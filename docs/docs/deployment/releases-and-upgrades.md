@@ -3512,6 +3512,368 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### v0.22.0 — dashboards on a square grid, and an event path that waits less {#v0220-upgrade}
+
+`v0.22.0` is an in-place upgrade from `v0.21.0` or `v0.21.1`: `dcctl install` for the cluster, then
+`dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). It adds no
+migration: no service changes its database schema. It includes the four fixes
+[`v0.21.1`](#v0211-upgrade) shipped, so coming from `v0.21.0`, read that section too for the one
+check it asks of you. Coming from `v0.20.0` or earlier, read the [`v0.21.0` notes](#v0210-upgrade)
+as well. An instance built by `v0.16.0` or earlier still has to be
+[destroyed and built again](#pre-declaration-recreate).
+
+Most of this release is dashboards: a square-cell grid that adapts to the screen, an editor that
+snaps to cells, a board time range with pause, and thirteen new widgets, among them a fleet table
+with one row per device. The rest makes the event path wait less: several services keep more
+publishes in flight, device-state does less database work per event, and the platform reads 256
+messages per pull. What changes for somebody:
+
+- **Dashboards are stored in a new format.** Older boards convert when they load, approximately
+  for the layout. Nothing is lost from a widget's settings except a time-series chart's sample
+  count. See [Dashboards are stored in a new format](#v0220-dashboard-format).
+- **The npm packages `@devicechain/dashboards` and `@devicechain/widgets` have breaking changes**,
+  and a `0.21` package draws a board saved by `v0.22.0` wrongly, without an error. See
+  [If you build against the npm packages](#v0220-packages).
+- **A single-device widget bound to a device group now refuses the group** instead of showing
+  whichever device reported last. See [A single-device widget refuses a group](#v0220-group-refusal).
+- **Three defaults move:** the fetch batch (128 to 256), device-management's CPU request (800m to
+  450m), and how many events external MQTT, Sparkplug and presence keep in flight, which also
+  raises how many a pod that dies suddenly can lose on those at-most-once paths. See
+  [Defaults that changed](#v0220-defaults).
+- **`dcctl upgrade`, `destroy` and `sim` refuse a `--kube-context` that names a different cluster
+  than the instance is recorded in.** It used to override the record silently. See
+  [dcctl refuses a conflicting `--kube-context`](#v0220-kube-context).
+- **Commands held for a maintenance window follow the device type's current window**, and
+  unassigning a window releases them at once. See
+  [Held commands follow the current maintenance window](#v0220-window-follow).
+
+#### Before you upgrade {#v0220-before}
+
+1. **If an application of yours renders dashboards with the npm packages, plan to move it to
+   `0.22.0` before anyone saves a board on the upgraded instance.** Boards stored today keep
+   rendering correctly with `0.21`; a board saved or published after the upgrade does not. See
+   [If you build against the npm packages](#v0220-packages).
+2. **If you read external MQTT or Sparkplug sources and a sudden pod loss must lose as little as
+   before**, set their publish windows down before you upgrade. See
+   [More publishes in flight](#v0220-publish-windows).
+3. **If your `terraform.tfvars` sets `nats_memory_limit` below 4Gi, raise it to 4Gi or remove the
+   line.** The upgrade keeps your value, and at 2Gi a server sustains only about 3,000 events a
+   second. See [The broker remembers redelivered events for 10 minutes](#v0220-dedup).
+
+#### During the upgrade {#v0220-during}
+
+- **No migration runs**, so the database is untouched and the pods roll as for any upgrade.
+- **The console and `/dash` read the new dashboard format as soon as they roll**, because they
+  ship with the release. Nothing converts a stored board during the upgrade; each converts when
+  it is next loaded.
+- **device-management pods are rescheduled with the lower CPU request**, and each NATS server's
+  memory limit rises from 2Gi to 4Gi. Those are the two changes to rendered resource values. See
+  [The broker remembers redelivered events for 10 minutes](#v0220-dedup).
+- **Until event-processing has rolled too, a disabled device's connection change can raise or
+  clear a connectivity alarm.** device-management now passes a disabled device's connects and
+  disconnects on, and an event-processing pod still on `v0.21.x` does not know to ignore them.
+  `dcctl upgrade` rolls the services together, so this lasts only for the rollout.
+
+Going back to `v0.21.x` after the upgrade reads the same database. Dashboards are the exception
+to look at: a board saved or published under `v0.22.0` is in the new format, which `v0.21.x` draws
+with every widget one cell wide and one cell high, and without the new widgets. Do not edit such a
+board in the older console, because saving it there writes that layout.
+
+#### After the upgrade {#v0220-after}
+
+- **Review each board you care about once.** Open it in the editor: a banner says it was
+  converted and names any chart whose sample count was dropped. Check the layout, then save, and
+  publish a new version if the board is published.
+- **Look for widgets that now refuse a group**, and move them to the fleet table or to a bar chart
+  with one bar per device.
+- **Nothing else is required.** The new settings all have defaults.
+
+##### The broker remembers redelivered events for 10 minutes {#v0220-dedup}
+
+`resolved-events` and `failed-events` now drop a re-published event for 10 minutes, up from the
+broker's 2-minute default. Before, an event whose source was redelivered after two failed
+publishes could be stored, and counted by detection, twice. The incoming-event stream's window
+goes from 30 to 10 minutes. It still covers every redelivery while a consumer runs, and an
+`event-sources` or `device-management` pod that comes back within about 8 minutes. If a pod is
+down longer, or a broker stores a publish, loses its acknowledgement and then fails publishes for
+more than about 8 minutes, the events in flight are stored twice. Run `event-sources` and
+`device-management` with 2 or more replicas to avoid the pod case. Each NATS server's memory
+limit goes from 2Gi to 4Gi (`GOMEMLIMIT` 1638MiB to 3276MiB), because every server holds each id
+inside these windows: about 2.6 GiB at 10,000 events a second sustained. The 768Mi request is
+unchanged, so no server is placed differently. `dcctl upgrade` applies the broker first and
+restarts its servers, one at a time under `--ha`. Each service then moves the windows on the
+existing streams in place on its first start; no stream is recreated and no message is lost.
+**If your `terraform.tfvars` sets `nats_memory_limit` below 4Gi, the upgrade keeps your value.**
+At 2Gi a server can sustain only about 3,000 events a second before the id tables leave it no
+headroom. Raise it to 4Gi, or remove the line, before you upgrade.
+
+#### What changed {#v0220-what-changed}
+
+##### Dashboards are stored in a new format {#v0220-dashboard-format}
+
+A board's definition moves from `schemaVersion` 1 to 3 in two steps, and a board with no
+`schemaVersion` is read by its shape. Every place that loads a definition converts it: the editor,
+`/dash`, cloning, import, version comparison and rollback. A load never writes the stored
+definition back.
+
+**The grid (format 2).** The old grid had fluid columns (24 by default) and fixed-height rows (40
+px). The new one has square cells, measured in cells in both directions, and two grid widgets may
+not overlap. No exact mapping exists between the two, so the conversion is an approximation:
+
+- column lines scale to the new column count and round, so widgets that met at a line still meet;
+- row lines are converted at a reference width of 1366 px;
+- the old gap becomes the gutter;
+- `z` and the pixel `offset` are dropped, because the grid has no layering;
+- whatever overlaps after rounding, or overlapped through `z`, is pushed down until it fits, and
+  each widget stays below the widgets it was below.
+
+Every widget is kept, with its type, binding and options, including a widget of a type this build
+does not know.
+
+**Chart windows (format 3).** A `timeseries-chart` used to keep a sample count, `options.window`
+(300 by default). It now draws a span of time: `windowSeconds`, or the board's time range when it
+names none. A sample count has no honest span, because it depends on how often the device reports,
+so the conversion drops `window`, and the chart follows the board's time range. That is one hour
+unless the board names another, which is the hour every chart already loaded, so what a chart shows
+on load does not change. A chart that was meant to be shorter or longer needs a span set by hand.
+Other widgets keep their `window`.
+
+**What authors see.** In the editor a converted board shows a banner: "Converted from the previous
+grid. Review the layout, then save to keep it in the new format." When charts lost a sample count,
+it also names them by title. Save is enabled even with no other edit, and saving writes the new
+format and retires the banner. A published version is immutable, so it stays in the old format
+and converts each time it is viewed, until you publish a new version. A dashboard file exported
+from `v0.21.x` imports and converts the same way.
+
+##### If you build against the npm packages {#v0220-packages}
+
+`@devicechain/dashboards`, `@devicechain/widgets`, `@devicechain/widget-sdk`, `@devicechain/client`
+and `@devicechain/brand` publish as `0.22.0`.
+
+**Move to `0.22.0` before boards are saved in the new format.** The `0.21` parser ignores
+`schemaVersion` and reads a new placement as a box with no span, so a board saved by `v0.22.0`
+renders with every widget one cell wide and one high. It shows no error. Boards stored before the
+upgrade keep rendering correctly with `0.21` until they are saved again.
+
+**From `0.22.0` on, a board saved by a newer version is refused instead of drawn wrong.**
+`parseDashboardDefinition` throws a `DashboardDefinitionError` with `code: 'schemaTooNew'` and the
+version it found in `found`. Check `code` rather than `instanceof`, which fails when an
+application bundles two copies of the package. `/dash`, board-replay and the console's detail
+page, rollback, import and clone show a message saying to upgrade instead of the board. This
+protects `0.22.0` and later viewers from boards saved by a future release only: a `0.21` viewer
+still draws a `v0.22.0` board wrongly, so upgrade the packages first.
+
+**`@devicechain/dashboards`** changes the layout model:
+
+- removed: `WidgetBox`, `resolveWidgetBox`, `baseBox`, `setWidgetBox`, `bringToFront`,
+  `gridBoxToPx` and `pxToGridBox`. Their replacements are `Placement`, `resolvePlacement`,
+  `basePlacement`, `setWidgetPlacement`, `gridPlacementToPx` and `pxToGridPlacement`; there is no
+  layering, so nothing replaces `bringToFront`;
+- `WidgetLayout` maps a breakpoint to a `Placement`, `Breakpoints` maps a name to a
+  `BreakpointSpec`, `CanvasGrid` replaces `gap` and `rowHeight` with `minCellSize`, `gutter` and
+  `padding`, and `GridGeometry` replaces its column and row sizes with `cell` and `gutter`;
+- `SYNTHETIC_GENERATORS` lists generator ids only. Supply your own labels; stored ids are
+  unchanged;
+- `parseDashboardDefinition` now refuses overlapping grid widgets. An older definition is
+  converted before that check.
+
+**`@devicechain/widgets`:**
+
+- `severityColor(severity)` is now `severityColor(colors, severity)`;
+- the `timeseries-chart` option `window` is replaced by `windowSeconds`, and the chart's options
+  version moves from 1 to 2.
+
+**`@devicechain/widget-sdk`** removes no export and adds many: size tokens and board density,
+fit-to-box text, freshness and the hub connection badge, severity levels and colours, thresholds,
+and the board time range (`useWidgetTimeRange`, `MAX_SPAN_SAMPLES`, `withinSpan`), plus new
+chart builders on `/echarts`. `useElementSize` gains an optional `step` parameter and
+`WidgetFrame` the optional `flush` and `sampleTime` props. Three changes a TypeScript build can
+notice:
+
+- `ChartTheme` has a required `severity` field. This matters only if you build a theme by hand
+  instead of calling `useChartTheme` or `resolveChartTheme`;
+- the unions `WidgetChannel` (now with `aggregate`), `WidgetId`, `BuiltinWidgetId`, `ThemeVar` and
+  `OptionSpec` gained members, so an exhaustive `switch` over one of them needs a new case;
+- `formatValue` with no precision now rounds to 3 decimals, or 4 significant digits below 1,
+  where it used to print the number unrounded.
+
+`SDK_API_VERSION` is unchanged, and the example third-party widget in the repository builds
+against `0.22.0` without a change. The `Upgrading from 0.21` section of each package's README,
+on [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards), [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) and
+[`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk), lists the changes with their replacements.
+**`@devicechain/client`** only adds: `createSessionTokens`, and
+`update-management` as an area. **`@devicechain/brand`** is unchanged.
+
+##### A single-device widget refuses a group {#v0220-group-refusal}
+
+The measurement stream keyed its latest values by measurement name. Bound to a device group, every
+device that reported `temperature` overwrote the others, so a card, gauge, chart or table showed
+whichever device spoke last as though it were the answer. Those widgets now refuse a group with a
+sentence that points to the fleet table, or to the bar chart's one-bar-per-device mode. This
+covers the latest-value card, the gauges, the time-series chart, the table, the pie chart, the
+stat card and a bar chart in its per-measurement mode. The editor offers a group only to the fleet
+table, the bar chart, the alarm widgets and the map.
+
+##### dcctl refuses a conflicting `--kube-context` {#v0220-kube-context}
+
+`dcctl upgrade` with a `--kube-context` that names the instance's own recorded cluster now renders
+exactly the same instance as without the flag. Before, it dropped the local blob-storage
+colocation setting, and the chart refused the render.
+
+A `--kube-context` that names a **different** context than the one recorded for the instance is
+now refused by `dcctl upgrade`, `dcctl destroy` and `dcctl sim`. It used to override the record
+silently. Drop the flag to use the recorded cluster. If the record is what is wrong, because the
+cluster was rebuilt or its context renamed, remove
+`~/.devicechain/instances/<instance>/instance.json` and re-run with `--kube-context`.
+
+##### A disabled device's connection status keeps updating {#v0220-disabled-presence}
+
+A disabled device's connects, disconnects and demotions now reach device-state and the event
+history, so its connection status stays true while it is disabled. Detection still ignores
+them, so no alarm fires for a disabled device, and its measurements, locations and commands are
+still refused. A Sparkplug edge node can make a disabled child device show as connected, because
+presence the node reports for its devices is trusted by design. A new counter, `devicechain_eventsources_presence_reconcile_unapplied_total`,
+counts reconciliation repairs that were sent but not seen to apply.
+
+##### Held commands follow the current maintenance window {#v0220-window-follow}
+
+A command held for a maintenance window now follows its device type's **current** window. If you
+move a type from window A to window B, the commands already waiting move to B's next opening.
+If you **unassign** a type's window, its waiting commands are **released at once**. The
+`v0.21.0` notes said they stayed held; that is no longer true. A disabled device's commands
+stay held either way. Before you unassign a window, check what is waiting on it.
+
+Also fixed: a disabled device's queued commands no longer keep the LwM2M sender polling in a
+tight loop, and a command whose confirmation is refused because its window has just closed now
+parks for the next opening instead of being left as `SENT`. A claim refused because the device
+is disabled is counted on `devicechain_commanddelivery_command_delivery_claims_refused_disabled_total`.
+
+##### Defaults that changed {#v0220-defaults}
+
+###### More publishes in flight {#v0220-publish-windows}
+
+On a replicated broker an acknowledgement takes about 8 to 11 ms, and a path that waits for each
+one before sending the next is capped by that. Five paths now keep a window of publishes in
+flight, each with a setting. Each is read at startup; a value outside 1 to 1024, or an explicit
+`0`, stops the service.
+
+| Setting | Service | Default | Before |
+| --- | --- | --- | --- |
+| `resolution.publishWindow` | `device-management` | 512 | 128, fixed |
+| `capture.publishWindow` | `event-sources` | 512 | 128, fixed |
+| `externalMqtt.publishWindow` | `event-sources` | 128 per source | 5 per source, about 440 events a second |
+| `brokerPresence.publishWindow` | `event-sources` | 128 | one per subject, about 88 transitions a second |
+| `ingest.publishWindow` | `sparkplug-ingest` | 32 per connection | one, about 88 messages a second |
+
+The first two read from streams that redeliver, so a deeper window costs only memory. The last
+three are at-most-once: the external broker, or the presence notice, is not replayed. A pod that
+stops cleanly, or hands a source to another pod, waits up to 8 seconds for what it has in flight.
+**A pod that dies suddenly loses up to a window's worth on top of what it lost before**: up to 128
+events per external MQTT source (it was 5), 32 messages per Sparkplug connection (it was 1), and
+128 presence transitions, which the next reconciliation pass repairs. If that matters more to you
+than the rate, set the window lower. The settings are described in
+[Observability](observability.md) and [Edge services](edge-services.md).
+
+###### The fetch batch is 256 {#v0220-fetch-batch}
+
+When `infrastructure.nats.fetch.batch` is not set, a service now pulls 256 messages at a time
+instead of 128. A value you set still wins. In GKE measurements device-management, which was
+limited by the round trip of each pull, resolved 10 to 12% more events per second at the larger
+batch. Each message's acknowledgement window still starts when it is delivered, so a reader that
+handles messages one at a time now has about 234 ms per message, not 469 ms, before the last one
+in a full batch is redelivered. A redelivered message is handled again, not lost. If you run a
+reader that is that slow, set `batch: 128`. See [Fetching ahead](observability.md#fetch-ahead).
+
+###### device-management requests less CPU {#v0220-dm-cpu}
+
+`functionalAreas.device-management.measuredRequests.cpu` falls from 800m to 450m, which is
+device-management's measured use at 6,000 events a second on this release. The CPU limit stays at
+2 cores. A value you set in your own values is kept.
+
+##### device-state does less work per event {#v0220-device-state}
+
+A batch of plain data events now writes all of its device rows in one upsert instead of a locked
+read and a write-back per batch. The queue between device-state's reader and its writers is sized
+from the writer pool (640 at the defaults, was 100), so the writers stay busy when the service is
+behind. The writers also take row locks in one order, which removes a rare deadlock between a
+writer creating device rows and one claiming presence on the same devices. At 6,000 events a
+second, device-state used 21% less CPU per event than on `v0.21.0`; part of that is the
+database-read fix `v0.21.1` already shipped.
+
+##### Measured on GKE {#v0220-performance}
+
+On the same GKE cluster shape as the previous round of measurements, a build with this release's
+device-state, device-management and event-sources changes sustained 10,000 events a second for 10
+minutes through every stage, 6 million events with none lost, duplicated or out of order. That is
+the same sustained rate as before, not a higher one: with ingest now faster, device-management's
+read side became the first stage to fall behind, at about 10,300 events a second for a single
+replica. The 256 fetch batch is the change aimed at it, and gave 12% more in a 3-minute run. Across
+the five event-path services, CPU at 10,000 events a second fell 6% against that round, which ran
+before the `v0.21.1` database-read fix.
+
+##### New alerts and metrics {#v0220-observability}
+
+New alerts, with `metrics.alerts` on:
+
+- `ExternalMqttSourceLosingEvents`: an external MQTT source's events failed to publish for 10
+  minutes, so they are lost;
+- `BrokerPresenceLosingTransitions`: presence transitions failed to reach the event stream for 10
+  minutes;
+- `DeviceCredentialCacheTooSmall` and `DeviceLookupCacheTooSmall`: more than 5% of
+  device-management's lookups evicted another entry from a full cache for 15 minutes;
+- `DetectRuleStatWriteFailing`: the rule-health fire counters cannot be written. Detection itself
+  is unaffected.
+
+New metrics: `devicechain_<area>_jetstream_publish_window_full_seconds_total`,
+`devicechain_<area>_jetstream_publish_window_full_total` and
+`devicechain_<area>_jetstream_publish_duplicates_total` for the publish windows above,
+`devicechain_eventsources_total_msg_publish_failed{source}` for external MQTT, and
+`devicechain_eventprocessing_detect_rule_stat_write_failures_total`, and `devicechain_eventsources_presence_reconcile_unapplied_total`. No metric was renamed or
+removed.
+
+##### Fixes from an end-to-end review {#v0220-review-fixes}
+
+- **Live widgets recover after an outage of any length.** Before, after about 40 seconds without
+  the network or the server, they showed "Data unavailable" until the page was reloaded, and a
+  stream the server ended could stop updating while the badge still read live. A widget whose code
+  failed to download can now be retried with **Reset widget**.
+- **Dashboard data shows what it says.** A slot pointed at another device while the board is
+  paused shows the new device. Bars with one bar per device keep updating. A stat card with no
+  device says "Choose a device for this widget" instead of "0 Readings". A fleet-table cell for a
+  device that reports rarely never shows a span's average as its latest reading, and a cell past
+  the read limit says "not loaded".
+
+##### Known limitation: history after a reconnect {#v0220-known-limitation}
+
+When a board reconnects, the history it missed is not read again. A line chart draws a straight
+line across the outage, and fleet and aggregate figures leave out the readings sent during it. A
+fix is planned.
+
+##### Also in this release {#v0220-also}
+
+- **Dashboards.** Cells stay square and the column count follows the container, so a phone shows
+  one widget per row and a wall display gets bigger cells. The editor snaps to cells, pushes
+  neighbours aside, works from the keyboard, can anchor a widget to another, and shows layout
+  problems on each widget; a layout error blocks publishing until **Fit to limits** clears it. It
+  also has undo and redo, duplicate, and copy and paste between boards; a widget pasted where its
+  device binding does not exist, such as another tenant's board, gets a new unbound slot and keeps
+  no device reference. A
+  board has a time range (15 minutes to 7 days) and a pause; commands still send while paused.
+  New widgets: linear and level gauges, battery, status light, signal bars, compass, progress
+  ring, command slider and toggle, stat card, bar and pie charts, and the fleet table. Widgets
+  gain thresholds, units and precision, show how old their value is, and say why they are empty.
+  `/dash` keeps its session alive and has a kiosk mode for wall displays.
+- **Over-the-air updates in the console:** Artifacts and Signers pages, and an Updates tab on the
+  device page. GraphQL adds `Artifact.signatures`.
+- **Tier limits.** The tier form sets the held-command ceiling, the shed priority and the three
+  geofence limits, and `AdminTenant.effectiveScalarSettings` reports where each value comes from.
+- **The console user guide** has 17 chapters in English, Spanish and Chinese.
+- **The alarm table wraps alarm keys and originators at hyphens** (`engine-` / `overheat`)
+  instead of in the middle of a word.
+- **board-replay no longer ships Vite's module-preload polyfill.** On Safari before 17 and Firefox
+  before 115, the shared chunks of a widget that loads on first use arrive one round trip later.
+  Nothing else changes.
+
 ### v0.21.1 — a patch, nothing to do {#v0211-upgrade}
 
 `v0.21.1` is a drop-in upgrade from `v0.21.0`: `dcctl install` for the cluster, then `dcctl

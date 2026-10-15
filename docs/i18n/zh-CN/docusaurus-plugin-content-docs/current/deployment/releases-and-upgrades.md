@@ -2056,6 +2056,301 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 无须操作。
 
+### v0.22.0：仪表板改用方形单元格网格，事件路径等待更少 {#v0220-upgrade}
+
+`v0.22.0` 可从 `v0.21.0` 或 `v0.21.1` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行
+`dcctl upgrade`，如 [v0.17.0](#v0170-upgrade) 所述。无新增迁移：没有服务改变其数据库模式。本版本
+包含 [`v0.21.1`](#v0211-upgrade) 已发布的四项修复；从 `v0.21.0` 升级时，也请阅读该节中要求你做的
+那一项检查。从 `v0.20.0` 或更早版本升级时，还请阅读 [`v0.21.0` 说明](#v0210-upgrade)。由
+`v0.16.0` 或更早版本构建的实例仍须[销毁后重建](#pre-declaration-recreate)。
+
+本版本的大部分内容是仪表板：随屏幕自适应的方形单元格网格、按单元格吸附的编辑器、带暂停的看板时间
+范围，以及十三个新组件，其中包括每台设备一行的设备群表格。其余部分让事件路径等待更少：多个服务
+保持更多在途发布，device-state 每个事件的数据库工作更少，平台每次拉取读取 256 条消息。对某些人
+有影响的变化：
+
+- **仪表板以新格式存储。** 旧看板在加载时转换，布局为近似转换。组件设置除时间序列图表的样本数外
+  不会丢失任何内容。见[仪表板以新格式存储](#v0220-dashboard-format)。
+- **npm 包 `@devicechain/dashboards` 和 `@devicechain/widgets` 有不兼容变更**，`0.21` 的包会把
+  `v0.22.0` 保存的看板画错，且不报错。见[如果你基于 npm 包开发](#v0220-packages)。
+- **绑定到设备组的单设备组件现在会拒绝该组**，而不再显示最后上报的那台设备。见
+  [单设备组件拒绝设备组](#v0220-group-refusal)。
+- **三个默认值变化：** 拉取批量（128 改为 256）、device-management 的 CPU 请求（800m 改为
+  450m），以及外部 MQTT、Sparkplug 和在线状态保持的在途事件数；后者也提高了这些至多一次路径上
+  pod 突然终止时可能丢失的数量。见[变化的默认值](#v0220-defaults)。
+- **`dcctl upgrade`、`destroy` 和 `sim` 会拒绝指向与实例记录不同集群的 `--kube-context`。**
+  以前它会静默覆盖记录。见[dcctl 拒绝冲突的 `--kube-context`](#v0220-kube-context)。
+- **为维护窗口保留的命令跟随设备类型的当前窗口**，取消分配窗口会立即释放这些命令。见
+  [保留的命令跟随当前维护窗口](#v0220-window-follow)。
+
+#### 升级前 {#v0220-before}
+
+1. **如果你的应用用 npm 包渲染仪表板，请计划在任何人于升级后的实例上保存看板之前把它升级到
+   `0.22.0`。** 现有看板用 `0.21` 仍能正确渲染；升级后保存或发布的看板则不能。见
+   [如果你基于 npm 包开发](#v0220-packages)。
+2. **如果你读取外部 MQTT 或 Sparkplug 源，且 pod 突然丢失时必须与以前丢得一样少**，请在升级前
+   调低它们的发布窗口。见[更多在途发布](#v0220-publish-windows)。
+3. **如果你的 `terraform.tfvars` 把 `nats_memory_limit` 设为低于 4Gi，请提高到 4Gi 或删除这一行。**
+   升级会保留你的值，而在 2Gi 下服务器只能持续处理约每秒 3,000 个事件。见
+   [broker 在 10 分钟内记住重新投递的事件](#v0220-dedup)。
+
+#### 升级期间 {#v0220-during}
+
+- **不运行任何迁移**，数据库不受影响，pod 照常滚动更新。
+- **控制台和 `/dash` 一经滚动更新即可读取新的仪表板格式**，因为它们随版本发布。升级期间不会转换
+  任何已存储的看板；每个看板在下次加载时转换。
+- **device-management 的 pod 以更低的 CPU 请求重新调度**，每个 NATS 服务器的内存上限从 2Gi 提高到
+  4Gi。这是渲染出的资源值中的两处变化。见[broker 在 10 分钟内记住重新投递的事件](#v0220-dedup)。
+- **在 event-processing 也完成滚动更新之前，已停用设备的连接变化可能触发或解除连接告警。**
+  device-management 现在会传递已停用设备的连接和断开，而仍为 `v0.21.x` 的 event-processing pod
+  不知道要忽略它们。`dcctl upgrade` 会一起滚动更新各服务，因此这只持续于发布期间。
+
+升级后回退到 `v0.21.x` 读取的是同一个数据库。仪表板是需要注意的例外：在 `v0.22.0` 下保存或发布的
+看板是新格式，`v0.21.x` 会把其中每个组件画成一个单元格宽、一个单元格高，且不显示新组件。不要在旧
+控制台中编辑这样的看板，因为在那里保存会写入那种布局。
+
+#### 升级后 {#v0220-after}
+
+- **把你关心的每个看板检查一遍。** 在编辑器中打开它：横幅会说明它已被转换，并列出被去掉样本数的
+  图表。检查布局后保存；如果看板已发布，再发布一个新版本。
+- **找出现在拒绝设备组的组件**，改用设备群表格，或每台设备一根柱的柱状图。
+- **无需其他操作。** 新设置都有默认值。
+
+##### broker 在 10 分钟内记住重新投递的事件 {#v0220-dedup}
+
+`resolved-events` 和 `failed-events` 现在在 10 分钟内丢弃重新发布的事件，而 broker 的默认值为 2
+分钟。以前，若事件的来源在两次发布失败后被重新投递，该事件可能被存储两次，并被检测计数两次。传入
+事件流的窗口从 30 分钟改为 10 分钟。它仍覆盖消费者运行期间的所有重新投递，以及在约 8 分钟内恢复的
+`event-sources` 或 `device-management` pod。如果 pod 停机更久，或者 broker 存储了一次发布、丢失了
+其确认，随后超过约 8 分钟发布失败，在途事件会被存储两次。以 2 个或更多副本运行 `event-sources` 和
+`device-management` 可避免 pod 的情况。每个 NATS 服务器的内存上限从 2Gi 提高到 4Gi（`GOMEMLIMIT`
+从 1638MiB 提高到 3276MiB），因为每个服务器都保存这些窗口内的每个 id：在每秒 10,000 个事件持续
+运行时约 2.6 GiB。768Mi 的请求不变，因此服务器的调度位置不变。`dcctl upgrade` 先应用 broker 并
+重启其服务器，在 `--ha` 下逐个重启。随后每个服务在首次启动时就地调整现有流的窗口；不会重建任何
+流，也不会丢失任何消息。**如果你的 `terraform.tfvars` 把 `nats_memory_limit` 设为低于 4Gi，升级会
+保留你的值。** 在 2Gi 下，服务器只能持续处理约每秒 3,000 个事件，之后 id 表就会耗尽其余量。请在
+升级前把它提高到 4Gi，或删除这一行。
+
+#### 变更内容 {#v0220-what-changed}
+
+##### 仪表板以新格式存储 {#v0220-dashboard-format}
+
+看板定义分两步从 `schemaVersion` 1 变为 3，没有 `schemaVersion` 的看板按其结构判断。所有加载定义
+的地方都会转换：编辑器、`/dash`、克隆、导入、版本比较和回滚。加载从不回写已存储的定义。
+
+**网格（格式 2）。** 旧网格是流式列（默认 24 列）和固定高度的行（40 px）。新网格使用方形单元格，
+两个方向都以单元格计量，且两个网格组件不能重叠。两者之间没有精确对应，因此转换是近似的：
+
+- 列线按新的列数缩放并取整，原来在一条线上相接的组件仍然相接；
+- 行线按 1366 px 的参考宽度转换；
+- 原来的间距成为槽宽（gutter）；
+- 丢弃 `z` 和像素 `offset`，因为网格没有层叠；
+- 取整后重叠的、或原来通过 `z` 重叠的组件会向下推，直到放得下，每个组件仍位于原来在它上方的组件
+  之下。
+
+每个组件都会保留，连同其类型、绑定和选项，包括本构建不认识的类型的组件。
+
+**图表窗口（格式 3）。** `timeseries-chart` 原来保存样本数 `options.window`（默认 300）。现在它
+绘制一段时间跨度：`windowSeconds`，未指定时使用看板的时间范围。样本数没有可靠的对应跨度，因为它
+取决于设备的上报频率，所以转换会丢弃 `window`，图表改为跟随看板的时间范围。除非看板另行指定，
+该范围为一小时，这正是每个图表原本加载的那一小时，因此图表加载时显示的内容不变。原本要更短或更长
+的图表需要手动设置跨度。其他组件保留其 `window`。
+
+**作者会看到什么。** 在编辑器中，转换过的看板会显示横幅，提示检查布局并保存以保留新格式。若有
+图表失去了样本数，横幅还会按标题列出它们。即使没有其他编辑也可以保存，保存会写入新格式并移除
+横幅。已发布的版本不可修改，因此它保持旧格式，每次查看时转换，直到你发布新版本。从 `v0.21.x`
+导出的仪表板文件也以同样方式导入和转换。
+
+##### 如果你基于 npm 包开发 {#v0220-packages}
+
+`@devicechain/dashboards`、`@devicechain/widgets`、`@devicechain/widget-sdk`、`@devicechain/client`
+和 `@devicechain/brand` 以 `0.22.0` 发布。
+
+**请在看板以新格式保存之前升级到 `0.22.0`。** `0.21` 的解析器忽略 `schemaVersion`，把新的放置
+读成没有跨度的方框，因此 `v0.22.0` 保存的看板会把每个组件画成一个单元格宽、一个单元格高，且不
+报错。升级前存储的看板在再次保存前，用 `0.21` 仍能正确渲染。
+
+**从 `0.22.0` 起，由更新版本保存的看板会被拒绝，而不是被画错。** `parseDashboardDefinition` 会
+抛出 `code: 'schemaTooNew'` 的 `DashboardDefinitionError`，并在 `found` 中给出发现的版本。请检查
+`code` 而不是 `instanceof`；当应用打包了该包的两个副本时，`instanceof` 会失效。`/dash`、
+board-replay 以及控制台的详情页、回滚、导入和克隆会显示提示升级的消息，而不是看板。这只保护
+`0.22.0` 及以后的查看器免受未来版本保存的看板影响：`0.21` 的查看器仍会把 `v0.22.0` 的看板画错，
+因此请先升级这些包。
+
+**`@devicechain/dashboards`** 改变了布局模型：
+
+- 移除 `WidgetBox`、`resolveWidgetBox`、`baseBox`、`setWidgetBox`、`bringToFront`、`gridBoxToPx`
+  和 `pxToGridBox`。替代项为 `Placement`、`resolvePlacement`、`basePlacement`、
+  `setWidgetPlacement`、`gridPlacementToPx` 和 `pxToGridPlacement`；由于不再有层叠，
+  `bringToFront` 没有替代项；
+- `WidgetLayout` 把断点映射到 `Placement`，`Breakpoints` 把名称映射到 `BreakpointSpec`，
+  `CanvasGrid` 用 `minCellSize`、`gutter` 和 `padding` 取代 `gap` 和 `rowHeight`，`GridGeometry`
+  用 `cell` 和 `gutter` 取代其行列尺寸；
+- `SYNTHETIC_GENERATORS` 只列出生成器 id。请自行提供标签；已存储的 id 不变；
+- `parseDashboardDefinition` 现在拒绝重叠的网格组件。旧定义会在该检查之前转换。
+
+**`@devicechain/widgets`：**
+
+- `severityColor(severity)` 改为 `severityColor(colors, severity)`；
+- `timeseries-chart` 的选项 `window` 由 `windowSeconds` 取代，图表的选项版本从 1 变为 2。
+
+**`@devicechain/widget-sdk`** 没有移除导出项，但新增了许多：尺寸令牌与看板密度、适应方框的文本、
+数值时效与连接状态徽标、严重级别与颜色、阈值，以及看板时间范围（`useWidgetTimeRange`、
+`MAX_SPAN_SAMPLES`、`withinSpan`），另有 `/echarts` 上的新图表构建函数。`useElementSize` 新增可选
+参数 `step`，`WidgetFrame` 新增可选属性 `flush` 和 `sampleTime`。有三处 TypeScript 构建可能察觉的
+变化：
+
+- `ChartTheme` 有了必填字段 `severity`。只有在你手动构建主题、而不是调用 `useChartTheme` 或
+  `resolveChartTheme` 时才有影响；
+- 联合类型 `WidgetChannel`（新增 `aggregate`）、`WidgetId`、`BuiltinWidgetId`、`ThemeVar` 和
+  `OptionSpec` 增加了成员，对它们做穷尽 `switch` 时需要新的分支；
+- 未指定精度时，`formatValue` 现在保留 3 位小数，小于 1 时保留 4 位有效数字，而以前输出未取整的
+  数值。
+
+`SDK_API_VERSION` 不变，仓库中的第三方组件示例无需修改即可基于 `0.22.0` 构建。
+[`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards)、[`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) 和
+[`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) 的 README 中的 `Upgrading from 0.21` 一节列出了
+各项变化及其替代项。
+**`@devicechain/client`** 只有新增：`createSessionTokens`，以及作为区域的 `update-management`。
+**`@devicechain/brand`** 不变。
+
+##### 单设备组件拒绝设备组 {#v0220-group-refusal}
+
+测量流按测量名称保存最新值。绑定到设备组时，每台上报 `temperature` 的设备都会覆盖其他设备，因此
+卡片、仪表、图表或表格会把最后上报的设备当作答案显示。这些组件现在会拒绝设备组，并给出一句话，
+指向设备群表格或柱状图的每设备一根柱模式。涉及最新值卡片、各类仪表、时间序列图表、表格、饼图、
+统计卡片，以及按测量模式的柱状图。编辑器只为设备群表格、柱状图、告警组件和地图提供设备组选项。
+
+##### dcctl 拒绝冲突的 `--kube-context` {#v0220-kube-context}
+
+`dcctl upgrade` 带上指向实例自身已记录集群的 `--kube-context` 时，现在渲染出与不带该参数时完全相同
+的实例。以前它会丢掉本地 blob 存储的共置设置，chart 因而拒绝渲染。
+
+指向与实例记录**不同**上下文的 `--kube-context` 现在会被 `dcctl upgrade`、`dcctl destroy` 和
+`dcctl sim` 拒绝。以前它会静默覆盖记录。去掉该参数即可使用已记录的集群。如果错的是记录本身（集群
+已重建或其上下文已改名），请删除 `~/.devicechain/instances/<instance>/instance.json`，再带上
+`--kube-context` 重新运行。
+
+##### 已停用设备的连接状态继续更新 {#v0220-disabled-presence}
+
+已停用设备的连接、断开和降级现在会到达 device-state 和事件历史，因此停用期间其连接状态仍然准确。
+检测仍会忽略这些事件，因此不会为已停用设备触发告警，其测量、位置和命令仍被拒绝。Sparkplug 边缘
+节点可以让已停用的子设备显示为已连接，因为节点为其设备报告的在线状态在设计上是受信任的。新计数器
+`devicechain_eventsources_presence_reconcile_unapplied_total` 统计已发送但未见生效的对账修复。
+
+##### 保留的命令跟随当前维护窗口 {#v0220-window-follow}
+
+为维护窗口保留的命令现在跟随其设备类型的**当前**窗口。如果把某个类型从窗口 A 改为窗口 B，已在
+等待的命令会移到 B 的下一次开放。如果**取消分配**某个类型的窗口，其等待中的命令会**立即释放**。
+`v0.21.0` 说明中称它们会保持保留，现在已不再如此。已停用设备的命令在任何情况下都保持保留。取消
+分配窗口前，请先检查有哪些命令在等待它。
+
+另外修复：已停用设备的排队命令不再让 LwM2M 发送端陷入紧密循环轮询；确认因窗口刚关闭而被拒绝的
+命令现在会停放到下一次开放，而不是停留在 `SENT`。因设备已停用而被拒绝的认领计入
+`devicechain_commanddelivery_command_delivery_claims_refused_disabled_total`。
+
+##### 变化的默认值 {#v0220-defaults}
+
+###### 更多在途发布 {#v0220-publish-windows}
+
+在复制的 broker 上，一次确认需要约 8 到 11 ms，逐条等待确认再发送下一条的路径受此限制。现在有
+五条路径保持一个在途发布窗口，各有一个设置。每个设置在启动时读取；超出 1 到 1024 的值，或显式的
+`0`，会使服务停止。
+
+| 设置 | 服务 | 默认值 | 以前 |
+| --- | --- | --- | --- |
+| `resolution.publishWindow` | `device-management` | 512 | 128，固定 |
+| `capture.publishWindow` | `event-sources` | 512 | 128，固定 |
+| `externalMqtt.publishWindow` | `event-sources` | 每个源 128 | 每个源 5，约每秒 440 个事件 |
+| `brokerPresence.publishWindow` | `event-sources` | 128 | 每个主题一个，约每秒 88 次状态变化 |
+| `ingest.publishWindow` | `sparkplug-ingest` | 每个连接 32 | 一个，约每秒 88 条消息 |
+
+前两个从会重新投递的流中读取，因此更深的窗口只消耗内存。后三个是至多一次投递：外部 broker 或在线
+状态通知不会重放。正常停止或把源交给另一个 pod 时，pod 最多等待 8 秒处理在途内容。**突然终止的
+pod 会在原有基础上最多再丢失一个窗口的内容**：每个外部 MQTT 源最多 128 个事件（以前为 5），每个
+Sparkplug 连接 32 条消息（以前为 1），以及 128 次在线状态变化，后者由下一轮对账修复。如果这比速率
+更重要，请调低窗口。这些设置的说明见[可观测性](observability.md)和[边缘服务](edge-services.md)。
+
+###### 拉取批量为 256 {#v0220-fetch-batch}
+
+未设置 `infrastructure.nats.fetch.batch` 时，服务现在每次拉取 256 条消息，而不是 128 条。你设置
+的值仍然优先。在 GKE 测量中，受每次拉取往返时间限制的 device-management 在更大批量下每秒多解析
+10% 到 12% 的事件。每条消息的确认窗口仍从投递时开始计时，因此逐条处理消息的读取者现在每条消息约有
+234 ms（以前为 469 ms），超出后满批中的最后一条会被重新投递。重新投递的消息会被再次处理，不会
+丢失。如果你运行这么慢的读取者，请设置 `batch: 128`。见[预取](observability.md#fetch-ahead)。
+
+###### device-management 请求更少的 CPU {#v0220-dm-cpu}
+
+`functionalAreas.device-management.measuredRequests.cpu` 从 800m 降为 450m，即本版本
+device-management 在每秒 6,000 个事件时的实测用量。CPU 上限仍为 2 核。你在自己的 values 中设置的
+值会保留。
+
+##### device-state 每个事件的工作更少 {#v0220-device-state}
+
+一批普通数据事件现在用一条 upsert 写入其所有设备行，而不是每批先加锁读取再回写。device-state
+读取者与写入者之间的队列按写入者池大小确定（默认 640，以前为 100），使服务落后时写入者保持忙碌。
+写入者还按统一顺序获取行锁，消除了一个罕见的死锁：一个写入者创建设备行，另一个写入者同时为相同
+设备认领在线状态。在每秒 6,000 个事件时，device-state 每个事件的 CPU 比 `v0.21.0` 少 21%，其中
+一部分来自 `v0.21.1` 已发布的数据库读取修复。
+
+##### GKE 实测 {#v0220-performance}
+
+在与上一轮测量相同形态的 GKE 集群上，包含本版本 device-state、device-management 和 event-sources
+变更的构建在所有阶段持续 10 分钟维持每秒 10,000 个事件：600 万个事件，无丢失、无重复、无乱序。
+这与之前的持续速率相同，而不是更高：由于摄取变快，device-management 的读取端成为最先落后的阶段，
+单副本约为每秒 10,300 个事件。256 的拉取批量正是针对它的变更，在一次 3 分钟的运行中提升了 12%。
+在事件路径的五个服务上，每秒 10,000 个事件时的 CPU 比那一轮低 6%；那一轮运行于 `v0.21.1` 的
+数据库读取修复之前。
+
+##### 新告警与新指标 {#v0220-observability}
+
+启用 `metrics.alerts` 时的新告警：
+
+- `ExternalMqttSourceLosingEvents`：某个外部 MQTT 源的事件 10 分钟内发布失败，因而丢失；
+- `BrokerPresenceLosingTransitions`：在线状态变化 10 分钟内未能写入事件流；
+- `DeviceCredentialCacheTooSmall` 和 `DeviceLookupCacheTooSmall`：15 分钟内 device-management
+  超过 5% 的查找从已满的缓存中逐出了另一条目；
+- `DetectRuleStatWriteFailing`：无法写入规则健康状况的触发计数。检测本身不受影响。
+
+新指标：用于上述发布窗口的 `devicechain_<area>_jetstream_publish_window_full_seconds_total`、
+`devicechain_<area>_jetstream_publish_window_full_total` 和
+`devicechain_<area>_jetstream_publish_duplicates_total`，用于外部 MQTT 的
+`devicechain_eventsources_total_msg_publish_failed{source}`，以及
+`devicechain_eventprocessing_detect_rule_stat_write_failures_total`，以及 `devicechain_eventsources_presence_reconcile_unapplied_total`。没有指标被重命名或移除。
+
+##### 端到端审查中的修复 {#v0220-review-fixes}
+
+- **实时组件在任意时长的中断后都能恢复。** 以前在断网或服务器不可用约 40 秒后，组件会显示“数据
+  不可用”，直到重新加载页面；服务器结束的数据流可能停止更新，而徽标仍显示实时。代码下载失败的
+  组件现在可以用“重置组件”重试。
+- **仪表板数据如实显示。** 看板暂停时把槽位改指向另一台设备，会显示新设备。每设备一根柱的柱状图
+  持续更新。未绑定设备的统计卡片会提示选择设备，而不是显示“0 次读数”。上报稀少的设备在设备群
+  表格中的单元格不会把某个时间段的平均值当作最新读数，超出读取上限的单元格显示“未加载”。
+
+##### 已知限制：重新连接后的历史数据 {#v0220-known-limitation}
+
+看板重新连接后，不会重新读取错过的历史数据。折线图会在中断期间画一条直线，设备群和聚合数值会遗漏
+中断期间发送的读数。已计划修复。
+
+##### 本版本还包括 {#v0220-also}
+
+- **仪表板。** 单元格保持方形，列数随容器变化，因此手机每行显示一个组件，墙面显示屏得到更大的
+  单元格。编辑器按单元格吸附、把相邻组件推开、支持键盘操作、可把组件锚定到另一个组件，并在每个
+  组件上显示布局问题；布局错误会阻止发布，直到“适应限制”将其清除。编辑器还支持撤销和重做、复制组件，
+  以及在看板之间复制粘贴；粘贴到设备绑定不存在的地方（例如另一个租户的看板）的组件会得到一个新的
+  未绑定槽位，不保留任何设备引用。看板有时间范围（15 分钟到 7
+  天）和暂停；暂停期间命令仍会发送。新组件：线性仪表和液位仪表、电池、状态灯、信号格、罗盘、进度
+  环、命令滑块和命令开关、统计卡片、柱状图和饼图，以及设备群表格。组件新增阈值、单位和精度，显示
+  数值的时效，并说明为何为空。`/dash` 会保持会话有效，并提供用于墙面显示屏的 kiosk 模式。
+- **控制台中的空中升级：** Artifacts 和 Signers 页面，以及设备页面上的 Updates 标签页。GraphQL
+  新增 `Artifact.signatures`。
+- **套餐限制。** 套餐表单可设置保留命令上限、削减优先级和三项地理围栏限制，
+  `AdminTenant.effectiveScalarSettings` 报告每个值的来源。
+- **控制台用户指南**共 17 章，提供英文、西班牙文和中文版本。
+- **告警表格在连字符处换行显示告警键和来源**（`engine-` / `overheat`），而不是在单词中间断开。
+- **board-replay 不再包含 Vite 的模块预加载 polyfill。** 在 Safari 17 之前和 Firefox 115 之前的
+  版本中，首次使用时才加载的组件的共享代码块会晚一个往返到达。其他均无变化。
+
 ### v0.21.1：补丁，无需操作 {#v0211-upgrade}
 
 `v0.21.1` 可从 `v0.21.0` 直接升级：先为集群执行 `dcctl install`，再为每个实例执行 `dcctl

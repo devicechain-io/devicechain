@@ -3771,6 +3771,399 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### v0.22.0 — paneles sobre una cuadrícula de celdas cuadradas, y una ruta de eventos que espera menos {#v0220-upgrade}
+
+`v0.22.0` es una actualización en su sitio desde `v0.21.0` o `v0.21.1`: `dcctl install` para el
+clúster y después `dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade).
+No añade ninguna migración: ningún servicio cambia el esquema de su base de datos. Incluye las
+cuatro correcciones que publicó la [`v0.21.1`](#v0211-upgrade), así que si vienes de `v0.21.0`, lee
+también esa sección por la única comprobación que te pide. Si vienes de `v0.20.0` o una versión
+anterior, lee además las [notas de la `v0.21.0`](#v0210-upgrade). Una instancia creada por la
+`v0.16.0` o anterior sigue teniendo que [destruirse y crearse de nuevo](#pre-declaration-recreate).
+
+La mayor parte de esta versión son paneles: una cuadrícula de celdas cuadradas que se adapta a la
+pantalla, un editor que se ajusta a las celdas, un rango de tiempo del panel con pausa y trece
+widgets nuevos, entre ellos una tabla de flota con una fila por dispositivo. El resto hace que la
+ruta de eventos espere menos: varios servicios mantienen más publicaciones en vuelo, device-state
+hace menos trabajo de base de datos por evento y la plataforma lee 256 mensajes por petición. Qué
+cambia para alguien:
+
+- **Los paneles se guardan en un formato nuevo.** Los paneles anteriores se convierten al cargarse,
+  de forma aproximada en cuanto a la disposición. De la configuración de un widget no se pierde
+  nada salvo el número de muestras de un gráfico de serie temporal. Consulta
+  [Los paneles se guardan en un formato nuevo](#v0220-dashboard-format).
+- **Los paquetes npm `@devicechain/dashboards` y `@devicechain/widgets` tienen cambios
+  incompatibles**, y un paquete `0.21` dibuja mal, sin ningún error, un panel guardado por la
+  `v0.22.0`. Consulta [Si desarrollas con los paquetes npm](#v0220-packages).
+- **Un widget de un solo dispositivo vinculado a un grupo de dispositivos ahora rechaza el grupo**
+  en lugar de mostrar el dispositivo que informó el último. Consulta
+  [Un widget de un solo dispositivo rechaza un grupo](#v0220-group-refusal).
+- **Cambian tres valores por defecto:** el lote de lectura (de 128 a 256), la petición de CPU de
+  device-management (de 800m a 450m) y cuántos eventos mantienen en vuelo MQTT externo, Sparkplug y
+  la presencia, lo que también aumenta cuántos puede perder un pod que muere de repente en esas
+  rutas de como mucho una entrega. Consulta [Valores por defecto que cambiaron](#v0220-defaults).
+- **`dcctl upgrade`, `destroy` y `sim` rechazan un `--kube-context` que nombra un clúster distinto
+  del registrado para la instancia.** Antes sustituía el registro sin avisar. Consulta
+  [dcctl rechaza un `--kube-context` en conflicto](#v0220-kube-context).
+- **Los comandos retenidos por una ventana de mantenimiento siguen la ventana actual del tipo de
+  dispositivo**, y quitar una ventana los libera de inmediato. Consulta
+  [Los comandos retenidos siguen la ventana de mantenimiento actual](#v0220-window-follow).
+
+#### Antes de actualizar {#v0220-before}
+
+1. **Si una aplicación tuya dibuja paneles con los paquetes npm, prevé pasarla a `0.22.0` antes de
+   que alguien guarde un panel en la instancia actualizada.** Los paneles guardados hoy se siguen
+   dibujando bien con `0.21`; un panel guardado o publicado después de la actualización, no.
+   Consulta [Si desarrollas con los paquetes npm](#v0220-packages).
+2. **Si lees fuentes MQTT externas o Sparkplug y la pérdida repentina de un pod debe perder tan
+   poco como antes**, reduce sus ventanas de publicación antes de actualizar. Consulta
+   [Más publicaciones en vuelo](#v0220-publish-windows).
+3. **Si tu `terraform.tfvars` define `nats_memory_limit` por debajo de 4Gi, súbelo a 4Gi o quita la
+   línea.** La actualización conserva tu valor, y con 2Gi un servidor solo sostiene unos 3.000
+   eventos por segundo. Consulta
+   [El broker recuerda los eventos reentregados durante 10 minutos](#v0220-dedup).
+
+#### Durante la actualización {#v0220-during}
+
+- **No se ejecuta ninguna migración**, así que la base de datos queda intacta y los pods se
+  renuevan como en cualquier actualización.
+- **La consola y `/dash` leen el nuevo formato de panel en cuanto se renuevan**, porque se
+  distribuyen con la versión. Nada convierte un panel guardado durante la actualización; cada uno
+  se convierte la próxima vez que se carga.
+- **Los pods de device-management se vuelven a programar con la petición de CPU más baja**, y el
+  límite de memoria de cada servidor NATS sube de 2Gi a 4Gi. Son los dos cambios en valores de
+  recursos renderizados. Consulta
+  [El broker recuerda los eventos reentregados durante 10 minutos](#v0220-dedup).
+- **Hasta que event-processing también se haya renovado, un cambio de conexión de un dispositivo
+  deshabilitado puede generar o cerrar una alarma de conectividad.** device-management ahora
+  transmite las conexiones y desconexiones de un dispositivo deshabilitado, y un pod de
+  event-processing que sigue en la `v0.21.x` no sabe que debe ignorarlas. `dcctl upgrade` renueva
+  los servicios juntos, así que esto solo dura lo que dura el despliegue.
+
+Volver a `v0.21.x` después de la actualización lee la misma base de datos. Los paneles son la
+excepción que hay que mirar: un panel guardado o publicado con la `v0.22.0` está en el formato
+nuevo, que la `v0.21.x` dibuja con cada widget de una celda de ancho y una de alto, y sin los widgets
+nuevos. No edites ese panel en la consola anterior, porque al guardarlo allí se escribe esa
+disposición.
+
+#### Después de actualizar {#v0220-after}
+
+- **Revisa una vez cada panel que te importe.** Ábrelo en el editor: un aviso indica que se
+  convirtió y nombra cualquier gráfico al que se le quitó el número de muestras. Comprueba la
+  disposición, guarda y, si el panel está publicado, publica una versión nueva.
+- **Busca los widgets que ahora rechazan un grupo** y cámbialos por la tabla de flota o por un
+  gráfico de barras con una barra por dispositivo.
+- **No hace falta nada más.** Todos los ajustes nuevos tienen valores por defecto.
+
+##### El broker recuerda los eventos reentregados durante 10 minutos {#v0220-dedup}
+
+`resolved-events` y `failed-events` ahora descartan un evento publicado de nuevo durante 10
+minutos, frente a los 2 minutos por defecto del broker. Antes, un evento cuyo origen se reentregaba
+tras dos publicaciones fallidas podía guardarse dos veces, y la detección podía contarlo dos veces.
+La ventana del flujo de eventos entrantes pasa de 30 a 10 minutos. Sigue cubriendo todas las
+reentregas mientras un consumidor está en marcha, y un pod de `event-sources` o
+`device-management` que vuelve en unos 8 minutos. Si un pod está caído más tiempo, o un broker
+guarda una publicación, pierde su confirmación y después falla publicaciones durante más de unos
+8 minutos, los eventos en vuelo se guardan dos veces. Ejecuta `event-sources` y
+`device-management` con 2 o más réplicas para evitar el caso del pod. El límite de memoria de cada
+servidor NATS pasa de 2Gi a 4Gi (`GOMEMLIMIT` de 1638MiB a 3276MiB), porque cada servidor guarda
+cada id dentro de estas ventanas: unos 2,6 GiB con 10.000 eventos por segundo sostenidos. La
+petición de 768Mi no cambia, así que ningún servidor se coloca de otra forma. `dcctl upgrade`
+aplica primero el broker y reinicia sus servidores, de uno en uno con `--ha`. Después, cada
+servicio cambia las ventanas de los flujos existentes en su sitio al arrancar por primera vez;
+no se recrea ningún flujo y no se pierde ningún mensaje. **Si tu `terraform.tfvars` define
+`nats_memory_limit` por debajo de 4Gi, la actualización conserva tu valor.** Con 2Gi un servidor
+solo puede sostener unos 3.000 eventos por segundo antes de que las tablas de ids lo dejen sin
+margen. Súbelo a 4Gi, o quita la línea, antes de actualizar.
+
+#### Qué cambió {#v0220-what-changed}
+
+##### Los paneles se guardan en un formato nuevo {#v0220-dashboard-format}
+
+La definición de un panel pasa de `schemaVersion` 1 a 3 en dos pasos, y un panel sin
+`schemaVersion` se lee por su forma. Todos los lugares que cargan una definición la convierten: el
+editor, `/dash`, la clonación, la importación, la comparación de versiones y la reversión. Una
+carga nunca vuelve a escribir la definición guardada.
+
+**La cuadrícula (formato 2).** La cuadrícula anterior tenía columnas fluidas (24 por defecto) y
+filas de altura fija (40 px). La nueva tiene celdas cuadradas, medidas en celdas en ambas
+direcciones, y dos widgets de la cuadrícula no pueden solaparse. No existe una correspondencia
+exacta entre ambas, así que la conversión es una aproximación:
+
+- las líneas de columna se escalan al nuevo número de columnas y se redondean, de modo que los
+  widgets que se tocaban en una línea se siguen tocando;
+- las líneas de fila se convierten a un ancho de referencia de 1366 px;
+- el espacio anterior pasa a ser el canal (gutter);
+- `z` y el `offset` en píxeles se descartan, porque la cuadrícula no tiene capas;
+- lo que se solapa tras el redondeo, o se solapaba mediante `z`, se desplaza hacia abajo hasta que
+  cabe, y cada widget queda debajo de los widgets que tenía encima.
+
+Se conservan todos los widgets, con su tipo, su vínculo y sus opciones, incluido un widget de un
+tipo que esta compilación no conoce.
+
+**Ventanas de los gráficos (formato 3).** Un `timeseries-chart` guardaba un número de muestras,
+`options.window` (300 por defecto). Ahora dibuja un intervalo de tiempo: `windowSeconds` o, si no
+indica ninguno, el rango de tiempo del panel. Un número de muestras no tiene un intervalo honesto,
+porque depende de la frecuencia con la que informa el dispositivo, así que la conversión descarta
+`window` y el gráfico sigue el rango de tiempo del panel. Es una hora salvo que el panel indique
+otra, que es la hora que ya cargaba cada gráfico, así que lo que muestra un gráfico al cargarse no
+cambia. Un gráfico que debía ser más corto o más largo necesita un intervalo fijado a mano. Los
+demás widgets conservan su `window`.
+
+**Qué ven los autores.** En el editor, un panel convertido muestra un aviso que pide revisar la
+disposición y guardar para conservarla en el formato nuevo. Cuando hay gráficos que perdieron el
+número de muestras, también los nombra por su título. Guardar está habilitado aunque no haya otra
+edición, y al guardar se escribe el formato nuevo y desaparece el aviso. Una versión publicada es
+inmutable, así que sigue en el formato anterior y se convierte cada vez que se ve, hasta que
+publiques una versión nueva. Un archivo de panel exportado desde la `v0.21.x` se importa y se
+convierte de la misma forma.
+
+##### Si desarrollas con los paquetes npm {#v0220-packages}
+
+`@devicechain/dashboards`, `@devicechain/widgets`, `@devicechain/widget-sdk`, `@devicechain/client`
+y `@devicechain/brand` se publican como `0.22.0`.
+
+**Pasa a `0.22.0` antes de que se guarden paneles en el formato nuevo.** El analizador de `0.21`
+ignora `schemaVersion` y lee una ubicación nueva como una caja sin extensión, así que un panel
+guardado por la `v0.22.0` se dibuja con cada widget de una celda de ancho y una de alto. No muestra
+ningún error. Los paneles guardados antes de la actualización se siguen dibujando bien con `0.21`
+hasta que se vuelven a guardar.
+
+**Desde `0.22.0`, un panel guardado por una versión más reciente se rechaza en lugar de dibujarse
+mal.** `parseDashboardDefinition` lanza un `DashboardDefinitionError` con `code: 'schemaTooNew'` y
+la versión encontrada en `found`. Comprueba `code` en lugar de `instanceof`, que falla cuando una
+aplicación empaqueta dos copias del paquete. `/dash`, board-replay y, en la consola, la página de
+detalle, la reversión, la importación y la clonación muestran un mensaje que pide actualizar en
+lugar del panel. Esto solo protege a los visores `0.22.0` y posteriores de los paneles guardados
+por una versión futura: un visor `0.21` sigue dibujando mal un panel de la `v0.22.0`, así que
+actualiza primero los paquetes.
+
+**`@devicechain/dashboards`** cambia el modelo de disposición:
+
+- se eliminan `WidgetBox`, `resolveWidgetBox`, `baseBox`, `setWidgetBox`, `bringToFront`,
+  `gridBoxToPx` y `pxToGridBox`. Los sustituyen `Placement`, `resolvePlacement`, `basePlacement`,
+  `setWidgetPlacement`, `gridPlacementToPx` y `pxToGridPlacement`; no hay capas, así que nada
+  sustituye a `bringToFront`;
+- `WidgetLayout` asocia un punto de corte a un `Placement`, `Breakpoints` asocia un nombre a un
+  `BreakpointSpec`, `CanvasGrid` sustituye `gap` y `rowHeight` por `minCellSize`, `gutter` y
+  `padding`, y `GridGeometry` sustituye sus tamaños de columna y fila por `cell` y `gutter`;
+- `SYNTHETIC_GENERATORS` solo enumera los identificadores de los generadores. Aporta tus propias
+  etiquetas; los identificadores guardados no cambian;
+- `parseDashboardDefinition` ahora rechaza widgets de la cuadrícula que se solapan. Una definición
+  anterior se convierte antes de esa comprobación.
+
+**`@devicechain/widgets`:**
+
+- `severityColor(severity)` pasa a ser `severityColor(colors, severity)`;
+- la opción `window` de `timeseries-chart` se sustituye por `windowSeconds`, y la versión de
+  opciones del gráfico pasa de 1 a 2.
+
+**`@devicechain/widget-sdk`** no elimina ninguna exportación y añade muchas: tokens de tamaño y
+densidad del panel, texto ajustado a la caja, antigüedad del valor y el indicador de conexión,
+niveles y colores de severidad, umbrales y el rango de tiempo del panel (`useWidgetTimeRange`,
+`MAX_SPAN_SAMPLES`, `withinSpan`), además de nuevos constructores de gráficos en `/echarts`.
+`useElementSize` gana un parámetro opcional `step` y `WidgetFrame` las propiedades opcionales
+`flush` y `sampleTime`. Tres cambios que una compilación de TypeScript puede notar:
+
+- `ChartTheme` tiene un campo obligatorio `severity`. Solo importa si construyes un tema a mano en
+  lugar de llamar a `useChartTheme` o `resolveChartTheme`;
+- las uniones `WidgetChannel` (ahora con `aggregate`), `WidgetId`, `BuiltinWidgetId`, `ThemeVar` y
+  `OptionSpec` ganaron miembros, así que un `switch` exhaustivo sobre una de ellas necesita un caso
+  nuevo;
+- `formatValue` sin precisión ahora redondea a 3 decimales, o a 4 cifras significativas por
+  debajo de 1, donde antes imprimía el número sin redondear.
+
+`SDK_API_VERSION` no cambia, y el widget de terceros de ejemplo del repositorio compila contra
+`0.22.0` sin cambios. La sección `Upgrading from 0.21` del README de cada paquete, en
+[`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards), [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) y
+[`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk), enumera los cambios con sus sustitutos.
+**`@devicechain/client`** solo añade: `createSessionTokens` y
+`update-management` como área. **`@devicechain/brand`** no cambia.
+
+##### Un widget de un solo dispositivo rechaza un grupo {#v0220-group-refusal}
+
+El flujo de mediciones indexaba sus últimos valores por nombre de medición. Vinculado a un grupo de
+dispositivos, cada dispositivo que informaba `temperature` sobrescribía a los demás, así que una
+tarjeta, un indicador, un gráfico o una tabla mostraba el dispositivo que había hablado el último
+como si fuera la respuesta. Esos widgets ahora rechazan un grupo con una frase que remite a la
+tabla de flota o al modo de una barra por dispositivo del gráfico de barras. Esto cubre la tarjeta
+de último valor, los indicadores, el gráfico de serie temporal, la tabla, el gráfico circular, la
+tarjeta de estadística y un gráfico de barras en su modo por medición. El editor solo ofrece un
+grupo a la tabla de flota, al gráfico de barras, a los widgets de alarmas y al mapa.
+
+##### dcctl rechaza un `--kube-context` en conflicto {#v0220-kube-context}
+
+`dcctl upgrade` con un `--kube-context` que nombra el clúster registrado de la propia instancia
+ahora renderiza exactamente la misma instancia que sin la opción. Antes descartaba el ajuste de
+colocación del almacenamiento de blobs local, y el chart rechazaba el renderizado.
+
+Un `--kube-context` que nombra un contexto **distinto** del registrado para la instancia ahora lo
+rechazan `dcctl upgrade`, `dcctl destroy` y `dcctl sim`. Antes sustituía el registro sin avisar.
+Quita la opción para usar el clúster registrado. Si lo que está mal es el registro, porque el
+clúster se reconstruyó o se renombró su contexto, elimina
+`~/.devicechain/instances/<instance>/instance.json` y vuelve a ejecutar con `--kube-context`.
+
+##### El estado de conexión de un dispositivo deshabilitado sigue actualizándose {#v0220-disabled-presence}
+
+Las conexiones, desconexiones y degradaciones de un dispositivo deshabilitado ahora llegan a
+device-state y al historial de eventos, así que su estado de conexión sigue siendo cierto mientras
+está deshabilitado. La detección las sigue ignorando, de modo que no salta ninguna alarma para un
+dispositivo deshabilitado, y sus mediciones, ubicaciones y comandos se siguen rechazando. Un nodo
+de borde Sparkplug puede hacer que un dispositivo hijo deshabilitado aparezca conectado, porque la
+presencia que el nodo informa de sus dispositivos es de confianza por diseño. Un contador nuevo,
+`devicechain_eventsources_presence_reconcile_unapplied_total`, cuenta las reparaciones de la reconciliación que se enviaron pero no se vieron
+aplicadas.
+
+##### Los comandos retenidos siguen la ventana de mantenimiento actual {#v0220-window-follow}
+
+Un comando retenido por una ventana de mantenimiento ahora sigue la ventana **actual** de su tipo
+de dispositivo. Si cambias un tipo de la ventana A a la ventana B, los comandos que ya esperaban
+pasan a la próxima apertura de B. Si **quitas** la ventana de un tipo, sus comandos en espera se
+**liberan de inmediato**. Las notas de la `v0.21.0` decían que seguían retenidos; eso ya no es así.
+Los comandos de un dispositivo deshabilitado siguen retenidos en cualquier caso. Antes de quitar
+una ventana, comprueba qué está esperando en ella.
+
+También se corrige: los comandos en cola de un dispositivo deshabilitado ya no mantienen al emisor
+LwM2M sondeando en un bucle continuo, y un comando cuya confirmación se rechaza porque su ventana
+acaba de cerrarse ahora queda aparcado para la próxima apertura en lugar de quedarse en `SENT`.
+Una reclamación rechazada porque el dispositivo está deshabilitado se cuenta en
+`devicechain_commanddelivery_command_delivery_claims_refused_disabled_total`.
+
+##### Valores por defecto que cambiaron {#v0220-defaults}
+
+###### Más publicaciones en vuelo {#v0220-publish-windows}
+
+En un broker replicado una confirmación tarda entre 8 y 11 ms, y una ruta que espera cada una antes
+de enviar la siguiente queda limitada por ello. Cinco rutas mantienen ahora una ventana de
+publicaciones en vuelo, cada una con su ajuste. Cada ajuste se lee al arrancar; un valor fuera de 1
+a 1024, o un `0` explícito, detiene el servicio.
+
+| Ajuste | Servicio | Por defecto | Antes |
+| --- | --- | --- | --- |
+| `resolution.publishWindow` | `device-management` | 512 | 128, fijo |
+| `capture.publishWindow` | `event-sources` | 512 | 128, fijo |
+| `externalMqtt.publishWindow` | `event-sources` | 128 por fuente | 5 por fuente, unos 440 eventos por segundo |
+| `brokerPresence.publishWindow` | `event-sources` | 128 | una por sujeto, unas 88 transiciones por segundo |
+| `ingest.publishWindow` | `sparkplug-ingest` | 32 por conexión | una, unos 88 mensajes por segundo |
+
+Las dos primeras leen de flujos que reentregan, así que una ventana más profunda solo cuesta
+memoria. Las tres últimas entregan como mucho una vez: el broker externo, o el aviso de presencia,
+no se repite. Un pod que se detiene limpiamente, o que pasa una fuente a otro pod, espera hasta 8
+segundos lo que tiene en vuelo. **Un pod que muere de repente pierde hasta una ventana además de lo
+que perdía antes**: hasta 128 eventos por fuente MQTT externa (antes 5), 32 mensajes por conexión
+Sparkplug (antes 1) y 128 transiciones de presencia, que repara la siguiente pasada de
+reconciliación. Si eso te importa más que el ritmo, baja la ventana. Los ajustes se describen en
+[Observabilidad](observability.md) y [Servicios de borde](edge-services.md).
+
+###### El lote de lectura es 256 {#v0220-fetch-batch}
+
+Cuando `infrastructure.nats.fetch.batch` no está definido, un servicio ahora lee 256 mensajes por
+petición en lugar de 128. Un valor que definas sigue mandando. En mediciones en GKE,
+device-management, que estaba limitado por el viaje de ida y vuelta de cada petición, resolvió un
+10 a 12 % más de eventos por segundo con el lote mayor. La ventana de confirmación de cada mensaje
+sigue empezando cuando se entrega, así que un lector que procesa los mensajes de uno en uno tiene
+ahora unos 234 ms por mensaje, no 469 ms, antes de que se reentregue el último de un lote completo.
+Un mensaje reentregado se procesa de nuevo, no se pierde. Si ejecutas un lector así de lento,
+define `batch: 128`. Consulta [Lectura anticipada](observability.md#fetch-ahead).
+
+###### device-management pide menos CPU {#v0220-dm-cpu}
+
+`functionalAreas.device-management.measuredRequests.cpu` baja de 800m a 450m, que es el uso medido
+de device-management a 6.000 eventos por segundo en esta versión. El límite de CPU sigue en 2
+núcleos. Un valor que definas en tus propios valores se conserva.
+
+##### device-state hace menos trabajo por evento {#v0220-device-state}
+
+Un lote de eventos de datos simples ahora escribe todas sus filas de dispositivo en un único upsert
+en lugar de una lectura con bloqueo y una reescritura por lote. La cola entre el lector de
+device-state y sus escritores se dimensiona a partir del grupo de escritores (640 con los valores
+por defecto, antes 100), de modo que los escritores siguen ocupados cuando el servicio va
+retrasado. Los escritores también toman los bloqueos de fila en un único orden, lo que elimina un
+interbloqueo poco frecuente entre un escritor que crea filas de dispositivo y otro que reclama la
+presencia de los mismos dispositivos. A 6.000 eventos por segundo, device-state usó un 21 % menos
+de CPU por evento que en la `v0.21.0`; parte de ello es la corrección de lectura de la base de
+datos que ya publicó la `v0.21.1`.
+
+##### Medido en GKE {#v0220-performance}
+
+Con la misma forma de clúster de GKE que la ronda de mediciones anterior, una compilación con los
+cambios de device-state, device-management y event-sources de esta versión sostuvo 10.000 eventos
+por segundo durante 10 minutos en todas las etapas: 6 millones de eventos, ninguno perdido,
+duplicado ni desordenado. Es el mismo ritmo sostenido que antes, no uno mayor: con la ingesta ahora
+más rápida, el lado de lectura de device-management pasó a ser la primera etapa en retrasarse, a
+unos 10.300 eventos por segundo con una sola réplica. El lote de lectura de 256 es el cambio
+dirigido a ello, y dio un 12 % más en una ejecución de 3 minutos. En los cinco servicios de la ruta
+de eventos, la CPU a 10.000 eventos por segundo bajó un 6 % respecto a esa ronda, que se ejecutó
+antes de la corrección de lectura de la base de datos de la `v0.21.1`.
+
+##### Alertas y métricas nuevas {#v0220-observability}
+
+Alertas nuevas, con `metrics.alerts` activado:
+
+- `ExternalMqttSourceLosingEvents`: los eventos de una fuente MQTT externa no se pudieron publicar
+  durante 10 minutos, así que se pierden;
+- `BrokerPresenceLosingTransitions`: las transiciones de presencia no llegaron al flujo de eventos
+  durante 10 minutos;
+- `DeviceCredentialCacheTooSmall` y `DeviceLookupCacheTooSmall`: más del 5 % de las búsquedas de
+  device-management expulsaron otra entrada de una caché llena durante 15 minutos;
+- `DetectRuleStatWriteFailing`: no se pueden escribir los contadores de disparos de la salud de las
+  reglas. La detección no se ve afectada.
+
+Métricas nuevas: `devicechain_<area>_jetstream_publish_window_full_seconds_total`,
+`devicechain_<area>_jetstream_publish_window_full_total` y
+`devicechain_<area>_jetstream_publish_duplicates_total` para las ventanas de publicación
+anteriores, `devicechain_eventsources_total_msg_publish_failed{source}` para MQTT externo y
+`devicechain_eventprocessing_detect_rule_stat_write_failures_total` y `devicechain_eventsources_presence_reconcile_unapplied_total`. Ninguna métrica se renombró
+ni se eliminó.
+
+##### Correcciones de una revisión de extremo a extremo {#v0220-review-fixes}
+
+- **Los widgets en vivo se recuperan tras una caída de cualquier duración.** Antes, tras unos 40
+  segundos sin red o sin servidor, mostraban "Datos no disponibles" hasta recargar la página, y un
+  flujo que el servidor terminaba podía dejar de actualizarse mientras el indicador seguía diciendo
+  en vivo. Un widget cuyo código no se pudo descargar ahora se puede reintentar con
+  **Restablecer widget**.
+- **Los datos del panel muestran lo que dicen.** Un slot que se apunta a otro dispositivo con el
+  panel en pausa muestra el dispositivo nuevo. Las barras con una barra por dispositivo siguen
+  actualizándose. Una tarjeta de estadística sin dispositivo pide elegir un dispositivo en lugar de
+  mostrar "0 lecturas". Una celda de la tabla de flota de un dispositivo que informa poco nunca
+  muestra la media de un intervalo como su última lectura, y una celda que supera el límite de
+  lectura dice "no cargado".
+
+##### Limitación conocida: el historial tras una reconexión {#v0220-known-limitation}
+
+Cuando un panel se reconecta, el historial que se perdió no se vuelve a leer. Un gráfico de líneas
+traza una línea recta sobre la caída, y las cifras de flota y agregadas omiten las lecturas
+enviadas durante ella. Hay una corrección prevista.
+
+##### También en esta versión {#v0220-also}
+
+- **Paneles.** Las celdas siguen siendo cuadradas y el número de columnas sigue al contenedor, así
+  que un teléfono muestra un widget por fila y una pantalla de pared obtiene celdas más grandes. El
+  editor se ajusta a las celdas, aparta a los vecinos, funciona con el teclado, puede anclar un
+  widget a otro y muestra los problemas de disposición en cada widget; un error de disposición
+  bloquea la publicación hasta que **Ajustar a los límites** lo resuelve. También tiene deshacer y
+  rehacer, duplicar, y copiar y pegar entre paneles; un widget pegado donde su vínculo de
+  dispositivo no existe, como el panel de otro inquilino, recibe un slot nuevo sin vincular y no
+  conserva ninguna referencia a dispositivos. Un panel tiene un rango
+  de tiempo (de 15 minutos a 7 días) y una pausa; los comandos se siguen enviando durante la pausa.
+  Widgets nuevos: indicadores lineal y de nivel, batería, luz de estado, barras de señal, brújula,
+  anillo de progreso, control deslizante y conmutador de comandos, tarjeta de estadística,
+  gráficos de barras y circular, y la tabla de flota. Los widgets ganan umbrales, unidades y
+  precisión, muestran la antigüedad de su valor y dicen por qué están vacíos. `/dash` mantiene viva
+  su sesión y tiene un modo quiosco para pantallas de pared.
+- **Actualizaciones por aire en la consola:** páginas de Artefactos y Firmantes, y una pestaña de
+  Actualizaciones en la página del dispositivo. GraphQL añade `Artifact.signatures`.
+- **Límites de nivel.** El formulario de nivel define el techo de comandos retenidos, la prioridad
+  de descarte y los tres límites de geocercas, y `AdminTenant.effectiveScalarSettings` informa de
+  dónde procede cada valor.
+- **La guía de usuario de la consola** tiene 17 capítulos en inglés, español y chino.
+- **La tabla de alarmas parte las claves de alarma y los originadores por los guiones**
+  (`engine-` / `overheat`) en lugar de en mitad de una palabra.
+- **board-replay ya no incluye el polyfill de precarga de módulos de Vite.** En Safari anterior a
+  17 y Firefox anterior a 115, los fragmentos compartidos de un widget que se carga al usarse por
+  primera vez llegan un viaje de ida y vuelta más tarde. Nada más cambia.
+
 ### v0.21.1: un parche, nada que hacer {#v0211-upgrade}
 
 `v0.21.1` es una actualización directa desde `v0.21.0`: `dcctl install` para el clúster y después
