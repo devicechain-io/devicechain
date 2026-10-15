@@ -99,6 +99,8 @@ export function buildFleet(i: FleetInputs): FleetState {
       latest,
       seed: seed === undefined ? 'pending' : seed === 'failed' ? 'failed' : 'ready',
       observed: [...observed],
+      // A live reading of an unread name is its value: cellFor looks at `latest` first.
+      ...(seeded?.unread?.length ? { unread: seeded.unread } : {}),
     };
   });
   return {
@@ -131,6 +133,8 @@ export type Cell =
   | { kind: 'failed' }
   // The device reported other measurements in the span, but never this one.
   | { kind: 'not-reported' }
+  // The device reported this in the span, but its newest reading was not loaded (MemberSeed.unread).
+  | { kind: 'unread' }
   // The device reported nothing at all in the span.
   | { kind: 'no-data' };
 
@@ -141,6 +145,7 @@ export function cellFor(member: FleetMember, measurement: string): Cell {
   }
   if (member.seed === 'pending') return { kind: 'loading' };
   if (member.seed === 'failed') return { kind: 'failed' };
+  if (member.unread?.includes(measurement)) return { kind: 'unread' };
   return member.observed.length > 0 && !member.observed.includes(measurement) ? { kind: 'not-reported' } : { kind: 'no-data' };
 }
 

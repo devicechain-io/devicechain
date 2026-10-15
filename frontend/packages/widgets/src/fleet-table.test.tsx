@@ -267,6 +267,11 @@ describe('explained empty cells', () => {
     expect(cell(container, 'partial', 'humidity').textContent).toContain('40');
   });
 
+  it('says "not loaded", never "no data in range", for a reported measurement whose newest reading was not read', () => {
+    const { container } = show(fleet([member('unread', 'Unread', {}, { observed: ['temperature'], unread: ['temperature'] })]));
+    expect(cell(container, 'unread', 'temperature').textContent).toBe('not loaded');
+  });
+
   it('shows a pending seed as loading and a failed one as unreadable, never as an absence', () => {
     const { container } = show(state);
     expect(cell(container, 'loading', 'temperature').textContent).toBe('…');

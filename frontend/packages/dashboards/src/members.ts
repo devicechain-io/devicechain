@@ -73,6 +73,9 @@ export interface MemberSeedPlan {
 export interface MemberSeed {
   latest: Record<string, MeasurementSample>;
   observed: string[];
+  // Names it reported in the window whose newest reading the plan chose not to read (a bound on its
+  // reads): the device HAS data for them, so they must never read as "no data".
+  unread?: string[];
 }
 
 // How many seed reads may be in flight at once across the whole hub. Six is what a browser opens

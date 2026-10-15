@@ -183,6 +183,15 @@ describe('cellFor: why a cell is empty', () => {
   it('treats a non-finite number as no reading', () => {
     expect(cellFor(member({ latest: { temperature: s('a', 'temperature', Number.NaN) } }), 'temperature').kind).toBe('no-data');
   });
+
+  it('says a name the seed left unread is not loaded, never "no data", until a live reading gives it a value', () => {
+    const seed: MemberSeed = { latest: { fuel: s('a', 'fuel', 40) }, observed: ['fuel', 'engine'], unread: ['engine'] };
+    const fleet = buildFleet(inputs({ seeds: new Map([['a', seed]]) }));
+    expect(cellFor(fleet.members[0], 'engine').kind).toBe('unread');
+    expect(cellFor(fleet.members[0], 'fuel').kind).toBe('value');
+    const heard = buildFleet(inputs({ seeds: new Map([['a', seed]]), live: live(s('a', 'engine', 61)) }));
+    expect(cellFor(heard.members[0], 'engine')).toMatchObject({ kind: 'value', value: 61 });
+  });
 });
 
 describe('columnNames', () => {

@@ -157,8 +157,31 @@ describe('a paused alarm widget', () => {
       isDatasourceAvailable: async () => true,
     } as unknown as DashboardHub;
     const snap = (total: number): AlarmSnapshot => ({ alarms: [], total } as unknown as AlarmSnapshot);
-    return { hub, push: (total: number) => act(() => sink?.next(snap(total))) };
+    return {
+      hub,
+      push: (total: number) => act(() => sink?.next(snap(total))),
+      fail: () => act(() => sink?.error?.(new Error('socket closed'))),
+    };
   }
+
+  // The hub's reconnect path: a query fails while the socket is down, then the socket comes back and
+  // re-queries -- the same subscription answering again, with newer rows. Nothing was re-pointed, so
+  // the pause holds exactly.
+  it('a dropped and re-established stream while paused leaves the held count alone', () => {
+    const f = alarmHub();
+    const w = widget('alarm-count', { state: 'ACTIVE' }, undefined);
+    const { setRange } = mount(w, f.hub, live);
+    f.push(3);
+    setRange(frozen);
+    f.fail();
+    f.push(8);
+    f.push(9);
+    expect(screen.getByText('3')).toBeTruthy();
+    expect(screen.queryByText('8')).toBeNull();
+    expect(screen.queryByText('9')).toBeNull();
+    setRange(live);
+    expect(screen.getByText('9')).toBeTruthy();
+  });
 
   it('holds the count on screen while paused and shows the live one on resume', () => {
     const f = alarmHub();

@@ -27,6 +27,12 @@ references (`css`), formatters, the change-flash cue, option readers (`optString
 that only draws DOM imports from here and pulls in neither Apache ECharts nor MapLibre nor
 the built-in widgets.
 
+A stream hook never returns one subscription's snapshot for another. Since 0.22,
+`useAlarmStream` and `useLocationStream` return `loading: true` with no rows from the very
+render whose subscription changed (a re-pointed slot, a new filter), until the new
+subscription answers. Before 0.22 that one render still carried the previous subscription's
+alarms or positions.
+
 Chart helpers live on a separate entry, `@devicechain/widget-sdk/echarts`: the `EChart`
 wrapper, `buildLineOption` / `buildGaugeOption` and the chart colour theme. `echarts` is an
 **optional peer dependency**, needed only by a widget that imports that entry.

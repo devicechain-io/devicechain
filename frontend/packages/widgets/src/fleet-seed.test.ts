@@ -252,7 +252,7 @@ describe('memberSeedPlan on a long span: the latest reading, not a bucket averag
     expect(s.asked[2].name).toBeUndefined();
   });
 
-  it('shows no value, rather than an average, for a name past the re-read bound', async () => {
+  it('shows no value, rather than an average, for a name past the re-read bound, and marks it unread', async () => {
     const names = Array.from({ length: MAX_NARROW_READS + 1 }, (_, i) => `m${i}`);
     // Each name's newest reading in a different bucket, newest first.
     const s = bucketing(names.map((n, i): [string, string, number] => [n, iso(Date.parse('2026-10-14T09:00:00Z') - i * 3 * 3600_000), i]));
@@ -260,5 +260,7 @@ describe('memberSeedPlan on a long span: the latest reading, not a bucket averag
     expect(s.asked).toHaveLength(2 + MAX_NARROW_READS);
     expect(Object.keys(seed.latest).sort()).toEqual(names.slice(0, MAX_NARROW_READS));
     expect(seed.observed.sort()).toEqual(names);
+    // The device HAS data for the name left over: it is unread, not "no data".
+    expect(seed.unread).toEqual(names.slice(MAX_NARROW_READS));
   });
 });

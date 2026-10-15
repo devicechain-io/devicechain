@@ -29,7 +29,8 @@
 //      worth of rows -- and its newest minute is what the cell shows, as for a device seen in the
 //      tail. Names whose newest buckets coincide share one such read, and a device gets at most
 //      MAX_NARROW_READS of them, newest bucket first. A name left past that bound is not shown
-//      rather than shown as an average (it stays observed): an average is never the latest reading.
+//      rather than shown as an average (an average is never the latest reading), and is marked
+//      `unread`: the device has data for it, so its cell says "not loaded", never "no data".
 //
 // Ages. The store returns a bucket's start, not the time of its newest reading, so a seeded reading is
 // stamped at the start of its bucket (or of the span, when the bucket began before it). The reading
@@ -143,6 +144,7 @@ async function sharpen(
     byStamp.set(at, [...(byStamp.get(at) ?? []), name]);
   }
   const latest = { ...seed.latest };
+  const unread: string[] = [];
   const end = Date.parse(window.endTime) + 1;
   const stamps = [...byStamp.keys()].sort((a, b) => b - a);
   for (const [i, at] of stamps.entries()) {
@@ -160,8 +162,11 @@ async function sharpen(
         : {};
     for (const name of names) {
       if (has(minutes, name)) latest[name] = minutes[name];
-      else delete latest[name];
+      else {
+        delete latest[name];
+        unread.push(name);
+      }
     }
   }
-  return { latest, observed: seed.observed };
+  return { latest, observed: seed.observed, unread };
 }
