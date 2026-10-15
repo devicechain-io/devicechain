@@ -42,12 +42,12 @@ function recordingSource() {
   return { source, calls };
 }
 
-const layout = (col: number) => ({ base: { col, colSpan: 4, row: 0, rowSpan: 2, z: 0 } });
+const layout = (col: number) => ({ base: { mode: 'grid' as const, col, row: 0, cols: 4, rows: 2 } });
 
 const staticOnly: DashboardDefinition = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Static',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   slots: {},
   widgets: [
     { id: 'note', type: 'label', layout: layout(0), options: { text: 'Zone A' } },

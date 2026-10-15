@@ -30,15 +30,15 @@ afterEach(cleanup);
 const alarmCount = (id: string, datasource: WidgetInstance['datasource']): WidgetInstance => ({
   id,
   type: 'alarm-count',
-  layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } },
+  layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } },
   datasource,
   options: { title: id },
 });
 
 const board = (widgets: WidgetInstance[]): DashboardDefinition => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Unbound',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   slots: { machine: { type: 'device' } },
   widgets,
 });

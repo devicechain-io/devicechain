@@ -32,7 +32,7 @@ beforeEach(async () => {
 });
 afterEach(cleanup);
 
-const box = { base: { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: 1 } };
+const box = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 8, rows: 4 } };
 
 // The shared fixture board, bound to a device the fixture recording holds.
 function boardText(extra: unknown[] = []): string {
@@ -63,7 +63,7 @@ describe('the replay player with an installed extension package', () => {
   });
 
   it("flags a built-in saved against another settings version instead of rendering it", async () => {
-    const stale = { id: 'g', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 9 }, layout: box, options: {} };
+    const stale = { id: 'g', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 9 }, layout: { base: { ...box.base, row: 4 } }, options: {} };
     const stub = stubFetch(await files(boardText([stale])));
     const replay = await loadReplay({ recordingUrl: RECORDING_URL, boardUrl: BOARD_URL, fetchFn: stub.fetchFn, origin: ORIGIN });
     const gauge = replay.definition.widgets.find((w) => w.id === 'g')!;

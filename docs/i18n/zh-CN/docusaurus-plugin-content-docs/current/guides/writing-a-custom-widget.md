@@ -189,9 +189,9 @@ implementation: {
 
 ```ts
 layout: {
-  defaultSpan: { cols: 8, rows: 4 }, // 新添加组件的尺寸
-  minSpan: { cols: 4, rows: 2 },     // 可缩小到的最小尺寸（默认 1 x 1）
-  maxSpan: { cols: 24, rows: 12 },   // 可放大到的最大尺寸（默认：无限制）
+  defaultSpan: { cols: 4, rows: 3 }, // 新添加组件的尺寸
+  minSpan: { cols: 3, rows: 2 },     // 可缩小到的最小尺寸（默认 1 x 1）
+  maxSpan: { cols: 8, rows: 6 },     // 可放大到的最大尺寸（默认：无限制）
   resize: 'both',                    // 'both'（默认）、'horizontal'、'vertical' 或 'none'
 },
 ```
@@ -201,7 +201,9 @@ layout: {
 你声明的 `minSpan` 或 `maxSpan` 在固定方向上必须与 `defaultSpan` 一致。宿主构建注册表时，会拒绝违反这些规则的块。
 
 编辑器以 `defaultSpan` 添加新组件。`@devicechain/dashboards` 中的 `lintLayout` 会把超出限制放置该组件的仪表板报告为错误。请把 `minSpan` 设为组件仍然清晰可读的最小尺寸。
-未声明 `layout` 块的组件会以 4 x 2 个单元添加且不设限制，`lintLayout` 会提示它没有声明。单元尺寸与当前网格绑定，后续版本中可能会重新校准。
+未声明 `layout` 块的组件会以 4 x 2 个单元添加且不设限制，`lintLayout` 会提示它没有声明。
+
+单元格是正方形，仪表板显示的单元格永远不会小于其最小单元格尺寸（默认 56 像素；屏幕更窄时仪表板会重新排列）。因此请按这个最小单元格来确定 `minSpan`：使用默认的 8 像素间隔时，2 个单元为 120 像素，3 个为 184 像素，4 个为 248 像素。在更宽的屏幕上单元格会变大，组件只会变得更大。正方形单元格网格之前的版本按 24 个窄列、40 像素行的网格计数；仍声明这些数值的包可以继续使用，但其尺寸大约宽了一倍，`lintLayout` 会报告把它放在限制之外的仪表板。请把列数减半并重新检查行数。
 
 文字遵循仪表板的密度。`WidgetFrame` 会为组件添加内边距，并把组件的内容区设为尺寸容器，因此在其中，CSS 容器单位（`cqw`、`cqh`）
 量到的就是组件实际拥有的空间。请使用字号阶梯（`fontVar('md')` 以及 `xs` 到 `display` 的其他档位）和 `spaceVar(1)` 到

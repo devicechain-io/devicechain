@@ -4,13 +4,14 @@
       "base": 0
     },
     "grid": {
-      "columns": 24,
-      "gap": 8,
-      "rowHeight": 40
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
     },
     "sizing": "fill"
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "slots": {
     "edgeExtremes": {
       "defaultBinding": {
@@ -44,10 +45,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 24,
+          "cols": 12,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 2,
-          "z": 0
+          "rows": 1
         }
       },
       "options": {
@@ -69,10 +70,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 14,
-          "row": 2,
-          "rowSpan": 8,
-          "z": 0
+          "cols": 7,
+          "mode": "grid",
+          "row": 1,
+          "rows": 5
         }
       },
       "options": {
@@ -92,11 +93,11 @@
       "id": "wl-stress-gauge",
       "layout": {
         "base": {
-          "col": 14,
-          "colSpan": 10,
-          "row": 2,
-          "rowSpan": 4,
-          "z": 0
+          "col": 7,
+          "cols": 5,
+          "mode": "grid",
+          "row": 1,
+          "rows": 3
         }
       },
       "options": {
@@ -120,11 +121,11 @@
       "id": "wl-stress-card",
       "layout": {
         "base": {
-          "col": 14,
-          "colSpan": 10,
-          "row": 6,
-          "rowSpan": 4,
-          "z": 0
+          "col": 7,
+          "cols": 5,
+          "mode": "grid",
+          "row": 4,
+          "rows": 2
         }
       },
       "options": {
@@ -144,10 +145,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 12,
-          "row": 10,
-          "rowSpan": 6,
-          "z": 0
+          "cols": 6,
+          "mode": "grid",
+          "row": 6,
+          "rows": 3
         }
       },
       "options": {
@@ -168,11 +169,11 @@
       "id": "wl-stress-silence",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 12,
-          "row": 10,
-          "rowSpan": 6,
-          "z": 0
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 6,
+          "rows": 3
         }
       },
       "options": {
@@ -186,10 +187,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 12,
-          "row": 16,
-          "rowSpan": 4,
-          "z": 0
+          "cols": 6,
+          "mode": "grid",
+          "row": 9,
+          "rows": 2
         }
       },
       "options": {
@@ -203,11 +204,11 @@
       "id": "wl-stress-image",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 12,
-          "row": 16,
-          "rowSpan": 4,
-          "z": 0
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 9,
+          "rows": 2
         }
       },
       "options": {

@@ -9,7 +9,7 @@ import { ACME_TANK_ID, ACME_TANK_WIDGET_JSON, acmeTankWidget } from '../fixtures
 import { createHostWidgetRegistry, hostWidgetCatalog, hostWidgetRegistry } from './index';
 
 const board = (widgets: unknown[]) => ({ title: 'T', slots: { tank: { type: 'device' } }, widgets });
-const box = { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } };
+const box = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } };
 
 describe('the host composition', () => {
   it('holds every built-in and is one shared, sealed registry', () => {
@@ -48,7 +48,7 @@ describe('what the catalog changes about parsing', () => {
   });
 
   it("a built-in saved against another settings version is a placeholder, which only a catalog can know", () => {
-    const stale = { id: 'g', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 9 }, layout: box, options: {} };
+    const stale = { id: 'g', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 9 }, layout: { base: { ...box.base, row: 4 } }, options: {} };
     const catalog = hostWidgetCatalog();
 
     const parsed = parseDashboardDefinition(board([stale]), { catalog });
@@ -62,7 +62,7 @@ describe('what the catalog changes about parsing', () => {
   it('a legacy built-in with no version metadata, and one at the installed version, still resolve', () => {
     const catalog = hostWidgetCatalog();
     const legacy = { id: 'a', type: 'gauge', layout: box, options: {} };
-    const current = { id: 'b', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 1 }, layout: box, options: {} };
+    const current = { id: 'b', type: 'gauge', widget: { version: '1.0.0', optionsVersion: 1 }, layout: { base: { ...box.base, row: 4 } }, options: {} };
     const parsed = parseDashboardDefinition(board([legacy, current]), { catalog });
     expect(parsed.widgets.map((w) => w.type)).toEqual(['gauge', 'gauge']);
   });

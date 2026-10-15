@@ -31,7 +31,7 @@ import { TimeSeriesChart } from './widgets/time-series-chart';
 const widget = (type: WidgetType, options: Record<string, unknown>): WidgetInstance => ({
   id: 'w',
   type,
-  layout: { base: { col: 0, colSpan: 2, row: 0, rowSpan: 2, z: 1 } },
+  layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 2, rows: 2 } },
   datasource: { kind: 'device', deviceToken: 'd', measurements: ['temperature'] },
   options,
 });

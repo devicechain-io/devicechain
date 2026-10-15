@@ -218,7 +218,7 @@ const registry: WidgetRegistry = createWidgetRegistry([
 
 // ---- fixtures ------------------------------------------------------------------
 
-const box = (col: number) => ({ col, colSpan: 4, row: 0, rowSpan: 3, z: 0 });
+const box = (col: number) => ({ mode: 'grid' as const, col, row: 0, cols: 4, rows: 3 });
 const ref = { version: '1.2.0', optionsVersion: 1 };
 
 const tankJson = (id: string, over: Record<string, unknown> = {}) => ({
@@ -232,9 +232,9 @@ const tankJson = (id: string, over: Record<string, unknown> = {}) => ({
 });
 
 const raw = (widgets: unknown[]) => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Ext',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   slots: { tank: { type: 'device' } },
   widgets,
 });
@@ -294,7 +294,7 @@ describe('an extension widget from custom JSON', () => {
 
 describe('a widget the registry cannot resolve', () => {
   const missing = tankJson('gone', { type: 'acme/not-installed', futureField: { a: [1, { b: 2 }] } });
-  const mismatched = tankJson('old', { widget: { version: '0.9.0', optionsVersion: 7 }, futureField: 'kept' });
+  const mismatched = tankJson('old', { widget: { version: '0.9.0', optionsVersion: 7 }, futureField: 'kept', layout: { base: box(4) } });
   const unversioned = (() => {
     const w = tankJson('bare');
     delete (w as Record<string, unknown>).widget;
@@ -501,7 +501,7 @@ describe('subscriptions', () => {
     const def = parse([
       tankJson('t1'),
       { id: 'v', type: 'acme/valve', widget: { version: '1.0.0', optionsVersion: 1 }, layout: { base: box(4) }, datasource: { kind: 'slot', slot: 'tank', measurements: [] } },
-      tankJson('gone', { type: 'acme/not-installed' }),
+      tankJson('gone', { type: 'acme/not-installed', layout: { base: box(8) } }),
     ]);
     const hub = new DashboardHub({ resolver });
     render(<DashboardRenderer definition={def} hub={hub} registry={registry} bindings={bound} seedHistory />);

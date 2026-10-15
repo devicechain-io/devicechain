@@ -21,7 +21,7 @@ function placeholder(): UnknownWidgetInstance {
       {
         id: 'deck-1',
         type: 'card-deck',
-        layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 4, z: 0 } },
+        layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 4 } },
         options: { title: 'Fleet' },
       },
     ],

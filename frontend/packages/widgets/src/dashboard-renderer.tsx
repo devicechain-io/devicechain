@@ -1,36 +1,57 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// DashboardRenderer maps a parsed DashboardDefinition onto a real CSS Grid (ADR-039
-// amendment 2026-07-08): the canvas is `display:grid` with `repeat(columns, 1fr)`, so
-// the board FILLS whatever width its container gives it; each widget is placed by span
-// (`grid-column`/`grid-row`), layered by `z`, and nudged by an optional signed-pixel
-// `offset`. Container sizing (fill / fixed-width / fixed-height) is a mount knob the
-// host may override via the `sizing` prop. It is view-only — the canvas editor lives in
-// the console. This is the shared viewer the console and the reference /dash app mount.
+// DashboardRenderer maps a parsed DashboardDefinition onto a real CSS Grid of SQUARE cells: the
+// canvas is `display:grid` with `repeat(columns, 1fr)`, so the board FILLS whatever width its
+// container gives it, and every row is as tall as a column is wide (the cell size is computed in
+// CSS from the grid's own width, `100cqw`, so it needs no measurement and has no first-frame
+// flash). A `grid` widget occupies its footprint (`grid-column`/`grid-row`); a `relative` widget
+// is drawn over its host's area at the host's anchor point, offset in cell pitches, and above
+// every grid widget. Gutters and padding are lengths or spacing tokens scaled by the density;
+// each widget's frame is the canvas default merged with its own (resolveFrame).
+//
+// Adaptive columns and reflow (a container too narrow for the authored column count at
+// minCellSize) are not here yet: the authored layout renders at every width. Container sizing
+// (fill / fixed-width / fixed-height) is a mount knob the host may override via the `sizing`
+// prop. It is view-only; the canvas editor lives in the console. This is the shared viewer the
+// console and the reference /dash app mount.
 
 import {
   activeBreakpoint,
+  anchorFraction,
+  breakpointColumns,
   DEFAULT_CANVAS_DENSITY,
   defaultHistoryWindow,
   fetchWidgetHistory,
-  resolveWidgetBox,
+  resolveFrame,
+  resolvePlacement,
   resolveWidgetDatasource,
   UNKNOWN_WIDGET_TYPE,
   type Breakpoints,
   type CanvasBackground,
   type CanvasDensity,
+  type CanvasGrid,
   type CanvasSizing,
   type DashboardDefinition,
+  type GridLength,
+  type GridPlacement,
+  type RelativePlacement,
   type WidgetActions,
-  type WidgetBox,
   type WidgetDataSource,
   type MeasurementSample,
   type SlotBinding,
+  type WidgetFrameSpec,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import { densityScale, tokenStyle, WidgetDensityProvider, WidgetTokenStyles, type WidgetRegistry } from '@devicechain/widget-sdk';
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import {
+  densityScale,
+  tokenStyle,
+  WidgetDensityProvider,
+  WidgetFrameStyleProvider,
+  WidgetTokenStyles,
+  type WidgetRegistry,
+} from '@devicechain/widget-sdk';
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
 import {
@@ -113,9 +134,9 @@ export function DashboardRenderer({
   const registry = registryProp ?? defaultWidgetRegistry();
   const histories = useWidgetHistories(widgets, seedHistory, registry);
 
-  const { grid, background: bg } = definition.canvas;
-  const rowGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
-  const colGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.col;
+  const { grid, background: bg, frame: canvasFrame } = definition.canvas;
+  const columns = breakpointColumns(definition.canvas, breakpoint);
+  const lengths = gridCss(grid, columns);
   const effectiveSizing = sizing ?? definition.canvas.sizing;
   const effectiveDensity = density ?? definition.canvas.density ?? DEFAULT_CANVAS_DENSITY;
   const scale = densityScale(effectiveDensity);
@@ -131,34 +152,42 @@ export function DashboardRenderer({
       <WidgetTimeZoneProvider timeZone={timeZone}>
       <WidgetSelectProvider select={select}>
         <WidgetCandidatesProvider candidates={candidates}>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${grid.columns}, minmax(0, 1fr))`,
-            gridAutoRows: `${grid.rowHeight}px`,
-            columnGap: colGap,
-            rowGap,
-            width: '100%',
-          }}
-        >
-          {widgets.map((widget) => {
-            const box = resolveWidgetBox(widget.layout, breakpoint);
-            return (
-              // data-widget names the grid item a widget occupies, so a check over the rendered
-              // board (the readability gate in apps/board-replay) can find each widget's box.
-              <div key={widget.id} data-widget={widget.id} style={gridItemStyle(box, grid.columns)}>
-                <WidgetSubjectProvider label={widgetSubjectLabel(widget)}>
-                  <ConnectedWidget
-                    widget={widget}
-                    hub={hub}
-                    registry={registry}
-                    actions={actions}
-                    initialSamples={histories[widget.id]}
-                  />
-                </WidgetSubjectProvider>
-              </div>
-            );
-          })}
+        <div style={{ padding: lengths.padding }}>
+          {/* The query container: its width is the grid's, so 100cqw below is the grid width. */}
+          <div style={{ containerType: 'inline-size' }}>
+            <div
+              data-grid=""
+              style={{
+                display: 'grid',
+                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                gridAutoRows: CELL,
+                columnGap: lengths.gutterX,
+                rowGap: lengths.gutterY,
+                width: '100%',
+                ...({ '--dc-cell': lengths.cell } as CSSProperties),
+              }}
+            >
+              <PlacedWidgets
+                widgets={widgets}
+                breakpoint={breakpoint}
+                columns={columns}
+                lengths={lengths}
+                render={(widget) => (
+                  <WidgetFrameStyleProvider frame={resolveFrame(canvasFrame, widgetFrame(widget))}>
+                    <WidgetSubjectProvider label={widgetSubjectLabel(widget)}>
+                      <ConnectedWidget
+                        widget={widget}
+                        hub={hub}
+                        registry={registry}
+                        actions={actions}
+                        initialSamples={histories[widget.id]}
+                      />
+                    </WidgetSubjectProvider>
+                  </WidgetFrameStyleProvider>
+                )}
+              />
+            </div>
+          </div>
         </div>
         </WidgetCandidatesProvider>
       </WidgetSelectProvider>
@@ -169,26 +198,141 @@ export function DashboardRenderer({
   );
 }
 
-// gridItemStyle maps a span box to a grid-item style. col/row are 0-based lines →
-// CSS's 1-based `col+1 / span colSpan`. It CLAMPS the placement into the grid's
-// column count: a box whose `col`/`colSpan` overruns `columns` (a shrunk grid, a
-// hand-authored/overflowing stored box, a boundary-drag rounding edge) would
-// otherwise land in implicit `auto` tracks CSS appends past the `1fr` columns —
-// unequal widths + horizontal overflow instead of a clamped placement. Rows are
+// The live cell size, as the grid element defines it.
+const CELL = 'var(--dc-cell)';
+
+// The grid's lengths as CSS: px multiply by the density scale like every size token, and a
+// spacing token reads the board's own variable.
+export interface GridCss {
+  gutterX: string;
+  gutterY: string;
+  padding: string;
+  // The live cell size: the grid's width less its gutters, shared by the columns. Read inside
+  // the query container, so `100cqw` is the grid's width.
+  cell: string;
+}
+
+export function gridLengthCss(len: GridLength): string {
+  if (typeof len === 'number') return `calc(${len}px * var(--dc-scale, 1))`;
+  return len === 'space-0' ? '0px' : `var(--dc-${len})`;
+}
+
+export function gridCss(grid: CanvasGrid, columns: number): GridCss {
+  const g = grid.gutter;
+  const gutterX = gridLengthCss(typeof g === 'object' ? g.x : g);
+  const gutterY = gridLengthCss(typeof g === 'object' ? g.y : g);
+  const p = grid.padding;
+  const padding =
+    typeof p === 'object'
+      ? [p.top, p.right, p.bottom, p.left].map(gridLengthCss).join(' ')
+      : gridLengthCss(p);
+  return { gutterX, gutterY, padding, cell: `calc((100cqw - ${columns - 1} * ${gutterX}) / ${columns})` };
+}
+
+// The frame override a widget carries (a placeholder carries none: its stored frame is the
+// newer release's to read).
+function widgetFrame(widget: WidgetInstance): WidgetFrameSpec | undefined {
+  return widget.type === UNKNOWN_WIDGET_TYPE ? undefined : widget.frame;
+}
+
+// gridItemStyle maps a grid placement to a grid-item style. col/row are 0-based cells →
+// CSS's 1-based `col+1 / span cols`. It CLAMPS the placement into the grid's column count: a
+// footprint whose `col`/`cols` overruns `columns` (a hand-authored or imported one; the lint
+// reports it) would otherwise land in implicit `auto` tracks CSS appends past the `1fr`
+// columns — unequal widths + horizontal overflow instead of a clamped placement. Rows are
 // unbounded (implicit rows are the intended vertical growth), so only columns clamp.
-export function gridItemStyle(box: WidgetBox, columns: number): CSSProperties {
-  const col = Math.min(Math.max(0, box.col), columns - 1);
-  const colSpan = Math.min(Math.max(1, box.colSpan), columns - col);
+export function gridItemStyle(p: GridPlacement, columns: number): CSSProperties {
+  const col = Math.min(Math.max(0, p.col), columns - 1);
+  const cols = Math.min(Math.max(1, p.cols), columns - col);
   return {
-    gridColumn: `${col + 1} / span ${colSpan}`,
-    gridRow: `${box.row + 1} / span ${box.rowSpan}`,
-    zIndex: box.z,
-    transform: box.offset ? `translate(${box.offset.x}px, ${box.offset.y}px)` : undefined,
+    gridColumn: `${col + 1} / span ${cols}`,
+    gridRow: `${p.row + 1} / span ${p.rows}`,
     // Let a grid item shrink below its content's intrinsic size so a wide chart/table
     // fits its track instead of overflowing it.
     minWidth: 0,
     minHeight: 0,
   };
+}
+
+// Relative widgets paint above every grid widget, in `layer` order among themselves.
+const RELATIVE_Z = 100;
+
+// relativeBoxStyle positions a relative widget inside its host's box (the containing block): the
+// host's anchor point (a percentage of the host), minus this widget's own `self` point (a
+// percentage of itself, via translate), plus the offset in cell pitches.
+export function relativeBoxStyle(p: RelativePlacement, lengths: Pick<GridCss, 'gutterX' | 'gutterY'>): CSSProperties {
+  const a = anchorFraction(p.anchor);
+  const s = anchorFraction(p.self ?? p.anchor);
+  const span = (n: number, gutter: string) => `calc(${n} * ${CELL} + ${n - 1} * ${gutter})`;
+  const pitches = (n: number, gutter: string) => `${n} * (${CELL} + ${gutter})`;
+  const fill = 'fill' in p.size;
+  return {
+    position: 'absolute',
+    left: `calc(${a.fx * 100}% + ${pitches(p.offset?.x ?? 0, lengths.gutterX)})`,
+    top: `calc(${a.fy * 100}% + ${pitches(p.offset?.y ?? 0, lengths.gutterY)})`,
+    width: fill ? '100%' : span((p.size as { cols: number }).cols, lengths.gutterX),
+    height: fill ? '100%' : span((p.size as { rows: number }).rows, lengths.gutterY),
+    transform: `translate(${-s.fx * 100}%, ${-s.fy * 100}%)`,
+    zIndex: RELATIVE_Z + (p.layer ?? 0),
+    pointerEvents: 'auto',
+  };
+}
+
+// PlacedWidgets draws every widget at a breakpoint: each grid widget as a grid item, and each
+// relative widget inside a layer over its host's grid area (a relative widget hosted on another
+// relative widget is drawn inside that one's box, one level deep, as the parser allows).
+function PlacedWidgets({
+  widgets,
+  breakpoint,
+  columns,
+  lengths,
+  render,
+}: {
+  widgets: WidgetInstance[];
+  breakpoint: string;
+  columns: number;
+  lengths: GridCss;
+  render: (widget: WidgetInstance) => ReactNode;
+}) {
+  const placed = widgets.map((w) => ({ widget: w, placement: resolvePlacement(w.layout, breakpoint) }));
+  const dependents = new Map<string, { widget: WidgetInstance; placement: RelativePlacement }[]>();
+  for (const { widget, placement } of placed) {
+    if (placement.mode !== 'relative') continue;
+    dependents.set(placement.host, [...(dependents.get(placement.host) ?? []), { widget, placement }]);
+  }
+  const relative = (host: string): ReactNode =>
+    (dependents.get(host) ?? []).map(({ widget, placement }) => (
+      // data-widget names the box a widget occupies, so a check over the rendered board (the
+      // readability gate in apps/board-replay) can find it.
+      <div key={widget.id} data-widget={widget.id} data-host={host} style={relativeBoxStyle(placement, lengths)}>
+        {render(widget)}
+        {relative(widget.id)}
+      </div>
+    ));
+  return (
+    <>
+      {placed.map(({ widget, placement }) => {
+        if (placement.mode !== 'grid') return null;
+        const style = gridItemStyle(placement, columns);
+        // Keyed by the widget, so removing or reordering widgets never remounts (and so never
+        // re-subscribes) the ones that stay.
+        return (
+          <Fragment key={widget.id}>
+            <div data-widget={widget.id} style={style}>
+              {render(widget)}
+            </div>
+            {dependents.has(widget.id) ? (
+              // The host's area again, as a layer for its relative widgets to be positioned in.
+              // It takes no pointer events itself, so the host underneath stays usable.
+              <div style={{ ...style, position: 'relative', pointerEvents: 'none', zIndex: RELATIVE_Z }}>
+                {relative(widget.id)}
+              </div>
+            ) : null}
+          </Fragment>
+        );
+      })}
+    </>
+  );
 }
 
 // sizingStyle turns the container-sizing knob into the outer wrapper's box. `fill`

@@ -10,7 +10,7 @@ import {
   parseDashboardDefinition,
   pruneSlots,
   serializeDefinition,
-  setWidgetBox,
+  setWidgetPlacement,
   type DashboardHub,
   type WidgetInstance,
 } from '@devicechain/dashboards';
@@ -22,14 +22,14 @@ import { stripUnknownOptions, validateDefinitionOptions } from './definition-opt
 
 afterEach(cleanup);
 
-const box = { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 };
+const box = { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 3 };
 
 // A newer widget that names a slot and carries option keys no widget here declares —
 // everything a known widget would subscribe to or have stripped.
 const newer = {
   id: 'deck-1',
   type: 'card-deck',
-  layout: { base: box },
+  layout: { base: { ...box, row: 3 } },
   datasource: { kind: 'slot', slot: 'site', measurements: ['fuel_pct'] },
   options: { title: 'Fleet', selectionTarget: 'machine', order: 'type', notAnOptionHere: true },
   deck: { cards: [] },
@@ -109,15 +109,15 @@ describe('a widget of an unknown type', () => {
 describe('the console load → edit → save path', () => {
   it('leaves an unknown widget and its slots exactly as stored', () => {
     const stored = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       title: 'Board',
-      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [{ id: 'l1', type: 'label', layout: { base: box }, options: { text: 'hi' } }, newer],
       slots: { site: { type: 'anchor' }, machine: { type: 'device' } },
     };
     let def = migrateToSlots(parseDashboardDefinition(JSON.parse(JSON.stringify(stored))));
     def = stripUnknownOptions(def);
-    def = pruneSlots(setWidgetBox(def, 'l1', { ...box, row: 5 }));
+    def = pruneSlots(setWidgetPlacement(def, 'l1', { ...box, row: 6 }));
     const saved = JSON.parse(serializeDefinition(def)) as typeof stored;
     expect(JSON.stringify(saved.widgets[1])).toBe(JSON.stringify(newer));
     expect(saved.slots).toEqual(stored.slots);

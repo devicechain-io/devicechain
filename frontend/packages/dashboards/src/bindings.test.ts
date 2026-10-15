@@ -13,9 +13,9 @@ import type { DashboardDefinition, SlotBinding } from './types';
 
 function def(slots: DashboardDefinition['slots']): DashboardDefinition {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: 'T',
-    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+    canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
     widgets: [],
     slots,
   };

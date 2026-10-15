@@ -186,13 +186,18 @@ const SELECTION_TARGET = {
 } as const satisfies OptionSpec;
 
 
-// Each widget's `layout` is its size contract, in cells of the CURRENT 24-column grid (rows
-// are 40 px, gutters 8 px). The minimums are the smallest box in which the widget's parts
-// all fit with room to spare: rows are the binding constraint, since the frame header costs
-// ~34-50 px before the widget's own content. The defaults are what a freshly added widget
-// takes. A maximum is declared only where the content stops filling the box (a single value,
-// a dial, a button); a chart, table, map or image fills a whole wall, so it has none.
-// 🔴 Square, constant-size cells re-calibrate every number below; the shape stays.
+// Each widget's `layout` is its size contract, in SQUARE cells. A cell is never smaller than the
+// grid's minCellSize (56 px by default; a narrower board reflows instead), so a span is a
+// readable size by construction, and the minimums below are sized at that smallest cell, with
+// 8 px gutters: n cells cover 64n - 8 px, so 2 is 120 px, 3 is 184 px and 4 is 248 px. On a wider
+// screen the cells stretch and every widget only grows.
+//
+// The minimums are the smallest box in which the widget's parts all fit with room to spare:
+// height is usually the binding constraint, since the frame header costs ~34-50 px before the
+// widget's own content. The defaults are what a freshly added widget takes. A maximum is
+// declared only where the content stops filling the box (a single value, a dial, a button, a
+// one-line selector); a chart, table, map or image fills a whole wall, so it has none, and a
+// label's column limit is set past any authored column count.
 
 const VERSION = '1.0.0';
 const ALL_SELECTORS = ['device', 'anchor', 'slot'] as const;
@@ -226,7 +231,7 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Timeseries chart' },
     interactions: {},
     freshness: true,
-    layout: { defaultSpan: { cols: 12, rows: 6 }, minSpan: { cols: 8, rows: 4 } },
+    layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
   }),
 
   'latest-card': defineWidgetDescriptor({
@@ -256,7 +261,7 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Latest card' },
     interactions: {},
     freshness: true,
-    layout: { defaultSpan: { cols: 8, rows: 3 }, minSpan: { cols: 6, rows: 3 }, maxSpan: { cols: 12, rows: 8 } },
+    layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
   gauge: defineWidgetDescriptor({
@@ -297,7 +302,7 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Gauge' },
     interactions: {},
     freshness: true,
-    layout: { defaultSpan: { cols: 8, rows: 4 }, minSpan: { cols: 6, rows: 3 }, maxSpan: { cols: 12, rows: 8 } },
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 6, rows: 6 } },
   }),
 
   table: defineWidgetDescriptor({
@@ -319,7 +324,7 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Table' },
     interactions: {},
     freshness: true,
-    layout: { defaultSpan: { cols: 12, rows: 5 }, minSpan: { cols: 6, rows: 3 } },
+    layout: { defaultSpan: { cols: 6, rows: 3 }, minSpan: { cols: 4, rows: 2 } },
   }),
 
   // label and image are static: the `none` channel, no datasource, no subscription and no
@@ -359,7 +364,7 @@ export const builtinWidgetDescriptors = {
     },
     defaults: { text: 'New label' },
     interactions: {},
-    layout: { defaultSpan: { cols: 6, rows: 2 }, minSpan: { cols: 2, rows: 1 }, maxSpan: { cols: 24, rows: 4 } },
+    layout: { defaultSpan: { cols: 3, rows: 1 }, minSpan: { cols: 1, rows: 1 }, maxSpan: { cols: 24, rows: 3 } },
   }),
 
   image: defineWidgetDescriptor({
@@ -395,7 +400,7 @@ export const builtinWidgetDescriptors = {
     },
     defaults: { title: 'Image' },
     interactions: {},
-    layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 2, rows: 2 } },
+    layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 1, rows: 1 } },
   }),
 
   'alarm-table': defineWidgetDescriptor({
@@ -426,7 +431,7 @@ export const builtinWidgetDescriptors = {
     },
     defaults: { title: 'Alarm table', state: 'ACTIVE' },
     interactions: { alarmActions: true, selection: true },
-    layout: { defaultSpan: { cols: 12, rows: 6 }, minSpan: { cols: 8, rows: 3 } },
+    layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 2 } },
   }),
 
   // The count shows the SERVER total and reads a page only to sample the worst loaded
@@ -451,7 +456,7 @@ export const builtinWidgetDescriptors = {
     },
     defaults: { title: 'Alarm count', state: 'ACTIVE' },
     interactions: {},
-    layout: { defaultSpan: { cols: 6, rows: 3 }, minSpan: { cols: 4, rows: 3 }, maxSpan: { cols: 12, rows: 6 } },
+    layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
   'command-button': defineWidgetDescriptor({
@@ -499,7 +504,7 @@ export const builtinWidgetDescriptors = {
     },
     defaults: { title: 'Command button' },
     interactions: { commandSend: true },
-    layout: { defaultSpan: { cols: 6, rows: 3 }, minSpan: { cols: 5, rows: 3 }, maxSpan: { cols: 12, rows: 8 } },
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 6 } },
   }),
 
   'entity-selector': defineWidgetDescriptor({
@@ -518,7 +523,7 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Entity selector' },
     interactions: { selection: true, candidates: true },
     // A select control is one line high, so its rows are pinned; it widens to fit long names.
-    layout: { defaultSpan: { cols: 6, rows: 2 }, minSpan: { cols: 4, rows: 2 }, maxSpan: { cols: 12, rows: 2 }, resize: 'horizontal' },
+    layout: { defaultSpan: { cols: 3, rows: 1 }, minSpan: { cols: 3, rows: 1 }, maxSpan: { cols: 12, rows: 1 }, resize: 'horizontal' },
   }),
 
   map: defineWidgetDescriptor({
@@ -556,7 +561,7 @@ export const builtinWidgetDescriptors = {
     },
     defaults: { title: 'Map' },
     interactions: {},
-    layout: { defaultSpan: { cols: 12, rows: 8 }, minSpan: { cols: 6, rows: 4 } },
+    layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 

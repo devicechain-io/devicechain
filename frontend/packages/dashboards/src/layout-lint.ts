@@ -3,19 +3,32 @@
 
 // lintLayout: a pure check of a definition's placement against what each widget can show.
 //
-// The parser clamps the fields of a box but never asks whether the box is a USABLE one: it
-// does not look at the right edge, and it has no idea how small a gauge can get before its
-// readout is unreadable. This is that question, answered once, here, for every producer of a
-// definition (the sim fixtures today; the editor and the publish gate later).
+// The parser refuses what cannot be DRAWN (two grid footprints on one cell, a relative widget
+// with no host); this is the question it leaves open: is each placement a USABLE one? A widget
+// past the right edge, a widget smaller or larger than it declares it can be, a relative widget
+// pushed off the canvas. Answered once, here, for every producer of a definition (the sim
+// fixtures today; the editor and the publish gate next).
 //
-// Widget knowledge is INJECTED. `dashboards` must not depend on `widgets`, so the span limits
-// a widget type declares arrive through `spanLimitsOf`, and the temporary pixel floor through
-// `pixelFloor.minPxOf`. Overlap is deliberately not a code: the parser is where it is refused.
+// Cells are square and of near-constant size, so a span in cells IS a readable size: a widget
+// that declares a sound minSpan cannot be too small to read at any width the board renders
+// without reflowing. There is therefore no pixel floor.
+//
+// Widget knowledge is INJECTED. `dashboards` must not depend on `widgets`, so the span limits a
+// widget type declares arrive through `spanLimitsOf`. Overlap is deliberately not a code: the
+// parser is where it is refused.
 
-import { activeBreakpoint, resolveWidgetBox } from './definition';
+import {
+  BASE_BREAKPOINT,
+  breakpointColumns,
+  gutterPx,
+  layoutBreakpoints,
+  layoutRects,
+  resolvePlacement,
+  spanPx,
+} from './grid';
 import { sameLabel } from './same-label';
 import { widgetBinding } from './slots';
-import type { DashboardDefinition, WidgetInstance } from './types';
+import type { DashboardDefinition, Placement, WidgetInstance } from './types';
 import { pinnedAxes, type WidgetLayoutSpec, type WidgetSpan } from './widget-descriptor';
 
 export type LayoutLintSeverity = 'error' | 'warning' | 'info';
@@ -23,22 +36,18 @@ export type LayoutLintSeverity = 'error' | 'warning' | 'info';
 export type LayoutLintCode =
   | 'span-out-of-limits'
   | 'overrun-columns'
+  | 'relative-off-canvas'
   | 'no-layout-declared'
-  | 'title-duplicates-subtitle'
-  // TEMPORARY (the A-slice pixel floor): removed when constant-size square cells make a span
-  // in cells a readable size by construction.
-  | 'below-readable-size';
+  | 'title-duplicates-subtitle';
 
 export interface LayoutFinding {
   code: LayoutLintCode;
   severity: LayoutLintSeverity;
   widgetId: string;
   message: string;
-  // The breakpoint whose box the finding is about, when it is not 'base'. An editor needs it
-  // to point at the right box, and two breakpoints' findings must not collapse into one.
+  // The breakpoint whose placement the finding is about, when it is not 'base'. An editor needs
+  // it to point at the right placement, and two breakpoints' findings must not collapse into one.
   breakpoint?: string;
-  // The container width a width-dependent finding was measured at (pixel floor only).
-  width?: number;
 }
 
 // What a widget type allows, per axis. Any bound may be absent, on either axis: a widget that
@@ -48,23 +57,13 @@ export interface SpanLimits {
   maxSpan?: Partial<WidgetSpan>;
 }
 
-export interface PixelSize {
-  width: number;
-  height: number;
-}
-
 export interface LayoutLintOptions {
-  // The column count the boxes are checked against: the authored count, or a reflow count.
+  // The column count the `base` placements are checked against: the authored count, or a
+  // reflow count. A breakpoint that declares its own count is checked at that count.
   columns: number;
   // undefined means the widget declares no limits at all, which is reported (info) rather
   // than assumed fine, so a type that forgot to declare them is visible.
   spanLimitsOf: (widget: WidgetInstance) => SpanLimits | undefined;
-  // TEMPORARY. The rendered size of each widget at each container width, against the
-  // smallest size the widget can be read at.
-  pixelFloor?: {
-    widths: number[];
-    minPxOf: (widget: WidgetInstance) => PixelSize | undefined;
-  };
 }
 
 // The limits a descriptor's `layout` block declares, in the shape lintLayout takes: its
@@ -85,10 +84,22 @@ export function spanLimitsOfLayout(layout: WidgetLayoutSpec | undefined): SpanLi
   return limits;
 }
 
-const BASE = 'base';
+// The cell sizes a relative widget's box is measured at. Its position is a straight line in the
+// cell size (an offset is in cell pitches, the gutter is fixed px), so a box inside the canvas at
+// the smallest cell and at a very large one is inside it at every size between: the smallest is
+// where the gutter weighs most, the large one where the cells do.
+const RELATIVE_PROBE_CELLS = (minCellSize: number) => [minCellSize, minCellSize * 16];
+
+// Rounding slack, in px, for a box that sits exactly on the canvas edge.
+const EDGE_EPSILON = 0.01;
 
 export function lintLayout(def: DashboardDefinition, options: LayoutLintOptions): LayoutFinding[] {
   const findings: LayoutFinding[] = [];
+  const columnsAt = (bp: string) =>
+    bp === BASE_BREAKPOINT || breakpointColumns(def.canvas, bp) === def.canvas.grid.columns
+      ? options.columns
+      : breakpointColumns(def.canvas, bp);
+  const breakpoints = layoutBreakpoints(def.canvas.breakpoints, def.widgets);
 
   for (const widget of def.widgets) {
     const limits = options.spanLimitsOf(widget);
@@ -101,28 +112,29 @@ export function lintLayout(def: DashboardDefinition, options: LayoutLintOptions)
       });
     }
 
-    for (const [bp, box] of Object.entries(widget.layout)) {
-      const where = bp === BASE ? '' : ` at breakpoint ${bp}`;
-      const at = bp === BASE ? {} : { breakpoint: bp };
-      if (box.col < 0 || box.col + box.colSpan > options.columns) {
+    for (const [bp, placement] of Object.entries(widget.layout)) {
+      const where = bp === BASE_BREAKPOINT ? '' : ` at breakpoint ${bp}`;
+      const at = bp === BASE_BREAKPOINT ? {} : { breakpoint: bp };
+      const columns = columnsAt(bp);
+      if (placement.mode === 'grid' && placement.col + placement.cols > columns) {
         findings.push({
           code: 'overrun-columns',
           severity: 'error',
           widgetId: widget.id,
           ...at,
-          message:
-            `spans columns ${box.col}..${box.col + box.colSpan} of ${options.columns}${where}`,
+          message: `spans columns ${placement.col}..${placement.col + placement.cols} of ${columns}${where}`,
         });
       }
-      if (limits) {
-        const problem = spanProblem(box.colSpan, box.rowSpan, limits);
+      const span = spanOf(def, widget, bp, placement);
+      if (limits && span) {
+        const problem = spanProblem(span.cols, span.rows, limits);
         if (problem) {
           findings.push({
             code: 'span-out-of-limits',
             severity: 'error',
             widgetId: widget.id,
             ...at,
-            message: `${box.colSpan}x${box.rowSpan} ${problem}${where}`,
+            message: `${span.cols}x${span.rows} ${problem}${where}`,
           });
         }
       }
@@ -137,35 +149,66 @@ export function lintLayout(def: DashboardDefinition, options: LayoutLintOptions)
         message: duplicate,
       });
     }
+  }
 
-    if (options.pixelFloor) {
-      const floor = options.pixelFloor.minPxOf(widget);
-      if (floor) {
-        for (const width of options.pixelFloor.widths) {
-          // The box the renderer would show at this width. The renderer picks the breakpoint
-          // from the viewport width; the lint treats the container as the full viewport,
-          // which is what a `fill` board is.
-          const bp = activeBreakpoint(def.canvas.breakpoints, width);
-          const box = resolveWidgetBox(widget.layout, bp);
-          const size = renderedSize(def, options.columns, box.colSpan, box.rowSpan, width);
-          if (size.width < floor.width || size.height < floor.height) {
-            findings.push({
-              code: 'below-readable-size',
-              severity: 'error',
-              widgetId: widget.id,
-              ...(widget.layout[bp] && bp !== BASE ? { breakpoint: bp } : {}),
-              width,
-              message:
-                `renders ${Math.round(size.width)}x${Math.round(size.height)} px at ${width} px wide; ` +
-                `${widget.type} needs at least ${floor.width}x${floor.height}`,
-            });
-          }
+  // A relative widget is checked at every breakpoint it is SHOWN at, its inherited base placement
+  // included, wherever that can differ from base: its host (or its host's host) may have its own
+  // placement there, or the breakpoint may be narrower. Where nothing differs, base already said it.
+  const byId = new Map(def.widgets.map((w) => [w.id, w]));
+  const differsFromBase = (w: WidgetInstance, bp: string): boolean => {
+    if (columnsAt(bp) !== options.columns) return true;
+    for (let cur: WidgetInstance | undefined = w, hops = 0; cur && hops < 3; hops++) {
+      if (Object.prototype.hasOwnProperty.call(cur.layout, bp)) return true;
+      const p = resolvePlacement(cur.layout, bp);
+      cur = p.mode === 'relative' ? byId.get(p.host) : undefined;
+    }
+    return false;
+  };
+  for (const bp of breakpoints) {
+    const columns = columnsAt(bp);
+    const gutter = gutterPx(def.canvas.grid);
+    const off = new Set<string>();
+    for (const cell of RELATIVE_PROBE_CELLS(def.canvas.grid.minCellSize)) {
+      const width = spanPx(columns, cell, gutter.x);
+      for (const [id, r] of layoutRects(def.widgets, bp, cell, gutter)) {
+        const w = byId.get(id)!;
+        if (resolvePlacement(w.layout, bp).mode !== 'relative' || off.has(id)) continue;
+        if (bp !== BASE_BREAKPOINT && !differsFromBase(w, bp)) continue;
+        if (r.x < -EDGE_EPSILON || r.y < -EDGE_EPSILON || r.x + r.w > width + EDGE_EPSILON) {
+          off.add(id);
+          const where = bp === BASE_BREAKPOINT ? '' : ` at breakpoint ${bp}`;
+          findings.push({
+            code: 'relative-off-canvas',
+            severity: 'error',
+            widgetId: id,
+            ...(bp === BASE_BREAKPOINT ? {} : { breakpoint: bp }),
+            message: `falls outside the ${columns}-column canvas${where} (left ${round(r.x)}, top ${round(r.y)}, right ${round(r.x + r.w)} of ${round(width)} px at ${round(cell)} px cells)`,
+          });
         }
       }
     }
   }
 
   return findings;
+}
+
+function round(n: number): number {
+  return Math.round(n * 10) / 10;
+}
+
+// The span a placement covers: a grid footprint's own, a relative widget's size, or for a
+// relative widget that fills its host, the host's span (one level of chaining at most).
+function spanOf(
+  def: DashboardDefinition,
+  widget: WidgetInstance,
+  bp: string,
+  p: Placement,
+): { cols: number; rows: number } | undefined {
+  if (p.mode === 'grid') return { cols: p.cols, rows: p.rows };
+  if (!('fill' in p.size)) return p.size;
+  const host = def.widgets.find((w) => w.id === p.host);
+  if (!host || host === widget) return undefined;
+  return spanOf(def, host, bp, resolvePlacement(host.layout, bp));
 }
 
 function spanProblem(cols: number, rows: number, limits: SpanLimits): string | undefined {
@@ -179,25 +222,6 @@ function spanProblem(cols: number, rows: number, limits: SpanLimits): string | u
     return `is above the ${bound(maxSpan)} maximum`;
   }
   return undefined;
-}
-
-// The grid's own rule, as the renderer lays it out: columns are fluid and share the width
-// left after the gutters, rows are fixed px, n tracks cover n*track + (n-1)*gutter.
-function renderedSize(
-  def: DashboardDefinition,
-  columns: number,
-  colSpan: number,
-  rowSpan: number,
-  containerWidth: number,
-): PixelSize {
-  const { gap, rowHeight } = def.canvas.grid;
-  const colGap = typeof gap === 'number' ? gap : gap.col;
-  const rowGap = typeof gap === 'number' ? gap : gap.row;
-  const cell = (containerWidth - colGap * (columns - 1)) / columns;
-  return {
-    width: colSpan * cell + (colSpan - 1) * colGap,
-    height: rowSpan * rowHeight + (rowSpan - 1) * rowGap,
-  };
 }
 
 // The frame shows the title option and, under it, the token of the entity the widget is

@@ -16,9 +16,11 @@ import (
 // 🔴 THE BOARD ASSUMES ~960 px OF WIDTH (half a 1920 screen, the other half being the 3D
 // window) AND 1080 px OF HEIGHT. It is not capped to one screen: the ORDERING RULE is that
 // the alarms, the KPI row and the map end above the fold (sitepulseFoldRows), and the cards
-// scroll below it, as many rows of them as the fleet needs. Every widget is sized to be
-// readable at that width (24 columns of ~32 px), which the frontend layout lint enforces
-// over the committed fixture.
+// scroll below it, as many rows of them as the fleet needs. It is laid out in SQUARE cells on
+// the 12-column grid: at 960 px a cell is ~73 px, comfortably above the 56 px minimum, so the
+// board renders as authored there and every widget is inside the size its descriptor declares,
+// which the frontend layout lint enforces over the committed fixture. On a full 1920 px screen
+// the cells double and every widget only grows.
 //
 // 🔴 THE WIDGET LIBRARY HAS NO VIEW THAT DRAWS ONE MEASUREMENT ACROSS MANY DEVICES.
 // useMeasurementStream keys its latest values by measurement NAME only, so a table or
@@ -63,27 +65,37 @@ const (
 	sitepulseSlotPlant   = "plant"
 	sitepulseSlotMachine = "selectedMachine"
 
-	// The fold: the rows a 1080 px-tall window shows (rows are 40 px + an 8 px gap). The
-	// alarm surfaces, the KPI row and the map must END at or above it; the rest may scroll.
-	sitepulseFoldRows = 1080 / (dashboardGridRowHeight + dashboardGridGap)
+	// The window the board is laid out for.
+	sitepulseViewportWidth  = 960
+	sitepulseViewportHeight = 1080
 
-	// Cards. A card is 8x3 (the latest-card floor is 6x3 at 960 px wide), so three fill the
-	// 24 columns and the default fleet's six machines per kind make two FULL rows rather than
-	// a row of four and a row of two. Every machine gets its card: the Unity demo's story runs
-	// through all of them (SP-HL-0006 is the low-fuel truck). A kind wraps onto as many rows
-	// as it needs, up to one screen of rows; the cap is DERIVED from the grid, not chosen,
-	// and only a large `--devices` run reaches it, when the label says the rows are partial.
-	sitepulseCardColSpan     = 8
-	sitepulseCardRowSpan     = 3
-	sitepulseCardsPerRow     = dashboardGridColumns / sitepulseCardColSpan
-	sitepulseCardRowsPerKind = sitepulseFoldRows / sitepulseCardRowSpan
+	// The fold: the whole rows a 1080 px-tall window shows. A cell is the width left after the
+	// padding and the gutters, shared by the columns, and a row is as tall as a cell is wide, so
+	// a row PITCH (cell + gutter) is (width - padding + gutter) / columns: 968 / 12 = ~80.7 px
+	// at 960, and 1080 px holds 13 of them. The alarm surfaces, the KPI row and the map must END
+	// at or above it; the rest may scroll. Integer arithmetic, rounded down: a row the window
+	// shows only part of is below the fold.
+	sitepulseFoldRows = (sitepulseViewportHeight - 2*dashboardGridPadding + dashboardGridGutter) * dashboardGridColumns /
+		(sitepulseViewportWidth - 2*dashboardGridPadding + dashboardGridGutter)
+
+	// Cards. A card is 4x2 (the latest-card minimum is 3x2), so three fill the 12 columns and
+	// the default fleet's six machines per kind make two FULL rows rather than a row of four
+	// and a row of two. Every machine gets its card: the Unity demo's story runs through all of
+	// them (SP-HL-0006 is the low-fuel truck). A kind wraps onto as many rows as it needs, up to
+	// one screen of rows; the cap is DERIVED from the grid, not chosen, and only a large
+	// `--devices` run reaches it, when the label says the rows are partial.
+	sitepulseCardCols        = 4
+	sitepulseCardRows        = 2
+	sitepulseCardsPerRow     = dashboardGridColumns / sitepulseCardCols
+	sitepulseCardRowsPerKind = sitepulseFoldRows / sitepulseCardRows
 	sitepulseCardsPerKind    = sitepulseCardsPerRow * sitepulseCardRowsPerKind
 
-	// Rows. KPIs (3 rows) lead, then the alarm table and the map stack beside the machine
-	// controls in a band that ends at row 13; the fuel label (1 row: it is just "Fuel level" now
-	// that the low-fuel threshold lives on the cards) and the card bands follow.
-	sitepulseFuelLabelRow = 13
-	sitepulseFuelFirstRow = 14
+	// Rows. The KPIs (2 rows) lead, then the alarm table and the map stack on the left 8
+	// columns beside the machine selector and its two gauges on the right 4, in a band that
+	// ends at row 9; the fuel label (1 row: it is just "Fuel level" now that the low-fuel
+	// threshold lives on the cards) and the card bands follow.
+	sitepulseFuelLabelRow = 9
+	sitepulseFuelFirstRow = 10
 
 	// Display scales for the two gauges. Not contract values: the only fixed points are
 	// the rule thresholds, and each scale keeps its threshold well inside the arc.
@@ -120,13 +132,13 @@ func sitepulseFuelBandText(shown, perKind int) string {
 
 // sitepulseCardBandRows is the grid rows a band of n cards takes once it wraps.
 func sitepulseCardBandRows(n int) int {
-	return (n + sitepulseCardsPerRow - 1) / sitepulseCardsPerRow * sitepulseCardRowSpan
+	return (n + sitepulseCardsPerRow - 1) / sitepulseCardsPerRow * sitepulseCardRows
 }
 
 // sitepulseCardBox places the i-th card of a band that starts at row: left to right, then
 // onto the next row.
 func sitepulseCardBox(row, i int) box {
-	return box{sitepulseCardColSpan * (i % sitepulseCardsPerRow), sitepulseCardColSpan, row + sitepulseCardRowSpan*(i/sitepulseCardsPerRow), sitepulseCardRowSpan}
+	return box{sitepulseCardCols * (i % sitepulseCardsPerRow), sitepulseCardCols, row + sitepulseCardRows*(i/sitepulseCardsPerRow), sitepulseCardRows}
 }
 
 func sitepulseDeviceSlot(label string, d DeviceInstance, scope *dashboardScope) dashboardSlot {
@@ -175,20 +187,20 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		return widgetSubject{Slot: sitepulseSlotMachine, Measurements: []string{metric}}
 	}
 
-	running := buildLatestCardWidget("sp-plant-running", box{18, 6, 0, 3}, onPlant(SitepulsePlantRunningKey),
+	running := buildLatestCardWidget("sp-plant-running", box{9, 3, 0, 2}, onPlant(SitepulsePlantRunningKey),
 		"Crusher running (1 = yes, 0 = no)", SitepulsePlantRunningKey, "", 0, false)
 	// An empty unit is no unit: omit the key rather than author a blank one.
 	delete(running.Options, "unit")
 
-	alarms := buildAlarmTableWidget("sp-alarms", box{0, 16, 3, 5}, onSite, "Active alarms", sitepulseSlotMachine)
+	alarms := buildAlarmTableWidget("sp-alarms", box{0, 8, 2, 3}, onSite, "Active alarms", sitepulseSlotMachine)
 	// ACTIVE only: this is an operator board, and a cleared row must not push a live
 	// critical off a 25-row page. The raise-then-clear story shows on the counts and cards.
 	alarms.Options["state"] = AlarmStateActiveWire
 
 	widgets := []dashboardWidget{
-		buildAlarmCountWidget("sp-alarms-critical", box{0, 6, 0, 3}, onSite, "Critical alarms", AlarmSeverityCriticalWire),
-		buildAlarmCountWidget("sp-alarms-major", box{6, 6, 0, 3}, onSite, "Major alarms", AlarmSeverityMajorWire),
-		buildLatestCardWidget("sp-plant-throughput", box{12, 6, 0, 3}, onPlant(SitepulseThroughputKey),
+		buildAlarmCountWidget("sp-alarms-critical", box{0, 3, 0, 2}, onSite, "Critical alarms", AlarmSeverityCriticalWire),
+		buildAlarmCountWidget("sp-alarms-major", box{3, 3, 0, 2}, onSite, "Major alarms", AlarmSeverityMajorWire),
+		buildLatestCardWidget("sp-plant-throughput", box{6, 3, 0, 2}, onPlant(SitepulseThroughputKey),
 			"Crusher throughput", SitepulseThroughputKey, "t/h", 0, false),
 		running,
 	}
@@ -218,7 +230,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		row += sitepulseCardBandRows(n)
 	}
 
-	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, 24, sitepulseFuelLabelRow, sitepulseFuelFirstRow - sitepulseFuelLabelRow}, sitepulseFuelBandText(shown, perKind), "left", 14))
+	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, dashboardGridColumns, sitepulseFuelLabelRow, sitepulseFuelFirstRow - sitepulseFuelLabelRow}, sitepulseFuelBandText(shown, perKind), "left", 14))
 
 	for _, b := range fuelBands {
 		for i, d := range b.devices {
@@ -243,13 +255,13 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 
 	widgets = append(widgets,
 		alarms,
-		buildMapWidget("sp-map", box{0, 16, 8, 5},
+		buildMapWidget("sp-map", box{0, 8, 5, 4},
 			widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions"),
-		buildEntitySelectorWidget("sp-machine-select", box{16, 8, 3, 2}, "Machine", sitepulseSlotMachine),
-		buildGaugeWidget("sp-engine-temp", box{16, 8, 5, 4}, onMachine(SitepulseEngineTempKey),
+		buildEntitySelectorWidget("sp-machine-select", box{8, 4, 2, 1}, "Machine", sitepulseSlotMachine),
+		buildGaugeWidget("sp-engine-temp", box{8, 4, 3, 3}, onMachine(SitepulseEngineTempKey),
 			"Engine temp",
 			SitepulseEngineTempKey, "°C", 0, sitepulseEngineTempGaugeMax),
-		buildGaugeWidget("sp-tyre", box{16, 8, 9, 4}, onMachine(SitepulseTyreKey),
+		buildGaugeWidget("sp-tyre", box{8, 4, 6, 3}, onMachine(SitepulseTyreKey),
 			"Tyre pressure",
 			SitepulseTyreKey, "kPa", 0, sitepulseTyreGaugeMax),
 	)
@@ -257,7 +269,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	sitepulseApplyThresholds(widgets)
 
 	def := dashboardDefinition{
-		SchemaVersion: 1,
+		SchemaVersion: dashboardSchemaVersion,
 		Title:         sitepulseDashboardName,
 		Canvas:        widgetlabCanvas(),
 		Slots:         slots,

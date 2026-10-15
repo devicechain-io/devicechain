@@ -17,6 +17,14 @@
 // host that loads and saves a newer board leaves the newer widget exactly as it was.
 
 import {
+  CURRENT_SCHEMA_VERSION,
+  FRAME_BORDER_WIDTHS,
+  FRAME_HEADERS,
+  FRAME_RADII,
+  FRAME_VARIANTS,
+  PLACEMENT_ANCHORS,
+  RESERVED_PLACEMENT_MODES,
+  THEME_COLOR_TOKENS,
   WIDGET_TYPES,
   isCanvasDensity,
   type AnchorTarget,
@@ -27,12 +35,16 @@ import {
   type DashboardDefinition,
   type ExtensionWidgetInstance,
   type ExtensionWidgetType,
+  type FrameBorder,
+  type GridLength,
   type KnownWidgetInstance,
   type LocationSelection,
+  type Placement,
+  type PlacementAnchor,
   type SlotBinding,
   type SlotDefinition,
   type SlotScope,
-  type WidgetBox,
+  type WidgetFrameSpec,
   type WidgetImplementationRef,
   type WidgetInstance,
   type WidgetLayout,
@@ -41,18 +53,24 @@ import {
   type WidgetType,
   UNKNOWN_WIDGET_TYPE,
 } from './types';
+import {
+  BASE_BREAKPOINT,
+  DEFAULT_GRID,
+  gridFootprintsOverlap,
+  isSpaceToken,
+  layoutBreakpoints,
+  resolvePlacement,
+} from './grid';
+import { convertLegacyDefinition, storedSchemaVersion } from './legacy-grid';
 import { parseWidgetRef, unresolvedReason } from './widget-compat';
 import type { WidgetCatalog } from './widget-catalog';
 
-// The breakpoint every layout must define; a widget/viewport with no more specific
-// box falls back to it. Named once so parse + resolveWidgetBox agree.
-export const BASE_BREAKPOINT = 'base';
+// The breakpoint every layout must define; a widget/viewport with no more specific placement
+// falls back to it.
+export { BASE_BREAKPOINT };
 
 const WIDGET_TYPE_SET: ReadonlySet<string> = new Set(WIDGET_TYPES);
 
-// The default canvas grid: 24 fluid columns, an 8px gutter, 40px rows — a
-// high-resolution grid that fills its container width (ADR-039 amendment).
-const DEFAULT_GRID: CanvasGrid = { columns: 24, gap: 8, rowHeight: 40 };
 const DEFAULT_SIZING: CanvasSizing = 'fill';
 
 // Thrown when a definition cannot be coerced into a renderable shape. The message
@@ -90,14 +108,20 @@ export interface ParseDefinitionOptions {
   catalog?: WidgetCatalog;
 }
 
-export function parseDashboardDefinition(raw: unknown, options: ParseDefinitionOptions = {}): DashboardDefinition {
-  if (!isRecord(raw)) throw new DashboardDefinitionError('not a JSON object');
+export function parseDashboardDefinition(input: unknown, options: ParseDefinitionOptions = {}): DashboardDefinition {
+  if (!isRecord(input)) throw new DashboardDefinitionError('not a JSON object');
+  if (!Array.isArray(input.widgets)) throw new DashboardDefinitionError('widgets must be an array');
 
-  const widgetsRaw = raw.widgets;
-  if (!Array.isArray(widgetsRaw)) throw new DashboardDefinitionError('widgets must be an array');
+  // A document stored before the square-cell grid is converted first (approximately; see
+  // ./legacy-grid), and the result says so. Everything below reads the current format only.
+  const stored = storedSchemaVersion(input);
+  const legacy = stored < CURRENT_SCHEMA_VERSION;
+  const raw = legacy ? convertLegacyDefinition(input) : input;
+  const widgetsRaw = raw.widgets as unknown[];
 
   const def: DashboardDefinition = {
-    schemaVersion: numberAt(raw, 'schemaVersion', 1),
+    // Never lower than the format this release writes: a save writes that format.
+    schemaVersion: Math.max(stored, CURRENT_SCHEMA_VERSION),
     title: typeof raw.title === 'string' ? raw.title : '',
     canvas: parseCanvas(raw.canvas),
     widgets: widgetsRaw.map((w, i) => parseWidget(w, i, options.catalog)),
@@ -107,7 +131,53 @@ export function parseDashboardDefinition(raw: unknown, options: ParseDefinitionO
   // dashboard serializes unchanged (no spurious `"slots":{}` diff).
   const slots = parseSlots(raw.slots);
   if (slots) def.slots = slots;
+  validatePlacements(def);
+  // An empty board has no layout to review. A typed definition handed back to the parser keeps
+  // the mark it already carries.
+  if (legacy && def.widgets.length > 0) def.convertedFrom = stored;
+  else if (typeof raw.convertedFrom === 'number') def.convertedFrom = raw.convertedFrom;
   return def;
+}
+
+// validatePlacements refuses a layout that cannot be drawn as declared, at every breakpoint a
+// widget can be shown at (its own placement there, or its base one):
+//   - two GRID footprints that overlap. Overlap is something a widget declares (the relative
+//     mode), never something that happens to a grid widget;
+//   - a relative widget whose host does not exist, is itself, or is a relative widget whose own
+//     host is relative too (a chain deeper than one level).
+// It throws rather than degrading: a definition that overlaps would draw one widget over another
+// with nothing to say why.
+function validatePlacements(def: DashboardDefinition): void {
+  for (const bp of layoutBreakpoints(def.canvas.breakpoints, def.widgets)) {
+    const at = bp === BASE_BREAKPOINT ? '' : ` at breakpoint '${bp}'`;
+    const placements = new Map<string, Placement>();
+    for (const w of def.widgets) placements.set(w.id, resolvePlacement(w.layout, bp));
+    const grid = [...placements].filter((e): e is [string, Extract<Placement, { mode: 'grid' }>] => e[1].mode === 'grid');
+    for (let i = 0; i < grid.length; i++) {
+      for (let j = i + 1; j < grid.length; j++) {
+        if (gridFootprintsOverlap(grid[i][1], grid[j][1])) {
+          throw new DashboardDefinitionError(
+            `widgets '${grid[i][0]}' and '${grid[j][0]}' overlap on the grid${at}; ` +
+              `a widget that is meant to sit over another is placed relative to it`,
+          );
+        }
+      }
+    }
+    for (const [id, p] of placements) {
+      if (p.mode !== 'relative') continue;
+      if (p.host === id) throw new DashboardDefinitionError(`widget '${id}' is placed relative to itself${at}`);
+      const host = placements.get(p.host);
+      if (!host) {
+        throw new DashboardDefinitionError(`widget '${id}' is placed relative to '${p.host}', which does not exist${at}`);
+      }
+      if (host.mode === 'relative' && placements.get(host.host)?.mode !== 'grid') {
+        throw new DashboardDefinitionError(
+          `widget '${id}' is placed relative to '${p.host}', which is relative to another relative widget${at}; ` +
+            `a relative widget's host may be relative only when that host sits on a grid widget`,
+        );
+      }
+    }
+  }
 }
 
 function parseSlots(raw: unknown): Record<string, SlotDefinition> | undefined {
@@ -244,25 +314,112 @@ export function parseSlotBinding(raw: unknown): SlotBinding | undefined {
   return undefined;
 }
 
-// parseGrid coerces the canvas grid, filling defaults. `columns`/`rowHeight` are
-// floored to >=1 so a zero never yields an unusable `repeat(0,1fr)` / 0-px rows.
-// `gap` accepts a single number or a {row,col} pair; anything else → the default.
+// parseGridLength reads one length: a finite number (clamped to >= 0) or a spacing token. An
+// absent value takes the fallback; any other string or type is refused, since a misspelled token
+// would otherwise draw a different board from the one authored.
+function parseGridLength(raw: unknown, fallback: GridLength, where: string): GridLength {
+  if (raw === undefined) return fallback;
+  if (typeof raw === 'number' && Number.isFinite(raw)) return Math.max(0, raw);
+  if (isSpaceToken(raw)) return raw;
+  throw new DashboardDefinitionError(`${where} is ${JSON.stringify(raw)}; a length is a number of px or a space-0..space-4 token`);
+}
+
+// parseGrid coerces the canvas grid, filling defaults. `columns` is floored to an integer >= 1
+// and `minCellSize` to >= 1, so neither can yield an unusable grid. `gutter` is one length or an
+// {x,y} pair; `padding` one length or a {top,right,bottom,left} set; a side an object leaves
+// out takes the default.
 function parseGrid(raw: unknown): CanvasGrid {
   const rec = isRecord(raw) ? raw : {};
   const columns = Math.max(1, Math.round(numberAt(rec, 'columns', DEFAULT_GRID.columns)));
-  const rowHeight = Math.max(1, numberAt(rec, 'rowHeight', DEFAULT_GRID.rowHeight));
-  let gap: CanvasGrid['gap'] = DEFAULT_GRID.gap;
-  if (typeof rec.gap === 'number' && Number.isFinite(rec.gap)) {
-    gap = Math.max(0, rec.gap);
-  } else if (isRecord(rec.gap)) {
-    // A missing axis falls back to the default gutter (not 0), so a partial
-    // `{gap:{row:12}}` keeps the default column gutter rather than losing it.
-    gap = {
-      row: Math.max(0, numberAt(rec.gap, 'row', DEFAULT_GRID.gap as number)),
-      col: Math.max(0, numberAt(rec.gap, 'col', DEFAULT_GRID.gap as number)),
-    };
+  const minCellSize = Math.max(1, numberAt(rec, 'minCellSize', DEFAULT_GRID.minCellSize));
+  const dg = DEFAULT_GRID.gutter as GridLength;
+  const gutter: CanvasGrid['gutter'] = isRecord(rec.gutter)
+    ? {
+        x: parseGridLength(rec.gutter.x, dg, 'canvas.grid.gutter.x'),
+        y: parseGridLength(rec.gutter.y, dg, 'canvas.grid.gutter.y'),
+      }
+    : parseGridLength(rec.gutter, dg, 'canvas.grid.gutter');
+  const dp = DEFAULT_GRID.padding as GridLength;
+  const padding: CanvasGrid['padding'] = isRecord(rec.padding)
+    ? {
+        top: parseGridLength(rec.padding.top, dp, 'canvas.grid.padding.top'),
+        right: parseGridLength(rec.padding.right, dp, 'canvas.grid.padding.right'),
+        bottom: parseGridLength(rec.padding.bottom, dp, 'canvas.grid.padding.bottom'),
+        left: parseGridLength(rec.padding.left, dp, 'canvas.grid.padding.left'),
+      }
+    : parseGridLength(rec.padding, dp, 'canvas.grid.padding');
+  return { columns, minCellSize, gutter, padding };
+}
+
+// parseBreakpoints keeps every well-formed breakpoint (a min width, or {minWidth, columns}) and
+// drops a malformed one, as it always has. `base` is added at 0 when absent; it is always in the
+// grid's own column count, so a `base` that declares another count is refused.
+function parseBreakpoints(raw: unknown, grid: CanvasGrid): Breakpoints {
+  const rec = isRecord(raw) ? raw : {};
+  const breakpoints: Breakpoints = {};
+  for (const [name, spec] of Object.entries(rec)) {
+    if (name === '__proto__') continue;
+    if (typeof spec === 'number' && Number.isFinite(spec)) {
+      breakpoints[name] = spec;
+    } else if (
+      isRecord(spec) &&
+      typeof spec.minWidth === 'number' &&
+      Number.isFinite(spec.minWidth) &&
+      typeof spec.columns === 'number' &&
+      Number.isInteger(spec.columns) &&
+      spec.columns >= 1
+    ) {
+      breakpoints[name] = { minWidth: spec.minWidth, columns: spec.columns };
+    }
   }
-  return { columns, gap, rowHeight };
+  const base = breakpoints[BASE_BREAKPOINT];
+  if (base === undefined) breakpoints[BASE_BREAKPOINT] = 0;
+  else if (typeof base === 'object' && base.columns !== grid.columns) {
+    throw new DashboardDefinitionError(
+      `breakpoint '${BASE_BREAKPOINT}' declares ${base.columns} columns; the base layout is in canvas.grid.columns (${grid.columns})`,
+    );
+  }
+  return breakpoints;
+}
+
+function oneOf<T extends string | number>(values: readonly T[], raw: unknown, where: string): T | undefined {
+  if (raw === undefined) return undefined;
+  if ((values as readonly unknown[]).includes(raw)) return raw as T;
+  throw new DashboardDefinitionError(`${where} is ${JSON.stringify(raw)}; expected one of ${values.map((v) => JSON.stringify(v)).join(', ')}`);
+}
+
+// parseFrame reads a frame (canvas default or widget override). Every value is a token from a
+// closed list and anything else is REFUSED, a free colour above all: a frame that quietly dropped
+// `#f00` would render a different card from the one authored, and one that kept it would break
+// dark mode and the ISA-101 theme. Keys a frame does not have are ignored.
+function parseFrame(raw: unknown, where: string): WidgetFrameSpec | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) throw new DashboardDefinitionError(`${where} is not an object`);
+  const frame: WidgetFrameSpec = {};
+  const variant = oneOf(FRAME_VARIANTS, raw.variant, `${where}.variant`);
+  if (variant) frame.variant = variant;
+  if (raw.border !== undefined) {
+    if (!isRecord(raw.border)) throw new DashboardDefinitionError(`${where}.border is not an object`);
+    const border: FrameBorder = {};
+    const width = oneOf(FRAME_BORDER_WIDTHS, raw.border.width, `${where}.border.width`);
+    if (width !== undefined) border.width = width;
+    const radius = oneOf(FRAME_RADII, raw.border.radius, `${where}.border.radius`);
+    if (radius) border.radius = radius;
+    const color = oneOf(THEME_COLOR_TOKENS, raw.border.color, `${where}.border.color`);
+    if (color) border.color = color;
+    frame.border = border;
+  }
+  if (raw.padding !== undefined) {
+    if (!isSpaceToken(raw.padding)) {
+      throw new DashboardDefinitionError(`${where}.padding is ${JSON.stringify(raw.padding)}; expected a space-0..space-4 token`);
+    }
+    frame.padding = raw.padding;
+  }
+  const background = oneOf([...THEME_COLOR_TOKENS, 'transparent' as const], raw.background, `${where}.background`);
+  if (background) frame.background = background;
+  const header = oneOf(FRAME_HEADERS, raw.header, `${where}.header`);
+  if (header) frame.header = header;
+  return frame;
 }
 
 // parseSizing coerces the container-sizing knob. 'fill' (the default) or a
@@ -284,17 +441,12 @@ function parseCanvas(raw: unknown): Canvas {
 
   const grid = parseGrid(rec.grid);
   const sizing = parseSizing(rec.sizing);
-
-  // Breakpoints must define 'base'; default a single base:0 so a definition that
-  // omits responsive layouts still resolves.
-  const bpRec = isRecord(rec.breakpoints) ? rec.breakpoints : {};
-  const breakpoints: Breakpoints = {};
-  for (const [name, width] of Object.entries(bpRec)) {
-    if (typeof width === 'number' && Number.isFinite(width)) breakpoints[name] = width;
-  }
-  if (!(BASE_BREAKPOINT in breakpoints)) breakpoints[BASE_BREAKPOINT] = 0;
+  // Breakpoints must define 'base'; a definition that omits responsive layouts gets base:0.
+  const breakpoints = parseBreakpoints(rec.breakpoints, grid);
 
   const canvas: Canvas = { grid, sizing, breakpoints };
+  const frame = parseFrame(rec.frame, 'canvas.frame');
+  if (frame) canvas.frame = frame;
   // An unknown value falls back to the default (absent) rather than failing the parse: a
   // definition written by a newer release still renders.
   if (isCanvasDensity(rec.density)) canvas.density = rec.density;
@@ -344,13 +496,15 @@ function parseWidget(raw: unknown, index: number, catalog: WidgetCatalog | undef
   const ds = parseDatasource(raw.datasource, index);
   if (ds) widget.datasource = ds;
   if (isRecord(raw.options)) widget.options = raw.options as Record<string, unknown>;
+  const frame = parseFrame(raw.frame, `widgets[${index}].frame`);
+  if (frame) widget.frame = frame;
   if (!builtin) return withStoredFields(raw, widget as ExtensionWidgetInstance);
   return widget;
 }
 
 // The envelope fields the parser owns on a resolved widget. Everything else a stored widget
 // carries is outside the owned schema.
-const OWNED_WIDGET_KEYS: ReadonlySet<string> = new Set(['id', 'type', 'widget', 'layout', 'datasource', 'options']);
+const OWNED_WIDGET_KEYS: ReadonlySet<string> = new Set(['id', 'type', 'widget', 'layout', 'datasource', 'options', 'frame']);
 
 // withStoredFields keeps, on a resolved EXTENSION widget, every stored field the envelope does
 // not own (a package's own top-level additions, extra keys inside `widget`), in the stored key
@@ -539,32 +693,89 @@ function parseLayout(raw: unknown, index: number): WidgetLayout {
   if (!isRecord(raw)) throw new DashboardDefinitionError(`widgets[${index}].layout is missing`);
 
   const layout: WidgetLayout = {};
-  for (const [bp, box] of Object.entries(raw)) {
-    if (isRecord(box)) layout[bp] = parseBox(box);
+  for (const [bp, placement] of Object.entries(raw)) {
+    if (bp === '__proto__') continue;
+    if (isRecord(placement)) layout[bp] = parsePlacement(placement, `widgets[${index}].layout.${bp}`);
   }
-  if (!(BASE_BREAKPOINT in layout)) {
-    throw new DashboardDefinitionError(`widgets[${index}].layout has no '${BASE_BREAKPOINT}' box`);
+  if (!Object.prototype.hasOwnProperty.call(layout, BASE_BREAKPOINT)) {
+    throw new DashboardDefinitionError(`widgets[${index}].layout has no '${BASE_BREAKPOINT}' placement`);
   }
   return layout;
 }
 
-function parseBox(rec: Record<string, unknown>): WidgetBox {
-  // col/row are 0-based start lines (clamped >=0); spans are >=1 so a widget can't
-  // vanish. offset is an optional signed-pixel nudge — carried only when present so a
-  // box without it round-trips unchanged.
-  const box: WidgetBox = {
-    col: Math.max(0, Math.round(numberAt(rec, 'col', 0))),
-    colSpan: Math.max(1, Math.round(numberAt(rec, 'colSpan', 1))),
-    row: Math.max(0, Math.round(numberAt(rec, 'row', 0))),
-    rowSpan: Math.max(1, Math.round(numberAt(rec, 'rowSpan', 1))),
-    // z rounds too: a fractional zIndex is invalid CSS and silently drops to auto,
-    // so keep it an integer like every other box field.
-    z: Math.round(numberAt(rec, 'z', 0)),
-  };
-  if (isRecord(rec.offset)) {
-    box.offset = { x: numberAt(rec.offset, 'x', 0), y: numberAt(rec.offset, 'y', 0) };
+// A whole number of cells >= min, or a refusal. Required: a span the author left out has no
+// value this parser could honestly pick.
+function cellCount(rec: Record<string, unknown>, key: string, min: number, where: string): number {
+  const v = rec[key];
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new DashboardDefinitionError(`${where}.${key} is ${JSON.stringify(v)}; expected a number of cells`);
   }
-  return box;
+  return Math.max(min, Math.round(v));
+}
+
+// parsePlacement reads one breakpoint's placement. A missing `mode` is a grid placement. Every
+// value the mode needs is required and checked: a placement is where a widget is drawn, and a
+// guessed one draws it somewhere nobody chose.
+function parsePlacement(rec: Record<string, unknown>, where: string): Placement {
+  const mode = rec.mode ?? 'grid';
+  if (mode === 'grid') {
+    return {
+      mode: 'grid',
+      col: cellCount(rec, 'col', 0, where),
+      row: cellCount(rec, 'row', 0, where),
+      cols: cellCount(rec, 'cols', 1, where),
+      rows: cellCount(rec, 'rows', 1, where),
+    };
+  }
+  if (mode === 'relative') return parseRelative(rec, where);
+  if ((RESERVED_PLACEMENT_MODES as readonly unknown[]).includes(mode)) {
+    throw new DashboardDefinitionError(`${where}.mode '${String(mode)}' is reserved and not supported by this release`);
+  }
+  throw new DashboardDefinitionError(`${where}.mode is ${JSON.stringify(mode)}; expected 'grid' or 'relative'`);
+}
+
+function parseAnchor(raw: unknown, where: string): PlacementAnchor {
+  if ((PLACEMENT_ANCHORS as readonly unknown[]).includes(raw)) return raw as PlacementAnchor;
+  throw new DashboardDefinitionError(`${where} is ${JSON.stringify(raw)}; expected one of ${PLACEMENT_ANCHORS.join(', ')}`);
+}
+
+function parseRelative(rec: Record<string, unknown>, where: string): Placement {
+  if (typeof rec.host !== 'string' || rec.host.length === 0) {
+    throw new DashboardDefinitionError(`${where}.host is ${JSON.stringify(rec.host)}; a relative widget names the widget it is placed against`);
+  }
+  const placement: Extract<Placement, { mode: 'relative' }> = {
+    mode: 'relative',
+    host: rec.host,
+    anchor: parseAnchor(rec.anchor, `${where}.anchor`),
+    size: { fill: 'host' },
+  };
+  if (rec.self !== undefined) placement.self = parseAnchor(rec.self, `${where}.self`);
+  if (rec.offset !== undefined) {
+    const o = rec.offset;
+    if (!isRecord(o) || !isFiniteNumber(o.x) || !isFiniteNumber(o.y)) {
+      throw new DashboardDefinitionError(`${where}.offset is ${JSON.stringify(o)}; expected {x, y} in cells`);
+    }
+    placement.offset = { x: o.x, y: o.y };
+  }
+  const size = rec.size;
+  if (isRecord(size) && size.fill === 'host') {
+    placement.size = { fill: 'host' };
+  } else if (isRecord(size)) {
+    placement.size = { cols: cellCount(size, 'cols', 1, `${where}.size`), rows: cellCount(size, 'rows', 1, `${where}.size`) };
+  } else {
+    throw new DashboardDefinitionError(`${where}.size is ${JSON.stringify(size)}; expected {cols, rows} or {fill: 'host'}`);
+  }
+  if (rec.layer !== undefined) {
+    if (!isFiniteNumber(rec.layer) || !Number.isInteger(rec.layer)) {
+      throw new DashboardDefinitionError(`${where}.layer is ${JSON.stringify(rec.layer)}; expected a whole number`);
+    }
+    placement.layer = rec.layer;
+  }
+  return placement;
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
 }
 
 // The stored shape of a definition: what serializeDefinition writes. A placeholder for
@@ -578,11 +789,15 @@ export type StoredDashboardDefinition = Omit<DashboardDefinition, 'widgets'> & {
 // Anything that writes a definition out — a save, a copy-as-JSON export — goes through
 // this, because JSON.stringify of the parsed model would write the placeholder wrapper
 // and lose the widget. Returns the same reference when there is no placeholder.
+//
+// The parser's `convertedFrom` mark is never written: it describes how this copy was read, not
+// the board, and a save is exactly what retires it.
 export function storedDefinition(def: DashboardDefinition): StoredDashboardDefinition {
-  if (!def.widgets.some((w) => w.type === UNKNOWN_WIDGET_TYPE)) return def as StoredDashboardDefinition;
+  const unmarked = withoutConversionMark(def);
+  if (!unmarked.widgets.some((w) => w.type === UNKNOWN_WIDGET_TYPE)) return unmarked as StoredDashboardDefinition;
   return {
-    ...def,
-    widgets: def.widgets.map((w) => (w.type === UNKNOWN_WIDGET_TYPE ? storedUnknownWidget(w) : w)),
+    ...unmarked,
+    widgets: unmarked.widgets.map((w) => (w.type === UNKNOWN_WIDGET_TYPE ? storedUnknownWidget(w) : w)),
   };
 }
 
@@ -620,10 +835,10 @@ function storedUnknownLayout(layout: WidgetLayout, rawLayout: unknown): unknown 
       changed = true; // the editor removed this breakpoint
       continue;
     }
-    if (sameBox(parseBox(box), current)) {
+    if (samePlacement(parsePlacement(box, bp), current)) {
       out[bp] = box;
     } else {
-      out[bp] = movedBox(box, current);
+      out[bp] = movedPlacement(box, current);
       changed = true;
     }
   }
@@ -635,25 +850,22 @@ function storedUnknownLayout(layout: WidgetLayout, rawLayout: unknown): unknown 
   return changed ? out : rawLayout;
 }
 
-// movedBox writes an edited box over a stored one. The fields a box has in this build
-// take the edited values; any other field the stored box carries (one a newer release
-// added) is kept, so a move does not strip it. An offset the edit cleared is removed.
-function movedBox(stored: Record<string, unknown>, current: WidgetBox): Record<string, unknown> {
-  const out: Record<string, unknown> = { ...stored, ...current };
-  if (current.offset === undefined) delete out.offset;
+// Every field a placement has in this build, in either mode.
+const PLACEMENT_KEYS: ReadonlySet<string> = new Set([
+  'mode', 'col', 'row', 'cols', 'rows', 'host', 'anchor', 'self', 'offset', 'size', 'layer',
+]);
+
+// movedPlacement writes an edited placement over a stored one. The edited placement replaces
+// every field this build knows (so a field the edit dropped, or one of the other mode, is gone);
+// any other field the stored entry carries (one a newer release added) is kept.
+function movedPlacement(stored: Record<string, unknown>, current: Placement): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...current };
+  for (const [k, v] of Object.entries(stored)) if (!PLACEMENT_KEYS.has(k)) out[k] = v;
   return out;
 }
 
-function sameBox(a: WidgetBox, b: WidgetBox): boolean {
-  return (
-    a.col === b.col &&
-    a.colSpan === b.colSpan &&
-    a.row === b.row &&
-    a.rowSpan === b.rowSpan &&
-    a.z === b.z &&
-    a.offset?.x === b.offset?.x &&
-    a.offset?.y === b.offset?.y
-  );
+function samePlacement(a: Placement, b: Placement): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 // serializeDefinition is the canonical on-the-wire JSON — the inverse of
@@ -663,33 +875,20 @@ export function serializeDefinition(def: DashboardDefinition): string {
   return JSON.stringify(storedDefinition(def));
 }
 
+// withoutConversionMark is the definition minus the parser's `convertedFrom` mark (the same
+// reference when it carries none): what an editor keeps once a save has written the current
+// format.
+export function withoutConversionMark(def: DashboardDefinition): DashboardDefinition {
+  if (def.convertedFrom === undefined) return def;
+  const { convertedFrom: _mark, ...rest } = def;
+  return rest;
+}
+
 // isDirty reports whether two definitions differ. A structural JSON compare is
 // enough: both sides come from parse/edit transforms that preserve key order, so
 // it only flips on a real change. Drives an editor's save/dirty state.
 export function isDirty(a: DashboardDefinition, b: DashboardDefinition): boolean {
   return serializeDefinition(a) !== serializeDefinition(b);
-}
-
-// resolveWidgetBox returns the box for the active breakpoint, falling back to the
-// widget's 'base' box when it defines no override for that breakpoint. Parse
-// guarantees a base box exists, so this always resolves.
-export function resolveWidgetBox(layout: WidgetLayout, breakpoint: string): WidgetBox {
-  return layout[breakpoint] ?? layout[BASE_BREAKPOINT];
-}
-
-// activeBreakpoint picks the breakpoint whose min width is the largest one that
-// still fits the viewport (falling back to 'base' / the smallest). Deterministic
-// given equal widths by preferring the wider min.
-export function activeBreakpoint(breakpoints: Breakpoints, viewportWidth: number): string {
-  let best = BASE_BREAKPOINT;
-  let bestWidth = -1;
-  for (const [name, minWidth] of Object.entries(breakpoints)) {
-    if (viewportWidth >= minWidth && minWidth > bestWidth) {
-      best = name;
-      bestWidth = minWidth;
-    }
-  }
-  return best;
 }
 
 // generateWidgetId mints a unique widget-instance id. Uses crypto.randomUUID where

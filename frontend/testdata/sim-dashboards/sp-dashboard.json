@@ -4,13 +4,14 @@
       "base": 0
     },
     "grid": {
-      "columns": 24,
-      "gap": 8,
-      "rowHeight": 40
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
     },
     "sizing": "fill"
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "slots": {
     "plant": {
       "defaultBinding": {
@@ -201,10 +202,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 3,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -223,11 +224,11 @@
       "id": "sp-alarms-major",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 3,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -248,11 +249,11 @@
       "id": "sp-plant-throughput",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 3,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -275,11 +276,11 @@
       "id": "sp-plant-running",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 3,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -295,10 +296,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 24,
-          "row": 13,
-          "rowSpan": 1,
-          "z": 0
+          "cols": 12,
+          "mode": "grid",
+          "row": 9,
+          "rows": 1
         }
       },
       "options": {
@@ -320,10 +321,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 14,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 10,
+          "rows": 2
         }
       },
       "options": {
@@ -356,11 +357,11 @@
       "id": "sp-fuel-sp-dozer-02",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 14,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 10,
+          "rows": 2
         }
       },
       "options": {
@@ -393,11 +394,11 @@
       "id": "sp-fuel-sp-dozer-03",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 14,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 10,
+          "rows": 2
         }
       },
       "options": {
@@ -431,10 +432,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 17,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 12,
+          "rows": 2
         }
       },
       "options": {
@@ -467,11 +468,11 @@
       "id": "sp-fuel-sp-dozer-05",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 17,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 12,
+          "rows": 2
         }
       },
       "options": {
@@ -504,11 +505,11 @@
       "id": "sp-fuel-sp-dozer-06",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 17,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 12,
+          "rows": 2
         }
       },
       "options": {
@@ -542,10 +543,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 20,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 14,
+          "rows": 2
         }
       },
       "options": {
@@ -578,11 +579,11 @@
       "id": "sp-fuel-sp-loader-02",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 20,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 14,
+          "rows": 2
         }
       },
       "options": {
@@ -615,11 +616,11 @@
       "id": "sp-fuel-sp-loader-03",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 20,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 14,
+          "rows": 2
         }
       },
       "options": {
@@ -653,10 +654,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 23,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 16,
+          "rows": 2
         }
       },
       "options": {
@@ -689,11 +690,11 @@
       "id": "sp-fuel-sp-loader-05",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 23,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 16,
+          "rows": 2
         }
       },
       "options": {
@@ -726,11 +727,11 @@
       "id": "sp-fuel-sp-loader-06",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 23,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 16,
+          "rows": 2
         }
       },
       "options": {
@@ -764,10 +765,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 26,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 18,
+          "rows": 2
         }
       },
       "options": {
@@ -800,11 +801,11 @@
       "id": "sp-fuel-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 26,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 18,
+          "rows": 2
         }
       },
       "options": {
@@ -837,11 +838,11 @@
       "id": "sp-fuel-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 26,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 18,
+          "rows": 2
         }
       },
       "options": {
@@ -875,10 +876,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 29,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 20,
+          "rows": 2
         }
       },
       "options": {
@@ -911,11 +912,11 @@
       "id": "sp-fuel-sp-hauler-05",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 29,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 20,
+          "rows": 2
         }
       },
       "options": {
@@ -948,11 +949,11 @@
       "id": "sp-fuel-sp-hauler-06",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 29,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 20,
+          "rows": 2
         }
       },
       "options": {
@@ -986,10 +987,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 32,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 22,
+          "rows": 2
         }
       },
       "options": {
@@ -1012,11 +1013,11 @@
       "id": "sp-payload-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 32,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 22,
+          "rows": 2
         }
       },
       "options": {
@@ -1039,11 +1040,11 @@
       "id": "sp-payload-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 32,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 22,
+          "rows": 2
         }
       },
       "options": {
@@ -1067,10 +1068,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 8,
-          "row": 35,
-          "rowSpan": 3,
-          "z": 0
+          "cols": 4,
+          "mode": "grid",
+          "row": 24,
+          "rows": 2
         }
       },
       "options": {
@@ -1093,11 +1094,11 @@
       "id": "sp-payload-sp-hauler-05",
       "layout": {
         "base": {
-          "col": 8,
-          "colSpan": 8,
-          "row": 35,
-          "rowSpan": 3,
-          "z": 0
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 24,
+          "rows": 2
         }
       },
       "options": {
@@ -1120,11 +1121,11 @@
       "id": "sp-payload-sp-hauler-06",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 35,
-          "rowSpan": 3,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 24,
+          "rows": 2
         }
       },
       "options": {
@@ -1146,10 +1147,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 16,
-          "row": 3,
-          "rowSpan": 5,
-          "z": 0
+          "cols": 8,
+          "mode": "grid",
+          "row": 2,
+          "rows": 3
         }
       },
       "options": {
@@ -1175,10 +1176,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 16,
-          "row": 8,
-          "rowSpan": 5,
-          "z": 0
+          "cols": 8,
+          "mode": "grid",
+          "row": 5,
+          "rows": 4
         }
       },
       "options": {
@@ -1190,11 +1191,11 @@
       "id": "sp-machine-select",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 3,
-          "rowSpan": 2,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 2,
+          "rows": 1
         }
       },
       "options": {
@@ -1214,11 +1215,11 @@
       "id": "sp-engine-temp",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 5,
-          "rowSpan": 4,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 3,
+          "rows": 3
         }
       },
       "options": {
@@ -1248,11 +1249,11 @@
       "id": "sp-tyre",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 9,
-          "rowSpan": 4,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 6,
+          "rows": 3
         }
       },
       "options": {

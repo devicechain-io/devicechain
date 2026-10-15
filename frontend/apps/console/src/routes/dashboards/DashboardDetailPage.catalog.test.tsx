@@ -61,7 +61,7 @@ afterEach(() => {
   h.registry = undefined;
 });
 
-const box = { base: { col: 0, colSpan: 4, row: 0, rowSpan: 2, z: 0 } };
+const box = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } };
 
 async function openPage(widgets: unknown[], installed: boolean) {
   h.registry = installed ? createHostWidgetRegistry([acmeTankWidget]) : createHostWidgetRegistry([]);

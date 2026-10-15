@@ -21,7 +21,7 @@
 // Colour tokens are the ThemeVar set in ./theme; the severity hues are generated from the
 // table in ./severity (WidgetTokenStyles below injects them), so no colour is typed twice.
 
-import { DENSITY_SCALE, type CanvasDensity } from '@devicechain/dashboards';
+import { DENSITY_SCALE, SPACE_TOKEN_PX, type CanvasDensity } from '@devicechain/dashboards';
 import type { CSSProperties } from 'react';
 
 import { severityTokenCss } from './severity';
@@ -36,7 +36,14 @@ export const FONT_TOKENS = {
 } as const;
 export type FontToken = keyof typeof FONT_TOKENS;
 
-export const SPACE_TOKENS = { 1: 4, 2: 8, 3: 12, 4: 16 } as const;
+// The spacing steps a widget draws from, read from the dashboard format's table (which also has
+// `space-0`, for a seamless board's gutter and a frameless widget's padding).
+export const SPACE_TOKENS = {
+  1: SPACE_TOKEN_PX['space-1'],
+  2: SPACE_TOKEN_PX['space-2'],
+  3: SPACE_TOKEN_PX['space-3'],
+  4: SPACE_TOKEN_PX['space-4'],
+} as const;
 export type SpaceToken = keyof typeof SPACE_TOKENS;
 
 // 'font-md' | 'space-3' -- the names useWidgetScale().px() accepts.

@@ -24,7 +24,7 @@ function tank(options: Record<string, unknown> = {}): KnownWidgetInstance {
     // An extension id is not in the built-in union; the instance shape that carries one
     // arrives with the runtime work, so the test narrows it here.
     type: TANK_ID as KnownWidgetInstance['type'],
-    layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 4, z: 0 } },
+    layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 4 } },
     options,
   };
 }

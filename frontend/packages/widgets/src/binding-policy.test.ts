@@ -18,7 +18,7 @@ const widget = (options: Record<string, unknown> | undefined, type = 'acme/x'): 
   ({
     id: 'w',
     type,
-    layout: { base: { col: 0, colSpan: 1, row: 0, rowSpan: 1, z: 0 } },
+    layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 1, rows: 1 } },
     options,
   }) as unknown as WidgetInstance;
 

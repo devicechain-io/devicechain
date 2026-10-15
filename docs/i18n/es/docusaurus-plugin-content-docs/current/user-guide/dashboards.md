@@ -97,17 +97,24 @@ plataforma comprueba cada acción contra tus propios permisos.
 previa**, **Exportar**, **Historial**, **Guardar** y **Hecho**, y aparece una barra de ajustes de
 diseño.
 
-<GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra Añadir widget, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 24, Altura de fila 40, Espaciado 8 y Tamaño Llenar área. Los widgets aparecen enmarcados en el lienzo; algunos muestran un guion o el texto de que aún no hay datos." />
+<GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra Añadir widget, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 12, Celda mínima 56, Separación 8, Margen 0 y Tamaño Llenar área. Los widgets aparecen enmarcados en el lienzo; algunos muestran un guion o el texto de que aún no hay datos." />
 
 - **Título** es el nombre del panel.
-- **Columnas**, **Altura de fila** y **Espaciado** definen la cuadrícula a la que se ajustan los
-  widgets.
+- **Columnas**, **Celda mínima**, **Separación** y **Margen** definen la cuadrícula a la que se
+  ajustan los widgets. Las celdas son cuadradas y se estiran para llenar el ancho; **Celda mínima**
+  es el tamaño más pequeño que puede tener una celda, en píxeles. **Separación** es el espacio
+  entre celdas y **Margen**, el borde alrededor del panel.
 - **Tamaño** decide cómo ocupa el panel la página: **Llenar área**, **Ancho fijo** o **Alto fijo**.
 
-Arrastra un widget para moverlo y arrastra sus bordes para cambiar su tamaño. Los widgets pueden
-solaparse; selecciona uno y usa **Al frente** para ponerlo encima. Un widget que todavía no ha
+Arrastra un widget para moverlo y arrastra sus bordes para cambiar su tamaño. Los widgets nunca
+se solapan: un widget que mueves o redimensionas sobre otros los empuja hacia abajo, y un widget
+nuevo ocupa el primer hueco libre. Un widget que todavía no ha
 recibido datos muestra un guion o *No data yet* (este texto aparece en inglés también en la consola
 en español).
+
+Un panel guardado por una versión anterior se convierte a la cuadrícula actual al abrirlo. La
+conversión es aproximada, así que el editor muestra un aviso que pide revisar el diseño. Al guardar,
+el panel queda en el formato actual y el aviso desaparece.
 
 **Guardar** almacena los cambios en el borrador. Está atenuado hasta que hay algo que guardar.
 **Hecho** vuelve a la vista; los cambios sin guardar se mantienen y **Guardar** sigue disponible allí.

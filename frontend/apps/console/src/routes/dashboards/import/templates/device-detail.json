@@ -4,13 +4,14 @@
       "base": 0
     },
     "grid": {
-      "columns": 24,
-      "gap": 8,
-      "rowHeight": 40
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
     },
     "sizing": "fill"
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "slots": {
     "device": {
       "label": "Device",
@@ -31,10 +32,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -57,11 +58,11 @@
       "id": "w-hum",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -84,11 +85,11 @@
       "id": "w-gauge",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 3
         }
       },
       "options": {
@@ -109,11 +110,11 @@
       "id": "w-alarms-count",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 4,
-          "z": 0
+          "rows": 2
         }
       },
       "options": {
@@ -135,10 +136,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 16,
-          "row": 4,
-          "rowSpan": 8,
-          "z": 0
+          "cols": 8,
+          "mode": "grid",
+          "row": 3,
+          "rows": 4
         }
       },
       "options": {
@@ -159,11 +160,11 @@
       "id": "w-map",
       "layout": {
         "base": {
-          "col": 16,
-          "colSpan": 8,
-          "row": 4,
-          "rowSpan": 8,
-          "z": 0
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 3,
+          "rows": 4
         }
       },
       "options": {
@@ -181,10 +182,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 12,
-          "row": 12,
-          "rowSpan": 6,
-          "z": 0
+          "cols": 6,
+          "mode": "grid",
+          "row": 7,
+          "rows": 3
         }
       },
       "options": {
@@ -203,11 +204,11 @@
       "id": "w-alarms",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 12,
-          "row": 12,
-          "rowSpan": 6,
-          "z": 0
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 7,
+          "rows": 3
         }
       },
       "options": {

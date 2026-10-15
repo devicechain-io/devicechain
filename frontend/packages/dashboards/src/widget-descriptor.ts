@@ -166,9 +166,16 @@ export type WidgetResizeMode = 'both' | 'horizontal' | 'vertical' | 'none';
 // How big a widget is allowed to be, declared by the widget and checked by the layout lint.
 // Plain JSON, validated when the catalog is built.
 //
-// 🔴 Spans are counted in cells of TODAY's 24-column grid (rows are 40 px). A later change
-// to square, constant-size cells re-calibrates every number a widget declares here; the
-// shape of this block does not change.
+// Spans are counted in SQUARE cells, never smaller than the board's minCellSize (56 px by
+// default), so a minSpan sized at that cell is readable at every width the layout renders at.
+//
+// 🔑 The move to square cells did NOT bump SDK_API_VERSION, deliberately. The numbers here
+// changed meaning (they were cells of a 24-column grid with 40 px rows, roughly twice as many
+// columns), but the block is advisory size metadata: the editor and the lint read it, and
+// nothing renders from it. A package still declaring the old numbers keeps rendering, and a
+// board placing it outside them is a lint error, which is the right size of failure. A bump would
+// instead turn every stored widget of every extension into an unresolved placeholder, and refuse
+// every descriptor, until each package was re-released: a hard break for a soft change.
 export interface WidgetLayoutSpec {
   // The size a freshly added widget takes.
   defaultSpan: WidgetSpan;

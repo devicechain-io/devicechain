@@ -70,13 +70,15 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **Edit** 会把仪表板变成画布。按钮变为 **Add widget**（添加组件）、**Preview**、**Export**、**History**、**Save**（保存）和 **Done**（完成），同时出现一个布局设置栏。
 
-<GuideShot id="dashboard-edit" alt="编辑模式下的 Widget Lab 仪表板。页眉显示 Add widget、Preview、Export、History、不可用的 Save 和 Done。设置栏显示 Title Widget Lab、Columns 24、Row height 40、Gap 8 和 Size Fill area。组件在画布上带有轮廓，有些显示短横线或 No data yet。" />
+<GuideShot id="dashboard-edit" alt="编辑模式下的 Widget Lab 仪表板。页眉显示 Add widget、Preview、Export、History、不可用的 Save 和 Done。设置栏显示 Title Widget Lab、Columns 12、Min cell 56、Gutter 8、Padding 0 和 Size Fill area。组件在画布上带有轮廓，有些显示短横线或 No data yet。" />
 
 - **Title**（标题）是仪表板的名称。
-- **Columns**（列数）、**Row height**（行高）和 **Gap**（间距）设置组件吸附的网格。
+- **Columns**（列数）、**Min cell**（最小单元格）、**Gutter**（间隔）和 **Padding**（边距）设置组件吸附的网格。单元格是正方形，会拉伸以填满宽度；**Min cell** 是单元格允许的最小尺寸（像素）。**Gutter** 是单元格之间的间距，**Padding** 是仪表板四周的边距。
 - **Size**（尺寸）决定仪表板如何填充页面：**Fill area**（填充区域）、**Fixed width**（固定宽度）或 **Fixed height**（固定高度）。
 
-拖动组件可移动，拖动边缘可调整大小。组件可以重叠；选中一个后使用 **Front**（置顶）把它放到最上层。尚未收到数据的组件会显示短横线或 *No data yet*。
+拖动组件可移动，拖动边缘可调整大小。组件从不重叠：移动或调整大小后压到其他组件上时，会把它们向下推开；新组件放在第一个空位。尚未收到数据的组件会显示短横线或 *No data yet*。
+
+由早期版本保存的仪表板在打开时会转换为当前网格。转换是近似的，因此编辑器会显示提示，请你检查布局。保存后，仪表板以当前格式存储，提示随之消失。
 
 **Save** 会把你的更改存入草稿。在没有可保存内容时它是灰色的。**Done** 返回查看视图；未保存的更改会保留，**Save** 在那里仍然可用。如果你有未保存的更改时关闭选项卡或使用 **Dashboards** 返回链接，控制台会在丢弃之前询问。在侧边栏中选择其他页面则不会询问，所以请先保存。保存只会改变草稿。在你发布版本之前，查看者看不到任何新内容。
 

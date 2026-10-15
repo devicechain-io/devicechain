@@ -83,7 +83,7 @@ afterEach(() => {
   h.seen.length = 0;
 });
 
-const box = { base: { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: 1 } };
+const box = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 8, rows: 4 } };
 
 // The console's template export of the shared board: the slot is declared, with no default.
 const template = (widgets: unknown[] = [{ ...ACME_TANK_WIDGET_JSON }]) =>
