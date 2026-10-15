@@ -88,6 +88,25 @@ describe('convertSampleWindows', () => {
 });
 
 describe('loading a board stored before the time span', () => {
+  it('a PUBLISHED version (immutable, never re-saved) converts on every load, identically, and is never written to', () => {
+    // A published version is read again on every open and never saved back, so the conversion
+    // runs each time: it must be deterministic and must not touch the stored document.
+    const stored = board([chart('c1', { title: 'Temp', window: 20 }, { widget: { optionsVersion: 1 } }), card('k1', { window: 90 })]);
+    const bytes = JSON.stringify(stored);
+    const first = parseDashboardDefinition(JSON.parse(bytes));
+    const second = parseDashboardDefinition(stored);
+    const third = parseDashboardDefinition(stored);
+    expect(JSON.stringify(stored)).toBe(bytes);
+    expect(serializeDefinition(second)).toBe(serializeDefinition(first));
+    expect(serializeDefinition(third)).toBe(serializeDefinition(first));
+    expect(second.convertedWindows).toEqual(['c1']);
+    expect(third.convertedWindows).toEqual(['c1']);
+    // And what it converts to is itself a fixed point of the parser.
+    const reread = parseDashboardDefinition(JSON.parse(serializeDefinition(first)));
+    expect(serializeDefinition(reread)).toBe(serializeDefinition(first));
+    expect(reread.convertedWindows).toBeUndefined();
+  });
+
   it('flags the converted charts by id and marks the board, keeping every widget', () => {
     const def = parseDashboardDefinition(
       board([chart('c1', { title: 'Temp', window: 300 }), chart('c2', { title: 'Hum' }), card('k1', { window: 90 })]),

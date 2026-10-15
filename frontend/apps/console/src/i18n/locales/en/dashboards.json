@@ -67,6 +67,7 @@
   "timeRangeResume": "Resume",
   "timeRangePaused": "Paused",
   "timeRangePausedAt": "Paused at {{time}}",
+  "timeRangeActionsLive": "commands still send",
   "versionHistoryTitle": "Version history",
   "versionHistoryDescription": "Publish the current draft as an immutable version that goes live for viewers, make an earlier version live without touching the draft, or roll the draft back to a previous one. History is append-only.",
   "versionPublishHeading": "Publish current draft",

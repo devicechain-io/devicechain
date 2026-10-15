@@ -195,3 +195,103 @@ describe('pause', () => {
     expect(result.current.samples).toEqual([]);
   });
 });
+
+describe('the retention ceiling never passes for full coverage', () => {
+  it('marks a span window the ceiling cut while it was still inside the span, with where it now starts', () => {
+    const f = fakeHub();
+    const { result } = mount(f, { windowSeconds: 604800, now: clock });
+    for (let i = 0; i < MAX_SPAN_SAMPLES + 25; i++) f.push(sample(i, ago(MAX_SPAN_SAMPLES + 25 - i)));
+    expect(result.current.samples).toHaveLength(MAX_SPAN_SAMPLES);
+    expect(result.current.truncatedBefore).toBe(result.current.samples[0].occurredTime);
+    expect(result.current.truncatedBefore).toBe(ago(MAX_SPAN_SAMPLES));
+  });
+
+  it('does NOT mark a window that lost only what fell out of the span, and clears once the hole has aged out', () => {
+    const f = fakeHub();
+    let t = NOW;
+    const now = () => t;
+    const { result } = mount(f, { windowSeconds: 600, window: 3, now });
+    f.push(sample(1, ago(900)));
+    f.push(sample(2, ago(800)));
+    f.push(sample(3, ago(10)));
+    expect(result.current.truncatedBefore).toBeUndefined();
+    // Evicting a sample still INSIDE the span is a hole at the window's start...
+    for (let i = 4; i < 7; i++) f.push(sample(i, ago(13 - i)));
+    expect(result.current.samples.map((s) => s.value)).toEqual([4, 5, 6]);
+    expect(result.current.truncatedBefore).toBe(ago(9));
+    // ...until the evicted sample would have aged out of the span anyway.
+    t = NOW + 591_500;
+    f.push(sample(7, new Date(t).toISOString()));
+    expect(result.current.samples.map((s) => s.value)).toEqual([5, 6, 7]);
+    expect(result.current.truncatedBefore).toBeUndefined();
+  });
+
+  it('marks a seed that alone is larger than the ceiling (many series over a long span)', () => {
+    const f = fakeHub();
+    const seed = Array.from({ length: 6 }, (_, i) => sample(i, ago(600 - i)));
+    const { result } = mount(f, { windowSeconds: 3600, window: 4, initialSamples: seed, now: clock });
+    expect(result.current.samples.map((s) => s.value)).toEqual([2, 3, 4, 5]);
+    expect(result.current.truncatedBefore).toBe(ago(598));
+  });
+
+  it('marks a pause that outlasted the ceiling, once it resumes', () => {
+    const f = fakeHub();
+    const { result, rerender } = mount(f, { windowSeconds: 3600, window: 4, now: clock, pausedAt: NOW });
+    for (let i = 0; i < 20; i++) f.push(sample(i, ago(100 - i)));
+    rerender({ windowSeconds: 3600, window: 4, now: clock });
+    expect(result.current.samples.map((s) => s.value)).toEqual([16, 17, 18, 19]);
+    expect(result.current.truncatedBefore).toBe(ago(84));
+  });
+
+  it('a count window (no span) is never marked: it was never a promise of a span', () => {
+    const f = fakeHub();
+    const { result } = mount(f, { window: 2, now: clock });
+    for (let i = 0; i < 5; i++) f.push(sample(i, ago(5)));
+    expect(result.current.truncatedBefore).toBeUndefined();
+  });
+});
+
+describe('pause: what resume hands back', () => {
+  it('keeps the latest value of a rarely-reporting measurement whose sample the capped queue evicted', () => {
+    const f = fakeHub();
+    const { result, rerender } = mount(f, { windowSeconds: 3600, window: 4, now: clock });
+    f.push(sample(0, ago(200), 'door'));
+    rerender({ windowSeconds: 3600, window: 4, now: clock, pausedAt: NOW });
+    f.push(sample(1, ago(100), 'door')); // the door changes once, early in the pause...
+    for (let i = 0; i < 10; i++) f.push(sample(i, ago(50 - i))); // ...then a busy measurement floods the queue
+    rerender({ windowSeconds: 3600, window: 4, now: clock });
+    expect(result.current.latest.door.value).toBe(1);
+    expect(result.current.latest.t.value).toBe(9);
+  });
+
+  it('merges each queued sample exactly once across repeated pauses and resumes', () => {
+    const f = fakeHub();
+    const { result, rerender } = mount(f, { windowSeconds: 3600, now: clock });
+    const paused = { windowSeconds: 3600, now: clock, pausedAt: NOW };
+    const live = { windowSeconds: 3600, now: clock };
+    f.push(sample(1, ago(40)));
+    rerender(paused);
+    f.push(sample(2, ago(30)));
+    rerender(live);
+    rerender(live);
+    f.push(sample(3, ago(20)));
+    rerender(paused);
+    f.push(sample(4, ago(10)));
+    rerender(live);
+    expect(result.current.samples.map((s) => s.value)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('lets a sample go at ARRIVAL once it is outside the span, so a wider span later does not resurrect it', () => {
+    // The live buffer holds the span and no more: widening is served by the renderer's re-seed,
+    // which reads the wider span from history, not by a live buffer that grew without bound.
+    const f = fakeHub();
+    let t = NOW;
+    const now = () => t;
+    const { result, rerender } = mount(f, { windowSeconds: 60, now });
+    f.push(sample(1, ago(30)));
+    t = NOW + 50_000;
+    f.push(sample(2, new Date(NOW + 49_000).toISOString()));
+    rerender({ windowSeconds: 3600, now });
+    expect(result.current.samples.map((s) => s.value)).toEqual([2]);
+  });
+});

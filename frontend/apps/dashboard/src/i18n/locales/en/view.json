@@ -9,6 +9,7 @@
   "pause": "Pause",
   "paused": "Paused",
   "pausedAt": "Paused at {{time}}",
+  "actionsLive": "commands still send",
   "resume": "Resume",
   "themeToDark": "Dark theme",
   "themeToLight": "Light theme",

@@ -82,6 +82,8 @@ describe('<TimeRangeBar>', () => {
     expect(pill.textContent).toContain('Paused');
     expect(pill.textContent).toContain(new Date(NOW).toLocaleTimeString());
     expect(pill.getAttribute('role')).toBe('status');
+    // A pause freezes what the board shows, not what it does: the pill says commands still go out.
+    expect(pill.querySelector('[data-time-range-actions-live]')?.textContent).toContain('commands still send');
     fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
     expect(c.resume).toHaveBeenCalledTimes(1);
     expect(c.pause).not.toHaveBeenCalled();
@@ -100,12 +102,13 @@ describe('<TimeRangeBar>', () => {
       <TimeRangeBar
         state={{ spanSeconds: 3600, paused: true, pausedAt: NOW }}
         controls={controls()}
-        labels={{ range: 'Rango', pause: 'Pausar', resume: 'Reanudar', paused: 'En pausa', pausedAt: (t) => `desde ${t}` }}
+        labels={{ range: 'Rango', pause: 'Pausar', resume: 'Reanudar', paused: 'En pausa', pausedAt: (t) => `desde ${t}`, actionsLive: 'los comandos se siguen enviando' }}
       />,
     );
     expect(screen.getByRole('button', { name: 'Reanudar' })).toBeTruthy();
     expect(screen.getByRole('group', { name: 'Rango' })).toBeTruthy();
     expect(document.querySelector('[data-time-range-paused]')?.textContent).toContain('En pausa');
+    expect(document.querySelector('[data-time-range-actions-live]')?.textContent).toContain('los comandos se siguen enviando');
   });
 });
 

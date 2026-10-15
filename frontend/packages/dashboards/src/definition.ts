@@ -67,6 +67,7 @@ import { convertSampleWindows } from './legacy-window';
 import { isValidSpanSeconds } from './time-range';
 import { parseWidgetRef, unresolvedReason } from './widget-compat';
 import type { WidgetCatalog } from './widget-catalog';
+import { isRecord } from './is-record';
 
 // The breakpoint every layout must define; a widget/viewport with no more specific placement
 // falls back to it.
@@ -83,10 +84,6 @@ export class DashboardDefinitionError extends Error {
     super(`invalid dashboard definition: ${message}`);
     this.name = 'DashboardDefinitionError';
   }
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function numberAt(rec: Record<string, unknown>, key: string, fallback: number): number {

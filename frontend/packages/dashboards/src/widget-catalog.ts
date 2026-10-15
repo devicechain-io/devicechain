@@ -17,6 +17,7 @@ import {
   type WidgetResizeMode,
   type WidgetDescriptor,
 } from './widget-descriptor';
+import { isRecord } from './is-record';
 
 export interface DescriptorIssue {
   // The widget id the issue is about, or `#<index>` when the descriptor has no usable id.
@@ -64,10 +65,6 @@ const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
   selection: [],
   none: [],
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;

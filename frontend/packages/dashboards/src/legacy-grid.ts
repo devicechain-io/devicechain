@@ -36,6 +36,7 @@ import {
   gutterPx,
 } from './grid';
 import { CURRENT_SCHEMA_VERSION, type CanvasGrid, type GridPlacement } from './types';
+import { isRecord } from './is-record';
 
 // The format this conversion produces: the square-cell grid. Later formats are layered on by
 // their own conversions (./legacy-window), never folded into this one.
@@ -45,10 +46,6 @@ export const GRID_SCHEMA_VERSION = 2;
 export const LEGACY_REFERENCE_WIDTH = 1366;
 
 const LEGACY_DEFAULTS = { columns: 24, gap: 8, rowHeight: 40 };
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 function num(rec: Record<string, unknown>, key: string, fallback: number): number {
   const v = rec[key];

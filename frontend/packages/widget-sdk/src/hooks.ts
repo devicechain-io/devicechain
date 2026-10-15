@@ -242,6 +242,18 @@ function latestOf(samples: MeasurementSample[]): Record<string, MeasurementSampl
   return latest;
 }
 
+// evictOldest keeps the newest `max` samples, recording in `evicted` the time of the newest one it
+// drops (the hook's mark for "the window no longer reaches back to its start").
+function evictOldest(samples: MeasurementSample[], max: number, evicted: { current: number }): MeasurementSample[] {
+  if (samples.length <= max) return samples;
+  const cut = samples.length - max;
+  for (let i = 0; i < cut; i++) {
+    const at = Date.parse(samples[i].occurredTime ?? '');
+    if (at > evicted.current) evicted.current = at;
+  }
+  return samples.slice(cut);
+}
+
 // withinSpan drops the samples that occurred before `end - spanSeconds`. A sample whose time is
 // missing or unparseable is KEPT: it cannot be shown to be outside the window, and dropping it
 // would hide a reading the count ceiling would have kept.
@@ -280,6 +292,15 @@ export function useMeasurementStream(
   const clockRef = useRef(options.now ?? Date.now);
   const pausedRef = useRef(paused);
   const queueRef = useRef<MeasurementSample[]>([]);
+  // The newest QUEUED sample per measurement name. The queue is capped, so a long pause at a high
+  // rate evicts its oldest entries -- and with them, possibly, the only sample of a measurement
+  // that reports rarely. Without this, resuming would leave that measurement's latest value at
+  // its pre-pause reading. Bounded by the number of measurement names, not by time.
+  const queueLatestRef = useRef<Record<string, MeasurementSample>>({});
+  // The time (epoch ms) of the newest sample the retention ceiling has evicted, live or queued.
+  // While it is still inside the span, the window no longer covers the whole span and says so
+  // (`truncatedBefore`), rather than drawing a short window under a long span's label.
+  const evictedRef = useRef(-Infinity);
   const flushRef = useRef<() => void>(() => {});
   const clock = options.now ?? Date.now;
   useEffect(() => {
@@ -301,6 +322,8 @@ export function useMeasurementStream(
   useEffect(() => {
     setTagged({ key, state: EMPTY }); // reset the live buffer whenever the datasource changes (or clears)
     queueRef.current = [];
+    queueLatestRef.current = {};
+    evictedRef.current = -Infinity;
     flushRef.current = () => {};
     if (!datasource) return;
 
@@ -310,30 +333,33 @@ export function useMeasurementStream(
     const update = (fn: (prev: MeasurementStreamState) => MeasurementStreamState) =>
       setTagged((prev) => (prev.key === key ? { key, state: fn(prev.state) } : prev));
 
-    const fold = (prev: MeasurementStreamState, incoming: MeasurementSample[]): MeasurementStreamState => {
+    const fold = (
+      prev: MeasurementStreamState,
+      incoming: MeasurementSample[],
+      newest: Record<string, MeasurementSample> = latestOf(incoming),
+    ): MeasurementStreamState => {
       let samples = prev.samples.concat(incoming);
       const span = spanRef.current;
       if (span !== undefined) samples = withinSpan(samples, span, clockRef.current());
-      if (samples.length > windowSize) samples = samples.slice(samples.length - windowSize);
-      const latest = { ...prev.latest };
-      for (const s of incoming) latest[s.name] = s;
-      return { latest, samples, error: null };
+      samples = evictOldest(samples, windowSize, evictedRef);
+      return { latest: { ...prev.latest, ...newest }, samples, error: null };
     };
 
     flushRef.current = () => {
       const queued = queueRef.current;
       if (queued.length === 0) return;
+      const newest = queueLatestRef.current;
       queueRef.current = [];
-      update((prev) => fold(prev, queued));
+      queueLatestRef.current = {};
+      update((prev) => fold(prev, queued, newest));
     };
 
     return hub.subscribeWidget(datasource, {
       next: (sample) => {
         if (pausedRef.current) {
           // Buffered, bounded: a pause that outlasts the ceiling keeps the newest.
-          const queue = queueRef.current;
-          queue.push(sample);
-          if (queue.length > windowSize) queue.splice(0, queue.length - windowSize);
+          queueRef.current = evictOldest([...queueRef.current, sample], windowSize, evictedRef);
+          queueLatestRef.current[sample.name] = sample;
           return;
         }
         update((prev) => fold(prev, [sample]));
@@ -357,21 +383,29 @@ export function useMeasurementStream(
   return useMemo(() => {
     // The span is measured back from the freeze instant while paused, from now otherwise.
     const end = pausedAt ?? clock();
-    const bound = (samples: MeasurementSample[]) =>
-      windowSeconds === undefined ? samples : withinSpan(samples, windowSeconds, end);
-    if (!initialSamples || initialSamples.length === 0) {
-      if (windowSeconds === undefined) return live;
-      const samples = bound(live.samples);
-      return samples.length === live.samples.length ? live : { ...live, samples };
+    if (windowSeconds === undefined) {
+      if (!initialSamples || initialSamples.length === 0) return live;
+      const merged = initialSamples.concat(live.samples);
+      return {
+        latest: { ...latestOf(initialSamples), ...live.latest },
+        samples: merged.length > windowSize ? merged.slice(merged.length - windowSize) : merged,
+        error: live.error,
+      };
     }
-    const merged = bound(initialSamples.concat(live.samples));
-    const samples =
-      merged.length > windowSize ? merged.slice(merged.length - windowSize) : merged;
-    return {
-      latest: { ...latestOf(initialSamples), ...live.latest },
-      samples,
-      error: live.error,
-    };
+    // A span. Everything kept is inside it, so anything the ceiling cuts here -- or cut earlier
+    // from the live buffer or the pause queue, while still inside it -- is a hole at the start of
+    // the window. The ceiling drops the OLDEST, so what is kept is one contiguous run; it is
+    // marked with where that run begins, so a chart can say it covers less than its span.
+    const from = end - windowSeconds * 1000;
+    const merged = withinSpan(initialSamples ? initialSamples.concat(live.samples) : live.samples, windowSeconds, end);
+    const samples = merged.length > windowSize ? merged.slice(merged.length - windowSize) : merged;
+    const cut = samples.length < merged.length || evictedRef.current >= from;
+    const truncatedBefore = cut ? (samples[0]?.occurredTime ?? undefined) : undefined;
+    const latest = initialSamples ? { ...latestOf(initialSamples), ...live.latest } : live.latest;
+    if (!truncatedBefore && latest === live.latest && samples.length === live.samples.length) return live;
+    const state: MeasurementStreamState = { latest, samples, error: live.error };
+    if (truncatedBefore) state.truncatedBefore = truncatedBefore;
+    return state;
   }, [initialSamples, live, windowSize, windowSeconds, pausedAt, clock]);
 }
 

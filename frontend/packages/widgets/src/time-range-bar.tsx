@@ -61,6 +61,10 @@ export interface TimeRangeLabels {
   paused: string;
   // "Paused at 14:03:22".
   pausedAt: (time: string) => string;
+  // Printed inside the pill: a pause freezes what the board SHOWS, never what it DOES. Commands
+  // (and alarm acknowledge / clear) still go out at once, and their status keeps updating, so an
+  // operator who acts on a frozen board is told the action is live.
+  actionsLive: string;
 }
 
 export const DEFAULT_TIME_RANGE_LABELS: TimeRangeLabels = {
@@ -69,6 +73,7 @@ export const DEFAULT_TIME_RANGE_LABELS: TimeRangeLabels = {
   resume: 'Resume',
   paused: 'Paused',
   pausedAt: (time) => `Paused at ${time}`,
+  actionsLive: 'commands still send',
 };
 
 const button = (active: boolean): CSSProperties => ({
@@ -116,6 +121,9 @@ export function PausedIndicator({
       <span aria-hidden="true">{'⏸'}</span>
       {labels.paused}
       {time ? <span style={{ fontWeight: 400, textTransform: 'none' }}>{` ${time}`}</span> : null}
+      <span data-time-range-actions-live="" style={{ fontWeight: 400, textTransform: 'none' }}>
+        {`· ${labels.actionsLive}`}
+      </span>
     </span>
   );
 }

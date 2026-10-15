@@ -29,12 +29,9 @@
 // again changes nothing and flags nothing.
 
 import { CURRENT_SCHEMA_VERSION } from './types';
+import { isRecord } from './is-record';
 
 const TIME_SERIES = 'timeseries-chart';
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 export interface WindowConversion {
   doc: Record<string, unknown>;

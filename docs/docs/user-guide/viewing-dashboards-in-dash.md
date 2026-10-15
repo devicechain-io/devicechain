@@ -69,8 +69,14 @@ for next time.
 The header carries a time range: **15m**, **1h**, **6h**, **24h** and **7d**. It sets how much
 history the charts draw, counted back from now. The board opens on the span its author chose, one
 hour if they chose none, and the span you pick applies to every chart that follows the board's
-range. A chart whose author pinned its own span keeps that span. Long ranges are drawn from
-averaged points rather than every reading, so a week stays quick to load.
+range. A chart whose author pinned its own span keeps that span, and shows it in its corner (for
+example **1h**) whenever it differs from the range in the header, so a pinned hour never reads as a
+day of data. Long ranges are drawn from averaged points rather than every reading, so a week stays
+quick to load.
+
+A chart holds at most 2,000 readings. On a long range over a busy device that can be fewer than the
+whole range: the oldest readings are let go first, and the chart then says where it starts (for
+example **from 14:03**) in its corner, so a partial window is never mistaken for the full range.
 
 **Pause** freezes the board. Values, charts, alarm counts, alarm tables and maps stop where they
 are, and a **Paused** badge with the time you paused appears next to the controls. Time keeps
@@ -79,7 +85,9 @@ you are looking at, so a paused value never looks current. Choose **Resume** and
 up with everything that arrived in the meantime. While paused you can still change the range; the
 board shows that span as it stood at the moment you paused.
 
-Command buttons keep working while paused, and so does the list of recent commands they show.
+Pause freezes what the board shows, not what it does. Command buttons keep working while paused,
+and so does the list of recent commands they show, which is why the **Paused** badge also reads
+"commands still send": a command sent from a frozen board goes out at once.
 
 ## Kiosk mode and links for wall displays
 
@@ -95,7 +103,7 @@ the right mode:
 | `dashboard` | a dashboard token | Loads that dashboard straight after sign-in, including after single sign-on. |
 | `kiosk` | `1` or `true` | Kiosk mode: hides the header and its controls, and shows a **Fullscreen** button instead. |
 | `theme` | `dark` or `light` | Sets the theme. Unlike the theme button, the parameter is not remembered. |
-| `density` | `compact`, `comfortable` or `wall` | Accepted, but it does not change the layout yet. |
+| `density` | `compact`, `comfortable` or `wall` | Scales the board's text and spacing: `compact` is smaller, `wall` is larger, for a display read from across a room. Overrides the density the board was saved with. |
 | `range` | `15m`, `1h`, `6h`, `24h` or `7d` | Opens the board on that time range instead of the board's own. |
 | `paused` | `1` | Opens the board frozen at the moment it loads, with the **Paused** badge showing. Any other value opens it live. |
 

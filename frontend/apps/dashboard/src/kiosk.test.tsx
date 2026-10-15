@@ -481,6 +481,8 @@ describe('the time range', () => {
     expect(document.querySelector('[data-time-range-bar]')).toBeNull();
     expect(document.querySelector('[data-time-range-paused]')).not.toBeNull();
     expect(h.rendered?.timeRange?.paused).toBe(true);
+    // A wall can still carry command forms: the pill says they are not frozen with the readings.
+    expect(document.querySelector('[data-time-range-actions-live]')?.textContent).toContain(t('view:actionsLive'));
   });
 
   it('kiosk, live: no indicator at all', async () => {

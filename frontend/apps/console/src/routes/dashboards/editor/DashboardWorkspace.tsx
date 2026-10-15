@@ -674,6 +674,7 @@ export function DashboardWorkspace({
           resume: t('timeRangeResume'),
           paused: t('timeRangePaused'),
           pausedAt: (time) => t('timeRangePausedAt', { time }),
+          actionsLive: t('timeRangeActionsLive'),
         }}
       />
       {!preview && <WorkspaceConnection hub={liveHub} />}

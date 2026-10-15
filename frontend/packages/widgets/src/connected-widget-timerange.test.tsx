@@ -188,3 +188,67 @@ describe('a paused alarm widget', () => {
     expect(screen.getByText('6')).toBeTruthy();
   });
 });
+
+describe('a chart says what span it draws whenever the header would say otherwise', () => {
+  function measurementHub() {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    return { hub, push: (m: MeasurementSample) => act(() => sink?.next(m)) };
+  }
+  const badge = () => document.querySelector<HTMLElement>('[data-chart-span]');
+  const day: TimeRangeState = { spanSeconds: 86400, paused: false };
+
+  it('a chart PINNED to an hour under a 24h board range is labelled with its own span', () => {
+    const f = measurementHub();
+    mount(widget('timeseries-chart', { windowSeconds: 3600 }), f.hub, day);
+    expect(badge()?.textContent).toBe('1h');
+    expect(badge()?.getAttribute('data-chart-span')).toBe('1h');
+    expect(badge()?.title).toMatch(/Pinned to 1h/);
+  });
+
+  it('the label follows the viewer: it goes when the board range matches the pin, and returns when it moves away', () => {
+    const f = measurementHub();
+    const { setRange } = mount(widget('timeseries-chart', { windowSeconds: 3600 }), f.hub, live);
+    expect(badge()).toBeNull();
+    setRange(day);
+    expect(badge()?.textContent).toBe('1h');
+    setRange({ spanSeconds: 900, paused: false });
+    expect(badge()?.textContent).toBe('1h');
+  });
+
+  it('a chart that follows the board range carries no label (the header already says it)', () => {
+    const f = measurementHub();
+    mount(widget('timeseries-chart', {}), f.hub, day);
+    expect(badge()).toBeNull();
+  });
+
+  it('an unusable pin (under a minute) follows the board, so it carries no label either', () => {
+    const f = measurementHub();
+    mount(widget('timeseries-chart', { windowSeconds: 5 }), f.hub, day);
+    expect(badge()).toBeNull();
+  });
+
+  it('a pinned chart outside any board has no header to contradict, so no label', () => {
+    const f = measurementHub();
+    render(<ConnectedWidget widget={widget('timeseries-chart', { windowSeconds: 3600 })} hub={f.hub} />);
+    expect(badge()).toBeNull();
+  });
+
+  it('a window the retention ceiling cut is marked with where it starts, never passed off as the whole range', () => {
+    const f = measurementHub();
+    mount(widget('timeseries-chart', {}), f.hub, { spanSeconds: 604800, paused: false });
+    expect(badge()).toBeNull();
+    for (let i = 0; i < 2010; i++) f.push(sample(i, at(2010 - i)));
+    const b = badge();
+    expect(b).not.toBeNull();
+    expect(b?.hasAttribute('data-chart-truncated')).toBe(true);
+    expect(b?.textContent).toMatch(/^from /);
+    expect(b?.title).toMatch(/not the whole 7d/);
+  });
+});

@@ -30,7 +30,7 @@ export function historyWindowFor(spanSeconds: number, end: number): HistoryWindo
   return { startTime, endTime, intervalSeconds: bucketSecondsFor(spanSeconds) };
 }
 
-// The default backfill: the last hour bucketed per minute (~60 points) — enough to
+// The default backfill: the last hour bucketed per minute (~60 points), enough to
 // give a chart shape on load without a heavy query. What a widget that is not time-ranged
 // (a card, a gauge: they need the latest value, not a span) is seeded with.
 export function defaultHistoryWindow(): HistoryWindow {

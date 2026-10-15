@@ -761,6 +761,7 @@ export function View({
     resume: t('view:resume'),
     paused: t('view:paused'),
     pausedAt: (time: string) => t('view:pausedAt', { time }),
+    actionsLive: t('view:actionsLive'),
   };
 
   const title = definition.title || t('view:untitled');

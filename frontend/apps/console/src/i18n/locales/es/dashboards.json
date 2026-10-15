@@ -67,6 +67,7 @@
   "timeRangeResume": "Reanudar",
   "timeRangePaused": "En pausa",
   "timeRangePausedAt": "En pausa desde las {{time}}",
+  "timeRangeActionsLive": "los comandos se siguen enviando",
   "versionHistoryTitle": "Historial de versiones",
   "versionHistoryDescription": "Publica el borrador actual como una versión inmutable que se activa para los espectadores, activa una versión anterior sin tocar el borrador, o revierte el borrador a una versión anterior. El historial es de solo adición.",
   "versionPublishHeading": "Publicar borrador actual",
