@@ -197,6 +197,57 @@ describe('freshness per cell', () => {
   });
 });
 
+describe('ages only where a reading lags the fleet (ageLagSeconds)', () => {
+  const ageOf = (c: HTMLElement, d: string, m: string) => cell(c, d, m).querySelector('[data-cell-age]')?.textContent ?? null;
+  // Two machines reporting every few seconds, one that fell silent four minutes ago, and the whole
+  // fleet eight days old: the lag is between readings, never against the viewer's clock.
+  const days = 8 * 86400;
+  const site = fleet([
+    member('a', 'A', { temperature: [20, days + 1], humidity: [50, days + 3] }),
+    member('b', 'B', { temperature: [21, days + 2] }),
+    member('c', 'C', { temperature: [22, days + 240] }),
+  ]);
+
+  it('drops the age line under a reading that keeps up with the newest, however old the fleet', () => {
+    const { container } = show(site, { ageLagSeconds: 30 });
+    expect(ageOf(container, 'a', 'temperature')).toBeNull();
+    expect(ageOf(container, 'a', 'humidity')).toBeNull();
+    expect(ageOf(container, 'b', 'temperature')).toBeNull();
+  });
+
+  it('shows the age of the reading that fell behind by the lag, and only that one', () => {
+    const { container } = show(site, { ageLagSeconds: 30 });
+    expect(ageOf(container, 'c', 'temperature')).toMatch(/8 days/);
+    expect(container.querySelectorAll('[data-cell-age]')).toHaveLength(1);
+  });
+
+  it('counts a reading exactly the lag behind as behind', () => {
+    const { container } = show(site, { ageLagSeconds: 239 });
+    expect(ageOf(container, 'c', 'temperature')).not.toBeNull();
+    const at = show(site, { ageLagSeconds: 240 });
+    expect(ageOf(at.container, 'c', 'temperature')).toBeNull();
+  });
+
+  it('measures the lag from the newest SHOWN column, not from a measurement the table leaves out', () => {
+    const withHidden = fleet([member('a', 'A', { temperature: [20, 100], pressure: [1, 0] }), member('b', 'B', { temperature: [21, 101] })]);
+    const { container } = show(withHidden, { ageLagSeconds: 30 }, ['temperature']);
+    expect(container.querySelectorAll('[data-cell-age]')).toHaveLength(0);
+  });
+
+  it('still shows the age of a stale cell that keeps up with the fleet', () => {
+    const { container } = show(site, { ageLagSeconds: 30, staleAfterSeconds: 60 });
+    expect(ageOf(container, 'a', 'temperature')).toContain('stale');
+  });
+
+  it('shows every age when the option is absent or not a positive number', () => {
+    for (const options of [{}, { ageLagSeconds: 0 }, { ageLagSeconds: -5 }, { ageLagSeconds: 'x' }]) {
+      const { container } = show(site, options);
+      expect(container.querySelectorAll('[data-cell-age]'), JSON.stringify(options)).toHaveLength(4);
+      cleanup();
+    }
+  });
+});
+
 describe('explained empty cells', () => {
   const state = fleet([
     member('quiet', 'Quiet', {}, { observed: [] }),

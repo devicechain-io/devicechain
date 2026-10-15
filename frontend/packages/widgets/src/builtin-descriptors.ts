@@ -1101,6 +1101,14 @@ export const builtinWidgetDescriptors = {
       columns: FLEET_COLUMNS,
       thresholds: FLEET_THRESHOLDS,
       staleAfterSeconds: STALE_AFTER_SECONDS,
+      ageLagSeconds: {
+        kind: 'number',
+        integer: true,
+        min: 1,
+        labelId: 'widgetLabelAgeLag',
+        helpId: 'widgetHintAgeLag',
+        doc: "Show a reading's age under it only when the reading is at least this many seconds older than the newest reading in the table (or stale). Unset shows every reading's age.",
+      },
       sortBy: {
         kind: 'string',
         labelId: 'widgetLabelSortBy',

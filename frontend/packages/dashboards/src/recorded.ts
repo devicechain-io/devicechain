@@ -64,6 +64,7 @@ import {
   type RecordedAlarmEvent,
   type RecordedAlarmSnapshot,
 } from './recording';
+import type { MemberSeed, MemberSeedPlan, MemberSink } from './members';
 
 // How far back from the cursor a fresh subscription back-fills measurement rows. Raw rows,
 // not buckets: a recording has no aggregate to show honestly.
@@ -623,6 +624,68 @@ export class RecordedDataSource implements WidgetDataSource {
       },
       advance: flush,
     });
+  }
+
+  // ── fleets ────────────────────────────────────────────────────────────────
+
+  // A fleet widget's roster (the run's devices) and then the same back-filled, ticking rows
+  // subscribeWidget delivers, each carrying its device.
+  //
+  // 🔴 A member has NO NAME here, so the widget labels it by its token, exactly as the live board
+  // does. A recorded device's `id` is its external id (the scene's binding key, "SP-HL-0003"),
+  // not a device name: the live roster reads device NAMES, which the sim never sets, and every
+  // other surface of the board (a gauge's subject line, the machine selector, an alarm's
+  // originator) names a device by its token. Labelling the table's rows by external id made one
+  // machine "SP-HL-0003" in the table and "sp-hauler-03" in the alarm beside it.
+  subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void {
+    let members: Array<{ token: string; name: string | null }>;
+    try {
+      members = this.resolve(datasource).map((g) => ({ token: g.deviceToken, name: null }));
+    } catch (err) {
+      return this.failLater(err, sink);
+    }
+    let stop: (() => void) | undefined;
+    const off = this.open({
+      start: () => {
+        sink.roster({ members, total: members.length, unbound: datasource.kind === 'unbound' });
+        stop = this.subscribeWidget(datasource, sink);
+      },
+      advance: () => {},
+    });
+    return () => {
+      off();
+      stop?.();
+    };
+  }
+
+  // Each device's seed comes from the recording itself, with no read to make: its newest reading per
+  // measurement inside the history window, and every measurement it reported in that window, which
+  // is how "does not report this" (a dozer's tyres) is told from "sent nothing".
+  async readMemberSeeds(
+    deviceTokens: readonly string[],
+    _plan: MemberSeedPlan,
+    onSeed: (deviceToken: string, seed: MemberSeed | null) => void,
+  ): Promise<void> {
+    const { t, v } = this.rec.measurements;
+    for (const token of deviceTokens) {
+      const seed: MemberSeed = { latest: {}, observed: [] };
+      for (const s of this.index.byDevice.get(token) ?? []) {
+        const at = upperBound(s.times, this.cursor) - 1;
+        if (at < 0 || s.times[at] < this.cursor - RECORDED_HISTORY_WINDOW_MS) continue;
+        const row = s.rows[at];
+        seed.observed.push(s.name);
+        seed.latest[s.name] = {
+          id: `${token}|${s.name}|${row}`,
+          deviceToken: token,
+          eventType: 0,
+          occurredTime: this.iso(t[row]),
+          name: s.name,
+          value: v[row],
+          classifier: null,
+        };
+      }
+      onSeed(token, seed);
+    }
   }
 
   // ── alarms ────────────────────────────────────────────────────────────────

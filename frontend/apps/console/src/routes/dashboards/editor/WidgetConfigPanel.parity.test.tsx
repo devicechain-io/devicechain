@@ -83,6 +83,7 @@ const LEGACY_LABEL: Record<string, string> = {
   sortBy: 'widgetLabelSortBy',
   sortDescending: 'widgetLabelSortDescending',
   pageSize: 'widgetLabelPageSize',
+  ageLagSeconds: 'widgetLabelAgeLag',
   columns: 'widgetLabelColumns',
 };
 
@@ -125,6 +126,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   sortBy: 'widgetHintSortBy',
   sortDescending: null,
   pageSize: null,
+  ageLagSeconds: 'widgetHintAgeLag',
   columns: 'widgetHintColumns',
 };
 

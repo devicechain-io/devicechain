@@ -24,7 +24,9 @@ describe('loadReplay', () => {
     const loaded = await loadReplay({ recordingUrl: RECORDING_URL, boardUrl: BOARD_URL, fetchFn: stub.fetchFn, origin: ORIGIN });
     expect(stub.calls).toEqual([RECORDING_URL, BOARD_URL]);
     expect(loaded.recording.runId).toBe('run-fixture');
-    expect(loaded.definition.widgets.length).toBeGreaterThan(30);
+    // The board is the fleet-table board: one table for the fleet, not a tank per machine.
+    expect(loaded.definition.widgets.map((w) => w.id)).toContain('sp-fleet');
+    expect(loaded.definition.widgets.length).toBeGreaterThan(10);
   });
 
   it('takes the site anchor from the pinned board: assigned / customer / acme-earthworks', async () => {
