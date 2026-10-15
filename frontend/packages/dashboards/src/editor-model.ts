@@ -63,14 +63,24 @@ function resolveCollisions(def: DashboardDefinition, breakpoint: string, first: 
   return changed ? { ...def, widgets } : def;
 }
 
+// resolveEverywhere resolves collisions at every breakpoint the parser checks, base first. An
+// edit to a base placement changes what every breakpoint without its own entry for that widget
+// shows, so a move that is clear at base can still land on another widget's override at a
+// breakpoint (and the parser refuses an overlap at any of them).
+function resolveEverywhere(def: DashboardDefinition, first: readonly string[]): DashboardDefinition {
+  let next = def;
+  for (const bp of layoutBreakpoints(def.canvas.breakpoints, def.widgets)) next = resolveCollisions(next, bp, first);
+  return next;
+}
+
 // setWidgetPlacement replaces a widget's base placement. A grid placement pushes whatever it now
-// covers down out of its way.
+// covers down out of its way, at base and at every breakpoint that shows it.
 export function setWidgetPlacement(def: DashboardDefinition, id: string, placement: Placement): DashboardDefinition {
   const next = {
     ...def,
     widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [BASE_BREAKPOINT]: placement } } : w)),
   };
-  return placement.mode === 'grid' ? resolveCollisions(next, BASE_BREAKPOINT, [id]) : next;
+  return placement.mode === 'grid' ? resolveEverywhere(next, [id]) : next;
 }
 
 // deleteWidget removes a widget by id. A widget that was placed relative to it would be left
@@ -96,7 +106,8 @@ export function deleteWidget(def: DashboardDefinition, id: string): DashboardDef
       next = { ...next, widgets: next.widgets.map((o) => (o.id === w.id ? { ...o, layout: { ...o.layout, [bp]: grid } } : o)) };
     }
   }
-  return next;
+  // A slot free at one breakpoint can be taken at another that inherits it.
+  return resolveEverywhere(next, []);
 }
 
 // The span a (possibly relative) placement covers, for re-homing a `fill` widget.
@@ -195,7 +206,9 @@ export function addWidget(
   // The id came from a registered descriptor, so it names either a built-in or a namespaced
   // extension; which one is the registry's knowledge, and this transform does not branch on it.
   const widget = { ...common, type: descriptor.id } as ResolvedWidgetInstance;
-  return { definition: { ...def, widgets: [...def.widgets, widget] }, id };
+  // The slot is free at base; a breakpoint override elsewhere may cover it, so resolve there too
+  // (the new widget keeps its place, and whatever it covers moves).
+  return { definition: resolveEverywhere({ ...def, widgets: [...def.widgets, widget] }, [id]), id };
 }
 
 // A pixel rectangle a drag/resize reports.

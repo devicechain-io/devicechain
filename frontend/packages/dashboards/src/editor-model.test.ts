@@ -88,6 +88,45 @@ describe('deleteWidget', () => {
   });
 });
 
+// A board with a breakpoint override: `b` has its own `md` placement, `a` and `c` show their base
+// ones at md. An edit to the base layout changes what `a` and `c` show at md too, so it must not
+// leave them on top of `b` there -- the parser checks every breakpoint and would refuse the board.
+describe('editing the base layout of a board with a breakpoint override', () => {
+  function withOverride(): DashboardDefinition {
+    return {
+      ...def(),
+      canvas: { ...def().canvas, breakpoints: { base: 0, md: 900 } },
+      widgets: [
+        { id: 'a', type: 'gauge', layout: { base: at(0, 0) } },
+        { id: 'b', type: 'label', layout: { base: at(6, 0), md: at(0, 6) } },
+        { id: 'c', type: 'label', layout: { base: at(0, 10, 2, 2) } },
+      ],
+    };
+  }
+
+  it('a move that is clear at base but lands on an override at md pushes it apart at md', () => {
+    const next = setWidgetPlacement(withOverride(), 'a', at(0, 6));
+    expect(basePlacement(next.widgets[0])).toEqual(at(0, 6));
+    reloads(next);
+  });
+
+  it('an added widget that is clear at base but lands on an override at md', () => {
+    // The first free slot at base is (0,3), under `a`, where `b` sits at md.
+    const d = withOverride();
+    d.widgets[1] = { ...d.widgets[1], layout: { base: at(6, 0), md: at(0, 3) } };
+    const { definition } = addWidget(d, { id: 'label', defaults: {}, version: '1.0.0', optionsVersion: 1, sdkApiVersion: 1, layout: { defaultSpan: { cols: 12, rows: 2 } } });
+    reloads(definition);
+  });
+
+  it('a relative widget re-homed on its host’s deletion that lands on an override at md', () => {
+    const d = withOverride();
+    // The first free 2x2 at base is (4,0), between `a` and `b`; `b` covers it at md.
+    d.widgets[1] = { ...d.widgets[1], layout: { base: at(6, 0), md: at(4, 0, 8, 2) } };
+    d.widgets.push({ id: 'badge', type: 'label', layout: { base: { mode: 'relative', host: 'c', anchor: 'top-left', size: { cols: 2, rows: 2 } } } });
+    reloads(deleteWidget(d, 'c'));
+  });
+});
+
 describe('updateWidget', () => {
   it('replaces the matching widget and leaves others untouched', () => {
     const d = def();

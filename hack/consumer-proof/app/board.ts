@@ -36,10 +36,10 @@ const FLEET = {
 } as const;
 
 export const BOARD: DashboardDefinition = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'consumer-proof',
   canvas: {
-    grid: { columns: 12, gap: 8, rowHeight: 40 },
+    grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 },
     sizing: 'fill',
     breakpoints: { base: 0 },
   },
@@ -48,7 +48,7 @@ export const BOARD: DashboardDefinition = {
       // Proves the map fetched tiles and placed markers: an ordinary configured map.
       id: 'raster-map',
       type: 'map',
-      layout: { base: { col: 0, colSpan: 6, row: 0, rowSpan: 10, z: 0 } },
+      layout: { base: { mode: 'grid', col: 0, row: 0, cols: 6, rows: 4 } },
       datasource: { ...FLEET },
       options: { title: 'Raster', tileUrl: TILE_URL, attribution: 'consumer-proof' },
     },
@@ -57,7 +57,7 @@ export const BOARD: DashboardDefinition = {
       // and it can only be drawn by a worker that loaded, parsed and tiled it.
       id: 'bundled-map',
       type: 'map',
-      layout: { base: { col: 6, colSpan: 6, row: 0, rowSpan: 10, z: 0 } },
+      layout: { base: { mode: 'grid', col: 6, row: 0, cols: 6, rows: 4 } },
       datasource: { ...FLEET },
       options: { title: 'Bundled' },
     },

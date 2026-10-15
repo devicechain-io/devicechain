@@ -12,8 +12,9 @@ import (
 // document as typed Go structs, then marshals it — the only place in this
 // module that must match the frontend's @devicechain/dashboards TypeScript
 // parser contract exactly (schemaVersion/canvas/widgets/layout.base/datasource/
-// slots shapes). It writes the CURRENT format natively (schemaVersion 2: square cells and
-// explicit placement modes), so the frontend never has to convert a sim board on load. Keeping it typed here, rather than hand-strung JSON, means a
+// slots shapes). It writes the CURRENT format natively (schemaVersion 2: square
+// cells and explicit placement modes), so the frontend never has to convert a sim
+// board on load. Keeping it typed here, rather than hand-strung JSON, means a
 // field rename on either side shows up as a compile error or a JSON-shape test
 // failure instead of a silent parser rejection at dashboard-open time.
 

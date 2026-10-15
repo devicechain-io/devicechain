@@ -103,6 +103,11 @@ describe('converting a schemaVersion 1 definition', () => {
     expect(old.widgets[0].layout.base).toEqual({ mode: 'grid', col: 0, row: 0, cols: 4, rows: 1 });
     // An old grid alone is enough.
     expect(parseDashboardDefinition({ canvas: { grid: { columns: 24, rowHeight: 40 } }, widgets: [] }).canvas.grid.columns).toBe(12);
+    // A box the old parser filled in (no spans, no z) and the current one cannot read: the old
+    // format, so it opens.
+    const sparse = parseDashboardDefinition({ widgets: [label('a', { base: { col: 2, row: 1 } })] });
+    expect(sparse.convertedFrom).toBe(1);
+    expect(sparse.widgets[0].layout.base).toEqual({ mode: 'grid', col: 1, row: 0, cols: 1, rows: 1 });
     // Neither: the current format, left exactly as written.
     const current = parseDashboardDefinition({ widgets: [label('a', { base: { mode: 'grid', col: 2, row: 0, cols: 8, rows: 3 } })] });
     expect(current.convertedFrom).toBeUndefined();
