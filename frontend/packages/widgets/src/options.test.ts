@@ -66,6 +66,11 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'command-button': 'widgets/command-button.tsx',
   'entity-selector': 'widgets/entity-selector.tsx',
   map: 'widgets/map.tsx',
+  'linear-gauge': 'widgets/linear-gauge.tsx',
+  'level-gauge': 'widgets/level-gauge.tsx',
+  battery: 'widgets/battery.tsx',
+  'status-light': 'widgets/status-light.tsx',
+  'signal-bars': 'widgets/signal-bars.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -93,7 +98,8 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // title to label a widget that never got as far as its own component.
   title: [...WIDGET_TYPES],
   // primaryMeasurementName(), called by the two single-value widgets.
-  measurement: ['latest-card', 'gauge'],
+  // (and the level widgets, through the shared useLevelReading hook).
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive.
   selectionTarget: ['alarm-table', 'entity-selector'],
@@ -317,6 +323,38 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     title: 'Fleet',
     tileUrl: 'https://tiles.example.invalid/{z}/{x}/{y}.png',
     attribution: '© Example Tiles',
+  },
+  'linear-gauge': {
+    title: 'Tank temperature',
+    measurement: 'temp_c',
+    min: 0,
+    max: 120,
+    style: 'thermometer',
+    orientation: 'vertical',
+    unit: 'C',
+    precision: 1,
+    thresholds: [{ value: 90, level: 'major' }],
+    window: 300,
+  },
+  'level-gauge': { title: 'Tank', measurement: 'level', min: 0, max: 5000, readout: 'percent', unit: 'L', precision: 0, window: 300 },
+  battery: { title: 'Battery', measurement: 'soc', min: 3, max: 4.2, unit: 'V', precision: 2, window: 300 },
+  'status-light': {
+    title: 'Pump',
+    measurement: 'running',
+    onAt: 1,
+    thresholds: [{ value: 0, level: 'critical', label: 'Stopped' }],
+    window: 300,
+  },
+  'signal-bars': {
+    title: 'Signal',
+    measurement: 'rssi',
+    unit: 'dBm',
+    thresholds: [
+      { value: -110, level: 'critical' },
+      { value: -100, level: 'warning' },
+      { value: -90, level: 'normal' },
+    ],
+    window: 300,
   },
 };
 

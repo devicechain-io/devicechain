@@ -168,6 +168,11 @@ export const WIDGET_TYPES = [
   'command-button',
   'entity-selector',
   'map',
+  'linear-gauge',
+  'level-gauge',
+  'battery',
+  'status-light',
+  'signal-bars',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];

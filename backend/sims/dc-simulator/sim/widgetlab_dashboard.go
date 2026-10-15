@@ -218,6 +218,71 @@ func buildEntitySelectorWidget(id string, b box, title, target string) dashboard
 	}
 }
 
+// ---- Levels and indicators ----------------------------------------------------
+//
+// The five single-value DOM/SVG widgets. A threshold names a severity LEVEL, never a colour,
+// so these carry none; `normal` keeps each widget's own neutral.
+
+// widgetThreshold is one entry of the shared `thresholds` option: a band that starts at Value.
+type widgetThreshold struct {
+	Value float64 `json:"value"`
+	Level string  `json:"level"`
+	Label string  `json:"label,omitempty"`
+}
+
+func buildLinearGaugeWidget(id string, b box, s widgetSubject, title, measurement, unit, style string, min, max float64, thresholds []widgetThreshold) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "linear-gauge", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "measurement": measurement, "unit": unit, "style": style,
+			"min": min, "max": max, "precision": 1, "thresholds": thresholds,
+		},
+	}
+}
+
+func buildLevelGaugeWidget(id string, b box, s widgetSubject, title, measurement, unit, readout string, min, max float64, thresholds []widgetThreshold) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "level-gauge", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "measurement": measurement, "unit": unit, "readout": readout,
+			"min": min, "max": max, "precision": 0, "thresholds": thresholds,
+		},
+	}
+}
+
+// The battery names no min/max: its scale is the documented percent default, which is what the
+// sim's battery metric is.
+func buildBatteryWidget(id string, b box, s widgetSubject, title, measurement string, thresholds []widgetThreshold) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "battery", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "measurement": measurement, "unit": "%", "precision": 0, "thresholds": thresholds,
+		},
+	}
+}
+
+// onAt is omitted when nil, so the lamp is coloured by its bands alone.
+func buildStatusLightWidget(id string, b box, s widgetSubject, title, measurement, unit string, onAt *float64, thresholds []widgetThreshold) dashboardWidget {
+	options := map[string]any{"title": title, "measurement": measurement, "unit": unit, "precision": 1}
+	if onAt != nil {
+		options["onAt"] = *onAt
+	}
+	if len(thresholds) > 0 {
+		options["thresholds"] = thresholds
+	}
+	return dashboardWidget{Id: id, Type: "status-light", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
+// One bar per threshold, so the thresholds ARE the steps of the signal.
+func buildSignalBarsWidget(id string, b box, s widgetSubject, title, measurement, unit string, thresholds []widgetThreshold) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "signal-bars", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "measurement": measurement, "unit": unit, "precision": 0, "thresholds": thresholds,
+		},
+	}
+}
+
 // ---- Shared board scaffolding -------------------------------------------------
 
 // widgetlabChartWindow is the rolling sample buffer the charts keep.
@@ -350,12 +415,71 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 			buildEntitySelectorWidget("wl-sensor-select", box{6, 6, 14, 1}, "Sensor", widgetlabSlotSensor),
 		},
 	}
+	// Each widget-family slice appends its own block below, starting at its own reserved row,
+	// so two slices never place a widget on the same cells.
+	def.Widgets = append(def.Widgets, widgetlabLevelsAndIndicators(onSensor)...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
 		return "", fmt.Errorf("marshal widgetlab gallery definition: %w", err)
 	}
 	return string(raw), nil
+}
+
+// widgetlabLevelsRow is the first row of the levels-and-indicators block (rows 15-19), under
+// the selectors that end the original gallery.
+const widgetlabLevelsRow = 15
+
+// widgetlabTemperatureBands are the severity bands the sweep crosses: normal from the bottom of
+// the sweep, warning from 28, critical from 32. Shared by the gallery and the stress board so the
+// out-of-range case reads against the same bands.
+var widgetlabTemperatureBands = []widgetThreshold{
+	{Value: WidgetlabSweepMin, Level: "normal"},
+	{Value: 28, Level: "warning"},
+	{Value: 32, Level: "critical"},
+}
+
+// widgetlabLevelsAndIndicators places the level and indicator widgets over the nominal sensor:
+// the sweep drives the temperature ones through their bands, the battery metric counts down
+// through the critical band, and humidity moves the tank and the signal steps.
+func widgetlabLevelsAndIndicators(onSensor func(measurements ...string) widgetSubject) []dashboardWidget {
+	const r = widgetlabLevelsRow
+	temperatureBands := widgetlabTemperatureBands
+	// A low battery is the abnormal end: critical from empty, then normal from 30.
+	batteryBands := []widgetThreshold{
+		{Value: 0, Level: "critical"},
+		{Value: 15, Level: "warning"},
+		{Value: 30, Level: "normal"},
+	}
+	halfOn := 50.0
+	return []dashboardWidget{
+		buildLinearGaugeWidget("wl-linear", box{0, 4, r, 3}, onSensor(WidgetlabTemperatureKey),
+			"Temperature", WidgetlabTemperatureKey, "C", "bar", WidgetlabSweepMin, WidgetlabSweepMax, temperatureBands),
+		buildLinearGaugeWidget("wl-thermometer", box{4, 3, r, 4}, onSensor(WidgetlabTemperatureKey),
+			"Thermometer", WidgetlabTemperatureKey, "C", "thermometer", WidgetlabSweepMin, WidgetlabSweepMax, temperatureBands),
+		buildLevelGaugeWidget("wl-level", box{7, 3, r, 4}, onSensor(WidgetlabHumidityKey),
+			"Tank level", WidgetlabHumidityKey, "%", "percent", 0, 100, []widgetThreshold{
+				{Value: 0, Level: "critical"},
+				{Value: 30, Level: "warning"},
+				{Value: 45, Level: "normal"},
+			}),
+		buildBatteryWidget("wl-battery", box{10, 2, r, 2}, onSensor(WidgetlabBatteryKey), "Battery", WidgetlabBatteryKey, batteryBands),
+		buildStatusLightWidget("wl-status", box{10, 2, r + 2, 2}, onSensor(WidgetlabTemperatureKey),
+			"Status", WidgetlabTemperatureKey, "C", nil, []widgetThreshold{
+				{Value: WidgetlabSweepMin, Level: "normal", Label: "Normal"},
+				{Value: 30, Level: "major", Label: "Hot"},
+			}),
+		buildStatusLightWidget("wl-status-onoff", box{2, 2, r + 3, 2}, onSensor(WidgetlabBatteryKey),
+			"Powered", WidgetlabBatteryKey, "%", &halfOn, nil),
+		buildSignalBarsWidget("wl-signal", box{0, 2, r + 3, 2}, onSensor(WidgetlabHumidityKey),
+			"Signal", WidgetlabHumidityKey, "%", []widgetThreshold{
+				{Value: 0, Level: "critical"},
+				{Value: 42, Level: "warning"},
+				{Value: 46, Level: "normal"},
+				{Value: 52, Level: "normal"},
+				{Value: 58, Level: "normal"},
+			}),
+	}
 }
 
 // ---- The stress board ---------------------------------------------------------
@@ -448,6 +572,14 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 			// the render failure this is here to show.
 			buildImageWidget("wl-stress-image", box{6, 6, 9, 2},
 				"Broken image", "data:image/png;base64,this-is-not-base64", "An image that cannot decode", "cover"),
+
+			// The extremes device again, on scale widgets whose range is the sweep's: a spike
+			// ten times past the top, zero and a negative below the bottom. The fill pins to the
+			// end and the readout still prints the true value with an off-scale marker.
+			buildLinearGaugeWidget("wl-stress-linear", box{0, 6, 11, 3}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
+				"Off the scale (bar)", WidgetlabTemperatureKey, "C", "bar", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
+			buildLevelGaugeWidget("wl-stress-level", box{6, 3, 11, 4}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
+				"Off the scale (tank)", WidgetlabTemperatureKey, "C", "value", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
 		},
 	}
 

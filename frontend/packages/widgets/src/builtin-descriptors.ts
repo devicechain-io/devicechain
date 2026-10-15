@@ -143,6 +143,33 @@ const UNIT = {
   doc: 'Unit suffix shown beside the value.',
 } as const satisfies OptionSpec;
 
+// The two ends of a level widget's scale. REQUIRED, with no default on the descriptor: a tank
+// or a thermometer drawn against a range nobody chose reads a wrong value as a plausible one,
+// so a widget without both ends says so instead of drawing (see level-reading.ts). The
+// greater-than constraint on each descriptor keeps the pair ordered.
+const SCALE_MIN = {
+  kind: 'number',
+  required: true,
+  labelId: 'widgetLabelMin',
+  helpId: 'widgetHintScaleMin',
+  doc: 'Value at the empty end of the scale. Required: the widget does not guess a range.',
+} as const satisfies OptionSpec;
+
+const SCALE_MAX = {
+  kind: 'number',
+  required: true,
+  labelId: 'widgetLabelMax',
+  helpId: 'widgetHintScaleMax',
+  doc: 'Value at the full end of the scale. Required, and above min.',
+} as const satisfies OptionSpec;
+
+const MEASUREMENT = {
+  kind: 'string',
+  labelId: 'widgetLabelMeasurement',
+  helpId: 'widgetHintMeasurement',
+  doc: 'Which measurement to display. Defaults to the first the datasource selects.',
+} as const satisfies OptionSpec;
+
 const ALARM_STATE = {
   kind: 'enum',
   values: ['ACTIVE', 'CLEARED'],
@@ -562,6 +589,186 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Map' },
     interactions: {},
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
+  }),
+
+  // ---- Levels and indicators ------------------------------------------------
+  // DOM/SVG single-value widgets on the measurement channel. A threshold band colours the fill
+  // or lamp; `normal` keeps the widget's neutral accent.
+
+  'linear-gauge': defineWidgetDescriptor({
+    id: 'linear-gauge',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Linear gauge', category: 'Telemetry', titleId: 'widgetTypeLinearGauge', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      min: SCALE_MIN,
+      max: SCALE_MAX,
+      style: {
+        kind: 'enum',
+        values: ['bar', 'thermometer'],
+        labelId: 'widgetLabelLinearStyle',
+        valueLabelIds: { bar: 'widgetLinearStyleBar', thermometer: 'widgetLinearStyleThermometer' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'A plain bar (default) or a thermometer: a vertical tube with a bulb. A thermometer is always vertical.',
+      },
+      orientation: {
+        kind: 'enum',
+        values: ['horizontal', 'vertical'],
+        labelId: 'widgetLabelOrientation',
+        valueLabelIds: { horizontal: 'widgetOrientationHorizontal', vertical: 'widgetOrientationVertical' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'Direction of a bar: horizontal (default) or vertical. Ignored by a thermometer.',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+    defaults: { title: 'Linear gauge' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 4, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
+  }),
+
+  'level-gauge': defineWidgetDescriptor({
+    id: 'level-gauge',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Level gauge', category: 'Telemetry', titleId: 'widgetTypeLevelGauge', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      min: SCALE_MIN,
+      max: SCALE_MAX,
+      readout: {
+        kind: 'enum',
+        values: ['value', 'percent'],
+        labelId: 'widgetLabelReadout',
+        valueLabelIds: { value: 'widgetReadoutValue', percent: 'widgetReadoutPercent' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'What the readout shows: the value with its unit (default) or the percent of the scale.',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+    defaults: { title: 'Level gauge' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 3, rows: 4 }, minSpan: { cols: 2, rows: 3 }, maxSpan: { cols: 6, rows: 8 } },
+  }),
+
+  battery: defineWidgetDescriptor({
+    id: 'battery',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Battery', category: 'Telemetry', titleId: 'widgetTypeBattery', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      min: {
+        kind: 'number',
+        labelId: 'widgetLabelMin',
+        helpId: 'widgetHintBatteryRange',
+        doc: 'Value of an empty battery. Default 0 (the scale is percent unless you set min and max).',
+      },
+      max: {
+        kind: 'number',
+        labelId: 'widgetLabelMax',
+        helpId: 'widgetHintBatteryRange',
+        doc: 'Value of a full battery. Default 100 (the scale is percent unless you set min and max).',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+    defaults: { title: 'Battery' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
+  }),
+
+  'status-light': defineWidgetDescriptor({
+    id: 'status-light',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Status light', category: 'Telemetry', titleId: 'widgetTypeStatusLight', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      onAt: {
+        kind: 'number',
+        labelId: 'widgetLabelOnAt',
+        helpId: 'widgetHintOnAt',
+        doc: 'For an on/off signal: the lamp is lit at or above this value and dark below it. Unset keeps the lamp lit while a value is present, coloured by its threshold band.',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    defaults: { title: 'Status light' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 2, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 4, rows: 4 } },
+  }),
+
+  'signal-bars': defineWidgetDescriptor({
+    id: 'signal-bars',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Signal bars', category: 'Telemetry', titleId: 'widgetTypeSignalBars', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      unit: UNIT,
+      precision: PRECISION,
+      // One bar per threshold: the entries ARE the steps, so they are required.
+      thresholds: {
+        ...THRESHOLDS,
+        maxItems: 8,
+        required: true,
+        helpId: 'widgetHintSignalThresholds',
+        doc: 'The steps of the signal, lowest first: one bar per entry, lit once the value reaches it and coloured by its level. At least two, at most eight.',
+      },
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    defaults: { title: 'Signal bars' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 2, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 4, rows: 4 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 
