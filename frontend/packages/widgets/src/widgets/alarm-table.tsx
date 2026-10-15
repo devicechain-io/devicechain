@@ -75,7 +75,9 @@ const narrowCell: CSSProperties = {
 // the column's min-content width at the longest segment, which is what lets the table
 // shrink at 390 px without pushing the Value column off the edge.
 export function hyphenBreaks(text: string): ReactNode {
-  const parts = text.split(/(?<=-)/);
+  // Split after each hyphen, keeping it on the left part. Not a lookbehind regex: this is a
+  // published package, and a lookbehind literal is a parse error in older WebKit.
+  const parts = text.split('-').map((p, i, all) => (i < all.length - 1 ? `${p}-` : p));
   return parts.map((part, i) => (
     <Fragment key={i}>
       {i > 0 ? <wbr /> : null}
