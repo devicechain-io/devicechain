@@ -3805,6 +3805,9 @@ cambia para alguien:
 - **`dcctl upgrade`, `destroy` y `sim` rechazan un `--kube-context` que nombra un clúster distinto
   del registrado para la instancia.** Antes sustituía el registro sin avisar. Consulta
   [dcctl rechaza un `--kube-context` en conflicto](#v0220-kube-context).
+- **Los comandos retenidos por una ventana de mantenimiento siguen la ventana actual del tipo de
+  dispositivo**, y quitar una ventana los libera de inmediato. Consulta
+  [Los comandos retenidos siguen la ventana de mantenimiento actual](#v0220-window-follow).
 
 #### Antes de actualizar {#v0220-before}
 
@@ -3825,6 +3828,11 @@ cambia para alguien:
   se convierte la próxima vez que se carga.
 - **Los pods de device-management se vuelven a programar con la petición de CPU más baja.** Es el
   único cambio en un valor de recursos renderizado.
+- **Hasta que event-processing también se haya renovado, un cambio de conexión de un dispositivo
+  deshabilitado puede generar o cerrar una alarma de conectividad.** device-management ahora
+  transmite las conexiones y desconexiones de un dispositivo deshabilitado, y un pod de
+  event-processing que sigue en la `v0.21.x` no sabe que debe ignorarlas. `dcctl upgrade` renueva
+  los servicios juntos, así que esto solo dura lo que dura el despliegue.
 
 Volver a `v0.21.x` después de la actualización lee la misma base de datos. Los paneles son la
 excepción que hay que mirar: un panel guardado o publicado con la `v0.22.0` está en el formato
@@ -3923,8 +3931,12 @@ actualiza primero los paquetes.
 - la opción `window` de `timeseries-chart` se sustituye por `windowSeconds`, y la versión de
   opciones del gráfico pasa de 1 a 2.
 
-**`@devicechain/widget-sdk`** no añade ni elimina ninguna exportación, con tres cambios que una
-compilación de TypeScript puede notar:
+**`@devicechain/widget-sdk`** no elimina ninguna exportación y añade muchas: tokens de tamaño y
+densidad del panel, texto ajustado a la caja, antigüedad del valor y el indicador de conexión,
+niveles y colores de severidad, umbrales y el rango de tiempo del panel (`useWidgetTimeRange`,
+`MAX_SPAN_SAMPLES`, `withinSpan`), además de nuevos constructores de gráficos en `/echarts`.
+`useElementSize` gana un parámetro opcional `step` y `WidgetFrame` las propiedades opcionales
+`flush` y `sampleTime`. Tres cambios que una compilación de TypeScript puede notar:
 
 - `ChartTheme` tiene un campo obligatorio `severity`. Solo importa si construyes un tema a mano en
   lugar de llamar a `useChartTheme` o `resolveChartTheme`;
@@ -3935,7 +3947,10 @@ compilación de TypeScript puede notar:
   debajo de 1, donde antes imprimía el número sin redondear.
 
 `SDK_API_VERSION` no cambia, y el widget de terceros de ejemplo del repositorio compila contra
-`0.22.0` sin cambios. **`@devicechain/client`** solo añade: `createSessionTokens` y
+`0.22.0` sin cambios. La sección `Upgrading from 0.21` del README de cada paquete, en
+[`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards), [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) y
+[`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk), enumera los cambios con sus sustitutos.
+**`@devicechain/client`** solo añade: `createSessionTokens` y
 `update-management` como área. **`@devicechain/brand`** no cambia.
 
 ##### Un widget de un solo dispositivo rechaza un grupo {#v0220-group-refusal}
@@ -3960,6 +3975,32 @@ rechazan `dcctl upgrade`, `dcctl destroy` y `dcctl sim`. Antes sustituía el reg
 Quita la opción para usar el clúster registrado. Si lo que está mal es el registro, porque el
 clúster se reconstruyó o se renombró su contexto, elimina
 `~/.devicechain/instances/<instance>/instance.json` y vuelve a ejecutar con `--kube-context`.
+
+##### El estado de conexión de un dispositivo deshabilitado sigue actualizándose {#v0220-disabled-presence}
+
+Las conexiones, desconexiones y degradaciones de un dispositivo deshabilitado ahora llegan a
+device-state y al historial de eventos, así que su estado de conexión sigue siendo cierto mientras
+está deshabilitado. La detección las sigue ignorando, de modo que no salta ninguna alarma para un
+dispositivo deshabilitado, y sus mediciones, ubicaciones y comandos se siguen rechazando. Un nodo
+de borde Sparkplug puede hacer que un dispositivo hijo deshabilitado aparezca conectado, porque la
+presencia que el nodo informa de sus dispositivos es de confianza por diseño. Un contador nuevo,
+`devicechain_eventsources_presence_reconcile_unapplied_total`, cuenta las reparaciones de la reconciliación que se enviaron pero no se vieron
+aplicadas.
+
+##### Los comandos retenidos siguen la ventana de mantenimiento actual {#v0220-window-follow}
+
+Un comando retenido por una ventana de mantenimiento ahora sigue la ventana **actual** de su tipo
+de dispositivo. Si cambias un tipo de la ventana A a la ventana B, los comandos que ya esperaban
+pasan a la próxima apertura de B. Si **quitas** la ventana de un tipo, sus comandos en espera se
+**liberan de inmediato**. Las notas de la `v0.21.0` decían que seguían retenidos; eso ya no es así.
+Los comandos de un dispositivo deshabilitado siguen retenidos en cualquier caso. Antes de quitar
+una ventana, comprueba qué está esperando en ella.
+
+También se corrige: los comandos en cola de un dispositivo deshabilitado ya no mantienen al emisor
+LwM2M sondeando en un bucle continuo, y un comando cuya confirmación se rechaza porque su ventana
+acaba de cerrarse ahora queda aparcado para la próxima apertura en lugar de quedarse en `SENT`.
+Una reclamación rechazada porque el dispositivo está deshabilitado se cuenta en
+`devicechain_commanddelivery_command_delivery_claims_refused_disabled_total`.
 
 ##### Valores por defecto que cambiaron {#v0220-defaults}
 
@@ -4045,8 +4086,28 @@ Métricas nuevas: `devicechain_<area>_jetstream_publish_window_full_seconds_tota
 `devicechain_<area>_jetstream_publish_window_full_total` y
 `devicechain_<area>_jetstream_publish_duplicates_total` para las ventanas de publicación
 anteriores, `devicechain_eventsources_total_msg_publish_failed{source}` para MQTT externo y
-`devicechain_eventprocessing_detect_rule_stat_write_failures_total`. Ninguna métrica se renombró
+`devicechain_eventprocessing_detect_rule_stat_write_failures_total` y `devicechain_eventsources_presence_reconcile_unapplied_total`. Ninguna métrica se renombró
 ni se eliminó.
+
+##### Correcciones de una revisión de extremo a extremo {#v0220-review-fixes}
+
+- **Los widgets en vivo se recuperan tras una caída de cualquier duración.** Antes, tras unos 40
+  segundos sin red o sin servidor, mostraban "Datos no disponibles" hasta recargar la página, y un
+  flujo que el servidor terminaba podía dejar de actualizarse mientras el indicador seguía diciendo
+  en vivo. Un widget cuyo código no se pudo descargar ahora se puede reintentar con
+  **Restablecer widget**.
+- **Los datos del panel muestran lo que dicen.** Un slot que se apunta a otro dispositivo con el
+  panel en pausa muestra el dispositivo nuevo. Las barras con una barra por dispositivo siguen
+  actualizándose. Una tarjeta de estadística sin dispositivo pide elegir un dispositivo en lugar de
+  mostrar "0 lecturas". Una celda de la tabla de flota de un dispositivo que informa poco nunca
+  muestra la media de un intervalo como su última lectura, y una celda que supera el límite de
+  lectura dice "no cargado".
+
+##### Limitación conocida: el historial tras una reconexión {#v0220-known-limitation}
+
+Cuando un panel se reconecta, el historial que se perdió no se vuelve a leer. Un gráfico de líneas
+traza una línea recta sobre la caída, y las cifras de flota y agregadas omiten las lecturas
+enviadas durante ella. Hay una corrección prevista.
 
 ##### También en esta versión {#v0220-also}
 
@@ -4054,7 +4115,10 @@ ni se eliminó.
   que un teléfono muestra un widget por fila y una pantalla de pared obtiene celdas más grandes. El
   editor se ajusta a las celdas, aparta a los vecinos, funciona con el teclado, puede anclar un
   widget a otro y muestra los problemas de disposición en cada widget; un error de disposición
-  bloquea la publicación hasta que **Ajustar a los límites** lo resuelve. Un panel tiene un rango
+  bloquea la publicación hasta que **Ajustar a los límites** lo resuelve. También tiene deshacer y
+  rehacer, duplicar, y copiar y pegar entre paneles; un widget pegado donde su vínculo de
+  dispositivo no existe, como el panel de otro inquilino, recibe un slot nuevo sin vincular y no
+  conserva ninguna referencia a dispositivos. Un panel tiene un rango
   de tiempo (de 15 minutos a 7 días) y una pausa; los comandos se siguen enviando durante la pausa.
   Widgets nuevos: indicadores lineal y de nivel, batería, luz de estado, barras de señal, brújula,
   anillo de progreso, control deslizante y conmutador de comandos, tarjeta de estadística,

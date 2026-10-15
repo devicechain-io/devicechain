@@ -3543,6 +3543,9 @@ messages per pull. What changes for somebody:
 - **`dcctl upgrade`, `destroy` and `sim` refuse a `--kube-context` that names a different cluster
   than the instance is recorded in.** It used to override the record silently. See
   [dcctl refuses a conflicting `--kube-context`](#v0220-kube-context).
+- **Commands held for a maintenance window follow the device type's current window**, and
+  unassigning a window releases them at once. See
+  [Held commands follow the current maintenance window](#v0220-window-follow).
 
 #### Before you upgrade {#v0220-before}
 
@@ -3562,6 +3565,10 @@ messages per pull. What changes for somebody:
   it is next loaded.
 - **device-management pods are rescheduled with the lower CPU request.** That is the only change to
   a rendered resource value.
+- **Until event-processing has rolled too, a disabled device's connection change can raise or
+  clear a connectivity alarm.** device-management now passes a disabled device's connects and
+  disconnects on, and an event-processing pod still on `v0.21.x` does not know to ignore them.
+  `dcctl upgrade` rolls the services together, so this lasts only for the rollout.
 
 Going back to `v0.21.x` after the upgrade reads the same database. Dashboards are the exception
 to look at: a board saved or published under `v0.22.0` is in the new format, which `v0.21.x` draws
@@ -3653,7 +3660,11 @@ still draws a `v0.22.0` board wrongly, so upgrade the packages first.
 - the `timeseries-chart` option `window` is replaced by `windowSeconds`, and the chart's options
   version moves from 1 to 2.
 
-**`@devicechain/widget-sdk`** adds and removes no export, with three changes a TypeScript build can
+**`@devicechain/widget-sdk`** removes no export and adds many: size tokens and board density,
+fit-to-box text, freshness and the hub connection badge, severity levels and colours, thresholds,
+and the board time range (`useWidgetTimeRange`, `MAX_SPAN_SAMPLES`, `withinSpan`), plus new
+chart builders on `/echarts`. `useElementSize` gains an optional `step` parameter and
+`WidgetFrame` the optional `flush` and `sampleTime` props. Three changes a TypeScript build can
 notice:
 
 - `ChartTheme` has a required `severity` field. This matters only if you build a theme by hand
@@ -3664,7 +3675,10 @@ notice:
   where it used to print the number unrounded.
 
 `SDK_API_VERSION` is unchanged, and the example third-party widget in the repository builds
-against `0.22.0` without a change. **`@devicechain/client`** only adds: `createSessionTokens`, and
+against `0.22.0` without a change. The `Upgrading from 0.21` section of each package's README,
+on [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards), [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) and
+[`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk), lists the changes with their replacements.
+**`@devicechain/client`** only adds: `createSessionTokens`, and
 `update-management` as an area. **`@devicechain/brand`** is unchanged.
 
 ##### A single-device widget refuses a group {#v0220-group-refusal}
@@ -3688,6 +3702,28 @@ now refused by `dcctl upgrade`, `dcctl destroy` and `dcctl sim`. It used to over
 silently. Drop the flag to use the recorded cluster. If the record is what is wrong, because the
 cluster was rebuilt or its context renamed, remove
 `~/.devicechain/instances/<instance>/instance.json` and re-run with `--kube-context`.
+
+##### A disabled device's connection status keeps updating {#v0220-disabled-presence}
+
+A disabled device's connects, disconnects and demotions now reach device-state and the event
+history, so its connection status stays true while it is disabled. Detection still ignores
+them, so no alarm fires for a disabled device, and its measurements, locations and commands are
+still refused. A Sparkplug edge node can make a disabled child device show as connected, because
+presence the node reports for its devices is trusted by design. A new counter, `devicechain_eventsources_presence_reconcile_unapplied_total`,
+counts reconciliation repairs that were sent but not seen to apply.
+
+##### Held commands follow the current maintenance window {#v0220-window-follow}
+
+A command held for a maintenance window now follows its device type's **current** window. If you
+move a type from window A to window B, the commands already waiting move to B's next opening.
+If you **unassign** a type's window, its waiting commands are **released at once**. The
+`v0.21.0` notes said they stayed held; that is no longer true. A disabled device's commands
+stay held either way. Before you unassign a window, check what is waiting on it.
+
+Also fixed: a disabled device's queued commands no longer keep the LwM2M sender polling in a
+tight loop, and a command whose confirmation is refused because its window has just closed now
+parks for the next opening instead of being left as `SENT`. A claim refused because the device
+is disabled is counted on `devicechain_commanddelivery_command_delivery_claims_refused_disabled_total`.
 
 ##### Defaults that changed {#v0220-defaults}
 
@@ -3769,15 +3805,36 @@ New metrics: `devicechain_<area>_jetstream_publish_window_full_seconds_total`,
 `devicechain_<area>_jetstream_publish_window_full_total` and
 `devicechain_<area>_jetstream_publish_duplicates_total` for the publish windows above,
 `devicechain_eventsources_total_msg_publish_failed{source}` for external MQTT, and
-`devicechain_eventprocessing_detect_rule_stat_write_failures_total`. No metric was renamed or
+`devicechain_eventprocessing_detect_rule_stat_write_failures_total`, and `devicechain_eventsources_presence_reconcile_unapplied_total`. No metric was renamed or
 removed.
+
+##### Fixes from an end-to-end review {#v0220-review-fixes}
+
+- **Live widgets recover after an outage of any length.** Before, after about 40 seconds without
+  the network or the server, they showed "Data unavailable" until the page was reloaded, and a
+  stream the server ended could stop updating while the badge still read live. A widget whose code
+  failed to download can now be retried with **Reset widget**.
+- **Dashboard data shows what it says.** A slot pointed at another device while the board is
+  paused shows the new device. Bars with one bar per device keep updating. A stat card with no
+  device says "Choose a device for this widget" instead of "0 Readings". A fleet-table cell for a
+  device that reports rarely never shows a span's average as its latest reading, and a cell past
+  the read limit says "not loaded".
+
+##### Known limitation: history after a reconnect {#v0220-known-limitation}
+
+When a board reconnects, the history it missed is not read again. A line chart draws a straight
+line across the outage, and fleet and aggregate figures leave out the readings sent during it. A
+fix is planned.
 
 ##### Also in this release {#v0220-also}
 
 - **Dashboards.** Cells stay square and the column count follows the container, so a phone shows
   one widget per row and a wall display gets bigger cells. The editor snaps to cells, pushes
   neighbours aside, works from the keyboard, can anchor a widget to another, and shows layout
-  problems on each widget; a layout error blocks publishing until **Fit to limits** clears it. A
+  problems on each widget; a layout error blocks publishing until **Fit to limits** clears it. It
+  also has undo and redo, duplicate, and copy and paste between boards; a widget pasted where its
+  device binding does not exist, such as another tenant's board, gets a new unbound slot and keeps
+  no device reference. A
   board has a time range (15 minutes to 7 days) and a pause; commands still send while paused.
   New widgets: linear and level gauges, battery, status light, signal bars, compass, progress
   ring, command slider and toggle, stat card, bar and pie charts, and the fleet table. Widgets

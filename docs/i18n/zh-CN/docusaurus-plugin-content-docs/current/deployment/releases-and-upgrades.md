@@ -2080,6 +2080,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
   pod 突然终止时可能丢失的数量。见[变化的默认值](#v0220-defaults)。
 - **`dcctl upgrade`、`destroy` 和 `sim` 会拒绝指向与实例记录不同集群的 `--kube-context`。**
   以前它会静默覆盖记录。见[dcctl 拒绝冲突的 `--kube-context`](#v0220-kube-context)。
+- **为维护窗口保留的命令跟随设备类型的当前窗口**，取消分配窗口会立即释放这些命令。见
+  [保留的命令跟随当前维护窗口](#v0220-window-follow)。
 
 #### 升级前 {#v0220-before}
 
@@ -2095,6 +2097,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **控制台和 `/dash` 一经滚动更新即可读取新的仪表板格式**，因为它们随版本发布。升级期间不会转换
   任何已存储的看板；每个看板在下次加载时转换。
 - **device-management 的 pod 以更低的 CPU 请求重新调度。** 这是渲染出的资源值中唯一的变化。
+- **在 event-processing 也完成滚动更新之前，已停用设备的连接变化可能触发或解除连接告警。**
+  device-management 现在会传递已停用设备的连接和断开，而仍为 `v0.21.x` 的 event-processing pod
+  不知道要忽略它们。`dcctl upgrade` 会一起滚动更新各服务，因此这只持续于发布期间。
 
 升级后回退到 `v0.21.x` 读取的是同一个数据库。仪表板是需要注意的例外：在 `v0.22.0` 下保存或发布的
 看板是新格式，`v0.21.x` 会把其中每个组件画成一个单元格宽、一个单元格高，且不显示新组件。不要在旧
@@ -2170,7 +2175,11 @@ board-replay 以及控制台的详情页、回滚、导入和克隆会显示提�
 - `severityColor(severity)` 改为 `severityColor(colors, severity)`；
 - `timeseries-chart` 的选项 `window` 由 `windowSeconds` 取代，图表的选项版本从 1 变为 2。
 
-**`@devicechain/widget-sdk`** 没有新增或移除导出项，但有三处 TypeScript 构建可能察觉的变化：
+**`@devicechain/widget-sdk`** 没有移除导出项，但新增了许多：尺寸令牌与看板密度、适应方框的文本、
+数值时效与连接状态徽标、严重级别与颜色、阈值，以及看板时间范围（`useWidgetTimeRange`、
+`MAX_SPAN_SAMPLES`、`withinSpan`），另有 `/echarts` 上的新图表构建函数。`useElementSize` 新增可选
+参数 `step`，`WidgetFrame` 新增可选属性 `flush` 和 `sampleTime`。有三处 TypeScript 构建可能察觉的
+变化：
 
 - `ChartTheme` 有了必填字段 `severity`。只有在你手动构建主题、而不是调用 `useChartTheme` 或
   `resolveChartTheme` 时才有影响；
@@ -2180,6 +2189,9 @@ board-replay 以及控制台的详情页、回滚、导入和克隆会显示提�
   数值。
 
 `SDK_API_VERSION` 不变，仓库中的第三方组件示例无需修改即可基于 `0.22.0` 构建。
+[`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards)、[`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) 和
+[`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) 的 README 中的 `Upgrading from 0.21` 一节列出了
+各项变化及其替代项。
 **`@devicechain/client`** 只有新增：`createSessionTokens`，以及作为区域的 `update-management`。
 **`@devicechain/brand`** 不变。
 
@@ -2199,6 +2211,24 @@ board-replay 以及控制台的详情页、回滚、导入和克隆会显示提�
 `dcctl sim` 拒绝。以前它会静默覆盖记录。去掉该参数即可使用已记录的集群。如果错的是记录本身（集群
 已重建或其上下文已改名），请删除 `~/.devicechain/instances/<instance>/instance.json`，再带上
 `--kube-context` 重新运行。
+
+##### 已停用设备的连接状态继续更新 {#v0220-disabled-presence}
+
+已停用设备的连接、断开和降级现在会到达 device-state 和事件历史，因此停用期间其连接状态仍然准确。
+检测仍会忽略这些事件，因此不会为已停用设备触发告警，其测量、位置和命令仍被拒绝。Sparkplug 边缘
+节点可以让已停用的子设备显示为已连接，因为节点为其设备报告的在线状态在设计上是受信任的。新计数器
+`devicechain_eventsources_presence_reconcile_unapplied_total` 统计已发送但未见生效的对账修复。
+
+##### 保留的命令跟随当前维护窗口 {#v0220-window-follow}
+
+为维护窗口保留的命令现在跟随其设备类型的**当前**窗口。如果把某个类型从窗口 A 改为窗口 B，已在
+等待的命令会移到 B 的下一次开放。如果**取消分配**某个类型的窗口，其等待中的命令会**立即释放**。
+`v0.21.0` 说明中称它们会保持保留，现在已不再如此。已停用设备的命令在任何情况下都保持保留。取消
+分配窗口前，请先检查有哪些命令在等待它。
+
+另外修复：已停用设备的排队命令不再让 LwM2M 发送端陷入紧密循环轮询；确认因窗口刚关闭而被拒绝的
+命令现在会停放到下一次开放，而不是停留在 `SENT`。因设备已停用而被拒绝的认领计入
+`devicechain_commanddelivery_command_delivery_claims_refused_disabled_total`。
 
 ##### 变化的默认值 {#v0220-defaults}
 
@@ -2267,13 +2297,29 @@ device-management 在每秒 6,000 个事件时的实测用量。CPU 上限仍为
 `devicechain_<area>_jetstream_publish_window_full_total` 和
 `devicechain_<area>_jetstream_publish_duplicates_total`，用于外部 MQTT 的
 `devicechain_eventsources_total_msg_publish_failed{source}`，以及
-`devicechain_eventprocessing_detect_rule_stat_write_failures_total`。没有指标被重命名或移除。
+`devicechain_eventprocessing_detect_rule_stat_write_failures_total`，以及 `devicechain_eventsources_presence_reconcile_unapplied_total`。没有指标被重命名或移除。
+
+##### 端到端审查中的修复 {#v0220-review-fixes}
+
+- **实时组件在任意时长的中断后都能恢复。** 以前在断网或服务器不可用约 40 秒后，组件会显示“数据
+  不可用”，直到重新加载页面；服务器结束的数据流可能停止更新，而徽标仍显示实时。代码下载失败的
+  组件现在可以用“重置组件”重试。
+- **仪表板数据如实显示。** 看板暂停时把槽位改指向另一台设备，会显示新设备。每设备一根柱的柱状图
+  持续更新。未绑定设备的统计卡片会提示选择设备，而不是显示“0 次读数”。上报稀少的设备在设备群
+  表格中的单元格不会把某个时间段的平均值当作最新读数，超出读取上限的单元格显示“未加载”。
+
+##### 已知限制：重新连接后的历史数据 {#v0220-known-limitation}
+
+看板重新连接后，不会重新读取错过的历史数据。折线图会在中断期间画一条直线，设备群和聚合数值会遗漏
+中断期间发送的读数。已计划修复。
 
 ##### 本版本还包括 {#v0220-also}
 
 - **仪表板。** 单元格保持方形，列数随容器变化，因此手机每行显示一个组件，墙面显示屏得到更大的
   单元格。编辑器按单元格吸附、把相邻组件推开、支持键盘操作、可把组件锚定到另一个组件，并在每个
-  组件上显示布局问题；布局错误会阻止发布，直到“适应限制”将其清除。看板有时间范围（15 分钟到 7
+  组件上显示布局问题；布局错误会阻止发布，直到“适应限制”将其清除。编辑器还支持撤销和重做、复制组件，
+  以及在看板之间复制粘贴；粘贴到设备绑定不存在的地方（例如另一个租户的看板）的组件会得到一个新的
+  未绑定槽位，不保留任何设备引用。看板有时间范围（15 分钟到 7
   天）和暂停；暂停期间命令仍会发送。新组件：线性仪表和液位仪表、电池、状态灯、信号格、罗盘、进度
   环、命令滑块和命令开关、统计卡片、柱状图和饼图，以及设备群表格。组件新增阈值、单位和精度，显示
   数值的时效，并说明为何为空。`/dash` 会保持会话有效，并提供用于墙面显示屏的 kiosk 模式。
