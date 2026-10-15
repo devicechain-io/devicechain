@@ -58,9 +58,9 @@ var latestLocationGuard = clause.Where{Exprs: []clause.Expression{
 	clause.Expr{SQL: "latest_locations.occurred_time < excluded.occurred_time"},
 }}
 
-// deviceStateKey is device_states' conflict key: the columns both of the batch's device-row
-// statements arbitrate on (createFolded's first-sight insert, writeFoldedStates' write-back),
-// and therefore the columns the write-back never rewrites. One definition for every use.
+// deviceStateKey is device_states' conflict key: the columns every one of the batch's
+// device-row statements arbitrates on (the heartbeat upsert, lockOrCreate, writeFoldedStates'
+// write-back), and therefore the columns the write-back never rewrites. One definition for every use.
 var deviceStateKey = []string{"tenant_id", "device_token"}
 
 // deviceStateConflict is deviceStateKey as an ON CONFLICT target.
@@ -184,7 +184,7 @@ func zeroUnderDefault(db *gorm.DB, cols []string, rows []DeviceState) error {
 // gorm:update_track_time setting is no substitute: it is cleared after the first statement, so
 // under a chunked write only the first chunk would be stamped.) Moving from an update to a
 // create changes nothing else a callback sees: the fence is still read at the transaction's
-// first write for the tenant (now this statement, or the first createFolded), and DeviceState
+// first write for the tenant (now the batch's first device-row statement), and DeviceState
 // is exempt from the audit journal on both paths.
 //
 // 🔴 Not OnConflict{UpdateAll: true}: gorm binds its updated_at assignment after
@@ -370,31 +370,45 @@ func (e *BatchRefusal) Unwrap() error { return e.Err }
 //
 // A tenant batch that carries any claim takes the LOCKED path, mergeWithLocks:
 //
-//  1. One statement locks the existing row of every device in the batch (SELECT … FOR
-//     UPDATE, in token order), reading only the columns the fold touches (foldSelect).
-//  2. Each device's updates are folded into its row in arrival order: applyEvent for a row
-//     that exists, newDeviceState for the first update of one that does not. A new row is
-//     inserted with ON CONFLICT DO NOTHING; when another writer created it after step 1 read,
-//     the insert does nothing, the committed row is locked and read, and every update is
-//     folded into it instead — what merging them one at a time would have done after losing
-//     the race. An existing row is kept for step 3.
-//  3. The batch's existing device rows are written back in one statement (writeFoldedStates),
-//     then its readings, then its positions, as one upsert each. The write-back takes no lock
-//     step 1 or 2 did not already hold.
+//  1. ONE statement takes every device row of the batch, in token order: an INSERT … ON
+//     CONFLICT DO UPDATE … WHERE 1 = 0 (lockOrCreate) that inserts the blank row
+//     (blankDeviceState) for a device with none and, for a device with one, takes the conflict
+//     arm, which LOCKS the row and changes nothing.
+//  2. One statement reads those rows back (SELECT … FOR UPDATE, in token order), reading only
+//     the columns the fold touches (foldSelect). Every row is already held, so it takes no lock.
+//  3. Each device's updates are folded into its row in arrival order with applyEvent — a blank
+//     row included, since applyEvent over it leaves what newDeviceState would.
+//  4. The rows are written back in one statement (writeFoldedStates), then the readings, then
+//     the positions, as one upsert each. The write-back takes no lock step 1 did not take.
 //
-// The two shapes are never mixed inside one tenant batch: that would take that tenant's row
-// locks in two statements, out of token order.
+// The two shapes are never mixed inside one tenant batch.
 //
-// Locks are taken in (tenant, table, key) order in every batch, so two batch writers cannot
-// deadlock on each other in either path. Three shapes can still meet in a deadlock, and
-// PostgreSQL then aborts one side: a row created by another writer between steps 1 and 2 is
-// locked out of order; the inactivity sweep updates many rows in scan order; and during a
-// rolling upgrade, an older per-event writer locks one device's readings in payload order.
-// A batch that loses is a *BatchRefusal and its tenant's updates are merged again one at a
-// time, which costs transactions. That one-event write is a transaction too and can lose a
-// deadlock in its turn: the processor retries it in place a few times, and an event that still
-// loses is left unacknowledged for the broker to redeliver, not applied. A sweep that loses is
-// recorded as a failed pass and runs again at the next.
+// 🔴 THE LOCK ORDER. A transaction that waits for a lock while holding another can deadlock
+// only with one that acquires the same two in the opposite order. Every batch therefore takes
+// device_states row locks in ONE statement and in ascending (tenant, token) order, whether
+// the row exists or not: the heartbeat upsert and lockOrCreate both walk VALUES in token
+// order, and an INSERT … ON CONFLICT takes a new row (its own insert, which a second
+// inserter waits on until commit) and an existing one (the conflict arm's row lock) at the
+// SAME point of that walk. Everything after it touches only rows already held, then
+// latest_measurements in (token, name) order, then latest_locations in token order, each one
+// statement (or ordered chunks of one) — so in (tenant, table, key) order throughout.
+//
+// The locked path used to lock the rows that EXISTED first, in one read, and insert the new
+// ones after it. That order is token order only among existing rows: a new device whose token
+// sorts below an existing one was locked after it, which the heartbeat upsert's single walk does
+// the other way round — a claim batch held B and waited to insert A while a heartbeat batch had
+// inserted A and waited for B, and PostgreSQL aborted one (40P01). Two such locked batches could
+// meet the same way when a third writer created a row between one's read and its inserts.
+// lockOrCreate is the cure for both: there is no "existing first" any more.
+//
+// Two shapes outside the batch can still meet a batch in a deadlock, and PostgreSQL then
+// aborts one side: the inactivity sweep updates many rows in scan order, and during a rolling
+// upgrade an older writer locks in its own order. A batch that loses is a *BatchRefusal and
+// its tenant's updates are merged again one at a time, which costs transactions. That
+// one-event write is a transaction too and can lose a deadlock in its turn: the processor
+// retries it in place a few times, and an event that still loses is left unacknowledged for
+// the broker to redeliver, not applied. A sweep that loses is recorded as a failed pass and
+// runs again at the next.
 func (api *Api) MergeProjectionBatch(ctx context.Context, updates []ProjectionUpdate) error {
 	byTenant := map[string]map[string][]int{}
 	for i, u := range updates {
@@ -464,52 +478,62 @@ func writeLatest(tdb *gorm.DB, tokens []string, devices map[string][]int, update
 	return upsertLatestLocations(tdb, locations)
 }
 
-// mergeWithLocks is mergeTenantBatch's locked path (steps 1-3 above), for a tenant batch that
-// carries a presence claim.
+// mergeWithLocks is mergeTenantBatch's locked path (steps 1-4 above), for a tenant batch that
+// carries a presence claim. tokens is sorted.
 func mergeWithLocks(tdb *gorm.DB, tokens []string, devices map[string][]int, updates []ProjectionUpdate) error {
+	if err := lockOrCreate(tdb, tokens); err != nil {
+		return err
+	}
 	sel, err := foldSelect(tdb)
 	if err != nil {
 		return err
 	}
-	var existing []DeviceState
+	var rows []DeviceState
 	if err := tdb.Clauses(clause.Locking{Strength: "UPDATE"}).Select(sel).
-		Where("device_token IN ?", tokens).Order("device_token").Find(&existing).Error; err != nil {
+		Where("device_token IN ?", tokens).Order("device_token").Find(&rows).Error; err != nil {
 		return err
 	}
-	rows := make(map[string]*DeviceState, len(existing))
-	for i := range existing {
-		rows[existing[i].DeviceToken] = &existing[i]
+	if len(rows) != len(tokens) {
+		// lockOrCreate left a row for every token, so a short read is a row the read cannot
+		// see (a soft-deleted one). Refuse it rather than drop those devices' events.
+		return fmt.Errorf("the batch's lock read found %d device rows of the %d it had just locked or created",
+			len(rows), len(tokens))
 	}
-
-	var folded []DeviceState
-	for _, tok := range tokens {
-		idx := devices[tok]
-		row, found := rows[tok]
-		if !found {
-			created, err := createFolded(tdb, tok, idx, updates)
-			if err != nil {
-				return err
-			}
-			if !created {
-				// Another writer created the row after the lock read: fold every update into
-				// the committed row, as a redelivered first event would have been.
-				row = &DeviceState{}
-				if err := tdb.Clauses(clause.Locking{Strength: "UPDATE"}).Select(sel).
-					Where("device_token = ?", tok).First(row).Error; err != nil {
-					return err
-				}
-				found = true
-			}
-		}
-		if found {
-			foldInto(row, idx, updates)
-			folded = append(folded, *row)
-		}
+	for i := range rows {
+		foldInto(&rows[i], devices[rows[i].DeviceToken], updates)
 	}
-	if err := writeFoldedStates(tdb, folded); err != nil {
+	if err := writeFoldedStates(tdb, rows); err != nil {
 		return err
 	}
 	return writeLatest(tdb, tokens, devices, updates)
+}
+
+// lockOrCreateNever is lockOrCreate's DO UPDATE condition: never true, so the conflict arm
+// writes nothing — but PostgreSQL locks a conflicting row whether or not the condition holds,
+// which is the whole point.
+var lockOrCreateNever = clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "1 = 0"}}}
+
+// lockOrCreate takes every device row of a locked-path tenant batch in ONE statement, walking
+// tokens (sorted) in order: a device with no row gets the blank row (blankDeviceState), and a
+// device with one takes the conflict arm, which locks the row and, by lockOrCreateNever,
+// changes nothing. It is the heartbeat upsert's walk with a different row and update arm, so
+// the two paths take the same locks in the same order — see "THE LOCK ORDER" on
+// MergeProjectionBatch. A row another writer is inserting is waited for and then locked, so
+// first sight has no lost race to recover from.
+//
+// The blank row is never committed as it is: the caller folds the device's events into it and
+// writes it back in the same transaction, and no other transaction can see it before then.
+func lockOrCreate(tdb *gorm.DB, tokens []string) error {
+	rows := make([]DeviceState, len(tokens))
+	for i, tok := range tokens {
+		rows[i] = *blankDeviceState(tok)
+	}
+	return rdb.CreateChunked(tdb.Clauses(clause.OnConflict{
+		Columns: deviceStateConflict(),
+		DoUpdates: clause.Set{{Column: clause.Column{Name: "updated_at"},
+			Value: clause.Column{Table: "device_states", Name: "updated_at"}}},
+		Where: lockOrCreateNever,
+	}), &rows).Error
 }
 
 // foldInto folds a device's updates into row, in arrival order.
@@ -527,20 +551,6 @@ func foldNew(tok string, idx []int, updates []ProjectionUpdate) *DeviceState {
 	row := newDeviceState(tok, storedTime(first.OccurredAt), storedTransition(first.Presence), first.Identity)
 	foldInto(row, idx[1:], updates)
 	return row
-}
-
-// createFolded inserts the row a device with no row ends up with (foldNew), unless another
-// writer has created one since the lock read, in which case it inserts nothing and reports
-// false.
-func createFolded(tdb *gorm.DB, tok string, idx []int, updates []ProjectionUpdate) (bool, error) {
-	res := tdb.Clauses(clause.OnConflict{
-		Columns:   deviceStateConflict(),
-		DoNothing: true,
-	}).Create(foldNew(tok, idx, updates))
-	if res.Error != nil {
-		return false, res.Error
-	}
-	return res.RowsAffected == 1, nil
 }
 
 // heartbeatGuard is the DO UPDATE's WHERE: it EXCLUDES the one row a plain data event cannot
@@ -596,9 +606,11 @@ func heartbeatUpsert(tdb *gorm.DB) *gorm.DB {
 //   - A device with a row takes heartbeatSet — unless heartbeatGuard excludes it, in which
 //     case the statement locks the row and leaves it alone.
 //
-// The statement takes each row's lock in token order (the VALUES order), where the locked path
-// takes them in a separate read: the same order, so no new deadlock shape. A redelivered event
-// changes nothing (the activity advance is monotone and the identity already equal).
+// The statement takes each row in token order (the VALUES order) — a new row by inserting it,
+// an existing one by its conflict arm's lock, at the same point of the walk — exactly as the
+// locked path's lockOrCreate does, so the two paths take device_states in one order (see "THE
+// LOCK ORDER" on MergeProjectionBatch). A redelivered event changes nothing (the activity
+// advance is monotone and the identity already equal).
 //
 // When the statement wrote fewer rows than it was given, some device was excluded: it is an
 // inferred-dead device a data event brings back. Those rows are already locked by this

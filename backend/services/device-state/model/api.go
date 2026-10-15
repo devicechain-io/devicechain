@@ -87,6 +87,20 @@ type DeviceIdentity struct {
 	Source     string
 }
 
+// blankDeviceState is the row of a device no event has touched: INFERRED, no identity, no
+// session, no stamps, the default inactivity timeout. newDeviceState starts from it, and the
+// batch's locked path inserts it for a device with no row and then folds the device's events
+// into it with applyEvent. That is only right because applyEvent over this row leaves exactly
+// what newDeviceState leaves, for EVERY first event (data, any claim, an invalid one);
+// TestABlankRowFoldsToTheNewRow pins it.
+func blankDeviceState(deviceToken string) *DeviceState {
+	return &DeviceState{
+		DeviceToken:       deviceToken,
+		PresenceSource:    PresenceSourceInferred,
+		InactivityTimeout: config.DefaultInactivityTimeout,
+	}
+}
+
 // newDeviceState builds the row for the first event ever seen for a device. A plain
 // data event creates it active (today's behavior); an authoritative CONNECTIVITY
 // transition creates it ASSERTED with Active set to exactly the transition — so a
@@ -106,13 +120,9 @@ type DeviceIdentity struct {
 // presence. The row is inert (SweepInactive only scans active rows) and the device's
 // next data event populates it the ordinary inferred way.
 func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) *DeviceState {
-	ds := &DeviceState{
-		DeviceToken:       deviceToken,
-		ExternalId:        id.ExternalId,
-		Source:            id.Source,
-		PresenceSource:    PresenceSourceInferred,
-		InactivityTimeout: config.DefaultInactivityTimeout,
-	}
+	ds := blankDeviceState(deviceToken)
+	ds.ExternalId = id.ExternalId
+	ds.Source = id.Source
 	if pt != nil {
 		// 🔴 THE GUARD IS POSITIVE, AND IT HAS TO BE. Row creation is the ONE presence path
 		// that never consults presence.Decide, so nothing here refuses a claim on its own

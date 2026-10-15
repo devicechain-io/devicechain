@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -414,5 +416,100 @@ func TestTheHeartbeatUpsertKeepsTheTenantRules(t *testing.T) {
 	}
 	if !strings.Contains(sql, "`device_states`.`tenant_id` = `excluded`.`tenant_id` AND (") {
 		t.Errorf("the heartbeat upsert's update arm is not confined to its tenant: %s", sql)
+	}
+}
+
+// THE LOCKED PATH INSERTS THE BLANK ROW AND FOLDS EVERY EVENT INTO IT. lockOrCreate takes a new
+// device's row by inserting blankDeviceState, and the fold then runs applyEvent over it — where
+// merging one event at a time builds the row with newDeviceState. The two must leave the same
+// row for EVERY possible first event, or the locked path would leave something one-at-a-time
+// does not: data with and without identity, each claim at session zero and above, a claim with
+// a compare-and-set, and the invalid claim.
+func TestABlankRowFoldsToTheNewRow(t *testing.T) {
+	at := storedTime(time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC))
+	ids := []DeviceIdentity{{}, {ExternalId: "ext-1"}, {Source: "mqtt1"}, {ExternalId: "ext-1", Source: "mqtt1"}}
+	events := []*PresenceTransition{nil}
+	for _, c := range []presence.Claim{presence.ClaimUnset, presence.ClaimConnected, presence.ClaimDisconnected,
+		presence.ClaimDemoted, presence.Claim(99)} {
+		for _, session := range []uint64{0, 7} {
+			events = append(events,
+				&PresenceTransition{Claim: c, SessionId: session, OccurredAt: at},
+				&PresenceTransition{Claim: c, SessionId: session, ExpectedSessionId: 3, OccurredAt: at})
+		}
+	}
+	for _, id := range ids {
+		for _, pt := range events {
+			want := newDeviceState("d1", at, pt, id)
+			got := blankDeviceState("d1")
+			applyEvent(got, at, pt, id)
+			if !reflect.DeepEqual(*got, *want) {
+				t.Errorf("first event %+v with identity %+v:\n  blank+applyEvent = %+v\n  newDeviceState   = %+v",
+					pt, id, *got, *want)
+			}
+		}
+	}
+}
+
+// 🔴 EVERY BATCH TAKES ITS DEVICE ROWS IN ONE STATEMENT, IN TOKEN ORDER. Two batches can deadlock
+// only by taking two rows in opposite orders, and the order an INSERT … ON CONFLICT takes rows in
+// is its VALUES order — for a row it inserts and a row it conflicts on alike. So the first
+// statement either path sends to device_states must be that INSERT, naming every device of the
+// batch in ascending token order, and nothing may reach device_states before it. The batch here
+// is the shape that deadlocked: devices that are NEW sort below devices that EXIST (the locked
+// path used to lock the existing rows in a read, then insert the new ones, so it took lo-03
+// before lo-00 where the heartbeat upsert takes lo-00 first). The updates arrive out of order,
+// so a path that stopped sorting fails here too.
+func TestEveryBatchPathTakesItsDeviceRowsInOneTokenOrderedStatement(t *testing.T) {
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	tokenRE := regexp.MustCompile(`lo-\d\d`)
+	for _, tc := range []struct {
+		name      string
+		withClaim bool
+	}{
+		{"locked path (a claim in the batch)", true},
+		{"heartbeat path (data only)", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newSQLiteProjectionApi(t, "order")
+			existing := []string{"lo-03", "lo-04", "lo-05"}
+			var seed []ProjectionUpdate
+			for _, tok := range existing {
+				seed = append(seed, data("acme", tok, t0))
+			}
+			if err := api.MergeProjectionBatch(context.Background(), seed); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			at := t0.Add(time.Minute)
+			batch := []ProjectionUpdate{
+				data("acme", "lo-05", at), data("acme", "lo-01", at), data("acme", "lo-03", at),
+				data("acme", "lo-00", at), data("acme", "lo-04", at), data("acme", "lo-02", at),
+			}
+			if tc.withClaim {
+				batch[2] = claim("acme", "lo-03", at, presence.ClaimConnected, 1)
+			}
+			want := []string{"lo-00", "lo-01", "lo-02", "lo-03", "lo-04", "lo-05"}
+
+			counter := rdbtest.NewStatementCounter("device_states")
+			counter.Record(true)
+			if err := countedApi(api, counter).MergeProjectionBatch(context.Background(), batch); err != nil {
+				t.Fatalf("MergeProjectionBatch: %v", err)
+			}
+			sqls := counter.MarkedSQL()
+			if len(sqls) == 0 {
+				t.Fatal("no statement reached device_states")
+			}
+			first := sqls[0]
+			if !strings.HasPrefix(strings.TrimSpace(first), "INSERT") || !strings.Contains(first, "ON CONFLICT") {
+				t.Fatalf("the batch's first statement on device_states is not its INSERT … ON CONFLICT; it is:\n  %s", first)
+			}
+			if got := tokenRE.FindAllString(first, -1); strings.Join(got, ",") != strings.Join(want, ",") {
+				t.Errorf("the first statement takes the devices in the order %v; want every device, ascending: %v", got, want)
+			}
+			for _, tok := range want {
+				if row := loadRow(t, api, "acme", tok); !row.LastActivityTime.Time.Equal(at) {
+					t.Errorf("%s: activity %v; want %v", tok, row.LastActivityTime.Time, at)
+				}
+			}
+		})
 	}
 }

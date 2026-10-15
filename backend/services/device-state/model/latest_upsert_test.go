@@ -234,21 +234,21 @@ func loadRace(t *testing.T, api *Api) []DeviceState {
 	return rows
 }
 
-// A device's row created by ANOTHER writer between the batch's lock read and its insert: the
-// insert does nothing, and the batch folds its events into the committed row — what merging
-// them one at a time would have done after losing the race — rather than failing the batch.
-// This is the LOCKED path, which a batch with a presence claim takes (a data-only batch takes
-// the heartbeat upsert, which has no such gap: see the next test).
+// A device's row created by ANOTHER writer just before the batch takes its rows: the batch's
+// lockOrCreate takes the conflict arm instead of inserting the blank row, and the batch folds
+// its events into the committed row — what merging them one at a time would have done after
+// losing the race — rather than failing the batch. This is the LOCKED path, which a batch with
+// a presence claim takes (a data-only batch takes the heartbeat upsert: see the next test).
 //
 // The other writer is simulated inside the batch's own transaction, the one way to put a row
-// in that gap deterministically on SQLite: a callback creates it right after the batch's lock
-// read of device_states.
+// there deterministically on SQLite: a callback creates it right before the batch's first
+// create on device_states.
 func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	db := api.RDB.Database
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := db.Callback().Query().After("gorm:query").Register("test:create_meanwhile", func(tx *gorm.DB) {
+	if err := db.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
 		if !armed || tx.Statement.Table != "device_states" {
 			return
 		}
