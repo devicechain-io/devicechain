@@ -6,7 +6,13 @@
   "connectionReconnecting": "Reconectando",
   "enterFullscreen": "Pantalla completa",
   "exitFullscreen": "Salir de pantalla completa",
+  "pause": "Pausar",
+  "paused": "En pausa",
+  "pausedAt": "En pausa desde las {{time}}",
+  "actionsLive": "los comandos se siguen enviando",
+  "resume": "Reanudar",
   "themeToDark": "Tema oscuro",
   "themeToLight": "Tema claro",
+  "timeRange": "Intervalo de tiempo",
   "untitled": "Panel"
 }

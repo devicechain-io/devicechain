@@ -25,6 +25,8 @@ import {
   DEFAULT_CANVAS_DENSITY,
   defaultHistoryWindow,
   effectiveLayout,
+  historyWindowFor,
+  initialTimeRange,
   fetchWidgetHistory,
   layoutShape,
   resolveFrame,
@@ -44,6 +46,7 @@ import {
   type WidgetDataSource,
   type MeasurementSample,
   type SlotBinding,
+  type TimeRangeState,
   type WidgetFrameSpec,
   type WidgetInstance,
 } from '@devicechain/dashboards';
@@ -52,11 +55,13 @@ import {
   tokenStyle,
   WidgetDensityProvider,
   WidgetFrameStyleProvider,
+  WidgetTimeRangeProvider,
   WidgetTokenStyles,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 
+import { measurementSpan } from './binding-policy';
 import { ConnectedWidget } from './connected-widget';
 import {
   type WidgetCandidates,
@@ -114,6 +119,11 @@ export interface DashboardRendererProps {
   // authored `canvas.density`, which wins over `comfortable`. Density scales every size token
   // (font, spacing) and the floor of the value-font curve, never the curve itself.
   density?: CanvasDensity;
+  // The board's time range: the span its time-series widgets draw, and whether the viewer has
+  // frozen it. Owned by the host (useBoardTimeRange + TimeRangeBar) so the control can live in the
+  // host's own header. Omitted = live over the definition's default span (or one hour), with no
+  // control -- a static embed, the replay page, an edit preview.
+  timeRange?: TimeRangeState;
 }
 
 export function DashboardRenderer({
@@ -129,13 +139,20 @@ export function DashboardRenderer({
   timeZone,
   themeRoot,
   density,
+  timeRange,
 }: DashboardRendererProps) {
   // Each widget with its slot resolved to a concrete selector. Recomputed per render;
   // that is cheap, and every channel keys its subscription on the selector's VALUE, so a
   // widget whose concrete selector did not change keeps its subscription.
   const widgets = useMemo(() => resolveWidgets(definition.widgets, bindings), [definition.widgets, bindings]);
   const registry = registryProp ?? defaultWidgetRegistry();
-  const histories = useWidgetHistories(widgets, seedHistory, registry);
+  // The default is derived, not stored: a host with no control still gets the board's own span.
+  const defaultSeconds = definition.timeRange?.defaultSeconds;
+  const range = useMemo(
+    () => timeRange ?? initialTimeRange(defaultSeconds),
+    [timeRange, defaultSeconds],
+  );
+  const histories = useWidgetHistories(widgets, seedHistory, registry, range);
 
   const { grid, background: bg, frame: canvasFrame } = definition.canvas;
   const effectiveSizing = sizing ?? definition.canvas.sizing;
@@ -163,12 +180,14 @@ export function DashboardRenderer({
       ref={boardRef}
       data-density={effectiveDensity}
       data-columns={columns}
+      data-time-paused={range.paused ? '' : undefined}
       style={{ ...sizingStyle(effectiveSizing, bg), ...tokenStyle(scale) }}
     >
       <WidgetTokenStyles />
       <WidgetDensityProvider scale={scale}>
       <WidgetThemeRootProvider root={themeRoot}>
       <WidgetTimeZoneProvider timeZone={timeZone}>
+      <WidgetTimeRangeProvider range={range}>
       <WidgetSelectProvider select={select}>
         <WidgetCandidatesProvider candidates={candidates}>
         <div style={{ padding: lengths.padding }}>
@@ -211,6 +230,7 @@ export function DashboardRenderer({
         </div>
         </WidgetCandidatesProvider>
       </WidgetSelectProvider>
+      </WidgetTimeRangeProvider>
       </WidgetTimeZoneProvider>
       </WidgetThemeRootProvider>
       </WidgetDensityProvider>
@@ -466,6 +486,7 @@ function useWidgetHistories(
   widgets: WidgetInstance[],
   enabled: boolean,
   registry: WidgetRegistry,
+  range: TimeRangeState,
 ): Record<string, MeasurementSample[] | undefined> {
   const [seeds, setSeeds] = useState<Record<string, Seed>>({});
   // widget id → the selector key most recently REQUESTED for it. A fetch whose key is no
@@ -479,10 +500,16 @@ function useWidgetHistories(
     };
   }, []);
 
-  // The (id, key) pairs that want a seed; value-compared so an equal render is a no-op.
+  // The (id, key, span) triples that want a seed; value-compared so an equal render is a no-op.
+  // `span` is the seconds a TIME-RANGED widget draws (null for one that is not, which keeps the
+  // fixed default seed): a new span re-fetches, but the seed on screen stays until the new one lands,
+  // because it is the same device's history and the stream prunes it to the span anyway.
   const wanted = widgets.flatMap((w) => {
     const key = seedKey(w, registry);
-    return key === undefined ? [] : [[w.id, key] as const];
+    if (key === undefined) return [];
+    const descriptor = w.type === UNKNOWN_WIDGET_TYPE ? undefined : registry.descriptor(w.type);
+    const span = descriptor ? (measurementSpan(descriptor, w, range.spanSeconds) ?? null) : null;
+    return [[w.id, key, span] as const];
   });
   const wantedKey = JSON.stringify(wanted);
 
@@ -494,16 +521,24 @@ function useWidgetHistories(
       setSeeds({});
       return;
     }
-    const historyWindow = defaultHistoryWindow();
+    const now = Date.now();
     const byId = new Map(widgets.map((w) => [w.id, w]));
     const next: Record<string, string> = {};
-    for (const [id, key] of wanted) {
-      next[id] = key;
-      if (requested.current[id] === key) continue; // already fetched (or in flight) for this selector
+    for (const [id, key, span] of wanted) {
+      // What was asked for: the selector AND the span. Equal = fetched, or in flight.
+      const asked = `${key}|${span ?? ''}`;
+      next[id] = asked;
+      if (requested.current[id] === asked) continue;
       const widget = byId.get(id);
       if (!widget) continue;
+      // A frozen board reads up to the freeze instant, so a range change while paused re-fetches
+      // the same moment at the new span instead of sliding forward.
+      const historyWindow =
+        span === null
+          ? defaultHistoryWindow()
+          : historyWindowFor(span, range.paused && range.pausedAt !== undefined ? range.pausedAt : now);
       void fetchWidgetHistory(widget, historyWindow).then((samples) => {
-        if (!mounted.current || requested.current[id] !== key) return; // superseded or unmounted
+        if (!mounted.current || requested.current[id] !== asked) return; // superseded or unmounted
         setSeeds((prev) => ({ ...prev, [id]: { key, samples } }));
       });
     }

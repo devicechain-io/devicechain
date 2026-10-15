@@ -28,6 +28,7 @@ import {
   WIDGET_TYPES,
   isCanvasDensity,
   type AnchorTarget,
+  type BoardTimeRange,
   type Breakpoints,
   type Canvas,
   type CanvasGrid,
@@ -61,9 +62,12 @@ import {
   layoutBreakpoints,
   resolvePlacement,
 } from './grid';
-import { convertLegacyDefinition, storedSchemaVersion } from './legacy-grid';
+import { convertLegacyDefinition, GRID_SCHEMA_VERSION, storedSchemaVersion } from './legacy-grid';
+import { convertSampleWindows } from './legacy-window';
+import { isValidSpanSeconds } from './time-range';
 import { parseWidgetRef, unresolvedReason } from './widget-compat';
 import type { WidgetCatalog } from './widget-catalog';
+import { isRecord } from './is-record';
 
 // The breakpoint every layout must define; a widget/viewport with no more specific placement
 // falls back to it.
@@ -80,10 +84,6 @@ export class DashboardDefinitionError extends Error {
     super(`invalid dashboard definition: ${message}`);
     this.name = 'DashboardDefinitionError';
   }
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
 function numberAt(rec: Record<string, unknown>, key: string, fallback: number): number {
@@ -112,11 +112,20 @@ export function parseDashboardDefinition(input: unknown, options: ParseDefinitio
   if (!isRecord(input)) throw new DashboardDefinitionError('not a JSON object');
   if (!Array.isArray(input.widgets)) throw new DashboardDefinitionError('widgets must be an array');
 
-  // A document stored before the square-cell grid is converted first (approximately; see
-  // ./legacy-grid), and the result says so. Everything below reads the current format only.
+  // A document stored in an older format is converted on load, one step at a time: the square-cell
+  // grid (approximately; see ./legacy-grid), then the time span (./legacy-window). The result
+  // says so. Everything below reads the current format only.
   const stored = storedSchemaVersion(input);
   const legacy = stored < CURRENT_SCHEMA_VERSION;
-  const raw = legacy ? convertLegacyDefinition(input) : input;
+  const gridConverted = stored < GRID_SCHEMA_VERSION;
+  let raw: Record<string, unknown> = input;
+  if (gridConverted) raw = convertLegacyDefinition(raw);
+  let flaggedWindows: number[] = [];
+  if (legacy) {
+    const converted = convertSampleWindows(raw);
+    raw = converted.doc;
+    flaggedWindows = converted.flagged;
+  }
   const widgetsRaw = raw.widgets as unknown[];
 
   const def: DashboardDefinition = {
@@ -131,11 +140,20 @@ export function parseDashboardDefinition(input: unknown, options: ParseDefinitio
   // dashboard serializes unchanged (no spurious `"slots":{}` diff).
   const slots = parseSlots(raw.slots);
   if (slots) def.slots = slots;
+  const timeRange = parseBoardTimeRange(raw.timeRange);
+  if (timeRange) def.timeRange = timeRange;
   validatePlacements(def);
-  // An empty board has no layout to review. A typed definition handed back to the parser keeps
-  // the mark it already carries.
-  if (legacy && def.widgets.length > 0) def.convertedFrom = stored;
+  // Only a conversion that changed something worth reviewing leaves a mark: a re-laid-out grid
+  // (an empty board has no layout to review), or a chart that lost its sample-count window. A
+  // v2 board with nothing to flag converts silently -- it lost nothing. A typed definition handed
+  // back to the parser keeps the marks it already carries.
+  const flaggedIds = flaggedWindows.map((i) => def.widgets[i]?.id).filter((id): id is string => id !== undefined);
+  if ((gridConverted && def.widgets.length > 0) || flaggedIds.length > 0) def.convertedFrom = stored;
   else if (typeof raw.convertedFrom === 'number') def.convertedFrom = raw.convertedFrom;
+  if (flaggedIds.length > 0) def.convertedWindows = flaggedIds;
+  else if (Array.isArray(raw.convertedWindows) && raw.convertedWindows.every((id) => typeof id === 'string')) {
+    def.convertedWindows = raw.convertedWindows as string[];
+  }
   return def;
 }
 
@@ -434,6 +452,15 @@ function parseSizing(raw: unknown): CanvasSizing {
     }
   }
   return DEFAULT_SIZING;
+}
+
+// parseBoardTimeRange reads the board's authored default span. A value that is not a usable span
+// (not an integer, under a minute, over a week) is IGNORED, so the board draws the default hour:
+// failing the whole board for a bad range would hide every widget on it, and clamping would turn
+// a typo into a window nobody wrote.
+function parseBoardTimeRange(raw: unknown): BoardTimeRange | undefined {
+  if (!isRecord(raw) || !isValidSpanSeconds(raw.defaultSeconds)) return undefined;
+  return { defaultSeconds: raw.defaultSeconds };
 }
 
 function parseCanvas(raw: unknown): Canvas {
@@ -879,8 +906,8 @@ export function serializeDefinition(def: DashboardDefinition): string {
 // reference when it carries none): what an editor keeps once a save has written the current
 // format.
 export function withoutConversionMark(def: DashboardDefinition): DashboardDefinition {
-  if (def.convertedFrom === undefined) return def;
-  const { convertedFrom: _mark, ...rest } = def;
+  if (def.convertedFrom === undefined && def.convertedWindows === undefined) return def;
+  const { convertedFrom: _mark, convertedWindows: _windows, ...rest } = def;
   return rest;
 }
 

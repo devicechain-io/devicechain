@@ -14,6 +14,10 @@ export interface MeasurementStreamState {
   // A rolling, chronological window of recent samples (drives the time chart).
   samples: MeasurementSample[];
   error: unknown | null;
+  // Set only on a window that is a time SPAN, when the retention ceiling had to drop samples that
+  // were still inside it: the window then covers from this instant (the oldest sample kept), not
+  // the whole span. A chart must say so rather than draw a short window under a long span's label.
+  truncatedBefore?: string;
 }
 
 // The state an alarm widget renders from: the current rows (newest first, capped),

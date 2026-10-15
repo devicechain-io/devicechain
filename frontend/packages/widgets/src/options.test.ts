@@ -222,7 +222,7 @@ describe('binding-policy option references', () => {
   // references, the declared-equals-read check would fail only for the keys it used to supply
   // — pin that it still finds them, per channel.
   it('finds the references each channel declares', () => {
-    expect(policyKeys('timeseries-chart')).toEqual(['window']);
+    expect(policyKeys('timeseries-chart')).toEqual(['windowSeconds']);
     expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'maxRows', 'severity', 'state']);
     expect(policyKeys('alarm-count').sort()).toEqual(['acknowledged', 'severity', 'state']); // page size is a constant
     expect(policyKeys('command-button')).toEqual(['maxRows']);
@@ -298,7 +298,7 @@ describe('WidgetOptions<T>', () => {
 // A known-good options bag per widget type. The counterweight to every rejection test
 // below: refusing bad input is only safe while good input passes untouched.
 const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
-  'timeseries-chart': { title: 'Zone temperature', window: 600 },
+  'timeseries-chart': { title: 'Zone temperature', windowSeconds: 600 },
   'latest-card': { title: 'Temp', measurement: 'temp_c', unit: '°C', precision: 1, flashOnChange: true, window: 300 },
   gauge: { title: 'Humidity', measurement: 'rh', min: 0, max: 100, unit: '%', precision: 1, flashOnChange: false, window: 300 },
   table: { title: 'All measurements', precision: 2, flashOnChange: true, window: 120 },

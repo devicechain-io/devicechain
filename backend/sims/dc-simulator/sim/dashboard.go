@@ -12,7 +12,7 @@ import (
 // document as typed Go structs, then marshals it — the only place in this
 // module that must match the frontend's @devicechain/dashboards TypeScript
 // parser contract exactly (schemaVersion/canvas/widgets/layout.base/datasource/
-// slots shapes). It writes the CURRENT format natively (schemaVersion 2: square
+// slots shapes). It writes the CURRENT format natively (schemaVersion 3: square
 // cells and explicit placement modes), so the frontend never has to convert a sim
 // board on load. Keeping it typed here, rather than hand-strung JSON, means a
 // field rename on either side shows up as a compile error or a JSON-shape test
@@ -181,7 +181,7 @@ type dashboardAnchorTarget struct {
 }
 
 // The definition format the builders write.
-const dashboardSchemaVersion = 2
+const dashboardSchemaVersion = 3
 
 // The sim boards' canvas grid (shared by every scenario's board), matching the frontend's
 // DEFAULT_GRID: 12 columns, cells of at least 56 px, an 8 px gutter and no padding. At the 960 px
@@ -303,7 +303,9 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 					Slot:         slotSelectedThermostat,
 					Measurements: []string{BuildingpulseTemperatureKey},
 				},
-				Options: map[string]any{"title": "Temperature", "window": 300},
+				// No span of its own: the chart follows the board's time range (one hour by default), so a
+				// viewer's range picker drives it.
+				Options: map[string]any{"title": "Temperature"},
 			},
 			{
 				Id:     "w-table",

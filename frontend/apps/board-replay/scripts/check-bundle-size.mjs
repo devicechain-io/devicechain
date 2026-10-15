@@ -9,8 +9,11 @@
 //            page links) -- what a visitor downloads before the map is ever needed. The map
 //            library, its worker and the land data load only when a map widget mounts.
 //   total    every file in dist/, plus the recording the page plays.
-// `maxInitial` and `maxTotal` are the measured sizes plus 10 %, so ordinary changes pass and
-// an accidental dependency does not. `hardInitial` and `hardTotal` are the product targets
+// `maxInitial` and `maxTotal` started as the measured sizes plus 10 %, so ordinary changes pass and
+// an accidental dependency does not. Once the headroom is spent, a raise is DELIBERATE: the
+// measured need (of every change landing together, when several are in flight) plus a small stated
+// margin, with the measurement and the reason in the commit that raises it -- never `--measure`
+// pasted in to make a red build green. `hardInitial` and `hardTotal` are the product targets
 // (400 KB before the map loads, 1.2 MB all-in); the budget can never be set above them.
 //
 //   node scripts/check-bundle-size.mjs            check dist/ against the budget

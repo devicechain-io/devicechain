@@ -30,12 +30,14 @@ import {
   WidgetCandidatesProvider,
   WidgetFreshnessProvider,
   WidgetSelectProvider,
+  useWidgetTimeRange,
   type WidgetFreshness,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
 import { useMemo, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, measurementWindow } from './binding-policy';
+import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow } from './binding-policy';
+import { useHeld } from './use-held';
 import { defaultWidgetRegistry } from './default-registry';
 import {
   optString,
@@ -193,8 +195,18 @@ function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
 }
 
 function MeasurementConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
+  // The board's time range (D-1). A widget that declares `binding.windowSeconds` draws a SPAN: its
+  // own pinned one, else the board's. Every measurement widget honors the pause, because a frozen
+  // board must freeze its cards and gauges too -- a number that kept moving under a "Paused"
+  // badge would be the worst possible answer.
+  const range = useWidgetTimeRange();
+  // The source's own clock (a recorded run is dated by the run), else the wall clock.
+  const now = useMemo(() => (hub.now ? () => hub.now!() : Date.now), [hub]);
   const data = useMeasurementStream(hub, widget.datasource, {
     window: measurementWindow(descriptor, widget),
+    windowSeconds: measurementSpan(descriptor, widget, range?.spanSeconds),
+    pausedAt: range?.paused ? range.pausedAt : undefined,
+    now,
     initialSamples,
   });
 
@@ -222,7 +234,11 @@ function MeasurementConnectedWidget({ widget, hub, descriptor, Component, action
 }
 
 function AlarmConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
-  const data = useAlarmStream(hub, alarmSubscription(descriptor, widget));
+  // Frozen while the board is paused: the snapshot on screen at the pause (or the first one to land,
+  // when the board opened paused) stays, and the live one is shown again on resume.
+  const range = useWidgetTimeRange();
+  const live = useAlarmStream(hub, alarmSubscription(descriptor, widget));
+  const data = useHeld(live, range?.paused === true, (s) => !s.loading);
 
   // Show the error pane ONLY when there's nothing to display (the initial load failed).
   // Once a snapshot has loaded, a later transient poll/query error keeps the last-good
@@ -247,7 +263,9 @@ function ControlConnectedWidget({ widget, hub, descriptor, Component, actions }:
 function LocationConnectedWidget({ widget, hub, Component, actions }: ChannelProps) {
   // The tile source lives in the widget's options, not here — it is a rendering choice, not
   // part of what the widget asks the platform for.
-  const data = useLocationStream(hub, { datasource: widget.datasource });
+  const range = useWidgetTimeRange();
+  const live = useLocationStream(hub, { datasource: widget.datasource });
+  const data = useHeld(live, range?.paused === true, (s) => !s.loading);
 
   // Same rule as the alarm channel: show the error pane ONLY when there is nothing to
   // display. Once a snapshot has loaded, a later transient poll error keeps the last

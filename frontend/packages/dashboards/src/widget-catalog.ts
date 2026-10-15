@@ -17,6 +17,7 @@ import {
   type WidgetResizeMode,
   type WidgetDescriptor,
 } from './widget-descriptor';
+import { isRecord } from './is-record';
 
 export interface DescriptorIssue {
   // The widget id the issue is about, or `#<index>` when the descriptor has no usable id.
@@ -57,17 +58,13 @@ const SELECTOR_KINDS = ['device', 'anchor', 'slot'];
 
 // The keys each channel's binding policy may carry, mirroring ChannelBindingPolicy.
 const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
-  measurement: ['window'],
+  measurement: ['window', 'windowSeconds'],
   alarm: ['pageSize', 'state', 'severity', 'acknowledged'],
   control: ['pageSize'],
   location: [],
   selection: [],
   none: [],
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
@@ -412,7 +409,7 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
     }
     if (policy.min !== undefined && typeof policy.min !== 'number') add(`${at}.min`, 'min must be a number');
     if (policy.default !== undefined) {
-      const wantsNumber = key === 'window' || key === 'pageSize';
+      const wantsNumber = key === 'window' || key === 'windowSeconds' || key === 'pageSize';
       if (typeof policy.default !== (wantsNumber ? 'number' : 'string')) {
         add(`${at}.default`, `default must be a ${wantsNumber ? 'number' : 'string'}`);
       }
@@ -425,6 +422,7 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
     s.kind === 'enum' && s.values.every((v) => v === 'true' || v === 'false');
 
   ref('window', isNumber, 'a number option', false);
+  ref('windowSeconds', isNumber, 'a number option', false);
   ref('pageSize', isNumber, 'a number option', true);
   ref('state', isText, 'a string or enum option', false);
   ref('severity', isText, 'a string or enum option', false);

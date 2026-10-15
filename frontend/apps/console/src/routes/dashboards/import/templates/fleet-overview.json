@@ -11,7 +11,7 @@
     },
     "sizing": "fill"
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "slots": {
     "focus": {
       "label": "Featured device",
@@ -148,8 +148,7 @@
         }
       },
       "options": {
-        "title": "Featured device",
-        "window": 300
+        "title": "Featured device"
       },
       "type": "timeseries-chart"
     },

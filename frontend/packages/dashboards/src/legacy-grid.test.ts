@@ -88,9 +88,9 @@ describe('converting a schemaVersion 1 definition', () => {
   it('marks the result, and the next save writes the current format with no mark', () => {
     const def = parseDashboardDefinition(legacy([label('a', oldBox(0, 8, 0, 3))]));
     expect(def.convertedFrom).toBe(1);
-    expect(def.schemaVersion).toBe(2);
+    expect(def.schemaVersion).toBe(3);
     const saved = JSON.parse(serializeDefinition(def));
-    expect(saved.schemaVersion).toBe(2);
+    expect(saved.schemaVersion).toBe(3);
     expect('convertedFrom' in saved).toBe(false);
     // The saved document is current: it parses with no conversion and no mark.
     expect(parseDashboardDefinition(saved).convertedFrom).toBeUndefined();

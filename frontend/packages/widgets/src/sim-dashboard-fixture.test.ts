@@ -197,9 +197,9 @@ describe('the parsed sim boards', () => {
         // document written to a schema this package does not implement. The parser
         // never rejects a mismatch (it defaults the field), so nothing else would
         // notice until a future schema change reinterpreted the whole document.
-        expect(parsed(token).schemaVersion).toBe(2);
+        expect(parsed(token).schemaVersion).toBe(3);
         expect(raw(token).schemaVersion, 'the fixture omits schemaVersion, so the parser ' +
-          'defaulted it and the assertion above proved nothing').toBe(2);
+          'defaulted it and the assertion above proved nothing').toBe(3);
       });
 
       // The one the parser degrades most quietly: parseDatasource drops a malformed

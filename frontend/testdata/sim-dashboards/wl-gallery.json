@@ -11,7 +11,7 @@
     },
     "sizing": "fill"
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "slots": {
     "sensor": {
       "defaultBinding": {
@@ -176,7 +176,7 @@
       },
       "options": {
         "title": "Temperature and humidity",
-        "window": 180
+        "windowSeconds": 900
       },
       "type": "timeseries-chart"
     },

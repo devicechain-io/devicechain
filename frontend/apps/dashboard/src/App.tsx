@@ -37,7 +37,10 @@ import {
 import {
   DashboardRenderer,
   MapRuntimeProvider,
+  PausedIndicator,
   TenantBasemapProvider,
+  TimeRangeBar,
+  useBoardTimeRange,
   useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
@@ -198,6 +201,8 @@ export default function App() {
       onSignOut={signOut}
       kiosk={params.kiosk}
       density={params.density}
+      range={params.range}
+      paused={params.paused}
       theme={theme}
       onToggleTheme={toggleTheme}
     />
@@ -694,6 +699,8 @@ export function View({
   onSignOut,
   kiosk = false,
   density = null,
+  range = null,
+  paused = false,
   theme,
   onToggleTheme,
 }: {
@@ -709,6 +716,10 @@ export function View({
    * kiosk styling and for tests.
    */
   density?: DashDensity | null;
+  /** The ?range= deep link, validated: a preset's span in seconds, or null for the board's default. */
+  range?: number | null;
+  /** The ?paused=1 deep link: open frozen at the moment of loading. */
+  paused?: boolean;
   theme?: DashTheme;
   onToggleTheme?: () => void;
 }) {
@@ -738,6 +749,21 @@ export function View({
   // widgets bound to the re-pointed slot re-subscribe.
   const hub = useDashboardHub(resolver, authorities);
 
+  // The viewer's time range and pause. The link wins over the board's own default for the span;
+  // it is read once, so a viewer's later pick is never undone by a re-render.
+  const [timeRange, timeRangeControls] = useBoardTimeRange(definition.timeRange?.defaultSeconds, {
+    spanSeconds: range ?? undefined,
+    paused,
+  });
+  const timeLabels = {
+    range: t('view:timeRange'),
+    pause: t('view:pause'),
+    resume: t('view:resume'),
+    paused: t('view:paused'),
+    pausedAt: (time: string) => t('view:pausedAt', { time }),
+    actionsLive: t('view:actionsLive'),
+  };
+
   const title = definition.title || t('view:untitled');
   const basemap = useTenantBasemapQuery();
 
@@ -751,8 +777,10 @@ export function View({
         <>
           {/* A wall display has no header, but a frozen board must never look live: the
               connection state floats in the corner opposite the fullscreen button. */}
-          <div style={{ position: 'fixed', top: 8, left: 8, zIndex: 10 }}>
+          <div style={{ position: 'fixed', top: 8, left: 8, zIndex: 10, display: 'flex', gap: 8 }}>
             <ConnectionStatus hub={hub} />
+            {/* A wall board has no controls, but it must never be frozen without saying so. */}
+            {timeRange.paused && <PausedIndicator pausedAt={timeRange.pausedAt} labels={timeLabels} />}
           </div>
           <FullscreenButton />
         </>
@@ -768,6 +796,7 @@ export function View({
           }}
         >
           <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
+          <TimeRangeBar state={timeRange} controls={timeRangeControls} labels={timeLabels} />
           <ConnectionStatus hub={hub} />
           <LocaleSwitcher />
           {onToggleTheme && (
@@ -797,6 +826,7 @@ export function View({
               select={select}
               candidates={candidates}
               density={density ?? undefined}
+              timeRange={timeRange}
             />
           </MapRuntimeProvider>
         </TenantBasemapProvider>

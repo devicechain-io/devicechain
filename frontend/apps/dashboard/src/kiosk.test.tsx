@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   gql: vi.fn(),
   load: vi.fn(),
   getter: null as null | (() => Promise<string | null>),
+  // The props the board renderer was last mounted with.
+  rendered: null as null | { timeRange?: { spanSeconds: number; paused: boolean; pausedAt?: number } },
 }));
 
 vi.mock('@devicechain/client', async (orig) => ({
@@ -27,7 +29,10 @@ vi.mock('@devicechain/widgets', async (orig) => {
   const React = await import('react');
   return {
     ...(await orig<Record<string, unknown>>()),
-    DashboardRenderer: () => React.createElement('div', { 'data-testid': 'board' }),
+    DashboardRenderer: (props: { timeRange?: { spanSeconds: number; paused: boolean; pausedAt?: number } }) => {
+      h.rendered = props;
+      return React.createElement('div', { 'data-testid': 'board' });
+    },
     useDashboardHub: () => ({}),
     useSlotCandidates: () => undefined,
   };
@@ -412,5 +417,79 @@ describe('access-token refresh', () => {
     });
     expect(screen.getByRole('alertdialog')).toBeTruthy();
     expect(screen.queryByTestId('board')).toBeNull();
+  });
+});
+
+describe('the time range', () => {
+  const rangeButton = (id: string) => document.querySelector(`[data-range="${id}"]`) as HTMLButtonElement;
+  const pauseButton = () => document.querySelector('[data-time-range-pause]') as HTMLButtonElement;
+
+  it('opens at the board default span, live, with the control in the header', async () => {
+    landOn('?dashboard=wall');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 3600, paused: false });
+    expect(rangeButton('1h').getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByText(t('view:paused'))).toBeNull();
+  });
+
+  it('?range= and ?paused=1 open the board at that span, frozen at the load instant', async () => {
+    landOn('?dashboard=wall&range=6h&paused=1');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 21600, paused: true, pausedAt: NOW });
+    expect(rangeButton('6h').getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-time-range-paused]')).not.toBeNull();
+    expect(pauseButton().textContent).toBe(t('view:resume'));
+  });
+
+  it('an unusable link opens the default, live, and does not crash', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&range=banana&paused=maybe');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 3600, paused: false });
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('picking a preset changes the span; pause freezes at the clock, resume lets go', async () => {
+    landOn('?dashboard=wall');
+    serve();
+    render(<App />);
+    await signIn();
+
+    fireEvent.click(rangeButton('24h'));
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 86400, paused: false });
+
+    fireEvent.click(pauseButton());
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 86400, paused: true, pausedAt: NOW });
+    expect(screen.getByText(t('view:paused'))).toBeTruthy();
+
+    fireEvent.click(pauseButton());
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 86400, paused: false });
+    expect(screen.queryByText(t('view:paused'))).toBeNull();
+  });
+
+  it('kiosk has no controls but still announces a frozen board', async () => {
+    landOn('?dashboard=wall&kiosk=1&paused=1');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(document.querySelector('[data-time-range-bar]')).toBeNull();
+    expect(document.querySelector('[data-time-range-paused]')).not.toBeNull();
+    expect(h.rendered?.timeRange?.paused).toBe(true);
+    // A wall can still carry command forms: the pill says they are not frozen with the readings.
+    expect(document.querySelector('[data-time-range-actions-live]')?.textContent).toContain(t('view:actionsLive'));
+  });
+
+  it('kiosk, live: no indicator at all', async () => {
+    landOn('?dashboard=wall&kiosk=1');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(document.querySelector('[data-time-range-paused]')).toBeNull();
   });
 });

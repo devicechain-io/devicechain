@@ -12,6 +12,7 @@
 import { gql } from '@devicechain/client';
 
 import { BUCKETED_MEASUREMENTS } from './queries';
+import { DEFAULT_TIME_RANGE_SECONDS, bucketSecondsFor, rangeWindow } from './time-range';
 import type { MeasurementSample, WidgetInstance } from './types';
 
 export interface HistoryWindow {
@@ -20,15 +21,20 @@ export interface HistoryWindow {
   intervalSeconds: number;
 }
 
-// The default backfill: the last hour bucketed per minute (~60 points) — enough to
-// give a chart shape on load without a heavy query.
+// historyWindowFor is the seed window for a span: `spanSeconds` back from `end` (epoch ms),
+// bucketed at the width bucketSecondsFor picks so the read stays within MAX_SEED_BUCKETS per
+// measurement whatever the span (7 days is 240 buckets, not 10 080 minutes). `end` is the
+// moment the board is frozen at while paused, otherwise now.
+export function historyWindowFor(spanSeconds: number, end: number): HistoryWindow {
+  const { startTime, endTime } = rangeWindow({ spanSeconds, paused: false }, end);
+  return { startTime, endTime, intervalSeconds: bucketSecondsFor(spanSeconds) };
+}
+
+// The default backfill: the last hour bucketed per minute (~60 points), enough to
+// give a chart shape on load without a heavy query. What a widget that is not time-ranged
+// (a card, a gauge: they need the latest value, not a span) is seeded with.
 export function defaultHistoryWindow(): HistoryWindow {
-  const now = Date.now();
-  return {
-    startTime: new Date(now - 60 * 60 * 1000).toISOString(),
-    endTime: new Date(now).toISOString(),
-    intervalSeconds: 60,
-  };
+  return historyWindowFor(DEFAULT_TIME_RANGE_SECONDS, Date.now());
 }
 
 // fetchWidgetHistory returns seed samples for one widget, or [] when it has no

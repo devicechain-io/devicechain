@@ -162,7 +162,7 @@ describe('converting old-format boards (seeded property test)', () => {
       expect(JSON.stringify(doc), ctx).toBe(before);
       const oldWidgets = doc.widgets as { id: string; layout: Record<string, unknown> }[];
       expect(def.widgets.map((w) => w.id), ctx).toEqual(oldWidgets.map((w) => w.id));
-      expect(def.schemaVersion, ctx).toBe(2);
+      expect(def.schemaVersion, ctx).toBe(3);
       if (oldWidgets.length > 0) expect(def.convertedFrom, ctx).toBe(1);
 
       for (const bp of layoutBreakpoints(def.canvas.breakpoints, def.widgets)) {

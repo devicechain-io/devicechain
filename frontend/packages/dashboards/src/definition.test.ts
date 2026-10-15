@@ -22,12 +22,12 @@ const box = (over = {}) => ({ mode: 'grid', col: 0, row: 0, cols: 4, rows: 3, ..
 // These tests are about the current format: a document without a schemaVersion is a stored
 // document from before it, which the parser converts (see legacy-grid.test.ts).
 const parseDashboardDefinition = (raw: unknown) =>
-  parseAny(raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? { schemaVersion: 2, ...raw } : raw);
+  parseAny(raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? { schemaVersion: 3, ...raw } : raw);
 
 describe('parseDashboardDefinition', () => {
   it('fills defaults for a minimal definition', () => {
     const def = parseDashboardDefinition({ widgets: [] });
-    expect(def.schemaVersion).toBe(2);
+    expect(def.schemaVersion).toBe(3);
     expect(def.title).toBe('');
     expect(def.canvas.grid).toEqual({ columns: 12, minCellSize: 56, gutter: 8, padding: 0 });
     expect(def.canvas.sizing).toBe('fill');
@@ -68,7 +68,7 @@ describe('parseDashboardDefinition', () => {
 
   it('keeps a valid widget and its datasource/options', () => {
     const def = parseDashboardDefinition({
-      schemaVersion: 2,
+      schemaVersion: 3,
       title: 'Fleet',
       widgets: [
         {
@@ -289,7 +289,7 @@ describe('generateWidgetId', () => {
 describe('serializeDefinition / isDirty', () => {
   const def = () =>
     parseDashboardDefinition({
-      schemaVersion: 2,
+      schemaVersion: 3,
       title: 'T',
       widgets: [{ id: 'w1', type: 'label', layout: { base: box() } }],
     });
@@ -438,7 +438,7 @@ describe('parseDashboardDefinition — location series selection', () => {
     // A representative board of every selector kind, none of which names a location
     // series — i.e. every dashboard stored before this field existed.
     const stored = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       title: 'Zone A',
       canvas: {
         grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 },

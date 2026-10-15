@@ -29,6 +29,7 @@ import {
   serializeDefinition,
   setCanvasGrid,
   setCanvasDensity,
+  setBoardTimeRange,
   setCanvasSizing,
   setSlotScope,
   setTitle,
@@ -38,8 +39,12 @@ import {
   widgetSlotName,
   withoutConversionMark,
   gridLengthPx,
+  DEFAULT_TIME_RANGE_SECONDS,
+  presetIdOf,
+  spanLabel,
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
+  TIME_RANGE_PRESETS,
   type CanvasDensity,
   type CanvasSizing,
   type ConcreteSelector,
@@ -52,7 +57,9 @@ import {
 } from '@devicechain/dashboards';
 import {
   DashboardRenderer,
+  TimeRangeBar,
   stripUnknownOptions,
+  useBoardTimeRange,
   useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
@@ -116,6 +123,7 @@ function CanvasSettings({
   const { grid, sizing } = definition.canvas;
   const gutter = gridLengthPx(typeof grid.gutter === 'object' ? grid.gutter.x : grid.gutter);
   const padding = gridLengthPx(typeof grid.padding === 'object' ? grid.padding.left : grid.padding);
+  const boardSpan = definition.timeRange?.defaultSeconds ?? DEFAULT_TIME_RANGE_SECONDS;
   const mode: 'fill' | 'width' | 'height' = sizing === 'fill' ? 'fill' : 'width' in sizing ? 'width' : 'height';
   const fixedPx = sizing === 'fill' ? 1200 : 'width' in sizing ? sizing.width : sizing.height;
 
@@ -174,6 +182,21 @@ function CanvasSettings({
         {mode !== 'fill' && (
           <NumberField label={t('workspacePx')} value={fixedPx} min={1} onChange={setFixedPx} />
         )}
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-muted-foreground">{t('workspaceTimeRange')}</label>
+        <Combobox
+          options={[
+            // A default that is none of the presets (set by import) is still the board's span: it
+            // is listed under its own label rather than silently reading as another preset.
+            ...(presetIdOf(boardSpan) === undefined ? [{ value: String(boardSpan), label: spanLabel(boardSpan) }] : []),
+            ...TIME_RANGE_PRESETS.map((p) => ({ value: String(p.seconds), label: p.id })),
+          ]}
+          value={String(boardSpan)}
+          onChange={(v) => onChange(setBoardTimeRange(definition, Number(v)))}
+          allowClear={false}
+          className="h-9 w-24"
+        />
       </div>
       <div className="flex items-center gap-2">
         <label className="text-sm text-muted-foreground">{t('workspaceDensity')}</label>
@@ -322,6 +345,9 @@ export function DashboardWorkspace({
 
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [working, setWorking] = useState<DashboardDefinition>(loaded);
+  // The viewer's time range and pause. Held here (not in the renderer) so the control sits in the
+  // page header; it starts at the board's own default span and follows the author changing it.
+  const [timeRange, timeRangeControls] = useBoardTimeRange(working.timeRange?.defaultSeconds);
   // The view-driven selection overlay (ADR-039 selection amendment): an alarm-originator
   // drill (and, in PR2b, a context-selector) accumulates slot→binding picks here.
   // Cleared on mode switch so the author sees their own bindings, not a stale drill.
@@ -379,6 +405,13 @@ export function DashboardWorkspace({
   // one approximately when it loaded. Saving writes the current format, which is what retires the
   // notice, so a converted board can be saved even before anything else is edited.
   const converted = working.convertedFrom !== undefined;
+  // The charts whose sample-count window had no span to become: they now follow the board's time
+  // range. Named by title (else id) so the author knows which ones to look at.
+  const convertedCharts = (working.convertedWindows ?? []).map((id) => {
+    const w = working.widgets.find((x) => x.id === id);
+    const title = w && w.type !== UNKNOWN_WIDGET_TYPE ? (w.options as { title?: unknown } | undefined)?.title : undefined;
+    return typeof title === 'string' && title !== '' ? title : id;
+  });
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
   const displayName = working.title || name;
   const heading = displayName || token;
@@ -631,7 +664,19 @@ export function DashboardWorkspace({
   );
 
   const viewActions = (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <TimeRangeBar
+        state={timeRange}
+        controls={timeRangeControls}
+        labels={{
+          range: t('timeRangeLabel'),
+          pause: t('timeRangePause'),
+          resume: t('timeRangeResume'),
+          paused: t('timeRangePaused'),
+          pausedAt: (time) => t('timeRangePausedAt', { time }),
+          actionsLive: t('timeRangeActionsLive'),
+        }}
+      />
       {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}
       {/* Reachable so edits carried into view mode can be persisted without
@@ -720,7 +765,12 @@ export function DashboardWorkspace({
                 data-shot="dashboard-converted"
                 className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
               >
-                {t('workspaceConvertedNotice')}
+                {working.convertedFrom !== undefined && working.convertedFrom < 2 && (
+                  <p>{t('workspaceConvertedNotice')}</p>
+                )}
+                {convertedCharts.length > 0 && (
+                  <p>{t('workspaceConvertedWindowsNotice', { count: convertedCharts.length, charts: convertedCharts.join(', ') })}</p>
+                )}
               </div>
             )}
           </div>
@@ -783,6 +833,7 @@ export function DashboardWorkspace({
             registry={registry}
             actions={dataHub}
             seedHistory={!preview}
+            timeRange={timeRange}
             bindings={bindings}
             // No drill in preview: synthetic alarm rows carry fabricated originator
             // tokens, and a drill would poison the live selection overlay with a token

@@ -472,6 +472,12 @@ export class RecordedDataSource implements WidgetDataSource {
     return this.stale;
   }
 
+  // The recorded instant the view is at: samples are dated by the run, so a time span is measured
+  // from here, not from the wall clock.
+  now(): number {
+    return this.startMs + this.cursor;
+  }
+
   private onClock(ev: ClockEvent): void {
     if (this.stale) return;
     if (ev.reason === 'seek') {

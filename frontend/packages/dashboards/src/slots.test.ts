@@ -33,7 +33,7 @@ function widget(id: string, datasource?: WidgetInstance['datasource']): WidgetIn
 
 function def(widgets: WidgetInstance[], slots?: DashboardDefinition['slots']): DashboardDefinition {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     title: 'T',
     canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
     widgets,
@@ -235,7 +235,7 @@ describe('scope-aware slot helpers', () => {
 
 // slot definition helper for the scope-authoring transforms.
 const scopeDef = (slots: Record<string, SlotDefinition>): DashboardDefinition => ({
-  schemaVersion: 2,
+  schemaVersion: 3,
   title: '',
   canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   widgets: [],
@@ -314,7 +314,7 @@ describe('slot transforms carry the location series', () => {
 
   it('migrateToSlots moves the entity onto a slot and keeps the location series', () => {
     const def: DashboardDefinition = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       title: '',
       canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [
@@ -333,7 +333,7 @@ describe('slot transforms carry the location series', () => {
 
   it('bindWidgetSlot writes the location series when the caller names one', () => {
     const def: DashboardDefinition = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       title: '',
       canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [widget('m1')],
@@ -371,7 +371,7 @@ describe('slot transforms carry the location series', () => {
   // with no location key at all, so a pre-existing board still serializes unchanged.
   it('omits the key entirely for a measurement-only widget', () => {
     const def: DashboardDefinition = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       title: '',
       canvas: { grid: { columns: 24, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [widget('g1', { kind: 'device', deviceToken: 'therm-1', measurements: ['t'] })],

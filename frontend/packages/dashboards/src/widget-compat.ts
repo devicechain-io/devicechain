@@ -22,6 +22,7 @@ import type {
   WidgetInstance,
 } from './types';
 import { UNKNOWN_WIDGET_TYPE, WIDGET_TYPES, type KnownWidgetInstance } from './types';
+import { isRecord } from './is-record';
 
 const BUILTIN_TYPES: ReadonlySet<string> = new Set(WIDGET_TYPES);
 
@@ -39,10 +40,6 @@ export function isResolvedWidget(widget: WidgetInstance): widget is ResolvedWidg
 }
 
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 // parseWidgetRef reads the stored `widget` metadata. `undefined` = absent (legacy / incomplete);
 // `null` = present but malformed, which must not be mistaken for absent.

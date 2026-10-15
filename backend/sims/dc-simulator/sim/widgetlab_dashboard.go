@@ -97,7 +97,7 @@ func (b box) layout() map[string]dashboardPlacement {
 func buildTimeSeriesChartWidget(id string, b box, s widgetSubject, title string) dashboardWidget {
 	return dashboardWidget{
 		Id: id, Type: "timeseries-chart", Layout: b.layout(), Datasource: s.datasource(),
-		Options: map[string]any{"title": title, "window": widgetlabChartWindow},
+		Options: map[string]any{"title": title, "windowSeconds": widgetlabChartWindowSeconds},
 	}
 }
 
@@ -305,14 +305,14 @@ func buildProgressRingWidget(id string, b box, s widgetSubject, title, measureme
 
 // ---- Shared board scaffolding -------------------------------------------------
 
-// widgetlabChartWindow is the rolling sample buffer the charts keep.
+// widgetlabChartWindowSeconds is the span the gallery's charts are PINNED to, so a viewer's
+// time-range picker leaves them alone: a gallery chart exists to show the sweep turn around, and
+// an hour (the default) or a week of it would flatten the curve into a blur.
 //
-// useMeasurementStream trims that buffer GLOBALLY, not per measurement, so a chart
-// drawing N series retains window/N samples of each. Sized here for the chart that
-// draws two, leaving one full sweep per series — enough to watch the curve turn
-// around rather than a rising line whose shape a viewer has to take on trust. A
-// third series would cut each to two thirds of a period.
-const widgetlabChartWindow = 2 * WidgetlabSweepTicks
+// Fifteen minutes holds a full sweep (WidgetlabSweepTicks samples) at any emit interval up to ten
+// seconds, which is enough to watch the curve rise and fall rather than a rising line whose shape
+// a viewer has to take on trust.
+const widgetlabChartWindowSeconds = 15 * 60
 
 // A 1x1 transparent PNG. Inline for the reason buildImageWidget explains, and the
 // smallest thing that proves the widget renders an image rather than its empty state.

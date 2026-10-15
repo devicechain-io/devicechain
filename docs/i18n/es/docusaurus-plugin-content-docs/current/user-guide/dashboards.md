@@ -105,6 +105,10 @@ diseño.
   es el tamaño más pequeño que puede tener una celda, en píxeles. **Separación** es el espacio
   entre celdas y **Margen**, el borde alrededor del panel.
 - **Tamaño** decide cómo ocupa el panel la página: **Llenar área**, **Ancho fijo** o **Alto fijo**.
+- **Intervalo de tiempo** es el intervalo que dibujan los gráficos del panel al abrirlo: 15m, 1h, 6h,
+  24h o 7d. Una hora es el valor predeterminado. Los espectadores pueden elegir otro desde la cabecera
+  y pausar el panel; consulta
+  [Visualización de paneles en /dash](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
 
 Arrastra un widget para moverlo. Un contorno discontinuo muestra las celdas que ocupará al soltarlo,
 y queda exactamente ahí. Un widget que esté en su camino pasa al hueco libre más cercano, encima o
@@ -130,6 +134,12 @@ en español).
 Un panel guardado por una versión anterior se convierte a la cuadrícula actual al abrirlo. La
 conversión es aproximada, así que el editor muestra un aviso que pide revisar el diseño. Al guardar,
 el panel queda en el formato actual y el aviso desaparece.
+
+Un gráfico de series temporales guardado por una versión anterior conservaba un número de muestras
+en lugar de un intervalo de tiempo. Un número de muestras no tiene intervalo si no se sabe con qué
+frecuencia informa el dispositivo, así que el gráfico no se convierte a un intervalo adivinado: sigue
+el intervalo de tiempo del panel, y el editor nombra los gráficos afectados. Indica un **Intervalo de
+tiempo** en cualquier gráfico que deba ser distinto y guarda.
 
 **Guardar** almacena los cambios en el borrador. Está atenuado hasta que hay algo que guardar.
 **Hecho** vuelve a la vista; los cambios sin guardar se mantienen y **Guardar** sigue disponible allí.
@@ -173,8 +183,11 @@ Los ajustes dependen del widget. Los más comunes:
   (**Selección manual**).
 - **Fuente de datos** elige el dispositivo o la entidad que lee el widget. En un widget que sigue a
   un principal, explica que el widget lo sigue.
-- **Medición** y opciones de presentación como unidades, rango, precisión y cuántas muestras
-  conservar.
+- **Medición** y opciones de presentación como unidades, rango y precisión.
+- **Intervalo de tiempo** (gráfico de series temporales): cuánto historial dibuja el gráfico, en
+  segundos, de 60 a 604800. Si lo dejas vacío, el gráfico sigue el intervalo de tiempo del panel,
+  que los espectadores pueden cambiar. Si lo indicas, el gráfico conserva ese intervalo sea cual
+  sea el que elija un espectador.
 
 Los problemas con las opciones de un widget, como una opción que no lee, una obligatoria vacía o un
 valor fuera de rango, se enumeran en **Historial de versiones**. **Publicar versión** sigue

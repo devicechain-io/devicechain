@@ -69,6 +69,34 @@ próxima vez.
 
 <GuideShot id="dash-dark" alt="El mismo panel Widget Lab con el tema oscuro: fondos oscuros, texto claro, el botón de la cabecera que ahora dice Tema claro, y los gráficos, el indicador, la tabla de alarmas y el formulario de comando adaptados al fondo oscuro." />
 
+## Intervalo de tiempo y pausa {#time-range-and-pause}
+
+La cabecera lleva un intervalo de tiempo: **15m**, **1h**, **6h**, **24h** y **7d**. Fija cuánto
+historial dibujan los gráficos, contado hacia atrás desde ahora. El panel se abre con el intervalo
+que eligió su autor, una hora si no eligió ninguno, y el que elijas se aplica a todos los gráficos
+que siguen el intervalo del panel. Un gráfico cuyo autor fijó su propio intervalo lo conserva, y lo
+muestra en su esquina (por ejemplo **1h**) siempre que difiere del intervalo de la cabecera, para
+que una hora fijada nunca se lea como un día de datos. Los intervalos largos se dibujan con puntos
+promediados en lugar de cada lectura, de modo que una semana sigue cargando con rapidez.
+
+Un gráfico guarda como máximo 2.000 lecturas. En un intervalo largo sobre un dispositivo con mucha
+actividad eso puede no cubrir todo el intervalo: se descartan primero las lecturas más antiguas, y
+el gráfico indica entonces en su esquina desde dónde empieza (por ejemplo **desde 14:03**), para que
+una ventana parcial nunca se confunda con el intervalo completo.
+
+**Pausar** congela el panel. Los valores, los gráficos, los contadores y las tablas de alarmas y los
+mapas se quedan donde están, y junto a los controles aparece una insignia **En pausa** con la hora
+a la que pausaste. En un panel congelado el tiempo sigue pasando: la antigüedad junto a un valor
+(«hace 12 s») sigue contando desde la lectura que estás viendo, así que un valor en pausa nunca
+parece actual. Elige **Reanudar** y el panel se pone al día con todo lo que llegó entretanto.
+Durante la pausa puedes cambiar el intervalo; el panel muestra ese intervalo tal como estaba en el
+momento en que pausaste.
+
+La pausa congela lo que el panel muestra, no lo que hace. Los botones de comando siguen funcionando
+en pausa, igual que la lista de comandos recientes que muestran; por eso la insignia **En pausa**
+dice también «los comandos se siguen enviando»: un comando enviado desde un panel congelado sale en
+el acto.
+
 ## Modo quiosco y enlaces para pantallas murales
 
 La dirección del visor puede llevar parámetros, para que un marcador o una pantalla mural abra el
@@ -83,7 +111,9 @@ panel adecuado en el modo adecuado:
 | `dashboard` | un token de panel | Carga ese panel justo después de iniciar sesión, también tras el inicio de sesión único. |
 | `kiosk` | `1` o `true` | Modo quiosco: oculta la cabecera y sus controles, y muestra en su lugar un botón **Pantalla completa**. |
 | `theme` | `dark` o `light` | Fija el tema. A diferencia del botón de tema, el parámetro no se recuerda. |
-| `density` | `compact`, `comfortable` o `wall` | Se acepta, pero todavía no cambia la disposición. |
+| `density` | `compact`, `comfortable` o `wall` | Escala el texto y el espaciado del panel: `compact` lo reduce y `wall` lo amplía, para una pantalla que se lee desde el otro lado de una sala. Sustituye la densidad con la que se guardó el panel. |
+| `range` | `15m`, `1h`, `6h`, `24h` o `7d` | Abre el panel con ese intervalo de tiempo en lugar del propio del panel. |
+| `paused` | `1` | Abre el panel congelado en el momento en que carga, con la insignia **En pausa** visible. Cualquier otro valor lo abre en vivo. |
 
 Si un parámetro lleva un valor que el visor no reconoce, se ignora, y los demás parámetros se siguen
 aplicando.
@@ -91,7 +121,9 @@ aplicando.
 En modo quiosco el panel ocupa toda la página. El único control es **Pantalla completa**, en la
 esquina superior derecha, que pasa a ser **Salir de pantalla completa**; se oculta si el navegador no
 puede pasar a pantalla completa. En modo quiosco no hay control para cerrar sesión, así que una
-pantalla mural se queda en su panel.
+pantalla mural se queda en su panel. El modo quiosco tampoco tiene controles de intervalo ni de pausa,
+pero un panel abierto con `paused=1` muestra igualmente su insignia **En pausa** junto al indicador de
+conexión, de modo que una pantalla mural congelada lo dice.
 
 <GuideShot id="dash-kiosk" alt="El panel Widget Lab en modo quiosco: sin cabecera, la tarjeta de título arriba con un botón de pantalla completa en la esquina superior derecha, y debajo los mismos widgets en vivo, incluidos la tabla de alarmas y el formulario de comando Setpoint." />
 
