@@ -76,6 +76,7 @@ function mount(onRolledBack = vi.fn()) {
         expectedUpdatedAt="2026-10-11T09:00:00Z"
         onRolledBack={onRolledBack}
         onStripUnknownOptions={vi.fn()}
+        onFitToLimits={vi.fn()}
       />
     </ConfirmProvider>,
   );

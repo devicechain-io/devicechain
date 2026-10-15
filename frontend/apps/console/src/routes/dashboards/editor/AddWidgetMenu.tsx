@@ -9,7 +9,7 @@
 // Text follows the same rule as the settings fields: the console's message for the id the
 // descriptor declares, else the text the package shipped.
 
-import type { WidgetDescriptor } from '@devicechain/dashboards';
+import { FALLBACK_DEFAULT_SPAN, formatSpan, type WidgetDescriptor } from '@devicechain/dashboards';
 import { Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -29,6 +29,9 @@ import type { EditorWidgetRegistry } from './widgetRegistry';
 // Descriptors without a category share one group, listed last, so an uncategorized
 // extension is still reachable and never hidden behind a heading it did not choose.
 const UNCATEGORIZED = '';
+
+// The span addWidget gives the widget: its declared default, else the fallback.
+const footprintOf = (descriptor: WidgetDescriptor) => descriptor.layout?.defaultSpan ?? FALLBACK_DEFAULT_SPAN;
 
 export function AddWidgetMenu({
   registry,
@@ -66,7 +69,7 @@ export function AddWidgetMenu({
                 data-testid={`add-widget-${descriptor.id}`}
                 onSelect={() => onAdd(descriptor)}
               >
-                <span className="flex flex-col">
+                <span className="flex flex-1 flex-col">
                   <span>{resolveText(lookup, descriptor.display.titleId, descriptor.display.title)}</span>
                   {/* Which widget and release this adds: the id is what the stored
                       definition records, and the version is provenance for an author
@@ -74,6 +77,15 @@ export function AddWidgetMenu({
                   <span className="text-xs text-muted-foreground">
                     {t('widgetMenuDetail', { id: descriptor.id, version: descriptor.version })}
                   </span>
+                </span>
+                {/* The footprint it lands with, so the author knows what space it will take
+                    before choosing (addWidget places exactly this span). */}
+                <span
+                  className="ml-4 whitespace-nowrap text-xs tabular-nums text-muted-foreground"
+                  data-testid={`add-widget-footprint-${descriptor.id}`}
+                  title={t('widgetMenuFootprint', { size: formatSpan(footprintOf(descriptor)) })}
+                >
+                  {formatSpan(footprintOf(descriptor))}
                 </span>
               </DropdownMenuItem>
             ))}

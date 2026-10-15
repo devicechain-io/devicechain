@@ -5,7 +5,7 @@
 // (ADR-039 amendment: authoring re-homes here from the standalone /dash app). It
 // owns the working copy of the definition, the view/edit mode, and the dirty-aware
 // save. View mode renders the read-only DashboardRenderer; edit mode renders the
-// react-rnd canvas + the widget config panel. Editing is gated on dashboard:write
+// cell-snapped canvas + the widget config panel. Editing is gated on dashboard:write
 // (the server enforces it too — this just hides a button the caller can't use).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -20,6 +20,7 @@ import {
   createEntityLister,
   DEFAULT_CANVAS_DENSITY,
   effectiveBindings,
+  fitToLimits,
   isDirty,
   migrateToSlots,
   parseDashboardDefinition,
@@ -76,6 +77,7 @@ import { DashboardCanvas } from './DashboardCanvas';
 import { UnknownWidgetPanel, WidgetConfigPanel } from './WidgetConfigPanel';
 import { VersionHistorySheet } from './VersionHistorySheet';
 import { AddWidgetMenu } from './AddWidgetMenu';
+import { publishLayoutBlockers, spanLimitsFor } from './layoutFindings';
 import { WorkspaceConnection } from './WorkspaceConnection';
 import { exportDefinitionJson } from './exportDefinition';
 import { DashboardImportDrawer } from '../import/DashboardImportDrawer';
@@ -478,6 +480,22 @@ export function DashboardWorkspace({
     toast(t('workspaceUnknownOptionsRemoved'));
   };
 
+  // Clamp every widget into the sizes it supports and bring any off the canvas back onto it. Like
+  // the repair above it lands as an ordinary unsaved edit, so the author reviews it before saving.
+  // `fitToLimits` returns the same object when nothing needed fixing.
+  const fitLimits = () => {
+    const next = fitToLimits(working, spanLimitsFor(registry));
+    if (next === working) {
+      toast(t('layoutAlreadyFits'));
+      return;
+    }
+    setWorking(next);
+    toast(t('layoutFitted'));
+  };
+  // Whether the board has anything the publish would refuse on layout: offers the repair in the
+  // toolbar as soon as it exists, not only once the publish drawer is open.
+  const layoutBlocked = useMemo(() => publishLayoutBlockers(working, registry).length > 0, [working, registry]);
+
   // After a rollback the server draft IS the chosen version; re-baseline working +
   // saved to it (seeding the title from the name like the initial load) so the
   // editor reflects it and isn't spuriously dirty, and advance the concurrency
@@ -636,6 +654,17 @@ export function DashboardWorkspace({
       {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}
       <AddWidgetMenu registry={registry} onAdd={addWidgetOfType} />
+      {layoutBlocked && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={fitLimits}
+          title={t('layoutFitToLimitsHint')}
+          data-testid="fit-to-limits"
+        >
+          {t('layoutFitToLimits')}
+        </Button>
+      )}
       {previewControl}
       {exportMenu}
       {historyButton}
@@ -794,6 +823,7 @@ export function DashboardWorkspace({
       expectedUpdatedAt={expectedUpdatedAt}
       onRolledBack={onRolledBack}
       onStripUnknownOptions={stripUnknown}
+      onFitToLimits={fitLimits}
       registry={registry}
     />
     </>

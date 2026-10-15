@@ -12,7 +12,7 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { WidgetInstance, WidgetType } from '@devicechain/dashboards';
+import type { DashboardDefinition, WidgetInstance, WidgetType } from '@devicechain/dashboards';
 
 const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
 vi.mock('@devicechain/client', async (importOriginal) => ({
@@ -35,8 +35,18 @@ const { createHostWidgetRegistry } = await import('@devicechain/host-widgets');
 const { ACME_TANK_WIDGET_JSON, acmeTankWidget } = await import('@devicechain/host-widgets/fixtures/acme-tank');
 const { GraphQLRequestError } = await import('@devicechain/client');
 
+// A definition around some widgets: the publish gate reads the canvas as well as the widgets.
+function boardOf(widgets: WidgetInstance[]): DashboardDefinition {
+  return {
+    schemaVersion: 2,
+    title: 'T',
+    canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
+    widgets,
+  };
+}
+
 function widget(id: string, type: WidgetType, options?: Record<string, unknown>): WidgetInstance {
-  return { id, type, layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } }, options };
+  return { id, type, layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 6, rows: 4 } }, options };
 }
 
 beforeEach(() => {
@@ -48,7 +58,7 @@ beforeEach(() => {
 
 describe('publishDashboard', () => {
   it('publishes a board whose widgets are all configured', async () => {
-    const definition = { widgets: [widget('w1', 'gauge', { title: 'Temp', min: 0, max: 100 })] };
+    const definition = boardOf([widget('w1', 'gauge', { title: 'Temp', min: 0, max: 100 })]);
 
     await expect(
       publishDashboard('ops', { definition, label: 'v1', expectedUpdatedAt: '2026-08-02T10:00:00Z' }),
@@ -75,7 +85,7 @@ describe('publishDashboard', () => {
   it('publishes a widget that declares no options when none are required', async () => {
     await expect(
       publishDashboard('ops', {
-        definition: { widgets: [widget('w1', 'timeseries-chart')] },
+        definition: boardOf([widget('w1', 'timeseries-chart')]),
         expectedUpdatedAt: null,
       }),
     ).resolves.toEqual({ version: 7, updatedAt: '2026-08-02T10:00:00Z' });
@@ -87,12 +97,10 @@ describe('publishDashboard', () => {
   // an immutable version published and an error on screen — strictly worse than no gate,
   // because the author would believe the publish failed.
   it('refuses a misconfigured board without sending anything', async () => {
-    const definition = {
-      widgets: [
-        widget('w1', 'gauge', { title: 'Temp', min: 0, max: 100 }),
-        widget('w2', 'image', { title: 'Floor plan' }), // required `url` never set
-      ],
-    };
+    const definition = boardOf([
+      widget('w1', 'gauge', { title: 'Temp', min: 0, max: 100 }),
+      widget('w2', 'image', { title: 'Floor plan' }), // required `url` never set
+    ]);
 
     await expect(
       publishDashboard('ops', { definition, expectedUpdatedAt: null }),
@@ -106,7 +114,7 @@ describe('publishDashboard', () => {
   // just that "something" was invalid. The author-facing wording is the drawer's job,
   // through the translated per-code strings.
   it('names the offending widget and option in the error', async () => {
-    const definition = { widgets: [widget('w2', 'image', { title: 'Floor plan' })] };
+    const definition = boardOf([widget('w2', 'image', { title: 'Floor plan' })]);
     await expect(
       publishDashboard('ops', { definition, expectedUpdatedAt: null }),
     ).rejects.toThrow(/w2 \(image\).*url/);
@@ -117,7 +125,7 @@ describe('publishDashboard', () => {
   // they configured something. `minimum` on a gauge reads as a scale bound and does
   // nothing at all. The repair for it is stripUnknownOptions, not a weaker gate.
   it('refuses a board carrying an option no widget reads', async () => {
-    const definition = { widgets: [widget('g', 'gauge', { min: 0, max: 10, minimum: 5 })] };
+    const definition = boardOf([widget('g', 'gauge', { min: 0, max: 10, minimum: 5 })]);
     await expect(
       publishDashboard('ops', { definition, expectedUpdatedAt: null }),
     ).rejects.toThrow(/minimum/);
@@ -128,6 +136,54 @@ describe('publishDashboard', () => {
 // A widget this console cannot resolve blocks a NEW version -- before any request -- while
 // everything that resolves still publishes. The board is parsed the way the console parses it
 // (with a catalog), so an unresolved widget is the parser's own placeholder.
+// A placement outside what its widget can show blocks a publish, before the network, for each of
+// the three lint codes. The editor cannot produce these; they arrive with imports and the API.
+describe('publishDashboard layout gate', () => {
+  const at = (col: number, row: number, cols: number, rows: number): WidgetInstance['layout'] => ({
+    base: { mode: 'grid', col, row, cols, rows },
+  });
+  const gauge = (id: string, layout: WidgetInstance['layout']): WidgetInstance => ({
+    id,
+    type: 'gauge',
+    layout,
+    options: { title: 'T', min: 0, max: 1 },
+  });
+
+  it('refuses a span past the widget limits (span-out-of-limits)', async () => {
+    const definition = boardOf([gauge('g', at(0, 0, 12, 12))]);
+    await expect(publishDashboard('ops', { definition, expectedUpdatedAt: null })).rejects.toThrow(
+      /dashboard layout is not publishable.*g \(span-out-of-limits\)/,
+    );
+    expect(gqlMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a footprint past the right edge (overrun-columns)', async () => {
+    const definition = boardOf([gauge('g', at(10, 0, 4, 2))]);
+    await expect(publishDashboard('ops', { definition, expectedUpdatedAt: null })).rejects.toThrow(
+      /g \(overrun-columns\)/,
+    );
+    expect(gqlMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses a relative widget off the canvas (relative-off-canvas)', async () => {
+    const definition = boardOf([
+      gauge('host', at(0, 0, 4, 2)),
+      gauge('badge', {
+        base: { mode: 'relative', host: 'host', anchor: 'top-left', offset: { x: -6, y: 0 }, size: { cols: 2, rows: 2 } },
+      }),
+    ]);
+    await expect(publishDashboard('ops', { definition, expectedUpdatedAt: null })).rejects.toThrow(
+      /badge \(relative-off-canvas\)/,
+    );
+    expect(gqlMock).not.toHaveBeenCalled();
+  });
+
+  it('publishes a board that is inside every limit', async () => {
+    const definition = boardOf([gauge('g', at(0, 0, 4, 3)), gauge('h', at(4, 0, 4, 3))]);
+    await expect(publishDashboard('ops', { definition, expectedUpdatedAt: null })).resolves.toMatchObject({ version: 7 });
+  });
+});
+
 describe('publishDashboard with extension widgets', () => {
   const layout = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 2 } };
   const board = (widgets: unknown[]) => ({ title: 'T', slots: { tank: { type: 'device' } }, widgets });

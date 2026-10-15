@@ -372,7 +372,7 @@ describe('a widget authored with another release of its package', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     // Rendered by the installed implementation, not replaced by a placeholder.
     const tank = await screen.findByTestId('acme-tank-w1');
-    fireEvent.mouseDown(tank);
+    fireEvent.pointerDown(tank);
     const notice = await screen.findByTestId('widget-version-drift');
     expect(notice.textContent).toContain('1.1.0');
     expect(notice.textContent).toContain('1.2.0');

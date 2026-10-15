@@ -185,6 +185,64 @@ export function pushDown(items: readonly PlacedGrid[], first: readonly string[] 
   return out;
 }
 
+// pushAside is how an EDIT settles the widgets around the one it changed, the Android launcher's
+// rule: the `first` widgets land exactly where they were put (resolved among themselves as
+// pushDown would), a widget their footprint now covers is DISPLACED, and every other widget stays
+// exactly where it is, so a gap the author left on purpose survives an unrelated edit. A displaced
+// widget keeps its column and its span and settles at the free row NEAREST the one it had,
+// searching up as well as down, so a widget dropped onto a neighbour swaps with it (the neighbour
+// takes the room the dragged one left) instead of shoving it further down the board; on a tie it
+// goes up. Moving up, it may not cover any widget, settled or not yet visited; moving down, it
+// displaces in turn whatever it lands on, which settles by the same rule. Nothing undisplaced is
+// ever pulled up into a gap. Deterministic, and the identity on a board with no collision; returns
+// the same placement object for every widget that did not move.
+export function pushAside(items: readonly PlacedGrid[], first: readonly string[] = []): Map<string, GridPlacement> {
+  const order = items.map((item, index) => ({ ...item, index }));
+  const priority = new Map(first.map((id, i) => [id, i]));
+  order.sort((a, b) => {
+    const pa = priority.get(a.id);
+    const pb = priority.get(b.id);
+    if (pa !== undefined || pb !== undefined) return (pa ?? Infinity) - (pb ?? Infinity);
+    return a.placement.row - b.placement.row || a.placement.col - b.placement.col || a.index - b.index;
+  });
+  const pending = new Map(order.map((item) => [item.id, item.placement]));
+  const placed: GridPlacement[] = [];
+  const out = new Map<string, GridPlacement>();
+  const clear = (p: GridPlacement, others: Iterable<GridPlacement>) => {
+    for (const q of others) if (gridFootprintsOverlap(p, q)) return false;
+    return true;
+  };
+  for (const item of order) {
+    pending.delete(item.id);
+    let p = item.placement;
+    if (priority.has(item.id)) {
+      // A widget the edit put somewhere goes exactly there, unless an earlier one of them is.
+      for (;;) {
+        const hits = placed.filter((q) => gridFootprintsOverlap(p, q));
+        if (hits.length === 0) break;
+        p = { ...p, row: Math.max(...hits.map((q) => q.row + q.rows)) };
+      }
+    } else if (!clear(p, placed)) {
+      const from = p.row;
+      for (let k = 1; ; k++) {
+        const up: GridPlacement = { ...p, row: from - k };
+        if (up.row >= 0 && clear(up, placed) && clear(up, pending.values())) {
+          p = up;
+          break;
+        }
+        const down: GridPlacement = { ...p, row: from + k };
+        if (clear(down, placed)) {
+          p = down;
+          break;
+        }
+      }
+    }
+    placed.push(p);
+    out.set(item.id, p);
+  }
+  return out;
+}
+
 // firstFreeSlot is the first position, scanning rows top to bottom and columns left to right, at
 // which a cols x rows footprint fits inside `columns` without touching any of `occupied`. A
 // footprint wider than the grid is placed at column 0 (it overruns; the lint reports it).

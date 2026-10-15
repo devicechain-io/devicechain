@@ -50,6 +50,21 @@ export interface LayoutFinding {
   breakpoint?: string;
 }
 
+// The findings that BLOCK a publish: the placement is outside what the widget can show, or off the
+// canvas. A published version is immutable and is what viewers are served, so these are refused
+// there; the draft stays editable. The editor cannot normally produce them, so they catch what
+// arrives some other way (an import, an older descriptor, the API). The rest (`no-layout-declared`,
+// `title-duplicates-subtitle`) are advice.
+export const PUBLISH_BLOCKING_LAYOUT_CODES: readonly LayoutLintCode[] = [
+  'span-out-of-limits',
+  'overrun-columns',
+  'relative-off-canvas',
+];
+
+export function blockingLayoutFindings(findings: readonly LayoutFinding[]): LayoutFinding[] {
+  return findings.filter((f) => PUBLISH_BLOCKING_LAYOUT_CODES.includes(f.code));
+}
+
 // What a widget type allows, per axis. Any bound may be absent, on either axis: a widget that
 // declares none can be any size, and one that pins only its rows has no column ceiling.
 export interface SpanLimits {
@@ -88,7 +103,8 @@ export function spanLimitsOfLayout(layout: WidgetLayoutSpec | undefined): SpanLi
 // cell size (an offset is in cell pitches, the gutter is fixed px), so a box inside the canvas at
 // the smallest cell and at a very large one is inside it at every size between: the smallest is
 // where the gutter weighs most, the large one where the cells do.
-const RELATIVE_PROBE_CELLS = (minCellSize: number) => [minCellSize, minCellSize * 16];
+// Exported to the editor model (not the package), so fitToLimits repairs against the same cells.
+export const RELATIVE_PROBE_CELLS = (minCellSize: number) => [minCellSize, minCellSize * 16];
 
 // Rounding slack, in px, for a box that sits exactly on the canvas edge.
 const EDGE_EPSILON = 0.01;
