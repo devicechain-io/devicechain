@@ -80,6 +80,15 @@ func answerAll(t *testing.T, s *publishStub, n int) (wait func()) {
 	}
 }
 
+// boundedCtx is a context that expires after asyncWithin, so a Settle that never returns
+// fails its test with an error instead of hanging the package.
+func boundedCtx(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), asyncWithin)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 // waitCountOrFail waits for out to hold want outcomes, naming what it was waiting for.
 func waitCountOrFail(t *testing.T, out *outcomes, want int, what string) {
 	t.Helper()
@@ -441,7 +450,7 @@ func TestSettleIsABarrierNotAClose(t *testing.T) {
 			t.Fatalf("cycle %d: broker holds %d, want %d", cycle, got, total+5)
 		}
 		settled := make(chan error, 1)
-		go func() { settled <- w.Settle(context.Background()) }()
+		go func() { settled <- w.Settle(boundedCtx(t)) }()
 		select {
 		case err := <-settled:
 			t.Fatalf("cycle %d: Settle returned (%v) with 5 publishes unanswered", cycle, err)
@@ -497,7 +506,7 @@ func TestSettleRespectsContextCancellation(t *testing.T) {
 	}
 
 	stub.answer(0)
-	if err := w.Settle(context.Background()); err != nil {
+	if err := w.Settle(boundedCtx(t)); err != nil {
 		t.Fatalf("settle after a cancelled one: %v", err)
 	}
 	if out.count() != 1 || out.errs[0] != nil {
@@ -528,8 +537,9 @@ func TestSettleOnAFullWindowRespectsContextCancellation(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Settle = %v, want DeadlineExceeded", err)
 		}
-	case <-time.After(asyncWithin):
-		t.Fatalf("Settle on a full window ignored its context for %s", asyncWithin)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Settle on a full window did not honour a 200ms context within 2s (the publish ceiling is 5s, " +
+			"so a Settle that waits for room is bounded by the broker, not by its context)")
 	}
 	wait := answerAll(t, stub, 3)
 	wait()
@@ -583,7 +593,7 @@ func TestNothingIsPublishedAfterClose(t *testing.T) {
 	case <-time.After(asyncWithin):
 		t.Fatal("Submit after Close never reported an outcome: a silent drop")
 	}
-	if err := w.Settle(context.Background()); !errors.Is(err, ErrAsyncWriterClosed) {
+	if err := w.Settle(boundedCtx(t)); !errors.Is(err, ErrAsyncWriterClosed) {
 		t.Fatalf("Settle after Close = %v, want ErrAsyncWriterClosed", err)
 	}
 	time.Sleep(300 * time.Millisecond)
