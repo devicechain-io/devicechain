@@ -58,6 +58,11 @@ var readSuperuserPassword = func(ctx context.Context, kubeContext, instance stri
 	if source == bootstrap.BindingUnreadable {
 		return "", fmt.Errorf("the record of which cluster instance %q lives on could not be read; pass --kube-context", instance)
 	}
+	// The same refusal, word for word, that upgrade and destroy make: it names the way
+	// out when the record is what is wrong, which a sim-only message had left off.
+	if err := bootstrap.RefuseConflictingContext(source, binding, kubeContext, instance); err != nil {
+		return "", err
+	}
 	return bootstrap.ReadSuperuserPassword(ctx, binding.KubeContext, instance)
 }
 

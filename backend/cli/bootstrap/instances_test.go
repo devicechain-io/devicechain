@@ -267,17 +267,27 @@ func TestListInstancesOnAnEmptyMachineIsEmptyNotAnError(t *testing.T) {
 	}
 }
 
-func TestResolveBindingPrefersFlagThenRecordThenGuess(t *testing.T) {
+func TestResolveBindingPrefersRecordThenFlagThenGuess(t *testing.T) {
 	fakeHome(t)
-	writeRecord(t, InstanceRecord{Instance: "harig", Provider: "local", Cluster: "devicechain-ha", KubeContext: "kind-devicechain-ha", Managed: false})
+	writeRecord(t, InstanceRecord{Instance: "harig", Provider: "local", Cluster: "devicechain-ha", KubeContext: "kind-devicechain-ha", Managed: false, ClusterUID: testUID})
 
-	// 1. The flag wins over the record: the operator is standing in front of us.
-	b, src := ResolveBinding(Options{Instance: "harig", KubeContext: "kind-somewhere-else"})
-	if src != BindingFromFlag || b.KubeContext != "kind-somewhere-else" {
-		t.Fatalf("flag did not win: %+v %v", b, src)
+	// 1. A flag naming the recorded context IS the record (same Managed, same UID): it
+	// must not rebuild the binding by hand. A flag naming ANOTHER context conflicts with
+	// the record and is surfaced as such, with the recorded binding, for a caller to refuse.
+	b, src := ResolveBinding(Options{Instance: "harig", KubeContext: "kind-devicechain-ha"})
+	// ClusterUID is the field only the record carries: a binding rebuilt from the flag
+	// would match on every other one here.
+	if src != BindingFromRecord || b.Cluster != "devicechain-ha" || b.ClusterUID != testUID {
+		t.Fatalf("a flag naming the recorded context did not resolve to the record: %+v %v", b, src)
 	}
-	if b.Managed {
-		t.Error("a context named by hand is not dcctl's cluster and must not be Managed")
+	b, src = ResolveBinding(Options{Instance: "harig", KubeContext: "kind-somewhere-else"})
+	if src != BindingConflict || b.KubeContext != "kind-devicechain-ha" {
+		t.Fatalf("a conflicting flag was not reported against the record: %+v %v", b, src)
+	}
+	// With no record the operator's word is all there is, and is not dcctl's cluster.
+	b, src = ResolveBinding(Options{Instance: "unrecorded", KubeContext: "kind-somewhere-else"})
+	if src != BindingFromFlag || b.KubeContext != "kind-somewhere-else" || b.Managed {
+		t.Fatalf("flag with no record: %+v %v", b, src)
 	}
 
 	// 2. The record wins over the guess, and carries the DIFFERENT cluster name — this is

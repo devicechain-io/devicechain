@@ -201,11 +201,13 @@ running whether or not dcctl created it. To delete a local cluster, do it by
 hand: kind delete cluster --name \<name>
 
 Which cluster the instance is in comes from a record written at bootstrap, not
-from the instance's name; --kube-context overrides it. An instance bootstrapped
-before dcctl recorded this has no record, and destroy falls back to guessing the
-cluster from the instance name — saying so as it goes. Run "dcctl instances list"
-to see which instances are in that state. If the cluster is already gone, only
-the local state is cleared.
+from the instance's name. --kube-context may name that same context; one naming
+a different context is refused, and the refusal says how to remove a record that
+is wrong. With no record, --kube-context says where the instance is. An instance
+bootstrapped before dcctl recorded this has no record, and with no --kube-context
+destroy falls back to guessing the cluster from the instance name — saying so as
+it goes. Run "dcctl instances list" to see which instances are in that state.
+If the cluster is already gone, only the local state is cleared.
 
 Use --all to destroy every instance on this machine.
 
@@ -220,7 +222,7 @@ dcctl destroy <provider> <instance> [flags]
       --dry-run               print what would happen without destroying anything
   -h, --help                  help for destroy
       --keep-backups          keep the instance's event-store backups in the cluster's in-cluster object store (they are removed by default; backups in an object store you supplied are never removed). Use it to rebuild the instance from them with --restore-tsdb-from
-      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap)
+      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --without-state         skip tofu destroy and remove the instance by its release, database, login and namespace (for an instance whose infrastructure state is lost)
   -y, --yes                   assume yes for prompts
 ```
@@ -1133,7 +1135,7 @@ dcctl upgrade <provider> <instance> [flags]
       --escrow-file string              where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on
       --escrow-passphrase-file string   read the escrow passphrase from this file (or $DCCTL_ESCROW_PASSPHRASE). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase
   -h, --help                            help for upgrade
-      --kube-context string             kube-context to target (default: the cluster recorded at bootstrap)
+      --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)
       --skip-infrastructure             move only the services: leave this instance's message broker and event store on the configuration they were built with
       --version string                  release version to upgrade to (default: this dcctl's pinned version)

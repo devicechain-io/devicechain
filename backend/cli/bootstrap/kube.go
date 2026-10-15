@@ -79,6 +79,9 @@ const (
 	// knew" and "we knew and the answer is unusable" call for different behaviour, and
 	// collapsing them is what let a corrupt file become a confident deletion.
 	BindingUnreadable BindingSource = "unreadable"
+	// BindingConflict: a record exists and --kube-context names a DIFFERENT context than
+	// it. The binding returned is the RECORDED one, so a refusal can name both.
+	BindingConflict BindingSource = "conflict"
 )
 
 // ResolveBinding resolves which cluster to act on for an instance that already
@@ -92,22 +95,48 @@ const (
 // `destroy` reported success for it; `upgrade` would have failed to find the instance.
 //
 // Precedence, and each step is deliberate:
-//  1. An explicit --kube-context. The operator is standing in front of us; nothing on
-//     disk outranks that. It is Managed:false because a context named by hand is, by
-//     definition, not the cluster dcctl named by convention.
-//  2. The instance record. The one source that was written down when both halves were
-//     in hand.
+//  1. The instance record. The one source that was written down when both halves were
+//     in hand. An explicit --kube-context naming the recorded context resolves to it
+//     (the flag says where to look, not what is there); one naming a DIFFERENT context
+//     is BindingConflict, which every caller refuses.
+//  2. An explicit --kube-context, when there is no readable record. Managed:false,
+//     because a context named by hand is, by definition, not the cluster dcctl named by
+//     convention; `upgrade` takes Managed from the instance's declaration regardless.
 //  3. The guess. Kept so an instance bootstrapped before records existed is still
 //     actionable — degrading LOUDLY beats refusing to touch a live instance.
 func ResolveBinding(opts Options) (ClusterBinding, BindingSource) {
+	rec, err := ReadInstanceRecord(opts.Instance)
 	if opts.KubeContext != "" {
+		// 🔴 A FLAG THAT NAMES THE RECORDED CLUSTER IS THE RECORD, NOT A DIFFERENT BINDING.
+		// This used to return a hand-built Managed:false binding for ANY flag, so
+		// `dcctl upgrade local guide --kube-context kind-devicechain` rendered an instance
+		// that was not the one the same command renders without the flag: Managed decides
+		// the object-store default, so the colocate default vanished and the chart refused
+		// a ReadWriteOnce claim mounted by two pods. The flag says where to look; it must
+		// not rewrite what is known about what is there.
+		if err == nil {
+			if rec.KubeContext == opts.KubeContext {
+				return rec.Binding(), BindingFromRecord
+			}
+			// 🔴 A DIFFERENT CONTEXT THAN THE ONE RECORDED IS REFUSED, NOT HONOURED. Acting
+			// on it would render (or tear down) an instance against a cluster it was not
+			// bound to, under a profile derived from the wrong binding.
+			return rec.Binding(), BindingConflict
+		}
+		// No record, or one that cannot be read: the operator's word is all there is.
+		// Managed:false because a context named by hand is, by definition, not the cluster
+		// dcctl named by convention.
+		//
+		// 🔴 AN UNREADABLE RECORD DOES NOT OUTRANK THE FLAG. refuseUnreadable's way out is
+		// "pass --kube-context to say where it is"; answering that flag with the same
+		// refusal turns the advice into a loop with no exit. There is nothing to conflict
+		// with: what cannot be read names no cluster.
 		return ClusterBinding{
 			Cluster:     clusterNameFromKindContext(opts.KubeContext),
 			KubeContext: opts.KubeContext,
 			Managed:     false,
 		}, BindingFromFlag
 	}
-	rec, err := ReadInstanceRecord(opts.Instance)
 	switch {
 	case err == nil:
 		return rec.Binding(), BindingFromRecord
