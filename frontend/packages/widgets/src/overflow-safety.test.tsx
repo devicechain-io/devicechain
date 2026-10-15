@@ -140,6 +140,23 @@ describe('alarm-table', () => {
     expect(screen.getByText('over-temperature').closest('tr')!.querySelectorAll('td')).toHaveLength(5);
   });
 
+  it('wraps alarm keys at hyphens, never mid-word (action column squeezing the alarm column)', () => {
+    stubElementSize(ALARM_TABLE_NARROW_PX - 1, 300);
+    const long: AlarmRow = { ...alarm, token: 'a-2', alarmKey: 'tyre-pressure-low', originatorToken: 'haul-truck-07' };
+    render(<AlarmTable widget={widget('alarm-table')} data={{ ...alarms, alarms: [long] }} />);
+    const cellOf = (text: string) => screen.getByText(text).closest('td')!;
+    for (const td of [cellOf('tyre-pressure-low'), cellOf('haul-truck-07')]) {
+      // `anywhere` would split mid-word; break-word only does so as a last resort.
+      expect(td.style.overflowWrap).toBe('break-word');
+      expect(td.style.wordBreak).toBe('normal');
+    }
+    // One break opportunity after each hyphen, and none inside a word.
+    const key = cellOf('tyre-pressure-low');
+    expect(key.querySelectorAll('wbr')).toHaveLength(2);
+    expect(key.innerHTML).toBe('tyre-<wbr>pressure-<wbr>low');
+    expect(key.textContent).toBe('tyre-pressure-low');
+  });
+
   it('keeps every column at the threshold width', () => {
     stubElementSize(ALARM_TABLE_NARROW_PX, 300);
     render(<AlarmTable widget={widget('alarm-table')} data={alarms} />);

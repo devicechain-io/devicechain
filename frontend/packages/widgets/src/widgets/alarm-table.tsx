@@ -8,7 +8,7 @@
 // from live data or the synthetic preview source.
 
 import type { AlarmRow, WidgetActions } from '@devicechain/dashboards';
-import { useState, type CSSProperties } from 'react';
+import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 
 import {
   type AlarmStreamState,
@@ -56,9 +56,35 @@ const headCell: CSSProperties = {
 // column on one line.
 export const ALARM_TABLE_NARROW_PX = 480;
 
-// A narrow table's text cells: tighter padding, and a long originator or alarm key breaks
-// across lines rather than widening the table past its box.
-const narrowCell: CSSProperties = { ...cell, padding: '6px 6px', whiteSpace: 'normal', overflowWrap: 'anywhere' };
+// A narrow table's text cells: tighter padding, and a long originator or alarm key wraps
+// across lines rather than widening the table past its box. Identifiers break at their
+// hyphens first (see hyphenBreaks); `break-word` splits inside a word only when a single
+// segment is wider than the cell. `anywhere` is deliberately NOT used: it also lowers the
+// column's min-content width, so a squeezed column was split mid-word ("engine-overhea|t")
+// instead of at a hyphen.
+const narrowCell: CSSProperties = {
+  ...cell,
+  padding: '6px 6px',
+  whiteSpace: 'normal',
+  overflowWrap: 'break-word',
+  wordBreak: 'normal',
+};
+
+// hyphenBreaks renders an identifier with a break opportunity after each hyphen, so a
+// hyphenated key ("tyre-pressure-low") wraps as "tyre-/pressure-/low". The <wbr> also keeps
+// the column's min-content width at the longest segment, which is what lets the table
+// shrink at 390 px without pushing the Value column off the edge.
+export function hyphenBreaks(text: string): ReactNode {
+  // Split after each hyphen, keeping it on the left part. Not a lookbehind regex: this is a
+  // published package, and a lookbehind literal is a parse error in older WebKit.
+  const parts = text.split('-').map((p, i, all) => (i < all.length - 1 ? `${p}-` : p));
+  return parts.map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 ? <wbr /> : null}
+      {part}
+    </Fragment>
+  ));
+}
 
 function statusLabel(alarm: AlarmRow): string {
   if (alarm.state === 'CLEARED') return 'Cleared';
@@ -161,7 +187,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                         <OriginatorCell alarm={alarm} drillTo={drillTo} />
                       </td>
                       <td style={text}>
-                        {alarm.alarmKey}
+                        {hyphenBreaks(alarm.alarmKey)}
                       </td>
                       <td style={{ ...cell, textAlign: 'right' }}>
                         <FlashValue
@@ -236,11 +262,11 @@ function OriginatorCell({
           textUnderlineOffset: 2,
         }}
       >
-        {token}
+        {hyphenBreaks(token)}
       </button>
     );
   }
-  return <>{alarm.originatorToken ?? alarm.originatorType}</>;
+  return <>{hyphenBreaks(alarm.originatorToken ?? alarm.originatorType)}</>;
 }
 
 const actionButton: CSSProperties = {
