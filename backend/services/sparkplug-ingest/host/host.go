@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/transport"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
@@ -60,9 +61,26 @@ const (
 	// Sparkplug host-offline path (a stalled handler starves paho's keepalive → the
 	// broker fires the OFFLINE will → edge nodes store-and-forward) instead of
 	// blocking the ordered receive goroutine forever.
+	//
+	// The same budget bounds the PUBLISH of what a message produced: it is submitted without
+	// the receive goroutine waiting for its acknowledgement (see Publisher), and one that
+	// fails is resubmitted, from a goroutine of its own, up to ingestMaxAttempts in all with
+	// ingestRetryBackoff between them, then abandoned and counted exactly as before.
 	ingestAttemptTimeout = 3 * time.Second
 	ingestMaxAttempts    = 3
 	ingestRetryBackoff   = 500 * time.Millisecond
+	// publishRetryDepth bounds the failed publishes waiting for their next attempt, and a
+	// full queue abandons the publish, counted, rather than blocking the writer's goroutine.
+	//
+	// It is twice the LARGEST window, so it fits two whole windows of failures at any
+	// configured ingest.publishWindow. A broker failure fails at most one window at once:
+	// after it the writer holds the window's slots back and lets one probe through per
+	// backoff until a publish succeeds (messaging's pace), so a second window can fail only
+	// after a success has let the first one's retries back in. Overflow therefore needs
+	// failures faster than the writer itself admits, and is counted like any other loss.
+	// At the default window of 32 the queue normally holds at most 32. It is a channel of
+	// pointers, so the headroom costs 16 KiB per connection.
+	publishRetryDepth = 2 * messaging.MaxOrderedWindow
 	// reconcileProbeWindow is how long the failover reconciliation waits after
 	// rebirthing a tenant's asserted-active nodes before it declares the still-silent
 	// ones dead (ADR-067 SP4b). It must comfortably exceed a healthy node's
@@ -150,12 +168,13 @@ type Metrics struct {
 	// source ingests none of its groups until every one is granted. A climbing counter is
 	// therefore an ingest outage for that source, not a presence nuance.
 	SubscribeFailures prometheus.Counter
-	// IngestFailures counts ingestWithRetry's every abandonment, one per abandoned ingest
+	// IngestFailures counts every abandonment of an ingest, one per abandoned ingest
 	// call: an accepted message's samples or presence transitions, or a reconciliation
 	// sweep's synthetic DISCONNECTED batch (which comes from no message). Samples are
 	// dropped at once when inbound-events refused them under backpressure (not retried;
-	// presence bypasses the gate), and anything either after the in-handler retry budget
-	// was exhausted (device-management or NATS unreachable) or on connection shutdown.
+	// presence bypasses the gate), and anything either after the retry budget was exhausted
+	// (device-management or NATS unreachable, whether the resolve failed or the publish was
+	// not acknowledged) or on connection shutdown.
 	// One message can count twice, once for its samples and once for its transitions. A clean-session
 	// Host gets no broker redelivery, so this is real (bounded) loss — the signal that
 	// ingest, not just connectivity, is degraded.
@@ -172,9 +191,28 @@ type Metrics struct {
 // can drive the full receive→ingest path with a fake, asserting what would be
 // ingested without a device-management or a NATS. A nil ingester makes the receive
 // path decode+log only (the SP1/SP2 behavior).
+//
+// It PREPARES rather than ingests: resolving the device and building the messages is the
+// half that must stay on the receive goroutine, in order, and the publish is the half that
+// leaves it (see Publisher). A nil Publication with a nil error is a definitive drop.
 type SampleIngester interface {
-	Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error
-	IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error
+	PrepareIngest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) (*Publication, error)
+	PreparePresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) (*Publication, error)
+}
+
+// Publisher is where a Client's prepared publications go, without the goroutine that
+// prepared them waiting for the stream's acknowledgement. *messaging.AsyncWriter satisfies
+// it, and a Client owns exactly one for the life of the process (not one per leadership
+// term: a writer holds a reply subscription until the connection closes).
+//
+// Submissions made from one goroutine reach the stream, and have their done run, in that
+// goroutine's call order. done may run on the writer's goroutine or, when the call is never
+// taken, on the caller's before Submit returns; it must be quick and must not call Submit.
+// Settle returns once every Submit that returned before it has had its done run, or ctx
+// ends: it is the barrier a leadership term drains with before the lease is released.
+type Publisher interface {
+	Submit(ctx context.Context, msgs []messaging.Message, done func(error))
+	Settle(ctx context.Context) error
 }
 
 // SampleLimiter charges a DATA message's samples against its tenant's ingest ceiling,
@@ -263,7 +301,63 @@ type Client struct {
 	// probeWG tracks in-flight reconcile probes so Stop drains them (they abort promptly
 	// on the session context, so this just closes the goroutine-leak-on-shutdown gap).
 	probeWG sync.WaitGroup
+
+	// publisher takes the publications the receive path prepares. It is built once for the
+	// life of the process and kept across leadership terms (a Stop drains it with Settle and
+	// leaves it open); whoever built it closes it. nil only for a decode-only client.
+	publisher Publisher
+	// settleTimeout bounds the drain at Stop; a field so a test can shorten it.
+	settleTimeout time.Duration
+
+	// subMu orders every submission against Stop. A submission holds the read side across
+	// its Submit, and Stop takes the write side to set stopped, so once Stop holds it there
+	// is no Submit in progress and none will start: that is what "no publish after Stop"
+	// rests on. Nothing that holds the read side waits for anything that needs the write
+	// side: Submit blocks only until the writer takes the call, the writer's goroutines never
+	// take subMu, and Stop cancels the context a blocked Submit is waiting on first.
+	subMu   sync.RWMutex
+	stopped bool
+
+	// retryCh carries a publish that failed to the goroutine that resubmits it, and retryMu
+	// guards it and retryClosed. The writer calls done on its own goroutine, which must not
+	// block and must not Submit, so a failure is handed over here without waiting. Both are
+	// replaced by Connect and closed by Stop; a failure that arrives once it is closed is
+	// abandoned, counted, because there is nobody left to resubmit it.
+	retryMu     sync.Mutex
+	retryCh     chan *publishItem
+	retryClosed bool
 }
+
+// publishItem is one prepared publication on its way to the stream, with the attempts spent
+// on it. onDrop reports its abandonment (the log line that names what was lost).
+type publishItem struct {
+	pub      *Publication
+	attempts int
+	retryAt  time.Time
+	onDrop   func(reason string, err error)
+}
+
+// publishSettleTimeout is how long a stopping Client waits for the publications it submitted
+// to be stored before the lease can be released. Each publish in flight runs its own 5 s
+// ceiling concurrently, so after the last submission returns everything settles within about
+// one ceiling; this is longer than that.
+//
+// 🔴 IT IS SIZED AGAINST THE SHUTDOWN BUDGET, NOT ONLY AGAINST THE CEILING. With the chart's
+// defaults (30 s grace, 5 s readiness drain) the teardown gets 30 - 5 - 2 = 23 s, and a
+// stop that runs every step to its bound spends: the OFFLINE STATE publish (publishTimeout,
+// 5 s), the disconnect quiesce (0.25 s), this settle, and then closing the writer, which
+// ends every backoff and waits for what the settle left: one ceiling (5 s) for what was
+// already sent, one more only for a piece that was still waiting for room. At 8 s the usual
+// worst case (one of the two brokers failing) is 8 + 5, about 13 s, and even the 5 s STATE
+// publish on top leaves some 4.7 s for the lease release and the broker manager's drain.
+// Both brokers failing at once with a piece waiting for room can exceed the budget by a
+// fraction of a second, which the service reports as a teardown that did not finish, never
+// as a silent kill. A settle that times out loses nothing by itself: the writer's Close
+// still waits for, and counts, what it left. The external MQTT source uses the same 8 s.
+const publishSettleTimeout = 8 * time.Second
+
+var errNoPublisher = errors.New("this Sparkplug client has no publisher: its publications cannot be stored")
+var errClientStopped = errors.New("the Sparkplug connection is shutting down")
 
 // NewClient builds a tenant-bound Host Application client from one configured
 // source and its resolved broker connection. ingester turns accepted messages into
@@ -298,13 +392,14 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 			DeviceTypeToken: source.DeviceTypeToken,
 			AutoRegister:    source.AutoRegister,
 		},
-		stateTopic:   StateTopic(source.HostId),
-		now:          now,
-		newClient:    func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
-		subscribe:    messaging.SubscribeMqttConfirmed,
-		backoffSleep: sleep,
-		rebirthCh:    make(chan nodeKey, rebirthQueueDepth),
-		probeWindow:  reconcileProbeWindow,
+		stateTopic:    StateTopic(source.HostId),
+		now:           now,
+		newClient:     func(o *mqtt.ClientOptions) mqtt.Client { return mqtt.NewClient(o) },
+		subscribe:     messaging.SubscribeMqttConfirmed,
+		backoffSleep:  sleep,
+		rebirthCh:     make(chan nodeKey, rebirthQueueDepth),
+		probeWindow:   reconcileProbeWindow,
+		settleTimeout: publishSettleTimeout,
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
 	c.rebirthPub = c.publishRebirth
@@ -339,6 +434,21 @@ func (c *Client) SetReconciler(r reconcileSource) {
 	c.reconciler = r
 }
 
+// SetPublisher binds the publisher the receive path submits its prepared publications to. It
+// is set once at wiring time before Connect, and kept for the life of the process: the
+// Client drains it (Settle) when a leadership term ends and never closes it. A client with
+// an ingester and no publisher cannot store anything, and abandons (and counts) every
+// message it accepts.
+func (c *Client) SetPublisher(p Publisher) {
+	c.publisher = p
+}
+
+// Publisher returns the publisher this client submits to, so the SERVICE's own wiring of it
+// can be gated, for the same reason as Metrics.
+func (c *Client) Publisher() Publisher {
+	return c.publisher
+}
+
 // subscriptions is the set of topic filters this host subscribes to: one per
 // configured group, or the all-groups wildcard when none is configured.
 func (c *Client) subscriptions() []string {
@@ -369,9 +479,20 @@ func (c *Client) Connect() {
 	c.cancel = cancel
 	c.runCtx = ctx
 	c.mu.Unlock()
-	c.wg.Add(2)
+	// A new term: the previous Stop closed submission and the retry queue, and the writer it
+	// drained is still open, so this only reopens the doors.
+	retryCh := make(chan *publishItem, publishRetryDepth)
+	c.retryMu.Lock()
+	c.retryCh = retryCh
+	c.retryClosed = false
+	c.retryMu.Unlock()
+	c.subMu.Lock()
+	c.stopped = false
+	c.subMu.Unlock()
+	c.wg.Add(3)
 	go c.runLoop(ctx)
 	go c.rebirthWorker(ctx)
+	go c.retryWorker(ctx, retryCh)
 }
 
 // runLoop owns the connection lifecycle. Each iteration is one MQTT session with
@@ -715,19 +836,25 @@ func (c *Client) admitSamples(samples []Sample) []Sample {
 	return samples[:c.limiter.AdmitSamples(c.tenant, len(samples))]
 }
 
-// ingestSamples resolves the device and emits its samples, retrying a transient
-// device-management/NATS failure within a bounded budget. It runs ON paho's ordered
-// receive goroutine (by design — the session machine needs strict ordering), so it
-// must return in bounded time: a clean-session Host gets no broker redelivery, so a
-// short retry saves a sample across a brief blip, but a prolonged outage is left to
-// the Sparkplug host-offline path rather than blocking receive forever. On budget
-// exhaustion the samples are dropped and counted. A message larger than one event is
-// emitted as several (adapter.Emitter.Emit), so "dropped" then means "not fully stored": a
-// publish that failed part-way kept its leading events, and each retry dedups them.
+// ingestSamples resolves the device and builds its samples' events, retrying a transient
+// device-management failure within a bounded budget, and submits them to the publisher
+// WITHOUT waiting for the stream to acknowledge them.
+//
+// The resolve runs ON paho's ordered receive goroutine (by design: the session machine
+// needs strict ordering, and this is called in the order the messages arrived), so it must
+// return in bounded time. A clean-session Host gets no broker redelivery, so a short retry
+// saves a sample across a brief blip, but a prolonged outage is left to the Sparkplug
+// host-offline path rather than blocking receive forever. Only the publish leaves that
+// goroutine: it used to wait one acknowledgement (about 11 ms on a replicated broker) per
+// message, which capped a connection near 88 messages a second. A publish that then fails
+// is resubmitted (see publishItem) and, when the budget is spent, dropped and counted. A
+// message larger than one event is emitted as several (adapter.Emitter.BuildMeasurements),
+// so "dropped" then means "not fully stored": a publish that failed part-way may have stored
+// any subset of its events, and each resubmission dedups them.
 func (c *Client) ingestSamples(externalId string, samples []Sample) {
-	c.ingestWithRetry(
-		func(ctx context.Context) error {
-			return c.ingester.Ingest(ctx, c.tenant, c.policy, externalId, samples)
+	c.ingest(
+		func(ctx context.Context) (*Publication, error) {
+			return c.ingester.PrepareIngest(ctx, c.tenant, c.policy, externalId, samples)
 		},
 		func(reason string, err error) {
 			// A backpressure drop is logged at debug: the refusal is counted
@@ -739,7 +866,7 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 			}
 			ev.Err(err).Str("tenant", c.tenant).Str("externalId", externalId).Int("samples", len(samples)).
 				Str("reason", reason).Msg("Dropping Sparkplug samples (a clean-session Host gets no broker redelivery); " +
-				"a message split across several events may already have stored its leading events.")
+				"a message split across several events may already have stored some of its events.")
 		},
 	)
 }
@@ -748,17 +875,173 @@ func (c *Client) ingestSamples(externalId string, samples []Sample) {
 // same bounded-retry contract as ingestSamples: a clean-session Host gets no broker
 // redelivery, so a brief device-management/NATS blip is retried, but a prolonged
 // outage is left to the host-offline path rather than blocking receive. The whole
-// batch is re-tried; the DedupID makes an already-emitted transition idempotent.
+// batch is submitted as one call and re-tried whole; the DedupID makes an already-emitted
+// transition idempotent.
 func (c *Client) ingestPresence(events []PresenceEvent) {
-	c.ingestWithRetry(
-		func(ctx context.Context) error {
-			return c.ingester.IngestPresence(ctx, c.tenant, c.policy, events)
+	c.ingest(
+		func(ctx context.Context) (*Publication, error) {
+			return c.ingester.PreparePresence(ctx, c.tenant, c.policy, events)
 		},
 		func(reason string, err error) {
 			log.Warn().Err(err).Str("tenant", c.tenant).Int("presence", len(events)).
 				Str("reason", reason).Msg("Dropping Sparkplug presence (a clean-session Host gets no broker redelivery).")
 		},
 	)
+}
+
+// ingest prepares a publication under the bounded in-handler retry and submits it.
+func (c *Client) ingest(prepare func(ctx context.Context) (*Publication, error), onDrop func(reason string, err error)) {
+	var pub *Publication
+	ok := c.ingestWithRetry(func(ctx context.Context) error {
+		p, err := prepare(ctx)
+		pub = p
+		return err
+	}, onDrop)
+	if !ok || pub == nil {
+		return // abandoned (counted) or definitively dropped by the ingester (counted there)
+	}
+	c.submit(&publishItem{pub: pub, onDrop: onDrop})
+}
+
+// publishContext is the context a publication is submitted under: the tenant for its
+// subject, and the connection's lifetime, so a Submit blocked behind a full window is
+// released when the connection stops. It carries NO deadline of its own: the writer applies
+// its publish ceiling from the moment each message is sent, and a deadline counted from
+// here would also be charged for the time spent waiting for room in the window.
+func (c *Client) publishContext(tenant string) context.Context {
+	c.mu.Lock()
+	ctx := c.runCtx
+	c.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return core.WithTenant(ctx, tenant)
+}
+
+// submit hands a publication to the publisher and returns once the publisher has room for
+// it, which is before the stream's acknowledgement.
+//
+// 🔴 ORDER IS PER SUBMITTING GOROUTINE. The receive goroutine submits in the order the
+// messages arrived, which is the order they reach the stream; the reconcile probe and the
+// retry goroutine submit from their own, and the publisher promises no order between
+// goroutines. That is safe here because every message carries a content-derived dedup id
+// and presence is ordered by (session, time), not by arrival.
+func (c *Client) submit(it *publishItem) {
+	c.subMu.RLock()
+	defer c.subMu.RUnlock()
+	if c.stopped {
+		c.drop(it, "connection shutting down", errClientStopped)
+		return
+	}
+	if c.publisher == nil {
+		log.Error().Str("tenant", c.tenant).Msg("A Sparkplug client with an ingest path has no publisher; abandoning what it accepted.")
+		c.drop(it, "no publisher", errNoPublisher)
+		return
+	}
+	c.publisher.Submit(c.publishContext(it.pub.Tenant), it.pub.Messages, func(err error) { c.published(it, err) })
+}
+
+// published is the publisher's done for one attempt. It runs on the writer's goroutine (or
+// on the submitter's, for a call the writer never took), so it never blocks and never
+// submits: a failure is handed to the retry goroutine.
+func (c *Client) published(it *publishItem, err error) {
+	if err == nil {
+		it.pub.Delivered()
+		return
+	}
+	// Not retried: the stream is refusing new events (backpressure), which lasts far longer
+	// than this budget. Presence is admitted past the gate (BypassBackpressure), so what
+	// reaches here is samples.
+	if errors.Is(err, messaging.ErrStreamBackpressure) {
+		c.drop(it, "ingest backpressure", err)
+		return
+	}
+	it.attempts++
+	if it.attempts >= ingestMaxAttempts {
+		c.drop(it, "ingest retry budget exhausted", err)
+		return
+	}
+	it.retryAt = time.Now().Add(ingestRetryBackoff)
+	c.retryMu.Lock()
+	defer c.retryMu.Unlock()
+	if c.retryClosed {
+		c.drop(it, "connection shutting down", err)
+		return
+	}
+	select {
+	case c.retryCh <- it:
+	default:
+		c.drop(it, "publish retry queue full", err)
+	}
+}
+
+// drop abandons a publication: counted on IngestFailures and logged by its own onDrop, so
+// an abandonment is never silent.
+func (c *Client) drop(it *publishItem, reason string, err error) {
+	if c.metrics.IngestFailures != nil {
+		c.metrics.IngestFailures.Inc()
+	}
+	it.onDrop(reason, err)
+}
+
+// retryWorker resubmits publishes that failed, each once its backoff has passed, from a
+// goroutine of its own. It is the only submitter whose order does not matter: a resubmission
+// lands behind later messages, which the dedup ids make safe. On the connection's end it
+// stops, and what is still queued is abandoned and counted by Stop.
+func (c *Client) retryWorker(ctx context.Context, ch chan *publishItem) {
+	defer c.wg.Done()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case it := <-ch:
+			if wait := time.Until(it.retryAt); wait > 0 && !sleep(ctx, wait) {
+				c.drop(it, "connection shutting down", ctx.Err())
+				return
+			}
+			c.submit(it)
+		}
+	}
+}
+
+// drainPublishes ends a leadership term's publishing: nothing already queued for a retry is
+// resubmitted, no new submission is taken, and everything already submitted is waited for,
+// bounded, so the lease is released only once nothing of this term is still on its way to
+// the stream. Stop calls it after the connection and every goroutine of the term are gone.
+//
+// A publish that fails during the wait is abandoned and counted rather than retried: the
+// term is over, and a resubmission after the lease is released is the one thing the barrier
+// exists to prevent. The host is a clean-session client, so what is abandoned here is lost,
+// and it is counted.
+func (c *Client) drainPublishes() {
+	c.retryMu.Lock()
+	c.retryClosed = true
+	ch := c.retryCh
+	c.retryMu.Unlock()
+	for drained := false; ch != nil && !drained; {
+		select {
+		case it := <-ch:
+			c.drop(it, "connection shutting down", errClientStopped)
+		default:
+			drained = true
+		}
+	}
+
+	c.subMu.Lock()
+	c.stopped = true
+	c.subMu.Unlock()
+
+	if c.publisher == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), c.settleTimeout)
+	defer cancel()
+	if err := c.publisher.Settle(ctx); err != nil {
+		log.Error().Err(err).Str("tenant", c.tenant).Dur("waited", c.settleTimeout).
+			Msg("A Sparkplug connection could not confirm that everything it published is stored before it stopped: " +
+				"what is still unconfirmed is lost, or may be stored after the next leader has begun. " +
+				"Every message carries a content-derived id, so a copy stored twice is stored once.")
+	}
 }
 
 // reconcileProbe is phase 2 of failover reconciliation (ADR-067 SP4b): it closes the
@@ -882,14 +1165,15 @@ func parseReconcileNodeKey(externalId string) (nodeKey, bool) {
 }
 
 // ingestWithRetry runs one bounded, in-handler retry loop shared by the sample and
-// presence paths. It runs ON paho's ordered receive goroutine (by design — the
-// session machine needs strict ordering), so it must return in bounded time: a
-// clean-session Host gets no broker redelivery, so a short retry saves work across a
-// brief blip, but a prolonged outage is left to the Sparkplug host-offline path
-// rather than blocking receive forever. EVERY abandonment path routes through onDrop
-// so a drop (real, bounded loss) is never silent; onDrop also increments the shared
-// IngestFailures counter.
-func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop func(reason string, err error)) {
+// presence paths, around the PREPARE step (resolving the device and building the messages;
+// the publish is retried separately, see published). It runs ON paho's ordered
+// receive goroutine (by design — the session machine needs strict ordering), so it must
+// return in bounded time: a clean-session Host gets no broker redelivery, so a short retry
+// saves work across a brief blip, but a prolonged outage is left to the Sparkplug
+// host-offline path rather than blocking receive forever. EVERY abandonment path routes
+// through onDrop so a drop (real, bounded loss) is never silent; onDrop also increments the
+// shared IngestFailures counter. It reports whether attempt succeeded.
+func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop func(reason string, err error)) bool {
 	c.mu.Lock()
 	ctx := c.runCtx
 	c.mu.Unlock()
@@ -907,27 +1191,21 @@ func (c *Client) ingestWithRetry(attempt func(ctx context.Context) error, onDrop
 		err := attempt(attemptCtx)
 		cancel()
 		if err == nil {
-			return
+			return true
 		}
-		// Not retried: the stream is refusing new events (backpressure), which lasts far
-		// longer than this loop's budget, and every retry would hold paho's ordered
-		// receive goroutine for nothing. Presence transitions are admitted past the gate
-		// (messaging.Message.BypassBackpressure), so what reaches here is samples.
-		if errors.Is(err, messaging.ErrStreamBackpressure) {
-			drop("ingest backpressure", err)
-			return
-		}
+		// (A backpressure refusal is not in this loop: the stream's gate is consulted by the
+		// publish, which is no longer attempted here. See published.)
 		if ctx.Err() != nil {
 			drop("connection shutting down", err)
-			return
+			return false
 		}
 		if n >= ingestMaxAttempts {
 			drop("ingest retry budget exhausted", err)
-			return
+			return false
 		}
 		if !sleep(ctx, ingestRetryBackoff) {
 			drop("connection shutting down", err)
-			return
+			return false
 		}
 	}
 }
@@ -1043,6 +1321,11 @@ func (c *Client) Stop() {
 	// Drain any in-flight reconcile probe. runLoop's exit cancelled the session context,
 	// so a probe in its window aborts promptly; this just makes shutdown wait for it.
 	c.probeWG.Wait()
+	// Last, and bounded: wait for the publications this term submitted to be stored. Stop
+	// is what a leadership term ends with before it releases the lease, and "nothing of
+	// this term is published after the next leader has begun" holds only once the writer has
+	// nothing in flight, which is not the same as the receive goroutine having returned.
+	c.drainPublishes()
 }
 
 // setSessionIfLive records the live client and its session timestamp, unless its

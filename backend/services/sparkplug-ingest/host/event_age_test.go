@@ -38,7 +38,8 @@ func TestABirthMetricOlderThanTheAgeLimitIsDroppedAloneAndTheRestStored(t *testi
 	ing := NewIngester(NewRegistrar(fakeCreateGQL{}, "url", nil), NewEmitter(w, fixedNow),
 		IngestMetrics{TooOldDropped: tooOld, MeasurementsEmitted: emitted})
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
-	c := NewClient(src, Broker{}, ing, admitAllSamples{}, fixedNow, Metrics{})
+	c := newTestClient(src, Broker{}, ing, admitAllSamples{}, fixedNow, Metrics{})
+	c.SetPublisher(wirePublisher{w})
 
 	fresh := fixedNow().Add(-time.Minute)
 	stale := fixedNow().Add(-400 * 24 * time.Hour)

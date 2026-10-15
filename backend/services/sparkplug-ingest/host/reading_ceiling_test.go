@@ -80,7 +80,7 @@ func TestSparkplugReadingsAreChargedAtTheTenantCeiling(t *testing.T) {
 	run := func(t *testing.T, limiter SampleLimiter) (*fakeIngester, prometheus.Counter) {
 		fake := &fakeIngester{}
 		failures := prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_failures"})
-		c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp"},
+		c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp"},
 			Broker{}, fake, limiter, fixedNow, Metrics{IngestFailures: failures})
 		c.onMessage(nil, fakeMessage{topic: "spBv1.0/g/NBIRTH/n", payload: birthOf(t, 300)})
 		require.Equal(t, 300, fake.ingestedSamples(), "the birth's values are ingested whole")
@@ -111,7 +111,7 @@ func TestABirthIsNeverShedAtTheReadingCeiling(t *testing.T) {
 	limiter := adapter.NewSampleLimiter(core.StaticCeiling(1e-9, 20), adapter.IngestLimiterMetrics{}, nil)
 	require.Equal(t, 256, limiter.AdmitSamples("acme", 256), "the bucket is now empty")
 	fake := &fakeIngester{}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp"},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp"},
 		Broker{}, fake, limiter, fixedNow, Metrics{})
 
 	c.onMessage(nil, fakeMessage{topic: "spBv1.0/g/NBIRTH/n", payload: birthOf(t, 300)})
@@ -125,7 +125,7 @@ func TestABirthIsNeverShedAtTheReadingCeiling(t *testing.T) {
 func TestARetriedSparkplugIngestIsChargedOnce(t *testing.T) {
 	limiter := &countingLimiter{next: admitAllSamples{}}
 	fake := &fakeIngester{}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp"},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp"},
 		Broker{}, fake, limiter, fixedNow, Metrics{})
 	c.onMessage(nil, fakeMessage{topic: "spBv1.0/g/NBIRTH/n", payload: birthOf(t, 3)})
 	fake.mu.Lock()
@@ -140,8 +140,8 @@ func TestARetriedSparkplugIngestIsChargedOnce(t *testing.T) {
 // A client that ingests cannot be built without a limiter: it would ingest unmetered.
 func TestNewClientRefusesAnIngesterWithoutALimiter(t *testing.T) {
 	assert.Panics(t, func() {
-		NewClient(config.SparkplugSource{Tenant: "acme"}, Broker{}, &fakeIngester{}, nil, fixedNow, Metrics{})
+		newTestClient(config.SparkplugSource{Tenant: "acme"}, Broker{}, &fakeIngester{}, nil, fixedNow, Metrics{})
 	})
-	assert.NotPanics(t, func() { NewClient(config.SparkplugSource{Tenant: "acme"}, Broker{}, nil, nil, fixedNow, Metrics{}) },
+	assert.NotPanics(t, func() { newTestClient(config.SparkplugSource{Tenant: "acme"}, Broker{}, nil, nil, fixedNow, Metrics{}) },
 		"a decode-only client has nothing to meter")
 }

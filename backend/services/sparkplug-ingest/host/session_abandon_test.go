@@ -57,7 +57,7 @@ func abandonClient(t *testing.T, fake *fakeIngester, seam *refuseFilters) (*Clie
 	t.Helper()
 	const bigSession = uint64(5_000_000_000_000_000_000)
 	failures := prometheus.NewCounter(prometheus.CounterOpts{Name: "subscribe_failures_total"})
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1", "g2", "g3"}},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1", "g2", "g3"}},
 		Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{SubscribeFailures: failures})
 	c.SetReconciler(&fakeReconciler{devices: []AssertedDevice{{ExternalId: "g1/node", SessionId: bigSession}}, max: bigSession})
 	c.probeWindow = 5 * time.Millisecond
@@ -220,7 +220,7 @@ func (s *scriptedClient) Connect() mqtt.Token {
 // resets the backoff, so the next abandoned session starts again at 1s. Every abandoned
 // connection is disconnected.
 func TestAnAbandonedSessionBacksOffAndAFullSessionResets(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
 		Broker{}, nil, nil, fixedNow, Metrics{})
 	// The session's outcome is decided by the script, through the subscribe seam: a
 	// "refused" session refuses g1.
@@ -313,7 +313,7 @@ func runScriptedSessions(t *testing.T, c *Client, script []string, prepare func(
 // The fake records a publish even when it fails it, which is the case that matters: the
 // broker kept the message and only the acknowledgement went missing.
 func TestAnAbandonedSessionOverwritesAPossiblyRetainedOnlineBeforeDisconnecting(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
 		Broker{}, nil, nil, fixedNow, Metrics{})
 	c.subscribe = grantAll
 
@@ -343,7 +343,7 @@ func TestAnAbandonedSessionOverwritesAPossiblyRetainedOnlineBeforeDisconnecting(
 // its own on the way out, because the broker publishes its Last-Will. Only its ONLINE is
 // ever sent on that connection.
 func TestALostFullSessionLeavesItsOfflineToTheWill(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"g1"}},
 		Broker{}, nil, nil, fixedNow, Metrics{})
 	c.subscribe = grantAll
 

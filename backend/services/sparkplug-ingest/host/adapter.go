@@ -35,6 +35,7 @@ type (
 	IngestPolicy   = adapter.IngestPolicy
 	IngestMetrics  = adapter.IngestMetrics
 	Ingester       = adapter.Ingester
+	Publication    = adapter.Publication
 	Reconciler     = adapter.Reconciler
 )
 

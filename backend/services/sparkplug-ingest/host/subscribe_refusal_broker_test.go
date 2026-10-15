@@ -104,7 +104,7 @@ func watchState(t *testing.T, url, stateTopic string) func() []State {
 }
 
 func refusalClient(url string, groups []string, failures prometheus.Counter) *Client {
-	return NewClient(
+	return newTestClient(
 		config.SparkplugSource{Tenant: "acme", HostId: "refusal-host", Groups: groups},
 		Broker{URL: url, ClientID: "refusal-host-client", Username: refusalHostUser, Password: refusalHostPass},
 		nil, nil, nil, Metrics{SubscribeFailures: failures},

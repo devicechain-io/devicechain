@@ -103,8 +103,8 @@
       "translationSha256": "fafe0194c7c8d297feb30ce7d8d5a2b92989a013db4855842b40b9d935ad67be"
     },
     "deployment/edge-services.md": {
-      "sourceSha256": "8ba6f3313490653da4ff4f9051d28237556352257076c52c46c706c6680cbb27",
-      "translationSha256": "576f69af375a32f24db6c3135d59f2827cfd52d7b114e56bf51a0f01e0f39a67"
+      "sourceSha256": "2da0d82818ab8e30e24b37752a203165a095162b775311620a087bec9729a741",
+      "translationSha256": "bec3407d9270b7eea9b780c350514a7a07445baf0a5462c2e123a77de52edcc2"
     },
     "deployment/kubernetes-operator.md": {
       "sourceSha256": "dc66bd4b2c9e90a6e6b411b07c76caa5837854983cf18e5e89ed0c498e59e97d",

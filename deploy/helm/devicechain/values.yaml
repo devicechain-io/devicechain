@@ -1966,6 +1966,14 @@ functionalAreas:
       #   burst: 2000                  # over it are dropped (no redelivery) and counted on ingest_samples_shed_total.
       #                                # A tenant's tier overrides both. Births, deaths and the message rate are NOT
       #                                # metered. Why 1000: see event-sources above.
+      # ingest:                        # How the Host publishes what it reads. publishWindow is how many messages ONE
+      #   publishWindow: 32            # connection keeps waiting for the platform broker's acknowledgement at once, 1
+      #                                # to 1024 (out of range, or an explicit 0, stops the service). Publishing cannot
+      #                                # exceed this divided by the acknowledgement time, ~11 ms on a replicated broker.
+      #                                # It is also a loss bound: the Host is a clean-session client, so a pod that
+      #                                # stops suddenly loses up to this many messages per connection (plus, while
+      #                                # publishes are failing, those awaiting a retry); a clean stop or a handover
+      #                                # waits for them (8 s).
     # Project each broker password Secret into the env var its source names:
     # extraEnv:
     #   - name: SPARKPLUG_ACME_PW

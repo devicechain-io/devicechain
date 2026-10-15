@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // DefaultHostId is the Sparkplug Host Application identity used when a source
@@ -36,6 +37,66 @@ const (
 	DefaultIngestBurst             = 2000
 )
 
+// DefaultIngestPublishWindow is how many messages one Sparkplug connection keeps awaiting the
+// platform broker's acknowledgement at once. The host used to publish from paho's single
+// receive goroutine and wait for each acknowledgement before it took the next message, so a
+// connection could not exceed 1 / the acknowledgement time (about 88 messages a second on a
+// replicated broker, where one takes about 11.4 ms). 32 lifts that to about 32 / 11.4 ms, some
+// 2,800 messages a second PER CONNECTION, and every source runs on the one leader pod.
+//
+// It is deliberately small, and well under the 128 of the external MQTT source and the
+// gateway: the window is also a LOSS BOUND (see Ingest.PublishWindow). A Sparkplug host is a
+// clean-session client that acknowledges every message to its broker as soon as the handler
+// returns, so a pod that dies loses everything it has taken and not yet stored, and 32 is
+// as much as the throughput above the old ceiling needs. The window is a ceiling, not an
+// occupancy: a connection that receives a message every 50 ms keeps about one in flight.
+const DefaultIngestPublishWindow = 32
+
+// Ingest configures how the host publishes what it ingests.
+type Ingest struct {
+	// PublishWindow is how many messages ONE Sparkplug connection keeps awaiting the platform
+	// broker's acknowledgement at once, from 1 to messaging.MaxOrderedWindow. Unset (absent)
+	// defaults to DefaultIngestPublishWindow; an explicit 0 is refused, not defaulted, and so
+	// is anything outside the range: a window that is silently clamped is a throughput limit
+	// nobody chose. A fixed setting, read once at startup, and the same for every source.
+	//
+	// 🔴 IT IS ALSO A LOSS BOUND. A Sparkplug host is a clean-session client (its broker
+	// redelivers nothing to a restarted host), and it acknowledges each message to the broker
+	// as soon as it has been handed on, not when it is stored. A pod that dies loses what it
+	// has taken and not yet stored, which was one message per connection and is now, per
+	// connection:
+	//
+	//   - up to this many awaiting the platform broker's acknowledgement;
+	//   - while publishes are failing, those waiting out their backoff to be tried again.
+	//     The writer lets a failing broker fail at most one window at once, so this is about
+	//     one more window at worst and nothing while the broker is healthy (the queue's hard
+	//     cap is host.publishRetryDepth, and what overflows it is counted as lost);
+	//   - the one message the receive goroutine is handling.
+	//
+	// Messages the MQTT client has read and not yet handed over are not acknowledged to the
+	// broker, but a clean session discards them on the disconnect anyway, as it did before.
+	// An edge node's store-and-forward covers the window in which the host is offline, not
+	// messages already delivered to a host that then died. A clean stop, or a handover of
+	// leadership, waits (bounded) for them to be stored first. What a new leader repairs is
+	// STATE, not history: it announces ONLINE, a node that then sends DATA with no birth on
+	// the new host is asked to rebirth, and failover reconciliation rebirths the nodes the
+	// platform still holds connected, so presence and every metric's current value come back
+	// with the births; readings lost in between do not.
+	//
+	// It is a pointer so that "not written" and "written as 0" are different things; after
+	// ApplyDefaults it is never nil.
+	PublishWindow *int
+}
+
+// PublishWindowSize is the publish window in effect: the configured one, or the default when
+// the setting was never written.
+func (i Ingest) PublishWindowSize() int {
+	if i.PublishWindow == nil {
+		return DefaultIngestPublishWindow
+	}
+	return *i.PublishWindow
+}
+
 // SparkplugConfiguration is the top-level configuration for the adapter: the set
 // of per-tenant Sparkplug sources it connects to (ADR-069). An empty set is a
 // valid, inert configuration (the service runs but connects to nothing) — this is
@@ -49,6 +110,9 @@ type SparkplugConfiguration struct {
 	// IngestRateLimit is the platform-default, per-tenant ingest ceiling the readings
 	// of every DATA message are charged against. See IngestRateLimit.
 	IngestRateLimit IngestRateLimit
+
+	// Ingest carries how the host publishes what it ingests. See Ingest.
+	Ingest Ingest
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling, counted in readings.
@@ -156,6 +220,10 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
+	if c.Ingest.PublishWindow == nil {
+		w := DefaultIngestPublishWindow
+		c.Ingest.PublishWindow = &w
+	}
 }
 
 // Validate fails the load closed on a configuration that would connect with no
@@ -165,6 +233,9 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 // misconfiguration from silently mis-routing telemetry, leaking one tenant's data
 // into another, or fighting itself for a STATE identity at the broker.
 func (c *SparkplugConfiguration) Validate() error {
+	if w := c.Ingest.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
+		return fmt.Errorf("ingest.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
 	// endpointTenant enforces the M7 invariant that a broker connection is the
 	// tenant trust boundary: a normalized broker endpoint may serve exactly one
 	// tenant. stateIdentity catches two Host Applications on one broker sharing a

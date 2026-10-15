@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
 )
@@ -34,14 +36,14 @@ func TestResolveSourcesGivesEachIngestingClientTheLimiter(t *testing.T) {
 	ingester := host.NewIngester(nil, nil, host.IngestMetrics{})
 	limiter := adapter.NewSampleLimiter(core.StaticCeiling(10, 20), adapter.IngestLimiterMetrics{}, nil)
 
-	clients, err := resolveSources(cfg, "inst", ingester, limiter, nil, host.Metrics{})
+	clients, err := resolveSources(cfg, "inst", ingester, limiter, nil, host.Metrics{}, noopPublishers)
 	require.NoError(t, err)
 	require.Len(t, clients, 2)
 	for i, c := range clients {
 		assert.Same(t, limiter, c.SampleLimiter(), "source %d's client was not given the service's limiter", i)
 	}
 
-	_, err = resolveSources(cfg, "inst", ingester, nil, nil, host.Metrics{})
+	_, err = resolveSources(cfg, "inst", ingester, nil, nil, host.Metrics{}, noopPublishers)
 	require.Error(t, err, "an ingest path with no ceiling must be refused, not built unmetered")
 }
 
@@ -65,3 +67,11 @@ func TestSparkplugIngestRateLimitDefaults(t *testing.T) {
 	require.Error(t, core.LoadConfiguration([]byte(`{"ingestRateLimit":{"messagesPerSecond":50}}`), &config.SparkplugConfiguration{}),
 		"an unknown key is refused, not ignored")
 }
+
+// noopPublisher accepts every submission and acknowledges it at once.
+type noopPublisher struct{}
+
+func (noopPublisher) Submit(_ context.Context, _ []messaging.Message, done func(error)) { done(nil) }
+func (noopPublisher) Settle(context.Context) error                                      { return nil }
+
+func noopPublishers() (host.Publisher, error) { return noopPublisher{}, nil }
