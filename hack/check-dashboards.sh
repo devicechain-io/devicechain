@@ -126,7 +126,7 @@ EXPECTED_DATA_KEYS=(
 # ---------------------------------------------------------------------------
 check_content() {
   python3 - "$1" <<'PY'
-import json, os, re, subprocess, sys
+import json, os, re, subprocess, sys, tempfile
 
 root = sys.argv[1]
 chart = os.path.join(root, "deploy", "helm", "devicechain")
@@ -197,13 +197,25 @@ if not areas:
 # name reaches promauto as such a literal (`ms.NewCounter("batch_refusals_total", ...)`),
 # so membership here is the closest a static check gets to "this series is
 # registered".
+#
+# 🔴 THE PATTERN GOES TO grep IN A FILE (-f), NEVER AS AN ARGUMENT. It contains
+# double quotes, and on Windows an argument list is flattened into ONE command
+# line that the MSYS grep then re-parses. The pattern arrived as
+# \[a-z][a-z0-9_]*" -- the leading quote turned into a backslash -- matched
+# nothing, and the run stopped at "found no Go string literals" below, before
+# checking a single dashboard. A file reaches grep byte for byte on every
+# platform. Written in binary, so no platform adds a carriage return to it either.
+with tempfile.NamedTemporaryFile("wb", suffix=".pattern", delete=False) as pattern_file:
+    pattern_file.write(b'"[a-z][a-z0-9_]*"\n')
 try:
     out = subprocess.run(
-        ["grep", "-rhoE", '"[a-z][a-z0-9_]*"', go_root, "--include=*.go"],
+        ["grep", "-rhoE", "-f", pattern_file.name, go_root, "--include=*.go"],
         capture_output=True, text=True, check=False,
     )
 except OSError as exc:
     sys.exit("could not run grep over the Go tree: %s" % exc)
+finally:
+    os.unlink(pattern_file.name)
 literals = {line.strip('"') for line in out.stdout.splitlines()}
 if not literals:
     sys.exit(
