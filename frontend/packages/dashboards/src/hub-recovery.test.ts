@@ -31,6 +31,8 @@ class FakeSocket {
   static refuseInit = false;
   // The most sockets ever connecting or open at one time.
   static peak = 0;
+  // Every subscribe frame any socket has received.
+  static subscribes = 0;
 
   readyState = FakeSocket.CONNECTING;
   at = Date.now();
@@ -64,6 +66,7 @@ class FakeSocket {
       }, 0);
     } else if (frame.type === 'subscribe') {
       this.subscriptions.push(frame);
+      FakeSocket.subscribes++;
     }
   }
 
@@ -93,8 +96,20 @@ class FakeSocket {
     this.onclose?.({ code, reason: '', wasClean: code !== 1006 });
   }
 
-  close(): void {
+  // The server ends one operation on a socket that stays up, as event-management does when the
+  // stream's live source cannot be opened: the resolver's error arrives as a `next` carrying
+  // only `errors`, and then `complete`.
+  end(sub: Frame): void {
+    this.subscriptions = this.subscriptions.filter((s) => s !== sub);
+    this.deliver({ id: sub.id, type: 'next', payload: { errors: [{ message: 'live source unavailable' }] } });
+    this.deliver({ id: sub.id, type: 'complete' });
+  }
+
+  // As a browser does: the close event follows, asynchronously.
+  close(code = 1000): void {
+    if (this.readyState === FakeSocket.CLOSED) return;
     this.readyState = FakeSocket.CLOSED;
+    setTimeout(() => this.onclose?.({ code, reason: '', wasClean: true }), 0);
   }
 }
 
@@ -128,6 +143,7 @@ beforeEach(() => {
   FakeSocket.down = false;
   FakeSocket.refuseInit = false;
   FakeSocket.peak = 0;
+  FakeSocket.subscribes = 0;
   vi.stubGlobal('WebSocket', FakeSocket);
   vi.stubGlobal('window', { location: { protocol: 'http:', host: 'localhost' } });
 });
@@ -209,5 +225,116 @@ describe('a live board after a long disconnection', () => {
     expect(FakeSocket.all).toHaveLength(1);
     expect(widget.errors).toHaveLength(1);
     expect((widget.errors[0] as { code: number }).code).toBe(4401);
+  });
+});
+
+// The socket stays up, but the server ends one stream: event-management could not open its live
+// source (its broker connection was still coming back) or the source closed. The server says so
+// with an error-only `next` and a `complete`, not an `error`, so the stream used to sit there,
+// subscribed to nothing, under a badge that read `live`.
+describe('a stream the server ends while the socket stays up', () => {
+  it('is opened again and gets data, without the widget ever showing an error', async () => {
+    const hub = new DashboardHub({ resolver });
+    const [widget] = openWidgets(hub, 1);
+    await vi.advanceTimersByTimeAsync(10);
+    const socket = live();
+    socket.end(socket.subscriptions[0]);
+    await vi.advanceTimersByTimeAsync(1_100);
+    expect(FakeSocket.subscribes).toBe(2);
+    live().publish(5);
+    expect(widget.values).toEqual([5]);
+    expect(widget.errors).toEqual([]);
+    expect(hub.connectionState).toBe('live');
+  });
+
+  it('is opened again after a doubling wait, which starts over once a reading arrives', async () => {
+    const hub = new DashboardHub({ resolver });
+    openWidgets(hub, 2); // a second stream keeps the socket open throughout
+    await vi.advanceTimersByTimeAsync(10);
+    const endD0 = (): void => {
+      const socket = live();
+      socket.end(socket.subscriptions.find((f) => (f.payload as { variables: { deviceToken: string } }).variables.deviceToken === 'd0')!);
+    };
+    // Re-opened 1 s, then 2 s, then 4 s after each end.
+    for (const wait of [1_000, 2_000, 4_000]) {
+      endD0();
+      const before = FakeSocket.subscribes;
+      await vi.advanceTimersByTimeAsync(wait - 50);
+      expect(FakeSocket.subscribes).toBe(before);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(FakeSocket.subscribes).toBe(before + 1);
+    }
+    // Capped at 30 s however often it ends.
+    for (let i = 0; i < 6; i++) {
+      endD0();
+      await vi.advanceTimersByTimeAsync(30_050);
+    }
+    const capped = FakeSocket.subscribes;
+    endD0();
+    await vi.advanceTimersByTimeAsync(30_050);
+    expect(FakeSocket.subscribes).toBe(capped + 1);
+    // A reading arrives: the next end is re-opened after 1 s again.
+    live().publish(1);
+    endD0();
+    const before = FakeSocket.subscribes;
+    await vi.advanceTimersByTimeAsync(1_050);
+    expect(FakeSocket.subscribes).toBe(before + 1);
+  });
+
+  it('is never re-opened once its widget has gone, waiting or not', async () => {
+    const hub = new DashboardHub({ resolver });
+    const watch = (deviceToken: string) => hub.subscribeWidget({ kind: 'device', deviceToken, measurements: ['t'] }, { next: () => {} });
+    watch('keep'); // keeps the socket open throughout
+    const leaves = watch('leaves');
+    const ended = watch('ended');
+    await vi.advanceTimersByTimeAsync(10);
+    const opened = FakeSocket.subscribes;
+    // A widget goes while its stream is open: its own unsubscribe completes, and that is not the server.
+    leaves();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.subscribes).toBe(opened);
+    // A widget goes while its ended stream waits to be re-opened.
+    const socket = live();
+    socket.end(socket.subscriptions.find((f) => (f.payload as { variables: { deviceToken: string } }).variables.deviceToken === 'ended')!);
+    await vi.advanceTimersByTimeAsync(500);
+    ended();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.subscribes).toBe(opened);
+  });
+
+  it('is not re-opened by a sign-out, which ends every stream from the client side', async () => {
+    const hub = new DashboardHub({ resolver });
+    openWidgets(hub, 1);
+    await vi.advanceTimersByTimeAsync(10);
+    disposeSubscriptions();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(FakeSocket.all).toHaveLength(1);
+    expect(FakeSocket.subscribes).toBe(1);
+  });
+});
+
+describe('a board that reads more than one area', () => {
+  it('gets every area back after an outage', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ data: { alarms: { results: [], pagination: { total: 0 } } } }))));
+    const hub = new DashboardHub({ resolver });
+    const [widget] = openWidgets(hub, 1);
+    hub.subscribeAlarms({ pageSize: 10 }, { next: () => {}, error: () => {} });
+    await vi.advanceTimersByTimeAsync(10);
+    const open = () => FakeSocket.all.filter((s) => s.readyState === FakeSocket.OPEN);
+    expect(open().map((s) => s.url).sort()).toEqual(['ws://localhost/api/device-management/graphql', 'ws://localhost/api/event-management/graphql'].sort());
+
+    FakeSocket.down = true;
+    for (const s of open()) s.drop(1006);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(hub.connectionState).toBe('offline');
+
+    FakeSocket.down = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    const back = open();
+    expect(back).toHaveLength(2);
+    for (const s of back) expect(s.subscriptions).toHaveLength(1);
+    back.find((s) => s.url.includes('event-management'))!.publish(3);
+    expect(widget.values).toEqual([3]);
+    expect(hub.connectionState).toBe('live');
   });
 });
