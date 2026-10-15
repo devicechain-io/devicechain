@@ -770,6 +770,74 @@ export const builtinWidgetDescriptors = {
     freshness: true,
     layout: { defaultSpan: { cols: 2, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 4, rows: 4 } },
   }),
+
+  // ---- Radial family ----------------------------------------------------------
+  // A heading on a full turn, and a ring filled between a configured min and max. The compass
+  // draws on the registered gauge series; the ring is SVG. Both put their number in DOM text.
+
+  compass: defineWidgetDescriptor({
+    id: 'compass',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Compass', category: 'Telemetry', titleId: 'widgetTypeCompass', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      precision: {
+        ...PRECISION,
+        doc: 'Decimal places of the heading. Default 0 (whole degrees). The heading is rounded first, then folded onto 0 to 360, so it never reads 360.',
+      },
+      thresholds: {
+        ...THRESHOLDS,
+        doc: 'Severity bands over the heading in degrees (0 to 360, after folding). Each entry starts a band at its value that runs to the next entry; below the first, and in a normal band, the needle keeps its own colour.',
+      },
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    defaults: { title: 'Compass' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
+  }),
+
+  'progress-ring': defineWidgetDescriptor({
+    id: 'progress-ring',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Progress ring', category: 'Telemetry', titleId: 'widgetTypeProgressRing', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { window: { option: 'window', min: 1 } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      min: SCALE_MIN,
+      max: SCALE_MAX,
+      readout: {
+        kind: 'enum',
+        values: ['percent', 'value'],
+        labelId: 'widgetLabelReadout',
+        valueLabelIds: { percent: 'widgetReadoutPercent', value: 'widgetReadoutValue' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'What the middle of the ring shows: the percent of the scale (default) or the value with its unit.',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      window: WINDOW,
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+    defaults: { title: 'Progress ring' },
+    interactions: {},
+    freshness: true,
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 6 } },
+  }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 
 // The catalog the headless validators read. Constructed at module load, so a built-in that

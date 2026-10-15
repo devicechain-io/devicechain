@@ -109,6 +109,7 @@ const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>>
   'alarm-table': { maxRows: 'widgetMaxRowsAlarmHint' },
   'command-button': { maxRows: 'widgetMaxRowsCommandHint' },
   'linear-gauge': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
+  'progress-ring': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
   'level-gauge': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
   battery: { min: 'widgetHintBatteryRange', max: 'widgetHintBatteryRange' },
 };

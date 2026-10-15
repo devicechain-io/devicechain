@@ -283,6 +283,26 @@ func buildSignalBarsWidget(id string, b box, s widgetSubject, title, measurement
 	}
 }
 
+// ---- The radial family ----------------------------------------------------------
+
+func buildCompassWidget(id string, b box, s widgetSubject, title, measurement string, thresholds []widgetThreshold) dashboardWidget {
+	options := map[string]any{"title": title, "measurement": measurement, "precision": 0}
+	if len(thresholds) > 0 {
+		options["thresholds"] = thresholds
+	}
+	return dashboardWidget{Id: id, Type: "compass", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
+func buildProgressRingWidget(id string, b box, s widgetSubject, title, measurement, unit, readout string, min, max float64, thresholds []widgetThreshold) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "progress-ring", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "measurement": measurement, "unit": unit, "readout": readout,
+			"min": min, "max": max, "precision": 0, "thresholds": thresholds,
+		},
+	}
+}
+
 // ---- Shared board scaffolding -------------------------------------------------
 
 // widgetlabChartWindow is the rolling sample buffer the charts keep.
@@ -418,6 +438,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	// Each widget-family slice appends its own block below, starting at its own reserved row,
 	// so two slices never place a widget on the same cells.
 	def.Widgets = append(def.Widgets, widgetlabLevelsAndIndicators(onSensor)...)
+	def.Widgets = append(def.Widgets, widgetlabRadialFamily(onSensor)...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -479,6 +500,29 @@ func widgetlabLevelsAndIndicators(onSensor func(measurements ...string) widgetSu
 				{Value: 52, Level: "normal"},
 				{Value: 58, Level: "normal"},
 			}),
+	}
+}
+
+// widgetlabRadialRow is the first row of the radial-family block (rows 20-23), under the levels
+// and indicators.
+const widgetlabRadialRow = 20
+
+// widgetlabRadialFamily places the compass and the progress rings. The sim reports no bearing,
+// so the compass is bound to the battery countdown (100 down to 1), which sweeps its needle
+// through a quarter of the dial; the stress board drives it past the ends of 0 to 360. The
+// rings read humidity as a percent of 0..100 and the temperature sweep as a value on its own scale.
+func widgetlabRadialFamily(onSensor func(measurements ...string) widgetSubject) []dashboardWidget {
+	const r = widgetlabRadialRow
+	return []dashboardWidget{
+		buildCompassWidget("wl-compass", box{0, 4, r, 4}, onSensor(WidgetlabBatteryKey), "Heading", WidgetlabBatteryKey, nil),
+		buildProgressRingWidget("wl-ring", box{4, 3, r, 3}, onSensor(WidgetlabHumidityKey),
+			"Humidity", WidgetlabHumidityKey, "%", "percent", 0, 100, []widgetThreshold{
+				{Value: 0, Level: "critical"},
+				{Value: 30, Level: "warning"},
+				{Value: 45, Level: "normal"},
+			}),
+		buildProgressRingWidget("wl-ring-value", box{7, 3, r, 3}, onSensor(WidgetlabTemperatureKey),
+			"Temperature", WidgetlabTemperatureKey, "C", "value", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
 	}
 }
 
@@ -580,6 +624,15 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 				"Off the scale (bar)", WidgetlabTemperatureKey, "C", "bar", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
 			buildLevelGaugeWidget("wl-stress-level", box{6, 3, 11, 4}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
 				"Off the scale (tank)", WidgetlabTemperatureKey, "C", "value", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
+
+			// The radial family on the same extremes device (rows 15 and down). The compass reads
+			// the cycle as headings: 350 stays 350, and the negative step folds onto the dial
+			// (-35 is 325) instead of sweeping the needle backwards. The ring is scaled for the
+			// sweep, so it pins at both ends and marks the true reading.
+			buildCompassWidget("wl-stress-compass", box{0, 4, 15, 4}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
+				"Headings that fold", WidgetlabTemperatureKey, nil),
+			buildProgressRingWidget("wl-stress-ring", box{4, 3, 15, 3}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
+				"Off the scale (ring)", WidgetlabTemperatureKey, "C", "value", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
 		},
 	}
 

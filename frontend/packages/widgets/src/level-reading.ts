@@ -52,14 +52,18 @@ export interface LevelInput {
   unit: string | undefined;
   precision: number | undefined;
   range?: RangeResult;
+  // Maps the sample's raw value to the one the widget shows (a compass folds a heading onto
+  // 0..360); undefined means "no usable value". Band, display and fill all read the mapped value.
+  normalize?: (raw: number | undefined) => number | undefined;
 }
 
 export function useLevelReading(widget: WidgetInstance, data: MeasurementStreamState, input: LevelInput): LevelReading {
   const severity = useSeverityColors();
   const name = primaryMeasurementName(widget);
   const sample = pickSample(data.latest, name);
-  const value = sample?.value ?? undefined;
-  const { thresholds, unit, precision, range } = input;
+  const { thresholds, unit, precision, range, normalize } = input;
+  const raw = sample?.value ?? undefined;
+  const value = normalize ? normalize(raw) : raw;
   const band = bandAt(thresholds, value);
   const bandColor = levelColor(severity, band?.level);
   return {

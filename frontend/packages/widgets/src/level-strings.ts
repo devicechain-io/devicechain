@@ -22,6 +22,8 @@ export interface LevelStrings {
   belowScale: string;
   on: string;
   off: string;
+  // The four points of the compass, in N, E, S, W order (West is "O" in Spanish).
+  cardinals: readonly [string, string, string, string];
 }
 
 export const LEVEL_STRINGS: Record<'en' | 'es', LevelStrings> = {
@@ -34,6 +36,7 @@ export const LEVEL_STRINGS: Record<'en' | 'es', LevelStrings> = {
     belowScale: 'Below scale',
     on: 'On',
     off: 'Off',
+    cardinals: ['N', 'E', 'S', 'W'],
   },
   es: {
     noData: 'Sin datos',
@@ -44,6 +47,7 @@ export const LEVEL_STRINGS: Record<'en' | 'es', LevelStrings> = {
     belowScale: 'Bajo la escala',
     on: 'Encendido',
     off: 'Apagado',
+    cardinals: ['N', 'E', 'S', 'O'],
   },
 };
 

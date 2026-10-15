@@ -11,9 +11,13 @@
 
 export { EChart, type EChartOption, type EChartProps } from './chart/echart';
 export {
+  buildCompassOption,
   buildGaugeOption,
   buildLineOption,
+  gaugeReadoutBox,
   severityFill,
+  wrapHeading,
+  type CompassChartOptions,
   type GaugeChartOptions,
   type LineChartOptions,
 } from './chart/chart-options';

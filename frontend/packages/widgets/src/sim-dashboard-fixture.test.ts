@@ -94,6 +94,8 @@ const PATHOLOGICAL_AXES = {
   image: 'a source that cannot decode',
   'linear-gauge': 'a value outside the scale, so the fill pins and the readout is marked',
   'level-gauge': 'a value outside the scale, so the liquid pins and the readout is marked',
+  compass: 'headings outside 0 to 360, which fold onto the dial rather than sweeping past it',
+  'progress-ring': 'a value outside the scale, so the ring pins and the readout is marked',
 } as const satisfies Partial<Record<WidgetType, string>>;
 
 describe('the sim dashboard fixtures', () => {

@@ -7,7 +7,6 @@
 
 import type { MeasurementSample } from '@devicechain/dashboards';
 
-import { FIT_MIN_FONT_PX, fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
 import { isAlarmLevel, levelColor, type AlarmLevel } from '../severity';
@@ -180,13 +179,32 @@ export function buildLineOption(
 export interface GaugeChartOptions {
   min?: number;
   max?: number;
-  unit?: string;
-  // Decimal places for the readout; unset uses the default rounding.
-  precision?: number;
   // Severity thresholds, drawn as coloured bands on the arc (any order).
   thresholds?: readonly Threshold[];
-  // The board's density scale: multiplies the label-font clamp and the readout's floor. Default 1.
+  // The board's density scale: multiplies the label-font clamp. Default 1.
   scale?: number;
+}
+
+// The dial's geometry as fractions of its box: where its centre sits and how much of the short
+// side's half it fills. The DOM readout is placed from the same numbers (gaugeReadoutBox).
+const GAUGE_CENTER_Y = 0.58;
+const GAUGE_RADIUS = 0.95;
+// How far below the hub the readout sits, as a fraction of the radius.
+const GAUGE_READOUT_OFFSET = 0.3;
+
+// The box (px, relative to the chart) the gauge's DOM readout is centred in and fitted to: under
+// the hub and inside the dial, where the canvas detail used to be drawn. A zero size (before the
+// first measure) takes the nominal one the builder assumes.
+export function gaugeReadoutBox(size?: ElementSize): { centerX: number; centerY: number; width: number; height: number } {
+  const s = shortSide(size);
+  const w = (size?.width ?? 0) > 0 ? size!.width : s;
+  const h = (size?.height ?? 0) > 0 ? size!.height : s;
+  return {
+    centerX: w / 2,
+    centerY: GAUGE_CENTER_Y * h + GAUGE_READOUT_OFFSET * GAUGE_RADIUS * (s / 2),
+    width: s * 0.7,
+    height: s * 0.25,
+  };
 }
 
 // Below this short side (px) the gauge drops its axis labels: at that size they would be
@@ -224,19 +242,12 @@ export function buildGaugeOption(
   // The needle takes the colour of the band the value sits in; with no bands, below the
   // lowest, or in a `normal` band it keeps the chart accent.
   const accent = levelColor(theme.severity, bandAt(thresholds, value)?.level) ?? theme.series[0];
-  const unitSuffix = options.unit ? ` ${options.unit}` : '';
 
   const s = shortSide(size);
   const arcWidth = clamp(Math.round(s / 26), 4, 12);
   const scale = options.scale ?? 1;
   const labelFont = clamp(Math.round(s / 20), Math.round(8 * scale), Math.round(13 * scale));
   const showAxisLabels = s >= GAUGE_AXIS_LABELS_MIN_SIDE;
-  // The readout is fitted to the dial's inner box and its own length, like every big number.
-  const readout = value == null ? '—' : `${formatValue(value, options.precision)}${unitSuffix}`;
-  const valueFont = fitValueFont({ width: s * 0.7, height: s * 0.25 }, readout.length, {
-    floor: Math.round(FIT_MIN_FONT_PX * scale),
-  });
-
   return {
     animation: false,
     series: [
@@ -245,8 +256,8 @@ export function buildGaugeOption(
         min,
         max,
         splitNumber: s < 160 ? 4 : 5, // fewer ticks than the default 10 → no cram
-        radius: '95%',
-        center: ['50%', '58%'],
+        radius: `${GAUGE_RADIUS * 100}%`,
+        center: ['50%', `${GAUGE_CENTER_Y * 100}%`],
         // The progress arc would paint over the bands, so with bands the needle alone marks the value.
         progress: { show: !banded, width: arcWidth, itemStyle: { color: accent } },
         pointer: { itemStyle: { color: accent }, length: '55%', width: clamp(Math.round(s / 50), 2, 6) },
@@ -255,14 +266,79 @@ export function buildGaugeOption(
         axisTick: { show: false },
         splitLine: { length: arcWidth, lineStyle: { color: theme.border, width: 1 } },
         axisLabel: { show: showAxisLabels, color: theme.mutedForeground, fontSize: labelFont, distance: arcWidth + 2 },
-        detail: {
-          valueAnimation: false,
-          color: theme.foreground,
-          fontSize: valueFont,
-          offsetCenter: [0, '30%'],
-          formatter: (v: number) => (value == null ? '—' : `${formatValue(v, options.precision)}${unitSuffix}`),
-        },
+        // The number is DOM text over the chart (gaugeReadoutBox), not canvas text: the readability
+        // gate measures DOM only, and a canvas readout was invisible to it.
+        detail: { show: false },
         data: [{ value: value ?? min }],
+      },
+    ],
+  };
+}
+
+// A heading in degrees folded onto [0, 360): 370 is 10 and -90 is 270, because a compass has no
+// "beyond a full turn" and a bearing sensor may well report either. 360 is 0, never 360, and a
+// value that is not a finite number has no heading at all (undefined), not a plausible one.
+export function wrapHeading(value: number | null | undefined): number | undefined {
+  if (value == null || !Number.isFinite(value)) return undefined;
+  return ((value % 360) + 360) % 360;
+}
+
+export interface CompassChartOptions {
+  // The four point labels in N, E, S, W order (a locale writes West as "O", so the caller owns them).
+  cardinals: readonly [string, string, string, string];
+  thresholds?: readonly Threshold[];
+  // The board's density scale; multiplies the label-font clamp. Default 1.
+  scale?: number;
+}
+
+// buildCompassOption draws a full turn on the registered gauge series: north at the top, the
+// angle running clockwise, so 90 is east. The needle takes the colour of the band the (wrapped)
+// heading is in and the chart accent in a `normal` band or none. The degrees themselves are DOM
+// text beside it (compass.tsx). With no reading the needle rests at north.
+export function buildCompassOption(
+  value: number | null,
+  theme: ChartTheme,
+  options: CompassChartOptions,
+  size?: ElementSize,
+): EChartOption {
+  const heading = wrapHeading(value);
+  const thresholds = parseThresholds(options.thresholds ?? []);
+  const bands = thresholdBands(thresholds, 0, 360);
+  const accent = levelColor(theme.severity, bandAt(thresholds, heading ?? null)?.level) ?? theme.series[0];
+  const s = shortSide(size);
+  const scale = options.scale ?? 1;
+  const arcWidth = clamp(Math.round(s / 30), 3, 10);
+  const labelFont = clamp(Math.round(s / 11), Math.round(10 * scale), Math.round(20 * scale));
+  const [north, east, south, west] = options.cardinals;
+  const points: Record<number, string> = { 0: north, 90: east, 180: south, 270: west };
+  return {
+    animation: false,
+    series: [
+      {
+        type: 'gauge',
+        min: 0,
+        max: 360,
+        startAngle: 90,
+        endAngle: -270,
+        splitNumber: 4,
+        radius: '92%',
+        center: ['50%', '50%'],
+        progress: { show: false },
+        pointer: { itemStyle: { color: accent }, length: '62%', width: clamp(Math.round(s / 36), 3, 8) },
+        anchor: { show: true, size: clamp(Math.round(s / 24), 5, 12), itemStyle: { color: accent } },
+        axisLine: { lineStyle: { width: arcWidth, color: gaugeArcColors(bands, 0, 360, theme) } },
+        axisTick: { show: s >= GAUGE_AXIS_LABELS_MIN_SIDE, splitNumber: 3, length: arcWidth, lineStyle: { color: theme.border, width: 1 } },
+        splitLine: { length: arcWidth * 1.6, lineStyle: { color: theme.mutedForeground, width: 2 } },
+        // Only the four points are labelled; 360 is the same tick as 0, so it stays blank.
+        axisLabel: {
+          show: true,
+          color: theme.foreground,
+          fontSize: labelFont,
+          distance: arcWidth * 1.6 + 6,
+          formatter: (v: number) => points[v] ?? '',
+        },
+        detail: { show: false },
+        data: [{ value: heading ?? 0 }],
       },
     ],
   };

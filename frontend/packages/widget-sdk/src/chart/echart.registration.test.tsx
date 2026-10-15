@@ -12,7 +12,7 @@ import * as echarts from 'echarts/core';
 import { SVGRenderer } from 'echarts/renderers';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildGaugeOption, buildLineOption } from './chart-options';
+import { buildCompassOption, buildGaugeOption, buildLineOption } from './chart-options';
 import type { ChartTheme } from './chart-theme';
 // Importing the wrapper registers the eager chart types and components; the threshold
 // markers are registered by loadThresholdMarkers, exactly as EChart does on demand.
@@ -63,6 +63,15 @@ function render(option: unknown) {
 }
 
 describe('ECharts component registration', () => {
+  it('draws the compass through the registered gauge: its four points are real text, and the needle is the heading', () => {
+    const { chart: c, svg } = render(buildCompassOption(10, theme, { cardinals: ['N', 'E', 'S', 'W'] }));
+    // The gauge series is only created when GaugeChart is registered; the labels exist only
+    // when the builder asked for them AND the engine drew them.
+    expect(c.getOption()).toBeTruthy();
+    for (const letter of ['N', 'E', 'S', 'W']) expect(svg).toContain(`>${letter}<`);
+    expect(svg).not.toContain('>360<');
+  });
+
   it('draws the legend of a multi-series chart', () => {
     const { chart: c, svg } = render(buildLineOption(samples, theme));
     expect((c as unknown as { getModel(): { getComponent(t: string): unknown } }).getModel().getComponent('legend'), 'the legend component was never created').toBeTruthy();

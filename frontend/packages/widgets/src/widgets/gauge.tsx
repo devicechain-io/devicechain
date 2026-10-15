@@ -8,6 +8,7 @@ import { useMemo } from 'react';
 import {
   defineWidget,
   flashBackgroundStyle,
+  formatValue,
   optBoolean,
   optNumber,
   optString,
@@ -19,9 +20,12 @@ import {
   WidgetFrame,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
-import { buildGaugeOption, EChart, useChartTheme } from '@devicechain/widget-sdk/echarts';
+import { buildGaugeOption, EChart, gaugeReadoutBox, useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import { LevelReadout } from '../level-readout';
+import { levelStrings } from '../level-strings';
+import { readRange } from '../value-scale';
 
 export function Gauge({ widget, data }: WidgetProps) {
   const name = primaryMeasurementName(widget);
@@ -50,8 +54,8 @@ function GaugeBody({ widget, data }: WidgetProps) {
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
 
   const option = useMemo(
-    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit, precision, thresholds, scale }, size),
-    [sample?.value, theme, min, max, unit, precision, thresholds, scale, size],
+    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, thresholds, scale }, size),
+    [sample?.value, theme, min, max, thresholds, scale, size],
   );
 
   // Opt-in directional flash. The value lives on an opaque canvas, so the cue is a
@@ -63,9 +67,47 @@ function GaugeBody({ widget, data }: WidgetProps) {
     sample && `${sample.deviceToken}:${sample.name}`,
   );
 
+  // The number is DOM text laid over the dial where the canvas used to print it, so the
+  // readability gate can measure it (it cannot see canvas text). The meter role carries the
+  // reading to assistive tech, which the canvas never did.
+  const box = gaugeReadoutBox(size);
+  const range = readRange(min, max, { min: 0, max: 100 });
+  const value = sample?.value ?? undefined;
+  const meter =
+    range.ok && value !== undefined && Number.isFinite(value)
+      ? {
+          role: 'meter' as const,
+          'aria-valuemin': range.range.min,
+          'aria-valuemax': range.range.max,
+          'aria-valuenow': Math.min(range.range.max, Math.max(range.range.min, value)),
+          'aria-valuetext': `${formatValue(value, precision)}${unit ? ` ${unit}` : ''}`,
+        }
+      : {};
+
   return (
-    <div style={{ width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }}>
+    <div style={{ position: 'relative', width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }} {...meter}>
       <EChart option={option} />
+      <div
+        style={{
+          position: 'absolute',
+          left: box.centerX - box.width / 2,
+          top: box.centerY - box.height / 2,
+          width: box.width,
+          height: box.height,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          pointerEvents: 'none',
+        }}
+      >
+        <LevelReadout
+          text={formatValue(value, precision)}
+          unit={unit}
+          size={{ width: box.width, height: box.height }}
+          scale={scale}
+          strings={levelStrings()}
+        />
+      </div>
     </div>
   );
 }
