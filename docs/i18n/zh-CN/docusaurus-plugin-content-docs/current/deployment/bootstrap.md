@@ -623,7 +623,7 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 
 | 服务 | CPU 请求 | CPU 上限 |
 | --- | --- | --- |
-| `device-management` | 800m | 2 核 |
+| `device-management` | 450m | 2 核 |
 | `event-management` | 900m | 2 核 |
 | `device-state` | 950m | 2 核 |
 | `event-sources` | 1 核 | 2 核 |

@@ -39,6 +39,11 @@ const (
 	v0180CompactRequest int64 = 25
 )
 
+// v0190Requests are the measured requests the v0.19.0 notes were written against, for the
+// areas whose request has since been re-measured. The notes are history, so the arithmetic
+// in them is held to what that release shipped, not to what the chart requests now.
+var v0190Requests = map[string]int64{"device-management": 800}
+
 var roomPages = map[string]string{
 	"en": filepath.Join("..", "..", "..", "docs", "docs", "deployment", "releases-and-upgrades.md"),
 	"es": filepath.Join("..", "..", "..", "docs", "i18n", "es", "docusaurus-plugin-content-docs", "current",
@@ -71,6 +76,9 @@ func rolloutsOf(t *testing.T, st *State, areas []string) map[string]areaRollout 
 			if c.Name == area {
 				r.cpu = c.Resources.Requests.Cpu().MilliValue()
 			}
+		}
+		if p, ok := v0190Requests[area]; ok && !st.Compact {
+			r.cpu = p
 		}
 		if r.cpu == 0 {
 			t.Fatalf("%s: no CPU request rendered on its container: its share would read as zero", area)

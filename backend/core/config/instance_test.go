@@ -635,7 +635,7 @@ func TestTheFetchHoldBudgetIsBoundedByTheAcknowledgementWindow(t *testing.T) {
 	}
 }
 
-// 🔑 FETCH-AHEAD IS ON BY DEFAULT, AT A BATCH OF 128, and only an explicit `ahead: false` turns
+// 🔑 FETCH-AHEAD IS ON BY DEFAULT, AT A BATCH OF 256, and only an explicit `ahead: false` turns
 // it off. It is on for detection's sake (event-processing's backlog stays small), not for
 // throughput: nothing here promises a higher ceiling.
 func TestFetchAheadIsOnByDefaultAndAnExplicitFalseTurnsItOff(t *testing.T) {
@@ -645,11 +645,8 @@ func TestFetchAheadIsOnByDefaultAndAnExplicitFalseTurnsItOff(t *testing.T) {
 	if !fetch.AheadEnabled() {
 		t.Error("an absent `ahead` key left fetch-ahead off; the default is on")
 	}
-	if got := fetch.BatchSize(); got != 128 {
-		t.Errorf("the default batch is %d, want 128", got)
-	}
-	if DefaultFetchBatch != 128 {
-		t.Errorf("DefaultFetchBatch = %d; the chart and the docs state 128", DefaultFetchBatch)
+	if got := fetch.BatchSize(); got != 256 {
+		t.Errorf("the default batch is %d, want 256", got)
 	}
 
 	off := &InstanceConfiguration{}
@@ -663,5 +660,18 @@ func TestFetchAheadIsOnByDefaultAndAnExplicitFalseTurnsItOff(t *testing.T) {
 	// is applied once, where configuration is loaded.
 	if (NatsFetchConfiguration{}).AheadEnabled() {
 		t.Error("an undefaulted configuration reads as on")
+	}
+}
+
+// TestDefaultFetchBatchIsTheMeasuredBest pins the default pull size at the widest the platform
+// allows. GKE round 10 measured fetch batch 256 against 128 on the same build: single-DM resolve
+// 10.36k to 11.62k events/s at 12.4k offered (+12%), read-loop fetch wait about 90% to 70%. The
+// chart and the docs state 256; change all three together, and only with a measurement.
+func TestDefaultFetchBatchIsTheMeasuredBest(t *testing.T) {
+	if got := (NatsFetchConfiguration{}).BatchSize(); got != 256 {
+		t.Errorf("default batch = %d, want 256 (GKE r10 arm d)", got)
+	}
+	if got := (NatsFetchConfiguration{}).BatchSize(); got != MaxFetchBatch {
+		t.Errorf("default batch = %d, want MaxFetchBatch = %d", got, MaxFetchBatch)
 	}
 }

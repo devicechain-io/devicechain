@@ -416,7 +416,7 @@ func TestAnUndefaultedFetchConfigurationPullsOneBatchAtATime(t *testing.T) {
 }
 
 // A configuration that went through ApplyDefaults, as every service's does, fetches ahead at a
-// batch of 128 — and a capacity reader still never does.
+// batch of 256 — and a capacity reader still never does.
 func TestADefaultedFetchConfigurationFetchesAheadAtTheDefaultBatch(t *testing.T) {
 	nmgr, cleanup := newTestManager(t)
 	defer cleanup()
@@ -425,7 +425,7 @@ func TestADefaultedFetchConfigurationFetchesAheadAtTheDefaultBatch(t *testing.T)
 	nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Fetch = cfg.Infrastructure.Nats.Fetch
 	r := newAheadReader(t, nmgr)
 	require.True(t, r.ahead, "a defaulted configuration did not fetch ahead")
-	require.Equal(t, 128, r.fetchSize)
+	require.Equal(t, 256, r.fetchSize)
 	require.False(t, newAheadReader(t, nmgr, ReaderWithCapacity(4)).ahead)
 }
 

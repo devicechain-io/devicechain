@@ -288,12 +288,15 @@ const requestSizingRate = 6000
 //	event-processing   0.34    0.34    0.33   throttled in ~5% of periods and
 //	                                           falling behind, so not used
 //
+// device-management's figure below is the later GKE round 10 reading (0.072 cores per
+// 1,000 events/s, 0.43 at 6,000), which supersedes the 0.76 above.
+//
 // event-processing's figure is instead its one UNTHROTTLED reading, 0.37 cores at
 // 6,800 events/s with a 1-core limit: a throttled reading is what the service did,
 // not what it was offered (the rule gkeCPUPerEvent follows too). It still fell behind
 // there, so its request is a floor for keeping up, not a measure of it.
 var gkeSplitPoolCores = map[string]float64{
-	"device-management": 0.76,
+	"device-management": 0.43, // GKE round 10: 0.072 cores per 1,000 events/s x 6; the table above (0.76) is the earlier build
 	"event-management":  0.87,
 	"device-state":      0.91,
 	"event-sources":     0.98,
@@ -525,7 +528,7 @@ func TestMeasuredRequestAboveAnOperatorsLimitNamesMeasuredRequests(t *testing.T)
 	}
 	for _, want := range []string{
 		"functionalAreas.device-management.measuredRequests.cpu",
-		"800m", "300m",
+		"450m", "300m",
 		"useMeasuredRequests: false",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -581,7 +584,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 		"event-sources": "2", "device-state": "2", "event-processing": "1",
 	}
 	measured := map[string]string{
-		"device-management": "800m", "event-management": "900m",
+		"device-management": "450m", "event-management": "900m",
 		"event-sources": "1", "device-state": "950m", "event-processing": "400m",
 	}
 
@@ -650,7 +653,7 @@ func TestAreaResourcesMergeOverTheDefaults(t *testing.T) {
 			}
 		}
 		for area, want := range map[string]string{
-			"device-management": "800m", // its measured request: it set only a limit
+			"device-management": "450m", // its measured request: it set only a limit
 			"event-management":  "1",    // its own request wins over its measured one
 			"event-processing":  "400m", // its measured request
 			"user-management":   "100m", // unmeasured: the top-level request

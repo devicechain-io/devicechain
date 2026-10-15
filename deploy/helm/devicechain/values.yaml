@@ -223,12 +223,12 @@ instance:
         kvCacheMaxBytes: 67108864 # 64 MiB per cache bucket (5 buckets)
         kvStateMaxBytes: 134217728 # 128 MiB per state bucket (6 buckets)
         # How the plain durable readers pull from the broker (defaults shown). Optional;
-        # omitted, a reader asks for 128 messages and asks for the next batch while it hands
+        # omitted, a reader asks for 256 messages and asks for the next batch while it hands
         # out the current one. This is a fixed setting read when a reader is built, so
         # changing it is a restart and touches no consumer. Readers that fetch only as many
         # messages as they have free workers (outbound connectors, notifications, REACT)
         # ignore it.
-        #   batch                 messages per pull, 1-256 (0 = 128). Also the most one dropped
+        #   batch                 messages per pull, 1-256 (0 = 256). Also the most one dropped
         #                         connection can lose from a pull.
         #   ahead                 ask for the next batch while the current one is handed out
         #                         (on unless set to false). It is on to keep the detection
@@ -237,7 +237,7 @@ instance:
         #   aheadHoldBudgetMillis stop asking ahead while recent batches take longer than this
         #                         to hand out (0 = 1000; at most a tenth of the 60 s ack window).
         # fetch:
-        #   batch: 128
+        #   batch: 256
         #   ahead: true
         #   aheadHoldBudgetMillis: 1000
         # Client-side TLS to the broker (ADR-025). MUST match the broker: the
@@ -1147,10 +1147,17 @@ functionalAreas:
       limits:
         cpu: "2"
     # CPU REQUEST: what this service used at 6,000 events/s, applied while
-    # useMeasuredRequests is on (not under --compact). Measured on GKE (3 x
-    # n2-standard-4 database nodes and 3 x n2-highcpu-4 service nodes, SSD persistent
-    # disks, --ha, the development build after v0.18.0, shipped defaults): 0.75 cores
-    # over a 180 s run and 0.76 over each of two 10-minute runs, rounded up to 800m.
+    # useMeasuredRequests is on (not under --compact). Re-measured on GKE round 10 (3 x
+    # n2-custom-4-8192 service nodes, --ha, shipped defaults): 0.072 cores per 1,000
+    # events/s, so 0.43 cores at 6,000 events/s, rounded up to 450m. The earlier figure,
+    # 0.76 cores (800m), predates later per-event CPU reductions in this service. It also left
+    # no room for a second replica: with 800m requested, replicas: 2 left the second pod
+    # Pending on the node that holds the inbound broker leader, event-processing,
+    # event-management and a NATS server (a 4-vCPU node has about 3.9 cores allocatable;
+    # these requests sum to 450 + 400 + 900 + 500 = 2,250m before the node's system pods),
+    # while 300m scheduled. At 450m the second replica needs 450m more, not 800m. The
+    # service still reaches ~0.75 cores at 10,000 events/s (limit 2 cores): a request
+    # only places the pod, it does not cap it.
     # 6,000 events/s is the rate a default --ha install sustained there for 10
     # minutes, twice, with resolution, storage and live state each keeping at least
     # 99.7% of it (detection fell behind; see event-processing below). A request only
@@ -1159,7 +1166,7 @@ functionalAreas:
     # used at that rate, and the scheduler stacked them. The kind figure above holds the
     # LIMIT. backend/cli/bootstrap/sizing_test.go holds both.
     measuredRequests:
-      cpu: 800m
+      cpu: 450m
     # Prefer a node that is not running this instance's event-store primary
     # (templates/_helpers.tpl devicechain.podAntiAffinity). Preferred,
     # never required: on a cluster with fewer nodes than busy services the pod still

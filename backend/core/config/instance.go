@@ -126,11 +126,15 @@ type NatsConfiguration struct {
 const (
 	// DefaultFetchBatch is how many messages one pull asks for when Batch is unset.
 	//
-	// 128 is the size the fetch-ahead measurements were taken at (a GKE A/B with
-	// the feature on at 128 against off at 64): fetch time scales with the batch, so a larger
-	// pull is no faster to deliver, and it stays well inside MaxFetchBatch and the window a
-	// lost pull leaves behind.
-	DefaultFetchBatch = 128
+	// 256 is the measured best, and it is MaxFetchBatch. On GKE (round 10, fetch batch 256
+	// against 128 with the same build and placement) the single-DM resolve rate rose 12%
+	// (10.36k to 11.62k events/s at 12.4k offered) and the share of read-loop samples spent
+	// waiting on the next fetch fell from about 90% to 70%: the consume end is bound by the
+	// round trip of a pull, not by how long the broker takes to fill it, and the larger pull
+	// was not proportionally slower to deliver. It stays inside the window a lost pull leaves
+	// behind (MaxFetchBatch is the widest range the gap fill reads cheaply), and a full batch
+	// clears far inside the 60 s acknowledgement window.
+	DefaultFetchBatch = 256
 	// MaxFetchBatch is the widest pull the platform allows. It is the same number as the
 	// widest range the event-processing gap fill reads one request per sequence
 	// (messaging's rangeDirectMax; a compile-time assertion there keeps the two equal), so

@@ -517,7 +517,7 @@ Each pod counts only the messages it held, so combine pods with `sum`, not `max`
 
 ## Fetching ahead {#fetch-ahead}
 
-By default a service pulls 128 messages from the broker and asks for the next 128 while it is still
+By default a service pulls 256 messages from the broker and asks for the next 256 while it is still
 working through the ones in hand, so the time each pull takes overlaps the work instead of being
 added to it. This is on to keep the detection engine's backlog small, not to raise throughput:
 with it on, the number of events waiting in front of detection stayed in the hundreds where it
@@ -527,7 +527,7 @@ starts, so a change is a restart, and they touch no consumer on the broker.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| `batch` | 128 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
+| `batch` | 256 | How many messages one pull asks for, from 1 to 256 (anything else is refused at startup). A larger batch spreads the pull's time over more messages. It is also the most one dropped connection can lose from a single pull, and the detection engine reads that range back from the stream before it carries on. |
 | `ahead` | on | Ask for the next batch while the current one is still being handed out, so the pull overlaps the work. Set `ahead: false` to pull one batch at a time. Messages are still handled in the order they arrive. |
 | `aheadHoldBudgetMillis` | 1000 | A batch asked for ahead waits while the one before it is handled, and its acknowledgement window is already running. If recent batches take longer than this to hand out, the service stops asking ahead and goes back to one pull at a time. At most a tenth of the acknowledgement window, or the service refuses to start. |
 
@@ -628,8 +628,8 @@ are made at the same time. Whatever the key-value store cannot answer is read fr
 one lookup at a time, so a resolver still holds at most one database connection. A resolver
 spends most of each event waiting for replies rather than using CPU. Several resolvers
 work at once. Events that arrive while all of them are busy wait in front of them, in order: up
-to 100 in the pod's hand-off queue and, behind them, the batches fetched from the stream: up to 128
-in the batch being handed out and, with [fetching ahead](#fetch-ahead) on, up to 128 more in the
+to 100 in the pod's hand-off queue and, behind them, the batches fetched from the stream: up to 256
+in the batch being handed out and, with [fetching ahead](#fetch-ahead) on, up to 256 more in the
 batch asked for ahead.
 The rest wait in the stream.
 

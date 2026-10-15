@@ -158,7 +158,7 @@ func (a stageArm) name() string {
 // (config.DefaultFetchBatch, the configured default pull size). The reader fetches again only once its buffer is empty, so
 // its buffer holds between 0 and this many, plus the one message the read loop holds while it
 // waits on a full hand-off channel.
-const readerFetchBatch = 128
+const readerFetchBatch = 256
 
 // Stage names a place an event can wait, for the verdict.
 const (
