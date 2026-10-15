@@ -133,6 +133,8 @@ The draft is for authors. Reading a draft definition, or the definition of a pub
 
 Publishing or making a version live does not change the draft's `updatedAt`, so saving the draft with the baseline you already hold still works. The version list itself carries only each version's number, optional label and description, and who published it when.
 
+A dashboard records the format it was saved in. A viewer or console older than that format refuses to open the board and says to upgrade, rather than drawing it wrong; an application that calls `parseDashboardDefinition` gets a `DashboardDefinitionError` whose `code` is `'schemaTooNew'` (check `code` rather than `instanceof`, which fails when an application bundles two copies of the package). Boards saved in an older format still open and are converted on load.
+
 ## Embedding: definitions, slots, and binding manifests {#embedding-definitions-slots-and-binding-manifests}
 
 A dashboard definition is portable and reusable as a template. Rather than hard-coding which device each widget reads, widgets bind to **named slots**. At mount time, a host supplies a **binding manifest** that maps each slot to a concrete device or anchor. So one definition plus two manifests gives two live dashboards for two different devices, with no change to the definition itself.

@@ -538,7 +538,7 @@ const MANIFEST_SAMPLES = [
 // sample like MANIFEST_SAMPLES above, never translated.
 const EMPTY_OBJECT = '{ }';
 
-function Load({
+export function Load({
   onRender,
   onSignOut,
   autoLoadToken = null,

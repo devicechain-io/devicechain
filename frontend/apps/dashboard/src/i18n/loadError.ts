@@ -49,6 +49,8 @@ export function loadErrorKey(error: LoadError): LoadErrorKey {
       return { key: 'load:errorDefinitionTooLarge', params: { limit: MAX_PASTE_MIB } };
     case 'definitionInvalid':
       return { key: 'load:errorDefinitionInvalid', params: { detail: error.detail } };
+    case 'definitionTooNew':
+      return { key: 'load:errorDefinitionTooNew', params: {} };
     case 'manifestInvalid':
       return { key: 'load:errorManifestInvalid', params: { detail: error.detail } };
     case 'manifestNotObject':

@@ -33,7 +33,7 @@ import { FormDrawer } from '@/components/registry';
 import { DashboardImportDrawer, type ImportSource } from './import/DashboardImportDrawer';
 import { DASHBOARD_TEMPLATES } from './import/templates';
 import { defaultWidgetRegistry } from './editor/widgetRegistry';
-import { migrateToSlots, parseDashboardDefinition, serializeDefinition } from '@devicechain/dashboards';
+import { type DashboardDefinitionError, migrateToSlots, parseDashboardDefinition, serializeDefinition } from '@devicechain/dashboards';
 import {
   DataTable,
   DataTableBody,
@@ -110,7 +110,7 @@ export default function DashboardsPage() {
         description: source.description ?? undefined,
       });
     } catch (err) {
-      toast(errMessage(err), 'error');
+      toast((err as DashboardDefinitionError | null)?.code === 'schemaTooNew' ? t('schemaTooNew') : errMessage(err), 'error');
     }
   };
 

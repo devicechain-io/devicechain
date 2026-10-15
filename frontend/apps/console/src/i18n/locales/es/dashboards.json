@@ -15,6 +15,7 @@
   "detailNotFound": "Panel «{{token}}» no encontrado.",
   "detailNotPublished": "El panel «{{token}}» aún no se ha publicado. Pide a un autor que lo publique.",
   "detailParseError": "No se pudo renderizar este panel: {{error}}",
+  "schemaTooNew": "Este panel se guardó con una versión más reciente de DeviceChain. Actualiza esta consola para abrirlo.",
   "detailInvalidDefinition": "Definición de panel no válida.",
   "workspaceDiscardTitle": "¿Descartar los cambios sin guardar?",
   "workspaceDiscardDescription": "Se perderán las ediciones del panel sin guardar.",

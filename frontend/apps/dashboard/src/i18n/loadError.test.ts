@@ -43,6 +43,7 @@ const SAMPLES: { [K in LoadError['code']]: Extract<LoadError, { code: K }>[] } =
     // whenever the thrown value was not an Error.
     { code: 'definitionInvalid', detail: null },
   ],
+  definitionTooNew: [{ code: 'definitionTooNew' }],
   manifestInvalid: [{ code: 'manifestInvalid', detail: 'Unexpected token' }],
   manifestNotObject: [{ code: 'manifestNotObject' }],
   manifestDropped: [

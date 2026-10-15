@@ -8,7 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { effectiveBindings, sameBinding } from '@devicechain/dashboards';
+import { CURRENT_SCHEMA_VERSION, effectiveBindings, sameBinding } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
 import { loadDashboard, MAX_PASTE_BYTES } from './load';
@@ -175,6 +175,17 @@ describe('loadDashboard', () => {
     expect('error' in result && (result.error as { detail: string | null }).detail).toEqual(
       expect.any(String),
     );
+  });
+
+  it('refuses a board saved by a newer version with its own code, not a generic parse failure', () => {
+    const newer = JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION + 1, title: 'T', widgets: [] });
+    const result = loadDashboard(newer, '');
+    expect('error' in result && result.error).toEqual({ code: 'definitionTooNew' });
+  });
+
+  it('still loads a board at the current version', () => {
+    const current = JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION, title: 'T', widgets: [] });
+    expect('loaded' in loadDashboard(current, '')).toBe(true);
   });
 
   it('refuses a paste over the server cap without parsing it', () => {

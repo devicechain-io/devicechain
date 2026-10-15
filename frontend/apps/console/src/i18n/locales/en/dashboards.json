@@ -15,6 +15,7 @@
   "detailNotFound": "Dashboard “{{token}}” not found.",
   "detailNotPublished": "Dashboard “{{token}}” has not been published yet. Ask an author to publish it.",
   "detailParseError": "Could not render this dashboard: {{error}}",
+  "schemaTooNew": "This dashboard was saved by a newer version of DeviceChain. Upgrade this console to open it.",
   "detailInvalidDefinition": "Invalid dashboard definition.",
   "workspaceDiscardTitle": "Discard unsaved changes?",
   "workspaceDiscardDescription": "Your unsaved dashboard edits will be lost.",

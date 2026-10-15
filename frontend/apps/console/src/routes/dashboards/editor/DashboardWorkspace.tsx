@@ -24,6 +24,7 @@ import {
   isDirty,
   migrateToSlots,
   parseDashboardDefinition,
+  type DashboardDefinitionError,
   pruneSlots,
   resolveConcrete,
   serializeDefinition,
@@ -64,6 +65,7 @@ import {
   useResolvedBindings,
   useSlotCandidates,
 } from '@devicechain/widgets';
+import { ErrorState } from '@/components/ui/error-state';
 import { PageShell } from '@/components/ui/page-shell';
 import { CopyToken } from '@/components/ui/copy-token';
 import { Button } from '@/components/ui/button';
@@ -364,6 +366,8 @@ export function DashboardWorkspace({
   // Advanced after every save/rollback so a subsequent save doesn't self-conflict.
   const [expectedUpdatedAt, setExpectedUpdatedAt] = useState<string | null>(updatedAt);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // A rollback landed on a board saved by a newer release: nothing here may draw or save it.
+  const [newerBoard, setNewerBoard] = useState(false);
   // Clone hands the board on screen to the import flow: a new token, checked, saved as a draft.
   const [cloneOpen, setCloneOpen] = useState(false);
   // Preview mode swaps the live hub for a client-side synthetic source so the author
@@ -547,7 +551,13 @@ export function DashboardWorkspace({
       setSelectedId(null);
       setExpectedUpdatedAt(result.updatedAt);
       setSaveState({ kind: 'clean' });
-    } catch {
+    } catch (err) {
+      // The server's draft is now a board this console cannot read. Keeping the editor open on
+      // the old copy would offer to save it back over the newer one, so it is closed instead.
+      if ((err as DashboardDefinitionError | null)?.code === 'schemaTooNew') {
+        setNewerBoard(true);
+        return;
+      }
       toast(t('workspaceRollbackParseError'), 'error');
     }
   };
@@ -719,6 +729,14 @@ export function DashboardWorkspace({
       </Button>
     </div>
   );
+
+  if (newerBoard) {
+    return (
+      <PageShell title={heading} banner="dashboard">
+        <ErrorState description={t('schemaTooNew')} />
+      </PageShell>
+    );
+  }
 
   return (
     <>

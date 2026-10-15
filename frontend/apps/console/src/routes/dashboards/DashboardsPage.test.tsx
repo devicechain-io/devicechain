@@ -7,16 +7,16 @@
 // member without it must not be shown a button whose only outcome is an error.
 
 import '@/i18n/config';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ authorities: [] as string[] }));
+const h = vi.hoisted(() => ({ authorities: [] as string[], toast: vi.fn(), getDashboard: vi.fn() }));
 
 vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({ claims: { authorities: h.authorities } }),
 }));
-vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: vi.fn() }) }));
+vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: h.toast }) }));
 vi.mock('@/components/ui/confirm-dialog', () => ({ useConfirm: () => vi.fn() }));
 vi.mock('@/lib/api/dashboards', () => ({
   listDashboards: vi.fn(async () => ({
@@ -25,8 +25,10 @@ vi.mock('@/lib/api/dashboards', () => ({
   })),
   createDashboard: vi.fn(),
   deleteDashboard: vi.fn(),
-  getDashboard: vi.fn(),
+  getDashboard: h.getDashboard,
 }));
+
+import { CURRENT_SCHEMA_VERSION } from '@devicechain/dashboards';
 
 import DashboardsPage from './DashboardsPage';
 
@@ -53,5 +55,26 @@ describe('DashboardsPage clone', () => {
     renderPage();
     await screen.findByText('Ops');
     expect(screen.queryByRole('button', { name: 'Clone' })).toBeNull();
+  });
+
+  it('refuses to clone a board saved by a newer version, and opens no import', async () => {
+    h.authorities = ['dashboard:read', 'dashboard:write'];
+    h.toast.mockClear();
+    h.getDashboard.mockResolvedValue({
+      token: 'ops',
+      name: 'Ops',
+      description: null,
+      definition: JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION + 1, title: 'Ops', widgets: [] }),
+    });
+    renderPage();
+    await screen.findByText('Ops');
+    fireEvent.click(screen.getByRole('button', { name: 'Clone' }));
+    await waitFor(() =>
+      expect(h.toast).toHaveBeenCalledWith(
+        'This dashboard was saved by a newer version of DeviceChain. Upgrade this console to open it.',
+        'error',
+      ),
+    );
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

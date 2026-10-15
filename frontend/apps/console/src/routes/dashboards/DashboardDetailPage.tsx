@@ -8,6 +8,7 @@ import {
   createDeviceResolver,
   migrateToSlots,
   parseDashboardDefinition,
+  type DashboardDefinitionError,
   setTitle,
   type DashboardDefinition,
 } from '@devicechain/dashboards';
@@ -79,7 +80,7 @@ export default function DashboardDetailPage() {
   // BOTH the workspace's working and saved baselines start seeded (otherwise the
   // seed would read as a spurious unsaved edit).
   const parsed = useMemo<
-    { definition: DashboardDefinition } | { error: string } | null
+    { definition: DashboardDefinition } | { error: string } | { tooNew: true } | null
   >(() => {
     if (!data || data === NOT_PUBLISHED) return null;
     try {
@@ -94,6 +95,9 @@ export default function DashboardDetailPage() {
       definition = migrateToSlots(definition);
       return { definition };
     } catch (err) {
+      // Refused whole -- for an author too: the editor is never mounted over a board it cannot
+      // read, so there is no save to write a lossy copy over the newer one.
+      if ((err as DashboardDefinitionError | null)?.code === 'schemaTooNew') return { tooNew: true };
       return { error: err instanceof Error ? err.message : t('detailInvalidDefinition') };
     }
   }, [data, t, registry]);
@@ -130,6 +134,13 @@ export default function DashboardDetailPage() {
     return (
       <PageShell title={data.name || token} banner="dashboard">
         <ErrorState description={t('detailParseError', { error: parsed.error })} />
+      </PageShell>
+    );
+  }
+  if (parsed && 'tooNew' in parsed) {
+    return (
+      <PageShell title={data.name || token} banner="dashboard">
+        <ErrorState description={t('schemaTooNew')} />
       </PageShell>
     );
   }
