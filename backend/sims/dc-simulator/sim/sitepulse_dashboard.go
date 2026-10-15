@@ -31,7 +31,8 @@ import (
 //
 // 🔴 EVERY NEW WIDGET HERE IS BOUND TO A MEASUREMENT THE SIM REALLY REPORTS, and the ones
 // that would need an invented number are absent on purpose. The sim reports fuel, engine
-// temperature, engine hours, payload, tyre pressure and position per machine, and throughput
+// temperature, engine hours and position per machine, payload and tyre pressure per wheeled
+// machine (haulers and loaders; a dozer is tracked), and throughput
 // and a running flag for the plant: no radio signal and no battery, so no signal-bars or
 // battery widget; no heading, so no compass; and no shift target or plant capacity, so no
 // progress-ring (the throughput stat pair stands in for it). Every band edge is a rule
@@ -41,7 +42,11 @@ import (
 // Engine temperature and tyre pressure are served the same honest way: the alarm table
 // carries each machine's overheat and tyre alarms with the triggering value, the counts
 // total them, and two gauges follow the SELECTED machine, which an alarm row's
-// originator drill re-points.
+// originator drill re-points. The selection DEFAULTS TO THE FIRST HAUL TRUCK, not the
+// first machine: a dozer runs on tracks and reports no tyre pressure (the equipment
+// profile declares the metric for every machine, but the player emits it only for the
+// wheeled ones, as the first recorded run shows), so a dozer default opened the board on
+// an empty tyre gauge.
 //
 // 🔴 THE SITE-WIDE ALARM SURFACES ARE BOUNDED, AND SAY SO HERE. A scoped alarm widget
 // runs one alarms query PER member device (dashboards hub.ts queryAlarms), and an anchor
@@ -53,8 +58,10 @@ import (
 // alarm widget (no datasource) would avoid the fan-out but the widget gate requires every
 // alarm widget to bind one.
 //
-// The Machine selector lists the anchor's members, which include the crusher: picking it
-// points the two gauges at a device that reports neither metric, so they render empty.
+// The Machine selector lists the anchor's members, which include the crusher and the dozers:
+// picking the crusher points the two gauges at a device that reports neither metric, and a
+// dozer leaves the tyre gauge empty, which the gauge says (a dash, and no needle) rather than
+// resting a needle on a number.
 // No anchor covers the machines only, and adding one is out of scope.
 //
 // 🔴 NO COMMAND WIDGET YET, which is S2's work (console dispatch of goto-area, bound to
@@ -111,13 +118,20 @@ const (
 	// header's range control is part of what this board is declared to carry.
 	sitepulseTimeRangeSeconds = 3600
 
-	// Rows. The KPIs (3 rows: the crusher lamp needs three to read at the smallest cell) lead, then the alarm table and the map stack on the left 8
-	// columns beside the machine selector and its two gauges on the right 4, in a band that
-	// ends at row 10; the fuel label (1 row: it is just "Fuel level" now that the low-fuel
-	// threshold lives on the tanks) and the tank and card bands follow.
-	sitepulseKPIRows      = 3
-	sitepulseFuelLabelRow = sitepulseKPIRows + 7
-	sitepulseFuelFirstRow = sitepulseFuelLabelRow + 1
+	// Rows. The KPIs lead in two bands of three tiles, each a third of the width and three rows
+	// tall: the site's state (the two alarm counts and the crusher lamp), then the plant's
+	// throughput (now, on average and at peak). Then the alarm table and the map stack on the left
+	// 8 columns beside the machine selector and its two gauges on the right 4, in a band that ends
+	// at row 13, which is the fold exactly, and the tank and card bands follow below it.
+	//
+	// Why two bands of three rows and not one: six tiles at their minimum widths (2+2+2+3+3+3)
+	// do not fit 12 columns, and at TWO rows every tile fits (the lamp and the stat card lay their
+	// caption beside the figure at that height) but the figure is ~30 px at 960, too small for a
+	// board that is read from across a room or beside a video.
+	sitepulseKPIBandRows  = 3
+	sitepulseKPIRows      = 2 * sitepulseKPIBandRows
+	sitepulseKPITileCols  = dashboardGridColumns / 3
+	sitepulseFuelFirstRow = sitepulseKPIRows + 7
 
 	// Display scales for the engine gauge, the tyre gauge and the fuel tanks. Not contract
 	// values: the only fixed points are the rule thresholds, and each scale keeps its threshold
@@ -141,17 +155,17 @@ func sitepulseMachinesOfType(devices []DeviceInstance, typ string) []DeviceInsta
 	return out
 }
 
-// sitepulseFuelBandText is the label over the fuel rows. The low-fuel threshold is no longer
-// prose here: it is a `thresholds` entry on each card, built from the constant the rule is
-// built from (sitepulseApplyThresholds), so the board cannot state a number the rule does not
-// use. perKind is the largest machine population; when it exceeds the cards shown the
-// label says the rows are partial rather than letting them look complete.
+// sitepulseFuelBandText is the note over the fuel rows when the per-kind cap leaves them
+// partial, and "" when every machine has its tank, in which case the board carries no note:
+// each tank is titled "Fuel level" and names its machine, so a heading row would only spend a
+// row repeating that. The low-fuel threshold is never prose here: it is a `thresholds` entry
+// on each tank, built from the constant the rule is built from, so the board cannot state a
+// number the rule does not use. perKind is the largest machine population.
 func sitepulseFuelBandText(shown, perKind int) string {
-	text := "Fuel level"
-	if perKind > shown {
-		text += fmt.Sprintf(" · showing the first %d of %d per machine kind", shown, perKind)
+	if perKind <= shown {
+		return ""
 	}
-	return text
+	return fmt.Sprintf("Fuel level · showing the first %d of %d per machine kind", shown, perKind)
 }
 
 // sitepulseCardBandRows is the grid rows a band of n cards takes once it wraps.
@@ -191,7 +205,8 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	firstDozer, err := firstOfType(devices, SitepulseDozerTypeToken)
+	// The gauges' default subject is the first haul truck, which reports both gauges' metrics.
+	firstHauler, err := firstOfType(devices, SitepulseHaulerTypeToken)
 	if err != nil {
 		return "", err
 	}
@@ -210,7 +225,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 			},
 		},
 		sitepulseSlotPlant:   sitepulseDeviceSlot("Crusher plant", plant, nil),
-		sitepulseSlotMachine: sitepulseDeviceSlot("Machine", firstDozer, &dashboardScope{Parent: sitepulseSlotSite, Strategy: "manual"}),
+		sitepulseSlotMachine: sitepulseDeviceSlot("Machine", firstHauler, &dashboardScope{Parent: sitepulseSlotSite, Strategy: "manual"}),
 	}
 
 	onSite := widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}}
@@ -221,10 +236,15 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		return widgetSubject{Slot: sitepulseSlotMachine, Measurements: []string{metric}}
 	}
 
+	// kpiTile places the i-th tile (0..2, left to right) of KPI band `band` (0 or 1).
+	kpiTile := func(band, i int) box {
+		return box{sitepulseKPITileCols * i, sitepulseKPITileCols, sitepulseKPIBandRows * band, sitepulseKPIBandRows}
+	}
+
 	// The crusher lamp: lit while plant_running reports 1 (onAt), dark at 0. No threshold bands:
 	// no rule fires on the plant, so no band would have a source. No unit either (it is a flag).
 	onAt := 1.0
-	running := buildStatusLightWidget("sp-plant-running", box{4, 2, 0, sitepulseKPIRows}, onPlant(SitepulsePlantRunningKey),
+	running := buildStatusLightWidget("sp-plant-running", kpiTile(0, 2), onPlant(SitepulsePlantRunningKey),
 		"Crusher running", SitepulsePlantRunningKey, "", &onAt, nil)
 	running.Options["precision"] = 0
 	// An empty unit is no unit: omit the key rather than author a blank one.
@@ -235,17 +255,20 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// critical off a 25-row page. The raise-then-clear story shows on the counts and cards.
 	alarms.Options["state"] = AlarmStateActiveWire
 
-	// The throughput pair covers the board's time range (windowSeconds 0): the card captions
-	// itself "Average · 1h" from the span in force, so the title stays the measurement's name.
-	// No thresholds: no rule fires on throughput, and the sim defines no target or capacity, so
-	// there is no honest progress-ring either.
+	// Throughput three ways. "Now" is the newest reading (stat `last`), aged on screen and
+	// refused once it is older than the board's range; the average and the peak cover the
+	// board's time range (windowSeconds 0) and caption themselves "Average · 1h" from the span
+	// in force. No thresholds: no rule fires on throughput, and the sim defines no target or
+	// capacity, so there is no honest progress-ring either.
 	widgets := []dashboardWidget{
-		buildAlarmCountWidget("sp-alarms-critical", box{0, 2, 0, sitepulseKPIRows}, onSite, "Critical alarms", AlarmSeverityCriticalWire),
-		buildAlarmCountWidget("sp-alarms-major", box{2, 2, 0, sitepulseKPIRows}, onSite, "Major alarms", AlarmSeverityMajorWire),
+		buildAlarmCountWidget("sp-alarms-critical", kpiTile(0, 0), onSite, "Critical alarms", AlarmSeverityCriticalWire),
+		buildAlarmCountWidget("sp-alarms-major", kpiTile(0, 1), onSite, "Major alarms", AlarmSeverityMajorWire),
 		running,
-		buildStatCardWidget("sp-plant-throughput-avg", box{6, 3, 0, sitepulseKPIRows}, onPlant(SitepulseThroughputKey),
+		buildStatCardWidget("sp-plant-throughput-now", kpiTile(1, 0), onPlant(SitepulseThroughputKey),
+			"Throughput now", SitepulseThroughputKey, "last", "t/h", 0, 0, nil),
+		buildStatCardWidget("sp-plant-throughput-avg", kpiTile(1, 1), onPlant(SitepulseThroughputKey),
 			"Avg throughput", SitepulseThroughputKey, "avg", "t/h", 0, 0, nil),
-		buildStatCardWidget("sp-plant-throughput-max", box{9, 3, 0, sitepulseKPIRows}, onPlant(SitepulseThroughputKey),
+		buildStatCardWidget("sp-plant-throughput-max", kpiTile(1, 2), onPlant(SitepulseThroughputKey),
 			"Peak throughput", SitepulseThroughputKey, "max", "t/h", 0, 0, nil),
 	}
 
@@ -274,7 +297,15 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		row += sitepulseTankBandRows(n)
 	}
 
-	widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, dashboardGridColumns, sitepulseFuelLabelRow, sitepulseFuelFirstRow - sitepulseFuelLabelRow}, sitepulseFuelBandText(shown, perKind), "left", 14))
+	// The partial-rows note, only when there is something to say: it takes the band's first
+	// row and moves every tank and card down by one.
+	if text := sitepulseFuelBandText(shown, perKind); text != "" {
+		widgets = append(widgets, buildLabelWidget("sp-fuel-label", box{0, dashboardGridColumns, sitepulseFuelFirstRow, 1}, text, "left", 14))
+		for i := range fuelBands {
+			fuelBands[i].row++
+		}
+		row++
+	}
 
 	// The low-fuel bands are the rule's own: the rule's severity from empty, normal from the
 	// threshold it fires below (a "below X" rule is two entries, because a band runs to the next).
@@ -287,7 +318,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 			slots[d.Token] = sitepulseDeviceSlot(d.ExternalId, d, nil)
 			widgets = append(widgets, buildLevelGaugeWidget("sp-fuel-"+d.Token, sitepulseTankBox(b.row, i),
 				widgetSubject{Slot: d.Token, Measurements: []string{SitepulseFuelKey}},
-				"Fuel %", SitepulseFuelKey, "%", "value", 0, sitepulseFuelTankMax, lowFuel))
+				"Fuel level", SitepulseFuelKey, "%", "value", 0, sitepulseFuelTankMax, lowFuel))
 		}
 	}
 

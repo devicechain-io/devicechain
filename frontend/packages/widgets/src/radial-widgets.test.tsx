@@ -265,10 +265,14 @@ describe('gauge readout', () => {
     expect(optionOf().series[0].detail.show).toBe(false);
   });
 
-  it('shows an em dash and rests the needle at the minimum with no sample', () => {
+  it('shows an em dash and draws no needle with no sample', () => {
+    // A needle resting on the minimum would read as a reading of the minimum.
     show({ min: 10, max: 50 }, 'none');
     expect(readout()?.textContent).toBe('—');
-    expect(optionOf().series[0].data[0].value).toBe(10);
+    expect(optionOf().series[0].pointer.show).toBe(false);
+    cleanup();
+    show({ min: 10, max: 50 }, 10);
+    expect(optionOf().series[0].pointer.show).toBe(true);
   });
 
   it('keeps the default 0..100 scale and the default rounding of an unset precision', () => {

@@ -132,10 +132,10 @@ func TestSitepulseBoardShowsEveryMachinesFuel(t *testing.T) {
 		if w.Options["measurement"] != "fuel_pct" || w.Options["unit"] != "%" {
 			t.Errorf("%s: measurement/unit = %v/%v, want fuel_pct/%%", w.Id, w.Options["measurement"], w.Options["unit"])
 		}
-		// The card is titled with the MEASUREMENT; the machine is named by the frame's subject
+		// The tank is titled with the MEASUREMENT; the machine is named by the frame's subject
 		// line, which shows the slot's device. A title that is the external id says it twice.
-		if want := externalIds[slot]; want == "" || w.Options["title"] != "Fuel %" || def.Slots[slot].Label != want {
-			t.Errorf("%s: title %v / slot label %q, want the title \"Fuel %%\" and the externalId %q as the slot label", w.Id, w.Options["title"], def.Slots[slot].Label, want)
+		if want := externalIds[slot]; want == "" || w.Options["title"] != "Fuel level" || def.Slots[slot].Label != want {
+			t.Errorf("%s: title %v / slot label %q, want the title \"Fuel level\" and the externalId %q as the slot label", w.Id, w.Options["title"], def.Slots[slot].Label, want)
 		}
 		if def.Slots[slot].DefaultBinding == nil || def.Slots[slot].DefaultBinding.DeviceToken != slot {
 			t.Errorf("%s: slot %q does not default-bind the device it is named for", w.Id, slot)
@@ -165,10 +165,6 @@ func TestSitepulseBoardStatesTheThresholds(t *testing.T) {
 		if got := thresholdsOf(w); got != lowFuel {
 			t.Errorf("%s (%s): thresholds = %s, want %s", w.Id, slot, got, lowFuel)
 		}
-	}
-	label := widgetByID(t, def, "sp-fuel-label")
-	if text, _ := label.Options["text"].(string); strings.Contains(text, "15") || strings.Contains(text, "fire") {
-		t.Errorf("fuel label %q still carries the threshold prose", text)
 	}
 
 	for _, c := range []struct {
@@ -274,6 +270,7 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 		t.Fatalf("plant slot = %+v, want a device slot defaulting to sp-plant-01", plant)
 	}
 	for id, c := range map[string]struct{ typ, metric, unit string }{
+		"sp-plant-throughput-now": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-throughput-avg": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-throughput-max": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-running":        {"status-light", "plant_running", ""},
@@ -294,7 +291,9 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 			t.Errorf("%s unit = %q (present %v), want %q (omitted when empty)", id, u, has, c.unit)
 		}
 	}
-	for id, stat := range map[string]string{"sp-plant-throughput-avg": "avg", "sp-plant-throughput-max": "max"} {
+	// "Now" is the newest reading (`last`), which the card refuses once it is older than the
+	// board's range; the other two are the range's average and peak.
+	for id, stat := range map[string]string{"sp-plant-throughput-now": "last", "sp-plant-throughput-avg": "avg", "sp-plant-throughput-max": "max"} {
 		w := widgetByID(t, def, id)
 		if w.Options["stat"] != stat {
 			t.Errorf("%s stat = %v, want %s", id, w.Options["stat"], stat)
@@ -347,8 +346,10 @@ func TestSitepulseBoardPayloadIsHaulersOnly(t *testing.T) {
 func TestSitepulseBoardDrillsAnAlarmToTheMachineGauges(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
 	sel, ok := def.Slots["selectedMachine"]
-	if !ok || sel.Type != "device" || sel.DefaultBinding == nil || sel.DefaultBinding.DeviceToken != "sp-dozer-01" {
-		t.Fatalf("selectedMachine = %+v, want a device slot defaulting to sp-dozer-01", sel)
+	// A haul truck, not the first machine: a dozer is tracked and reports no tyre pressure, so
+	// a dozer default opens the board on an empty tyre gauge.
+	if !ok || sel.Type != "device" || sel.DefaultBinding == nil || sel.DefaultBinding.DeviceToken != "sp-hauler-01" {
+		t.Fatalf("selectedMachine = %+v, want a device slot defaulting to sp-hauler-01", sel)
 	}
 	if sel.Scope == nil || sel.Scope.Parent != "site" || sel.Scope.Strategy != "manual" {
 		t.Errorf("selectedMachine scope = %+v, want parent site, strategy manual", sel.Scope)
@@ -403,16 +404,24 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 		if got := len(cardsFor(def, "payload_t")); got != tc.perKind {
 			t.Errorf("--devices %d: %d payload cards, want %d", tc.devices, got, tc.perKind)
 		}
-		text, _ := widgetByID(t, def, "sp-fuel-label").Options["text"].(string)
+		// The note exists exactly when the rows are partial.
+		labels := widgetsOfType(def, "label")
 		if tc.devices > tc.perKind {
+			if len(labels) != 1 || labels[0].Id != "sp-fuel-label" {
+				t.Fatalf("--devices %d: the board carries labels %+v, want the one partial-rows note sp-fuel-label", tc.devices, labels)
+			}
+			text, _ := labels[0].Options["text"].(string)
 			if want := fmt.Sprintf("first %d of %d", tc.perKind, tc.devices); !strings.Contains(text, want) {
 				t.Errorf("--devices %d: label %q lacks the note %q", tc.devices, text, want)
 			}
-		} else if strings.Contains(text, "showing the first") {
-			t.Errorf("--devices %d: label %q claims partial rows but every machine has a card", tc.devices, text)
-		}
-		if strings.Contains(text, "every machine") {
-			t.Errorf("--devices %d: label %q claims every machine is listed; the anchor membership is paged", tc.devices, text)
+			if strings.Contains(text, "15") || strings.Contains(text, "fire") {
+				t.Errorf("--devices %d: label %q carries threshold prose; the bands are on the tanks", tc.devices, text)
+			}
+			if strings.Contains(text, "every machine") {
+				t.Errorf("--devices %d: label %q claims every machine is listed; the anchor membership is paged", tc.devices, text)
+			}
+		} else if len(labels) != 0 {
+			t.Errorf("--devices %d: the board carries %d labels, but every machine has a tank and there is nothing to note", tc.devices, len(labels))
 		}
 		// dashboard-management refuses a definition over 1 MiB (model/api.go maxDefinitionBytes).
 		if len(m.Dashboards[0].Definition) >= 1<<20 {
@@ -421,12 +430,23 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 	}
 }
 
-// The default 18-machine board has six per kind and every machine has a card, so the
-// label must not say the rows are partial.
-func TestSitepulseDefaultBoardLabelCarriesNoTruncationNote(t *testing.T) {
-	text, _ := widgetByID(t, sitepulseBoard(t, sitepulseManifest(t)), "sp-fuel-label").Options["text"].(string)
-	if strings.Contains(text, "showing the first") {
-		t.Errorf("default board label %q claims partial rows", text)
+// The default 18-machine board has six per kind and every machine has a tank, so it carries
+// no partial-rows note, and no heading row either: each tank names itself and its machine.
+// The tanks start on the row the gauges' band ends on, so no empty row sits between them.
+func TestSitepulseDefaultBoardSpendsNoRowOnAFuelHeading(t *testing.T) {
+	def := sitepulseBoard(t, sitepulseManifest(t))
+	if got := widgetsOfType(def, "label"); len(got) != 0 {
+		t.Errorf("default board carries %d labels, want none", len(got))
+	}
+	tyre := widgetByID(t, def, "sp-tyre").Layout["base"]
+	first := 1 << 30
+	for _, w := range tanksFor(def, "fuel_pct") {
+		if r := w.Layout["base"].Row; r < first {
+			first = r
+		}
+	}
+	if end := tyre.Row + tyre.Rows; first != end {
+		t.Errorf("the first fuel tank starts at row %d, want %d, the row the gauge band ends on", first, end)
 	}
 }
 
@@ -443,7 +463,7 @@ func TestSitepulseBoardKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
 		t.Errorf("premise: the board computes a fold of %d rows, want %d", sitepulseFoldRows, foldRows)
 	}
 	def := sitepulseBoard(t, sitepulseManifest(t))
-	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput-avg", "sp-plant-throughput-max", "sp-plant-running", "sp-alarms", "sp-map"} {
+	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-plant-throughput-max", "sp-plant-running", "sp-alarms", "sp-map"} {
 		b := widgetByID(t, def, id).Layout["base"]
 		if b.Mode != "grid" {
 			t.Fatalf("%s is placed %q; the fold is counted in grid rows", id, b.Mode)

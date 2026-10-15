@@ -16,6 +16,7 @@ import { spanLabel, type AggregateStreamState } from '@devicechain/dashboards';
 import {
   bandAt,
   css,
+  FIT_MIN_FONT_PX,
   fontVar,
   formatValue,
   levelColor,
@@ -36,6 +37,8 @@ import { LevelEmpty, LevelReadout } from '../level-readout';
 
 // The room the caption under the figure needs, before the density scale.
 const CAPTION_ROOM_PX = 22;
+// The share of the width the figure is fitted to when the caption sits beside it.
+const BESIDE_FIGURE_SHARE = 0.6;
 
 // The latest reading is aged on screen like every other single reading ("12 sec. ago"), and with
 // no threshold of its own it is never called stale -- only its age is shown.
@@ -61,28 +64,51 @@ export function StatCard({ widget, data }: WidgetProps<AggregateStreamState>) {
         const isCount = reading.stat === 'count';
         const band = bandAt(thresholds, reading.value);
         const room = Math.round(CAPTION_ROOM_PX * scale);
+        // The caption goes UNDER the figure while that leaves the figure two lines of the smallest
+        // readable size; below that (the 2-row minimum with a subject line and a freshness footer,
+        // at the smallest cell) it goes BESIDE it, so the declared minimum holds the whole card.
+        const beside = size.height > 0 && size.height - room < 2 * Math.round(FIT_MIN_FONT_PX * scale);
+        const figure = beside
+          ? { width: Math.round(size.width * BESIDE_FIGURE_SHARE), height: size.height }
+          : { width: size.width, height: Math.max(0, size.height - room) };
         return (
           <div
             data-stat={reading.stat}
             data-stat-span={reading.spanSeconds}
+            data-stat-layout={beside ? 'beside' : 'under'}
             data-threshold-level={band?.level}
             title={band?.label}
-            style={{ display: 'flex', flexDirection: 'column', justifyContent: 'safe center', height: '100%', overflow: 'hidden' }}
+            style={{
+              display: 'flex',
+              flexDirection: beside ? 'row' : 'column',
+              alignItems: beside ? 'center' : undefined,
+              justifyContent: 'safe center',
+              gap: beside ? spaceVar(2) : undefined,
+              height: '100%',
+              overflow: 'hidden',
+            }}
           >
-            <div style={{ flex: '1 1 0', minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div
+              style={
+                beside
+                  ? { flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'center' }
+                  : { flex: '1 1 0', minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }
+              }
+            >
               <LevelReadout
                 text={formatValue(reading.value, isCount ? 0 : precision)}
                 unit={isCount ? undefined : unit}
                 color={levelColor(severity, band?.level)}
-                size={{ width: size.width, height: Math.max(0, size.height - room) }}
+                size={figure}
                 scale={scale}
               />
             </div>
             <div
               data-stat-caption=""
               style={{
-                flex: '0 0 auto',
-                marginTop: spaceVar(1),
+                flex: beside ? '0 1 auto' : '0 0 auto',
+                minWidth: 0,
+                marginTop: beside ? undefined : spaceVar(1),
                 textAlign: 'center',
                 fontSize: fontVar('sm'),
                 color: css('muted-foreground'),

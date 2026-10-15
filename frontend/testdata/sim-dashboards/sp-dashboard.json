@@ -23,7 +23,7 @@
     },
     "selectedMachine": {
       "defaultBinding": {
-        "deviceToken": "sp-dozer-01",
+        "deviceToken": "sp-hauler-01",
         "kind": "device"
       },
       "label": "Machine",
@@ -205,7 +205,7 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 2,
+          "cols": 4,
           "mode": "grid",
           "row": 0,
           "rows": 3
@@ -227,8 +227,8 @@
       "id": "sp-alarms-major",
       "layout": {
         "base": {
-          "col": 2,
-          "cols": 2,
+          "col": 4,
+          "cols": 4,
           "mode": "grid",
           "row": 0,
           "rows": 3
@@ -252,8 +252,8 @@
       "id": "sp-plant-running",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 2,
+          "col": 8,
+          "cols": 4,
           "mode": "grid",
           "row": 0,
           "rows": 3
@@ -275,13 +275,40 @@
         ],
         "slot": "plant"
       },
+      "id": "sp-plant-throughput-now",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 3,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "throughput_tph",
+        "precision": 0,
+        "stat": "last",
+        "title": "Throughput now",
+        "unit": "t/h"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "throughput_tph"
+        ],
+        "slot": "plant"
+      },
       "id": "sp-plant-throughput-avg",
       "layout": {
         "base": {
-          "col": 6,
-          "cols": 3,
+          "col": 4,
+          "cols": 4,
           "mode": "grid",
-          "row": 0,
+          "row": 3,
           "rows": 3
         }
       },
@@ -305,10 +332,10 @@
       "id": "sp-plant-throughput-max",
       "layout": {
         "base": {
-          "col": 9,
-          "cols": 3,
+          "col": 8,
+          "cols": 4,
           "mode": "grid",
-          "row": 0,
+          "row": 3,
           "rows": 3
         }
       },
@@ -320,24 +347,6 @@
         "unit": "t/h"
       },
       "type": "stat-card"
-    },
-    {
-      "id": "sp-fuel-label",
-      "layout": {
-        "base": {
-          "col": 0,
-          "cols": 12,
-          "mode": "grid",
-          "row": 10,
-          "rows": 1
-        }
-      },
-      "options": {
-        "align": "left",
-        "fontSize": 14,
-        "text": "Fuel level"
-      },
-      "type": "label"
     },
     {
       "datasource": {
@@ -353,7 +362,7 @@
           "col": 0,
           "cols": 2,
           "mode": "grid",
-          "row": 11,
+          "row": 13,
           "rows": 3
         }
       },
@@ -373,7 +382,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -392,7 +401,7 @@
           "col": 2,
           "cols": 2,
           "mode": "grid",
-          "row": 11,
+          "row": 13,
           "rows": 3
         }
       },
@@ -412,7 +421,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -431,7 +440,7 @@
           "col": 4,
           "cols": 2,
           "mode": "grid",
-          "row": 11,
+          "row": 13,
           "rows": 3
         }
       },
@@ -451,7 +460,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -470,7 +479,7 @@
           "col": 6,
           "cols": 2,
           "mode": "grid",
-          "row": 11,
+          "row": 13,
           "rows": 3
         }
       },
@@ -490,7 +499,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -509,7 +518,7 @@
           "col": 8,
           "cols": 2,
           "mode": "grid",
-          "row": 11,
+          "row": 13,
           "rows": 3
         }
       },
@@ -529,7 +538,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -548,7 +557,7 @@
           "col": 10,
           "cols": 2,
           "mode": "grid",
-          "row": 11,
+          "row": 13,
           "rows": 3
         }
       },
@@ -568,7 +577,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -587,7 +596,7 @@
           "col": 0,
           "cols": 2,
           "mode": "grid",
-          "row": 14,
+          "row": 16,
           "rows": 3
         }
       },
@@ -607,7 +616,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -626,7 +635,7 @@
           "col": 2,
           "cols": 2,
           "mode": "grid",
-          "row": 14,
+          "row": 16,
           "rows": 3
         }
       },
@@ -646,7 +655,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -665,7 +674,7 @@
           "col": 4,
           "cols": 2,
           "mode": "grid",
-          "row": 14,
+          "row": 16,
           "rows": 3
         }
       },
@@ -685,7 +694,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -704,7 +713,7 @@
           "col": 6,
           "cols": 2,
           "mode": "grid",
-          "row": 14,
+          "row": 16,
           "rows": 3
         }
       },
@@ -724,7 +733,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -743,7 +752,7 @@
           "col": 8,
           "cols": 2,
           "mode": "grid",
-          "row": 14,
+          "row": 16,
           "rows": 3
         }
       },
@@ -763,7 +772,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -782,7 +791,7 @@
           "col": 10,
           "cols": 2,
           "mode": "grid",
-          "row": 14,
+          "row": 16,
           "rows": 3
         }
       },
@@ -802,7 +811,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -821,7 +830,7 @@
           "col": 0,
           "cols": 2,
           "mode": "grid",
-          "row": 17,
+          "row": 19,
           "rows": 3
         }
       },
@@ -841,7 +850,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -860,7 +869,7 @@
           "col": 2,
           "cols": 2,
           "mode": "grid",
-          "row": 17,
+          "row": 19,
           "rows": 3
         }
       },
@@ -880,7 +889,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -899,7 +908,7 @@
           "col": 4,
           "cols": 2,
           "mode": "grid",
-          "row": 17,
+          "row": 19,
           "rows": 3
         }
       },
@@ -919,7 +928,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -938,7 +947,7 @@
           "col": 6,
           "cols": 2,
           "mode": "grid",
-          "row": 17,
+          "row": 19,
           "rows": 3
         }
       },
@@ -958,7 +967,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -977,7 +986,7 @@
           "col": 8,
           "cols": 2,
           "mode": "grid",
-          "row": 17,
+          "row": 19,
           "rows": 3
         }
       },
@@ -997,7 +1006,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -1016,7 +1025,7 @@
           "col": 10,
           "cols": 2,
           "mode": "grid",
-          "row": 17,
+          "row": 19,
           "rows": 3
         }
       },
@@ -1036,7 +1045,7 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
       "type": "level-gauge"
@@ -1055,7 +1064,7 @@
           "col": 0,
           "cols": 4,
           "mode": "grid",
-          "row": 20,
+          "row": 22,
           "rows": 2
         }
       },
@@ -1082,7 +1091,7 @@
           "col": 4,
           "cols": 4,
           "mode": "grid",
-          "row": 20,
+          "row": 22,
           "rows": 2
         }
       },
@@ -1109,7 +1118,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 20,
+          "row": 22,
           "rows": 2
         }
       },
@@ -1136,7 +1145,7 @@
           "col": 0,
           "cols": 4,
           "mode": "grid",
-          "row": 22,
+          "row": 24,
           "rows": 2
         }
       },
@@ -1163,7 +1172,7 @@
           "col": 4,
           "cols": 4,
           "mode": "grid",
-          "row": 22,
+          "row": 24,
           "rows": 2
         }
       },
@@ -1190,7 +1199,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 22,
+          "row": 24,
           "rows": 2
         }
       },
@@ -1215,7 +1224,7 @@
           "col": 0,
           "cols": 8,
           "mode": "grid",
-          "row": 3,
+          "row": 6,
           "rows": 3
         }
       },
@@ -1244,7 +1253,7 @@
           "col": 0,
           "cols": 8,
           "mode": "grid",
-          "row": 6,
+          "row": 9,
           "rows": 4
         }
       },
@@ -1260,7 +1269,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 3,
+          "row": 6,
           "rows": 1
         }
       },
@@ -1284,7 +1293,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 4,
+          "row": 7,
           "rows": 3
         }
       },
@@ -1323,7 +1332,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 7,
+          "row": 10,
           "rows": 3
         }
       },
