@@ -507,6 +507,13 @@ En 0, nadie lee la fuente y lo que tu bróker entrega mientras tanto se pierde; 
 último pod que tomó la fuente dice por qué. Una instalación sin fuentes externas no exporta esa
 serie, y la alerta no salta.
 
+`ExternalMqttSourceLosingEvents` (aviso) salta cuando una fuente lleva diez minutos perdiendo
+eventos por publicaciones fallidas (`devicechain_eventsources_total_msg_publish_failed` en aumento).
+Esos eventos ya se leyeron de tu bróker y se han perdido, así que revisa el bróker de mensajería de
+la plataforma, no el tuyo; el registro de event-sources indica la fuente y el tenant de cada uno. Una
+ráfaga aislada, como lo que estaba en vuelo cuando una parada dejó de esperar, se despeja sola y no
+la dispara.
+
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 
 El broker da a un servicio una ventana fija para confirmar cada mensaje que le entrega. Un

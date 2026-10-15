@@ -239,6 +239,8 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 总和两分钟不为 1 时，`ExternalMqttSourceNotReadByOnePod`（warning）触发。0 表示无人读取，期间外部代理投递内容丢失；最近接管 Pod 日志说明原因。没有外部来源的安装不导出此序列，告警安静。
 
+来源因发布失败持续丢失事件（`devicechain_eventsources_total_msg_publish_failed` 上升）十分钟时，`ExternalMqttSourceLosingEvents`（warning）触发。这些事件已从你的代理读取，已经丢失，应检查平台的消息代理，而不是你的代理；event-sources 日志注明每条的来源和租户。单次突发（例如停止时放弃等待而仍在途的事件）会自行消退，不会触发。
+
 ## 超过确认窗口的消息 {#held-past-ack-wait}
 
 代理为每条交付消息提供固定确认窗口。窗口关闭仍未确认，会重新交付，服务按新消息处理。告警通知和对外连接器的工作是向平台外慢速发送，因此可能重复通知或调用 webhook。两者仅在有空闲 worker 时读取相应数量消息，避免排队消耗窗口；每次发送也会在窗口结束前留有余量地截止。下列告警报告仍超时的情况。

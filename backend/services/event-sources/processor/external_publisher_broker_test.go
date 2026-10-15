@@ -525,3 +525,62 @@ func TestExternalMqttStopSettlesAfterTheWorkersHaveSubmitted(t *testing.T) {
 		t.Fatal("Stop did not return after the publish was answered")
 	}
 }
+
+// 🔴 A SETTLE THAT TIMES OUT STILL RELEASES THE LEASE, AND THE LOSS IS NOT SILENT. The
+// platform broker holds every publish unanswered, so the term's settle cannot finish: the
+// owned source's stop must give up at the bound, say so, and release the lease anyway (a
+// lease held for ever would leave the source unread by every pod). What was in flight is
+// then lost to this pod, and each event is counted on the failure hook once its publish
+// reaches its own ceiling; none vanishes uncounted.
+func TestExternalMqttSettleTimeoutStillReleasesTheLease(t *testing.T) {
+	fastOwnerRetries(t)
+	saved := externalSettleTimeout
+	externalSettleTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { externalSettleTimeout = saved })
+	logs := captureDebugLog(t)
+
+	rig := newExtRig(t, externalWindow, true)
+	log := &eventLog{}
+	bucket := newFakeBucket(log)
+	owned, err := NewOwnedMqttSource("ext", testInstance, "pod-a",
+		func(clientID string, owns func() bool) (TermSource, error) {
+			return rig.source(termLog{rig.pub, log, "pod-a"}, clientID, owns), nil
+		},
+		func() (SourceLeases, error) { return bucket.leasesFor("pod-a"), nil },
+		OwnerHooks{
+			Fail:     func(err error) { t.Errorf("the source asked to end the process: %v", err) },
+			SetOwner: func(string, bool) {}, NotOwner: func(string) {},
+		})
+	require.NoError(t, err)
+	require.NoError(t, owned.Initialize(context.Background()))
+	require.NoError(t, owned.Start(context.Background()))
+	partition := OwnershipPartition("ext")
+	waitFor(t, "the term never began reading", 15*time.Second, func() bool {
+		return len(extMqttClients(t, rig.srv, "devicechain:inst-1:ext:")) == 1
+	})
+
+	const inFlight = 5
+	rig.events(0, inFlight)
+	waitFor(t, "the publishes never reached the broker", 15*time.Second, func() bool {
+		return rig.holder.seen() == inFlight
+	})
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- owned.Stop(context.Background()) }()
+	select {
+	case err := <-stopped:
+		require.NoError(t, err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the owned source's stop was held by a settle that cannot finish")
+	}
+	assert.False(t, bucket.held(partition), "a settle that timed out kept the lease")
+	order := log.snapshot()
+	require.GreaterOrEqual(t, log.index("settle:pod-a"), 0, "the term never settled: %v", order)
+	require.Less(t, log.index("settle:pod-a"), log.index("release:pod-a"),
+		"the lease was released before the term tried to settle: %v", order)
+	assert.Contains(t, logs.String(), "could not confirm that everything it published is stored")
+	assert.Zero(t, rig.failed.Load(), "nothing has failed yet: the publishes are still within their ceiling")
+
+	waitFor(t, "an event left in flight by the timed-out settle was never counted as lost", 15*time.Second,
+		func() bool { return rig.failed.Load() == inFlight })
+}

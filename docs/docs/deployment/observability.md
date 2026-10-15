@@ -490,6 +490,12 @@ At 0, nothing is reading the source and what your broker delivers meanwhile is l
 the pod that last took the source over says why. An install with no external source exports no
 such series, and the alert stays quiet.
 
+`ExternalMqttSourceLosingEvents` (warning) fires when a source has been losing events to failed
+publishes (`devicechain_eventsources_total_msg_publish_failed` rising) for ten minutes. Those events
+were read from your broker and are gone, so look at the platform's message broker, not yours; the
+event-sources log names the source and tenant of each. A single burst, such as what was in flight
+when a stop gave up waiting, clears on its own and does not raise it.
+
 ## Messages held past their acknowledgement window {#held-past-ack-wait}
 
 The broker gives a service a fixed window to acknowledge each message it hands out. A

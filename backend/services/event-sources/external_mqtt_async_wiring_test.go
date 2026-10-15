@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -39,6 +40,14 @@ type externalWiring struct {
 }
 
 func startExternalWiring(t *testing.T, window *int, streamMaxMsgs int64) *externalWiring {
+	t.Helper()
+	return startExternalWiringWith(t, window, streamMaxMsgs, core.NewNoOpLifecycleCallbacks())
+}
+
+// startExternalWiringWith is startExternalWiring with the service broker manager's own
+// lifecycle callbacks, so a test can observe what is true at the moment that manager stops.
+func startExternalWiringWith(t *testing.T, window *int, streamMaxMsgs int64,
+	natsCallbacks core.LifecycleCallbacks) *externalWiring {
 	t.Helper()
 	savedConfig, savedSources, savedMs, savedNats := Configuration, EventSources, Microservice, NatsManager
 	savedGateway, savedGatewayId, savedPublishers := GatewaySource, GatewaySourceId, ExternalPublishers
@@ -103,7 +112,7 @@ func startExternalWiring(t *testing.T, window *int, streamMaxMsgs int64) *extern
 	require.NoError(t, buildEventSources())
 	require.Len(t, ExternalPublishers, 1, "main built an external source with no publisher of its own")
 
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), createNatsComponents)
+	NatsManager = messaging.NewNatsManager(Microservice, natsCallbacks, createNatsComponents)
 	NatsManager.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
 		return func(context.Context, messaging.MaxDelivery) (messaging.MaxDeliveryOutcome, error) {
 			return messaging.MaxDeliveryLettered, nil
@@ -251,10 +260,101 @@ func TestExternalMqttPublishIsRefusedAtAClosedGate(t *testing.T) {
 // service's writer is closed, so the publish cannot happen.
 func TestExternalMqttFailedPublishIsCountedPerSource(t *testing.T) {
 	w := startExternalWiring(t, nil, 0)
+	// Exported at 0 from the start, before anything has failed: a series that first appears
+	// at 1 has no increase(), so ExternalMqttSourceLosingEvents would miss the first loss.
+	// Read by collecting, because WithLabelValues would create the series it asks about.
+	require.Equal(t, 1, testutil.CollectAndCount(PublishFailedCounter),
+		"main did not export the source's lost-event series before its first loss")
 	require.NoError(t, w.publish(t, 0))
 	require.Zero(t, testutil.ToFloat64(PublishFailedCounter.WithLabelValues("ext-a")))
 
 	closeExternalPublishers()
 	require.Error(t, w.publish(t, 1), "a publish after the writers were closed must fail, not vanish")
 	assert.Equal(t, 1.0, testutil.ToFloat64(PublishFailedCounter.WithLabelValues("ext-a")))
+}
+
+// stopRecorder is an event source that only records its stop, and refuses it when err is set.
+type stopRecorder struct {
+	err     error
+	stopped bool
+}
+
+func (s *stopRecorder) Initialize(context.Context) error        { return nil }
+func (s *stopRecorder) ExecuteInitialize(context.Context) error { return nil }
+func (s *stopRecorder) Start(context.Context) error             { return nil }
+func (s *stopRecorder) ExecuteStart(context.Context) error      { return nil }
+func (s *stopRecorder) Stop(ctx context.Context) error          { return s.ExecuteStop(ctx) }
+func (s *stopRecorder) ExecuteStop(context.Context) error {
+	s.stopped = true
+	return s.err
+}
+func (s *stopRecorder) Terminate(context.Context) error        { return nil }
+func (s *stopRecorder) ExecuteTerminate(context.Context) error { return nil }
+
+// 🔴 THE CALLER, NOT THE FUNCTION. closeExternalPublishers is only worth anything if the
+// service's own shutdown hook calls it, and calls it at the right moment: after the sources
+// have stopped (their last term has settled) and BEFORE the broker manager drains the
+// connection the writers publish on, so that what a timed-out settle left in flight is failed
+// and counted by its own writer. This drives the real beforeMicroserviceStopped over main's
+// own wiring and asks, at the instant the broker manager begins to stop, whether the external
+// source's writer still takes a publish. On a source that fails to stop, the hook returns
+// before the broker manager, and the writers must be closed all the same.
+func TestServiceStopClosesTheExternalWritersBeforeTheBrokerStops(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		failingSource bool
+	}{
+		{"clean stop", false},
+		{"a source fails to stop", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			var w *externalWiring
+			var brokerStopping bool
+			var atBrokerStop error
+			cb := core.NewNoOpLifecycleCallbacks()
+			cb.Stopper = core.LifecycleCallback{
+				Preprocess: func(context.Context) error {
+					brokerStopping = true
+					atBrokerStop = w.publish(t, 99)
+					return nil
+				},
+				Postprocess: func(context.Context) error { return nil },
+			}
+			w = startExternalWiringWith(t, nil, 0, cb)
+			savedSvc := Svc
+			t.Cleanup(func() { Svc = savedSvc })
+			Svc = service.FromManagers(Microservice, service.Managers{Nats: NatsManager})
+
+			// main's own sources, as far as a stop needs them: initialized, never started (the
+			// owned source then has no term to end), plus one that records its stop.
+			for _, s := range EventSources {
+				require.NoError(t, s.Initialize(ctx))
+			}
+			rec := &stopRecorder{}
+			if tc.failingSource {
+				rec.err = errors.New("this source refused to stop")
+			}
+			EventSources = append(EventSources, rec)
+
+			require.NoError(t, w.publish(t, 0), "the writer must work before the stop")
+			err := beforeMicroserviceStopped(ctx)
+			assert.True(t, rec.stopped, "the hook never stopped the sources")
+
+			if tc.failingSource {
+				require.ErrorIs(t, err, rec.err)
+				assert.False(t, brokerStopping, "a failed source stop must return before the broker manager stops")
+				err = w.publish(t, 1)
+				require.Error(t, err, "a source that failed to stop left the external writers open")
+				assert.NotErrorIs(t, err, messaging.ErrStreamBackpressure)
+				return
+			}
+			require.NoError(t, err)
+			require.True(t, brokerStopping, "the hook never stopped the broker manager")
+			require.Error(t, atBrokerStop,
+				"the external source's writer still took a publish when the broker manager began to stop: "+
+					"it must be closed after the sources and before the drain")
+			assert.NotErrorIs(t, atBrokerStop, messaging.ErrStreamBackpressure)
+		})
+	}
 }

@@ -556,6 +556,12 @@ func buildEventSources() error {
 				return err
 			}
 			ExternalPublishers = append(ExternalPublishers, publisher)
+			// Export the source's lost-event series at 0 from the start: a counter that first
+			// appears at 1 has no increase() over a window, so the first loss after a restart
+			// would not raise ExternalMqttSourceLosingEvents.
+			if PublishFailedCounter != nil {
+				PublishFailedCounter.WithLabelValues(source.Id)
+			}
 			owned, err := processor.NewOwnedMqttSource(source.Id, Microservice.InstanceId, replicaName(),
 				func(clientID string, owns func() bool) (processor.TermSource, error) {
 					// Never return the *MqttEventSource itself on error: a nil pointer in a
@@ -1161,18 +1167,22 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// writer that is about to close.
 	stopBrokerPresence()
 
-	// The external sources' writers outlive their terms, so they are closed here, once the
-	// sources (and with them the last term, which settled its publishes) have stopped. On a
-	// failed stop too: a writer left open would keep the connection from draining.
-	defer closeExternalPublishers()
-
-	// Stop each event source.
+	// Stop each event source. The external sources' writers outlive their terms, so they are
+	// closed here, once the sources (and with them the last term, which settled its
+	// publishes) have stopped, and BEFORE the broker manager drains the connection they
+	// publish on: whatever a settle that timed out left in flight is then failed and counted
+	// by its own writer, not cut off by the drain. On a failed stop too.
+	//
+	// 🔴 Not a defer: a deferred close runs after Svc.Stop, which is the order this exists to
+	// prevent (pinned by TestServiceStopClosesTheExternalWritersBeforeTheBrokerStops).
 	for _, source := range EventSources {
 		err := source.Stop(ctx)
 		if err != nil {
+			closeExternalPublishers()
 			return err
 		}
 	}
+	closeExternalPublishers()
 
 	// Stop the GraphQL manager, then the broker manager.
 	return Svc.Stop(ctx)
