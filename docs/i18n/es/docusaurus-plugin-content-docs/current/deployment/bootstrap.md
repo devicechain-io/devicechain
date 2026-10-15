@@ -1565,6 +1565,15 @@ un nodo se quedaba sin memoria.
   no se midió un servidor que vuelve a unirse a su clúster ni que se pone al día con una cola
   grande tras perder un nodo. Si alguna vez un servidor se detiene por quedarse sin memoria
   (`OOMKilled` en `kubectl describe pod`), aumenta su límite.
+- **La detección de duplicados ocupa memoria en proporción a la ingesta sostenida.** Para que un
+  evento reentregado se guarde una sola vez, cada servidor recuerda el id de mensaje de cada evento
+  publicado en el stream de eventos entrantes durante los últimos 30 minutos, y en el de eventos
+  resueltos durante los últimos 10. Cada id cuesta unos 120 bytes en cada servidor, así que una
+  ingesta sostenida de E eventos por segundo ocupa unos E × 2400 s × 120 bytes: unos 290 MB a
+  1000 eventos por segundo, 1,7 GB a 6000 y 2,9 GB a 10 000, más que el límite de 2Gi. Se tarda
+  30 minutos de ingesta constante en llegar ahí, más que las ejecuciones de la prueba anterior. Si
+  tu instancia sostiene más de unos 4000 eventos por segundo, aumenta `nats_memory_limit` en esa
+  cantidad.
 - **La CPU se solicita por debajo de lo que un servidor usa con carga**: unos 4,4 núcleos entre
   los tres servidores a 6000 eventos por segundo, de 1,6 a 1,8 de ellos en el servidor que lidera
   el stream de eventos entrantes. Con `--ha` en tres nodos cada nodo ejecuta exactamente un

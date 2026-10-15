@@ -1441,6 +1441,14 @@ first in line for eviction when a node ran short of memory.
   where a server is placed, and the limit is what stops one. Those runs were steady ingest: a server rejoining its cluster, or catching up
   a large backlog after a node is lost, was not measured. If a server is ever stopped for running
   out of memory (`OOMKilled` in `kubectl describe pod`), raise its limit.
+- **Duplicate detection holds memory in proportion to sustained ingest.** So that a redelivered
+  event is stored once, every server remembers the message id of each event published to the
+  incoming-event stream in the last 30 minutes, and to the resolved-event stream in the last 10.
+  Each id costs about 120 bytes on every server, so ingest sustained at E events per second holds
+  about E × 2,400 s × 120 bytes: about 290 MB at 1,000 events per second, 1.7 GB at 6,000 and
+  2.9 GB at 10,000, which is more than the 2Gi limit. It takes 30 minutes of steady ingest to
+  reach, longer than the benchmark runs above. If your instance sustains more than about 4,000
+  events per second, raise `nats_memory_limit` by that amount.
 - **CPU is requested below what a server uses under load**: about 4.4 cores across the three
   servers at 6,000 events per second, 1.6 to 1.8 of them on the server leading the incoming-event
   stream. Under `--ha` on three nodes each node runs exactly one server, so the

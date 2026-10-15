@@ -527,14 +527,14 @@ func TestARedeliveredSourceIsStoredOnce(t *testing.T) {
 		}
 		return info.State.Msgs
 	}
-	// The premise: resolved-events declares no window of its own, so the broker's default
-	// applies, and it outlasts the first redelivery (one AckWait, 60 s, after the fetch).
+	// The premise: resolved-events declares the redelivery span as its window, which
+	// outlasts the last of a source's redeliveries, not just the first.
 	info, err := js.StreamInfo(stream)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Config.Duplicates != 2*time.Minute {
-		t.Fatalf("resolved-events duplicate window is %v, want the broker default 2m", info.Config.Duplicates)
+	if want := time.Duration(streams.RedeliveryDuplicateWindowSeconds) * time.Second; info.Config.Duplicates != want {
+		t.Fatalf("resolved-events duplicate window is %v, want the redelivery span %v", info.Config.Duplicates, want)
 	}
 
 	submit := func(i int, seq uint64, events ...EventResolutionResults) {
