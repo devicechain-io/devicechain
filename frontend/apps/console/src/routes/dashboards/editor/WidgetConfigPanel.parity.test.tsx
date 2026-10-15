@@ -66,6 +66,11 @@ const LEGACY_LABEL: Record<string, string> = {
   parameterSchema: 'widgetCommandHeading',
   tileUrl: 'widgetLabelTileUrl',
   attribution: 'widgetLabelAttribution',
+  // Appended with the levels-and-indicators widgets; the table stays the record of every wording.
+  style: 'widgetLabelLinearStyle',
+  orientation: 'widgetLabelOrientation',
+  readout: 'widgetLabelReadout',
+  onAt: 'widgetLabelOnAt',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -94,11 +99,18 @@ const LEGACY_HINT: Record<string, string | null> = {
   parameterSchema: 'widgetCommandFieldHint',
   tileUrl: 'widgetTileUrlHint',
   attribution: 'widgetAttributionHint',
+  style: null,
+  orientation: null,
+  readout: null,
+  onAt: 'widgetHintOnAt',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { maxRows: 'widgetMaxRowsAlarmHint' },
   'command-button': { maxRows: 'widgetMaxRowsCommandHint' },
+  'linear-gauge': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
+  'level-gauge': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
+  battery: { min: 'widgetHintBatteryRange', max: 'widgetHintBatteryRange' },
 };
 
 const LEGACY_ENUM_VALUE: Record<string, string> = {
@@ -117,6 +129,12 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'fit:contain': 'widgetFitContain',
   'fit:cover': 'widgetFitCover',
   'fit:fill': 'widgetFitFill',
+  'style:bar': 'widgetLinearStyleBar',
+  'style:thermometer': 'widgetLinearStyleThermometer',
+  'orientation:horizontal': 'widgetOrientationHorizontal',
+  'orientation:vertical': 'widgetOrientationVertical',
+  'readout:value': 'widgetReadoutValue',
+  'readout:percent': 'widgetReadoutPercent',
 };
 
 const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
@@ -125,6 +143,9 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   acknowledged: 'widgetPlaceholderAny',
   align: 'widgetPlaceholderDefault',
   fit: 'widgetPlaceholderDefault',
+  style: 'widgetPlaceholderDefault',
+  orientation: 'widgetPlaceholderDefault',
+  readout: 'widgetPlaceholderDefault',
 };
 
 const LEGACY_CUSTOM: Record<string, 'command' | 'slot'> = {

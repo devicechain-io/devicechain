@@ -102,6 +102,35 @@
       }
     },
     {
+      "id": "nc-level-overflow",
+      "type": "linear-gauge",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 6,
+          "cols": 1,
+          "rows": 4
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "max": 1,
+        "measurement": "value",
+        "min": 0,
+        "orientation": "vertical",
+        "precision": 4,
+        "title": "Level",
+        "unit": "kPa"
+      }
+    },
+    {
       "id": "nc-overlap-a",
       "type": "label",
       "layout": {

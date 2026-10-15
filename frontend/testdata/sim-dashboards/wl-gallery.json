@@ -310,6 +310,288 @@
         "title": "Sensor"
       },
       "type": "entity-selector"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-linear",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 15,
+          "rows": 3
+        }
+      },
+      "options": {
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "precision": 1,
+        "style": "bar",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Temperature",
+        "unit": "C"
+      },
+      "type": "linear-gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-thermometer",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 3,
+          "mode": "grid",
+          "row": 15,
+          "rows": 4
+        }
+      },
+      "options": {
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "precision": 1,
+        "style": "thermometer",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Thermometer",
+        "unit": "C"
+      },
+      "type": "linear-gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-level",
+      "layout": {
+        "base": {
+          "col": 7,
+          "cols": 3,
+          "mode": "grid",
+          "row": 15,
+          "rows": 4
+        }
+      },
+      "options": {
+        "max": 100,
+        "measurement": "humidity",
+        "min": 0,
+        "precision": 0,
+        "readout": "percent",
+        "thresholds": [
+          {
+            "level": "critical",
+            "value": 0
+          },
+          {
+            "level": "warning",
+            "value": 30
+          },
+          {
+            "level": "normal",
+            "value": 45
+          }
+        ],
+        "title": "Tank level",
+        "unit": "%"
+      },
+      "type": "level-gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-battery",
+      "layout": {
+        "base": {
+          "col": 10,
+          "cols": 2,
+          "mode": "grid",
+          "row": 15,
+          "rows": 2
+        }
+      },
+      "options": {
+        "measurement": "battery",
+        "precision": 0,
+        "thresholds": [
+          {
+            "level": "critical",
+            "value": 0
+          },
+          {
+            "level": "warning",
+            "value": 15
+          },
+          {
+            "level": "normal",
+            "value": 30
+          }
+        ],
+        "title": "Battery",
+        "unit": "%"
+      },
+      "type": "battery"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-status",
+      "layout": {
+        "base": {
+          "col": 10,
+          "cols": 2,
+          "mode": "grid",
+          "row": 17,
+          "rows": 2
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "thresholds": [
+          {
+            "label": "Normal",
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "label": "Hot",
+            "level": "major",
+            "value": 30
+          }
+        ],
+        "title": "Status",
+        "unit": "C"
+      },
+      "type": "status-light"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-status-onoff",
+      "layout": {
+        "base": {
+          "col": 2,
+          "cols": 2,
+          "mode": "grid",
+          "row": 18,
+          "rows": 2
+        }
+      },
+      "options": {
+        "measurement": "battery",
+        "onAt": 50,
+        "precision": 1,
+        "title": "Powered",
+        "unit": "%"
+      },
+      "type": "status-light"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-signal",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 2,
+          "mode": "grid",
+          "row": 18,
+          "rows": 2
+        }
+      },
+      "options": {
+        "measurement": "humidity",
+        "precision": 0,
+        "thresholds": [
+          {
+            "level": "critical",
+            "value": 0
+          },
+          {
+            "level": "warning",
+            "value": 42
+          },
+          {
+            "level": "normal",
+            "value": 46
+          },
+          {
+            "level": "normal",
+            "value": 52
+          },
+          {
+            "level": "normal",
+            "value": 58
+          }
+        ],
+        "title": "Signal",
+        "unit": "%"
+      },
+      "type": "signal-bars"
     }
   ]
 }

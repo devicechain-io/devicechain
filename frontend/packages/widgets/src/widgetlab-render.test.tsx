@@ -12,7 +12,7 @@ import type { AlarmRow, CommandRow, KnownWidgetInstance, MeasurementSample } fro
 import { isBuiltinWidget, parseDashboardDefinition, UNKNOWN_WIDGET_TYPE } from '@devicechain/dashboards';
 import { cleanup, render as rtlRender } from '@testing-library/react';
 import type { ComponentType, ReactElement } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 // jsdom has no canvas, so the ECharts wrapper is stubbed — as in widgets.test.tsx.
 // The stub still receives the real option object the widget built from its options
@@ -35,9 +35,17 @@ import {
   type MeasurementStreamState,
 } from '@devicechain/widget-sdk';
 import { createBuiltinWidgetRegistry } from './builtin-registry';
+import { LEVEL_STRINGS } from './level-strings';
 import { MapRuntimeProvider } from './map-runtime-context';
+import { loadLevelWidgets } from './widgets/level-lazy';
 
 afterEach(cleanup);
+
+// 🔴 The level-and-indicator components load from a lazy chunk, and until it arrives their
+// registration renders NOTHING -- which every absence assertion below would read as clean.
+// Loading it once here makes every later mount render synchronously; the positive
+// level-family assertion further down is what fails if this ever stops being true.
+beforeAll(() => loadLevelWidgets());
 
 // ---- The render gate -----------------------------------------------------------
 //
@@ -102,7 +110,15 @@ function board(token: string) {
 // the host has not supplied MapLibre's worker URL — so this entry is what makes the harness
 // wiring above load-bearing rather than decorative: remove the provider and this fails,
 // instead of the board quietly rendering a notice nobody asserted against.
-const EMPTY_STATES = ['No image URL', 'No command configured', 'Map runtime not configured'];
+const EMPTY_STATES = [
+  'No image URL',
+  'No command configured',
+  'Map runtime not configured',
+  // The level family's explained refusals (a scale or the thresholds missing).
+  LEVEL_STRINGS.en.setRange,
+  LEVEL_STRINGS.en.badRange,
+  LEVEL_STRINGS.en.setThresholds,
+];
 
 const sample = (name: string, value: number): MeasurementSample => ({
   id: `${name}-1`,
@@ -338,6 +354,23 @@ describe('the gallery widgets draw their data', () => {
       cleanup();
     }
     expect(checked, 'the gallery has no latest-card').toBeGreaterThan(0);
+  });
+
+  it('draws a reading on every level and indicator widget', () => {
+    // Each of the five marks what it drew: a fill fraction, a lamp lit or dark, a count of lit bars.
+    // An explained empty state (no scale, no data) carries none of them.
+    const DREW = '[data-fill], [data-lit], [data-bars-lit]';
+    let checked = 0;
+    for (const type of ['linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars']) {
+      for (const widget of galleryWidgets(type)) {
+        checked++;
+        const { container } = renderWidget(widget);
+        expect(container.querySelector('[data-level-empty]')?.textContent, `${widget.id} drew an empty state`).toBeUndefined();
+        expect(container.querySelector(DREW), `${widget.id} (${type}) drew no reading`).not.toBeNull();
+        cleanup();
+      }
+    }
+    expect(checked, 'the gallery has no level or indicator widget').toBeGreaterThanOrEqual(5);
   });
 
   it('puts a reading on the gauge rather than an empty dial', () => {

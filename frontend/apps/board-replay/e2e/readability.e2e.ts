@@ -159,7 +159,8 @@ for (const board of BOARDS) {
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and
 // kept permanently: a card whose title cannot fit its width (the frame drops a title only below
 // a height, so this card is tall enough to keep it) and whose reading is cut, a card whose title alone
-// cannot fit it, a label that cannot fit, and a widget on top of another, beside one widget that
+// cannot fit it, a label that cannot fit, a level gauge whose fitted reading cannot fit its column,
+// and a widget on top of another, beside one widget that
 // fits and must NOT be flagged (a check that flagged everything would pass the first half of this
 // test). The parser refuses two grid widgets on one cell, so the overlap is a widget placed
 // RELATIVE to a host and hung off its edge over a third widget it is not anchored to.
@@ -192,6 +193,11 @@ for (const width of WIDTHS) {
       const reading = findings.filter((f) => f.widget === 'nc-overflowing-card' && f.detail.startsWith('"888.8000'));
       expect([...new Set(reading.map((f) => f.kind))].sort(), where).toEqual(['text-clipped', 'text-overflow']);
       expect(kinds('nc-overflowing-label').has('text-clipped'), where).toBe(true);
+      // A level widget's fitted reading: a vertical linear gauge one cell wide, reading 888.8 on
+      // a 0..1 scale. The fit cannot shrink the text below its floor, so the value runs out of
+      // the column; the gate must see a level widget's own readout, not only frame text.
+      const level = findings.filter((f) => f.widget === 'nc-level-overflow' && f.detail.startsWith('"888.8000'));
+      expect(level.some((f) => f.kind === 'text-clipped'), where).toBe(true);
       // A frame title cut to an ellipsis is a finding, though the frame truncates it on
       // purpose (readability.ts says why). This card's reading fits; only its title does not.
       const title = findings.filter((f) => f.widget === 'nc-long-title');

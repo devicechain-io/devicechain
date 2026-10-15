@@ -16,6 +16,13 @@ import { gaugeWidget } from './widgets/gauge';
 import { imageWidget } from './widgets/image';
 import { labelWidget } from './widgets/label';
 import { latestCardWidget } from './widgets/latest-card';
+import {
+  batteryWidget,
+  levelGaugeWidget,
+  linearGaugeWidget,
+  signalBarsWidget,
+  statusLightWidget,
+} from './widgets/level-lazy';
 import { mapWidget } from './widgets/map';
 import { tableWidget } from './widgets/table';
 import { timeSeriesChartWidget } from './widgets/time-series-chart';
@@ -32,6 +39,11 @@ export const builtinWidgetDefinitions = [
   commandButtonWidget,
   entitySelectorWidget,
   mapWidget,
+  linearGaugeWidget,
+  levelGaugeWidget,
+  batteryWidget,
+  statusLightWidget,
+  signalBarsWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent

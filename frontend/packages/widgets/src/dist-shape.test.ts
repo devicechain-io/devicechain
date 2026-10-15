@@ -133,6 +133,23 @@ describe('the built package', () => {
     expect(readFileSync(chunkPath, 'utf8')).toContain(GEOMETRY_PAYLOAD);
   });
 
+  // The level-and-indicator family is the second lazy boundary: its five components load on
+  // first mount from one chunk (widgets/level-lazy.tsx), so a board without one never pays
+  // for them. A static import of any of them from the registry folds them back into the entry,
+  // and only the artifact shows it. Both halves, as for the geometry: out of the entry, and
+  // still shipped behind a dynamic import.
+  it('keeps the level widgets in a lazily loaded chunk of their own', () => {
+    const LEVEL_PAYLOAD = '"data-level-readout"';
+    expect(read('index.js').includes(LEVEL_PAYLOAD), 'the level widgets were folded into the entry chunk').toBe(false);
+    const chunk = [...read('index.js').matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)]
+      .map((m) => m[1])
+      .find((spec) => spec.includes('level-widgets'));
+    expect(chunk, 'no dynamic import of the level-widgets chunk in dist/index.js').toBeTruthy();
+    const chunkPath = path.resolve(distDir, chunk!);
+    expect(existsSync(chunkPath), `${chunk} is imported but was not emitted`).toBe(true);
+    expect(readFileSync(chunkPath, 'utf8')).toContain(LEVEL_PAYLOAD);
+  });
+
   it('writes no bundler dialect anywhere in the main entry graph', () => {
     expect(
       main.imports.filter(isDialect),

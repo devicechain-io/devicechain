@@ -26,8 +26,43 @@ import (
 )
 
 const (
-	MESSAGE_BACKLOG_SIZE = 100 // Number of messages that can be read and waiting to be processed
+	// MESSAGE_BACKLOG_FLOOR is the smallest read-to-writer channel, for a processor assembled
+	// by literal with no writers configured. Production sizes it by messageBacklog.
+	MESSAGE_BACKLOG_FLOOR = 100
+	// MESSAGE_BACKLOG_FACTOR is how many full pool-fulls of batches the channel holds.
+	MESSAGE_BACKLOG_FACTOR = 2
 )
+
+// messageBacklog is the capacity of the channel between the single read loop and the
+// writers: MESSAGE_BACKLOG_FACTOR times writers x maxBatch, never below the floor.
+//
+// It was a constant 100 against 10 writers x 32 = 320 events a full pool takes in one
+// round, so under backlog the writers drained the channel faster than the one reader could
+// refill a batch and ran part-empty (GKE round 9: workers 29% idle while the stage fell
+// behind). Holding at least two rounds lets every writer fill a batch while the next is
+// already queued.
+//
+// Memory is bounded by capacity x the size of one resolved event (Message.Value, about
+// 1 KiB for a few measurements; assume 4 KiB for a large one): at the defaults that is
+// 640 slots, under 3 MiB, and at the configuration maxima (writers below the pool size,
+// maxBatch 64) a few hundred KiB per writer. Beyond the channel the reader holds at most
+// its own fetch buffer (one pull, plus one fetched ahead); everything else stays in the
+// broker, unfetched. The durable's MaxAckPending (65,536) is far above all of it, so the
+// channel, not the broker, is what bounds how much a full pool can draw on.
+//
+// The cost is age. The broker's AckWait (60 s) starts at fetch, so a message waits in the
+// channel behind everything ahead of it. At the defaults 640 slots pass AckWait only if
+// the pool merges under about 11 events a second, which is a stalled database, not a slow
+// one. A stalled database leaves those messages to be redelivered, as it did with 100
+// slots, only more of them. Shutdown drains the channel to completion (ExecuteStop), so a
+// larger channel is a longer drain: well under a second at the rates the pool sustains.
+func messageBacklog(writers, maxBatch int) int {
+	n := MESSAGE_BACKLOG_FACTOR * writers * maxBatch
+	if n < MESSAGE_BACKLOG_FLOOR {
+		return MESSAGE_BACKLOG_FLOOR
+	}
+	return n
+}
 
 // StateProcessor is a second, independent consumer of the resolved-events stream
 // (fan-out alongside event-management's persistence). For every resolved event it
@@ -258,7 +293,7 @@ func (sp *StateProcessor) Linger() time.Duration {
 
 // Initialize pool of workers that merge device state in parallel.
 func (sp *StateProcessor) initializeWorkers() {
-	sp.messages = make(chan messaging.Message, MESSAGE_BACKLOG_SIZE)
+	sp.messages = make(chan messaging.Message, messageBacklog(sp.projection.Writers, sp.projection.MaxBatch))
 	log.Info().Int("writers", sp.projection.Writers).Int("maxBatch", sp.projection.MaxBatch).
 		Dur("linger", sp.projection.Linger()).Msg("Device state projection writers started")
 	for w := 1; w <= sp.projection.Writers; w++ {

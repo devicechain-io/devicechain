@@ -925,14 +925,17 @@ dispositivos. Una caché menor que la flota la recorre en ciclo y casi no respon
 60.000 dispositivos que informan cada 10 s, cada uno con una relación seguida, necesitan en cada
 réplica un `inMemoryCache.credentialCacheMiB` de unos 80 (una entrada ocupa unos 1,1 KB) y un
 `inMemoryCache.perDeviceCacheMiB` de unos 64 (un conjunto de relaciones ocupa unos 950 bytes), y un
-límite de memoria de 512Mi para alojarlos. La señal es
+límite de memoria de 768Mi para alojarlos. La señal es
 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` cerca del ritmo de
 eventos, mientras `kv_cache_local_entries` de esa caché se mantiene muy por debajo de
 `kv_cache_local_max_entries`. Una flota demasiado grande para la caché muestra en cambio
 `kv_cache_local_evictions_total{reason="capacity"}` creciendo cerca del ritmo de eventos, con
 `kv_cache_local_entries` en `kv_cache_local_max_entries` o `kv_cache_local_bytes` en
 `kv_cache_local_max_bytes`; en las credenciales, las mismas señales están en
-`credential_cache_evictions_total{reason="capacity"}`. Entonces suba el límite, y con él el límite
+`credential_cache_evictions_total{reason="capacity"}`. El chart avisa de esto con
+`DeviceCredentialCacheTooSmall` y `DeviceLookupCacheTooSmall` (aviso): una réplica cuyas expulsiones
+por capacidad llevan 15 minutos por encima del 5% de sus consultas. Cuando salte una, suba el límite
+(`inMemoryCache.credentialCacheMiB` o `inMemoryCache.perDeviceCacheMiB`), y con él el límite
 de memoria: con los valores por defecto las seis cachés en memoria guardan como máximo 112 MiB.
 `device-management` se ejecuta con `GOGC=400` y un límite blando de memoria (`GOMEMLIMIT`) al 75 %
 de su límite de memoria, de modo que el recolector deja crecer el heap hasta unas cinco veces lo
