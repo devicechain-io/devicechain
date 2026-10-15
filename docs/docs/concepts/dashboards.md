@@ -51,6 +51,7 @@ The command slider and toggle show what was last sent to the device, with that c
 | **Stat card** | telemetry | the average, minimum, maximum, sum, reading count or latest reading of one measurement over the dashboard's time range (or a span of its own) |
 | **Bar chart** | telemetry | the latest reading of each selected measurement as a bar, in the data source's order or sorted by value; columns in a wide widget, rows in a tall one |
 | **Pie chart** | telemetry | each selected measurement's share of the total of their latest readings, with a legend of names, values and percentages |
+| **Fleet table** | telemetry | one row per device of a group and one column per measurement, each cell that device's own latest reading with its age, coloured by the column's thresholds; sortable, paged, and the device name selects that device in linked widgets. A bar chart set to *one bar per device* draws the same per-device readings as bars |
 | **Label** | static | static text |
 | **Image** | static | a static image (e.g. a floor plan behind other widgets) |
 | **Alarm table** | alarm | live alarms for a device or anchor |

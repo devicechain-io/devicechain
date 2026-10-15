@@ -51,6 +51,7 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 | **Tarjeta de estadística** | telemetría | el promedio, mínimo, máximo, suma, número de lecturas o última lectura de una medición en el intervalo de tiempo del panel (o en uno propio) |
 | **Gráfico de barras** | telemetría | la última lectura de cada medición seleccionada como una barra, en el orden de la fuente de datos o por valor; columnas en un widget ancho, filas en uno alto |
 | **Gráfico circular** | telemetría | la proporción de cada medición seleccionada sobre el total de sus últimas lecturas, con una leyenda de nombres, valores y porcentajes |
+| **Tabla de flota** | telemetría | una fila por dispositivo de un grupo y una columna por medición; cada celda muestra la última lectura de ese dispositivo con su antigüedad, coloreada según los umbrales de la columna; se puede ordenar y paginar, y el nombre del dispositivo lo selecciona en los widgets enlazados. Un gráfico de barras configurado como *una barra por dispositivo* dibuja las mismas lecturas por dispositivo como barras |
 | **Etiqueta** | estático | texto estático |
 | **Imagen** | estático | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |

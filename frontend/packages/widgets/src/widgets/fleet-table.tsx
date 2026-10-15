@@ -35,6 +35,7 @@ import {
   resolveStaleAfterSeconds,
   spaceVar,
   useSeverityColors,
+  useWidgetScale,
   useWidgetSelect,
   useWidgetTimeRange,
   WidgetFrame,
@@ -144,6 +145,15 @@ export function FleetTable({ widget, data }: WidgetProps) {
   return <Table widget={widget} fleet={fleet} strings={strings} />;
 }
 
+// Below this width (px of the widget body) the table becomes a card per device.
+export const STACK_BELOW_PX = 480;
+
+function Responsive({ wide, narrow }: { wide: ReactNode; narrow: ReactNode }) {
+  const { width } = useWidgetScale().size;
+  // An unmeasured body (width 0: before the first layout, or under a test renderer) takes the table.
+  return width > 0 && width < STACK_BELOW_PX ? narrow : wide;
+}
+
 function Frame({ title, children }: { title: string | undefined; children: ReactNode }) {
   return <WidgetFrame title={title} flush>{children}</WidgetFrame>;
 }
@@ -196,6 +206,136 @@ function Table({
     sort.by === by ? (sort.descending ? 'descending' : 'ascending') : 'none';
   const arrow = (by: string | null): string => (sort.by === by ? (sort.descending ? ' ▼' : ' ▲') : '');
 
+  const wide = (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: fontVar('md'), color: css('foreground') }}>
+      <thead>
+        <tr>
+          <th scope="col" aria-sort={ariaSort(null)} style={{ ...headBox, ...stickyFirst, zIndex: 2 }}>
+            <button type="button" style={plainButton} onClick={() => sortOn(null)} title={strings.sortBy(strings.device)}>
+              {strings.device}
+              {arrow(null)}
+            </button>
+          </th>
+          {columns.map((name) => {
+            const f = formats.get(name);
+            const heading = (f?.label ?? name) + (f?.unit ? ` (${f.unit})` : '');
+            return (
+              <th key={name} scope="col" aria-sort={ariaSort(name)} style={headBox}>
+                <button type="button" style={plainButton} onClick={() => sortOn(name)} title={strings.sortBy(heading)}>
+                  {heading}
+                  {arrow(name)}
+                </button>
+              </th>
+            );
+          })}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((member) => {
+          const label = deviceLabel(member);
+          return (
+            <tr key={member.token} data-device={member.token} style={{ borderBottom: `1px solid ${css('border')}` }}>
+              <th scope="row" style={{ ...cellBox, ...stickyFirst, fontWeight: 500 }}>
+                {drillTo ? (
+                  <button
+                    type="button"
+                    style={{ ...plainButton, color: css('primary'), textDecoration: 'underline', textUnderlineOffset: 2 }}
+                    title={strings.drill(label)}
+                    onClick={() => drillTo.select({ slot: drillTo.slot, binding: { kind: 'device', deviceToken: member.token } })}
+                  >
+                    {label}
+                  </button>
+                ) : (
+                  label
+                )}
+              </th>
+              {columns.map((name) => (
+                <td key={name} data-measurement={name} style={cellBox}>
+                  <CellView
+                    cell={cellFor(member, name)}
+                    format={formats.get(name)}
+                    bands={bands.get(name)}
+                    colors={colors}
+                    staleAfter={staleAfter}
+                    now={now}
+                    strings={strings}
+                  />
+                </td>
+              ))}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+
+  // Narrow, the table gives way to a card per device: a column cut off at the right edge is unread
+  // on a wall display, where nobody scrolls sideways, so the narrow layout never overflows.
+  const narrow = (
+    <div data-fleet-stacked="" style={{ color: css('foreground'), fontSize: fontVar('md') }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: spaceVar(2), padding: `${spaceVar(2)} ${spaceVar(3)}` }}>
+        {[null, ...columns].map((by) => {
+          const f = by === null ? undefined : formats.get(by);
+          const heading = by === null ? strings.device : (f?.label ?? by);
+          return (
+            <button
+              key={by ?? ''}
+              type="button"
+              aria-pressed={sort.by === by}
+              style={{ ...plainButton, fontSize: fontVar('xs'), fontWeight: 600, color: css('muted-foreground'), overflowWrap: 'anywhere' }}
+              onClick={() => sortOn(by)}
+              title={strings.sortBy(heading)}
+            >
+              {heading}
+              {arrow(by)}
+            </button>
+          );
+        })}
+      </div>
+      {rows.map((member) => {
+        const label = deviceLabel(member);
+        return (
+          <div key={member.token} data-device={member.token} style={{ padding: `${spaceVar(2)} ${spaceVar(3)}`, borderTop: `1px solid ${css('border')}` }}>
+            <div style={{ fontWeight: 500, overflowWrap: 'anywhere' }}>
+              {drillTo ? (
+                <button
+                  type="button"
+                  style={{ ...plainButton, color: css('primary'), textDecoration: 'underline', textUnderlineOffset: 2, overflowWrap: 'anywhere' }}
+                  title={strings.drill(label)}
+                  onClick={() => drillTo.select({ slot: drillTo.slot, binding: { kind: 'device', deviceToken: member.token } })}
+                >
+                  {label}
+                </button>
+              ) : (
+                label
+              )}
+            </div>
+            {columns.map((name) => {
+              const f = formats.get(name);
+              return (
+                <div key={name} data-measurement={name} style={{ display: 'flex', justifyContent: 'space-between', gap: spaceVar(3), alignItems: 'baseline' }}>
+                  <span style={{ color: css('muted-foreground'), fontSize: fontVar('sm'), overflowWrap: 'anywhere' }}>{f?.label ?? name}</span>
+                  <span style={{ textAlign: 'right', overflowWrap: 'anywhere' }}>
+                    <CellView
+                      cell={cellFor(member, name)}
+                      format={f}
+                      bands={bands.get(name)}
+                      colors={colors}
+                      staleAfter={staleAfter}
+                      now={now}
+                      strings={strings}
+                      wrap
+                    />
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
     <Frame title={optString(widget.options, 'title')}>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -207,66 +347,7 @@ function Table({
           data-fleet-scroll=""
           style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
         >
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: fontVar('md'), color: css('foreground') }}>
-            <thead>
-              <tr>
-                <th scope="col" aria-sort={ariaSort(null)} style={{ ...headBox, ...stickyFirst, zIndex: 2 }}>
-                  <button type="button" style={plainButton} onClick={() => sortOn(null)} title={strings.sortBy(strings.device)}>
-                    {strings.device}
-                    {arrow(null)}
-                  </button>
-                </th>
-                {columns.map((name) => {
-                  const f = formats.get(name);
-                  const heading = (f?.label ?? name) + (f?.unit ? ` (${f.unit})` : '');
-                  return (
-                    <th key={name} scope="col" aria-sort={ariaSort(name)} style={headBox}>
-                      <button type="button" style={plainButton} onClick={() => sortOn(name)} title={strings.sortBy(heading)}>
-                        {heading}
-                        {arrow(name)}
-                      </button>
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((member) => {
-                const label = deviceLabel(member);
-                return (
-                  <tr key={member.token} data-device={member.token} style={{ borderBottom: `1px solid ${css('border')}` }}>
-                    <th scope="row" style={{ ...cellBox, ...stickyFirst, fontWeight: 500 }}>
-                      {drillTo ? (
-                        <button
-                          type="button"
-                          style={{ ...plainButton, color: css('primary'), textDecoration: 'underline', textUnderlineOffset: 2 }}
-                          title={strings.drill(label)}
-                          onClick={() => drillTo.select({ slot: drillTo.slot, binding: { kind: 'device', deviceToken: member.token } })}
-                        >
-                          {label}
-                        </button>
-                      ) : (
-                        label
-                      )}
-                    </th>
-                    {columns.map((name) => (
-                      <td key={name} data-measurement={name} style={cellBox}>
-                        <CellView
-                          cell={cellFor(member, name)}
-                          format={formats.get(name)}
-                          bands={bands.get(name)}
-                          colors={colors}
-                          staleAfter={staleAfter}
-                          now={now}
-                          strings={strings}
-                        />
-                      </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <Responsive wide={wide} narrow={narrow} />
         </div>
         {(fleet.truncated || pages > 1) && (
           <div
@@ -323,6 +404,7 @@ function CellView({
   staleAfter,
   now,
   strings,
+  wrap,
 }: {
   cell: Cell;
   format: ColumnFormat | undefined;
@@ -331,8 +413,10 @@ function CellView({
   staleAfter: number | undefined;
   now: number;
   strings: FleetStrings;
+  // Let the text break (the narrow card) instead of holding one line (the table cell).
+  wrap?: boolean;
 }) {
-  const muted: CSSProperties = { color: css('muted-foreground'), fontSize: fontVar('sm') };
+  const muted: CSSProperties = { color: css('muted-foreground'), fontSize: fontVar('sm'), ...(wrap ? { overflowWrap: 'anywhere' as const } : {}) };
   switch (cell.kind) {
     case 'loading':
       return <span style={muted} title={strings.loading} aria-label={strings.loading}>…</span>;

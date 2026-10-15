@@ -95,7 +95,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 | 分组 | 组件 |
 |---|---|
-| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环）、Stat card（统计卡片）、Bar chart（柱状图）、Pie chart（饼图） |
+| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环）、Stat card（统计卡片）、Bar chart（柱状图）、Pie chart（饼图）、Fleet table（车队表格） |
 | Static（静态） | Label（标签）、Image（图片） |
 | Alarms（告警） | Alarm table（告警表）、Alarm count（告警计数） |
 | Control（控制） | Command button（命令按钮）、Command slider（命令滑块）、Command toggle（命令开关） |
@@ -119,6 +119,8 @@ import GuideShot from '@site/src/components/GuideShot';
 - **Time span**（时间跨度，时序图表）：图表绘制多少历史数据，单位为秒，范围 60 到 604800。留空时图表跟随看板的时间范围，查看者可以更改；填写后，无论查看者选择什么范围，图表都保持该跨度。
 - **Statistic**（统计量，统计卡片）：显示跨度内的哪个数值：平均值（默认）、最小值、最大值、总和、读数个数，或最新读数。卡片会在数值下方写出统计量及其覆盖的跨度，例如“Maximum · 1h”。同一个 **Time span** 设置可以把卡片固定在自己的跨度上。卡片无法得出数值时（数据源无法计算聚合、读取失败，或跨度内没有读数），会说明原因，而不会显示一个它没能算出的数字。没有读数的跨度，其读数个数为 0。
 - **Order**（顺序，柱状图、饼图）：测量按数据源列出的顺序排列，或按从小到大、从大到小排序。尚未上报的测量排在最后。柱状图在宽组件中绘制纵向柱，在高组件中绘制横向条。
+- **One bar per**（每根柱代表，柱状图）：*Measurement*（测量，默认）为一台设备的每个测量绘制一根柱；*Device*（设备）为组件所绑定设备组中的每台设备绘制一根柱，针对你选择的那一个 **Measurement**，因此数据源必须是设备组而不是单台设备。过大的设备组会按所选顺序截取前若干根柱，图表会注明“Showing N of M devices”。
+- **Fleet table**（车队表格）：组件所绑定设备组中每台设备一行，数据源所选的每个测量一列。**Columns** 为每个测量设置标题、单位和精度；**Thresholds** 为某个测量一列的单元格着色（正常区间保持表格原有颜色）；**Stale after** 把早于该秒数的读数标记为过期，不设置时表格只显示每个读数的时效。点击列标题（或用键盘按下）即可排序；**Order by** 与 **Largest first** 设置初始顺序，排序列中没有数值的设备始终排在最后。**Devices per page** 为较长的车队分页。**Target slot** 让设备名称成为链接，在绑定到该槽位的组件中选中该设备。看板较窄时，表格会变成每台设备一张卡片。没有数值的单元格会说明原因：*no data in range*（范围内无数据）、*does not report this*（该设备上报其他测量但从不上报这一项）或 *could not be read*（无法读取）。表格读取设备组的前 500 台设备，设备组更大时会注明“Showing 500 of N devices”。它遵循看板的时间范围，看板暂停时表格不再变动。
 
 组件选项的问题，例如它不读取的选项、留空的必填项或超出范围的值，会列在 **Version history**（版本历史）中。问题修复之前，**Publish version** 保持不可用。
 

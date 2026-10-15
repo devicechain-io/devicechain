@@ -321,6 +321,9 @@ describe('the pause', () => {
     setRange(frozenAt(NOW));
     await flush();
     act0(() => f.sink().next(sample('a', 'temperature', 99, 1)));
+    // Something else rebuilds the table while it is paused (a seed settling): the queued reading
+    // must still be held back, not just unscheduled.
+    act0(() => f.seed('a', { latest: {}, observed: ['temperature'] }));
     await flush();
     expect(cellText('a', 'temperature'), 'a paused board moved').toContain('20');
     expect(cellText('a', 'temperature')).not.toContain('99');

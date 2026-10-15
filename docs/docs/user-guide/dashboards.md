@@ -150,7 +150,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count |
 | Control | Command button, Command slider, Command toggle |
@@ -189,6 +189,25 @@ The settings depend on the widget. Common ones:
 - **Order** (bar chart, pie chart): the measurements in the order the data source lists them, or
   sorted smallest or largest first. A measurement that has not reported yet comes last. A bar chart
   draws columns in a wide widget and rows in a tall one.
+- **One bar per** (bar chart): *Measurement* (the default) draws a bar for each measurement of one
+  device. *Device* draws a bar for each device of the group the widget is bound to, for the one
+  **Measurement** you choose, so the data source must be a device group, not a single device. A
+  group too large to draw is cut to its first bars in the chosen order, and the chart says "Showing
+  N of M devices".
+- **Fleet table**: one row per device of the group the widget is bound to and one column per
+  measurement the data source selects. Set the group on the widget's data source and pick the
+  measurements to show. **Columns** gives a heading, unit and precision per measurement;
+  **Thresholds** colour the cells of one measurement's column (the normal band keeps the table's
+  colour); **Stale after** marks a reading older than that many seconds as stale, and without it
+  the table only shows each reading's age. Click a column heading, or press it from the keyboard,
+  to sort; **Order by** and **Largest first** set the starting order, and devices with no value
+  for the sorted column always come last. **Devices per page** pages a long fleet. **Target slot**
+  makes the device name a link that selects that device in the widgets bound to the slot. On a
+  narrow board the table becomes a card per device. A cell with no number says why: *no data in
+  range*, *does not report this* (the device reports other measurements but never this one), or
+  *could not be read*. The table reads the first 500 devices of a group and says "Showing 500 of N
+  devices" when the group is larger. It follows the dashboard's time range, and a paused
+  dashboard stops it moving.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until
