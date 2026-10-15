@@ -1093,10 +1093,10 @@
       "layout": {
         "base": {
           "col": 6,
-          "cols": 3,
+          "cols": 4,
           "mode": "grid",
           "row": 33,
-          "rows": 4
+          "rows": 5
         }
       },
       "options": {
@@ -1123,7 +1123,7 @@
           "col": 0,
           "cols": 4,
           "mode": "grid",
-          "row": 37,
+          "row": 38,
           "rows": 4
         }
       },
@@ -1151,7 +1151,7 @@
           "col": 4,
           "cols": 3,
           "mode": "grid",
-          "row": 37,
+          "row": 38,
           "rows": 3
         }
       },

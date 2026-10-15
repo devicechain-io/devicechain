@@ -640,9 +640,9 @@ func widgetlabAggregates(onSensor func(measurements ...string) widgetSubject) []
 			WidgetlabTemperatureKey, "max", "C", 0, 0, nil),
 
 		buildBarChartWidget("wl-bar", box{0, 6, r + 6, 4}, all, "Latest readings", "", "none"),
-		buildBarChartWidget("wl-bar-rows", box{6, 3, r + 6, 4}, all, "Largest first", "", "descending"),
-		buildPieChartWidget("wl-pie", box{0, 4, r + 10, 4}, all, "Share of the total", "", "none"),
-		buildPieChartWidget("wl-pie-min", box{4, 3, r + 10, 3}, all, "Share (smallest)", "", "descending"),
+		buildBarChartWidget("wl-bar-rows", box{6, 4, r + 6, 5}, all, "Largest first", "", "descending"),
+		buildPieChartWidget("wl-pie", box{0, 4, r + 11, 4}, all, "Share of the total", "", "none"),
+		buildPieChartWidget("wl-pie-min", box{4, 3, r + 11, 3}, all, "Share (smallest)", "", "descending"),
 	}
 }
 
