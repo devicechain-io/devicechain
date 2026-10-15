@@ -92,7 +92,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 | 分组 | 组件 |
 |---|---|
-| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格） |
+| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环） |
 | Static（静态） | Label（标签）、Image（图片） |
 | Alarms（告警） | Alarm table（告警表）、Alarm count（告警计数） |
 | Control（控制） | Command button（命令按钮） |

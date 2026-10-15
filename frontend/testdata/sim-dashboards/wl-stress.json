@@ -304,6 +304,74 @@
         "unit": "C"
       },
       "type": "level-gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-compass",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 15,
+          "rows": 4
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 0,
+        "title": "Headings that fold"
+      },
+      "type": "compass"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-ring",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 3,
+          "mode": "grid",
+          "row": 15,
+          "rows": 3
+        }
+      },
+      "options": {
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "precision": 0,
+        "readout": "value",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Off the scale (ring)",
+        "unit": "C"
+      },
+      "type": "progress-ring"
     }
   ]
 }

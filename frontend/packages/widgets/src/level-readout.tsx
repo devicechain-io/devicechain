@@ -23,14 +23,24 @@ export interface ReadoutRoom {
   scale: number;
 }
 
-export interface LevelReadoutProps extends ReadoutRoom {
+// The words the off-scale marker is labelled with; the only strings the readout itself reads.
+export type MarkerStrings = Pick<LevelStrings, 'aboveScale' | 'belowScale'>;
+
+// A readout that can be marked off-scale must be handed the marker's label, so an unlabelled
+// marker cannot be written; one that is never marked (the gauge) needs no strings at all, which
+// keeps the level-strings table out of an eager widget's bundle.
+export type LevelReadoutProps = ReadoutRoom & {
   text: string;
   unit?: string;
   color?: string;
-  // Set when the value lies off the scale: a marker is drawn beside it.
-  position?: ScalePosition;
-  strings: LevelStrings;
-}
+} & (
+    | {
+        // Set when the value lies off the scale: a marker is drawn beside it.
+        position?: ScalePosition;
+        strings: MarkerStrings;
+      }
+    | { position?: undefined; strings?: undefined }
+  );
 
 const MARKER = { above: '▲', below: '▼' } as const;
 

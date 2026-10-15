@@ -139,7 +139,7 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 
 | Grupo | Widgets |
 |---|---|
-| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal |
+| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso |
 | Estático | Etiqueta, Imagen |
 | Alarmas | Tabla de alarmas, Contador de alarmas |
 | Control | Botón de comando |

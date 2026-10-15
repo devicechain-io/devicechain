@@ -136,7 +136,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count |
 | Control | Command button |

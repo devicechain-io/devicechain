@@ -260,6 +260,8 @@
   "widgetTypeBattery": "Battery",
   "widgetTypeStatusLight": "Status light",
   "widgetTypeSignalBars": "Signal bars",
+  "widgetTypeCompass": "Compass",
+  "widgetTypeProgressRing": "Progress ring",
   "widgetCategoryTelemetry": "Telemetry",
   "widgetCategoryStatic": "Static",
   "widgetCategoryAlarms": "Alarms",

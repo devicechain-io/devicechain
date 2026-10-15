@@ -173,6 +173,8 @@ export const WIDGET_TYPES = [
   'battery',
   'status-light',
   'signal-bars',
+  'compass',
+  'progress-ring',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];

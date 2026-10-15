@@ -18,8 +18,10 @@ import { labelWidget } from './widgets/label';
 import { latestCardWidget } from './widgets/latest-card';
 import {
   batteryWidget,
+  compassWidget,
   levelGaugeWidget,
   linearGaugeWidget,
+  progressRingWidget,
   signalBarsWidget,
   statusLightWidget,
 } from './widgets/level-lazy';
@@ -44,6 +46,8 @@ export const builtinWidgetDefinitions = [
   batteryWidget,
   statusLightWidget,
   signalBarsWidget,
+  compassWidget,
+  progressRingWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent

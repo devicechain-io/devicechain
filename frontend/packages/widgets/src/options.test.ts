@@ -71,6 +71,8 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   battery: 'widgets/battery.tsx',
   'status-light': 'widgets/status-light.tsx',
   'signal-bars': 'widgets/signal-bars.tsx',
+  compass: 'widgets/compass.tsx',
+  'progress-ring': 'widgets/progress-ring.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -99,7 +101,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   title: [...WIDGET_TYPES],
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars'],
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive.
   selectionTarget: ['alarm-table', 'entity-selector'],
@@ -356,6 +358,14 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     ],
     window: 300,
   },
+  compass: {
+    title: 'Wind',
+    measurement: 'wind_dir',
+    precision: 0,
+    thresholds: [{ value: 90, level: 'warning' }],
+    window: 300,
+  },
+  'progress-ring': { title: 'Fill', measurement: 'fill', min: 0, max: 200, readout: 'value', unit: 'L', precision: 0, window: 300 },
 };
 
 describe('validateWidgetOptions', () => {

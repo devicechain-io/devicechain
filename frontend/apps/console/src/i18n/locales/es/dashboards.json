@@ -260,6 +260,8 @@
   "widgetTypeBattery": "Batería",
   "widgetTypeStatusLight": "Luz de estado",
   "widgetTypeSignalBars": "Barras de señal",
+  "widgetTypeCompass": "Brújula",
+  "widgetTypeProgressRing": "Anillo de progreso",
   "widgetCategoryTelemetry": "Telemetría",
   "widgetCategoryStatic": "Estático",
   "widgetCategoryAlarms": "Alarmas",

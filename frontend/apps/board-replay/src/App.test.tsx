@@ -43,6 +43,15 @@ const { RecordedDataSource } = dashboards;
 
 const canvasText = (globalThis as unknown as { __canvasText: string[] }).__canvasText;
 
+// The gauge prints its number as DOM text over the dial (it used to be canvas text, which the
+// readability gate cannot see), so the reading is read off the page -- off the ONE gauge named,
+// and it must be there: a readout that never rendered would otherwise satisfy a "does not show".
+const gaugeReading = (widgetId: string) => {
+  const el = document.querySelector(`[data-widget="${widgetId}"] [data-level-readout]`);
+  expect(el, `no readout on gauge ${widgetId}`).not.toBeNull();
+  return el!.textContent ?? '';
+};
+
 beforeEach(async () => {
   await setReplayLocale('en');
   canvasText.length = 0;
@@ -483,14 +492,14 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
 
     // Before the drill the tyre gauge is on the default machine, a dozer, which reports no
     // tyre pressure: it must not be showing the hauler's reading.
-    expect(canvasText.join('|')).not.toContain('599.6');
+    expect(gaugeReading('sp-tyre')).not.toContain('599.6');
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'sp-hauler-03' }));
     });
     await settle();
     expect((screen.getByLabelText('Machine') as HTMLSelectElement).value).toBe('sp-hauler-03');
-    expect(canvasText.join('|')).toContain('599.6');
+    expect(gaugeReading('sp-tyre')).toContain('599.6');
   });
 
   it('the Machine selector drives the same gauge', async () => {
@@ -500,7 +509,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
       fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-03' } });
     });
     await settle();
-    expect(canvasText.join('|')).toContain('599.6');
+    expect(gaugeReading('sp-tyre')).toContain('599.6');
   });
 
   it('shows the map as "Not in this recording", never as an empty map', async () => {

@@ -4,7 +4,15 @@
 import type { MeasurementSample } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { buildGaugeOption, buildLineOption, GAUGE_AXIS_LABELS_MIN_SIDE, severityFill } from './chart-options';
+import {
+  buildCompassOption,
+  buildGaugeOption,
+  buildLineOption,
+  GAUGE_AXIS_LABELS_MIN_SIDE,
+  gaugeReadoutBox,
+  severityFill,
+  wrapHeading,
+} from './chart-options';
 import type { ChartTheme } from './chart-theme';
 
 const theme: ChartTheme = {
@@ -202,7 +210,6 @@ describe('buildGaugeOption', () => {
     const small = seriesOf(buildGaugeOption(20, theme, { min: 0, max: 50 }, { width: 120, height: 100 }))[0];
     const large = seriesOf(buildGaugeOption(20, theme, { min: 0, max: 50 }, { width: 600, height: 400 }))[0];
     expect(small.splitNumber).toBeLessThan(large.splitNumber);
-    expect(small.detail.fontSize).toBeLessThan(large.detail.fontSize);
     expect(small.axisLabel.fontSize).toBeLessThanOrEqual(large.axisLabel.fontSize);
   });
 
@@ -213,13 +220,23 @@ describe('buildGaugeOption', () => {
     expect(ok.axisLabel.show).toBe(true);
   });
 
-  it('applies precision to the readout, and shows the raw value when unset', () => {
-    const withP = seriesOf(buildGaugeOption(21.456, theme, { precision: 1, unit: 'C' }))[0];
-    expect(withP.detail.formatter(21.456)).toBe('21.5 C');
-    const raw = seriesOf(buildGaugeOption(21.456, theme, {}))[0];
-    expect(raw.detail.formatter(21.456)).toBe('21.456');
-    // Unset is not full float width either.
-    expect(raw.detail.formatter(30.203057033956792)).toBe('30.203');
+  it("draws no readout of its own with readout 'none': the caller's DOM text is the number", () => {
+    // Canvas text is invisible to the readability gate, so the built-in gauge overlays a DOM
+    // readout (gauge.tsx) and asks for a bare dial; the series must not ALSO print the value.
+    for (const value of [21.456, null]) {
+      const gauge = seriesOf(buildGaugeOption(value, theme, { readout: 'none' }))[0];
+      expect(gauge.detail.show).toBe(false);
+    }
+  });
+
+  it('keeps drawing its readout by default, so a widget that renders only the chart still shows the number', () => {
+    // Third-party widgets (examples/widget-tank-level) call buildGaugeOption with a unit and
+    // render the chart alone; dropping the canvas readout would leave their dial without a value.
+    const gauge = seriesOf(buildGaugeOption(21.456, theme, { unit: 'kPa', precision: 1 }))[0];
+    expect(gauge.detail.show).not.toBe(false);
+    expect(gauge.detail.formatter(21.456)).toBe('21.5 kPa');
+    const empty = seriesOf(buildGaugeOption(null, theme, { unit: 'kPa' }))[0];
+    expect(empty.detail.formatter(0)).toBe('—');
   });
 
   it('paints the arc in the severity bands, ending at 1, with the neutral track below the first', () => {
@@ -287,10 +304,100 @@ describe('buildGaugeOption', () => {
     expect(onlyNormal.progress.show).toBe(true);
   });
 
-  it('fits the readout font to the string length', () => {
-    const size = { width: 140, height: 140 };
-    const short = seriesOf(buildGaugeOption(5, theme, {}, size))[0];
-    const long = seriesOf(buildGaugeOption(123456.789, theme, {}, size))[0];
-    expect(long.detail.fontSize).toBeLessThan(short.detail.fontSize);
+  it('places the DOM readout where the canvas detail used to be: under the hub, inside the dial', () => {
+    const box = gaugeReadoutBox({ width: 200, height: 140 });
+    // The dial is centred at 58% of the height and sized by the short side (140).
+    expect(box.centerX).toBe(100);
+    expect(box.centerY).toBeCloseTo(0.58 * 140 + 0.3 * 0.95 * 70, 5);
+    expect(box.width).toBeCloseTo(140 * 0.7, 5);
+    expect(box.height).toBeCloseTo(140 * 0.25, 5);
+    // Unmeasured: the same nominal 200 px the builder assumes.
+    expect(gaugeReadoutBox({ width: 0, height: 0 }).width).toBeCloseTo(200 * 0.7, 5);
+  });
+});
+
+describe('wrapHeading', () => {
+  it.each([
+    [0, 0],
+    [10, 10],
+    [359, 359],
+    [360, 0],
+    [370, 10],
+    [720, 0],
+    [725.5, 5.5],
+    [-90, 270],
+    [-1, 359],
+    [-360, 0],
+    [-450, 270],
+  ])('%s degrees wraps to %s', (input, wrapped) => {
+    expect(wrapHeading(input)).toBeCloseTo(wrapped, 9);
+  });
+
+  it('never returns 360 or a negative zero', () => {
+    expect(Object.is(wrapHeading(-360), 0)).toBe(true);
+    expect(Object.is(wrapHeading(-0), 0)).toBe(true);
+    // A tiny negative would round up to 360 under naive modulo arithmetic.
+    expect(wrapHeading(-1e-14)).toBeLessThan(360);
+  });
+
+  it('has no heading for a value that is not a finite number', () => {
+    for (const bad of [Number.NaN, Infinity, -Infinity, null, undefined]) expect(wrapHeading(bad)).toBeUndefined();
+  });
+});
+
+describe('buildCompassOption', () => {
+  const letters = ['N', 'E', 'S', 'W'] as const;
+  const compass = (value: number | null, opts = {}) => seriesOf(buildCompassOption(value, theme, { cardinals: letters, ...opts }))[0];
+
+  it('is a full circle from north, clockwise: 0 at the top, 90 to the east', () => {
+    const c = compass(10);
+    expect(c.type).toBe('gauge');
+    expect(c.min).toBe(0);
+    expect(c.max).toBe(360);
+    expect(c.startAngle).toBe(90);
+    expect(c.endAngle).toBe(-270);
+    expect(c.clockwise).not.toBe(false);
+    expect(c.splitNumber).toBe(4);
+  });
+
+  it.each([
+    [10, 10],
+    [370, 10],
+    [-90, 270],
+    [360, 0],
+    [0, 0],
+  ])('points the needle at heading %s as %s degrees', (value, needle) => {
+    expect(compass(value).data[0].value).toBeCloseTo(needle, 9);
+  });
+
+  it('rests the needle at north with no reading, and draws no value text', () => {
+    const c = compass(null);
+    expect(c.data[0].value).toBe(0);
+    expect(c.detail.show).toBe(false);
+  });
+
+  it('labels the four points of the compass and leaves the 360 tick blank', () => {
+    const fmt = compass(10).axisLabel.formatter as (v: number) => string;
+    expect([0, 90, 180, 270, 360].map(fmt)).toEqual(['N', 'E', 'S', 'W', '']);
+    const es = compass(10, { cardinals: ['N', 'E', 'S', 'O'] }).axisLabel.formatter as (v: number) => string;
+    expect(es(270)).toBe('O');
+    // Any other tick is left unlabelled rather than printed as a number.
+    expect(fmt(45)).toBe('');
+  });
+
+  it('takes the needle colour of the band the heading is in, and the accent in a normal band', () => {
+    const thresholds = [
+      { value: 0, level: 'normal' as const },
+      { value: 90, level: 'critical' as const },
+    ];
+    expect(compass(45, { thresholds }).pointer.itemStyle.color).toBe('#c1');
+    expect(compass(100, { thresholds }).pointer.itemStyle.color).toBe('hsl(5, 5%, 5%)');
+    // The band is read at the WRAPPED heading: 460 is 100 degrees.
+    expect(compass(460, { thresholds }).pointer.itemStyle.color).toBe('hsl(5, 5%, 5%)');
+    expect(compass(100, { thresholds }).axisLine.lineStyle.color).toEqual([
+      [0.25, '#333'],
+      [1, 'hsl(5, 5%, 5%)'],
+    ]);
+    expect(compass(10).pointer.itemStyle.color).toBe('#c1');
   });
 });

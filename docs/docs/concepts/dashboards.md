@@ -27,9 +27,9 @@ The definition format and the renderer carry a per-breakpoint placement for ever
 
 ## Widgets
 
-Built-in widgets span six channels: telemetry, static (no data), alarm, control, selection, and location. The time-series chart and the gauge render over [Apache ECharts](https://echarts.apache.org/), and the map over [MapLibre GL](https://maplibre.org/). The rest are plain DOM.
+Built-in widgets span six channels: telemetry, static (no data), alarm, control, selection, and location. The time-series chart, the gauge and the compass render over [Apache ECharts](https://echarts.apache.org/), and the map over [MapLibre GL](https://maplibre.org/). The rest are plain DOM.
 
-The level and indicator widgets (linear gauge, level gauge, battery, status light, signal bars) never guess a scale: a gauge with no min and max, or no data, says so rather than drawing a plausible fill. A value off the scale pins the fill to the end and marks the readout with ▲ or ▼. They colour by threshold band only when the value is in an abnormal band; a `normal` band keeps the widget's neutral colour.
+The level and indicator widgets (linear gauge, level gauge, battery, status light, signal bars) never guess a scale: a gauge with no min and max, or no data, says so rather than drawing a plausible fill. A value off the scale pins the fill to the end and marks the readout with ▲ or ▼. They colour by threshold band only when the value is in an abnormal band; a `normal` band keeps the widget's neutral colour. The compass and the progress ring follow the same rules: a heading outside 0–360 folds onto the dial (370° reads 10°), and a progress ring with no min and max says so. The gauge, compass and progress ring print their reading as page text, not as part of the chart drawing.
 
 | Widget | Channel | Shows |
 |---|---|---|
@@ -42,6 +42,8 @@ The level and indicator widgets (linear gauge, level gauge, battery, status ligh
 | **Battery** | telemetry | a battery glyph filled to the latest value, on a 0–100 percent scale unless you set min and max |
 | **Status light** | telemetry | a lamp coloured by the value's threshold band, or lit and dark at an on-at value, with a text caption |
 | **Signal bars** | telemetry | one bar per threshold, lit for each threshold the latest value has reached |
+| **Compass** | telemetry | a heading (wind direction, bearing) as a needle on a full turn, with the degrees and the nearest of eight compass points |
+| **Progress ring** | telemetry | a ring filled between a required min and max, read out as a percent or the value |
 | **Label** | static | static text |
 | **Image** | static | a static image (e.g. a floor plan behind other widgets) |
 | **Alarm table** | alarm | live alarms for a device or anchor |

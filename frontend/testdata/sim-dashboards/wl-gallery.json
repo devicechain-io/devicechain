@@ -592,6 +592,117 @@
         "unit": "%"
       },
       "type": "signal-bars"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-compass",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 20,
+          "rows": 4
+        }
+      },
+      "options": {
+        "measurement": "battery",
+        "precision": 0,
+        "title": "Battery as a heading"
+      },
+      "type": "compass"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-ring",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 3,
+          "mode": "grid",
+          "row": 20,
+          "rows": 3
+        }
+      },
+      "options": {
+        "max": 100,
+        "measurement": "humidity",
+        "min": 0,
+        "precision": 0,
+        "readout": "percent",
+        "thresholds": [
+          {
+            "level": "critical",
+            "value": 0
+          },
+          {
+            "level": "warning",
+            "value": 30
+          },
+          {
+            "level": "normal",
+            "value": 45
+          }
+        ],
+        "title": "Humidity",
+        "unit": "%"
+      },
+      "type": "progress-ring"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-ring-value",
+      "layout": {
+        "base": {
+          "col": 7,
+          "cols": 3,
+          "mode": "grid",
+          "row": 20,
+          "rows": 3
+        }
+      },
+      "options": {
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "precision": 0,
+        "readout": "value",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Temperature",
+        "unit": "C"
+      },
+      "type": "progress-ring"
     }
   ]
 }
