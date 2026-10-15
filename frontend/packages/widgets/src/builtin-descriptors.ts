@@ -163,6 +163,42 @@ const SCALE_MAX = {
   doc: 'Value at the full end of the scale. Required, and above min.',
 } as const satisfies OptionSpec;
 
+// The command a control sends. The three keys are the command-vocabulary triple the console's
+// command picker writes at once (the command button declares the same three), so picking a
+// command in the editor bakes its key, label and parameter schema here too.
+const CONTROL_COMMAND_NAME = {
+  kind: 'string',
+  required: true,
+  labelId: 'widgetCommandHeading',
+  helpId: 'widgetCommandFieldHint',
+  control: 'command-vocabulary',
+  doc: 'Command key issued to the target device. Without it the control cannot send.',
+} as const satisfies OptionSpec;
+
+const CONTROL_COMMAND_LABEL = {
+  kind: 'string',
+  labelId: 'widgetCommandHeading',
+  helpId: 'widgetCommandFieldHint',
+  control: 'command-vocabulary',
+  doc: 'Name of the control for assistive technology. Defaults to the command key.',
+} as const satisfies OptionSpec;
+
+const CONTROL_PARAMETER_SCHEMA = {
+  kind: 'string',
+  format: 'json',
+  labelId: 'widgetCommandHeading',
+  helpId: 'widgetCommandFieldHint',
+  control: 'command-vocabulary',
+  doc: "The command's parameter descriptors, baked in as JSON at author time. Gives the control its range and its refusals.",
+} as const satisfies OptionSpec;
+
+const CONTROL_PARAMETER = {
+  kind: 'string',
+  labelId: 'widgetLabelParameter',
+  helpId: 'widgetHintControlParameter',
+  doc: 'Which parameter of the command this control sets. May be left blank when the command has exactly one parameter of the right type.',
+} as const satisfies OptionSpec;
+
 const MEASUREMENT = {
   kind: 'string',
   labelId: 'widgetLabelMeasurement',
@@ -837,6 +873,69 @@ export const builtinWidgetDescriptors = {
     interactions: {},
     freshness: true,
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 6 } },
+  }),
+
+  'command-slider': defineWidgetDescriptor({
+    id: 'command-slider',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Command slider', category: 'Control', titleId: 'widgetTypeCommandSlider', categoryId: 'widgetCategoryControl' },
+    channel: 'control',
+    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    // The control reads its last-sent value off this history, so it asks for a long one.
+    binding: { pageSize: { const: 50 } },
+    options: {
+      title: TITLE,
+      commandName: CONTROL_COMMAND_NAME,
+      commandLabel: CONTROL_COMMAND_LABEL,
+      parameterSchema: CONTROL_PARAMETER_SCHEMA,
+      parameter: CONTROL_PARAMETER,
+      min: {
+        kind: 'number',
+        labelId: 'widgetLabelMin',
+        helpId: 'widgetHintSliderRange',
+        doc: "Lowest value, used only when the command's parameter declares no minimum.",
+      },
+      max: {
+        kind: 'number',
+        labelId: 'widgetLabelMax',
+        helpId: 'widgetHintSliderRange',
+        doc: "Highest value, used only when the command's parameter declares no maximum.",
+      },
+      step: {
+        kind: 'number',
+        min: 0,
+        labelId: 'widgetLabelStep',
+        helpId: 'widgetHintSliderStep',
+        doc: 'Distance between values. Defaults to 1 for a whole-number parameter, else a hundredth of the range.',
+      },
+    },
+    constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
+    defaults: { title: 'Command slider' },
+    interactions: { commandSend: true },
+    layout: { defaultSpan: { cols: 4, rows: 2 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 8, rows: 3 } },
+  }),
+
+  'command-toggle': defineWidgetDescriptor({
+    id: 'command-toggle',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Command toggle', category: 'Control', titleId: 'widgetTypeCommandToggle', categoryId: 'widgetCategoryControl' },
+    channel: 'control',
+    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    binding: { pageSize: { const: 50 } },
+    options: {
+      title: TITLE,
+      commandName: CONTROL_COMMAND_NAME,
+      commandLabel: CONTROL_COMMAND_LABEL,
+      parameterSchema: CONTROL_PARAMETER_SCHEMA,
+      parameter: CONTROL_PARAMETER,
+    },
+    defaults: { title: 'Command toggle' },
+    interactions: { commandSend: true },
+    layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 3 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 

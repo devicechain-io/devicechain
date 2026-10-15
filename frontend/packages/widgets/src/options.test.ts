@@ -73,6 +73,8 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'signal-bars': 'widgets/signal-bars.tsx',
   compass: 'widgets/compass.tsx',
   'progress-ring': 'widgets/progress-ring.tsx',
+  'command-slider': 'widgets/command-slider.tsx',
+  'command-toggle': 'widgets/command-toggle.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -366,6 +368,23 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     window: 300,
   },
   'progress-ring': { title: 'Fill', measurement: 'fill', min: 0, max: 200, readout: 'value', unit: 'L', precision: 0, window: 300 },
+  'command-slider': {
+    title: 'Setpoint',
+    commandName: 'setSetpoint',
+    commandLabel: 'Set Setpoint',
+    parameterSchema: '[{"name":"target","dataType":"DOUBLE","required":true}]',
+    parameter: 'target',
+    min: 15,
+    max: 35,
+    step: 0.5,
+  },
+  'command-toggle': {
+    title: 'Power',
+    commandName: 'setPower',
+    commandLabel: 'Set Power',
+    parameterSchema: '[{"name":"enabled","dataType":"BOOLEAN","required":true}]',
+    parameter: 'enabled',
+  },
 };
 
 describe('validateWidgetOptions', () => {

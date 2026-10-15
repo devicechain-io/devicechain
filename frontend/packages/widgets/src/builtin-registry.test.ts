@@ -72,6 +72,8 @@ describe('the built-in registry', () => {
       const expected: Partial<Record<WidgetType, object>> = {
         'alarm-table': { alarmActions: true, selection: true },
         'command-button': { commandSend: true },
+        'command-slider': { commandSend: true },
+        'command-toggle': { commandSend: true },
         'entity-selector': { selection: true, candidates: true },
       };
       expect(descriptor.interactions).toEqual(expected[type] ?? {});

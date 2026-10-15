@@ -31,6 +31,8 @@ Los widgets integrados abarcan seis canales: telemetría, estático (sin datos),
 
 Los widgets de nivel e indicadores (indicador lineal, indicador de nivel, batería, luz de estado, barras de señal) nunca suponen una escala: un indicador sin mín. ni máx., o sin datos, lo dice en lugar de dibujar un relleno verosímil. Un valor fuera de la escala fija el relleno en el extremo y marca la lectura con ▲ o ▼. Solo colorean por banda de umbral cuando el valor está en una banda anómala; una banda `normal` conserva el color neutro del widget. La brújula y el anillo de progreso siguen las mismas reglas: un rumbo fuera de 0–360 se pliega sobre el dial (370° se lee 10°), y un anillo de progreso sin mín. ni máx. lo dice. El medidor, la brújula y el anillo de progreso muestran su lectura como texto de la página, no como parte del dibujo del gráfico.
 
+El control deslizante y el interruptor de comando muestran lo último que se envió al dispositivo, con el estado de entrega de ese comando (pendiente, entregado o fallido), nunca el estado actual del dispositivo. El control deslizante envía una sola vez al soltarlo, o con Intro desde el teclado, no mientras se arrastra; un valor que no se le pidió enviar (Escape, o un arrastre abandonado) se descarta. El interruptor envía lo contrario del último valor enviado solo mientras ese comando está pendiente o entregado. Si no se ha enviado nada, si el último comando falló o si no figura entre los comandos recientes, el interruptor no adivina: ofrece Encendido y Apagado y envía el que usted elija. Ninguno de los dos vuelve a enviar mientras su comando anterior aún se está aceptando. Si el comando tiene otro parámetro obligatorio sin valor por defecto, o el parámetro elegido no existe o es de otro tipo, el control lo dice y no envía nada. Un visor sin `command:write` los ve en solo lectura.
+
 | Widget | Canal | Muestra |
 |---|---|---|
 | **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo de una ventana de tiempo |
@@ -49,6 +51,8 @@ Los widgets de nivel e indicadores (indicador lineal, indicador de nivel, bater�
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |
 | **Conteo de alarmas** | alarma | un recuento agregado de alarmas abiertas |
 | **Comando / control** | control | un formulario de parámetros tipado que despacha un comando y muestra en vivo su ciclo de vida de entrega |
+| **Control deslizante de comando** | control | un control deslizante para un parámetro numérico de un comando, que se envía al soltarlo; su rango proviene de la definición del comando |
+| **Interruptor de comando** | control | un interruptor para un parámetro booleano de un comando, un comando por clic |
 | **Selector de entidad** | selección | un selector que reapunta un slot con nombre, de modo que quien lo ve elige qué entidad muestra el panel — o un widget dentro de él |
 | **Mapa** | ubicación | la última posición conocida de los dispositivos vinculados |
 

@@ -123,6 +123,16 @@ const (
 	WidgetlabCommandDef = "wl-set-setpoint-cmd"
 	WidgetlabCommandKey = "setSetpoint"
 
+	// The command the toggle sends, and the parameters the slider and toggle bind. The slider
+	// drives setSetpoint's `target`; the toggle drives setPower's `enabled`, the board's one
+	// BOOLEAN command. Each is read from two sides, the definition authored here and the
+	// widget options the board bakes, so each is a constant: a control naming a parameter the
+	// published schema lacks renders a refusal where a working control was meant.
+	WidgetlabPowerCommandDef   = "wl-set-power-cmd"
+	WidgetlabPowerCommandKey   = "setPower"
+	WidgetlabSetpointParameter = "target"
+	WidgetlabPowerParameter    = "enabled"
+
 	// The alarm tier. Both spellings live in wirevocabulary.go, which carries the whole
 	// reasoning for why they are two constants and what each collapse breaks — the
 	// canonical copy, not a summary of one.
@@ -140,6 +150,13 @@ const (
 const widgetlabParameterSchema = `[` +
 	`{"name":"target","kind":"SCALAR","dataType":"DOUBLE","unit":"C","required":true,"minValue":15,"maxValue":35},` +
 	`{"name":"mode","kind":"SCALAR","dataType":"STRING","required":false,"enum":["heat","cool","auto"],"default":"auto"}` +
+	`]`
+
+// widgetlabPowerParameterSchema is the toggle's command: ONE required BOOLEAN. A boolean with
+// no default is deliberate: the toggle must send the value the operator chose, and a schema that
+// supplied one would let it send a value nobody chose.
+const widgetlabPowerParameterSchema = `[` +
+	`{"name":"enabled","kind":"SCALAR","dataType":"BOOLEAN","required":true}` +
 	`]`
 
 // widgetlabSweep is the nominal temperature at a given tick: a triangle wave
@@ -247,6 +264,12 @@ func (s *widgetlab) Manifest() SimManifest {
 						CommandKey:      WidgetlabCommandKey,
 						Name:            "Set Setpoint",
 						ParameterSchema: widgetlabParameterSchema,
+					},
+					{
+						Token:           WidgetlabPowerCommandDef,
+						CommandKey:      WidgetlabPowerCommandKey,
+						Name:            "Set Power",
+						ParameterSchema: widgetlabPowerParameterSchema,
 					},
 				},
 				// The threshold is WidgetlabAlarmThreshold rather than a literal, which

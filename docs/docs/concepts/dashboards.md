@@ -31,6 +31,8 @@ Built-in widgets span six channels: telemetry, static (no data), alarm, control,
 
 The level and indicator widgets (linear gauge, level gauge, battery, status light, signal bars) never guess a scale: a gauge with no min and max, or no data, says so rather than drawing a plausible fill. A value off the scale pins the fill to the end and marks the readout with ▲ or ▼. They colour by threshold band only when the value is in an abnormal band; a `normal` band keeps the widget's neutral colour. The compass and the progress ring follow the same rules: a heading outside 0–360 folds onto the dial (370° reads 10°), and a progress ring with no min and max says so. The gauge, compass and progress ring print their reading as page text, not as part of the chart drawing.
 
+The command slider and toggle show what was last sent to the device, with that command's delivery status (pending, delivered or failed), never the device's current state. The slider sends once when released, or on Enter from the keyboard, not while it is dragged; a value it was not told to send (Escape, or the drag abandoned) is discarded. The toggle sends the opposite of the last value sent only while that command is pending or delivered. With nothing sent, when the last command failed, or when it is not among the recent commands, the toggle does not guess: it offers On and Off and sends the one you choose. Neither control sends again while its previous command is still being accepted. If the command has another required parameter with no default value, or the chosen parameter is missing or of the wrong type, the control says so and sends nothing. A viewer without `command:write` sees them read-only.
+
 | Widget | Channel | Shows |
 |---|---|---|
 | **Time-series chart** | telemetry | one or more measurement series over a time window |
@@ -49,6 +51,8 @@ The level and indicator widgets (linear gauge, level gauge, battery, status ligh
 | **Alarm table** | alarm | live alarms for a device or anchor |
 | **Alarm count** | alarm | a rolled-up count of open alarms |
 | **Command / control** | control | a typed parameter form that dispatches a command and shows its live delivery lifecycle |
+| **Command slider** | control | a slider for one numeric parameter of a command, sent when released; its range comes from the command definition |
+| **Command toggle** | control | a switch for one boolean parameter of a command, one command per click |
 | **Entity selector** | selection | a picker that re-points a named slot, so a viewer chooses which entity the dashboard — or one widget within it — shows |
 | **Map** | location | the last known position of the bound devices |
 

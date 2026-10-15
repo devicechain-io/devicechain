@@ -142,7 +142,7 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 | Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso |
 | Estático | Etiqueta, Imagen |
 | Alarmas | Tabla de alarmas, Contador de alarmas |
-| Control | Botón de comando |
+| Control | Botón de comando, Control deslizante de comando, Interruptor de comando |
 | Navegación | Selector de entidad, que permite al espectador elegir qué dispositivo o entidad muestra el panel |
 | Ubicación | Mapa, que dibuja sobre el mapa del inquilino (consulta [Configuración del inquilino](./tenant-settings.md)) |
 

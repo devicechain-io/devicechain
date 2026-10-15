@@ -703,6 +703,108 @@
         "unit": "C"
       },
       "type": "progress-ring"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-cmd-slider",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 25,
+          "rows": 2
+        }
+      },
+      "options": {
+        "commandLabel": "Set Setpoint",
+        "commandName": "setSetpoint",
+        "parameter": "target",
+        "parameterSchema": "[{\"name\":\"target\",\"kind\":\"SCALAR\",\"dataType\":\"DOUBLE\",\"unit\":\"C\",\"required\":true,\"minValue\":15,\"maxValue\":35},{\"name\":\"mode\",\"kind\":\"SCALAR\",\"dataType\":\"STRING\",\"required\":false,\"enum\":[\"heat\",\"cool\",\"auto\"],\"default\":\"auto\"}]",
+        "step": 0.5,
+        "title": "Setpoint"
+      },
+      "type": "command-slider"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-cmd-slider-min",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 3,
+          "mode": "grid",
+          "row": 25,
+          "rows": 2
+        }
+      },
+      "options": {
+        "commandLabel": "Set Setpoint",
+        "commandName": "setSetpoint",
+        "parameter": "target",
+        "parameterSchema": "[{\"name\":\"target\",\"kind\":\"SCALAR\",\"dataType\":\"DOUBLE\",\"unit\":\"C\",\"required\":true,\"minValue\":15,\"maxValue\":35},{\"name\":\"mode\",\"kind\":\"SCALAR\",\"dataType\":\"STRING\",\"required\":false,\"enum\":[\"heat\",\"cool\",\"auto\"],\"default\":\"auto\"}]",
+        "step": 0.5,
+        "title": "Setpoint (smallest)"
+      },
+      "type": "command-slider"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-cmd-toggle",
+      "layout": {
+        "base": {
+          "col": 7,
+          "cols": 3,
+          "mode": "grid",
+          "row": 25,
+          "rows": 2
+        }
+      },
+      "options": {
+        "commandLabel": "Set Power",
+        "commandName": "setPower",
+        "parameter": "enabled",
+        "parameterSchema": "[{\"name\":\"enabled\",\"kind\":\"SCALAR\",\"dataType\":\"BOOLEAN\",\"required\":true}]",
+        "title": "Power"
+      },
+      "type": "command-toggle"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-cmd-toggle-min",
+      "layout": {
+        "base": {
+          "col": 10,
+          "cols": 2,
+          "mode": "grid",
+          "row": 25,
+          "rows": 2
+        }
+      },
+      "options": {
+        "commandLabel": "Set Power",
+        "commandName": "setPower",
+        "parameter": "enabled",
+        "parameterSchema": "[{\"name\":\"enabled\",\"kind\":\"SCALAR\",\"dataType\":\"BOOLEAN\",\"required\":true}]",
+        "title": "Power (smallest)"
+      },
+      "type": "command-toggle"
     }
   ]
 }

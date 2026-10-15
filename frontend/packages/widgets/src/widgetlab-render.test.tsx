@@ -35,8 +35,10 @@ import {
   type MeasurementStreamState,
 } from '@devicechain/widget-sdk';
 import { createBuiltinWidgetRegistry } from './builtin-registry';
+import { CONTROL_STRINGS } from './command-control-strings';
 import { LEVEL_STRINGS } from './level-strings';
 import { MapRuntimeProvider } from './map-runtime-context';
+import { loadControlWidgets } from './widgets/control-lazy';
 import { loadLevelWidgets } from './widgets/level-lazy';
 
 afterEach(cleanup);
@@ -45,7 +47,7 @@ afterEach(cleanup);
 // registration renders NOTHING -- which every absence assertion below would read as clean.
 // Loading it once here makes every later mount render synchronously; the positive
 // level-family assertion further down is what fails if this ever stops being true.
-beforeAll(() => loadLevelWidgets());
+beforeAll(() => Promise.all([loadLevelWidgets(), loadControlWidgets()]));
 
 // ---- The render gate -----------------------------------------------------------
 //
@@ -118,6 +120,9 @@ const EMPTY_STATES = [
   LEVEL_STRINGS.en.setRange,
   LEVEL_STRINGS.en.badRange,
   LEVEL_STRINGS.en.setThresholds,
+  // The command controls' explained refusals (no range, no parameter chosen).
+  CONTROL_STRINGS.en.setRange,
+  CONTROL_STRINGS.en.setParameter,
 ];
 
 const sample = (name: string, value: number): MeasurementSample => ({
@@ -391,6 +396,30 @@ describe('the gallery widgets draw their data', () => {
       }
     }
     expect(checked, 'the gallery has no radial widget').toBeGreaterThanOrEqual(4);
+  });
+
+  it('draws a working command control on the gallery, bound to the published command', () => {
+    // A control the schema refuses draws a role=alert notice instead of an input; one that works
+    // carries its slider, or its switch (or, with no power command in the history, the explicit
+    // On / Off choice), and the setpoint slider reads the round-trip row above.
+    let checked = 0;
+    for (const [type, role] of [
+      ['command-slider', 'input[type="range"]'],
+      ['command-toggle', 'button[role="switch"], [data-toggle-choose] button'],
+    ] as const) {
+      for (const widget of galleryWidgets(type)) {
+        checked++;
+        const { container } = renderWidget(widget);
+        expect(container.querySelector('[data-control-empty]')?.textContent, `${widget.id} refused to draw`).toBeUndefined();
+        expect(container.querySelector(role), `${widget.id} (${type}) drew no ${role}`).not.toBeNull();
+        if (type === 'command-slider') {
+          expect((container.querySelector('input[type="range"]') as HTMLInputElement).value).toBe('22');
+          expect(container.querySelector('[data-last-sent]')?.textContent).toMatch(/Last sent.*22.*Delivered/);
+        }
+        cleanup();
+      }
+    }
+    expect(checked, 'the gallery has no command slider or toggle').toBeGreaterThanOrEqual(4);
   });
 
   it('puts a reading on the gauge rather than an empty dial', () => {
