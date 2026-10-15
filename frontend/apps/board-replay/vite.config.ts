@@ -39,6 +39,11 @@ export default defineConfig({
   plugins: [react(), devData()],
   server: { port: 5175 },
   build: {
+    // No modulepreload polyfill. It is ~230 B gzip of the initial load, and all it does here is
+    // fetch, early, the shared chunks a LAZY widget chunk depends on -- only in the browsers
+    // that ignore rel=modulepreload (Safari before 17, Firefox before 115). Those still load every
+    // chunk correctly without it, one round trip later when a widget that needs one first mounts.
+    modulePreload: { polyfill: false },
     rollupOptions: {
       output: {
         entryFileNames: 'main.js',
