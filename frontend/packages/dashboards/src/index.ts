@@ -266,6 +266,8 @@ export {
 // platform's GraphQL, kept out of the presentational widget layer.
 export { createDeviceResolver } from './resolver';
 export type { MeasurementBucket } from './queries';
+export { ANCHOR_PAGE_SIZE } from './resolver';
+export type { MemberRef, MemberRoster, MemberSeed, MemberSink, SeedFailure } from './members';
 export { defaultHistoryWindow, fetchWidgetHistory, historyWindowFor, type HistoryWindow } from './history';
 
 // The board's time range: a span, the presets a viewer picks from, pause, and the deep link.
@@ -303,6 +305,8 @@ export type {
   AggregateStreamState,
   AlarmStreamState,
   CommandStreamState,
+  FleetMember,
+  FleetState,
   LocationStreamState,
   MeasurementAggregate,
   MeasurementStreamState,

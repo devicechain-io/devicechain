@@ -78,6 +78,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'stat-card': 'widgets/stat-card.tsx',
   'bar-chart': 'widgets/bar-chart.tsx',
   'pie-chart': 'widgets/pie-chart.tsx',
+  'fleet-table': 'widgets/fleet-table.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -397,8 +398,19 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     thresholds: [{ value: 90, level: 'major' }],
     windowSeconds: 3600,
   },
-  'bar-chart': { title: 'Readings', unit: 'C', precision: 1, sort: 'descending' },
+  'bar-chart': { title: 'Readings', groupBy: 'device', measurement: 'temp_c', unit: 'C', precision: 1, sort: 'descending' },
   'pie-chart': { title: 'Share', unit: 'L', precision: 0, sort: 'ascending' },
+  'fleet-table': {
+    title: 'Machines',
+    columns: [{ measurement: 'temp_c', label: 'Temperature', unit: 'C', precision: 1 }],
+    thresholds: [{ measurement: 'temp_c', value: 90, level: 'major' }],
+    staleAfterSeconds: 300,
+    sortBy: 'temp_c',
+    sortDescending: true,
+    pageSize: 25,
+    selectionTarget: 'machine',
+    windowSeconds: 3600,
+  },
 };
 
 describe('validateWidgetOptions', () => {

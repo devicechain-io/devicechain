@@ -72,6 +72,17 @@ export function measurementSpan(
   return isValidSpanSeconds(pinned) ? pinned : boardSpan;
 }
 
+// Whether a measurement widget reads its datasource MEMBER BY MEMBER (a fleet widget: a row or a
+// bar per device of an anchor) rather than as one stream keyed by measurement name. The descriptor
+// says so with `binding.members`: always (`const`), or when a declared option holds a given value
+// (a bar chart set to one bar per device).
+export function membersMode(descriptor: WidgetDescriptor, widget: WidgetInstance): boolean {
+  const members = policy(descriptor).members as { const?: boolean; option?: string; equals?: string } | undefined;
+  if (!members) return false;
+  if (members.const === true) return true;
+  return members.option !== undefined && optString(widget.options, members.option) === members.equals;
+}
+
 // The acknowledged filter is stored as 'true' / 'false' (or absent = any).
 function parseAcknowledged(value: string | undefined): boolean | undefined {
   if (value === 'true') return true;

@@ -441,6 +441,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabRadialFamily(onSensor)...)
 	def.Widgets = append(def.Widgets, widgetlabCommandControls(widgetSubject{Slot: widgetlabSlotSensor})...)
 	def.Widgets = append(def.Widgets, widgetlabAggregates(onSensor)...)
+	def.Widgets = append(def.Widgets, widgetlabFleet()...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -643,6 +644,72 @@ func widgetlabAggregates(onSensor func(measurements ...string) widgetSubject) []
 		buildBarChartWidget("wl-bar-rows", box{6, 4, r + 6, 5}, all, "Largest first", "", "descending"),
 		buildPieChartWidget("wl-pie", box{0, 4, r + 11, 4}, all, "Share of the total", "", "none"),
 		buildPieChartWidget("wl-pie-min", box{4, 3, r + 11, 3}, all, "Share (smallest)", "", "descending"),
+	}
+}
+
+// ---- The fleet: one row or bar per device of the zone ---------------------------
+
+// widgetlabFleetRow is the first row of the fleet block (rows 42-53), under the categorical charts
+// that end at row 41.
+const widgetlabFleetRow = 42
+
+// buildFleetTableWidget draws one row per device of the subject's anchor and one column per
+// measurement it selects. Each column carries its own heading, unit, precision and severity bands;
+// a reading older than staleAfterSeconds is marked stale; the device name drills to the sensor slot.
+func buildFleetTableWidget(id string, b box, s widgetSubject, title string, columns []map[string]any, thresholds []map[string]any, staleAfterSeconds int, sortBy string) dashboardWidget {
+	options := map[string]any{
+		"title": title, "columns": columns, "selectionTarget": widgetlabSlotSensor,
+	}
+	if staleAfterSeconds > 0 {
+		options["staleAfterSeconds"] = staleAfterSeconds
+	}
+	if len(thresholds) > 0 {
+		options["thresholds"] = thresholds
+	}
+	if sortBy != "" {
+		options["sortBy"] = sortBy
+		options["sortDescending"] = true
+	}
+	return dashboardWidget{Id: id, Type: "fleet-table", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
+// buildDeviceBarChartWidget is a bar chart with one bar per device of the subject's anchor, for
+// one measurement.
+func buildDeviceBarChartWidget(id string, b box, s widgetSubject, title, measurement, unit, sort string) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "bar-chart", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "groupBy": "device", "measurement": measurement,
+			"unit": unit, "precision": 1, "sort": sort,
+		},
+	}
+}
+
+// widgetlabFleet binds the fleet widgets to the zone, so each shows every sensor in it at once: a
+// table with all three measurements, banded temperatures and a stale threshold; a smaller table
+// at the size minimum; and a bar per sensor sorted by temperature.
+func widgetlabFleet() []dashboardWidget {
+	const r = widgetlabFleetRow
+	zone := widgetSubject{
+		Slot:         widgetlabSlotZone,
+		Measurements: []string{WidgetlabTemperatureKey, WidgetlabHumidityKey, WidgetlabBatteryKey},
+	}
+	bands := make([]map[string]any, 0, len(widgetlabTemperatureBands))
+	for _, t := range widgetlabTemperatureBands {
+		bands = append(bands, map[string]any{"measurement": WidgetlabTemperatureKey, "value": t.Value, "level": t.Level})
+	}
+	columns := []map[string]any{
+		{"measurement": WidgetlabTemperatureKey, "label": "Temperature", "unit": "C", "precision": 1},
+		{"measurement": WidgetlabHumidityKey, "label": "Humidity", "unit": "%", "precision": 0},
+		{"measurement": WidgetlabBatteryKey, "label": "Battery", "unit": "%", "precision": 0},
+	}
+	return []dashboardWidget{
+		buildFleetTableWidget("wl-fleet-table", box{0, 12, r, 6}, zone, "Sensors in the zone", columns, bands, 300, WidgetlabTemperatureKey),
+		buildFleetTableWidget("wl-fleet-table-min", box{0, 6, r + 6, 3},
+			widgetSubject{Slot: widgetlabSlotZone, Measurements: []string{WidgetlabTemperatureKey}},
+			"Fleet (smallest)", columns[:1], bands, 0, ""),
+		buildDeviceBarChartWidget("wl-fleet-bar", box{6, 6, r + 6, 5}, zone, "Temperature by sensor",
+			WidgetlabTemperatureKey, "C", "descending"),
 	}
 }
 

@@ -1162,6 +1162,151 @@
         "unit": ""
       },
       "type": "pie-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "zone"
+      },
+      "id": "wl-fleet-table",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 12,
+          "mode": "grid",
+          "row": 42,
+          "rows": 6
+        }
+      },
+      "options": {
+        "columns": [
+          {
+            "label": "Temperature",
+            "measurement": "temperature",
+            "precision": 1,
+            "unit": "C"
+          },
+          {
+            "label": "Humidity",
+            "measurement": "humidity",
+            "precision": 0,
+            "unit": "%"
+          },
+          {
+            "label": "Battery",
+            "measurement": "battery",
+            "precision": 0,
+            "unit": "%"
+          }
+        ],
+        "selectionTarget": "sensor",
+        "sortBy": "temperature",
+        "sortDescending": true,
+        "staleAfterSeconds": 300,
+        "thresholds": [
+          {
+            "level": "normal",
+            "measurement": "temperature",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "measurement": "temperature",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "measurement": "temperature",
+            "value": 32
+          }
+        ],
+        "title": "Sensors in the zone"
+      },
+      "type": "fleet-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "zone"
+      },
+      "id": "wl-fleet-table-min",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 6,
+          "mode": "grid",
+          "row": 48,
+          "rows": 3
+        }
+      },
+      "options": {
+        "columns": [
+          {
+            "label": "Temperature",
+            "measurement": "temperature",
+            "precision": 1,
+            "unit": "C"
+          }
+        ],
+        "selectionTarget": "sensor",
+        "thresholds": [
+          {
+            "level": "normal",
+            "measurement": "temperature",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "measurement": "temperature",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "measurement": "temperature",
+            "value": 32
+          }
+        ],
+        "title": "Fleet (smallest)"
+      },
+      "type": "fleet-table"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "zone"
+      },
+      "id": "wl-fleet-bar",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 48,
+          "rows": 5
+        }
+      },
+      "options": {
+        "groupBy": "device",
+        "measurement": "temperature",
+        "precision": 1,
+        "sort": "descending",
+        "title": "Temperature by sensor",
+        "unit": "C"
+      },
+      "type": "bar-chart"
     }
   ]
 }

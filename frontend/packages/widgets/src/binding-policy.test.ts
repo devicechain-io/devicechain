@@ -8,7 +8,7 @@
 import { WIDGET_TYPES, type WidgetDescriptor, type WidgetInstance } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow } from './binding-policy';
+import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { builtinWidgetCatalog } from './builtin-descriptors';
 
 const asDescriptor = (binding: Record<string, unknown>): WidgetDescriptor =>
@@ -125,5 +125,37 @@ describe('the built-in policies', () => {
       expect(measurementSpan(d('timeseries-chart'), widget({}, 'timeseries-chart'), undefined)).toBeUndefined();
       expect(measurementSpan(d('timeseries-chart'), widget({ windowSeconds: 300 }, 'timeseries-chart'), undefined)).toBe(300);
     });
+  });
+});
+
+describe('membersMode', () => {
+  it('is off for a widget whose descriptor declares no members policy', () => {
+    expect(membersMode(asDescriptor({}), widget({ groupBy: 'device' }))).toBe(false);
+  });
+
+  it('is always on for a constant policy, whatever the options hold', () => {
+    expect(membersMode(asDescriptor({ members: { const: true } }), widget(undefined))).toBe(true);
+    expect(membersMode(asDescriptor({ members: { const: true } }), widget({}))).toBe(true);
+  });
+
+  it('follows a declared option: on only while it holds the named value', () => {
+    const d = asDescriptor({ members: { option: 'groupBy', equals: 'device' } });
+    expect(membersMode(d, widget({ groupBy: 'device' }))).toBe(true);
+    expect(membersMode(d, widget({ groupBy: 'measurement' }))).toBe(false);
+    expect(membersMode(d, widget({}))).toBe(false);
+    expect(membersMode(d, widget(undefined))).toBe(false);
+    expect(membersMode(d, widget({ groupBy: 7 }))).toBe(false);
+  });
+
+  it('is declared by the fleet table (always) and the bar chart (per device), and by no other built-in', () => {
+    const on = (type: string, options?: Record<string, unknown>) =>
+      membersMode(builtinWidgetCatalog.get(type as never)!, widget(options, type));
+    expect(on('fleet-table', {})).toBe(true);
+    expect(on('bar-chart', {})).toBe(false);
+    expect(on('bar-chart', { groupBy: 'device' })).toBe(true);
+    for (const type of WIDGET_TYPES) {
+      if (type === 'fleet-table' || type === 'bar-chart') continue;
+      expect(on(type, { groupBy: 'device' }), type).toBe(false);
+    }
   });
 });

@@ -298,6 +298,31 @@ const CATEGORY_SORT = {
   doc: 'Order of the categories. Default: as the data source lists them.',
 } as const satisfies OptionSpec;
 
+// A fleet table's per-column and per-column-threshold entries NAME their measurement, because a list
+// item holds scalars only: one flat list per concern keeps each editable as a row, and a column
+// without an entry keeps the datasource's name, the board's formatting and no bands.
+const FLEET_COLUMNS = {
+  kind: 'list',
+  maxItems: 24,
+  labelId: 'widgetLabelColumns',
+  helpId: 'widgetHintColumns',
+  doc: 'Heading, unit and precision per measurement column. A column without an entry shows the measurement name.',
+  item: {
+    measurement: { kind: 'string', required: true, labelId: 'widgetLabelMeasurement', doc: 'The measurement this entry formats.' },
+    label: { kind: 'string', labelId: 'widgetLabelColumnHeading', doc: 'Column heading. Defaults to the measurement name.' },
+    unit: { ...UNIT },
+    precision: { ...PRECISION },
+  },
+} as const satisfies OptionSpec;
+
+const FLEET_THRESHOLDS = {
+  ...THRESHOLDS,
+  item: {
+    measurement: { kind: 'string', required: true, labelId: 'widgetLabelMeasurement', doc: 'The measurement column these bands colour.' },
+    ...THRESHOLDS.item,
+  },
+} as const satisfies OptionSpec;
+
 export const builtinWidgetDescriptors = {
   'timeseries-chart': defineWidgetDescriptor({
     id: 'timeseries-chart',
@@ -1008,8 +1033,24 @@ export const builtinWidgetDescriptors = {
     display: { title: 'Bar chart', category: 'Telemetry', titleId: 'widgetTypeBarChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
-    binding: {},
-    options: { title: TITLE, unit: UNIT, precision: PRECISION, sort: CATEGORY_SORT },
+    // One bar per measurement of a device, or (groupBy device) one bar per member of an anchor.
+    binding: { members: { option: 'groupBy', equals: 'device' } },
+    options: {
+      title: TITLE,
+      groupBy: {
+        kind: 'enum',
+        values: ['measurement', 'device'],
+        labelId: 'widgetLabelGroupBy',
+        helpId: 'widgetHintGroupBy',
+        valueLabelIds: { measurement: 'widgetGroupByMeasurement', device: 'widgetGroupByDevice' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'What a bar is. Default: one bar per measurement. Device: one bar per device of the anchor, for the one measurement set below.',
+      },
+      measurement: MEASUREMENT,
+      unit: UNIT,
+      precision: PRECISION,
+      sort: CATEGORY_SORT,
+    },
     defaults: { title: 'Bar chart' },
     interactions: {},
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
@@ -1028,6 +1069,48 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Pie chart' },
     interactions: {},
     layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
+  }),
+
+  // A new widget rather than a mode of `table`: that one is one device's measurements as rows, on a
+  // channel that keys its values by name; this one is a fleet, a row per member and a column per
+  // measurement, and reads its data by device.
+  'fleet-table': defineWidgetDescriptor({
+    id: 'fleet-table',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Fleet table', category: 'Telemetry', titleId: 'widgetTypeFleetTable', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { windowSeconds: { option: 'windowSeconds' }, members: { const: true } },
+    options: {
+      title: TITLE,
+      columns: FLEET_COLUMNS,
+      thresholds: FLEET_THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      sortBy: {
+        kind: 'string',
+        labelId: 'widgetLabelSortBy',
+        helpId: 'widgetHintSortBy',
+        doc: 'The measurement the table is ordered by. Blank orders by device name.',
+      },
+      sortDescending: { kind: 'boolean', labelId: 'widgetLabelSortDescending', doc: 'Largest first.' },
+      pageSize: {
+        kind: 'number',
+        integer: true,
+        min: 5,
+        max: 100,
+        labelId: 'widgetLabelPageSize',
+        doc: 'Devices per page. Default 20.',
+      },
+      selectionTarget: SELECTION_TARGET,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'Fleet table' },
+    // The frame shows the age of the newest reading in the fleet; each cell shows its own.
+    freshness: true,
+    interactions: { selection: true },
+    layout: { defaultSpan: { cols: 12, rows: 6 }, minSpan: { cols: 6, rows: 3 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 

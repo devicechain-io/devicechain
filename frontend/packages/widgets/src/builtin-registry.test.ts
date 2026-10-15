@@ -76,6 +76,8 @@ describe('the built-in registry', () => {
         'command-slider': { commandSend: true },
         'command-toggle': { commandSend: true },
         'entity-selector': { selection: true, candidates: true },
+        // The device column drills like the alarm table's originator.
+        'fleet-table': { selection: true },
       };
       expect(descriptor.interactions).toEqual(expected[type] ?? {});
     });

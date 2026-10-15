@@ -27,6 +27,8 @@ import {
   CREATE_COMMAND,
 } from './internal/command-doc';
 import { LATEST_LOCATIONS_QUERY } from './internal/location-doc';
+import { createLimiter, foldMemberSeed, MEMBER_SEED_CONCURRENCY, SEED_CANCELLED } from './members';
+import type { MemberRef, MemberRoster, MemberSeed, MemberSink, SeedFailure } from './members';
 import { BUCKETED_MEASUREMENTS, type MeasurementBucket } from './queries';
 import {
   MEASUREMENT_STREAM,
@@ -103,6 +105,10 @@ export interface DeviceResolver {
   // widget availability check: a dashboard references a device by a stable token
   // (ADR-044), and a since-deleted device's token no longer resolves.
   deviceExists(deviceToken: string): Promise<boolean>;
+  // The anchor's members with their names, and the anchor's true size (which can exceed the page
+  // the resolver reads). Optional: a resolver without it yields tokens only, and a fleet widget then
+  // labels rows by token and cannot report a truncated anchor.
+  anchorMembers?(anchor: AnchorTarget): Promise<{ members: MemberRef[]; total: number }>;
 }
 
 // WidgetStreamSink receives live samples for one widget, across every device its
@@ -326,6 +332,20 @@ export interface WidgetDataSource {
   // Optional: a source that cannot produce them omits it, and the widget then says so instead of
   // showing a number. Rejects when the read fails.
   bucketMeasurements?(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]>;
+  // A fleet widget's roster and live feed: the members the selector resolves to (delivered once),
+  // then every member's samples, each tagged with its device. ONE subscription per widget, however
+  // many members; the hub shares each member's upstream stream with every other widget on it.
+  // Optional: a source without it leaves a fleet widget with an explained "not supported" state.
+  subscribeMembers?(datasource: DatasourceSelector, sink: MemberSink): () => void;
+  // What each of these devices last reported inside the window, delivered per device as its read
+  // settles (`null` when that device's read failed; `error` says why). Bounded and shared: see
+  // MEMBER_SEED_CONCURRENCY. `cancelled` is checked before each read starts. Optional like the above.
+  readMemberSeeds?(
+    deviceTokens: readonly string[],
+    window: HistoryWindow,
+    onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void,
+    cancelled?: () => boolean,
+  ): Promise<void>;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -414,6 +434,100 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       });
 
     return dispose;
+  }
+
+  // subscribeMembers: the roster, then the live samples of every member. Resolution is async, so
+  // the disposer is returned at once and cancels a still-pending resolution (a widget torn down
+  // before its roster arrives never attaches a leaked subscriber). Each member rides the same
+  // ref-counted device stream every other widget on it uses.
+  subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void {
+    let disposed = false;
+    const detachers: Array<() => void> = [];
+    this.resolveRoster(datasource)
+      .then(({ roster, names }) => {
+        if (disposed) return;
+        sink.roster(roster);
+        for (const member of roster.members) {
+          detachers.push(
+            this.attach(member.token, names, { next: (sample) => sink.next(sample), error: (err) => sink.error?.(err) }),
+          );
+        }
+      })
+      .catch((err) => {
+        if (disposed) return;
+        if (isForbiddenError(err)) sink.forbidden?.();
+        else sink.error?.(err);
+      });
+    return () => {
+      disposed = true;
+      for (const detach of detachers.splice(0)) detach();
+    };
+  }
+
+  // One resolution of a selector into a roster. An anchor goes through the resolver's member read
+  // when it has one (names and the true size); everything else is the tokens resolveDevices yields.
+  private async resolveRoster(datasource: DatasourceSelector): Promise<{ roster: MemberRoster; names: Set<string> }> {
+    const names = new Set(datasource.measurements);
+    if (datasource.kind === 'anchor' && this.resolver.anchorMembers) {
+      const { members, total } = await this.resolver.anchorMembers(datasource.anchor);
+      return { roster: { members, total, unbound: false }, names };
+    }
+    const groups = await this.resolveDevices(datasource);
+    const members = groups.map((g) => ({ token: g.deviceToken, name: null }));
+    return { roster: { members, total: members.length, unbound: datasource.kind === 'unbound' }, names };
+  }
+
+  // The hub-wide cap on in-flight member seed reads, and the reads currently in flight (so a second
+  // widget asking the same question of the same device in the same window shares one request).
+  private readonly seedLimiter = createLimiter(MEMBER_SEED_CONCURRENCY);
+  private readonly seedReads = new Map<string, Promise<MemberSeed>>();
+
+  async readMemberSeeds(
+    deviceTokens: readonly string[],
+    window: HistoryWindow,
+    onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void,
+    cancelled: () => boolean = () => false,
+  ): Promise<void> {
+    await Promise.all(
+      deviceTokens.map(async (token) => {
+        for (;;) {
+          let seed: MemberSeed;
+          try {
+            seed = await this.memberSeed(token, window, cancelled);
+          } catch (err) {
+            if (cancelled()) return;
+            // A read this asker shared with one that has since gone away was dropped before it
+            // started; this asker is still here, so it asks again (now as the first asker).
+            if (err === SEED_CANCELLED) continue;
+            onSeed(token, null, isForbiddenError(err) ? 'forbidden' : 'failed');
+            return;
+          }
+          if (!cancelled()) onSeed(token, seed);
+          return;
+        }
+      }),
+    );
+  }
+
+  private memberSeed(token: string, window: HistoryWindow, cancelled: () => boolean): Promise<MemberSeed> {
+    const key = JSON.stringify([token, window]);
+    let read = this.seedReads.get(key);
+    if (!read) {
+      // The first asker's `cancelled` decides whether the read starts. A later asker that shares the
+      // read while it waits and then finds it dropped is cancelled-or-not on its own account: it
+      // settles through readMemberSeeds' own check, never as a failed device.
+      read = this.seedLimiter(
+        () =>
+          gql(EVENT_AREA, BUCKETED_MEASUREMENTS, { criteria: { deviceToken: token, ...window } }).then((r) =>
+            foldMemberSeed(token, r.bucketedMeasurements),
+          ),
+        cancelled,
+      );
+      this.seedReads.set(key, read);
+      const forget = () => this.seedReads.delete(key);
+      read.then(forget, forget);
+    }
+    return read;
   }
 
   // bucketMeasurements reads the buckets of every (device, measurement) pair over a window. Widgets

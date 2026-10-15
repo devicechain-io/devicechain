@@ -253,6 +253,46 @@ describe('the built package', () => {
     expect(/\bfunction\s+LatestCard\s*\(/.test(entry), 'the definition pattern cannot see the eager card').toBe(true);
   });
 
+  // The fleet widgets are the sixth lazy boundary. The table lives in the aggregate widgets' chunk
+  // (it is one more widget of that family), and the per-device feed is a chunk of its own: a board
+  // without a fleet table or a per-device bar chart downloads neither the feed, nor the roster and
+  // seed state it keeps, nor the pure fleet model. Only the descriptor is eager.
+  it('keeps the fleet table and the per-device feed in lazily loaded chunks of their own', () => {
+    const entryFiles = staticGraph(path.join(distDir, 'index.js'));
+    const definitions: Record<string, RegExp> = {
+      FleetTable: /function\s+FleetTable\s*\(/,
+      FleetFeed: /function\s+FleetFeed\s*\(/,
+      buildFleet: /function\s+buildFleet\s*\(/,
+      sortMembers: /function\s+sortMembers\s*\(/,
+    };
+    for (const [name, pattern] of Object.entries(definitions)) {
+      const holder = entryFiles.find((f) => pattern.test(readFileSync(f, 'utf8')));
+      expect(holder, `${name} was folded into the initial download (${holder})`).toBeUndefined();
+    }
+    const entry = read('index.js');
+    const specs = [...entry.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
+    const chunkOf = (needle: string) => {
+      const spec = specs.find((s) => s.includes(needle));
+      expect(spec, `no dynamic import of the ${needle} chunk in dist/index.js (saw ${specs.join(', ')})`).toBeTruthy();
+      const file = path.resolve(distDir, spec!);
+      expect(existsSync(file), `${spec} is imported but was not emitted`).toBe(true);
+      return readFileSync(file, 'utf8');
+    };
+    expect(definitions.FleetTable.test(chunkOf('aggregate-widgets')), 'FleetTable is not in the lazy widget chunk').toBe(true);
+    const feed = chunkOf('fleet-feed');
+    expect(definitions.FleetFeed.test(feed), 'FleetFeed is not in the lazy feed chunk').toBe(true);
+    // The pure fleet model is shared by the feed (which builds the state) and the table and bar
+    // (which read it), so it sits in a chunk both load -- never in the initial download.
+    const lazy = walkDist(path.join(distDir, 'chunks')).filter((f) => f.endsWith('.js'));
+    expect(
+      lazy.some((f) => definitions.buildFleet.test(readFileSync(f, 'utf8'))),
+      'the fleet model is in no lazy chunk',
+    ).toBe(true);
+    // Two chunks, two downloads: the feed does not carry the table, nor the table the feed.
+    expect(definitions.FleetTable.test(feed)).toBe(false);
+    expect(definitions.FleetFeed.test(chunkOf('aggregate-widgets'))).toBe(false);
+  });
+
   it('draws the bar and pie without ECharts: no chart type of either kind is imported anywhere in the build', () => {
     const files = [...staticGraph(path.join(distDir, 'index.js')), ...walkDist(path.join(distDir, 'chunks'))];
     for (const file of new Set(files)) {

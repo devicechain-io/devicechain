@@ -17,9 +17,12 @@
 import { gql } from '@devicechain/client';
 
 import type { DeviceResolver } from './hub';
+import type { MemberRef } from './members';
 import {
   DEVICES_BY_TOKEN,
   DEVICES_FOR_ANCHOR,
+  DEVICE_NAMES,
+  type DeviceNamesResult,
   type DevicesByTokenResult,
   type EntityRelationshipsResult,
 } from './queries';
@@ -27,38 +30,81 @@ import type { AnchorTarget } from './types';
 
 // A generous page size for anchor membership — Phase 1 dashboards anchor to areas
 // with tens of devices, not thousands; server-side aggregation is Phase 2.
-const ANCHOR_PAGE_SIZE = 500;
+export const ANCHOR_PAGE_SIZE = 500;
 
 export function createDeviceResolver(): DeviceResolver {
-  const anchorCache = new Map<string, Promise<string[]>>();
+  const anchorCache = new Map<string, Promise<{ tokens: string[]; total: number }>>();
+  const memberCache = new Map<string, Promise<{ members: MemberRef[]; total: number }>>();
   // Memoize existence per token for the resolver's lifetime: many widgets on a
   // dashboard bind the same device, and a device's existence is stable for a viewing
   // session (a delete mid-session is rare and the next mount re-checks).
   const existsCache = new Map<string, Promise<boolean>>();
 
+  function anchorKey(anchor: AnchorTarget): string {
+    return `${anchor.relationship}|${anchor.targetType}|${anchor.targetToken}`;
+  }
+
+  // One page of the anchor's members and the anchor's true size, memoized per anchor.
+  function anchorPage(anchor: AnchorTarget): Promise<{ tokens: string[]; total: number }> {
+    const key = anchorKey(anchor);
+    let pending = anchorCache.get(key);
+    if (!pending) {
+      pending = gql('device-management', DEVICES_FOR_ANCHOR, {
+        criteria: {
+          pageNumber: 1,
+          pageSize: ANCHOR_PAGE_SIZE,
+          sourceType: 'device',
+          targetType: anchor.targetType,
+          target: anchor.targetToken,
+          relationshipType: anchor.relationship,
+        },
+      })
+        .then((r: EntityRelationshipsResult) => {
+          const tokens = r.entityRelationships.results.map((rel) => rel.source.token);
+          // A server that reports no total is taken at its word: the page is the fleet.
+          const total = r.entityRelationships.pagination?.totalRecords ?? tokens.length;
+          return { tokens, total: Math.max(total, tokens.length) };
+        })
+        .catch((err) => {
+          anchorCache.delete(key);
+          throw err;
+        });
+      anchorCache.set(key, pending);
+    }
+    return pending;
+  }
+
   return {
     devicesForAnchor(anchor: AnchorTarget): Promise<string[]> {
-      const key = `${anchor.relationship}|${anchor.targetType}|${anchor.targetToken}`;
-      let pending = anchorCache.get(key);
+      return anchorPage(anchor).then((page) => page.tokens);
+    },
+
+    // The members of an anchor with their names and the anchor's true size. One relationship page
+    // (shared with devicesForAnchor) plus ONE batched name read, whatever the size of the fleet. A
+    // failed name read is not a failed roster: the tokens still stream, and the widget labels
+    // them by token.
+    anchorMembers(anchor: AnchorTarget): Promise<{ members: MemberRef[]; total: number }> {
+      const key = anchorKey(anchor);
+      let pending = memberCache.get(key);
       if (!pending) {
-        pending = gql('device-management', DEVICES_FOR_ANCHOR, {
-          criteria: {
-            pageNumber: 1,
-            pageSize: ANCHOR_PAGE_SIZE,
-            sourceType: 'device',
-            targetType: anchor.targetType,
-            target: anchor.targetToken,
-            relationshipType: anchor.relationship,
-          },
-        })
-          .then((r: EntityRelationshipsResult) =>
-            r.entityRelationships.results.map((rel) => rel.source.token),
-          )
+        pending = anchorPage(anchor)
+          .then(async ({ tokens, total }) => {
+            const names = new Map<string, string | null>();
+            if (tokens.length > 0) {
+              try {
+                const r: DeviceNamesResult = await gql('device-management', DEVICE_NAMES, { tokens });
+                for (const d of r.devicesByToken) names.set(d.token, d.name);
+              } catch {
+                // labelled by token
+              }
+            }
+            return { members: tokens.map((token) => ({ token, name: names.get(token) ?? null })), total };
+          })
           .catch((err) => {
-            anchorCache.delete(key);
+            memberCache.delete(key);
             throw err;
           });
-        anchorCache.set(key, pending);
+        memberCache.set(key, pending);
       }
       return pending;
     },

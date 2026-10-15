@@ -36,7 +36,7 @@ import {
 } from '@devicechain/widget-sdk';
 import { lazy, Suspense, useMemo, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow } from './binding-policy';
+import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { useHeld } from './use-held';
 import { defaultWidgetRegistry } from './default-registry';
 import {
@@ -196,7 +196,26 @@ function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
   return <Component widget={widget} data={null} actions={actions} />;
 }
 
-function MeasurementConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
+// The fleet feed is its own chunk (fleet-feed.tsx), like the aggregate feed: a board without a fleet
+// table or a per-device bar chart never downloads it. A chunk that fails to load is thrown to the
+// widget's containment, which shows the failure.
+const FleetFeed = lazy(() => import('./fleet-feed'));
+
+function MeasurementConnectedWidget(props: ChannelProps) {
+  // Read member by member, or as one stream keyed by measurement name: decided by the descriptor
+  // and the widget's options, never by the widget id.
+  if (membersMode(props.descriptor, props.widget)) {
+    const { widget, hub, descriptor, Component, actions } = props;
+    return (
+      <Suspense fallback={null}>
+        <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} />
+      </Suspense>
+    );
+  }
+  return <StreamConnectedWidget {...props} />;
+}
+
+function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
   // The board's time range (D-1). A widget that declares `binding.windowSeconds` draws a SPAN: its
   // own pinned one, else the board's. Every measurement widget honors the pause, because a frozen
   // board must freeze its cards and gauges too -- a number that kept moving under a "Paused"
