@@ -211,7 +211,7 @@ event-sources, outbound-connectors and ai-inference can admit up to twice a tena
 ceiling.
 
 The five services on the event path request CPU sized from measurement, from
-`functionalAreas.<area>.measuredRequests`: `device-management` 800m,
+`functionalAreas.<area>.measuredRequests`: `device-management` 450m,
 `event-management` 900m, `device-state` 950m and `event-sources` 1 core, what each
 used at 6,000 events a second in an earlier GKE run, and `event-processing` 400m, a floor taken from a
 heavier run rather than a measure of what keeping up needs. While

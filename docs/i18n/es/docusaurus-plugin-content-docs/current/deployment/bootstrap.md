@@ -1404,7 +1404,7 @@ Cada servicio de backend solicita 128Mi de memoria y tiene un límite de 256Mi, 
 
 | Servicio | Solicitud de CPU | Límite de CPU |
 | --- | --- | --- |
-| `device-management` | 800m | 2 núcleos |
+| `device-management` | 450m | 2 núcleos |
 | `event-management` | 900m | 2 núcleos |
 | `device-state` | 950m | 2 núcleos |
 | `event-sources` | 1 núcleo | 2 núcleos |

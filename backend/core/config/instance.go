@@ -126,11 +126,26 @@ type NatsConfiguration struct {
 const (
 	// DefaultFetchBatch is how many messages one pull asks for when Batch is unset.
 	//
-	// 128 is the size the fetch-ahead measurements were taken at (a GKE A/B with
-	// the feature on at 128 against off at 64): fetch time scales with the batch, so a larger
-	// pull is no faster to deliver, and it stays well inside MaxFetchBatch and the window a
-	// lost pull leaves behind.
-	DefaultFetchBatch = 128
+	// 256 measured better than 128, and it is MaxFetchBatch. On GKE (round 10, fetch batch
+	// 256 against 128 with the same build and placement) the single-DM resolve rate rose 12%
+	// (10.36k to 11.62k events/s at 12.4k offered) and the share of read-loop samples spent
+	// waiting on the next fetch fell from about 90% to 70%: the consume end is bound by the
+	// round trip of a pull, not by how long the broker takes to fill it, and the larger pull
+	// was not proportionally slower to deliver. It stays inside the window a lost pull leaves
+	// behind (MaxFetchBatch is the widest range the gap fill reads cheaply).
+	//
+	// What it costs is acknowledgement-window margin. Every message of a pull starts its
+	// 60 s window at delivery, so the last of a full batch waits behind the other 255. A
+	// reader that handles messages one at a time on its read goroutine now runs past the
+	// window at about 234 ms a message (60 s / 256), where 128 allowed about 469 ms; a
+	// worker pool divides that by its width. The event-path consumers are far inside it
+	// (device-management resolves on ten workers in milliseconds, the writers commit a batch
+	// per transaction); the serial readers are the low-volume ones (roster, rules,
+	// entity-deleted, command responses), which see a full batch only behind a backlog and,
+	// like every durable consumer, take deliveries at least once: a message that does run
+	// past it is redelivered and handled again, not lost. A deployment with a slow serial
+	// consumer can set batch back to 128.
+	DefaultFetchBatch = 256
 	// MaxFetchBatch is the widest pull the platform allows. It is the same number as the
 	// widest range the event-processing gap fill reads one request per sequence
 	// (messaging's rangeDirectMax; a compile-time assertion there keeps the two equal), so

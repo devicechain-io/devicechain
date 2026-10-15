@@ -1296,7 +1296,7 @@ which is limited to 384Mi (a floor: a higher top-level `resources.limits.memory`
 
 | Service | CPU request | CPU limit |
 | --- | --- | --- |
-| `device-management` | 800m | 2 cores |
+| `device-management` | 450m | 2 cores |
 | `event-management` | 900m | 2 cores |
 | `device-state` | 950m | 2 cores |
 | `event-sources` | 1 core | 2 cores |

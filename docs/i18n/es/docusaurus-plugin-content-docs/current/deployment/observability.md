@@ -536,7 +536,7 @@ un pod. Cada pod cuenta solo los mensajes que retuvo él, así que combine los p
 
 ## Lectura anticipada {#fetch-ahead}
 
-De forma predeterminada, un servicio pide 128 mensajes al broker y pide los 128 siguientes mientras
+De forma predeterminada, un servicio pide 256 mensajes al broker y pide los 256 siguientes mientras
 todavía procesa los que tiene, de modo que el tiempo de cada petición se solapa con el trabajo en
 lugar de sumarse a él. Está activado para mantener pequeña la cola del motor de detección, no para
 aumentar el rendimiento: con él, el número de eventos en espera delante de la detección se mantuvo
@@ -546,7 +546,7 @@ servicio, así que un cambio requiere un reinicio, y no modifican ningún consum
 
 | Ajuste | Valor predeterminado | Qué hace |
 | --- | --- | --- |
-| `batch` | 128 | Cuántos mensajes pide cada petición, de 1 a 256 (cualquier otro valor se rechaza al arrancar). Un lote mayor reparte el tiempo de la petición entre más mensajes. Es también lo máximo que una conexión caída puede hacer perder de una sola petición, y el motor de detección vuelve a leer ese intervalo del flujo antes de continuar. |
+| `batch` | 256 | Cuántos mensajes pide cada petición, de 1 a 256 (cualquier otro valor se rechaza al arrancar). Un lote mayor reparte el tiempo de la petición entre más mensajes. Es también lo máximo que una conexión caída puede hacer perder de una sola petición, y el motor de detección vuelve a leer ese intervalo del flujo antes de continuar. |
 | `ahead` | activado | Pide el lote siguiente mientras se entrega el actual, de modo que la petición se solapa con el trabajo. Con `ahead: false` se pide un lote cada vez. Los mensajes se siguen procesando en el orden en que llegan. |
 | `aheadHoldBudgetMillis` | 1000 | Un lote pedido por adelantado espera mientras se procesa el anterior, y su ventana de confirmación ya está corriendo. Si los últimos lotes tardan más que este valor en entregarse, el servicio deja de pedir por adelantado y vuelve a una petición cada vez. Como máximo una décima parte de la ventana de confirmación; de lo contrario el servicio se niega a arrancar. |
 
@@ -654,8 +654,8 @@ vez. Lo que el almacén clave-valor no puede responder se lee de la base de dato
 tras otra, así que un resolvedor sigue ocupando como máximo una conexión a la base de datos. Un
 resolvedor pasa la mayor parte de cada evento esperando respuestas, no usando CPU. Varios resolvedores trabajan a la
 vez. Los eventos que llegan mientras todos están ocupados esperan delante de ellos, en orden: hasta
-100 en la cola de entrega del pod y, detrás de ellos, los lotes leídos del flujo: hasta 128 en el
-lote que se está entregando y, con la [lectura anticipada](#fetch-ahead) activada, hasta 128 más
+100 en la cola de entrega del pod y, detrás de ellos, los lotes leídos del flujo: hasta 256 en el
+lote que se está entregando y, con la [lectura anticipada](#fetch-ahead) activada, hasta 256 más
 en el lote pedido por adelantado. El resto espera
 en el flujo.
 

@@ -27,7 +27,7 @@ import (
 const (
 	// MESSAGE_BACKLOG_SIZE is how many inbound messages can wait for a free resolver. With
 	// every resolver busy, events wait here and, behind these, in the reader's fetched batch
-	// (up to config.DefaultFetchBatch, 128, with the next batch already fetched ahead of
+	// (up to config.DefaultFetchBatch, 256, with the next batch already fetched ahead of
 	// the reader): the occupancy measured by BenchmarkInboundStageOccupancy, which matches
 	// the ack-pending the inbound consumer shows on a saturated kind cluster. That queue is inherent in a saturated stage; the
 	// pool width (resolution.workers) is what sets how fast it drains. The consumer's
