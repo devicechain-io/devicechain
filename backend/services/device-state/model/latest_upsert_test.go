@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"gorm.io/gorm"
@@ -210,32 +211,98 @@ func TestABatchStatementWithoutItsTenantFailsClosed(t *testing.T) {
 	}
 }
 
-// A device's row created by ANOTHER writer between the batch's lock read and its insert: the
-// insert does nothing, and the batch folds its events into the committed row — what merging
-// them one at a time would have done after losing the race — rather than failing the batch.
+// theirRow is the row another writer's first event leaves for race-1: data at t0, external id
+// "theirs" — the row newDeviceState builds, written raw on the batch's own connection.
+func theirRow(t *testing.T, tx *gorm.DB, t0 time.Time) {
+	t.Helper()
+	if _, err := tx.Statement.ConnPool.ExecContext(context.Background(),
+		"INSERT INTO device_states (created_at, updated_at, tenant_id, device_token, external_id, source, active, "+
+			"last_connect_time, last_activity_time, inactivity_timeout, presence_source, session_id) "+
+			"VALUES (?, ?, 'acme', 'race-1', 'theirs', '', true, ?, ?, 600, 'INFERRED', 0)",
+		t0, t0, t0, t0); err != nil {
+		t.Errorf("the other writer's insert: %v", err)
+	}
+}
+
+// loadRace reads race-1's rows.
+func loadRace(t *testing.T, api *Api) []DeviceState {
+	t.Helper()
+	var rows []DeviceState
+	if err := api.RDB.DB(core.WithTenant(context.Background(), "acme")).Where("device_token = ?", "race-1").Find(&rows).Error; err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return rows
+}
+
+// A device's row created by ANOTHER writer just before the batch takes its rows: the batch's
+// lockOrCreate takes the conflict arm instead of inserting the blank row, and the batch folds
+// its events into the committed row — what merging them one at a time would have done after
+// losing the race — rather than failing the batch. This is the LOCKED path, which a batch with
+// a presence claim takes (a data-only batch takes the heartbeat upsert: see the next test).
 //
 // The other writer is simulated inside the batch's own transaction, the one way to put a row
-// in that gap deterministically on SQLite: a callback creates it right after the batch's lock
-// read of device_states.
+// there deterministically on SQLite: a callback creates it right before the batch's first
+// create on device_states.
 func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
 	api := newSQLiteProjectionApi(t, "db")
 	db := api.RDB.Database
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := db.Callback().Query().After("gorm:query").Register("test:create_meanwhile", func(tx *gorm.DB) {
+	if err := db.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
 		if !armed || tx.Statement.Table != "device_states" {
 			return
 		}
 		armed = false
-		// The other writer's first event: data at t0, external id "theirs" — the row
-		// newDeviceState builds, written raw on the batch's own connection.
-		if _, err := tx.Statement.ConnPool.ExecContext(context.Background(),
-			"INSERT INTO device_states (created_at, updated_at, tenant_id, device_token, external_id, source, active, "+
-				"last_connect_time, last_activity_time, inactivity_timeout, presence_source, session_id) "+
-				"VALUES (?, ?, 'acme', 'race-1', 'theirs', '', true, ?, ?, 600, 'INFERRED', 0)",
-			t0, t0, t0, t0); err != nil {
-			t.Errorf("the other writer's insert: %v", err)
+		theirRow(t, tx, t0)
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
+	}
+	err := api.MergeProjectionBatch(context.Background(), []ProjectionUpdate{
+		{Tenant: "acme", DeviceToken: "race-1", OccurredAt: t0.Add(time.Minute), Identity: DeviceIdentity{Source: "mqtt1"},
+			Presence: &PresenceTransition{Claim: presence.ClaimConnected, SessionId: 1, OccurredAt: t0.Add(time.Minute)}},
+		{Tenant: "acme", DeviceToken: "race-1", OccurredAt: t0.Add(2 * time.Minute)},
+	})
+	if err != nil {
+		t.Fatalf("MergeProjectionBatch over a row created meanwhile: %v", err)
+	}
+	if armed {
+		t.Fatal("the callback never ran, so this test did not put a row in the gap")
+	}
+	rows := loadRace(t, api)
+	if len(rows) != 1 {
+		t.Fatalf("%d rows for race-1; want exactly 1", len(rows))
+	}
+	got := rows[0]
+	// The other writer's row, with the batch's events folded in: its identity kept, the
+	// batch's source added, the claim promoting it, activity advanced to the batch's latest.
+	if got.ExternalId != "theirs" || got.Source != "mqtt1" {
+		t.Errorf("identity = %q/%q; want theirs/mqtt1", got.ExternalId, got.Source)
+	}
+	if got.PresenceSource != PresenceSourceAsserted || got.SessionId != 1 || !got.Active {
+		t.Errorf("presence %s session %d active %v; want the claim folded in: ASSERTED, 1, true", got.PresenceSource, got.SessionId, got.Active)
+	}
+	if !got.LastActivityTime.Time.Equal(t0.Add(2*time.Minute)) || !got.LastConnectTime.Time.Equal(t0.Add(time.Minute)) {
+		t.Errorf("activity %v connect %v; want %v and %v", got.LastActivityTime.Time, got.LastConnectTime.Time,
+			t0.Add(2*time.Minute), t0.Add(time.Minute))
+	}
+}
+
+// The same race for a data-only batch, which takes the heartbeat upsert: the other writer's row
+// lands right before the batch's INSERT, which then takes its conflict arm instead of
+// inserting — the batch folds into the row rather than losing it, with no lock read and no
+// second statement. Simulated by a callback that creates the row just before the batch's
+// create, on the batch's own connection.
+func TestAHeartbeatBatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
+	api := newSQLiteProjectionApi(t, "db")
+	db := api.RDB.Database
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	armed := true
+	if err := db.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
+		if !armed || tx.Statement.Table != "device_states" {
+			return
 		}
+		armed = false
+		theirRow(t, tx, t0)
 	}); err != nil {
 		t.Fatalf("register callback: %v", err)
 	}
@@ -249,16 +316,11 @@ func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhile(t *testing.T) {
 	if armed {
 		t.Fatal("the callback never ran, so this test did not put a row in the gap")
 	}
-	var rows []DeviceState
-	if err := api.RDB.DB(core.WithTenant(context.Background(), "acme")).Where("device_token = ?", "race-1").Find(&rows).Error; err != nil {
-		t.Fatalf("read: %v", err)
-	}
+	rows := loadRace(t, api)
 	if len(rows) != 1 {
 		t.Fatalf("%d rows for race-1; want exactly 1", len(rows))
 	}
 	got := rows[0]
-	// The other writer's row, with the batch's events folded in: its identity kept, the
-	// batch's source added, activity advanced to the batch's latest, first connect still its.
 	if got.ExternalId != "theirs" || got.Source != "mqtt1" {
 		t.Errorf("identity = %q/%q; want theirs/mqtt1", got.ExternalId, got.Source)
 	}

@@ -87,6 +87,20 @@ type DeviceIdentity struct {
 	Source     string
 }
 
+// blankDeviceState is the row of a device no event has touched: INFERRED, no identity, no
+// session, no stamps, the default inactivity timeout. newDeviceState starts from it, and the
+// batch's locked path inserts it for a device with no row and then folds the device's events
+// into it with applyEvent. That is only right because applyEvent over this row leaves exactly
+// what newDeviceState leaves, for EVERY first event (data, any claim, an invalid one);
+// TestABlankRowFoldsToTheNewRow pins it.
+func blankDeviceState(deviceToken string) *DeviceState {
+	return &DeviceState{
+		DeviceToken:       deviceToken,
+		PresenceSource:    PresenceSourceInferred,
+		InactivityTimeout: config.DefaultInactivityTimeout,
+	}
+}
+
 // newDeviceState builds the row for the first event ever seen for a device. A plain
 // data event creates it active (today's behavior); an authoritative CONNECTIVITY
 // transition creates it ASSERTED with Active set to exactly the transition — so a
@@ -106,13 +120,9 @@ type DeviceIdentity struct {
 // presence. The row is inert (SweepInactive only scans active rows) and the device's
 // next data event populates it the ordinary inferred way.
 func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransition, id DeviceIdentity) *DeviceState {
-	ds := &DeviceState{
-		DeviceToken:       deviceToken,
-		ExternalId:        id.ExternalId,
-		Source:            id.Source,
-		PresenceSource:    PresenceSourceInferred,
-		InactivityTimeout: config.DefaultInactivityTimeout,
-	}
+	ds := blankDeviceState(deviceToken)
+	ds.ExternalId = id.ExternalId
+	ds.Source = id.Source
 	if pt != nil {
 		// 🔴 THE GUARD IS POSITIVE, AND IT HAS TO BE. Row creation is the ONE presence path
 		// that never consults presence.Decide, so nothing here refuses a claim on its own
@@ -344,6 +354,12 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 	// alone, so an event newer than the last recorded activity but still from inside the
 	// silence resurrects and is swept again next pass. That device really did produce
 	// data at that time; whether it is alive NOW is the sweep's question, not this one's.
+	//
+	// 🔴 THIS BRANCH HAS A SQL TWIN. A batch with no presence claim does not run applyEvent on the
+	// rows that already exist; heartbeatSet and heartbeatGuard (projection_merge.go) apply the
+	// rule below in the database for every row it cannot flip, and the guard sends the rows it
+	// can flip back here. A change to this branch is a change to both, and
+	// projection_equivalence_test.go fails when they disagree.
 	fresh := !found.LastActivityTime.Valid || !occurredAt.Before(found.LastActivityTime.Time)
 	if fresh && found.PresenceSource != PresenceSourceAsserted && !found.Active {
 		found.Active = true

@@ -94,11 +94,10 @@ func gathered(t *testing.T, reg *prometheus.Registry, name, result string) (valu
 }
 
 // A queue of 32 measurement events for 32 devices of one tenant is merged in ONE
-// transaction: one lock read, one fence read, the devices' states, one upsert for all 96
-// latest values — where merging them one at a time made 320 statements and 64 fence reads in
-// 64 transactions. A device seen for the first time is inserted on its own (that is how a
-// lost first-sight race is told apart); the states of devices that already have one are
-// written back together, one statement for the tenant.
+// transaction: one fence read, ONE upsert for all 32 device states (new devices and known ones
+// alike — a data-only batch takes the heartbeat upsert, with no lock read and no per-device
+// first-sight insert), one upsert for all 96 latest values — where merging them one at a time
+// made 320 statements and 64 fence reads in 64 transactions.
 func TestAQueueOfEventsIsMergedInOneTransaction(t *testing.T) {
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
@@ -111,12 +110,12 @@ func TestAQueueOfEventsIsMergedInOneTransaction(t *testing.T) {
 		// seeded devices already have a row (merged at t0, one at a time) before the queue.
 		seeded bool
 		at     time.Time
-		// The devices' states: one INSERT per device at first sight, one write-back for all of
-		// them once they exist — plus the lock read, the fence read and the latest-value upsert.
+		// The fence read, one upsert for the devices' states, one for the latest values — at
+		// first sight and once the devices exist alike.
 		wantAll, wantFence int64
 	}{
-		{"first sight", false, t0, 1 + 1 + 32 + 1, 1},
-		{"every device seen before", true, t1, 1 + 1 + 1 + 1, 1},
+		{"first sight", false, t0, 3, 1},
+		{"every device seen before", true, t1, 3, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sp, _, counter := newFencedStateProcessor(t)
@@ -193,9 +192,9 @@ func TestEventsForOneDeviceInABatchFoldInArrivalOrder(t *testing.T) {
 	acks := drainQueue(sp, []messaging.Message{
 		threeMetrics(t, "bf-01", t2), threeMetrics(t, "bf-01", t0), threeMetrics(t, "bf-01", t1),
 	})
-	if all, fence := counter.Counts(); all != 4 || fence != 1 {
-		t.Errorf("three events for one new device made %d statements with %d fence reads; want 4 with 1 "+
-			"(lock read, fence, insert, upsert)", all, fence)
+	if all, fence := counter.Counts(); all != 3 || fence != 1 {
+		t.Errorf("three events for one new device made %d statements with %d fence reads; want 3 with 1 "+
+			"(fence, state upsert, latest-value upsert)", all, fence)
 	}
 	for i, n := range ackCounts(acks) {
 		if n != 1 {
