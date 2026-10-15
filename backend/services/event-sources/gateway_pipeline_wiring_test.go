@@ -100,6 +100,10 @@ func TestCreateNatsComponentsHandsTheGatewayItsWriter(t *testing.T) {
 			Decoder:       config.EventDecoder{Type: processor.DECODER_TYPE_JSON},
 		}},
 	}
+	// A non-default window, so the writer createNatsComponents hands the gateway is seen
+	// to be built from the configuration, not from the default or a literal.
+	window := 300
+	Configuration.Capture.PublishWindow = &window
 	Configuration.ApplyDefaults()
 	GatewaySource = nil
 	buildTestRateLimiters(t)
@@ -120,6 +124,8 @@ func TestCreateNatsComponentsHandsTheGatewayItsWriter(t *testing.T) {
 	require.NoError(t, GatewaySource.Initialize(ctx))
 	require.NoError(t, GatewaySource.Start(ctx),
 		"the gateway source did not start: createNatsComponents did not hand it its reader and writer")
+	require.Equal(t, window, GatewaySource.Writer().(interface{ Window() int }).Window(),
+		"the writer createNatsComponents handed the gateway is not at the configured capture.publishWindow")
 
 	nc, err := nats.Connect(srv.ClientURL())
 	require.NoError(t, err)

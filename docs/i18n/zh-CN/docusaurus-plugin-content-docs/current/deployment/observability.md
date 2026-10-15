@@ -410,7 +410,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 以下没有告警，但发布缓慢时应查看：
 
 - **`devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`**：从发送到服务处理代理确认或失败的发布时长，按目标流区分。`sync` 为单独等待发布；`pipelined` 为多条同时执行，例如设备管理发布解析事件、事件来源转发平台 MQTT 设备事件。流水线时长还包括等待所有更早发布完成、失败后暂停，因此两模式不能直接比较。无响应同步发布在五秒上限计数，`le="5"` 桶以外即触及上限；流水线发布可超过五秒而未触限。
-- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**：流水线写入器因整个窗口都在等待确认而无法发送的秒数。速率接近 1 表示限制发布的是窗口而非代理，应调高 `resolution.publishWindow`；接近 0 表示窗口有余量。
+- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**：流水线写入器因整个窗口都在等待确认而无法发送的秒数。速率接近 1 表示限制发布的是窗口而非代理，应调高 `resolution.publishWindow`（`device-management`）或 `capture.publishWindow`（`event-sources`）；接近 0 表示窗口有余量。
 - **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**：发现窗口已满而必须等待的发送次数。上一项的秒数除以该值即为平均等待时间。
 - **`devicechain_<area>_jetstream_publish_duplicates_total{suffix}`**：代理确认为已持有相同消息 ID 的重复消息的发布数。消息只存储一次。Pod 重启或确认丢失后该值上升，是流在吸收重新发布，并非故障。
 

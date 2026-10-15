@@ -825,7 +825,8 @@ No alert reads the next series, but it is the one to look at when publishing is 
   limit.
 - **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**: seconds a pipelined
   writer could not send because its whole window was waiting for acknowledgements. A rate near 1
-  means the window, not the broker, limits publishing: raise `resolution.publishWindow`. A rate
+  means the window, not the broker, limits publishing: raise `resolution.publishWindow` (`device-management`) or
+  `capture.publishWindow` (`event-sources`). A rate
   near 0 means the window has room.
 - **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**: how many sends found the
   window full and had to wait. The seconds above divided by this is the average wait.

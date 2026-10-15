@@ -212,6 +212,13 @@ func (es *GatewayJetStreamSource) SetWriter(writer messaging.OrderedWriter) {
 	es.writer = writer
 }
 
+// Writer is the ordered writer SetWriter handed this source, or nil before it was handed
+// one. It is read by main's wiring test, which must see the writer createNatsComponents
+// built, not one it built itself.
+func (es *GatewayJetStreamSource) Writer() messaging.OrderedWriter {
+	return es.writer
+}
+
 func (es *GatewayJetStreamSource) Initialize(ctx context.Context) error {
 	return es.lifecycle.Initialize(ctx)
 }

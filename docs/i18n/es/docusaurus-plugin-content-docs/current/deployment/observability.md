@@ -869,7 +869,8 @@ Ningún aviso lee la serie siguiente, pero es la que hay que mirar cuando public
 - **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**: segundos en que un
   escritor en pipeline no pudo enviar porque toda su ventana esperaba confirmaciones. Una tasa
   cercana a 1 significa que la ventana, y no el broker, limita la publicación: suba
-  `resolution.publishWindow`. Una tasa cercana a 0 significa que la ventana tiene espacio.
+  `resolution.publishWindow` (`device-management`) o `capture.publishWindow` (`event-sources`).
+  Una tasa cercana a 0 significa que la ventana tiene espacio.
 - **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**: cuántos envíos encontraron
   la ventana llena y tuvieron que esperar. Los segundos anteriores divididos por esta cifra son la
   espera media.

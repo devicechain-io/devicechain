@@ -921,7 +921,6 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) er
 	return senderr
 }
 
-// Create messaging components used by this microservice.
 // newGatewayWriter builds the gateway source's ordered inbound-events writer at the
 // configured capture.publishWindow. It is the ONLY ordered writer this service builds (the
 // other sources and the presence tap publish synchronously through InboundEventsWriter and
@@ -932,6 +931,7 @@ func newGatewayWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, err
 	return processor.NewInboundWriter(nmgr, Configuration.Capture.PublishWindowSize())
 }
 
+// Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	ievents, err := nmgr.NewWriter(streams.InboundEvents)
 	if err != nil {
