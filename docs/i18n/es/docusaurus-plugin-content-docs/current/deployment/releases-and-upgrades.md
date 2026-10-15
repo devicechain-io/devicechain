@@ -3771,6 +3771,36 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### v0.21.1: un parche, nada que hacer {#v0211-upgrade}
+
+`v0.21.1` es una actualización directa desde `v0.21.0`: `dcctl install` para el clúster y después
+`dcctl upgrade` para cada instancia, como en la [v0.21.0](#v0210-upgrade). No añade ninguna
+migración, por lo que la base de datos queda intacta, y no cambia ninguna API, tema, permiso,
+valor del chart ni clave de configuración. Todo lo que describe la sección de la v0.21.0 que sigue
+es exactamente lo que estás ejecutando. Si vienes de `v0.20.0` o una versión anterior, sigue
+primero las [notas de la v0.21.0](#v0210-upgrade); se aplican sin cambios.
+
+Cuatro correcciones:
+
+- **Leer de la base de datos vuelve a costar lo que costaba antes de la v0.21.0.** La v0.21.0 fue
+  la primera versión compilada con la cadena de herramientas Go 1.27, y con ella el controlador de
+  PostgreSQL hacía una inspección de tipos adicional por cada columna de cada fila que leía. Los
+  servicios que leen mucho, device-state sobre todo, gastaban por ello bastante más CPU en la
+  ingesta. Las filas vuelven a leerse como en `v0.20.0`, y el rendimiento de ingesta de
+  device-state queda restablecido. En una prueba de rendimiento centrada en lecturas, la misma
+  lectura pasó de 85–95 ms a 31–35 ms.
+- **La vista Rule Health cuenta los disparos en PostgreSQL.** Hasta ahora mostraba cero disparos y
+  ninguna hora de último disparo para todas las reglas, porque PostgreSQL rechazaba la sentencia
+  que registra un disparo. La detección no se vio afectada: las reglas generaron y cerraron
+  alarmas con normalidad en todo momento. Los recuentos empiezan con la actualización; los
+  disparos anteriores nunca se registraron.
+- **Crear una identidad con `enabled: false` crea una identidad deshabilitada.** Antes se guardaba
+  habilitada. La misma corrección cubre los demás registros que llevan un indicador de
+  habilitación. Una identidad creada deshabilitada con `v0.21.0` o una versión anterior sigue
+  habilitada: revisa las que quisiste crear deshabilitadas y deshabilítalas.
+- **Detener la fuente de eventos HTTP espera a que sus conexiones terminen de cerrarse**, de modo
+  que una fuente detenida ya no actualiza sus métricas después de haberse detenido.
+
 ### v0.21.0 — un dispositivo puede quedar excluido por completo, y las actualizaciones se firman {#v0210-upgrade}
 
 `v0.21.0` es una actualización en su sitio desde `v0.20.0`: `dcctl install` para el clúster y
