@@ -15,6 +15,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 const h = vi.hoisted(() => ({
   toast: (() => undefined) as (...args: unknown[]) => void,
   rolledBack: undefined as ((result: { definition: string; updatedAt: string | null }) => void) | undefined,
+  // The tenant the signed-in token names: one tab can change it, and its clipboard outlives that.
+  tenant: 'tenant-a',
 }));
 
 const quiet: WidgetDataSource = {
@@ -37,7 +39,7 @@ vi.mock('./VersionHistorySheet', () => ({
     return null;
   },
 }));
-vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({ claims: { authorities: ['dashboard:write'] } }) }));
+vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => ({ claims: { authorities: ['dashboard:write'], tenant: h.tenant } }) }));
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: (...args: unknown[]) => h.toast(...args) }) }));
 vi.mock('@/components/ui/confirm-dialog', () => ({ useConfirm: () => vi.fn(async () => false) }));
 vi.mock('@/lib/api/dashboards', () => ({
@@ -63,6 +65,7 @@ let toasts: unknown[][] = [];
 beforeEach(() => {
   toasts = [];
   h.toast = (...args: unknown[]) => toasts.push(args);
+  h.tenant = 'tenant-a';
   clearWidgetClipboard();
 });
 afterEach(cleanup);
@@ -204,6 +207,30 @@ describe('undo and redo', () => {
     expect(undoButton().hasAttribute('disabled')).toBe(false);
   });
 
+  it('leaves the keys, and copy and paste, to a dialog, popover or menu open over the canvas', () => {
+    edit(board([card('a', 0, 0)]));
+    act(() => widgetEl('a').focus());
+    drag(widgetEl('a'), [[200, 0]]);
+    expect(left(widgetEl('a'))).toBe(200);
+    for (const role of ['dialog', 'menu', 'listbox']) {
+      const overlay = document.createElement('div');
+      overlay.setAttribute('role', role);
+      const button = document.createElement('button');
+      overlay.appendChild(button);
+      document.body.appendChild(overlay);
+      key(button, 'z', { ctrlKey: true });
+      expect(left(widgetEl('a'))).toBe(200);
+      key(button, 'd', { metaKey: true });
+      expect(canvasWidgets()).toHaveLength(1);
+      const data: Record<string, string> = {};
+      expect(clipboardEvent('copy', button, data).defaultPrevented).toBe(false);
+      overlay.remove();
+    }
+    // The counterweight: the same key on the page undoes.
+    key(document.body, 'z', { ctrlKey: true });
+    expect(left(widgetEl('a'))).toBe(0);
+  });
+
   it('typing into one widget setting is one undo step', () => {
     edit(board([card('a', 0, 0)]));
     act(() => widgetEl('a').focus());
@@ -342,6 +369,30 @@ describe('copy and paste', () => {
     expect(clipboardEvent('paste', document.body, { 'text/plain': 'just some text' }).defaultPrevented).toBe(false);
     expect(clipboardEvent('paste', titleInput(), { 'text/plain': text }).defaultPrevented).toBe(false);
     expect(canvasWidgets()).toHaveLength(0);
+  });
+
+  it('a copy made in one tenant keeps no binding in another, even on a look-alike board', () => {
+    const text = copyFrom(pumpBoard(), 'board-1', 'a');
+    expect(JSON.parse(text).tenant).toBe('tenant-a');
+    // The tab changes tenant. The other tenant has a board of the same token whose slot-1 is bound
+    // to ITS pump-1: same names, a different machine.
+    h.tenant = 'tenant-b';
+    edit(pumpBoard(), 'board-1');
+    clipboardEvent('paste', document.body, { 'text/plain': text });
+    expect(canvasWidgets()).toHaveLength(2);
+    expect(screen.queryByTestId('paste-unbound')?.textContent ?? '').toContain('copied in another tenant');
+  });
+
+  it('the Paste button applies the same rule to the tab’s own clipboard', () => {
+    const { unmount } = edit(pumpBoard(), 'board-1');
+    act(() => widgetEl('a').focus());
+    fireEvent.click(screen.getByTestId('widget-copy'));
+    unmount();
+    h.tenant = 'tenant-b';
+    edit(pumpBoard(), 'board-1');
+    fireEvent.click(screen.getByTestId('paste'));
+    expect(canvasWidgets()).toHaveLength(2);
+    expect(screen.queryByTestId('paste-unbound')?.textContent ?? '').toContain('copied in another tenant');
   });
 
   it('refuses a widget this console does not have, and names it', () => {

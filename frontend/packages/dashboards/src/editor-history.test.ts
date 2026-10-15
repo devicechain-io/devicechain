@@ -3,8 +3,9 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { serializeDefinition } from './definition';
-import { moveWidget, setTitle } from './editor-model';
+import { isDirty, serializeDefinition } from './definition';
+import { moveWidget, setTitle, updateWidget } from './editor-model';
+import { pruneSlots } from './slots';
 import {
   canRedo,
   canUndo,
@@ -17,7 +18,7 @@ import {
   undoEdit,
   type EditHistory,
 } from './editor-history';
-import type { DashboardDefinition } from './types';
+import type { DashboardDefinition, WidgetInstance } from './types';
 
 function board(): DashboardDefinition {
   return {
@@ -162,5 +163,37 @@ describe('rebase', () => {
     expect(h.present.convertedFrom).toBeUndefined();
     expect(undoEdit(h).history.present.convertedFrom).toBeUndefined();
     expect(undoEdit(h).history.present.title).toBe('History');
+  });
+});
+
+// The history holds whole snapshots, and that is affordable only because the editor's transforms
+// share every widget an edit does not touch. Measured on a board of 150 widgets with real options
+// (about 95 KB serialized): a hundred edits hold about 250 distinct widget objects, not the 15,150
+// a deep copy per snapshot would. A transform that started cloning the board would multiply the
+// editor's memory by the depth, and this is where it shows.
+describe('memory', () => {
+  it('a hundred edits to a large board share every widget they did not touch', () => {
+    const widgets: WidgetInstance[] = Array.from({ length: 150 }, (_, i) => ({
+      id: `w${i}`,
+      type: 'gauge',
+      layout: { base: { mode: 'grid', col: (i % 4) * 3, row: Math.floor(i / 4) * 3, cols: 3, rows: 3 } },
+      options: { title: `Widget ${i}`, min: 0, max: 100, thresholds: Array.from({ length: 20 }, (_, k) => ({ value: k, color: '#c00' })) },
+    }));
+    let h = createEditHistory<DashboardDefinition, string>({ ...board(), widgets });
+    for (let i = 0; i < 100; i++) {
+      const id = `w${i % 150}`;
+      const w = h.present.widgets.find((x) => x.id === id)!;
+      const next =
+        i % 2 === 0
+          ? updateWidget(h.present, id, { ...w, options: { ...w.options, title: `edit ${i}` } } as WidgetInstance)
+          : moveWidget(h.present, id, { col: (i * 3) % 12, row: 200 + i * 3 }, 12, { nearest: true });
+      h = commitEdit(h, pruneSlots(next), 'edit', { equals: (a, b) => !isDirty(a, b) });
+    }
+    expect(h.past).toHaveLength(100);
+    const distinct = new Set<object>();
+    for (const state of [...h.past.map((e) => e.state), h.present]) for (const w of state.widgets) distinct.add(w);
+    // 150 originals plus at most one new object per edited widget per edit (a move may also push a
+    // neighbour aside); a deep copy per snapshot would be 101 x 150.
+    expect(distinct.size).toBeLessThanOrEqual(150 + 2 * 100);
   });
 });

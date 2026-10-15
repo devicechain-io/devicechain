@@ -99,7 +99,7 @@ import { exportDefinitionJson } from './exportDefinition';
 import { DashboardImportDrawer } from '../import/DashboardImportDrawer';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
 import { useEditHistory, type EditAction, type EditLabel } from './useEditHistory';
-import { editorShortcut, isTypingTarget } from './editorShortcuts';
+import { editorShortcut, isEditorSurfaceTarget } from './editorShortcuts';
 import { readWidgetClipboard, writeWidgetClipboard } from './widgetClipboard';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
@@ -348,6 +348,13 @@ function settingsKey(before: WidgetInstance | undefined, after: WidgetInstance):
   return `settings:${after.id}:${changed.sort().join(',')}`;
 }
 
+// The notice for each reason a paste left a widget unbound.
+const PASTE_UNBOUND_MESSAGE: Record<UnboundPaste['reason'], string> = {
+  missing: 'pasteUnboundMissing',
+  different: 'pasteUnboundDifferent',
+  tenant: 'pasteUnboundTenant',
+};
+
 // The slot a pasted widget still waits on, while it does: it references the slot the paste gave it
 // and nothing has been bound to that slot since. Read from the working copy, so the explanation
 // goes as soon as the author binds the widget, deletes it, or undoes the paste, and comes back
@@ -535,9 +542,15 @@ export function DashboardWorkspace({
     setAnnouncement(t('announceDuplicated', { name }));
   };
 
-  // The clipboard text for widget `id`, recording this board as where it came from.
+  // Where a copy is made and a paste lands: this board, in the tenant the console is acting in.
+  // The tenant is read from the token at the moment of the copy or paste, never cached: a tab that
+  // changes tenant keeps its clipboard, and the stamp is what stops a widget copied in one tenant
+  // from keeping its bindings in another (see pasteWidgets).
+  const here = { tenant: claims?.tenant ?? '', board: token };
+
+  // The clipboard text for widget `id`, recording this board and tenant as where it came from.
   const clipboardText = (id: string): string | undefined => {
-    const clip = copyWidget(working, id, token);
+    const clip = copyWidget(working, id, here);
     return clip && serializeWidgetClipboard(clip);
   };
   const copied = (id: string, text: string) => {
@@ -561,7 +574,7 @@ export function DashboardWorkspace({
     if (!parsed) return false;
     for (const r of parsed.refused) toast(t('workspacePasteRefused', { type: r.type, reason: r.reason }), 'error');
     if (parsed.clipboard.widgets.length === 0) return true;
-    const result = pasteWidgets(working, parsed.clipboard, token);
+    const result = pasteWidgets(working, parsed.clipboard, here);
     const name = widgetName(result.definition.widgets.find((w) => w.id === result.ids[0]));
     history.commit(result.definition, { action: 'paste', name });
     setSelectedId(result.ids[0]);
@@ -608,7 +621,7 @@ export function DashboardWorkspace({
     // page, is left to the browser.
     const onCopy = (e: ClipboardEvent) => {
       const now = live.current;
-      if (!now.selectedId || isTypingTarget(e.target)) return;
+      if (!now.selectedId || !isEditorSurfaceTarget(e.target)) return;
       if (!(window.getSelection?.()?.isCollapsed ?? true)) return;
       const text = now.clipboardText(now.selectedId);
       if (!text) return;
@@ -617,7 +630,7 @@ export function DashboardWorkspace({
       now.copied(now.selectedId, text);
     };
     const onPaste = (e: ClipboardEvent) => {
-      if (isTypingTarget(e.target)) return;
+      if (!isEditorSurfaceTarget(e.target)) return;
       const text = e.clipboardData?.getData('text/plain') ?? '';
       // Text that is not a widget is not ours to paste; an empty system clipboard falls back to
       // the widget last copied in this tab.
@@ -997,7 +1010,7 @@ export function DashboardWorkspace({
                 <div>
                   {notices.map((n) => (
                     <p key={`${n.widgetId}:${n.slot}`}>
-                      {t(n.reason === 'missing' ? 'pasteUnboundMissing' : 'pasteUnboundDifferent', {
+                      {t(PASTE_UNBOUND_MESSAGE[n.reason], {
                         name: n.name,
                         slot: n.from,
                       })}

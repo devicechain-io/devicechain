@@ -6,7 +6,10 @@
 // they reach the system clipboard without asking for a permission.
 //
 // None of them fires while the author is typing: in a text field, Ctrl+Z belongs to the field
-// (it undoes the typing), and taking it would undo an edit the author is not looking at.
+// (it undoes the typing), and taking it would undo an edit the author is not looking at. Nor while
+// focus is in a dialog, a popover or a menu (version history, a colour picker, a combobox list, the
+// add-widget menu): the canvas is behind it, and an undo there would change a board the author
+// cannot see. The same rule covers copy and paste (see isEditorSurfaceTarget).
 
 export type EditorShortcut = 'undo' | 'redo' | 'duplicate';
 
@@ -14,18 +17,33 @@ export type EditorShortcut = 'undo' | 'redo' | 'duplicate';
 // select, an editable element, or a widget that says it is a text box or a combobox.
 export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
-  if (target.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return true;
+  if (target instanceof HTMLElement && target.isContentEditable) return true;
+  if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return true;
   const role = target.closest('[role]')?.getAttribute('role');
   return role === 'textbox' || role === 'combobox' || role === 'searchbox' || role === 'spinbutton';
+}
+
+// What sits over the canvas: a dialog, a popover (Radix gives its content role=dialog), a menu or a
+// list box.
+const OVERLAY = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], [role="menu"], [role="listbox"]';
+
+// isEditorSurfaceTarget says whether a key or clipboard event belongs to the editor at all: it is
+// not in a text field and not in anything layered over the canvas.
+export function isEditorSurfaceTarget(target: EventTarget | null): boolean {
+  if (isTypingTarget(target)) return false;
+  return !(target instanceof Element && target.closest(OVERLAY));
 }
 
 // editorShortcut names the editor shortcut a key press is, or null. A press inside a text field is
 // never one.
 export function editorShortcut(
-  e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey' | 'target'>,
+  e: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'altKey' | 'target'> &
+    Partial<Pick<KeyboardEvent, 'defaultPrevented' | 'isComposing'>>,
 ): EditorShortcut | null {
   if (!(e.ctrlKey || e.metaKey) || e.altKey) return null;
-  if (isTypingTarget(e.target)) return null;
+  // Already handled by what has focus, or mid-composition in an input method.
+  if (e.defaultPrevented || e.isComposing) return null;
+  if (!isEditorSurfaceTarget(e.target)) return null;
   const key = e.key.toLowerCase();
   if (key === 'z') return e.shiftKey ? 'redo' : 'undo';
   if (key === 'y' && e.ctrlKey && !e.shiftKey) return 'redo';

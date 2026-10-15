@@ -267,8 +267,10 @@ On the same dashboard a copy keeps its data source. On another dashboard it keep
 dashboard has a slot of the same name bound to the same device or entity: slots are numbered per
 dashboard, so the same name on two dashboards usually means two different devices. Otherwise the
 widget is pasted without a data source, and the editor says so, naming the widget and the slot it
-was bound to, until you choose a data source in its settings. A widget placed relative to another
-is copied onto the grid at its own size; choose **Relative to…** to attach it again.
+was bound to, until you choose a data source in its settings. A widget copied in another tenant
+never keeps its data source, whatever the dashboard: devices belong to their tenant, so the paste
+leaves it without one and says why. A widget placed relative to another is copied onto the grid at
+its own size; choose **Relative to…** to attach it again.
 
 ## Previewing with synthetic data {#previewing-with-synthetic-data}
 

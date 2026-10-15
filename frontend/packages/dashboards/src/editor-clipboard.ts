@@ -23,6 +23,14 @@
 //     pasted UNBOUND: it points at a new slot of the same kind with nothing bound to it, and the
 //     paste reports it, so the editor can say why. Never dropped to "no datasource": to an alarm
 //     widget an absent datasource means the whole tenant; an unbound slot means no device yet.
+//   - 🔴 A copy is stamped with the TENANT it was made in, and a paste into any other tenant keeps
+//     NO entity reference at all. Device and entity tokens are only unique within a tenant, so a
+//     binding carried across would quietly show the same-named device of the other tenant (or
+//     publish the first tenant's identifiers on a board the second tenant's users can read). One
+//     browser tab can change tenant, and its clipboard outlives the change, so this is decided at
+//     paste time, from the stamp, never assumed. Every slot reference, and every concrete device or
+//     entity selector, becomes a new unbound slot with no label (a slot's label is often the token
+//     it was bound to), and the board stamp is ignored: board tokens are per tenant too.
 
 import { CURRENT_SCHEMA_VERSION } from './types';
 import { BASE_BREAKPOINT, generateWidgetId, parseDashboardDefinition, storedDefinition, type ParseDefinitionOptions } from './definition';
@@ -42,9 +50,16 @@ import {
 export const WIDGET_CLIPBOARD_FORMAT = 'devicechain/dashboard-widgets';
 export const WIDGET_CLIPBOARD_VERSION = 1;
 
+// Where a copy was made, or where a paste lands: the tenant and the board token within it.
+export interface ClipboardOrigin {
+  tenant: string;
+  board: string;
+}
+
 // What a copy holds: the widgets (on the grid, ids as they were), the slots they reference as the
-// source board defined them, the source board's token and the canvas they were authored on.
+// source board defined them, the tenant and board they came from and the canvas they were authored on.
 export interface WidgetClipboard {
+  tenant: string;
   board: string;
   canvas: Canvas;
   widgets: ResolvedWidgetInstance[];
@@ -58,13 +73,14 @@ export interface RefusedWidget {
 }
 
 // A pasted widget that lost its binding: it now points at `slot`, a new slot with nothing bound
-// to it, because the board has no slot `from` (`missing`) or has one bound to something else, or
-// of the other kind (`different`).
+// to it, because the board has no slot `from` (`missing`), has one bound to something else, or
+// of the other kind (`different`), or the copy was made in another tenant (`tenant`: `from` is
+// then the source slot's name, or empty for a widget that named its device directly).
 export interface UnboundPaste {
   widgetId: string;
   slot: string;
   from: string;
-  reason: 'missing' | 'different';
+  reason: 'missing' | 'different' | 'tenant';
 }
 
 export interface PasteResult {
@@ -86,9 +102,9 @@ function slotReferences(w: WidgetInstance): string[] {
 const own = <V>(map: Record<string, V> | undefined, key: string): V | undefined =>
   map && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined;
 
-// copyWidget takes widget `id` of `def` (on board `board`) into a clipboard. A placeholder for a
+// copyWidget takes widget `id` of `def` (on `origin`'s board) into a clipboard. A placeholder for a
 // widget this console cannot show is not copied: it carries no settings this build can vouch for.
-export function copyWidget(def: DashboardDefinition, id: string, board: string): WidgetClipboard | undefined {
+export function copyWidget(def: DashboardDefinition, id: string, origin: ClipboardOrigin): WidgetClipboard | undefined {
   const w = def.widgets.find((x) => x.id === id);
   if (!w || w.type === UNKNOWN_WIDGET_TYPE) return undefined;
   const p = basePlacement(w);
@@ -100,7 +116,7 @@ export function copyWidget(def: DashboardDefinition, id: string, board: string):
     const slot = own(def.slots, name);
     if (slot) slots[name] = structuredClone(slot);
   }
-  return { board, canvas: structuredClone(def.canvas), widgets: [widget], slots };
+  return { tenant: origin.tenant, board: origin.board, canvas: structuredClone(def.canvas), widgets: [widget], slots };
 }
 
 // serializeWidgetClipboard is the text a copy puts on the system clipboard.
@@ -112,13 +128,20 @@ export function serializeWidgetClipboard(clip: WidgetClipboard): string {
     widgets: clip.widgets,
     ...(Object.keys(clip.slots).length > 0 ? { slots: clip.slots } : {}),
   });
-  return JSON.stringify({ format: WIDGET_CLIPBOARD_FORMAT, version: WIDGET_CLIPBOARD_VERSION, board: clip.board, definition });
+  return JSON.stringify({
+    format: WIDGET_CLIPBOARD_FORMAT,
+    version: WIDGET_CLIPBOARD_VERSION,
+    tenant: clip.tenant,
+    board: clip.board,
+    definition,
+  });
 }
 
 // parseWidgetClipboard reads clipboard text back, validating every widget against the registry
 // `options.catalog` names (the built-ins without one). Text that is not a widget clipboard, of
 // another version, or whose definition does not parse, is undefined: the caller leaves the paste
-// alone. A widget the registry cannot resolve is refused and named.
+// alone, and so is text with no tenant stamp: a paste must know where a copy came from. A widget
+// the registry cannot resolve is refused and named.
 export function parseWidgetClipboard(
   text: string,
   options: ParseDefinitionOptions = {},
@@ -130,8 +153,9 @@ export function parseWidgetClipboard(
     return undefined;
   }
   if (typeof env !== 'object' || env === null) return undefined;
-  const { format, version, board, definition } = env as Record<string, unknown>;
-  if (format !== WIDGET_CLIPBOARD_FORMAT || version !== WIDGET_CLIPBOARD_VERSION || typeof board !== 'string') return undefined;
+  const { format, version, tenant, board, definition } = env as Record<string, unknown>;
+  if (format !== WIDGET_CLIPBOARD_FORMAT || version !== WIDGET_CLIPBOARD_VERSION) return undefined;
+  if (typeof tenant !== 'string' || tenant === '' || typeof board !== 'string') return undefined;
   let parsed: DashboardDefinition;
   try {
     parsed = parseDashboardDefinition(definition, options);
@@ -148,13 +172,19 @@ export function parseWidgetClipboard(
     const type = typeof w.raw.type === 'string' ? w.raw.type : '';
     refused.push({ type, reason: w.reason?.message ?? '' });
   }
-  return { clipboard: { board, canvas: parsed.canvas, widgets, slots: parsed.slots ?? {} }, refused };
+  return { clipboard: { tenant, board, canvas: parsed.canvas, widgets, slots: parsed.slots ?? {} }, refused };
 }
 
-// pasteWidgets adds the clipboard's widgets to `def`, the board `board`: each with a new id, in
-// the first free slot at its span, its slot references kept or unbound as described above.
-export function pasteWidgets(def: DashboardDefinition, clip: WidgetClipboard, board: string): PasteResult {
-  const sameBoard = clip.board === board;
+// A selector that names its entity directly rather than through a slot.
+const CONCRETE_KINDS: ReadonlySet<string> = new Set(['device', 'anchor', 'devices', 'relatedTraversal']);
+
+// pasteWidgets adds the clipboard's widgets to `def`, the board `at`: each with a new id, in the
+// first free slot at its span, its slot references kept or unbound as described above.
+export function pasteWidgets(def: DashboardDefinition, clip: WidgetClipboard, at: ClipboardOrigin): PasteResult {
+  // An empty stamp is never a match: a paste that cannot tell where a copy came from treats it as
+  // another tenant's.
+  const sameTenant = clip.tenant !== '' && clip.tenant === at.tenant;
+  const sameBoard = sameTenant && clip.board === at.board;
   const columns = def.canvas.grid.columns;
   const slots: Record<string, SlotDefinition> = { ...(def.slots ?? {}) };
   // One decision per source slot, so widgets pasted together that shared a slot still share one.
@@ -165,6 +195,7 @@ export function pasteWidgets(def: DashboardDefinition, clip: WidgetClipboard, bo
     const source = own(clip.slots, from);
     const target = own(slots, from);
     const keep =
+      sameTenant &&
       target !== undefined &&
       source !== undefined &&
       target.type === source.type &&
@@ -173,8 +204,10 @@ export function pasteWidgets(def: DashboardDefinition, clip: WidgetClipboard, bo
     if (keep) result = { slot: from };
     else {
       const slot = nextSlotName(slots);
-      slots[slot] = { type: source?.type ?? 'device', ...(source?.label !== undefined ? { label: source.label } : {}) };
-      result = { slot, reason: target ? 'different' : 'missing' };
+      // Another tenant's label is not carried: it is often the token the slot was bound to.
+      const label = sameTenant ? source?.label : undefined;
+      slots[slot] = { type: source?.type ?? 'device', ...(label !== undefined ? { label } : {}) };
+      result = { slot, reason: !sameTenant ? 'tenant' : target ? 'different' : 'missing' };
     }
     mapped.set(from, result);
     return result;
@@ -202,6 +235,20 @@ export function pasteWidgets(def: DashboardDefinition, clip: WidgetClipboard, bo
       if (w.datasource?.kind === 'slot' && w.datasource.slot === from) w.datasource = { ...w.datasource, slot: m.slot };
       if (w.options?.selectionTarget === from) w.options = { ...w.options, selectionTarget: m.slot };
     }
+    // A widget from another tenant that names its device or entity directly keeps the series it
+    // reads and loses the entity: it points at a new unbound slot of the matching kind.
+    const ds = w.datasource;
+    if (!sameTenant && ds && CONCRETE_KINDS.has(ds.kind) && ds.kind !== 'slot' && ds.kind !== 'unbound') {
+      const slot = nextSlotName(slots);
+      slots[slot] = { type: ds.kind === 'anchor' ? 'anchor' : 'device' };
+      w.datasource = {
+        kind: 'slot',
+        slot,
+        measurements: [...ds.measurements],
+        ...(ds.location ? { location: { ...ds.location } } : {}),
+      };
+      unbound.push({ widgetId: id, slot, from: '', reason: 'tenant' });
+    }
     added.push(w);
     ids.push(id);
   }
@@ -216,8 +263,10 @@ export function duplicateWidget(
   def: DashboardDefinition,
   id: string,
 ): { definition: DashboardDefinition; id: string; unbound: UnboundPaste[] } | undefined {
-  const clip = copyWidget(def, id, '');
+  // The widget's own board, in its own tenant.
+  const here: ClipboardOrigin = { tenant: 'here', board: 'here' };
+  const clip = copyWidget(def, id, here);
   if (!clip) return undefined;
-  const r = pasteWidgets(def, clip, '');
+  const r = pasteWidgets(def, clip, here);
   return { definition: r.definition, id: r.ids[0], unbound: r.unbound };
 }

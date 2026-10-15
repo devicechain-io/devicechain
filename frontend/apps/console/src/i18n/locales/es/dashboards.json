@@ -418,6 +418,7 @@
   "announcePasted": "Se pegó {{name}}",
   "pasteUnboundMissing": "{{name}} se pegó sin origen de datos: este panel no tiene el slot {{slot}}. Elige su origen de datos en la configuración del widget.",
   "pasteUnboundDifferent": "{{name}} se pegó sin origen de datos: el slot {{slot}} de este panel muestra otra cosa. Elige su origen de datos en la configuración del widget.",
+  "pasteUnboundTenant": "{{name}} se pegó sin origen de datos: se copió en otro inquilino, y los dispositivos nunca pasan de un inquilino a otro. Elige su origen de datos en la configuración del widget.",
   "pasteUnboundDismiss": "Descartar",
   "layoutFindingSpan": "El tamaño está fuera de lo que admite este widget",
   "layoutFindingOverrun": "Sobrepasa el borde derecho de la cuadrícula",

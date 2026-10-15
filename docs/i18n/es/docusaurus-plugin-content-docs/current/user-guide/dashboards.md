@@ -259,6 +259,8 @@ panel tiene un slot con el mismo nombre vinculado al mismo dispositivo o entidad
 numeran en cada panel, así que el mismo nombre en dos paneles suele indicar dos dispositivos
 distintos. Si no, el widget se pega sin origen de datos y el editor lo indica, con el nombre del
 widget y del slot al que estaba vinculado, hasta que eliges un origen de datos en su configuración.
+Un widget copiado en otro inquilino nunca conserva su origen de datos, sea cual sea el panel: los
+dispositivos pertenecen a su inquilino, así que se pega sin origen de datos y el editor dice por qué.
 Un widget colocado en relación con otro se copia en la cuadrícula con su propio tamaño; elige
 **Relativo a…** para volver a unirlo.
 

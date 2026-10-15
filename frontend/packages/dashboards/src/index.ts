@@ -286,6 +286,7 @@ export {
   parseWidgetClipboard,
   pasteWidgets,
   serializeWidgetClipboard,
+  type ClipboardOrigin,
   type PasteResult,
   type RefusedWidget,
   type UnboundPaste,

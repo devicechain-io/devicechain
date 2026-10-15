@@ -418,6 +418,7 @@
   "announcePasted": "Pasted {{name}}",
   "pasteUnboundMissing": "{{name}} was pasted without a data source: this dashboard has no slot {{slot}}. Choose its data source in the widget's settings.",
   "pasteUnboundDifferent": "{{name}} was pasted without a data source: this dashboard's slot {{slot}} shows something else. Choose its data source in the widget's settings.",
+  "pasteUnboundTenant": "{{name}} was pasted without a data source: it was copied in another tenant, and devices are never carried between tenants. Choose its data source in the widget's settings.",
   "pasteUnboundDismiss": "Dismiss",
   "layoutFindingSpan": "Size is outside what this widget supports",
   "layoutFindingOverrun": "Runs past the right edge of the grid",
