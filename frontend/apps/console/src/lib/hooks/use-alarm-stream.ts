@@ -10,8 +10,10 @@ import { ALARM_STREAM, type AlarmEvent, type AlarmStreamData } from '@/lib/api/a
 // closed, or the operation terminally ended and we are re-establishing it.
 export type AlarmStreamStatus = 'connecting' | 'live' | 'reconnecting';
 
-// How long to wait before re-establishing a subscription that terminally ended
-// (graphql-ws retries exhausted, a fatal close code, or a server-side complete).
+// How long to wait before re-establishing a subscription that terminally ended (a fatal
+// close code, a server-side error or complete). A dropped socket never ends here: the
+// client retries it, with a capped and jittered back-off, for as long as this is
+// subscribed -- the same path the dashboard widgets ride.
 // A flat delay is a self-limiting retry loop — no tight spin against a hard-down
 // server — while the 30s query poll keeps the list fresh in the meantime.
 const RESUBSCRIBE_DELAY_MS = 3000;
@@ -24,7 +26,7 @@ const RESUBSCRIBE_DELAY_MS = 3000;
 // re-establishes following a drop, so the caller can re-run its query to catch any
 // transition missed during the gap (the schema's "re-run on reconnect" guidance).
 //
-// The feed self-heals: graphql-ws auto-retries a transient socket close; a terminal
+// The feed self-heals: the client retries a dropped socket until it is back; a terminal
 // error or a server-side complete (both permanent for that operation) schedules a
 // fresh subscription. Callbacks are held in refs so a new identity each render never
 // tears down the live subscription.

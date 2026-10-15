@@ -18,7 +18,7 @@ const RESUBSCRIBE_DELAY_MS = 3000;
 // and invokes onEvent for each firing (raised/resolved). onReconnect fires after the socket
 // re-establishes following a drop, so the caller can re-run its ruleHealth query to refresh
 // the durable counts that a stream gap may have advanced. It self-heals exactly like
-// useAlarmStream: graphql-ws auto-retries a transient close; a terminal error or a
+// useAlarmStream: the client retries a dropped socket until it is back; a terminal error or a
 // server-side complete schedules a fresh subscription. Callbacks are held in refs so a new
 // identity each render never tears down the live subscription. A blank profileToken makes it
 // inert (no subscription) — the drawer/tab can mount it before a profile is selected.

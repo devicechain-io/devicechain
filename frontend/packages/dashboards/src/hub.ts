@@ -1102,15 +1102,47 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     const handle = this.connection.register();
     let closeSocket: (() => void) | undefined;
     let operationOpen = true;
+    // Consecutive server-side ends with no reading in between; spaces the re-opens below.
+    let ended = 0;
+    // This operation's socket is up, as far as its last connected/closed said.
+    let up = true;
+    let reopen: ReturnType<typeof setTimeout> | undefined;
     const closeOperation = (): void => {
       if (!operationOpen) return;
       operationOpen = false;
+      clearTimeout(reopen);
       closeSocket?.();
     };
+    const open = (): void => {
+      closeSocket = subscribe(EVENT_AREA, MEASUREMENT_STREAM, variables, adapter);
+    };
     const adapter: SubscriptionSink<MeasurementStreamResult> = {
-      next: (data) => this.fanout(deviceToken, data.measurementStream),
-      connected: () => handle.connected(),
-      closed: () => handle.closed(),
+      next: (data) => {
+        ended = 0;
+        this.fanout(deviceToken, data.measurementStream);
+      },
+      connected: () => {
+        up = true;
+        handle.connected();
+      },
+      closed: () => {
+        up = false;
+        handle.closed();
+      },
+      // 🔴 The server ended this operation on a socket that is still up: its live source
+      // closed, or could not be opened (a resolver error reaches the client as an error-only
+      // `next`, which carries no data, and then this). Left alone, the stream would sit here
+      // receiving nothing while the board read `live` -- a widget frozen until someone reloads,
+      // one stream at a time. Open it again, after a doubling wait capped at 30 s, for as long
+      // as anything shows it. Two other completes are not the server's and are never re-opened:
+      // a widget's own unsubscribe (closeOperation has marked it), and the client being disposed
+      // on sign-out, which closes the socket first (re-opening would bring back the socket the
+      // sign-out exists to drop).
+      complete: () => {
+        if (!operationOpen || !up) return;
+        closeSocket?.();
+        reopen = setTimeout(open, Math.min(1000 * 2 ** ended++, 30_000));
+      },
       error: (err) => {
         // The upstream is dead. Evict it (and drop the socket-level subscription)
         // so the NEXT subscriber for this device opens a fresh stream instead of
@@ -1118,9 +1150,12 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
         // Guard the delete so a stream that has already been replaced is left be.
         if (this.streams.get(deviceToken) === stream) this.streams.delete(deviceToken);
         // 🔴 Close the operation but KEEP the connection handle until the last subscriber
-        // detaches. graphql-ws errors every operation once its retries are spent, so
-        // releasing here would empty the tracker exactly when the socket is beyond
-        // recovery, and a board whose every stream had died would read `live`. A handle
+        // detaches. A dropped socket is retried for as long as the stream is wanted (the
+        // client never gives up on one), so what lands here is final: a close that says
+        // the request is wrong (a refused token among them) or the server ending this
+        // operation. A fatal close errors every operation at once, so releasing here would
+        // empty the tracker exactly when the socket is down for good, and a board whose
+        // every stream had died would read `live`. A handle
         // whose socket was up when the operation failed (a server-side error) counts as up.
         closeOperation();
         if (stream.subscribers.size > 0) this.deadStreams.add(stream);
@@ -1129,8 +1164,8 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       },
     };
     const variables: MeasurementStreamVariables = { deviceToken, name: null };
-    closeSocket = subscribe(EVENT_AREA, MEASUREMENT_STREAM, variables, adapter);
-    if (!operationOpen) closeSocket(); // it failed while subscribing
+    open();
+    if (!operationOpen) closeSocket?.(); // it failed while subscribing
     stream.unsubscribe = () => {
       handle.release();
       closeOperation();

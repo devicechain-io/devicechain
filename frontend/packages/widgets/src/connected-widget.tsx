@@ -34,7 +34,7 @@ import {
   type WidgetFreshness,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
-import { lazy, Suspense, useMemo, type ComponentType, type ReactNode } from 'react';
+import { useMemo, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { useHeld } from './use-held';
@@ -51,6 +51,9 @@ import {
   WidgetFrame,
 } from '@devicechain/widget-sdk';
 import { WidgetContainment, useReportRejection } from './widget-containment';
+import { lazyChunk } from './widgets/lazy-chunk';
+import type { AggregateFeedProps } from './aggregate-feed';
+import type { FleetFeedProps } from './fleet-feed';
 import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 
 export interface ConnectedWidgetProps {
@@ -198,8 +201,8 @@ function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
 
 // The fleet feed is its own chunk (fleet-feed.tsx), like the aggregate feed: a board without a fleet
 // table or a per-device bar chart never downloads it. A chunk that fails to load is thrown to the
-// widget's containment, which shows the failure.
-const FleetFeed = lazy(() => import('./fleet-feed'));
+// widget's containment, which shows the failure, and its Reset fetches it again (lazyChunk).
+const FleetFeed = lazyChunk<typeof import('./fleet-feed')>(() => import('./fleet-feed')).component<never, FleetFeedProps>('default');
 
 function MeasurementConnectedWidget(props: ChannelProps) {
   // Read member by member, or as one stream keyed by measurement name: decided by the descriptor
@@ -213,9 +216,7 @@ function MeasurementConnectedWidget(props: ChannelProps) {
   const members = membersMode(descriptor, widget);
   if (members || widget.datasource?.kind === 'anchor') {
     return (
-      <Suspense fallback={null}>
-        <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} refuse={!members} />
-      </Suspense>
+      <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} refuse={!members} />
     );
   }
   return <StreamConnectedWidget {...props} />;
@@ -262,17 +263,13 @@ function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, in
 
 // The aggregate feed is its own chunk (aggregate-feed.tsx): a board without an aggregate widget
 // never downloads it. Nothing renders until it arrives, and a chunk that fails to load is thrown to
-// the widget's containment, which shows the failure.
-const AggregateFeed = lazy(() => import('./aggregate-feed'));
+// the widget's containment, which shows the failure, and its Reset fetches it again.
+const AggregateFeed = lazyChunk<typeof import('./aggregate-feed')>(() => import('./aggregate-feed')).component<never, AggregateFeedProps>('default');
 
 function AggregateConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
   // An aggregate names one device's measurements, so a group is refused as above.
   const props = { hub, widget, descriptor, Component, actions, ErrorFrame: WidgetErrorFrame };
-  return (
-    <Suspense fallback={null}>
-      {widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />}
-    </Suspense>
-  );
+  return widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />;
 }
 
 function AlarmConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
