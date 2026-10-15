@@ -62,7 +62,8 @@ describe('the built-in registry', () => {
       }
       expect(descriptor.datasource).toEqual({
         mode: channel === 'alarm' ? 'optional' : 'required',
-        selectors: channel === 'control' ? ['device', 'slot'] : ['device', 'anchor', 'slot'],
+        // A command target and an aggregate's "latest" each name ONE device; the rest may be an anchor.
+        selectors: channel === 'control' || channel === 'aggregate' ? ['device', 'slot'] : ['device', 'anchor', 'slot'],
       });
     });
 

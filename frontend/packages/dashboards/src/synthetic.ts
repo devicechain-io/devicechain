@@ -11,6 +11,8 @@
 // names, never resolves
 // a device).
 
+import type { HistoryWindow } from './history';
+import type { MeasurementBucket } from './queries';
 import type {
   AlarmStreamSink,
   AlarmSubscription,
@@ -362,6 +364,29 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
     // Preview never refuses: there is no enqueue gate behind it to decide a rejection,
     // and inventing one would be a verdict nothing actually reached.
     return { status: 'sent', token: 'syn-dispatch' };
+  }
+
+  // bucketMeasurements answers with ONE bucket per measurement spanning the window, folded from a
+  // synthetic reading per interval, so a preview stat reads something the waveform actually did
+  // (a minimum and maximum inside [min, max]).
+  async bucketMeasurements(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
+    const names = datasource.measurements.length > 0 ? datasource.measurements : [DEFAULT_NAME];
+    const from = Date.parse(window.startTime);
+    const to = Date.parse(window.endTime);
+    return names.map((name) => {
+      const walk = new Map<string, number>();
+      const values = Array.from({ length: 120 }, (_, i) => this.valueFor(name, from + ((to - from) * i) / 119, walk));
+      const sum = values.reduce((a, v) => a + v, 0);
+      return {
+        bucketStart: window.startTime,
+        name,
+        avg: sum / values.length,
+        min: Math.min(...values),
+        max: Math.max(...values),
+        sum,
+        count: values.length,
+      };
+    });
   }
 
   // disposeAll stops every live stream (e.g. when preview is turned off). Individual

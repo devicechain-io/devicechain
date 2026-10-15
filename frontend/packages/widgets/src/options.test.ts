@@ -75,6 +75,9 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'progress-ring': 'widgets/progress-ring.tsx',
   'command-slider': 'widgets/command-slider.tsx',
   'command-toggle': 'widgets/command-toggle.tsx',
+  'stat-card': 'widgets/stat-card.tsx',
+  'bar-chart': 'widgets/bar-chart.tsx',
+  'pie-chart': 'widgets/pie-chart.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -103,7 +106,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   title: [...WIDGET_TYPES],
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring'],
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive.
   selectionTarget: ['alarm-table', 'entity-selector'],
@@ -385,6 +388,17 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     parameterSchema: '[{"name":"enabled","dataType":"BOOLEAN","required":true}]',
     parameter: 'enabled',
   },
+  'stat-card': {
+    title: 'Peak temperature',
+    measurement: 'temp_c',
+    stat: 'max',
+    unit: 'C',
+    precision: 1,
+    thresholds: [{ value: 90, level: 'major' }],
+    windowSeconds: 3600,
+  },
+  'bar-chart': { title: 'Readings', unit: 'C', precision: 1, sort: 'descending' },
+  'pie-chart': { title: 'Share', unit: 'L', precision: 0, sort: 'ascending' },
 };
 
 describe('validateWidgetOptions', () => {

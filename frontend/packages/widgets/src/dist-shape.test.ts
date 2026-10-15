@@ -45,7 +45,7 @@
 // the portable entry never reaches the /vite one. Deleting either file loses real
 // coverage.
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
@@ -82,6 +82,23 @@ async function graphOf(entry: string) {
   );
   return { inputs, imports };
 }
+
+/** Every file the entry reaches through STATIC imports (what a host downloads up front). */
+function staticGraph(entry: string): string[] {
+  const STATIC_IMPORT = /(?:\bfrom|\bimport)\s*["'](\.{1,2}\/[^"']+\.js)["']/g;
+  const seen = new Set<string>();
+  const queue = [entry];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const m of readFileSync(file, 'utf8').matchAll(STATIC_IMPORT)) queue.push(path.resolve(path.dirname(file), m[1]));
+  }
+  return [...seen];
+}
+
+const walkDist = (dir: string): string[] =>
+  existsSync(dir) ? readdirSync(dir).map((name) => path.join(dir, name)) : [];
 
 let main: Awaited<ReturnType<typeof graphOf>>;
 let viteEntry: Awaited<ReturnType<typeof graphOf>>;
@@ -192,6 +209,59 @@ describe('the built package', () => {
     // Not in the level family's chunk: two families, two downloads.
     const levelSpec = specs.find((spec) => spec.includes('level-widgets'));
     expect(readFileSync(path.resolve(distDir, levelSpec!), 'utf8').includes(CONTROL_PAYLOAD)).toBe(false);
+  });
+
+  // The aggregate and categorical widgets are the fourth lazy boundary, and the aggregate feed (the
+  // bucket fold and the refresh loop) is a fifth: a board without a stat card, bar chart or pie
+  // chart downloads neither. Neither pulls a chart type into the build: the bar and pie are SVG, so
+  // no ECharts bar or pie module exists anywhere in what ships, and the SDK's chart registration
+  // (see its own dist-shape test) stays line and gauge.
+  it('keeps the stat card, bar chart, pie chart and the aggregate feed in lazily loaded chunks of their own', () => {
+    const entryFiles = staticGraph(path.join(distDir, 'index.js'));
+    const definitions: Record<string, RegExp> = {
+      StatCard: /\bfunction\s+StatCard\s*\(/,
+      BarChart: /\bfunction\s+BarChart\s*\(/,
+      PieChart: /\bfunction\s+PieChart\s*\(/,
+      AggregateFeed: /\bfunction\s+AggregateFeed\s*\(/,
+      aggregateBuckets: /\bfunction\s+aggregateBuckets\s*\(/,
+    };
+    for (const [name, pattern] of Object.entries(definitions)) {
+      const holder = entryFiles.find((f) => pattern.test(readFileSync(f, 'utf8')));
+      expect(holder, `${name} was folded into the initial download (${holder})`).toBeUndefined();
+    }
+    const entry = read('index.js');
+    const specs = [...entry.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
+    const chunkOf = (needle: string) => {
+      const spec = specs.find((s) => s.includes(needle));
+      expect(spec, `no dynamic import of the ${needle} chunk in dist/index.js (saw ${specs.join(', ')})`).toBeTruthy();
+      const file = path.resolve(distDir, spec!);
+      expect(existsSync(file), `${spec} is imported but was not emitted`).toBe(true);
+      return readFileSync(file, 'utf8');
+    };
+    const widgets = chunkOf('aggregate-widgets');
+    for (const name of ['StatCard', 'BarChart', 'PieChart']) {
+      expect(definitions[name].test(widgets), `${name} is not in the lazy widget chunk`).toBe(true);
+    }
+    const feed = chunkOf('aggregate-feed');
+    for (const name of ['AggregateFeed', 'aggregateBuckets']) {
+      expect(definitions[name].test(feed), `${name} is not in the lazy feed chunk`).toBe(true);
+    }
+    // Two chunks, two downloads: the cards do not carry the feed, nor the feed the cards.
+    expect(definitions.AggregateFeed.test(widgets)).toBe(false);
+    expect(definitions.StatCard.test(feed)).toBe(false);
+    // Reach control for the absence claim: the same patterns find an eager widget's definition.
+    expect(/\bfunction\s+LatestCard\s*\(/.test(entry), 'the definition pattern cannot see the eager card').toBe(true);
+  });
+
+  it('draws the bar and pie without ECharts: no chart type of either kind is imported anywhere in the build', () => {
+    const files = [...staticGraph(path.join(distDir, 'index.js')), ...walkDist(path.join(distDir, 'chunks'))];
+    for (const file of new Set(files)) {
+      if (!file.endsWith('.js')) continue;
+      const code = readFileSync(file, 'utf8');
+      expect(code, `${file} imports a bar or pie chart type`).not.toMatch(/\b(BarChart|PieChart)\b[^;]*from\s*["']echarts/);
+    }
+    // Reach control: the scan does read the chunk the bar and pie live in.
+    expect(walkDist(path.join(distDir, 'chunks')).some((f) => /aggregate-widgets/.test(f))).toBe(true);
   });
 
   it('writes no bundler dialect anywhere in the main entry graph', () => {

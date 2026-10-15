@@ -96,6 +96,7 @@ const PATHOLOGICAL_AXES = {
   'level-gauge': 'a value outside the scale, so the liquid pins and the readout is marked',
   compass: 'headings outside 0 to 360, which fold onto the dial rather than sweeping past it',
   'progress-ring': 'a value outside the scale, so the ring pins and the readout is marked',
+  'stat-card': 'a spike ten times past the top, which the maximum reports and the average would hide',
 } as const satisfies Partial<Record<WidgetType, string>>;
 
 describe('the sim dashboard fixtures', () => {

@@ -56,3 +56,37 @@ export interface LocationStreamState {
   loading: boolean;
   error: unknown | null;
 }
+
+// What a stat widget reads for one measurement over its span: the exact count, minimum, maximum
+// and sum of the readings, and the mean (the sum over the count, which is the count-weighted mean
+// of the buckets' averages). Never derived from averages: a bucket's average hides its extremes.
+export interface MeasurementAggregate {
+  count: number;
+  min: number;
+  max: number;
+  sum: number;
+  avg: number;
+}
+
+// The span an aggregate covers, as the instants the read was asked for and its length.
+export interface AggregateSpan {
+  startTime: string;
+  endTime: string;
+  spanSeconds: number;
+}
+
+// Where an aggregate read stands. `unavailable` is a settled, explained state -- the source cannot
+// compute aggregates (`unsupported`), or the read failed or came back unusable (`failed`) -- and
+// the widget says so instead of drawing a number it could not compute.
+export type AggregateResult =
+  | { status: 'loading' }
+  | ({ status: 'ready'; byName: Record<string, MeasurementAggregate> } & AggregateSpan)
+  | { status: 'unavailable'; reason: 'unsupported' | 'failed'; message?: string };
+
+// The state an aggregate widget renders from: the aggregates over its span, and the newest LIVE
+// reading per measurement (no history seed, so it is a reading and never a bucket's average).
+export interface AggregateStreamState {
+  aggregates: AggregateResult;
+  latest: Record<string, MeasurementSample>;
+  error: unknown | null;
+}

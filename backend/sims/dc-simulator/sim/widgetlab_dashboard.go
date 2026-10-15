@@ -440,6 +440,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabLevelsAndIndicators(onSensor)...)
 	def.Widgets = append(def.Widgets, widgetlabRadialFamily(onSensor)...)
 	def.Widgets = append(def.Widgets, widgetlabCommandControls(widgetSubject{Slot: widgetlabSlotSensor})...)
+	def.Widgets = append(def.Widgets, widgetlabAggregates(onSensor)...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -575,6 +576,76 @@ func widgetlabCommandControls(subject widgetSubject) []dashboardWidget {
 	}
 }
 
+// ---- Aggregates and categorical charts ----------------------------------------
+
+// widgetlabAggregatesRow is the first row of the aggregate block (rows 27-41), under the command
+// controls that end at row 26.
+const widgetlabAggregatesRow = 27
+
+// buildStatCardWidget shows one statistic of one measurement over a span. windowSeconds 0 leaves
+// the card on the board's time range; a positive value pins it to that span.
+func buildStatCardWidget(id string, b box, s widgetSubject, title, measurement, stat, unit string, precision, windowSeconds int, thresholds []widgetThreshold) dashboardWidget {
+	options := map[string]any{
+		"title": title, "measurement": measurement, "stat": stat, "unit": unit, "precision": precision,
+	}
+	if windowSeconds > 0 {
+		options["windowSeconds"] = windowSeconds
+	}
+	if len(thresholds) > 0 {
+		options["thresholds"] = thresholds
+	}
+	return dashboardWidget{Id: id, Type: "stat-card", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
+func buildBarChartWidget(id string, b box, s widgetSubject, title, unit, sort string) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "bar-chart", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "unit": unit, "precision": 1, "sort": sort,
+		},
+	}
+}
+
+func buildPieChartWidget(id string, b box, s widgetSubject, title, unit, sort string) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "pie-chart", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{"title": title, "unit": unit, "precision": 0, "sort": sort},
+	}
+}
+
+// widgetlabAggregates places the stat cards (every statistic, the board-range card and a pinned
+// one, a banded maximum, and the smallest size) over the nominal sensor, then a bar chart (wide, so
+// columns) and a taller one (rows, sorted) and the pies over the sensor's three measurements. The pies read temperature,
+// humidity and battery, all non-negative, so they draw; the bars sort so the order is visible.
+func widgetlabAggregates(onSensor func(measurements ...string) widgetSubject) []dashboardWidget {
+	const r = widgetlabAggregatesRow
+	temperature := onSensor(WidgetlabTemperatureKey)
+	all := onSensor(WidgetlabTemperatureKey, WidgetlabHumidityKey, WidgetlabBatteryKey)
+	return []dashboardWidget{
+		buildStatCardWidget("wl-stat-avg", box{0, 3, r, 3}, temperature, "Average temperature",
+			WidgetlabTemperatureKey, "avg", "C", 1, 0, nil),
+		buildStatCardWidget("wl-stat-max", box{3, 3, r, 3}, temperature, "Peak temperature",
+			WidgetlabTemperatureKey, "max", "C", 1, 0, widgetlabTemperatureBands),
+		buildStatCardWidget("wl-stat-min", box{6, 3, r, 3}, temperature, "Lowest temperature",
+			WidgetlabTemperatureKey, "min", "C", 1, 0, nil),
+		buildStatCardWidget("wl-stat-count", box{9, 3, r, 3}, temperature, "Readings",
+			WidgetlabTemperatureKey, "count", "", 0, 0, nil),
+		buildStatCardWidget("wl-stat-sum", box{0, 3, r + 3, 3}, onSensor(WidgetlabHumidityKey), "Humidity total",
+			WidgetlabHumidityKey, "sum", "%", 0, 0, nil),
+		buildStatCardWidget("wl-stat-last", box{3, 3, r + 3, 3}, temperature, "Latest temperature",
+			WidgetlabTemperatureKey, "last", "C", 1, 0, widgetlabTemperatureBands),
+		buildStatCardWidget("wl-stat-pinned", box{6, 3, r + 3, 3}, temperature, "Average, last 5 min",
+			WidgetlabTemperatureKey, "avg", "C", 1, 300, nil),
+		buildStatCardWidget("wl-stat-min-size", box{9, 3, r + 3, 2}, temperature, "Peak (smallest)",
+			WidgetlabTemperatureKey, "max", "C", 0, 0, nil),
+
+		buildBarChartWidget("wl-bar", box{0, 6, r + 6, 4}, all, "Latest readings", "", "none"),
+		buildBarChartWidget("wl-bar-rows", box{6, 3, r + 6, 4}, all, "Largest first", "", "descending"),
+		buildPieChartWidget("wl-pie", box{0, 4, r + 10, 4}, all, "Share of the total", "", "none"),
+		buildPieChartWidget("wl-pie-min", box{4, 3, r + 10, 3}, all, "Share (smallest)", "", "descending"),
+	}
+}
+
 // ---- The stress board ---------------------------------------------------------
 
 // buildWidgetlabStress renders the curated set bound to an edge sensor — the
@@ -684,6 +755,11 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 				"Headings that fold", WidgetlabTemperatureKey, nil),
 			buildProgressRingWidget("wl-stress-ring", box{4, 3, 15, 3}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
 				"Off the scale (ring)", WidgetlabTemperatureKey, "C", "value", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
+
+			// The same spike, read as a maximum: the figure is the spike itself, which the average
+			// over the same span would hide.
+			buildStatCardWidget("wl-stress-stat", box{0, 3, 20, 3}, on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
+				"Peak of the spikes", WidgetlabTemperatureKey, "max", "C", 1, 0, widgetlabTemperatureBands),
 		},
 	}
 

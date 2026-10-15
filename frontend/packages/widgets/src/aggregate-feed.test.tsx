@@ -1,0 +1,377 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+// The aggregate channel through the real ConnectedWidget: the span a stat card reads (the board's,
+// or its own pin), that a paused board reads one frozen window and never again, that a live one
+// keeps reading, and that every way of having no figure is an explained state.
+
+import type {
+  DashboardHub,
+  DatasourceSelector,
+  HistoryWindow,
+  MeasurementBucket,
+  MeasurementSample,
+  TimeRangeState,
+  WidgetInstance,
+  WidgetStreamSink,
+} from '@devicechain/dashboards';
+import { WidgetTimeRangeProvider } from '@devicechain/widget-sdk';
+import { act, cleanup, render, screen } from '@testing-library/react';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { AGGREGATE_REFRESH_MS } from './aggregate-feed';
+import { ConnectedWidget } from './connected-widget';
+import { loadAggregateWidgets } from './widgets/aggregate-lazy';
+
+const NOW = Date.parse('2026-10-14T12:00:00Z');
+const ds: DatasourceSelector = { kind: 'device', deviceToken: 'd-1', measurements: ['temperature'] };
+
+// The stat card and the feed both arrive as chunks, and a dynamic import resolves on the module
+// runner's own timers, which the fake clock below would never advance. So both are loaded ONCE,
+// here, on the real clock: the card's chunk by loading it, the feed's by mounting a card and
+// waiting for it. React.lazy then holds the resolved module, and every mount below is synchronous.
+beforeAll(async () => {
+  await loadAggregateWidgets();
+  const hub = { subscribeWidget: () => () => {}, isDatasourceAvailable: async () => true } as unknown as DashboardHub;
+  render(<ConnectedWidget widget={widget()} hub={hub} />);
+  await screen.findByText('This data source cannot compute aggregates', {}, { timeout: 20_000 });
+  cleanup();
+}, 30_000);
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(NOW);
+  document.documentElement.lang = 'en';
+});
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+const bucket = (over: Partial<MeasurementBucket> = {}): MeasurementBucket => ({
+  bucketStart: '2026-10-14T11:00:00Z',
+  name: 'temperature',
+  avg: 20,
+  min: 10,
+  max: 40,
+  sum: 400,
+  count: 20,
+  ...over,
+});
+
+const widget = (options: Record<string, unknown> = {}, datasource: DatasourceSelector | null = ds): WidgetInstance =>
+  ({
+    id: 'w',
+    type: 'stat-card',
+    layout: { base: { mode: 'grid', col: 0, row: 0, cols: 3, rows: 3 } },
+    ...(datasource ? { datasource } : {}),
+    options: { stat: 'max', ...options },
+  }) as unknown as WidgetInstance;
+
+interface Hub {
+  hub: DashboardHub;
+  read: ReturnType<typeof vi.fn>;
+  push: (m: MeasurementSample) => void;
+}
+
+function makeHub(read: (d: DatasourceSelector, w: HistoryWindow) => Promise<MeasurementBucket[]> | MeasurementBucket[]): Hub {
+  let sink: WidgetStreamSink | null = null;
+  const fn = vi.fn(async (d: DatasourceSelector, w: HistoryWindow) => read(d, w));
+  const hub = {
+    subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+      sink = s;
+      return () => {};
+    },
+    isDatasourceAvailable: async () => true,
+    bucketMeasurements: fn,
+  } as unknown as DashboardHub;
+  return { hub, read: fn, push: (m) => act(() => sink?.next(m)) };
+}
+
+const live = (spanSeconds = 3600): TimeRangeState => ({ spanSeconds, paused: false });
+const frozenAt = (pausedAt: number, spanSeconds = 3600): TimeRangeState => ({ spanSeconds, paused: true, pausedAt });
+
+function mount(w: WidgetInstance, hub: DashboardHub, range: TimeRangeState | undefined) {
+  const tree = (r: TimeRangeState | undefined) => (
+    <WidgetTimeRangeProvider range={r}>
+      <ConnectedWidget widget={w} hub={hub} />
+    </WidgetTimeRangeProvider>
+  );
+  const view = render(tree(range));
+  return { ...view, setRange: (r: TimeRangeState | undefined) => view.rerender(tree(r)) };
+}
+
+// Let the feed's read, and the state it sets, land.
+const settle = () => act(async () => void (await vi.advanceTimersByTimeAsync(0)));
+const advance = (ms: number) => act(async () => void (await vi.advanceTimersByTimeAsync(ms)));
+
+const figure = () => document.querySelector('[data-level-readout]')?.textContent;
+const caption = () => document.querySelector('[data-stat-caption]')?.textContent;
+const empty = () => document.querySelector('[data-level-empty]')?.textContent;
+
+describe('the span a stat card reads', () => {
+  it('is the board range: a window of that span ending now, bucketed for it', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, live(3600));
+    await settle();
+    expect(f.read).toHaveBeenCalledTimes(1);
+    const [selector, window] = f.read.mock.calls[0];
+    expect(selector).toEqual(ds);
+    expect(window).toEqual({
+      startTime: new Date(NOW - 3600_000).toISOString(),
+      endTime: new Date(NOW).toISOString(),
+      intervalSeconds: 60,
+    });
+    expect(figure()).toBe('40');
+    expect(caption()).toBe('Maximum · 1h');
+  });
+
+  it('follows the viewer: a new range reads again over the new span, and says so', async () => {
+    const f = makeHub(() => [bucket()]);
+    const { setRange } = mount(widget(), f.hub, live(3600));
+    await settle();
+    setRange(live(86400));
+    await settle();
+    expect(f.read).toHaveBeenCalledTimes(2);
+    const window = f.read.mock.calls[1][1];
+    expect(Date.parse(window.endTime) - Date.parse(window.startTime)).toBe(86400_000);
+    expect(window.intervalSeconds).toBe(360); // 24h in 240 buckets
+    expect(caption()).toBe('Maximum · 1d');
+  });
+
+  it('is its own pin when it has one, whatever the viewer picks', async () => {
+    const f = makeHub(() => [bucket()]);
+    const { setRange } = mount(widget({ windowSeconds: 300 }), f.hub, live(86400));
+    await settle();
+    expect(caption()).toBe('Maximum · 5m');
+    const window = f.read.mock.calls[0][1];
+    expect(Date.parse(window.endTime) - Date.parse(window.startTime)).toBe(300_000);
+    setRange(live(3600));
+    await settle();
+    expect(f.read).toHaveBeenCalledTimes(1); // nothing about this card changed
+    expect(caption()).toBe('Maximum · 5m');
+  });
+
+  it('ignores a pin that is not a usable span, and follows the board', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget({ windowSeconds: 5 }), f.hub, live(900));
+    await settle();
+    expect(caption()).toBe('Maximum · 15m');
+  });
+
+  it('is an hour outside any board, which is the span every chart seeded with before it was configurable', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, undefined);
+    await settle();
+    expect(caption()).toBe('Maximum · 1h');
+  });
+
+  it('never shows the figure of one span under the label of another', async () => {
+    let release: (b: MeasurementBucket[]) => void = () => {};
+    const slow = new Promise<MeasurementBucket[]>((r) => (release = r));
+    let call = 0;
+    const f = makeHub(() => (call++ === 0 ? [bucket({ max: 11 })] : slow));
+    const { setRange } = mount(widget(), f.hub, live(3600));
+    await settle();
+    expect(figure()).toBe('11');
+    setRange(live(86400));
+    await settle();
+    // The 1h figure is gone the moment the span changes; the card is waiting for the 24h one.
+    expect(figure()).toBeUndefined();
+    expect(empty()).toBe('Loading');
+    await act(async () => release([bucket({ max: 99 })]));
+    expect(figure()).toBe('99');
+    expect(caption()).toBe('Maximum · 1d');
+  });
+
+  it('discards a slow answer for a span the viewer has already left', async () => {
+    let releaseOld: (b: MeasurementBucket[]) => void = () => {};
+    const old = new Promise<MeasurementBucket[]>((r) => (releaseOld = r));
+    let call = 0;
+    const f = makeHub(() => (call++ === 0 ? old : [bucket({ max: 24 })]));
+    const { setRange } = mount(widget(), f.hub, live(3600));
+    setRange(live(86400));
+    await settle();
+    expect(figure()).toBe('24');
+    await act(async () => releaseOld([bucket({ max: 1 })]));
+    expect(figure()).toBe('24');
+    expect(caption()).toBe('Maximum · 1d');
+  });
+});
+
+describe('a live stat card', () => {
+  it('reads again every refresh interval, and shows the new figure', async () => {
+    let max = 40;
+    const f = makeHub(() => [bucket({ max })]);
+    mount(widget(), f.hub, live());
+    await settle();
+    expect(figure()).toBe('40');
+    max = 55;
+    await advance(AGGREGATE_REFRESH_MS);
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(figure()).toBe('55');
+    await advance(AGGREGATE_REFRESH_MS);
+    expect(f.read).toHaveBeenCalledTimes(3);
+  });
+
+  it('moves the window forward with the clock', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, live());
+    await settle();
+    await advance(AGGREGATE_REFRESH_MS);
+    const second = f.read.mock.calls[1][1];
+    expect(second.endTime).toBe(new Date(NOW + AGGREGATE_REFRESH_MS).toISOString());
+  });
+
+  it('stops reading when it unmounts', async () => {
+    const f = makeHub(() => [bucket()]);
+    const view = mount(widget(), f.hub, live());
+    await settle();
+    view.unmount();
+    await advance(AGGREGATE_REFRESH_MS * 3);
+    expect(f.read).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('a paused board', () => {
+  const pausedAt = NOW - 10 * 60_000;
+
+  it('reads the window that ENDS at the freeze instant, not now', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget(), f.hub, frozenAt(pausedAt));
+    await settle();
+    const window = f.read.mock.calls[0][1];
+    expect(window.endTime).toBe(new Date(pausedAt).toISOString());
+    expect(window.startTime).toBe(new Date(pausedAt - 3600_000).toISOString());
+  });
+
+  it('reads it once and never again: the figure on screen does not move', async () => {
+    let max = 40;
+    const f = makeHub(() => [bucket({ max })]);
+    mount(widget(), f.hub, frozenAt(pausedAt));
+    await settle();
+    max = 99;
+    await advance(AGGREGATE_REFRESH_MS * 4);
+    expect(f.read).toHaveBeenCalledTimes(1);
+    expect(figure()).toBe('40');
+  });
+
+  it('freezes a live card: pausing stops its polling, resuming starts it again', async () => {
+    let max = 40;
+    const f = makeHub(() => [bucket({ max })]);
+    const { setRange } = mount(widget(), f.hub, live());
+    await settle();
+    setRange(frozenAt(NOW));
+    await settle();
+    const afterPause = f.read.mock.calls.length;
+    max = 77;
+    await advance(AGGREGATE_REFRESH_MS * 3);
+    expect(f.read).toHaveBeenCalledTimes(afterPause);
+    expect(figure()).toBe('40');
+    setRange(live());
+    await settle();
+    expect(figure()).toBe('77');
+  });
+
+  it('holds the latest reading too: a reading that arrives while frozen is not shown', async () => {
+    const f = makeHub(() => [bucket()]);
+    const { setRange } = mount(widget({ stat: 'last' }), f.hub, live());
+    await settle();
+    f.push({ id: '1', deviceToken: 'd-1', eventType: 0, occurredTime: new Date(NOW - 5000).toISOString(), name: 'temperature', value: 21, classifier: null });
+    expect(figure()).toBe('21');
+    setRange(frozenAt(NOW));
+    f.push({ id: '2', deviceToken: 'd-1', eventType: 0, occurredTime: new Date(NOW).toISOString(), name: 'temperature', value: 30, classifier: null });
+    expect(figure()).toBe('21');
+    setRange(live());
+    expect(figure()).toBe('30');
+  });
+});
+
+describe('a stat card with nothing to show, says why', () => {
+  it('names a source that cannot produce buckets, and shows no figure', async () => {
+    const hub = {
+      subscribeWidget: () => () => {},
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    mount(widget(), hub, live());
+    await settle();
+    expect(empty()).toBe('This data source cannot compute aggregates');
+    expect(figure()).toBeUndefined();
+  });
+
+  it('still shows the latest reading from a source that cannot produce buckets', async () => {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    mount(widget({ stat: 'last' }), hub, live());
+    await settle();
+    act(() =>
+      sink?.next({ id: '1', deviceToken: 'd-1', eventType: 0, occurredTime: new Date(NOW).toISOString(), name: 'temperature', value: 19.5, classifier: null }),
+    );
+    expect(figure()).toBe('19.5');
+  });
+
+  it('shows a failed read as unavailable, with the reason, never as a figure', async () => {
+    const f = makeHub(() => Promise.reject(new Error('event-management is down')));
+    mount(widget(), f.hub, live());
+    await settle();
+    expect(empty()).toBe('Aggregates unavailable: event-management is down');
+    expect(figure()).toBeUndefined();
+  });
+
+  it('shows buckets that hold readings but no maximum as a failure, not as a maximum of the averages', async () => {
+    const f = makeHub(() => [bucket({ max: null, avg: 30, count: 3 })]);
+    mount(widget(), f.hub, live());
+    await settle();
+    expect(empty()).toMatch(/holds 3 readings but no max/);
+    expect(figure()).toBeUndefined();
+    expect(document.body.textContent).not.toContain('30');
+  });
+
+  it('recovers when the next read succeeds', async () => {
+    let fail = true;
+    const f = makeHub(() => (fail ? Promise.reject(new Error('blip')) : [bucket({ max: 61 })]));
+    mount(widget(), f.hub, live());
+    await settle();
+    expect(empty()).toMatch(/blip/);
+    fail = false;
+    await advance(AGGREGATE_REFRESH_MS);
+    expect(figure()).toBe('61');
+  });
+
+  it('says there were no readings when the span holds none', async () => {
+    const f = makeHub(() => []);
+    mount(widget(), f.hub, live());
+    await settle();
+    expect(empty()).toBe('No readings in the last 1h');
+  });
+
+  it('says there were none for a card with no datasource, without asking the source', async () => {
+    const f = makeHub(() => [bucket()]);
+    mount(widget({}, null), f.hub, live());
+    await settle();
+    expect(f.read).not.toHaveBeenCalled();
+    expect(empty()).toMatch(/No readings/);
+  });
+
+  it('shows the host error pane when the live stream itself fails', async () => {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+      bucketMeasurements: async () => [bucket()],
+    } as unknown as DashboardHub;
+    mount(widget(), hub, live());
+    await settle();
+    act(() => sink?.error?.(new Error('socket closed')));
+    expect(screen.getByText('Data unavailable')).toBeTruthy();
+    expect(screen.getByText(/socket closed/)).toBeTruthy();
+  });
+});

@@ -129,6 +129,13 @@ export interface MeasurementBucket {
   bucketStart: string;
   name: string;
   avg: number | null;
+  // The bucket's other aggregates, exact over the readings it holds (null when it holds none).
+  // Optional on the type because the chart seed reads only `avg`; the aggregate widgets read
+  // these and refuse a bucket that has readings but lacks them.
+  min?: number | null;
+  max?: number | null;
+  sum?: number | null;
+  count?: number;
 }
 export interface BucketedMeasurementsResult {
   bucketedMeasurements: MeasurementBucket[];
@@ -149,6 +156,10 @@ export const BUCKETED_MEASUREMENTS = `
       bucketStart
       name
       avg
+      min
+      max
+      sum
+      count
     }
   }
 ` as unknown as TypedDocument<BucketedMeasurementsResult, BucketedMeasurementsVariables>;

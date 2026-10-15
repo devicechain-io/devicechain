@@ -12,6 +12,7 @@
 // @devicechain/widget-sdk; this module is the React-free vocabulary both sides share.
 
 import type {
+  AggregateStreamState,
   AlarmStreamState,
   CommandStreamState,
   LocationStreamState,
@@ -25,7 +26,7 @@ import { WIDGET_TYPES, type WidgetType } from './types';
 // A widget's data channel: which hub subscription binds it. `selection` and `none` open no
 // data channel at all — a selection widget drives a slot from the ambient candidate
 // provider, and a `none` widget is static.
-export type WidgetChannel = 'measurement' | 'alarm' | 'control' | 'selection' | 'location' | 'none';
+export type WidgetChannel = 'measurement' | 'alarm' | 'control' | 'selection' | 'location' | 'aggregate' | 'none';
 
 // The resolved data a component on channel C receives. `null` marks the empty channel.
 export type ChannelSnapshot<C extends WidgetChannel> = C extends 'measurement'
@@ -36,7 +37,9 @@ export type ChannelSnapshot<C extends WidgetChannel> = C extends 'measurement'
       ? CommandStreamState
       : C extends 'location'
         ? LocationStreamState
-        : null;
+        : C extends 'aggregate'
+          ? AggregateStreamState
+          : null;
 
 // ---- Ids --------------------------------------------------------------------
 
@@ -109,7 +112,12 @@ export interface AckOptionRef<S extends WidgetOptionSpecs = WidgetOptionSpecs> {
 type PageSize<S extends WidgetOptionSpecs> = ConstBinding<number> | NumberOptionRef<S>;
 
 export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOptionSpecs = WidgetOptionSpecs> =
-  C extends 'measurement'
+  C extends 'aggregate'
+    ? {
+        // The span the aggregates cover: the option pins it (seconds); unset, the board's range.
+        windowSeconds?: NumberOptionRef<S>;
+      }
+    : C extends 'measurement'
     ? {
         window?: NumberOptionRef<S>;
         // Declaring it makes the widget TIME-RANGED: it draws a span rather than a sample count.

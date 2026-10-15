@@ -156,7 +156,7 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 
 | Grupo | Widgets |
 |---|---|
-| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso |
+| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso, Tarjeta de estadística, Gráfico de barras, Gráfico circular |
 | Estático | Etiqueta, Imagen |
 | Alarmas | Tabla de alarmas, Contador de alarmas |
 | Control | Botón de comando, Control deslizante de comando, Interruptor de comando |
@@ -188,6 +188,15 @@ Los ajustes dependen del widget. Los más comunes:
   segundos, de 60 a 604800. Si lo dejas vacío, el gráfico sigue el intervalo de tiempo del panel,
   que los espectadores pueden cambiar. Si lo indicas, el gráfico conserva ese intervalo sea cual
   sea el que elija un espectador.
+- **Estadística** (tarjeta de estadística): qué cifra del intervalo mostrar: promedio (por defecto),
+  mínimo, máximo, suma, número de lecturas o la última lectura. La tarjeta escribe bajo la cifra la
+  estadística y el intervalo que abarca, por ejemplo «Máximo · 1h». El mismo ajuste **Intervalo de
+  tiempo** fija la tarjeta a un intervalo propio. La tarjeta dice por qué no tiene cifra (la fuente
+  de datos no puede calcular agregados, la lectura falló o no hubo lecturas en el intervalo) en lugar
+  de mostrar un número que no pudo calcular.
+- **Orden** (gráfico de barras, gráfico circular): las mediciones en el orden en que las lista la
+  fuente de datos, o de menor a mayor o de mayor a menor. Una medición que aún no ha informado va
+  la última. El gráfico de barras dibuja columnas en un widget ancho y filas en uno alto.
 
 Los problemas con las opciones de un widget, como una opción que no lee, una obligatoria vacía o un
 valor fuera de rango, se enumeran en **Historial de versiones**. **Publicar versión** sigue

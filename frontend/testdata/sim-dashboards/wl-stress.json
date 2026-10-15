@@ -372,6 +372,47 @@
         "unit": "C"
       },
       "type": "progress-ring"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-stat",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 20,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "stat": "max",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Peak of the spikes",
+        "unit": "C"
+      },
+      "type": "stat-card"
     }
   ]
 }

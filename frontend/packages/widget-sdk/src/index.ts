@@ -128,6 +128,7 @@ export {
   withinSpan,
   useResolvedBindings,
   useSlotCandidates,
+  type AggregateStreamState,
   type AlarmStreamState,
   type CandidatesState,
   type CommandStreamState,
