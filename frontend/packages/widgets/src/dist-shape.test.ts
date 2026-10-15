@@ -133,21 +133,48 @@ describe('the built package', () => {
     expect(readFileSync(chunkPath, 'utf8')).toContain(GEOMETRY_PAYLOAD);
   });
 
-  // The level-and-indicator family is the second lazy boundary: its five components load on
-  // first mount from one chunk (widgets/level-lazy.tsx), so a board without one never pays
-  // for them. A static import of any of them from the registry folds them back into the entry,
-  // and only the artifact shows it. Both halves, as for the geometry: out of the entry, and
-  // still shipped behind a dynamic import.
-  it('keeps the level widgets in a lazily loaded chunk of their own', () => {
-    const LEVEL_PAYLOAD = '"data-level-readout"';
-    expect(read('index.js').includes(LEVEL_PAYLOAD), 'the level widgets were folded into the entry chunk').toBe(false);
-    const chunk = [...read('index.js').matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)]
+  // The level, indicator and radial family is the second lazy boundary: its seven components
+  // load on first mount from one chunk (widgets/level-lazy.tsx), so a board without one never
+  // pays for them. A static import of any of them from the registry folds them back into the
+  // entry, and only the artifact shows it. Both halves, as for the geometry: out of the entry,
+  // and still shipped behind a dynamic import.
+  //
+  // The marker is each component's own definition, not a string the family shares: the gauge
+  // (eager, and a public export) renders the same fitted readout, so `data-level-readout` is
+  // legitimately in the entry and would say nothing about where the lazy seven landed.
+  it('keeps the level and radial widgets in a lazily loaded chunk of their own', () => {
+    const LAZY = ['LinearGauge', 'LevelGauge', 'Battery', 'StatusLight', 'SignalBars', 'Compass', 'ProgressRing'];
+    const defines = (name: string) => new RegExp(`\\bfunction\\s+${name}\\s*\\(`);
+    // The entry AND every chunk it imports statically: a component folded back in can land in a
+    // shared chunk the entry imports rather than in index.js itself, and is downloaded all the same.
+    const STATIC_IMPORT = /(?:\bfrom|\bimport)\s*["'](\.{1,2}\/[^"']+\.js)["']/g;
+    const seen = new Set<string>();
+    const queue = [path.join(distDir, 'index.js')];
+    while (queue.length > 0) {
+      const file = queue.pop()!;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const m of readFileSync(file, 'utf8').matchAll(STATIC_IMPORT)) queue.push(path.resolve(path.dirname(file), m[1]));
+    }
+    const entryFiles = [...seen];
+    for (const name of LAZY) {
+      const holder = entryFiles.find((f) => defines(name).test(readFileSync(f, 'utf8')));
+      expect(holder, `${name} was folded into the initial download (${holder})`).toBeUndefined();
+    }
+    const entry = read('index.js');
+    const chunk = [...entry.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)]
       .map((m) => m[1])
       .find((spec) => spec.includes('level-widgets'));
     expect(chunk, 'no dynamic import of the level-widgets chunk in dist/index.js').toBeTruthy();
     const chunkPath = path.resolve(distDir, chunk!);
     expect(existsSync(chunkPath), `${chunk} is imported but was not emitted`).toBe(true);
-    expect(readFileSync(chunkPath, 'utf8')).toContain(LEVEL_PAYLOAD);
+    const code = readFileSync(chunkPath, 'utf8');
+    // Reach control for the absence claim above: the same pattern finds every one HERE.
+    for (const name of LAZY) {
+      expect(defines(name).test(code), `${name} is not in the lazy chunk`).toBe(true);
+    }
+    // ...and for the pattern itself: it does find an eager widget's definition in the entry.
+    expect(defines('Gauge').test(entry), 'the definition pattern cannot see the eager gauge').toBe(true);
   });
 
   it('writes no bundler dialect anywhere in the main entry graph', () => {

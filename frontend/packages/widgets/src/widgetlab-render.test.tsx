@@ -373,6 +373,26 @@ describe('the gallery widgets draw their data', () => {
     expect(checked, 'the gallery has no level or indicator widget').toBeGreaterThanOrEqual(5);
   });
 
+  it('draws a reading on every radial widget', () => {
+    // The ring marks its fill; the compass and the gauge have only their readout to show for a
+    // reading (the dial is canvas). An empty state renders no readout at all, and the gauge's
+    // em dash for a missing sample is checked by text.
+    let checked = 0;
+    for (const type of ['compass', 'progress-ring', 'gauge']) {
+      for (const widget of galleryWidgets(type)) {
+        checked++;
+        const { container } = renderWidget(widget);
+        expect(container.querySelector('[data-level-empty]')?.textContent, `${widget.id} drew an empty state`).toBeUndefined();
+        const readout = container.querySelector('[data-level-readout]');
+        expect(readout, `${widget.id} (${type}) drew no readout`).not.toBeNull();
+        expect(readout!.textContent, `${widget.id} (${type}) read no value`).toMatch(/\d/);
+        if (type === 'progress-ring') expect(container.querySelector('[data-fill]'), `${widget.id} drew no fill`).not.toBeNull();
+        cleanup();
+      }
+    }
+    expect(checked, 'the gallery has no radial widget').toBeGreaterThanOrEqual(4);
+  });
+
   it('puts a reading on the gauge rather than an empty dial', () => {
     let checked = 0;
     for (const widget of galleryWidgets('gauge')) {

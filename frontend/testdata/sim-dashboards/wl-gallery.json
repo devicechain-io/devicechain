@@ -614,7 +614,7 @@
       "options": {
         "measurement": "battery",
         "precision": 0,
-        "title": "Heading"
+        "title": "Battery as a heading"
       },
       "type": "compass"
     },

@@ -29,9 +29,9 @@ El formato de definición y el renderizador incluyen una caja por punto de quieb
 
 ## Widgets
 
-Los widgets integrados abarcan seis canales: telemetría, estático (sin datos), alarma, control, selección y ubicación. El gráfico de series temporales y el medidor se renderizan sobre [Apache ECharts](https://echarts.apache.org/), y el mapa sobre [MapLibre GL](https://maplibre.org/). El resto son DOM simple.
+Los widgets integrados abarcan seis canales: telemetría, estático (sin datos), alarma, control, selección y ubicación. El gráfico de series temporales, el medidor y la brújula se renderizan sobre [Apache ECharts](https://echarts.apache.org/), y el mapa sobre [MapLibre GL](https://maplibre.org/). El resto son DOM simple.
 
-Los widgets de nivel e indicadores (indicador lineal, indicador de nivel, batería, luz de estado, barras de señal) nunca suponen una escala: un indicador sin mín. ni máx., o sin datos, lo dice en lugar de dibujar un relleno verosímil. Un valor fuera de la escala fija el relleno en el extremo y marca la lectura con ▲ o ▼. Solo colorean por banda de umbral cuando el valor está en una banda anómala; una banda `normal` conserva el color neutro del widget.
+Los widgets de nivel e indicadores (indicador lineal, indicador de nivel, batería, luz de estado, barras de señal) nunca suponen una escala: un indicador sin mín. ni máx., o sin datos, lo dice en lugar de dibujar un relleno verosímil. Un valor fuera de la escala fija el relleno en el extremo y marca la lectura con ▲ o ▼. Solo colorean por banda de umbral cuando el valor está en una banda anómala; una banda `normal` conserva el color neutro del widget. La brújula y el anillo de progreso siguen las mismas reglas: un rumbo fuera de 0–360 se pliega sobre el dial (370° se lee 10°), y un anillo de progreso sin mín. ni máx. lo dice. El medidor, la brújula y el anillo de progreso muestran su lectura como texto de la página, no como parte del dibujo del gráfico.
 
 | Widget | Canal | Muestra |
 |---|---|---|
@@ -44,6 +44,8 @@ Los widgets de nivel e indicadores (indicador lineal, indicador de nivel, bater�
 | **Batería** | telemetría | un icono de batería lleno hasta el valor más reciente, sobre una escala de 0 a 100 % salvo que se fijen mín. y máx. |
 | **Luz de estado** | telemetría | una lámpara coloreada por la banda de umbral del valor, o encendida y apagada en un valor de encendido, con un texto |
 | **Barras de señal** | telemetría | una barra por umbral, encendida por cada umbral que el valor más reciente ha alcanzado |
+| **Brújula** | telemetría | un rumbo (dirección del viento, demora) como aguja sobre una vuelta completa, con los grados y el más cercano de los ocho puntos cardinales |
+| **Anillo de progreso** | telemetría | un anillo lleno entre un mín. y un máx. obligatorios, leído como porcentaje o como valor |
 | **Etiqueta** | estático | texto estático |
 | **Imagen** | estático | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |

@@ -24,7 +24,6 @@ import { buildGaugeOption, EChart, gaugeReadoutBox, useChartTheme } from '@devic
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { LevelReadout } from '../level-readout';
-import { levelStrings } from '../level-strings';
 import { readRange } from '../value-scale';
 
 export function Gauge({ widget, data }: WidgetProps) {
@@ -102,10 +101,9 @@ function GaugeBody({ widget, data }: WidgetProps) {
       >
         <LevelReadout
           text={formatValue(value, precision)}
-          unit={unit}
+          unit={value === undefined ? undefined : unit}
           size={{ width: box.width, height: box.height }}
           scale={scale}
-          strings={levelStrings()}
         />
       </div>
     </div>

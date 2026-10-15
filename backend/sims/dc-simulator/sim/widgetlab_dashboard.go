@@ -508,13 +508,13 @@ func widgetlabLevelsAndIndicators(onSensor func(measurements ...string) widgetSu
 const widgetlabRadialRow = 20
 
 // widgetlabRadialFamily places the compass and the progress rings. The sim reports no bearing,
-// so the compass is bound to the battery countdown (100 down to 1), which sweeps its needle
-// through a quarter of the dial; the stress board drives it past the ends of 0 to 360. The
+// so the compass is bound to the battery countdown (100 down to 1) and titled as that stand-in,
+// so no one reads it as a bearing; it sweeps the needle through a quarter of the dial; the stress board drives it past the ends of 0 to 360. The
 // rings read humidity as a percent of 0..100 and the temperature sweep as a value on its own scale.
 func widgetlabRadialFamily(onSensor func(measurements ...string) widgetSubject) []dashboardWidget {
 	const r = widgetlabRadialRow
 	return []dashboardWidget{
-		buildCompassWidget("wl-compass", box{0, 4, r, 4}, onSensor(WidgetlabBatteryKey), "Heading", WidgetlabBatteryKey, nil),
+		buildCompassWidget("wl-compass", box{0, 4, r, 4}, onSensor(WidgetlabBatteryKey), "Battery as a heading", WidgetlabBatteryKey, nil),
 		buildProgressRingWidget("wl-ring", box{4, 3, r, 3}, onSensor(WidgetlabHumidityKey),
 			"Humidity", WidgetlabHumidityKey, "%", "percent", 0, 100, []widgetThreshold{
 				{Value: 0, Level: "critical"},

@@ -75,6 +75,10 @@ describe('compass', () => {
     [450, '90', 'E'],
     [180, '180', 'S'],
     [225, '225', 'SW'],
+    // Between the axes: the NEAREST point, so 30 is NE (not N) and 350 is N (not NW).
+    [30, '30', 'NE'],
+    [350, '350', 'N'],
+    [-20, '340', 'N'],
   ])('heading %s reads %s degrees, %s, and points the needle there', (value, degrees, point) => {
     show({}, value);
     expect(readout()?.firstChild?.textContent).toBe(`${degrees}°`);
@@ -137,6 +141,10 @@ describe('compass', () => {
     expect(normal).toBe(styleOf('[data-level-readout]'));
     expect(normal).not.toContain(WARNING);
     expect(normal).not.toContain(CRITICAL);
+    // ...and that neutral is the foreground text colour, not the chart accent: equal to "no
+    // thresholds" alone would also hold if both painted the accent.
+    expect(normal).toContain('var(--foreground)');
+    expect(normal).not.toContain(ACCENT);
   });
 });
 
@@ -212,6 +220,13 @@ describe('progress-ring', () => {
     expect(meter.getAttribute('aria-valuetext')).toContain('L');
   });
 
+  it('clamps the meter value to the scale off the end, and keeps the true value in words', () => {
+    show({ ...opts, unit: 'L' }, 300);
+    const meter = screen.getByRole('meter');
+    expect(meter.getAttribute('aria-valuenow')).toBe('200');
+    expect(meter.getAttribute('aria-valuetext')).toBe('300 L');
+  });
+
   const thresholds = [
     { value: 0, level: 'critical' },
     { value: 30, level: 'normal' },
@@ -231,6 +246,8 @@ describe('progress-ring', () => {
     cleanup();
     show(opts, 100);
     expect(styleOf('[data-ring-fill]')).toContain(ACCENT);
+    // The arc takes the accent; the number stays in the foreground colour, as on every level widget.
+    expect(styleOf('[data-level-readout]')).toContain('var(--foreground)');
   });
 });
 
@@ -265,5 +282,18 @@ describe('gauge readout', () => {
     const meter = screen.getByRole('meter');
     expect(meter.getAttribute('aria-valuenow')).toBe('30');
     expect(meter.getAttribute('aria-valuetext')).toBe('30 C');
+  });
+
+  it('clamps the meter value off the scale like the level gauges, with the true reading in words', () => {
+    show({ min: 0, max: 50, unit: 'C' }, 80);
+    const meter = screen.getByRole('meter');
+    expect(meter.getAttribute('aria-valuenow')).toBe('50');
+    expect(meter.getAttribute('aria-valuetext')).toBe('80 C');
+  });
+
+  it('with no sample, is no meter and prints a bare em dash, never a unit with no number', () => {
+    show({ min: 0, max: 50, unit: 'C' }, 'none');
+    expect(screen.queryByRole('meter')).toBeNull();
+    expect(readout()?.textContent).toBe('—');
   });
 });
