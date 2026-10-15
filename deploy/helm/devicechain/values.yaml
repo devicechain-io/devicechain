@@ -762,7 +762,7 @@ resources:
 # from one that is idle, and on a three-node GKE cluster it put the busiest services
 # on the node running the event store's primary.
 #
-# Together the five event-path areas request 4.05 cores (4.95 under `dcctl --ha`,
+# Together the five event-path areas request 3.70 cores (4.60 under `dcctl --ha`,
 # which runs two event-management pods). A non-compact install on a cluster that
 # cannot spare them leaves pods Pending; use --compact there.
 useMeasuredRequests: true
@@ -1150,14 +1150,16 @@ functionalAreas:
     # useMeasuredRequests is on (not under --compact). Re-measured on GKE round 10 (3 x
     # n2-custom-4-8192 service nodes, --ha, shipped defaults): 0.072 cores per 1,000
     # events/s, so 0.43 cores at 6,000 events/s, rounded up to 450m. The earlier figure,
-    # 0.76 cores (800m), predates later per-event CPU reductions in this service. It also left
-    # no room for a second replica: with 800m requested, replicas: 2 left the second pod
-    # Pending on the node that holds the inbound broker leader, event-processing,
-    # event-management and a NATS server (a 4-vCPU node has about 3.9 cores allocatable;
-    # these requests sum to 450 + 400 + 900 + 500 = 2,250m before the node's system pods),
-    # while 300m scheduled. At 450m the second replica needs 450m more, not 800m. The
-    # service still reaches ~0.75 cores at 10,000 events/s (limit 2 cores): a request
-    # only places the pod, it does not cap it.
+    # 0.76 cores (800m), predates later per-event CPU reductions in this service.
+    # It also crowded out a second replica. In that run both replicas were held to the
+    # node that also ran the inbound broker leader's NATS server, event-processing and one
+    # event-management pod (3.92 cores allocatable). At 800m the second pod stayed
+    # Pending; two pods at 300m both ran. So the node had between 600m and 1,600m free for
+    # this service. Two pods at 450m need 900m, inside that range but NOT measured: whether
+    # they fit depends on what the node's system pods request. A replica the scheduler
+    # puts on another node needs only its own 450m there. The service still uses about
+    # 0.72 cores at 10,000 events/s (limit 2 cores): a request only places the pod, it
+    # does not cap it.
     # 6,000 events/s is the rate a default --ha install sustained there for 10
     # minutes, twice, with resolution, storage and live state each keeping at least
     # 99.7% of it (detection fell behind; see event-processing below). A request only
