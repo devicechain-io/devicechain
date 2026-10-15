@@ -139,7 +139,7 @@ draft only. Viewers see nothing new until you publish a version.
 | Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count |
-| Control | Command button |
+| Control | Command button, Command slider, Command toggle |
 | Navigation | Entity selector, which lets a viewer choose which device or entity the dashboard shows |
 | Location | Map, which draws on the tenant's map (see [Tenant settings](/user-guide/tenant-settings)) |
 

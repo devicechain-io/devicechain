@@ -60,6 +60,24 @@ type dashboardGrid struct {
 // the gallery, which TestWidgetlabGalleryCarriesEveryWidgetType already fails on.
 const commandWidgetType = "command-button"
 
+// The two command controls issue as well, so a board carrying either makes the same demand of
+// the scenario's devices as a command-button does.
+const (
+	commandSliderWidgetType = "command-slider"
+	commandToggleWidgetType = "command-toggle"
+)
+
+// isCommandWidgetType reports whether a widget type issues commands. Validate's far-end check
+// and the gallery tests ask this rather than comparing against one constant, so a control added
+// to the list cannot be placed on a board whose devices would never answer it.
+func isCommandWidgetType(widgetType string) bool {
+	switch widgetType {
+	case commandWidgetType, commandSliderWidgetType, commandToggleWidgetType:
+		return true
+	}
+	return false
+}
+
 // dashboardWidget mirrors WidgetInstance. Datasource is a pointer so a widget
 // that has none (a label/image) omits the field entirely rather than marshaling
 // an empty object.

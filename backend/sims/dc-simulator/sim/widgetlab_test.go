@@ -544,8 +544,8 @@ func TestWidgetlabRuleIsAuthoredFromTheSweepConstants(t *testing.T) {
 
 func TestWidgetlabCommandExercisesMoreThanOneParameterType(t *testing.T) {
 	commands := widgetlabProfile(t).Commands
-	if len(commands) != 1 {
-		t.Fatalf("expected exactly one command definition, got %d", len(commands))
+	if len(commands) != 2 {
+		t.Fatalf("expected the setpoint and the power command definitions, got %d", len(commands))
 	}
 	if commands[0].CommandKey != WidgetlabCommandKey {
 		t.Errorf("command definition declares key %q, not the constant %q the widget will bake",
@@ -1001,6 +1001,53 @@ func TestWidgetlabBoardOptionsAgreeWithWhatIsProvisioned(t *testing.T) {
 				"render fields the device does not accept", id)
 		}
 	})
+
+	// The command controls bake the SAME schema the profile publishes, and bind a parameter that
+	// schema declares with the type the control needs: a slider on a STRING parameter, or a
+	// toggle on a name the schema lacks, renders a refusal where a working control was meant.
+	profileCommands := map[string]CommandSpec{}
+	for _, c := range widgetlabProfile(t).Commands {
+		profileCommands[c.CommandKey] = c
+	}
+	controlBinding := func(kind, wantType string) func(id string, o map[string]any) {
+		return func(id string, o map[string]any) {
+			cmd, ok := profileCommands[o["commandName"].(string)]
+			if !ok {
+				t.Errorf("%s issues %v, which the profile does not publish", id, o["commandName"])
+				return
+			}
+			if got := o["parameterSchema"]; got != cmd.ParameterSchema {
+				t.Errorf("%s bakes a parameterSchema the profile does not declare for %q", id, cmd.CommandKey)
+			}
+			var params []struct {
+				Name     string `json:"name"`
+				DataType string `json:"dataType"`
+				Required bool   `json:"required"`
+				Default  string `json:"default"`
+			}
+			if err := json.Unmarshal([]byte(cmd.ParameterSchema), &params); err != nil {
+				t.Fatalf("%s: schema does not decode: %v", id, err)
+			}
+			bound := false
+			for _, p := range params {
+				if p.Name == o["parameter"] {
+					bound = true
+					if p.DataType != wantType && !(kind == "slider" && wantType == "DOUBLE" && p.DataType == "INT") {
+						t.Errorf("%s binds %q, a %s parameter; a %s control needs %s",
+							id, p.Name, p.DataType, kind, wantType)
+					}
+				} else if p.Required && p.Default == "" {
+					t.Errorf("%s: the command also requires %q with no default, so the control "+
+						"would refuse to send and the gallery would show a refusal", id, p.Name)
+				}
+			}
+			if !bound {
+				t.Errorf("%s binds parameter %v, which %q does not declare", id, o["parameter"], cmd.CommandKey)
+			}
+		}
+	}
+	each(commandSliderWidgetType, controlBinding("slider", "DOUBLE"))
+	each(commandToggleWidgetType, controlBinding("toggle", "BOOLEAN"))
 
 	// An alarm widget filtering by severity must use the WIRE form — the authoring
 	// severity uppercased by the raise-alarm consumer. The lowercase form matches no
@@ -1648,7 +1695,7 @@ func TestWidgetlabsCommandWidgetBindsADeviceTheFarEndCovers(t *testing.T) {
 	board := widgetlabBoard(t, WidgetlabGalleryDashboardToken)
 	checked := 0
 	for _, w := range board.Widgets {
-		if w.Type != commandWidgetType {
+		if !isCommandWidgetType(w.Type) {
 			continue
 		}
 		if w.Datasource == nil {
@@ -1688,7 +1735,7 @@ func boardCarriesACommandWidget(t *testing.T, m SimManifest) bool {
 			t.Fatalf("dashboard %q does not parse: %v", ds.Token, err)
 		}
 		for _, w := range parsed.Widgets {
-			if w.Type == commandWidgetType {
+			if isCommandWidgetType(w.Type) {
 				return true
 			}
 		}

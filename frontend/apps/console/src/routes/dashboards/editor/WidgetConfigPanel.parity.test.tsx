@@ -71,6 +71,9 @@ const LEGACY_LABEL: Record<string, string> = {
   orientation: 'widgetLabelOrientation',
   readout: 'widgetLabelReadout',
   onAt: 'widgetLabelOnAt',
+  // Appended with the command controls.
+  parameter: 'widgetLabelParameter',
+  step: 'widgetLabelStep',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -103,6 +106,8 @@ const LEGACY_HINT: Record<string, string | null> = {
   orientation: null,
   readout: null,
   onAt: 'widgetHintOnAt',
+  parameter: 'widgetHintControlParameter',
+  step: 'widgetHintSliderStep',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -112,6 +117,7 @@ const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>>
   'progress-ring': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
   'level-gauge': { min: 'widgetHintScaleMin', max: 'widgetHintScaleMax' },
   battery: { min: 'widgetHintBatteryRange', max: 'widgetHintBatteryRange' },
+  'command-slider': { min: 'widgetHintSliderRange', max: 'widgetHintSliderRange' },
 };
 
 const LEGACY_ENUM_VALUE: Record<string, string> = {

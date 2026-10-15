@@ -175,6 +175,8 @@ export const WIDGET_TYPES = [
   'signal-bars',
   'compass',
   'progress-ring',
+  'command-slider',
+  'command-toggle',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];

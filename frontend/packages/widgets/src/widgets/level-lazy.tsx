@@ -10,38 +10,16 @@
 // load is THROWN, so the widget's error boundary shows the failure: an empty tank that looks
 // like a reading is the outcome this must never produce.
 
-import { useEffect, useState } from 'react';
-import { defineWidget, type WidgetProps } from '@devicechain/widget-sdk';
+import { defineWidget } from '@devicechain/widget-sdk';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import { lazyChunk } from './lazy-chunk';
 
-type LevelWidgets = typeof import('./level-widgets');
+const chunk = lazyChunk(() => import('./level-widgets'));
 
-let loaded: LevelWidgets | undefined;
-let loading: Promise<LevelWidgets> | undefined;
+export const loadLevelWidgets = chunk.load;
 
-// Memoized: every level widget on a board shares one fetch. Once it has resolved, `loaded`
-// lets a later mount render synchronously, with no empty first frame.
-export function loadLevelWidgets(): Promise<LevelWidgets> {
-  loading ??= import('./level-widgets').then((m) => (loaded = m));
-  return loading;
-}
-
-function lazyComponent(name: keyof LevelWidgets) {
-  function LazyLevelWidget(props: WidgetProps) {
-    const [mod, setMod] = useState(loaded);
-    const [error, setError] = useState<unknown>();
-    useEffect(() => {
-      if (!mod) loadLevelWidgets().then(setMod, setError);
-    }, [mod]);
-    if (error !== undefined) throw error;
-    if (!mod) return null;
-    const Component = mod[name];
-    return <Component {...props} />;
-  }
-  LazyLevelWidget.displayName = `Lazy(${name})`;
-  return LazyLevelWidget;
-}
+const lazyComponent = chunk.component;
 
 export const linearGaugeWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['linear-gauge'],

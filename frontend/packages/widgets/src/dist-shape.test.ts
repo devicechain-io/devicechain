@@ -177,6 +177,23 @@ describe('the built package', () => {
     expect(defines('Gauge').test(entry), 'the definition pattern cannot see the eager gauge').toBe(true);
   });
 
+  // The command controls are the third: the slider and toggle, with the sending code they share,
+  // load on first mount from a chunk of their own (widgets/control-lazy.tsx), separate from the
+  // level family's so a board with one kind never downloads the other.
+  it('keeps the command controls in a lazily loaded chunk of their own', () => {
+    const CONTROL_PAYLOAD = '"data-last-sent"';
+    expect(read('index.js').includes(CONTROL_PAYLOAD), 'the command controls were folded into the entry chunk').toBe(false);
+    const specs = [...read('index.js').matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
+    const chunk = specs.find((spec) => spec.includes('control-widgets'));
+    expect(chunk, `no dynamic import of the control-widgets chunk in dist/index.js (saw ${specs.join(', ')})`).toBeTruthy();
+    const chunkPath = path.resolve(distDir, chunk!);
+    expect(existsSync(chunkPath), `${chunk} is imported but was not emitted`).toBe(true);
+    expect(readFileSync(chunkPath, 'utf8')).toContain(CONTROL_PAYLOAD);
+    // Not in the level family's chunk: two families, two downloads.
+    const levelSpec = specs.find((spec) => spec.includes('level-widgets'));
+    expect(readFileSync(path.resolve(distDir, levelSpec!), 'utf8').includes(CONTROL_PAYLOAD)).toBe(false);
+  });
+
   it('writes no bundler dialect anywhere in the main entry graph', () => {
     expect(
       main.imports.filter(isDialect),

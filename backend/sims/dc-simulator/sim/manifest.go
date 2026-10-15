@@ -829,11 +829,11 @@ func (m SimManifest) Validate() error {
 			var parsed dashboardDefinition
 			if err := json.Unmarshal([]byte(ds.Definition), &parsed); err == nil {
 				for _, w := range parsed.Widgets {
-					if w.Type == commandWidgetType {
+					if isCommandWidgetType(w.Type) {
 						return fmt.Errorf("dashboard %q carries a %s widget (%q) but the manifest "+
 							"declares CommandFarEnd %q: nothing in the scenario would answer "+
 							"the command, so it would reach SENT and expire",
-							ds.Token, commandWidgetType, w.Id, m.FarEndMode())
+							ds.Token, w.Type, w.Id, m.FarEndMode())
 					}
 				}
 			}

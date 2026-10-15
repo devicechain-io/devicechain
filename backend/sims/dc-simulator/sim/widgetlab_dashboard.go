@@ -439,6 +439,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	// so two slices never place a widget on the same cells.
 	def.Widgets = append(def.Widgets, widgetlabLevelsAndIndicators(onSensor)...)
 	def.Widgets = append(def.Widgets, widgetlabRadialFamily(onSensor)...)
+	def.Widgets = append(def.Widgets, widgetlabCommandControls(widgetSubject{Slot: widgetlabSlotSensor})...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -523,6 +524,54 @@ func widgetlabRadialFamily(onSensor func(measurements ...string) widgetSubject) 
 			}),
 		buildProgressRingWidget("wl-ring-value", box{7, 3, r, 3}, onSensor(WidgetlabTemperatureKey),
 			"Temperature", WidgetlabTemperatureKey, "C", "value", WidgetlabSweepMin, WidgetlabSweepMax, widgetlabTemperatureBands),
+	}
+}
+
+// ---- Command controls ---------------------------------------------------------
+
+// widgetlabControlsRow is the first row of the command-controls block (rows 25-26). Rows 20-24
+// belong to the radial family; keeping this block clear of them is what lets two slices append to
+// the same gallery without ever placing a widget on the same cells.
+const widgetlabControlsRow = 25
+
+// buildCommandSliderWidget binds one numeric parameter of the published command. The range is NOT
+// an option: the control reads it from the baked parameter schema, the same snapshot the command
+// button renders its form from. Only the step is authored.
+func buildCommandSliderWidget(id string, b box, s widgetSubject, title, commandName, commandLabel, schema, parameter string, step float64) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: commandSliderWidgetType, Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "commandName": commandName, "commandLabel": commandLabel,
+			"parameterSchema": schema, "parameter": parameter, "step": step,
+		},
+	}
+}
+
+func buildCommandToggleWidget(id string, b box, s widgetSubject, title, commandName, commandLabel, schema, parameter string) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: commandToggleWidgetType, Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{
+			"title": title, "commandName": commandName, "commandLabel": commandLabel,
+			"parameterSchema": schema, "parameter": parameter,
+		},
+	}
+}
+
+// widgetlabCommandControls places the slider (default span and the smallest it may be) on the
+// setpoint command and the toggle (default span and smallest) on the power command, over the
+// nominal sensor. The sim's devices answer every command they are sent, so each control's
+// "last sent" caption walks Pending to Delivered when it is used.
+func widgetlabCommandControls(subject widgetSubject) []dashboardWidget {
+	const r = widgetlabControlsRow
+	return []dashboardWidget{
+		buildCommandSliderWidget("wl-cmd-slider", box{0, 4, r, 2}, subject, "Setpoint",
+			WidgetlabCommandKey, "Set Setpoint", widgetlabParameterSchema, WidgetlabSetpointParameter, 0.5),
+		buildCommandSliderWidget("wl-cmd-slider-min", box{4, 3, r, 2}, subject, "Setpoint (smallest)",
+			WidgetlabCommandKey, "Set Setpoint", widgetlabParameterSchema, WidgetlabSetpointParameter, 0.5),
+		buildCommandToggleWidget("wl-cmd-toggle", box{7, 3, r, 2}, subject, "Power",
+			WidgetlabPowerCommandKey, "Set Power", widgetlabPowerParameterSchema, WidgetlabPowerParameter),
+		buildCommandToggleWidget("wl-cmd-toggle-min", box{10, 2, r, 2}, subject, "Power (smallest)",
+			WidgetlabPowerCommandKey, "Set Power", widgetlabPowerParameterSchema, WidgetlabPowerParameter),
 	}
 }
 

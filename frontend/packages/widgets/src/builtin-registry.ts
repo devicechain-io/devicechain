@@ -11,6 +11,7 @@ import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-s
 import { alarmCountWidget } from './widgets/alarm-count';
 import { alarmTableWidget } from './widgets/alarm-table';
 import { commandButtonWidget } from './widgets/command-button';
+import { commandSliderWidget, commandToggleWidget } from './widgets/control-lazy';
 import { entitySelectorWidget } from './widgets/entity-selector';
 import { gaugeWidget } from './widgets/gauge';
 import { imageWidget } from './widgets/image';
@@ -48,6 +49,8 @@ export const builtinWidgetDefinitions = [
   signalBarsWidget,
   compassWidget,
   progressRingWidget,
+  commandSliderWidget,
+  commandToggleWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent
