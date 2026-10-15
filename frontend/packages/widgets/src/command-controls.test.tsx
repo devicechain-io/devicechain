@@ -257,6 +257,24 @@ describe('command-slider', () => {
     expect(screen.getByText(/aren.t available/i)).toBeTruthy();
   });
 
+  it('shows a short View only caption and carries the full reason as the description', () => {
+    const check = (el: HTMLElement) => {
+      const caption = document.querySelector('[data-read-only]') as HTMLElement;
+      expect(caption.textContent).toBe('View only');
+      const ids = (el.getAttribute('aria-describedby') ?? '').split(' ');
+      const described = ids.map((id) => document.getElementById(id)?.textContent ?? '').join(' ');
+      expect(described).toMatch(/permission to send commands/);
+      expect(caption.getAttribute('title')).toMatch(/permission to send commands/);
+      // The long sentence is never the visible text.
+      expect(caption.textContent).not.toMatch(/permission/);
+    };
+    const s = render(<CommandSlider widget={slider()} data={state()} actions={actionsWith(makeSend(), false)} />);
+    check(input());
+    s.unmount();
+    render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith(makeSend(), false)} />);
+    check(document.querySelector('[aria-describedby]') as HTMLElement);
+  });
+
   it('names "last sent", never state, and follows the delivery status', () => {
     const view = render(
       <CommandSlider widget={slider()} data={state([row({ status: 'QUEUED' })])} actions={actionsWith()} />,

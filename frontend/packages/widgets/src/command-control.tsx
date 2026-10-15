@@ -162,11 +162,26 @@ export function ControlEmpty({ message }: { message: string }) {
   );
 }
 
-// The notes under a control: the reason it is read-only, and the last send's error.
-export function ControlNotes({ sender }: { sender: CommandSender }) {
+// The id of the full read-only reason, derived from the caption's id so the control can name it in
+// aria-describedby. The visible caption is the short "View only" so it fits a two-row widget at
+// one-column width; the full sentence lives here, hidden from the eye but not from assistive tech.
+export const readOnlyId = (captionId: string) => `${captionId}-ro`;
+
+// The notes under a control: a short "View only" caption (the full reason is its title and the
+// control's description), and the last send's error.
+export function ControlNotes({ sender, captionId }: { sender: CommandSender; captionId: string }) {
   return (
     <>
-      {sender.readOnlyReason ? <div style={note}>{sender.readOnlyReason}</div> : null}
+      {sender.readOnlyReason ? (
+        <span id={readOnlyId(captionId)} hidden>
+          {sender.readOnlyReason}
+        </span>
+      ) : null}
+      {sender.readOnlyReason ? (
+        <div data-read-only="" title={sender.readOnlyReason} style={{ ...note, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {sender.strings.viewOnly}
+        </div>
+      ) : null}
       {sender.error ? (
         <div role="alert" style={{ ...note, color: commandStatusColor('FAILED') }}>
           {sender.error}

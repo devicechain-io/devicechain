@@ -37,6 +37,7 @@ import { bindControl, deliveryGroup, lastSent, payloadFor, type Binding, type La
 import {
   ControlEmpty,
   ControlNotes,
+  readOnlyId,
   LastSentCaption,
   refusalText,
   TOUCH_TARGET_PX,
@@ -158,7 +159,7 @@ function ToggleBody({
       }}
     >
       {unknown ? (
-        <div role="group" aria-label={label} aria-describedby={captionId} data-toggle-choose="" style={{ display: 'flex', gap: spaceVar(2) }}>
+        <div role="group" aria-label={label} aria-describedby={sender.readOnlyReason ? `${captionId} ${readOnlyId(captionId)}` : captionId} data-toggle-choose="" style={{ display: 'flex', gap: spaceVar(2) }}>
           {([true, false] as const).map((v) => (
             <button
               key={String(v)}
@@ -190,7 +191,7 @@ function ToggleBody({
           role="switch"
           aria-checked={checked}
           aria-label={label}
-          aria-describedby={captionId}
+          aria-describedby={sender.readOnlyReason ? `${captionId} ${readOnlyId(captionId)}` : captionId}
           aria-busy={sender.pending}
           disabled={disabled}
           onClick={() => sendValue(!checked)}
@@ -250,8 +251,11 @@ function ToggleBody({
           </span>
         </button>
       )}
-      {caption}
-      <ControlNotes sender={sender} />
+      {/* One row, so the short read-only caption costs no height at a two-row widget's minimum span. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: spaceVar(2) }}>
+        {caption}
+        <ControlNotes sender={sender} captionId={captionId} />
+      </div>
     </div>
   );
 }

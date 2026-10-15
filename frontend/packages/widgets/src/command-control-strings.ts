@@ -39,6 +39,8 @@ export interface ControlStrings {
   on: string;
   off: string;
   // Read-only reasons.
+  // The short visible caption beside a read-only control; the full reason is its description.
+  viewOnly: string;
   noPermission: string;
   noSeam: string;
   noDevice: string;
@@ -70,6 +72,7 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     sending: 'Sending…',
     on: 'On',
     off: 'Off',
+    viewOnly: 'View only',
     noPermission: 'You don’t have permission to send commands.',
     noSeam: 'Commands aren’t available in this view.',
     noDevice: 'No device is selected for this command.',
@@ -99,6 +102,7 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     sending: 'Enviando…',
     on: 'Encendido',
     off: 'Apagado',
+    viewOnly: 'Solo lectura',
     noPermission: 'No tiene permiso para enviar comandos.',
     noSeam: 'Los comandos no están disponibles en esta vista.',
     noDevice: 'No hay un dispositivo seleccionado para este comando.',

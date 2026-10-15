@@ -49,6 +49,7 @@ import {
 import {
   ControlEmpty,
   ControlNotes,
+  readOnlyId,
   LastSentCaption,
   refusalText,
   TOUCH_TARGET_PX,
@@ -246,7 +247,7 @@ function SliderBody({
           type="range"
           aria-label={label}
           aria-valuetext={withUnit(shown, unit)}
-          aria-describedby={`${hintId} ${captionId}`}
+          aria-describedby={`${hintId} ${captionId}${sender.readOnlyReason ? ` ${readOnlyId(captionId)}` : ''}`}
           aria-disabled={busy || undefined}
           aria-busy={busy || undefined}
           min={range.min}
@@ -296,8 +297,11 @@ function SliderBody({
           ) : null}
         </output>
       </div>
-      {caption}
-      <ControlNotes sender={sender} />
+      {/* One row, so the short read-only caption costs no height at a two-row widget's minimum span. */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', columnGap: spaceVar(2) }}>
+        {caption}
+        <ControlNotes sender={sender} captionId={captionId} />
+      </div>
     </div>
   );
 }
