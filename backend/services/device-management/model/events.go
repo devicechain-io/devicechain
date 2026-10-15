@@ -186,10 +186,23 @@ type ResolvedEvent struct {
 	// it — and once such a row exists, the next reader has to guess whether the field is
 	// meaningful there. 0 on a location event means the tenant had never created a fence.
 	FenceSetVersion int32
-	OccurredTime    time.Time
-	ProcessedTime   time.Time
-	EventType       esmodel.EventType
-	Payload         interface{}
+	// SourceDeviceDisabled is true when the device was disabled at the instant the event
+	// was resolved. Only a presence transition is ever resolved for a disabled device (see
+	// EventResolver.ResolveEvent): a CONNECTED, DISCONNECTED or DEMOTED claim is made by
+	// the platform's own transport about a connection the platform itself holds, so it
+	// still moves the device's presence and is kept in its connection history. Every other
+	// event from a disabled device is refused before it is resolved.
+	//
+	// 🔴 A consumer that acts ON THE DEVICE'S BEHALF must skip an event carrying it.
+	// Detection is the one today: a connectivity rule fed a quarantined device's
+	// disconnect would raise an alarm for a device the operator has cut off, which is what
+	// disabling it promises will not happen. It is frozen into the event like
+	// ScopeMemberships, so a replay skips exactly what the live path skipped.
+	SourceDeviceDisabled bool
+	OccurredTime         time.Time
+	ProcessedTime        time.Time
+	EventType            esmodel.EventType
+	Payload              interface{}
 }
 
 // GroupRef is one rule-scoped dynamic-group version an event is stamped as belonging

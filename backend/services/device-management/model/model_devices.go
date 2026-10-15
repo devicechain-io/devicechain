@@ -210,7 +210,8 @@ type DeviceUpdateRequest struct {
 }
 
 // ErrDeviceDisabled is the refusal for a device an operator has disabled: its events are
-// refused at resolution, its broker connects are refused, and commands to it are refused
+// refused at resolution (all but the platform's own presence transitions, which report the
+// connection it already had), its broker connects are refused, and commands to it are refused
 // at enqueue. It is permanent for as long as the device stays disabled, so nothing that
 // receives it should retry.
 var ErrDeviceDisabled = errors.New("the device is disabled")
@@ -236,8 +237,9 @@ type Device struct {
 	ExpectedSince sql.NullTime
 
 	// DisabledAt is when an operator disabled the device; NULL means it is enabled. A
-	// disabled device's events are refused at resolution, its broker connects are
-	// refused at the auth callout, and commands to it are refused at enqueue. It is
+	// disabled device's events are refused at resolution (all but its presence
+	// transitions, which the platform's transports report and detection skips), its broker
+	// connects are refused at the auth callout, and commands to it are refused at enqueue. It is
 	// surfaced as `enabled` (DisabledAt NULL); the timestamp says since when.
 	//
 	// 🔴 THE STORED FORM IS "DISABLED SINCE", NOT AN `enabled` BOOLEAN, BECAUSE OF WHAT A

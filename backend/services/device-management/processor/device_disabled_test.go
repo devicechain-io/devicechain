@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -100,4 +101,63 @@ func (suite *InboundEventsProcessorTestSuite) TestADisabledDevicesEventIsDiscard
 	case <-time.After(200 * time.Millisecond):
 	}
 	assert.Equal(suite.T(), 1.0, counterValue(suite, reg, deviceDisabledMetric), "the refusal is counted once")
+}
+
+// presenceEvent is a transport's presence transition for the rig's device, fresh so the
+// age floor lets it through.
+func presenceEvent(source string, state esmodel.PresenceState, session string) *esmodel.UnresolvedEvent {
+	now := time.Now().UTC()
+	return &esmodel.UnresolvedEvent{
+		Source:        source,
+		Device:        "dev",
+		EventType:     esmodel.StateChange,
+		OccurredTime:  now,
+		ProcessedTime: now,
+		Payload:       &esmodel.UnresolvedStateChangePayload{State: state, Reason: "test", SessionId: session},
+	}
+}
+
+// A disabled device's connection is still the platform's to report. Disabling a device does
+// not close a connection it already has, so the transition that ends it — from the broker,
+// the LwM2M server or the Sparkplug host — must reach the presence projection, or the
+// device reads CONNECTED for as long as it stays disabled. The transition is marked as a
+// disabled device's, and the device's own data is still refused around it.
+func TestADisabledDevicesPresenceTransitionsAreResolvedAndMarked(t *testing.T) {
+	rig := newCountingResolveRig(t, false, nil)
+	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_resolve_device_disabled_total"})
+	rig.rez.deviceDisabled = counter
+
+	connected := rig.resolve(presenceEvent("mqtt", esmodel.PresenceConnected, "7"))
+	assert.False(t, connected.SourceDeviceDisabled, "an enabled device's transition was marked disabled")
+
+	if _, err := rig.api.UpdateDevice(rig.ctx, "dev", &dmodel.DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	for _, source := range []string{"mqtt", "lwm2m", "sparkplug"} {
+		for _, state := range []esmodel.PresenceState{esmodel.PresenceDisconnected, esmodel.PresenceConnected} {
+			results, reason, err := rig.rez.ResolveEvent(rig.ctx, presenceEvent(source, state, "8"))
+			require.NoError(t, err, "%s %s from a disabled device was refused", source, state)
+			require.Equal(t, uint(0), reason)
+			require.Len(t, results, 1)
+			resolved := results[0].Resolved
+			payload, ok := resolved.Payload.(*dmodel.ResolvedStateChangePayload)
+			require.True(t, ok, "%T", resolved.Payload)
+			assert.Equal(t, string(state), payload.State)
+			assert.True(t, resolved.SourceDeviceDisabled, "%s %s was not marked as a disabled device's", source, state)
+		}
+	}
+	assert.Equal(t, 0.0, testutil.ToFloat64(counter), "a presence transition was counted as a refused event")
+
+	// The device's own data is still refused: a measurement, a location and an alert.
+	for _, event := range []*esmodel.UnresolvedEvent{tempEvent("21.6"), devLocationEvent(), {
+		Device: "dev", EventType: esmodel.Alert,
+		Payload: &esmodel.UnresolvedAlertsPayload{Entries: []esmodel.UnresolvedAlertEntry{{Type: "smoke"}}},
+	}} {
+		_, reason, err := rig.rez.ResolveEvent(rig.ctx, event)
+		require.Error(t, err, "a disabled device's %s resolved", event.EventType)
+		assert.True(t, errors.Is(err, dmodel.ErrDeviceDisabled), "%v", err)
+		assert.Equal(t, uint(dmproto.FailureReason_DeviceDisabled), reason)
+	}
+	assert.Equal(t, 3.0, testutil.ToFloat64(counter), "each refused event is counted once")
 }

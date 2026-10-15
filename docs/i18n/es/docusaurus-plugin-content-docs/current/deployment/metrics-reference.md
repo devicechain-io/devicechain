@@ -187,7 +187,8 @@ por encima de cero de forma sostenida significa que las reparaciones no converge
 | `presence_events_failed_total` | Transiciones de presencia que no se pudieron escribir en el flujo de entrada. |
 | `presence_events_refused_total` | Transiciones de presencia rechazadas por la puerta de admisión de ingesta (inquilino eliminado o techo del inquilino). |
 | `presence_reconcile_regressed_sessions` | Dispositivos encontrados ACTIVOS con un id de sesión inferior al que mantiene la proyección, en la última pasada de reconciliación. Un valor sostenido distinto de cero significa que las reparaciones no convergen. |
-| `presence_reconcile_repaired_total{direction}` | Transiciones de presencia emitidas por la reconciliación porque se perdió un aviso, por dirección. |
+| `presence_reconcile_repaired_total{direction}` | Reparaciones de presencia que la reconciliación emitió porque se perdió un aviso, y que el estado del dispositivo luego reflejó, por dirección. Una reparación se cuenta en la pasada siguiente a la que la emitió. |
+| `presence_reconcile_unapplied_total{direction}` | Reparaciones de presencia que el estado del dispositivo aún no reflejaba en la siguiente pasada de reconciliación, por dirección. Se rechazaron o se perdieron, y se emiten de nuevo. Una tasa sostenida significa que las reparaciones no se aplican; una causa es un dispositivo eliminado mientras aún aparecía como conectado, cuya reparación se rechaza en cada pasada. |
 | `presence_reconcile_runs_total{outcome}` | Pasadas de reconciliación de presencia, por resultado. |
 | `presence_reconcile_withheld_disconnects_total` | Dispositivos que se habrían marcado fuera de línea si el inventario del broker hubiera sido demostrablemente completo. |
 | `presence_released_total` | Dispositivos devueltos de presencia afirmada a presencia inferida porque esta fuente dejó de leer el broker. |

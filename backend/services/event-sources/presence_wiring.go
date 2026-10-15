@@ -974,6 +974,7 @@ func reconcileMetrics() presence.ReconcileMetrics {
 	return presence.ReconcileMetrics{
 		Runs:               PresenceReconcileCounter,
 		Repaired:           PresenceRepairedCounter,
+		Unapplied:          PresenceUnappliedCounter,
 		SkippedDisconnects: PresenceWithheldCounter,
 		RegressedSessions:  PresenceRegressedGauge,
 	}
@@ -1004,6 +1005,7 @@ var (
 	PresenceRegressedCounter   prometheus.Counter
 	PresenceReconcileCounter   *prometheus.CounterVec
 	PresenceRepairedCounter    *prometheus.CounterVec
+	PresenceUnappliedCounter   *prometheus.CounterVec
 	PresenceWithheldCounter    prometheus.Counter
 	PresenceRegressedGauge     prometheus.Gauge
 	PresenceTapOffGauge        *prometheus.GaugeVec
@@ -1064,7 +1066,13 @@ func initializePresenceMetrics() {
 		[]string{"outcome"})
 	PresenceRepairedCounter = Microservice.NewCounterVec(
 		"presence_reconcile_repaired_total",
-		"Presence transitions emitted by reconciliation because an advisory was missed, by direction",
+		"Presence repairs reconciliation emitted because an advisory was missed and the projection was "+
+			"then seen to apply, by direction. Counted on the pass after the repair",
+		[]string{"direction"})
+	PresenceUnappliedCounter = Microservice.NewCounterVec(
+		"presence_reconcile_unapplied_total",
+		"Presence repairs the projection had not applied by the next reconciliation pass, by direction: "+
+			"refused or lost downstream, and emitted again. A standing rate means repairs are not landing",
 		[]string{"direction"})
 	PresenceWithheldCounter = Microservice.NewCounter(
 		"presence_reconcile_withheld_disconnects_total",

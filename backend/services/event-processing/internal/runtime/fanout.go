@@ -102,6 +102,17 @@ func scopeMembershipSet(ev *dmmodel.ResolvedEvent) map[scopeMemberKey]struct{} {
 // state from a tenant with no fences (a known-EMPTY set).
 func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time,
 	attr map[string]float64, fences *geofence.FenceSet) PlanResult {
+	// 🔴 A DISABLED DEVICE'S EVENT FEEDS NOTHING. The only events resolved for a disabled
+	// device are its presence transitions — its connection is the platform's to report, so
+	// they still reach the projection and the history — and a disabled device raises no
+	// alarm. Fed to a connectivity rule, the disconnect that ends a quarantined device's
+	// connection would raise one; fed to the group-scope check, it would descope and resolve
+	// alarms. Neither happened before the transitions were let through, and neither is the
+	// detection engine's to do for a device an operator has cut off. The mark is frozen into
+	// the event, so a replay and a preview skip exactly what the live path skipped.
+	if ev.SourceDeviceDisabled {
+		return PlanResult{}
+	}
 	profileRules := reg.RulesFor(tenant, ev.ProfileVersionToken)
 	if len(profileRules) == 0 {
 		return PlanResult{}

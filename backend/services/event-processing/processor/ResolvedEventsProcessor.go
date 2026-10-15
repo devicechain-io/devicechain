@@ -1839,6 +1839,21 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 			Msgf("Dropping resolved event that could not be parsed from subject %q", msg.Subject)
 		return rp.skipPoison(msg.StreamSeq)
 	}
+	// 🔴 A DISABLED DEVICE'S EVENT IS SKIPPED WHOLE, NOT FED AS AN EMPTY PLAN. Plan already
+	// gives it no rule, but ProcessResolved with an empty batch still ADVANCES the shared
+	// watermark to its time — firing other devices' due timers and closing panes at this
+	// message — and before these presence transitions were let through resolution the event
+	// never reached the stream at all. Skip records the sequence as handled and moves nothing
+	// else, which is exactly that: a quarantined device's connection is the projection's and
+	// the history's to record, not an input to detection. The mark is frozen into the event,
+	// so a replay skips it at the same sequence.
+	if event.SourceDeviceDisabled {
+		if rp.engine.Skip(msg.StreamSeq) {
+			rp.dirty = true
+			return true
+		}
+		return false
+	}
 
 	// The event's own time, bounded against the server clock at RESOLUTION and travelling
 	// immutably ever since. DETECT does not bound it again and holds no tolerance to bound it

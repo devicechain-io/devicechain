@@ -247,8 +247,17 @@ var resolvedWireMessages = []string{
 	"PResolvedMeasurementsPayload", "PResolvedMeasurementsEntry", "PResolvedMeasurementEntry",
 }
 
+// sizedByTheirOwnTag are the fields numbered past 15 that the writer sizes with
+// protowire.SizeTag rather than tagSize (disabledSize in resolved_wire.go). A field joins
+// this list only together with that sizing: TestResolvedEventWireMatchesProtoMarshal's
+// "every field" case then fails as a sized-versus-written mismatch if it is sized wrong.
+var sizedByTheirOwnTag = map[string]bool{
+	"io.devicechain.devicemanagement.PResolvedEvent.source_device_disabled": true,
+}
+
 // fieldsBeyondOneByteTags names every field of the writer's messages whose number does
-// not encode, with its wire type, in one byte.
+// not encode, with its wire type, in one byte, and that the writer does not size by its own
+// tag.
 func fieldsBeyondOneByteTags(t *testing.T, file protoreflect.FileDescriptor) []string {
 	t.Helper()
 	var beyond []string
@@ -259,7 +268,7 @@ func fieldsBeyondOneByteTags(t *testing.T, file protoreflect.FileDescriptor) []s
 		}
 		for i := 0; i < md.Fields().Len(); i++ {
 			fd := md.Fields().Get(i)
-			if protowire.SizeTag(fd.Number()) != tagSize {
+			if protowire.SizeTag(fd.Number()) != tagSize && !sizedByTheirOwnTag[string(fd.FullName())] {
 				beyond = append(beyond, fmt.Sprintf("%s = %d", fd.FullName(), fd.Number()))
 			}
 		}
@@ -277,13 +286,14 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 			"do not fit; size their tags with protowire.SizeTag:\n  %s", tagSize, strings.Join(beyond, "\n  "))
 	}
 
-	// The negative control: field 16 added to each message must be named.
+	// The negative control: field 17 added to each message must be named. (17, because
+	// PResolvedEvent already holds a field 16, sized by its own tag.)
 	for _, message := range resolvedWireMessages {
 		fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
 		for _, m := range fdp.MessageType {
 			if m.GetName() == message {
 				m.Field = append(m.Field, &descriptorpb.FieldDescriptorProto{
-					Name: proto.String("sixteenth"), JsonName: proto.String("sixteenth"), Number: proto.Int32(16),
+					Name: proto.String("seventeenth"), JsonName: proto.String("seventeenth"), Number: proto.Int32(17),
 					Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
 					Type:  descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
 				})
@@ -294,8 +304,8 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 			t.Fatalf("the extended descriptor does not build: %v", err)
 		}
 		beyond := fieldsBeyondOneByteTags(t, file)
-		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".sixteenth") {
-			t.Errorf("field 16 added to %s: named %v, want exactly it", message, beyond)
+		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".seventeenth") {
+			t.Errorf("field 17 added to %s: named %v, want exactly it", message, beyond)
 		}
 	}
 }
