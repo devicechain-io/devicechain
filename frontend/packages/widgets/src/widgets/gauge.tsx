@@ -53,7 +53,7 @@ function GaugeBody({ widget, data }: WidgetProps) {
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
 
   const option = useMemo(
-    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, thresholds, scale }, size),
+    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, thresholds, scale, readout: 'none' }, size),
     [sample?.value, theme, min, max, thresholds, scale, size],
   );
 

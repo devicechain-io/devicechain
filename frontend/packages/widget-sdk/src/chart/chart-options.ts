@@ -7,6 +7,7 @@
 
 import type { MeasurementSample } from '@devicechain/dashboards';
 
+import { FIT_MIN_FONT_PX, fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
 import { isAlarmLevel, levelColor, type AlarmLevel } from '../severity';
@@ -179,10 +180,18 @@ export function buildLineOption(
 export interface GaugeChartOptions {
   min?: number;
   max?: number;
+  unit?: string;
+  // Decimal places for the readout; unset uses the default rounding.
+  precision?: number;
   // Severity thresholds, drawn as coloured bands on the arc (any order).
   thresholds?: readonly Threshold[];
-  // The board's density scale: multiplies the label-font clamp. Default 1.
+  // The board's density scale: multiplies the label-font clamp and the readout's floor. Default 1.
   scale?: number;
+  // Where the number is drawn. 'canvas' (the default) paints it inside the dial, as the builder
+  // always has, so a widget that renders only the chart keeps its readout. 'none' leaves the dial
+  // bare for a caller that draws the number itself as DOM text in gaugeReadoutBox, which the
+  // readability gate can measure (the built-in gauge does).
+  readout?: 'canvas' | 'none';
 }
 
 // The dial's geometry as fractions of its box: where its centre sits and how much of the short
@@ -248,6 +257,12 @@ export function buildGaugeOption(
   const scale = options.scale ?? 1;
   const labelFont = clamp(Math.round(s / 20), Math.round(8 * scale), Math.round(13 * scale));
   const showAxisLabels = s >= GAUGE_AXIS_LABELS_MIN_SIDE;
+  const unitSuffix = options.unit ? ` ${options.unit}` : '';
+  // The readout is fitted to the dial's inner box and its own length, like every big number.
+  const readout = value == null ? '—' : `${formatValue(value, options.precision)}${unitSuffix}`;
+  const valueFont = fitValueFont({ width: s * 0.7, height: s * 0.25 }, readout.length, {
+    floor: Math.round(FIT_MIN_FONT_PX * scale),
+  });
   return {
     animation: false,
     series: [
@@ -266,9 +281,16 @@ export function buildGaugeOption(
         axisTick: { show: false },
         splitLine: { length: arcWidth, lineStyle: { color: theme.border, width: 1 } },
         axisLabel: { show: showAxisLabels, color: theme.mutedForeground, fontSize: labelFont, distance: arcWidth + 2 },
-        // The number is DOM text over the chart (gaugeReadoutBox), not canvas text: the readability
-        // gate measures DOM only, and a canvas readout was invisible to it.
-        detail: { show: false },
+        detail:
+          options.readout === 'none'
+            ? { show: false }
+            : {
+                valueAnimation: false,
+                color: theme.foreground,
+                fontSize: valueFont,
+                offsetCenter: [0, `${GAUGE_READOUT_OFFSET * 100}%`],
+                formatter: (v: number) => (value == null ? '—' : `${formatValue(v, options.precision)}${unitSuffix}`),
+              },
         data: [{ value: value ?? min }],
       },
     ],

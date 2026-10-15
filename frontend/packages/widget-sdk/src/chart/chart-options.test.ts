@@ -220,13 +220,23 @@ describe('buildGaugeOption', () => {
     expect(ok.axisLabel.show).toBe(true);
   });
 
-  it('draws no readout of its own: the number is DOM text over the chart', () => {
-    // Canvas text is invisible to the readability gate, so the gauge widget overlays a DOM readout
-    // (gauge.tsx); the series must not ALSO print the value or it would show twice.
+  it("draws no readout of its own with readout 'none': the caller's DOM text is the number", () => {
+    // Canvas text is invisible to the readability gate, so the built-in gauge overlays a DOM
+    // readout (gauge.tsx) and asks for a bare dial; the series must not ALSO print the value.
     for (const value of [21.456, null]) {
-      const gauge = seriesOf(buildGaugeOption(value, theme, {}))[0];
+      const gauge = seriesOf(buildGaugeOption(value, theme, { readout: 'none' }))[0];
       expect(gauge.detail.show).toBe(false);
     }
+  });
+
+  it('keeps drawing its readout by default, so a widget that renders only the chart still shows the number', () => {
+    // Third-party widgets (examples/widget-tank-level) call buildGaugeOption with a unit and
+    // render the chart alone; dropping the canvas readout would leave their dial without a value.
+    const gauge = seriesOf(buildGaugeOption(21.456, theme, { unit: 'kPa', precision: 1 }))[0];
+    expect(gauge.detail.show).not.toBe(false);
+    expect(gauge.detail.formatter(21.456)).toBe('21.5 kPa');
+    const empty = seriesOf(buildGaugeOption(null, theme, { unit: 'kPa' }))[0];
+    expect(empty.detail.formatter(0)).toBe('—');
   });
 
   it('paints the arc in the severity bands, ending at 1, with the neutral track below the first', () => {
