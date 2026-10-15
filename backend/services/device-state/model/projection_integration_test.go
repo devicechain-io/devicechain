@@ -863,8 +863,8 @@ func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T
 		t.Errorf("%d of %d devices at %v after the batch", moved, n, t1)
 	}
 
-	// The same devices in a batch with a claim take the locked path: a lock read and the two
-	// write-backs.
+	// The same devices in a batch with a claim take the locked path: lockOrCreate (two
+	// statements, in token order), a lock read and the two write-backs.
 	t2 := t1.Add(time.Minute)
 	withClaim := batchAt(t2)
 	withClaim[0] = claim("acme", "w-00000", t2, presence.ClaimConnected, 1)
@@ -872,8 +872,9 @@ func TestABatchOfMoreExistingDevicesThanOneStatementHoldsOnPostgres(t *testing.T
 	if err := counted.MergeProjectionBatch(ctx, withClaim); err != nil {
 		t.Fatalf("a batch of %d existing devices with a claim: %v", n, err)
 	}
-	if _, marked := counter.Counts(); marked != 3 {
-		t.Errorf("the batch with a claim sent %d statements on device_states; want 3 (a lock read and two write-backs)", marked)
+	if _, marked := counter.Counts(); marked != 5 {
+		t.Errorf("the batch with a claim sent %d statements on device_states; want 5 (two lockOrCreate statements, "+
+			"a lock read and two write-backs)", marked)
 	}
 	if moved := countAt(t2); moved != int64(n) {
 		t.Errorf("%d of %d devices at %v after the batch with a claim", moved, n, t2)
