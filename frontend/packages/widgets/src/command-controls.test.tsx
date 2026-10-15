@@ -287,7 +287,13 @@ describe('command-slider', () => {
     expect(screen.getByRole('status').textContent).toMatch(/27/);
     expect(input().value).toBe('27');
     view.rerender(<CommandSlider widget={slider()} data={state()} actions={actionsWith()} />);
-    expect(screen.getByRole('status').textContent).toMatch(/nothing sent/i);
+    expect(screen.getByRole('status').textContent).toMatch(/nothing sent/i);    // A history longer than the page, with none of this command on it, proves nothing was sent
+    // only within the page: it says so rather than "nothing sent".
+    view.rerender(
+      <CommandSlider widget={slider()} data={{ ...state([row({ name: 'reboot' })]), total: 80 }} actions={actionsWith()} />,
+    );
+    expect(screen.getByRole('status').textContent).toMatch(/not among the recent commands/i);
+    expect(screen.getByRole('status').textContent).not.toMatch(/nothing sent/i);
   });
 
   it('shows a Pending last-sent value as soon as the dispatch is accepted', async () => {
