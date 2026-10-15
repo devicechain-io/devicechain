@@ -168,7 +168,9 @@ La dirección puede llevar parámetros, de modo que un marcador o una pantalla d
 | `dashboard` | un token de panel | Carga la versión activa de ese panel justo después de iniciar sesión. El parámetro se conserva al iniciar sesión, también con inicio de sesión único. |
 | `kiosk` | `1` (o `true`) | Oculta la cabecera y sus controles y ofrece un botón de pantalla completa. En este modo no hay control para cerrar sesión. |
 | `theme` | `dark`, `light` | Fija el tema de color. Fuera del modo quiosco, un interruptor en la cabecera lo cambia y recuerda la elección; el parámetro `theme` nunca se recuerda. |
-| `density` | `compact`, `comfortable`, `wall` | Reservado para la anulación de la densidad del lienzo. El valor se valida y se acepta, pero todavía no cambia el renderizado. |
+| `density` | `compact`, `comfortable`, `wall` | Sustituye la densidad con la que se diseñó el panel. Escala todos los tamaños de texto y de espaciado, los márgenes entre celdas y la celda más pequeña a la que puede reducirse una columna, así que `wall` dibuja más grande y, en una pantalla estrecha, con menos columnas, y `compact` dibuja más pequeño. Sin el parámetro se aplica la densidad del propio panel, y el parámetro nunca se guarda en el panel ni se recuerda. |
+| `range` | `15m`, `1h`, `6h`, `24h`, `7d` | Abre el panel con ese intervalo de tiempo en lugar del predeterminado del panel. El visor puede seguir cambiándolo. |
+| `paused` | `1` | Abre el panel en pausa en el momento en que se carga. Cualquier otro valor lo abre en vivo. |
 
 Un parámetro con un valor no reconocido se ignora y se escribe un aviso en la consola del navegador; el panel se carga igualmente con ese ajuste en su valor por defecto.
 

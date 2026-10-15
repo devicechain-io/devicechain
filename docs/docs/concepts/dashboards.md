@@ -170,7 +170,9 @@ The address can carry parameters, so a bookmark or a wall display opens the righ
 | `dashboard` | a dashboard token | Loads that dashboard's live version straight after sign-in. The parameter survives sign-in, including single sign-on. |
 | `kiosk` | `1` (or `true`) | Hides the header and its controls and offers a fullscreen button. There is no sign-out control in this mode. |
 | `theme` | `dark`, `light` | Sets the colour theme. Outside kiosk mode a toggle in the header changes it and remembers the choice; a `theme` parameter is never remembered. |
-| `density` | `compact`, `comfortable`, `wall` | Reserved for the canvas density override. The value is validated and accepted, but it does not change the rendering yet. |
+| `density` | `compact`, `comfortable`, `wall` | Overrides the density the board was authored with. It scales every text and spacing size, the gutters and the smallest cell a column may shrink to, so `wall` draws larger and, on a narrow screen, with fewer columns, and `compact` draws smaller. The board's own setting applies when the parameter is absent, and the parameter is never saved to the board or remembered. |
+| `range` | `15m`, `1h`, `6h`, `24h`, `7d` | Opens the board at that time range instead of the board's own default. The viewer can still change it. |
+| `paused` | `1` | Opens the board paused at the moment it loads. Any other value opens it live. |
 
 A parameter with an unrecognised value is ignored and a warning is written to the browser console; the board still loads with that setting at its default.
 

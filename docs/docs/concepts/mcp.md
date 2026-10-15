@@ -24,6 +24,8 @@ The server exposes eleven **read** tools. Each one is a query against the same G
 - `get_device` — a single device's details.
 - `get_device_capabilities` — what a device can measure, and the published commands it accepts, with each command's parameter schema.
 
+`list_devices` and `get_device` do not yet say whether a device is disabled, and `list_devices` cannot filter by it. A disabled device is listed exactly like a live one, so an assistant cannot tell a quarantined device from a working one through these tools. Check a device's status in the console, where a disabled device carries a **Disabled** badge; see [Disabling and enabling a device](../user-guide/devices.md#disabling-and-enabling-a-device).
+
 **Live state & telemetry**
 
 - `get_device_state` — the device's current last-known state, including whether that state was *reported by the transport* or *inferred from silence*. The difference changes what "not active" means. Reported means the device is known to be disconnected. Inferred means only that nothing has arrived recently, which is also what a healthy device on a slow reporting interval looks like.
