@@ -5,8 +5,14 @@
 //
 // 🔴 THE SWITCH SHOWS THE LAST VALUE SENT, NOT THE DEVICE'S STATE. It rests where the newest
 // command left it (read off the command history) and the caption says "Last sent" with that
-// command's delivery status. With nothing sent it is drawn unset (thumb mid-track, a dash for the
-// word) and exposed as off, since a switch has no third state; a click then sends true.
+// command's delivery status.
+//
+// 🔴 IT NEVER GUESSES WHICH WAY TO FLIP. A click sends the opposite of the last value sent only
+// when that value is a live intent: a command that is pending or was delivered, carrying a value
+// this control can read. With nothing sent, a history too short to show this command, a newest
+// command with no readable value, or a newest command that FAILED (its value never reached the
+// device, so flipping relative to it would send what the operator may already have), the switch
+// is replaced by two explicit buttons, On and Off, and the operator chooses.
 //
 // A click while a send is in flight does nothing, so rapid clicks make one command, not a queue of
 // alternating ones.
@@ -27,7 +33,7 @@ import {
   type WidgetScale,
 } from '@devicechain/widget-sdk';
 
-import { bindControl, lastSent, payloadFor, type Binding } from '../command-control-core';
+import { bindControl, deliveryGroup, lastSent, payloadFor, type Binding, type LastSent } from '../command-control-core';
 import {
   ControlEmpty,
   ControlNotes,
@@ -75,7 +81,7 @@ export function CommandToggle({ widget, data, actions }: WidgetProps<CommandStre
           <ToggleBody
             binding={binding}
             label={commandLabel ?? binding.param.name}
-            value={typeof last?.value === 'boolean' ? last.value : undefined}
+            value={intentOf(last)}
             sender={sender}
             captionId={captionId}
             caption={
@@ -94,6 +100,14 @@ export function CommandToggle({ widget, data, actions }: WidgetProps<CommandStre
       }
     </WidgetFrame>
   );
+}
+
+// The value a flip may be computed from, or undefined when the operator has to choose. Only a
+// command that is still on its way, or arrived, states an intent the device is acting on.
+export function intentOf(last: LastSent | null): boolean | undefined {
+  if (!last || typeof last.value !== 'boolean') return undefined;
+  const group = deliveryGroup(last.status);
+  return group === 'pending' || group === 'delivered' ? last.value : undefined;
 }
 
 function ToggleBody({
@@ -116,7 +130,7 @@ function ToggleBody({
   const checked = value === true;
   const unknown = value === undefined;
   const disabled = !sender.canSend;
-  const word = unknown ? '—' : checked ? sender.strings.on : sender.strings.off;
+  const word = checked ? sender.strings.on : sender.strings.off;
 
   const chars = useStickyChars(word.length);
   const floor = Math.round(FIT_MIN_FONT_PX * ws.scale);
@@ -127,9 +141,7 @@ function ToggleBody({
   };
   const font = measured ? fitValueFont(room, chars, { floor }) : fitValueFontCss(chars, { floor });
 
-  const click = () => {
-    // Opposite of what the switch shows; an unset switch is shown off, so it turns on.
-    const next = !checked;
+  const sendValue = (next: boolean) => {
     sender.send(payloadFor(binding, next), next);
   };
 
@@ -145,71 +157,99 @@ function ToggleBody({
         overflow: 'hidden',
       }}
     >
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        aria-label={label}
-        aria-describedby={captionId}
-        aria-busy={sender.pending}
-        disabled={disabled}
-        data-unset={unknown ? 'true' : undefined}
-        onClick={click}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: spaceVar(2),
-          minHeight: TOUCH_TARGET_PX,
-          minWidth: TOUCH_TARGET_PX,
-          padding: 0,
-          border: 'none',
-          background: 'transparent',
-          color: css('foreground'),
-          cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
-          textAlign: 'left',
-        }}
-      >
-        <span
-          aria-hidden="true"
+      {unknown ? (
+        <div role="group" aria-label={label} aria-describedby={captionId} data-toggle-choose="" style={{ display: 'flex', gap: spaceVar(2) }}>
+          {([true, false] as const).map((v) => (
+            <button
+              key={String(v)}
+              type="button"
+              disabled={disabled}
+              aria-busy={sender.pending}
+              onClick={() => sendValue(v)}
+              style={{
+                flex: '1 1 0',
+                minHeight: TOUCH_TARGET_PX,
+                minWidth: TOUCH_TARGET_PX,
+                padding: `0 ${spaceVar(2)}`,
+                borderRadius: 6,
+                border: `1px solid ${css('border')}`,
+                background: css('background'),
+                color: css('foreground'),
+                fontWeight: 600,
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.6 : 1,
+              }}
+            >
+              {v ? sender.strings.on : sender.strings.off}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <button
+          type="button"
+          role="switch"
+          aria-checked={checked}
+          aria-label={label}
+          aria-describedby={captionId}
+          aria-busy={sender.pending}
+          disabled={disabled}
+          onClick={() => sendValue(!checked)}
           style={{
-            position: 'relative',
-            flex: '0 0 auto',
-            width: TRACK_W,
-            height: TRACK_H,
-            borderRadius: TRACK_H / 2,
-            boxSizing: 'border-box',
-            border: `1px solid ${css('border')}`,
-            background: checked ? css('primary') : css('muted'),
+            display: 'flex',
+            alignItems: 'center',
+            gap: spaceVar(2),
+            minHeight: TOUCH_TARGET_PX,
+            minWidth: TOUCH_TARGET_PX,
+            padding: 0,
+            border: 'none',
+            background: 'transparent',
+            color: css('foreground'),
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            opacity: disabled ? 0.6 : 1,
+            textAlign: 'left',
           }}
         >
           <span
+            aria-hidden="true"
             style={{
-              position: 'absolute',
-              top: (TRACK_H - THUMB) / 2 - 1,
-              left: unknown ? (TRACK_W - THUMB) / 2 - 1 : checked ? TRACK_W - THUMB - 3 : 2,
-              width: THUMB,
-              height: THUMB,
-              borderRadius: '50%',
-              background: checked ? css('primary-foreground') : css('background'),
-              border: `1px solid ${css('border')}`,
+              position: 'relative',
+              flex: '0 0 auto',
+              width: TRACK_W,
+              height: TRACK_H,
+              borderRadius: TRACK_H / 2,
               boxSizing: 'border-box',
+              border: `1px solid ${css('border')}`,
+              background: checked ? css('primary') : css('muted'),
             }}
-          />
-        </span>
-        <span
-          data-toggle-word=""
-          style={{
-            fontSize: font,
-            fontWeight: 600,
-            lineHeight: 1.1,
-            whiteSpace: 'nowrap',
-            color: unknown ? css('muted-foreground') : css('foreground'),
-          }}
-        >
-          {word}
-        </span>
-      </button>
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: (TRACK_H - THUMB) / 2 - 1,
+                left: checked ? TRACK_W - THUMB - 3 : 2,
+                width: THUMB,
+                height: THUMB,
+                borderRadius: '50%',
+                background: checked ? css('primary-foreground') : css('background'),
+                border: `1px solid ${css('border')}`,
+                boxSizing: 'border-box',
+              }}
+            />
+          </span>
+          <span
+            data-toggle-word=""
+            style={{
+              fontSize: font,
+              fontWeight: 600,
+              lineHeight: 1.1,
+              whiteSpace: 'nowrap',
+              color: css('foreground'),
+            }}
+          >
+            {word}
+          </span>
+        </button>
+      )}
       {caption}
       <ControlNotes sender={sender} />
     </div>

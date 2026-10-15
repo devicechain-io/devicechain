@@ -400,11 +400,12 @@ describe('the gallery widgets draw their data', () => {
 
   it('draws a working command control on the gallery, bound to the published command', () => {
     // A control the schema refuses draws a role=alert notice instead of an input; one that works
-    // carries its slider or switch, and the setpoint slider reads the round-trip row above.
+    // carries its slider, or its switch (or, with no power command in the history, the explicit
+    // On / Off choice), and the setpoint slider reads the round-trip row above.
     let checked = 0;
     for (const [type, role] of [
       ['command-slider', 'input[type="range"]'],
-      ['command-toggle', 'button[role="switch"]'],
+      ['command-toggle', 'button[role="switch"], [data-toggle-choose] button'],
     ] as const) {
       for (const widget of galleryWidgets(type)) {
         checked++;

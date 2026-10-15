@@ -146,7 +146,58 @@ describe('command-slider', () => {
     fireEvent.pointerUp(input());
     fireEvent.keyDown(input(), { key: 'Enter' });
     expect(send).toHaveBeenCalledTimes(1);
-    expect(input().disabled).toBe(true);
+    // In flight it is aria-disabled and ignores input, but stays focusable: `disabled` would
+    // throw a keyboard user's focus onto the page body right after Enter.
+    expect(input().getAttribute('aria-disabled')).toBe('true');
+    expect(input().disabled).toBe(false);
+    expect(input().dataset.staged).toBeUndefined();
+  });
+
+  it('tells a keyboard user that Enter sends, and voices the staged value', () => {
+    render(<CommandSlider widget={slider()} data={state([row({ status: 'SUCCESSFUL' })])} actions={actionsWith()} />);
+    const described = (input().getAttribute('aria-describedby') ?? '').split(' ');
+    const texts = described.map((id) => document.getElementById(id)?.textContent ?? '');
+    expect(texts.join(' ')).toMatch(/press Enter to send/i);
+    expect(input().getAttribute('aria-valuetext')).toBe('21 C');
+    fireEvent.change(input(), { target: { value: '23' } });
+    expect(input().getAttribute('aria-valuetext')).toBe('23 C');
+    expect(screen.getByRole('status').textContent).toMatch(/not sent yet/i);
+  });
+
+  // 🔴 A staged value that was not committed is DISCARDED, never sent by a later stray release.
+  for (const [how, abandon] of [
+    ['the pointer is cancelled', () => fireEvent.pointerCancel(input())],
+    ['the pointer capture is lost mid-drag', () => fireEvent.lostPointerCapture(input())],
+    ['the pointer is released off the slider', () => fireEvent.pointerUp(document.body)],
+    ['Escape is pressed', () => fireEvent.keyDown(input(), { key: 'Escape' })],
+    ['focus leaves the slider', () => fireEvent.blur(input())],
+  ] as const) {
+    it(`discards the staged value, and sends nothing, when ${how}`, () => {
+      const send = makeSend();
+      render(<CommandSlider widget={slider()} data={state([row({ status: 'SUCCESSFUL' })])} actions={actionsWith(send)} />);
+      fireEvent.pointerDown(input());
+      fireEvent.change(input(), { target: { value: '30' } });
+      expect(input().value).toBe('30');
+      abandon();
+      expect(input().value).toBe('21');
+      expect(input().dataset.staged).toBeUndefined();
+      expect(screen.getByRole('status').textContent).toMatch(/last sent.*21/i);
+      // Nothing is left behind for a later Enter or release to send.
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      fireEvent.pointerUp(input());
+      expect(send).not.toHaveBeenCalled();
+    });
+  }
+
+  it('a capture lost AFTER the release on the slider does not undo the send', () => {
+    const send = makeSend();
+    render(<CommandSlider widget={slider()} data={state()} actions={actionsWith(send)} />);
+    fireEvent.pointerDown(input());
+    fireEvent.change(input(), { target: { value: '26' } });
+    fireEvent.pointerUp(input());
+    fireEvent.lostPointerCapture(input());
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][2]).toBe('{"target":26,"mode":"auto"}');
   });
 
   it('refuses to send when another required parameter has no value, and says why', () => {
@@ -249,6 +300,23 @@ describe('command-slider', () => {
     expect(screen.getByRole('status').textContent).toMatch(/24.*pending|pending.*24/i);
   });
 
+  it('does not wait on delivery: a second send while the first is still pending is the one shown', async () => {
+    // Blocking until delivery would lock the control for a device that is away; only the dispatch
+    // itself is guarded. The newer send must then be what "Last sent" reports.
+    const send = makeSend(async () => ({ status: 'sent', token: 'd-2' }));
+    render(
+      <CommandSlider widget={slider()} data={state([row({ token: 'c-1', status: 'SENT' })])} actions={actionsWith(send)} />,
+    );
+    expect(screen.getByRole('status').textContent).toMatch(/21.*pending/i);
+    fireEvent.change(input(), { target: { value: '25' } });
+    await act(async () => {
+      fireEvent.pointerUp(input());
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('status').textContent).toMatch(/25.*pending/i);
+    expect(screen.getByRole('status').textContent).not.toMatch(/21/);
+  });
+
   it('shows the server reason for a refusal, and a fixed message for a failure', async () => {
     const refusing = makeSend(async () => ({ status: 'rejected', code: 'invalid', reason: 'target above ceiling' }));
     const { unmount } = render(<CommandSlider widget={slider()} data={state()} actions={actionsWith(refusing)} />);
@@ -283,18 +351,77 @@ const toggle = (extra: Record<string, unknown> = {}) =>
     ...extra,
   });
 const sw = () => screen.getByRole('switch') as HTMLButtonElement;
+const onButton = () => screen.getByRole('button', { name: /^on$/i });
 const power = (payload: unknown, over: Partial<CommandRow> = {}) =>
   row({ name: 'setPower', payload: JSON.stringify(payload), ...over });
 
 describe('command-toggle', () => {
   it('sends a real boolean, not the string, and nothing before the click', () => {
     const send = makeSend();
-    render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith(send)} />);
+    render(<CommandToggle widget={toggle()} data={state([power({ enabled: true }, { status: 'SUCCESSFUL' })])} actions={actionsWith(send)} />);
     expect(send).not.toHaveBeenCalled();
     fireEvent.click(sw());
     expect(send).toHaveBeenCalledTimes(1);
-    expect(send.mock.calls[0]).toEqual(['therm-1', 'setPower', '{"enabled":true}']);
-    expect(JSON.parse(send.mock.calls[0][2]!).enabled).toBe(true);
+    expect(send.mock.calls[0]).toEqual(['therm-1', 'setPower', '{"enabled":false}']);
+    expect(JSON.parse(send.mock.calls[0][2]!).enabled).toBe(false);
+  });
+
+  // 🔴 A toggle never guesses which way to flip. Each of these leaves it not knowing the live
+  // intent, so it offers both values and sends exactly the one chosen.
+  for (const [why, rows, total] of [
+    ['nothing was sent', [], 0],
+    ['the history is longer than the page and holds none of this command', [row({ name: 'reboot' })], 80],
+    ['the newest command FAILED: its value never reached the device', [power({ enabled: true }, { status: 'FAILED' })], 1],
+    ['the newest command timed out', [power({ enabled: false }, { status: 'TIMEOUT' })], 1],
+    ['the newest command carries no readable value', [power({ enabled: 'yes' }, { status: 'SUCCESSFUL' })], 1],
+    ['the newest status is not one this control knows', [power({ enabled: true }, { status: 'MYSTERY' })], 1],
+  ] as const) {
+    it(`asks On or Off, never flips, when ${why}`, () => {
+      for (const [word, sent] of [
+        [/^on$/i, '{"enabled":true}'],
+        [/^off$/i, '{"enabled":false}'],
+      ] as const) {
+        const send = makeSend();
+        const data = { ...state([...rows]), total };
+        render(<CommandToggle widget={toggle()} data={data} actions={actionsWith(send)} />);
+        expect(screen.queryByRole('switch')).toBeNull();
+        const group = screen.getByRole('group', { name: 'Power' });
+        expect(group.querySelectorAll('button')).toHaveLength(2);
+        fireEvent.click(screen.getByRole('button', { name: word }));
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0][2]).toBe(sent);
+        cleanup();
+      }
+    });
+  }
+
+  it('still flips from a value that is pending: the operator issued it and it is on its way', () => {
+    const send = makeSend();
+    render(<CommandToggle widget={toggle()} data={state([power({ enabled: true }, { status: 'SENT' })])} actions={actionsWith(send)} />);
+    expect(sw().getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(sw());
+    expect(send.mock.calls[0][2]).toBe('{"enabled":false}');
+  });
+
+  it('a newer FAILED command wins over an older delivered one: no flip from the older value', () => {
+    const send = makeSend();
+    const rows = [
+      power({ enabled: false }, { token: 'new', status: 'FAILED', queuedTime: '2026-07-06T12:30:00Z' }),
+      power({ enabled: true }, { token: 'old', status: 'SUCCESSFUL', queuedTime: '2026-07-06T11:00:00Z' }),
+    ];
+    render(<CommandToggle widget={toggle()} data={state(rows)} actions={actionsWith(send)} />);
+    expect(screen.queryByRole('switch')).toBeNull();
+    expect(screen.getByRole('status').textContent).toMatch(/off.*failed/i);
+  });
+
+  it('the choice is read-only without the command permission, too', () => {
+    const send = makeSend();
+    render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith(send, false)} />);
+    for (const b of screen.getByRole('group').querySelectorAll('button')) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(b);
+    }
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('sends the opposite of the last value sent', () => {
@@ -313,7 +440,7 @@ describe('command-toggle', () => {
 
   it('sends once for rapid clicks while one is in flight', () => {
     const send = makeSend(() => new Promise<CommandDispatch>(() => {}));
-    render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith(send)} />);
+    render(<CommandToggle widget={toggle()} data={state([power({ enabled: true }, { status: 'SUCCESSFUL' })])} actions={actionsWith(send)} />);
     fireEvent.click(sw());
     fireEvent.click(sw());
     fireEvent.click(sw());
@@ -324,14 +451,17 @@ describe('command-toggle', () => {
   it('can send again once the first dispatch has settled', async () => {
     const send = makeSend();
     render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith(send)} />);
+    // Nothing sent: the operator chooses On. Once that is accepted it is a pending intent, so the
+    // switch appears, on, and the next click flips it.
     await act(async () => {
-      fireEvent.click(sw());
+      fireEvent.click(onButton());
     });
+    expect(sw().getAttribute('aria-checked')).toBe('true');
     await act(async () => {
       fireEvent.click(sw());
     });
     expect(send).toHaveBeenCalledTimes(2);
-    // The second click turns it off: the first one's value is what the switch showed.
+    expect(send.mock.calls[0][2]).toBe('{"enabled":true}');
     expect(send.mock.calls[1][2]).toBe('{"enabled":false}');
   });
 
@@ -344,7 +474,7 @@ describe('command-toggle', () => {
       { name: 'quiet', dataType: 'BOOLEAN' },
     ]);
     render(<CommandToggle widget={toggle({ parameterSchema: schema })} data={state()} actions={actionsWith(send)} />);
-    fireEvent.click(sw());
+    fireEvent.click(onButton());
     expect(JSON.parse(send.mock.calls[0][2]!)).toEqual({ enabled: true, ramp: 5 });
   });
 
@@ -375,7 +505,9 @@ describe('command-toggle', () => {
 
   it('is read-only without the command permission', () => {
     const send = makeSend();
-    render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith(send, false)} />);
+    render(
+      <CommandToggle widget={toggle()} data={state([power({ enabled: true }, { status: 'SUCCESSFUL' })])} actions={actionsWith(send, false)} />,
+    );
     expect(sw().disabled).toBe(true);
     fireEvent.click(sw());
     expect(send).not.toHaveBeenCalled();
@@ -386,7 +518,7 @@ describe('command-toggle', () => {
     const view = render(<CommandToggle widget={toggle()} data={state()} actions={actionsWith()} />);
     const caption = () => screen.getByRole('status').textContent ?? '';
     expect(caption()).toMatch(/nothing sent/i);
-    expect(sw().getAttribute('aria-checked')).toBe('false');
+    expect(screen.queryByRole('switch')).toBeNull();
     for (const [status, word] of [
       ['QUEUED', /pending/i],
       ['SENT', /pending/i],

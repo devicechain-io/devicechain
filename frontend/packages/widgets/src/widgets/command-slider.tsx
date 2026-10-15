@@ -5,15 +5,23 @@
 // comes from the command definition baked into the options (the same snapshot the command button
 // renders its form from); the author's min/max/step fill only what the definition leaves open.
 //
-// 🔴 DRAGGING SENDS NOTHING. The thumb stages a value; releasing it (or pressing Enter, for a
-// keyboard user) sends it, once. While a send is in flight the slider is disabled, so a second
-// release cannot queue a second command.
+// 🔴 DRAGGING SENDS NOTHING. The thumb stages a value; releasing it on the slider (or pressing
+// Enter, for a keyboard user) sends it, once. A staged value that is not committed is DISCARDED,
+// never sent later: a cancelled pointer (the browser took the gesture for a scroll), a lost
+// capture or a release off the slider, Escape, or focus leaving the slider. While a send is in
+// flight the slider is aria-disabled and ignores input, so a second release cannot queue a second
+// command; it is not `disabled`, which would drop a keyboard user's focus on the page body.
+//
+// Keyboard: the arrow, Page and Home/End keys stage a value (the native range input's own
+// behaviour, so aria-valuetext follows the staged value) and Enter sends it. That departure from a
+// plain slider is announced: the input is described by a hint saying so, as well as by the
+// last-sent caption, which reads "Not sent yet. ... press Enter to send" while a value is staged.
 //
 // 🔴 IT SHOWS WHAT WAS SENT, NOT WHAT THE DEVICE IS DOING. The thumb rests at the last value sent
 // (read off the command history) and the caption says so with that command's delivery status.
 // With nothing sent the thumb rests at the bottom of the range and the readout is a dash.
 
-import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
   css,
@@ -86,12 +94,43 @@ export function CommandSlider({ widget, data, actions }: WidgetProps<CommandStre
     setDraftState(v);
   };
   const captionId = useId();
+  const hintId = useId();
+
+  // A pointer pressed on the slider whose release has not been seen. A release anywhere but on
+  // the slider, a cancel or a lost capture while it is set discards the staged value.
+  const pressed = useRef(false);
+  const offRelease = useRef<(() => void) | null>(null);
+  useEffect(() => () => offRelease.current?.(), []);
+  const discard = () => {
+    pressed.current = false;
+    offRelease.current?.();
+    offRelease.current = null;
+    if (draftRef.current !== null) setDraft(null);
+  };
+  const press = (input: HTMLInputElement) => {
+    pressed.current = true;
+    offRelease.current?.();
+    const doc = input.ownerDocument;
+    const onRelease = (e: PointerEvent) => {
+      // The slider's own release commits through onPointerUp; this one sees releases elsewhere.
+      if (e.target instanceof Node && input.contains(e.target)) return;
+      discard();
+    };
+    doc.addEventListener('pointerup', onRelease, true);
+    offRelease.current = () => doc.removeEventListener('pointerup', onRelease, true);
+  };
 
   const commit = () => {
     if (!binding.ok) return;
     const staged = draftRef.current;
     if (staged === null || !sender.canSend) return;
     if (sender.send(payloadFor(binding, staged), staged)) setDraft(null);
+  };
+  const release = () => {
+    pressed.current = false;
+    offRelease.current?.();
+    offRelease.current = null;
+    commit();
   };
 
   return (
@@ -107,6 +146,7 @@ export function CommandSlider({ widget, data, actions }: WidgetProps<CommandStre
             lastValue={typeof last?.value === 'number' ? last.value : undefined}
             sender={sender}
             captionId={captionId}
+            hintId={hintId}
             caption={
               <LastSentCaption
                 id={captionId}
@@ -117,8 +157,17 @@ export function CommandSlider({ widget, data, actions }: WidgetProps<CommandStre
                 override={draft !== null ? sender.strings.unsent : sender.pending ? sender.strings.sending : undefined}
               />
             }
-            onStage={(v) => setDraft(clampToRange(binding.range!, v))}
+            onStage={(v) => {
+              // A value moved while a send is in flight is not staged: the slider is aria-disabled.
+              if (!sender.pending) setDraft(clampToRange(binding.range!, v));
+            }}
             onCommit={commit}
+            onPress={press}
+            onRelease={release}
+            onDiscard={discard}
+            onLostCapture={() => {
+              if (pressed.current) discard();
+            }}
             scale={scale}
           />
         )
@@ -134,9 +183,14 @@ function SliderBody({
   lastValue,
   sender,
   captionId,
+  hintId,
   caption,
   onStage,
   onCommit,
+  onPress,
+  onRelease,
+  onDiscard,
+  onLostCapture,
   scale: ws,
 }: {
   binding: Bound;
@@ -145,14 +199,21 @@ function SliderBody({
   lastValue: number | undefined;
   sender: CommandSender;
   captionId: string;
+  hintId: string;
   caption: ReactNode;
   onStage: (v: number) => void;
   onCommit: () => void;
+  onPress: (input: HTMLInputElement) => void;
+  onRelease: () => void;
+  onDiscard: () => void;
+  onLostCapture: () => void;
   scale: WidgetScale;
 }) {
   const range = binding.range!;
   const unit = binding.param.unit;
-  const disabled = !sender.canSend || sender.pending;
+  // Read-only is `disabled`; in flight is only aria-disabled, so focus stays on the slider.
+  const disabled = !sender.canSend;
+  const busy = sender.pending;
   const rest = lastValue !== undefined ? clampToRange(range, lastValue) : range.min;
   const shown = draft ?? rest;
   const known = draft !== null || lastValue !== undefined;
@@ -185,7 +246,9 @@ function SliderBody({
           type="range"
           aria-label={label}
           aria-valuetext={withUnit(shown, unit)}
-          aria-describedby={captionId}
+          aria-describedby={`${hintId} ${captionId}`}
+          aria-disabled={busy || undefined}
+          aria-busy={busy || undefined}
           min={range.min}
           max={range.max}
           step={range.step}
@@ -193,9 +256,14 @@ function SliderBody({
           disabled={disabled}
           data-staged={draft !== null ? 'true' : undefined}
           onChange={(e) => onStage(Number(e.target.value))}
-          onPointerUp={onCommit}
+          onPointerDown={(e) => onPress(e.currentTarget)}
+          onPointerUp={onRelease}
+          onPointerCancel={onDiscard}
+          onLostPointerCapture={onLostCapture}
+          onBlur={onDiscard}
           onKeyDown={(e) => {
             if (e.key === 'Enter') onCommit();
+            else if (e.key === 'Escape') onDiscard();
           }}
           style={{
             flex: '1 1 0',
@@ -203,9 +271,12 @@ function SliderBody({
             height: TOUCH_TARGET_PX,
             margin: 0,
             accentColor: css('primary'),
-            cursor: disabled ? 'not-allowed' : 'pointer',
+            cursor: disabled || busy ? 'not-allowed' : 'pointer',
           }}
         />
+        <span id={hintId} hidden>
+          {sender.strings.sliderHint}
+        </span>
         <output
           aria-hidden="true"
           data-slider-readout=""

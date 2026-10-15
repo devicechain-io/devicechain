@@ -95,6 +95,29 @@ describe('bindControl', () => {
     expect(b).toEqual({ ok: false, refusal: { code: 'otherRequired', names: ['zone', 'cfg'] } });
   });
 
+  it('refuses a default the definition itself would reject, rather than send it on every command', () => {
+    const b = bindControl('number', {
+      ...base,
+      parameterSchema: schema(
+        { name: 'target', dataType: 'DOUBLE', minValue: 0, maxValue: 1 },
+        { name: 'ramp', dataType: 'INT', default: '2.5' },
+        { name: 'gain', dataType: 'DOUBLE', default: '9', maxValue: 5 },
+        { name: 'mode', dataType: 'STRING', enum: ['heat', 'cool'], default: 'auto' },
+        { name: 'ok', dataType: 'INT', default: '3' },
+      ),
+    });
+    expect(b).toEqual({ ok: false, refusal: { code: 'badDefault', names: ['ramp', 'gain', 'mode'] } });
+    // The counterweight: valid defaults bind and are sent.
+    const good = bindControl('number', {
+      ...base,
+      parameterSchema: schema(
+        { name: 'target', dataType: 'DOUBLE', minValue: 0, maxValue: 1 },
+        { name: 'mode', dataType: 'STRING', enum: ['heat', 'cool'], default: 'cool' },
+      ),
+    });
+    expect(bound(good).sent.map((p) => p.name)).toEqual(['target', 'mode']);
+  });
+
   it('picks the one parameter of the right type when none is named, and only then', () => {
     const one = schema({ name: 'power', dataType: 'BOOLEAN' }, { name: 'ramp', dataType: 'INT' });
     expect(bound(bindControl('boolean', { commandName: 'c', parameterSchema: one, parameter: undefined })).param.name).toBe('power');

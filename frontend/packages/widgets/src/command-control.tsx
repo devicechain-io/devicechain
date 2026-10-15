@@ -31,6 +31,8 @@ export function refusalText(r: Refusal, s: ControlStrings, expect: 'number' | 'b
       return s.fixedChoices(r.name);
     case 'otherRequired':
       return s.otherRequired(r.names);
+    case 'badDefault':
+      return s.badDefault(r.names);
     case 'setRange':
       return s.setRange;
     case 'badRange':

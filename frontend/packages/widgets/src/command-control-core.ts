@@ -12,7 +12,7 @@
 
 import type { CommandParameter, CommandRow } from '@devicechain/dashboards';
 
-import { buildPayload, isScalar, parseParameterSchema } from './widgets/command-params';
+import { buildPayload, isScalar, parseParameterSchema, validateParams } from './widgets/command-params';
 
 export type ControlKind = 'number' | 'boolean';
 
@@ -23,6 +23,7 @@ export type Refusal =
   | { code: 'wrongType'; name: string; kind: ControlKind }
   | { code: 'fixedChoices'; name: string }
   | { code: 'otherRequired'; names: string[] }
+  | { code: 'badDefault'; names: string[] }
   | { code: 'setRange' }
   | { code: 'badRange' };
 
@@ -78,7 +79,15 @@ export function bindControl(kind: ControlKind, input: BindInput): Binding {
   const others = params.filter((p) => p !== param);
   const unsatisfied = others.filter((p) => p.required && (!isScalar(p) || p.default == null || p.default === ''));
   if (unsatisfied.length > 0) return refuse({ code: 'otherRequired', names: unsatisfied.map((p) => p.name) });
-  const sent = [param, ...others.filter((p) => isScalar(p) && p.default != null && p.default !== '')];
+  const defaulted = others.filter((p) => isScalar(p) && p.default != null && p.default !== '');
+  // A default is sent as written, so one the definition's own rules reject (not a number, not a
+  // whole number, outside its range) would be a command the server refuses on every send.
+  const invalid = new Set(
+    Object.keys(validateParams(defaulted, Object.fromEntries(defaulted.map((p) => [p.name, p.default ?? ''])))),
+  );
+  for (const p of defaulted) if (p.enum && p.enum.length > 0 && !p.enum.includes(p.default ?? '')) invalid.add(p.name);
+  if (invalid.size > 0) return refuse({ code: 'badDefault', names: defaulted.filter((p) => invalid.has(p.name)).map((p) => p.name) });
+  const sent = [param, ...defaulted];
 
   if (kind === 'boolean') return { ok: true, kind, param, sent };
 

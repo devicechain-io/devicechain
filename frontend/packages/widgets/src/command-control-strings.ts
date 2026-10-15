@@ -18,6 +18,7 @@ export interface ControlStrings {
   wrongType: (name: string, expected: string) => string;
   fixedChoices: (name: string) => string;
   otherRequired: (names: string[]) => string;
+  badDefault: (names: string[]) => string;
   setRange: string;
   badRange: string;
   numberKind: string;
@@ -29,6 +30,8 @@ export interface ControlStrings {
   beyondHistory: string;
   noValue: string;
   unsent: string;
+  // The slider's keyboard description: arrows choose, Enter sends.
+  sliderHint: string;
   pending: string;
   delivered: string;
   failed: string;
@@ -50,6 +53,7 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     wrongType: (n, e) => `Parameter “${n}” is not ${e}`,
     fixedChoices: (n) => `Parameter “${n}” takes fixed choices, not a range`,
     otherRequired: (ns) => `Not sent: the command also requires ${ns.map((n) => `“${n}”`).join(', ')}, which has no default value`,
+    badDefault: (ns) => `Not sent: the default value of ${ns.map((n) => `“${n}”`).join(', ')} is not valid for the command`,
     setRange: 'Set min and max',
     badRange: 'Max must be above min',
     numberKind: 'a number',
@@ -59,6 +63,7 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     beyondHistory: 'Not among the recent commands',
     noValue: 'no value',
     unsent: 'Not sent yet. Release or press Enter to send',
+    sliderHint: 'Arrow keys choose a value; press Enter to send it, or Escape to discard it.',
     pending: 'Pending',
     delivered: 'Delivered',
     failed: 'Failed',
@@ -77,6 +82,7 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     wrongType: (n, e) => `El parámetro “${n}” no es ${e}`,
     fixedChoices: (n) => `El parámetro “${n}” admite opciones fijas, no un rango`,
     otherRequired: (ns) => `No se envía: el comando también exige ${ns.map((n) => `“${n}”`).join(', ')}, que no tiene valor por defecto`,
+    badDefault: (ns) => `No se envía: el valor por defecto de ${ns.map((n) => `“${n}”`).join(', ')} no es válido para el comando`,
     setRange: 'Defina mín. y máx.',
     badRange: 'El máx. debe superar el mín.',
     numberKind: 'un número',
@@ -86,6 +92,7 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     beyondHistory: 'No figura entre los comandos recientes',
     noValue: 'sin valor',
     unsent: 'Aún no enviado. Suelte o pulse Intro para enviar',
+    sliderHint: 'Las flechas eligen un valor; pulse Intro para enviarlo o Escape para descartarlo.',
     pending: 'Pendiente',
     delivered: 'Entregado',
     failed: 'Fallido',
