@@ -9,11 +9,9 @@
 import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-sdk';
 
 import { barChartWidget, fleetTableWidget, pieChartWidget, statCardWidget } from './widgets/aggregate-lazy';
-import { alarmCountWidget } from './widgets/alarm-count';
-import { alarmTableWidget } from './widgets/alarm-table';
-import { commandButtonWidget } from './widgets/command-button';
-import { commandSliderWidget, commandToggleWidget } from './widgets/control-lazy';
-import { entitySelectorWidget } from './widgets/entity-selector';
+import { alarmCountWidget, alarmTableWidget } from './widgets/alarm-lazy';
+import { commandButtonWidget, commandSliderWidget, commandToggleWidget } from './widgets/control-lazy';
+import { entitySelectorWidget } from './widgets/selection-lazy';
 import { gaugeWidget } from './widgets/gauge';
 import { imageWidget } from './widgets/image';
 import { labelWidget } from './widgets/label';
@@ -28,7 +26,7 @@ import {
   statusLightWidget,
 } from './widgets/level-lazy';
 import { mapWidget } from './widgets/map';
-import { tableWidget } from './widgets/table';
+import { tableWidget } from './widgets/table-lazy';
 import { timeSeriesChartWidget } from './widgets/time-series-chart';
 
 export const builtinWidgetDefinitions = [

@@ -14,7 +14,6 @@ import {
   type AlarmStreamState,
   css,
   fontVar,
-  defineWidget,
   FlashValue,
   formatDateTime,
   optBoolean,
@@ -29,7 +28,6 @@ import {
   type WidgetSelect,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { severityColor, severityLabel } from './severity';
 
 const cell: CSSProperties = { padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' };
@@ -346,10 +344,3 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
     </span>
   );
 }
-
-// The registration: this widget's portable descriptor paired with its component, declared
-// through the same public `defineWidget` a third-party package uses.
-export const alarmTableWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['alarm-table'],
-  implementation: { kind: 'trusted-react', component: AlarmTable },
-});

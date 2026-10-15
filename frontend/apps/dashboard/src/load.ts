@@ -33,6 +33,7 @@ import {
   type SlotBinding,
 } from '@devicechain/dashboards';
 import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
+import { preloadWidgets } from '@devicechain/widgets';
 
 import { PUBLISHED_DASHBOARD } from './queries';
 
@@ -163,7 +164,11 @@ export async function loadPublishedDashboard(
   } catch (err) {
     return { error: fetchError(err) };
   }
-  return loadDashboard(definition, manifestText, registry);
+  const result = loadDashboard(definition, manifestText, registry);
+  // The board's lazily loaded widget code arrives before the board is handed over, so its first
+  // frame is the whole board rather than empty boxes still filling in. Never rejects.
+  if ('loaded' in result) await preloadWidgets(registry, result.loaded.definition.widgets.map((w) => w.type));
+  return result;
 }
 
 // Classify a failed fetch by the server's machine-readable code where there is one, and

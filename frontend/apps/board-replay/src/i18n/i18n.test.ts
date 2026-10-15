@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import i18n, { DEFAULT_LOCALE, RESOURCES, SUPPORTED_LOCALES, resolveLocale } from './config';
+import i18n, { CATALOG_LOADERS, DEFAULT_LOCALE, SUPPORTED_LOCALES, resolveLocale, setReplayLocale } from './config';
 import { LIVE_PATTERNS, liveMatches } from '../testing/live-scan';
 
 // The catalogs as they sit on disk (what a translator edits), not the registry in config.ts:
@@ -43,9 +43,9 @@ describe('chrome catalogs', () => {
     }
   });
 
-  it('registers the same bundles that are on disk', () => {
+  it('loads the same bundles that are on disk', async () => {
     for (const locale of SUPPORTED_LOCALES) {
-      expect(RESOURCES[locale].chrome).toEqual(files[`./locales/${locale}/chrome.json`].default);
+      expect(await CATALOG_LOADERS[locale]()).toEqual(files[`./locales/${locale}/chrome.json`].default);
     }
   });
 
@@ -82,14 +82,14 @@ describe('the "live" scanner', () => {
 
 describe('plural forms', () => {
   it('count the machines in the singular where the language has one', async () => {
-    await i18n.changeLanguage('en');
+    await setReplayLocale('en');
     expect(i18n.t('provenanceMachines', { count: 1 })).toBe('1 simulated machine, its own DeviceChain device.');
     expect(i18n.t('provenanceMachines', { count: 19 })).toBe('19 simulated machines, each its own DeviceChain device.');
-    await i18n.changeLanguage('es');
+    await setReplayLocale('es');
     expect(i18n.t('provenanceMachines', { count: 1 })).toContain('1 máquina simulada');
-    await i18n.changeLanguage('zh-CN');
+    await setReplayLocale('zh-CN');
     expect(i18n.t('provenanceMachines', { count: 1 })).toContain('1 台模拟机器');
-    await i18n.changeLanguage('en');
+    await setReplayLocale('en');
   });
 });
 

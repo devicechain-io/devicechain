@@ -9,7 +9,7 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { check, initialFiles, measure, type Budget } from '../scripts/check-bundle-size.mjs';
+import { check, checkShape, initialFiles, lazyBoundaries, measure, type Budget } from '../scripts/check-bundle-size.mjs';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -65,5 +65,47 @@ describe('bundle size gate', () => {
     expect(committed.maxInitial).toBeGreaterThan(0);
     expect(committed.maxTotal).toBeGreaterThan(0);
     expect(check({ initial: 0, total: 0 }, committed)).toEqual([]);
+  });
+});
+
+describe('lazy boundary check', () => {
+  // A dist whose entry statically imports `shared-1.js` and lazily imports `widget-1.js`.
+  function shapedDist(files: { main?: string; shared?: string; widget?: string }): string {
+    const dist = mkdtempSync(path.join(tmpdir(), 'shape-gate-'));
+    dirs.push(dist);
+    mkdirSync(path.join(dist, 'chunks'));
+    writeFileSync(
+      path.join(dist, 'main.js'),
+      `import{a}from"./chunks/shared-1.js";const m=()=>import("./chunks/widget-1.js");${files.main ?? ''}`,
+    );
+    writeFileSync(path.join(dist, 'chunks/shared-1.js'), files.shared ?? 'export const a=1;');
+    writeFileSync(path.join(dist, 'chunks/widget-1.js'), files.widget ?? 'export const w=1;');
+    return dist;
+  }
+  const boundary = [{ what: 'the widget', chunk: 'widget', markers: ['MARKER'] }];
+
+  it('passes when the marker is only in the lazy chunk', () => {
+    expect(checkShape(shapedDist({ widget: '"MARKER"' }), boundary)).toEqual([]);
+  });
+
+  it('fails when the marker is in the entry, or in a chunk the entry imports statically', () => {
+    expect(checkShape(shapedDist({ widget: '"MARKER"', main: '"MARKER"' }), boundary)).toHaveLength(1);
+    expect(checkShape(shapedDist({ widget: '"MARKER"', shared: '"MARKER"' }), boundary)).toHaveLength(1);
+  });
+
+  it('fails when no lazy chunk of that name holds the marker (the reach control)', () => {
+    expect(checkShape(shapedDist({}), boundary)).toHaveLength(1);
+    // Folded into the entry and gone from the chunk: both halves report.
+    expect(checkShape(shapedDist({ main: '"MARKER"' }), boundary)).toHaveLength(2);
+  });
+
+  it('reads the catalog markers from the catalogs, and none of them is English', () => {
+    const en = JSON.parse(readFileSync(path.resolve(import.meta.dirname, 'i18n/locales/en/chrome.json'), 'utf8')) as Record<string, string>;
+    const markers = lazyBoundaries().flatMap((b) => b.markers);
+    expect(markers.length).toBeGreaterThan(5);
+    for (const marker of markers) {
+      expect(marker.length).toBeGreaterThan(5);
+      expect(Object.values(en).some((v) => v.includes(marker)), `${marker} is English chrome`).toBe(false);
+    }
   });
 });

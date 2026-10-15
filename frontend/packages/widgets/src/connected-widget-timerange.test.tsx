@@ -18,7 +18,7 @@ import type {
 } from '@devicechain/dashboards';
 import { WidgetTimeRangeProvider } from '@devicechain/widget-sdk';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/widget-sdk/echarts')>();
@@ -30,6 +30,7 @@ vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
 });
 
 import { ConnectedWidget } from './connected-widget';
+import { loadAlarmWidgets } from './widgets/alarm-lazy';
 
 const NOW = Date.parse('2026-10-14T12:00:00Z');
 const at = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
@@ -147,6 +148,9 @@ describe('a paused measurement widget', () => {
 });
 
 describe('a paused alarm widget', () => {
+  // The alarm components load from a lazy chunk; loaded once here, every mount renders at once.
+  beforeAll(() => loadAlarmWidgets());
+
   function alarmHub() {
     let sink: AlarmStreamSink | null = null;
     const hub = {

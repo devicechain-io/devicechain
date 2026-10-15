@@ -27,6 +27,7 @@ export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 // package supplies), and the factory for a sealed registry holding exactly them.
 export { builtinWidgetCatalog, builtinWidgetDescriptors } from './builtin-descriptors';
 export { builtinWidgetDefinitions, createBuiltinWidgetRegistry } from './builtin-registry';
+export { preloadWidgets } from './preload';
 
 // Read-only by-id views of the built-in descriptors (channel, datasource binding), and the
 // widget contract. The registrations above are the source of truth; these are derived.

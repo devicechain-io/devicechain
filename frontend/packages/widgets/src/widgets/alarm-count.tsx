@@ -10,7 +10,6 @@
 import {
   type AlarmStreamState,
   css,
-  defineWidget,
   fitValueFont,
   fitValueFontCss,
   FIT_MIN_FONT_PX,
@@ -24,7 +23,6 @@ import {
   type WidgetProps,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { highestSeverity, severityColor, severityLabel } from './severity';
 
 // The caption under the count (11 px text plus its 6 px margin). It always shows -- it names
@@ -109,10 +107,3 @@ export function AlarmCount({ widget, data }: WidgetProps<AlarmStreamState>) {
     </WidgetFrame>
   );
 }
-
-// The registration: this widget's portable descriptor paired with its component, declared
-// through the same public `defineWidget` a third-party package uses.
-export const alarmCountWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['alarm-count'],
-  implementation: { kind: 'trusted-react', component: AlarmCount },
-});

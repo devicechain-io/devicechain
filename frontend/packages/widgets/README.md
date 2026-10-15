@@ -39,6 +39,21 @@ A templated board takes its slot bindings on the renderer, not the hub:
 (`useDashboardHub(resolver, authorities)` builds and disposes it); a new
 `bindings` map re-subscribes only the widgets whose slot moved.
 
+Several built-ins load their component code on first mount, so a board without
+them never downloads it. Until that code arrives the widget's box is empty. To
+draw the whole board on its first frame, await `preloadWidgets` with the board's
+widget types before you render it:
+
+```tsx
+import { createBuiltinWidgetRegistry, preloadWidgets } from '@devicechain/widgets';
+
+const registry = createBuiltinWidgetRegistry();
+await preloadWidgets(registry, definition.widgets.map((w) => w.type));
+```
+
+It never rejects: a chunk that fails to load still fails in the widget itself,
+where its error boundary shows it.
+
 Or drive a single widget yourself with `ConnectedWidget`; it resolves the widget's
 component, channel and binding policy through a registry (the built-ins by default,
 or the one you pass as `registry`; see `createBuiltinWidgetRegistry` and

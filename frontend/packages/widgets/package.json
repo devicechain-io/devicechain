@@ -35,6 +35,9 @@
     },
     "./package.json": "./package.json"
   },
+  "sideEffects": [
+    "./dist/vite.js"
+  ],
   "files": [
     "dist",
     "README.md",
