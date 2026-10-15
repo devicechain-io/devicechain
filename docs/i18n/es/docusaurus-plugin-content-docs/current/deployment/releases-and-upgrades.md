@@ -3818,6 +3818,10 @@ cambia para alguien:
 2. **Si lees fuentes MQTT externas o Sparkplug y la pérdida repentina de un pod debe perder tan
    poco como antes**, reduce sus ventanas de publicación antes de actualizar. Consulta
    [Más publicaciones en vuelo](#v0220-publish-windows).
+3. **Si tu `terraform.tfvars` define `nats_memory_limit` por debajo de 4Gi, súbelo a 4Gi o quita la
+   línea.** La actualización conserva tu valor, y con 2Gi un servidor solo sostiene unos 3.000
+   eventos por segundo. Consulta
+   [El broker recuerda los eventos reentregados durante 10 minutos](#v0220-dedup).
 
 #### Durante la actualización {#v0220-during}
 
@@ -3826,8 +3830,10 @@ cambia para alguien:
 - **La consola y `/dash` leen el nuevo formato de panel en cuanto se renuevan**, porque se
   distribuyen con la versión. Nada convierte un panel guardado durante la actualización; cada uno
   se convierte la próxima vez que se carga.
-- **Los pods de device-management se vuelven a programar con la petición de CPU más baja.** Es el
-  único cambio en un valor de recursos renderizado.
+- **Los pods de device-management se vuelven a programar con la petición de CPU más baja**, y el
+  límite de memoria de cada servidor NATS sube de 2Gi a 4Gi. Son los dos cambios en valores de
+  recursos renderizados. Consulta
+  [El broker recuerda los eventos reentregados durante 10 minutos](#v0220-dedup).
 - **Hasta que event-processing también se haya renovado, un cambio de conexión de un dispositivo
   deshabilitado puede generar o cerrar una alarma de conectividad.** device-management ahora
   transmite las conexiones y desconexiones de un dispositivo deshabilitado, y un pod de
@@ -3848,6 +3854,27 @@ disposición.
 - **Busca los widgets que ahora rechazan un grupo** y cámbialos por la tabla de flota o por un
   gráfico de barras con una barra por dispositivo.
 - **No hace falta nada más.** Todos los ajustes nuevos tienen valores por defecto.
+
+#### El broker recuerda los eventos reentregados durante 10 minutos {#v0220-dedup}
+
+`resolved-events` y `failed-events` ahora descartan un evento publicado de nuevo durante 10
+minutos, frente a los 2 minutos por defecto del broker. Antes, un evento cuyo origen se reentregaba
+tras dos publicaciones fallidas podía guardarse dos veces, y la detección podía contarlo dos veces.
+La ventana del flujo de eventos entrantes pasa de 30 a 10 minutos. Sigue cubriendo todas las
+reentregas mientras un consumidor está en marcha, y un pod de `event-sources` o
+`device-management` que vuelve en unos 8 minutos. Si un pod está caído más tiempo, o un broker
+guarda una publicación, pierde su confirmación y después falla publicaciones durante más de unos
+8 minutos, los eventos en vuelo se guardan dos veces. Ejecuta `event-sources` y
+`device-management` con 2 o más réplicas para evitar el caso del pod. El límite de memoria de cada
+servidor NATS pasa de 2Gi a 4Gi (`GOMEMLIMIT` de 1638MiB a 3276MiB), porque cada servidor guarda
+cada id dentro de estas ventanas: unos 2,6 GiB con 10.000 eventos por segundo sostenidos. La
+petición de 768Mi no cambia, así que ningún servidor se coloca de otra forma. `dcctl upgrade`
+aplica primero el broker y reinicia sus servidores, de uno en uno con `--ha`. Después, cada
+servicio cambia las ventanas de los flujos existentes en su sitio al arrancar por primera vez;
+no se recrea ningún flujo y no se pierde ningún mensaje. **Si tu `terraform.tfvars` define
+`nats_memory_limit` por debajo de 4Gi, la actualización conserva tu valor.** Con 2Gi un servidor
+solo puede sostener unos 3.000 eventos por segundo antes de que las tablas de ids lo dejen sin
+margen. Súbelo a 4Gi, o quita la línea, antes de actualizar.
 
 #### Qué cambió {#v0220-what-changed}
 

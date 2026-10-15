@@ -2090,13 +2090,17 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
    [如果你基于 npm 包开发](#v0220-packages)。
 2. **如果你读取外部 MQTT 或 Sparkplug 源，且 pod 突然丢失时必须与以前丢得一样少**，请在升级前
    调低它们的发布窗口。见[更多在途发布](#v0220-publish-windows)。
+3. **如果你的 `terraform.tfvars` 把 `nats_memory_limit` 设为低于 4Gi，请提高到 4Gi 或删除这一行。**
+   升级会保留你的值，而在 2Gi 下服务器只能持续处理约每秒 3,000 个事件。见
+   [broker 在 10 分钟内记住重新投递的事件](#v0220-dedup)。
 
 #### 升级期间 {#v0220-during}
 
 - **不运行任何迁移**，数据库不受影响，pod 照常滚动更新。
 - **控制台和 `/dash` 一经滚动更新即可读取新的仪表板格式**，因为它们随版本发布。升级期间不会转换
   任何已存储的看板；每个看板在下次加载时转换。
-- **device-management 的 pod 以更低的 CPU 请求重新调度。** 这是渲染出的资源值中唯一的变化。
+- **device-management 的 pod 以更低的 CPU 请求重新调度**，每个 NATS 服务器的内存上限从 2Gi 提高到
+  4Gi。这是渲染出的资源值中的两处变化。见[broker 在 10 分钟内记住重新投递的事件](#v0220-dedup)。
 - **在 event-processing 也完成滚动更新之前，已停用设备的连接变化可能触发或解除连接告警。**
   device-management 现在会传递已停用设备的连接和断开，而仍为 `v0.21.x` 的 event-processing pod
   不知道要忽略它们。`dcctl upgrade` 会一起滚动更新各服务，因此这只持续于发布期间。
@@ -2111,6 +2115,21 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
   图表。检查布局后保存；如果看板已发布，再发布一个新版本。
 - **找出现在拒绝设备组的组件**，改用设备群表格，或每台设备一根柱的柱状图。
 - **无需其他操作。** 新设置都有默认值。
+
+#### broker 在 10 分钟内记住重新投递的事件 {#v0220-dedup}
+
+`resolved-events` 和 `failed-events` 现在在 10 分钟内丢弃重新发布的事件，而 broker 的默认值为 2
+分钟。以前，若事件的来源在两次发布失败后被重新投递，该事件可能被存储两次，并被检测计数两次。传入
+事件流的窗口从 30 分钟改为 10 分钟。它仍覆盖消费者运行期间的所有重新投递，以及在约 8 分钟内恢复的
+`event-sources` 或 `device-management` pod。如果 pod 停机更久，或者 broker 存储了一次发布、丢失了
+其确认，随后超过约 8 分钟发布失败，在途事件会被存储两次。以 2 个或更多副本运行 `event-sources` 和
+`device-management` 可避免 pod 的情况。每个 NATS 服务器的内存上限从 2Gi 提高到 4Gi（`GOMEMLIMIT`
+从 1638MiB 提高到 3276MiB），因为每个服务器都保存这些窗口内的每个 id：在每秒 10,000 个事件持续
+运行时约 2.6 GiB。768Mi 的请求不变，因此服务器的调度位置不变。`dcctl upgrade` 先应用 broker 并
+重启其服务器，在 `--ha` 下逐个重启。随后每个服务在首次启动时就地调整现有流的窗口；不会重建任何
+流，也不会丢失任何消息。**如果你的 `terraform.tfvars` 把 `nats_memory_limit` 设为低于 4Gi，升级会
+保留你的值。** 在 2Gi 下，服务器只能持续处理约每秒 3,000 个事件，之后 id 表就会耗尽其余量。请在
+升级前把它提高到 4Gi，或删除这一行。
 
 #### 变更内容 {#v0220-what-changed}
 
