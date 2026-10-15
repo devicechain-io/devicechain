@@ -180,9 +180,18 @@ func (r *CommandDispatchHoldResolver) DispatchUntil() string {
 
 // CommandDispatchScheduleResolver exposes the window half of an enqueue decision.
 type CommandDispatchScheduleResolver struct {
-	holds    []*model.CommandDispatchHold
-	refusals []*model.BatchEnqueueRefusal
-	ungated  []string
+	holds     []*model.CommandDispatchHold
+	refusals  []*model.BatchEnqueueRefusal
+	ungated   []string
+	undefined []string
+}
+
+// Undefined lists the devices whose type's current profile version does not define the command.
+func (r *CommandDispatchScheduleResolver) Undefined() []string {
+	if r.undefined == nil {
+		return []string{}
+	}
+	return r.undefined
 }
 
 // Ungated lists the devices that exist, are enabled, and are not gated for the command.
@@ -216,6 +225,7 @@ func (r *SchemaResolver) CommandDispatchSchedule(ctx context.Context, args struc
 	DeviceTokens []string
 	CommandKey   string
 	ExpiresAt    *string
+	AlreadyHeld  *bool
 }) (*CommandDispatchScheduleResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
@@ -232,12 +242,14 @@ func (r *SchemaResolver) CommandDispatchSchedule(ctx context.Context, args struc
 		}
 		expiresAt = &parsed
 	}
-	holds, refusals, ungated, err := r.GetApi(ctx).CommandDispatchSchedule(ctx, args.DeviceTokens, args.CommandKey,
-		expiresAt, time.Now())
+	alreadyHeld := args.AlreadyHeld != nil && *args.AlreadyHeld
+	schedule, err := r.GetApi(ctx).DispatchScheduleFor(ctx, args.DeviceTokens, args.CommandKey,
+		expiresAt, time.Now(), alreadyHeld)
 	if err != nil {
 		return nil, err
 	}
-	return &CommandDispatchScheduleResolver{holds: holds, refusals: refusals, ungated: ungated}, nil
+	return &CommandDispatchScheduleResolver{holds: schedule.Holds, refusals: schedule.Refusals,
+		ungated: schedule.Ungated, undefined: schedule.Undefined}, nil
 }
 
 // ------------

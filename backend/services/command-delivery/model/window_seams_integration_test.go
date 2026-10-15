@@ -224,3 +224,39 @@ func TestPostgresRepointMovesAndReleasesWaitingCommands(t *testing.T) {
 	assert.Equal(t, "plant-a", commandRow(t, api, ctx, "c-sent").WindowToken.String, "a SENT row was re-pointed")
 	assert.Equal(t, "plant-a", commandRow(t, api, other, "b-0").WindowToken.String, "another tenant's row moved")
 }
+
+// A waiting command its device's profile no longer defines is failed on Postgres through the
+// real write path: every undelivered status, NOT_DELIVERED with the fixed reason, and nothing
+// outside the named devices, the key, the window, the undelivered statuses or the tenant.
+func TestPostgresFailUndefinedWaitingFailsOnlyTheNamedWaitingRows(t *testing.T) {
+	api := newPostgresApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	other := core.WithTenant(context.Background(), "B")
+	after := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	for i, status := range []CommandStatus{CommandQueued, CommandHeld, CommandParked} {
+		pgCommand(t, api, ctx, fmt.Sprintf("u-%d", i), "dev-0", status, after, after.Add(time.Hour), "plant-a")
+	}
+	pgCommand(t, api, ctx, "u-sent", "dev-0", CommandSent, after, after.Add(time.Hour), "plant-a")
+	pgCommand(t, api, ctx, "u-other-device", "dev-1", CommandQueued, after, after.Add(time.Hour), "plant-a")
+	pgCommand(t, api, ctx, "u-other-window", "dev-0", CommandQueued, after, after.Add(time.Hour), "plant-b")
+	pgCommand(t, api, other, "u-other-tenant", "dev-0", CommandQueued, after, after.Add(time.Hour), "plant-a")
+	otherKey := &Command{DeviceToken: "dev-0", Name: "read", Status: CommandQueued.String(),
+		WindowToken: sql.NullString{String: "plant-a", Valid: true}}
+	otherKey.Token = "u-other-key"
+	require.NoError(t, api.RDB.DB(ctx).Create(otherKey).Error)
+
+	failed, err := api.FailUndefinedWaiting(ctx, "plant-a", "reboot", []string{"dev-0"})
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), failed)
+	for i := 0; i < 3; i++ {
+		row := commandRow(t, api, ctx, fmt.Sprintf("u-%d", i))
+		assert.Equal(t, CommandFailed.String(), row.Status)
+		assert.Equal(t, OutcomeNotDelivered.String(), row.Outcome.String)
+		assert.Equal(t, CommandUndefinedReason, row.Error.String)
+	}
+	assert.Equal(t, CommandSent.String(), commandRow(t, api, ctx, "u-sent").Status, "a SENT row was failed")
+	assert.Equal(t, CommandQueued.String(), commandRow(t, api, ctx, "u-other-device").Status, "an unnamed device was failed")
+	assert.Equal(t, CommandQueued.String(), commandRow(t, api, ctx, "u-other-window").Status, "another window's row was failed")
+	assert.Equal(t, CommandQueued.String(), commandRow(t, api, ctx, "u-other-key").Status, "another command key was failed")
+	assert.Equal(t, CommandQueued.String(), commandRow(t, api, other, "u-other-tenant").Status, "another tenant's row was failed")
+}

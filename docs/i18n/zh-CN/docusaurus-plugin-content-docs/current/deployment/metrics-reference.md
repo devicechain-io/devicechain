@@ -39,6 +39,7 @@ title: 指标参考
 | `command_delivery_disabled_gate_errors_total` | 无法为某个分发批次读取已停用设备记录（该批次不分发），或无法从 device-management 同步该记录的次数。持续有速率表示指令被延迟，而不是丢失。 |
 | `command_delivery_disabled_gate_ready` | 仪表。本进程列出租户并读取每个租户的已停用设备后为 `1`，此前为 `0`。尚未在任何地方填充过记录的租户在其为 `0` 时不会被分发；若它卡在 `0` 且 `command_delivery_disabled_gate_errors_total` 上升，说明重启发生在 user-management 或 device-management 故障期间。 |
 | `command_delivery_disabled_gate_pending_tenants` | 仪表。本进程尚未读取其已停用设备记录的租户数；这些租户的指令在等待。已删除或不再出现在列表中的租户不再计入。 |
+| `command_delivery_window_commands_undefined_total` | 在等待维护窗口、却因其设备类型当前所用的配置文件版本不再定义而失败且从未发送的指令。每条都以 `FAILED` 结束，结果为 `NOT_DELIVERED`。 |
 | `command_delivery_claims_refused_disabled_total` | 因指令的设备在分发读取已停用设备记录之后才被停用，而被领取拒绝的分发。不会发送任何内容，下一次扫描会保留该指令，且不计入 `command_delivery_claims_lost_total`。 |
 | `command_delivery_responses_dead_lettered_total` | 在记录它们的所有尝试都失败后写入死信流的设备指令响应，使设备确实给出的应答可以被看到，而不会让其指令看起来没有被应答。 |
 | `command_delivery_responses_refused_total` | 因发布的设备并不拥有其所指指令而被拒绝的设备响应。预期为零：要么某设备在替另一设备应答，要么分发把指令发给了错误的设备。 |

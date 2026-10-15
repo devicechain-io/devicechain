@@ -152,8 +152,9 @@ type Command implements Model & TokenReference & MetadataEntity {
     responsePayload: String
     """
     Why the command failed. Set when status is FAILED and a reason exists: the message the
-    device reported, or the platform's own explanation when it gave up publishing or lost the
-    answer. Null otherwise.
+    device reported, or the platform's own explanation when it gave up publishing, lost the
+    answer, or failed a command waiting for a maintenance window because the device's profile no
+    longer defines it. Null otherwise.
     """
     error: String
     """Token of the batch that created this command; null for a command issued one at a time."""
@@ -171,8 +172,9 @@ type Command implements Model & TokenReference & MetadataEntity {
     What a finished command physically amounted to, recorded by the write that finished it; null
     while the command is still live. SUCCEEDED: the device reported success. NOT_DELIVERED: proven
     never to have reached the device (expired or cancelled while the platform held it, or the
-    platform gave up publishing it), so sending it again cannot act twice. REJECTED: the device
-    received it and answered that it did not do it. UNKNOWN: it may have reached the device and
+    platform gave up publishing it, or failed it while it waited for a maintenance window because
+    the device's profile no longer defines it), so sending it again cannot act twice. REJECTED:
+    the device received it and answered that it did not do it. UNKNOWN: it may have reached the device and
     acted (sent and never answered, or answered and the answer lost), so sending it again may act
     twice. Commands that finished before this field existed are UNKNOWN unless their status alone
     decides it. Branch on this, not on error text.

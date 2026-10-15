@@ -65,14 +65,63 @@ type WindowOpeningResolver interface {
 //
 // holds names the devices the command must still wait for, each with the window and opening it
 // should be bound to (which may be a different window from the one it was stamped with). ungated
-// names the devices whose type no longer gates the command at all. A device in NEITHER list is
-// one the owner decided nothing about (it is disabled, or gone), and the caller must leave its
-// rows exactly as stamped: reading that silence as "ungated" would release a disabled device's
-// disruptive commands to go out outside any window once it is enabled. An error means nothing
-// was decided, and the rows likewise stay as stamped.
+// names the devices whose type has no maintenance window any more. undefined names the devices
+// whose type's current profile version no longer defines the command at all. A device in NONE of
+// the lists is one the owner decided nothing about (it is disabled, or gone), and the caller must
+// leave its rows exactly as stamped: reading that silence as "ungated" would release a disabled
+// device's disruptive commands to go out outside any window once it is enabled. An error means
+// nothing was decided, and the rows likewise stay as stamped.
+//
+// 🔴 THE QUESTION IS ASKED ABOUT A COMMAND THAT IS ALREADY HELD, AND THE ANSWER FOLLOWS THE
+// TYPE'S WINDOW, NOT THE COMMAND'S CURRENT IMPACT. A profile version that now marks the command
+// NORMAL does not make it ungated: what was queued as disruptive keeps waiting for the window.
+// Only an operator changing the window (re-pointing the type, or unassigning its window)
+// releases it. A command the profile no longer defines is never ungated either: it is
+// undefined, and the pass fails it rather than send a command the device's profile no longer
+// describes.
 type WindowAssignmentResolver interface {
 	CurrentWindows(ctx context.Context, deviceTokens []string, commandKey string) (holds []DispatchHold,
-		ungated []string, err error)
+		ungated []string, undefined []string, err error)
+}
+
+// CommandUndefinedReason is the fixed sentence written into a command's Error column when the
+// re-stamp pass fails a command that was waiting for a maintenance window and that its device's
+// profile no longer defines. Like UndispatchableReason it is fixed rather than interpolated, so
+// it identifies this failure exactly; the row's outcome is NOT_DELIVERED, because it never left
+// the platform.
+const CommandUndefinedReason = "Command no longer defined by this device's profile. It was waiting " +
+	"for a maintenance window and was never sent."
+
+// FailUndefinedWaiting drives the undelivered commands of the named devices and command key that
+// are stamped from window `from` to FAILED (outcome NOT_DELIVERED, error CommandUndefinedReason),
+// because the profile version their device type is on now no longer defines the command. It
+// reports how many rows it failed. Called under the window's tenant.
+//
+// 🔑 FAILED, NOT RELEASED AND NOT LEFT WAITING. Releasing would send a command the device's
+// profile no longer describes, outside the window it was queued to wait for; leaving it would
+// send it at the next opening all the same. Waiting cannot make the command valid again, so the
+// honest terminal is reached now, with a reason the operator can read: the stance
+// MarkUndeliverable takes for a transport with no command path.
+//
+// Predicated on the undelivered statuses like RepointWindow, so a row claimed meanwhile is not
+// touched and the conditional UPDATE composes with a racing claim.
+func (api *Api) FailUndefinedWaiting(ctx context.Context, from, commandKey string,
+	deviceTokens []string) (int64, error) {
+	var failed int64
+	for start := 0; start < len(deviceTokens); start += gateChunk {
+		chunk := deviceTokens[start:min(start+gateChunk, len(deviceTokens))]
+		res := api.RDB.DB(ctx).Model(&Command{}).
+			Where("window_token = ? AND name = ? AND status IN ?", from, commandKey, claimableStatusStrings()).
+			Where("device_token IN ?", chunk).
+			Updates(terminalUpdate(CommandFailed, OutcomeNotDelivered, map[string]any{
+				"error": sql.NullString{String: CommandUndefinedReason, Valid: true},
+			}))
+		if res.Error != nil {
+			return failed, res.Error
+		}
+		failed += res.RowsAffected
+	}
+	return failed, nil
 }
 
 // WaitingCommandKey is one (device, command key) with undelivered commands stamped from a window.

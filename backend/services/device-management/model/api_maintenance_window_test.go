@@ -376,3 +376,50 @@ func TestUngatedNamesOnlyEnabledDevicesWhoseTypeDoesNotGate(t *testing.T) {
 		t.Fatalf("ungated = %v, want only the two enabled devices %v", ungated, tokens[1:])
 	}
 }
+
+// A command already waiting for a window keeps waiting when the profile version its type is on
+// now marks it NORMAL: asked with alreadyHeld, the answer follows the type's window alone. A
+// command the profile no longer defines is UNDEFINED in both modes, never ungated, and only a
+// type with no window makes an already-held command ungated.
+func TestAlreadyHeldFollowsTheWindowAndNamesUndefinedCommands(t *testing.T) {
+	api := newWindowTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	tokens := seedGatedType(t, api, ctx, "plant", 2)
+	at := utcAt(2026, 1, 14, 12, 0)
+
+	// Enqueue mode: NORMAL is ungated, an undefined key is undefined.
+	enq, err := api.DispatchScheduleFor(ctx, tokens, "read", nil, at, false)
+	if err != nil || len(enq.Holds) != 0 || len(enq.Ungated) != 2 || len(enq.Undefined) != 0 {
+		t.Fatalf("enqueue NORMAL: %+v err=%v, want both ungated", enq, err)
+	}
+	// Held mode: the same NORMAL command stays on the type's window.
+	held, err := api.DispatchScheduleFor(ctx, tokens, "read", nil, at, true)
+	if err != nil || len(held.Holds) != 2 || len(held.Ungated) != 0 || len(held.Undefined) != 0 {
+		t.Fatalf("held NORMAL: %+v err=%v, want both held", held, err)
+	}
+	if held.Holds[0].WindowToken != "mw-plant" {
+		t.Fatalf("held NORMAL window = %q, want mw-plant", held.Holds[0].WindowToken)
+	}
+	for _, mode := range []bool{false, true} {
+		gone, err := api.DispatchScheduleFor(ctx, tokens, "gone", nil, at, mode)
+		if err != nil || len(gone.Holds) != 0 || len(gone.Ungated) != 0 || len(gone.Undefined) != 2 {
+			t.Fatalf("alreadyHeld=%v undefined key: %+v err=%v, want both undefined", mode, gone, err)
+		}
+	}
+
+	// Unassigning the type's window: only then is an already-held command ungated, and an
+	// undefined one is still undefined.
+	if _, err := api.UpdateDeviceType(ctx, "type-plant", &DeviceTypeUpdateRequest{
+		MaintenanceWindowToken: dcgraphql.OptionalString{Set: true, Value: nil},
+	}); err != nil {
+		t.Fatalf("unassign window: %v", err)
+	}
+	held, err = api.DispatchScheduleFor(ctx, tokens, "read", nil, at, true)
+	if err != nil || len(held.Holds) != 0 || len(held.Ungated) != 2 {
+		t.Fatalf("held NORMAL, no window: %+v err=%v, want both ungated", held, err)
+	}
+	gone, err := api.DispatchScheduleFor(ctx, tokens, "gone", nil, at, true)
+	if err != nil || len(gone.Ungated) != 0 || len(gone.Undefined) != 2 {
+		t.Fatalf("undefined, no window: %+v err=%v, want both undefined", gone, err)
+	}
+}

@@ -144,6 +144,12 @@ type DeliveryMetrics struct {
 	// than a fault of the platform.
 	WindowRestamps prometheus.Counter
 
+	// WindowCommandsUndefined counts commands that were waiting for a maintenance window and were
+	// FAILED (never sent) because the profile version their device type is on now no longer
+	// defines them. Each carries model.CommandUndefinedReason. A rate here follows profile
+	// versions that dropped a disruptive command while commands for it were still queued.
+	WindowCommandsUndefined prometheus.Counter
+
 	// StrandedObserved counts commands the stranded pass found sitting in SENT past the
 	// grace horizon, StrandedRecovered counts those it re-armed (by where they landed),
 	// and StrandedSkipped counts those it declined, by reason.
@@ -317,6 +323,9 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 				"because the window was edited or deleted, or closed again before the command's "+
 				"device came back, or moved onto (or released from) another window because their "+
 				"device type was moved to it or lost its window"),
+		WindowCommandsUndefined: ms.NewCounter("command_delivery_window_commands_undefined_total",
+			"Commands that were waiting for a maintenance window and were failed, never sent, because "+
+				"the profile version their device type is on now no longer defines them"),
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",
 			"Commands found sitting in SENT with no outcome for longer than the platform could "+
 				"still have been retrying them"),

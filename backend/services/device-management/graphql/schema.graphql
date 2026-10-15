@@ -713,10 +713,16 @@ type CommandDispatchSchedule {
     refusals: [BatchEnqueueRefusal!]!
     """
     Devices that exist, are enabled, and whose device type does not gate this command: no
-    maintenance window, or a command that is not DISRUPTIVE or DESTRUCTIVE. A device in none of
-    the three lists does not exist or is disabled, and nothing is decided about it.
+    maintenance window, or a command that is not DISRUPTIVE or DESTRUCTIVE. Asked with
+    alreadyHeld, only a device type with no maintenance window makes a device ungated. A device
+    in none of the four lists does not exist or is disabled, and nothing is decided about it.
     """
     ungated: [String!]!
+    """
+    Devices that exist and are enabled, but whose device type's current profile version does not
+    define this command at all.
+    """
+    undefined: [String!]!
 }
 
 """One page of the devices an entity group contains, for use as the target of a command."""
@@ -3451,6 +3457,12 @@ type Query {
         commandKey: String!
         """When the command expires, as an RFC 3339 timestamp. Omit it for a command that never expires."""
         expiresAt: String
+        """
+        True when asking about a command that is already waiting for a maintenance window. The
+        answer then follows the device type's window alone: a profile version that now marks the
+        command NORMAL does not make it ungated, so it keeps waiting. Defaults to false.
+        """
+        alreadyHeld: Boolean
     ): CommandDispatchSchedule!
 
     # Find customer types by unique id.

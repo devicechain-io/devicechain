@@ -25,8 +25,8 @@ func newWindowSchedulerAgainst(t *testing.T, body string) *WindowScheduler {
 func TestCurrentWindowsRelaysHoldsAndUngated(t *testing.T) {
 	s := newWindowSchedulerAgainst(t, `{"data":{"commandDispatchSchedule":{
 	  "holds":[{"deviceToken":"pump-a","windowToken":"mw-b","dispatchAfter":"2026-01-17T01:00:00Z","dispatchUntil":"2026-01-17T05:00:00Z"}],
-	  "ungated":["pump-c"]}}}`)
-	holds, ungated, err := s.CurrentWindows(batchCtx(), []string{"pump-a", "pump-b", "pump-c"}, "reboot")
+	  "ungated":["pump-c"],"undefined":["pump-d"]}}}`)
+	holds, ungated, undefined, err := s.CurrentWindows(batchCtx(), []string{"pump-a", "pump-b", "pump-c", "pump-d"}, "reboot")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,18 +37,22 @@ func TestCurrentWindowsRelaysHoldsAndUngated(t *testing.T) {
 	if len(ungated) != 1 || ungated[0] != "pump-c" {
 		t.Fatalf("ungated = %v, want [pump-c]", ungated)
 	}
+	if len(undefined) != 1 || undefined[0] != "pump-d" {
+		t.Fatalf("undefined = %v, want [pump-d]", undefined)
+	}
 }
 
 // An owner that answers without `ungated` (an older device-management) is an error, never
 // "nothing is ungated", and never "nothing is held".
 func TestCurrentWindowsFailsClosedOnAMissingList(t *testing.T) {
 	for name, body := range map[string]string{
-		"no ungated": `{"data":{"commandDispatchSchedule":{"holds":[]}}}`,
-		"no holds":   `{"data":{"commandDispatchSchedule":{"ungated":["pump-a"]}}}`,
+		"no ungated":   `{"data":{"commandDispatchSchedule":{"holds":[],"undefined":[]}}}`,
+		"no holds":     `{"data":{"commandDispatchSchedule":{"ungated":["pump-a"],"undefined":[]}}}`,
+		"no undefined": `{"data":{"commandDispatchSchedule":{"holds":[],"ungated":[]}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := newWindowSchedulerAgainst(t, body)
-			if _, _, err := s.CurrentWindows(batchCtx(), []string{"pump-a"}, "reboot"); err == nil {
+			if _, _, _, err := s.CurrentWindows(batchCtx(), []string{"pump-a"}, "reboot"); err == nil {
 				t.Fatal("a response missing a list was read as a decision")
 			}
 		})

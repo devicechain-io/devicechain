@@ -86,7 +86,8 @@ Estos estados son terminales. Nada sale de un estado terminal.
   - el transporte del dispositivo no puede llevar comandos en absoluto;
   - un dispositivo sí respondió, pero la plataforma no pudo registrar la respuesta tras todos los
     intentos;
-  - la plataforma no pudo publicar el comando a su dispositivo y dejó de reintentarlo.
+  - la plataforma no pudo publicar el comando a su dispositivo y dejó de reintentarlo;
+  - el comando esperaba una ventana de mantenimiento y el perfil de su dispositivo ya no lo define.
 
   En cada uno de estos casos, el campo `error` del comando indica cuál fue, así que nunca confundes
   un `FAILED` del lado de la plataforma con un fallo informado por el dispositivo.
@@ -104,7 +105,7 @@ volvió nada, lo que apunta al dispositivo.
 Todo comando terminal lleva además un `outcome` que dice qué ocurrió físicamente, porque `FAILED` por sí solo abarca tres hechos distintos:
 
 - **`SUCCEEDED`** — el dispositivo informó éxito.
-- **`NOT_DELIVERED`** — demostrado que nunca llegó al dispositivo (`EXPIRED`, `CANCELLED` y los casos de `FAILED` en que el transporte no puede llevar comandos o la plataforma dejó de intentar publicarlo).
+- **`NOT_DELIVERED`** — demostrado que nunca llegó al dispositivo (`EXPIRED`, `CANCELLED` y los casos de `FAILED` en que el transporte no puede llevar comandos, la plataforma dejó de intentar publicarlo o el perfil del dispositivo ya no define un comando que esperaba una ventana).
 - **`REJECTED`** — el dispositivo recibió el comando e informó un fallo.
 - **`UNKNOWN`** — puede haber actuado: `TIMEOUT`, o un `FAILED` en el que el dispositivo respondió y la plataforma perdió la respuesta.
 
@@ -297,9 +298,11 @@ terminal lo escribe la plataforma por su cuenta:
 - `TIMEOUT`, `EXPIRED` o `CANCELLED`;
 - `FAILED` porque el transporte no puede llevar el comando en absoluto;
 - `FAILED` porque llegó la respuesta de un dispositivo y no se pudo registrar contra el comando;
-- `FAILED` porque la plataforma no pudo publicar el comando y dejó de reintentarlo.
+- `FAILED` porque la plataforma no pudo publicar el comando y dejó de reintentarlo;
+- `FAILED` porque el comando esperaba una ventana de mantenimiento y el perfil de su dispositivo
+  ya no lo define.
 
-Ninguno de los dos últimos es `TIMEOUT`, por la misma razón en direcciones opuestas: en uno el
+Ni el segundo ni el tercero es `TIMEOUT`, por la misma razón en direcciones opuestas: en uno el
 dispositivo sí respondió, y en el otro nunca se le envió nada. `TIMEOUT` te llevaría a inspeccionar
 hardware que funciona en ambos casos.
 
@@ -435,14 +438,19 @@ ventana.
   comandos en espera siguen esperando; ninguno se libera.
 - Los comandos en espera siguen a su **tipo** de dispositivo, no a la ventana con la que se
   marcaron. Si un tipo pasa a otra ventana, el mismo pase mueve los comandos que ya esperan a la
-  siguiente apertura de la nueva ventana. Si se le quita la ventana al tipo, o el comando ya no es
-  `DISRUPTIVE` ni `DESTRUCTIVE` en él, se liberan y se despachan con normalidad. Los comandos de un
-  dispositivo deshabilitado se quedan en la ventana con la que se marcaron hasta que el dispositivo
-  se habilita; el pase siguiente los mueve entonces.
+  siguiente apertura de la nueva ventana. Si se le quita la ventana al tipo, se liberan y se
+  despachan con normalidad. Los comandos de un dispositivo deshabilitado se quedan en la ventana
+  con la que se marcaron hasta que el dispositivo se habilita; el pase siguiente los mueve entonces.
+- Solo un cambio en la ventana libera un comando en espera; un cambio en el perfil no. Si el tipo
+  de dispositivo pasa a una versión del perfil que marca el comando como `NORMAL`, los comandos que
+  ya esperan siguen esperando a la ventana hasta que se abra, o hasta que los canceles. Los comandos
+  encolados después del cambio siguen la nueva versión del perfil y no se retienen. Si la nueva
+  versión del perfil ya no define el comando, los comandos en espera no se envían nunca: terminan en
+  `FAILED` con resultado `NOT_DELIVERED`, y su `error` dice "Command no longer defined by this
+  device's profile". El contador `command_delivery_window_commands_undefined_total` los cuenta.
 - Liberar no es pausar. Los comandos liberados se envían en cuanto la entrega los alcanza, fuera de
   cualquier ventana, así que desvincular la ventana de un tipo con muchos comandos disruptivos en
-  espera los envía todos en aproximadamente un minuto. Lo mismo ocurre cuando una nueva versión del
-  perfil marca el comando como `NORMAL` o deja de definirlo. Para detener los comandos en espera,
+  espera los envía todos en aproximadamente un minuto. Para detener los comandos en espera,
   cancélalos (o su lote) antes de desvincular la ventana, o pasa el tipo a otra ventana.
 - Si un comando LwM2M se reclamó dentro de su ventana y la ventana se cierra antes de que pueda
   enviarse al dispositivo, no se envía. Vuelve a esperar (`PARKED`) a la siguiente apertura.

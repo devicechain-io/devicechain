@@ -236,9 +236,50 @@ type CommandDispatchHold struct {
 // device named here may have its hold released.
 func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []string, commandKey string,
 	expiresAt *time.Time, at time.Time) ([]*CommandDispatchHold, []*BatchEnqueueRefusal, []string, error) {
+	schedule, err := api.DispatchScheduleFor(ctx, deviceTokens, commandKey, expiresAt, at, false)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return schedule.Holds, schedule.Refusals, schedule.Ungated, nil
+}
+
+// DispatchSchedule is the whole answer of DispatchScheduleFor: every enabled, existing device
+// asked about is in exactly one of the four lists.
+type DispatchSchedule struct {
+	Holds    []*CommandDispatchHold
+	Refusals []*BatchEnqueueRefusal
+	// Ungated: the device's type does not gate the command (see DispatchScheduleFor for how
+	// alreadyHeld changes what that means).
+	Ungated []string
+	// Undefined: the profile version the device's type is on now does not define the command.
+	Undefined []string
+}
+
+// DispatchScheduleFor is CommandDispatchSchedule with the fourth list, UNDEFINED, and the mode
+// the re-stamp pass asks in.
+//
+// alreadyHeld=false is the enqueue question: is THIS command, as the profile classifies it now,
+// gated? A NORMAL command is ungated.
+//
+// alreadyHeld=true is the re-stamp question about a command that is ALREADY waiting for a
+// window: which window must it keep waiting for? The answer then follows the device type's
+// window ALONE and ignores the command's current impact. 🔴 THAT IS THE POINT OF THE MODE. A
+// waiting disruptive command is released only when an operator changes the WINDOW (re-points
+// the type, or unassigns its window); a new profile version that marks the command NORMAL is
+// a change to how FUTURE commands are classified, and must not send one that was queued as
+// disruptive outside its window. Under this mode a device is ungated only when its type has no
+// window at all.
+//
+// In both modes a command the type's current profile version does not define at all (dropped
+// from the vocabulary, or the type has no profile now) is UNDEFINED rather than ungated: the
+// re-stamp pass fails such a command and never sends it, and enqueue's vocabulary gate has
+// already refused it.
+func (api *Api) DispatchScheduleFor(ctx context.Context, deviceTokens []string, commandKey string,
+	expiresAt *time.Time, at time.Time, alreadyHeld bool) (*DispatchSchedule, error) {
 	holds := make([]*CommandDispatchHold, 0)
 	refusals := make([]*BatchEnqueueRefusal, 0)
 	ungated := make([]string, 0)
+	undefined := make([]string, 0)
 	ordered := dedupeTokens(deviceTokens)
 
 	verdicts := make(map[uint]typeWindowDecision)
@@ -251,7 +292,7 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 		}
 		found, err := api.DevicesByToken(ctx, ordered[start:end])
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, err
 		}
 		byToken := make(map[string]*Device, len(found))
 		for _, d := range found {
@@ -267,11 +308,15 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 			v, resolved := verdicts[device.DeviceTypeId]
 			if !resolved {
 				var err error
-				v, err = api.typeWindowVerdict(ctx, device.DeviceTypeId, commandKey, at, windows)
+				v, err = api.typeWindowVerdict(ctx, device.DeviceTypeId, commandKey, at, windows, alreadyHeld)
 				if err != nil {
-					return nil, nil, nil, err
+					return nil, err
 				}
 				verdicts[device.DeviceTypeId] = v
+			}
+			if !v.defined {
+				undefined = append(undefined, token)
+				continue
 			}
 			if !v.gated {
 				ungated = append(ungated, token)
@@ -292,12 +337,15 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 			})
 		}
 	}
-	return holds, refusals, ungated, nil
+	return &DispatchSchedule{Holds: holds, Refusals: refusals, Ungated: ungated, Undefined: undefined}, nil
 }
 
 // typeWindowDecision is the part of a dispatch schedule that depends only on the device TYPE.
 type typeWindowDecision struct {
-	// gated: the command is DISRUPTIVE or DESTRUCTIVE on a type that has a window.
+	// defined: the profile version the type is on now defines the command.
+	defined bool
+	// gated: the command is DISRUPTIVE or DESTRUCTIVE (or, asked with alreadyHeld, defined at
+	// all) on a type that has a window.
 	gated       bool
 	windowToken string
 	// [after, until) is the opening the command must start in: the one open now (after is
@@ -307,9 +355,10 @@ type typeWindowDecision struct {
 }
 
 // typeWindowVerdict resolves one device type's decision. windows memoizes the windows loaded
-// so far across the types of one call.
+// so far across the types of one call. alreadyHeld is DispatchScheduleFor's mode: the command's
+// current impact then does not decide whether it stays on the type's window.
 func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, commandKey string, at time.Time,
-	windows map[uint]*MaintenanceWindow) (typeWindowDecision, error) {
+	windows map[uint]*MaintenanceWindow, alreadyHeld bool) (typeWindowDecision, error) {
 	type result = typeWindowDecision
 	definitions, err := api.CommandDefinitionsByDeviceType(ctx, deviceTypeId)
 	if err != nil {
@@ -322,15 +371,18 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 			break
 		}
 	}
-	if matched == nil || !matched.WindowGated() {
-		return result{}, nil
+	if matched == nil {
+		return result{}, nil // not defined by the profile version the type is on now
+	}
+	if !alreadyHeld && !matched.WindowGated() {
+		return result{defined: true}, nil
 	}
 	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
 	if err != nil {
 		return result{}, err
 	}
 	if len(types) == 0 || types[0].MaintenanceWindowId == nil {
-		return result{}, nil // gated command, but the type has no window: nothing to wait for
+		return result{defined: true}, nil // gated command, but the type has no window: nothing to wait for
 	}
 	windowId := *types[0].MaintenanceWindowId
 	window, cached := windows[windowId]
@@ -351,7 +403,7 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 		return result{}, fmt.Errorf("maintenance window %q cannot be evaluated: %w", window.Token, err)
 	}
 	iv := schedule.Next(at)
-	return result{gated: true, windowToken: window.Token, after: iv.Start, until: iv.End}, nil
+	return result{defined: true, gated: true, windowToken: window.Token, after: iv.Start, until: iv.End}, nil
 }
 
 // WindowOpening is the answer to "when may an operation under this window start?".
