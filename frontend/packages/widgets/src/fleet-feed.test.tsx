@@ -137,7 +137,6 @@ const flush = () => act(async () => void (await vi.advanceTimersByTimeAsync(FLUS
 const act0 = (fn: () => void) => act(fn);
 const cellText = (device: string, measurement: string) =>
   document.querySelector(`tr[data-device="${device}"] td[data-measurement="${measurement}"]`)?.textContent ?? null;
-const rowTokens = () => [...document.querySelectorAll('tbody tr')].map((tr) => tr.getAttribute('data-device'));
 
 describe('the data it asks for', () => {
   it('opens ONE member subscription for the widget and hands it the datasource', async () => {

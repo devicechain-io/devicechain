@@ -78,6 +78,12 @@ const LEGACY_LABEL: Record<string, string> = {
   // Appended with the stat card and the categorical charts.
   stat: 'widgetLabelStat',
   sort: 'widgetLabelSort',
+  // Appended with the fleet table and the per-device bar chart.
+  groupBy: 'widgetLabelGroupBy',
+  sortBy: 'widgetLabelSortBy',
+  sortDescending: 'widgetLabelSortDescending',
+  pageSize: 'widgetLabelPageSize',
+  columns: 'widgetLabelColumns',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -115,6 +121,11 @@ const LEGACY_HINT: Record<string, string | null> = {
   step: 'widgetHintSliderStep',
   stat: 'widgetHintStat',
   sort: null,
+  groupBy: 'widgetHintGroupBy',
+  sortBy: 'widgetHintSortBy',
+  sortDescending: null,
+  pageSize: null,
+  columns: 'widgetHintColumns',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -158,6 +169,8 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'sort:none': 'widgetSortNone',
   'sort:ascending': 'widgetSortAscending',
   'sort:descending': 'widgetSortDescending',
+  'groupBy:measurement': 'widgetGroupByMeasurement',
+  'groupBy:device': 'widgetGroupByDevice',
 };
 
 const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
@@ -171,6 +184,7 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   readout: 'widgetPlaceholderDefault',
   stat: 'widgetPlaceholderDefault',
   sort: 'widgetPlaceholderDefault',
+  groupBy: 'widgetPlaceholderDefault',
 };
 
 const LEGACY_CUSTOM: Record<string, 'command' | 'slot'> = {

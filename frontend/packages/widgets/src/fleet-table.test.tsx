@@ -292,9 +292,9 @@ describe('order', () => {
     const { container } = show(state, {}, ['temperature']);
     const btn = container.querySelectorAll('thead th')[1].querySelector('button')!;
     fireEvent.click(btn);
-    expect(rows(container).at(-1)).toBe('d');
+    expect(rows(container)[rows(container).length - 1]).toBe('d');
     fireEvent.click(btn);
-    expect(rows(container).at(-1)).toBe('d');
+    expect(rows(container)[rows(container).length - 1]).toBe('d');
   });
 
   it('is operable from the keyboard: every heading is a real button, focusable and labelled', () => {

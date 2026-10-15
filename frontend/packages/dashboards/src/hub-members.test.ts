@@ -254,7 +254,7 @@ describe('the seed: no query storm', () => {
   it('delivers each device seed under its own token', async () => {
     backend(3);
     const got: Array<[string, number | undefined]> = [];
-    await newHub().readMemberSeeds(tokens(3), WINDOW, (t, seed) => got.push([t, seed?.latest.temperature?.value]));
+    await newHub().readMemberSeeds(tokens(3), WINDOW, (t, seed) => got.push([t, seed?.latest.temperature?.value ?? undefined]));
     expect(got.sort()).toEqual([
       ['d-001', 1],
       ['d-002', 2],

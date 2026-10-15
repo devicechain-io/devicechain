@@ -393,5 +393,17 @@
   "layoutFitted": "Widgets fitted to their size limits.",
   "layoutAlreadyFits": "Every widget already fits its limits.",
   "versionLayoutBlocked_one": "{{count}} widget is outside its supported size or off the canvas and must be fixed before this dashboard can be published.",
-  "versionLayoutBlocked_other": "{{count}} widgets are outside their supported size or off the canvas and must be fixed before this dashboard can be published."
+  "versionLayoutBlocked_other": "{{count}} widgets are outside their supported size or off the canvas and must be fixed before this dashboard can be published.",
+  "widgetTypeFleetTable": "Fleet table",
+  "widgetLabelColumns": "Columns",
+  "widgetHintColumns": "Heading, unit and precision for each measurement column. A column without an entry shows the measurement name.",
+  "widgetLabelColumnHeading": "Heading",
+  "widgetLabelSortBy": "Order by",
+  "widgetHintSortBy": "The measurement the table is ordered by. Leave blank to order by device name. Viewers can re-order from the column headings.",
+  "widgetLabelSortDescending": "Largest first",
+  "widgetLabelPageSize": "Devices per page",
+  "widgetLabelGroupBy": "One bar per",
+  "widgetHintGroupBy": "What a bar stands for: each measurement of one device, or each device of the group for the one measurement chosen below.",
+  "widgetGroupByMeasurement": "Measurement",
+  "widgetGroupByDevice": "Device"
 }
