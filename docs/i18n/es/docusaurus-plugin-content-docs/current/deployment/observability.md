@@ -668,6 +668,14 @@ fuera del orden de llegada, por una fracción de segundo; la detección los apli
 llegan al flujo de eventos resueltos. Un valor fuera de rango impide que el servicio arranque, y el
 error nombra el ajuste. El servicio registra el valor que usa al arrancar.
 
+### Ventana de publicación de ingesta {#ingest-publish-window}
+
+`event-sources` publica cada evento decodificado en el broker y mantiene varias de esas publicaciones esperando la confirmación del broker a la vez, igual que `device-management`.
+
+| Ajuste (config de `event-sources`) | Valor por defecto | Qué hace |
+| --- | --- | --- |
+| `capture.publishWindow` | `512` | Cuántos eventos mantiene un pod esperando la confirmación del broker a la vez, de 1 a 1024. Un valor fuera de ese rango, incluido 0, detiene el servicio al arrancar; nunca se ajusta. La ingesta no puede ir más rápido que este número dividido por lo que tarda una confirmación, y en un broker replicado una confirmación tarda de 8 a 11 ms aproximadamente, así que 128 dejaba a un pod cerca de 11.000 eventos por segundo y 512 no. Súbalo cuando `devicechain_eventsources_jetstream_publish_window_full_seconds_total` crezca cerca de un segundo por segundo. Cada evento de la ventana se guarda en memoria, junto con el mensaje de dispositivo del que viene, hasta que se confirma, así que la memoria crece en la ventana por el tamaño de un evento y un mensaje de origen: unos pocos MiB con 512 para cargas habituales. Si el pod muere, esos mensajes de origen se reentregan tras la espera de confirmación del consumidor y se publican de nuevo con el mismo id de mensaje, que el stream reconoce (consulte `jetstream_publish_duplicates_total`). Es un ajuste fijo, leído al arrancar. |
+
 ## Persistencia de eventos {#event-persistence}
 
 `event-management` escribe los eventos por lotes. Cada escritor toma los eventos que ya lo esperan,

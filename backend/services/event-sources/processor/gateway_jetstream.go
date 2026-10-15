@@ -18,25 +18,27 @@ import (
 	"github.com/devicechain-io/dc-microservice/streams"
 )
 
-// CAPTURE_PUBLISH_WINDOW is how many inbound-events publishes the gateway source keeps
-// awaiting their PubAck at once (messaging.OrderedWriter), where it used to keep one per
-// decode worker (DECODE_WORKER_COUNT). It is the same window device-management uses, and
-// the curve that confirmed it is BenchmarkCaptureIngestThroughput's: in-process over
-// loopback with 20,000 captured events (one tenant, 1,000 devices), median of three, in
-// events per second,
+// The gateway source keeps a configurable number of inbound-events publishes awaiting
+// their PubAck at once (capture.publishWindow, config.DefaultCapturePublishWindow;
+// messaging.OrderedWriter), where it used to keep one per decode worker
+// (DECODE_WORKER_COUNT). The shape was confirmed by BenchmarkCaptureIngestThroughput:
+// in-process over loopback with 20,000 captured events (one tenant, 1,000 devices),
+// median of three, in events per second,
 //
 //	      none     sync     w=1    w=128    w=256
 //	R1  78,451   10,424   2,611   64,085   58,929
 //	R3  39,705    4,704     828   23,062   21,574
 //
-// where none builds each message and publishes nothing — the stage's ceiling without a
-// publish — and sync is the five synchronous publishes this replaced. The rule, fixed
-// before measuring, was that the publish is a ceiling if sync falls below half of none at
-// R3 (it is under an eighth), and that a window ships only if it at least doubles sync at
-// R3 (128 is about 4.9x) and a wider one gains nothing (256 is within noise, and lower).
-// The absolute numbers are a floor — a real network adds a round trip to every publish —
-// and the ratios are the result.
-const CAPTURE_PUBLISH_WINDOW = 128
+// where none builds each message and publishes nothing, the stage's ceiling without a
+// publish, and sync is the five synchronous publishes this replaced. A window ships only
+// if it at least doubles sync at R3 (128 is about 4.9x).
+//
+// 🔴 THAT BENCHMARK COULD NOT CHOOSE THE SIZE. Loopback answers a PubAck in well under a
+// millisecond, where no window is ever full, so 256 looked no better than 128. On a
+// replicated stream a PubAck is ~11 ms and the window is the ceiling (window / PubAck), which
+// is why the size is a setting with a default derived from that latency. The ratios above
+// show that pipelining helps; the default's arithmetic and the memory bound are in
+// config.DefaultCapturePublishWindow.
 
 // POISON_ROUTE_LIMIT bounds how many poison messages are routed to failed-decode at once.
 // The route is a synchronous publish of up to 5 s, and it used to run on the decode worker
@@ -66,10 +68,12 @@ type poisonRoutes struct {
 }
 
 // NewInboundWriter builds the gateway source's ordered writer to inbound-events, with the
-// CAPTURE_PUBLISH_WINDOW it was measured at. It lives here rather than in main.go so that
-// the window the source actually runs with is the one a test in this package observes.
-func NewInboundWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, error) {
-	return nmgr.NewOrderedWriter(streams.InboundEvents, CAPTURE_PUBLISH_WINDOW)
+// given publish window (capture.publishWindow). The window is the caller's to choose and
+// is never defaulted here, so a caller that forgets it fails to compile rather than
+// silently running some other number. It lives here rather than in main.go so that the
+// writer the source actually runs with is the one a test in this package observes.
+func NewInboundWriter(nmgr *messaging.NatsManager, window int) (messaging.OrderedWriter, error) {
+	return nmgr.NewOrderedWriter(streams.InboundEvents, window)
 }
 
 // pendingPublish is one built message on its way from a decode worker to the submitter.
@@ -117,7 +121,7 @@ type GatewayJetStreamSource struct {
 	messages chan rawMessage
 	workers  []*DecodeWorker
 
-	// writer publishes to inbound-events with CAPTURE_PUBLISH_WINDOW publishes in flight.
+	// writer publishes to inbound-events with capture.publishWindow publishes in flight.
 	// Its ONE submitter is the goroutine submitLoop runs; the decode workers hand it
 	// their built messages over publishes, which is UNBUFFERED on purpose: the window is
 	// already the buffer, and a queue in front of it would only hold captured messages

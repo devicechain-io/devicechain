@@ -20,7 +20,7 @@ import (
 )
 
 // THE PIPELINED PUBLISH. The gateway source hands every decoded event to ONE ordered
-// writer, which keeps up to CAPTURE_PUBLISH_WINDOW publishes awaiting their PubAck at once
+// writer, which keeps up to capture.publishWindow publishes awaiting their PubAck at once
 // and reports each outcome to the message's settler. These tests drive the real source —
 // its read loop, decode workers, submitter and settler, through Start and Stop — against
 // heldWriter, which holds every outcome until the test releases it, so what is in flight

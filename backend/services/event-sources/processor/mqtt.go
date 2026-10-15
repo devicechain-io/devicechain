@@ -32,7 +32,7 @@ const (
 	// source it is one of the stages a message taken from the stream can sit in UNACKED,
 	// and so be redelivered after a crash — bounded loss became bounded REDELIVERY. The
 	// whole bound there is the reader's fetch batch, plus this queue, plus one message per
-	// decode worker, plus the one the submitter is placing, plus CAPTURE_PUBLISH_WINDOW
+	// decode worker, plus the one the submitter is placing, plus capture.publishWindow
 	// awaiting their PubAck, plus POISON_ROUTE_LIMIT being routed to failed-decode; the
 	// capture dedup id stores each redelivered one once.
 	DECODE_CHANNEL_DEPTH = 100

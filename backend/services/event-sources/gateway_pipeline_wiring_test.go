@@ -144,3 +144,59 @@ func TestCreateNatsComponentsHandsTheGatewayItsWriter(t *testing.T) {
 	require.Equal(t, "acme:"+strconv.FormatUint(ack.Sequence, 10), m.Header.Get(nats.MsgIdHdr),
 		"the published event must carry the dedup id of the capture message it came from")
 }
+
+// capture.publishWindow in the service's configuration document reaches the gateway source's
+// ordered writer, and a document that omits it gets the default. A processor test builds its
+// own writer, so a service that stopped passing the setting would run the default while every
+// other test stayed green.
+func TestConfiguredCapturePublishWindowReachesTheGatewayWriter(t *testing.T) {
+	savedMs, savedCfg := Microservice, Configuration
+	t.Cleanup(func() { Microservice, Configuration = savedMs, savedCfg })
+
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
+		StoreDir: dctest.JetStreamStoreDir(t),
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv.Shutdown)
+	u, err := url.Parse(srv.ClientURL())
+	require.NoError(t, err)
+	port, err := strconv.Atoi(u.Port())
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		doc  string
+		want int
+	}{
+		{`{"capture":{"publishWindow":300}}`, 300},
+		// Counterweight: with nothing set the writer gets the default, so a wiring that
+		// always passed 300 (or any other fixed value) cannot pass both.
+		{`{}`, 512},
+	} {
+		t.Run(tc.doc, func(t *testing.T) {
+			Microservice = &core.Microservice{InstanceId: "pubwindow", FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}
+			Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+			Microservice.Readiness.MarkReadyWithoutAuthSurface()
+			Microservice.InstanceConfiguration.Infrastructure.Nats.Hostname = u.Hostname()
+			Microservice.InstanceConfiguration.Infrastructure.Nats.Port = uint32(port)
+			Microservice.MicroserviceConfigurationRaw = []byte(tc.doc)
+			require.NoError(t, parseConfiguration())
+
+			var writer messaging.OrderedWriter
+			nmgr := messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
+				var err error
+				writer, err = newGatewayWriter(n)
+				return err
+			})
+			ctx := context.Background()
+			require.NoError(t, nmgr.Initialize(ctx))
+			require.NoError(t, nmgr.Start(ctx))
+			t.Cleanup(func() { _ = nmgr.Stop(context.Background()) })
+			require.NotNil(t, writer)
+			require.Equal(t, tc.want, writer.(interface{ Window() int }).Window(), "the gateway writer's window")
+			writer.Close()
+		})
+	}
+}

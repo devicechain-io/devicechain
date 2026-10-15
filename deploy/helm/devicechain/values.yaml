@@ -1344,6 +1344,15 @@ functionalAreas:
     #     contention:
     #       manualFloor: 0   # 0..3 — 1 sheds best-effort, 2 adds bronze, 3 adds silver
     #
+    # Inbound-events publish window: how many events a pod keeps awaiting the broker's
+    # acknowledgement at once, 1 to 1024 (out of range, 0 included, stops the service).
+    # Ingest cannot exceed this divided by the acknowledgement time, ~8-11 ms on a
+    # replicated broker, so 128 capped a pod near 11,000 events/s. Each event in the
+    # window is held in memory with its source message until acknowledged.
+    #   config:
+    #     capture:
+    #       publishWindow: 512
+    #
     # Broker-asserted MQTT presence. The broker knows exactly when a device connects
     # and disconnects; without this, an MQTT device's presence is inferred from "it
     # published recently", and every alarm, dashboard and command-delivery decision

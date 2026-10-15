@@ -56,7 +56,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 			return err
 		}
 		reader = r
-		writer, err = NewInboundWriter(n)
+		writer, err = NewInboundWriter(n, pinnedWindow)
 		return err
 	})
 	nmgr.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
@@ -69,6 +69,8 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 	require.NoError(t, nmgr.Initialize(ctx))
 	require.NoError(t, nmgr.Start(ctx))
 	t.Cleanup(func() { _ = nmgr.Stop(context.Background()) })
+
+	require.Equal(t, pinnedWindow, writer.(interface{ Window() int }).Window())
 
 	nc, err := nats.Connect(srv.ClientURL())
 	require.NoError(t, err)
@@ -137,18 +139,19 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond, "the capture consumer still has messages awaiting an ack")
 }
 
-// measuredWindow is the window BenchmarkCaptureIngestThroughput chose (see
-// CAPTURE_PUBLISH_WINDOW). It is written out rather than read from the constant, so that a
-// change to the window is a change to a measured value, made here too, with a new
-// measurement — not a silent edit a test compared against itself. At a window of 1 the
-// benchmark ran several times slower than the synchronous path this replaced.
-const measuredWindow = 128
+// pinnedWindow is the window these tests ask the writer for. It is written out, and is
+// deliberately NOT the shipped default (config.DefaultCapturePublishWindow, 512), so that what
+// the broker is seen holding is the argument NewInboundWriter was given: a writer that ignored
+// it and used some fixed number would hold a different count and fail. The shipped default's
+// value is pinned in the config package; the service handing the configured value to the
+// writer is pinned in main's TestConfiguredCapturePublishWindowReachesTheGatewayWriter.
+const pinnedWindow = 200
 
-// THE SHIPPED WINDOW, through the writer the service builds. The inbound-events stream is
+// THE REQUESTED WINDOW, through the writer the service builds. The inbound-events stream is
 // replaced by a responder that holds every publish unanswered, so what the broker is
 // holding at once is the writer's window, counted exactly: the writer must have
-// measuredWindow publishes out and be waiting for room with the rest.
-func TestTheInboundWriterKeepsTheMeasuredWindowInFlight(t *testing.T) {
+// pinnedWindow publishes out and be waiting for room with the rest.
+func TestTheInboundWriterKeepsTheRequestedWindowInFlight(t *testing.T) {
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
 		StoreDir: dctest.JetStreamStoreDir(t),
@@ -168,7 +171,7 @@ func TestTheInboundWriterKeepsTheMeasuredWindowInFlight(t *testing.T) {
 	ms.Readiness.MarkReadyWithoutAuthSurface()
 	var writer messaging.OrderedWriter
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
-		writer, err = NewInboundWriter(n)
+		writer, err = NewInboundWriter(n, pinnedWindow)
 		return err
 	})
 	ctx := context.Background()
@@ -198,7 +201,7 @@ func TestTheInboundWriterKeepsTheMeasuredWindowInFlight(t *testing.T) {
 		return len(held)
 	}
 
-	const total = measuredWindow + 8
+	const total = pinnedWindow + 8
 	var settled atomic.Int32
 	submitted := make(chan struct{})
 	go func() {
@@ -210,10 +213,10 @@ func TestTheInboundWriterKeepsTheMeasuredWindowInFlight(t *testing.T) {
 		}
 	}()
 
-	require.Eventually(t, func() bool { return seen() >= measuredWindow }, 10*time.Second, time.Millisecond,
-		"the inbound writer never had the measured window of publishes out at once")
+	require.Eventually(t, func() bool { return seen() >= pinnedWindow }, 10*time.Second, time.Millisecond,
+		"the inbound writer never had the requested window of publishes out at once")
 	time.Sleep(200 * time.Millisecond)
-	require.Equal(t, measuredWindow, seen(),
+	require.Equal(t, pinnedWindow, seen(),
 		"publishes the broker held at once, all unanswered: the gateway source's inbound window")
 
 	// Answer everything as it arrives, so the writer can finish and close.
