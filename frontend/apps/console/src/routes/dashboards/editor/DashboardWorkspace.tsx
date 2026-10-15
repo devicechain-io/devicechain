@@ -11,13 +11,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Download, FlaskConical, History, Trash2 } from 'lucide-react';
+import { ArrowLeft, ClipboardPaste, Download, FlaskConical, History, Redo2, Trash2, Undo2 } from 'lucide-react';
 import { hasAuthority } from '@devicechain/client';
 import {
   addWidget,
   bindWidgetSlot,
   clearWidgetDatasource,
+  copyWidget,
   createEntityLister,
+  duplicateWidget,
   DEFAULT_CANVAS_DENSITY,
   effectiveBindings,
   fitToLimits,
@@ -25,9 +27,12 @@ import {
   migrateToSlots,
   parseDashboardDefinition,
   type DashboardDefinitionError,
+  parseWidgetClipboard,
+  pasteWidgets,
   pruneSlots,
   resolveConcrete,
   serializeDefinition,
+  serializeWidgetClipboard,
   setCanvasGrid,
   setCanvasDensity,
   setBoardTimeRange,
@@ -54,7 +59,9 @@ import {
   type SelectionTarget,
   type SlotBinding,
   type SyntheticGenerator,
+  type UnboundPaste,
   type WidgetDescriptor,
+  type WidgetInstance,
 } from '@devicechain/dashboards';
 import {
   DashboardRenderer,
@@ -91,6 +98,9 @@ import { WorkspaceConnection } from './WorkspaceConnection';
 import { exportDefinitionJson } from './exportDefinition';
 import { DashboardImportDrawer } from '../import/DashboardImportDrawer';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
+import { useEditHistory, type EditAction, type EditLabel } from './useEditHistory';
+import { editorShortcut, isTypingTarget } from './editorShortcuts';
+import { readWidgetClipboard, writeWidgetClipboard } from './widgetClipboard';
 
 type SaveState = { kind: 'clean' } | { kind: 'saving' } | { kind: 'error'; message: string };
 
@@ -116,10 +126,11 @@ function useDebouncedValue<T>(value: T, key: string, ms: number): T {
 // token or per axis/side shows here as its px value; typing one writes a single px value.
 function CanvasSettings({
   definition,
-  onChange,
+  onChange: commit,
 }: {
   definition: DashboardDefinition;
-  onChange: (next: DashboardDefinition) => void;
+  // `field` names the setting, so typing into one number box is one undo step.
+  onChange: (next: DashboardDefinition, field: string) => void;
 }) {
   const { t } = useTranslation('dashboards');
   const { grid, sizing } = definition.canvas;
@@ -132,10 +143,10 @@ function CanvasSettings({
   const setMode = (next: 'fill' | 'width' | 'height') => {
     const value: CanvasSizing =
       next === 'fill' ? 'fill' : next === 'width' ? { width: fixedPx } : { height: fixedPx };
-    onChange(setCanvasSizing(definition, value));
+    commit(setCanvasSizing(definition, value), 'sizing');
   };
   const setFixedPx = (px: number) =>
-    onChange(setCanvasSizing(definition, mode === 'width' ? { width: px } : { height: px }));
+    commit(setCanvasSizing(definition, mode === 'width' ? { width: px } : { height: px }), 'sizing-px');
 
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
@@ -143,25 +154,25 @@ function CanvasSettings({
         label={t('workspaceColumns')}
         value={grid.columns}
         min={1}
-        onChange={(v) => onChange(setCanvasGrid(definition, { columns: v }))}
+        onChange={(v) => commit(setCanvasGrid(definition, { columns: v }), 'columns')}
       />
       <NumberField
         label={t('workspaceMinCellSize')}
         value={grid.minCellSize}
         min={1}
-        onChange={(v) => onChange(setCanvasGrid(definition, { minCellSize: v }))}
+        onChange={(v) => commit(setCanvasGrid(definition, { minCellSize: v }), 'minCellSize')}
       />
       <NumberField
         label={t('workspaceGutter')}
         value={gutter}
         min={0}
-        onChange={(v) => onChange(setCanvasGrid(definition, { gutter: v }))}
+        onChange={(v) => commit(setCanvasGrid(definition, { gutter: v }), 'gutter')}
       />
       <NumberField
         label={t('workspacePadding')}
         value={padding}
         min={0}
-        onChange={(v) => onChange(setCanvasGrid(definition, { padding: v }))}
+        onChange={(v) => commit(setCanvasGrid(definition, { padding: v }), 'padding')}
       />
       <div className="flex items-center gap-2">
         <label className="text-sm text-muted-foreground">{t('workspaceSize')}</label>
@@ -195,7 +206,7 @@ function CanvasSettings({
             ...TIME_RANGE_PRESETS.map((p) => ({ value: String(p.seconds), label: p.id })),
           ]}
           value={String(boardSpan)}
-          onChange={(v) => onChange(setBoardTimeRange(definition, Number(v)))}
+          onChange={(v) => commit(setBoardTimeRange(definition, Number(v)), 'time-range')}
           allowClear={false}
           className="h-9 w-24"
         />
@@ -213,7 +224,7 @@ function CanvasSettings({
             { value: 'wall', label: t('workspaceDensityWall') },
           ]}
           value={definition.canvas.density ?? DEFAULT_CANVAS_DENSITY}
-          onChange={(v) => onChange(setCanvasDensity(definition, v as CanvasDensity))}
+          onChange={(v) => commit(setCanvasDensity(definition, v as CanvasDensity), 'density')}
           allowClear={false}
           className="h-9 w-36"
         />
@@ -314,6 +325,41 @@ function applyDatasource(
   return pruneSlots(bindWidgetSlot(def, widgetId, binding, ds.measurements, ds.location));
 }
 
+// A widget's name as an author recognises it: its title option, else its type.
+function widgetName(widget: WidgetInstance | undefined): string {
+  if (!widget) return '';
+  const title = widget.options?.title;
+  return typeof title === 'string' && title.trim() !== '' ? title.trim() : widget.type;
+}
+
+// The undo step a settings edit belongs to: the widget, and which of its settings changed. Typing
+// into one field changes the same setting on every keystroke, so the keystrokes are one step;
+// moving to another field opens a new one.
+function settingsKey(before: WidgetInstance | undefined, after: WidgetInstance): string {
+  const changed: string[] = [];
+  const a = before?.options ?? {};
+  const b = after.options ?? {};
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) changed.push(`options.${k}`);
+  }
+  for (const k of ['frame', 'datasource', 'widget'] as const) {
+    if (JSON.stringify(before?.[k]) !== JSON.stringify(after[k])) changed.push(k);
+  }
+  return `settings:${after.id}:${changed.sort().join(',')}`;
+}
+
+// The slot a pasted widget still waits on, while it does: it references the slot the paste gave it
+// and nothing has been bound to that slot since. Read from the working copy, so the explanation
+// goes as soon as the author binds the widget, deletes it, or undoes the paste, and comes back
+// with a redo.
+function stillUnbound(def: DashboardDefinition, n: UnboundPaste): boolean {
+  const w = def.widgets.find((x) => x.id === n.widgetId);
+  if (!w) return false;
+  const refers = (w.datasource?.kind === 'slot' && w.datasource.slot === n.slot) || w.options?.selectionTarget === n.slot;
+  const slot = def.slots && Object.prototype.hasOwnProperty.call(def.slots, n.slot) ? def.slots[n.slot] : undefined;
+  return refers && slot !== undefined && slot.defaultBinding === undefined;
+}
+
 // 🔴 THE EDITOR NO LONGER TAKES A `description`, AND THE ABSENCE IS THE FIX.
 //
 // It never edited one. It took the prop only so a save could send it back verbatim,
@@ -346,7 +392,12 @@ export function DashboardWorkspace({
   const canEdit = hasAuthority(claims, 'dashboard:write');
 
   const [mode, setMode] = useState<'view' | 'edit'>('view');
-  const [working, setWorking] = useState<DashboardDefinition>(loaded);
+  // The working copy, as an undo/redo history (see useEditHistory for when it resets).
+  const [working, history] = useEditHistory(loaded);
+  // What the last undo, redo, duplicate, copy or paste did, for a screen reader.
+  const [announcement, setAnnouncement] = useState('');
+  // Widgets pasted without their binding, and why: shown until each is bound (see stillUnbound).
+  const [pasteNotices, setPasteNotices] = useState<(UnboundPaste & { name: string })[]>([]);
   // The viewer's time range and pause. Held here (not in the renderer) so the control sits in the
   // page header; it starts at the board's own default span and follows the author changing it.
   const [timeRange, timeRangeControls] = useBoardTimeRange(working.timeRange?.defaultSeconds);
@@ -459,9 +510,136 @@ export function DashboardWorkspace({
 
   const addWidgetOfType = (descriptor: WidgetDescriptor) => {
     const { definition, id } = addWidget(working, descriptor);
-    setWorking(definition);
+    history.commit(definition, { action: 'add', name: widgetName(definition.widgets.find((w) => w.id === id)) });
     setSelectedId(id); // open the new widget's config panel
   };
+
+  // ---- undo, redo, duplicate, copy and paste ------------------------------------------
+
+  const describeEdit = (label: EditLabel) => t(`historyEdit_${label.action satisfies EditAction}`, { name: label.name ?? '' });
+  const undo = () => {
+    const label = history.undo();
+    if (label) setAnnouncement(t('historyUndid', { edit: describeEdit(label) }));
+  };
+  const redo = () => {
+    const label = history.redo();
+    if (label) setAnnouncement(t('historyRedid', { edit: describeEdit(label) }));
+  };
+
+  const duplicate = (id: string) => {
+    const result = duplicateWidget(working, id);
+    if (!result) return;
+    const name = widgetName(working.widgets.find((w) => w.id === id));
+    history.commit(result.definition, { action: 'duplicate', name });
+    setSelectedId(result.id);
+    setAnnouncement(t('announceDuplicated', { name }));
+  };
+
+  // The clipboard text for widget `id`, recording this board as where it came from.
+  const clipboardText = (id: string): string | undefined => {
+    const clip = copyWidget(working, id, token);
+    return clip && serializeWidgetClipboard(clip);
+  };
+  const copied = (id: string, text: string) => {
+    writeWidgetClipboard(text);
+    const name = widgetName(working.widgets.find((w) => w.id === id));
+    setAnnouncement(t('announceCopied', { name }));
+    toast(t('workspaceWidgetCopied', { name }));
+  };
+  // The toolbar's Copy: the tab's clipboard always, the system clipboard where the browser allows
+  // it (a non-secure context has none), so a paste in another tab can read it too.
+  const copyFromToolbar = (id: string) => {
+    const text = clipboardText(id);
+    if (!text) return;
+    copied(id, text);
+    void navigator.clipboard?.writeText(text).catch(() => undefined);
+  };
+
+  // Pastes clipboard text. False when the text is not a widget clipboard at all.
+  const pasteText = (text: string): boolean => {
+    const parsed = parseWidgetClipboard(text, { catalog: registry.catalog });
+    if (!parsed) return false;
+    for (const r of parsed.refused) toast(t('workspacePasteRefused', { type: r.type, reason: r.reason }), 'error');
+    if (parsed.clipboard.widgets.length === 0) return true;
+    const result = pasteWidgets(working, parsed.clipboard, token);
+    const name = widgetName(result.definition.widgets.find((w) => w.id === result.ids[0]));
+    history.commit(result.definition, { action: 'paste', name });
+    setSelectedId(result.ids[0]);
+    if (result.unbound.length > 0) {
+      const named = result.unbound.map((n) => ({
+        ...n,
+        name: widgetName(result.definition.widgets.find((w) => w.id === n.widgetId)),
+      }));
+      setPasteNotices((prev) => [...prev, ...named]);
+    }
+    setAnnouncement(t('announcePasted', { name }));
+    return true;
+  };
+  const pasteFromToolbar = () => {
+    const text = readWidgetClipboard();
+    if (!text || !pasteText(text)) toast(t('workspacePasteEmpty'), 'error');
+  };
+  const notices = pasteNotices.filter((n) => stillUnbound(working, n));
+
+  // The latest of everything the document-level listeners below call, so they are bound once per
+  // edit session rather than on every render.
+  const live = useRef({ undo, redo, duplicate, clipboardText, copied, pasteText, selectedId });
+  live.current = { undo, redo, duplicate, clipboardText, copied, pasteText, selectedId };
+  const { seal } = history;
+
+  useEffect(() => {
+    if (mode !== 'edit') return;
+    const onKey = (e: KeyboardEvent) => {
+      const shortcut = editorShortcut(e);
+      if (!shortcut) return;
+      const now = live.current;
+      if (shortcut === 'duplicate') {
+        if (!now.selectedId) return;
+        e.preventDefault(); // the browser's bookmark shortcut
+        now.duplicate(now.selectedId);
+        return;
+      }
+      e.preventDefault();
+      if (shortcut === 'undo') now.undo();
+      else now.redo();
+    };
+    // Copy and paste ride the browser's own events, so the system clipboard is read and written
+    // without a permission prompt. Text copied or pasted in a field, or a text selection on the
+    // page, is left to the browser.
+    const onCopy = (e: ClipboardEvent) => {
+      const now = live.current;
+      if (!now.selectedId || isTypingTarget(e.target)) return;
+      if (!(window.getSelection?.()?.isCollapsed ?? true)) return;
+      const text = now.clipboardText(now.selectedId);
+      if (!text) return;
+      e.clipboardData?.setData('text/plain', text);
+      e.preventDefault();
+      now.copied(now.selectedId, text);
+    };
+    const onPaste = (e: ClipboardEvent) => {
+      if (isTypingTarget(e.target)) return;
+      const text = e.clipboardData?.getData('text/plain') ?? '';
+      // Text that is not a widget is not ours to paste; an empty system clipboard falls back to
+      // the widget last copied in this tab.
+      const source = text !== '' ? text : readWidgetClipboard();
+      if (source && live.current.pasteText(source)) e.preventDefault();
+    };
+    // Leaving a field ends its typing step: coming back to it later is a new undo step.
+    const onFocusOut = () => seal();
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('copy', onCopy);
+    document.addEventListener('paste', onPaste);
+    document.addEventListener('focusout', onFocusOut);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('copy', onCopy);
+      document.removeEventListener('paste', onPaste);
+      document.removeEventListener('focusout', onFocusOut);
+    };
+  }, [mode, seal]);
+
+  // A different widget selected starts a new typing step.
+  useEffect(() => seal(), [selectedId, seal]);
 
   const toggleMode = () => {
     setSelectedId(null);
@@ -484,7 +662,8 @@ export function DashboardWorkspace({
       .then((result) => {
         // The save wrote the current format: neither copy is a conversion any more.
         setSaved(withoutConversionMark(snapshot));
-        setWorking((w) => withoutConversionMark(w));
+        // In every state the history holds, or an undo would bring the conversion notice back.
+        history.rebase(withoutConversionMark);
         setExpectedUpdatedAt(result.updatedAt); // advance the baseline for the next save
         setSaveState({ kind: 'clean' });
         toast(t('workspaceSaved'));
@@ -513,7 +692,7 @@ export function DashboardWorkspace({
       toast(t('workspaceNoUnknownOptions'));
       return;
     }
-    setWorking(next);
+    history.commit(next, { action: 'strip' });
     toast(t('workspaceUnknownOptionsRemoved'));
   };
 
@@ -526,7 +705,7 @@ export function DashboardWorkspace({
       toast(t('layoutAlreadyFits'));
       return;
     }
-    setWorking(next);
+    history.commit(next, { action: 'fit' });
     toast(t('layoutFitted'));
   };
   // Whether the board has anything the publish would refuse on layout: offers the repair in the
@@ -546,7 +725,9 @@ export function DashboardWorkspace({
       const currentName = saved.title || name || '';
       if (def.title === '' && currentName) def = setTitle(def, currentName);
       def = migrateToSlots(def); // keep the editor slot-based (a version may be concrete)
-      setWorking(def);
+      // Replaced from outside the editor: the history before it no longer leads here.
+      history.reset(def);
+      setPasteNotices([]);
       setSaved(def);
       setSelectedId(null);
       setExpectedUpdatedAt(result.updatedAt);
@@ -708,7 +889,34 @@ export function DashboardWorkspace({
     <div className="flex items-center gap-2">
       {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}
+      <div role="group" aria-label={t('workspaceHistoryControls')} className="flex gap-1">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={undo}
+          disabled={!history.canUndo}
+          aria-label={t('workspaceUndo')}
+          title={t('workspaceUndoHint')}
+          data-testid="undo"
+        >
+          <Undo2 size={14} />
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={redo}
+          disabled={!history.canRedo}
+          aria-label={t('workspaceRedo')}
+          title={t('workspaceRedoHint')}
+          data-testid="redo"
+        >
+          <Redo2 size={14} />
+        </Button>
+      </div>
       <AddWidgetMenu registry={registry} onAdd={addWidgetOfType} />
+      <Button variant="outline" size="sm" onClick={pasteFromToolbar} title={t('workspacePasteHint')} data-testid="paste">
+        <ClipboardPaste size={14} /> {t('workspacePaste')}
+      </Button>
       {layoutBlocked && (
         <Button
           variant="outline"
@@ -771,12 +979,36 @@ export function DashboardWorkspace({
               <Input
                 id="dash-title"
                 value={working.title}
-                onChange={(e) => setWorking(setTitle(working, e.target.value))}
+                onChange={(e) => history.commit(setTitle(working, e.target.value), { action: 'title' }, 'title')}
                 placeholder={t('workspaceTitlePlaceholder')}
                 className="max-w-sm"
               />
             </div>
-            <CanvasSettings definition={working} onChange={setWorking} />
+            <CanvasSettings
+              definition={working}
+              onChange={(next, field) => history.commit(next, { action: 'canvas' }, `canvas:${field}`)}
+            />
+            {notices.length > 0 && (
+              <div
+                role="status"
+                data-testid="paste-unbound"
+                className="flex w-full items-start justify-between gap-3 rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              >
+                <div>
+                  {notices.map((n) => (
+                    <p key={`${n.widgetId}:${n.slot}`}>
+                      {t(n.reason === 'missing' ? 'pasteUnboundMissing' : 'pasteUnboundDifferent', {
+                        name: n.name,
+                        slot: n.from,
+                      })}
+                    </p>
+                  ))}
+                </div>
+                <Button variant="quiet" size="inline" onClick={() => setPasteNotices([])}>
+                  {t('pasteUnboundDismiss')}
+                </Button>
+              </div>
+            )}
             {converted && (
               <div
                 role="status"
@@ -798,12 +1030,22 @@ export function DashboardWorkspace({
     >
       {mode === 'edit' ? (
         <div className="flex h-full min-h-0">
+          <div className="sr-only" role="status" aria-live="polite" data-testid="editor-announcer">
+            {announcement}
+          </div>
           <div className="min-w-0 flex-1">
             <DashboardCanvas
               definition={working}
               // Prune slots orphaned by a widget delete (canvas edits go through here);
               // a no-op for move/resize since those keep every widget's slot reference.
-              onChange={(next) => setWorking(pruneSlots(next))}
+              onChange={(next, edit) =>
+                history.commit(pruneSlots(next), {
+                  action: edit.action,
+                  name: widgetName(working.widgets.find((w) => w.id === edit.widgetId)),
+                })
+              }
+              onDuplicate={duplicate}
+              onCopy={copyFromToolbar}
               hub={dataHub}
               registry={registry}
               actions={dataHub}
@@ -827,14 +1069,26 @@ export function DashboardWorkspace({
               slotName={widgetSlotName(selected)}
               slotScoped={isSlotScoped(working, widgetSlotName(selected))}
               slots={working.slots}
-              onChange={(next) => setWorking(updateWidget(working, next.id, next))}
-              onDatasource={(ds) => setWorking(applyDatasource(working, selected.id, ds))}
+              onChange={(next) =>
+                history.commit(
+                  updateWidget(working, next.id, next),
+                  { action: 'options', name: widgetName(selected) },
+                  settingsKey(selected, next),
+                )
+              }
+              onDatasource={(ds) =>
+                history.commit(
+                  applyDatasource(working, selected.id, ds),
+                  { action: 'datasource', name: widgetName(selected) },
+                  `datasource:${selected.id}`,
+                )
+              }
               // Scope the selected widget's slot (parent + strategy), or clear it. setSlotScope
               // validates (parent exists/anchor/no cycle) and no-ops an invalid change. Prune
               // afterwards is unnecessary — scope never orphans a slot.
               onScope={(scope) => {
                 const slot = widgetSlotName(selected);
-                if (slot) setWorking((w) => setSlotScope(w, slot, scope));
+                if (slot) history.commit((w) => setSlotScope(w, slot, scope), { action: 'scope', name: widgetName(selected) });
               }}
               onClose={() => setSelectedId(null)}
             />

@@ -93,8 +93,9 @@ platform checks each action against your own permissions.
 
 ## Editing on the canvas
 
-**Edit** turns the dashboard into a canvas. The buttons change to **Add widget**, **Preview**,
-**Export**, **History**, **Save** and **Done**, and a bar of layout settings appears.
+**Edit** turns the dashboard into a canvas. The buttons change to **Undo**, **Redo**, **Add
+widget**, **Paste**, **Preview**, **Export**, **History**, **Save** and **Done**, and a bar of
+layout settings appears.
 
 <GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows Add widget, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 12, Min cell 56, Gutter 8, Padding 0 and Size Fill area. Widgets are outlined on the canvas; some show a dash or No data yet." />
 
@@ -237,6 +238,37 @@ A relative widget keeps its size, moves whenever its host moves, may overlap it,
 the grid. A dashed line joins it to its host. Drag it to shift it away from the anchor in whole
 cells, or hold **Shift** to move in quarter cells. Choose **Grid** to put it back on the grid, in the
 first free space. A relative widget cannot itself be a host.
+
+### Undo, duplicate and paste {#undo-duplicate-and-paste}
+
+**Undo** and **Redo**, first among the editor's buttons, step back and forward through your edits:
+moving, resizing, adding and deleting widgets, their settings and data sources, the layout settings
+and **Fit to limits**. **Ctrl+Z** (**Cmd+Z** on a Mac) undoes, and **Ctrl+Shift+Z** or **Ctrl+Y**
+(**Cmd+Shift+Z**) redoes. A drag or a resize is one step however far the pointer travels, and typing
+into one field is one step until you leave the field. The editor keeps the last 100 steps. While you
+are typing in a field, these keys undo and redo the typing in that field instead. A screen reader is
+told what each step undid, for example "Undid move of Tank level".
+
+Undo only ever goes back to what the dashboard really was: it can bring back a placement problem
+that **Fit to limits** fixed, but never one the dashboard did not have. The steps last until you
+leave the dashboard or restore a version. Saving and publishing keep them, so you can undo an edit
+you have just saved; the dashboard then has unsaved changes again.
+
+**Duplicate**, on the selected widget, or **Ctrl+D** (**Cmd+D**), adds a copy with the same size,
+settings and data source in the first free space it fits.
+
+**Copy**, on the selected widget, or **Ctrl+C** (**Cmd+C**), copies it. **Paste**, in the editor
+header, adds the widget last copied in this browser tab to the dashboard you are editing, in the
+first free space, so you can copy on one dashboard and paste on another. **Ctrl+V** (**Cmd+V**)
+pastes from the clipboard, which also reaches a dashboard open in another tab. A widget type this
+console does not have is not pasted, and the console names it.
+
+On the same dashboard a copy keeps its data source. On another dashboard it keeps it only where that
+dashboard has a slot of the same name bound to the same device or entity: slots are numbered per
+dashboard, so the same name on two dashboards usually means two different devices. Otherwise the
+widget is pasted without a data source, and the editor says so, naming the widget and the slot it
+was bound to, until you choose a data source in its settings. A widget placed relative to another
+is copied onto the grid at its own size; choose **Relative to…** to attach it again.
 
 ## Previewing with synthetic data {#previewing-with-synthetic-data}
 

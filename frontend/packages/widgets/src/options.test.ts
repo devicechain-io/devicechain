@@ -93,6 +93,8 @@ const SHARED_SOURCES = [
   'connected-widget.tsx',
   '../../widget-sdk/src/widget-options.ts',
   '../../dashboards/src/slots.ts',
+  // Copy and paste carry the slot a selector re-points (`selectionTarget`) across with the widget.
+  '../../dashboards/src/editor-clipboard.ts',
   // lintLayout reads every widget's title to catch one repeating the subject line.
   '../../dashboards/src/layout-lint.ts',
   // The fleet feed reads the per-device bar chart's `measurement` (what its seed must find) and
@@ -113,7 +115,8 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // The fleet feed reads it for the bar chart's one bar per device.
   measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
-  // reads it generically to keep a referenced slot alive.
+  // reads it generically to keep a referenced slot alive, and editor-clipboard.ts to carry it
+  // across a paste.
   selectionTarget: ['alarm-table', 'entity-selector'],
 };
 
