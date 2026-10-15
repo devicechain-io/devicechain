@@ -235,7 +235,7 @@ describe('dragging a grid widget', () => {
     const onSelect = vi.fn();
     render(
       <DashboardCanvas
-        definition={board([{ id: 'p', type: PORTAL_ID, layout: { base: { mode: 'grid', col: 0, row: 0, cols: 3, rows: 2 } } }])}
+        definition={board([{ id: 'p', type: PORTAL_ID, widget: { version: '1.0.0', optionsVersion: 1 }, layout: { base: { mode: 'grid', col: 0, row: 0, cols: 3, rows: 2 } } }])}
         onChange={onChange}
         hub={quiet}
         bindings={{}}

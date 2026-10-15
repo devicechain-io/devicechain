@@ -367,12 +367,13 @@ export function DashboardCanvas({
     </div>
   );
 
-  // Whether a pointer down may begin a gesture: the primary button of the primary pointer, while
-  // no other gesture runs, from the widget's own DOM. React bubbles an event out of a PORTAL to the
-  // component that rendered it, so a popover a widget portals out of its (inert) body would
-  // otherwise reach the widget's handler from somewhere that is not the widget at all.
+  // Whether a pointer down may begin a gesture: the primary button, while no other gesture runs (a
+  // second finger or pen cannot start one, and the running one only follows its own pointerId),
+  // from the widget's own DOM. React bubbles an event out of a PORTAL to the component that
+  // rendered it, so a popover a widget portals out of its (inert) body would otherwise reach the
+  // widget's handler from somewhere that is not the widget at all.
   const mayStart = (e: React.PointerEvent) =>
-    e.button === 0 && e.isPrimary !== false && gesture === null && e.currentTarget.contains(e.target as Node);
+    e.button === 0 && gesture === null && e.currentTarget.contains(e.target as Node);
 
   const startGesture = (e: React.PointerEvent, start: GestureStart) => {
     setPointer({ dx: 0, dy: 0, shift: e.shiftKey });

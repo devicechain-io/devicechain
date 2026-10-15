@@ -304,8 +304,8 @@ describe('fit to limits and the publish block', () => {
     // Anchored top-right of a one-column host at column 0, a three-column badge hangs off the left
     // edge with no offset to drop: what placeRelative produces when such a host is picked.
     const d = board([
-      { id: 'h', type: 'free', layout: { base: at(0, 0, 1, 2) } },
-      { id: 'r', type: 'free', layout: { base: { mode: 'relative', host: 'h', anchor: 'top-right', size: { cols: 3, rows: 1 } } } },
+      { id: 'h', type: 'image', layout: { base: at(0, 0, 1, 2) } },
+      { id: 'r', type: 'image', layout: { base: { mode: 'relative', host: 'h', anchor: 'top-right', size: { cols: 3, rows: 1 } } } },
     ]);
     expect(codes(d)).toEqual(['relative-off-canvas']);
     const fixed = fitToLimits(d, limitsOf);
@@ -316,10 +316,10 @@ describe('fit to limits and the publish block', () => {
 
   it('keeps as much of an off-canvas offset as the canvas allows', () => {
     const d = board([
-      { id: 'h', type: 'free', layout: { base: at(2, 0, 4, 3) } },
+      { id: 'h', type: 'image', layout: { base: at(2, 0, 4, 3) } },
       {
         id: 'r',
-        type: 'free',
+        type: 'image',
         layout: {
           base: { mode: 'relative', host: 'h', anchor: 'top-left', offset: { x: -5, y: 0.5 }, size: { cols: 1, rows: 1 } },
         },
@@ -331,10 +331,10 @@ describe('fit to limits and the publish block', () => {
 
   it('fixes a relative widget off the canvas only at a narrower breakpoint it INHERITS base at', () => {
     const d = board([
-      { id: 'h', type: 'free', layout: { base: at(2, 0, 4, 2) } },
+      { id: 'h', type: 'image', layout: { base: at(2, 0, 4, 2) } },
       {
         id: 'r',
-        type: 'free',
+        type: 'image',
         layout: {
           base: { mode: 'relative', host: 'h', anchor: 'top-right', self: 'top-left', size: { cols: 2, rows: 1 }, offset: { x: 2, y: 0 } },
         },
@@ -355,7 +355,7 @@ describe('fit to limits and the publish block', () => {
 
   it("gives a `fill` widget an explicit size when its host is outside the widget's own limits", () => {
     const d = board([
-      { id: 'h', type: 'free', layout: { base: at(0, 0, 8, 6) } },
+      { id: 'h', type: 'image', layout: { base: at(0, 0, 8, 6) } },
       { id: 'r', type: 'label', layout: { base: { mode: 'relative', host: 'h', anchor: 'center', size: { fill: 'host' } } } },
     ]);
     expect(codes(d)).toEqual(['span-out-of-limits']);
@@ -369,10 +369,10 @@ describe('fit to limits and the publish block', () => {
     // 56 px cells but runs off the right edge at very large ones, where the fixed (here wide)
     // gutter weighs less. Measured at the smallest cell alone, -10.9 would be kept.
     const d = board([
-      { id: 'h', type: 'free', layout: { base: at(0, 0, 12, 2) } },
+      { id: 'h', type: 'image', layout: { base: at(0, 0, 12, 2) } },
       {
         id: 'r',
-        type: 'free',
+        type: 'image',
         layout: {
           base: {
             mode: 'relative',
@@ -396,10 +396,10 @@ describe('fit to limits and the publish block', () => {
     // As wide as the canvas, with its left edge hung on the host's right edge: the gutter makes the
     // offset that fits small cells miss at large ones, so no single offset is on the canvas.
     const d = board([
-      { id: 'h', type: 'free', layout: { base: at(0, 0, 12, 2) } },
+      { id: 'h', type: 'image', layout: { base: at(0, 0, 12, 2) } },
       {
         id: 'r',
-        type: 'free',
+        type: 'image',
         layout: { base: { mode: 'relative', host: 'h', anchor: 'top-right', self: 'top-left', size: { cols: 12, rows: 1 } } },
       },
     ]);
@@ -416,7 +416,7 @@ describe('fit to limits and the publish block', () => {
       return seed % n;
     };
     const anchors = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const;
-    const types = ['label', 'free'];
+    const types = ['label', 'image'] as const;
     let checked = 0;
     for (let trial = 0; trial < 400; trial++) {
       const widgets: WidgetInstance[] = [];
