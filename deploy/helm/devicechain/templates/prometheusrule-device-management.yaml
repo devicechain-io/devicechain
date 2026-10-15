@@ -5,7 +5,7 @@ WHY THIS GROUP EXISTS. device-management keeps device credentials and per-device
 (relationships, group membership, and so on) in bounded in-process caches, so the hot path
 answers from memory instead of the database or the key-value bucket. A cache smaller than
 the fleet that reports through it does not degrade gently: it cycles through the fleet, so
-nearly every lookup is a miss and every miss evicts an entry another device is about to
+nearly every read is a miss and every miss evicts an entry another device is about to
 need. Throughput then falls off a cliff (about fourfold in the 60,000-device measurements)
 while every pod stays Ready and nothing logs an error. The counters below are how that
 state is seen.
@@ -67,6 +67,6 @@ spec:
             severity: warning
             devicechain_instance: {{ $id }}
           annotations:
-            summary: "A device-management lookup cache is too small for the fleet"
+            summary: "A device-management per-device cache is too small for the fleet"
             description: "On {{ "{{ $labels.pod }}" }}, more than 5% of lookups in the {{ "{{ $labels.cache }}" }} cache have pushed another entry out of a full cache for 15m (now {{ "{{ $value | humanizePercentage }}" }}). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
 {{- end }}
