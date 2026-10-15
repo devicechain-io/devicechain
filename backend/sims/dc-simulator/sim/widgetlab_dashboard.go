@@ -529,10 +529,12 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 			widgetlabSlotSilent:   deviceSlot("Silent sensor", silent),
 		},
 		Widgets: []dashboardWidget{
+			// One line, because the label is one row high and a phone-width board (390 px, six
+			// cells) has room for about 40 characters of it. Each widget below is bound to the
+			// edge sensor that produces its own case: spikes and out-of-range values, dropped
+			// metrics, and silence.
 			buildLabelWidget("wl-stress-title", box{0, 12, 0, 1},
-				"Maintainer board — deliberately pathological data. Each widget is bound to the edge "+
-					"sensor that produces its own case: spikes and out-of-range values, dropped "+
-					"metrics, and silence. Everything below is SUPPOSED to look wrong.",
+				"Pathological data, meant to look wrong",
 				"left", 16),
 
 			// The extremes device: a chart whose axis is blown out by a spike an order

@@ -3,7 +3,7 @@
 
 /// <reference types="node" />
 
-// The board readability gate: every committed sim board, at 960 and 1920 px wide, in light and
+// The board readability gate: every committed sim board, at 390, 960 and 1920 px wide, in light and
 // dark, must render with no clipped or overflowing text and no widget on top of another.
 // The checks are in readability.ts; this file drives them and holds the ratchet.
 //
@@ -11,6 +11,7 @@
 // measured under test-results/readability/, as an ADVISORY artifact: nothing compares it with a
 // baseline and nothing fails on it. It is there for a reviewer to look at.
 
+import { STACK_BELOW_WIDTH } from '@devicechain/dashboards';
 import { expect, test, type Page } from '@playwright/test';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -23,7 +24,7 @@ const BOARDS = readdirSync(SIM_DIR)
   .map((f) => f.slice(0, -'.json'.length))
   .sort();
 
-const WIDTHS = [960, 1920] as const;
+const WIDTHS = [390, 960, 1920] as const;
 const HEIGHT = 1080;
 const THEMES = ['light', 'dark'] as const;
 
@@ -40,6 +41,8 @@ const KNOWN_FAILURES: ReadonlySet<string> = new Set<string>([
   // board carries pathological DATA on purpose; a label that cannot wrap it is the widget's
   // defect, not the board's.
   'wl-stress|wl-stress-label|text-clipped|960',
+  // The stress board's unbreakable word again on a phone: deliberate data, as at 960.
+  'wl-stress|wl-stress-label|text-clipped|390',
 ]);
 
 const keyOf = (board: string, width: number, f: Finding) =>
@@ -71,6 +74,29 @@ async function measure(page: Page, board: string, width: number, theme: string) 
   );
 
   const result = await page.evaluate(measureReadability);
+  // Nothing sticks out past the right edge of the board: at a phone width the board reflows
+  // into the columns that fit rather than scrolling sideways.
+  const stickout = await page.evaluate(() => {
+    const grid = document.querySelector('[data-grid]');
+    if (!grid) return 0;
+    const edge = grid.getBoundingClientRect().right;
+    return Math.max(0, ...[...document.querySelectorAll('[data-widget]')].map((el) => el.getBoundingClientRect().right - edge));
+  });
+  expect(stickout, `${board} at ${width} px: a widget runs past the board's right edge`).toBeLessThanOrEqual(1);
+  // A phone reads one widget per row: every grid widget starts at the board's left edge (and
+  // none overlaps, which measureReadability checks), so no two share a row. A relative widget
+  // (data-host) sits where its host puts it and is not part of the column.
+  if (width < STACK_BELOW_WIDTH) {
+    const besideAnother = await page.evaluate(() => {
+      const grid = document.querySelector('[data-grid]');
+      if (!grid) return [];
+      const edge = grid.getBoundingClientRect().left;
+      return [...document.querySelectorAll('[data-widget]:not([data-host])')]
+        .filter((el) => Math.abs(el.getBoundingClientRect().left - edge) > 1)
+        .map((el) => el.getAttribute('data-widget'));
+    });
+    expect(besideAnother, `${board} at ${width} px: widgets not in a single column`).toEqual([]);
+  }
   expect(result.widgets.length, `${board}: every widget in the definition is on the page`).toBe(Number(state.gateWidgets));
 
   await page.screenshot({
@@ -151,6 +177,18 @@ for (const width of WIDTHS) {
       // ellipsis line alone yields both kinds (nc-long-title below), so the READING's findings
       // are picked out by its text (the gate page's synthetic 888.8, at the card's precision):
       // otherwise a check that stopped seeing a cut value would still pass on the header.
+      // At a phone width the board reflows (six cells across), which changes how far each
+      // fault reaches: the card's reading is only cut, not clipped. The exact kinds are pinned at
+      // the two wide widths, where the authored layout is drawn; at 390 each fault must still be
+      // seen, and the clean widget must still not be. The overlap is the exception: it hangs a relative widget off a
+      // host's edge onto a third widget, and the reflow moves the host (and the badge with it) away.
+      if (width < 960) {
+        expect(kinds('nc-overflowing-card').has('text-overflow'), where).toBe(true);
+        expect(kinds('nc-overflowing-label').has('text-clipped'), where).toBe(true);
+        expect(kinds('nc-long-title').has('text-overflow'), where).toBe(true);
+        expect(findings.filter((f) => f.widget === 'nc-clean' || f.other === 'nc-clean'), where).toEqual([]);
+        continue;
+      }
       expect([...kinds('nc-overflowing-card')].sort(), where).toEqual(['text-clipped', 'text-overflow']);
       const reading = findings.filter((f) => f.widget === 'nc-overflowing-card' && f.detail.startsWith('"888.8000'));
       expect([...new Set(reading.map((f) => f.kind))].sort(), where).toEqual(['text-clipped', 'text-overflow']);
