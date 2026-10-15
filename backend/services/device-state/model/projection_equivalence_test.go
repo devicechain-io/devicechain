@@ -377,6 +377,64 @@ func equivalenceCases() []equivalenceCase {
 			seed:    []ProjectionUpdate{reading(A, "old", at(0), "temp", 1)},
 			updates: []ProjectionUpdate{reading(A, "new", at(time.Minute), "temp", 2), reading(A, "old", at(time.Minute), "temp", 3)},
 			want:    []string{"reading tenant-a/new/temp value=2 ", "reading tenant-a/old/temp value=3 "}},
+
+		// The cases below are the DATA-ONLY batch's (a tenant batch with no claim takes the heartbeat
+		// upsert, whose update arm is applyEvent's data rule in SQL). Each names the SQL it pins.
+		{name: "heartbeat: a swept device (stored 13s) given [15s, 12s, 20s] flips on the first fresh event",
+			seed:    []ProjectionUpdate{data(A, "d1", at(13*time.Second))},
+			sweepAt: at(2 * time.Hour),
+			updates: []ProjectionUpdate{data(A, "d1", at(15*time.Second)), data(A, "d1", at(12*time.Second)), data(A, "d1", at(20*time.Second))},
+			want:    []string{"active=true conn=2026-09-20T12:00:15Z", "act=2026-09-20T12:00:20Z alarm=null"}},
+		{name: "heartbeat: a swept device given only an older event stays inactive",
+			seed:    []ProjectionUpdate{data(A, "d1", at(13*time.Second))},
+			sweepAt: at(2 * time.Hour),
+			updates: []ProjectionUpdate{data(A, "d1", at(12*time.Second))},
+			want:    []string{"active=false", "act=2026-09-20T12:00:13Z"}},
+		{name: "heartbeat: an ASSERTED-dead device stays dead and its activity advances",
+			seed: []ProjectionUpdate{claim(A, "d1", at(0), presence.ClaimConnected, 1),
+				claim(A, "d1", at(10*time.Second), presence.ClaimDisconnected, 1)},
+			updates: []ProjectionUpdate{data(A, "d1", at(20*time.Second))},
+			want:    []string{"active=false", "presence=ASSERTED", "act=2026-09-20T12:00:20Z"}},
+		{name: "heartbeat: an inferred device that never had activity (a demotion made the row) is brought back",
+			seed:    []ProjectionUpdate{claim(A, "d1", at(0), presence.ClaimDemoted, 3)},
+			updates: []ProjectionUpdate{data(A, "d1", at(5*time.Second))},
+			want:    []string{"active=true conn=2026-09-20T12:00:05Z", "presence=INFERRED"}},
+		{name: "heartbeat: identity is the last non-empty value of the batch",
+			seed: []ProjectionUpdate{withIdentity(data(A, "d1", at(0)), "ext-0")},
+			updates: []ProjectionUpdate{withIdentity(data(A, "d1", at(5*time.Second)), ""),
+				withIdentity(data(A, "d1", at(6*time.Second)), "ext-1"), withIdentity(data(A, "d1", at(7*time.Second)), "")},
+			want: []string{`ext="ext-1"`}},
+		{name: "heartbeat: a batch with no identity leaves the stored one",
+			seed:    []ProjectionUpdate{withIdentity(data(A, "d1", at(0)), "ext-0")},
+			updates: []ProjectionUpdate{withIdentity(data(A, "d1", at(5*time.Second)), ""), data(A, "d1", at(6*time.Second))},
+			want:    []string{`ext="ext-0" src="mqtt1"`}},
+		{name: "heartbeat: an event older than the stored activity does not move it back",
+			seed:    []ProjectionUpdate{data(A, "d1", at(2*time.Minute))},
+			updates: []ProjectionUpdate{data(A, "d1", at(0)), data(A, "d1", at(time.Minute))},
+			want:    []string{"act=2026-09-20T12:02:00Z"}},
+		{name: "heartbeat: a frozen clock (stored activity == event time) resurrects a swept device",
+			seed:    []ProjectionUpdate{data(A, "d1", at(time.Minute))},
+			sweepAt: at(2 * time.Hour),
+			updates: []ProjectionUpdate{data(A, "d1", at(time.Minute))},
+			want:    []string{"active=true conn=2026-09-20T12:01:00Z", "alarm=null"}},
+		{name: "heartbeat: a sub-microsecond older event ties the stored activity and resurrects",
+			seed:    []ProjectionUpdate{data(A, "d1", at(1300*time.Nanosecond))},
+			sweepAt: at(2 * time.Hour),
+			updates: []ProjectionUpdate{data(A, "d1", at(1100*time.Nanosecond))},
+			want:    []string{"active=true"}},
+		{name: "heartbeat: one statement holds a swept device, a live one and a new one",
+			seed: []ProjectionUpdate{data(A, "swept", at(0)), data(A, "live", at(time.Hour+55*time.Minute))},
+			// swept is silent for 2h at the sweep; live was heard from 5 minutes before it.
+			sweepAt: at(2 * time.Hour),
+			updates: []ProjectionUpdate{data(A, "swept", at(2*time.Hour+time.Second)), data(A, "live", at(2*time.Hour+time.Second)),
+				data(A, "fresh", at(2*time.Hour+time.Second))},
+			want: []string{"state tenant-a/swept ext=\"\" src=\"\" active=true", "state tenant-a/live ext=\"\" src=\"\" active=true",
+				"state tenant-a/fresh ext=\"\" src=\"\" active=true"}},
+		{name: "heartbeat: one tenant carries a claim (locked path), the other does not (heartbeat path)",
+			seed: []ProjectionUpdate{data(A, "d1", at(0)), data(B, "d1", at(0))},
+			updates: []ProjectionUpdate{claim(A, "d1", at(time.Minute), presence.ClaimDisconnected, 2), data(A, "d2", at(time.Minute)),
+				data(B, "d1", at(time.Minute)), data(B, "d2", at(time.Minute))},
+			want: []string{"state tenant-a/d1 ext=\"\" src=\"\" active=false", "state tenant-b/d1 ext=\"\" src=\"\" active=true"}},
 	}
 }
 
@@ -416,6 +474,66 @@ func randomUpdates(r *rand.Rand) []ProjectionUpdate {
 		out = append(out, u)
 	}
 	return out
+}
+
+// randomDataUpdates is randomUpdates without a presence claim: data events, readings and fixes
+// only, so every tenant batch takes the heartbeat upsert (randomUpdates is a quarter claims, and
+// most of its batches therefore take the locked path). The times are drawn from the same small
+// set, so ties, out-of-order events and sub-microsecond pairs are common; identities include
+// the empty one.
+func randomDataUpdates(r *rand.Rand) []ProjectionUpdate {
+	tenants := []string{"tenant-a", "tenant-b"}
+	devices := []string{"d1", "d2", "d3", "d4"}
+	offsets := []time.Duration{0, 1100 * time.Nanosecond, 1300 * time.Nanosecond, time.Second, time.Minute, 2 * time.Minute}
+	n := 1 + r.Intn(12)
+	out := make([]ProjectionUpdate, 0, n)
+	for i := 0; i < n; i++ {
+		tenant, tok := tenants[r.Intn(len(tenants))], devices[r.Intn(len(devices))]
+		when := eqT0.Add(offsets[r.Intn(len(offsets))])
+		var u ProjectionUpdate
+		switch r.Intn(3) {
+		case 0:
+			u = data(tenant, tok, when)
+		case 1:
+			u = reading(tenant, tok, when, []string{"temp", "hum"}[r.Intn(2)], float64(r.Intn(100)))
+		default:
+			u = fix(tenant, tok, when, float64(r.Intn(90)))
+		}
+		if r.Intn(3) == 0 {
+			u = withIdentity(u, []string{"", "ext-1", "ext-2"}[r.Intn(3)])
+		}
+		out = append(out, u)
+	}
+	return out
+}
+
+// dataOnlyCase is one generated data-only sequence, over a seed that is data-only half the time
+// and the mixed generator's (claims, so asserted and demoted rows exist) otherwise, and that is
+// swept before the batch runs in a third of the cases, so that inferred-dead rows exist for the
+// batch to bring back.
+func dataOnlyCase(r *rand.Rand, seed int64, i int) equivalenceCase {
+	c := equivalenceCase{name: fmt.Sprintf("dataonly-seed%d-seq%03d", seed, i), updates: randomDataUpdates(r)}
+	switch r.Intn(4) {
+	case 0:
+		c.seed = randomDataUpdates(r)
+	case 1:
+		c.seed = randomUpdates(r)
+	}
+	if r.Intn(3) == 0 {
+		c.sweepAt = eqT0.Add(2 * time.Hour)
+	}
+	return c
+}
+
+// 200 data-only sequences: the heartbeat upsert against merging one at a time, with swept
+// seeds. The seed, like the sequence number, is in every failure's name.
+func TestGeneratedDataOnlyBatchesLeaveWhatMergingOneAtATimeLeaves(t *testing.T) {
+	const seed = 20261014
+	r := rand.New(rand.NewSource(seed))
+	for i := 0; i < 200; i++ {
+		c := dataOnlyCase(r, seed, i)
+		t.Run(c.name, func(t *testing.T) { assertEquivalent(t, newSQLiteProjectionApi, c) })
+	}
 }
 
 // 200 generated sequences, from a fixed seed so a failure reproduces; the seed and the

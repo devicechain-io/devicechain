@@ -42,7 +42,8 @@ const (
 // one event at a time could be merged.
 //
 // Two writers can hold events for the same device at once. That is safe because every
-// merge locks the device's row before it reads it (so same-device merges serialize), folds
+// merge locks the device's row before it reads it, or, for a batch with no presence claim,
+// writes it in one upsert that locks the row it updates (so same-device merges serialize), folds
 // events with ONE rule over times held at stored precision (so a batch leaves what merging
 // its events one at a time would), and writes the latest values under a strictly-newer
 // guard (so a late or redelivered reading cannot move the projection backwards). Each

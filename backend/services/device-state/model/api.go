@@ -344,6 +344,12 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 	// alone, so an event newer than the last recorded activity but still from inside the
 	// silence resurrects and is swept again next pass. That device really did produce
 	// data at that time; whether it is alive NOW is the sweep's question, not this one's.
+	//
+	// 🔴 THIS BRANCH HAS A SQL TWIN. A batch with no presence claim does not run applyEvent on the
+	// rows that already exist; heartbeatSet and heartbeatGuard (projection_merge.go) apply the
+	// rule below in the database for every row it cannot flip, and the guard sends the rows it
+	// can flip back here. A change to this branch is a change to both, and
+	// projection_equivalence_test.go fails when they disagree.
 	fresh := !found.LastActivityTime.Valid || !occurredAt.Before(found.LastActivityTime.Time)
 	if fresh && found.PresenceSource != PresenceSourceAsserted && !found.Active {
 		found.Active = true
