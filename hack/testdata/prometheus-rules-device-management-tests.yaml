@@ -11,7 +11,9 @@
 #
 #   - low churn (a full cache that evicts 2% of lookups) must not page;
 #   - evictions for another reason (expired, revoked) at a high rate must not page;
-#   - an install exporting no series must not page.
+#   - an idle pod (every series at zero, so 0/0) must not page;
+#   - an install exporting no series must not page;
+#   - a cache the alert's advice does not cover (profile-resolution-by-type) must not page.
 #
 # THE SERIES (counters, scraped every minute):
 #
@@ -72,8 +74,9 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
-  # Lookup cache: relationships-by-source at 20% capacity evictions fires; a second
-  # cache on the same pod at 1% does not, so the alert is per cache.
+  # Lookup cache: relationships-by-source at 20% capacity evictions fires; device-by-token
+  # on the same pod at 1% does not, so the alert is per cache. profile-resolution-by-type at
+  # 50% does not either: it is not bounded by perDeviceCacheMiB, so the rule leaves it out.
   # ------------------------------------------------------------------
   - interval: 1m
     input_series:
@@ -81,10 +84,14 @@ tests:
         values: '0+100x60'
       - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="relationships-by-source", reason="capacity"}'
         values: '0+20x60'
-      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="devices", result="hit"}'
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="device-by-token", result="hit"}'
         values: '0+100x60'
-      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="devices", reason="capacity"}'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="device-by-token", reason="capacity"}'
         values: '0+1x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="profile-resolution-by-type", result="miss"}'
+        values: '0+100x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="profile-resolution-by-type", reason="capacity"}'
+        values: '0+50x60'
     alert_rule_test:
       - eval_time: 10m
         alertname: DeviceLookupCacheTooSmall
@@ -100,6 +107,28 @@ tests:
             exp_annotations:
               summary: "A device-management lookup cache is too small for the fleet"
               description: "On dc-device-management-aaaaa, more than 5% of lookups in the relationships-by-source cache have pushed another entry out of a full cache for 15m (now 20%). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
+
+  # ------------------------------------------------------------------
+  # Idle pod: every series exists (created at zero) and none moves, so both ratios are
+  # 0/0 = NaN. Quiet for both.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_cache_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="hit"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_credential_cache_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", reason="capacity"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="device-by-token", result="hit"}'
+        values: '0x60'
+      - series: 'devicechain_devicemanagement_kv_cache_local_evictions_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", cache="device-by-token", reason="capacity"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: DeviceCredentialCacheTooSmall
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: DeviceLookupCacheTooSmall
+        exp_alerts: []
 
   # ------------------------------------------------------------------
   # No series at all (no in-memory copy, or nothing reporting). Quiet for both.

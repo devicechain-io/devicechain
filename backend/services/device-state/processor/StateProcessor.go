@@ -45,8 +45,17 @@ const (
 // Memory is bounded by capacity x the size of one resolved event (Message.Value, about
 // 1 KiB for a few measurements; assume 4 KiB for a large one): at the defaults that is
 // 640 slots, under 3 MiB, and at the configuration maxima (writers below the pool size,
-// maxBatch 64) a few hundred KiB per writer. Events beyond the channel stay in the
-// broker, unfetched.
+// maxBatch 64) a few hundred KiB per writer. Beyond the channel the reader holds at most
+// its own fetch buffer (one pull, plus one fetched ahead); everything else stays in the
+// broker, unfetched. The durable's MaxAckPending (65,536) is far above all of it, so the
+// channel, not the broker, is what bounds how much a full pool can draw on.
+//
+// The cost is age. The broker's AckWait (60 s) starts at fetch, so a message waits in the
+// channel behind everything ahead of it. At the defaults 640 slots pass AckWait only if
+// the pool merges under about 11 events a second, which is a stalled database, not a slow
+// one. A stalled database leaves those messages to be redelivered, as it did with 100
+// slots, only more of them. Shutdown drains the channel to completion (ExecuteStop), so a
+// larger channel is a longer drain: well under a second at the rates the pool sustains.
 func messageBacklog(writers, maxBatch int) int {
 	n := MESSAGE_BACKLOG_FACTOR * writers * maxBatch
 	if n < MESSAGE_BACKLOG_FLOOR {

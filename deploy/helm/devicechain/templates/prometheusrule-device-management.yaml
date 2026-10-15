@@ -18,6 +18,16 @@ because each replica holds its own copy and is sized (and fails) on its own.
 NO absent() ARM. A pod that exports nothing is a crash-looping pod, which the
 container-restart alerts already catch, and a cache built without the in-memory copy has
 no kv_cache_local_ series at all.
+
+THE LOOKUP ALERT NAMES ITS CACHES. Of device-management's five key-value caches, only the
+three keyed by device (device-by-token, relationships-by-source, memberships-by-entity) are
+bounded by inMemoryCache.perDeviceCacheMiB, which is the knob the alert tells an operator
+to raise. The other two are keyed by device type and by tenant, keep the library default
+bound and have no knob; an alert on them would give advice that does not apply. A cache
+added to the per-device set is added to the matcher here.
+
+0/0 IS QUIET. Every series is created at zero, so an idle pod divides zero by zero; the
+result is NaN, NaN > 0.05 is false, and nothing fires. The promtool tests pin that case.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -48,9 +58,9 @@ spec:
             description: "On {{ "{{ $labels.pod }}" }}, more than 5% of device credential lookups have pushed another credential out of a full cache for 15m (now {{ "{{ $value | humanizePercentage }}" }}). The cache is smaller than the set of devices reporting through it, so it is cycling and most checks go to the database. Raise inMemoryCache.credentialCacheMiB for device-management, and raise its memory limit with it."
         - alert: DeviceLookupCacheTooSmall
           expr: |
-            sum by (pod, cache) (rate(devicechain_devicemanagement_kv_cache_local_evictions_total{reason="capacity",namespace="{{ $ns }}"}[10m]))
+            sum by (pod, cache) (rate(devicechain_devicemanagement_kv_cache_local_evictions_total{reason="capacity",cache=~"device-by-token|relationships-by-source|memberships-by-entity",namespace="{{ $ns }}"}[10m]))
             /
-            sum by (pod, cache) (rate(devicechain_devicemanagement_kv_cache_local_lookups_total{namespace="{{ $ns }}"}[10m]))
+            sum by (pod, cache) (rate(devicechain_devicemanagement_kv_cache_local_lookups_total{cache=~"device-by-token|relationships-by-source|memberships-by-entity",namespace="{{ $ns }}"}[10m]))
             > 0.05
           for: 15m
           labels:
