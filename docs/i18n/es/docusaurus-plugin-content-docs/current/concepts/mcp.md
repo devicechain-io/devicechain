@@ -24,6 +24,8 @@ El servidor expone once herramientas de **lectura**. Cada una es una consulta co
 - `get_device` — los detalles de un dispositivo individual.
 - `get_device_capabilities` — qué puede medir un dispositivo y los comandos publicados que acepta, con el esquema de parámetros de cada comando.
 
+`list_devices` y `get_device` todavía no indican si un dispositivo está deshabilitado, y `list_devices` no puede filtrar por ello. Un dispositivo deshabilitado aparece exactamente igual que uno activo, así que con estas herramientas un asistente no puede distinguir un dispositivo en cuarentena de uno que funciona. Comprueba el estado del dispositivo en la consola, donde un dispositivo deshabilitado lleva el distintivo **Deshabilitado**; consulta [Deshabilitar y habilitar un dispositivo](../user-guide/devices.md).
+
 **Estado en vivo y telemetría**
 
 - `get_device_state` — el estado actual de último valor conocido del dispositivo, incluido si ese estado lo *reportó el transporte* o se *infirió del silencio*. La diferencia cambia lo que significa «no activo». Reportado significa que se sabe que el dispositivo está desconectado. Inferido significa solo que no ha llegado nada recientemente, que es también el aspecto que tiene un dispositivo sano con un intervalo de reporte lento.

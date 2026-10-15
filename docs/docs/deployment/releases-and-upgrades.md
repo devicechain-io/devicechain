@@ -3582,10 +3582,24 @@ console's built files move to a new path. Every binary is now built with Go 1.27
   that cannot yet reach a `device-management` pod with the new query holds them. They are not
   lost, and they go out once the sync succeeds.
 - **Four areas apply a migration** on their first start: `device-management` adds a nullable
-  `disabled_at` column and a partial index to the devices table, `command-delivery` creates two
-  small tables, `update-management` creates the signer registry, and `user-management` adds a
-  CA-bundle column to the identity providers. Each is individually re-runnable, none rewrites an
-  existing row, and none needs a recreate. See [New tables and columns](#v0210-migrations).
+  `disabled_at` column and a partial index to the devices table, the maintenance-windows table, a
+  window column on device types and an impact column on command definitions; `command-delivery` creates two small tables and adds outcome,
+  window and retry columns to its commands and batches; `update-management` creates the signer
+  registry; and `user-management` adds a CA-bundle column to the identity providers. Each is
+  individually re-runnable, and none needs a recreate. See
+  [New tables and columns](#v0210-migrations).
+- **`command-delivery`'s migration rewrites existing rows.** It fills the new `outcome` column for
+  every command that has already finished, in one `UPDATE` over the commands table. A successful
+  command is recorded as succeeded, an expired or cancelled one as not delivered, and a failed or
+  timed-out one as unknown, because the old row does not say which it was. On a large commands
+  table this makes the first start of `command-delivery` take longer, in proportion to the number
+  of finished commands, and PostgreSQL writes a new version of each of those rows, so expect
+  write-ahead log and dead rows for autovacuum on the same scale. The statement only writes rows
+  whose `outcome` is still empty, so running it again never overwrites a value. A pod's startup
+  probe allows about 150 seconds by default (`startupProbe` in the chart values); if your table is
+  large enough for the backfill to take longer, raise `startupProbe.failureThreshold` for the
+  upgrade, or the container is restarted before the migration finishes and starts it again. The
+  other migrations in this release add tables, columns and indexes and write no rows.
 - **`update-management` starts reading the device roster** from new facts only, so it needs no
   catch-up and no operator step.
 

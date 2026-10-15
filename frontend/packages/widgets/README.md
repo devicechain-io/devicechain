@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # @devicechain/widgets
 
 React dashboard widgets for DeviceChain, plus the renderer that lays a board out.
-Eleven widgets across five channels — charts, gauges, tables, alarm views, a
-command button, an entity selector and a map — all bound to live data through
+Twenty-four widgets — charts, gauges, tables, a fleet table, alarm views,
+command controls, an entity selector and a map — all bound to live data through
 [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards).
 
 Themed entirely with CSS custom properties. No Tailwind, no global styles, no
@@ -50,16 +50,23 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 
 | channel | widgets |
 | --- | --- |
-| measurement | `timeseries-chart`, `gauge`, `latest-card`, `table` |
+| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table` |
+| aggregate | `stat-card` |
 | none (static) | `label`, `image` |
 | alarm | `alarm-table`, `alarm-count` |
-| control | `command-button` |
+| control | `command-button`, `command-slider`, `command-toggle` |
 | selection | `entity-selector` |
 | location | `map` |
 
-Charts and gauges are [Apache ECharts](https://echarts.apache.org); the map is
-[MapLibre GL](https://maplibre.org), loaded lazily so a board with no map on it
-downloads none of it.
+`fleet-table`, and `bar-chart` in its one-bar-per-device mode, read a device
+group member by member. The other measurement widgets, and `stat-card`, show one
+device and refuse a group. `stat-card` shows one figure (average, minimum, maximum, sum, count or
+latest) over the board's time range.
+
+The time-series chart, the dial gauge and the compass are drawn with
+[Apache ECharts](https://echarts.apache.org); the other widgets are plain DOM
+and SVG. The map is [MapLibre GL](https://maplibre.org), loaded lazily so a board
+with no map on it downloads none of it.
 
 `WIDGET_OPTIONS` is the typed schema for every widget's options bag —
 `validateWidgetOptions` reports exactly where a stored bag disagrees with what the
@@ -157,6 +164,20 @@ Every colour, radius and font comes from a CSS custom property, so a host restyl
 widgets by setting variables on any ancestor. The DeviceChain values ship as
 [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand); nothing
 here requires them.
+
+## Upgrading from 0.21
+
+- `severityColor(severity)` is now `severityColor(colors, severity)`; the
+  colours come from `useSeverityColors()` in `@devicechain/widget-sdk`.
+- The `timeseries-chart` option `window` (a sample count) is replaced by
+  `windowSeconds` (a time span), and the chart's options version moves from 1 to
+  2. A stored board converts when it is parsed: the sample count is dropped and
+  the chart follows the board's time range.
+- Thirteen widgets are new, so `WidgetChannel` and the widget id unions gained
+  members; an exhaustive `switch` over them needs new cases.
+
+See [If you build against the npm packages](https://docs.devicechain.io/deployment/releases-and-upgrades#v0220-packages)
+in the release's upgrade guide.
 
 ## Compatibility
 

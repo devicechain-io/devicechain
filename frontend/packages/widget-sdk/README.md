@@ -14,7 +14,8 @@ npm install @devicechain/widget-sdk @devicechain/dashboards react
 ```
 
 `@devicechain/dashboards` and `react` are **peer dependencies**: the SDK defines the React
-contexts a widget reads (selection, candidate lookup, time zone, theme root), and a context is
+contexts a widget reads (selection, candidate lookup, time zone, theme root, time range, density,
+freshness), and a context is
 identified by the object that created it, so every widget package and the host must resolve
 the same single copy of this package. Declare it as a peer in your own widget package too,
 never as a dependency.
@@ -88,3 +89,32 @@ for the built-in widgets.
 
 Trusted widget code runs with the host page's privileges. The declarations in a descriptor
 shape the API; they are not a security boundary.
+
+## Upgrading from 0.21
+
+0.22 removes no export. A TypeScript build can notice three changes:
+
+- `ChartTheme` has a required `severity` field. This matters only if you build a theme by hand
+  instead of calling `useChartTheme` or `resolveChartTheme`.
+- The unions `WidgetChannel` (now with `'aggregate'`), `WidgetId`, `BuiltinWidgetId`, `ThemeVar`
+  and `OptionSpec` (now with `ListOptionSpec`) gained members, so an exhaustive `switch` over one
+  of them needs a new case.
+- `formatValue` with no precision rounds to 3 decimals, or 4 significant digits below 1, where it
+  used to print the number unrounded.
+
+Additions, which need no change:
+
+- `WidgetFrame` takes `flush`, which removes the content padding for a widget that fills its box
+  edge to edge, and `sampleTime`, the time of the one sample a single-value widget shows, so its
+  age readout ages that sample rather than the newest one the host holds.
+- `useElementSize` takes an optional `step` that rounds each dimension down to a multiple of it,
+  so a caller that needs only a coarse size does not re-render for every pixel.
+- New exports for size and density tokens (`fontVar`, `spaceVar`, `tokenStyle`,
+  `useWidgetScale`, `fitValueFont`), sample age (`useFreshness`, `Freshness`, `StaleBadge`,
+  `formatAge`), alarm severity (`SEVERITY_LEVELS`, `severityVar`, `useSeverityColors`),
+  thresholds (`parseThresholds`, `thresholdBands`, `bandAt`), the board's time range
+  (`useWidgetTimeRange`) and the hub connection (`useHubConnectionState`, `HubConnectionBadge`).
+
+`SDK_API_VERSION` is unchanged. See
+[If you build against the npm packages](https://docs.devicechain.io/deployment/releases-and-upgrades#v0220-packages)
+in the release's upgrade guide.

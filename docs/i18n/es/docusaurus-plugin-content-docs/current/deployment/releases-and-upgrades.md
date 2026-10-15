@@ -3849,11 +3849,27 @@ la consola pasan a una ruta nueva. Todos los binarios se compilan ahora con Go 1
   `device-management` con la nueva consulta los retiene. No se pierden, y salen en cuanto la
   sincronización tiene éxito.
 - **Cuatro áreas aplican una migración** en su primer arranque: `device-management` añade a la tabla
-  de dispositivos una columna `disabled_at` anulable y un índice parcial, `command-delivery` crea dos
-  tablas pequeñas, `update-management` crea el registro de firmantes y `user-management` añade una
-  columna de paquete de CA a los proveedores de identidad. Cada una puede volver a ejecutarse por
-  separado, ninguna reescribe una fila existente y ninguna requiere recrear. Consulta
+  de dispositivos una columna `disabled_at` anulable y un índice parcial, la tabla de ventanas de
+  mantenimiento, una columna de ventana en los tipos de dispositivo y una columna de impacto en las
+  definiciones de comando; `command-delivery` crea dos tablas pequeñas y añade columnas de
+  resultado, de ventana y de reintento a sus comandos y lotes; `update-management` crea el registro
+  de firmantes; y `user-management` añade una columna de paquete de CA a los proveedores de
+  identidad. Cada una puede volver a ejecutarse por separado, y ninguna requiere recrear. Consulta
   [Tablas y columnas nuevas](#v0210-migrations).
+- **La migración de `command-delivery` reescribe filas existentes.** Rellena la nueva columna
+  `outcome` de cada comando que ya terminó, con un solo `UPDATE` sobre la tabla de comandos. Un
+  comando correcto queda registrado como satisfactorio, uno caducado o cancelado como no entregado,
+  y uno fallido o agotado por tiempo como desconocido, porque la fila antigua no dice cuál de ellos
+  fue. Con una tabla de comandos grande, el primer arranque de `command-delivery` tarda más, en
+  proporción al número de comandos terminados, y PostgreSQL escribe una versión nueva de cada una de
+  esas filas, así que cuenta con un volumen de registro de escritura anticipada y de filas muertas
+  para autovacuum a la misma escala. La sentencia solo escribe las filas cuyo `outcome` sigue vacío,
+  así que volver a ejecutarla nunca sobrescribe un valor. La sonda de arranque de un pod concede
+  unos 150 segundos por defecto (`startupProbe` en los valores del chart); si tu tabla es lo
+  bastante grande para que el relleno tarde más, sube `startupProbe.failureThreshold` para la
+  actualización, o el contenedor se reinicia antes de que termine la migración y la vuelve a
+  empezar. Las demás migraciones de esta versión añaden tablas, columnas e índices y no escriben
+  ninguna fila.
 - **`update-management` empieza a leer el censo de dispositivos** solo a partir de hechos nuevos, así
   que no necesita ponerse al día ni ningún paso del operador.
 

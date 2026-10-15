@@ -14,9 +14,9 @@ schema {
 
 """Pagination info for search results."""
 type SearchResultsPagination {
-    """Zero-based index of the first record on this page."""
+    """Position of the first result on this page within the full result set (1-based)."""
     pageStart: Int
-    """Zero-based index of the last record on this page."""
+    """Position of the last result on this page within the full result set (1-based)."""
     pageEnd: Int
     """Total number of records matching the search."""
     totalRecords: Int

@@ -54,14 +54,22 @@ Ten widgets pointed at the same device open **one** upstream subscription, not
 ten. Each widget declares the measurement names it cares about (none means all),
 and the hub fans a single stream out to the subscribers that asked for each name.
 
-Four channels, each with its own `subscribe*` method and disposer:
+Each channel has its own method, and each subscription returns its disposer:
 
-| channel | what it carries |
+| method | what it carries |
 | --- | --- |
 | `subscribeWidget` | measurement samples for a datasource selector |
+| `subscribeMembers` | a fleet widget's members, then each member's samples tagged with its device |
+| `bucketMeasurements` | the time buckets (count, minimum, maximum, sum) a stat widget folds into one figure |
 | `subscribeAlarms` | live alarm rows, plus `acknowledgeAlarm` / `clearAlarm` |
-| `subscribeCommands` | command rows and their delivery status, plus dispatch |
+| `subscribeCommands` | command rows and their delivery status, plus `sendCommand` |
 | `subscribeLocations` | position series for map widgets |
+
+The widget layer depends on the `WidgetDataSource` interface, not on the hub
+class, so a host can feed it from the hub, from `SyntheticDataSource` or from a
+recorded run (`RecordedDataSource`). `subscribeMembers`, `bucketMeasurements` and
+`readMemberSeeds` are optional on that interface: a source without them leaves
+the widgets that need them saying so instead of showing a number.
 
 `disposeAll()` tears down every open channel — a host calls it when the board
 closes, which is what keeps a poll and a socket from outliving the page.
@@ -83,10 +91,43 @@ and the version it found in `found`. Test `code`, not `instanceof`, so the check
 still holds when an application ends up with two copies of the package.
 
 Parsing is validating: a malformed board fails here, in your code, rather than
-half-rendering later. `isDirty` compares a working copy against its saved
-original, `resolveWidgetBox` and `activeBreakpoint` resolve responsive layout,
-and the `editor-model` transforms (`addWidget`, `setWidgetBox`, `deleteWidget`,
-`bringToFront`, …) are pure functions an authoring UI can wire to drag and resize.
+half-rendering later. A board stored in an older format is converted as it is
+parsed, and the result carries a `convertedFrom` mark until it is saved again
+(`withoutConversionMark` drops it). `isDirty` compares a working copy against its
+saved original.
+
+### Layout
+
+A board lays out on a grid of square cells. Each widget has a `WidgetLayout`: a
+`Placement` per breakpoint, with `base` required. A placement is either a grid
+footprint (`GridPlacement`, measured in cells) or a position relative to another
+widget (`RelativePlacement`). The column count follows the container, so the same
+board reads on a phone and on a wall display.
+
+| need | exports |
+| --- | --- |
+| the placement a widget shows at a width | `activeBreakpoint`, `resolvePlacement` |
+| what a renderer draws for a container width | `effectiveLayout`, `layoutShape`, `liveColumns` |
+| pixel boxes for every widget | `layoutRects`, `gridRect`, `relativeRect`, `cellSizeAt` |
+| grid lengths and the widget frame | `gridLengthPx`, `gutterPx`, `paddingPx`, `resolveFrame` |
+| placement against what each widget can show | `lintLayout`, `blockingLayoutFindings` |
+
+The `editor-model` transforms are pure functions an authoring UI can wire to drag
+and resize: `addWidget`, `moveWidget`, `resizeWidget`, `setWidgetPlacement`,
+`placeOnGrid`, `placeRelative`, `deleteWidget`, `setTitle`, `setCanvasGrid`,
+`setCanvasDensity` and `updateWidget`, with `gridPlacementToPx` and
+`pxToGridPlacement` to convert between cells and pixels. Moving or resizing a
+grid widget pushes whatever it now covers out of its way. Grid widgets never
+overlap, so there is no stacking order to manage.
+
+### Time range and density
+
+A board has a time range: `TIME_RANGE_PRESETS` (15 minutes to 7 days),
+`initialTimeRange`, `pauseRange` / `resumeRange` and `rangeWindow` manage it, and
+`timeRangeFromSearch` reads the `range` and `paused` URL parameters. Its density
+(`CANVAS_DENSITIES`: `compact`, `comfortable`, `wall`) scales every text and
+spacing size by `DENSITY_SCALE`; a host may override the board's own value at
+view time.
 
 ## Slots
 
@@ -117,6 +158,41 @@ worth asking about a command, and they are different questions — a `SENT` comm
 is still in flight but is no longer cancellable. The underlying sets are
 deliberately not exported: every surface asks the predicate, so a new status
 cannot be learned by some call sites and not others.
+
+## Upgrading from 0.21
+
+0.22 replaces the layout model, so code written against 0.21 needs changes:
+
+| 0.21 | 0.22 |
+| --- | --- |
+| `WidgetBox` | `Placement` (`GridPlacement` or `RelativePlacement`) |
+| `resolveWidgetBox` | `resolvePlacement` |
+| `baseBox` | `basePlacement` |
+| `setWidgetBox` | `setWidgetPlacement`, or `moveWidget` / `resizeWidget` |
+| `gridBoxToPx` / `pxToGridBox` | `gridPlacementToPx` / `pxToGridPlacement` |
+| `bringToFront` | removed: grid widgets cannot overlap, so there is no stacking order |
+
+These keep their names but change type:
+
+- `WidgetLayout` maps a breakpoint to a `Placement`, and `Breakpoints` maps a
+  name to a `BreakpointSpec`.
+- `CanvasGrid` replaces `gap` and `rowHeight` with `minCellSize`, `gutter` and
+  `padding`; `GridGeometry` replaces its column and row sizes with `cell` and
+  `gutter`.
+- `SYNTHETIC_GENERATORS` is a list of generator ids (`'sine'`, `'ramp'`,
+  `'random-walk'`) instead of `{ value, label }` pairs. Supply your own labels;
+  the stored ids are unchanged.
+- `parseDashboardDefinition` refuses a definition whose grid widgets overlap. A
+  definition in an older format is converted before that check.
+
+Some unions gained members, which breaks an exhaustive `switch` over them:
+`WidgetChannel` has `'aggregate'` (the stat card), `OptionSpec` has
+`ListOptionSpec`, and `WidgetType`, `WidgetId` and `BuiltinWidgetId` have the new
+built-in widgets.
+
+The release's upgrade guide covers what changes for stored boards and for the
+other packages:
+[If you build against the npm packages](https://docs.devicechain.io/deployment/releases-and-upgrades#v0220-packages).
 
 ## Compatibility
 

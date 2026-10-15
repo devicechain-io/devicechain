@@ -2112,9 +2112,16 @@ upgrade`，如[v0.17.0](#v0170-upgrade)所述。从 `v0.19.0` 或更早版本升
   因此无法访问带有新查询的 `device-management` Pod 的新 `command-delivery` Pod 会保留这些命令。
   命令不会丢失，同步成功后即会发出。
 - **四个服务在首次启动时会应用迁移**：`device-management` 为设备表添加可为空的 `disabled_at` 列和一个部分索引，
-  `command-delivery` 创建两张小表，`update-management` 创建签名者注册表，`user-management` 为身份提供商添加
-  CA 证书包列。每个迁移都可单独重复执行，都不会重写任何现有行，也都不需要销毁重建。
-  参见[新表和新列](#v0210-migrations)。
+  并添加维护窗口表、设备类型上的窗口列和命令定义上的影响列；`command-delivery` 创建两张小表，并为命令和批次
+  添加结果、窗口和重试相关的列；`update-management` 创建签名者注册表；`user-management` 为身份提供商添加
+  CA 证书包列。每个迁移都可单独重复执行，也都不需要销毁重建。参见[新表和新列](#v0210-migrations)。
+- **`command-delivery` 的迁移会重写现有行。** 它用一条针对命令表的 `UPDATE` 语句，为每条已经结束的命令填写新的
+  `outcome` 列：成功的命令记为成功，已过期或已取消的记为未送达，失败或超时的记为未知，因为旧行没有记录
+  具体是哪一种。命令表很大时，`command-delivery` 的首次启动会更久，耗时与已结束命令的数量成正比；PostgreSQL
+  还会为每一行写入新版本，因此预写日志和需要 autovacuum 清理的死行也会达到相同规模。该语句只写入 `outcome`
+  仍为空的行，所以再次执行绝不会覆盖已有的值。Pod 的启动探针默认约允许 150 秒（chart 值中的
+  `startupProbe`）；如果表大到回填需要更久，请在升级期间调高 `startupProbe.failureThreshold`，否则容器会在
+  迁移完成前被重启，并重新开始迁移。本版本的其他迁移只添加表、列和索引，不写入任何行。
 - **`update-management` 仅从新的事实开始读取设备名册**，因此无需追赶，也无需运维人员执行任何步骤。
 
 升级后回退到 `v0.20.0`，会保留新列和新表，`v0.20.0` 会忽略它们。它不认识签名者，
