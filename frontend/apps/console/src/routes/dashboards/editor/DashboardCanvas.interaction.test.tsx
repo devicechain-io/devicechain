@@ -13,10 +13,35 @@ import {
   type WidgetDataSource,
   type WidgetInstance,
 } from '@devicechain/dashboards';
+import { createHostWidgetRegistry } from '@devicechain/host-widgets';
+import { defineWidget } from '@devicechain/widget-sdk';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { createPortal } from 'react-dom';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { DashboardCanvas } from './DashboardCanvas';
+
+// A widget that renders a popover through a portal, as a select or a menu does.
+const PORTAL_ID = 'test/portal';
+const portalWidget = defineWidget({
+  descriptor: {
+    id: PORTAL_ID,
+    version: '1.0.0',
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Portal', category: 'Test' },
+    channel: 'none',
+    datasource: { mode: 'none' },
+    binding: {},
+    interactions: {},
+    options: {},
+    defaults: {},
+  },
+  implementation: {
+    kind: 'trusted-react',
+    component: () => createPortal(<div data-testid="portal-pop">pop</div>, document.body),
+  },
+});
 
 afterEach(cleanup);
 
@@ -74,18 +99,19 @@ const widgetEl = (id: string) => screen.getByTestId(`canvas-widget-${id}`);
 const px = (el: HTMLElement, prop: 'left' | 'top' | 'width' | 'height') => parseFloat(el.style[prop]);
 
 // Pointer events dispatched the way a browser delivers them: down on the element, move and up on
-// the window.
+// the window, all from one primary mouse pointer with its button held.
+const POINTER = { pointerId: 1, isPrimary: true, pointerType: 'mouse' };
 function press(el: Element, x = 0, y = 0, shiftKey = false) {
-  fireEvent.pointerDown(el, { button: 0, clientX: x, clientY: y, shiftKey });
+  fireEvent.pointerDown(el, { button: 0, buttons: 1, clientX: x, clientY: y, shiftKey, ...POINTER });
 }
 function moveTo(x: number, y: number, shiftKey = false) {
   act(() => {
-    window.dispatchEvent(new MouseEvent('pointermove', { clientX: x, clientY: y, shiftKey }));
+    window.dispatchEvent(new PointerEvent('pointermove', { clientX: x, clientY: y, shiftKey, buttons: 1, ...POINTER }));
   });
 }
 function release(x: number, y: number, shiftKey = false) {
   act(() => {
-    window.dispatchEvent(new MouseEvent('pointerup', { clientX: x, clientY: y, shiftKey }));
+    window.dispatchEvent(new PointerEvent('pointerup', { clientX: x, clientY: y, shiftKey, ...POINTER }));
   });
 }
 const placementOf = (def: DashboardDefinition, id: string) => basePlacement(def.widgets.find((w) => w.id === id)!);
@@ -114,15 +140,25 @@ describe('dragging a grid widget', () => {
     expect(screen.queryByTestId('drag-ghost')).toBeNull();
   });
 
-  it('compacts live: a widget below falls into the space the dragged one leaves', () => {
+  it('swaps live: a neighbour the drop covers takes the room the dragged widget left, and returns', () => {
     mount(board([card('a', 0, 0), card('c', 0, 2)]));
     press(widgetEl('a'));
-    moveTo(600, 0);
+    moveTo(0, 200); // a onto c's rows
     expect(px(widgetEl('c'), 'top')).toBe(0);
     // Back where it started: the neighbour returns, because the preview is recomputed from the
     // original rather than accumulated.
     moveTo(0, 0);
     expect(px(widgetEl('c'), 'top')).toBe(200);
+  });
+
+  it('keeps the gaps the author left: a widget the drop does not cover never moves', () => {
+    // c sits two rows below a on purpose; a is dragged off to the right, over nothing.
+    const { onChange } = mount(board([card('a', 0, 0), card('c', 0, 4)]));
+    press(widgetEl('a'));
+    moveTo(600, 0);
+    expect(px(widgetEl('c'), 'top')).toBe(400);
+    release(600, 0);
+    expect(placementOf(onChange.mock.calls[0][0], 'c')).toMatchObject({ col: 0, row: 4 });
   });
 
   it('Escape discards the gesture', () => {
@@ -135,6 +171,85 @@ describe('dragging a grid widget', () => {
     release(300, 0);
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.queryByTestId('drag-ghost')).toBeNull();
+  });
+
+  it('pointercancel, a lost capture and a window blur each discard the preview', () => {
+    const { onChange } = mount(def());
+    for (const end of ['pointercancel', 'lostpointercapture', 'blur']) {
+      press(widgetEl('a'));
+      moveTo(300, 0);
+      expect(screen.getByTestId('drag-ghost')).toBeTruthy();
+      act(() => {
+        window.dispatchEvent(end === 'blur' ? new Event(end) : new PointerEvent(end, POINTER));
+      });
+      expect(screen.queryByTestId('drag-ghost'), end).toBeNull();
+      expect(px(widgetEl('b'), 'top'), end).toBe(0);
+      release(300, 0);
+    }
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('a mouse released where no pointerup reached the page commits nothing', () => {
+    const { onChange } = mount(def());
+    press(widgetEl('a'));
+    moveTo(300, 0);
+    act(() => {
+      window.dispatchEvent(new PointerEvent('pointermove', { clientX: 300, clientY: 0, buttons: 0, ...POINTER }));
+    });
+    expect(screen.queryByTestId('drag-ghost')).toBeNull();
+    release(300, 0);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('a second pointer neither starts a gesture nor steers the running one', () => {
+    const { onChange } = mount(def());
+    const withId = (type: string, x: number, pointerId: number) => {
+      const e = new MouseEvent(type, { clientX: x, clientY: 0 });
+      Object.defineProperty(e, 'pointerId', { value: pointerId });
+      return e;
+    };
+    const down = new MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 0, clientY: 0 });
+    Object.defineProperty(down, 'pointerId', { value: 1 });
+    fireEvent(widgetEl('a'), down);
+    // Another finger on b: not primary, and a gesture is already running.
+    fireEvent.pointerDown(widgetEl('b'), { button: 0, isPrimary: false, pointerId: 2 });
+    act(() => {
+      window.dispatchEvent(withId('pointermove', 600, 2));
+    });
+    expect(px(widgetEl('a'), 'left')).toBe(0);
+    act(() => {
+      window.dispatchEvent(withId('pointerup', 600, 2));
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => {
+      window.dispatchEvent(withId('pointerup', 300, 1));
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(placementOf(onChange.mock.calls[0][0], 'a')).toMatchObject({ col: 3 });
+  });
+
+  it('a pointer down from a popover the widget portals out of its body starts no drag', () => {
+    // React bubbles an event out of a portal to the component that rendered it: the widget's own
+    // handler sees a pointer down whose target is not inside the widget at all.
+    const onChange = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <DashboardCanvas
+        definition={board([{ id: 'p', type: PORTAL_ID, layout: { base: { mode: 'grid', col: 0, row: 0, cols: 3, rows: 2 } } }])}
+        onChange={onChange}
+        hub={quiet}
+        bindings={{}}
+        selectedId={null}
+        onSelect={onSelect}
+        registry={createHostWidgetRegistry([portalWidget])}
+      />,
+    );
+    press(screen.getByTestId('portal-pop'));
+    moveTo(300, 0);
+    expect(screen.queryByTestId('drag-ghost')).toBeNull();
+    release(300, 0);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it('a click that does not move commits nothing', () => {
@@ -219,6 +334,17 @@ describe('placement mode', () => {
     expect(screen.queryByTestId('pick-host-hint')).toBeNull();
   });
 
+  it('a host can be picked from the keyboard, and the placed widget keeps the focus', () => {
+    const { onChange, onSelect } = mount(two(), 'badge');
+    fireEvent.click(screen.getByTestId('placement-relative'));
+    widgetEl('host').focus();
+    fireEvent.keyDown(widgetEl('host'), { key: 'Enter' });
+    expect(placementOf(onChange.mock.calls[0][0], 'badge')).toMatchObject({ mode: 'relative', host: 'host' });
+    expect(onSelect).toHaveBeenLastCalledWith('badge');
+    expect(document.activeElement).toBe(widgetEl('badge'));
+    expect(screen.queryByTestId('pick-host-hint')).toBeNull();
+  });
+
   it('Escape cancels the host pick without changing anything', () => {
     const { onChange } = mount(two(), 'badge');
     fireEvent.click(screen.getByTestId('placement-relative'));
@@ -247,6 +373,18 @@ describe('placement mode', () => {
     expect(screen.getByTestId('guide-badge').querySelector('line')?.getAttribute('stroke-dasharray')).toBeTruthy();
     fireEvent.click(screen.getByTestId('anchor-bottom-left'));
     expect(placementOf(onChange.mock.calls[0][0], 'badge')).toMatchObject({ anchor: 'bottom-left' });
+  });
+
+  it('Tab leaves the anchor picker: it holds no keyboard trap', () => {
+    mount(relative(), 'badge');
+    const cells = screen.getAllByTestId(/^anchor-/);
+    // Every point is an ordinary tab stop (no roving tabindex, no key handler that eats Tab).
+    for (const c of cells) expect(c.getAttribute('tabindex')).not.toBe('-1');
+    const last = cells[cells.length - 1];
+    last.focus();
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    last.dispatchEvent(tab);
+    expect(tab.defaultPrevented).toBe(false);
   });
 
   it('Grid brings a relative widget back onto the grid', () => {
@@ -295,6 +433,23 @@ describe('keyboard', () => {
     expect(el.getAttribute('aria-label')).toContain('column 3, row 3');
     fireEvent.keyDown(el, { key: 'ArrowLeft' });
     expect(screen.getByText('a is now 3×2 at column 2, row 3')).toBeTruthy();
+  });
+
+  it('keeps the focus on the widget it moved, and announces a relative widget by its offset', () => {
+    const d = board([card('host', 0, 0, 4, 3), card('badge', 6, 0, 3, 2), card('a', 2, 4)]);
+    d.widgets[1] = {
+      ...d.widgets[1],
+      layout: { base: { mode: 'relative', host: 'host', anchor: 'top-right', size: { cols: 2, rows: 2 } } },
+    };
+    const { onChange, rerender } = mount(d);
+    widgetEl('a').focus();
+    fireEvent.keyDown(widgetEl('a'), { key: 'ArrowDown' });
+    rerender(
+      <DashboardCanvas definition={onChange.mock.calls[0][0]} onChange={onChange} hub={quiet} bindings={{}} selectedId="a" onSelect={() => {}} />,
+    );
+    expect(document.activeElement).toBe(widgetEl('a'));
+    fireEvent.keyDown(widgetEl('badge'), { key: 'ArrowLeft' });
+    expect(screen.getByText('badge is now offset -1, 0 cells from its anchor')).toBeTruthy();
   });
 
   it('does not move past the edge of the canvas', () => {

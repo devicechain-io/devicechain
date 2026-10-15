@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The editor's size-enforcement transforms: live compaction, first-free-slot placement, the size
+// The editor's size-enforcement transforms: displacement on edit, first-free-slot placement, the size
 // readout, relative placement, fit-to-limits and the publish block. Pure; the console wires them.
 
 import { describe, expect, it } from 'vitest';
@@ -20,7 +20,7 @@ import {
   setRelativeOffset,
   snapOffset,
 } from './editor-model';
-import { compactUp } from './grid';
+import { gridFootprintsOverlap, pushAside } from './grid';
 import { blockingLayoutFindings, lintLayout, type SpanLimits } from './layout-lint';
 import type { DashboardDefinition, GridPlacement, WidgetInstance } from './types';
 
@@ -75,64 +75,87 @@ describe('addWidget: first free slot', () => {
   });
 });
 
-describe('compaction', () => {
+describe('an edit moves only what it displaces', () => {
   const stack = () => board([w('a', at(0, 0)), w('b', at(0, 3)), w('c', at(0, 6))]);
 
-  it('closes the space a drag leaves and keeps a pushed widget from jumping over the dragged one', () => {
-    const next = moveWidget(stack(), 'a', { col: 0, row: 6 }, 12, { compact: true });
-    // b falls into the vacated rows; c is pushed under a and cannot pass it.
-    expect(rows(next)).toEqual({ a: at(0, 6), b: at(0, 0), c: at(0, 9) });
+  it('swaps a widget dropped onto a neighbour: the neighbour takes the room the dragged one left', () => {
+    const next = moveWidget(stack(), 'a', { col: 0, row: 3 }, 12, { nearest: true });
+    expect(rows(next)).toEqual({ a: at(0, 3), b: at(0, 0), c: at(0, 6) });
     reloads(next);
   });
 
-  it('is off by default: the stored arrangement is only pushed apart', () => {
-    const next = moveWidget(stack(), 'a', { col: 0, row: 6 });
+  it('the dragged widget lands where it is dropped, and a gap it leaves stays open', () => {
+    const next = moveWidget(stack(), 'a', { col: 0, row: 6 }, 12, { nearest: true });
+    // b was not in the way and does not move; c, covered, goes to its nearest free row (down 3,
+    // nearer than the 6 up to the vacated rows).
     expect(rows(next)).toEqual({ a: at(0, 6), b: at(0, 3), c: at(0, 9) });
   });
 
-  it('pulls a widget up into the room a neighbour left beside it', () => {
-    const d = board([w('a', at(0, 0)), w('b', at(4, 0)), w('c', at(0, 3))]);
-    const next = moveWidget(d, 'a', { col: 8, row: 0 }, 12, { compact: true });
-    expect(rows(next).c).toEqual(at(0, 0));
-    expect(rows(next).a).toEqual(at(8, 0));
+  it('never pulls an undisplaced widget up into a gap the author left', () => {
+    // A deliberate one-row gap above c, and an empty column 8.. beside a.
+    const d = board([w('a', at(0, 0)), w('b', at(4, 0)), w('c', at(0, 4))]);
+    const next = moveWidget(d, 'a', { col: 8, row: 0 }, 12, { nearest: true });
+    expect(rows(next)).toEqual({ a: at(8, 0), b: at(4, 0), c: at(0, 4) });
   });
 
-  it('a resize that grows pushes neighbours down, and shrinking lets them back up', () => {
+  it('a resize that grows displaces neighbours; shrinking leaves them where they are', () => {
     const d = board([w('a', at(0, 0)), w('b', at(0, 3))]);
-    const grown = resizeWidget(d, 'a', { col: 0, row: 0, cols: 4, rows: 5 }, undefined, {}, 12, { compact: true });
+    const grown = resizeWidget(d, 'a', { col: 0, row: 0, cols: 4, rows: 5 }, undefined, {}, 12, { nearest: true });
     expect(rows(grown).b.row).toBe(5);
-    const shrunk = resizeWidget(grown, 'a', { col: 0, row: 0, cols: 4, rows: 2 }, undefined, {}, 12, { compact: true });
-    expect(rows(shrunk).b.row).toBe(2);
+    const shrunk = resizeWidget(grown, 'a', { col: 0, row: 0, cols: 4, rows: 2 }, undefined, {}, 12, { nearest: true });
+    expect(rows(shrunk).b.row).toBe(5);
   });
 
-  it('compactUp is deterministic, idempotent and never leaves an overlap', () => {
-    const items = [
-      { id: 'a', placement: at(0, 4, 6, 2) },
-      { id: 'b', placement: at(3, 9, 6, 2) },
-      { id: 'c', placement: at(8, 1, 4, 5) },
-      { id: 'd', placement: at(0, 12, 12, 1) },
-    ];
-    const once = compactUp(items, ['b']);
-    const again = compactUp(items.map((i) => ({ id: i.id, placement: once.get(i.id)! })), ['b']);
-    for (const [id, p] of once) expect(again.get(id)).toEqual(p);
-    expect(compactUp(items, ['b'])).toEqual(once);
-    const list = [...once.values()];
-    for (let i = 0; i < list.length; i++)
-      for (let j = i + 1; j < list.length; j++) {
-        const [p, q] = [list[i], list[j]];
-        const overlap = p.col < q.col + q.cols && q.col < p.col + p.cols && p.row < q.row + q.rows && q.row < p.row + p.rows;
-        expect(overlap).toBe(false);
+  it('a displaced widget takes room above only when its whole footprint fits there', () => {
+    // a is dropped over b. Up, the rows a left are free only where a was: at 8 columns wide b
+    // would cover d beside it, so b goes down instead and d stays put.
+    const d = board([w('a', at(0, 0, 4, 2)), w('d', at(4, 0, 4, 2)), w('b', at(0, 2, 8, 2))]);
+    const next = moveWidget(d, 'a', { col: 0, row: 2 }, 12, { nearest: true });
+    expect(rows(next).d).toEqual(at(4, 0, 4, 2));
+    expect(rows(next).b.row).toBe(4);
+    reloads(next);
+  });
+
+  it('pushAside is deterministic, the identity on a clear board, and never leaves an overlap', () => {
+    let seed = 7;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    for (let trial = 0; trial < 300; trial++) {
+      const items: { id: string; placement: GridPlacement }[] = [];
+      for (let i = 0; i < 6; i++) {
+        const cols = 1 + rand(6);
+        const p = at(rand(12 - cols + 1), rand(12), cols, 1 + rand(4));
+        if (items.every((o) => !gridFootprintsOverlap(p, o.placement))) items.push({ id: `w${i}`, placement: p });
       }
-    expect(once.get('b')).toEqual(at(3, 9, 6, 2)); // the fixed one stays exactly where it was put
+      // A clear board is returned as it is.
+      const same = pushAside(items);
+      for (const i of items) expect(same.get(i.id)).toBe(i.placement);
+      // Drop one of them somewhere else.
+      const moved = items[rand(items.length)];
+      const dropped = { ...moved.placement, col: rand(12 - moved.placement.cols + 1), row: rand(10) };
+      const input = items.map((i) => (i === moved ? { id: i.id, placement: dropped } : i));
+      const out = pushAside(input, [moved.id]);
+      expect(pushAside(input, [moved.id])).toEqual(out);
+      expect(out.get(moved.id)).toEqual(dropped);
+      const list = [...out.values()];
+      for (let i = 0; i < list.length; i++)
+        for (let j = i + 1; j < list.length; j++) expect(gridFootprintsOverlap(list[i], list[j])).toBe(false);
+      // Only a widget the drop covered can have moved, when nothing it covered moved down onto another.
+      const covered = input.filter((i) => i.id !== moved.id && gridFootprintsOverlap(i.placement, dropped));
+      if (covered.every((c) => out.get(c.id)!.row < c.placement.row))
+        for (const i of input) if (i.id !== moved.id && !covered.includes(i)) expect(out.get(i.id)).toBe(i.placement);
+    }
   });
 
-  it('only the base layout is pulled together; a breakpoint arrangement is kept', () => {
+  it('only the base layout is rearranged; a breakpoint arrangement is kept', () => {
     const d = board([
       w('a', at(0, 0)),
       { id: 'b', type: 'label', layout: { base: at(0, 3), md: at(0, 8) } },
     ]);
     d.canvas.breakpoints = { base: 0, md: 900 };
-    const next = moveWidget(d, 'a', { col: 4, row: 0 }, 12, { compact: true });
+    const next = moveWidget(d, 'a', { col: 0, row: 3 }, 12, { nearest: true });
     expect(next.widgets[1].layout.md).toEqual(at(0, 8));
     expect(basePlacement(next.widgets[1])).toEqual(at(0, 0));
   });
@@ -245,7 +268,7 @@ describe('fit to limits and the publish block', () => {
     expect(blockingLayoutFindings(findings)).toEqual([]);
   });
 
-  it('clamps every out-of-limit widget and re-packs, leaving nothing that blocks', () => {
+  it('clamps every out-of-limit widget, leaving nothing that blocks', () => {
     const d = board([
       small('big', at(0, 0, 8, 6)),
       small('tiny', at(8, 0, 1, 1)),
@@ -258,8 +281,8 @@ describe('fit to limits and the publish block', () => {
     expect(rows(fixed).edge.col + rows(fixed).edge.cols).toBeLessThanOrEqual(12);
     expect(codes(fixed)).toEqual([]);
     reloads(fixed);
-    // Re-packed: `under` rises into the room `big` gave up.
-    expect(rows(fixed).under.row).toBeLessThan(6);
+    // Nothing is pulled up: `under` keeps its row, and the room `big` gave up stays open.
+    expect(rows(fixed).under).toEqual(at(0, 6, 4, 3));
   });
 
   it('brings an off-canvas relative widget back to its anchor, and fixes a breakpoint entry', () => {
@@ -275,6 +298,166 @@ describe('fit to limits and the publish block', () => {
     ]);
     const fixed = fitToLimits(d, limitsOf);
     expect(codes(fixed)).toEqual([]);
+  });
+
+  it('brings a relative widget with NO offset back on the canvas (a wide badge on a narrow host)', () => {
+    // Anchored top-right of a one-column host at column 0, a three-column badge hangs off the left
+    // edge with no offset to drop: what placeRelative produces when such a host is picked.
+    const d = board([
+      { id: 'h', type: 'free', layout: { base: at(0, 0, 1, 2) } },
+      { id: 'r', type: 'free', layout: { base: { mode: 'relative', host: 'h', anchor: 'top-right', size: { cols: 3, rows: 1 } } } },
+    ]);
+    expect(codes(d)).toEqual(['relative-off-canvas']);
+    const fixed = fitToLimits(d, limitsOf);
+    expect(fixed).not.toBe(d);
+    expect(codes(fixed)).toEqual([]);
+    reloads(fixed);
+  });
+
+  it('keeps as much of an off-canvas offset as the canvas allows', () => {
+    const d = board([
+      { id: 'h', type: 'free', layout: { base: at(2, 0, 4, 3) } },
+      {
+        id: 'r',
+        type: 'free',
+        layout: {
+          base: { mode: 'relative', host: 'h', anchor: 'top-left', offset: { x: -5, y: 0.5 }, size: { cols: 1, rows: 1 } },
+        },
+      },
+    ]);
+    const fixed = fitToLimits(d, limitsOf);
+    expect((basePlacement(fixed.widgets[1]) as { offset: unknown }).offset).toEqual({ x: -2, y: 0.5 });
+  });
+
+  it('fixes a relative widget off the canvas only at a narrower breakpoint it INHERITS base at', () => {
+    const d = board([
+      { id: 'h', type: 'free', layout: { base: at(2, 0, 4, 2) } },
+      {
+        id: 'r',
+        type: 'free',
+        layout: {
+          base: { mode: 'relative', host: 'h', anchor: 'top-right', self: 'top-left', size: { cols: 2, rows: 1 }, offset: { x: 2, y: 0 } },
+        },
+      },
+    ]);
+    // On 12 columns the badge ends at column 10; on 8 it runs off the right edge.
+    d.canvas.breakpoints = { base: 0, sm: { minWidth: 400, columns: 8 } };
+    expect(blockingLayoutFindings(lintLayout(d, options)).map((f) => [f.code, f.breakpoint])).toEqual([
+      ['relative-off-canvas', 'sm'],
+    ]);
+    const fixed = fitToLimits(d, limitsOf);
+    expect(blockingLayoutFindings(lintLayout(fixed, options))).toEqual([]);
+    // Base was fine and is left alone; the fix is written for the breakpoint.
+    expect(basePlacement(fixed.widgets[1])).toEqual(basePlacement(d.widgets[1]));
+    expect(fixed.widgets[1].layout.sm).toBeDefined();
+    reloads(fixed);
+  });
+
+  it("gives a `fill` widget an explicit size when its host is outside the widget's own limits", () => {
+    const d = board([
+      { id: 'h', type: 'free', layout: { base: at(0, 0, 8, 6) } },
+      { id: 'r', type: 'label', layout: { base: { mode: 'relative', host: 'h', anchor: 'center', size: { fill: 'host' } } } },
+    ]);
+    expect(codes(d)).toEqual(['span-out-of-limits']);
+    const fixed = fitToLimits(d, limitsOf);
+    expect(codes(fixed)).toEqual([]);
+    expect((basePlacement(fixed.widgets[1]) as { size: unknown }).size).toEqual({ cols: 4, rows: 3 });
+  });
+
+  it('repairs against every cell size the lint measures, not only the smallest', () => {
+    // Hung by its left edge from the host's right edge, an 11-column box at x = -10.9 fits at
+    // 56 px cells but runs off the right edge at very large ones, where the fixed (here wide)
+    // gutter weighs less. Measured at the smallest cell alone, -10.9 would be kept.
+    const d = board([
+      { id: 'h', type: 'free', layout: { base: at(0, 0, 12, 2) } },
+      {
+        id: 'r',
+        type: 'free',
+        layout: {
+          base: {
+            mode: 'relative',
+            host: 'h',
+            anchor: 'top-right',
+            self: 'top-left',
+            offset: { x: -10.9, y: 0 },
+            size: { cols: 11, rows: 1 },
+          },
+        },
+      },
+    ]);
+    d.canvas.grid.gutter = 40;
+    expect(codes(d)).toEqual(['relative-off-canvas']);
+    const fixed = fitToLimits(d, limitsOf);
+    expect((basePlacement(fixed.widgets[1]) as { offset: unknown }).offset).toEqual({ x: -11, y: 0 });
+    expect(codes(fixed)).toEqual([]);
+  });
+
+  it('puts a relative widget on the grid when no offset keeps it on the canvas at every cell size', () => {
+    // As wide as the canvas, with its left edge hung on the host's right edge: the gutter makes the
+    // offset that fits small cells miss at large ones, so no single offset is on the canvas.
+    const d = board([
+      { id: 'h', type: 'free', layout: { base: at(0, 0, 12, 2) } },
+      {
+        id: 'r',
+        type: 'free',
+        layout: { base: { mode: 'relative', host: 'h', anchor: 'top-right', self: 'top-left', size: { cols: 12, rows: 1 } } },
+      },
+    ]);
+    const fixed = fitToLimits(d, limitsOf);
+    expect(basePlacement(fixed.widgets[1])).toEqual(at(0, 2, 12, 1));
+    expect(codes(fixed)).toEqual([]);
+    reloads(fixed);
+  });
+
+  it('always leaves nothing that blocks, whatever the board (seeded)', () => {
+    let seed = 11;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    const anchors = ['top-left', 'top', 'top-right', 'left', 'center', 'right', 'bottom-left', 'bottom', 'bottom-right'] as const;
+    const types = ['label', 'free'];
+    let checked = 0;
+    for (let trial = 0; trial < 400; trial++) {
+      const widgets: WidgetInstance[] = [];
+      const grids: GridPlacement[] = [];
+      for (let i = 0; i < 4; i++) {
+        const p = at(rand(12), rand(10), 1 + rand(14), 1 + rand(7));
+        if (grids.some((g) => gridFootprintsOverlap(g, p))) continue;
+        grids.push(p);
+        widgets.push({ id: `g${i}`, type: types[rand(2)], layout: { base: p } });
+      }
+      if (widgets.length === 0) continue;
+      const hosts = widgets.map((x) => x.id);
+      for (let i = 0; i < 3; i++) {
+        const size = rand(4) === 0 ? ({ fill: 'host' } as const) : { cols: 1 + rand(14), rows: 1 + rand(5) };
+        widgets.push({
+          id: `r${i}`,
+          type: types[rand(2)],
+          layout: {
+            base: {
+              mode: 'relative',
+              host: hosts[rand(hosts.length)],
+              anchor: anchors[rand(9)],
+              ...(rand(2) ? { self: anchors[rand(9)] } : {}),
+              ...(rand(2) ? { offset: { x: (rand(41) - 20) / 4, y: (rand(41) - 20) / 4 } } : {}),
+              size,
+            },
+          },
+        });
+      }
+      const d = board(widgets);
+      if (rand(2)) {
+        d.canvas.breakpoints = { base: 0, sm: { minWidth: 400, columns: 4 + rand(6) } };
+        // One grid widget gets its own entry there, below everything else.
+        widgets[0].layout = { ...widgets[0].layout, sm: at(rand(6), 30 + rand(4), 1 + rand(8), 1 + rand(3)) };
+      }
+      const fixed = fitToLimits(d, limitsOf);
+      expect(blockingLayoutFindings(lintLayout(fixed, options)), JSON.stringify(d)).toEqual([]);
+      reloads(fixed);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(300);
   });
 
   it('returns the same object when everything already fits', () => {

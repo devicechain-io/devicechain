@@ -102,8 +102,8 @@ export interface VersionHistorySheetProps {
   // stripUnknownOptions in @devicechain/widgets). The workspace owns the definition, so
   // the repair happens there; this drawer only offers it.
   onStripUnknownOptions: () => void;
-  // Clamps every widget into its size limits and re-packs the WORKING copy (fitToLimits), leaving
-  // an unsaved edit to review and save, as for the option repair above.
+  // Clamps every widget into its size limits and back onto the canvas in the WORKING copy
+  // (fitToLimits), leaving an unsaved edit to review and save, as for the option repair above.
   onFitToLimits: () => void;
   // The registry `saved` was parsed with: the catalog its option schemas are judged against.
   // Defaults to the deployment's.

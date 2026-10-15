@@ -103,7 +103,8 @@ export function spanLimitsOfLayout(layout: WidgetLayoutSpec | undefined): SpanLi
 // cell size (an offset is in cell pitches, the gutter is fixed px), so a box inside the canvas at
 // the smallest cell and at a very large one is inside it at every size between: the smallest is
 // where the gutter weighs most, the large one where the cells do.
-const RELATIVE_PROBE_CELLS = (minCellSize: number) => [minCellSize, minCellSize * 16];
+// Exported to the editor model (not the package), so fitToLimits repairs against the same cells.
+export const RELATIVE_PROBE_CELLS = (minCellSize: number) => [minCellSize, minCellSize * 16];
 
 // Rounding slack, in px, for a box that sits exactly on the canvas edge.
 const EDGE_EPSILON = 0.01;

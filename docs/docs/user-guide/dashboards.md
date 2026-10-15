@@ -105,9 +105,10 @@ platform checks each action against your own permissions.
 - **Size** decides how the dashboard fills the page: **Fill area**, **Fixed width** or **Fixed
   height**.
 
-Drag a widget to move it. A dashed outline shows the cells it will take when you let go, and the
-other widgets move aside to make room; the ones below close up into any space you leave. Widgets
-on the grid never overlap, and a new widget goes in the first free space it fits. Select a widget
+Drag a widget to move it. A dashed outline shows the cells it will take when you let go, and it
+lands exactly there. A widget in its way moves to the nearest free space above or below, so
+dropping one widget onto another swaps them. Nothing else moves: a gap you left on purpose stays
+open. Widgets on the grid never overlap, and a new widget goes in the first free space it fits. Select a widget
 and drag a handle on its edge or corner to resize it. The size shows as columns by rows, such as
 *2×3*, while you drag, and the widget stops at the smallest and largest size it allows. A widget
 that can only be resized in one direction has handles on that side only. Press **Esc** while
@@ -178,13 +179,14 @@ running past the right edge, or placed relative to another so that it falls off 
 editor does not produce these by itself; they come with an imported dashboard, an older widget
 release or a dashboard written through the API. **Fit to limits**, in the editor header whenever the
 dashboard has any and in **Version history**, clamps every widget into the sizes it supports and
-packs the dashboard again. Review the result, then save.
+brings any widget that falls off the dashboard back onto it. A widget that a larger size now covers
+moves down; the rest stay where they are. Review the result, then save.
 
 ### Placing a widget relative to another
 
 A widget normally sits on the grid. A widget can instead be placed **Relative to…** another, for a
 badge on a map or a caption under a chart. Select the widget, choose **Relative to…** and click the
-widget it should hang from. A picker with nine anchor points appears; choose the corner, edge or
+widget it should hang from, or move the focus to it and press **Enter**. A picker with nine anchor points appears; choose the corner, edge or
 centre of the host that it attaches to.
 
 A relative widget keeps its size, moves whenever its host moves, may overlap it, and is drawn above

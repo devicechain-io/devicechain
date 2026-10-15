@@ -107,9 +107,10 @@ diseño.
 - **Tamaño** decide cómo ocupa el panel la página: **Llenar área**, **Ancho fijo** o **Alto fijo**.
 
 Arrastra un widget para moverlo. Un contorno discontinuo muestra las celdas que ocupará al soltarlo,
-y los demás widgets se apartan para dejarle sitio; los de abajo suben para cerrar el espacio que
-dejas. Los widgets de la cuadrícula nunca se solapan, y un widget nuevo ocupa el primer hueco libre
-en el que cabe. Selecciona un widget y arrastra un tirador de su borde o esquina para cambiar su
+y queda exactamente ahí. Un widget que esté en su camino pasa al hueco libre más cercano, encima o
+debajo, de modo que soltar un widget sobre otro los intercambia. Nada más se mueve: un hueco que
+dejaste a propósito sigue abierto. Los widgets de la cuadrícula nunca se solapan, y un widget nuevo
+ocupa el primer hueco libre en el que cabe. Selecciona un widget y arrastra un tirador de su borde o esquina para cambiar su
 tamaño. Mientras arrastras, el tamaño se muestra como columnas por filas, por ejemplo *2×3*, y el
 widget se detiene en el tamaño mínimo y máximo que admite. Un widget que solo puede cambiar de
 tamaño en una dirección tiene tiradores únicamente en ese lado. Pulsa **Esc** mientras arrastras
@@ -184,13 +185,15 @@ los tamaños que admite, que sobrepasa el borde derecho o que, colocado en relac
 fuera del panel. El editor no los produce por sí solo; llegan con un panel importado, una versión
 anterior de un widget o un panel escrito mediante la API. **Ajustar a los límites**, en la cabecera
 del editor mientras el panel tenga alguno y en **Historial de versiones**, ajusta cada widget a los
-tamaños que admite y vuelve a organizar el panel. Revisa el resultado y guarda.
+tamaños que admite y devuelve al panel cualquier widget que quede fuera. Un widget que un tamaño
+mayor pase a cubrir baja; los demás se quedan donde están. Revisa el resultado y guarda.
 
 ### Colocar un widget en relación con otro
 
 Un widget normalmente está en la cuadrícula. También puede colocarse **Relativo a…** otro, por
 ejemplo una insignia sobre un mapa o un pie bajo un gráfico. Selecciona el widget, elige
-**Relativo a…** y haz clic en el widget del que debe depender. Aparece un selector con nueve puntos
+**Relativo a…** y haz clic en el widget del que debe depender, o lleva el foco a él y pulsa
+**Intro**. Aparece un selector con nueve puntos
 de anclaje; elige la esquina, el borde o el centro del anfitrión al que se une.
 
 Un widget relativo conserva su tamaño, se mueve cuando se mueve su anfitrión, puede solaparlo y se

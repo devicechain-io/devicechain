@@ -480,9 +480,9 @@ export function DashboardWorkspace({
     toast(t('workspaceUnknownOptionsRemoved'));
   };
 
-  // Clamp every widget into the sizes it supports and re-pack the board. Like the repair above it
-  // lands as an ordinary unsaved edit, so the author reviews it before saving. `fitToLimits`
-  // returns the same object when nothing needed fixing.
+  // Clamp every widget into the sizes it supports and bring any off the canvas back onto it. Like
+  // the repair above it lands as an ordinary unsaved edit, so the author reviews it before saving.
+  // `fitToLimits` returns the same object when nothing needed fixing.
   const fitLimits = () => {
     const next = fitToLimits(working, spanLimitsFor(registry));
     if (next === working) {

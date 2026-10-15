@@ -15,9 +15,10 @@
 import { BASE_BREAKPOINT, generateWidgetId } from './definition';
 import {
   breakpointColumns,
-  compactUp,
   firstFreeSlot,
+  gutterPx,
   layoutBreakpoints,
+  pushAside,
   pushDown,
   relativeRect,
   resolvePlacement,
@@ -26,7 +27,7 @@ import {
   type Gutter,
   type PlacedGrid,
 } from './grid';
-import { lintLayout, type SpanLimits } from './layout-lint';
+import { lintLayout, RELATIVE_PROBE_CELLS, type SpanLimits } from './layout-lint';
 import { DEFAULT_CANVAS_DENSITY } from './types';
 import type {
   CanvasDensity,
@@ -55,14 +56,14 @@ function resolveCollisions(
   def: DashboardDefinition,
   breakpoint: string,
   first: readonly string[],
-  compact = false,
+  aside = false,
 ): DashboardDefinition {
   const placed: PlacedGrid[] = [];
   for (const w of def.widgets) {
     const p = resolvePlacement(w.layout, breakpoint);
     if (p.mode === 'grid') placed.push({ id: w.id, placement: p });
   }
-  const resolved = compact ? compactUp(placed, first) : pushDown(placed, first);
+  const resolved = aside ? pushAside(placed, first) : pushDown(placed, first);
   let changed = false;
   const widgets = def.widgets.map((w) => {
     const before = resolvePlacement(w.layout, breakpoint);
@@ -78,23 +79,24 @@ function resolveCollisions(
 // edit to a base placement changes what every breakpoint without its own entry for that widget
 // shows, so a move that is clear at base can still land on another widget's override at a
 // breakpoint (and the parser refuses an overlap at any of them).
-function resolveEverywhere(def: DashboardDefinition, first: readonly string[], compact = false): DashboardDefinition {
+function resolveEverywhere(def: DashboardDefinition, first: readonly string[], aside = false): DashboardDefinition {
   let next = def;
-  // Compaction is the base layout's gravity: a breakpoint arrangement is authored on purpose and
-  // is only ever pushed apart, never pulled together.
+  // The swap is an edit of the base layout: a breakpoint arrangement the edit reaches only through
+  // the inherited base placement is pushed apart, never rearranged.
   for (const bp of layoutBreakpoints(def.canvas.breakpoints, def.widgets))
-    next = resolveCollisions(next, bp, first, compact && bp === BASE_BREAKPOINT);
+    next = resolveCollisions(next, bp, first, aside && bp === BASE_BREAKPOINT);
   return next;
 }
 
-// How an edit settles the widgets around the one it changed. By default whatever the new
-// footprint covers is pushed DOWN out of its way and nothing else moves. With `compact` the base
-// layout also falls upward into the space the edit left (what an Android launcher does with the
-// icons below the one you picked up), so a drag leaves no hole behind it. The editor's pointer
-// and keyboard edits compact; a caller that wants the stored arrangement kept as authored (an
-// import, a fixture builder) does not.
+// How an edit settles the widgets around the one it changed. Either way the edited widget lands
+// exactly where it was put, only the widgets its new footprint covers move, and every other widget
+// keeps its place, so a gap the author left (to align or to group) is never closed by an
+// unrelated edit. By default a covered widget is pushed DOWN out of the way. With `nearest` it
+// settles at the free row nearest the one it had, up or down (pushAside), so dropping a widget
+// onto a neighbour swaps the two instead of shoving the neighbour further down the board: what an
+// Android launcher does. The editor's pointer and keyboard edits use `nearest`.
 export interface EditOptions {
-  compact?: boolean;
+  nearest?: boolean;
 }
 
 // setWidgetPlacement replaces a widget's base placement. A grid placement pushes whatever it now
@@ -109,7 +111,7 @@ export function setWidgetPlacement(
     ...def,
     widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [BASE_BREAKPOINT]: placement } } : w)),
   };
-  return placement.mode === 'grid' ? resolveEverywhere(next, [id], options.compact) : next;
+  return placement.mode === 'grid' ? resolveEverywhere(next, [id], options.nearest) : next;
 }
 
 // clampSpan holds a span inside a widget's declared limits and inside the columns that remain to
@@ -493,25 +495,35 @@ export function placeOnGrid(def: DashboardDefinition, id: string): DashboardDefi
 // ---- Fit to limits ------------------------------------------------------------------
 
 // fitToLimits is the one-click repair for a board whose widgets are outside what they declare they
-// can be (a converted legacy board, an import, a definition the API wrote): every placement, at
-// every breakpoint, has its span clamped into the widget's limits and into the columns, a footprint
-// that overran the right edge is pulled back inside it, a relative widget the lint found off the
-// canvas is brought back to its anchor, and the base layout is then re-packed through the model
-// (collisions pushed apart, the rest compacted upward). Returns the same object when nothing needed
-// fixing, so a caller can tell "already fits" from "fixed".
+// can be (a converted legacy board, an import, a definition the API wrote), and the way out of
+// every finding that blocks a publish:
+//   - every placement, at every breakpoint, has its span clamped into the widget's limits and into
+//     the columns, and a footprint that overran the right edge is pulled back inside it;
+//   - a relative widget that `fill`s a host its own limits do not allow is given an explicit size,
+//     the host's span clamped into those limits;
+//   - a relative widget off the canvas is moved back onto it, keeping as much of its offset as the
+//     canvas allows, at every cell size the lint measures (fitRelativeOnCanvas). At a breakpoint
+//     where it shows its base placement, the fix is written as an entry for that breakpoint, so
+//     base is not disturbed;
+//   - any collision a grown span causes is then pushed apart through the model. Nothing is pulled
+//     up into a gap: a board the author spaced on purpose keeps its spacing, and a widget that
+//     shrank leaves the room it gave up.
+// Returns the same object when nothing needed fixing, so a caller can tell "already fits" from
+// "fixed".
 export function fitToLimits(
   def: DashboardDefinition,
   spanLimitsOf: (widget: WidgetInstance) => SpanLimits | undefined,
 ): DashboardDefinition {
   let changed = false;
-  const fitted: DashboardDefinition = {
+  const columnsAt = (bp: string) => breakpointColumns(def.canvas, bp);
+  const clamped: DashboardDefinition = {
     ...def,
     widgets: def.widgets.map((w) => {
       const limits = spanLimitsOf(w);
       const layout: Record<string, Placement> = {};
       let touched = false;
       for (const [bp, p] of Object.entries(w.layout)) {
-        const columns = bp === BASE_BREAKPOINT ? def.canvas.grid.columns : breakpointColumns(def.canvas, bp);
+        const columns = columnsAt(bp);
         let q: Placement = p;
         if (p.mode === 'grid') {
           const span = clampSpan(p, limits, columns);
@@ -529,24 +541,89 @@ export function fitToLimits(
       return { ...w, layout };
     }),
   };
-  // A relative widget that is still off the canvas goes back to its anchor.
-  let next = fitted;
-  const off = lintLayout(fitted, { columns: def.canvas.grid.columns, spanLimitsOf }).filter(
-    (f) => f.code === 'relative-off-canvas',
-  );
-  for (const f of off) {
-    const bp = f.breakpoint ?? BASE_BREAKPOINT;
-    next = {
-      ...next,
-      widgets: next.widgets.map((w) => {
-        const p = w.id === f.widgetId ? w.layout[bp] : undefined;
-        if (!p || p.mode !== 'relative' || !p.offset) return w;
-        changed = true;
-        const { offset: _dropped, ...rest } = p;
-        return { ...w, layout: { ...w.layout, [bp]: rest } };
-      }),
-    };
+  // A `fill` widget's span is its host's, read once the hosts are clamped.
+  let next: DashboardDefinition = {
+    ...clamped,
+    widgets: clamped.widgets.map((w) => {
+      const limits = spanLimitsOf(w);
+      if (!limits) return w;
+      let layout: WidgetInstance['layout'] | undefined;
+      for (const [bp, p] of Object.entries(w.layout)) {
+        if (p.mode !== 'relative' || !('fill' in p.size)) continue;
+        const span = hostSpan(p, clamped, bp);
+        const size = clampSpan(span, limits, columnsAt(bp));
+        if (size.cols === span.cols && size.rows === span.rows) continue;
+        layout = { ...(layout ?? w.layout), [bp]: { ...p, size } };
+      }
+      if (!layout) return w;
+      changed = true;
+      return { ...w, layout };
+    }),
+  };
+  // A relative widget off the canvas is moved back onto it. Its host may itself be a relative
+  // widget being moved, so a second pass sees the host where it ends up.
+  for (let pass = 0; pass < 3; pass++) {
+    const off = lintLayout(next, { columns: def.canvas.grid.columns, spanLimitsOf }).filter(
+      (f) => f.code === 'relative-off-canvas',
+    );
+    if (off.length === 0) break;
+    for (const f of off) {
+      const fixed = fitRelativeOnCanvas(next, f.widgetId, f.breakpoint ?? BASE_BREAKPOINT);
+      if (fixed !== next) changed = true;
+      next = fixed;
+    }
   }
   if (!changed) return def;
-  return resolveEverywhere(next, [], true);
+  return resolveEverywhere(next, []);
+}
+
+// fitRelativeOnCanvas moves the relative widget `id`, as it is shown at `bp`, back inside the
+// canvas at every cell size the lint measures. A box's position is a straight line in the cell
+// size and in its offset, so the offsets that keep it inside are, per axis, a range at each probed
+// cell; the one kept is the widget's own offset clamped into the intersection of those ranges, in
+// quarter cells. When no quarter-cell offset fits every cell size (a box as wide as the canvas
+// whose `self` point differs from its anchor), the widget is put on the grid at that breakpoint,
+// in the first free slot, at its own size: the one placement that is always on the canvas.
+function fitRelativeOnCanvas(def: DashboardDefinition, id: string, bp: string): DashboardDefinition {
+  const w = def.widgets.find((x) => x.id === id);
+  if (!w) return def;
+  const p = resolvePlacement(w.layout, bp);
+  if (p.mode !== 'relative') return def;
+  const columns = breakpointColumns(def.canvas, bp);
+  const gutter = gutterPx(def.canvas.grid);
+  const { offset, ...bare } = p;
+  let loX = -Infinity;
+  let hiX = Infinity;
+  let loY = -Infinity;
+  for (const cell of RELATIVE_PROBE_CELLS(def.canvas.grid.minCellSize)) {
+    const host = layoutRects(def.widgets, bp, cell, gutter).get(p.host);
+    if (!host) return def;
+    const r = relativeRect(bare, host, cell, gutter);
+    const width = spanPx(columns, cell, gutter.x);
+    loX = Math.max(loX, -r.x / (cell + gutter.x));
+    hiX = Math.min(hiX, (width - r.x - r.w) / (cell + gutter.x));
+    loY = Math.max(loY, -r.y / (cell + gutter.y));
+  }
+  const step = OFFSET_STEP_FINE;
+  const up = (v: number) => Math.ceil(v / step - 1e-9) * step;
+  const down = (v: number) => Math.floor(v / step + 1e-9) * step;
+  let placement: Placement;
+  if (up(loX) <= down(hiX)) {
+    const x = Math.min(Math.max(offset?.x ?? 0, up(loX)), down(hiX)) || 0;
+    const y = Math.max(offset?.y ?? 0, up(loY)) || 0;
+    placement = x === 0 && y === 0 ? bare : { ...bare, offset: { x, y } };
+  } else {
+    const size = 'fill' in p.size ? hostSpan(p, def, bp) : p.size;
+    const cols = Math.min(size.cols, columns);
+    const occupied = def.widgets
+      .filter((o) => o.id !== id)
+      .map((o) => resolvePlacement(o.layout, bp))
+      .filter((o): o is GridPlacement => o.mode === 'grid');
+    const slot = firstFreeSlot(occupied, cols, size.rows, columns);
+    placement = { mode: 'grid', col: slot.col, row: slot.row, cols, rows: size.rows };
+  }
+  return {
+    ...def,
+    widgets: def.widgets.map((x) => (x.id === id ? { ...x, layout: { ...x.layout, [bp]: placement } } : x)),
+  };
 }

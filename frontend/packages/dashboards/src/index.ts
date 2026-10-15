@@ -370,7 +370,7 @@ export {
   layoutRects,
   paddingPx,
   pushDown,
-  compactUp,
+  pushAside,
   relativeRect,
   resolveFrame,
   resolvePlacement,

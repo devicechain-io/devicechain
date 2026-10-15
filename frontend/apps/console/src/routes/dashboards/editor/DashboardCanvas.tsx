@@ -11,8 +11,10 @@
 // owns no placement arithmetic of its own beyond turning pointer movement into cells
 // (canvasGeometry). A gesture (drag, resize, offset drag) never mutates the definition while it
 // runs: each pointer move recomputes a PREVIEW definition from the unchanged original, and the
-// preview is what is drawn, so neighbours are seen pushed aside and the board compacting live and
-// then returning if the pointer goes back. Releasing commits the preview; Escape discards it.
+// preview is what is drawn, so a neighbour in the way is seen moving to the nearest free room (a
+// swap, when the room is the one the dragged widget left) and then returning if the pointer goes
+// back; nothing that is not in the way moves. Releasing commits the preview; Escape, a cancelled
+// or lost pointer, or the window losing focus discards it.
 //
 //   - dragging a grid widget shows a footprint ghost snapped to the cells it would take, while the
 //     widget itself follows the pointer;
@@ -96,11 +98,9 @@ export interface DashboardCanvasProps {
   onSelect: (id: string | null) => void;
 }
 
-// What the pointer is doing to which widget, from where it started.
-type Gesture =
-  | { kind: 'move'; id: string; x: number; y: number; origin: GridPlacement }
-  | { kind: 'resize'; id: string; x: number; y: number; origin: GridPlacement; handle: Handle }
-  | { kind: 'offset'; id: string; x: number; y: number; origin: { x: number; y: number } };
+// What the pointer is doing to which widget, from where it started, and which pointer it is (a
+// second finger, or a pen beside a mouse, is not the gesture).
+type Gesture = GestureStart & { x: number; y: number; pointerId: number | undefined };
 
 type GestureStart =
   | { kind: 'move'; id: string; origin: GridPlacement }
@@ -252,7 +252,7 @@ export function DashboardCanvas({
     const widget = definition.widgets.find((w) => w.id === g.id);
     if (!widget) return definition;
     if (g.kind === 'move') {
-      return moveWidget(definition, g.id, moveTarget(g.origin, p.dx, p.dy, strides), grid.columns, { compact: true });
+      return moveWidget(definition, g.id, moveTarget(g.origin, p.dx, p.dy, strides), grid.columns, { nearest: true });
     }
     if (g.kind === 'resize') {
       return resizeWidget(
@@ -262,7 +262,7 @@ export function DashboardCanvas({
         limitsOf(widget),
         handleEdges(g.handle),
         grid.columns,
-        { compact: true },
+        { nearest: true },
       );
     }
     return setRelativeOffset(
@@ -282,24 +282,42 @@ export function DashboardCanvas({
   useEffect(() => {
     if (!gesture) return;
     const at = (e: MouseEvent): Pointer => ({ dx: e.clientX - gesture.x, dy: e.clientY - gesture.y, shift: e.shiftKey });
-    const move = (e: MouseEvent) => setPointer(at(e));
+    const ours = (e: Event) => (e as PointerEvent).pointerId === gesture.pointerId;
+    const cancel = () => setGesture(null);
+    const move = (e: MouseEvent) => {
+      if (!ours(e)) return;
+      // A mouse whose button is no longer down was released where no pointerup reached us (outside
+      // the window, over a frame): the gesture did not end with a drop, so it commits nothing.
+      if ((e as PointerEvent).pointerType === 'mouse' && e.buttons === 0) {
+        cancel();
+        return;
+      }
+      setPointer(at(e));
+    };
     const up = (e: MouseEvent) => {
+      if (!ours(e)) return;
       const next = previewRef.current(gesture, at(e));
       setGesture(null);
       if (next !== definitionRef.current) onChangeRef.current(next);
     };
-    const cancel = () => setGesture(null);
+    const lost = (e: Event) => {
+      if (ours(e)) cancel();
+    };
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') cancel();
     };
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
-    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('pointercancel', lost);
+    window.addEventListener('lostpointercapture', lost);
+    window.addEventListener('blur', cancel);
     window.addEventListener('keydown', key);
     return () => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
-      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('pointercancel', lost);
+      window.removeEventListener('lostpointercapture', lost);
+      window.removeEventListener('blur', cancel);
       window.removeEventListener('keydown', key);
     };
   }, [gesture]);
@@ -349,24 +367,41 @@ export function DashboardCanvas({
     </div>
   );
 
+  // Whether a pointer down may begin a gesture: the primary button of the primary pointer, while
+  // no other gesture runs, from the widget's own DOM. React bubbles an event out of a PORTAL to the
+  // component that rendered it, so a popover a widget portals out of its (inert) body would
+  // otherwise reach the widget's handler from somewhere that is not the widget at all.
+  const mayStart = (e: React.PointerEvent) =>
+    e.button === 0 && e.isPrimary !== false && gesture === null && e.currentTarget.contains(e.target as Node);
+
   const startGesture = (e: React.PointerEvent, start: GestureStart) => {
     setPointer({ dx: 0, dy: 0, shift: e.shiftKey });
-    setGesture({ ...start, x: e.clientX, y: e.clientY } as Gesture);
+    setGesture({ ...start, x: e.clientX, y: e.clientY, pointerId: e.pointerId });
+  };
+
+  // The widget elements by id, to put focus on the one being edited.
+  const elements = useRef(new Map<string, HTMLDivElement>());
+
+  // Completes a host pick on `widget`, if one is under way: a valid host takes the widget being
+  // placed (which keeps the selection and gets the focus); anything else ends the pick unchanged.
+  const pickHost = (widget: WidgetInstance): boolean => {
+    if (!pickingFor || pickingFor === widget.id) return false;
+    const placing = pickingFor;
+    setPickingFor(null);
+    if (canHostRelative(definition, placing, widget.id)) {
+      onChange(placeRelative(definition, placing, widget.id, 'top-right'));
+      onSelect(placing);
+      elements.current.get(placing)?.focus();
+    }
+    return true;
   };
 
   // Pointer down on a widget's body: pick a host if one is being chosen, else begin a drag.
   const onWidgetPointerDown = (e: React.PointerEvent, widget: WidgetInstance) => {
-    if (e.button !== 0) return;
+    if (!mayStart(e)) return;
     if ((e.target as HTMLElement).closest('[data-no-drag]')) return;
     e.stopPropagation();
-    if (pickingFor && pickingFor !== widget.id) {
-      if (canHostRelative(definition, pickingFor, widget.id)) {
-        onChange(placeRelative(definition, pickingFor, widget.id, 'top-right'));
-        onSelect(pickingFor);
-      }
-      setPickingFor(null);
-      return;
-    }
+    if (pickHost(widget)) return;
     setPickingFor(null);
     onSelect(widget.id);
     const placement = basePlacement(widget);
@@ -378,6 +413,12 @@ export function DashboardCanvas({
   // with Shift); Shift+arrows resize a grid widget by a cell.
   const onWidgetKeyDown = (e: React.KeyboardEvent, widget: WidgetInstance) => {
     if (e.target !== e.currentTarget) return;
+    // Enter or Space on a focused widget completes a host pick, as a click does.
+    if ((e.key === 'Enter' || e.key === ' ') && pickingFor && pickingFor !== widget.id) {
+      e.preventDefault();
+      pickHost(widget);
+      return;
+    }
     const dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
     const dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
     if (dx === 0 && dy === 0) return;
@@ -400,10 +441,10 @@ export function DashboardCanvas({
         limitsOf(widget),
         {},
         grid.columns,
-        { compact: true },
+        { nearest: true },
       );
     } else {
-      next = moveWidget(definition, widget.id, { col: p.col + dx, row: p.row + dy }, grid.columns, { compact: true });
+      next = moveWidget(definition, widget.id, { col: p.col + dx, row: p.row + dy }, grid.columns, { nearest: true });
     }
     if (next === definition) return;
     onChange(next);
@@ -411,6 +452,8 @@ export function DashboardCanvas({
     const q = after && basePlacement(after);
     if (q?.mode === 'grid') {
       setAnnouncement(t('canvasAnnounce', { name: nameOf(widget), size: formatSpan(q), col: q.col + 1, row: q.row + 1 }));
+    } else if (q?.mode === 'relative') {
+      setAnnouncement(t('canvasAnnounceOffset', { name: nameOf(widget), x: q.offset?.x ?? 0, y: q.offset?.y ?? 0 }));
     }
   };
 
@@ -609,6 +652,10 @@ export function DashboardCanvas({
               return (
                 <div
                   key={widget.id}
+                  ref={(el) => {
+                    if (el) elements.current.set(widget.id, el);
+                    else elements.current.delete(widget.id);
+                  }}
                   role="group"
                   tabIndex={0}
                   data-testid={`canvas-widget-${widget.id}`}
@@ -659,7 +706,7 @@ export function DashboardCanvas({
                       className="rounded-sm border border-primary bg-background"
                       style={handleStyle(h)}
                       onPointerDown={(e) => {
-                        if (e.button !== 0 || placement.mode !== 'grid') return;
+                        if (!mayStart(e) || placement.mode !== 'grid') return;
                         e.stopPropagation();
                         startGesture(e, { kind: 'resize', id: widget.id, origin: placement, handle: h });
                       }}
