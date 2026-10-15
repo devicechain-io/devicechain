@@ -1199,7 +1199,7 @@
       },
       "options": {
         "selectionTarget": "selectedMachine",
-        "title": ""
+        "title": "Machine"
       },
       "type": "entity-selector"
     },

@@ -436,7 +436,7 @@ describe('no network beyond the two files', () => {
     await act(async () => ticker.frame(3000));
     await seekTo(25_000);
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Select selectedMachine'), { target: { value: 'sp-hauler-02' } });
+      fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-02' } });
     });
     await settle();
 
@@ -449,7 +449,7 @@ describe('no network beyond the two files', () => {
 describe('selection', () => {
   it('lists the Machine selector candidates from the recording, so it is wired and not inert', async () => {
     await mountApp(await fixtureRecordingText());
-    const pick = screen.getByLabelText('Select selectedMachine') as HTMLSelectElement;
+    const pick = screen.getByLabelText('Machine') as HTMLSelectElement;
     expect(Array.from(pick.options).map((o) => o.value)).toEqual(
       expect.arrayContaining(['sp-hauler-01', 'sp-hauler-02', 'sp-plant-01']),
     );
@@ -457,7 +457,7 @@ describe('selection', () => {
 
   it('keeps the selected machine across a seek', async () => {
     await mountApp(await fixtureRecordingText());
-    const pick = () => screen.getByLabelText('Select selectedMachine') as HTMLSelectElement;
+    const pick = () => screen.getByLabelText('Machine') as HTMLSelectElement;
     await act(async () => {
       fireEvent.change(pick(), { target: { value: 'sp-hauler-02' } });
     });
@@ -489,7 +489,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
       fireEvent.click(screen.getByRole('button', { name: 'sp-hauler-03' }));
     });
     await settle();
-    expect((screen.getByLabelText('Select selectedMachine') as HTMLSelectElement).value).toBe('sp-hauler-03');
+    expect((screen.getByLabelText('Machine') as HTMLSelectElement).value).toBe('sp-hauler-03');
     expect(canvasText.join('|')).toContain('599.6');
   });
 
@@ -497,7 +497,7 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
     await mountApp(await excerptOnCurrentBoardText());
     await seekTo(441_200);
     await act(async () => {
-      fireEvent.change(screen.getByLabelText('Select selectedMachine'), { target: { value: 'sp-hauler-03' } });
+      fireEvent.change(screen.getByLabelText('Machine'), { target: { value: 'sp-hauler-03' } });
     });
     await settle();
     expect(canvasText.join('|')).toContain('599.6');

@@ -18,6 +18,7 @@
 
 import {
   WIDGET_TYPES,
+  isCanvasDensity,
   type AnchorTarget,
   type Breakpoints,
   type Canvas,
@@ -294,6 +295,9 @@ function parseCanvas(raw: unknown): Canvas {
   if (!(BASE_BREAKPOINT in breakpoints)) breakpoints[BASE_BREAKPOINT] = 0;
 
   const canvas: Canvas = { grid, sizing, breakpoints };
+  // An unknown value falls back to the default (absent) rather than failing the parse: a
+  // definition written by a newer release still renders.
+  if (isCanvasDensity(rec.density)) canvas.density = rec.density;
   if (isRecord(rec.background)) {
     const { color, imageUrl } = rec.background;
     canvas.background = {

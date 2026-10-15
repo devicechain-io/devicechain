@@ -21,6 +21,10 @@ export function css(name: ThemeVar): string {
 
 // The subset of the console's design tokens widgets rely on. Kept small and
 // semantic so the contract a host must provide is explicit and stable.
+//
+// Colours only: sizes are SizeTokens (see ./tokens). The chart ramp and the severity hues are
+// part of the set, so a widget colours itself from a token rather than a literal; `normal` has
+// NO severity token (it renders in the ordinary foreground, see ./severity).
 export type ThemeVar =
   | 'background'
   | 'foreground'
@@ -29,5 +33,15 @@ export type ThemeVar =
   | 'muted'
   | 'muted-foreground'
   | 'primary'
+  | 'primary-foreground'
   | 'border'
-  | 'destructive';
+  | 'destructive'
+  | 'chart-1'
+  | 'chart-2'
+  | 'chart-3'
+  | 'chart-4'
+  | 'chart-5'
+  | 'sev-critical'
+  | 'sev-major'
+  | 'sev-minor'
+  | 'sev-warning';

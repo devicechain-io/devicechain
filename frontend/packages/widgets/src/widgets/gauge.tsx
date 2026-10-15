@@ -14,8 +14,8 @@ import {
   optThresholds,
   pickSample,
   primaryMeasurementName,
-  useElementSize,
   useFlashOnChange,
+  useWidgetScale,
   WidgetFrame,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
@@ -24,8 +24,20 @@ import { buildGaugeOption, EChart, useChartTheme } from '@devicechain/widget-sdk
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 export function Gauge({ widget, data }: WidgetProps) {
+  const name = primaryMeasurementName(widget);
+  const sample = pickSample(data.latest, name);
+  return (
+    <WidgetFrame title={optString(widget.options, 'title') ?? name} sampleTime={sample?.occurredTime ?? null} flush>
+      <GaugeBody widget={widget} data={data} />
+    </WidgetFrame>
+  );
+}
+
+// Rendered INSIDE the frame: the widget scale is the frame's content column, which is only in
+// context below the frame.
+function GaugeBody({ widget, data }: WidgetProps) {
   const theme = useChartTheme();
-  const [sizeRef, size] = useElementSize<HTMLDivElement>();
+  const { size, scale } = useWidgetScale();
   const name = primaryMeasurementName(widget);
   const sample = pickSample(data.latest, name);
 
@@ -38,8 +50,8 @@ export function Gauge({ widget, data }: WidgetProps) {
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
 
   const option = useMemo(
-    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit, precision, thresholds }, size),
-    [sample?.value, theme, min, max, unit, precision, thresholds, size.width, size.height],
+    () => buildGaugeOption(sample?.value ?? null, theme, { min, max, unit, precision, thresholds, scale }, size),
+    [sample?.value, theme, min, max, unit, precision, thresholds, scale, size],
   );
 
   // Opt-in directional flash. The value lives on an opaque canvas, so the cue is a
@@ -52,11 +64,9 @@ export function Gauge({ widget, data }: WidgetProps) {
   );
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title') ?? name} sampleTime={sample?.occurredTime ?? null}>
-      <div ref={sizeRef} style={{ width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }}>
-        <EChart option={option} />
-      </div>
-    </WidgetFrame>
+    <div style={{ width: '100%', height: '100%', ...flashBackgroundStyle(flashDirection) }}>
+      <EChart option={option} />
+    </div>
   );
 }
 

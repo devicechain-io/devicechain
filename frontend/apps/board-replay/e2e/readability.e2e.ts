@@ -131,7 +131,8 @@ for (const board of BOARDS) {
 // ---- The negative control --------------------------------------------------------
 //
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and
-// kept permanently: a card whose title and reading cannot fit it, a card whose title alone
+// kept permanently: a card whose title cannot fit its width (the frame drops a title only below
+// a height, so this card is tall enough to keep it) and whose reading is cut, a card whose title alone
 // cannot fit it, a label that cannot fit, and two widgets nudged on top of each other, beside
 // one widget that fits and must NOT be flagged (a check that flagged everything would pass the
 // first half of this test).

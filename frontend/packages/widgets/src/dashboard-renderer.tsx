@@ -11,6 +11,7 @@
 
 import {
   activeBreakpoint,
+  DEFAULT_CANVAS_DENSITY,
   defaultHistoryWindow,
   fetchWidgetHistory,
   resolveWidgetBox,
@@ -18,6 +19,7 @@ import {
   UNKNOWN_WIDGET_TYPE,
   type Breakpoints,
   type CanvasBackground,
+  type CanvasDensity,
   type CanvasSizing,
   type DashboardDefinition,
   type WidgetActions,
@@ -27,7 +29,7 @@ import {
   type SlotBinding,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import type { WidgetRegistry } from '@devicechain/widget-sdk';
+import { densityScale, tokenStyle, WidgetDensityProvider, WidgetTokenStyles, type WidgetRegistry } from '@devicechain/widget-sdk';
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
@@ -83,6 +85,10 @@ export interface DashboardRendererProps {
   // The element chart colors are read from, when the host scopes its design tokens to a
   // container rather than the document root. Omit for the document root (every other host).
   themeRoot?: Element;
+  // A viewer's density override (the /dash app's `?density=`). Wins over the definition's
+  // authored `canvas.density`, which wins over `comfortable`. Density scales every size token
+  // (font, spacing) and the floor of the value-font curve, never the curve itself.
+  density?: CanvasDensity;
 }
 
 export function DashboardRenderer({
@@ -97,6 +103,7 @@ export function DashboardRenderer({
   candidates,
   timeZone,
   themeRoot,
+  density,
 }: DashboardRendererProps) {
   const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
   // Each widget with its slot resolved to a concrete selector. Recomputed per render;
@@ -110,9 +117,16 @@ export function DashboardRenderer({
   const rowGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
   const colGap = typeof grid.gap === 'number' ? grid.gap : grid.gap.col;
   const effectiveSizing = sizing ?? definition.canvas.sizing;
+  const effectiveDensity = density ?? definition.canvas.density ?? DEFAULT_CANVAS_DENSITY;
+  const scale = densityScale(effectiveDensity);
 
   return (
-    <div style={sizingStyle(effectiveSizing, bg)}>
+    <div
+      data-density={effectiveDensity}
+      style={{ ...sizingStyle(effectiveSizing, bg), ...tokenStyle(scale) }}
+    >
+      <WidgetTokenStyles />
+      <WidgetDensityProvider scale={scale}>
       <WidgetThemeRootProvider root={themeRoot}>
       <WidgetTimeZoneProvider timeZone={timeZone}>
       <WidgetSelectProvider select={select}>
@@ -150,6 +164,7 @@ export function DashboardRenderer({
       </WidgetSelectProvider>
       </WidgetTimeZoneProvider>
       </WidgetThemeRootProvider>
+      </WidgetDensityProvider>
     </div>
   );
 }

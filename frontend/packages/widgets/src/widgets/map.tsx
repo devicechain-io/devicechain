@@ -39,6 +39,7 @@ import { useTenantBasemap } from '../basemap-context';
 import { useMapRuntime, type MapRuntime } from '../map-runtime-context';
 import {
   css,
+  fontVar,
   defineWidget,
   type LocationStreamState,
   optString,
@@ -214,7 +215,7 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
   }
 
   return (
-    <WidgetFrame title={title} bodyStyle={{ padding: 0 }}>
+    <WidgetFrame title={title} flush>
       <LiveMap basemap={basemap} positions={positions} runtime={runtime} />
     </WidgetFrame>
   );
@@ -269,7 +270,7 @@ function PlainPanel({ positions, note }: { positions: PlaceableLocation[]; note:
           right: 0,
           bottom: 0,
           padding: '4px 8px',
-          fontSize: 12,
+          fontSize: fontVar('sm'),
           lineHeight: 1.3,
           textAlign: 'center',
           color: css('muted-foreground'),
@@ -480,19 +481,18 @@ function MapNotice({ glyph, heading, detail }: { glyph?: string; heading: string
         gap: 4,
         width: '100%',
         height: '100%',
-        padding: 12,
         boxSizing: 'border-box',
         textAlign: 'center',
         color: css('muted-foreground'),
       }}
     >
       {glyph ? (
-        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">
+        <div style={{ fontSize: fontVar('xl'), lineHeight: 1 }} aria-hidden="true">
           {glyph}
         </div>
       ) : null}
-      <div style={{ fontSize: 13, fontWeight: 600 }}>{heading}</div>
-      {detail ? <div style={{ fontSize: 12, opacity: 0.8 }}>{detail}</div> : null}
+      <div style={{ fontSize: fontVar('md'), fontWeight: 600 }}>{heading}</div>
+      {detail ? <div style={{ fontSize: fontVar('sm'), opacity: 0.8 }}>{detail}</div> : null}
     </div>
   );
 }

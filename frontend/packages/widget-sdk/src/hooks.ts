@@ -500,7 +500,12 @@ export interface ElementSize {
 // scales absolute font sizes, so a small widget crams without this. Returns
 // {0,0} until measured (and where ResizeObserver is unavailable, e.g. jsdom); the
 // consumers treat a zero size as "use default sizing".
-export function useElementSize<T extends HTMLElement>(): [RefObject<T | null>, ElementSize] {
+//
+// `step` quantises each dimension DOWN to a multiple of it (default 1: exact), so a caller that
+// only needs a coarse size -- the frame feeding every widget's scale -- does not re-render for
+// sub-pixel or few-pixel jitter. Down, so text fitted to the quantised box always fits the
+// real one.
+export function useElementSize<T extends HTMLElement>(step = 1): [RefObject<T | null>, ElementSize] {
   const ref = useRef<T>(null);
   const [size, setSize] = useState<ElementSize>({ width: 0, height: 0 });
 
@@ -510,15 +515,13 @@ export function useElementSize<T extends HTMLElement>(): [RefObject<T | null>, E
     const observer = new ResizeObserver((entries) => {
       const rect = entries[0]?.contentRect;
       if (!rect) return;
-      setSize((prev) =>
-        prev.width === rect.width && prev.height === rect.height
-          ? prev
-          : { width: rect.width, height: rect.height },
-      );
+      const width = step > 1 ? Math.floor(rect.width / step) * step : rect.width;
+      const height = step > 1 ? Math.floor(rect.height / step) * step : rect.height;
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [step]);
 
   return [ref, size];
 }

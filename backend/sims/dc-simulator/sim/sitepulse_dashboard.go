@@ -245,7 +245,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		alarms,
 		buildMapWidget("sp-map", box{0, 16, 8, 5},
 			widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions"),
-		buildEntitySelectorWidget("sp-machine-select", box{16, 8, 3, 2}, "", sitepulseSlotMachine),
+		buildEntitySelectorWidget("sp-machine-select", box{16, 8, 3, 2}, "Machine", sitepulseSlotMachine),
 		buildGaugeWidget("sp-engine-temp", box{16, 8, 5, 4}, onMachine(SitepulseEngineTempKey),
 			"Engine temp",
 			SitepulseEngineTempKey, "°C", 0, sitepulseEngineTempGaugeMax),

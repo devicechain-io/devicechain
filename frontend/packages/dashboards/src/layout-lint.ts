@@ -13,6 +13,7 @@
 // `pixelFloor.minPxOf`. Overlap is deliberately not a code: the parser is where it is refused.
 
 import { activeBreakpoint, resolveWidgetBox } from './definition';
+import { sameLabel } from './same-label';
 import { widgetBinding } from './slots';
 import type { DashboardDefinition, WidgetInstance } from './types';
 import { pinnedAxes, type WidgetLayoutSpec, type WidgetSpan } from './widget-descriptor';
@@ -218,7 +219,7 @@ function titleDuplicatesSubtitle(def: DashboardDefinition, widget: WidgetInstanc
   if (!subject) return undefined;
   const ds = widget.datasource;
   const slotLabel = ds?.kind === 'slot' ? def.slots?.[ds.slot]?.label : undefined;
-  const same = (a: string | undefined) => !!a && a.trim().toLowerCase() === title.trim().toLowerCase();
+  const same = (a: string | undefined) => sameLabel(a, title);
   if (same(subject)) return `the title and the subject line both read "${title.trim()}"`;
   if (same(slotLabel)) {
     return `the title "${title.trim()}" is the slot's name for "${subject}", which the subject line already shows`;

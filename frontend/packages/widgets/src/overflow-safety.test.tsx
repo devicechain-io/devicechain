@@ -69,8 +69,9 @@ const alarm: AlarmRow = {
 };
 const alarms: AlarmStreamState = { alarms: [alarm], total: 1, loading: false, error: null };
 
+// The widget's own column: the first child of the frame's content column.
 const columnOf = (container: HTMLElement) =>
-  container.querySelector('[data-widget-body]')!.firstElementChild as HTMLElement;
+  container.querySelector('[data-widget-content]')!.firstElementChild as HTMLElement;
 
 describe('latest-card', () => {
   it('hides the timestamp when the measured box has no room for it (sitepulse card)', () => {

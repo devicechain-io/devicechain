@@ -7,6 +7,7 @@
 import type { HubConnectionState } from '@devicechain/dashboards';
 
 import { css, type ThemeVar } from './theme';
+import { fontVar } from './tokens';
 
 export interface HubConnectionBadgeProps {
   state: HubConnectionState;
@@ -28,7 +29,7 @@ export function HubConnectionBadge({ state, labels }: HubConnectionBadgeProps) {
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        fontSize: 12,
+        fontSize: fontVar('sm'),
         padding: '2px 8px',
         borderRadius: 999,
         border: `1px solid ${css('border')}`,

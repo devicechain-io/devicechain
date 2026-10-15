@@ -13,6 +13,7 @@ import { useState, type CSSProperties } from 'react';
 import {
   type AlarmStreamState,
   css,
+  fontVar,
   defineWidget,
   FlashValue,
   formatDateTime,
@@ -20,6 +21,7 @@ import {
   optNumber,
   optString,
   useElementSize,
+  useSeverityColors,
   useWidgetSelect,
   useWidgetTimeZone,
   WidgetFrame,
@@ -36,7 +38,7 @@ const headCell: CSSProperties = {
   position: 'sticky',
   top: 0,
   background: css('card'),
-  fontSize: 11,
+  fontSize: fontVar('xs'),
   fontWeight: 600,
   textTransform: 'uppercase',
   letterSpacing: '0.04em',
@@ -62,6 +64,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   // Actions render only when the runtime supplies a seam AND the viewer may write.
   const canAct = actions?.can('alarm:write') ?? false;
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
+  const severity = useSeverityColors();
   const narrow = size.width > 0 && size.width < ALARM_TABLE_NARROW_PX;
   const columns = 5 + (narrow ? 0 : 2) + (canAct ? 1 : 0);
   // Round the triggering value to a fixed precision when configured; unset keeps the raw
@@ -80,14 +83,14 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   const drillTo = select && selectionTarget ? { select, slot: selectionTarget } : undefined;
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
+    <WidgetFrame title={optString(widget.options, 'title')} flush>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
         <div ref={sizeRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
           <table
             style={{
               width: '100%',
               borderCollapse: 'collapse',
-              fontSize: 13,
+              fontSize: fontVar('md'),
               color: css('foreground'),
               fontVariantNumeric: 'tabular-nums',
             }}
@@ -133,7 +136,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                 </tr>
               ) : (
                 alarms.map((alarm) => {
-                  const color = severityColor(alarm.severity);
+                  const color = severityColor(severity, alarm.severity);
                   return (
                     <tr key={alarm.token} style={{ borderBottom: `1px solid ${css('border')}` }}>
                       <td aria-hidden="true" style={{ padding: 0, width: 4, background: color }} />
@@ -183,7 +186,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
           <div
             style={{
               padding: '4px 10px',
-              fontSize: 11,
+              fontSize: fontVar('xs'),
               color: css('muted-foreground'),
               borderTop: `1px solid ${css('border')}`,
             }}
@@ -235,7 +238,7 @@ function OriginatorCell({
 
 const actionButton: CSSProperties = {
   padding: '2px 8px',
-  fontSize: 12,
+  fontSize: fontVar('sm'),
   lineHeight: 1.4,
   borderRadius: 4,
   border: `1px solid ${css('border')}`,
@@ -249,6 +252,7 @@ const actionButton: CSSProperties = {
 // "—"); an acknowledged one still shows Clear. After a successful mutation the hub
 // reconciles the table, so the row updates itself.
 function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetActions }) {
+  const severity = useSeverityColors();
   const [pending, setPending] = useState<'ack' | 'clear' | null>(null);
   const [failed, setFailed] = useState(false);
 
@@ -279,7 +283,7 @@ function AlarmRowActions({ alarm, actions }: { alarm: AlarmRow; actions: WidgetA
           role="img"
           aria-label="Action failed — retry"
           title="Action failed — retry"
-          style={{ color: severityColor('CRITICAL'), fontSize: 12 }}
+          style={{ color: severityColor(severity, 'CRITICAL'), fontSize: fontVar('sm') }}
         >
           ⚠
         </span>
