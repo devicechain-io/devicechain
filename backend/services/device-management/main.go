@@ -55,7 +55,7 @@ var (
 	// the same root key, in the same step, as DeviceSecretKey.
 	SecretTransit *credential.SecretTransit
 
-	InboundEventsReader    messaging.MessageReader
+	InboundEventsReaders   []messaging.MessageReader
 	InboundEventsProcessor *processor.InboundEventsProcessor
 	ResolvedEventsWriter   messaging.OrderedWriter
 	FailedEventsWriter     messaging.OrderedWriter
@@ -218,14 +218,15 @@ func newDeadLetterSink(nmgr *messaging.NatsManager) (*deadletter.Sink, error) {
 	return DeadLetters.NewSink(w), nil
 }
 
-// newInboundEventsProcessor assembles the inbound processor from this service's globals, its
-// resolver pool sized by the loaded configuration. It is a function of its own so
+// newInboundEventsProcessor assembles the inbound processor from this service's globals (the
+// inbound readers createInboundReaders built among them), its resolver pool sized by the
+// loaded configuration. It is a function of its own so
 // resolution_wiring_test.go can check the configuration reaches the processor: a processor
 // test builds the processor itself, so a service that stopped passing resolution.workers
 // would run the default while every other test stayed green. Its loss counter is the service's
 // dead-letter producer, for the same reason.
-func newInboundEventsProcessor(reader messaging.MessageReader) *processor.InboundEventsProcessor {
-	return processor.NewInboundEventsProcessor(Microservice, reader, ResolvedEventsWriter, FailedEventsWriter,
+func newInboundEventsProcessor() *processor.InboundEventsProcessor {
+	return processor.NewInboundEventsProcessor(Microservice, InboundEventsReaders, ResolvedEventsWriter, FailedEventsWriter,
 		core.NewNoOpLifecycleCallbacks(), CachedApi, Configuration.DeviceAuthMode,
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
 		processor.WithResolvers(Configuration.Resolution.Workers),
@@ -290,13 +291,31 @@ func createPublishWriters(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
+// createInboundReaders builds the configured number of pull readers on the inbound-events
+// durable (resolution.inboundReaders), each subscribed to the cross-tenant wildcard. They are
+// readers of ONE consumer: the broker hands each message to exactly one of them, and each
+// keeps its own pull in flight, so the pod reads as deep as that many replicas would while
+// keeping one set of caches. It is a function of its own so resolution_wiring_test.go can
+// check the setting reaches the broker: a processor test builds its own readers.
+func createInboundReaders(nmgr *messaging.NatsManager) error {
+	n := Configuration.Resolution.InboundReaderCount()
+	readers := make([]messaging.MessageReader, 0, n)
+	for i := 0; i < n; i++ {
+		r, err := nmgr.NewReader(streams.InboundEvents)
+		if err != nil {
+			return err
+		}
+		readers = append(readers, r)
+	}
+	InboundEventsReaders = readers
+	return nil
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
-	// Create reader for inbound events (wildcard across tenants).
-	ievents, err := nmgr.NewReader(streams.InboundEvents)
-	if err != nil {
+	// Create the readers for inbound events (wildcard across tenants).
+	if err := createInboundReaders(nmgr); err != nil {
 		return err
 	}
-	InboundEventsReader = ievents
 
 	if err := createPublishWriters(nmgr); err != nil {
 		return err
@@ -404,7 +423,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 		GeoFencePublishFails)
 
 	// Add and initialize inbound events processor.
-	InboundEventsProcessor = newInboundEventsProcessor(InboundEventsReader)
+	InboundEventsProcessor = newInboundEventsProcessor()
 	err = InboundEventsProcessor.Initialize(context.Background())
 	if err != nil {
 		return err

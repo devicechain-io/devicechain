@@ -36,7 +36,7 @@ func (suite *InboundEventsProcessorTestSuite) withRegistry() *prometheus.Registr
 	ms := &core.Microservice{InstanceId: "devicechain", FunctionalArea: "device-management"}
 	reg := prometheus.NewRegistry()
 	ms.UseMetricsRegistry(reg)
-	suite.IP = NewInboundEventsProcessor(ms, suite.Inbound,
+	suite.IP = NewInboundEventsProcessor(ms, []messaging.MessageReader{suite.Inbound},
 		msgtest.InlineOrderedWriter{W: suite.Resolved}, msgtest.InlineOrderedWriter{W: suite.Failed},
 		core.NewNoOpLifecycleCallbacks(), suite.API, config.AuthModeOptional,
 		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second, NewResolveMetrics(ms))

@@ -62,12 +62,12 @@ func TestTheRaiseAlarmLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.
 func TestTheInboundEventsLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
 	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	iproc := &InboundEventsProcessor{
-		InboundEventsReader: reader,
-		messages:            make(chan messaging.Message, readCap),
-		readPacer:           core.NewReadPacer(nil, "inbound events").UseClock(core.VirtualClock()),
+		InboundEventsReaders: []messaging.MessageReader{reader},
+		messages:             make(chan messaging.Message, readCap),
+		readPacers:           []*core.ReadPacer{core.NewReadPacer(nil, "inbound events").UseClock(core.VirtualClock())},
 	}
 
-	iproc.readLoop(context.Background())
+	iproc.readLoop(context.Background(), 0)
 
 	if reader.Reads >= readCap {
 		t.Fatalf("the inbound events loop read %d times against an error that never clears and "+

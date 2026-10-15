@@ -145,3 +145,49 @@ func TestResolutionPublishWindowIsBounded(t *testing.T) {
 		})
 	}
 }
+
+// resolution.inboundReaders loads as written, and a document that omits it gets 2.
+func TestResolutionInboundReadersLoadAndDefault(t *testing.T) {
+	cfg := &DeviceManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"resolution":{"inboundReaders":3}}`), cfg))
+	assert.Equal(t, 3, cfg.Resolution.InboundReaderCount())
+
+	cfg = &DeviceManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
+	assert.Equal(t, 2, cfg.Resolution.InboundReaderCount())
+	require.NotNil(t, cfg.Resolution.InboundReaders)
+
+	cfg = &DeviceManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"resolution":{"workers":4}}`), cfg))
+	assert.Equal(t, 2, cfg.Resolution.InboundReaderCount())
+	assert.Equal(t, 2, *NewDeviceManagementConfiguration().Resolution.InboundReaders)
+	assert.Equal(t, 2, DefaultInboundReaders)
+	assert.Equal(t, 4, MaxInboundReaders)
+}
+
+// resolution.inboundReaders outside 1..4 stops the service, naming the setting and the value.
+// It is refused, never clamped, and an explicit 0 is refused rather than read as unset. The
+// edges are exact.
+func TestResolutionInboundReadersAreBounded(t *testing.T) {
+	for _, tc := range []struct {
+		name, doc string
+		ok        bool
+	}{
+		{"zero", `{"resolution":{"inboundReaders":0}}`, false},
+		{"negative", `{"resolution":{"inboundReaders":-1}}`, false},
+		{"one above the maximum", `{"resolution":{"inboundReaders":5}}`, false},
+		{"the minimum", `{"resolution":{"inboundReaders":1}}`, true},
+		{"the maximum", `{"resolution":{"inboundReaders":4}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DeviceManagementConfiguration{}
+			err := core.LoadConfiguration([]byte(tc.doc), cfg)
+			if tc.ok {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "resolution.inboundReaders must be between 1 and 4")
+		})
+	}
+}

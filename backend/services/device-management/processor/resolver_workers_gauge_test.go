@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -33,7 +34,7 @@ func TestTheResolverWorkersGaugeReportsThePoolItRuns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iproc := NewInboundEventsProcessor(nmgr.Microservice, &sliceReader{}, resolved, failed,
+	iproc := NewInboundEventsProcessor(nmgr.Microservice, []messaging.MessageReader{&sliceReader{}}, resolved, failed,
 		core.NewNoOpLifecycleCallbacks(), instantApi{}, config.AuthModeOptional, time.Minute, metrics,
 		WithResolvers(3), WithSecretTransit(testSecretTransit(t)))
 	if got := iproc.Resolvers(); got != 3 {

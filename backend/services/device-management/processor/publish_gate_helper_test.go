@@ -28,15 +28,15 @@ func newGateProcessor(t testing.TB, nmgr *messaging.NatsManager, reader messagin
 	if err != nil {
 		t.Fatalf("failed writer: %v", err)
 	}
-	return NewInboundEventsProcessor(nmgr.Microservice, reader, resolved, failed,
+	return NewInboundEventsProcessor(nmgr.Microservice, []messaging.MessageReader{reader}, resolved, failed,
 		core.NewNoOpLifecycleCallbacks(), api, config.AuthModeOptional,
 		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second,
 		NewResolveMetrics(nmgr.Microservice))
 }
 
 // newBenchProcessor is newGateProcessor for BenchmarkResolvedPublishThroughput, with the
-// publish window and the resolver pool width as parameters.
-func newBenchProcessor(b testing.TB, nmgr *messaging.NatsManager, reader messaging.MessageReader,
+// inbound readers, the publish window and the resolver pool width as parameters.
+func newBenchProcessor(b testing.TB, nmgr *messaging.NatsManager, readers []messaging.MessageReader,
 	api dmodel.DeviceManagementApi, window, resolvers int) *InboundEventsProcessor {
 	b.Helper()
 	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, window)
@@ -47,7 +47,7 @@ func newBenchProcessor(b testing.TB, nmgr *messaging.NatsManager, reader messagi
 	if err != nil {
 		b.Fatalf("failed writer: %v", err)
 	}
-	iproc := NewInboundEventsProcessor(nmgr.Microservice, reader, resolved, failed,
+	iproc := NewInboundEventsProcessor(nmgr.Microservice, readers, resolved, failed,
 		core.NewNoOpLifecycleCallbacks(), api, config.AuthModeOptional,
 		time.Duration(config.DefaultMaxEventFutureSkewSeconds)*time.Second,
 		NewResolveMetrics(nmgr.Microservice))
