@@ -319,6 +319,33 @@ func TestConsumerLeaderFollowsItsReader(t *testing.T) {
 	}
 }
 
+// With the consumer half off, which is the default, the gauge still reads the placement and
+// nothing is moved, however many samples see the leader away.
+//
+// GUARD: a reconciler that ignores the setting steps the leader down on every instance that
+// never asked for it (the shipped default), and the gauge would be the only witness.
+func TestConsumerLeaderStaysWhenTheSettingIsOff(t *testing.T) {
+	servers := dctest.StartJetStreamCluster(t, 3)
+	c := servers[2].Name()
+	nmgr := affinityManager(t, servers[0], uniqueArea("affinity-off-reader"), false, false, readerOnResolved)
+	d := nmgr.trackedDurables()[0]
+	ctx := context.Background()
+	moveConsumerLeader(t, nmgr, d, c)
+	for i := 0; i < affinityHysteresis+1; i++ {
+		nmgr.sampleNow(ctx)
+	}
+	time.Sleep(time.Second)
+	if got := consumerLocal(nmgr, d); got != 0 {
+		t.Fatalf("jetstream_consumer_leader_local reads %v with the leader away and the setting off; the watcher stays on", got)
+	}
+	if ci := waitConsumerSettled(t, nmgr, d); consumerLeader(ci) != c {
+		t.Fatalf("the leader moved with the reconciler off: it is on %s, was put on %s", consumerLeader(ci), c)
+	}
+	if got := moves(nmgr, d); got != 0 {
+		t.Fatalf("%v step-downs asked for with the reconciler off", got)
+	}
+}
+
 // With three replicas reading one durable, two on A and one on B, exactly ONE replica asks
 // for the move, and the leader goes to A (the majority).
 //
@@ -361,6 +388,45 @@ func TestOneReplicaMovesTheLeaderToTheMajority(t *testing.T) {
 	}
 	if total != 1 {
 		t.Fatalf("%v step-downs were asked for across the three replicas; one replica must act", total)
+	}
+}
+
+// The replica with the lowest id reads from the server that already leads the consumer, so it
+// never samples the leader as remote and never runs a census. The two readers on the
+// majority's server must still move the leader to themselves.
+//
+// GUARD: an actor elected among ALL readers is that minority replica, which has nothing to do,
+// and the two majority replicas each defer to it: the leader stays off the majority's server
+// for good, with no move asked and nothing logged.
+func TestTheMajorityMovesTheLeaderWhenTheLowestIdIsBesideIt(t *testing.T) {
+	servers := dctest.StartJetStreamCluster(t, 3)
+	a, b := servers[0].Name(), servers[1].Name()
+	area := uniqueArea("affinity-lowest")
+	withID := func(id string) func(*NatsManager) error {
+		return func(n *NatsManager) error {
+			n.aff().id = id
+			return readerOnResolved(n)
+		}
+	}
+	replicas := []*NatsManager{
+		affinityManager(t, servers[0], area, true, false, withID("z1")),
+		affinityManager(t, servers[0], area, true, false, withID("z2")),
+		affinityManager(t, servers[1], area, true, false, withID("a0")),
+	}
+	d := replicas[0].trackedDurables()[0]
+	ctx := context.Background()
+	moveConsumerLeader(t, replicas[0], d, b)
+	for i := 0; i < affinityHysteresis; i++ {
+		for _, r := range replicas {
+			r.sampleNow(ctx)
+		}
+	}
+	waitWithin(t, 15*time.Second, "the consumer leader to reach the majority's server", func() bool {
+		ci, err := replicas[0].js.ConsumerInfo(d.stream, d.durable)
+		return err == nil && consumerLeader(ci) == a
+	})
+	if got := moves(replicas[2], d); got != 0 {
+		t.Fatalf("the replica beside the leader asked for %v step-downs; it never sees the leader as remote", got)
 	}
 }
 

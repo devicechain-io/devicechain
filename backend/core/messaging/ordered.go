@@ -96,6 +96,9 @@ type orderedWriter struct {
 	backoff   time.Duration
 	backedOff time.Time
 	held      int
+	// inEpisode mirrors "a failure episode is open" (a backoff running or set, or slots held)
+	// for the submitter, which reads it in follow; written only by the settle goroutine.
+	inEpisode atomic.Bool
 
 	// draining is closed by Draining; a closed channel ends every backoff at once.
 	draining     chan struct{}
@@ -302,6 +305,15 @@ func (o *orderedWriter) follow() {
 		if time.Now().Before(o.nextFollow) {
 			return
 		}
+		// 🔴 NOT DURING A FAILURE EPISODE. An episode keeps slots back until a publish
+		// succeeds (pace), so the window cannot settle until this submitter publishes again,
+		// and waiting for it here would block the very probe that ends the episode: every
+		// election that failed publishes would cost a full affinitySwapSettle stall with
+		// nothing in flight. The submission goes on the current connection (through a route,
+		// which works), and the swap is tried on the next one, after the episode.
+		if o.inEpisode.Load() {
+			return
+		}
 		if !o.settleWindow(affinitySwapSettle) {
 			o.nextFollow = time.Now().Add(affinitySwapRetry)
 			return
@@ -424,7 +436,9 @@ func (o *orderedWriter) settleLoop() {
 			log.Error().Err(err).Str("suffix", o.suffix).Msg("nats write operation failed")
 		}
 		p.done(err)
-		for n := o.pace(p.fut != nil && err == nil, brokerFailed, p.sent); n > 0; n-- {
+		n := o.pace(p.fut != nil && err == nil, brokerFailed, p.sent)
+		o.inEpisode.Store(o.backoff != 0 || o.held > 0)
+		for ; n > 0; n-- {
 			<-o.slots
 		}
 	}
@@ -482,6 +496,7 @@ func (o *orderedWriter) pace(succeeded, brokerFailed bool, sent time.Time) int {
 		o.held++
 		return 0
 	}
+	o.inEpisode.Store(true)
 	if o.backoff == 0 {
 		o.backoff = orderedBackoffStart
 	} else {

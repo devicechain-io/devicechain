@@ -132,17 +132,20 @@ type NatsConfiguration struct {
 // (jetstream_consumer_leader_local, jetstream_publish_leader_local) are exported whatever
 // these say: the watcher is never switched off with the thing it watches.
 //
-// ABSENT MEANS ON (ApplyDefaults); `false` turns a half off. Pointers, so an absent key can
-// be told from an explicit false.
+// ABSENT MEANS OFF; `true` turns a half on. Pointers, so an absent key can be told from an
+// explicit false, and so the default can be flipped in ApplyDefaults without a schema change.
 //
-// 🔑 ON BY DEFAULT BECAUSE A ROUTE HOP IS A COST, NEVER A MEANING. On the GKE round-10 shape
-// three of the ~11.9 broker messages per event were frames forwarded between servers only
-// because a client was not connected to the server leading its stream or consumer; a run
-// whose one consumer leader happened to sit away from its reader measured 13.7-13.9 against
-// 11.9. Neither half changes what is stored, in what order, or what is acknowledged: a
-// consumer step-down pauses delivery for milliseconds and is what the broker does on any
-// election, and the writer changes connection only between windows, never inside one. On an
-// unclustered broker both halves find nothing to do.
+// 🔴 OFF BY DEFAULT UNTIL A CLUSTER MEASUREMENT EARNS IT. The case for both halves is a
+// count, not a run: on the GKE round-10 shape three of the ~11.9 broker messages per event
+// were frames forwarded between servers only because a client was not connected to the
+// server leading its stream or consumer, and a run whose one consumer leader sat away from
+// its reader measured 13.7-13.9 against 11.9. Neither half changes what is stored, in what
+// order, or what is acknowledged. But the consumer-leader half STEPS DOWN broker leaders on
+// a production cluster on its own initiative, and each step-down pauses that consumer's
+// deliveries; how often that happens across rolling deploys and scaling, and what the
+// publish half buys under real load, are what GKE round 11 measures, with each half on in
+// its own arm. A default that moves broker leadership is flipped on that evidence, not
+// ahead of it. On an unclustered broker both halves find nothing to do.
 type NatsAffinityConfiguration struct {
 	// ConsumerLeaders moves a reader's consumer leader to the server the reader is
 	// connected to when it has been elsewhere for several samples in a row and the
@@ -155,10 +158,8 @@ type NatsAffinityConfiguration struct {
 	PublishToLeader *bool
 }
 
-// ConsumerLeadersEnabled reports whether the consumer-leader reconciler acts. A
-// configuration that never went through ApplyDefaults (a manager assembled by hand in a
-// test) has the key absent, and reads as off: the default is applied where configuration
-// is loaded, once.
+// ConsumerLeadersEnabled reports whether the consumer-leader reconciler acts: only on an
+// explicit true.
 func (c NatsAffinityConfiguration) ConsumerLeadersEnabled() bool {
 	return c.ConsumerLeaders != nil && *c.ConsumerLeaders
 }
@@ -249,8 +250,8 @@ func (c NatsFetchConfiguration) AheadEnabled() bool {
 // AheadFlag returns a pointer to on, for a Go caller that sets Ahead explicitly.
 func AheadFlag(on bool) *bool { return &on }
 
-// BoolFlag returns a pointer to on, for a Go caller that sets an absent-means-on switch
-// (such as NatsAffinityConfiguration's) explicitly.
+// BoolFlag returns a pointer to on, for a Go caller that sets a pointer switch (such as
+// NatsAffinityConfiguration's) explicitly.
 func BoolFlag(on bool) *bool { return &on }
 
 // validate checks the parts of the fetch settings that do not depend on the
@@ -1090,12 +1091,7 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if nats.Fetch.Ahead == nil {
 		nats.Fetch.Ahead = AheadFlag(true)
 	}
-	if nats.Affinity.ConsumerLeaders == nil {
-		nats.Affinity.ConsumerLeaders = BoolFlag(true)
-	}
-	if nats.Affinity.PublishToLeader == nil {
-		nats.Affinity.PublishToLeader = BoolFlag(true)
-	}
+	// Leader affinity is NOT defaulted on: absent reads as off (NatsAffinityConfiguration).
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid
 	// empty selection. RootKey is deliberately NOT defaulted — key material is

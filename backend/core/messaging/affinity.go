@@ -62,7 +62,7 @@ const (
 	// elections are still settling for a while after one.
 	affinityQuietAfterReconnect = 2 * time.Minute
 	// affinityRequestTimeout bounds each broker request the affinity code makes (a stream
-	// info, a step-down) and each dial of a leader connection.
+	// info, a step-down). A leader connection's dial is bounded by the liveness dialer.
 	affinityRequestTimeout = 5 * time.Second
 	// affinityCensusQuiet ends a census gather once no reply has arrived for this long, and
 	// affinityCensusMax bounds it outright.
@@ -495,8 +495,12 @@ func (a *affinity) dial(server, url string) (*nats.Conn, error) {
 		nats.Name(a.nmgr.Microservice.FunctionalArea),
 		nats.NoReconnect(),
 		nats.DontRandomize(),
-		nats.Timeout(affinityRequestTimeout),
 	}
+	// 🔴 NO nats.Timeout HERE. BrokerLivenessOptions' dialer carries a fixed dial timeout and
+	// its stall detector tells nats.go's whole-connect deadline from a traffic write deadline
+	// by how far ahead each was armed; a caller-set connect timeout near half the write
+	// timeout would be read as traffic (see brokerDialTimeout). The default 2 s connect bound
+	// is the one the detector was written against.
 	opts = append(opts, BrokerLivenessOptions(a.nmgr.Microservice.FunctionalArea+" (stream leader)", func() {})...)
 	tlsConfig, err := natscfg.TLSConfig(natscfg.Hostname)
 	if err != nil {
@@ -670,8 +674,8 @@ func consumerLeader(ci *nats.ConsumerInfo) string {
 //   - a census of this area's replicas finds a server that a STRICT MAJORITY of the
 //     durable's readers are connected to (two replicas on two servers have none, and
 //     moving the leader between them would only flap), the leader is not already there,
-//     and THIS replica is the census's actor (the lowest id among the durable's readers),
-//     so that across replicas one asks.
+//     and THIS replica is the census's actor (the lowest id among the durable's readers
+//     that are away from its leader; see decideMove), so that across replicas one asks.
 func (a *affinity) reconcile(ctx context.Context, d durableRef, si *nats.StreamInfo, ci *nats.ConsumerInfo, local bool) {
 	st := a.durables[d]
 	if st == nil {
@@ -729,7 +733,7 @@ func (a *affinity) move(ctx context.Context, d durableRef, ci *nats.ConsumerInfo
 		log.Debug().Err(err).Str("durable", d.durable).Msg("Consumer-leader census failed; leaving the leader where it is")
 		return
 	}
-	target, actor, ok := decideMove(replies, d.durable, a.id)
+	target, actor, ok := decideMove(replies, d.durable, a.id, consumerLeader(ci))
 	switch {
 	case !actor:
 		return
@@ -893,23 +897,34 @@ func readersOf(replies []censusReply, durable string) []censusReply {
 	return out
 }
 
-// decideMove reads a census for one durable: whether self is the actor (the lowest id among
-// the durable's readers), and the server a strict majority of those readers are attached to
-// (ok false when there is none).
-func decideMove(replies []censusReply, durable, self string) (target string, actor, ok bool) {
+// decideMove reads a census for one durable: whether self is the actor, and the server a
+// strict majority of the durable's readers are attached to (ok false when there is none).
+//
+// 🔴 THE ACTOR IS THE LOWEST ID AMONG THE READERS THAT ARE AWAY FROM THE LEADER, not among
+// all readers. Only a replica whose own server does not lead the consumer ever samples it as
+// remote and reaches the census (reconcile returns early on a local leader), so an actor
+// elected from every reader can be one that never asks: three readers on A, A and B with
+// the leader on B and the B reader holding the lowest id would leave the leader on B for
+// good, the two A readers each deferring to a replica that has nothing to do. Every reader
+// that does run the census sees the same leader, so all of them elect the same actor.
+func decideMove(replies []censusReply, durable, self, leader string) (target string, actor, ok bool) {
 	readers := readersOf(replies, durable)
 	if len(readers) == 0 {
 		return "", false, false
 	}
-	lowest := readers[0].ID
+	lowest := ""
 	counts := map[string]int{}
 	for _, r := range readers {
-		lowest = min(lowest, r.ID)
+		if r.Server != leader || leader == "" {
+			if lowest == "" || r.ID < lowest {
+				lowest = r.ID
+			}
+		}
 		if r.Server != "" {
 			counts[r.Server]++
 		}
 	}
-	actor = lowest == self
+	actor = lowest != "" && lowest == self
 	for server, n := range counts {
 		if 2*n > len(readers) {
 			return server, actor, true
