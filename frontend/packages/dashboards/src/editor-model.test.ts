@@ -7,9 +7,12 @@ import { isDirty, parseDashboardDefinition, serializeDefinition } from './defini
 import {
   addWidget,
   basePlacement,
+  clampSpan,
   deleteWidget,
   gridPlacementToPx,
+  moveWidget,
   pxToGridPlacement,
+  resizeWidget,
   setCanvasGrid,
   setTitle,
   setWidgetPlacement,
@@ -291,5 +294,77 @@ describe('setCanvasGrid', () => {
     const d = withWide();
     expect(setCanvasGrid(d, { columns: 24 }).widgets[0]).toBe(d.widgets[0]);
     expect(setCanvasGrid(d, { gutter: 4 }).widgets[0]).toBe(d.widgets[0]);
+  });
+});
+
+describe('moveWidget', () => {
+  it('moves the widget to the cell and pushes the one it lands on down, keeping its column and span', () => {
+    const next = moveWidget(def(), 'a', { col: 5, row: 0 });
+    expect(basePlacement(next.widgets[0])).toEqual(at(5, 0, 4, 3));
+    expect(basePlacement(next.widgets[1])).toEqual(at(6, 3, 4, 3));
+    reloads(next);
+  });
+
+  it('holds the footprint inside the columns and above row 0', () => {
+    const right = moveWidget(def(), 'a', { col: 11, row: -3 });
+    expect(basePlacement(right.widgets[0])).toEqual(at(8, 0, 4, 3)); // 12 columns - 4 wide
+    expect(basePlacement(right.widgets[1])).toEqual(at(6, 3, 4, 3)); // now under it
+    reloads(right);
+  });
+
+  it('moves into free space without disturbing anyone, and returns the same board for a no-op', () => {
+    const d = def();
+    const next = moveWidget(d, 'a', { col: 0, row: 6 });
+    expect(basePlacement(next.widgets[0])).toEqual(at(0, 6, 4, 3));
+    expect(next.widgets[1]).toBe(d.widgets[1]);
+    expect(moveWidget(d, 'a', { col: 0, row: 0 })).toBe(d);
+    expect(moveWidget(d, 'nope', { col: 1, row: 1 })).toBe(d);
+  });
+});
+
+describe('resizeWidget', () => {
+  const limits = { minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 4 } };
+
+  it('stops at the widget maximum and minimum, cell by cell', () => {
+    const big = resizeWidget(def(), 'a', { col: 0, row: 0, cols: 9, rows: 9 }, limits);
+    expect(basePlacement(big.widgets[0])).toEqual(at(0, 0, 6, 4));
+    const small = resizeWidget(def(), 'a', { col: 0, row: 0, cols: 1, rows: 1 }, limits);
+    expect(basePlacement(small.widgets[0])).toEqual(at(0, 0, 3, 2));
+  });
+
+  it('pushes the neighbours it grows over down', () => {
+    const next = resizeWidget(def(), 'a', { col: 0, row: 0, cols: 7, rows: 3 }, { maxSpan: { cols: 8 } });
+    expect(basePlacement(next.widgets[0])).toEqual(at(0, 0, 7, 3));
+    expect(basePlacement(next.widgets[1])).toEqual(at(6, 3, 4, 3));
+    reloads(next);
+  });
+
+  it('keeps the opposite edge fixed when a left or top handle is clamped', () => {
+    const d = setWidgetPlacement(def(), 'a', at(4, 4, 4, 3)); // right edge 8, bottom edge 7
+    const next = resizeWidget(d, 'a', { col: 7, row: 6, cols: 1, rows: 1 }, limits, { fromLeft: true, fromTop: true });
+    expect(basePlacement(next.widgets[0])).toEqual(at(5, 5, 3, 2)); // 8 - 3, 7 - 2
+  });
+
+  it('does not run past the right edge or let the left edge go below column 0', () => {
+    const d = setWidgetPlacement(def(), 'a', at(9, 0, 3, 3));
+    const right = resizeWidget(d, 'a', { col: 9, row: 0, cols: 6, rows: 3 }, undefined);
+    expect(basePlacement(right.widgets[0])).toEqual(at(9, 0, 3, 3));
+    const left = resizeWidget(def(), 'a', { col: -2, row: 0, cols: 6, rows: 3 }, undefined, { fromLeft: true });
+    expect(basePlacement(left.widgets[0]).mode === 'grid' && (basePlacement(left.widgets[0]) as GridPlacement).col).toBe(0);
+  });
+
+  it('holds a pinned axis where its limits meet', () => {
+    const pinned = { minSpan: { rows: 3 }, maxSpan: { rows: 3 } };
+    const next = resizeWidget(def(), 'a', { col: 0, row: 0, cols: 5, rows: 8 }, pinned);
+    expect(basePlacement(next.widgets[0])).toEqual(at(0, 0, 5, 3));
+  });
+});
+
+describe('clampSpan', () => {
+  it('is the identity without limits and rounds to whole cells', () => {
+    expect(clampSpan({ cols: 3.4, rows: 2.6 }, undefined, 12)).toEqual({ cols: 3, rows: 3 });
+  });
+  it('lets the room to the right win over a minimum', () => {
+    expect(clampSpan({ cols: 1, rows: 1 }, { minSpan: { cols: 5 } }, 2)).toEqual({ cols: 2, rows: 1 });
   });
 });

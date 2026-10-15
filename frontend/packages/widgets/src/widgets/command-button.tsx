@@ -137,13 +137,15 @@ export function CommandButton({ widget, data, actions }: WidgetProps<CommandStre
 
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 10 }}>
+      {/* A short widget (its minimum is two rows, and a cell on a phone is ~56 px) scrolls the
+          form down rather than cutting off the send button or the line explaining why it is off. */}
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 10, overflowY: 'auto' }}>
         {!commandName ? (
           <div style={{ ...hint, margin: 'auto' }}>No command configured.</div>
         ) : (
           <>
             {/* Typed parameter form. */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, flexShrink: 0 }}>
               {params.map((param) =>
                 isScalar(param) ? (
                   <ParamField

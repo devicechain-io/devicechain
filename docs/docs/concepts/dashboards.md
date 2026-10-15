@@ -14,18 +14,16 @@ Planned: richer datasource selectors (relationship-graph traversal, drill-down),
 
 ## The canvas
 
-A dashboard lays widgets out on a **fluid CSS grid**. The grid provides:
+A dashboard lays widgets out on a grid of **square cells**. The grid provides:
 
-- a high-resolution column grid — you place widgets by column/row span, not by fixed pixels;
-- z-order and layering;
-- an optional per-widget pixel offset, for fine nudging or overlap;
+- placement by cells: each widget covers a block of whole cells, columns by rows, and each widget type can set the smallest and largest block it takes;
+- no overlap: two widgets on the grid never share a cell, and moving or resizing one in the editor pushes the others down out of its way;
+- widgets placed **relative** to another one, anchored to a point on it and moving with it, such as a badge over a map or a caption under a chart. These are the only widgets that sit over others;
 - an optional background image or color.
 
-Because the columns are fractional, a dashboard fills the width of whatever container you mount it in: a panel, a fixed-width frame, or a full page. A mount-time sizing knob (`fill`, fixed width, or fixed height) lets the host choose.
+The dashboard measures the container you mount it in (a panel, a fixed-width frame, or a full page), not the screen. While the authored columns fit at the canvas's minimum cell size, the layout is drawn as authored and the cells stretch to fill the width, so a wall display gets bigger cells rather than more of them. In a narrower container the dashboard uses as many columns as fit and places the widgets into them in reading order, each within the sizes it allows. Below 600 px wide, as on a phone, each widget takes its own row, so the dashboard reads as a single column. A mount-time sizing knob (`fill`, fixed width, or fixed height) lets the host choose.
 
-Snap-to-grid is inherent to the grid. Widgets can still overlap, because they can share cells and layer by z — for example, cards over a floor-plan image.
-
-The definition format and the renderer carry a per-breakpoint box for every widget, so a dashboard can arrange differently on different screen sizes. The canvas editor writes the base breakpoint only, though, so a console-authored dashboard has exactly one layout today.
+The definition format and the renderer carry a per-breakpoint placement for every widget, chosen by the width of the dashboard's container, and a breakpoint layout defined this way is drawn in place of the automatic rearrangement. The canvas editor writes the base breakpoint only, though, so a console-authored dashboard has one layout today, rearranged automatically in narrower containers.
 
 ## Widgets
 

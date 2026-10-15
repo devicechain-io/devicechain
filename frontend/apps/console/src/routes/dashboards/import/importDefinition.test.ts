@@ -5,7 +5,14 @@
 // binding is found and repaired before anything is saved, bad or oversized input is refused,
 // and a widget this console cannot resolve survives as a placeholder that blocks publishing.
 
-import { parseDashboardDefinition, serializeDefinition, unresolvedWidgets } from '@devicechain/dashboards';
+import {
+  lintLayout,
+  parseDashboardDefinition,
+  serializeDefinition,
+  spanLimitsOfLayout,
+  UNKNOWN_WIDGET_TYPE,
+  unresolvedWidgets,
+} from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 import { defaultWidgetRegistry } from '../editor/widgetRegistry';
 import { exportDefinitionJson } from '../editor/exportDefinition';
@@ -337,6 +344,16 @@ describe('starter templates', () => {
     expect(prepared.definition.widgets.length).toBeGreaterThan(0);
     // A template names no entity of its own tenant.
     for (const ref of collectBindingRefs(prepared.definition)) expect(ref.token).toBeNull();
+  });
+
+  it.each(DASHBOARD_TEMPLATES.map((t) => [t.id, t.json]))('%s passes the layout lint with no error', (_id, json) => {
+    const { definition } = prepareImport(json, catalog);
+    const registry = defaultWidgetRegistry();
+    const findings = lintLayout(definition, {
+      columns: definition.canvas.grid.columns,
+      spanLimitsOf: (w) => (w.type === UNKNOWN_WIDGET_TYPE ? undefined : spanLimitsOfLayout(registry.descriptor(w.type)?.layout)),
+    }).filter((f) => f.severity === 'error');
+    expect(findings).toEqual([]);
   });
 
   it('device detail and fleet overview ask for a device to bind; the alarms board asks for none', () => {

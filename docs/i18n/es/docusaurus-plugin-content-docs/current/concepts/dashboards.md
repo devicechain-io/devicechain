@@ -14,18 +14,16 @@ Planeado: selectores de fuente de datos más completos (recorrido del grafo de r
 
 ## El lienzo
 
-Un panel distribuye los widgets en una **cuadrícula CSS fluida**. La cuadrícula ofrece:
+Un panel distribuye los widgets en una cuadrícula de **celdas cuadradas**. La cuadrícula ofrece:
 
-- una cuadrícula de columnas de alta resolución: colocas los widgets por extensión de columna/fila, no por píxeles fijos;
-- orden en z y capas;
-- un desplazamiento en píxeles opcional por widget, para ajustes finos o superposiciones;
+- colocación por celdas: cada widget ocupa un bloque de celdas completas, columnas por filas, y cada tipo de widget puede fijar el bloque más pequeño y el más grande que ocupa;
+- ningún solapamiento: dos widgets de la cuadrícula nunca comparten una celda, y al mover o redimensionar uno en el editor los demás se desplazan hacia abajo para dejarle sitio;
+- widgets colocados en **relación** con otro, anclados a un punto de este y que se mueven con él, como una insignia sobre un mapa o un pie bajo un gráfico. Son los únicos widgets que quedan encima de otros;
 - una imagen o un color de fondo opcional.
 
-Como las columnas son fraccionarias, un panel llena el ancho de cualquier contenedor en el que lo montes: un panel lateral, un marco de ancho fijo o una página completa. Un control de dimensionamiento en el momento del montaje (`fill`, ancho fijo o alto fijo) permite que el host elija.
+El panel mide el contenedor en el que lo montas (un panel lateral, un marco de ancho fijo o una página completa), no la pantalla. Mientras las columnas diseñadas caben con el tamaño mínimo de celda del lienzo, el diseño se dibuja tal como se creó y las celdas se estiran para llenar el ancho, de modo que una pantalla mural obtiene celdas más grandes y no más celdas. En un contenedor más estrecho, el panel usa tantas columnas como quepan y coloca los widgets en ellas en orden de lectura, cada uno dentro de los tamaños que admite. Por debajo de 600 px de ancho, como en un teléfono, cada widget ocupa su propia fila, de modo que el panel se lee como una sola columna. Un control de dimensionamiento en el momento del montaje (`fill`, ancho fijo o alto fijo) permite que el host elija.
 
-El ajuste a la cuadrícula (snap-to-grid) es inherente a la cuadrícula. Aun así, los widgets pueden superponerse, porque pueden compartir celdas y apilarse por z; por ejemplo, tarjetas sobre la imagen de un plano de planta.
-
-El formato de definición y el renderizador incluyen una caja por punto de quiebre para cada widget, de modo que un panel puede organizarse de forma distinta según el tamaño de pantalla. Sin embargo, el editor de lienzo solo escribe el punto de quiebre base, así que hoy un panel creado en la consola tiene exactamente un diseño.
+El formato de definición y el renderizador incluyen una colocación por punto de quiebre (breakpoint) para cada widget, elegida según el ancho del contenedor del panel, y un diseño de punto de quiebre definido así se dibuja en lugar de la reorganización automática. Sin embargo, el editor de lienzo solo escribe el punto de quiebre base, así que hoy un panel creado en la consola tiene un solo diseño, que se reorganiza automáticamente en contenedores más estrechos.
 
 ## Widgets
 

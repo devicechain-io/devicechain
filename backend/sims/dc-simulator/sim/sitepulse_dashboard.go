@@ -187,8 +187,10 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		return widgetSubject{Slot: sitepulseSlotMachine, Measurements: []string{metric}}
 	}
 
+	// The title says what the value means, in the roughly 28 characters a 3-cell card has room for
+	// at the minimum cell width (a longer one is cut to an ellipsis on a phone).
 	running := buildLatestCardWidget("sp-plant-running", box{9, 3, 0, 2}, onPlant(SitepulsePlantRunningKey),
-		"Crusher running (1 = yes, 0 = no)", SitepulsePlantRunningKey, "", 0, false)
+		"Crusher on (1 = yes)", SitepulsePlantRunningKey, "", 0, false)
 	// An empty unit is no unit: omit the key rather than author a blank one.
 	delete(running.Options, "unit")
 

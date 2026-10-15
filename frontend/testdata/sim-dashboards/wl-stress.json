@@ -54,7 +54,7 @@
       "options": {
         "align": "left",
         "fontSize": 16,
-        "text": "Maintainer board — deliberately pathological data. Each widget is bound to the edge sensor that produces its own case: spikes and out-of-range values, dropped metrics, and silence. Everything below is SUPPOSED to look wrong."
+        "text": "Pathological data, meant to look wrong"
       },
       "type": "label"
     },

@@ -877,13 +877,16 @@ every replica sees nearly every device. A cache smaller than the fleet cycles th
 answers almost nothing. For example, 60,000 devices reporting every 10 s, each with one tracked
 relationship, need `inMemoryCache.credentialCacheMiB` of about 80 (an entry is about 1.1 KB) and
 `inMemoryCache.perDeviceCacheMiB` of about 64 (a relationship set is about 950 bytes) on every
-replica, and a memory limit of 512Mi to hold them. The sign is
+replica, and a memory limit of 768Mi to hold them. The sign is
 `kv_cache_local_lookups_total{cache="relationships-by-source", result="miss"}` close to the event
 rate, while `kv_cache_local_entries` for that cache stays well below `kv_cache_local_max_entries`.
 A fleet too large for the cache instead shows `kv_cache_local_evictions_total{reason="capacity"}`
 rising at close to the event rate, with `kv_cache_local_entries` at `kv_cache_local_max_entries`
 or `kv_cache_local_bytes` at `kv_cache_local_max_bytes`; for credentials, the same signs are in
-`credential_cache_evictions_total{reason="capacity"}`. Then raise the bound, and the memory limit
+`credential_cache_evictions_total{reason="capacity"}`. The chart alerts on this with
+`DeviceCredentialCacheTooSmall` and `DeviceLookupCacheTooSmall` (warning): a replica whose capacity
+evictions have been more than 5% of its lookups for 15 minutes. When one fires, raise the bound
+(`inMemoryCache.credentialCacheMiB` or `inMemoryCache.perDeviceCacheMiB`), and the memory limit
 with it: at the defaults the six in-memory caches hold at most 112 MiB. `device-management` runs
 with `GOGC=400` and a soft memory limit (`GOMEMLIMIT`) at 75% of its memory limit, so the collector
 lets the heap grow to about five times what it holds, and works harder once it nears that soft
