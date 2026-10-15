@@ -191,12 +191,22 @@ func EmitMeasurement(ctx context.Context, rt *Runtime, d DeviceInstance, metricK
 // HTTP 202 (accepted into the pipeline; persistence/resolution happen
 // asynchronously downstream).
 func EmitMeasurements(ctx context.Context, rt *Runtime, d DeviceInstance, metrics map[string]float64) error {
-	now := eventTimestamp()
+	return emitMeasurementsAt(ctx, rt, d, eventTimestamp(), wireMeasurements(metrics))
+}
 
+// wireMeasurements renders each value as the decimal string the wire carries.
+func wireMeasurements(metrics map[string]float64) map[string]string {
 	values := make(map[string]string, len(metrics))
 	for key, value := range metrics {
 		values[key] = fmt.Sprintf("%v", value)
 	}
+	return values
+}
+
+// emitMeasurementsAt is EmitMeasurements with the stamp and the wire strings chosen by the
+// caller, for an emitter that must know exactly what it sent (sitepulse's device plane logs
+// every accepted reading, so a recording made from the platform can be checked against it).
+func emitMeasurementsAt(ctx context.Context, rt *Runtime, d DeviceInstance, now string, values map[string]string) error {
 	entry := map[string]any{
 		"measurements": values,
 		"occurredTime": now,
@@ -261,16 +271,18 @@ type FixFunc func(i int, d DeviceInstance) (Fix, bool)
 // payload ids — so a scenario that wants to exercise store-and-forward batching may send
 // one, and should say why.
 func EmitLocation(ctx context.Context, rt *Runtime, d DeviceInstance, fix Fix) error {
-	now := eventTimestamp()
+	return emitLocationAt(ctx, rt, d, eventTimestamp(), wireFix(fix))
+}
 
+// wireFix renders a fix as the entry fields the wire carries, without its stamp.
+func wireFix(fix Fix) map[string]string {
 	// EVERY value is a string, including the numbers: the decoder's entry type holds
 	// *string per field, so a bare JSON number does not unmarshal into it and the
 	// whole decode fails. Written out field by field rather than through a reflective
 	// loop so the wire contract is readable as itself.
-	entry := map[string]any{
-		"latitude":     formatFixValue(fix.Latitude),
-		"longitude":    formatFixValue(fix.Longitude),
-		"occurredTime": now,
+	entry := map[string]string{
+		"latitude":  formatFixValue(fix.Latitude),
+		"longitude": formatFixValue(fix.Longitude),
 	}
 	for key, value := range map[string]*float64{
 		"elevation": fix.Elevation,
@@ -286,7 +298,17 @@ func EmitLocation(ctx context.Context, rt *Runtime, d DeviceInstance, fix Fix) e
 			entry[key] = formatFixValue(*value)
 		}
 	}
+	return entry
+}
 
+// emitLocationAt is EmitLocation with the stamp and the wire fields chosen by the caller
+// (see emitMeasurementsAt).
+func emitLocationAt(ctx context.Context, rt *Runtime, d DeviceInstance, now string, fields map[string]string) error {
+	entry := make(map[string]any, len(fields)+1)
+	for key, value := range fields {
+		entry[key] = value
+	}
+	entry["occurredTime"] = now
 	payload, err := jsonRoundTrip(map[string]any{"entries": []any{entry}})
 	if err != nil {
 		return fmt.Errorf("build location payload: %w", err)

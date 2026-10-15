@@ -20,6 +20,8 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -64,6 +66,12 @@ func main() {
 		"run a scenario that needs a command far end WITHOUT one. Its command widgets then "+
 			"enqueue commands nothing answers, which reach SENT and expire — an escape hatch for "+
 			"a host that cannot reach the MQTT gateway, not a default")
+	playDevices := flag.Bool("play-devices", envBoolOr("DC_SIM_PLAY_DEVICES", false),
+		"sitepulse only: play the device plane in this process (the scene's machine model and fleet "+
+			"tracks) instead of a Unity player. Never run a player against the same sim while this is on")
+	publishLog := flag.String("publish-log", envOr("DC_SIM_PUBLISH_LOG", ""),
+		"with --play-devices: append every event the ingress accepted to this NDJSON file, so a "+
+			"recording made from the platform can be checked against what the devices sent")
 	flag.Parse()
 
 	if *handshakePath == "" {
@@ -75,12 +83,21 @@ func main() {
 		EmitInterval: *emitInterval,
 		Concurrency:  *concurrency,
 	}
-	if err := run(*handshakePath, *bind, *port, load, *noFarEnd); err != nil {
+	if *publishLog != "" && !*playDevices {
+		log.Fatal().Msg("--publish-log logs what --play-devices publishes; without it this process publishes nothing")
+	}
+	if err := run(*handshakePath, *bind, *port, load, *noFarEnd, devicePlane{play: *playDevices, publishLog: *publishLog}); err != nil {
 		log.Fatal().Err(err).Msg("dc-simulator exited")
 	}
 }
 
-func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool) error {
+// devicePlane is the --play-devices choice and its publish log.
+type devicePlane struct {
+	play       bool
+	publishLog string
+}
+
+func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool, plane devicePlane) error {
 	hs, err := sim.LoadHandshake(handshakePath)
 	if err != nil {
 		return err
@@ -98,6 +115,23 @@ func run(handshakePath, bind, port string, load sim.Load, noFarEnd bool) error {
 	driver, err := sim.NewSim(manifestId, hs.Seed, load)
 	if err != nil {
 		return err
+	}
+
+	if plane.play {
+		var publishLog io.Writer
+		if plane.publishLog != "" {
+			f, err := os.OpenFile(plane.publishLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				return fmt.Errorf("open publish log: %w", err)
+			}
+			defer f.Close()
+			publishLog = f
+		}
+		if err := sim.PlayDevices(driver, publishLog); err != nil {
+			return err
+		}
+		log.Warn().Str("manifestId", manifestId).
+			Msg("this process is playing the device plane: do not run a Unity player against this sim")
 	}
 
 	// The device count the client's connection pool is sized against is the
