@@ -24,7 +24,7 @@ import {
   isDirty,
   migrateToSlots,
   parseDashboardDefinition,
-  DashboardSchemaTooNewError,
+  type DashboardDefinitionError,
   pruneSlots,
   resolveConcrete,
   serializeDefinition,
@@ -554,7 +554,7 @@ export function DashboardWorkspace({
     } catch (err) {
       // The server's draft is now a board this console cannot read. Keeping the editor open on
       // the old copy would offer to save it back over the newer one, so it is closed instead.
-      if (err instanceof DashboardSchemaTooNewError) {
+      if ((err as DashboardDefinitionError | null)?.code === 'schemaTooNew') {
         setNewerBoard(true);
         return;
       }

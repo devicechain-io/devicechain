@@ -131,7 +131,7 @@ El borrador es para los autores. Leer la definición de un borrador, o la de una
 
 Publicar o activar una versión no cambia el `updatedAt` del borrador, de modo que guardar el borrador con la referencia que ya tienes sigue funcionando. La lista de versiones solo lleva el número de cada versión, su etiqueta y descripción opcionales, y quién la publicó y cuándo.
 
-Un panel registra el formato con el que se guardó. Un visor o una consola más antiguos que ese formato se niegan a abrir el panel e indican que hay que actualizar, en lugar de dibujarlo mal; una aplicación que llama a `parseDashboardDefinition` recibe un `DashboardSchemaTooNewError`. Los paneles guardados en un formato anterior siguen abriéndose y se convierten al cargarse.
+Un panel registra el formato con el que se guardó. Un visor o una consola más antiguos que ese formato se niegan a abrir el panel e indican que hay que actualizar, en lugar de dibujarlo mal; una aplicación que llama a `parseDashboardDefinition` recibe un `DashboardDefinitionError` cuyo `code` es `'schemaTooNew'` (compruebe `code` en lugar de `instanceof`, que falla cuando una aplicación empaqueta dos copias del paquete). Los paneles guardados en un formato anterior siguen abriéndose y se convierten al cargarse.
 
 ## Incrustación: definiciones, slots y manifiestos de vinculación {#embedding-definitions-slots-and-binding-manifests}
 

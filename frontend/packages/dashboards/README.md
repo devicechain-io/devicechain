@@ -77,6 +77,11 @@ import { parseDashboardDefinition, serializeDefinition } from '@devicechain/dash
 const board = parseDashboardDefinition(json); // throws DashboardDefinitionError
 ```
 
+A board saved by a newer release than this package is refused rather than read as
+the current format: the `DashboardDefinitionError` carries `code: 'schemaTooNew'`
+and the version it found in `found`. Test `code`, not `instanceof`, so the check
+still holds when an application ends up with two copies of the package.
+
 Parsing is validating: a malformed board fails here, in your code, rather than
 half-rendering later. `isDirty` compares a working copy against its saved
 original, `resolveWidgetBox` and `activeBreakpoint` resolve responsive layout,

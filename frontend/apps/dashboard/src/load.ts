@@ -28,7 +28,7 @@ import {
   migrateToSlots,
   parseBindingManifest,
   parseDashboardDefinition,
-  DashboardSchemaTooNewError,
+  type DashboardDefinitionError,
   type DashboardDefinition,
   type SlotBinding,
 } from '@devicechain/dashboards';
@@ -111,7 +111,7 @@ export function loadDashboard(
   try {
     definition = migrateToSlots(parseDashboardDefinition(JSON.parse(definitionText), { catalog: registry.catalog }));
   } catch (err) {
-    if (err instanceof DashboardSchemaTooNewError) return { error: { code: 'definitionTooNew' } };
+    if ((err as DashboardDefinitionError | null)?.code === 'schemaTooNew') return { error: { code: 'definitionTooNew' } };
     return { error: { code: 'definitionInvalid', detail: errorDetail(err) } };
   }
 

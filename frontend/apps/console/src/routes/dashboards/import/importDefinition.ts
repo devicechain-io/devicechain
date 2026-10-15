@@ -22,7 +22,7 @@
 import {
   migrateToSlots,
   parseDashboardDefinition,
-  DashboardSchemaTooNewError,
+  type DashboardDefinitionError,
   serializeDefinition,
   setTitle,
   unresolvedWidgets,
@@ -205,7 +205,7 @@ export function prepareImport(text: string, catalog: WidgetCatalog | undefined):
     definition = migrateToSlots(parseDashboardDefinition(raw, { catalog }));
   } catch (err) {
     // The message is the drawer's to word (and translate); this carries only the class.
-    if (err instanceof DashboardSchemaTooNewError) throw new DashboardImportError('tooNew', err.message);
+    if ((err as DashboardDefinitionError | null)?.code === 'schemaTooNew') throw new DashboardImportError('tooNew', (err as Error).message);
     throw new DashboardImportError('invalid', err instanceof Error ? err.message : 'Not a dashboard definition.');
   }
   if (byteLength(serializeDefinition(definition)) > MAX_DEFINITION_BYTES) {

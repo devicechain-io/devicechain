@@ -79,21 +79,21 @@ const DEFAULT_SIZING: CanvasSizing = 'fill';
 
 // Thrown when a definition cannot be coerced into a renderable shape. The message
 // names the offending path so a bad document is diagnosable, not just "invalid".
+//
+// `code` is set only when the document is one this build must not read at all:
+// 'schemaTooNew' means it was saved by a newer release (its schemaVersion, `found`, is above
+// CURRENT_SCHEMA_VERSION), and reading it as the current format would draw it wrong without
+// saying so (every widget collapsed to a single cell). It is the same class, so a caller that
+// knows nothing of the code still refuses the document; a caller that wants to say WHY tests
+// `code`, which -- unlike `instanceof` -- also holds across two bundled copies of this package.
 export class DashboardDefinitionError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly code?: 'schemaTooNew',
+    readonly found?: number,
+  ) {
     super(`invalid dashboard definition: ${message}`);
     this.name = 'DashboardDefinitionError';
-  }
-}
-
-// Thrown, in place of DashboardDefinitionError's general case, when a document was saved by a
-// newer release than this build: its format is one this parser has no reading of, and
-// reading it as the current one draws it wrong without saying so (every widget collapsed to
-// a single cell). A subclass, so a caller that only knows DashboardDefinitionError still
-// refuses the document; a caller that wants to say WHY tests for this class.
-export class DashboardSchemaTooNewError extends DashboardDefinitionError {
-  constructor(public readonly found: number) {
-    super(`saved by a newer schema version, ${found}`);
   }
 }
 
@@ -123,7 +123,9 @@ export function parseDashboardDefinition(input: unknown, options: ParseDefinitio
   if (!isRecord(input)) throw new DashboardDefinitionError('not a JSON object');
   // Before anything reads the shape: a newer format is refused whole, not read as this one.
   const stored = storedSchemaVersion(input);
-  if (stored > CURRENT_SCHEMA_VERSION) throw new DashboardSchemaTooNewError(stored);
+  if (stored > CURRENT_SCHEMA_VERSION) {
+    throw new DashboardDefinitionError(`schemaVersion ${stored} is too new`, 'schemaTooNew', stored);
+  }
   if (!Array.isArray(input.widgets)) throw new DashboardDefinitionError('widgets must be an array');
 
   // A document stored in an older format is converted on load, one step at a time: the square-cell
@@ -142,8 +144,8 @@ export function parseDashboardDefinition(input: unknown, options: ParseDefinitio
   const widgetsRaw = raw.widgets as unknown[];
 
   const def: DashboardDefinition = {
-    // Never lower than the format this release writes: a save writes that format.
-    schemaVersion: Math.max(stored, CURRENT_SCHEMA_VERSION),
+    // The format this release writes (a newer one was refused above): a save writes that format.
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     title: typeof raw.title === 'string' ? raw.title : '',
     canvas: parseCanvas(raw.canvas),
     widgets: widgetsRaw.map((w, i) => parseWidget(w, i, options.catalog)),

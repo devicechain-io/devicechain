@@ -129,7 +129,7 @@ DeviceChain 包含可嵌入、支持版本管理的仪表板系统，用于可�
 
 发布或启用某个版本不会改变草稿的 `updatedAt`，因此用你已持有的基线保存草稿依然有效。版本列表本身只提供每个版本的编号、可选标签和描述，以及谁在何时发布。
 
-面板会记录保存时所用的格式。比该格式更旧的查看器或控制台会拒绝打开此面板并提示升级，而不是错误地绘制它；调用 `parseDashboardDefinition` 的应用会收到 `DashboardSchemaTooNewError`。以旧格式保存的面板仍可打开，并在加载时转换。
+面板会记录保存时所用的格式。比该格式更旧的查看器或控制台会拒绝打开此面板并提示升级，而不是错误地绘制它；调用 `parseDashboardDefinition` 的应用会收到 `code` 为 `'schemaTooNew'` 的 `DashboardDefinitionError`（请检查 `code` 而不是 `instanceof`；当应用打包了该包的两个副本时，`instanceof` 会失效）。以旧格式保存的面板仍可打开，并在加载时转换。
 
 ## 嵌入：定义、插槽与绑定清单 {#embedding-definitions-slots-and-binding-manifests}
 

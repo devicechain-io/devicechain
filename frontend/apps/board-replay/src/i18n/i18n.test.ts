@@ -17,7 +17,7 @@ const placeholders = (s: string) => [...s.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map(
 
 describe('chrome catalogs', () => {
   it('has exactly one catalog file per supported locale', () => {
-    // refusal.json is the separately-loaded refusal message (see ../BoardTooNew.tsx): one per locale too.
+    // refusal.json is the separately-loaded refusal message (see ../refusal.ts): one per locale too.
     const chrome = Object.keys(files).filter((f) => f.endsWith('/chrome.json'));
     expect(chrome.sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/chrome.json`).sort());
     const refusal = Object.keys(files).filter((f) => f.endsWith('/refusal.json'));

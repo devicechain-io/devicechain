@@ -8,7 +8,7 @@ import {
   createDeviceResolver,
   migrateToSlots,
   parseDashboardDefinition,
-  DashboardSchemaTooNewError,
+  type DashboardDefinitionError,
   setTitle,
   type DashboardDefinition,
 } from '@devicechain/dashboards';
@@ -97,7 +97,7 @@ export default function DashboardDetailPage() {
     } catch (err) {
       // Refused whole -- for an author too: the editor is never mounted over a board it cannot
       // read, so there is no save to write a lossy copy over the newer one.
-      if (err instanceof DashboardSchemaTooNewError) return { tooNew: true };
+      if ((err as DashboardDefinitionError | null)?.code === 'schemaTooNew') return { tooNew: true };
       return { error: err instanceof Error ? err.message : t('detailInvalidDefinition') };
     }
   }, [data, t, registry]);
