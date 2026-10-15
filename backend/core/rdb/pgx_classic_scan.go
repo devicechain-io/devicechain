@@ -21,7 +21,9 @@ package rdb
 // it silently (no QueryerContext ⇒ prepare-per-query; no SessionResetter ⇒ no reset on
 // reuse; no ColumnType* ⇒ gorm's column types go blank). TestPgxClassicScanDrift
 // compares the method sets reflectively and fails if any is lost — or if a future pgx
-// moves the conn/rows/stmt off the concrete types embedded here.
+// moves the conn/rows/stmt off the concrete types embedded here. What a method set
+// cannot show — gorm's Initialize changing, or pgx meeting the exit condition below — is
+// held by TestPgxClassicScanUpstreamPins, which fails on any bump of either module.
 //
 // EXIT CONDITION: delete this file — and call postgres.New(postgres.Config{DSN: dsn})
 // directly again — once pgx caches isSQLScanDestination per reflect.Type (upstream:

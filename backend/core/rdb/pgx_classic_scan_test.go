@@ -12,6 +12,7 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"testing"
@@ -191,6 +192,49 @@ func TestPgxClassicScanInterfaces(t *testing.T) {
 				"reflection path again", n)
 		}
 	})
+}
+
+// The versions pgx_classic_scan.go was written against and checked line by line. The
+// replication is only as faithful as the last time someone re-read upstream, so a bump of
+// either module (Dependabot raises them weekly) must fail here until it is re-read.
+const (
+	pgxClassicGormPostgresVersion = "v1.6.3"
+	pgxClassicPgxVersion          = "v5.11.0"
+)
+
+// TestPgxClassicScanUpstreamPins is the drift guard for what the method-set tests cannot
+// see: BEHAVIOUR. newPostgresDialector re-implements gorm.io/driver/postgres's
+// Dialector.Initialize, so an upstream change to Initialize (a new Config field honoured,
+// a different default, another OptionOpenDB) would silently not reach any service. And the
+// file's EXIT CONDITION is a pgx change. Neither is visible by type, so the linked versions
+// are pinned and a bump is a deliberate re-check.
+func TestPgxClassicScanUpstreamPins(t *testing.T) {
+	bi, ok := debug.ReadBuildInfo()
+	require.True(t, ok, "no build info in the test binary; cannot read the linked module versions")
+	linked := map[string]string{}
+	for _, d := range bi.Deps {
+		v := d.Version
+		if d.Replace != nil {
+			v = d.Replace.Version
+		}
+		linked[d.Path] = v
+	}
+	for _, pin := range []struct{ path, want, recheck string }{
+		{"gorm.io/driver/postgres", pgxClassicGormPostgresVersion,
+			"re-read its postgres.go Dialector.Initialize and New, diff them against " +
+				"newPostgresDialector in pgx_classic_scan.go (DSN parse, PreferSimpleProtocol, the " +
+				"time-zone runtime parameter and TimestampCodec, OptionOpenDB, any new Config field), " +
+				"port any change, then update pgxClassicGormPostgresVersion"},
+		{"github.com/jackc/pgx/v5", pgxClassicPgxVersion,
+			"check whether stdlib/sql_go1.27.go now caches isSQLScanDestination per reflect.Type " +
+				"(if so, run BenchmarkPgxScan and follow pgx_classic_scan.go's EXIT CONDITION), that " +
+				"stdlib.OpenDB is still sql.OpenDB(GetConnector(...)) and nothing more, then update " +
+				"pgxClassicPgxVersion"},
+	} {
+		got, found := linked[pin.path]
+		require.True(t, found, "%s is no longer linked into core; revisit pgx_classic_scan.go", pin.path)
+		assert.Equal(t, pin.want, got, "%s moved from %s to %s: %s", pin.path, pin.want, got, pin.recheck)
+	}
 }
 
 func names2(m map[string]bool) []string {
