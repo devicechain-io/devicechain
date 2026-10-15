@@ -52,7 +52,6 @@
     "react-colorful": "^5.8.1",
     "react-dom": "^19.3.0",
     "react-i18next": "^17.0.16",
-    "react-rnd": "^10.5.2",
     "react-router-dom": "^7.18.4",
     "sonner": "^2.0.8",
     "tailwind-merge": "^3.7.0"

@@ -185,6 +185,43 @@ export function pushDown(items: readonly PlacedGrid[], first: readonly string[] 
   return out;
 }
 
+// compactUp is pushDown followed by gravity: after the collisions are resolved, every widget except
+// the `first` ones (which stay exactly where they were put) slides UP one row at a time while the
+// row above is free, stopping at the first footprint in its way, so nothing ever jumps over
+// another widget and the reading order is the order it had. Widgets are slid in reading order of
+// their pushed positions, so each one settles against the ones above it. This is what an Android
+// launcher does with the icons below one you pick up: the gap closes. Deterministic: the same
+// input gives the same output. Returns the same placement object for every widget that did not move.
+export function compactUp(items: readonly PlacedGrid[], first: readonly string[] = []): Map<string, GridPlacement> {
+  const pushed = pushDown(items, first);
+  const fixed = new Set(first);
+  const order = items
+    .map((item, index) => ({ id: item.id, index, p: pushed.get(item.id)! }))
+    .filter((x) => !fixed.has(x.id))
+    .sort((a, b) => a.p.row - b.p.row || a.p.col - b.p.col || a.index - b.index);
+  const out = new Map<string, GridPlacement>();
+  const placed: GridPlacement[] = [];
+  for (const id of first) {
+    const p = pushed.get(id);
+    if (p) {
+      out.set(id, p);
+      placed.push(p);
+    }
+  }
+  for (const { id, p } of order) {
+    let q = p;
+    while (q.row > 0) {
+      const above: GridPlacement = { ...q, row: q.row - 1 };
+      if (placed.some((o) => gridFootprintsOverlap(above, o))) break;
+      q = above;
+    }
+    const settled = q.row === p.row ? p : q;
+    out.set(id, settled);
+    placed.push(settled);
+  }
+  return out;
+}
+
 // firstFreeSlot is the first position, scanning rows top to bottom and columns left to right, at
 // which a cols x rows footprint fits inside `columns` without touching any of `occupied`. A
 // footprint wider than the grid is placed at column 0 (it overruns; the lint reports it).

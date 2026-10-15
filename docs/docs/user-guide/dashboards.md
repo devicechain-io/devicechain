@@ -105,10 +105,15 @@ platform checks each action against your own permissions.
 - **Size** decides how the dashboard fills the page: **Fill area**, **Fixed width** or **Fixed
   height**.
 
-Drag a widget to move it and drag its edges to resize it. Widgets never overlap: a widget you
-move or resize onto others pushes them down out of its way, and a new widget goes in the first
-free space. Resizing stops at the smallest and largest size the widget allows. A widget that has
-not received data yet shows a dash or *No data yet*.
+Drag a widget to move it. A dashed outline shows the cells it will take when you let go, and the
+other widgets move aside to make room; the ones below close up into any space you leave. Widgets
+on the grid never overlap, and a new widget goes in the first free space it fits. Select a widget
+and drag a handle on its edge or corner to resize it. The size shows as columns by rows, such as
+*2×3*, while you drag, and the widget stops at the smallest and largest size it allows. A widget
+that can only be resized in one direction has handles on that side only. Press **Esc** while
+dragging to cancel. With a widget focused, the arrow keys move it one cell and **Shift** with the
+arrow keys resizes it. A widget outside the sizes it supports, or running past the right edge,
+carries a note saying so. A widget that has not received data yet shows a dash or *No data yet*.
 
 The dashboard measures the space it is given, not the screen. While the columns fit at **Min
 cell** or larger it shows your layout as you arranged it, with the cells stretching to fill the
@@ -143,12 +148,13 @@ draft only. Viewers see nothing new until you publish a version.
 | Navigation | Entity selector, which lets a viewer choose which device or entity the dashboard shows |
 | Location | Map, which draws on the tenant's map (see [Tenant settings](/user-guide/tenant-settings)) |
 
-Choose one to add it to the canvas, then configure it.
+Each entry shows the size, in cells, the widget is added at, such as *4×3*. Choose one to add it to
+the first free space on the canvas, then configure it.
 
 ### Configuring a widget
 
-Select a widget on the canvas to open its settings on the right. **Front** and **Delete** appear on
-the widget itself.
+Select a widget on the canvas to open its settings on the right. **Grid**, **Relative to…** and
+**Delete** appear on the widget itself.
 
 <GuideShot id="dashboard-widget-config" alt="Edit mode with the Temperature latest card selected, showing Front and Delete buttons on the widget. The settings panel on the right, titled Latest card, shows Title Temperature, a Context section with Binds to set to Scoped to a parent, Parent slot zone and Strategy Manual pick, a Data source section explaining it is derived from the parent context, slot sensor, and a Measurement field." />
 
@@ -166,6 +172,25 @@ The settings depend on the widget. Common ones:
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until
 they are fixed.
+
+Placement problems also keep **Publish version** disabled: a widget outside the sizes it supports,
+running past the right edge, or placed relative to another so that it falls off the dashboard. The
+editor does not produce these by itself; they come with an imported dashboard, an older widget
+release or a dashboard written through the API. **Fit to limits**, in the editor header whenever the
+dashboard has any and in **Version history**, clamps every widget into the sizes it supports and
+packs the dashboard again. Review the result, then save.
+
+### Placing a widget relative to another
+
+A widget normally sits on the grid. A widget can instead be placed **Relative to…** another, for a
+badge on a map or a caption under a chart. Select the widget, choose **Relative to…** and click the
+widget it should hang from. A picker with nine anchor points appears; choose the corner, edge or
+centre of the host that it attaches to.
+
+A relative widget keeps its size, moves whenever its host moves, may overlap it, and is drawn above
+the grid. A dashed line joins it to its host. Drag it to shift it away from the anchor in whole
+cells, or hold **Shift** to move in quarter cells. Choose **Grid** to put it back on the grid, in the
+first free space. A relative widget cannot itself be a host.
 
 ## Previewing with synthetic data {#previewing-with-synthetic-data}
 

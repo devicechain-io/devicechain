@@ -242,9 +242,21 @@ export {
   setCanvasDensity,
   updateWidget,
   addWidget,
+  canHostRelative,
+  fitToLimits,
+  formatSpan,
+  OFFSET_STEP,
+  OFFSET_STEP_FINE,
+  placeOnGrid,
+  placeRelative,
+  setRelativeAnchor,
+  setRelativeOffset,
+  snapOffset,
   gridPlacementToPx,
   pxToGridPlacement,
+  type EditOptions,
   type PixelRect,
+  type RelativeBounds,
   type GridGeometry,
 } from './editor-model';
 
@@ -358,6 +370,7 @@ export {
   layoutRects,
   paddingPx,
   pushDown,
+  compactUp,
   relativeRect,
   resolveFrame,
   resolvePlacement,
@@ -384,7 +397,9 @@ export { LEGACY_REFERENCE_WIDTH } from './legacy-grid';
 // The layout lint: placement against what each widget can show. Widget knowledge (span
 // limits) is injected, so this package stays free of `widgets`.
 export {
+  blockingLayoutFindings,
   lintLayout,
+  PUBLISH_BLOCKING_LAYOUT_CODES,
   spanLimitsOfLayout,
   type LayoutFinding,
   type LayoutLintCode,

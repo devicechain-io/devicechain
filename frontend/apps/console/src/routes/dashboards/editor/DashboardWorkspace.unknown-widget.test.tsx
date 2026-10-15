@@ -97,7 +97,7 @@ describe('DashboardWorkspace with a widget of an unknown type', () => {
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
     const placeholder = await screen.findByText('This widget needs a newer viewer');
     expect(screen.queryByText('Unsupported widget')).toBeNull();
-    fireEvent.mouseDown(placeholder);
+    fireEvent.pointerDown(placeholder);
     expect(await screen.findByText('Unsupported widget')).toBeTruthy();
     expect(screen.getByText('Type: card-deck')).toBeTruthy();
     // Only the one panel: the config panel (headed by the widget's type) is not opened

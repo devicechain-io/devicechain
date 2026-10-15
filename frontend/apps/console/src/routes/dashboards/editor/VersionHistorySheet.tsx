@@ -49,6 +49,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { formatTime } from '@/lib/utils';
 import { validateDefinitionOptions } from '@devicechain/widgets';
 import { OPTION_ISSUE_MESSAGE_KEYS, UNRESOLVED_REASON_KEYS, widgetLabel } from './optionIssues';
+import { LAYOUT_FINDING_KEYS, publishLayoutBlockers } from './layoutFindings';
 import {
   parseDashboardDefinition,
   unresolvedWidgets,
@@ -101,6 +102,9 @@ export interface VersionHistorySheetProps {
   // stripUnknownOptions in @devicechain/widgets). The workspace owns the definition, so
   // the repair happens there; this drawer only offers it.
   onStripUnknownOptions: () => void;
+  // Clamps every widget into its size limits and re-packs the WORKING copy (fitToLimits), leaving
+  // an unsaved edit to review and save, as for the option repair above.
+  onFitToLimits: () => void;
   // The registry `saved` was parsed with: the catalog its option schemas are judged against.
   // Defaults to the deployment's.
   registry?: EditorWidgetRegistry;
@@ -117,6 +121,7 @@ export function VersionHistorySheet({
   expectedUpdatedAt,
   onRolledBack,
   onStripUnknownOptions,
+  onFitToLimits,
   registry = defaultWidgetRegistry(),
 }: VersionHistorySheetProps) {
   const { t } = useTranslation(['dashboards', 'common']);
@@ -139,6 +144,7 @@ export function VersionHistorySheet({
             expectedUpdatedAt={expectedUpdatedAt}
             onRolledBack={onRolledBack}
             onStripUnknownOptions={onStripUnknownOptions}
+            onFitToLimits={onFitToLimits}
             registry={registry}
             onClose={() => onOpenChange(false)}
           />
@@ -157,6 +163,7 @@ function VersionHistoryBody({
   expectedUpdatedAt,
   onRolledBack,
   onStripUnknownOptions,
+  onFitToLimits,
   registry,
   onClose,
 }: {
@@ -168,6 +175,7 @@ function VersionHistoryBody({
   expectedUpdatedAt: string | null;
   onRolledBack: (result: { definition: string; updatedAt: string | null }) => void;
   onStripUnknownOptions: () => void;
+  onFitToLimits: () => void;
   registry: EditorWidgetRegistry;
   onClose: () => void;
 }) {
@@ -203,6 +211,9 @@ function VersionHistoryBody({
   // the draft keeps their stored JSON, and saves, layout edits and loading all still work.
   const unresolved = useMemo(() => unresolvedWidgets(saved), [saved]);
   const strippable = issues.some((i) => i.code === 'unknown');
+  // Placements outside what their widget can show, or off the canvas. Judged on the SAVED
+  // definition for the same reason as the option issues.
+  const layoutBlockers = useMemo(() => publishLayoutBlockers(saved, registry), [saved, registry]);
 
   const publish = async () => {
     setBusy(true);
@@ -210,6 +221,7 @@ function VersionHistoryBody({
       const { version } = await publishDashboard(token, {
         definition: saved,
         catalog: registry.catalog,
+        registry,
         label,
         description,
         expectedUpdatedAt,
@@ -384,6 +396,28 @@ function VersionHistoryBody({
               </ul>
             </div>
           )}
+          {layoutBlockers.length > 0 && (
+            <div
+              className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3"
+              data-testid="publish-blocked-layout"
+            >
+              <p className="text-sm font-medium">{t('versionLayoutBlocked', { count: layoutBlockers.length })}</p>
+              <ul className="space-y-1 text-sm text-muted-foreground">
+                {layoutBlockers.map((f) => (
+                  <li key={`${f.widgetId}:${f.code}:${f.breakpoint ?? ''}`}>
+                    <span className="text-foreground">{widgetLabel(saved, f.widgetId)}</span>
+                    <span className="ml-1">— {t(LAYOUT_FINDING_KEYS[f.code])}</span>
+                  </li>
+                ))}
+              </ul>
+              {/* Offered only against a clean editor, for the same reason as the option repair. */}
+              {!dirty && (
+                <Button variant="outline" size="sm" onClick={onFitToLimits} disabled={busy}>
+                  {t('layoutFitToLimits')}
+                </Button>
+              )}
+            </div>
+          )}
           {issues.length > 0 && (
             <div className="space-y-2 rounded-md border border-destructive/40 bg-destructive/5 p-3">
               <p className="text-sm font-medium">
@@ -421,7 +455,7 @@ function VersionHistoryBody({
             size="sm"
             onClick={publish}
             loading={busy}
-            disabled={dirty || saving || issues.length > 0 || unresolved.length > 0}
+            disabled={dirty || saving || issues.length > 0 || unresolved.length > 0 || layoutBlockers.length > 0}
           >
             {t('versionPublishButton')}
           </Button>

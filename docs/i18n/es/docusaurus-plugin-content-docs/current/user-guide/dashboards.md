@@ -106,10 +106,16 @@ diseño.
   entre celdas y **Margen**, el borde alrededor del panel.
 - **Tamaño** decide cómo ocupa el panel la página: **Llenar área**, **Ancho fijo** o **Alto fijo**.
 
-Arrastra un widget para moverlo y arrastra sus bordes para cambiar su tamaño. Los widgets nunca
-se solapan: un widget que mueves o redimensionas sobre otros los empuja hacia abajo, y un widget
-nuevo ocupa el primer hueco libre. Al cambiar el tamaño, el widget se detiene en el tamaño mínimo y
-máximo que admite. El panel mide el espacio que se le da, no la pantalla. Mientras las columnas
+Arrastra un widget para moverlo. Un contorno discontinuo muestra las celdas que ocupará al soltarlo,
+y los demás widgets se apartan para dejarle sitio; los de abajo suben para cerrar el espacio que
+dejas. Los widgets de la cuadrícula nunca se solapan, y un widget nuevo ocupa el primer hueco libre
+en el que cabe. Selecciona un widget y arrastra un tirador de su borde o esquina para cambiar su
+tamaño. Mientras arrastras, el tamaño se muestra como columnas por filas, por ejemplo *2×3*, y el
+widget se detiene en el tamaño mínimo y máximo que admite. Un widget que solo puede cambiar de
+tamaño en una dirección tiene tiradores únicamente en ese lado. Pulsa **Esc** mientras arrastras
+para cancelar. Con un widget enfocado, las flechas lo mueven una celda y **Mayús** con las flechas
+cambia su tamaño. Un widget fuera de los tamaños que admite, o que sobrepasa el borde derecho,
+muestra una nota que lo indica. El panel mide el espacio que se le da, no la pantalla. Mientras las columnas
 caben con **Celda mínima** o más, muestra tu diseño tal como lo dispusiste y las celdas se estiran
 para llenar el ancho, de modo que una pantalla grande obtiene celdas más grandes y no más celdas.
 En un espacio más estrecho usa tantas columnas como quepan y reparte los widgets en ellas en orden
@@ -146,12 +152,13 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 | Navegación | Selector de entidad, que permite al espectador elegir qué dispositivo o entidad muestra el panel |
 | Ubicación | Mapa, que dibuja sobre el mapa del inquilino (consulta [Configuración del inquilino](./tenant-settings.md)) |
 
-Elige uno para añadirlo al lienzo y después configúralo.
+Cada entrada muestra el tamaño, en celdas, con el que se añade el widget, por ejemplo *4×3*. Elige
+uno para añadirlo en el primer hueco libre del lienzo y después configúralo.
 
 ### Configurar un widget
 
-Selecciona un widget en el lienzo para abrir sus ajustes a la derecha. **Al frente** y **Eliminar**
-aparecen sobre el propio widget.
+Selecciona un widget en el lienzo para abrir sus ajustes a la derecha. **Cuadrícula**, **Relativo
+a…** y **Eliminar** aparecen sobre el propio widget.
 
 <GuideShot id="dashboard-widget-config" alt="Modo de edición con la tarjeta de último valor Temperature seleccionada, con los botones Al frente y Eliminar sobre el widget. El panel de ajustes de la derecha muestra el título Temperature, una sección Contexto con Se vincula a en Con ámbito a un principal, Slot principal zone y Estrategia Selección manual, una sección Fuente de datos que explica que deriva del contexto principal, slot sensor, y un campo Medición." />
 
@@ -171,6 +178,26 @@ Los ajustes dependen del widget. Los más comunes:
 Los problemas con las opciones de un widget, como una opción que no lee, una obligatoria vacía o un
 valor fuera de rango, se enumeran en **Historial de versiones**. **Publicar versión** sigue
 desactivado hasta corregirlos.
+
+Los problemas de colocación también mantienen desactivado **Publicar versión**: un widget fuera de
+los tamaños que admite, que sobrepasa el borde derecho o que, colocado en relación con otro, queda
+fuera del panel. El editor no los produce por sí solo; llegan con un panel importado, una versión
+anterior de un widget o un panel escrito mediante la API. **Ajustar a los límites**, en la cabecera
+del editor mientras el panel tenga alguno y en **Historial de versiones**, ajusta cada widget a los
+tamaños que admite y vuelve a organizar el panel. Revisa el resultado y guarda.
+
+### Colocar un widget en relación con otro
+
+Un widget normalmente está en la cuadrícula. También puede colocarse **Relativo a…** otro, por
+ejemplo una insignia sobre un mapa o un pie bajo un gráfico. Selecciona el widget, elige
+**Relativo a…** y haz clic en el widget del que debe depender. Aparece un selector con nueve puntos
+de anclaje; elige la esquina, el borde o el centro del anfitrión al que se une.
+
+Un widget relativo conserva su tamaño, se mueve cuando se mueve su anfitrión, puede solaparlo y se
+dibuja sobre la cuadrícula. Una línea discontinua lo une a su anfitrión. Arrástralo para alejarlo
+del anclaje en celdas completas, o mantén **Mayús** para moverlo en cuartos de celda. Elige
+**Cuadrícula** para devolverlo a la cuadrícula, en el primer hueco libre. Un widget relativo no
+puede ser a su vez anfitrión.
 
 ## Vista previa con datos sintéticos {#previewing-with-synthetic-data}
 

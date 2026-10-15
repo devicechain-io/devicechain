@@ -52,6 +52,31 @@ describe('the add-widget menu', () => {
     expect(onAdd.mock.calls[0][0].id).toBe(TANK_ID);
   });
 
+  // The picker says what space each widget will take before it is added: exactly the span
+  // addWidget places it with (the descriptor's default, else the 4x2 fallback).
+  it("shows each widget's default footprint", async () => {
+    const registry = createBuiltinWidgetRegistry();
+    render(<AddWidgetMenu registry={registry} onAdd={vi.fn()} />);
+    open();
+    await screen.findByTestId('add-widget-gauge');
+    expect(screen.getByTestId('add-widget-footprint-gauge').textContent).toBe('3×3');
+    expect(screen.getByTestId('add-widget-footprint-timeseries-chart').textContent).toBe('6×4');
+    for (const { descriptor } of registry.list()) {
+      const span = descriptor.layout?.defaultSpan ?? { cols: 4, rows: 2 };
+      expect(screen.getByTestId(`add-widget-footprint-${descriptor.id}`).textContent).toBe(`${span.cols}×${span.rows}`);
+    }
+  });
+
+  it('shows the fallback footprint for a widget that declares none', async () => {
+    const registry = registryWithTank();
+    render(<AddWidgetMenu registry={registry} onAdd={vi.fn()} />);
+    open();
+    const declared = registry.descriptor(TANK_ID)?.layout?.defaultSpan ?? { cols: 4, rows: 2 };
+    expect((await screen.findByTestId(`add-widget-footprint-${TANK_ID}`)).textContent).toBe(
+      `${declared.cols}×${declared.rows}`,
+    );
+  });
+
   // The control: the extra entry is there because the registry holds it, not because the
   // menu was handed a fixed list.
   it('does not show the extension when the registry does not hold it', async () => {

@@ -4,13 +4,17 @@
 // Typed GraphQL operations against the dashboard-management service (ADR-039).
 import { gql, GraphQLRequestError } from '@devicechain/client';
 import {
+  blockingLayoutFindings,
+  lintLayout,
   parseDashboardDefinition,
   serializeDefinition,
+  spanLimitsOfLayout,
+  UNKNOWN_WIDGET_TYPE,
   unresolvedWidgets,
   type DashboardDefinition,
   type WidgetCatalog,
 } from '@devicechain/dashboards';
-import { hostWidgetCatalog } from '@devicechain/host-widgets';
+import { hostWidgetCatalog, hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
 import { validateDefinitionOptions } from '@devicechain/widgets';
 import { graphql } from '@/gql/dashboard-management';
 import type {
@@ -248,6 +252,11 @@ export const INVALID_DEFINITION_MARKER = 'dashboard definition is not publishabl
 // this text is read by whoever bypassed it.
 export const UNRESOLVED_WIDGETS_MARKER = 'dashboard has widgets this console cannot resolve';
 
+// LAYOUT_BLOCKED_MARKER prefixes the refusal for a board whose placements are outside what their
+// widgets can show (see the layout check in publishDashboard). The drawer lists the widgets and
+// disables Publish first, as for the other two.
+export const LAYOUT_BLOCKED_MARKER = 'dashboard layout is not publishable';
+
 // ── Versioning (ADR-039) ──────────────────────────────────────────────────
 
 const DASHBOARD_VERSIONS = graphql(`
@@ -343,7 +352,9 @@ export async function publishDashboard(
     // The definition the caller believes the server will freeze — the last SAVED
     // definition, at expectedUpdatedAt. Not the unsaved editor copy: that is a
     // document the server has never seen.
-    definition: Pick<DashboardDefinition, 'widgets'>;
+    //
+    // The WHOLE definition, canvas included: the layout checks below read the grid.
+    definition: DashboardDefinition;
     label?: string;
     description?: string;
     // REQUIRED, though nullable: this is the whole tie between the definition
@@ -355,6 +366,9 @@ export async function publishDashboard(
     // The catalog `definition` was parsed with. Defaults to the deployment's own, so a
     // caller cannot validate an extension widget against a built-ins-only view by omission.
     catalog?: WidgetCatalog;
+    // The registry the widgets' declared size limits are read from. Defaults to the
+    // deployment's own, like `catalog`.
+    registry?: WidgetRegistry;
   },
 ): Promise<{ version: number; updatedAt: string | null }> {
   // 🔴 A WIDGET THIS CONSOLE CANNOT RESOLVE BLOCKS A NEW VERSION. A published version is
@@ -379,6 +393,25 @@ export async function publishDashboard(
       `${INVALID_DEFINITION_MARKER}: ${issues
         .map((i) => `${i.widgetId} (${i.widgetType}): ${i.message}`)
         .join('; ')}`,
+    );
+  }
+  // 🔴 A PLACEMENT OUTSIDE WHAT ITS WIDGET CAN SHOW BLOCKS A NEW VERSION too: a size past the
+  // widget's declared limits, a footprint running off the right edge, a relative widget pushed off
+  // the canvas. The editor cannot normally produce them -- they arrive with an import, a
+  // descriptor that has since changed, or a definition the API wrote -- which is exactly why the
+  // check is on the publish action and not in the editor. The draft is unrestricted; the author
+  // fits or fixes the board (the editor's "fit to limits") and publishes.
+  const registry = input.registry ?? hostWidgetRegistry();
+  const layout = blockingLayoutFindings(
+    lintLayout(input.definition, {
+      columns: input.definition.canvas.grid.columns,
+      spanLimitsOf: (w) =>
+        w.type === UNKNOWN_WIDGET_TYPE ? undefined : spanLimitsOfLayout(registry.descriptor(w.type)?.layout),
+    }),
+  );
+  if (layout.length > 0) {
+    throw new Error(
+      `${LAYOUT_BLOCKED_MARKER}: ${layout.map((f) => `${f.widgetId} (${f.code}): ${f.message}`).join('; ')}`,
     );
   }
   const data = await gql('dashboard-management', PUBLISH_DASHBOARD, {
