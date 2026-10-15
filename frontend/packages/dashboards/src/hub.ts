@@ -1118,9 +1118,12 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
         // Guard the delete so a stream that has already been replaced is left be.
         if (this.streams.get(deviceToken) === stream) this.streams.delete(deviceToken);
         // 🔴 Close the operation but KEEP the connection handle until the last subscriber
-        // detaches. graphql-ws errors every operation once its retries are spent, so
-        // releasing here would empty the tracker exactly when the socket is beyond
-        // recovery, and a board whose every stream had died would read `live`. A handle
+        // detaches. A dropped socket is retried for as long as the stream is wanted (the
+        // client never gives up on one), so what lands here is final: a close that says
+        // the request is wrong (a refused token among them) or the server ending this
+        // operation. A fatal close errors every operation at once, so releasing here would
+        // empty the tracker exactly when the socket is down for good, and a board whose
+        // every stream had died would read `live`. A handle
         // whose socket was up when the operation failed (a server-side error) counts as up.
         closeOperation();
         if (stream.subscribers.size > 0) this.deadStreams.add(stream);

@@ -18,7 +18,8 @@
 // once, which opens a new socket whose connection_init carries a freshly resolved
 // token, and reports the reconnect to the sink as connected(true) so a consumer
 // re-queries whatever it may have missed. graphql-ws treats 4401 as fatal and does
-// not retry it on its own.
+// not retry it on its own. Any other dropped socket is retried for as long as the
+// operation is wanted, with a capped, jittered back-off (clientFor).
 
 import type { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 import { createClient, type Client } from 'graphql-ws';
@@ -49,6 +50,20 @@ interface AreaClient {
   lastCloseWasAcked: boolean;
 }
 
+// The longest wait between two reconnect attempts. graphql-ws doubles its wait on each
+// attempt, so without a ceiling an outage of a few minutes would push the next attempt
+// hours away.
+export const RETRY_CEILING_MS = 30_000;
+
+// retryDelayMs is the wait before reconnect attempt `retries` (0-based): doubling from one
+// second up to RETRY_CEILING_MS, then a random point in the upper half of that. The random
+// half spreads out every screen that lost the same server at the same moment, so they do
+// not all come back on the same tick; the fixed half keeps attempts from bunching near zero.
+export function retryDelayMs(retries: number, random: () => number = Math.random): number {
+  const ceiling = Math.min(1000 * 2 ** retries, RETRY_CEILING_MS);
+  return (ceiling / 2) * (1 + random());
+}
+
 // One graphql-ws client per area — the WebSocket (and its connection_init auth)
 // is reused across every subscription to that area. connectionParams is a
 // function so the token is re-resolved on each (re)connect, surviving refresh.
@@ -63,6 +78,23 @@ function clientFor(area: Area): AreaClient {
         const token = await resolveAuthToken();
         return token ? { Authorization: `Bearer ${token}` } : {};
       },
+      // 🔴 Keep reconnecting for as long as anything is subscribed. Left to its defaults,
+      // graphql-ws gives up after 5 attempts (about 40 s; in a browser, after the first one
+      // that fails, see shouldRetry) and then errors every operation, and nothing reopened
+      // them: a wall display that lost its network for a minute showed
+      // "Data unavailable" until someone reloaded it. One socket per area carries every
+      // operation, so each attempt is ONE connection however many widgets are waiting, and
+      // graphql-ws resubscribes all of them on it once it is acknowledged.
+      retryAttempts: Infinity,
+      retryWait: (retries) => new Promise((resolve) => setTimeout(resolve, retryDelayMs(retries))),
+      // graphql-ws retries only close events by default, and a browser reports a handshake
+      // that failed (the server or the network still down) as an `error` event first, so
+      // the first failed attempt would end every operation however many were allowed. A
+      // socket's own error event is a network problem and is retried; an Error thrown in
+      // this client is not. The closes that say the request itself is wrong (4400, 4401,
+      // 4409, 4429) are fatal inside graphql-ws whatever this answers, so an expired or
+      // refused token still reaches subscribe() below and the session flow, never a loop.
+      shouldRetry: (err) => (typeof Event != 'undefined' && err instanceof Event) || hasCode(err),
     });
     const state: AreaClient = { client, acked: false, lastCloseWasAcked: false };
     // Registered once, here, before any subscription can register its own — so on a
@@ -85,11 +117,14 @@ function clientFor(area: Area): AreaClient {
   return entry;
 }
 
+// hasCode reports whether a graphql-ws error is a close event (anything with a close code).
+function hasCode(err: unknown): err is { code: unknown } {
+  return typeof err === 'object' && err !== null && 'code' in err;
+}
+
 // isUnauthorizedClose reports whether a graphql-ws sink error is a 4401 close event.
 function isUnauthorizedClose(err: unknown): boolean {
-  return (
-    typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === CLOSE_UNAUTHORIZED
-  );
+  return hasCode(err) && err.code === CLOSE_UNAUTHORIZED;
 }
 
 export interface SubscriptionSink<T> {

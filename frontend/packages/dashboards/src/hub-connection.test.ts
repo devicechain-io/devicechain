@@ -92,7 +92,7 @@ describe('DashboardHub connection state', () => {
     expect(hub.connectionState).toBe('live');
   });
 
-  it('keeps a stream whose retries ran out counted as down until its widget goes', async () => {
+  it('keeps a stream ended by a fatal close counted as down until its widget goes', async () => {
     const hub = new DashboardHub({ resolver });
     const widgetSink = { next: vi.fn(), error: vi.fn() };
     const detach = hub.subscribeWidget({ kind: 'device', deviceToken: 'd1', measurements: ['t'] }, widgetSink);
@@ -101,7 +101,7 @@ describe('DashboardHub connection state', () => {
 
     sink.closed?.();
     vi.advanceTimersByTime(OFFLINE_AFTER_MS);
-    // graphql-ws gives up and errors the operation: the board must not now read live.
+    // A fatal close errors the operation: the board must not now read live.
     sink.error?.(new Error('socket closed'));
     expect(widgetSink.error).toHaveBeenCalled();
     expect(hub.connectionState).toBe('offline');

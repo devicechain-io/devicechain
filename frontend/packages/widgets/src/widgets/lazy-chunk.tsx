@@ -7,7 +7,10 @@
 //
 // Until the chunk arrives the widget renders nothing inside its box. A chunk that fails to load is
 // THROWN, so the widget's error boundary shows the failure: an empty box that looks like a widget
-// with nothing to say is the outcome this must never produce.
+// with nothing to say is the outcome this must never produce. The failure is NOT remembered: the
+// next mount (the boundary's "Reset widget") fetches the chunk again, so a blip on a wall display's
+// network is not a widget that stays broken until the page is reloaded. React.lazy remembers it,
+// which is why the feeds load through here too.
 //
 // The `import()` itself stays in each family's own module, as a literal: that is what makes the
 // bundler split the chunk, and it is what the dist-shape guard looks for.
@@ -20,16 +23,22 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
   let loading: Promise<M> | undefined;
 
   // Memoized: every widget of the family on a board shares one fetch. Once it has resolved,
-  // `loaded` lets a later mount render synchronously, with no empty first frame.
-  const load = (): Promise<M> => {
-    loading ??= importer().then((m) => (loaded = m));
-    return loading;
-  };
+  // `loaded` lets a later mount render synchronously, with no empty first frame. A rejection is
+  // forgotten, so the next load fetches again; only a mount asks, so a chunk that keeps failing
+  // is never retried in a loop.
+  const load = (): Promise<M> =>
+    (loading ??= importer().then(
+      (m) => (loaded = m),
+      (err: unknown) => {
+        loading = undefined;
+        throw err;
+      },
+    ));
 
   // `P` is the data a given component takes when it differs from the family's default `D` (a chunk
-  // that holds widgets of two channels).
-  function component<P = D>(name: keyof M & string) {
-    function LazyChunkWidget(props: WidgetProps<P>) {
+  // that holds widgets of two channels). `Props` is for a component that is not a widget at all.
+  function component<P = D, Props extends object = WidgetProps<P>>(name: keyof M & string) {
+    function LazyChunkWidget(props: Props) {
       const [mod, setMod] = useState(loaded);
       const [error, setError] = useState<unknown>();
       useEffect(() => {
@@ -37,7 +46,7 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
       }, [mod]);
       if (error !== undefined) throw error;
       if (!mod) return null;
-      const Component = mod[name] as ComponentType<WidgetProps<P>>;
+      const Component = mod[name] as ComponentType<Props>;
       return <Component {...props} />;
     }
     LazyChunkWidget.displayName = `Lazy(${name})`;
