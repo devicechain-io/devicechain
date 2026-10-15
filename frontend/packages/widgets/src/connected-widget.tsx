@@ -34,7 +34,7 @@ import {
   type WidgetFreshness,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
-import { useMemo, type ComponentType, type ReactNode } from 'react';
+import { lazy, Suspense, useMemo, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow } from './binding-policy';
 import { useHeld } from './use-held';
@@ -180,6 +180,8 @@ function ChannelBody(props: ChannelProps) {
       return <ControlConnectedWidget {...props} />;
     case 'location':
       return <LocationConnectedWidget {...props} />;
+    case 'aggregate':
+      return <AggregateConnectedWidget {...props} />;
     case 'selection':
     case 'none':
       return <StaticConnectedWidget {...props} />;
@@ -230,6 +232,26 @@ function MeasurementConnectedWidget({ widget, hub, descriptor, Component, action
     <WidgetFreshnessProvider freshness={freshness}>
       <Component widget={widget} data={data} actions={actions} />
     </WidgetFreshnessProvider>
+  );
+}
+
+// The aggregate feed is its own chunk (aggregate-feed.tsx): a board without an aggregate widget
+// never downloads it. Nothing renders until it arrives, and a chunk that fails to load is thrown to
+// the widget's containment, which shows the failure.
+const AggregateFeed = lazy(() => import('./aggregate-feed'));
+
+function AggregateConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+  return (
+    <Suspense fallback={null}>
+      <AggregateFeed
+        hub={hub}
+        widget={widget}
+        descriptor={descriptor}
+        Component={Component}
+        actions={actions}
+        ErrorFrame={WidgetErrorFrame}
+      />
+    </Suspense>
   );
 }
 

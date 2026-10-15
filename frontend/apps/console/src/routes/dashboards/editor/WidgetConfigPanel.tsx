@@ -387,7 +387,7 @@ export function WidgetConfigPanel({
                   // A map reads a LOCATION series, not named scalar series, so it hides
                   // the measurements field for the same reason the alarm widgets do —
                   // measurement names on a map selector would be read by nothing.
-                  showMeasurements={channel === 'measurement'}
+                  showMeasurements={channel === 'measurement' || channel === 'aggregate'}
                   // The kinds the descriptor accepts: a widget that does not accept an
                   // anchor offers only the device kind.
                   deviceOnly={!(policy.selectors as readonly string[]).includes('anchor')}

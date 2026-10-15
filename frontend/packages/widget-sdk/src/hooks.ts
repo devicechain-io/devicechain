@@ -19,6 +19,7 @@ import type {
   WidgetDataSource,
 } from '@devicechain/dashboards';
 import type {
+  AggregateStreamState,
   AlarmStreamState,
   CommandStreamState,
   LocationStreamState,
@@ -37,7 +38,7 @@ import { useWidgetCandidates, type WidgetCandidates } from './context';
 
 // The channel snapshots moved to @devicechain/dashboards (they are pure data over the hub's
 // row types); re-exported so every import site here keeps resolving.
-export type { AlarmStreamState, CommandStreamState, LocationStreamState, MeasurementStreamState };
+export type { AggregateStreamState, AlarmStreamState, CommandStreamState, LocationStreamState, MeasurementStreamState };
 
 // useDashboardHub gives a host ONE live hub per (resolver, authorities) — compared by
 // value, so a re-rendered but equal authorities array keeps the hub — and disposes it when

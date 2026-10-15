@@ -52,7 +52,7 @@ export function describeIssues(subject: string, issues: readonly DescriptorIssue
 
 // ---- Descriptor validation --------------------------------------------------
 
-const CHANNELS: readonly WidgetChannel[] = ['measurement', 'alarm', 'control', 'selection', 'location', 'none'];
+const CHANNELS: readonly WidgetChannel[] = ['measurement', 'alarm', 'control', 'selection', 'location', 'aggregate', 'none'];
 const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SELECTOR_KINDS = ['device', 'anchor', 'slot'];
 
@@ -62,6 +62,7 @@ const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
   alarm: ['pageSize', 'state', 'severity', 'acknowledged'],
   control: ['pageSize'],
   location: [],
+  aggregate: ['windowSeconds'],
   selection: [],
   none: [],
 };

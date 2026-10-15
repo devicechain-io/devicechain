@@ -75,6 +75,9 @@ const LEGACY_LABEL: Record<string, string> = {
   // Appended with the command controls.
   parameter: 'widgetLabelParameter',
   step: 'widgetLabelStep',
+  // Appended with the stat card and the categorical charts.
+  stat: 'widgetLabelStat',
+  sort: 'widgetLabelSort',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -110,6 +113,8 @@ const LEGACY_HINT: Record<string, string | null> = {
   onAt: 'widgetHintOnAt',
   parameter: 'widgetHintControlParameter',
   step: 'widgetHintSliderStep',
+  stat: 'widgetHintStat',
+  sort: null,
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -144,6 +149,15 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'orientation:vertical': 'widgetOrientationVertical',
   'readout:value': 'widgetReadoutValue',
   'readout:percent': 'widgetReadoutPercent',
+  'stat:avg': 'widgetStatAvg',
+  'stat:min': 'widgetStatMin',
+  'stat:max': 'widgetStatMax',
+  'stat:sum': 'widgetStatSum',
+  'stat:count': 'widgetStatCount',
+  'stat:last': 'widgetStatLast',
+  'sort:none': 'widgetSortNone',
+  'sort:ascending': 'widgetSortAscending',
+  'sort:descending': 'widgetSortDescending',
 };
 
 const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
@@ -155,6 +169,8 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   style: 'widgetPlaceholderDefault',
   orientation: 'widgetPlaceholderDefault',
   readout: 'widgetPlaceholderDefault',
+  stat: 'widgetPlaceholderDefault',
+  sort: 'widgetPlaceholderDefault',
 };
 
 const LEGACY_CUSTOM: Record<string, 'command' | 'slot'> = {
@@ -271,12 +287,13 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
           ? 'widgetLabelScope'
           : 'widgetLabelDataSource';
     expect(screen.getByText(tr(heading))).toBeTruthy();
+    // (aggregate, like measurement, names the measurements it reads)
     const showMeasurements = channel !== 'alarm' && channel !== 'control' && channel !== 'location';
     expect(screen.queryByText(tr('widgetLabelMeasurements')) !== null, 'measurements field').toBe(showMeasurements);
 
     // Open the kind picker and see which kinds it offers.
     const kindField = screen.getByText(tr('widgetLabelKind')).closest('div')!.parentElement!;
     fireEvent.click(within(kindField).getAllByRole('button')[0]);
-    expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(channel !== 'control');
+    expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(channel !== 'control' && channel !== 'aggregate');
   });
 });

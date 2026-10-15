@@ -8,6 +8,7 @@
 
 import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-sdk';
 
+import { barChartWidget, pieChartWidget, statCardWidget } from './widgets/aggregate-lazy';
 import { alarmCountWidget } from './widgets/alarm-count';
 import { alarmTableWidget } from './widgets/alarm-table';
 import { commandButtonWidget } from './widgets/command-button';
@@ -51,6 +52,9 @@ export const builtinWidgetDefinitions = [
   progressRingWidget,
   commandSliderWidget,
   commandToggleWidget,
+  statCardWidget,
+  barChartWidget,
+  pieChartWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent

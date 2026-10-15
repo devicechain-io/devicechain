@@ -805,6 +805,363 @@
         "title": "Power (smallest)"
       },
       "type": "command-toggle"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-avg",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 27,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "stat": "avg",
+        "title": "Average temperature",
+        "unit": "C"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-max",
+      "layout": {
+        "base": {
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
+          "row": 27,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "stat": "max",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Peak temperature",
+        "unit": "C"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-min",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 27,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "stat": "min",
+        "title": "Lowest temperature",
+        "unit": "C"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-count",
+      "layout": {
+        "base": {
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
+          "row": 27,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 0,
+        "stat": "count",
+        "title": "Readings",
+        "unit": ""
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "humidity"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-sum",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 30,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "humidity",
+        "precision": 0,
+        "stat": "sum",
+        "title": "Humidity total",
+        "unit": "%"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-last",
+      "layout": {
+        "base": {
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
+          "row": 30,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "stat": "last",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Latest temperature",
+        "unit": "C"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-pinned",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 30,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 1,
+        "stat": "avg",
+        "title": "Average, last 5 min",
+        "unit": "C",
+        "windowSeconds": 300
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-stat-min-size",
+      "layout": {
+        "base": {
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
+          "row": 30,
+          "rows": 2
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "precision": 0,
+        "stat": "max",
+        "title": "Peak (smallest)",
+        "unit": "C"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-bar",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 6,
+          "mode": "grid",
+          "row": 33,
+          "rows": 4
+        }
+      },
+      "options": {
+        "precision": 1,
+        "sort": "none",
+        "title": "Latest readings",
+        "unit": ""
+      },
+      "type": "bar-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-bar-rows",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 4,
+          "mode": "grid",
+          "row": 33,
+          "rows": 5
+        }
+      },
+      "options": {
+        "precision": 1,
+        "sort": "descending",
+        "title": "Largest first",
+        "unit": ""
+      },
+      "type": "bar-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-pie",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 4,
+          "mode": "grid",
+          "row": 38,
+          "rows": 4
+        }
+      },
+      "options": {
+        "precision": 0,
+        "sort": "none",
+        "title": "Share of the total",
+        "unit": ""
+      },
+      "type": "pie-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "sensor"
+      },
+      "id": "wl-pie-min",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 3,
+          "mode": "grid",
+          "row": 38,
+          "rows": 3
+        }
+      },
+      "options": {
+        "precision": 0,
+        "sort": "descending",
+        "title": "Share (smallest)",
+        "unit": ""
+      },
+      "type": "pie-chart"
     }
   ]
 }

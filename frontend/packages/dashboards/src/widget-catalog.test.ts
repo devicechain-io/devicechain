@@ -166,6 +166,22 @@ describe('validateWidgetDescriptor', () => {
     expect(alarm({ ...good, window: { option: 'window' } })).toEqual(['binding.window']);
   });
 
+  it('accepts an aggregate-channel widget that pins its span, and nothing else in its binding', () => {
+    const OPTS = { ...OPTIONS, windowSeconds: { kind: 'number', integer: true, min: 60, max: 604800, doc: 'Span.' } } as const;
+    const { constraints: _constraints, ...base } = valid();
+    const aggregate = (binding: unknown, extra: object = {}) =>
+      issuesOf({ ...base, channel: 'aggregate', options: OPTS, defaults: { title: 'T' }, binding, ...extra }).map((i) => i.path);
+    expect(aggregate({ windowSeconds: { option: 'windowSeconds' } })).toEqual([]);
+    expect(aggregate({})).toEqual([]);
+    // A sample count means nothing to a widget that folds a span; the page size is not its either.
+    expect(aggregate({ window: { option: 'window' } })).toEqual(['binding.window']);
+    expect(aggregate({ pageSize: { const: 5 } })).toEqual(['binding.pageSize']);
+    // The span option must be a number option that exists.
+    expect(aggregate({ windowSeconds: { option: 'title' } })).toEqual(['binding.windowSeconds.option']);
+    // Aggregates are not "freshness": the frame's age readout is a measurement-channel feature.
+    expect(aggregate({}, { freshness: true })).toEqual(['freshness']);
+  });
+
   it('rejects channel/datasource mismatches', () => {
     for (const channel of ['none', 'selection']) {
       const issues = issuesOf({ ...valid(), channel, binding: {} });

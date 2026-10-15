@@ -29,6 +29,7 @@ vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
 });
 
 import {
+  type AggregateStreamState,
   type AlarmStreamState,
   type CommandStreamState,
   type LocationStreamState,
@@ -38,6 +39,8 @@ import { createBuiltinWidgetRegistry } from './builtin-registry';
 import { CONTROL_STRINGS } from './command-control-strings';
 import { LEVEL_STRINGS } from './level-strings';
 import { MapRuntimeProvider } from './map-runtime-context';
+import { AGGREGATE_STRINGS } from './aggregate-strings';
+import { loadAggregateWidgets } from './widgets/aggregate-lazy';
 import { loadControlWidgets } from './widgets/control-lazy';
 import { loadLevelWidgets } from './widgets/level-lazy';
 
@@ -47,7 +50,7 @@ afterEach(cleanup);
 // registration renders NOTHING -- which every absence assertion below would read as clean.
 // Loading it once here makes every later mount render synchronously; the positive
 // level-family assertion further down is what fails if this ever stops being true.
-beforeAll(() => Promise.all([loadLevelWidgets(), loadControlWidgets()]));
+beforeAll(() => Promise.all([loadLevelWidgets(), loadControlWidgets(), loadAggregateWidgets()]));
 
 // ---- The render gate -----------------------------------------------------------
 //
@@ -123,6 +126,13 @@ const EMPTY_STATES = [
   // The command controls' explained refusals (no range, no parameter chosen).
   CONTROL_STRINGS.en.setRange,
   CONTROL_STRINGS.en.setParameter,
+  // The aggregate widgets' explained states: on a board with data, none may be reached.
+  AGGREGATE_STRINGS.en.loading,
+  AGGREGATE_STRINGS.en.unsupported,
+  AGGREGATE_STRINGS.en.noData,
+  AGGREGATE_STRINGS.en.noCategories,
+  AGGREGATE_STRINGS.en.pieNegative,
+  AGGREGATE_STRINGS.en.pieNoShare,
 ];
 
 const sample = (name: string, value: number): MeasurementSample => ({
@@ -158,6 +168,24 @@ function measurementData(): MeasurementStreamState {
     error: null,
   };
 }
+
+// What the aggregate read returned over the hour before the samples above. Distinct per measurement
+// and per statistic, so a card that read the wrong field or the wrong name shows the wrong figure.
+const AGGREGATE_DATA: AggregateStreamState = {
+  aggregates: {
+    status: 'ready',
+    startTime: '2026-08-01T11:00:00Z',
+    endTime: '2026-08-01T12:00:00Z',
+    spanSeconds: 3600,
+    byName: {
+      temperature: { count: 40, min: 12, max: 31.5, sum: 800, avg: 20 },
+      humidity: { count: 20, min: 40, max: 70, sum: 1100, avg: 55 },
+      battery: { count: 10, min: 60, max: 90, sum: 750, avg: 75 },
+    },
+  },
+  latest: measurementData().latest,
+  error: null,
+};
 
 const alarmRow: AlarmRow = {
   token: 'alarm-1',
@@ -266,6 +294,8 @@ function renderWidget(widget: KnownWidgetInstance) {
       return render(<Component widget={widget} data={locationData} />);
     case 'measurement':
       return render(<Component widget={widget} data={measurementData()} />);
+    case 'aggregate':
+      return render(<Component widget={widget} data={AGGREGATE_DATA} />);
     case 'selection':
     case 'none':
       return render(<Component widget={widget} data={null} />);
@@ -420,6 +450,52 @@ describe('the gallery widgets draw their data', () => {
       }
     }
     expect(checked, 'the gallery has no command slider or toggle').toBeGreaterThanOrEqual(4);
+  });
+
+  it('shows the statistic each stat card is set to, over the span it says', () => {
+    // The figures are the ones AGGREGATE_DATA gives each measurement and field (or the latest
+    // reading), so a card that read another field, another measurement, or a bucket average shows
+    // a different number. The caption names the statistic and the span.
+    const EXPECT: Record<string, { figure: string; caption: string }> = {
+      'wl-stat-avg': { figure: '20', caption: 'Average · 1h' },
+      'wl-stat-max': { figure: '31.5', caption: 'Maximum · 1h' },
+      'wl-stat-min': { figure: '12', caption: 'Minimum · 1h' },
+      'wl-stat-count': { figure: '40', caption: 'Readings · 1h' },
+      'wl-stat-sum': { figure: '1100', caption: 'Sum · 1h' },
+      'wl-stat-last': { figure: '21.5', caption: 'Latest' },
+      'wl-stat-pinned': { figure: '20', caption: 'Average · 1h' },
+    };
+    let checked = 0;
+    for (const widget of galleryWidgets('stat-card')) {
+      const want = EXPECT[widget.id];
+      if (!want) continue;
+      checked++;
+      const { container } = renderWidget(widget);
+      expect(container.querySelector('[data-level-readout]')?.textContent, `${widget.id} shows another figure`).toContain(want.figure);
+      expect(container.querySelector('[data-stat-caption]')?.textContent, `${widget.id} captions another statistic or span`).toBe(want.caption);
+      cleanup();
+    }
+    expect(checked, 'the gallery lost a stat card').toBe(Object.keys(EXPECT).length);
+  });
+
+  it('gives the bar and pie charts a category per measurement, valued by its latest reading', () => {
+    let checked = 0;
+    for (const type of ['bar-chart', 'pie-chart']) {
+      for (const widget of galleryWidgets(type)) {
+        checked++;
+        const { container } = renderWidget(widget);
+        const names = widget.datasource && 'measurements' in widget.datasource ? widget.datasource.measurements : [];
+        // A bar's value rides on its group; a pie wedge's share does (every category reads the same sample).
+        const drawn = [...container.querySelectorAll(type === 'bar-chart' ? '[data-bar]' : '[data-slice]')];
+        expect(drawn.map((el) => el.getAttribute(type === 'bar-chart' ? 'data-bar' : 'data-slice')).sort(), `${widget.id} lost a category`).toEqual([...names].sort());
+        for (const el of drawn) {
+          if (type === 'bar-chart') expect(Number(el.getAttribute('data-value'))).toBe(SAMPLE_VALUE);
+          else expect(Number(el.getAttribute('data-fraction'))).toBeCloseTo(1 / names.length, 6);
+        }
+        cleanup();
+      }
+    }
+    expect(checked, 'the gallery lost a bar or pie chart').toBeGreaterThanOrEqual(4);
   });
 
   it('puts a reading on the gauge rather than an empty dial', () => {

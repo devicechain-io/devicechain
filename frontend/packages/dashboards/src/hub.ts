@@ -13,6 +13,7 @@
 import { gql, isForbiddenError, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
 import { ConnectionTracker, type HubConnectionState } from './connection';
+import type { HistoryWindow } from './history';
 import {
   ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
@@ -26,6 +27,7 @@ import {
   CREATE_COMMAND,
 } from './internal/command-doc';
 import { LATEST_LOCATIONS_QUERY } from './internal/location-doc';
+import { BUCKETED_MEASUREMENTS, type MeasurementBucket } from './queries';
 import {
   MEASUREMENT_STREAM,
   type MeasurementStreamResult,
@@ -319,6 +321,11 @@ export interface WidgetDataSource {
   // = the wall clock, which is right for every live source. A source that plays back a recorded
   // run implements it, because the run's samples are dated by the run.
   now?(): number;
+  // The time buckets of a selector's measurements over a window, each carrying the exact count,
+  // minimum, maximum and sum of its readings: what a stat widget folds into the span's aggregates.
+  // Optional: a source that cannot produce them omits it, and the widget then says so instead of
+  // showing a number. Rejects when the read fails.
+  bucketMeasurements?(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]>;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -407,6 +414,33 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       });
 
     return dispose;
+  }
+
+  // bucketMeasurements reads the buckets of every (device, measurement) pair over a window. Widgets
+  // that ask the same question while a read is in flight share it: stat cards on one measurement
+  // and span read on the same minute boundaries, so a board of them costs one read per question.
+  private readonly bucketReads = new Map<string, Promise<MeasurementBucket[]>>();
+
+  bucketMeasurements(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
+    const key = JSON.stringify([datasource, window]);
+    let read = this.bucketReads.get(key);
+    if (!read) {
+      read = this.readBuckets(datasource, window);
+      this.bucketReads.set(key, read);
+      const forget = () => this.bucketReads.delete(key);
+      read.then(forget, forget);
+    }
+    return read;
+  }
+
+  private async readBuckets(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
+    const groups = await this.resolveDevices(datasource);
+    const reads = groups.flatMap((g) =>
+      (g.names.size ? [...g.names] : [undefined]).map((name) =>
+        gql(EVENT_AREA, BUCKETED_MEASUREMENTS, { criteria: { deviceToken: g.deviceToken, name, ...window } }),
+      ),
+    );
+    return (await Promise.all(reads)).flatMap((r) => r.bucketedMeasurements);
   }
 
   // subscribeAlarms binds an alarm widget's scope+filters to a sink and returns a

@@ -19,7 +19,7 @@
 // tsconfig `types` entry, which would stop tsc auto-including every other @types package.
 /// <reference types="node" />
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
@@ -132,6 +132,26 @@ describe('the built SDK /echarts entry', () => {
   it('is where ECharts is imported -- by bare specifier, never bundled in', () => {
     expect(chartImports).toContain('echarts/core');
     expect(chartImports).toContain('echarts/charts');
+  });
+
+  // The categorical widgets (bar, pie) are SVG, so the chart engine's registration does not grow:
+  // line and gauge are the only chart types it imports, and no lazily loaded chart-type chunk
+  // exists beside the threshold markers. A bar or pie type here would cost ~7 KB gzip each, and a
+  // second lazily loaded ECharts module makes the app bundler split the whole engine out of the
+  // entry chunk (measured: about +8 KB on the initial download), so this is a budget line.
+  it('registers only the line and gauge chart types, with no bar or pie module in the build', () => {
+    const chartTypes = [...readFileSync(path.join(distDir, 'echarts.js'), 'utf8').matchAll(/import\s*\{([^}]*)\}\s*from\s*"echarts\/charts"/g)]
+      .flatMap((m) => m[1].split(','))
+      .map((n) => n.trim())
+      .filter(Boolean)
+      .sort();
+    expect(chartTypes).toEqual(['GaugeChart', 'LineChart']);
+    const chunks = readdirSync(path.join(distDir, 'chunks')).filter((f) => f.endsWith('.js'));
+    expect(chunks.some((f) => /echart-markers/.test(f)), 'the pattern cannot see the markers chunk').toBe(true);
+    expect(chunks.filter((f) => /bar|pie/i.test(f))).toEqual([]);
+    for (const f of chunks) {
+      expect(readFileSync(path.join(distDir, 'chunks', f), 'utf8'), `${f} imports a bar or pie chart type`).not.toMatch(/\b(BarChart|PieChart)\b/);
+    }
   });
 
   it('imports no map library and nothing from the built-in catalog', () => {

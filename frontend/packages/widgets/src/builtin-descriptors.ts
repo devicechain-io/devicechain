@@ -284,7 +284,18 @@ const WINDOW_SECONDS = {
   max: 604800,
   labelId: 'widgetLabelWindowSeconds',
   helpId: 'widgetHintWindowSeconds',
-  doc: 'Seconds of history the chart draws, back from now. Leave unset to follow the board’s time range; set it to pin this chart to a fixed span that the viewer’s range picker does not change. 60 to 604800.',
+  doc: 'Seconds of history the widget covers, back from now. Leave unset to follow the board’s time range; set it to pin this widget to a fixed span that the viewer’s range picker does not change. 60 to 604800.',
+} as const satisfies OptionSpec;
+
+// The categorical charts' shared options. Both draw the latest reading of each measurement the
+// datasource names: the order is the datasource's own unless a sort is set.
+const CATEGORY_SORT = {
+  kind: 'enum',
+  values: ['none', 'ascending', 'descending'],
+  labelId: 'widgetLabelSort',
+  valueLabelIds: { none: 'widgetSortNone', ascending: 'widgetSortAscending', descending: 'widgetSortDescending' },
+  placeholderId: 'widgetPlaceholderDefault',
+  doc: 'Order of the categories. Default: as the data source lists them.',
 } as const satisfies OptionSpec;
 
 export const builtinWidgetDescriptors = {
@@ -950,6 +961,73 @@ export const builtinWidgetDescriptors = {
     defaults: { title: 'Command toggle' },
     interactions: { commandSend: true },
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 3 } },
+  }),
+  'stat-card': defineWidgetDescriptor({
+    id: 'stat-card',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Stat card', category: 'Telemetry', titleId: 'widgetTypeStatCard', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'aggregate',
+    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    binding: { windowSeconds: { option: 'windowSeconds' } },
+    options: {
+      title: TITLE_OR_MEASUREMENT,
+      measurement: MEASUREMENT,
+      stat: {
+        kind: 'enum',
+        values: ['avg', 'min', 'max', 'sum', 'count', 'last'],
+        labelId: 'widgetLabelStat',
+        helpId: 'widgetHintStat',
+        valueLabelIds: {
+          avg: 'widgetStatAvg',
+          min: 'widgetStatMin',
+          max: 'widgetStatMax',
+          sum: 'widgetStatSum',
+          count: 'widgetStatCount',
+          last: 'widgetStatLast',
+        },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'Which figure to show. Default average.',
+      },
+      unit: UNIT,
+      precision: PRECISION,
+      thresholds: THRESHOLDS,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'Stat card' },
+    interactions: {},
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
+  }),
+
+  'bar-chart': defineWidgetDescriptor({
+    id: 'bar-chart',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Bar chart', category: 'Telemetry', titleId: 'widgetTypeBarChart', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: {},
+    options: { title: TITLE, unit: UNIT, precision: PRECISION, sort: CATEGORY_SORT },
+    defaults: { title: 'Bar chart' },
+    interactions: {},
+    layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
+  }),
+
+  'pie-chart': defineWidgetDescriptor({
+    id: 'pie-chart',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Pie chart', category: 'Telemetry', titleId: 'widgetTypePieChart', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: {},
+    options: { title: TITLE, unit: UNIT, precision: PRECISION, sort: CATEGORY_SORT },
+    defaults: { title: 'Pie chart' },
+    interactions: {},
+    layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 

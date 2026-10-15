@@ -26,8 +26,10 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
     return loading;
   };
 
-  function component(name: keyof M & string) {
-    function LazyChunkWidget(props: WidgetProps<D>) {
+  // `P` is the data a given component takes when it differs from the family's default `D` (a chunk
+  // that holds widgets of two channels).
+  function component<P = D>(name: keyof M & string) {
+    function LazyChunkWidget(props: WidgetProps<P>) {
       const [mod, setMod] = useState(loaded);
       const [error, setError] = useState<unknown>();
       useEffect(() => {
@@ -35,7 +37,7 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
       }, [mod]);
       if (error !== undefined) throw error;
       if (!mod) return null;
-      const Component = mod[name] as ComponentType<WidgetProps<D>>;
+      const Component = mod[name] as ComponentType<WidgetProps<P>>;
       return <Component {...props} />;
     }
     LazyChunkWidget.displayName = `Lazy(${name})`;

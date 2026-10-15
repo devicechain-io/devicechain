@@ -265,6 +265,7 @@ export {
 // history seeder the renderer backfills charts with — the runtime's coupling to the
 // platform's GraphQL, kept out of the presentational widget layer.
 export { createDeviceResolver } from './resolver';
+export type { MeasurementBucket } from './queries';
 export { defaultHistoryWindow, fetchWidgetHistory, historyWindowFor, type HistoryWindow } from './history';
 
 // The board's time range: a span, the presets a viewer picks from, pause, and the deep link.
@@ -297,9 +298,13 @@ export {
 // The portable widget vocabulary — React-free, shared by the definition parser, the headless
 // validators, @devicechain/widget-sdk and the built-in widget package.
 export type {
+  AggregateResult,
+  AggregateSpan,
+  AggregateStreamState,
   AlarmStreamState,
   CommandStreamState,
   LocationStreamState,
+  MeasurementAggregate,
   MeasurementStreamState,
 } from './channel-snapshots';
 export {

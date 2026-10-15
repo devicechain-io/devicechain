@@ -150,7 +150,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count |
 | Control | Command button, Command slider, Command toggle |
@@ -180,6 +180,15 @@ The settings depend on the widget. Common ones:
 - **Time span** (timeseries chart): how much history the chart draws, in seconds, from 60 to
   604800. Leave it empty and the chart follows the board's time range, which viewers can change.
   Set it and the chart keeps that span whatever range a viewer picks.
+- **Statistic** (stat card): which figure of the span to show: average (the default), minimum,
+  maximum, sum, number of readings, or the latest reading. The card prints the statistic and the
+  span it covers under the figure, for example "Maximum · 1h". The same **Time span** setting
+  pins the card to its own span. A card says why it has no figure (the data source cannot compute
+  aggregates, the read failed, or there were no readings in the span) instead of showing a number
+  it could not compute. The number of readings of a span with none is 0.
+- **Order** (bar chart, pie chart): the measurements in the order the data source lists them, or
+  sorted smallest or largest first. A measurement that has not reported yet comes last. A bar chart
+  draws columns in a wide widget and rows in a tall one.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until
