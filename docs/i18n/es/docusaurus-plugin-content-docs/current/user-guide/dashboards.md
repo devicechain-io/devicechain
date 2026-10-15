@@ -113,8 +113,9 @@ máximo que admite. El panel mide el espacio que se le da, no la pantalla. Mient
 caben con **Celda mínima** o más, muestra tu diseño tal como lo dispusiste y las celdas se estiran
 para llenar el ancho, de modo que una pantalla grande obtiene celdas más grandes y no más celdas.
 En un espacio más estrecho usa tantas columnas como quepan y reparte los widgets en ellas en orden
-de lectura, de arriba abajo y de izquierda a derecha, de modo que un teléfono muestra una única
-pila legible. Cada widget conserva su tamaño dentro de los límites que admite, y un widget colocado
+de lectura, de arriba abajo y de izquierda a derecha. Por debajo de 600 px de ancho, como en un
+teléfono, cada widget ocupa su propia fila a todo el ancho, de modo que el panel se lee como una
+sola columna. Cada widget conserva su tamaño dentro de los límites que admite, y un widget colocado
 en relación con otro se mueve con él. Un widget que todavía no ha
 recibido datos muestra un guion o *No data yet* (este texto aparece en inglés también en la consola
 en español).

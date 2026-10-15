@@ -14,7 +14,7 @@
 // cell at the authored column count is at least `minCellSize` it renders as authored and the
 // cells stretch. Narrower than that the column count drops to what fits and the base layout is
 // poured into it in reading order (effectiveLayout), each widget clamped into the span limits
-// its descriptor declares. A breakpoint the author defined for the width wins over the automatic
+// its descriptor declares; below STACK_BELOW_WIDTH (a phone) that is a single column. A breakpoint the author defined for the width wins over the automatic
 // reflow. Until the container has a measured width the authored layout is drawn. Container sizing
 // (fill / fixed-width / fixed-height) is a mount knob the host may override via the `sizing`
 // prop. It is view-only; the canvas editor lives in the console. This is the shared viewer the
@@ -26,6 +26,7 @@ import {
   defaultHistoryWindow,
   effectiveLayout,
   fetchWidgetHistory,
+  layoutShape,
   resolveFrame,
   resolvePlacement,
   resolveWidgetDatasource,
@@ -54,7 +55,7 @@ import {
   WidgetTokenStyles,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
 import {
@@ -129,7 +130,6 @@ export function DashboardRenderer({
   themeRoot,
   density,
 }: DashboardRendererProps) {
-  const [boardRef, containerWidth] = useContainerWidth<HTMLDivElement>();
   // Each widget with its slot resolved to a concrete selector. Recomputed per render;
   // that is cheap, and every channel keys its subscription on the selector's VALUE, so a
   // widget whose concrete selector did not change keeps its subscription.
@@ -141,6 +141,12 @@ export function DashboardRenderer({
   const effectiveSizing = sizing ?? definition.canvas.sizing;
   const effectiveDensity = density ?? definition.canvas.density ?? DEFAULT_CANVAS_DENSITY;
   const scale = densityScale(effectiveDensity);
+  // The width is kept only when it changes the layout's shape (breakpoint, columns, single
+  // column): within one shape the cells stretch through CSS, so a resize redraws nothing until
+  // a column comes or goes.
+  const { canvas } = definition;
+  const shapeKey = useCallback((width: number) => JSON.stringify(layoutShape(canvas, width, scale)), [canvas, scale]);
+  const [boardRef, containerWidth] = useContainerWidth<HTMLDivElement>(shapeKey);
   const layout = useMemo(
     () =>
       effectiveLayout(definition, containerWidth, {
@@ -401,19 +407,29 @@ export function widgetSubjectLabel(widget: WidgetInstance): string | undefined {
 // useContainerWidth tracks an element's content width with a ResizeObserver, measured
 // synchronously before first paint so a narrow container never flashes the authored layout. 0
 // means "not measured" (no layout engine, or not yet laid out) and draws the authored layout.
-function useContainerWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
+// A new width is taken only when `keyOf` tells it apart from the one held, so a resize that
+// does not change what is drawn does not re-render; a new `keyOf` re-measures under its rule.
+function useContainerWidth<T extends HTMLElement>(keyOf: (width: number) => string): [RefObject<T | null>, number] {
   const ref = useRef<T>(null);
   const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
+  const keyOfRef = useRef(keyOf);
+  const measure = useCallback(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = () => setWidth(el.clientWidth);
+    const next = el.clientWidth;
+    setWidth((prev) => (keyOfRef.current(prev) === keyOfRef.current(next) ? prev : next));
+  }, []);
+  useLayoutEffect(() => {
+    keyOfRef.current = keyOf;
     measure();
-    if (typeof ResizeObserver === 'undefined') return;
+  }, [keyOf, measure]);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [measure]);
   return [ref, width];
 }
 

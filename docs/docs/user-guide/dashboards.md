@@ -114,8 +114,9 @@ The dashboard measures the space it is given, not the screen. While the columns 
 cell** or larger it shows your layout as you arranged it, with the cells stretching to fill the
 width, so a wall display gets bigger cells rather than more of them. In a narrower space it uses as
 many columns as fit and pours the widgets into them in reading order, top to bottom and left to
-right, so a phone shows a single readable stack. Each widget keeps its size within the limits it
-allows, and a widget placed relative to another moves with it.
+right. Below 600 px wide, as on a phone, each widget takes its own row at the full width, so the
+dashboard reads as a single column. Each widget keeps its size within the limits it allows, and a
+widget placed relative to another moves with it.
 
 A dashboard saved by an earlier release is converted to the current grid when it opens. The
 conversion is approximate, so the editor shows a note asking you to review the layout. Saving

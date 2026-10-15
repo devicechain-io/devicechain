@@ -49,13 +49,25 @@ export interface ReflowItem {
 const clampInto = (n: number, min: number | undefined, max: number | undefined) =>
   Math.min(max ?? Infinity, Math.max(min ?? 1, n));
 
+// The container width below which a reflowed board is drawn as a single column: the compact
+// window class phones fall in. Above it, narrow widgets pair up side by side; below it two of
+// them would each get half a phone, so every widget takes its own row at the full width.
+export const STACK_BELOW_WIDTH = 600;
+
 // reflowGrid pours grid footprints into `columns` columns. Widgets go in reading order (row, then
 // column, then their order in the input), each keeping its span clamped into its declared limits
 // and then into the columns (a widget wider than the whole grid takes the full width, below its
 // minSpan if it has to), at the first free slot at or below the row the previous widget landed in.
 // The row never moves back up, so the order a viewer reads is the order authored. Nothing
 // overlaps. Deterministic: the same input gives the same output.
-export function reflowGrid(items: readonly ReflowItem[], columns: number): Map<string, GridPlacement> {
+//
+// With `stack` (a phone), each widget instead takes its own row under the previous one, as wide
+// as the grid and its maxSpan allow: a single column, still in reading order, heights kept.
+export function reflowGrid(
+  items: readonly ReflowItem[],
+  columns: number,
+  options: { stack?: boolean } = {},
+): Map<string, GridPlacement> {
   const order = items
     .map((item, index) => ({ item, index }))
     .sort(
@@ -67,10 +79,18 @@ export function reflowGrid(items: readonly ReflowItem[], columns: number): Map<s
   const placed: GridPlacement[] = [];
   const out = new Map<string, GridPlacement>();
   let floor = 0;
+  let bottom = 0;
   for (const { item } of order) {
     const { placement: p, limits } = item;
-    const cols = Math.min(columns, clampInto(p.cols, limits?.minSpan?.cols, limits?.maxSpan?.cols));
+    const want = options.stack ? columns : p.cols;
+    const cols = Math.min(columns, clampInto(want, limits?.minSpan?.cols, limits?.maxSpan?.cols));
     const rows = clampInto(p.rows, limits?.minSpan?.rows, limits?.maxSpan?.rows);
+    if (options.stack) {
+      const spot: GridPlacement = { mode: 'grid', col: 0, row: bottom, cols, rows };
+      out.set(item.id, spot);
+      bottom += rows;
+      continue;
+    }
     let spot: GridPlacement | undefined;
     for (let row = floor; !spot; row++) {
       for (let col = 0; col + cols <= columns; col++) {
@@ -88,13 +108,36 @@ export function reflowGrid(items: readonly ReflowItem[], columns: number): Map<s
   return out;
 }
 
-export interface EffectiveLayout {
+// The SHAPE of the layout at a width: everything about it a width decides. Two widths with the
+// same shape draw the same layout (the cells differ in size, which CSS follows on its own), so a
+// renderer redraws only when the shape changes, not on every pixel of a resize.
+export interface LayoutShape {
   // The breakpoint whose placements are shown: chosen from the container's width.
   breakpoint: string;
   // The column count actually drawn.
   columns: number;
   // True when the board was poured into fewer columns than that breakpoint authored.
   reflowed: boolean;
+  // True when the reflow is a single column (a container narrower than STACK_BELOW_WIDTH).
+  stacked: boolean;
+}
+
+// layoutShape is the shape a container width gives a definition's canvas. A width of 0 or less
+// means "not measured yet": the authored base breakpoint at its own columns.
+export function layoutShape(
+  canvas: Pick<DashboardDefinition['canvas'], 'grid' | 'breakpoints'>,
+  containerWidth: number,
+  scale = 1,
+): LayoutShape {
+  const measured = containerWidth > 0;
+  const breakpoint = measured ? activeBreakpoint(canvas.breakpoints, containerWidth) : BASE_BREAKPOINT;
+  const authored = breakpointColumns(canvas, breakpoint);
+  const columns = measured ? liveColumns(canvas.grid, containerWidth, authored, scale) : authored;
+  const reflowed = columns < authored;
+  return { breakpoint, columns, reflowed, stacked: reflowed && containerWidth < STACK_BELOW_WIDTH };
+}
+
+export interface EffectiveLayout extends LayoutShape {
   // The grid footprint of every grid widget as drawn (the authored one when not reflowed).
   grid: Map<string, GridPlacement>;
 }
@@ -102,24 +145,22 @@ export interface EffectiveLayout {
 // effectiveLayout is what a renderer draws for a container width. A width of 0 or less means "not
 // measured yet" and draws the authored base layout. A breakpoint the author defined for this
 // width wins over the automatic reflow: it is drawn as authored while its cells fit, and is itself
-// poured into fewer columns only if even its own count does not fit. Relative widgets are not in
-// `grid`: they follow their host.
+// poured into fewer columns only if even its own count does not fit. A reflow in a container
+// narrower than STACK_BELOW_WIDTH is a single column. Relative widgets are not in `grid`: they
+// follow their host.
 export function effectiveLayout(
   def: DashboardDefinition,
   containerWidth: number,
   options: { scale?: number; limitsOf?: (w: WidgetInstance) => SpanLimits | undefined } = {},
 ): EffectiveLayout {
-  const scale = options.scale ?? 1;
-  const measured = containerWidth > 0;
-  const breakpoint = measured ? activeBreakpoint(def.canvas.breakpoints, containerWidth) : BASE_BREAKPOINT;
-  const authored = breakpointColumns(def.canvas, breakpoint);
-  const columns = measured ? liveColumns(def.canvas.grid, containerWidth, authored, scale) : authored;
+  const shape = layoutShape(def.canvas, containerWidth, options.scale ?? 1);
   const items: ReflowItem[] = [];
   for (const w of def.widgets) {
-    const p = resolvePlacement(w.layout, breakpoint);
+    const p = resolvePlacement(w.layout, shape.breakpoint);
     if (p.mode === 'grid') items.push({ id: w.id, placement: p, limits: options.limitsOf?.(w) });
   }
-  const reflowed = columns < authored;
-  const grid = reflowed ? reflowGrid(items, columns) : new Map(items.map((i) => [i.id, i.placement]));
-  return { breakpoint, columns, reflowed, grid };
+  const grid = shape.reflowed
+    ? reflowGrid(items, shape.columns, { stack: shape.stacked })
+    : new Map(items.map((i) => [i.id, i.placement]));
+  return { ...shape, grid };
 }

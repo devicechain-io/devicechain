@@ -371,9 +371,12 @@ export {
 // the base layout into fewer columns, and the layout a renderer draws for a width.
 export {
   effectiveLayout,
+  layoutShape,
   liveColumns,
   reflowGrid,
+  STACK_BELOW_WIDTH,
   type EffectiveLayout,
+  type LayoutShape,
   type ReflowItem,
 } from './reflow';
 export { LEGACY_REFERENCE_WIDTH } from './legacy-grid';

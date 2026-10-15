@@ -7,6 +7,7 @@
 
 import { DashboardHub, type DashboardDefinition } from '@devicechain/dashboards';
 import { act, cleanup, render } from '@testing-library/react';
+import { Profiler } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@devicechain/client', async (importOriginal) => {
@@ -87,5 +88,72 @@ describe('renderer reflow', () => {
     const c = await draw(390);
     const layer = (c.querySelector('[data-widget="badge"]') as HTMLElement).parentElement as HTMLElement;
     expect(`${layer.style.gridColumn} | ${layer.style.gridRow}`).toBe('1 / span 6 | 3 / span 2');
+  });
+});
+
+describe('renderer resize', () => {
+  // A ResizeObserver the test drives (jsdom has none). Only the board's own observer is fired:
+  // widgets inside it observe their own boxes.
+  const observers: { cb: () => void; els: Element[] }[] = [];
+  let disconnected = 0;
+  class FakeObserver {
+    private entry: { cb: () => void; els: Element[] };
+    constructor(cb: () => void) {
+      this.entry = { cb, els: [] };
+      observers.push(this.entry);
+    }
+    observe(el: Element) {
+      this.entry.els.push(el);
+    }
+    unobserve() {}
+    disconnect() {
+      if ((this.entry.els[0] as HTMLElement | undefined)?.dataset?.columns !== undefined) disconnected++;
+    }
+  }
+  const fire = () => {
+    for (const o of observers) if (o.els.some((el) => (el as HTMLElement).dataset.columns !== undefined)) o.cb();
+  };
+  let width = 960;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    observers.length = 0;
+    disconnected = 0;
+  });
+
+  it('redraws when a column comes or goes, not on every pixel, and disconnects on unmount', async () => {
+    vi.stubGlobal('ResizeObserver', FakeObserver);
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get: () => width });
+    width = 960;
+    let commits = 0;
+    const hub = new DashboardHub({ resolver });
+    const { container, unmount } = render(
+      <Profiler id="board" onRender={() => commits++}>
+        <DashboardRenderer definition={board} hub={hub} seedHistory={false} bindings={{}} />
+      </Profiler>,
+    );
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const settled = commits;
+    // 960 -> 800 px: still 12 columns (they need 760), only the cells shrink, which CSS follows.
+    for (const w of [950, 900, 850, 800, 761, 760]) {
+      width = w;
+      act(() => fire());
+    }
+    expect(commits, 'a resize inside one shape re-renders').toBe(settled);
+    // 759 px: 11 columns.
+    width = 759;
+    act(() => fire());
+    expect((container.querySelector('[data-columns]') as HTMLElement).dataset.columns).toBe('11');
+    expect(commits).toBeGreaterThan(settled);
+    // 390 px: the phone's single column.
+    width = 390;
+    act(() => fire());
+    expect(at(container, 'a')).toBe('1 / span 6 | 1 / span 2');
+    expect(at(container, 'b')).toBe('1 / span 6 | 3 / span 2');
+    unmount();
+    hub.disposeAll();
+    expect(disconnected).toBe(1);
   });
 });

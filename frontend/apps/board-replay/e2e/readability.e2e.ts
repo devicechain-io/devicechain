@@ -11,6 +11,7 @@
 // measured under test-results/readability/, as an ADVISORY artifact: nothing compares it with a
 // baseline and nothing fails on it. It is there for a reviewer to look at.
 
+import { STACK_BELOW_WIDTH } from '@devicechain/dashboards';
 import { expect, test, type Page } from '@playwright/test';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -40,15 +41,7 @@ const KNOWN_FAILURES: ReadonlySet<string> = new Set<string>([
   // board carries pathological DATA on purpose; a label that cannot wrap it is the widget's
   // defect, not the board's.
   'wl-stress|wl-stress-label|text-clipped|960',
-  // The same two defects at a phone width, where there are only six cells across, plus the two
-  // widgets whose CONTENT, not their span, needs more room than six cells give them.
-  // An alarm table cannot lay seven columns out in 390 px; it should collapse to fewer.
-  'bp-dashboard|w-alarms|text-clipped|390',
-  'wl-gallery|wl-alarm-table|text-clipped|390',
-  // The command button's reason line and its long command names are cut at 5 of 6 cells.
-  'wl-gallery|wl-command|text-clipped|390',
-  'wl-gallery|wl-command|text-overflow|390',
-  // The stress board's unbreakable word, as at 960.
+  // The stress board's unbreakable word again on a phone: deliberate data, as at 960.
   'wl-stress|wl-stress-label|text-clipped|390',
 ]);
 
@@ -90,6 +83,20 @@ async function measure(page: Page, board: string, width: number, theme: string) 
     return Math.max(0, ...[...document.querySelectorAll('[data-widget]')].map((el) => el.getBoundingClientRect().right - edge));
   });
   expect(stickout, `${board} at ${width} px: a widget runs past the board's right edge`).toBeLessThanOrEqual(1);
+  // A phone reads one widget per row: every grid widget starts at the board's left edge (and
+  // none overlaps, which measureReadability checks), so no two share a row. A relative widget
+  // (data-host) sits where its host puts it and is not part of the column.
+  if (width < STACK_BELOW_WIDTH) {
+    const besideAnother = await page.evaluate(() => {
+      const grid = document.querySelector('[data-grid]');
+      if (!grid) return [];
+      const edge = grid.getBoundingClientRect().left;
+      return [...document.querySelectorAll('[data-widget]:not([data-host])')]
+        .filter((el) => Math.abs(el.getBoundingClientRect().left - edge) > 1)
+        .map((el) => el.getAttribute('data-widget'));
+    });
+    expect(besideAnother, `${board} at ${width} px: widgets not in a single column`).toEqual([]);
+  }
   expect(result.widgets.length, `${board}: every widget in the definition is on the page`).toBe(Number(state.gateWidgets));
 
   await page.screenshot({

@@ -8,7 +8,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_GRID } from './grid';
-import { effectiveLayout, liveColumns, reflowGrid, type ReflowItem } from './reflow';
+import { effectiveLayout, layoutShape, liveColumns, reflowGrid, STACK_BELOW_WIDTH, type ReflowItem } from './reflow';
 import type { DashboardDefinition, GridPlacement } from './types';
 
 const at = (col: number, row: number, cols: number, rows: number): GridPlacement => ({ mode: 'grid', col, row, cols, rows });
@@ -112,6 +112,44 @@ describe('reflowGrid', () => {
   });
 });
 
+describe('reflowGrid on a phone (stack)', () => {
+  it('gives every widget its own row at the full width, in reading order, heights kept', () => {
+    const out = reflowGrid(
+      [
+        item('b', at(3, 0, 3, 2)),
+        item('a', at(0, 0, 3, 2)),
+        item('c', at(0, 2, 12, 4)),
+        item('d', at(0, 6, 2, 1)),
+      ],
+      6,
+      { stack: true },
+    );
+    expect(Object.fromEntries(out)).toEqual({
+      a: at(0, 0, 6, 2),
+      b: at(0, 2, 6, 2),
+      c: at(0, 4, 6, 4),
+      d: at(0, 8, 6, 1),
+    });
+  });
+
+  it('stops at a maxSpan narrower than the grid, and still takes the row alone', () => {
+    const out = reflowGrid(
+      [item('tile', at(0, 0, 2, 2), { maxSpan: { cols: 3, rows: 2 } }), item('next', at(2, 0, 2, 2))],
+      6,
+      { stack: true },
+    );
+    expect(out.get('tile')).toEqual(at(0, 0, 3, 2));
+    expect(out.get('next')).toEqual(at(0, 2, 6, 2));
+  });
+
+  it('clamps rows into the limits as the side-by-side pour does', () => {
+    const out = reflowGrid([item('x', at(0, 0, 4, 9), { minSpan: { cols: 1, rows: 2 }, maxSpan: { cols: 12, rows: 5 } })], 6, {
+      stack: true,
+    });
+    expect(out.get('x')).toEqual(at(0, 0, 6, 5));
+  });
+});
+
 function board(tablet = true): DashboardDefinition {
   const w = (id: string, layout: Record<string, GridPlacement>) =>
     ({ id, type: 'label', layout, options: {} }) as unknown as DashboardDefinition['widgets'][number];
@@ -143,10 +181,36 @@ describe('effectiveLayout', () => {
     }
   });
 
+  it('is a single column below 600 px and pairs narrow widgets above it', () => {
+    const narrow = {
+      ...board(false),
+      widgets: board(false).widgets.map((w, i) => ({ ...w, layout: { base: at((i % 2) * 3, Math.floor(i / 2) * 2, 3, 2) } })),
+    } as DashboardDefinition;
+    expect(STACK_BELOW_WIDTH).toBe(600);
+    // 599 px: floor(607/64) = 9 columns, under the stacking width.
+    const phone = effectiveLayout(narrow, 599);
+    expect(phone).toMatchObject({ columns: 9, reflowed: true, stacked: true });
+    expect([...phone.grid.values()]).toEqual([at(0, 0, 9, 2), at(0, 2, 9, 2), at(0, 4, 9, 2)]);
+    // 600 px: the same 9 columns, now side by side.
+    const tablet = effectiveLayout(narrow, 600);
+    expect(tablet).toMatchObject({ columns: 9, reflowed: true, stacked: false });
+    expect([...tablet.grid.values()]).toEqual([at(0, 0, 3, 2), at(3, 0, 3, 2), at(6, 0, 3, 2)]);
+  });
+
+  it('never stacks a board that is drawn as authored, however narrow', () => {
+    // Four authored columns fit a 390 px phone (cells of 91.5 px): the author's own layout.
+    const four = { ...board(false), canvas: { ...board(false).canvas, grid: { ...grid, columns: 4 } } } as DashboardDefinition;
+    expect(layoutShape(four.canvas, 390)).toEqual({ breakpoint: 'base', columns: 4, reflowed: false, stacked: false });
+  });
+
+  it('shapes an unmeasured width as the authored base layout', () => {
+    expect(layoutShape(board().canvas, 0)).toEqual({ breakpoint: 'base', columns: 12, reflowed: false, stacked: false });
+  });
+
   it('pours the base layout into 6 columns at 390 px, in reading order', () => {
     // 390 selects the base breakpoint (tablet starts at 500).
     const l = effectiveLayout(board(), 390);
-    expect(l).toMatchObject({ breakpoint: 'base', columns: 6, reflowed: true });
+    expect(l).toMatchObject({ breakpoint: 'base', columns: 6, reflowed: true, stacked: true });
     expect(Object.fromEntries(l.grid)).toEqual({
       a: at(0, 0, 6, 2),
       b: at(0, 2, 6, 2),

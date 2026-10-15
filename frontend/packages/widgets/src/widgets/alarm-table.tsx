@@ -51,8 +51,14 @@ const headCell: CSSProperties = {
 // acknowledged flag; an active alarm is "Acknowledged" once owned, else "Active".
 // Below this measured width the table drops its lowest-value columns (Status, Raised) rather
 // than clipping or scrolling sideways: severity, originator, alarm and value are what an
-// operator reads at a glance. Unmeasured (first frame, jsdom) keeps every column.
+// operator reads at a glance, and the text columns wrap instead of pushing the value off the
+// right edge (a phone's single column is ~390 px). Unmeasured (first frame, jsdom) keeps every
+// column on one line.
 export const ALARM_TABLE_NARROW_PX = 480;
+
+// A narrow table's text cells: tighter padding, and a long originator or alarm key breaks
+// across lines rather than widening the table past its box.
+const narrowCell: CSSProperties = { ...cell, padding: '6px 6px', whiteSpace: 'normal', overflowWrap: 'anywhere' };
 
 function statusLabel(alarm: AlarmRow): string {
   if (alarm.state === 'CLEARED') return 'Cleared';
@@ -67,6 +73,7 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   const severity = useSeverityColors();
   const narrow = size.width > 0 && size.width < ALARM_TABLE_NARROW_PX;
   const columns = 5 + (narrow ? 0 : 2) + (canAct ? 1 : 0);
+  const text = narrow ? narrowCell : cell;
   // Round the triggering value to a fixed precision when configured; unset keeps the raw
   // value (formatValue's default), matching the table widget. An alarm's raw lastValue is
   // otherwise a full-width float (e.g. 31.19073834583732).
@@ -150,10 +157,10 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                         </span>
                       </td>
                       {narrow ? null : <td style={{ ...cell, color: css('muted-foreground') }}>{statusLabel(alarm)}</td>}
-                      <td style={cell}>
+                      <td style={text}>
                         <OriginatorCell alarm={alarm} drillTo={drillTo} />
                       </td>
-                      <td style={cell}>
+                      <td style={text}>
                         {alarm.alarmKey}
                       </td>
                       <td style={{ ...cell, textAlign: 'right' }}>
