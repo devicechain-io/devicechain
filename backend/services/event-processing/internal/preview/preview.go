@@ -187,6 +187,12 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		if derr != nil {
 			continue // a corrupt payload is skipped, never fails the whole preview
 		}
+		// A disabled device's presence transition feeds detection nothing, not even the
+		// watermark, exactly as the live loop skips it (applyResolved) — so it is not counted
+		// as scanned either.
+		if event.SourceDeviceDisabled {
+			continue
+		}
 		// Only events resolved against the previewed profile version feed the draft rule (the same
 		// scope key the live fan-out uses).
 		if event.ProfileVersionToken != profileVersion {

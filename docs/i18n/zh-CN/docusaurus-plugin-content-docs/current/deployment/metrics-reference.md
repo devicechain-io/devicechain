@@ -144,7 +144,7 @@ title: 指标参考
 | `presence_events_refused_total` | 被接入准入门拒绝的在线状态转换（已删除租户或租户上限）。 |
 | `presence_reconcile_regressed_sessions` | 截至最近一次协调轮次，发现处于 LIVE 状态、但会话 ID 低于投影所持有会话 ID 的设备。持续的非零值表示修复没有收敛。 |
 | `presence_reconcile_repaired_total{direction}` | 因错过通告而由协调发出、且随后已在设备状态中生效的在线状态修复，按方向区分。修复在发出后的下一轮才被计数。 |
-| `presence_reconcile_unapplied_total{direction}` | 到下一轮协调时仍未在设备状态中生效的在线状态修复，按方向区分。它们被拒绝或丢失，并会再次发出。持续的速率表示修复没有生效。 |
+| `presence_reconcile_unapplied_total{direction}` | 到下一轮协调时仍未在设备状态中生效的在线状态修复，按方向区分。它们被拒绝或丢失，并会再次发出。持续的速率表示修复没有生效；原因之一是设备在仍显示为已连接时被删除，其修复在每一轮都会被拒绝。 |
 | `presence_reconcile_runs_total{outcome}` | 在线状态协调轮次，按结果区分。 |
 | `presence_reconcile_withheld_disconnects_total` | 若代理清单可证明完整，本应被标记为离线的设备。 |
 | `presence_released_total` | 因此来源停止读取代理，而从断言在线状态交还为推断在线状态的设备。 |

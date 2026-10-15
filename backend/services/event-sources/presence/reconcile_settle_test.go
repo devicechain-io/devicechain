@@ -4,6 +4,7 @@
 package presence
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -118,4 +119,47 @@ func TestAConnectRepairIsSettledByTheNextRead(t *testing.T) {
 func liveConn(t *testing.T, d LiveDevice) connzConn {
 	t.Helper()
 	return connzConn{MQTTClient: testInstance + ":" + d.Tenant + ":" + d.DeviceToken, Type: "mqtt", Start: startAt(int64(d.SessionId))}
+}
+
+// A repair the projection has since moved PAST — the device reconnected on a newer session
+// before the next read — is neither applied nor unapplied: something newer decided the row,
+// and whether the repair landed first cannot be told. Counting it either way would be a guess.
+func TestARepairOvertakenByANewerSessionIsNeither(t *testing.T) {
+	gone := StoredDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575, Active: true}
+	rig := newSettleRig(t, nil, gone)
+
+	rig.pass(t)
+	newer := gone
+	newer.SessionId++
+	rig.reads.states["acme"][DeviceKey("acme", "sensor-001")] = newer
+	rig.pass(t)
+
+	repaired, unapplied := rig.counts("disconnect")
+	require.Equal(t, 0.0, repaired, "a repair overtaken by a newer session was counted as applied")
+	require.Equal(t, 0.0, unapplied, "a repair overtaken by a newer session was counted as unapplied")
+}
+
+// switchableTenants is a tenant list a test can change between passes.
+type switchableTenants struct{ tokens *[]string }
+
+func (s switchableTenants) TenantTokens(context.Context) ([]string, error) { return *s.tokens, nil }
+
+// A tenant gone from the list forgets its pending repairs on the next complete pass. Kept,
+// they would be judged against the tenant's rows whenever it reappeared — after any number of
+// passes, as if the repair had just been emitted — and would leak for every tenant removed.
+func TestARemovedTenantsPendingRepairsAreForgotten(t *testing.T) {
+	gone := StoredDevice{Tenant: "acme", DeviceToken: "sensor-001", SessionId: 1786552664076882575, Active: true}
+	rig := newSettleRig(t, nil, gone)
+	tenants := []string{"acme"}
+	rig.r.tenants = switchableTenants{&tenants}
+
+	rig.pass(t) // emits the DISCONNECTED for acme
+	tenants = nil
+	rig.pass(t) // acme is gone: its pending repair must be dropped
+	require.Empty(t, rig.r.sent, "a removed tenant's pending repairs were kept")
+	tenants = []string{"acme"}
+	rig.pass(t)
+
+	_, unapplied := rig.counts("disconnect")
+	require.Equal(t, 0.0, unapplied, "a repair from before the tenant was removed was settled when it came back")
 }

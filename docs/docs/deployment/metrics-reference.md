@@ -181,7 +181,7 @@ tells you whether presence is being read at all: `presence_canary_missed_total` 
 | `presence_events_refused_total` | Presence transitions refused by the ingest admission gate (deleted tenant or tenant ceiling). |
 | `presence_reconcile_regressed_sessions` | Devices found LIVE on a session id lower than the one the projection holds, as of the last reconciliation pass. A standing non-zero value means the repairs are not converging. |
 | `presence_reconcile_repaired_total{direction}` | Presence repairs that reconciliation emitted because an advisory was missed, and that the device's status was then seen to take, by direction. A repair is counted on the pass after it is emitted. |
-| `presence_reconcile_unapplied_total{direction}` | Presence repairs that the device's status had not taken by the next reconciliation pass, by direction. They were refused or lost, and are emitted again. A standing rate means repairs are not landing. |
+| `presence_reconcile_unapplied_total{direction}` | Presence repairs that the device's status had not taken by the next reconciliation pass, by direction. They were refused or lost, and are emitted again. A standing rate means repairs are not landing; a device deleted while it still showed as connected is one cause, since its repair is refused on every pass. |
 | `presence_reconcile_runs_total{outcome}` | Presence reconciliation passes, by outcome. |
 | `presence_reconcile_withheld_disconnects_total` | Devices that would have been marked offline had the broker inventory been provably complete. |
 | `presence_released_total` | Devices handed back from asserted to inferred presence because this source stopped reading the broker. |

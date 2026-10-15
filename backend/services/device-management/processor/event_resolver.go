@@ -1054,8 +1054,17 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// device's status true. Disabling a device does not close a connection it already has:
 	// that connection stays open until it ends. A StateChange is the platform's own report
 	// of that connection — the broker, the LwM2M server and the Sparkplug host make it, and
-	// a device cannot (the device-facing decoder rejects one) — so refusing it refused the
-	// platform's account of its own connection, not the device's data. Refused, the
+	// so does an operator's demotion (device-state's demoteAssertedPresence); the device-
+	// facing JSON decoder rejects one — so refusing it refused the platform's account of its
+	// own connection, not the device's data.
+	//
+	// 🔴 SPARKPLUG IS THE ONE PRODUCER A DEVICE DRIVES. The host turns an edge node's
+	// BIRTH/DEATH into CONNECTED/DISCONNECTED, and its children are identified by topic with
+	// broker-level auth only, so an edge node can announce a disabled child and the child
+	// reads CONNECTED. That moves the projection and the history and nothing else — no data
+	// is resolved, the mark keeps it out of detection, and commands to a disabled device are
+	// refused at the claim — and it is no more than the same node can already claim for any
+	// enabled device of its tenant. Refused, the
 	// DISCONNECTED that ends the connection never reached the projection, an asserted row
 	// takes Active only from a StateChange, and the device read CONNECTED for as long as it
 	// stayed disabled; the presence reconciler's repair was refused the same way, every pass.
