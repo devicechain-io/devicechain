@@ -712,3 +712,66 @@ func TestSparkplugKeepsOneNodesStreamOrder(t *testing.T) {
 	}
 	assert.Equal(t, want, got, "the stream holds the node's readings in a different order than it sent them")
 }
+
+// serialProbe wraps the real ingest pipeline and records whether two messages were ever being
+// prepared at once, and the order their values arrived in. Preparing is the receive goroutine's
+// work, done right after Observe, so overlap means messages were handled concurrently and
+// Observe is no longer a serial check.
+type serialProbe struct {
+	inner    SampleIngester
+	inFlight atomic.Int32
+	overlap  atomic.Bool
+	mu       sync.Mutex
+	values   []float64
+}
+
+func (p *serialProbe) PrepareIngest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) (*Publication, error) {
+	if p.inFlight.Add(1) > 1 {
+		p.overlap.Store(true)
+	}
+	defer p.inFlight.Add(-1)
+	p.mu.Lock()
+	for _, s := range samples {
+		p.values = append(p.values, s.Value)
+	}
+	p.mu.Unlock()
+	time.Sleep(3 * time.Millisecond) // wide enough that a concurrent handler overlaps
+	return p.inner.PrepareIngest(ctx, tenant, policy, externalId, samples)
+}
+
+func (p *serialProbe) PreparePresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) (*Publication, error) {
+	return p.inner.PreparePresence(ctx, tenant, policy, events)
+}
+
+// 🔴 OBSERVE IS SERIAL, shown directly and not through its side effect: the messages are handled
+// one at a time, in the order the broker delivered them, with the stream answering as fast as it
+// can. (A rebirth request is the side effect of a seq gap, which a concurrent run only
+// SOMETIMES produces; overlap and order are what it always breaks.)
+func TestSparkplugHandlesOneConnectionsMessagesOneAtATimeInOrder(t *testing.T) {
+	const data = 60
+	rig := newSpRig(t, spWindow, 0)
+	m := newSpMetrics()
+	ing := NewIngester(NewRegistrar(fakeCreateGQL{}, "url", nil), NewEmitter(failingWriter{}, time.Now),
+		IngestMetrics{MeasurementsEmitted: m.emitted, PresenceEmitted: m.presence})
+	probe := &serialProbe{inner: ing}
+	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", Groups: []string{"plant-a"}, AutoRegister: true, DeviceTypeToken: "sp-node"}
+	c := NewClient(src, Broker{URL: rig.mqttURL, ClientID: "sp-async-host"}, probe, admitAllSamples{}, time.Now, m.host())
+	c.SetPublisher(rig.writer)
+	rig.online(c)
+	t.Cleanup(func() { stopWithin(t, c, 30*time.Second) })
+
+	feed := rig.feeder()
+	feed.publish(spBirthTopic, nodeBirth(t))
+	for i := 1; i <= data; i++ {
+		feed.publish(spDataTopic, uniqueData(t, uint64(i), float64(1000+i)))
+	}
+	require.Eventually(t, func() bool { return m.received("NDATA") == data }, 30*time.Second, 5*time.Millisecond)
+	assert.False(t, probe.overlap.Load(), "two messages were being handled at once: Observe is no longer a serial check")
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	want := []float64{1}
+	for i := 1; i <= data; i++ {
+		want = append(want, float64(1000+i))
+	}
+	assert.Equal(t, want, probe.values, "messages were handled in a different order than the broker delivered them")
+}

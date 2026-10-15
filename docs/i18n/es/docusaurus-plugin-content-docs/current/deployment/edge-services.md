@@ -556,6 +556,21 @@ techo nunca descarta: una métrica que cambia poco y se pierde así falta hasta 
 el nodo renace. Las transiciones de conexión y desconexión que afirman nacimientos y muertes se
 siguen aceptando.
 
+**La publicación es por ventana, y la ventana también es un límite de pérdida.** Cada conexión lee
+sus mensajes de uno en uno, en orden, porque el Host debe ver cada mensaje para mantener correctas
+sus sesiones. No espera a que la plataforma almacene un mensaje antes de leer el siguiente: mantiene
+una ventana de mensajes esperando la confirmación del broker de la plataforma. Antes esperaba por
+cada uno, así que una conexión no podía superar un mensaje por confirmación, unos 88 por segundo en
+un broker replicado, donde una confirmación tarda unos 11 ms, y todas las fuentes de Sparkplug se
+ejecutan en el único pod líder. Una publicación que falla se intenta de nuevo, hasta tres intentos
+en total, con medio segundo entre ellos; después el mensaje se descarta y se cuenta en
+`ingest_failures_total`, como siempre. Una parada, o el traspaso a otro líder, espera (hasta 10
+segundos) a que se almacene lo que está en vuelo antes de liberar el arrendamiento.
+
+| Ajuste | Valor por defecto | Qué hace |
+|---|---|---|
+| `ingest.publishWindow` | `32` | Cuántos mensajes mantiene una conexión de Sparkplug esperando a la vez la confirmación del broker de la plataforma, de 1 a 1024. Un valor fuera de ese rango, o un 0 explícito, detiene el servicio al arrancar; nunca se ajusta. La publicación no puede ir más rápido que este número dividido por lo que tarda una confirmación (unos 2.800 mensajes por segundo por conexión con 32). Es un ajuste fijo, leído al arrancar, igual para todas las fuentes. **También es cuánto más puede perder un pod.** El Host es un cliente de sesión limpia que confirma cada mensaje a tu broker en cuanto lo ha tomado, y un broker no reentrega a un host que se reinició, así que un pod que se detiene de golpe pierde lo que había tomado y aún no almacenó: hasta este número de mensajes por conexión, donde antes era uno. El almacenamiento y reenvío del nodo de borde cubre el tiempo en que el Host está desconectado, no los mensajes ya entregados a un Host que luego murió. Vigila `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events"}`: una tasa cercana a 1 significa que la ventana es lo que limita la publicación. |
+
 **El límite de lecturas se aplica dividiendo.** El
 [límite de lecturas por evento](../guides/connecting-a-device.md#how-much-one-message-may-carry) se
 aplica en esta vía dividiendo el mensaje, no rechazándolo. Un DDATA que lleve miles de métricas se
@@ -721,7 +736,7 @@ Prefijo: `devicechain_sparkplugingest_`.
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths que pidió la máquina de sesión, y los que su cola de publicación estaba demasiado llena para aceptar. Un descarte es una señal de latencia más que un fallo (la petición se vuelve a hacer en la siguiente ventana del nodo), pero una tasa de descarte sostenida significa que los rebirths salen más despacio de lo que se piden. Léelo junto a `rebirth_requests_total`, que solo cuenta lo que llegó al cable y por tanto está limitado por el publicador y no por la demanda: **descartes mientras `rebirth_requests_total` sube hasta un techo estable** es un fan-out que supera a un publicador por lo demás sano; **descartes mientras está plano** son las propias publicaciones atascándose, lo que apunta a la conexión con el broker. |
 | `unknown_device_dropped_total` | Tráfico de identidades sin dispositivo, con el registro automático desactivado. |
 | `decode_errors_total` | Payloads malformados. |
-| `ingest_failures_total` | Mensajes aceptados cuyas lecturas, o las transiciones de conexión y desconexión que afirman sus nacimientos y muertes, se descartaron, más los lotes de desconexiones que la reconciliación de presencia declaró y no pudo almacenar: las lecturas en el acto mientras la plataforma aplica contrapresión, y unas u otras cuando se agotó el reintento dentro del manejador (device-management o el broker no respondían) o mientras la conexión se cerraba. Un mensaje dividido en varios eventos puede haber almacenado sus primeros eventos. Un Host de sesión limpia no recibe reentregas, así que cada uno se pierde. Alimenta `SparkplugIngestDroppingData`. |
+| `ingest_failures_total` | Mensajes aceptados cuyas lecturas, o las transiciones de conexión y desconexión que afirman sus nacimientos y muertes, se descartaron, más los lotes de desconexiones que la reconciliación de presencia declaró y no pudo almacenar: las lecturas en el acto mientras la plataforma aplica contrapresión, y unas u otras cuando se agotó el reintento (device-management o el broker no respondían, o el broker de la plataforma no confirmó la publicación) o mientras la conexión se cerraba. Un mensaje dividido en varios eventos puede haber almacenado algunos de sus eventos. Un Host de sesión limpia no recibe reentregas, así que cada uno se pierde. Alimenta `SparkplugIngestDroppingData`. |
 | `ingest_samples_shed_total` | Lecturas DATA descartadas porque un inquilino supera su techo de ingesta. Un inquilino que descarta aquí envía más lecturas de las que permite su nivel. |
 | `tenant_deleted_dropped_total` | Tráfico rechazado porque su inquilino está siendo eliminado. |
 | `samples_too_old_dropped_total` | Lecturas descartadas porque su marca de tiempo es anterior en más de 366 días al momento en que el host las recibió; el resto de su mensaje se almacena. Una métrica cuyo valor no ha cambiado en ese tiempo se descarta de cada nacimiento, y un nodo sin reloj configurado (horas cercanas a 1970) ve descartadas todas sus lecturas. El servicio registra un aviso que nombra el dispositivo. |

@@ -12,12 +12,11 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/messaging"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -82,31 +81,10 @@ func (p *scriptedPublisher) settles() int {
 	return p.settled
 }
 
-// capturedLog routes the global logger into a buffer for the duration of a test.
-type capturedLog struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (c *capturedLog) Write(p []byte) (int, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.Write(p)
-}
-
-func (c *capturedLog) String() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.buf.String()
-}
-
-func captureLog(t *testing.T) *capturedLog {
+// captureLog collects what is logged for the remainder of t.
+func captureLog(t *testing.T) *dctest.LogSink {
 	t.Helper()
-	c := &capturedLog{}
-	prev := log.Logger
-	log.Logger = zerolog.New(c)
-	t.Cleanup(func() { log.Logger = prev })
-	return c
+	return logSink.Capture(t)
 }
 
 // quietClient is a Client over the fake ingester whose connection is a fake that never
@@ -249,12 +227,23 @@ func TestAHandlerAfterStopPublishesNothing(t *testing.T) {
 // answers must not hold the lease for ever. It gives up at its bound and says so.
 func TestStopIsBoundedWhenThePublisherNeverSettles(t *testing.T) {
 	logs := captureLog(t)
-	pub := &scriptedPublisher{settle: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
+	// The test's own release, so a Settle that ignores its bound is failed by the assertion
+	// below instead of hanging the cleanup's Stop as well.
+	release := make(chan struct{})
+	pub := &scriptedPublisher{settle: func(ctx context.Context) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
+	}}
 	c := quietClient(t, &fakeIngester{}, pub, newFailures())
+	t.Cleanup(func() { close(release) }) // runs before quietClient's Stop
 	c.settleTimeout = 300 * time.Millisecond
 
 	begun := time.Now()
-	stopWithin(t, c, 10*time.Second)
+	stopWithin(t, c, 5*time.Second)
 	assert.GreaterOrEqual(t, time.Since(begun), 250*time.Millisecond, "it gave up before its bound")
 	assert.Contains(t, logs.String(), "could not confirm that everything it published is stored")
 }
@@ -278,4 +267,53 @@ func TestADecodeOnlyClientNeedsNoPublisher(t *testing.T) {
 	c.newClient = func(*mqtt.ClientOptions) mqtt.Client { return newFakeClient() }
 	c.Connect()
 	stopWithin(t, c, 10*time.Second)
+}
+
+// 🔴 A PUBLISH THAT FAILS WHILE STOP IS SETTLING IS COUNTED, NOT RESUBMITTED. The term is
+// ending: a retry queued now would never be resubmitted (its goroutine is gone) and, unless the
+// queue was closed first, would vanish uncounted. Stop is held in its Settle, the publish then
+// fails, and the loss must show on the counter with nothing submitted again.
+func TestAPublishThatFailsWhileStopIsSettlingIsCounted(t *testing.T) {
+	settling, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	pub := &scriptedPublisher{hold: true, settle: func(ctx context.Context) error {
+		once.Do(func() { close(settling) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return nil
+	}}
+	failures := newFailures()
+	c := quietClient(t, &fakeIngester{}, pub, failures)
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+
+	c.ingestSamples("g/n", oneSample())
+	require.Equal(t, 1, pub.submitted())
+	stopped := make(chan struct{})
+	go func() { c.Stop(); close(stopped) }()
+	select {
+	case <-settling:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop never began settling")
+	}
+
+	pub.mu.Lock()
+	done := pub.pending[0]
+	pub.mu.Unlock()
+	done(errors.New("no PubAck"))
+	assert.Equal(t, 1.0, testutil.ToFloat64(failures), "a publish that failed during Stop's settle was lost uncounted")
+	close(release)
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Stop did not return")
+	}
+	assert.Equal(t, 1, pub.submitted(), "a failed publish was resubmitted after the term ended")
 }
