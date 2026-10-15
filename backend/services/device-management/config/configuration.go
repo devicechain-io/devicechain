@@ -91,6 +91,18 @@ const DefaultResolutionWorkers = 10
 // The cost of a deeper window is bounded and small: more sources held unacked in the pod
 // (a crash redelivers them at AckWait, and the dedup id absorbs the republish), and more
 // publishes failed together by a reconnect, which pays one backoff for the whole window.
+//
+// Memory: each publish in the window holds its encoded event and its unacked source until
+// the PubAck, so a writer holds at most window x (event + source). At the few hundred bytes
+// of a typical event that is well under a megabyte at 512, and two writers are built (the
+// failed one is idle in steady state). The ceiling is window x the stream's maximum message
+// size (1 MiB unless raised) twice over: about 1 GiB at 512 if every event were that large,
+// a pathological case the fetch batch and the 100-slot backlogs ahead of the writer
+// already multiply the same way.
+//
+// A wider window is filled only as far as the inbound reader supplies it: in flight is the
+// rate times the PubAck time, about 130 at 11,400 events a second. So on its own a window
+// of 512 lifts this ceiling and leaves the next one, the inbound pull, to bind.
 const DefaultPublishWindow = 512
 
 // DefaultPerDeviceCacheEntries and DefaultPerDeviceCacheMiB bound what one replica keeps

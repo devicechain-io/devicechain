@@ -90,8 +90,8 @@ fires" is far more often this than a rule bug.
 
 Publication is 1→N with a coordinated ack (`backend/services/device-management/processor/inbound.go`).
 `ProcessResolvedEvent` hands each resolved event to a `messaging.OrderedWriter`
-(`backend/core/messaging/ordered.go`), which keeps up to `PUBLISH_WINDOW` publishes awaiting
-their PubAck and reports every outcome in submission order on one settle goroutine.
+(`backend/core/messaging/ordered.go`), which keeps up to `resolution.publishWindow` (default 512)
+publishes awaiting their PubAck and reports every outcome in submission order on one settle goroutine.
 `settleResolved` runs there and acks the source only after the last event it produced has its
 PubAck. A publish failure latches instead, so the source is never acked and the whole message
 redelivers. The failed-events loop uses the same writer and acks its source only once the

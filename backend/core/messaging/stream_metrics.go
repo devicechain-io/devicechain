@@ -222,6 +222,12 @@ type streamMetrics struct {
 	// the window is the limit on publishing (raise it); near 0, it is not. It counts only
 	// time actually spent waiting.
 	publishWindowFull *prometheus.CounterVec
+	// publishWindowFullWaits counts the submissions that found the window full and waited,
+	// by stream suffix: the same events publishWindowFull charges the time of. Seconds over
+	// waits is the mean wait. It is the count that makes the instrument checkable at all:
+	// a wait shorter than the clock's resolution charges zero seconds, and so does time
+	// charged by mistake to a submission that never waited.
+	publishWindowFullWaits *prometheus.CounterVec
 	// publishDuplicates counts PubAcks the broker marked Duplicate: a publish it had already
 	// stored under the same Nats-Msg-Id, so the republish of a redelivered source was
 	// absorbed instead of stored twice. Nonzero after a restart or a lost acknowledgement is
@@ -388,6 +394,11 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 		publishWindowFull: ms.NewCounterVec("jetstream_publish_window_full_seconds_total",
 			"Seconds a pipelined JetStream writer spent unable to send because its whole window was "+
 				"awaiting acknowledgements, by stream suffix. Time spent with room in the window is not counted.",
+			[]string{"suffix"}),
+		publishWindowFullWaits: ms.NewCounterVec("jetstream_publish_window_full_total",
+			"Submissions a pipelined JetStream writer made that found its whole window awaiting "+
+				"acknowledgements and had to wait, by stream suffix. jetstream_publish_window_full_seconds_total "+
+				"is the time they waited.",
 			[]string{"suffix"}),
 		publishDuplicates: ms.NewCounterVec("jetstream_publish_duplicates_total",
 			"Publishes the broker acknowledged as duplicates of a message it already held under the same "+
@@ -683,15 +694,19 @@ func (m *streamMetrics) initPublish(suffix, mode string) {
 	m.publishLatency.WithLabelValues(suffix, mode)
 	if mode == publishModePipelined {
 		m.publishWindowFull.WithLabelValues(suffix)
+		m.publishWindowFullWaits.WithLabelValues(suffix)
 		m.publishDuplicates.WithLabelValues(suffix)
 	}
 }
 
-// addWindowFull charges d of blocked time to suffix's window-full counter.
+// addWindowFull records one submission that waited d for room in suffix's window: one
+// wait, and d seconds. The two are recorded together so neither can be charged without the
+// other.
 func (m *streamMetrics) addWindowFull(suffix string, d time.Duration) {
 	if m == nil || m.publishWindowFull == nil {
 		return
 	}
+	m.publishWindowFullWaits.WithLabelValues(suffix).Inc()
 	m.publishWindowFull.WithLabelValues(suffix).Add(d.Seconds())
 }
 

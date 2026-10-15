@@ -57,25 +57,46 @@ func handWrittenWriter(window int, js nats.JetStreamContext) *orderedWriter {
 	}
 }
 
+// publishAllWithin bounds a run that a broken writer can stop dead: a slot that is never
+// freed parks the submitter (or Close) for good, and a hang is not a failure.
+const publishAllWithin = 30 * time.Second
+
 // publishAll submits n messages, closes the writer, and returns the order the outcomes came
-// back in and how long the whole run took.
+// back in and how long the whole run took. A run that does not finish within
+// publishAllWithin fails the test instead of hanging it (the stuck goroutine is abandoned).
 func publishAll(t *testing.T, w *orderedWriter, n int) ([]int, time.Duration) {
 	t.Helper()
 	var mu sync.Mutex
 	var order []int
+	var submitted atomic.Int64
 	start := time.Now()
-	for i := 0; i < n; i++ {
-		i := i
-		w.Publish(orderedCtx(), Message{Value: []byte(strconv.Itoa(i))}, func(err error) {
-			if err != nil {
-				t.Errorf("publish %d failed: %v", i, err)
-			}
-			mu.Lock()
-			order = append(order, i)
-			mu.Unlock()
-		})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		for i := 0; i < n; i++ {
+			i := i
+			w.Publish(orderedCtx(), Message{Value: []byte(strconv.Itoa(i))}, func(err error) {
+				if err != nil {
+					t.Errorf("publish %d failed: %v", i, err)
+				}
+				mu.Lock()
+				order = append(order, i)
+				mu.Unlock()
+			})
+			submitted.Add(1)
+		}
+		w.Close()
+	}()
+	select {
+	case <-finished:
+	case <-time.After(publishAllWithin):
+		mu.Lock()
+		settled := len(order)
+		mu.Unlock()
+		t.Fatalf("the writer stopped: %d of %d publishes submitted and %d settled after %s, "+
+			"so a window slot was never freed (or never taken back) and the submitter or Close is parked",
+			submitted.Load(), n, settled, publishAllWithin)
 	}
-	w.Close()
 	return order, time.Since(start)
 }
 
@@ -119,18 +140,25 @@ func TestOrderedWriterThroughputIsWindowOverLatency(t *testing.T) {
 	}
 }
 
-// The window the writer was built with is the one it reports.
+// The window the writer was built with is the one it reports. Two sizes, so an answer fixed
+// at one of them cannot pass.
 func TestOrderedWriterReportsItsWindow(t *testing.T) {
 	_, nmgr := orderedManager(t)
-	w := newOrdered(t, nmgr, 300)
-	defer w.Close()
-	if got := w.(interface{ Window() int }).Window(); got != 300 {
-		t.Fatalf("Window() = %d, want 300", got)
+	for _, want := range []int{300, MaxOrderedWindow} {
+		w := newOrdered(t, nmgr, want)
+		if got := w.(interface{ Window() int }).Window(); got != want {
+			t.Errorf("Window() = %d, want %d", got, want)
+		}
+		w.Close()
 	}
 }
 
 func windowFullSeconds(nmgr *NatsManager) float64 {
 	return testutil.ToFloat64(nmgr.metrics.publishWindowFull.WithLabelValues(streams.ResolvedEvents))
+}
+
+func windowFullWaits(nmgr *NatsManager) float64 {
+	return testutil.ToFloat64(nmgr.metrics.publishWindowFullWaits.WithLabelValues(streams.ResolvedEvents))
 }
 
 func duplicateCount(nmgr *NatsManager) float64 {
@@ -139,8 +167,13 @@ func duplicateCount(nmgr *NatsManager) float64 {
 
 // Time blocked on a full window is counted, and time with room in it is not.
 //
-// GUARD: kills "never counted" (the blocked case reads 0) and "counted on every publish"
-// (the roomy case reads above 0).
+// The waits are asserted as a COUNT as well as in seconds. A free slot is taken in well
+// under a microsecond, which a coarse clock (Windows) reads as zero, so a writer that
+// charged every submission would still read 0 seconds in the roomy case; it cannot read 0
+// waits.
+//
+// GUARD: kills "never counted" (the blocked case reads 0), "counted on every publish" (the
+// roomy case reads a wait), and a wait timed from after the slot was won (about 0 seconds).
 func TestWindowFullTimeIsCountedOnlyWhileBlocked(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	nmgr, _ := metricsManager(t, srv)
@@ -150,8 +183,8 @@ func TestWindowFullTimeIsCountedOnlyWhileBlocked(t *testing.T) {
 
 	w.Publish(orderedCtx(), Message{Value: []byte("0")}, out.done(0))
 	w.Publish(orderedCtx(), Message{Value: []byte("1")}, out.done(1))
-	if got := windowFullSeconds(nmgr); got != 0 {
-		t.Fatalf("two publishes into a window of two blocked for %vs", got)
+	if got, waits := windowFullSeconds(nmgr), windowFullWaits(nmgr); got != 0 || waits != 0 {
+		t.Fatalf("two publishes into a window of two were charged %v waits and %vs", waits, got)
 	}
 
 	released := make(chan struct{})
@@ -161,15 +194,33 @@ func TestWindowFullTimeIsCountedOnlyWhileBlocked(t *testing.T) {
 	}()
 	stub.waitSeen(2)
 	time.Sleep(200 * time.Millisecond)
+	select {
+	case <-released:
+		t.Fatal("a third publish into a full window of two was sent before any slot was freed")
+	default:
+	}
 	stub.answer(0)
-	<-released
+	select {
+	case <-released:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the third publish was still waiting 10s after the first PubAck freed a slot")
+	}
 	stub.waitSeen(3)
 	stub.answer(1)
 	stub.answer(2)
-	w.Close()
+	closed := make(chan struct{})
+	go func() { defer close(closed); w.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close did not return 10s after every publish was answered")
+	}
 
 	if got := windowFullSeconds(nmgr); got < 0.15 || got > 5 {
 		t.Fatalf("a submitter held 200ms by a full window was charged %vs, want about 0.2", got)
+	}
+	if waits := windowFullWaits(nmgr); waits != 1 {
+		t.Fatalf("one submitter held by a full window was counted as %v waits, want 1", waits)
 	}
 }
 
