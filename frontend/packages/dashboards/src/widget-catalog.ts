@@ -433,21 +433,18 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
   // `{ option, equals }` when a declared option holding `equals` turns the mode on.
   const members = binding.members;
   if (members !== undefined) {
-    if (!isRecord(members)) {
-      add('binding.members', 'members must be an object');
-    } else if (members.const !== undefined) {
-      if (members.const !== true) add('binding.members.const', `const must be true, got ${JSON.stringify(members.const)}`);
-      if (members.option !== undefined || members.equals !== undefined) {
-        add('binding.members', 'members must be a constant or an option reference, not both');
-      }
-    } else if (typeof members.option !== 'string' || typeof members.equals !== 'string') {
+    const m = isRecord(members) ? members : {};
+    const isConst = m.const !== undefined;
+    if (isConst ? m.option !== undefined || m.equals !== undefined : typeof m.option !== 'string' || typeof m.equals !== 'string') {
       add('binding.members', 'members must be { const: true } or { option, equals } naming a declared option and a value of it');
+    } else if (isConst) {
+      if (m.const !== true) add('binding.members.const', `const must be true, got ${JSON.stringify(m.const)}`);
     } else if (specs) {
-      const spec = hasOwn(specs, members.option) ? specs[members.option] : undefined;
-      if (!spec) add('binding.members.option', `option ${JSON.stringify(members.option)} is not a declared option key`);
-      else if (!isText(spec)) add('binding.members.option', `option ${JSON.stringify(members.option)} must be a string or enum option`);
-      else if (spec.kind === 'enum' && !spec.values.includes(members.equals)) {
-        add('binding.members.equals', `${JSON.stringify(members.equals)} is not one of the option's values`);
+      const spec = hasOwn(specs, m.option as string) ? specs[m.option as string] : undefined;
+      if (!spec) add('binding.members.option', `option ${JSON.stringify(m.option)} is not a declared option key`);
+      else if (!isText(spec)) add('binding.members.option', `option ${JSON.stringify(m.option)} must be a string or enum option`);
+      else if (spec.kind === 'enum' && !spec.values.includes(m.equals as string)) {
+        add('binding.members.equals', `${JSON.stringify(m.equals)} is not one of the option's values`);
       }
     }
   }

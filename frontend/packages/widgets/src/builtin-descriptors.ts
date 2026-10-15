@@ -306,14 +306,22 @@ const CATEGORY_SORT = {
 // A fleet table's per-column and per-column-threshold entries NAME their measurement, because a list
 // item holds scalars only: one flat list per concern keeps each editable as a row, and a column
 // without an entry keeps the datasource's name, the board's formatting and no bands.
+// The measurement column a fleet table's list entry (a format, a band) applies to.
+const FLEET_MEASUREMENT = {
+  kind: 'string',
+  required: true,
+  labelId: 'widgetLabelMeasurement',
+  doc: 'The measurement column this entry applies to.',
+} as const satisfies OptionSpec;
+
 const FLEET_COLUMNS = {
   kind: 'list',
   maxItems: 24,
   labelId: 'widgetLabelColumns',
   helpId: 'widgetHintColumns',
-  doc: 'Heading, unit and precision per measurement column. A column without an entry shows the measurement name.',
+  doc: 'Heading, unit and precision per measurement column; a column with none shows its name.',
   item: {
-    measurement: { kind: 'string', required: true, labelId: 'widgetLabelMeasurement', doc: 'The measurement this entry formats.' },
+    measurement: FLEET_MEASUREMENT,
     label: { kind: 'string', labelId: 'widgetLabelColumnHeading', doc: 'Column heading. Defaults to the measurement name.' },
     unit: { ...UNIT },
     precision: { ...PRECISION },
@@ -323,7 +331,7 @@ const FLEET_COLUMNS = {
 const FLEET_THRESHOLDS = {
   ...THRESHOLDS,
   item: {
-    measurement: { kind: 'string', required: true, labelId: 'widgetLabelMeasurement', doc: 'The measurement column these bands colour.' },
+    measurement: FLEET_MEASUREMENT,
     ...THRESHOLDS.item,
   },
 } as const satisfies OptionSpec;
@@ -1049,7 +1057,7 @@ export const builtinWidgetDescriptors = {
         helpId: 'widgetHintGroupBy',
         valueLabelIds: { measurement: 'widgetGroupByMeasurement', device: 'widgetGroupByDevice' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'What a bar is. Default: one bar per measurement. Device: one bar per device of the anchor, for the one measurement set below.',
+        doc: 'One bar per measurement (the default), or per device of the group for the measurement set below.',
       },
       measurement: MEASUREMENT,
       unit: UNIT,
