@@ -464,6 +464,8 @@ interface FoldedAlarm {
   raised: string | null;
   cleared: string | null;
   ack: boolean;
+  // The reading that raised it, when the recording holds it.
+  val: number | null;
   // The recording time this state is known as of: the event's time, or for an alarm taken
   // from a snapshot, when that snapshot's query was sent.
   asOfMs: number;
@@ -780,6 +782,9 @@ export class RecordedDataSource implements WidgetDataSource {
         // Each record's own `ack` decides; acknowledgement is not carried over from an
         // earlier record of the same alarm.
         ack: a.ack === true,
+        // The reading that raised the alarm. A cleared alarm keeps its raise's reading, as the
+        // platform's row does (a resolve carries no value).
+        val: a.val ?? (a.state === 'CLEARED' ? (prior?.val ?? null) : null),
         asOfMs,
       });
     };
@@ -960,8 +965,9 @@ function toAlarmRow(a: FoldedAlarm): AlarmRow {
     // The recording notes THAT an alarm was acknowledged, not when or by whom.
     acknowledgedTime: null,
     acknowledgedBy: null,
-    // The stored alarm's last value is not recorded, and a nearby measurement would
-    // invent the integrator's state. Null renders as an em dash.
-    lastValue: null,
+    // The reading that raised it, as the recording holds it (recording.ts: `val`). A recording
+    // without one plays with none; a nearby measurement would invent the integrator's state.
+    // Null renders as an em dash.
+    lastValue: a.val,
   };
 }

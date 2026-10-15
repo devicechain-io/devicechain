@@ -4,6 +4,12 @@
 // The embed's fixed canvas: its children are laid out at exactly the canvas size, then the
 // whole canvas is scaled to fit the host box and centred in it (see fitCanvas). The host's
 // size only ever changes the scale.
+//
+// A host that gives the mount element a width and NO height (a plain block in a page's flow,
+// the most natural way to embed it) leaves `height: 100%` with nothing to resolve against.
+// The host box then takes the canvas's own aspect ratio instead of collapsing to zero height,
+// which would scale the board to nothing. A host with a definite height keeps it: aspect-ratio
+// yields to a box whose width and height are both given.
 
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
@@ -26,7 +32,7 @@ export function EmbedStage({ canvas, children }: { canvas: CanvasSize; children:
 
   const { scale, left, top } = fitCanvas(box, canvas);
   return (
-    <div ref={host} data-testid="embed-host" style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+    <div ref={host} data-testid="embed-host" style={{ position: 'relative', width: '100%', height: '100%', aspectRatio: `${canvas.width} / ${canvas.height}`, overflow: 'hidden' }}>
       <div
         data-testid="embed-canvas"
         data-scale={scale}

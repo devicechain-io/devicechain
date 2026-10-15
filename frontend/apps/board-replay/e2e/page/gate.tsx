@@ -12,6 +12,8 @@
 //   &embed=WxH&reflow=1               the NEGATIVE CONTROL of the embed checks: the same board
 //                                     laid out at the viewport's width instead, which is what
 //                                     the embed exists to prevent (readability.e2e.ts)
+//   &embed=WxH&host=flow               the embed in a host with a width and NO height (a block in
+//                                     a page's flow), instead of one filling the viewport
 //   &recording=showcase               draw sitepulse from the showcase recording, not the
 //                                     first-run excerpt
 //
@@ -151,6 +153,7 @@ async function prepare(boardParam: string | null, recordingParam: string | null)
 interface EmbedCase {
   canvas: { width: number; height: number };
   reflow: boolean;
+  flow: boolean;
 }
 
 function Ready({ prepared, embed }: { prepared: Prepared; embed: EmbedCase | null }) {
@@ -170,6 +173,13 @@ function Ready({ prepared, embed }: { prepared: Prepared; embed: EmbedCase | nul
     />
   );
   if (!embed) return board;
+  if (embed.flow) {
+    return (
+      <div style={{ width: '100%' }}>
+        <EmbedStage canvas={embed.canvas}>{board}</EmbedStage>
+      </div>
+    );
+  }
   // The viewport is the embed's host box, as an iframe's would be.
   return (
     <div style={{ position: 'fixed', inset: 0 }}>
@@ -199,7 +209,7 @@ async function main() {
     if (e !== null) {
       const canvas = parseCanvas(e);
       if (!canvas) throw new Error(`embed must be WxH, got '${e}'`);
-      embed = { canvas, reflow: params.get('reflow') === '1' };
+      embed = { canvas, reflow: params.get('reflow') === '1', flow: params.get('host') === 'flow' };
     }
     createRoot(document.getElementById('gate-root')!).render(<Ready prepared={prepared} embed={embed} />);
   } catch (err) {

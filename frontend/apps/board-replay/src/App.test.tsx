@@ -28,6 +28,7 @@ import {
   stubFetch,
 } from './testing/harness';
 import { readFileSync } from 'node:fs';
+import { hostWidgetRegistry } from '@devicechain/host-widgets';
 import { canvasStrings, liveMatches, readableStrings } from './testing/live-scan';
 
 // Counts every data source the app builds (a seek must build exactly one).
@@ -512,6 +513,54 @@ describe('the showcase recording (format 2)', () => {
     expect(card('sp-plant-throughput-avg')).toContain(`${Math.round(avg)}t/h`);
     expect(card('sp-plant-throughput-max')).toContain(`${Math.round(Math.max(...values))}t/h`);
     expect(document.body.textContent).not.toMatch(/cannot compute/i);
+  });
+
+  // The alarm table's Value column shows the reading that raised each alarm, as the live board
+  // does. The oracle is the file: each alarm's last record at the chapter, folded by hand.
+  it('shows the reading that raised every active alarm, never a dash', async () => {
+    const doc = JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8'));
+    const at = doc.chapters[0].tMs as number;
+    const last = new Map<string, { state: string; val?: number; dev: string }>();
+    for (const s of doc.alarms.snapshots) if (s.tMs <= at) for (const a of s.alarms) last.set(a.id, a);
+    for (const e of doc.alarms.events) if (e.tMs <= at) last.set(e.id, { ...e, val: e.val ?? last.get(e.id)?.val });
+    const active = [...last.values()].filter((a) => a.state === 'ACTIVE');
+    expect(active.length).toBeGreaterThan(0);
+    await mountApp(await showcaseOnCurrentBoardText());
+    await seekTo(at);
+    await settle();
+    const table = document.querySelector('[data-widget="sp-alarms"]');
+    const rows = [...(table?.querySelectorAll('tbody tr') ?? [])].map((r) => r.textContent ?? '');
+    expect(rows).toHaveLength(active.length);
+    for (const a of active) {
+      expect(a.val, `${a.dev}: the recording holds no raising reading`).toEqual(expect.any(Number));
+      expect(rows.find((r) => r.includes(a.dev))).toContain(a.val!.toFixed(1));
+    }
+    expect(rows.join('')).not.toContain('—');
+  });
+
+  // A stat card's Avg and Peak fold every row of its span, so a measurement any aggregate
+  // widget reads must be recorded at the run's full rate: a thinned history drops the peak
+  // reading and weights the average towards the unthinned tail. The registry says which
+  // widgets aggregate; the run reported every 5 s.
+  it('records every measurement the board aggregates at full rate', () => {
+    const doc = JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8'));
+    const board = JSON.parse(boardBytes().toString('utf-8'));
+    const registry = hostWidgetRegistry();
+    const aggregated = new Set<string>(
+      board.widgets
+        .filter((w: { type: string }) => registry.descriptor(w.type)?.channel === 'aggregate')
+        .flatMap((w: { datasource?: { measurements?: string[] } }) => w.datasource?.measurements ?? []),
+    );
+    expect([...aggregated]).toEqual(['throughput_tph']);
+    for (const name of aggregated) {
+      const n = doc.channels.measurements.indexOf(name);
+      for (let d = 0; d < doc.devices.length; d++) {
+        const times = doc.measurements.t.filter((_: number, i: number) => doc.measurements.n[i] === n && doc.measurements.d[i] === d);
+        for (let i = 1; i < times.length; i++) {
+          expect(times[i] - times[i - 1], `${doc.devices[d].id} ${name}: a gap at ${times[i - 1]} ms`).toBeLessThanOrEqual(6_000);
+        }
+      }
+    }
   });
 
   it('places the machines on the map from the recorded positions', async () => {

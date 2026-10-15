@@ -39,7 +39,11 @@
 // shape with empty columns. Version 2 also lets `converter` carry the producing tool's
 // `name`: a recording read back from the platform's own history (dc-simulator's
 // sitepulse-record) times every row by the device's own stamp, where the Unity converter
-// times it by when the recording viewer applied it.
+// times it by when the recording viewer applied it. And in version 2 an alarm may carry `val`:
+// the reading that RAISED it, which the platform shows as the alarm's value. sitepulse-record
+// writes it only from the device's own publish log (the value it sent for the alarm's metric
+// at the raise instant), so an alarm raised before the run carries none, and plays with no
+// value rather than a guessed one.
 
 // The newest version this reader understands; it reads every version in
 // RECORDING_FORMAT_VERSIONS.
@@ -110,6 +114,8 @@ export interface RecordedAlarm {
   sev: (typeof ALARM_SEVERITIES)[number];
   occ: string;
   ack?: true;
+  // The reading that raised the alarm (version 2; absent when the recording does not know it).
+  val?: number;
 }
 
 // A snapshot is the whole alarm set as the recorder's query returned it. `requestedAtMs` is
@@ -438,6 +444,9 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     const dev = str(o.dev, `${p}.dev`);
     if (!tokens.has(dev)) throw new RecordingFormatError(`${p}.dev`, `device '${dev}' is not in $.devices`);
     if (o.ack !== undefined && o.ack !== true) throw new RecordingFormatError(`${p}.ack`, 'present only when true');
+    if (o.val !== undefined && (typeof o.val !== 'number' || !Number.isFinite(o.val))) {
+      throw new RecordingFormatError(`${p}.val`, 'expected a finite number');
+    }
     const out: RecordedAlarm = {
       id,
       dev,
@@ -448,16 +457,19 @@ export function parseBoardRecording(input: unknown): BoardRecording {
       occ: instant(o.occ, `${p}.occ`),
     };
     if (o.ack === true) out.ack = true;
+    if (typeof o.val === 'number') out.val = o.val;
     return out;
   };
   const ALARM_KEYS = ['id', 'dev', 'key', 'metric', 'state', 'sev', 'occ'];
+  // `val` is a version 2 field: a version 1 document that carries it is refused, not read.
+  const ALARM_OPTIONAL = version >= 2 ? ['ack', 'val'] : ['ack'];
   const checkTime = (tMs: number, p: string): number => {
     if (tMs < 0 || tMs > hi) throw new RecordingFormatError(p, `${tMs} is outside [0, ${hi}]`);
     return tMs;
   };
   const snapshots = column(al.snapshots, '$.alarms.snapshots', (x, p): RecordedAlarmSnapshot => {
     const o = strict(x, p, ['tMs', 'requestedAtMs', 'total', 'alarms']);
-    const alarms = column(o.alarms, `${p}.alarms`, (a, ap) => alarm(strict(a, ap, ALARM_KEYS, ['ack']), ap));
+    const alarms = column(o.alarms, `${p}.alarms`, (a, ap) => alarm(strict(a, ap, ALARM_KEYS, ALARM_OPTIONAL), ap));
     const ids = new Set<string>();
     alarms.forEach((a, i) => {
       if (ids.has(a.id)) throw new RecordingFormatError(`${p}.alarms[${i}].id`, `duplicate alarm ${a.id} in one snapshot`);
@@ -476,7 +488,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     return { tMs, requestedAtMs, total, alarms };
   });
   const events = column(al.events, '$.alarms.events', (x, p): RecordedAlarmEvent => {
-    const o = strict(x, p, [...ALARM_KEYS, 'tMs'], ['ack']);
+    const o = strict(x, p, [...ALARM_KEYS, 'tMs'], ALARM_OPTIONAL);
     return { ...alarm(o, p), tMs: checkTime(num(o.tMs, `${p}.tMs`), `${p}.tMs`) };
   });
   for (const [name, list] of [['snapshots', snapshots], ['events', events]] as const) {

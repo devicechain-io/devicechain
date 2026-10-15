@@ -46,7 +46,7 @@ function v2Refusal(mutate: (doc: Json) => void): RecordingFormatError {
     expect(err).toBeInstanceOf(RecordingFormatError);
     return err as RecordingFormatError;
   }
-  throw new Error('the corrupted recording was accepted');
+  return expect.fail('the corrupted recording was accepted');
 }
 
 function sourceAt(rec: BoardRecording, cursorMs: number, timeShiftMs?: number) {
@@ -287,5 +287,41 @@ describe('aggregates from the recording', () => {
       source.bucketMeasurements({ kind: 'device', deviceToken: 'sp-hauler-01', measurements: ['engine_hours'] }, windowOf(0, 60_000, 60)),
     ).rejects.toBeInstanceOf(NotInRecordingError);
     expect(await source.bucketMeasurements({ kind: 'unbound', slot: 's', measurements: ['fuel_pct'] } as DatasourceSelector, windowOf(0, 60_000, 60))).toEqual([]);
+  });
+});
+
+// The alarm table's Value column: the reading that raised the alarm. Version 2 carries it as
+// `val`; a recording that does not know it plays with none (an em dash), never a guess.
+describe('the reading that raised an alarm', () => {
+  const withValues = (): Json => {
+    const doc = fixtureJsonV2();
+    doc.alarms.events[0].val = 14.98; // alarm-1 raised
+    doc.alarms.events[1].val = 599.6; // alarm-2 raised
+    // alarm-1's clear (events[2]) carries none: it keeps its raise's reading, as the platform does.
+    return doc;
+  };
+  const rowsAt = async (doc: Json, cursorMs: number) => {
+    const { source } = sourceAt(parseBoardRecording(doc), cursorMs);
+    const got: AlarmSnapshot[] = [];
+    source.subscribeAlarms({ pageSize: 10 }, { next: (x) => got.push(x) });
+    await settle();
+    return Object.fromEntries(got[got.length - 1].alarms.map((a) => [a.token, a.lastValue]));
+  };
+
+  it('hands each alarm the reading that raised it, and keeps it through the clear', async () => {
+    expect(await rowsAt(withValues(), 25_000)).toEqual({ 'alarm-1': 14.98, 'alarm-2': 599.6 });
+    expect(await rowsAt(withValues(), 45_000)).toEqual({ 'alarm-1': 14.98, 'alarm-2': 599.6, 'alarm-3': null });
+  });
+
+  it('answers null for an alarm the recording holds no reading for', async () => {
+    expect(await rowsAt(fixtureJsonV2(), 45_000)).toEqual({ 'alarm-1': null, 'alarm-2': null, 'alarm-3': null });
+  });
+
+  it('refuses a reading that is not a finite number, and a version 1 document that carries one', () => {
+    expect(v2Refusal((d) => (d.alarms.events[0].val = '14.98')).path).toBe('$.alarms.events[0].val');
+    expect(v2Refusal((d) => (d.alarms.events[0].val = null)).path).toBe('$.alarms.events[0].val');
+    const v1 = fixtureJson();
+    v1.alarms.events[0].val = 14.98;
+    expect(() => parseBoardRecording(v1)).toThrow(RecordingFormatError);
   });
 });

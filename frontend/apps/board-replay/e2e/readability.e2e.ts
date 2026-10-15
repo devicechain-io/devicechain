@@ -247,6 +247,9 @@ const EMBED_CANVAS = { width: 960, height: 1080 } as const;
 const EMBED_CONTAINERS: ReadonlyArray<readonly [number, number]> = [
   [1280, 720],
   [640, 360],
+  // A phone held upright, and a 4K wall: letterboxed top and bottom, and scaled up 2x.
+  [375, 667],
+  [3840, 2160],
 ];
 
 // The board's layout in canvas pixels: each widget's box relative to the canvas, divided by the
@@ -290,7 +293,7 @@ async function embedAt(page: Page, size: readonly [number, number], theme: strin
     { polling: 'raf', timeout: 30_000 },
   );
   const layout = await page.evaluate(canvasLayout);
-  await page.screenshot({ path: path.join(test.info().project.outputDir, 'readability', `embed-${size[0]}x${size[1]}-${theme}${extra ? '-control' : ''}.png`) });
+  await page.screenshot({ path: path.join(test.info().project.outputDir, 'readability', `embed-${size[0]}x${size[1]}-${theme}${extra.includes('reflow') ? '-control' : extra ? '-flow' : ''}.png`) });
   return layout;
 }
 
@@ -300,6 +303,8 @@ test('the embed is gated at the canvas and the container sizes the site uses', (
   expect(EMBED_CONTAINERS).toEqual([
     [1280, 720],
     [640, 360],
+    [375, 667],
+    [3840, 2160],
   ]);
 });
 
@@ -333,6 +338,25 @@ for (const theme of THEMES) {
     }
   });
 }
+
+// A host page that gives the embed a width and no height (a block in its flow) gets the whole
+// canvas at that width, at the canvas's own aspect ratio: never a box of zero height, which
+// would scale the board to nothing and show the visitor an empty strip.
+test('the showcase embed in a host with no height takes the canvas aspect ratio', async ({ page }) => {
+  const native = await embedAt(page, [EMBED_CANVAS.width, EMBED_CANVAS.height], 'dark');
+  for (const width of [375, 1280]) {
+    const at = await embedAt(page, [width, 300], 'dark', '&host=flow');
+    const want = width / EMBED_CANVAS.width;
+    expect(at.scale, `${width}: scale`).toBeCloseTo(want, 6);
+    const [left, top, w, h] = at.canvas;
+    // (The box's height is fractional; the host measures whole pixels, so within half of one.)
+    expect(Math.abs(left)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(top)).toBeLessThanOrEqual(0.5);
+    expect(w).toBeCloseTo(width, 1);
+    expect(h).toBeCloseTo(EMBED_CANVAS.height * want, 1);
+    expect(at.widgets, `${width}: the embed reflowed`).toEqual(native.widgets);
+  }
+});
 
 // The negative control: the same board laid out at the container's width (no fixed canvas),
 // which is the defect the embed prevents. The layout check must see it at both sizes.
