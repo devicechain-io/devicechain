@@ -9,10 +9,11 @@
 import type {
   DashboardHub,
   DatasourceSelector,
-  HistoryWindow,
   MeasurementSample,
+  MemberBucketCriteria,
   MemberRoster,
   MemberSeed,
+  MemberSeedPlan,
   MemberSink,
   SeedFailure,
   TimeRangeState,
@@ -66,22 +67,32 @@ interface Fake {
   disposed: ReturnType<typeof vi.fn>;
   sink: () => MemberSink;
   seed: (token: string, seed: MemberSeed | null, failure?: SeedFailure) => void;
-  windows: HistoryWindow[];
+  // The span each seed plan reads, found by running the plan against a store that holds nothing:
+  // it asks for the last few minutes, finds nothing, and then asks for the whole span.
+  windows: MemberBucketCriteria[];
+  plans: MemberSeedPlan[];
 }
 
 // A hub whose roster, live samples and seeds are delivered by the test, when the test chooses.
 function makeHub(): Fake {
   let sink: MemberSink | null = null;
   const onSeeds: Array<(token: string, seed: MemberSeed | null, failure?: SeedFailure) => void> = [];
-  const windows: HistoryWindow[] = [];
+  const windows: MemberBucketCriteria[] = [];
+  const plans: MemberSeedPlan[] = [];
   const disposed = vi.fn();
   const subscribe = vi.fn((_d: DatasourceSelector, s: MemberSink) => {
     sink = s;
     return disposed;
   });
-  const seeds = vi.fn(async (_tokens: readonly string[], window: HistoryWindow, onSeed: (typeof onSeeds)[number]) => {
-    windows.push(window);
+  const seeds = vi.fn(async (_tokens: readonly string[], plan: MemberSeedPlan, onSeed: (typeof onSeeds)[number]) => {
     onSeeds.push(onSeed);
+    plans.push(plan);
+    const asked: MemberBucketCriteria[] = [];
+    await plan.seed('probe', async (c) => {
+      asked.push(c);
+      return [];
+    });
+    windows.push(asked[asked.length - 1]);
   });
   const hub = {
     subscribeWidget: () => () => {},
@@ -97,6 +108,7 @@ function makeHub(): Fake {
     sink: () => sink!,
     seed: (token, seed, failure) => onSeeds.forEach((f) => f(token, seed, failure)),
     windows,
+    plans,
   };
 }
 
@@ -350,6 +362,33 @@ describe('the pause', () => {
   });
 });
 
+describe('what the seed plan asks for', () => {
+  // A device that reported only temperature in the last few minutes: what else does the plan read?
+  async function followUps(w: WidgetInstance): Promise<MemberBucketCriteria[]> {
+    const f = makeHub();
+    mount(w, f.hub, live(3600));
+    act0(() => f.sink().roster(roster(['a'])));
+    await flush();
+    const asked: MemberBucketCriteria[] = [];
+    await f.plans[0].seed('a', async (c) => {
+      asked.push(c);
+      return asked.length === 1 ? [{ bucketStart: iso(NOW - 120_000), name: 'temperature', avg: 20, count: 4 }] : [];
+    });
+    return asked.slice(1);
+  }
+
+  it('looks further back only for the columns the table shows, one narrowed read each', async () => {
+    const more = await followUps(widget());
+    expect(more.map((c) => c.name)).toEqual(['humidity']);
+    expect(Date.parse(more[0].endTime) + 1 - Date.parse(more[0].startTime)).toBe(3600_000);
+  });
+
+  it('counts the measurement a per-device bar chart compares as shown, whatever the datasource names', async () => {
+    const more = await followUps(widget({ groupBy: 'device', measurement: 'pressure' }, { ...ds, measurements: ['temperature'] }, 'bar-chart'));
+    expect(more.map((c) => c.name)).toEqual(['pressure']);
+  });
+});
+
 describe('which feed a widget gets', () => {
   it('reads a bar chart member by member only when it is set to one bar per device', async () => {
     const f = makeHub();
@@ -361,9 +400,17 @@ describe('which feed a widget gets', () => {
     expect(stream).not.toHaveBeenCalled();
     cleanup();
 
+    // One bar per measurement keys its readings by name: bound to a group it is refused, in words
+    // that point at the per-device mode, and reads nothing at all.
     mount(widget({ measurement: 'temperature' }, ds, 'bar-chart'), f.hub, live());
     await flush();
-    expect(stream).toHaveBeenCalledTimes(1);
+    expect(stream).not.toHaveBeenCalled();
     expect(f.subscribe).toHaveBeenCalledTimes(1); // no second member subscription
+    expect(document.body.textContent).toContain('Set it to one bar per device to compare them');
+    cleanup();
+
+    mount(widget({ measurement: 'temperature' }, { kind: 'device', deviceToken: 'd-1', measurements: ['temperature'] }, 'bar-chart'), f.hub, live());
+    await flush();
+    expect(stream).toHaveBeenCalledTimes(1);
   });
 });

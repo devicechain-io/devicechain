@@ -74,7 +74,8 @@ describe('SyntheticDataSource.subscribeMembers', () => {
 
   it('settles every seed empty: its history is its live feed', async () => {
     const seen: string[] = [];
-    await new SyntheticDataSource().readMemberSeeds(['a', 'b'], { startTime: '', endTime: '', intervalSeconds: 60 }, (t, seed) => {
+    const plan = { seed: () => Promise.reject(new Error('a preview reads no history')) };
+    await new SyntheticDataSource().readMemberSeeds(['a', 'b'], plan, (t, seed) => {
       expect(seed).toEqual({ latest: {}, observed: [] });
       seen.push(t);
     });

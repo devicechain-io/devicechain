@@ -62,8 +62,13 @@ describe('the built-in registry', () => {
       }
       expect(descriptor.datasource).toEqual({
         mode: channel === 'alarm' ? 'optional' : 'required',
-        // A command target and an aggregate's "latest" each name ONE device; the rest may be an anchor.
-        selectors: channel === 'control' || channel === 'aggregate' ? ['device', 'slot'] : ['device', 'anchor', 'slot'],
+        // A command target, an aggregate and a reading keyed by measurement name each name ONE device
+        // (a group would mix its devices' readings); the alarm and location widgets and the fleet
+        // widgets (which read member by member) may be bound to a group.
+        selectors:
+          channel === 'control' || channel === 'aggregate' || (channel === 'measurement' && !('members' in descriptor.binding))
+            ? ['device', 'slot']
+            : ['device', 'anchor', 'slot'],
       });
     });
 

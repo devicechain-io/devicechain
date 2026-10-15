@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardHub, type DeviceResolver } from './hub';
-import { MEMBER_SEED_CONCURRENCY, type MemberRoster } from './members';
+import { MEMBER_SEED_CONCURRENCY, type MemberBucketCriteria, type MemberRoster, type MemberSeed, type MemberSeedPlan } from './members';
 import { BUCKETED_MEASUREMENTS, DEVICE_NAMES, DEVICES_FOR_ANCHOR } from './queries';
 import { ANCHOR_PAGE_SIZE, createDeviceResolver } from './resolver';
 import type { DatasourceSelector, MeasurementSample } from './types';
@@ -195,28 +195,43 @@ describe('the live samples', () => {
   });
 });
 
+// A plan of one read over the window: what each device's seed is made of is the widget's business
+// (fleet-seed.ts in the widgets package); the hub's is to bound, share and settle the reads.
+function planOf(...windows: MemberBucketCriteria[]): MemberSeedPlan {
+  return {
+    async seed(deviceToken, read) {
+      const latest: MemberSeed['latest'] = {};
+      for (const w of windows) {
+        for (const b of await read(w)) latest[b.name] = sample(deviceToken, b.name, b.avg ?? Number.NaN, b.bucketStart);
+      }
+      return { latest, observed: Object.keys(latest) };
+    },
+  };
+}
+const PLAN = planOf(WINDOW);
+
 describe('the seed: no query storm', () => {
-  it('costs one read per member plus two for the whole roster (N+2, not N per widget)', async () => {
+  it('costs the plan’s reads per member plus two for the whole roster (N+2 for a one-read plan)', async () => {
     backend(60);
     const hub = newHub();
     hub.subscribeMembers(ANCHOR, { roster: () => {}, next: () => {} });
     await flush();
-    await hub.readMemberSeeds(tokens(60), WINDOW, () => {});
+    await hub.readMemberSeeds(tokens(60), PLAN, () => {});
     expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
     expect(countOf(DEVICE_NAMES)).toBe(1);
     expect(countOf(BUCKETED_MEASUREMENTS)).toBe(60);
     expect(h.gql).toHaveBeenCalledTimes(62);
   });
 
-  it('asks the store for every measurement of a device in one read (no name filter), over the window', async () => {
+  it('asks the event store exactly what the plan asked, for the device it is reading', async () => {
     backend(1);
-    await newHub().readMemberSeeds(['d-001'], WINDOW, () => {});
+    await newHub().readMemberSeeds(['d-001'], planOf({ ...WINDOW, name: 'temperature' }), () => {});
     const call = h.gql.mock.calls.find((c) => c[1] === BUCKETED_MEASUREMENTS)!;
     expect(call[0]).toBe('event-management');
-    expect(call[2]).toEqual({ criteria: { deviceToken: 'd-001', ...WINDOW } });
+    expect(call[2]).toEqual({ criteria: { deviceToken: 'd-001', ...WINDOW, name: 'temperature' } });
   });
 
-  it('never has more than the limit in flight, whatever the size of the fleet', async () => {
+  it('never has more than the limit in flight, whatever the size of the fleet or the plan', async () => {
     let active = 0;
     let peak = 0;
     h.gql.mockImplementation(async () => {
@@ -226,35 +241,47 @@ describe('the seed: no query storm', () => {
       active -= 1;
       return { bucketedMeasurements: [] };
     });
-    await newHub().readMemberSeeds(tokens(100), WINDOW, () => {});
+    await newHub().readMemberSeeds(tokens(100), planOf(WINDOW, { ...WINDOW, name: 'x' }), () => {});
     expect(peak).toBe(MEMBER_SEED_CONCURRENCY);
-    expect(h.gql).toHaveBeenCalledTimes(100);
+    expect(h.gql).toHaveBeenCalledTimes(200);
   });
 
-  it('makes two widgets that ask for the same window share the reads', async () => {
+  it('makes two widgets that ask the same question share the reads', async () => {
     backend(30);
     const hub = newHub();
     const seen: string[] = [];
     await Promise.all([
-      hub.readMemberSeeds(tokens(30), WINDOW, (t) => seen.push(`a${t}`)),
-      hub.readMemberSeeds(tokens(30), WINDOW, (t) => seen.push(`b${t}`)),
+      hub.readMemberSeeds(tokens(30), PLAN, (t) => seen.push(`a${t}`)),
+      hub.readMemberSeeds(tokens(30), planOf(WINDOW), (t) => seen.push(`b${t}`)),
     ]);
     expect(countOf(BUCKETED_MEASUREMENTS)).toBe(30);
     expect(seen).toHaveLength(60); // both widgets got every device
   });
 
-  it('asks again for a different window (a new span is a new question)', async () => {
+  it('asks again for a different window or name (a different question)', async () => {
     backend(4);
     const hub = newHub();
-    await hub.readMemberSeeds(tokens(4), WINDOW, () => {});
-    await hub.readMemberSeeds(tokens(4), { ...WINDOW, startTime: '2026-10-14T10:00:00.000Z' }, () => {});
-    expect(countOf(BUCKETED_MEASUREMENTS)).toBe(8);
+    await hub.readMemberSeeds(tokens(4), PLAN, () => {});
+    await hub.readMemberSeeds(tokens(4), planOf({ ...WINDOW, startTime: '2026-10-14T10:00:00.000Z' }), () => {});
+    await hub.readMemberSeeds(tokens(4), planOf({ ...WINDOW, name: 'temperature' }), () => {});
+    expect(countOf(BUCKETED_MEASUREMENTS)).toBe(12);
+  });
+
+  it('never shares a read between two different questions in flight at once', async () => {
+    backend(4);
+    const hub = newHub();
+    await Promise.all([
+      hub.readMemberSeeds(tokens(4), PLAN, () => {}),
+      hub.readMemberSeeds(tokens(4), planOf({ ...WINDOW, name: 'temperature' }), () => {}),
+      hub.readMemberSeeds(tokens(4), planOf({ ...WINDOW, startTime: '2026-10-14T10:00:00.000Z' }), () => {}),
+    ]);
+    expect(countOf(BUCKETED_MEASUREMENTS)).toBe(12);
   });
 
   it('delivers each device seed under its own token', async () => {
     backend(3);
     const got: Array<[string, number | undefined]> = [];
-    await newHub().readMemberSeeds(tokens(3), WINDOW, (t, seed) => got.push([t, seed?.latest.temperature?.value ?? undefined]));
+    await newHub().readMemberSeeds(tokens(3), PLAN, (t, seed) => got.push([t, seed?.latest.temperature?.value ?? undefined]));
     expect(got.sort()).toEqual([
       ['d-001', 1],
       ['d-002', 2],
@@ -266,7 +293,7 @@ describe('the seed: no query storm', () => {
     backend(3, 3, (t) => (t === 'd-002' ? new Error('down') : undefined));
     const got = new Map<string, unknown>();
     const why = new Map<string, unknown>();
-    await newHub().readMemberSeeds(tokens(3), WINDOW, (t, seed, failure) => {
+    await newHub().readMemberSeeds(tokens(3), PLAN, (t, seed, failure) => {
       got.set(t, seed);
       why.set(t, failure);
     });
@@ -279,7 +306,7 @@ describe('the seed: no query storm', () => {
   it('classifies a refusal as forbidden, not as a failure', async () => {
     backend(1, 1, () => ({ forbidden: true }));
     const why: unknown[] = [];
-    await newHub().readMemberSeeds(['d-001'], WINDOW, (_t, _s, failure) => why.push(failure));
+    await newHub().readMemberSeeds(['d-001'], PLAN, (_t, _s, failure) => why.push(failure));
     expect(why).toEqual(['forbidden']);
   });
 
@@ -291,9 +318,32 @@ describe('the seed: no query storm', () => {
       return { bucketedMeasurements: [] };
     });
     const got: string[] = [];
-    await newHub().readMemberSeeds(tokens(50), WINDOW, (t) => got.push(t), () => cancelled);
+    await newHub().readMemberSeeds(tokens(50), PLAN, (t) => got.push(t), () => cancelled);
     expect(h.gql.mock.calls.length).toBeLessThanOrEqual(MEMBER_SEED_CONCURRENCY);
     expect(got).toHaveLength(0);
+  });
+
+  it('re-asks, for a widget still here, a shared read that its first asker abandoned before it started', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    h.gql.mockImplementation(async (_area: string, _doc: unknown, vars: any) => {
+      if (vars.criteria.deviceToken !== 'late') await gate;
+      return { bucketedMeasurements: [{ bucketStart: '2026-10-14T11:58:00Z', name: 'temperature', avg: 7, count: 1 }] };
+    });
+    const hub = newHub();
+    // Six devices fill the limiter, so the next read waits its turn.
+    const busy = hub.readMemberSeeds(tokens(MEMBER_SEED_CONCURRENCY), PLAN, () => {});
+    let goneA = false;
+    const gotA: string[] = [];
+    const gotB: string[] = [];
+    const a = hub.readMemberSeeds(['late'], PLAN, (t) => gotA.push(t), () => goneA);
+    const b = hub.readMemberSeeds(['late'], PLAN, (t) => gotB.push(t));
+    goneA = true; // A goes away while the read it started (and B shares) is still queued
+    release();
+    await Promise.all([a, b, busy]);
+    expect(gotA).toEqual([]);
+    expect(gotB).toEqual(['late']);
+    expect(h.gql.mock.calls.filter((c) => c[2].criteria.deviceToken === 'late')).toHaveLength(1);
   });
 });
 

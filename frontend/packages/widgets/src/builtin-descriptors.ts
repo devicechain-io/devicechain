@@ -264,6 +264,11 @@ const SELECTION_TARGET = {
 
 const VERSION = '1.0.0';
 const ALL_SELECTORS = ['device', 'anchor', 'slot'] as const;
+// A telemetry widget that shows readings keyed by measurement name shows ONE device: bound to a group,
+// two devices reporting the same name would overwrite each other in it. Only the fleet widgets (the
+// fleet table, a bar chart with one bar per device) take a group, and the runtime refuses a group
+// that reaches any other one some other way (a host binding, a hand-edited definition).
+const ONE_DEVICE = ['device', 'slot'] as const;
 const NO_DATASOURCE = { mode: 'none' } as const;
 
 // The alarm filters are read by both alarm widgets from the same option keys.
@@ -331,7 +336,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 2,
     display: { title: 'Timeseries chart', category: 'Telemetry', titleId: 'widgetTypeTimeseriesChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { windowSeconds: { option: 'windowSeconds' } },
     options: {
       title: TITLE,
@@ -354,7 +359,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Latest card', category: 'Telemetry', titleId: 'widgetTypeLatestCard', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -384,7 +389,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Gauge', category: 'Telemetry', titleId: 'widgetTypeGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -425,7 +430,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Table', category: 'Telemetry', titleId: 'widgetTypeTable', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE,
@@ -579,7 +584,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Command button', category: 'Control', titleId: 'widgetTypeCommandButton', categoryId: 'widgetCategoryControl' },
     channel: 'control',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { pageSize: { option: 'maxRows', default: 20, min: 1 } },
     options: {
       title: TITLE,
@@ -688,7 +693,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Linear gauge', category: 'Telemetry', titleId: 'widgetTypeLinearGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -731,7 +736,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Level gauge', category: 'Telemetry', titleId: 'widgetTypeLevelGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -766,7 +771,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Battery', category: 'Telemetry', titleId: 'widgetTypeBattery', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -803,7 +808,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Status light', category: 'Telemetry', titleId: 'widgetTypeStatusLight', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -833,7 +838,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Signal bars', category: 'Telemetry', titleId: 'widgetTypeSignalBars', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -868,7 +873,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Compass', category: 'Telemetry', titleId: 'widgetTypeCompass', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -897,7 +902,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Progress ring', category: 'Telemetry', titleId: 'widgetTypeProgressRing', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -932,7 +937,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Command slider', category: 'Control', titleId: 'widgetTypeCommandSlider', categoryId: 'widgetCategoryControl' },
     channel: 'control',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     // The control reads its last-sent value off this history, so it asks for a long one.
     binding: { pageSize: { const: 50 } },
     options: {
@@ -974,7 +979,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Command toggle', category: 'Control', titleId: 'widgetTypeCommandToggle', categoryId: 'widgetCategoryControl' },
     channel: 'control',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { pageSize: { const: 50 } },
     options: {
       title: TITLE,
@@ -994,7 +999,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Stat card', category: 'Telemetry', titleId: 'widgetTypeStatCard', categoryId: 'widgetCategoryTelemetry' },
     channel: 'aggregate',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { windowSeconds: { option: 'windowSeconds' } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -1063,7 +1068,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Pie chart', category: 'Telemetry', titleId: 'widgetTypePieChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: {},
     options: { title: TITLE, unit: UNIT, precision: PRECISION, sort: CATEGORY_SORT },
     defaults: { title: 'Pie chart' },

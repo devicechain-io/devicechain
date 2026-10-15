@@ -175,7 +175,9 @@ The settings depend on the widget. Common ones:
   inside the building chosen elsewhere on the dashboard. With a parent, **Strategy** decides whether
   it follows the parent's **First member** or a member you choose (**Manual pick**).
 - **Data source** picks the device or entity the widget reads. For a widget scoped to a parent, it
-  explains that the widget follows the parent.
+  explains that the widget follows the parent. Only the fleet table and a bar chart set to one bar
+  per device can read a device group; every other telemetry widget shows one device, and bound to a
+  group it says so rather than mixing the readings of several devices.
 - **Measurement** and display options such as units, range and precision.
 - **Time span** (timeseries chart): how much history the chart draws, in seconds, from 60 to
   604800. Leave it empty and the chart follows the board's time range, which viewers can change.

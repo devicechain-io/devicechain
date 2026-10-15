@@ -308,6 +308,12 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
     // Open the kind picker and see which kinds it offers.
     const kindField = screen.getByText(tr('widgetLabelKind')).closest('div')!.parentElement!;
     fireEvent.click(within(kindField).getAllByRole('button')[0]);
-    expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(channel !== 'control' && channel !== 'aggregate');
+    // A deliberate change since the pre-registry editor: a telemetry widget that shows readings by
+    // measurement name shows ONE device (a group would mix its devices' readings), so only the
+    // fleet widgets -- the fleet table and the bar chart, whose one-bar-per-device mode reads a
+    // group -- are offered a group, beside the alarm and map widgets.
+    const fleet = type === 'fleet-table' || type === 'bar-chart';
+    const takesGroup = channel === 'alarm' || channel === 'location' || (channel === 'measurement' && fleet);
+    expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(takesGroup);
   });
 });

@@ -182,7 +182,10 @@ Los ajustes dependen del widget. Los más comunes:
   **Estrategia** decide si sigue al **Primer miembro** del principal o a un miembro que tú eliges
   (**Selección manual**).
 - **Fuente de datos** elige el dispositivo o la entidad que lee el widget. En un widget que sigue a
-  un principal, explica que el widget lo sigue.
+  un principal, explica que el widget lo sigue. Solo la tabla de flota y un gráfico de barras con una
+  barra por dispositivo pueden leer un grupo de dispositivos; cualquier otro widget de telemetría
+  muestra un solo dispositivo y, vinculado a un grupo, lo indica en lugar de mezclar las lecturas de
+  varios dispositivos.
 - **Medición** y opciones de presentación como unidades, rango y precisión.
 - **Intervalo de tiempo** (gráfico de series temporales): cuánto historial dibuja el gráfico, en
   segundos, de 60 a 604800. Si lo dejas vacío, el gráfico sigue el intervalo de tiempo del panel,

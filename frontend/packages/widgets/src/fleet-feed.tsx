@@ -9,9 +9,10 @@
 //   - ONE subscription per widget (hub.subscribeMembers). The samples it delivers carry their
 //     device, and everything here is keyed by device and measurement together -- the measurement
 //     channel's name-only `latest` is exactly what this exists to get away from;
-//   - the seed is one read per member, bounded hub-wide and shared between widgets that ask the
-//     same question (see members.ts for the cost and the bound). The window is the widget's pinned
-//     span, else the board's, ending at the freeze instant while paused;
+//   - the seed is read per member, bounded hub-wide and shared between widgets that ask the same
+//     question; what is read is fleet-seed.ts's plan (the last few minutes first, the span only for
+//     what that left empty). The window is the widget's pinned span, else the board's, ending at the
+//     freeze instant while paused;
 //   - paused, live readings queue (newest per device and measurement) and merge on resume, so the
 //     table on screen does not move under a "Paused" badge;
 //   - a change of span re-reads the seeds; a reading older than the span is no longer shown.
@@ -31,11 +32,14 @@ import {
   type WidgetDescriptor,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import { resolveStaleAfterSeconds, useWidgetTimeRange, WidgetFreshnessProvider } from '@devicechain/widget-sdk';
+import { optString, resolveStaleAfterSeconds, useWidgetTimeRange, WidgetFrame, WidgetFreshnessProvider } from '@devicechain/widget-sdk';
 import { useEffect, useMemo, useReducer, useRef, useState, type ComponentType } from 'react';
 
 import { measurementSpan } from './binding-policy';
 import { buildFleet, newestMemberTime, seedWindow } from './fleet-model';
+import { memberSeedPlan } from './fleet-seed';
+import { fleetStrings } from './fleet-strings';
+import { LevelEmpty } from './level-readout';
 
 // The most often the state is rebuilt from live samples.
 export const FLUSH_MS = 250;
@@ -72,15 +76,47 @@ export interface FleetFeedProps {
   Component: ComponentType<any>;
   actions: WidgetActions | undefined;
   ErrorFrame: ComponentType<{ widget: WidgetInstance; error: unknown }>;
+  // Not a fleet widget, but bound to a group: say so instead (GroupRefusal).
+  refuse?: boolean;
 }
 
-export default function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: FleetFeedProps) {
+// What a widget that shows ONE device's readings keyed by measurement name renders when it is bound
+// to a group: every device reporting "temperature" would overwrite the others in it, so it shows a
+// sentence instead of whichever device spoke last. A widget with a per-device mode (the bar chart's
+// one bar per device) is pointed at that mode; any other at the fleet table.
+export function GroupRefusal({ widget, descriptor }: { widget: WidgetInstance; descriptor: WidgetDescriptor }) {
+  const strings = fleetStrings();
+  const perDevice = (descriptor.binding as { members?: unknown }).members !== undefined;
+  return (
+    <WidgetFrame title={optString(widget.options, 'title')}>
+      <div data-group-refused="" style={{ display: 'contents' }}>
+        <LevelEmpty message={`${strings.oneDevice} ${perDevice ? strings.usePerDevice : strings.useFleetTable}`} />
+      </div>
+    </WidgetFrame>
+  );
+}
+
+// The measurements a fleet widget shows, and so the ones its seed must find: the datasource's, and
+// the `measurement` option a per-device bar chart compares. Empty: every measurement reported.
+export function shownMeasurements(widget: WidgetInstance): string[] {
+  const one = widget.options?.measurement;
+  const named = [...(widget.datasource?.measurements ?? []), ...(typeof one === 'string' && one !== '' ? [one] : [])];
+  return [...new Set(named)];
+}
+
+export default function FleetEntry(props: FleetFeedProps) {
+  return props.refuse ? <GroupRefusal widget={props.widget} descriptor={props.descriptor} /> : <FleetFeed {...props} />;
+}
+
+function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: FleetFeedProps) {
   const range = useWidgetTimeRange();
   const now = useMemo(() => (hub.now ? () => hub.now!() : Date.now), [hub]);
   const spanSeconds = measurementSpan(descriptor, widget, range?.spanSeconds) ?? range?.spanSeconds ?? DEFAULT_TIME_RANGE_SECONDS;
   const pausedAt = range?.paused ? range.pausedAt : undefined;
   const ds = widget.datasource;
   const dsKey = JSON.stringify(ds ?? null);
+  const names = shownMeasurements(widget);
+  const namesKey = JSON.stringify(names);
   const supported = hub.subscribeMembers !== undefined && hub.readMemberSeeds !== undefined;
 
   const store = useRef<Store>(emptyStore(dsKey));
@@ -156,7 +192,7 @@ export default function FleetFeed({ hub, widget, descriptor, Component, actions,
     let cancelled = false;
     void hub.readMemberSeeds!(
       tokens,
-      seedWindow(spanSeconds, pausedAt ?? now()),
+      memberSeedPlan(seedWindow(spanSeconds, pausedAt ?? now()), names),
       (token, seed, failure) => {
         if (failure === 'forbidden') s.forbidden = true;
         else s.seeds.set(token, seed ?? 'failed');
@@ -168,7 +204,7 @@ export default function FleetFeed({ hub, widget, descriptor, Component, actions,
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hub, supported, dsKey, rosterKey, spanSeconds, pausedAt]);
+  }, [hub, supported, dsKey, rosterKey, spanSeconds, pausedAt, namesKey]);
 
   // A reading ages out of the span with no event to say so.
   useEffect(() => {

@@ -10,10 +10,12 @@
 //
 // There is no batched "latest value of these devices" read in the platform: the event store
 // aggregates one device at a time (bucketedMeasurements), and device-state holds presence and
-// position but no measurement values. The seed is therefore ONE read per member, and what keeps
-// that from being a query storm is that (a) it is the only per-member read -- the roster is one
+// position but no measurement values. The seed is therefore read per member, and what keeps that
+// from being a query storm is that (a) it is the only per-member read -- the roster is one
 // relationship page plus one batched name lookup, whatever the size of the fleet -- (b) a hub-wide
-// limiter bounds how many are in flight, and (c) identical reads share one request.
+// limiter bounds how many are in flight, (c) identical reads share one request, and (d) the widget's
+// plan asks for as little as answers it (the fleet widgets read the last few minutes first; see
+// fleet-seed.ts in the widgets package).
 
 import type { MeasurementBucket } from './queries';
 import type { MeasurementSample } from './types';
@@ -46,6 +48,25 @@ export interface MemberSink {
 
 // Why one member's seed read did not come back.
 export type SeedFailure = 'forbidden' | 'failed';
+
+// One bucketed read of ONE member, as a seed plan asks for it: the hub fills in the device. `name`
+// narrows the read to one measurement (the store takes one name or none).
+export interface MemberBucketCriteria {
+  startTime: string;
+  endTime: string;
+  intervalSeconds: number;
+  name?: string;
+}
+
+export type MemberBucketRead = (criteria: MemberBucketCriteria) => Promise<MeasurementBucket[]>;
+
+// What to read for one member and how to make its seed of the answer. The WIDGET decides that (which
+// span, which measurements, read in what order); the hub supplies `read` -- bounded hub-wide and
+// shared, so two widgets asking one device the same question cost one request -- and settles the
+// result. A plan that rejects settles that member as failed (or forbidden).
+export interface MemberSeedPlan {
+  seed(deviceToken: string, read: MemberBucketRead): Promise<MemberSeed>;
+}
 
 // What one member last reported inside a window: its newest reading per measurement name, and every
 // name it reported at all (which is how "does not report this" is told from "sent nothing").
@@ -88,28 +109,4 @@ export function createLimiter(max: number) {
       next();
     });
   };
-}
-
-// foldMemberSeed turns one device's buckets into its seed. The newest bucket with a mean wins per
-// name, stamped at the bucket's START: the reading happened somewhere inside the bucket, so its age
-// is never understated. A name whose buckets hold readings is observed even when none has a mean.
-export function foldMemberSeed(deviceToken: string, buckets: readonly MeasurementBucket[]): MemberSeed {
-  const latest: Record<string, MeasurementSample> = {};
-  const observed = new Set<string>();
-  for (const b of buckets) {
-    if (b.count === undefined ? b.avg != null : b.count > 0) observed.add(b.name);
-    if (b.avg == null) continue;
-    const held = latest[b.name];
-    if (held && held.occurredTime !== null && Date.parse(held.occurredTime) >= Date.parse(b.bucketStart)) continue;
-    latest[b.name] = {
-      id: `seed-${deviceToken}-${b.name}-${b.bucketStart}`,
-      deviceToken,
-      eventType: 0,
-      occurredTime: b.bucketStart,
-      name: b.name,
-      value: b.avg,
-      classifier: null,
-    };
-  }
-  return { latest, observed: [...observed] };
 }

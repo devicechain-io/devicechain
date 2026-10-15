@@ -12,7 +12,7 @@
 // a device).
 
 import type { HistoryWindow } from './history';
-import type { MemberRef, MemberSeed, MemberSink } from './members';
+import type { MemberRef, MemberSeed, MemberSeedPlan, MemberSink } from './members';
 import type { MeasurementBucket } from './queries';
 import type {
   AlarmStreamSink,
@@ -433,7 +433,7 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
   // seed settles empty and the live feed alone fills the cells.
   async readMemberSeeds(
     deviceTokens: readonly string[],
-    _window: HistoryWindow,
+    _plan: MemberSeedPlan,
     onSeed: (deviceToken: string, seed: MemberSeed | null) => void,
   ): Promise<void> {
     for (const token of deviceTokens) onSeed(token, { latest: {}, observed: [] });

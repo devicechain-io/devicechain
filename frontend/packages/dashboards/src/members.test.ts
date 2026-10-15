@@ -1,55 +1,12 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The two pieces of the fleet read that carry no I/O: folding a device's buckets into its seed, and
-// the limiter that bounds how many reads are in flight.
+// The piece of the fleet read that carries no I/O: the limiter that bounds how many reads are in
+// flight. (Folding a device's buckets into its seed is the widget's plan: fleet-seed.test.ts.)
 
 import { describe, expect, it } from 'vitest';
 
-import { createLimiter, foldMemberSeed, SEED_CANCELLED } from './members';
-import type { MeasurementBucket } from './queries';
-
-const b = (name: string, bucketStart: string, avg: number | null, count: number | undefined = 5): MeasurementBucket => ({
-  bucketStart,
-  name,
-  avg,
-  count,
-});
-
-describe('foldMemberSeed', () => {
-  it('keeps the NEWEST bucket per measurement, whatever order the store returned them in', () => {
-    const seed = foldMemberSeed('d-1', [
-      b('t', '2026-10-14T11:02:00Z', 22),
-      b('t', '2026-10-14T11:03:00Z', 23),
-      b('t', '2026-10-14T11:01:00Z', 21),
-    ]);
-    expect(seed.latest.t.value).toBe(23);
-    expect(seed.latest.t.occurredTime).toBe('2026-10-14T11:03:00Z');
-    expect(seed.latest.t.deviceToken).toBe('d-1');
-  });
-
-  it('keeps each measurement apart, and records every name the device reported as observed', () => {
-    const seed = foldMemberSeed('d-1', [b('t', '2026-10-14T11:00:00Z', 20), b('h', '2026-10-14T11:00:00Z', 55)]);
-    expect(Object.keys(seed.latest).sort()).toEqual(['h', 't']);
-    expect(seed.observed.sort()).toEqual(['h', 't']);
-  });
-
-  it('skips a bucket with no mean when choosing the latest, yet still counts its name as observed', () => {
-    const seed = foldMemberSeed('d-1', [b('t', '2026-10-14T11:00:00Z', 20), b('t', '2026-10-14T11:05:00Z', null, 3)]);
-    expect(seed.latest.t.value).toBe(20);
-    expect(seed.observed).toEqual(['t']);
-  });
-
-  it('does not count an empty bucket as the device reporting that measurement', () => {
-    const seed = foldMemberSeed('d-1', [b('t', '2026-10-14T11:00:00Z', null, 0)]);
-    expect(seed.observed).toEqual([]);
-    expect(seed.latest).toEqual({});
-  });
-
-  it('is empty for a device with no buckets at all', () => {
-    expect(foldMemberSeed('d-1', [])).toEqual({ latest: {}, observed: [] });
-  });
-});
+import { createLimiter, SEED_CANCELLED } from './members';
 
 describe('createLimiter', () => {
   it('never runs more than the limit at once, and runs everything', async () => {

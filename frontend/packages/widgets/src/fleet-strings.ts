@@ -21,6 +21,10 @@ export interface FleetStrings {
   unsupported: string;
   noMembers: string;
   noMeasurement: string;
+  // A widget that shows one device, bound to a group: refused, with where the group can be shown.
+  oneDevice: string;
+  useFleetTable: string;
+  usePerDevice: string;
   stale: string;
   // "Showing 500 of 812 devices": a fleet past what is read must say so.
   truncated: (shown: number, total: number) => string;
@@ -43,6 +47,9 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     unsupported: 'This data source cannot list a fleet',
     noMembers: 'No devices in this group',
     noMeasurement: 'Choose the measurement to compare',
+    oneDevice: 'This widget shows one device, and it is bound to a group of devices whose readings it would mix together.',
+    useFleetTable: 'Bind it to one device, or show the group in a fleet table.',
+    usePerDevice: 'Set it to one bar per device to compare them, or bind it to one device.',
     stale: 'stale',
     truncated: (shown, total) => `Showing ${shown} of ${total} devices`,
     range: (from, to, of) => `${from}–${to} of ${of}`,
@@ -62,6 +69,9 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     unsupported: 'Esta fuente de datos no puede listar una flota',
     noMembers: 'No hay dispositivos en este grupo',
     noMeasurement: 'Elija la medición que comparar',
+    oneDevice: 'Este widget muestra un solo dispositivo y está vinculado a un grupo de dispositivos cuyas lecturas mezclaría.',
+    useFleetTable: 'Vincúlelo a un dispositivo o muestre el grupo en una tabla de flota.',
+    usePerDevice: 'Configúrelo con una barra por dispositivo para compararlos, o vincúlelo a un dispositivo.',
     stale: 'obsoleto',
     truncated: (shown, total) => `Mostrando ${shown} de ${total} dispositivos`,
     range: (from, to, of) => `${from}–${to} de ${of}`,

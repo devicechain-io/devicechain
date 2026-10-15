@@ -27,8 +27,8 @@ import {
   CREATE_COMMAND,
 } from './internal/command-doc';
 import { LATEST_LOCATIONS_QUERY } from './internal/location-doc';
-import { createLimiter, foldMemberSeed, MEMBER_SEED_CONCURRENCY, SEED_CANCELLED } from './members';
-import type { MemberRef, MemberRoster, MemberSeed, MemberSink, SeedFailure } from './members';
+import { createLimiter, MEMBER_SEED_CONCURRENCY, SEED_CANCELLED } from './members';
+import type { MemberBucketCriteria, MemberRef, MemberRoster, MemberSeed, MemberSeedPlan, MemberSink, SeedFailure } from './members';
 import { BUCKETED_MEASUREMENTS, type MeasurementBucket } from './queries';
 import {
   MEASUREMENT_STREAM,
@@ -337,12 +337,13 @@ export interface WidgetDataSource {
   // many members; the hub shares each member's upstream stream with every other widget on it.
   // Optional: a source without it leaves a fleet widget with an explained "not supported" state.
   subscribeMembers?(datasource: DatasourceSelector, sink: MemberSink): () => void;
-  // What each of these devices last reported inside the window, delivered per device as its read
-  // settles (`null` when that device's read failed; `error` says why). Bounded and shared: see
-  // MEMBER_SEED_CONCURRENCY. `cancelled` is checked before each read starts. Optional like the above.
+  // Each device's seed, made by the widget's plan from the reads it asks for, delivered per device as
+  // it settles (`null` when that device's plan failed; `failure` says why). Every read is bounded
+  // hub-wide (MEMBER_SEED_CONCURRENCY) and shared with any identical one in flight. `cancelled` is
+  // checked before each read starts. Optional like the above.
   readMemberSeeds?(
     deviceTokens: readonly string[],
-    window: HistoryWindow,
+    plan: MemberSeedPlan,
     onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void,
     cancelled?: () => boolean,
   ): Promise<void>;
@@ -478,56 +479,54 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   }
 
   // The hub-wide cap on in-flight member seed reads, and the reads currently in flight (so a second
-  // widget asking the same question of the same device in the same window shares one request).
+  // widget asking the same question of the same device shares one request).
   private readonly seedLimiter = createLimiter(MEMBER_SEED_CONCURRENCY);
-  private readonly seedReads = new Map<string, Promise<MemberSeed>>();
+  private readonly seedReads = new Map<string, Promise<MeasurementBucket[]>>();
 
   async readMemberSeeds(
     deviceTokens: readonly string[],
-    window: HistoryWindow,
+    plan: MemberSeedPlan,
     onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void,
     cancelled: () => boolean = () => false,
   ): Promise<void> {
     await Promise.all(
       deviceTokens.map(async (token) => {
-        for (;;) {
-          let seed: MemberSeed;
-          try {
-            seed = await this.memberSeed(token, window, cancelled);
-          } catch (err) {
-            if (cancelled()) return;
-            // A read this asker shared with one that has since gone away was dropped before it
-            // started; this asker is still here, so it asks again (now as the first asker).
-            if (err === SEED_CANCELLED) continue;
-            onSeed(token, null, isForbiddenError(err) ? 'forbidden' : 'failed');
-            return;
-          }
-          if (!cancelled()) onSeed(token, seed);
+        let seed: MemberSeed;
+        try {
+          seed = await plan.seed(token, (criteria) => this.memberBuckets(token, criteria, cancelled));
+        } catch (err) {
+          if (cancelled() || err === SEED_CANCELLED) return;
+          onSeed(token, null, isForbiddenError(err) ? 'forbidden' : 'failed');
           return;
         }
+        if (!cancelled()) onSeed(token, seed);
       }),
     );
   }
 
-  private memberSeed(token: string, window: HistoryWindow, cancelled: () => boolean): Promise<MemberSeed> {
-    const key = JSON.stringify([token, window]);
-    let read = this.seedReads.get(key);
-    if (!read) {
-      // The first asker's `cancelled` decides whether the read starts. A later asker that shares the
-      // read while it waits and then finds it dropped is cancelled-or-not on its own account: it
-      // settles through readMemberSeeds' own check, never as a failed device.
-      read = this.seedLimiter(
-        () =>
-          gql(EVENT_AREA, BUCKETED_MEASUREMENTS, { criteria: { deviceToken: token, ...window } }).then((r) =>
-            foldMemberSeed(token, r.bucketedMeasurements),
-          ),
-        cancelled,
-      );
-      this.seedReads.set(key, read);
-      const forget = () => this.seedReads.delete(key);
-      read.then(forget, forget);
+  private async memberBuckets(token: string, criteria: MemberBucketCriteria, cancelled: () => boolean): Promise<MeasurementBucket[]> {
+    const key = JSON.stringify([token, criteria]);
+    for (;;) {
+      let read = this.seedReads.get(key);
+      if (!read) {
+        // The first asker's `cancelled` decides whether the read starts.
+        read = this.seedLimiter(
+          () => gql(EVENT_AREA, BUCKETED_MEASUREMENTS, { criteria: { deviceToken: token, ...criteria } }).then((r) => r.bucketedMeasurements),
+          cancelled,
+        );
+        this.seedReads.set(key, read);
+        const forget = () => this.seedReads.delete(key);
+        read.then(forget, forget);
+      }
+      try {
+        return await read;
+      } catch (err) {
+        // A read this asker shared with one that has since gone away was dropped before it started;
+        // this asker is still here, so it asks again (now as the first asker).
+        if (err === SEED_CANCELLED && !cancelled()) continue;
+        throw err;
+      }
     }
-    return read;
   }
 
   // bucketMeasurements reads the buckets of every (device, measurement) pair over a window. Widgets

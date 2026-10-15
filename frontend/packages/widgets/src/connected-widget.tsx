@@ -204,11 +204,17 @@ const FleetFeed = lazy(() => import('./fleet-feed'));
 function MeasurementConnectedWidget(props: ChannelProps) {
   // Read member by member, or as one stream keyed by measurement name: decided by the descriptor
   // and the widget's options, never by the widget id.
-  if (membersMode(props.descriptor, props.widget)) {
-    const { widget, hub, descriptor, Component, actions } = props;
+  //
+  // Keyed by measurement name, a group's devices would overwrite one another and the widget would
+  // show whichever spoke last as if it were the answer. So a group reaching a widget that is not
+  // reading member by member is refused in words (the fleet chunk says so), whatever brought it
+  // here: a host binding, an older definition. The editor offers a group only to the fleet widgets.
+  const { widget, hub, descriptor, Component, actions } = props;
+  const members = membersMode(descriptor, widget);
+  if (members || widget.datasource?.kind === 'anchor') {
     return (
       <Suspense fallback={null}>
-        <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} />
+        <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} refuse={!members} />
       </Suspense>
     );
   }
@@ -260,16 +266,11 @@ function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, in
 const AggregateFeed = lazy(() => import('./aggregate-feed'));
 
 function AggregateConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+  // An aggregate names one device's measurements, so a group is refused as above.
+  const props = { hub, widget, descriptor, Component, actions, ErrorFrame: WidgetErrorFrame };
   return (
     <Suspense fallback={null}>
-      <AggregateFeed
-        hub={hub}
-        widget={widget}
-        descriptor={descriptor}
-        Component={Component}
-        actions={actions}
-        ErrorFrame={WidgetErrorFrame}
-      />
+      {widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />}
     </Suspense>
   );
 }

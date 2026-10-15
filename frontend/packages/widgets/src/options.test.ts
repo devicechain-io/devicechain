@@ -95,6 +95,9 @@ const SHARED_SOURCES = [
   '../../dashboards/src/slots.ts',
   // lintLayout reads every widget's title to catch one repeating the subject line.
   '../../dashboards/src/layout-lint.ts',
+  // The fleet feed reads the per-device bar chart's `measurement` (what its seed must find) and
+  // the title of the pane it shows a one-device widget bound to a group.
+  'fleet-feed.tsx',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
@@ -107,7 +110,8 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   title: [...WIDGET_TYPES],
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card'],
+  // The fleet feed reads it for the bar chart's one bar per device.
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive.
   selectionTarget: ['alarm-table', 'entity-selector'],
