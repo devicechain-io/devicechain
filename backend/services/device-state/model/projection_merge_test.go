@@ -316,3 +316,103 @@ func TestABatchWriteBackRefusesAZeroUnderADefault(t *testing.T) {
 		t.Errorf("the refused row was written: activity %v; want %v", got, t0)
 	}
 }
+
+// The heartbeat upsert sends a row to the Go fold (a lock read and a write-back) only when the
+// row's guard excludes it: an inferred, inactive device that the batch's latest event is fresh
+// for. A swept device given only events older than its recorded activity cannot flip, so the
+// upsert writes it and no fallback runs. Value tests cannot tell a guard that excludes too
+// much from a correct one, because the fallback's fold produces the same row; only the
+// statement count can.
+func TestAHeartbeatBatchFallsBackOnlyForADeviceItCanBringBack(t *testing.T) {
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name   string
+		at     time.Time
+		want   int64
+		active bool
+	}{
+		{"an older event cannot bring it back: the upsert alone", t0.Add(-time.Second), 1, false},
+		{"a fresh event brings it back: upsert, lock read, write-back", t0.Add(time.Second), 3, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := newSQLiteProjectionApi(t, "db")
+			if err := mergeOneAtATime(api, data("acme", "swept", t0)); err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			if n, err := api.SweepInactive(core.WithSystemContext(context.Background()), t0.Add(2*time.Hour)); err != nil || n != 1 {
+				t.Fatalf("sweep flipped %d, err %v; want 1", n, err)
+			}
+			counter := rdbtest.NewStatementCounter("device_states")
+			counter.Reset()
+			if err := countedApi(api, counter).MergeProjectionBatch(context.Background(),
+				[]ProjectionUpdate{data("acme", "swept", tc.at)}); err != nil {
+				t.Fatalf("batch: %v", err)
+			}
+			if _, marked := counter.Counts(); marked != tc.want {
+				t.Errorf("the batch sent %d statements on device_states; want %d", marked, tc.want)
+			}
+			if ds := loadRow(t, api, "acme", "swept"); ds.Active != tc.active {
+				t.Errorf("active = %v; want %v", ds.Active, tc.active)
+			}
+		})
+	}
+}
+
+// The heartbeat upsert takes its rows' locks in the order its VALUES list them, so it must list
+// them in token order: two writers upserting overlapping devices in different orders would
+// deadlock on PostgreSQL. The devices are given in reverse order, across enough of them that a
+// map's iteration order would not come out sorted by chance.
+func TestTheHeartbeatUpsertListsItsRowsInTokenOrder(t *testing.T) {
+	api := newSQLiteProjectionApi(t, "db")
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	var seen []string
+	if err := api.RDB.Database.Callback().Create().Before("gorm:create").Register("test:values_order", func(tx *gorm.DB) {
+		if rows, ok := tx.Statement.Dest.(*[]DeviceState); ok && tx.Statement.Table == "device_states" {
+			for _, r := range *rows {
+				seen = append(seen, r.DeviceToken)
+			}
+		}
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
+	}
+	var updates []ProjectionUpdate
+	for i := 31; i >= 0; i-- {
+		updates = append(updates, data("acme", fmt.Sprintf("dev-%02d", i), t0))
+	}
+	if err := api.MergeProjectionBatch(context.Background(), updates); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	if len(seen) != 32 {
+		t.Fatalf("the upsert carried %d rows; want 32", len(seen))
+	}
+	if !sort.StringsAreSorted(seen) {
+		t.Errorf("the upsert listed its rows as %v; want token order", seen)
+	}
+}
+
+// The heartbeat upsert is a gorm Create, so core/rdb's tenant rules apply to it: with no tenant
+// bound it fails closed, and with one its update arm is confined to that tenant's rows (the
+// guard core/rdb prepends to the statement's own WHERE).
+func TestTheHeartbeatUpsertKeepsTheTenantRules(t *testing.T) {
+	api := newSQLiteProjectionApi(t, "db")
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	updates := []ProjectionUpdate{data("acme", "d1", t0)}
+	devices := map[string][]int{"d1": {0}}
+	if err := mergeHeartbeats(api.RDB.DB(context.Background()), []string{"d1"}, devices, updates); !errors.Is(err, core.ErrNoTenant) {
+		t.Fatalf("a heartbeat upsert with no tenant in context returned %v; want core.ErrNoTenant", err)
+	}
+	var sql string
+	if err := api.RDB.Database.Callback().Create().After("gorm:create").Register("test:upsert_sql", func(tx *gorm.DB) {
+		if tx.Statement.Table == "device_states" {
+			sql = tx.Statement.SQL.String()
+		}
+	}); err != nil {
+		t.Fatalf("register callback: %v", err)
+	}
+	if err := api.MergeProjectionBatch(context.Background(), updates); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+	if !strings.Contains(sql, "`device_states`.`tenant_id` = `excluded`.`tenant_id` AND (") {
+		t.Errorf("the heartbeat upsert's update arm is not confined to its tenant: %s", sql)
+	}
+}

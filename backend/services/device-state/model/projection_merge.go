@@ -609,6 +609,12 @@ func heartbeatUpsert(tdb *gorm.DB) *gorm.DB {
 //
 // A soft-deleted row would be updated and left deleted, as the latest-value upserts would;
 // nothing soft-deletes these rows.
+//
+// Every VALUES row evaluates the id default, so a row that takes the conflict arm still consumes
+// a value of device_states' own sequence (one per device per batch; the latest-value upserts
+// already do the same). Nothing reads the ids as dense — they are row identities and a keyset
+// cursor, both gap-tolerant — and a bigint sequence outlasts any event rate. Naming the id in
+// VALUES would avoid it only for rows already known, which is the read this path exists to skip.
 func mergeHeartbeats(tdb *gorm.DB, tokens []string, devices map[string][]int, updates []ProjectionUpdate) error {
 	rows := make([]DeviceState, len(tokens))
 	for i, tok := range tokens {
