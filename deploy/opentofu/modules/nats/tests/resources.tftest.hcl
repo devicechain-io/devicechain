@@ -121,7 +121,7 @@ run "request_above_limit_is_refused" {
   command = plan
 
   variables {
-    memory_request = "3Gi"
+    memory_request = "5Gi"
   }
 
   expect_failures = [helm_release.nats]
