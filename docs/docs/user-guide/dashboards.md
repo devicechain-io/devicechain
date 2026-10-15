@@ -104,6 +104,9 @@ platform checks each action against your own permissions.
   pixels. **Gutter** is the space between cells and **Padding** the margin around the dashboard.
 - **Size** decides how the dashboard fills the page: **Fill area**, **Fixed width** or **Fixed
   height**.
+- **Time range** is the span the dashboard's charts draw when it opens: 15m, 1h, 6h, 24h or 7d.
+  One hour is the default. Viewers can pick another from the header and pause the board; see
+  [Viewing dashboards in /dash](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
 
 Drag a widget to move it. A dashed outline shows the cells it will take when you let go, and it
 lands exactly there. A widget in its way moves to the nearest free space above or below, so
@@ -127,6 +130,11 @@ widget placed relative to another moves with it.
 A dashboard saved by an earlier release is converted to the current grid when it opens. The
 conversion is approximate, so the editor shows a note asking you to review the layout. Saving
 keeps the dashboard in the current format and removes the note.
+
+A timeseries chart saved by an earlier release kept a number of samples instead of a span of time.
+A sample count has no span without knowing how often the device reports, so the chart is not
+converted to a guessed span. It follows the dashboard's time range instead, and the editor names
+the charts concerned. Set a **Time span** on any chart that should differ, then save.
 
 **Save** stores your changes in the draft. It is greyed out until there is something to save.
 **Done** returns to the view; unsaved changes stay, and **Save** remains available there. If you
@@ -168,7 +176,10 @@ The settings depend on the widget. Common ones:
   it follows the parent's **First member** or a member you choose (**Manual pick**).
 - **Data source** picks the device or entity the widget reads. For a widget scoped to a parent, it
   explains that the widget follows the parent.
-- **Measurement** and display options such as units, range, precision and how many samples to keep.
+- **Measurement** and display options such as units, range and precision.
+- **Time span** (timeseries chart): how much history the chart draws, in seconds, from 60 to
+  604800. Leave it empty and the chart follows the board's time range, which viewers can change.
+  Set it and the chart keeps that span whatever range a viewer picks.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until

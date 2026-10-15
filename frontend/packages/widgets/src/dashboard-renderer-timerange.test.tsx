@@ -72,6 +72,10 @@ const board = (over: Partial<DashboardDefinition> = {}, chartOptions: Record<str
 const range = (spanSeconds: number, extra: Partial<TimeRangeState> = {}): TimeRangeState => ({ spanSeconds, paused: false, ...extra });
 const flush = () => act(async () => void (await new Promise((r) => setTimeout(r, 0))));
 const fetchesOf = (id: string) => h.fetches.filter((f) => f.widgetId === id);
+const lastChartRender = () => {
+  const all = h.renders.filter((r) => r.widgetId === 'chart');
+  return all[all.length - 1];
+};
 const spanOf = (w: HistoryWindow) => (Date.parse(w.endTime) - Date.parse(w.startTime)) / 1000;
 
 describe('the history window each widget asks for', () => {
@@ -131,7 +135,7 @@ describe('a change of range', () => {
     const { rerender } = render(<DashboardRenderer definition={def} hub={source} timeRange={range(3600)} />);
     await flush();
     await act(async () => fetchesOf('chart')[0].resolve([{ id: 's', deviceToken: 'd-1', eventType: 0, occurredTime: null, name: 't', value: 1, classifier: null }]));
-    expect(h.renders.filter((r) => r.widgetId === 'chart').at(-1)?.seeded).toBe(1);
+    expect(lastChartRender()?.seeded).toBe(1);
 
     const before = h.renders.length;
     rerender(<DashboardRenderer definition={def} hub={source} timeRange={range(86400)} />);
@@ -151,7 +155,7 @@ describe('a change of range', () => {
     const mk = (v: number): MeasurementSample => ({ id: `s${v}`, deviceToken: 'd-1', eventType: 0, occurredTime: null, name: 't', value: v, classifier: null });
     await act(async () => fresh.resolve([mk(2), mk(3)]));
     await act(async () => stale.resolve([mk(1)]));
-    expect(h.renders.filter((r) => r.widgetId === 'chart').at(-1)?.seeded).toBe(2);
+    expect(lastChartRender()?.seeded).toBe(2);
   });
 });
 
