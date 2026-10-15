@@ -15,6 +15,7 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -213,16 +214,16 @@ func loadRacePG(t *testing.T, api *Api, token string) DeviceState {
 	return rows[0]
 }
 
-// A device's row created by another writer between the batch's lock read and its insert, on
-// PostgreSQL: the INSERT … ON CONFLICT DO NOTHING reports no row, and the batch folds its
-// events into the row that is there. This is the LOCKED path (a batch with a presence claim);
-// a data-only batch has no such gap and is the next test. The other writer is simulated inside
-// the batch's own transaction, right after its lock read, as the SQLite test does.
+// A device's row created by another writer just before the batch takes its rows, on
+// PostgreSQL: lockOrCreate takes the conflict arm (locking the row, inserting nothing), and the
+// batch folds its events into the row that is there. This is the LOCKED path (a batch with a
+// presence claim); the heartbeat path is the next test. The other writer is simulated inside
+// the batch's own transaction, right before its first create, as the SQLite test does.
 func TestABatchFoldsIntoARowAnotherWriterCreatedMeanwhileOnPostgres(t *testing.T) {
 	api := newPostgresProjectionApi(t, "race")
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	armed := true
-	if err := api.RDB.Database.Callback().Query().After("gorm:query").Register("test:create_meanwhile", func(tx *gorm.DB) {
+	if err := api.RDB.Database.Callback().Create().Before("gorm:create").Register("test:create_meanwhile", func(tx *gorm.DB) {
 		if !armed || tx.Statement.Table != "device_states" {
 			return
 		}
@@ -501,6 +502,244 @@ func TestTwoReplicasMergingTheSameDevicesEndInTheSerialState(t *testing.T) {
 		t.Errorf("two replicas left a different projection than one writer.\nconcurrent:\n  %s\nserial:\n  %s",
 			strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
+}
+
+// 🔴 THE LOCK-ORDER INVERSION, MADE DETERMINISTIC. Two batch transactions deadlock only when
+// each holds a device row the other is waiting for, and that needs a gap: one of them must be
+// held mid-statement at exactly the right point. These tests make the gap with a third
+// transaction (holdInsert) that has inserted a device's row and not committed — every other
+// inserter of that device waits for it — and release it only once the other writer has either
+// finished or is visibly waiting for the held batch (pg_blocking_pids). A path that takes rows
+// out of token order then deadlocks every run (PostgreSQL aborts one side with 40P01 after
+// deadlock_timeout), not one run in many.
+
+// heldInsert is an open transaction, on a connection of its own, that has inserted one device's
+// row and not committed.
+type heldInsert struct {
+	tx  *sql.Tx
+	pid int
+}
+
+// holdInsert inserts tok's row for tenant acme in a transaction it leaves open: until it is
+// rolled back, any other transaction inserting tok waits for it.
+func holdInsert(t *testing.T, api *Api, tok string) *heldInsert {
+	t.Helper()
+	db, err := api.RDB.Database.DB()
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin the held insert: %v", err)
+	}
+	h := &heldInsert{tx: tx}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	if err := tx.QueryRowContext(ctx, "SELECT pg_backend_pid()").Scan(&h.pid); err != nil {
+		t.Fatalf("held insert's backend: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO "device-state".device_states (created_at, updated_at, tenant_id, `+
+		`device_token, external_id, source, active, inactivity_timeout, presence_source, session_id) `+
+		`VALUES ($1, $1, 'acme', $2, '', '', false, 600, 'INFERRED', 0)`, now, tok); err != nil {
+		t.Fatalf("the held insert of %s: %v", tok, err)
+	}
+	return h
+}
+
+// release rolls the held insert back: tok has no row again, and its waiters go on.
+func (h *heldInsert) release(t *testing.T) {
+	t.Helper()
+	if err := h.tx.Rollback(); err != nil {
+		t.Fatalf("release the held insert: %v", err)
+	}
+}
+
+// blockedBy counts the backends waiting for a lock that pid holds.
+func blockedBy(t *testing.T, api *Api, pid int) int {
+	t.Helper()
+	return countBackends(t, api, "$1 = ANY(pg_blocking_pids(pid))", pid)
+}
+
+// blockedByAWriter counts the backends of api's database waiting for a lock held by anything
+// other than the held inserts: one batch writer waiting for another.
+func blockedByAWriter(t *testing.T, api *Api, held ...*heldInsert) int {
+	t.Helper()
+	pids := make([]string, len(held))
+	for i, h := range held {
+		pids[i] = strconv.Itoa(h.pid)
+	}
+	return countBackends(t, api, "datname = current_database() AND cardinality(pg_blocking_pids(pid)) > 0 "+
+		"AND NOT (pg_blocking_pids(pid) && ARRAY["+strings.Join(pids, ",")+"]::int[])")
+}
+
+func countBackends(t *testing.T, api *Api, where string, args ...any) int {
+	t.Helper()
+	db, err := api.RDB.Database.DB()
+	if err != nil {
+		t.Fatalf("pool: %v", err)
+	}
+	var n int
+	if err := db.QueryRowContext(context.Background(), "SELECT count(*) FROM pg_stat_activity WHERE "+where,
+		args...).Scan(&n); err != nil {
+		t.Fatalf("count waiting backends: %v", err)
+	}
+	return n
+}
+
+// eventually polls cond until it holds or d passes, and reports which.
+func eventually(d time.Duration, cond func() bool) bool {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return true
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return cond()
+}
+
+// mergeAsync runs one batch on api in the background; its error arrives on the channel.
+func mergeAsync(api *Api, batch []ProjectionUpdate) chan error {
+	done := make(chan error, 1)
+	go func() { done <- api.MergeProjectionBatch(context.Background(), batch) }()
+	return done
+}
+
+// finishedOrWaiting waits until the batch behind done has finished (its error, and true) or a
+// batch writer is waiting for another (false). It fails the test if neither happens.
+func finishedOrWaiting(t *testing.T, api *Api, done chan error, what string, held ...*heldInsert) (bool, error) {
+	t.Helper()
+	var err error
+	finished := false
+	if !eventually(15*time.Second, func() bool {
+		select {
+		case err = <-done:
+			finished = true
+			return true
+		default:
+			return blockedByAWriter(t, api, held...) > 0
+		}
+	}) {
+		t.Fatalf("%s neither finished nor waited for another writer", what)
+	}
+	return finished, err
+}
+
+// await is the error of the batch behind done, failing the test if it never finishes.
+func await(t *testing.T, done chan error, what string) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(30 * time.Second):
+		t.Fatalf("%s never finished", what)
+		return nil
+	}
+}
+
+// assertSerialState replays batches one after another into a database of its own and requires
+// api's projection to equal it (on orderFreeRows).
+func assertSerialState(t *testing.T, api *Api, batches ...[]ProjectionUpdate) {
+	t.Helper()
+	serial := newPostgresProjectionApi(t, "serialinv")
+	for _, b := range batches {
+		if err := serial.MergeProjectionBatch(context.Background(), b); err != nil {
+			t.Fatalf("serial: %v", err)
+		}
+	}
+	if got, want := orderFreeRows(t, api), orderFreeRows(t, serial); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("the two batches left a different projection than merging them one after the other.\n"+
+			"concurrent:\n  %s\nserial:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// A CLAIM BATCH AND A HEARTBEAT BATCH, where a NEW device sorts below a KNOWN one: the shape that
+// failed TestTwoReplicasMergingTheSameDevicesEndInTheSerialState intermittently with 40P01.
+//
+// dl-2 exists; dl-0 and dl-1 do not. The claim batch (dl-0, dl-1, claim on dl-2) is held at
+// dl-0 by holdInsert. The heartbeat batch (dl-1, dl-2), from a second pool, then runs. A locked
+// path that locks EXISTING rows first already holds dl-2 at that point, so the heartbeat batch
+// inserts dl-1 and waits for dl-2; released, the claim batch inserts dl-0 and waits for dl-1 —
+// a cycle. Taking every row in one token-ordered statement, the claim batch holds nothing while
+// it waits at dl-0, and the heartbeat batch simply finishes.
+func TestAClaimBatchAndAHeartbeatBatchOverNewAndKnownDevicesDoNotDeadlockOnPostgres(t *testing.T) {
+	api := newPostgresProjectionApi(t, "invhb")
+	replica := newPostgresReplica(t, api)
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	t1, t2 := t0.Add(time.Minute), t0.Add(2*time.Minute)
+	seed := []ProjectionUpdate{data("acme", "dl-2", t0)}
+	if err := api.MergeProjectionBatch(context.Background(), seed); err != nil {
+		t.Fatalf("seed dl-2: %v", err)
+	}
+	claimBatch := []ProjectionUpdate{reading("acme", "dl-0", t1, "temp", 1), reading("acme", "dl-1", t1, "temp", 1),
+		claim("acme", "dl-2", t1, presence.ClaimConnected, 1)}
+	heartbeatBatch := []ProjectionUpdate{reading("acme", "dl-1", t2, "temp", 2), reading("acme", "dl-2", t2, "temp", 2)}
+
+	hold := holdInsert(t, api, "dl-0")
+	claimDone := mergeAsync(api, claimBatch)
+	if !eventually(15*time.Second, func() bool { return blockedBy(t, api, hold.pid) > 0 }) {
+		t.Fatal("the claim batch never reached dl-0, so the test made no gap")
+	}
+	heartbeatDone := mergeAsync(replica, heartbeatBatch)
+	heartbeatFinished, heartbeatErr := finishedOrWaiting(t, api, heartbeatDone, "the heartbeat batch", hold)
+	hold.release(t)
+	claimErr := await(t, claimDone, "the claim batch")
+	if !heartbeatFinished {
+		heartbeatErr = await(t, heartbeatDone, "the heartbeat batch")
+	}
+	if claimErr != nil || heartbeatErr != nil {
+		t.Fatalf("claim batch: %v; heartbeat batch: %v — two batches took device rows in opposite orders "+
+			"(the heartbeat batch waited for the claim batch: %v)", claimErr, heartbeatErr, !heartbeatFinished)
+	}
+	assertSerialState(t, api, seed, heartbeatBatch, claimBatch)
+}
+
+// TWO CLAIM BATCHES and a third writer that creates a row between them: the shape main's locked
+// path already had (it locked the rows that existed, then inserted the rest, and a row created
+// after its read was then locked last — out of order).
+//
+// Nothing exists. Batch A (dm-0, dm-2, claim on dm-3) is held at dm-0; then dm-3 is created and
+// committed; then batch B (dm-1, dm-2, claim on dm-3), from a second pool, is held at dm-1. A
+// path that reads existing rows first has B holding dm-3 (it existed at B's read but not at A's).
+// A is released: it inserts dm-0 and dm-2, finds dm-3 created meanwhile and waits for B's lock on
+// it. B is released: it inserts dm-1 and waits for A's dm-2 — a cycle. In one token-ordered
+// statement neither batch holds anything while it waits, and A finishes before B is released.
+func TestTwoClaimBatchesAroundARowCreatedBetweenThemDoNotDeadlockOnPostgres(t *testing.T) {
+	api := newPostgresProjectionApi(t, "invclaim")
+	replica := newPostgresReplica(t, api)
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	t1, t2 := t0.Add(time.Minute), t0.Add(2*time.Minute)
+	batchA := []ProjectionUpdate{reading("acme", "dm-0", t1, "temp", 1), reading("acme", "dm-2", t1, "temp", 1),
+		claim("acme", "dm-3", t1, presence.ClaimConnected, 1)}
+	created := []ProjectionUpdate{data("acme", "dm-3", t0)}
+	batchB := []ProjectionUpdate{reading("acme", "dm-1", t2, "temp", 2), reading("acme", "dm-2", t2, "temp", 2),
+		claim("acme", "dm-3", t2, presence.ClaimConnected, 2)}
+
+	holdA, holdB := holdInsert(t, api, "dm-0"), holdInsert(t, api, "dm-1")
+	aDone := mergeAsync(api, batchA)
+	if !eventually(15*time.Second, func() bool { return blockedBy(t, api, holdA.pid) > 0 }) {
+		t.Fatal("batch A never reached dm-0, so the test made no gap")
+	}
+	if err := api.MergeProjectionBatch(context.Background(), created); err != nil {
+		t.Fatalf("the third writer's dm-3: %v", err)
+	}
+	bDone := mergeAsync(replica, batchB)
+	if !eventually(15*time.Second, func() bool { return blockedBy(t, api, holdB.pid) > 0 }) {
+		t.Fatal("batch B never reached dm-1, so the test made no gap")
+	}
+	holdA.release(t)
+	aFinished, aErr := finishedOrWaiting(t, api, aDone, "batch A", holdB)
+	holdB.release(t)
+	bErr := await(t, bDone, "batch B")
+	if !aFinished {
+		aErr = await(t, aDone, "batch A")
+	}
+	if aErr != nil || bErr != nil {
+		t.Fatalf("batch A: %v; batch B: %v — two batches took device rows in opposite orders "+
+			"(batch A waited for batch B: %v)", aErr, bErr, !aFinished)
+	}
+	assertSerialState(t, api, created, batchA, batchB)
 }
 
 // orderFreeRows is the projection's rows minus what legitimately depends on arrival order
