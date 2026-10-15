@@ -57,12 +57,15 @@ func TestMaintenanceWindowWireSurface(t *testing.T) {
 	// An empty schedule is an EMPTY decision, and decodes as lists, not nulls: command
 	// delivery reads an absent list as a broken response and fails closed.
 	sched := exec(`query { commandDispatchSchedule(deviceTokens: ["nobody"], commandKey: "reboot") {
-	  holds { deviceToken } refusals { deviceToken code } } }`, nil)["commandDispatchSchedule"].(map[string]any)
+	  holds { deviceToken } refusals { deviceToken code } ungated } }`, nil)["commandDispatchSchedule"].(map[string]any)
 	if holds, ok := sched["holds"].([]any); !ok || len(holds) != 0 {
 		t.Fatalf("holds = %v, want an empty list", sched["holds"])
 	}
 	if refusals, ok := sched["refusals"].([]any); !ok || len(refusals) != 0 {
 		t.Fatalf("refusals = %v, want an empty list", sched["refusals"])
+	}
+	if ungated, ok := sched["ungated"].([]any); !ok || len(ungated) != 0 {
+		t.Fatalf("ungated = %v, want an empty list", sched["ungated"])
 	}
 
 	res := schema.Exec(ctx, `mutation($r: MaintenanceWindowCreateRequest!) {

@@ -380,6 +380,57 @@ func TestAFetchErrorDefersAndRetries(t *testing.T) {
 	assert.Equal(t, 1.0, testutil.ToFloat64(h.m.DrainErrors))
 }
 
+// TestAPageWhoseEveryClaimIsRefusedBacksOff: the fetch offers a full page the claim refuses row by
+// row — a disabled device, before the read carried the disabled predicate. Each turn then saw a
+// full page, re-armed with no delay, and read the same page again: a hot loop of one fetch and
+// drainTurnMax claims per turn against command-delivery. The turns are counted over a fixed
+// interval of real time while the virtual clock stands still, so a backed-off device takes exactly
+// one; a spinning one takes hundreds.
+func TestAPageWhoseEveryClaimIsRefusedBacksOff(t *testing.T) {
+	h := newHarness(t, 1, func(h *harness) { h.store.refuse["pump-1"] = true })
+	h.look.set("pump-1", ReachLive)
+	for i := 1; i <= drainTurnMax+1; i++ {
+		h.store.add(fmt.Sprintf("c%d", i), "pump-1", statusHeld)
+	}
+
+	h.d.Drain("acme", "pump-1")
+	require.Eventually(t, func() bool { return h.store.fetchCount() >= 1 }, time.Second, time.Millisecond)
+	never(t, func() bool { return h.store.fetchCount() > 1 }, "a page whose every claim was refused was read again at once")
+	assert.Empty(t, h.exec.order(), "nothing was claimed, so nothing may run")
+	require.Eventually(t, func() bool {
+		p := h.clk.pending()
+		return len(p) == 1 && p[0].Equal(h.clk.Now().Add(drainRetryDelay))
+	}, time.Second, time.Millisecond, "the next turn is armed at drainRetryDelay")
+
+	// It is a back-off, not a stop: the device is still read again, once, after the delay.
+	h.clk.Advance(drainRetryDelay)
+	require.Eventually(t, func() bool { return h.store.fetchCount() == 2 }, time.Second, time.Millisecond)
+	never(t, func() bool { return h.store.fetchCount() > 2 }, "the retry spun")
+	assert.True(t, h.gated("pump-1"), "the backlog is still there, so the gate stays up")
+}
+
+// TestAShortPageOfLostClaimsLiftsTheGateAfterTheBackOff: the ordinary race — someone else took
+// every row on a short page. The back-off costs one delayed, empty read, and then the gate lifts.
+func TestAShortPageOfLostClaimsLiftsTheGateAfterTheBackOff(t *testing.T) {
+	h := newHarness(t, 1, nil)
+	h.look.set("pump-1", ReachLive)
+	h.store.add("c1", "pump-1", statusHeld)
+	h.store.mu.Lock()
+	h.store.refuse["pump-1"] = true
+	h.store.mu.Unlock()
+
+	h.d.Drain("acme", "pump-1")
+	require.Eventually(t, func() bool { return len(h.clk.pending()) == 1 }, time.Second, time.Millisecond)
+	h.store.mu.Lock()
+	h.store.byTok["c1"].status = "SENT" // the other dispatcher's claim: the row has left the backlog
+	h.store.mu.Unlock()
+
+	h.clk.Advance(drainRetryDelay)
+	require.Eventually(t, func() bool { return !h.gated("pump-1") }, time.Second, time.Millisecond,
+		"an empty backlog after the back-off lifts the gate")
+	assert.Equal(t, 2, h.store.fetchCount())
+}
+
 // TestAClaimErrorStopsTheTurnAndRetriesInOrder: the first row's claim fails. The turn stops there
 // rather than claiming the second row and delivering it first, and the retry starts from the same
 // row.

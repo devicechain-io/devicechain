@@ -1081,8 +1081,10 @@ type Mutation {
     For a transport that received a command on the live delivery stream: confirms, just before
     actuating, that the delivery is still the dispatch the platform holds. Returns a new
     dispatch nonce to quote when reporting the outcome, or null when the delivery is stale
-    (re-armed, re-sent, answered, cancelled or its batch cancelled), in which case discard it
-    without actuating. Requires command:claim, a system-tier authority.
+    (re-armed, re-sent, answered, cancelled or its batch cancelled) or its maintenance window
+    has closed, in which case discard it without actuating. A command refused because its
+    window closed is moved back to PARKED, to be delivered in the next opening. Requires
+    command:claim, a system-tier authority.
     """
     # Confirm, immediately before actuating it, that a command a transport RECEIVED on the
     # live delivery stream is still the dispatch the platform is holding. For a transport that

@@ -230,8 +230,10 @@ func (r *SchemaResolver) MarkCommandSent(ctx context.Context, args struct {
 //
 // 🔑 IT IS GATED ON command:claim, THE AUTHORITY THE WAKE DRAIN ALREADY USES, NOT A NEW ONE.
 // It takes a dispatch into the transport's hands, which is exactly what command:claim
-// documents. It cannot move a row backwards or out of SENT, so it is weaker than parking, and
-// its only power over a row is to make a stale dispatch lose — which needs the live nonce.
+// documents. Its power over a row is to make a stale dispatch lose, and — only for the dispatch
+// it names, and only once that command's maintenance window has closed — to park it SENT ->
+// PARKED for the next opening. Both need the live nonce, and the park is what the stranded-SENT
+// pass would do to that row after its grace anyway, so it is still weaker than command:park.
 //
 // Like markCommandSent it returns the nonce rather than the row: the caller's decision to
 // actuate must rest on whether THIS call's conditional UPDATE matched.

@@ -1301,9 +1301,11 @@ func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (CommandStat
 // actuate minutes after an operator was told the fleet write had stopped. Duplicating the
 // subquery per route is how one of them ends up without it.
 //
-// ConfirmDispatch runs it too, although a confirm keeps the row in SENT rather than taking it
-// back: the confirm is the last step before a transport actuates, so a called-off batch's
-// command stops there instead of reaching the device.
+// ConfirmDispatch runs it too: the confirm is the last step before a transport actuates, so a
+// called-off batch's command stops there instead of reaching the device. A confirm normally keeps
+// the row in SENT, but one refused because the window closed parks it (parkOutsideWindow) — a
+// fourth route back into the dispatchable set, which carries the cancelled-batch predicate in its
+// own UPDATE for the race this write cannot see.
 //
 // It runs before the caller's own write and both are predicated on SENT, so exactly one of
 // the two can move the row — which is what makes the sequence safe without a transaction.
@@ -1668,6 +1670,14 @@ const DefaultDrainLimit = 32
 // rdb.MaxPageSize is clamped to it. A caller cannot ask for an unbounded drain, which is
 // the point — the backlog of a fleet that was offline for a weekend is exactly the set
 // that must not arrive in one response.
+//
+// 🔴 A DISABLED DEVICE'S BACKLOG IS NOT DRAINABLE, AND THE READ SAYS SO FOR THE SAME REASON
+// THE WINDOW PREDICATE SITS ON IT. MarkSentByToken refuses a disabled device's row, so a read
+// that offered those rows handed the drain a page it could claim none of. The LwM2M drain read
+// that as a full page of rows someone else had taken and asked again at once, so a disabled
+// queue-mode device with a few withheld commands spun its shard in a tight fetch-and-claim
+// loop until its next registration update. Every predicate a claim carries belongs on the read
+// that feeds it; this one was the pair left out of step.
 func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit int) ([]*Command, error) {
 	if limit <= 0 {
 		limit = DefaultDrainLimit
@@ -1685,6 +1695,7 @@ func (api *Api) DrainableCommands(ctx context.Context, deviceToken string, limit
 		Where("status IN ?", drainableStatusStrings()).
 		Where(liveSQL, liveArgs...).
 		Where(heldSQL, heldArgs...).
+		Where("(tenant_id, device_token) NOT IN (?)", api.disabledDevices(ctx)).
 		Order("id ASC").
 		Limit(limit).
 		Find(&found)
@@ -1810,6 +1821,20 @@ func (api *Api) MarkSentByToken(ctx context.Context, token string) (string, bool
 // stays SENT until the stranded pass retires it (to CANCELLED, through the same brake), and the
 // device is not actuated either way.
 //
+// 🔴 A CONFIRM REFUSED BECAUSE THE WINDOW CLOSED PARKS THE ROW, AND IT USED TO LEAVE IT SENT.
+// The sweep can claim a command moments before its maintenance window closes, and a busy
+// transport can reach this confirm after the close. The rotation carries the window predicate,
+// so it matches nothing, and the transport (correctly) does not actuate. But the row then sat in
+// SENT on a dispatch nobody would ever actuate: rescued by the stranded-SENT pass after its
+// grace only where presence is wired, and otherwise left to reach TIMEOUT at its TTL — "sent and
+// never answered", about a command the device was never sent, which a batch retry then refuses
+// without includeUnknown. It is now parked in the same call (parkOutsideWindow): PARKED is
+// exactly "dispatched, and it went nowhere", the re-stamp pass rolls it to the next opening like
+// any other waiting row, and the stranded pass has nothing to clean up. Unlike that pass, this
+// park needs no presence to be safe: only a transport that confirms before it actuates calls
+// here, and a refused confirm is that transport's own word that it did not actuate — the one
+// fact the stranded pass has to infer.
+//
 // Three outcomes, as MarkSentByToken's: (newNonce, true, nil) — confirmed, actuate, and quote
 // newNonce in the response (MarkResponse matches the row's CURRENT nonce, so the old one would
 // be refused); ("", false, nil) — lost, do not actuate; (_, _, err) — unknown, do not actuate.
@@ -1827,7 +1852,39 @@ func (api *Api) ConfirmDispatch(ctx context.Context, token, nonce string) (strin
 	if stopped {
 		return "", false, nil
 	}
-	return api.rotateDispatch(ctx, where, args)
+	next, won, err := api.rotateDispatch(ctx, where, args)
+	if err != nil || won {
+		return next, won, err
+	}
+	if err := api.parkOutsideWindow(ctx, where, args); err != nil {
+		return "", false, err
+	}
+	return "", false, nil
+}
+
+// parkOutsideWindow is the second half of a refused confirm: it takes the row SENT -> PARKED if,
+// and only if, it is still on the quoted dispatch and its hold no longer admits a start. Every
+// other reason a rotation can match nothing leaves the row alone, because each already has an
+// owner: a stale nonce means the row has moved on (answered, re-armed, re-claimed), and a
+// called-off batch is the stranded pass's to land on CANCELLED — so the batch predicate is
+// carried here too, or a cancel committing between the brake write and this one would leave a
+// called-off command PARKED and claimable.
+//
+// The window condition is the exact negation of dispatchableNowWhere, written from it rather than
+// spelled again, so "outside the window" here can never disagree with "inside" on the claims.
+// sent_time is cleared and the nonce kept, as ParkClaim does: a redelivered copy of the envelope
+// quoting it is refused by the confirm's status = 'SENT'.
+func (api *Api) parkOutsideWindow(ctx context.Context, where string, args []any) error {
+	heldSQL, heldArgs := dispatchableNowWhere(time.Now())
+	return api.RDB.DB(ctx).Model(&Command{}).
+		Where(where, args...).
+		Where("status = ?", CommandSent.String()).
+		Where("NOT ("+heldSQL+")", heldArgs...).
+		Where("(batch_id IS NULL OR batch_id NOT IN (?))", api.cancelledBatchIds(ctx)).
+		Updates(map[string]any{
+			"status":    CommandParked.String(),
+			"sent_time": sql.NullTime{},
+		}).Error
 }
 
 // rotateDispatch is ConfirmDispatch's conditional UPDATE, split out only so the folded

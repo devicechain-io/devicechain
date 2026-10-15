@@ -423,8 +423,9 @@ Los comandos que ya esperan una ventana siguen su nuevo calendario en aproximada
 pase con bloqueo de líder en la entrega de comandos consulta periódicamente al propietario de la
 ventana. Es un sondeo, no un evento, así que el límite es de unos 60 segundos, y converge incluso si
 una notificación se hubiera perdido. El contador `command_delivery_window_restamps_total` cuenta los
-comandos cuya retención se movió porque la ventana se editó o se eliminó, o se cerró de nuevo antes
-de que volviera el dispositivo.
+comandos cuya retención se movió porque la ventana se editó o se eliminó, se cerró de nuevo antes
+de que volviera el dispositivo, o porque su tipo de dispositivo pasó a otra ventana o se quedó sin
+ventana.
 
 - Eliminar una ventana se rechaza mientras algún tipo de dispositivo la use. Si una ventana
   desaparece de todos modos, los comandos en espera se liberan y se despachan con normalidad.
@@ -432,8 +433,19 @@ de que volviera el dispositivo.
   puede reclamarse en cuanto la ventana se cierra, y ese mismo pase lo mueve a la siguiente
   apertura. Si la entrega de comandos no puede contactar con el propietario de la ventana, los
   comandos en espera siguen esperando; ninguno se libera.
-- Desasignar una ventana de un tipo de dispositivo no libera los comandos ya marcados con ella;
-  siguen esperando a esa ventana.
+- Los comandos en espera siguen a su **tipo** de dispositivo, no a la ventana con la que se
+  marcaron. Si un tipo pasa a otra ventana, el mismo pase mueve los comandos que ya esperan a la
+  siguiente apertura de la nueva ventana. Si se le quita la ventana al tipo, o el comando ya no es
+  `DISRUPTIVE` ni `DESTRUCTIVE` en él, se liberan y se despachan con normalidad. Los comandos de un
+  dispositivo deshabilitado se quedan en la ventana con la que se marcaron hasta que el dispositivo
+  se habilita; el pase siguiente los mueve entonces.
+- Liberar no es pausar. Los comandos liberados se envían en cuanto la entrega los alcanza, fuera de
+  cualquier ventana, así que desvincular la ventana de un tipo con muchos comandos disruptivos en
+  espera los envía todos en aproximadamente un minuto. Lo mismo ocurre cuando una nueva versión del
+  perfil marca el comando como `NORMAL` o deja de definirlo. Para detener los comandos en espera,
+  cancélalos (o su lote) antes de desvincular la ventana, o pasa el tipo a otra ventana.
+- Si un comando LwM2M se reclamó dentro de su ventana y la ventana se cierra antes de que pueda
+  enviarse al dispositivo, no se envía. Vuelve a esperar (`PARKED`) a la siguiente apertura.
 
 ### Lo que no se controla {#maintenance-window-limits}
 

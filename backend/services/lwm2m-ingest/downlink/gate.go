@@ -376,7 +376,7 @@ func (s *shardState) pickEligible(clk dispatchClock) (deviceKey, uint64, bool) {
 // turnResult is what one drain turn found.
 type turnResult struct {
 	fetched int  // rows the page held
-	failed  bool // a fetch or claim error: retry after drainRetryDelay
+	failed  bool // a fetch or claim error, or a page whose every claim was lost: retry after drainRetryDelay
 	stopped bool // the device was not live, the term ended, the tenant is deleted, or draining is off
 }
 
