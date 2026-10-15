@@ -393,5 +393,17 @@
   "layoutFitted": "Widgets ajustados a sus límites de tamaño.",
   "layoutAlreadyFits": "Todos los widgets ya respetan sus límites.",
   "versionLayoutBlocked_one": "Debes corregir {{count}} widget que está fuera de su tamaño admitido o del lienzo antes de publicar este panel.",
-  "versionLayoutBlocked_other": "Debes corregir {{count}} widgets que están fuera de su tamaño admitido o del lienzo antes de publicar este panel."
+  "versionLayoutBlocked_other": "Debes corregir {{count}} widgets que están fuera de su tamaño admitido o del lienzo antes de publicar este panel.",
+  "widgetTypeFleetTable": "Tabla de flota",
+  "widgetLabelColumns": "Columnas",
+  "widgetHintColumns": "Encabezado, unidad y precisión de cada columna de medición. Una columna sin entrada muestra el nombre de la medición.",
+  "widgetLabelColumnHeading": "Encabezado",
+  "widgetLabelSortBy": "Ordenar por",
+  "widgetHintSortBy": "La medición por la que se ordena la tabla. Déjela en blanco para ordenar por nombre de dispositivo. Los usuarios pueden reordenar desde los encabezados.",
+  "widgetLabelSortDescending": "Mayor primero",
+  "widgetLabelPageSize": "Dispositivos por página",
+  "widgetLabelGroupBy": "Una barra por",
+  "widgetHintGroupBy": "Qué representa una barra: cada medición de un dispositivo, o cada dispositivo del grupo para la medición elegida abajo.",
+  "widgetGroupByMeasurement": "Medición",
+  "widgetGroupByDevice": "Dispositivo"
 }

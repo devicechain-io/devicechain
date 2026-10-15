@@ -156,7 +156,7 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 
 | Grupo | Widgets |
 |---|---|
-| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso, Tarjeta de estadística, Gráfico de barras, Gráfico circular |
+| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso, Tarjeta de estadística, Gráfico de barras, Gráfico circular, Tabla de flota |
 | Estático | Etiqueta, Imagen |
 | Alarmas | Tabla de alarmas, Contador de alarmas |
 | Control | Botón de comando, Control deslizante de comando, Interruptor de comando |
@@ -182,7 +182,10 @@ Los ajustes dependen del widget. Los más comunes:
   **Estrategia** decide si sigue al **Primer miembro** del principal o a un miembro que tú eliges
   (**Selección manual**).
 - **Fuente de datos** elige el dispositivo o la entidad que lee el widget. En un widget que sigue a
-  un principal, explica que el widget lo sigue.
+  un principal, explica que el widget lo sigue. Solo la tabla de flota y un gráfico de barras con una
+  barra por dispositivo pueden leer un grupo de dispositivos; cualquier otro widget de telemetría
+  muestra un solo dispositivo y, vinculado a un grupo, lo indica en lugar de mezclar las lecturas de
+  varios dispositivos.
 - **Medición** y opciones de presentación como unidades, rango y precisión.
 - **Intervalo de tiempo** (gráfico de series temporales): cuánto historial dibuja el gráfico, en
   segundos, de 60 a 604800. Si lo dejas vacío, el gráfico sigue el intervalo de tiempo del panel,
@@ -197,6 +200,8 @@ Los ajustes dependen del widget. Los más comunes:
 - **Orden** (gráfico de barras, gráfico circular): las mediciones en el orden en que las lista la
   fuente de datos, o de menor a mayor o de mayor a menor. Una medición que aún no ha informado va
   la última. El gráfico de barras dibuja columnas en un widget ancho y filas en uno alto.
+- **Una barra por** (gráfico de barras): *Medición* (el valor predeterminado) dibuja una barra por cada medición de un dispositivo. *Dispositivo* dibuja una barra por cada dispositivo del grupo al que está vinculado el widget, para la **Medición** que elija, por lo que la fuente de datos debe ser un grupo de dispositivos. Un grupo demasiado grande se recorta a sus primeras barras en el orden elegido, y el gráfico indica «Mostrando N de M dispositivos».
+- **Tabla de flota**: una fila por dispositivo del grupo al que está vinculado el widget y una columna por cada medición que selecciona la fuente de datos. **Columnas** da un encabezado, unidad y precisión por medición; **Umbrales** colorean las celdas de la columna de una medición (la banda normal conserva el color de la tabla); **Obsoleto tras** marca como obsoleta una lectura más antigua que esos segundos, y sin él la tabla solo muestra la antigüedad de cada lectura. Haga clic en el encabezado de una columna, o púlselo con el teclado, para ordenar; **Ordenar por** y **Mayor primero** fijan el orden inicial, y los dispositivos sin valor en la columna ordenada quedan siempre al final. **Dispositivos por página** pagina una flota larga. **Ranura de destino** convierte el nombre del dispositivo en un enlace que selecciona ese dispositivo en los widgets vinculados a la ranura. En un tablero estrecho la tabla pasa a una tarjeta por dispositivo. Una celda sin número explica por qué: *sin datos en el rango*, *no informa esta medición* (el dispositivo informa otras mediciones pero nunca esta) o *no se pudo leer*. La tabla lee los primeros 500 dispositivos de un grupo e indica «Mostrando 500 de N dispositivos» cuando el grupo es mayor. Sigue el rango de tiempo del tablero, y un tablero en pausa la detiene.
 
 Los problemas con las opciones de un widget, como una opción que no lee, una obligatoria vacía o un
 valor fuera de rango, se enumeran en **Historial de versiones**. **Publicar versión** sigue

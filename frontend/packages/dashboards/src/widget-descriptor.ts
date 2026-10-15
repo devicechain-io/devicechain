@@ -124,6 +124,10 @@ export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOption
         // The referenced option pins the span (seconds); unset, the widget follows the board's
         // time range, which a viewer may change.
         windowSeconds?: NumberOptionRef<S>;
+        // Makes the widget a FLEET widget: its datasource is read member by member (one row or bar
+        // per device of an anchor) and `data.members` is set. `{ const: true }` always; or an option
+        // reference with the value that turns the mode on (a bar chart's "one bar per device").
+        members?: ConstBinding<true> | (StringOptionRef<S> & { equals: string });
       }
     : C extends 'alarm'
       ? {

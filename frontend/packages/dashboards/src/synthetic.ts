@@ -12,6 +12,7 @@
 // a device).
 
 import type { HistoryWindow } from './history';
+import type { MemberRef, MemberSeed, MemberSeedPlan, MemberSink } from './members';
 import type { MeasurementBucket } from './queries';
 import type {
   AlarmStreamSink,
@@ -387,6 +388,55 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
         count: values.length,
       };
     });
+  }
+
+  // A preview fleet: a handful of fabricated devices, each out of phase with the others (the
+  // series is keyed by device and name together), and one that never reports its second
+  // measurement, so a table previews its "does not report this" cell. An unbound slot has no
+  // members, as in the live hub.
+  private previewMembers(datasource: DatasourceSelector): MemberRef[] {
+    if (datasource.kind === 'unbound') return [];
+    return Array.from({ length: 5 }, (_, i) => ({ token: `synthetic-${i + 1}`, name: `Unit ${i + 1}` }));
+  }
+
+  subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void {
+    const members = this.previewMembers(datasource);
+    const names = datasource.measurements.length > 0 ? datasource.measurements : [DEFAULT_NAME];
+    const walk = new Map<string, number>();
+    let seq = 0;
+    const emit = (token: string, tMs: number): void => {
+      // One member never reports past its first measurement.
+      for (const name of token === 'synthetic-4' ? names.slice(0, 1) : names) {
+        sink.next({
+          id: `syn-m-${seq++}`,
+          deviceToken: token,
+          eventType: 0,
+          occurredTime: new Date(tMs).toISOString(),
+          name,
+          value: this.valueFor(`${token}/${name}`, tMs, walk),
+          classifier: null,
+        });
+      }
+    };
+    sink.roster({ members, total: members.length, unbound: datasource.kind === 'unbound' });
+    for (const m of members) emit(m.token, Date.now());
+    const timer = setInterval(() => {
+      for (const m of members) emit(m.token, Date.now());
+    }, this.intervalMs);
+    this.timers.add(timer);
+    return () => {
+      if (this.timers.delete(timer)) clearInterval(timer);
+    };
+  }
+
+  // A preview has no history to read: its members report the moment they are subscribed, so the
+  // seed settles empty and the live feed alone fills the cells.
+  async readMemberSeeds(
+    deviceTokens: readonly string[],
+    _plan: MemberSeedPlan,
+    onSeed: (deviceToken: string, seed: MemberSeed | null) => void,
+  ): Promise<void> {
+    for (const token of deviceTokens) onSeed(token, { latest: {}, observed: [] });
   }
 
   // disposeAll stops every live stream (e.g. when preview is turned off). Individual

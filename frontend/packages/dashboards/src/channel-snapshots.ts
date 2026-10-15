@@ -18,6 +18,36 @@ export interface MeasurementStreamState {
   // were still inside it: the window then covers from this instant (the oldest sample kept), not
   // the whole span. A chart must say so rather than draw a short window under a long span's label.
   truncatedBefore?: string;
+  // Present only on a widget that reads a whole fleet (its descriptor declares `binding.members`
+  // and the mode is on): every member of the anchor with its OWN latest reading per measurement.
+  // `latest` above stays keyed by measurement name alone, so two devices reporting the same name
+  // collapse into one value there; this is the shape that keeps them apart.
+  members?: FleetState;
+}
+
+// One device of a fleet, as a fleet widget sees it. `seed` is where its history read stands, and
+// is what separates the empty states: a reading is a reading wherever it came from, but the lack
+// of one means "still loading" until the seed has settled, and only then "no data in range" (the
+// device sent nothing in the span) or "does not report this" (it sent other measurements).
+export interface FleetMember {
+  token: string;
+  // The device's name, when the source knows it; the widget falls back to the token.
+  name: string | null;
+  // Its newest reading per measurement name, inside the span.
+  latest: Record<string, MeasurementSample>;
+  seed: 'pending' | 'ready' | 'failed';
+  // Every measurement name it reported at least once inside the span.
+  observed: string[];
+}
+
+// The members a fleet widget draws. `total` is the size of the anchor; `members` holds at most the
+// first page the resolver reads, so `truncated` is how a widget knows to say "showing N of M"
+// rather than pass a subset off as the fleet.
+export interface FleetState {
+  status: 'loading' | 'ready' | 'unbound' | 'forbidden' | 'unsupported';
+  members: FleetMember[];
+  total: number;
+  truncated: boolean;
 }
 
 // The state an alarm widget renders from: the current rows (newest first, capped),

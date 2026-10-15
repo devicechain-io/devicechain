@@ -18,6 +18,8 @@ import type { TypedDocument } from '@devicechain/client';
 export interface EntityRelationshipsResult {
   entityRelationships: {
     results: Array<{ source: { token: string } }>;
+    // The size of the whole anchor, past the page: what lets a fleet widget say "showing 500 of N".
+    pagination?: { totalRecords: number | null } | null;
   };
 }
 export interface EntityRelationshipsVariables {
@@ -38,6 +40,9 @@ export const DEVICES_FOR_ANCHOR = `
         source {
           token
         }
+      }
+      pagination {
+        totalRecords
       }
     }
   }
@@ -64,6 +69,24 @@ export const DEVICES_BY_TOKEN = `
     }
   }
 ` as unknown as TypedDocument<DevicesByTokenResult, DevicesByTokenVariables>;
+
+// -- device-management: the names of a set of devices (one batched read) ------
+// A fleet widget labels its rows with device names, not tokens. devicesByToken takes up to 1000
+// tokens, and an anchor resolves to at most one page of 500, so the whole roster's names are ONE
+// round trip however large the fleet.
+
+export interface DeviceNamesResult {
+  devicesByToken: Array<{ token: string; name: string | null }>;
+}
+
+export const DEVICE_NAMES = `
+  query DashboardDeviceNames($tokens: [String!]!) {
+    devicesByToken(tokens: $tokens) {
+      token
+      name
+    }
+  }
+` as unknown as TypedDocument<DeviceNamesResult, DevicesByTokenVariables>;
 
 // ── device-management: list entities of one kind (root context-selector candidates) ─
 // Each anchor target type (customer/area/asset) plus bare devices exposes a

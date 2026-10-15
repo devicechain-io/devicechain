@@ -264,6 +264,11 @@ const SELECTION_TARGET = {
 
 const VERSION = '1.0.0';
 const ALL_SELECTORS = ['device', 'anchor', 'slot'] as const;
+// A telemetry widget that shows readings keyed by measurement name shows ONE device: bound to a group,
+// two devices reporting the same name would overwrite each other in it. Only the fleet widgets (the
+// fleet table, a bar chart with one bar per device) take a group, and the runtime refuses a group
+// that reaches any other one some other way (a host binding, a hand-edited definition).
+const ONE_DEVICE = ['device', 'slot'] as const;
 const NO_DATASOURCE = { mode: 'none' } as const;
 
 // The alarm filters are read by both alarm widgets from the same option keys.
@@ -298,6 +303,39 @@ const CATEGORY_SORT = {
   doc: 'Order of the categories. Default: as the data source lists them.',
 } as const satisfies OptionSpec;
 
+// A fleet table's per-column and per-column-threshold entries NAME their measurement, because a list
+// item holds scalars only: one flat list per concern keeps each editable as a row, and a column
+// without an entry keeps the datasource's name, the board's formatting and no bands.
+// The measurement column a fleet table's list entry (a format, a band) applies to.
+const FLEET_MEASUREMENT = {
+  kind: 'string',
+  required: true,
+  labelId: 'widgetLabelMeasurement',
+  doc: 'The measurement column this entry applies to.',
+} as const satisfies OptionSpec;
+
+const FLEET_COLUMNS = {
+  kind: 'list',
+  maxItems: 24,
+  labelId: 'widgetLabelColumns',
+  helpId: 'widgetHintColumns',
+  doc: 'Heading, unit and precision per measurement column; a column with none shows its name.',
+  item: {
+    measurement: FLEET_MEASUREMENT,
+    label: { kind: 'string', labelId: 'widgetLabelColumnHeading', doc: 'Column heading. Defaults to the measurement name.' },
+    unit: { ...UNIT },
+    precision: { ...PRECISION },
+  },
+} as const satisfies OptionSpec;
+
+const FLEET_THRESHOLDS = {
+  ...THRESHOLDS,
+  item: {
+    measurement: FLEET_MEASUREMENT,
+    ...THRESHOLDS.item,
+  },
+} as const satisfies OptionSpec;
+
 export const builtinWidgetDescriptors = {
   'timeseries-chart': defineWidgetDescriptor({
     id: 'timeseries-chart',
@@ -306,7 +344,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 2,
     display: { title: 'Timeseries chart', category: 'Telemetry', titleId: 'widgetTypeTimeseriesChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { windowSeconds: { option: 'windowSeconds' } },
     options: {
       title: TITLE,
@@ -329,7 +367,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Latest card', category: 'Telemetry', titleId: 'widgetTypeLatestCard', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -359,7 +397,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Gauge', category: 'Telemetry', titleId: 'widgetTypeGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -400,7 +438,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Table', category: 'Telemetry', titleId: 'widgetTypeTable', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE,
@@ -554,7 +592,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Command button', category: 'Control', titleId: 'widgetTypeCommandButton', categoryId: 'widgetCategoryControl' },
     channel: 'control',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { pageSize: { option: 'maxRows', default: 20, min: 1 } },
     options: {
       title: TITLE,
@@ -663,7 +701,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Linear gauge', category: 'Telemetry', titleId: 'widgetTypeLinearGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -706,7 +744,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Level gauge', category: 'Telemetry', titleId: 'widgetTypeLevelGauge', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -741,7 +779,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Battery', category: 'Telemetry', titleId: 'widgetTypeBattery', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -778,7 +816,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Status light', category: 'Telemetry', titleId: 'widgetTypeStatusLight', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -808,7 +846,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Signal bars', category: 'Telemetry', titleId: 'widgetTypeSignalBars', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -843,7 +881,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Compass', category: 'Telemetry', titleId: 'widgetTypeCompass', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -872,7 +910,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Progress ring', category: 'Telemetry', titleId: 'widgetTypeProgressRing', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { window: { option: 'window', min: 1 } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -907,7 +945,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Command slider', category: 'Control', titleId: 'widgetTypeCommandSlider', categoryId: 'widgetCategoryControl' },
     channel: 'control',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     // The control reads its last-sent value off this history, so it asks for a long one.
     binding: { pageSize: { const: 50 } },
     options: {
@@ -949,7 +987,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Command toggle', category: 'Control', titleId: 'widgetTypeCommandToggle', categoryId: 'widgetCategoryControl' },
     channel: 'control',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { pageSize: { const: 50 } },
     options: {
       title: TITLE,
@@ -969,7 +1007,7 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Stat card', category: 'Telemetry', titleId: 'widgetTypeStatCard', categoryId: 'widgetCategoryTelemetry' },
     channel: 'aggregate',
-    datasource: { mode: 'required', selectors: ['device', 'slot'] },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: { windowSeconds: { option: 'windowSeconds' } },
     options: {
       title: TITLE_OR_MEASUREMENT,
@@ -1008,8 +1046,24 @@ export const builtinWidgetDescriptors = {
     display: { title: 'Bar chart', category: 'Telemetry', titleId: 'widgetTypeBarChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
-    binding: {},
-    options: { title: TITLE, unit: UNIT, precision: PRECISION, sort: CATEGORY_SORT },
+    // One bar per measurement of a device, or (groupBy device) one bar per member of an anchor.
+    binding: { members: { option: 'groupBy', equals: 'device' } },
+    options: {
+      title: TITLE,
+      groupBy: {
+        kind: 'enum',
+        values: ['measurement', 'device'],
+        labelId: 'widgetLabelGroupBy',
+        helpId: 'widgetHintGroupBy',
+        valueLabelIds: { measurement: 'widgetGroupByMeasurement', device: 'widgetGroupByDevice' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'One bar per measurement (the default), or per device of the group for the measurement set below.',
+      },
+      measurement: MEASUREMENT,
+      unit: UNIT,
+      precision: PRECISION,
+      sort: CATEGORY_SORT,
+    },
     defaults: { title: 'Bar chart' },
     interactions: {},
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
@@ -1022,12 +1076,54 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 1,
     display: { title: 'Pie chart', category: 'Telemetry', titleId: 'widgetTypePieChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
     binding: {},
     options: { title: TITLE, unit: UNIT, precision: PRECISION, sort: CATEGORY_SORT },
     defaults: { title: 'Pie chart' },
     interactions: {},
     layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
+  }),
+
+  // A new widget rather than a mode of `table`: that one is one device's measurements as rows, on a
+  // channel that keys its values by name; this one is a fleet, a row per member and a column per
+  // measurement, and reads its data by device.
+  'fleet-table': defineWidgetDescriptor({
+    id: 'fleet-table',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Fleet table', category: 'Telemetry', titleId: 'widgetTypeFleetTable', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { windowSeconds: { option: 'windowSeconds' }, members: { const: true } },
+    options: {
+      title: TITLE,
+      columns: FLEET_COLUMNS,
+      thresholds: FLEET_THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      sortBy: {
+        kind: 'string',
+        labelId: 'widgetLabelSortBy',
+        helpId: 'widgetHintSortBy',
+        doc: 'The measurement the table is ordered by. Blank orders by device name.',
+      },
+      sortDescending: { kind: 'boolean', labelId: 'widgetLabelSortDescending', doc: 'Largest first.' },
+      pageSize: {
+        kind: 'number',
+        integer: true,
+        min: 5,
+        max: 100,
+        labelId: 'widgetLabelPageSize',
+        doc: 'Devices per page. Default 20.',
+      },
+      selectionTarget: SELECTION_TARGET,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'Fleet table' },
+    // The frame shows the age of the newest reading in the fleet; each cell shows its own.
+    freshness: true,
+    interactions: { selection: true },
+    layout: { defaultSpan: { cols: 12, rows: 6 }, minSpan: { cols: 6, rows: 3 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 

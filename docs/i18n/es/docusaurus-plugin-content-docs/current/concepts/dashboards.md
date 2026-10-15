@@ -40,7 +40,7 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 | **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo de una ventana de tiempo |
 | **Medidor (gauge)** | telemetría | un único valor más reciente frente a un rango / umbrales |
 | **Tarjeta de último valor** | telemetría | una sola lectura actual con su marca de tiempo |
-| **Tabla** | telemetría | filas recientes de un dispositivo o ancla |
+| **Tabla** | telemetría | la última lectura de cada medición de un dispositivo |
 | **Indicador lineal** | telemetría | un único valor más reciente como barra (horizontal o vertical) o termómetro, sobre una escala mín./máx. obligatoria |
 | **Indicador de nivel** | telemetría | un depósito lleno hasta el valor más reciente entre un mín. y un máx. obligatorios, leído como valor o como porcentaje |
 | **Batería** | telemetría | un icono de batería lleno hasta el valor más reciente, sobre una escala de 0 a 100 % salvo que se fijen mín. y máx. |
@@ -51,6 +51,7 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 | **Tarjeta de estadística** | telemetría | el promedio, mínimo, máximo, suma, número de lecturas o última lectura de una medición en el intervalo de tiempo del panel (o en uno propio) |
 | **Gráfico de barras** | telemetría | la última lectura de cada medición seleccionada como una barra, en el orden de la fuente de datos o por valor; columnas en un widget ancho, filas en uno alto |
 | **Gráfico circular** | telemetría | la proporción de cada medición seleccionada sobre el total de sus últimas lecturas, con una leyenda de nombres, valores y porcentajes |
+| **Tabla de flota** | telemetría | una fila por dispositivo de un grupo y una columna por medición; cada celda muestra la última lectura de ese dispositivo con su antigüedad, coloreada según los umbrales de la columna; se puede ordenar y paginar, y el nombre del dispositivo lo selecciona en los widgets enlazados. Un gráfico de barras configurado como *una barra por dispositivo* dibuja las mismas lecturas por dispositivo como barras |
 | **Etiqueta** | estático | texto estático |
 | **Imagen** | estático | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |
@@ -88,7 +89,7 @@ Abrir un panel requiere `dashboard:read`, que posee todo miembro habilitado de u
 Un widget no embebe una consulta. Embebe un **selector** tipado que el runtime resuelve:
 
 - **`device`** — un solo dispositivo, por token.
-- **`anchor`** — telemetría con alcance a una entidad organizacional (un cliente, un área o un activo), designada mediante una relación rastreada. El runtime la expande del lado del cliente a los dispositivos relacionados en ese momento con esa entidad y transmite las muestras sin procesar de cada miembro: un flujo por dispositivo, hasta 500 miembros. Agregar los eventos del ancla en una sola serie del lado del servidor está reservado. El campo `aggregation` de un selector se almacena y se conserva en el ida y vuelta, pero todavía no se lee.
+- **`anchor`** — telemetría con alcance a una entidad organizacional (un cliente, un área o un activo), designada mediante una relación rastreada. El runtime la expande del lado del cliente a los dispositivos relacionados en ese momento con esa entidad y transmite las muestras sin procesar de cada miembro: un flujo por dispositivo, hasta 500 miembros. Solo la tabla de flota y un gráfico de barras configurado con una barra por dispositivo leen un ancla, porque mantienen separadas las lecturas de cada dispositivo. Cualquier otro widget de telemetría muestra un solo dispositivo y, vinculado a un ancla, lo indica en lugar de mezclar las lecturas de sus dispositivos bajo un mismo nombre de medición. Agregar los eventos del ancla en una sola serie del lado del servidor está reservado. El campo `aggregation` de un selector se almacena y se conserva en el ida y vuelta, pero todavía no se lee.
 - **`slot`** — un marcador con nombre que el host resuelve en el momento del montaje a partir de su manifiesto de vinculación (consulta [Incrustación](#embedding-definitions-slots-and-binding-manifests) más abajo). Esto es lo que la consola escribe hoy: al cargar un panel, reescribe los selectores concretos `device` y `anchor` como slots, de modo que un panel creado es por defecto una plantilla reutilizable.
 
 Otros dos tipos, `devices` y `relatedTraversal`, están reservados para que una definición almacenada siga siendo compatible hacia adelante. El runtime los rechaza hasta que se implementen.

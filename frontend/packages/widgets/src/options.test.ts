@@ -78,6 +78,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'stat-card': 'widgets/stat-card.tsx',
   'bar-chart': 'widgets/bar-chart.tsx',
   'pie-chart': 'widgets/pie-chart.tsx',
+  'fleet-table': 'widgets/fleet-table.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -94,6 +95,9 @@ const SHARED_SOURCES = [
   '../../dashboards/src/slots.ts',
   // lintLayout reads every widget's title to catch one repeating the subject line.
   '../../dashboards/src/layout-lint.ts',
+  // The fleet feed reads the per-device bar chart's `measurement` (what its seed must find) and
+  // the title of the pane it shows a one-device widget bound to a group.
+  'fleet-feed.tsx',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
@@ -106,7 +110,8 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   title: [...WIDGET_TYPES],
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card'],
+  // The fleet feed reads it for the bar chart's one bar per device.
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive.
   selectionTarget: ['alarm-table', 'entity-selector'],
@@ -397,8 +402,19 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     thresholds: [{ value: 90, level: 'major' }],
     windowSeconds: 3600,
   },
-  'bar-chart': { title: 'Readings', unit: 'C', precision: 1, sort: 'descending' },
+  'bar-chart': { title: 'Readings', groupBy: 'device', measurement: 'temp_c', unit: 'C', precision: 1, sort: 'descending' },
   'pie-chart': { title: 'Share', unit: 'L', precision: 0, sort: 'ascending' },
+  'fleet-table': {
+    title: 'Machines',
+    columns: [{ measurement: 'temp_c', label: 'Temperature', unit: 'C', precision: 1 }],
+    thresholds: [{ measurement: 'temp_c', value: 90, level: 'major' }],
+    staleAfterSeconds: 300,
+    sortBy: 'temp_c',
+    sortDescending: true,
+    pageSize: 25,
+    selectionTarget: 'machine',
+    windowSeconds: 3600,
+  },
 };
 
 describe('validateWidgetOptions', () => {

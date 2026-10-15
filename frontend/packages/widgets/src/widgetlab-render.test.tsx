@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import type { AlarmRow, CommandRow, KnownWidgetInstance, MeasurementSample } from '@devicechain/dashboards';
+import type { AlarmRow, CommandRow, KnownWidgetInstance, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 import { isBuiltinWidget, parseDashboardDefinition, UNKNOWN_WIDGET_TYPE } from '@devicechain/dashboards';
 import { cleanup, render as rtlRender } from '@testing-library/react';
 import type { ComponentType, ReactElement } from 'react';
@@ -35,8 +35,10 @@ import {
   type LocationStreamState,
   type MeasurementStreamState,
 } from '@devicechain/widget-sdk';
+import { membersMode } from './binding-policy';
 import { createBuiltinWidgetRegistry } from './builtin-registry';
 import { CONTROL_STRINGS } from './command-control-strings';
+import { FLEET_STRINGS } from './fleet-strings';
 import { LEVEL_STRINGS } from './level-strings';
 import { MapRuntimeProvider } from './map-runtime-context';
 import { AGGREGATE_STRINGS } from './aggregate-strings';
@@ -133,6 +135,13 @@ const EMPTY_STATES = [
   AGGREGATE_STRINGS.en.noCategories,
   AGGREGATE_STRINGS.en.pieNegative,
   AGGREGATE_STRINGS.en.pieNoShare,
+  // The fleet widgets' explained states: a configured board has a group, access and members.
+  FLEET_STRINGS.en.unbound,
+  FLEET_STRINGS.en.forbidden,
+  FLEET_STRINGS.en.unsupported,
+  FLEET_STRINGS.en.noMembers,
+  FLEET_STRINGS.en.noMeasurement,
+  FLEET_STRINGS.en.failed,
 ];
 
 const sample = (name: string, value: number): MeasurementSample => ({
@@ -185,6 +194,31 @@ const AGGREGATE_DATA: AggregateStreamState = {
   },
   latest: measurementData().latest,
   error: null,
+};
+
+// A fleet of three machines for the widgets that read member by member: each reports its OWN
+// temperature (so a row that showed another device's value shows a wrong number), one never reports
+// the battery, and the third device is the one the table's colour test looks at.
+const FLEET_DATA: MeasurementStreamState = {
+  latest: {},
+  samples: [],
+  error: null,
+  members: {
+    status: 'ready',
+    total: 3,
+    truncated: false,
+    members: [
+      { token: 'wl-sensor-01', name: 'Sensor 1', temperature: 21.5, humidity: 40, battery: 88 },
+      { token: 'wl-sensor-02', name: 'Sensor 2', temperature: 29, humidity: 52, battery: null },
+      { token: 'wl-sensor-03', name: 'Sensor 3', temperature: 33, humidity: 61, battery: 71 },
+    ].map(({ token, name, ...readings }) => {
+      const latest: Record<string, MeasurementSample> = {};
+      for (const [metric, value] of Object.entries(readings)) {
+        if (value !== null) latest[metric] = { ...sample(metric, value), deviceToken: token };
+      }
+      return { token, name, latest, seed: 'ready' as const, observed: Object.keys(latest) };
+    }),
+  },
 };
 
 const alarmRow: AlarmRow = {
@@ -293,7 +327,13 @@ function renderWidget(widget: KnownWidgetInstance) {
     case 'location':
       return render(<Component widget={widget} data={locationData} />);
     case 'measurement':
-      return render(<Component widget={widget} data={measurementData()} />);
+      // The descriptor decides whether a measurement widget reads member by member, as it does live.
+      return render(
+        <Component
+          widget={widget}
+          data={membersMode(registry.descriptor(widget.type)!, widget as unknown as WidgetInstance) ? FLEET_DATA : measurementData()}
+        />,
+      );
     case 'aggregate':
       return render(<Component widget={widget} data={AGGREGATE_DATA} />);
     case 'selection':
@@ -481,7 +521,8 @@ describe('the gallery widgets draw their data', () => {
   it('gives the bar and pie charts a category per measurement, valued by its latest reading', () => {
     let checked = 0;
     for (const type of ['bar-chart', 'pie-chart']) {
-      for (const widget of galleryWidgets(type)) {
+      // A bar chart set to one bar per device draws devices, not measurements (the test below).
+      for (const widget of galleryWidgets(type).filter((w) => w.options?.groupBy !== 'device')) {
         checked++;
         const { container } = renderWidget(widget);
         const names = widget.datasource && 'measurements' in widget.datasource ? widget.datasource.measurements : [];
@@ -496,6 +537,39 @@ describe('the gallery widgets draw their data', () => {
       }
     }
     expect(checked, 'the gallery lost a bar or pie chart').toBeGreaterThanOrEqual(4);
+  });
+
+  it('draws the fleet: a row per device and a column per measurement, each cell that device’s own reading', () => {
+    // FLEET_DATA gives every machine its OWN temperature, so a row that showed another machine's
+    // value, or one value for the whole column, shows a wrong number.
+    const EXPECT: Record<string, string> = { 'wl-sensor-01': '21.5', 'wl-sensor-02': '29', 'wl-sensor-03': '33' };
+    let checked = 0;
+    for (const widget of galleryWidgets('fleet-table')) {
+      checked++;
+      const { container } = renderWidget(widget);
+      expect(container.querySelector('[data-level-empty]')?.textContent, `${widget.id} drew an empty state`).toBeUndefined();
+      const names = widget.datasource && 'measurements' in widget.datasource ? widget.datasource.measurements : [];
+      expect([...container.querySelectorAll('thead th')].length, `${widget.id} lost a column`).toBe(names.length + 1);
+      expect(container.querySelectorAll('tbody tr'), `${widget.id} lost a device`).toHaveLength(3);
+      for (const [device, temperature] of Object.entries(EXPECT)) {
+        const td = container.querySelector(`tr[data-device="${device}"] td[data-measurement="temperature"]`);
+        expect(td?.textContent, `${widget.id}: ${device} shows another device's temperature`).toContain(temperature);
+      }
+      cleanup();
+    }
+    expect(checked, 'the gallery lost a fleet table').toBeGreaterThanOrEqual(2);
+  });
+
+  it('draws one bar per device on the per-device bar chart', () => {
+    let checked = 0;
+    for (const widget of galleryWidgets('bar-chart').filter((w) => w.options?.groupBy === 'device')) {
+      checked++;
+      const { container } = renderWidget(widget);
+      const drawn = [...container.querySelectorAll('[data-bar]')].map((el) => [el.getAttribute('data-bar'), Number(el.getAttribute('data-value'))]);
+      expect(drawn.sort(), `${widget.id} lost a device`).toEqual([['Sensor 1', 21.5], ['Sensor 2', 29], ['Sensor 3', 33]]);
+      cleanup();
+    }
+    expect(checked, 'the gallery lost the per-device bar chart').toBe(1);
   });
 
   it('puts a reading on the gauge rather than an empty dial', () => {

@@ -36,7 +36,7 @@ import {
 } from '@devicechain/widget-sdk';
 import { lazy, Suspense, useMemo, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow } from './binding-policy';
+import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { useHeld } from './use-held';
 import { defaultWidgetRegistry } from './default-registry';
 import {
@@ -196,7 +196,32 @@ function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
   return <Component widget={widget} data={null} actions={actions} />;
 }
 
-function MeasurementConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
+// The fleet feed is its own chunk (fleet-feed.tsx), like the aggregate feed: a board without a fleet
+// table or a per-device bar chart never downloads it. A chunk that fails to load is thrown to the
+// widget's containment, which shows the failure.
+const FleetFeed = lazy(() => import('./fleet-feed'));
+
+function MeasurementConnectedWidget(props: ChannelProps) {
+  // Read member by member, or as one stream keyed by measurement name: decided by the descriptor
+  // and the widget's options, never by the widget id.
+  //
+  // Keyed by measurement name, a group's devices would overwrite one another and the widget would
+  // show whichever spoke last as if it were the answer. So a group reaching a widget that is not
+  // reading member by member is refused in words (the fleet chunk says so), whatever brought it
+  // here: a host binding, an older definition. The editor offers a group only to the fleet widgets.
+  const { widget, hub, descriptor, Component, actions } = props;
+  const members = membersMode(descriptor, widget);
+  if (members || widget.datasource?.kind === 'anchor') {
+    return (
+      <Suspense fallback={null}>
+        <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} refuse={!members} />
+      </Suspense>
+    );
+  }
+  return <StreamConnectedWidget {...props} />;
+}
+
+function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
   // The board's time range (D-1). A widget that declares `binding.windowSeconds` draws a SPAN: its
   // own pinned one, else the board's. Every measurement widget honors the pause, because a frozen
   // board must freeze its cards and gauges too -- a number that kept moving under a "Paused"
@@ -241,16 +266,11 @@ function MeasurementConnectedWidget({ widget, hub, descriptor, Component, action
 const AggregateFeed = lazy(() => import('./aggregate-feed'));
 
 function AggregateConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+  // An aggregate names one device's measurements, so a group is refused as above.
+  const props = { hub, widget, descriptor, Component, actions, ErrorFrame: WidgetErrorFrame };
   return (
     <Suspense fallback={null}>
-      <AggregateFeed
-        hub={hub}
-        widget={widget}
-        descriptor={descriptor}
-        Component={Component}
-        actions={actions}
-        ErrorFrame={WidgetErrorFrame}
-      />
+      {widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />}
     </Suspense>
   );
 }

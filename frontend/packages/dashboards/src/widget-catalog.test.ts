@@ -166,6 +166,27 @@ describe('validateWidgetDescriptor', () => {
     expect(alarm({ ...good, window: { option: 'window' } })).toEqual(['binding.window']);
   });
 
+  it('checks the members binding that makes a measurement widget a fleet widget', () => {
+    const at = (members: unknown, channel = 'measurement') =>
+      issuesOf({ ...valid(), channel, binding: { members } }).map((i) => i.path);
+    // Always, or when a declared option holds a value of it.
+    expect(at({ const: true })).toEqual([]);
+    expect(at({ option: 'state', equals: 'ACTIVE' })).toEqual([]);
+    expect(at({ option: 'title', equals: 'anything' })).toEqual([]);
+    // Neither of the two shapes, or both at once.
+    expect(at({ const: false })).toEqual(['binding.members.const']);
+    expect(at({ const: true, option: 'state', equals: 'ACTIVE' })).toEqual(['binding.members']);
+    expect(at({})).toEqual(['binding.members']);
+    expect(at({ option: 'state' })).toEqual(['binding.members']);
+    expect(at('yes')).toEqual(['binding.members']);
+    // The option must exist, be text, and the value must be one the enum can hold.
+    expect(at({ option: 'ghost', equals: 'x' })).toEqual(['binding.members.option']);
+    expect(at({ option: 'min', equals: 'x' })).toEqual(['binding.members.option']);
+    expect(at({ option: 'state', equals: 'PAUSED' })).toEqual(['binding.members.equals']);
+    // Only the measurement channel reads a fleet.
+    expect(at({ const: true }, 'alarm')).toContain('binding.members');
+  });
+
   it('accepts an aggregate-channel widget that pins its span, and nothing else in its binding', () => {
     const OPTS = { ...OPTIONS, windowSeconds: { kind: 'number', integer: true, min: 60, max: 604800, doc: 'Span.' } } as const;
     const { constraints: _constraints, ...base } = valid();

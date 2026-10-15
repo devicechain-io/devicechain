@@ -24,6 +24,8 @@ import {
 
 import { aggregateStrings } from '../aggregate-strings';
 import { categoryItems, parseSort } from '../category-items';
+import { deviceBars } from '../fleet-model';
+import { fleetStrings } from '../fleet-strings';
 import { niceDomain } from '../category-geometry';
 import { LevelEmpty } from '../level-readout';
 
@@ -35,21 +37,78 @@ export const MAX_LABELLED_BARS = 12;
 // The thickest a bar is drawn, in px at density 1: a single bar does not fill the chart.
 const MAX_BAR_PX = 56;
 
+// A chart of one bar per device cannot label hundreds of bars; the first MAX_DEVICE_BARS in the
+// chosen order are drawn, and the chart SAYS how many devices there are (see deviceItems).
+export const MAX_DEVICE_BARS = 100;
+
 export function BarChart({ widget, data }: WidgetProps) {
   const sort = parseSort(optString(widget.options, 'sort'));
-  const items = useMemo(() => categoryItems(widget, data, sort), [widget, data, sort]);
+  const perDevice = optString(widget.options, 'groupBy') === 'device';
+  const measurement = optString(widget.options, 'measurement') ?? widget.datasource?.measurements[0];
+  const items = useMemo(
+    () => (perDevice ? [] : categoryItems(widget, data, sort)),
+    [widget, data, sort, perDevice],
+  );
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
-      {(ws) =>
-        items.length === 0 ? (
+      {(ws) => {
+        if (perDevice) {
+          return <DeviceBars data={data} measurement={measurement} sort={sort} unit={unit} precision={precision} ws={ws} />;
+        }
+        return items.length === 0 ? (
           <LevelEmpty message={aggregateStrings().noCategories} />
         ) : (
           <Bars items={items} unit={unit} precision={precision} ws={ws} />
-        )
-      }
+        );
+      }}
     </WidgetFrame>
+  );
+}
+
+// One bar per device of the anchor, for one measurement: the same chart, with the fleet's members as
+// its categories. Every way the fleet can fail to be a chart is a sentence, and a fleet larger than
+// what is drawn is counted in the chart itself, where it cannot be dropped with a heading.
+function DeviceBars({
+  data,
+  measurement,
+  sort,
+  unit,
+  precision,
+  ws,
+}: {
+  data: WidgetProps['data'];
+  measurement: string | undefined;
+  sort: ReturnType<typeof parseSort>;
+  unit: string | undefined;
+  precision: number | undefined;
+  ws: WidgetScale;
+}) {
+  const strings = fleetStrings();
+  const fleet = data.members;
+  const bars = useMemo(
+    () => (fleet && measurement ? deviceBars(fleet.members, measurement, sort) : []),
+    [fleet, measurement, sort],
+  );
+  if (!measurement) return <LevelEmpty message={strings.noMeasurement} />;
+  if (!fleet || fleet.status === 'loading') return <LevelEmpty message={strings.loading} />;
+  if (fleet.status === 'unbound') return <LevelEmpty message={strings.unbound} />;
+  if (fleet.status === 'forbidden') return <LevelEmpty message={strings.forbidden} />;
+  if (fleet.status === 'unsupported') return <LevelEmpty message={strings.unsupported} />;
+  if (bars.length === 0) return <LevelEmpty message={strings.noMembers} />;
+  const drawn = bars.slice(0, MAX_DEVICE_BARS);
+  // Counted against the anchor, not only against this chart's own cap: a fleet the resolver read
+  // only a page of is just as cut off as one this chart trimmed.
+  const note = fleet.truncated || drawn.length < bars.length ? strings.truncated(drawn.length, Math.max(fleet.total, bars.length)) : undefined;
+  return (
+    <Bars
+      items={drawn.map((b) => ({ label: b.label, key: b.token, value: b.value }))}
+      unit={unit}
+      precision={precision}
+      ws={ws}
+      note={note}
+    />
   );
 }
 
@@ -65,14 +124,19 @@ function Bars({
   unit,
   precision,
   ws,
+  note,
 }: {
-  items: { label: string; value: number | null }[];
+  items: { label: string; value: number | null; key?: string }[];
   unit: string | undefined;
   precision: number | undefined;
   ws: WidgetScale;
+  // A line along the bottom of the chart: how much of the fleet the bars are.
+  note?: string;
 }) {
   const W = ws.size.width > 0 ? ws.size.width : 240;
-  const H = ws.size.height > 0 ? ws.size.height : 160;
+  const fullH = ws.size.height > 0 ? ws.size.height : 160;
+  const noteH = note ? ws.px('font-xs') * 1.8 : 0;
+  const H = Math.max(1, fullH - noteH);
   // Columns in a wide chart, rows in a tall one: rows leave a long measurement name its full width.
   const horizontal = H > W;
   const font = ws.px('font-xs');
@@ -128,6 +192,11 @@ function Bars({
       aria-label={items.map((i) => `${i.label}: ${i.value === null ? '—' : withUnit(i.value)}`).join(', ')}
       style={{ display: 'block' }}
     >
+      {note ? (
+        <text data-bar-note="" x={pad} y={fullH - font * 0.4} style={{ ...text, ...muted }}>
+          {note}
+        </text>
+      ) : null}
       {unit ? (
         <text
           x={horizontal ? W - pad : pad}
@@ -164,7 +233,7 @@ function Bars({
         const lo = Math.min(zero, end);
         const hi = Math.max(zero, end);
         return (
-          <g key={item.label} data-bar={item.label} data-value={v ?? undefined}>
+          <g key={item.key ?? item.label} data-bar={item.label} data-value={v ?? undefined}>
             <title>{`${item.label}: ${v === null ? '—' : withUnit(v)}`}</title>
             {v === null ? null : horizontal ? (
               <rect x={x0 + lo} y={centre - thick / 2} width={Math.max(1, hi - lo)} height={thick} style={{ fill: css('chart-1') }} />
