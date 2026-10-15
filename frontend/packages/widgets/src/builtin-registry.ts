@@ -10,13 +10,18 @@ import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-s
 
 import { alarmCountWidget } from './widgets/alarm-count';
 import { alarmTableWidget } from './widgets/alarm-table';
+import { batteryWidget } from './widgets/battery';
 import { commandButtonWidget } from './widgets/command-button';
 import { entitySelectorWidget } from './widgets/entity-selector';
 import { gaugeWidget } from './widgets/gauge';
 import { imageWidget } from './widgets/image';
 import { labelWidget } from './widgets/label';
 import { latestCardWidget } from './widgets/latest-card';
+import { levelGaugeWidget } from './widgets/level-gauge';
+import { linearGaugeWidget } from './widgets/linear-gauge';
 import { mapWidget } from './widgets/map';
+import { signalBarsWidget } from './widgets/signal-bars';
+import { statusLightWidget } from './widgets/status-light';
 import { tableWidget } from './widgets/table';
 import { timeSeriesChartWidget } from './widgets/time-series-chart';
 
@@ -32,6 +37,11 @@ export const builtinWidgetDefinitions = [
   commandButtonWidget,
   entitySelectorWidget,
   mapWidget,
+  linearGaugeWidget,
+  levelGaugeWidget,
+  batteryWidget,
+  statusLightWidget,
+  signalBarsWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent
