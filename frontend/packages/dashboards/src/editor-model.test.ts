@@ -3,41 +3,67 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isDirty } from './definition';
+import { isDirty, parseDashboardDefinition, serializeDefinition } from './definition';
 import {
   addWidget,
-  baseBox,
-  bringToFront,
+  basePlacement,
   deleteWidget,
-  gridBoxToPx,
-  pxToGridBox,
+  gridPlacementToPx,
+  pxToGridPlacement,
   setCanvasGrid,
   setTitle,
-  setWidgetBox,
+  setWidgetPlacement,
   updateWidget,
   type GridGeometry,
 } from './editor-model';
-import type { DashboardDefinition } from './types';
+import type { DashboardDefinition, GridPlacement, Placement } from './types';
 
-const box = (over = {}) => ({ col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0, ...over });
+const at = (col: number, row: number, cols = 4, rows = 3): GridPlacement => ({ mode: 'grid', col, row, cols, rows });
 
 function def(): DashboardDefinition {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: 'Test',
-    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+    canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
     widgets: [
-      { id: 'a', type: 'gauge', layout: { base: box({ z: 1 }) } },
-      { id: 'b', type: 'label', layout: { base: box({ col: 10, z: 2 }) } },
+      { id: 'a', type: 'gauge', layout: { base: at(0, 0) } },
+      { id: 'b', type: 'label', layout: { base: at(6, 0) } },
     ],
   };
 }
 
-describe('setWidgetBox', () => {
-  it('replaces only the target widget’s base box', () => {
-    const next = setWidgetBox(def(), 'a', box({ col: 5, row: 6, colSpan: 8, rowSpan: 9, z: 1 }));
-    expect(baseBox(next.widgets[0])).toEqual({ col: 5, colSpan: 8, row: 6, rowSpan: 9, z: 1 });
-    expect(baseBox(next.widgets[1])).toEqual(box({ col: 10, z: 2 })); // untouched
+// Every transform must leave a definition the parser accepts: no grid overlap, no dangling host.
+function reloads(d: DashboardDefinition) {
+  expect(() => parseDashboardDefinition(JSON.parse(serializeDefinition(d)))).not.toThrow();
+}
+
+describe('setWidgetPlacement', () => {
+  it('replaces only the target widget’s base placement', () => {
+    const d = def();
+    const next = setWidgetPlacement(d, 'a', at(0, 5, 3, 2));
+    expect(basePlacement(next.widgets[0])).toEqual(at(0, 5, 3, 2));
+    expect(next.widgets[1]).toBe(d.widgets[1]); // untouched
+  });
+
+  it('pushes a widget it lands on down, keeping that widget’s column and span', () => {
+    const next = setWidgetPlacement(def(), 'a', at(5, 0, 4, 3)); // now covers b's columns 6..8
+    expect(basePlacement(next.widgets[0])).toEqual(at(5, 0, 4, 3));
+    expect(basePlacement(next.widgets[1])).toEqual(at(6, 3)); // straight down, below a
+    reloads(next);
+  });
+
+  it('pushes a chain: a widget pushed onto another pushes that one too', () => {
+    const d: DashboardDefinition = {
+      ...def(),
+      widgets: [
+        { id: 'a', type: 'gauge', layout: { base: at(0, 0, 4, 2) } },
+        { id: 'b', type: 'label', layout: { base: at(0, 2, 4, 2) } },
+        { id: 'c', type: 'label', layout: { base: at(0, 4, 4, 2) } },
+      ],
+    };
+    const next = setWidgetPlacement(d, 'a', at(0, 0, 4, 3));
+    expect(next.widgets.map(basePlacement)).toEqual([at(0, 0, 4, 3), at(0, 3, 4, 2), at(0, 5, 4, 2)]);
+    reloads(next);
   });
 });
 
@@ -46,52 +72,27 @@ describe('deleteWidget', () => {
     const next = deleteWidget(def(), 'a');
     expect(next.widgets.map((w) => w.id)).toEqual(['b']);
   });
-});
 
-describe('bringToFront', () => {
-  it('raises a widget above the current max z', () => {
-    const next = bringToFront(def(), 'a'); // a.z=1, max=2 → a.z=3
-    expect(baseBox(next.widgets[0]).z).toBe(3);
-  });
-  it('is a no-op when already on top', () => {
-    const d = def();
-    expect(bringToFront(d, 'b')).toBe(d); // b already has max z
-  });
-  it('breaks a z-tie by bumping above the other widget', () => {
-    const tied: DashboardDefinition = {
+  it('puts a widget that was placed relative to the deleted one back on the grid, so the board still loads', () => {
+    const badge: Placement = { mode: 'relative', host: 'a', anchor: 'top-right', size: { cols: 1, rows: 1 } };
+    const filler: Placement = { mode: 'relative', host: 'a', anchor: 'center', size: { fill: 'host' } };
+    const d: DashboardDefinition = {
       ...def(),
-      widgets: [
-        { id: 'a', type: 'gauge', layout: { base: box({ z: 2 }) } },
-        { id: 'b', type: 'label', layout: { base: box({ col: 10, z: 2 }) } },
-      ],
+      widgets: [...def().widgets, { id: 'badge', type: 'label', layout: { base: badge } }, { id: 'fill', type: 'label', layout: { base: filler } }],
     };
-    const next = bringToFront(tied, 'a'); // tie at z=2 → a bumps to 3
-    expect(baseBox(next.widgets[0]).z).toBe(3);
-  });
-  it('is a no-op for a lone widget at z=0', () => {
-    const lone: DashboardDefinition = {
-      ...def(),
-      widgets: [{ id: 'a', type: 'gauge', layout: { base: box({ z: 0 }) } }],
-    };
-    expect(bringToFront(lone, 'a')).toBe(lone);
+    const next = deleteWidget(d, 'a');
+    expect(basePlacement(next.widgets.find((w) => w.id === 'badge')!)).toEqual(at(0, 0, 1, 1));
+    // `fill` takes the deleted host's span.
+    expect(basePlacement(next.widgets.find((w) => w.id === 'fill')!)).toMatchObject({ mode: 'grid', cols: 4, rows: 3 });
+    reloads(next);
   });
 });
 
 describe('updateWidget', () => {
   it('replaces the matching widget and leaves others untouched', () => {
     const d = def();
-    const next = updateWidget(d, 'a', {
-      id: 'a',
-      type: 'latest-card',
-      layout: { base: box({ z: 1 }) },
-      options: { title: 'Renamed' },
-    });
-    expect(next.widgets[0]).toEqual({
-      id: 'a',
-      type: 'latest-card',
-      layout: { base: box({ z: 1 }) },
-      options: { title: 'Renamed' },
-    });
+    const next = updateWidget(d, 'a', { id: 'a', type: 'latest-card', layout: { base: at(0, 0) }, options: { title: 'Renamed' } });
+    expect(next.widgets[0]).toEqual({ id: 'a', type: 'latest-card', layout: { base: at(0, 0) }, options: { title: 'Renamed' } });
     expect(next.widgets[1]).toBe(d.widgets[1]); // untouched
   });
 });
@@ -99,7 +100,7 @@ describe('updateWidget', () => {
 describe('addWidget', () => {
   const gauge = { id: 'gauge', version: '1.0.0', optionsVersion: 1, sdkApiVersion: 1, defaults: { title: 'Gauge' } } as const;
 
-  it('appends a widget with a unique id, on top, and the descriptor defaults', () => {
+  it('appends a widget with a unique id and the descriptor defaults', () => {
     const d = def();
     const { definition, id } = addWidget(d, gauge);
     expect(definition.widgets).toHaveLength(3);
@@ -108,9 +109,24 @@ describe('addWidget', () => {
     expect(added.id).not.toBe('a');
     expect(added.id).not.toBe('b');
     expect(added.type).toBe('gauge');
-    expect(baseBox(added).z).toBe(3); // max existing z (2) + 1
     expect(added.datasource).toBeUndefined();
     expect(added.options).toEqual({ title: 'Gauge' });
+  });
+
+  it('places it in the first free slot, scanning rows, never on top of another widget', () => {
+    // a covers columns 0..3 and b 6..9 on rows 0..2: a 2-wide widget fits at column 4 of row 0.
+    const narrow = addWidget(def(), { ...gauge, layout: { defaultSpan: { cols: 2, rows: 2 } } }).definition;
+    expect(basePlacement(narrow.widgets[2])).toEqual(at(4, 0, 2, 2));
+    // A 4-wide one does not fit beside them, so it goes below.
+    const wide = addWidget(def(), gauge).definition; // the 4x2 fallback
+    expect(basePlacement(wide.widgets[2])).toEqual(at(0, 3, 4, 2));
+    reloads(narrow);
+    reloads(wide);
+  });
+
+  it('is never wider than the grid', () => {
+    const huge = addWidget(def(), { ...gauge, layout: { defaultSpan: { cols: 30, rows: 2 } } }).definition;
+    expect(basePlacement(huge.widgets[2])).toMatchObject({ col: 0, cols: 12 });
   });
 
   it('takes its starting options from the descriptor, whatever the widget id', () => {
@@ -145,9 +161,9 @@ describe('addWidget', () => {
 
   it("places a widget at its descriptor's default span, and a layout-less one at the fallback 4x2", () => {
     const sized = addWidget(def(), { ...gauge, layout: { defaultSpan: { cols: 6, rows: 3 } } }).definition.widgets[2];
-    expect(baseBox(sized)).toMatchObject({ colSpan: 6, rowSpan: 3 });
+    expect(basePlacement(sized)).toMatchObject({ cols: 6, rows: 3 });
     const bare = addWidget(def(), gauge).definition.widgets[2];
-    expect(baseBox(bare)).toMatchObject({ colSpan: 4, rowSpan: 2 });
+    expect(basePlacement(bare)).toMatchObject({ cols: 4, rows: 2 });
   });
 
   it('gives each widget its own copy of the defaults', () => {
@@ -169,116 +185,72 @@ describe('isDirty', () => {
     expect(isDirty(d, def())).toBe(false);
     expect(isDirty(setTitle(d, 'x'), d)).toBe(true);
   });
+
+  it('ignores the conversion mark: it is never stored', () => {
+    expect(isDirty({ ...def(), convertedFrom: 1 }, def())).toBe(false);
+  });
 });
 
-// colWidth 100 / gaps 0 → strides 100 (col) and 50 (row): round pixels to span lines.
-const geom: GridGeometry = { colWidth: 100, colGap: 0, rowHeight: 50, rowGap: 0 };
+// Square 100 px cells, no gutter: strides of 100 on both axes.
+const geom: GridGeometry = { cell: 100, gutter: { x: 0, y: 0 } };
 
-describe('pxToGridBox', () => {
-  it('snaps pixels to grid span lines and clamps', () => {
-    // x 205 → col 2, w 290 → colSpan 3; y 120 → row 2, h 160 → rowSpan 3.
-    expect(pxToGridBox({ x: 205, y: 120, w: 290, h: 160 }, geom, 2)).toEqual({
-      col: 2,
-      colSpan: 3,
-      row: 2,
-      rowSpan: 3,
-      z: 2,
-    });
+describe('pxToGridPlacement', () => {
+  it('snaps pixels to cell lines and clamps', () => {
+    // x 205 → col 2, w 290 → cols 3; y 120 → row 1, h 160 → rows 2.
+    expect(pxToGridPlacement({ x: 205, y: 120, w: 290, h: 160 }, geom)).toEqual(at(2, 1, 3, 2));
     // negative/zero clamps to col,row>=0 and spans>=1.
-    expect(pxToGridBox({ x: -20, y: -1, w: 2, h: 0 }, geom, 0)).toEqual({
-      col: 0,
-      colSpan: 1,
-      row: 0,
-      rowSpan: 1,
-      z: 0,
-    });
+    expect(pxToGridPlacement({ x: -20, y: -1, w: 2, h: 0 }, geom)).toEqual(at(0, 0, 1, 1));
   });
 
-  it('un-offsets before snapping and preserves the offset', () => {
-    const offset = { x: 30, y: 10 };
-    // The rect is the offset position; un-offsetting lands it back on col 2 / row 2.
-    expect(pxToGridBox({ x: 230, y: 130, w: 100, h: 50 }, geom, 1, offset)).toEqual({
-      col: 2,
-      colSpan: 1,
-      row: 2,
-      rowSpan: 1,
-      z: 1,
-      offset,
-    });
+  it('clamps col and cols to the grid when columns is given, and not otherwise', () => {
+    expect(pxToGridPlacement({ x: 1100, y: 0, w: 400, h: 100 }, geom, 12)).toMatchObject({ col: 11, cols: 1 });
+    expect(pxToGridPlacement({ x: 1100, y: 0, w: 400, h: 100 }, geom).cols).toBe(4);
   });
 });
 
-describe('gridBoxToPx', () => {
-  it('renders a span box to a pixel rect', () => {
-    const b = { col: 2, colSpan: 3, row: 2, rowSpan: 3, z: 0 };
-    expect(gridBoxToPx(b, geom)).toEqual({ x: 200, y: 100, w: 300, h: 150 });
+describe('gridPlacementToPx', () => {
+  it('renders a placement to a pixel rect', () => {
+    expect(gridPlacementToPx(at(2, 2, 3, 3), geom)).toEqual({ x: 200, y: 200, w: 300, h: 300 });
   });
 
-  it('adds the signed offset to the position', () => {
-    const b = { col: 1, colSpan: 1, row: 1, rowSpan: 1, z: 0, offset: { x: 5, y: -3 } };
-    expect(gridBoxToPx(b, geom)).toEqual({ x: 105, y: 47, w: 100, h: 50 });
-  });
-});
-
-// The two functions are inverses: a span box → pixels → span box is the identity.
-// Exercised WITH a nonzero gap so the `(span-1)*gap` term and the `+gap` snap
-// correction are actually pinned (the zero-gap `geom` above degenerates to cell math).
-describe('gridBoxToPx / pxToGridBox round-trip', () => {
-  const gapped: GridGeometry = { colWidth: 33, colGap: 8, rowHeight: 40, rowGap: 4 };
-
-  it('is the identity for representative boxes (nonzero gap)', () => {
-    for (const b of [
-      { col: 0, colSpan: 1, row: 0, rowSpan: 1, z: 0 },
-      { col: 4, colSpan: 3, row: 2, rowSpan: 5, z: 2 },
-      { col: 1, colSpan: 1, row: 1, rowSpan: 1, z: 0, offset: { x: 5, y: -3 } },
-    ]) {
-      expect(pxToGridBox(gridBoxToPx(b, gapped), gapped, b.z, b.offset)).toEqual(b);
+  // The two functions are inverses, exercised WITH a nonzero gutter so the `(span-1)*gutter`
+  // term and the `+gutter` snap correction are pinned.
+  it('round-trips through pxToGridPlacement with a gutter, and renders n*cell + (n-1)*gutter', () => {
+    const gapped: GridGeometry = { cell: 33, gutter: { x: 8, y: 4 } };
+    for (const p of [at(0, 0, 1, 1), at(4, 2, 3, 5), at(1, 1, 1, 1)]) {
+      expect(pxToGridPlacement(gridPlacementToPx(p, gapped), gapped)).toEqual(p);
     }
-  });
-
-  it('renders a gapped multi-span width as span*width + (span-1)*gap', () => {
-    // colSpan 3 at width 33, gap 8 → 3*33 + 2*8 = 115 (NOT 3*stride).
-    expect(gridBoxToPx({ col: 0, colSpan: 3, row: 0, rowSpan: 1, z: 0 }, gapped).w).toBe(115);
-  });
-});
-
-describe('pxToGridBox column clamp', () => {
-  it('clamps col and colSpan to the grid when columns is given', () => {
-    // A rect landing at col 23 span 4 on a 24-col grid clamps to col 23 span 1.
-    const wide: GridGeometry = { colWidth: 100, colGap: 0, rowHeight: 50, rowGap: 0 };
-    const box = pxToGridBox({ x: 2300, y: 0, w: 400, h: 50 }, wide, 0, undefined, 24);
-    expect(box.col).toBe(23);
-    expect(box.colSpan).toBe(1); // 24 - 23
-  });
-
-  it('leaves the box unclamped when columns is omitted', () => {
-    const wide: GridGeometry = { colWidth: 100, colGap: 0, rowHeight: 50, rowGap: 0 };
-    expect(pxToGridBox({ x: 2300, y: 0, w: 400, h: 50 }, wide, 0).colSpan).toBe(4);
+    expect(gridPlacementToPx(at(0, 0, 3, 1), gapped).w).toBe(115); // 3*33 + 2*8, not 3 strides
   });
 });
 
 describe('setCanvasGrid', () => {
-  const withCols = (columns: number): DashboardDefinition => ({
+  const withWide = (): DashboardDefinition => ({
     ...def(),
-    canvas: { grid: { columns, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
-    widgets: [{ id: 'a', type: 'gauge', layout: { base: { col: 16, colSpan: 8, row: 0, rowSpan: 4, z: 0 } } }],
+    widgets: [
+      { id: 'a', type: 'gauge', layout: { base: at(8, 0, 4, 2) } },
+      { id: 'b', type: 'gauge', layout: { base: at(5, 0, 1, 2) } },
+    ],
   });
 
-  it('floors columns/rowHeight to >=1 integers', () => {
-    expect(setCanvasGrid(withCols(24), { columns: 12.7 }).canvas.grid.columns).toBe(13);
-    expect(setCanvasGrid(withCols(24), { columns: 0 }).canvas.grid.columns).toBe(1);
-    expect(setCanvasGrid(withCols(24), { rowHeight: -5 }).canvas.grid.rowHeight).toBe(1);
+  it('floors columns to an integer >= 1 and minCellSize to >= 1', () => {
+    expect(setCanvasGrid(withWide(), { columns: 12.7 }).canvas.grid.columns).toBe(13);
+    expect(setCanvasGrid(withWide(), { columns: 0 }).canvas.grid.columns).toBe(1);
+    expect(setCanvasGrid(withWide(), { minCellSize: -5 }).canvas.grid.minCellSize).toBe(1);
   });
 
-  it('clamps widgets back inside the grid when columns shrinks', () => {
-    const next = setCanvasGrid(withCols(24), { columns: 12 });
-    // widget at col 16 span 8 would overrun 12 cols → clamp col 11, span 1.
-    expect(baseBox(next.widgets[0])).toEqual({ col: 11, colSpan: 1, row: 0, rowSpan: 4, z: 0 });
+  it('clamps widgets back inside the grid when columns shrinks, and pushes down what the clamp makes collide', () => {
+    const next = setCanvasGrid(withWide(), { columns: 6 });
+    // a (8..12) clamps to column 5, span 1, onto b (5..6). Both now start at row 0, column 5,
+    // so reading order cannot separate them and the earlier widget in the board keeps its place.
+    expect(basePlacement(next.widgets[0])).toEqual(at(5, 0, 1, 2));
+    expect(basePlacement(next.widgets[1])).toEqual(at(5, 2, 1, 2));
+    reloads(next);
   });
 
-  it('leaves widgets untouched when columns grows or is unchanged', () => {
-    const d = withCols(24);
-    expect(setCanvasGrid(d, { columns: 48 }).widgets[0]).toBe(d.widgets[0]);
-    expect(setCanvasGrid(d, { gap: 4 }).widgets[0]).toBe(d.widgets[0]);
+  it('leaves widgets untouched when columns grows or another field changes', () => {
+    const d = withWide();
+    expect(setCanvasGrid(d, { columns: 24 }).widgets[0]).toBe(d.widgets[0]);
+    expect(setCanvasGrid(d, { gutter: 4 }).widgets[0]).toBe(d.widgets[0]);
   });
 });

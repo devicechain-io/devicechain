@@ -12,13 +12,14 @@ import (
 // document as typed Go structs, then marshals it — the only place in this
 // module that must match the frontend's @devicechain/dashboards TypeScript
 // parser contract exactly (schemaVersion/canvas/widgets/layout.base/datasource/
-// slots shapes). Keeping it typed here, rather than hand-strung JSON, means a
+// slots shapes). It writes the CURRENT format natively (schemaVersion 2: square cells and
+// explicit placement modes), so the frontend never has to convert a sim board on load. Keeping it typed here, rather than hand-strung JSON, means a
 // field rename on either side shows up as a compile error or a JSON-shape test
 // failure instead of a silent parser rejection at dashboard-open time.
 
 // dashboardDefinition is the top-level DashboardDefinition shape
-// (frontend/packages/dashboards/src/types.ts). schemaVersion is currently
-// always 1. The buildingpulse dashboard uses the ADR-039 slot model with a
+// (frontend/packages/dashboards/src/types.ts). schemaVersion is always
+// dashboardSchemaVersion. The buildingpulse dashboard uses the ADR-039 slot model with a
 // scoped context hierarchy (a `building` anchor + a `selectedThermostat` device
 // scoped to it), so `slots` is populated (not nil).
 type dashboardDefinition struct {
@@ -35,14 +36,16 @@ type dashboardCanvas struct {
 	Breakpoints map[string]int `json:"breakpoints"`
 }
 
-// dashboardGrid mirrors CanvasGrid (ADR-039 amendment 2026-07-08): a high-res fluid
-// column count, a gutter in px, and a fixed row height in px. The viewer renders the
-// canvas as a real CSS Grid (`repeat(columns, 1fr)`), so a definition fills whatever
-// width its container gives it — no pixel widths baked in here.
+// dashboardGrid mirrors CanvasGrid: the authored column count, the smallest cell the board
+// renders at before it reflows (px at density 1), and the gutter and padding (px at density 1;
+// the frontend also accepts spacing tokens and per-axis/per-side forms, which no sim board needs).
+// Cells are SQUARE: a row is as tall as the live cell is wide, so a span fixes a widget's shape
+// as well as its share of the width, and the columns still stretch to fill the container.
 type dashboardGrid struct {
-	Columns   int `json:"columns"`
-	Gap       int `json:"gap"`
-	RowHeight int `json:"rowHeight"`
+	Columns     int `json:"columns"`
+	MinCellSize int `json:"minCellSize"`
+	Gutter      int `json:"gutter"`
+	Padding     int `json:"padding"`
 }
 
 // commandWidgetType is the one widget type that ISSUES rather than displays — the
@@ -60,11 +63,11 @@ const commandWidgetType = "command-button"
 // that has none (a label/image) omits the field entirely rather than marshaling
 // an empty object.
 type dashboardWidget struct {
-	Id         string                  `json:"id"`
-	Type       string                  `json:"type"`
-	Layout     map[string]dashboardBox `json:"layout"`
-	Datasource *dashboardDatasource    `json:"datasource,omitempty"`
-	Options    map[string]any          `json:"options,omitempty"`
+	Id         string                        `json:"id"`
+	Type       string                        `json:"type"`
+	Layout     map[string]dashboardPlacement `json:"layout"`
+	Datasource *dashboardDatasource          `json:"datasource,omitempty"`
+	Options    map[string]any                `json:"options,omitempty"`
 }
 
 // dashboardThreshold is one entry of the `thresholds` widget option: a severity band that
@@ -84,17 +87,17 @@ func withThresholds(w dashboardWidget, thresholds ...dashboardThreshold) dashboa
 	return w
 }
 
-// dashboardBox is one breakpoint's layout box as a CSS-Grid SPAN placement (WidgetBox
-// in types.ts): Col/Row are the 0-based start lines and ColSpan/RowSpan how many
-// tracks the widget covers. On the sim boards' grid (dashboardGridColumns below)
-// a half-width chart is ColSpan ~14 of 24 — the columns are fluid, so the widget
-// fills that fraction of whatever width the viewer has, not a fixed pixel count.
-type dashboardBox struct {
-	Col     int `json:"col"`
-	ColSpan int `json:"colSpan"`
-	Row     int `json:"row"`
-	RowSpan int `json:"rowSpan"`
-	Z       int `json:"z"`
+// dashboardPlacement is one breakpoint's GRID placement (GridPlacement in types.ts): Col/Row
+// are the 0-based start cell and Cols/Rows how many cells the widget covers. Mode is always
+// "grid" on the sim boards; the frontend's other mode (a widget placed relative to another) is
+// not one they use. Two grid footprints may not overlap: the frontend parser refuses such a
+// board, which is why no Go check for overlap exists any more.
+type dashboardPlacement struct {
+	Mode string `json:"mode"`
+	Col  int    `json:"col"`
+	Row  int    `json:"row"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
 }
 
 // dashboardDatasource models the two selector kinds this scenario needs: a "slot"
@@ -158,12 +161,17 @@ type dashboardAnchorTarget struct {
 	TargetToken  string `json:"targetToken"`
 }
 
-// The sim boards' canvas grid (shared by every scenario's board): a 24-column fluid grid, 8px gutter, 40px rows —
-// matching the frontend's DEFAULT_GRID. Widgets place by span across these columns.
+// The definition format the builders write.
+const dashboardSchemaVersion = 2
+
+// The sim boards' canvas grid (shared by every scenario's board), matching the frontend's
+// DEFAULT_GRID: 12 columns, cells of at least 56 px, an 8 px gutter and no padding. At the 960 px
+// a half-screen board gets, a cell is (960 - 11*8) / 12 = ~73 px.
 const (
-	dashboardGridColumns   = 24
-	dashboardGridGap       = 8
-	dashboardGridRowHeight = 40
+	dashboardGridColumns     = 12
+	dashboardGridMinCellSize = 56
+	dashboardGridGutter      = 8
+	dashboardGridPadding     = 0
 )
 
 // Slot names the buildingpulse dashboard declares. `building` is the root context (an
@@ -174,9 +182,19 @@ const (
 	slotSelectedThermostat = "selectedThermostat"
 )
 
-// baseLayout builds a Layout map with only the required "base" breakpoint span box.
-func baseLayout(col, colSpan, row, rowSpan, z int) map[string]dashboardBox {
-	return map[string]dashboardBox{"base": {Col: col, ColSpan: colSpan, Row: row, RowSpan: rowSpan, Z: z}}
+// baseLayout builds a Layout map with only the required "base" breakpoint's grid placement.
+func baseLayout(col, cols, row, rows int) map[string]dashboardPlacement {
+	return map[string]dashboardPlacement{"base": {Mode: "grid", Col: col, Row: row, Cols: cols, Rows: rows}}
+}
+
+// dashboardCanvasGrid is the sim boards' grid.
+func dashboardCanvasGrid() dashboardGrid {
+	return dashboardGrid{
+		Columns:     dashboardGridColumns,
+		MinCellSize: dashboardGridMinCellSize,
+		Gutter:      dashboardGridGutter,
+		Padding:     dashboardGridPadding,
+	}
 }
 
 // buildBuildingpulseDashboard renders the buildingpulse scenario's one dashboard,
@@ -199,14 +217,10 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 	}
 
 	def := dashboardDefinition{
-		SchemaVersion: 1,
+		SchemaVersion: dashboardSchemaVersion,
 		Title:         "Building Pulse",
 		Canvas: dashboardCanvas{
-			Grid: dashboardGrid{
-				Columns:   dashboardGridColumns,
-				Gap:       dashboardGridGap,
-				RowHeight: dashboardGridRowHeight,
-			},
+			Grid: dashboardCanvasGrid(),
 			// Fill the viewer's area — the fluid grid stretches to whatever width the
 			// console/embed gives it (ADR-039 amendment "fill area").
 			Sizing:      "fill",
@@ -237,11 +251,11 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 				Scope:          &dashboardScope{Parent: slotBuilding, Strategy: "manual"},
 			},
 		},
-		// Span placement on the 24-column grid: a top band of two context selectors
-		// (building + thermostat, 2 rows tall), then a wide temperature chart and a
-		// latest-values table side by side (14 + 10 = 24 columns, 8 rows tall), with a
-		// full-width alarm table beneath (all 24 columns, 6 rows). The columns are fluid,
-		// so this fills the viewer at any width.
+		// Placement on the 12-column grid of square cells: a top band of two context
+		// selectors (building + thermostat, one row each), then a wide temperature chart and
+		// a latest-values table side by side (7 + 5 = 12 columns, 4 rows tall), with a
+		// full-width alarm table beneath (all 12 columns, 3 rows). The columns stretch, so
+		// this fills the viewer at any width.
 		Widgets: []dashboardWidget{
 			{
 				// Root context-selector: pick which building the whole dashboard shows.
@@ -249,7 +263,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 				// its scoped child (selectedThermostat) so every widget follows.
 				Id:      "w-building-select",
 				Type:    "entity-selector",
-				Layout:  baseLayout(0, 12, 0, 2, 0),
+				Layout:  baseLayout(0, 6, 0, 1),
 				Options: map[string]any{"title": "Building", "selectionTarget": slotBuilding},
 			},
 			{
@@ -258,13 +272,13 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 				// alarm-originator drill.
 				Id:      "w-thermostat-select",
 				Type:    "entity-selector",
-				Layout:  baseLayout(12, 12, 0, 2, 0),
+				Layout:  baseLayout(6, 6, 0, 1),
 				Options: map[string]any{"title": "Thermostat", "selectionTarget": slotSelectedThermostat},
 			},
 			{
 				Id:     "w-chart",
 				Type:   "timeseries-chart",
-				Layout: baseLayout(0, 14, 2, 8, 0),
+				Layout: baseLayout(0, 7, 1, 4),
 				Datasource: &dashboardDatasource{
 					Kind:         "slot",
 					Slot:         slotSelectedThermostat,
@@ -275,7 +289,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 			{
 				Id:     "w-table",
 				Type:   "table",
-				Layout: baseLayout(14, 10, 2, 8, 0),
+				Layout: baseLayout(7, 5, 1, 4),
 				Datasource: &dashboardDatasource{
 					Kind:         "slot",
 					Slot:         slotSelectedThermostat,
@@ -289,7 +303,7 @@ func buildBuildingpulseDashboard(devices []DeviceInstance) (string, error) {
 			{
 				Id:     "w-alarms",
 				Type:   "alarm-table",
-				Layout: baseLayout(0, 24, 10, 6, 0),
+				Layout: baseLayout(0, 12, 5, 3),
 				// Scoped to the building: only this building's thermostats' alarms show
 				// (the per-building context Derek asked for). selectionTarget names the
 				// slot an originator drill re-points — click an alarm's device and the

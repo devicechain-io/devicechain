@@ -29,7 +29,7 @@ function Harness({ initial }: { initial?: Record<string, unknown> }) {
   const [widget, setWidget] = useState<KnownWidgetInstance>({
     id: 'g1',
     type: 'gauge',
-    layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 4, z: 0 } },
+    layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 4 } },
     options: initial ?? {},
   });
   return (

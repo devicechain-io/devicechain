@@ -246,9 +246,9 @@ in grid cells (columns across, rows down), not pixels:
 
 ```ts
 layout: {
-  defaultSpan: { cols: 8, rows: 4 }, // the size a newly added widget takes
-  minSpan: { cols: 4, rows: 2 },     // the smallest it can be resized to (default 1 x 1)
-  maxSpan: { cols: 24, rows: 12 },   // the largest (default: no limit)
+  defaultSpan: { cols: 4, rows: 3 }, // the size a newly added widget takes
+  minSpan: { cols: 3, rows: 2 },     // the smallest it can be resized to (default 1 x 1)
+  maxSpan: { cols: 8, rows: 6 },     // the largest (default: no limit)
   resize: 'both',                    // 'both' (default), 'horizontal', 'vertical' or 'none'
 },
 ```
@@ -262,8 +262,15 @@ builds it.
 The editor adds a new widget at `defaultSpan`. `lintLayout` in `@devicechain/dashboards` reports a
 dashboard that places the widget outside its limits as an error. Choose a `minSpan` that is the smallest
 box in which your widget is still readable. A widget without a `layout` block is added at 4 x 2 cells
-with no limits, and `lintLayout` reports that it declared none. Cell sizes are tied to the current grid
-and may be recalibrated in a later release.
+with no limits, and `lintLayout` reports that it declared none.
+
+Cells are square, and a dashboard never shows a cell smaller than its minimum cell size (56 pixels
+by default; a narrower screen rearranges the dashboard instead). So size `minSpan` at that smallest
+cell: with the default 8-pixel gutter, 2 cells are 120 pixels, 3 are 184 and 4 are 248. On a wider
+screen the cells grow and your widget only gets bigger. Releases before the square-cell grid
+counted cells on a grid of 24 narrow columns and 40-pixel rows; a package that still declares those
+numbers keeps working, but its spans are about twice as wide as they should be, and `lintLayout`
+reports any board that places it outside them. Halve the columns and recheck the rows.
 
 Text follows the board's density. `WidgetFrame` pads the widget and sets its content area up as a size
 container, so inside it CSS container units (`cqw`, `cqh`) measure the space your widget really has.

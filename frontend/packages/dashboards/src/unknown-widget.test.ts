@@ -14,7 +14,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { isDirty, parseDashboardDefinition, serializeDefinition } from './definition';
-import { bringToFront, deleteWidget, setCanvasGrid, setWidgetBox, updateWidget } from './editor-model';
+import { deleteWidget, setCanvasGrid, setWidgetPlacement, updateWidget } from './editor-model';
 import { pruneSlots } from './slots';
 import type { DashboardDefinition, WidgetInstance } from './types';
 
@@ -22,11 +22,11 @@ import type { DashboardDefinition, WidgetInstance } from './types';
 // and not whatever the constant happens to say.
 const PLACEHOLDER = 'unknown-widget';
 
-const box = (over = {}) => ({ col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0, ...over });
+const box = (over = {}) => ({ mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 3, ...over });
 
 // A widget from a newer release. Everything about it is deliberately awkward for this
-// parser: key order that is not the parser's, a box the known-widget path would
-// normalize (fractional col, zero span, no z), a datasource kind this build has never
+// parser: key order that is not the parser's, a placement the known-widget path would
+// normalize (fractional col, zero span, no mode), a datasource kind this build has never
 // heard of, a first-class field it does not read, and an unknown type nested inside
 // that field.
 function newerWidget(): Record<string, unknown> {
@@ -34,19 +34,19 @@ function newerWidget(): Record<string, unknown> {
     type: 'card-deck',
     options: { title: 'Fleet', selectionTarget: 'machine', order: 'type', future: { nested: [1, 'two', null] } },
     id: 'deck-1',
-    layout: { base: { col: 2.4, colSpan: 0, row: 3, rowSpan: 9 }, tablet: { col: 0, colSpan: 24, row: 3, rowSpan: 9, z: 1 } },
+    layout: { base: { row: 3, cols: 0, col: 2.4, rows: 9 }, tablet: { mode: 'grid', col: 0, row: 3, cols: 12, rows: 9 } },
     datasource: { kind: 'slot', slot: 'site', measurements: [], extra: true },
     deck: {
       cards: [
         {
           id: 'hauler',
           deviceTypes: ['sp-hauler'],
-          grid: { columns: 12, rowHeight: 36, gap: 8 },
+          grid: { columns: 6, minCellSize: 48, gutter: 'space-2' },
           widgets: [
             {
               id: 'fuel',
               type: 'latest-card',
-              layout: { base: box({ colSpan: 6 }) },
+              layout: { base: box({ cols: 6 }) },
               datasource: { kind: 'member', measurements: ['fuel_pct'] },
               options: { title: 'Fuel', unit: '%', notAnOption: 1 },
             },
@@ -66,9 +66,9 @@ function newerWidget(): Record<string, unknown> {
 
 function board(widgets: unknown[], slots?: Record<string, unknown>): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     title: 'Board',
-    canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+    canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
     widgets,
     ...(slots ? { slots } : {}),
   };
@@ -89,9 +89,9 @@ describe('unknown widget types', () => {
     const placeholder = def.widgets[1];
     expect(placeholder.type).toBe(PLACEHOLDER);
     expect(placeholder.id).toBe('deck-1');
-    // The placeholder is placed where the widget was stored, through the same box rules
+    // The placeholder is placed where the widget was stored, through the same placement rules
     // every widget is placed by.
-    expect(placeholder.layout.base).toEqual({ col: 2, colSpan: 1, row: 3, rowSpan: 9, z: 0 });
+    expect(placeholder.layout.base).toEqual({ mode: 'grid', col: 2, row: 3, cols: 1, rows: 9 });
     // It reads nothing and configures nothing: whatever the newer widget binds is in its
     // raw object, and the hub must never see it as a selector this build understands.
     expect(placeholder.datasource).toBeUndefined();
@@ -130,14 +130,14 @@ describe('unknown widget types', () => {
     // Built by hand rather than by the parser, so this pins the serializer on its own.
     const raw = newerWidget();
     const def: DashboardDefinition = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       title: 'Board',
-      canvas: { grid: { columns: 24, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+      canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
       widgets: [
         {
           id: 'deck-1',
           type: PLACEHOLDER,
-          layout: { base: { col: 2, colSpan: 1, row: 3, rowSpan: 9, z: 0 }, tablet: { col: 0, colSpan: 24, row: 3, rowSpan: 9, z: 1 } },
+          layout: { base: { mode: 'grid', col: 2, row: 3, cols: 1, rows: 9 }, tablet: { mode: 'grid', col: 0, row: 3, cols: 12, rows: 9 } },
           raw,
         } as unknown as WidgetInstance,
       ],
@@ -160,20 +160,16 @@ describe('unknown widget types', () => {
 
   it('carry a move through the save, and nothing else', () => {
     const def = parseDashboardDefinition(board([newerWidget()]));
-    const moved = setWidgetBox(def, 'deck-1', { col: 6, colSpan: 12, row: 0, rowSpan: 4, z: 2 });
+    const moved = setWidgetPlacement(def, 'deck-1', { mode: 'grid', col: 6, row: 0, cols: 6, rows: 4 });
     const saved = JSON.parse(savedWidget(moved, 0)) as Record<string, unknown>;
     const expected = newerWidget();
-    expected.layout = { ...(expected.layout as object), base: { col: 6, colSpan: 12, row: 0, rowSpan: 4, z: 2 } };
+    expected.layout = { ...(expected.layout as object), base: { mode: 'grid', col: 6, row: 0, cols: 6, rows: 4 } };
     // Same keys in the same order, only the layout changed.
     expect(JSON.stringify(saved)).toBe(JSON.stringify(expected));
   });
 
-  it('carry a bring-to-front and a canvas regrid through the save', () => {
+  it('carry a canvas regrid through the save', () => {
     const two = parseDashboardDefinition(board([label, newerWidget()]));
-    const front = bringToFront(two, 'deck-1');
-    const frontBox = front.widgets[1].layout.base;
-    expect((JSON.parse(savedWidget(front, 1)) as { layout: { base: unknown } }).layout.base).toEqual(frontBox);
-
     // Shrinking the grid clamps every widget back inside it, placeholders included.
     const regrid = setCanvasGrid(two, { columns: 1 });
     const regridLayout = regrid.widgets[1].layout;
@@ -206,7 +202,7 @@ describe('unknown widget types', () => {
     expect(savedWidget(twice, 1)).toBe(JSON.stringify(newerWidget()));
 
     // An edit made before the re-parse is kept by it, and still reaches the save.
-    const moved = setWidgetBox(once, 'deck-1', { col: 6, colSpan: 12, row: 0, rowSpan: 4, z: 2 });
+    const moved = setWidgetPlacement(once, 'deck-1', { mode: 'grid', col: 6, row: 0, cols: 6, rows: 4 });
     const movedTwice = parseDashboardDefinition(moved);
     expect(serializeDefinition(movedTwice)).toBe(serializeDefinition(moved));
 
@@ -226,28 +222,26 @@ describe('unknown widget types', () => {
     expect(savedWidget(def, 0)).toBe(JSON.stringify(odd));
   });
 
-  it('keep a box field this build does not know when the box is moved', () => {
-    // A newer release may add a field to a box. Moving the placeholder writes the fields
+  it('keep a placement field this build does not know when the placement is moved', () => {
+    // A newer release may add a field to a placement. Moving the placeholder writes the fields
     // this build knows and must leave that one in place.
-    const stored = { ...newerWidget(), layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0, minRows: 2 } } };
+    const stored = { ...newerWidget(), layout: { base: { mode: 'grid', col: 0, row: 0, cols: 4, rows: 3, minRows: 2 } } };
     const def = parseDashboardDefinition(board([stored]));
-    const moved = setWidgetBox(def, 'deck-1', { col: 1, colSpan: 4, row: 0, rowSpan: 3, z: 0 });
+    const moved = setWidgetPlacement(def, 'deck-1', box({ col: 1 }));
     const saved = JSON.parse(savedWidget(moved, 0)) as { layout: { base: unknown } };
     expect(JSON.stringify(saved.layout.base)).toBe(
-      JSON.stringify({ col: 1, colSpan: 4, row: 0, rowSpan: 3, z: 0, minRows: 2 }),
+      JSON.stringify({ mode: 'grid', col: 1, row: 0, cols: 4, rows: 3, minRows: 2 }),
     );
   });
 
-  it('drop a stored offset the edit cleared, and write one the edit set', () => {
-    const stored = { ...newerWidget(), layout: { base: { ...box(), offset: { x: 3, y: 4 } } } };
-    const def = parseDashboardDefinition(board([stored]));
-    const cleared = setWidgetBox(def, 'deck-1', box({ col: 1 }));
-    expect((JSON.parse(savedWidget(cleared, 0)) as { layout: { base: object } }).layout.base).not.toHaveProperty('offset');
-    const nudged = setWidgetBox(def, 'deck-1', { ...box(), offset: { x: 5, y: 6 } });
-    expect((JSON.parse(savedWidget(nudged, 0)) as { layout: { base: { offset: unknown } } }).layout.base.offset).toEqual({
-      x: 5,
-      y: 6,
-    });
+  it('drop the other mode\'s fields when a move changes the placement mode', () => {
+    const relative = { mode: 'relative', host: 'l1', anchor: 'bottom', self: 'top', size: { cols: 2, rows: 1 } };
+    const stored = { ...newerWidget(), layout: { base: relative } };
+    const def = parseDashboardDefinition(board([label, stored]));
+    const gridded = setWidgetPlacement(def, 'deck-1', box({ row: 3 }));
+    expect(JSON.stringify((JSON.parse(savedWidget(gridded, 1)) as { layout: { base: object } }).layout.base)).toBe(
+      JSON.stringify(box({ row: 3 })),
+    );
   });
 
   it('still reject a widget with no type, an empty one, or a non-string one', () => {
@@ -258,10 +252,16 @@ describe('unknown widget types', () => {
     expect(() => parseDashboardDefinition(board([{ type: '', layout: { base: box() } }]))).toThrow(/unknown type/);
   });
 
-  it('still reject an unknown widget with no base box (it could not be placed)', () => {
+  it('still reject an unknown widget with no base placement (it could not be placed)', () => {
     expect(() =>
       parseDashboardDefinition(board([{ id: 'x', type: 'hologram', layout: { tablet: box() } }])),
-    ).toThrow(/no 'base' box/);
+    ).toThrow(/no 'base' placement/);
+  });
+
+  it('take part in the overlap refusal: a placeholder occupies its cells like any widget', () => {
+    expect(() =>
+      parseDashboardDefinition(board([label, { id: 'x', type: 'hologram', layout: { base: box({ col: 2 }) } }])),
+    ).toThrow(/'l1' and 'x' overlap/);
   });
 });
 

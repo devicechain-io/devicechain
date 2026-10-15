@@ -160,7 +160,7 @@ function renderPanel(type: WidgetType, datasource?: ConcreteSelector) {
   const widget: KnownWidgetInstance = {
     id: 'w1',
     type,
-    layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 4, z: 0 } },
+    layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 4 } },
     options: {},
   };
   render(

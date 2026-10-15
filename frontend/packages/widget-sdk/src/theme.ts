@@ -12,6 +12,8 @@
 // which cannot resolve CSS variables — so for charts we read the variables off the
 // live computed style and hand ECharts concrete color strings (resolveChartTheme).
 
+import type { ThemeColorToken } from '@devicechain/dashboards';
+
 // css returns an `hsl(var(--name))` reference for use in an inline style. The host
 // defines the variable as HSL channels (e.g. `--card: 0 0% 100%`), matching the
 // console's token set.
@@ -25,23 +27,8 @@ export function css(name: ThemeVar): string {
 // Colours only: sizes are SizeTokens (see ./tokens). The chart ramp and the severity hues are
 // part of the set, so a widget colours itself from a token rather than a literal; `normal` has
 // NO severity token (it renders in the ordinary foreground, see ./severity).
-export type ThemeVar =
-  | 'background'
-  | 'foreground'
-  | 'card'
-  | 'card-foreground'
-  | 'muted'
-  | 'muted-foreground'
-  | 'primary'
-  | 'primary-foreground'
-  | 'border'
-  | 'destructive'
-  | 'chart-1'
-  | 'chart-2'
-  | 'chart-3'
-  | 'chart-4'
-  | 'chart-5'
-  | 'sev-critical'
-  | 'sev-major'
-  | 'sev-minor'
-  | 'sev-warning';
+//
+// The list itself lives with the dashboard format (THEME_COLOR_TOKENS), because a definition
+// names these too, for a frame's border and background: one list, so a colour a widget can use
+// is exactly a colour a board may name.
+export type ThemeVar = ThemeColorToken;

@@ -15,7 +15,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { WIDGET_TYPES, addWidget, baseBox, spanLimitsOfLayout, type WidgetType } from '@devicechain/dashboards';
+import { WIDGET_TYPES, addWidget, basePlacement, parseDashboardDefinition, spanLimitsOfLayout, type WidgetType } from '@devicechain/dashboards';
 import { createWidgetRegistry } from '@devicechain/widget-sdk';
 import { describe, expect, it } from 'vitest';
 
@@ -26,7 +26,7 @@ import { WIDGET_OPTIONS } from './options';
 import { WIDGET_BINDS_DATASOURCE, WIDGET_CHANNEL } from './registry';
 
 const registry = createBuiltinWidgetRegistry();
-const empty = { version: 1, widgets: [] } as never;
+const empty = parseDashboardDefinition({ schemaVersion: 2, widgets: [] });
 
 describe('the built-in registry', () => {
   it('is constructed successfully, i.e. the built-ins pass their own validation', () => {
@@ -248,8 +248,10 @@ describe('the built-in size contract', () => {
     for (const type of WIDGET_TYPES) {
       const descriptor = registry.descriptor(type)!;
       const { definition } = addWidget(empty, descriptor);
-      const box = baseBox(definition.widgets[0]);
-      expect({ cols: box.colSpan, rows: box.rowSpan }, type).toEqual(descriptor.layout!.defaultSpan);
+      const placement = basePlacement(definition.widgets[0]);
+      expect(placement.mode === 'grid' && { cols: placement.cols, rows: placement.rows }, type).toEqual(
+        descriptor.layout!.defaultSpan,
+      );
     }
   });
 });

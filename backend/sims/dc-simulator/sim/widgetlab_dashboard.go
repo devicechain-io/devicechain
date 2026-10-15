@@ -78,12 +78,13 @@ func (s widgetSubject) datasource() *dashboardDatasource {
 	return ds
 }
 
-// box is a widget's placement, named so a board reads as a layout rather than as
-// five positional integers per line.
-type box struct{ col, colSpan, row, rowSpan int }
+// box is a widget's grid placement, in cells: its start column, how many columns it covers,
+// its start row and how many rows. Named so a board reads as a layout rather than as four
+// positional integers per line.
+type box struct{ col, cols, row, rows int }
 
-func (b box) layout() map[string]dashboardBox {
-	return baseLayout(b.col, b.colSpan, b.row, b.rowSpan, 0)
+func (b box) layout() map[string]dashboardPlacement {
+	return baseLayout(b.col, b.cols, b.row, b.rows)
 }
 
 // ---- One builder per widget type ---------------------------------------------
@@ -235,7 +236,7 @@ const widgetlabImageDataURI = "data:image/png;base64," +
 
 func widgetlabCanvas() dashboardCanvas {
 	return dashboardCanvas{
-		Grid:        dashboardGrid{Columns: dashboardGridColumns, Gap: dashboardGridGap, RowHeight: dashboardGridRowHeight},
+		Grid:        dashboardCanvasGrid(),
 		Sizing:      "fill",
 		Breakpoints: map[string]int{"base": 0},
 	}
@@ -297,7 +298,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	onZone := widgetSubject{Slot: widgetlabSlotZone, Measurements: []string{}}
 
 	def := dashboardDefinition{
-		SchemaVersion: 1,
+		SchemaVersion: dashboardSchemaVersion,
 		Title:         "Widget Lab",
 		Canvas:        widgetlabCanvas(),
 		Slots: map[string]dashboardSlot{
@@ -323,30 +324,30 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 			},
 		},
 		Widgets: []dashboardWidget{
-			buildLabelWidget("wl-title", box{0, 24, 0, 2},
+			buildLabelWidget("wl-title", box{0, 12, 0, 1},
 				"Widget Lab — one of every dashboard widget", "left", 20),
 
-			buildLatestCardWidget("wl-card", box{0, 6, 2, 4}, onSensor(WidgetlabTemperatureKey),
+			buildLatestCardWidget("wl-card", box{0, 3, 1, 3}, onSensor(WidgetlabTemperatureKey),
 				"Temperature", WidgetlabTemperatureKey, "C", 1, true),
-			buildGaugeWidget("wl-gauge", box{6, 6, 2, 4}, onSensor(WidgetlabTemperatureKey),
+			buildGaugeWidget("wl-gauge", box{3, 3, 1, 3}, onSensor(WidgetlabTemperatureKey),
 				"Temperature", WidgetlabTemperatureKey, "C", WidgetlabSweepMin, WidgetlabSweepMax),
-			buildAlarmCountWidget("wl-alarm-count", box{12, 6, 2, 4}, onZone, "Active alarms", WidgetlabAlarmSeverityWire),
-			buildImageWidget("wl-image", box{18, 6, 2, 4},
+			buildAlarmCountWidget("wl-alarm-count", box{6, 3, 1, 3}, onZone, "Active alarms", WidgetlabAlarmSeverityWire),
+			buildImageWidget("wl-image", box{9, 3, 1, 3},
 				"Image", widgetlabImageDataURI, "A placeholder image", "contain"),
 
-			buildTimeSeriesChartWidget("wl-chart", box{0, 14, 6, 8},
+			buildTimeSeriesChartWidget("wl-chart", box{0, 7, 4, 4},
 				onSensor(WidgetlabTemperatureKey, WidgetlabHumidityKey), "Temperature and humidity"),
-			buildTableWidget("wl-table", box{14, 10, 6, 8}, onSensor(), "Latest values"),
+			buildTableWidget("wl-table", box{7, 5, 4, 4}, onSensor(), "Latest values"),
 
-			buildAlarmTableWidget("wl-alarm-table", box{0, 14, 14, 6}, onZone, "Alarms", widgetlabSlotSensor),
-			buildCommandButtonWidget("wl-command", box{14, 10, 14, 6},
+			buildAlarmTableWidget("wl-alarm-table", box{0, 7, 8, 3}, onZone, "Alarms", widgetlabSlotSensor),
+			buildCommandButtonWidget("wl-command", box{7, 5, 8, 3},
 				widgetSubject{Slot: widgetlabSlotSensor}, "Setpoint"),
 
-			buildMapWidget("wl-map", box{0, 24, 20, 6},
+			buildMapWidget("wl-map", box{0, 12, 11, 3},
 				widgetSubject{Slot: widgetlabSlotSensor, Location: "latest"}, "Where the sensors are"),
 
-			buildEntitySelectorWidget("wl-zone-select", box{0, 12, 26, 2}, "Zone", widgetlabSlotZone),
-			buildEntitySelectorWidget("wl-sensor-select", box{12, 12, 26, 2}, "Sensor", widgetlabSlotSensor),
+			buildEntitySelectorWidget("wl-zone-select", box{0, 6, 14, 1}, "Zone", widgetlabSlotZone),
+			buildEntitySelectorWidget("wl-sensor-select", box{6, 6, 14, 1}, "Sensor", widgetlabSlotSensor),
 		},
 	}
 
@@ -395,7 +396,7 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 	}
 
 	def := dashboardDefinition{
-		SchemaVersion: 1,
+		SchemaVersion: dashboardSchemaVersion,
 		Title:         "Widget Lab — Stress",
 		Canvas:        widgetlabCanvas(),
 		Slots: map[string]dashboardSlot{
@@ -404,7 +405,7 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 			widgetlabSlotSilent:   deviceSlot("Silent sensor", silent),
 		},
 		Widgets: []dashboardWidget{
-			buildLabelWidget("wl-stress-title", box{0, 24, 0, 2},
+			buildLabelWidget("wl-stress-title", box{0, 12, 0, 1},
 				"Maintainer board — deliberately pathological data. Each widget is bound to the edge "+
 					"sensor that produces its own case: spikes and out-of-range values, dropped "+
 					"metrics, and silence. Everything below is SUPPOSED to look wrong.",
@@ -413,14 +414,14 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 			// The extremes device: a chart whose axis is blown out by a spike an order
 			// of magnitude past the sweep, and a gauge scaled for the sweep that the
 			// device leaves entirely, so the needle pins.
-			buildTimeSeriesChartWidget("wl-stress-chart", box{0, 14, 2, 8},
+			buildTimeSeriesChartWidget("wl-stress-chart", box{0, 7, 1, 5},
 				on(widgetlabSlotExtremes, WidgetlabTemperatureKey), "Spikes and out-of-range"),
-			buildGaugeWidget("wl-stress-gauge", box{14, 10, 2, 4},
+			buildGaugeWidget("wl-stress-gauge", box{7, 5, 1, 3},
 				on(widgetlabSlotExtremes, WidgetlabTemperatureKey),
 				"Off the scale", WidgetlabTemperatureKey, "C", WidgetlabSweepMin, WidgetlabSweepMax),
 			// No precision cap, so a raw float renders at its full width.
 			{
-				Id: "wl-stress-card", Type: "latest-card", Layout: box{14, 10, 6, 4}.layout(),
+				Id: "wl-stress-card", Type: "latest-card", Layout: box{7, 5, 4, 2}.layout(),
 				Datasource: on(widgetlabSlotExtremes, WidgetlabTemperatureKey).datasource(),
 				Options: map[string]any{
 					"title": "Unrounded", "measurement": WidgetlabTemperatureKey, "unit": "C",
@@ -428,24 +429,24 @@ func buildWidgetlabStress(devices []DeviceInstance) (string, error) {
 			},
 
 			// The partial reporter: rows appear and disappear underneath the table.
-			buildTableWidget("wl-stress-table", box{0, 12, 10, 6}, on(widgetlabSlotPartial), "Partial reports"),
+			buildTableWidget("wl-stress-table", box{0, 6, 6, 3}, on(widgetlabSlotPartial), "Partial reports"),
 			// The silent device: the chart stops extending and the card's timestamp
 			// goes stale while the device is simply gone.
-			buildTimeSeriesChartWidget("wl-stress-silence", box{12, 12, 10, 6},
+			buildTimeSeriesChartWidget("wl-stress-silence", box{6, 6, 6, 3},
 				on(widgetlabSlotSilent, WidgetlabTemperatureKey), "Goes silent"),
 
 			// label and image carry no datasource, so a PLACEMENT is the only
 			// pathological axis they have — there is no device behaviour to drive them
 			// with. Text far longer than its box (which the frame CLIPS rather than
 			// overflowing), and an image that fails to decode.
-			buildLabelWidget("wl-stress-label", box{0, 12, 16, 4},
+			buildLabelWidget("wl-stress-label", box{0, 6, 9, 2},
 				"Pneumonoultramicroscopicsilicovolcanoconiosisantidisestablishmentarianismfloccinaucinihilipilification",
 				"left", 18),
 			// A data: URI whose payload is not valid base64, so the decode fails
 			// locally. A broken http(s) URL would ALSO fail behind an air-gapped
 			// deploy's egress policy, making a network block indistinguishable from
 			// the render failure this is here to show.
-			buildImageWidget("wl-stress-image", box{12, 12, 16, 4},
+			buildImageWidget("wl-stress-image", box{6, 6, 9, 2},
 				"Broken image", "data:image/png;base64,this-is-not-base64", "An image that cannot decode", "cover"),
 		},
 	}

@@ -4,43 +4,72 @@
 import type { SlotBinding, WidgetInstance } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { gridItemStyle, resolveWidgets, sizingStyle, widgetSubjectLabel } from './dashboard-renderer';
+import { gridCss, gridItemStyle, relativeBoxStyle, resolveWidgets, sizingStyle, widgetSubjectLabel } from './dashboard-renderer';
 
 // A minimal widget carrying only the datasource the subject resolver reads.
 function widgetWith(datasource: WidgetInstance['datasource']): WidgetInstance {
-  return { id: 'w', type: 'table', layout: { base: { col: 0, colSpan: 1, row: 0, rowSpan: 1, z: 0 } }, datasource };
+  return { id: 'w', type: 'table', layout: { base: { mode: 'grid', col: 0, row: 0, cols: 1, rows: 1 } }, datasource };
 }
 
-// gridItemStyle owns the genuinely-new mapping: 0-based span box → CSS grid lines,
-// plus the clamp that keeps a widget inside the fluid column count (an overflow would
-// land in implicit `auto` tracks and break the fill). The renderer's own React tree
-// is exercised live on kind; this pins the pure math.
+// gridItemStyle owns the mapping from a 0-based footprint to CSS grid lines, plus the clamp
+// that keeps a widget inside the column count (an overflow would land in implicit `auto` tracks
+// and break the fill). The renderer's own React tree is exercised live; this pins the pure math.
 describe('gridItemStyle', () => {
-  it('maps a 0-based span box to 1-based CSS grid lines', () => {
-    const style = gridItemStyle({ col: 2, colSpan: 3, row: 4, rowSpan: 5, z: 1 }, 24);
+  it('maps a 0-based footprint to 1-based CSS grid lines, with no layering of its own', () => {
+    const style = gridItemStyle({ mode: 'grid', col: 2, row: 4, cols: 3, rows: 5 }, 12);
     expect(style.gridColumn).toBe('3 / span 3'); // col 2 → line 3
     expect(style.gridRow).toBe('5 / span 5'); // row 4 → line 5
-    expect(style.zIndex).toBe(1);
+    expect(style.zIndex).toBeUndefined();
     expect(style.transform).toBeUndefined();
     expect(style.minWidth).toBe(0);
     expect(style.minHeight).toBe(0);
   });
 
-  it('clamps a box that overruns the column count into the grid', () => {
+  it('clamps a footprint that overruns the column count into the grid', () => {
     // col 16 span 12 on a 12-col grid → col 11 (line 12), span 1 (12 - 11).
-    const style = gridItemStyle({ col: 16, colSpan: 12, row: 0, rowSpan: 2, z: 0 }, 12);
-    expect(style.gridColumn).toBe('12 / span 1');
+    expect(gridItemStyle({ mode: 'grid', col: 16, row: 0, cols: 12, rows: 2 }, 12).gridColumn).toBe('12 / span 1');
   });
 
   it('clamps a partial overrun to the remaining columns', () => {
-    // col 20 span 8 on 24 cols → col 20 (line 21), span 4 (24 - 20).
-    const style = gridItemStyle({ col: 20, colSpan: 8, row: 0, rowSpan: 1, z: 0 }, 24);
-    expect(style.gridColumn).toBe('21 / span 4');
+    // col 10 span 4 on 12 cols → col 10 (line 11), span 2.
+    expect(gridItemStyle({ mode: 'grid', col: 10, row: 0, cols: 4, rows: 1 }, 12).gridColumn).toBe('11 / span 2');
+  });
+});
+
+describe('gridCss', () => {
+  it('scales px lengths by the density and reads spacing tokens from the board', () => {
+    const css = gridCss({ columns: 12, minCellSize: 56, gutter: { x: 8, y: 'space-2' }, padding: 'space-0' }, 12);
+    expect(css.gutterX).toBe('calc(8px * var(--dc-scale, 1))');
+    expect(css.gutterY).toBe('var(--dc-space-2)');
+    expect(css.padding).toBe('0px');
   });
 
-  it('emits a translate transform only when an offset is present', () => {
-    const style = gridItemStyle({ col: 0, colSpan: 1, row: 0, rowSpan: 1, z: 0, offset: { x: 5, y: -3 } }, 24);
-    expect(style.transform).toBe('translate(5px, -3px)');
+  it('makes a cell the grid width less its gutters, shared by the live column count (square rows use it)', () => {
+    expect(gridCss({ columns: 12, minCellSize: 56, gutter: 0, padding: 0 }, 4).cell).toBe(
+      'calc((100cqw - 3 * calc(0px * var(--dc-scale, 1))) / 4)',
+    );
+  });
+});
+
+describe('relativeBoxStyle', () => {
+  const lengths = { gutterX: 'GX', gutterY: 'GY' };
+
+  it('places a corner badge at the host anchor, pulled back by its own point, offset in cell pitches', () => {
+    const style = relativeBoxStyle(
+      { mode: 'relative', host: 'map', anchor: 'top-right', offset: { x: -0.25, y: 0.25 }, size: { cols: 1, rows: 2 }, layer: 2 },
+      lengths,
+    );
+    expect(style.left).toBe('calc(100% + -0.25 * (var(--dc-cell) + GX))');
+    expect(style.top).toBe('calc(0% + 0.25 * (var(--dc-cell) + GY))');
+    expect(style.transform).toBe('translate(-100%, 0%)'); // self defaults to the anchor
+    expect(style.width).toBe('calc(1 * var(--dc-cell) + 0 * GX)');
+    expect(style.height).toBe('calc(2 * var(--dc-cell) + 1 * GY)');
+    expect(style.zIndex).toBe(102); // above every grid widget, in layer order
+  });
+
+  it('fills its host when told to', () => {
+    const style = relativeBoxStyle({ mode: 'relative', host: 'h', anchor: 'center', size: { fill: 'host' } }, lengths);
+    expect([style.width, style.height, style.transform]).toEqual(['100%', '100%', 'translate(-50%, -50%)']);
   });
 });
 

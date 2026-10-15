@@ -35,7 +35,7 @@ vi.mock('@/components/ui/toast', () => ({
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { DashboardWorkspace } from './DashboardWorkspace';
 
-const box = { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 };
+const box = { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 3 };
 
 // A stored widget of a type this console does not know, with fields the parser does not
 // read. Its stored JSON is what an export must contain.

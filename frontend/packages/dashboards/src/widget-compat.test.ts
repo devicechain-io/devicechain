@@ -29,7 +29,7 @@ const TANK = defineWidgetDescriptor({
 
 const catalog = createWidgetCatalog([TANK]);
 
-const box = { col: 0, colSpan: 8, row: 0, rowSpan: 4, z: 0 };
+const box = { mode: 'grid' as const, col: 0, row: 0, cols: 8, rows: 4 };
 
 const tank = (over: Record<string, unknown> = {}) => ({
   id: 'tank-1',
@@ -172,7 +172,7 @@ describe('a widget the catalog cannot resolve', () => {
 
   it('is reported by unresolvedWidgets so a publish gate can refuse it', () => {
     const def = parseDashboardDefinition(
-      board([tank({ id: 'a', widget: { version: '1.2.0', optionsVersion: 9 } }), tank({ id: 'b' })]),
+      board([tank({ id: 'a', widget: { version: '1.2.0', optionsVersion: 9 } }), tank({ id: 'b', layout: { base: { ...box, row: 4 } } })]),
       { catalog },
     );
     expect(unresolvedWidgets(def).map((r) => [r.widgetId, r.reason.code])).toEqual([['a', 'options-version']]);
@@ -194,7 +194,7 @@ describe('legacy built-ins', () => {
     const def = parseDashboardDefinition(board([gauge]));
     expect(def.widgets[0]).toEqual(gauge);
     expect(isBuiltinWidget(def.widgets[0])).toBe(true);
-    expect(serializeDefinition(def)).toBe(JSON.stringify({ schemaVersion: 1, title: '', canvas: def.canvas, widgets: [gauge], slots: { tank: { type: 'device' } } }));
+    expect(serializeDefinition(def)).toBe(JSON.stringify({ schemaVersion: 2, title: '', canvas: def.canvas, widgets: [gauge], slots: { tank: { type: 'device' } } }));
   });
 
   // Deliberately unchanged for built-ins: only the owned envelope survives, as it always has.

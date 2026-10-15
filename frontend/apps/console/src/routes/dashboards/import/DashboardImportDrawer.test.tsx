@@ -51,9 +51,9 @@ import { MAX_IMPORT_TEXT_BYTES } from './importDefinition';
 import { DashboardImportDrawer } from './DashboardImportDrawer';
 import { DASHBOARD_TEMPLATES } from './templates';
 
-const box = { base: { col: 0, colSpan: 6, row: 0, rowSpan: 4, z: 0 } };
+const box = { base: { mode: 'grid' as const, col: 0, row: 0, cols: 6, rows: 4 } };
 const exported = JSON.stringify({
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Plant',
   widgets: [
     {
@@ -163,7 +163,7 @@ describe('DashboardImportDrawer', () => {
       ...JSON.parse(exported),
       widgets: [
         ...(JSON.parse(exported) as { widgets: unknown[] }).widgets,
-        { id: 'i1', type: 'image', layout: box, options: { url: 'https://img.example.org/a.png' } },
+        { id: 'i1', type: 'image', layout: { base: { ...box.base, row: 4 } }, options: { url: 'https://img.example.org/a.png' } },
       ],
     });
     open({ text: withImage });

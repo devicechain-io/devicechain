@@ -35,6 +35,8 @@ import {
   isResolvedWidget,
   updateWidget,
   widgetSlotName,
+  withoutConversionMark,
+  gridLengthPx,
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
   type CanvasDensity,
@@ -96,10 +98,11 @@ function useDebouncedValue<T>(value: T, key: string, ms: number): T {
   return debounced;
 }
 
-// CanvasSettings — the grid-level knobs (ADR-039 amendment): column count, gutter,
-// row height, and how the board sizes into its container (fill / fixed width / fixed
-// height). Columns is high-res (24–48) so span placement stays near-free; sizing is
-// the "fill an area vs. fixed pixels" control. A compact bar next to the title.
+// CanvasSettings — the grid-level knobs: the column count, the smallest cell the board renders
+// at before it reflows, the gutter between cells and the padding around the board (both px,
+// scaled by the density), and how the board sizes into its container (fill / fixed width /
+// fixed height). A compact bar next to the title. A gutter or padding authored as a spacing
+// token or per axis/side shows here as its px value; typing one writes a single px value.
 function CanvasSettings({
   definition,
   onChange,
@@ -109,7 +112,8 @@ function CanvasSettings({
 }) {
   const { t } = useTranslation('dashboards');
   const { grid, sizing } = definition.canvas;
-  const gap = typeof grid.gap === 'number' ? grid.gap : grid.gap.row;
+  const gutter = gridLengthPx(typeof grid.gutter === 'object' ? grid.gutter.x : grid.gutter);
+  const padding = gridLengthPx(typeof grid.padding === 'object' ? grid.padding.left : grid.padding);
   const mode: 'fill' | 'width' | 'height' = sizing === 'fill' ? 'fill' : 'width' in sizing ? 'width' : 'height';
   const fixedPx = sizing === 'fill' ? 1200 : 'width' in sizing ? sizing.width : sizing.height;
 
@@ -130,16 +134,22 @@ function CanvasSettings({
         onChange={(v) => onChange(setCanvasGrid(definition, { columns: v }))}
       />
       <NumberField
-        label={t('workspaceRowHeight')}
-        value={grid.rowHeight}
+        label={t('workspaceMinCellSize')}
+        value={grid.minCellSize}
         min={1}
-        onChange={(v) => onChange(setCanvasGrid(definition, { rowHeight: v }))}
+        onChange={(v) => onChange(setCanvasGrid(definition, { minCellSize: v }))}
       />
       <NumberField
-        label={t('workspaceGap')}
-        value={gap}
+        label={t('workspaceGutter')}
+        value={gutter}
         min={0}
-        onChange={(v) => onChange(setCanvasGrid(definition, { gap: v }))}
+        onChange={(v) => onChange(setCanvasGrid(definition, { gutter: v }))}
+      />
+      <NumberField
+        label={t('workspacePadding')}
+        value={padding}
+        min={0}
+        onChange={(v) => onChange(setCanvasGrid(definition, { padding: v }))}
       />
       <div className="flex items-center gap-2">
         <label className="text-sm text-muted-foreground">{t('workspaceSize')}</label>
@@ -363,6 +373,10 @@ export function DashboardWorkspace({
   const dataHub = preview ? synthetic : liveHub;
 
   const dirty = isDirty(working, saved);
+  // The board was stored in the previous grid format and its layout was mapped onto the current
+  // one approximately when it loaded. Saving writes the current format, which is what retires the
+  // notice, so a converted board can be saved even before anything else is edited.
+  const converted = working.convertedFrom !== undefined;
   const selected = working.widgets.find((w) => w.id === selectedId) ?? null;
   const displayName = working.title || name;
   const heading = displayName || token;
@@ -429,7 +443,9 @@ export function DashboardWorkspace({
       expectedUpdatedAt,
     })
       .then((result) => {
-        setSaved(snapshot);
+        // The save wrote the current format: neither copy is a conversion any more.
+        setSaved(withoutConversionMark(snapshot));
+        setWorking((w) => withoutConversionMark(w));
         setExpectedUpdatedAt(result.updatedAt); // advance the baseline for the next save
         setSaveState({ kind: 'clean' });
         toast(t('workspaceSaved'));
@@ -514,7 +530,7 @@ export function DashboardWorkspace({
     ) : null;
 
   const saveButton = (
-    <Button size="sm" onClick={save} disabled={!dirty || saveState.kind === 'saving'}>
+    <Button size="sm" onClick={save} disabled={!(dirty || converted) || saveState.kind === 'saving'}>
       {saveState.kind === 'saving' ? t('workspaceSaving') : t('common:save')}
     </Button>
   );
@@ -669,6 +685,15 @@ export function DashboardWorkspace({
               />
             </div>
             <CanvasSettings definition={working} onChange={setWorking} />
+            {converted && (
+              <div
+                role="status"
+                data-shot="dashboard-converted"
+                className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm"
+              >
+                {t('workspaceConvertedNotice')}
+              </div>
+            )}
           </div>
         ) : undefined
       }

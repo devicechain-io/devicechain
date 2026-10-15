@@ -133,9 +133,10 @@ for (const board of BOARDS) {
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and
 // kept permanently: a card whose title cannot fit its width (the frame drops a title only below
 // a height, so this card is tall enough to keep it) and whose reading is cut, a card whose title alone
-// cannot fit it, a label that cannot fit, and two widgets nudged on top of each other, beside
-// one widget that fits and must NOT be flagged (a check that flagged everything would pass the
-// first half of this test).
+// cannot fit it, a label that cannot fit, and a widget on top of another, beside one widget that
+// fits and must NOT be flagged (a check that flagged everything would pass the first half of this
+// test). The parser refuses two grid widgets on one cell, so the overlap is a widget placed
+// RELATIVE to a host and hung off its edge over a third widget it is not anchored to.
 
 for (const width of WIDTHS) {
   test(`the negative control fails the gate at ${width} px`, async ({ page }) => {

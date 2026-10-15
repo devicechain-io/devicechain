@@ -259,9 +259,9 @@ cuentan en celdas de la cuadrícula (columnas a lo ancho, filas a lo alto), no e
 
 ```ts
 layout: {
-  defaultSpan: { cols: 8, rows: 4 }, // el tamaño de un widget recién añadido
-  minSpan: { cols: 4, rows: 2 },     // el mínimo al que se puede redimensionar (por defecto 1 x 1)
-  maxSpan: { cols: 24, rows: 12 },   // el máximo (por defecto: sin límite)
+  defaultSpan: { cols: 4, rows: 3 }, // el tamaño de un widget recién añadido
+  minSpan: { cols: 3, rows: 2 },     // el mínimo al que se puede redimensionar (por defecto 1 x 1)
+  maxSpan: { cols: 8, rows: 6 },     // el máximo (por defecto: sin límite)
   resize: 'both',                    // 'both' (por defecto), 'horizontal', 'vertical' o 'none'
 },
 ```
@@ -275,8 +275,17 @@ reglas cuando el anfitrión lo construye.
 El editor añade un widget nuevo con `defaultSpan`. `lintLayout`, de `@devicechain/dashboards`, informa
 como error de un panel que coloque el widget fuera de sus límites. Elige un `minSpan` que sea la caja más
 pequeña en la que tu widget siga siendo legible. Un widget sin bloque `layout` se añade con 4 x 2 celdas y
-sin límites, y `lintLayout` indica que no declaró ninguno. Los tamaños de celda están ligados a la
-cuadrícula actual y podrían recalibrarse en una versión posterior.
+sin límites, y `lintLayout` indica que no declaró ninguno.
+
+Las celdas son cuadradas, y un panel nunca muestra una celda más pequeña que su tamaño mínimo de
+celda (56 píxeles por defecto; en una pantalla más estrecha el panel se reorganiza). Por eso conviene
+calcular `minSpan` con esa celda mínima: con la separación por defecto de 8 píxeles, 2 celdas son 120
+píxeles, 3 son 184 y 4 son 248. En una pantalla más ancha las celdas crecen y tu widget solo se hace
+más grande. Las versiones anteriores a la cuadrícula de celdas cuadradas contaban celdas en una
+cuadrícula de 24 columnas estrechas y filas de 40 píxeles; un paquete que aún declare esos números
+sigue funcionando, pero sus tamaños son aproximadamente el doble de anchos de lo que deberían, y
+`lintLayout` informa de cualquier panel que lo coloque fuera de ellos. Divide las columnas entre dos y
+revisa las filas.
 
 El texto sigue la densidad del panel. `WidgetFrame` añade el relleno y configura el área de contenido del
 widget como un contenedor de tamaño, de modo que dentro de él las unidades de contenedor CSS (`cqw`, `cqh`)

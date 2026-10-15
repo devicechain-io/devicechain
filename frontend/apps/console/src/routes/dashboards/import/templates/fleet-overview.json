@@ -4,13 +4,14 @@
       "base": 0
     },
     "grid": {
-      "columns": 24,
-      "gap": 8,
-      "rowHeight": 40
+      "columns": 12,
+      "gutter": 8,
+      "minCellSize": 56,
+      "padding": 0
     },
     "sizing": "fill"
   },
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "slots": {
     "focus": {
       "label": "Featured device",
@@ -24,10 +25,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 24,
+          "cols": 12,
+          "mode": "grid",
           "row": 0,
-          "rowSpan": 2,
-          "z": 0
+          "rows": 1
         }
       },
       "options": {
@@ -42,10 +43,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 6,
-          "row": 2,
-          "rowSpan": 4,
-          "z": 0
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 2
         }
       },
       "options": {
@@ -59,11 +60,11 @@
       "id": "w-major",
       "layout": {
         "base": {
-          "col": 6,
-          "colSpan": 6,
-          "row": 2,
-          "rowSpan": 4,
-          "z": 0
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 2
         }
       },
       "options": {
@@ -77,11 +78,11 @@
       "id": "w-minor",
       "layout": {
         "base": {
-          "col": 12,
-          "colSpan": 6,
-          "row": 2,
-          "rowSpan": 4,
-          "z": 0
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 2
         }
       },
       "options": {
@@ -95,11 +96,11 @@
       "id": "w-warn",
       "layout": {
         "base": {
-          "col": 18,
-          "colSpan": 6,
-          "row": 2,
-          "rowSpan": 4,
-          "z": 0
+          "col": 9,
+          "cols": 3,
+          "mode": "grid",
+          "row": 1,
+          "rows": 2
         }
       },
       "options": {
@@ -114,10 +115,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "colSpan": 14,
-          "row": 6,
-          "rowSpan": 10,
-          "z": 0
+          "cols": 7,
+          "mode": "grid",
+          "row": 3,
+          "rows": 5
         }
       },
       "options": {
@@ -139,11 +140,11 @@
       "id": "w-focus-chart",
       "layout": {
         "base": {
-          "col": 14,
-          "colSpan": 10,
-          "row": 6,
-          "rowSpan": 6,
-          "z": 0
+          "col": 7,
+          "cols": 5,
+          "mode": "grid",
+          "row": 3,
+          "rows": 3
         }
       },
       "options": {
@@ -164,11 +165,11 @@
       "id": "w-focus-map",
       "layout": {
         "base": {
-          "col": 14,
-          "colSpan": 10,
-          "row": 12,
-          "rowSpan": 4,
-          "z": 0
+          "col": 7,
+          "cols": 5,
+          "mode": "grid",
+          "row": 6,
+          "rows": 3
         }
       },
       "options": {

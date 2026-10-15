@@ -55,7 +55,7 @@ const GHOST = {
       id: 'far',
       type: 'acme/far-widget',
       widget: { version: '3.0.0', optionsVersion: 1 },
-      layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 } },
+      layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 3 } },
       options: { title: 'far' },
     },
   ],
@@ -152,7 +152,7 @@ describe('rolling back to a version with unresolved widgets', () => {
           type: 'gauge',
           // Saved under a settings version the installed gauge does not use.
           widget: { version: '1.0.0', optionsVersion: 99 },
-          layout: { base: { col: 0, colSpan: 4, row: 0, rowSpan: 3, z: 0 } },
+          layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 4, rows: 3 } },
           options: {},
         },
       ],

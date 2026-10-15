@@ -382,31 +382,26 @@ func TestSitepulseDefaultBoardLabelCarriesNoTruncationNote(t *testing.T) {
 	}
 }
 
-// The board is not capped to a screen (it may scroll), but its widgets must not overlap or
-// leave the grid, and the ORDERING RULE holds: the alarm surfaces, the KPI row and the map
-// end at or above the fold of a 1080 px-tall window, so a scroll only ever hides cards and
-// gauges. (The pixel floor each widget must clear is the frontend layout lint's job.)
-func TestSitepulseBoardDoesNotOverlapAndKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
-	def := sitepulseBoard(t, sitepulseManifest(t))
-	occupied := map[[2]int]string{}
-	for _, w := range def.Widgets {
-		b := w.Layout["base"]
-		if b.Col < 0 || b.Row < 0 || b.Col+b.ColSpan > dashboardGridColumns {
-			t.Errorf("%s spans columns %d..%d of %d", w.Id, b.Col, b.Col+b.ColSpan, dashboardGridColumns)
-		}
-		for c := b.Col; c < b.Col+b.ColSpan; c++ {
-			for r := b.Row; r < b.Row+b.RowSpan; r++ {
-				if other, taken := occupied[[2]int{c, r}]; taken {
-					t.Fatalf("%s overlaps %s at column %d row %d", w.Id, other, c, r)
-				}
-				occupied[[2]int{c, r}] = w.Id
-			}
-		}
+// The board is not capped to a screen (it may scroll), but the ORDERING RULE holds: the alarm
+// surfaces, the KPI row and the map end at or above the fold of a 1080 px-tall window, so a
+// scroll only ever hides cards and gauges. Whether the widgets overlap or leave the grid, and
+// whether each is a size it can be read at, is the frontend's to say: the parser refuses an
+// overlap and the layout lint checks the rest, over the committed fixture.
+func TestSitepulseBoardKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
+	// A LITERAL, not the constant the board is built from: 960 px across 12 columns with 8 px
+	// gutters is a row pitch of ~80.7 px, and 1080 px holds 13 whole rows.
+	const foldRows = 13
+	if sitepulseFoldRows != foldRows {
+		t.Errorf("premise: the board computes a fold of %d rows, want %d", sitepulseFoldRows, foldRows)
 	}
+	def := sitepulseBoard(t, sitepulseManifest(t))
 	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput", "sp-plant-running", "sp-alarms", "sp-map"} {
 		b := widgetByID(t, def, id).Layout["base"]
-		if end := b.Row + b.RowSpan; end > sitepulseFoldRows {
-			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (%d rows); the alarms, KPIs and map belong above it", id, end, sitepulseFoldRows)
+		if b.Mode != "grid" {
+			t.Fatalf("%s is placed %q; the fold is counted in grid rows", id, b.Mode)
+		}
+		if end := b.Row + b.Rows; end > foldRows {
+			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (%d rows); the alarms, KPIs and map belong above it", id, end, foldRows)
 		}
 	}
 }

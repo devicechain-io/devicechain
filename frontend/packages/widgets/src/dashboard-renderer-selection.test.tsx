@@ -121,7 +121,7 @@ function tokenOf(ds: DatasourceSelector | undefined): string | undefined {
 
 // ── The board: one widget per channel on the re-pointed slot, and one on a slot that stays ─
 
-const box = (row: number) => ({ base: { col: 0, colSpan: 4, row, rowSpan: 2, z: 0 } });
+const box = (row: number) => ({ base: { mode: 'grid' as const, col: 0, row, cols: 4, rows: 2 } });
 
 function widgetsFor(slot: string, prefix: string, row: number): WidgetInstance[] {
   return [
@@ -154,9 +154,9 @@ function widgetsFor(slot: string, prefix: string, row: number): WidgetInstance[]
 }
 
 const definition: DashboardDefinition = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: 'Selection',
-  canvas: { grid: { columns: 12, gap: 8, rowHeight: 40 }, sizing: 'fill', breakpoints: { base: 0 } },
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
   slots: {
     machine: { type: 'device' },
     plant: { type: 'device' },
