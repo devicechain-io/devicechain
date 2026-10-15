@@ -157,8 +157,31 @@ describe('a paused alarm widget', () => {
       isDatasourceAvailable: async () => true,
     } as unknown as DashboardHub;
     const snap = (total: number): AlarmSnapshot => ({ alarms: [], total } as unknown as AlarmSnapshot);
-    return { hub, push: (total: number) => act(() => sink?.next(snap(total))) };
+    return {
+      hub,
+      push: (total: number) => act(() => sink?.next(snap(total))),
+      fail: () => act(() => sink?.error?.(new Error('socket closed'))),
+    };
   }
+
+  // The hub's reconnect path: a query fails while the socket is down, then the socket comes back and
+  // re-queries -- the same subscription answering again, with newer rows. Nothing was re-pointed, so
+  // the pause holds exactly.
+  it('a dropped and re-established stream while paused leaves the held count alone', () => {
+    const f = alarmHub();
+    const w = widget('alarm-count', { state: 'ACTIVE' }, undefined);
+    const { setRange } = mount(w, f.hub, live);
+    f.push(3);
+    setRange(frozen);
+    f.fail();
+    f.push(8);
+    f.push(9);
+    expect(screen.getByText('3')).toBeTruthy();
+    expect(screen.queryByText('8')).toBeNull();
+    expect(screen.queryByText('9')).toBeNull();
+    setRange(live);
+    expect(screen.getByText('9')).toBeTruthy();
+  });
 
   it('holds the count on screen while paused and shows the live one on resume', () => {
     const f = alarmHub();
@@ -186,6 +209,66 @@ describe('a paused alarm widget', () => {
     expect(screen.queryByText('6')).toBeNull();
     setRange(live);
     expect(screen.getByText('6')).toBeTruthy();
+  });
+});
+
+describe('a slot re-pointed while the board is paused', () => {
+  // One alarm stream per subscription, each fed by the test: what the hub would send for that device.
+  // `answered` maps a device to the count a source that already holds its snapshot answers with AT
+  // ONCE, inside subscribe (a cache, a recording): no loading state ever reaches the widget then.
+  function alarmHub(answered: Record<string, number> = {}) {
+    const sinks = new Map<string, AlarmStreamSink>();
+    const snap = (total: number): AlarmSnapshot => ({ alarms: [], total }) as unknown as AlarmSnapshot;
+    const hub = {
+      subscribeAlarms: (s: { datasource?: { deviceToken?: string } }, k: AlarmStreamSink) => {
+        const device = s.datasource?.deviceToken ?? '';
+        sinks.set(device, k);
+        if (answered[device] !== undefined) k.next(snap(answered[device]));
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    return { hub, push: (device: string, total: number) => act(() => sinks.get(device)?.next(snap(total))) };
+  }
+  const on = (device: string) => widget('alarm-count', { state: 'ACTIVE' }, { kind: 'device', deviceToken: device, measurements: [] });
+  const mountOn = (hub: DashboardHub) => {
+    const tree = (w: WidgetInstance, r: TimeRangeState) => (
+      <WidgetTimeRangeProvider range={r}>
+        <ConnectedWidget widget={w} hub={hub} />
+      </WidgetTimeRangeProvider>
+    );
+    const view = render(tree(on('hauler-1'), live));
+    return { tree, view };
+  };
+
+  it('holds the new device’s first snapshot when its source answers at once', () => {
+    const f = alarmHub({ 'hauler-2': 8 });
+    const { tree, view } = mountOn(f.hub);
+    f.push('hauler-1', 3);
+    view.rerender(tree(on('hauler-1'), frozen));
+    view.rerender(tree(on('hauler-2'), frozen));
+    expect(screen.queryByText('3')).toBeNull();
+    expect(screen.getByText('8')).toBeTruthy();
+  });
+
+  it('never shows the previous device’s alarms under the new one, and holds the new one’s first snapshot', () => {
+    const f = alarmHub();
+    const { tree, view } = mountOn(f.hub);
+    f.push('hauler-1', 3);
+    view.rerender(tree(on('hauler-1'), frozen));
+    expect(screen.getByText('3')).toBeTruthy();
+
+    // The operator picks hauler-2 while paused: hauler-1's count must go at once.
+    view.rerender(tree(on('hauler-2'), frozen));
+    expect(screen.queryByText('3')).toBeNull();
+    f.push('hauler-2', 8);
+    expect(screen.getByText('8')).toBeTruthy();
+    // ...and that first snapshot is what the pause now holds.
+    f.push('hauler-2', 9);
+    expect(screen.getByText('8')).toBeTruthy();
+    expect(screen.queryByText('9')).toBeNull();
+    view.rerender(tree(on('hauler-2'), live));
+    expect(screen.getByText('9')).toBeTruthy();
   });
 });
 

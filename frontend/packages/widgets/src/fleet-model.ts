@@ -77,6 +77,10 @@ export function buildFleet(i: FleetInputs): FleetState {
   if (!i.roster) return { status: 'loading', members: [], total: 0, truncated: false };
   if (i.roster.unbound) return { status: 'unbound', members: [], total: 0, truncated: false };
 
+  // A seeded reading is stamped at the start of its minute (fleet-seed.ts, "Ages") and happened
+  // somewhere in that minute, so it is in range while its minute is. Held to the exact instant, a
+  // reading 59 minutes 45 seconds old on an hour's board was dropped as out of range.
+  const seedSince = Math.floor(i.since / MINUTE_MS) * MINUTE_MS;
   const members = i.roster.members.map((ref): FleetMember => {
     const seed = i.seeds.get(ref.token);
     const seeded = seed && seed !== 'failed' ? seed : undefined;
@@ -85,7 +89,7 @@ export function buildFleet(i: FleetInputs): FleetState {
     const names = new Set<string>([...Object.keys(seeded?.latest ?? {}), ...(live?.keys() ?? [])]);
     for (const name of names) {
       const best = newer(seeded?.latest[name], live?.get(name));
-      if (best && inRange(best, i.since)) latest[name] = best;
+      if (best && inRange(best, best === seeded?.latest[name] ? seedSince : i.since)) latest[name] = best;
     }
     const observed = new Set<string>(seeded?.observed ?? []);
     for (const name of Object.keys(latest)) observed.add(name);
@@ -95,6 +99,8 @@ export function buildFleet(i: FleetInputs): FleetState {
       latest,
       seed: seed === undefined ? 'pending' : seed === 'failed' ? 'failed' : 'ready',
       observed: [...observed],
+      // A live reading of an unread name is its value: cellFor looks at `latest` first.
+      ...(seeded?.unread?.length ? { unread: seeded.unread } : {}),
     };
   });
   return {
@@ -127,6 +133,8 @@ export type Cell =
   | { kind: 'failed' }
   // The device reported other measurements in the span, but never this one.
   | { kind: 'not-reported' }
+  // The device reported this in the span, but its newest reading was not loaded (MemberSeed.unread).
+  | { kind: 'unread' }
   // The device reported nothing at all in the span.
   | { kind: 'no-data' };
 
@@ -137,6 +145,7 @@ export function cellFor(member: FleetMember, measurement: string): Cell {
   }
   if (member.seed === 'pending') return { kind: 'loading' };
   if (member.seed === 'failed') return { kind: 'failed' };
+  if (member.unread?.includes(measurement)) return { kind: 'unread' };
   return member.observed.length > 0 && !member.observed.includes(measurement) ? { kind: 'not-reported' } : { kind: 'no-data' };
 }
 

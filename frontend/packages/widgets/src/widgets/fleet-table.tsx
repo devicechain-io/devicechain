@@ -461,6 +461,8 @@ function CellView({
       return <span style={muted}>{strings.failed}</span>;
     case 'not-reported':
       return <span style={muted} data-cell-empty="not-reported">{strings.notReported}</span>;
+    case 'unread':
+      return <span style={muted} data-cell-empty="unread">{strings.unread}</span>;
     case 'no-data':
       return <span style={muted} data-cell-empty="no-data">{strings.noData}</span>;
     case 'value': {

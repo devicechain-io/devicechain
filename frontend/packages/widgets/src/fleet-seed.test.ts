@@ -191,3 +191,76 @@ describe('memberSeedPlan', () => {
     expect(seed.latest.temperature.occurredTime).toBe('2026-10-14T11:58:00Z');
   });
 });
+
+// ---- A span bucket's average is not a latest reading -------------------------------------------
+
+// A store that AVERAGES each read's readings into buckets of the read's own width (aligned to the
+// epoch, as the store's buckets are), so a wide span bucket answers with a mean like the real one.
+function bucketing(readings: Array<[string, string, number]>) {
+  const asked: MemberBucketCriteria[] = [];
+  const read = async (c: MemberBucketCriteria): Promise<MeasurementBucket[]> => {
+    asked.push(c);
+    const lo = Date.parse(c.startTime);
+    const hi = Date.parse(c.endTime);
+    const width = c.intervalSeconds * 1000;
+    const sums = new Map<string, { name: string; start: number; sum: number; n: number }>();
+    for (const [name, at, value] of readings) {
+      const t = Date.parse(at);
+      if ((c.name !== undefined && c.name !== name) || t < lo || t > hi) continue;
+      const start = Math.floor(t / width) * width;
+      const k = `${name}@${start}`;
+      const acc = sums.get(k) ?? { name, start, sum: 0, n: 0 };
+      acc.sum += value;
+      acc.n += 1;
+      sums.set(k, acc);
+    }
+    return [...sums.values()].map((a) => b(a.name, iso(a.start), a.sum / a.n, a.n));
+  };
+  return { asked, read };
+}
+
+describe('memberSeedPlan on a long span: the latest reading, not a bucket average', () => {
+  const WEEK = seedWindow(7 * 86400, NOW);
+
+  it('shows a quiet device’s last reading, not the average of the 42-minute bucket it fell in', async () => {
+    // Fuel 14, refuelled to 40 eleven minutes later, inside one 42-minute bucket; then parked.
+    const s = bucketing([
+      ['fuel', '2026-10-14T09:15:00Z', 14],
+      ['fuel', '2026-10-14T09:26:00Z', 40],
+    ]);
+    expect(WEEK.intervalSeconds).toBe(42 * 60);
+    const seed = await memberSeedPlan(WEEK, ['fuel']).seed('d', s.read);
+    expect(seed.latest.fuel.value).toBe(40);
+    expect(seed.latest.fuel.occurredTime).toBe('2026-10-14T09:26:00.000Z');
+    // The re-read is one bucket wide, in minutes, narrowed to the one name.
+    const last = s.asked[s.asked.length - 1];
+    expect(last).toMatchObject({ intervalSeconds: 60, name: 'fuel' });
+    expect(Date.parse(last.endTime) + 1 - Date.parse(last.startTime)).toBe(42 * 60_000);
+  });
+
+  it('re-reads names whose newest bucket is the same one together, once', async () => {
+    const s = bucketing([
+      ['fuel', '2026-10-14T09:15:00Z', 14],
+      ['fuel', '2026-10-14T09:26:00Z', 40],
+      ['engine', '2026-10-14T09:16:00Z', 80],
+      ['engine', '2026-10-14T09:25:00Z', 60],
+    ]);
+    const seed = await memberSeedPlan(WEEK, ['fuel', 'engine']).seed('d', s.read);
+    expect([seed.latest.fuel.value, seed.latest.engine.value]).toEqual([40, 60]);
+    // tail, span, and ONE re-read of every name over the shared bucket.
+    expect(s.asked).toHaveLength(3);
+    expect(s.asked[2].name).toBeUndefined();
+  });
+
+  it('shows no value, rather than an average, for a name past the re-read bound, and marks it unread', async () => {
+    const names = Array.from({ length: MAX_NARROW_READS + 1 }, (_, i) => `m${i}`);
+    // Each name's newest reading in a different bucket, newest first.
+    const s = bucketing(names.map((n, i): [string, string, number] => [n, iso(Date.parse('2026-10-14T09:00:00Z') - i * 3 * 3600_000), i]));
+    const seed = await memberSeedPlan(WEEK, names).seed('d', s.read);
+    expect(s.asked).toHaveLength(2 + MAX_NARROW_READS);
+    expect(Object.keys(seed.latest).sort()).toEqual(names.slice(0, MAX_NARROW_READS));
+    expect(seed.observed.sort()).toEqual(names);
+    // The device HAS data for the name left over: it is unread, not "no data".
+    expect(seed.unread).toEqual(names.slice(MAX_NARROW_READS));
+  });
+});

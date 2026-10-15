@@ -13,6 +13,8 @@ export interface FleetStrings {
   loading: string;
   // The reason a cell holds no number (D-5): each is a different fact about the device.
   notReported: string;
+  // It reported this, but its newest reading was not loaded: there IS data.
+  unread: string;
   noData: string;
   failed: string;
   // Whole-widget states.
@@ -40,6 +42,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     device: 'Device',
     loading: 'Loading',
     notReported: 'does not report this',
+    unread: 'not loaded',
     noData: 'no data in range',
     failed: 'could not be read',
     unbound: 'Choose a device group for this widget',
@@ -62,6 +65,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     device: 'Dispositivo',
     loading: 'Cargando',
     notReported: 'no informa esta medición',
+    unread: 'no cargado',
     noData: 'sin datos en el rango',
     failed: 'no se pudo leer',
     unbound: 'Elija un grupo de dispositivos para este widget',

@@ -38,6 +38,9 @@ export interface FleetMember {
   seed: 'pending' | 'ready' | 'failed';
   // Every measurement name it reported at least once inside the span.
   observed: string[];
+  // Names it reported in the span whose newest reading was not loaded (MemberSeed.unread): "not
+  // loaded", never "no data in range".
+  unread?: string[];
 }
 
 // The members a fleet widget draws. `total` is the size of the anchor; `members` holds at most the

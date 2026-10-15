@@ -240,6 +240,26 @@ describe('useAlarmStream', () => {
     expect(result.current.error).toBeNull();
   });
 
+  // EVERY render is recorded, not just the settled one: the render that carries the new
+  // subscription runs before the effect that resets the state, and it must not return the old rows.
+  it('never returns the previous subscription’s rows under a new one, not even for one render', () => {
+    const f = fakeAlarmHub();
+    const seen: Array<{ pageSize: number | undefined; tokens: string[]; loading: boolean }> = [];
+    const { rerender } = renderHook(
+      ({ sub }) => {
+        const s = useAlarmStream(f.hub, sub);
+        seen.push({ pageSize: sub.pageSize, tokens: s.alarms.map((a) => a.token), loading: s.loading });
+        return s;
+      },
+      { initialProps: { sub: alarmSub } },
+    );
+    f.push({ alarms: [alarm({ token: 'a-1' })], total: 1 });
+    rerender({ sub: { ...alarmSub, pageSize: 10 } });
+    const under = seen.filter((r) => r.pageSize === 10);
+    expect(under.length).toBeGreaterThan(0);
+    expect(under.every((r) => r.loading && r.tokens.length === 0)).toBe(true);
+  });
+
   it('records a sink error and stops loading', () => {
     const f = fakeAlarmHub();
     const { result } = renderHook(() => useAlarmStream(f.hub, alarmSub));
@@ -477,6 +497,25 @@ describe('useLocationStream', () => {
     expect(result.current.loading).toBe(true);
     expect(result.current.locations).toEqual([]);
     expect(result.current.forbidden).toBe(false);
+  });
+
+  it('never returns the previous selector’s positions under a new one, not even for one render', () => {
+    const f = fakeLocationHub();
+    const other: LocationSubscription = { datasource: { ...locationSub.datasource!, deviceToken: 'dozer-2' } as LocationSubscription['datasource'] };
+    const seen: Array<{ device: string; tokens: string[]; loading: boolean }> = [];
+    const { rerender } = renderHook(
+      ({ sub }) => {
+        const s = useLocationStream(f.hub, sub);
+        seen.push({ device: (sub.datasource as { deviceToken: string }).deviceToken, tokens: s.locations.map((l) => l.deviceToken), loading: s.loading });
+        return s;
+      },
+      { initialProps: { sub: locationSub } },
+    );
+    f.push({ kind: 'positions', deviceTokens: ['dozer-1'], locations: [position()] });
+    rerender({ sub: other });
+    const under = seen.filter((r) => r.device === 'dozer-2');
+    expect(under.length).toBeGreaterThan(0);
+    expect(under.every((r) => r.loading && r.tokens.length === 0)).toBe(true);
   });
 
   it('holds the latest snapshot and clears loading', () => {

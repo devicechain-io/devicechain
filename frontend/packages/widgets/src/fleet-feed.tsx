@@ -96,8 +96,11 @@ export function GroupRefusal({ widget, descriptor }: { widget: WidgetInstance; d
   );
 }
 
-// The measurements a fleet widget shows, and so the ones its seed must find: the datasource's, and
-// the `measurement` option a per-device bar chart compares. Empty: every measurement reported.
+// The measurements a fleet widget shows, and so the ones its seed must find AND its live feed must
+// carry: the datasource's, and the `measurement` option a per-device bar chart compares. Empty: every
+// measurement reported. One list for both, because the hub's live feed delivers only the names its
+// selector lists: a bar chart comparing a measurement its datasource does not name would otherwise
+// be seeded with it and then never hear of it again.
 export function shownMeasurements(widget: WidgetInstance): string[] {
   const one = widget.options?.measurement;
   const named = [...(widget.datasource?.measurements ?? []), ...(typeof one === 'string' && one !== '' ? [one] : [])];
@@ -113,9 +116,9 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
   const now = useMemo(() => (hub.now ? () => hub.now!() : Date.now), [hub]);
   const spanSeconds = measurementSpan(descriptor, widget, range?.spanSeconds) ?? range?.spanSeconds ?? DEFAULT_TIME_RANGE_SECONDS;
   const pausedAt = range?.paused ? range.pausedAt : undefined;
-  const ds = widget.datasource;
-  const dsKey = JSON.stringify(ds ?? null);
   const names = shownMeasurements(widget);
+  const ds = widget.datasource && { ...widget.datasource, measurements: names };
+  const dsKey = JSON.stringify(ds ?? null);
   const namesKey = JSON.stringify(names);
   const supported = hub.subscribeMembers !== undefined && hub.readMemberSeeds !== undefined;
 
