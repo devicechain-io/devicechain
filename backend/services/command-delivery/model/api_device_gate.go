@@ -35,7 +35,8 @@ var _ DeviceGateReader = (*Api)(nil)
 // disabledDevices is the sub-select naming every (tenant, device) pair recorded as disabled. It
 // is the ONE spelling of "this device is disabled" on the write paths: both claims fold it into
 // their predicate, so a dispatch the pre-filter missed (a fact that landed between its read and
-// the claim) still loses at the claim.
+// the claim) still loses at the claim. The wake drain's read (DrainableCommands) carries it too,
+// so it never offers a page its own claim must refuse.
 //
 // Written `disabled = true`, not a bound parameter: the partial index behind it is matched on
 // the literal predicate, and a bound value would hide it from the planner.
@@ -194,19 +195,28 @@ func (api *Api) ReconcileDisabled(ctx context.Context, disabled []string, readSt
 	if err != nil {
 		return nil, err
 	}
-	var enabled []string
+	var unlisted []string
 	for _, tok := range recorded {
-		if listed[tok] {
-			continue
+		if !listed[tok] {
+			unlisted = append(unlisted, tok)
 		}
-		res := api.RDB.DB(ctx).Model(&DeviceGate{}).
-			Where("device_token = ? AND disabled = true AND updated_at < ?", tok, readStarted).
-			Updates(map[string]any{"disabled": false, "updated_at": now})
-		if res.Error != nil {
-			return nil, res.Error
+	}
+	// One statement per chunk, not one per device: the walk also runs on the roster consumer's
+	// goroutine (a tenant's first fact), under that stream's ack deadline. RETURNING names the
+	// rows THIS write moved, which is the answer: a device a newer fact already changed is left
+	// alone by the predicate and so is not reported.
+	var enabled []string
+	for start := 0; start < len(unlisted); start += gateChunk {
+		chunk := unlisted[start:min(start+gateChunk, len(unlisted))]
+		var moved []DeviceGate
+		if err := api.RDB.DB(ctx).Model(&moved).
+			Clauses(clause.Returning{Columns: []clause.Column{{Name: "device_token"}}}).
+			Where("device_token IN ? AND disabled = true AND updated_at < ?", chunk, readStarted).
+			Updates(map[string]any{"disabled": false, "updated_at": now}).Error; err != nil {
+			return nil, err
 		}
-		if res.RowsAffected == 1 {
-			enabled = append(enabled, tok)
+		for _, row := range moved {
+			enabled = append(enabled, row.DeviceToken)
 		}
 	}
 	return enabled, nil

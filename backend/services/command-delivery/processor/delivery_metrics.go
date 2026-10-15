@@ -116,6 +116,13 @@ type DeliveryMetrics struct {
 	// from device-management. A standing rate means commands are being delayed, not lost.
 	DisabledGateErrors prometheus.Counter
 
+	// ClaimsRefusedDisabled counts claims refused because the command's device was disabled
+	// between the batch's read of the record and the claim. The claim itself refuses a disabled
+	// device's command, and those refusals used to be logged as another dispatcher winning the
+	// row and counted in ClaimsLost — a claim race that never happened, on a series whose whole
+	// value is that a standing rate means two dispatch paths overlap.
+	ClaimsRefusedDisabled prometheus.Counter
+
 	// DisabledGateReady is 1 once this process has listed the tenants and read every one of them
 	// for the disabled-device record, and 0 until then; DisabledGatePending is how many tenants
 	// it is still waiting on. Until a tenant's record has been filled once (anywhere: the marker
@@ -294,6 +301,10 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		DisabledGateErrors: ms.NewCounter("command_delivery_disabled_gate_errors_total",
 			"Times the disabled-device record could not be read for a dispatch batch (that batch "+
 				"is not dispatched) or could not be synced from device-management"),
+		ClaimsRefusedDisabled: ms.NewCounter("command_delivery_claims_refused_disabled_total",
+			"Dispatches the claim refused because the command's device was disabled after the "+
+				"dispatch read the disabled-device record. The command stays undelivered and is held "+
+				"by the next sweep; these are not counted as lost claims"),
 		DisabledGateReady: ms.NewGauge("command_delivery_disabled_gate_ready",
 			"1 once this process has read the disabled devices of every tenant, 0 until then; tenants "+
 				"never synced anywhere are not dispatched to while it is 0"),
@@ -304,7 +315,8 @@ func NewDeliveryMetrics(ms *core.Microservice) DeliveryMetrics {
 		WindowRestamps: ms.NewCounter("command_delivery_window_restamps_total",
 			"Commands whose maintenance-window hold was moved to the window's current schedule "+
 				"because the window was edited or deleted, or closed again before the command's "+
-				"device came back"),
+				"device came back, or moved onto (or released from) another window because their "+
+				"device type was moved to it or lost its window"),
 		StrandedObserved: ms.NewCounter("command_delivery_stranded_observed_total",
 			"Commands found sitting in SENT with no outcome for longer than the platform could "+
 				"still have been retrying them"),

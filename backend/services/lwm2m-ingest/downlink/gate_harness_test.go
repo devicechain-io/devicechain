@@ -52,6 +52,9 @@ type fakeStore struct {
 	dispatchErrs map[string]int           // token → live confirmations that fail
 	claimErrs    map[string]int           // token → drain claims that fail
 	fetchErrs    int                      // drain fetches that fail
+	// refuse names devices whose rows the drain FETCH still offers but every drain CLAIM refuses:
+	// a predicate the claim carries and the read does not, as the disabled-device gate once was.
+	refuse map[string]bool
 
 	fetches   int
 	parkCalls []string
@@ -65,6 +68,7 @@ func newFakeStore() *fakeStore {
 		parkHolds:    map[string]chan struct{}{},
 		dispatchErrs: map[string]int{},
 		claimErrs:    map[string]int{},
+		refuse:       map[string]bool{},
 	}
 }
 
@@ -135,7 +139,7 @@ func (s *fakeStore) Claim(_ context.Context, _, token string) (string, bool, err
 		return "", false, errors.New("command-delivery unreachable")
 	}
 	r := s.byTok[token]
-	if r.status != statusParked && r.status != statusHeld {
+	if r.status != statusParked && r.status != statusHeld || s.refuse[r.device] {
 		return "", false, nil
 	}
 	r.status, r.nonce = "SENT", s.mint()

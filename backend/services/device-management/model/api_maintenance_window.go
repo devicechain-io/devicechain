@@ -225,10 +225,20 @@ type CommandDispatchHold struct {
 // read as "no hold".
 //
 // expiresAt is optional; nil means the command never expires and can always wait.
+//
+// 🔑 UNGATED IS THE THIRD ANSWER SPELLED OUT, and it exists for the re-stamp pass rather than
+// for enqueue. A device that exists, is enabled and whose type does not gate this command (no
+// window, or the command is not disruptive) is listed there. Enqueue could treat "not held, not
+// refused" as ungated, because a skipped device never reaches the queue. The re-stamp pass
+// cannot: it asks about commands ALREADY waiting, and a disabled or deleted device is skipped
+// too — reading that silence as "the type has no window now" would release a disabled device's
+// held disruptive commands to dispatch outside any window the moment it is enabled. Only a
+// device named here may have its hold released.
 func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []string, commandKey string,
-	expiresAt *time.Time, at time.Time) ([]*CommandDispatchHold, []*BatchEnqueueRefusal, error) {
+	expiresAt *time.Time, at time.Time) ([]*CommandDispatchHold, []*BatchEnqueueRefusal, []string, error) {
 	holds := make([]*CommandDispatchHold, 0)
 	refusals := make([]*BatchEnqueueRefusal, 0)
+	ungated := make([]string, 0)
 	ordered := dedupeTokens(deviceTokens)
 
 	verdicts := make(map[uint]typeWindowDecision)
@@ -241,7 +251,7 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 		}
 		found, err := api.DevicesByToken(ctx, ordered[start:end])
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		byToken := make(map[string]*Device, len(found))
 		for _, d := range found {
@@ -259,11 +269,12 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 				var err error
 				v, err = api.typeWindowVerdict(ctx, device.DeviceTypeId, commandKey, at, windows)
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				verdicts[device.DeviceTypeId] = v
 			}
 			if !v.gated {
+				ungated = append(ungated, token)
 				continue
 			}
 			if expiresAt != nil && v.after.After(at) && v.after.After(*expiresAt) {
@@ -281,7 +292,7 @@ func (api *Api) CommandDispatchSchedule(ctx context.Context, deviceTokens []stri
 			})
 		}
 	}
-	return holds, refusals, nil
+	return holds, refusals, ungated, nil
 }
 
 // typeWindowDecision is the part of a dispatch schedule that depends only on the device TYPE.

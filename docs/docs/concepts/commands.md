@@ -405,15 +405,22 @@ Commands already waiting on a window follow its new schedule within about a minu
 pass in command delivery polls the window's owner for the current schedule. It is a poll, not an
 event, so the bound is about 60 seconds, and it still converges when a notification would have been
 lost. The counter `command_delivery_window_restamps_total` counts commands whose hold was moved
-because the window was edited or deleted, or closed again before the device returned.
+because the window was edited or deleted, closed again before the device returned, or because their
+device type moved to another window or lost its window.
 
 - Deleting a window is refused while any device type uses it. If a window is gone anyway, waiting
   commands are released and dispatch normally.
 - If a device is offline through a whole opening, its undelivered command cannot be claimed once
   the window closes, and the same pass moves it to the next opening. If command delivery cannot
   reach the window's owner, waiting commands stay waiting; none is released.
-- Unassigning a window from a device type does not release commands already stamped from it; they
-  keep waiting for that window.
+- Waiting commands follow their device **type**, not the window they were stamped with. If a type
+  is moved to another window, the same pass moves the commands already waiting onto the new
+  window's next opening. If the type's window is removed, or the command is no longer `DISRUPTIVE`
+  or `DESTRUCTIVE` on it, they are released and dispatch normally. A disabled device's commands
+  stay on the window they were stamped with until the device is enabled; the next pass then moves
+  them.
+- If an LwM2M command was claimed inside its window and the window closes before the device can be
+  sent it, it is not sent. It goes back to waiting (`PARKED`) for the next opening.
 
 ### What is not gated {#maintenance-window-limits}
 

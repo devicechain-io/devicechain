@@ -59,6 +59,74 @@ type WindowOpeningResolver interface {
 	WindowOpening(ctx context.Context, windowToken string, at time.Time) (WindowOpening, error)
 }
 
+// WindowAssignmentResolver asks the owner which maintenance window each device's TYPE is on NOW,
+// for a command already waiting — the question the re-stamp pass asks so that a command follows
+// its device type when the type is re-pointed to another window or unassigned.
+//
+// holds names the devices the command must still wait for, each with the window and opening it
+// should be bound to (which may be a different window from the one it was stamped with). ungated
+// names the devices whose type no longer gates the command at all. A device in NEITHER list is
+// one the owner decided nothing about (it is disabled, or gone), and the caller must leave its
+// rows exactly as stamped: reading that silence as "ungated" would release a disabled device's
+// disruptive commands to go out outside any window once it is enabled. An error means nothing
+// was decided, and the rows likewise stay as stamped.
+type WindowAssignmentResolver interface {
+	CurrentWindows(ctx context.Context, deviceTokens []string, commandKey string) (holds []DispatchHold,
+		ungated []string, err error)
+}
+
+// WaitingCommandKey is one (device, command key) with undelivered commands stamped from a window.
+type WaitingCommandKey struct {
+	DeviceToken string
+	Name        string
+}
+
+// WaitingCommandKeys lists the distinct (device, command key) pairs with undelivered commands
+// stamped from one window, in the context's tenant. The owner's answer is a function of the device
+// (through its type) and the command key, so this is the whole question the re-point step asks.
+func (api *Api) WaitingCommandKeys(ctx context.Context, windowToken string) ([]WaitingCommandKey, error) {
+	found := make([]WaitingCommandKey, 0)
+	err := api.RDB.DB(ctx).Model(&Command{}).
+		Select("device_token, name").
+		Where("window_token = ? AND status IN ?", windowToken, claimableStatusStrings()).
+		Group("device_token, name").
+		Order("device_token, name").
+		Scan(&found).Error
+	if err != nil {
+		return nil, err
+	}
+	return found, nil
+}
+
+// RepointWindow moves the undelivered commands of the named devices and command key that are
+// stamped from window `from` onto `hold` — another window and its current opening — or, with a nil
+// hold, clears the hold (both bounds and the token) because the device's type no longer gates the
+// command. It reports how many rows it changed. Called under the window's tenant.
+//
+// Like RestampWindow it gates only the START: the predicate names the undelivered statuses, so a
+// row claimed meanwhile is not touched, and the conditional UPDATE composes with a racing claim.
+func (api *Api) RepointWindow(ctx context.Context, from, commandKey string, deviceTokens []string,
+	hold *DispatchHold) (int64, error) {
+	set := map[string]any{"dispatch_after": nil, "dispatch_until": nil, "window_token": nil}
+	if hold != nil {
+		set = map[string]any{"dispatch_after": hold.DispatchAfter, "dispatch_until": hold.DispatchUntil,
+			"window_token": hold.WindowToken}
+	}
+	var moved int64
+	for start := 0; start < len(deviceTokens); start += gateChunk {
+		chunk := deviceTokens[start:min(start+gateChunk, len(deviceTokens))]
+		res := api.RDB.DB(ctx).Model(&Command{}).
+			Where("window_token = ? AND name = ? AND status IN ?", from, commandKey, claimableStatusStrings()).
+			Where("device_token IN ?", chunk).
+			Updates(set)
+		if res.Error != nil {
+			return moved, res.Error
+		}
+		moved += res.RowsAffected
+	}
+	return moved, nil
+}
+
 // dispatchableNowWhere is the ONE predicate for "this row's hold, if any, admits a start now",
 // shared by every query that selects work to dispatch and every conditional UPDATE that claims
 // it: the opening has begun AND has not yet closed.
@@ -127,7 +195,10 @@ func (api *Api) WaitingWindows(ctx context.Context, after WaitingWindow, limit i
 //
 //   - window gone: the hold is cleared (both bounds and the token), and the commands dispatch
 //     as ordinary ones. Deleting a window that device types still use is refused upstream,
-//     so this is a type that was unassigned or a window removed after.
+//     so this is a window removed after its last type let go of it. (A type that was
+//     UNASSIGNED, or re-pointed to another window, does not make its old window gone: the
+//     window still exists for every other type using it. That case is RepointWindow's, which
+//     the pass runs first, through the device type's current assignment.)
 //   - window open now: every row is bound to the current opening — a future start is brought
 //     forward to now, and the close is set to this opening's. That releases a row that was
 //     waiting for it and re-admits one whose earlier opening passed unclaimed.

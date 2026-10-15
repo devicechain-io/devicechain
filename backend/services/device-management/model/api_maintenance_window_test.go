@@ -75,7 +75,7 @@ func TestADisruptiveCommandIsHeldUntilTheNextOpening(t *testing.T) {
 
 	// Wednesday 2026-01-14 12:00 UTC; the window opens Sunday 02:00 CET = 01:00 UTC.
 	at := utcAt(2026, 1, 14, 12, 0)
-	holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, at)
+	holds, refusals, _, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, at)
 	if err != nil {
 		t.Fatalf("schedule: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestADestructiveCommandIsHeldToo(t *testing.T) {
 	api := newWindowTestApi(t)
 	ctx := core.WithTenant(context.Background(), "A")
 	tokens := seedGatedType(t, api, ctx, "plant", 1)
-	holds, _, err := api.CommandDispatchSchedule(ctx, tokens, "wipe", nil, utcAt(2026, 1, 14, 12, 0))
+	holds, _, _, err := api.CommandDispatchSchedule(ctx, tokens, "wipe", nil, utcAt(2026, 1, 14, 12, 0))
 	if err != nil || len(holds) != 1 {
 		t.Fatalf("holds = %v, err = %v; a DESTRUCTIVE command must wait", holds, err)
 	}
@@ -111,7 +111,7 @@ func TestANormalCommandIsNeverHeld(t *testing.T) {
 	// NORMAL, an undeclared impact (a definition from before the field), a key the
 	// vocabulary does not know, all dispatch at once: only DISRUPTIVE/DESTRUCTIVE wait.
 	for _, key := range []string{"read", "legacy", "no-such-command"} {
-		holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, key, nil, at)
+		holds, refusals, _, err := api.CommandDispatchSchedule(ctx, tokens, key, nil, at)
 		if err != nil {
 			t.Fatalf("%s: %v", key, err)
 		}
@@ -132,7 +132,7 @@ func TestACommandInsideTheWindowIsBoundToTheCurrentOpening(t *testing.T) {
 	at := utcAt(2026, 1, 18, 3, 0) // Sunday 04:00 Berlin, inside 02:00-06:00
 	// An expiry before the close does not refuse it: the window is open now.
 	expires := utcAt(2026, 1, 18, 4, 0)
-	holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
+	holds, refusals, _, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
 	if err != nil || len(holds) != 1 || len(refusals) != 0 {
 		t.Fatalf("inside the window: holds=%v refusals=%v err=%v", holds, refusals, err)
 	}
@@ -150,7 +150,7 @@ func TestATypeWithoutAWindowIsNeverHeld(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "A")
 	tokens := seedDevicesSharingAType(t, api, ctx, "bare", 1,
 		[]*CommandDefinition{{CommandKey: "reboot", Impact: ImpactDisruptive}})
-	holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, utcAt(2026, 1, 14, 12, 0))
+	holds, refusals, _, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, utcAt(2026, 1, 14, 12, 0))
 	if err != nil || len(holds) != 0 || len(refusals) != 0 {
 		t.Fatalf("no window assigned: holds=%v refusals=%v err=%v", holds, refusals, err)
 	}
@@ -164,7 +164,7 @@ func TestRefusedWhenTheNextOpeningIsAfterExpiry(t *testing.T) {
 
 	// Expires Saturday: the Sunday opening is too late.
 	expires := utcAt(2026, 1, 17, 0, 0)
-	holds, refusals, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
+	holds, refusals, _, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
 	if err != nil {
 		t.Fatalf("schedule: %v", err)
 	}
@@ -177,14 +177,14 @@ func TestRefusedWhenTheNextOpeningIsAfterExpiry(t *testing.T) {
 
 	// Expires Monday: the same opening now fits, so the command is held rather than refused.
 	expires = utcAt(2026, 1, 19, 0, 0)
-	holds, refusals, err = api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
+	holds, refusals, _, err = api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
 	if err != nil || len(refusals) != 0 || len(holds) != 2 {
 		t.Fatalf("holds=%d refusals=%d err=%v, want a hold per device", len(holds), len(refusals), err)
 	}
 
 	// Expiry exactly at the opening still admits it: the window opens AT that instant.
 	expires = utcAt(2026, 1, 18, 1, 0)
-	holds, refusals, _ = api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
+	holds, refusals, _, _ = api.CommandDispatchSchedule(ctx, tokens, "reboot", &expires, at)
 	if len(refusals) != 0 || len(holds) != 2 {
 		t.Fatalf("expiry at the opening: holds=%d refusals=%d", len(holds), len(refusals))
 	}
@@ -246,7 +246,7 @@ func TestAWindowThatNoLongerValidatesFailsTheCheckClosed(t *testing.T) {
 		Update("timezone", "Mars/Olympus").Error; err != nil {
 		t.Fatal(err)
 	}
-	_, _, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, time.Now())
+	_, _, _, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, time.Now())
 	if err == nil {
 		t.Fatal("an unevaluable window was read as no hold")
 	}
@@ -332,5 +332,47 @@ func TestAnOldSnapshotDecodesAsNormal(t *testing.T) {
 	}
 	if got := snap.Commands[0]; got.EffectiveImpact() != ImpactNormal || got.WindowGated() {
 		t.Fatalf("an unstamped definition reads as %q, gated=%v", got.EffectiveImpact(), got.WindowGated())
+	}
+}
+
+// Ungated names exactly the devices the command may reach at any time: an enabled device whose
+// type does not gate it. A disabled device and an unknown token are in NO list, because the
+// re-stamp pass releases a waiting command's hold only for a device named here, and silence
+// about a disabled device must never read as "release it".
+func TestUngatedNamesOnlyEnabledDevicesWhoseTypeDoesNotGate(t *testing.T) {
+	api := newWindowTestApi(t)
+	ctx := core.WithTenant(context.Background(), "A")
+	tokens := seedGatedType(t, api, ctx, "plant", 3)
+	at := utcAt(2026, 1, 14, 12, 0)
+
+	// Control: while the type has its window every device is held and none is ungated.
+	holds, _, ungated, err := api.CommandDispatchSchedule(ctx, tokens, "reboot", nil, at)
+	if err != nil || len(holds) != 3 || len(ungated) != 0 {
+		t.Fatalf("control: holds=%d ungated=%v err=%v", len(holds), ungated, err)
+	}
+	// A NORMAL command is ungated on every enabled device.
+	_, _, ungated, err = api.CommandDispatchSchedule(ctx, tokens, "read", nil, at)
+	if err != nil || len(ungated) != 3 {
+		t.Fatalf("a NORMAL command: ungated=%v err=%v, want all three", ungated, err)
+	}
+
+	if err := api.RDB.DB(ctx).Model(&Device{}).Where("token = ?", tokens[0]).
+		Update("disabled_at", time.Now()).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.UpdateDeviceType(ctx, "type-plant", &DeviceTypeUpdateRequest{
+		MaintenanceWindowToken: dcgraphql.OptionalString{Set: true, Value: nil},
+	}); err != nil {
+		t.Fatalf("unassign window: %v", err)
+	}
+	holds, refusals, ungated, err := api.CommandDispatchSchedule(ctx, append(tokens, "nobody"), "reboot", nil, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(holds) != 0 || len(refusals) != 0 {
+		t.Fatalf("an unassigned type still gated: holds=%+v refusals=%+v", holds, refusals)
+	}
+	if len(ungated) != 2 || ungated[0] != tokens[1] || ungated[1] != tokens[2] {
+		t.Fatalf("ungated = %v, want only the two enabled devices %v", ungated, tokens[1:])
 	}
 }

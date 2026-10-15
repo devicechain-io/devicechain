@@ -134,9 +134,11 @@ func TestTheLiveConfirmRoadHonoursADispatchHold(t *testing.T) {
 	if next, won, err := api.ConfirmDispatch(ctx, "live", nonce); err != nil || won || next != "" {
 		t.Fatalf("ConfirmDispatch actuated a held row: next=%q won=%v err=%v", next, won, err)
 	}
-
+	// A refused confirm parks a row its window no longer admits (see
+	// TestAConfirmAfterTheWindowClosedParksTheRow), so the positive half re-forces SENT.
 	if err := api.RDB.DB(ctx).Model(&Command{}).Where("token = ?", "live").
-		Update("dispatch_after", time.Now().Add(-time.Minute)).Error; err != nil {
+		Updates(map[string]any{"dispatch_after": time.Now().Add(-time.Minute),
+			"status": CommandSent.String()}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if _, won, err := api.ConfirmDispatch(ctx, "live", nonce); err != nil || !won {
@@ -494,6 +496,13 @@ func TestARowWhoseOpeningClosedUnclaimedIsRefusedWithoutARestamp(t *testing.T) {
 		closeAt(t, api, ctx, "live", time.Now().Add(-time.Minute))
 		if _, won, _ := api.ConfirmDispatch(ctx, "live", nonce); won {
 			t.Fatal("a late envelope was actuated after its window closed")
+		}
+		// The refusal parked the row (TestAConfirmAfterTheWindowClosedParksTheRow); the control
+		// puts it back on SENT so it measures the window predicate alone.
+		assertStatus(t, api, ctx, "live", CommandParked)
+		if err := api.RDB.DB(ctx).Model(&Command{}).Where("token = ?", "live").
+			Update("status", CommandSent.String()).Error; err != nil {
+			t.Fatal(err)
 		}
 		closeAt(t, api, ctx, "live", time.Now().Add(time.Hour))
 		if _, won, _ := api.ConfirmDispatch(ctx, "live", nonce); !won {

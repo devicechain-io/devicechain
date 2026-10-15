@@ -182,6 +182,15 @@ func (r *CommandDispatchHoldResolver) DispatchUntil() string {
 type CommandDispatchScheduleResolver struct {
 	holds    []*model.CommandDispatchHold
 	refusals []*model.BatchEnqueueRefusal
+	ungated  []string
+}
+
+// Ungated lists the devices that exist, are enabled, and are not gated for the command.
+func (r *CommandDispatchScheduleResolver) Ungated() []string {
+	if r.ungated == nil {
+		return []string{}
+	}
+	return r.ungated
 }
 
 func (r *CommandDispatchScheduleResolver) Holds() []*CommandDispatchHoldResolver {
@@ -223,12 +232,12 @@ func (r *SchemaResolver) CommandDispatchSchedule(ctx context.Context, args struc
 		}
 		expiresAt = &parsed
 	}
-	holds, refusals, err := r.GetApi(ctx).CommandDispatchSchedule(ctx, args.DeviceTokens, args.CommandKey,
+	holds, refusals, ungated, err := r.GetApi(ctx).CommandDispatchSchedule(ctx, args.DeviceTokens, args.CommandKey,
 		expiresAt, time.Now())
 	if err != nil {
 		return nil, err
 	}
-	return &CommandDispatchScheduleResolver{holds: holds, refusals: refusals}, nil
+	return &CommandDispatchScheduleResolver{holds: holds, refusals: refusals, ungated: ungated}, nil
 }
 
 // ------------

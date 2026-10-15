@@ -245,6 +245,13 @@ func (cproc *CommandDeliveryProcessor) syncDisabledGate(ctx context.Context) err
 	// The first pass learns which tenants exist and marks every one as not yet read; each is
 	// cleared as its read succeeds. A tenant created later is not in the set, so it dispatches
 	// at once (it has no history to have missed, and its facts keep the record current).
+	//
+	// 🔴 A TENANT THAT IS DELETED, OR NO LONGER LISTED, LEAVES THE SET HERE. The sync skips a
+	// deleted tenant, and syncTenant was the only thing that cleared an entry, so a tenant
+	// deleted before (or during) the first pass sat in the set for the life of the process:
+	// pending stuck at >= 1 and ready at 0 on every restart of any instance that had ever
+	// deleted a tenant, which is the gauge reporting an outage that is not happening. A tenant
+	// that has gone has nothing left to wait for.
 	cproc.gateMu.Lock()
 	if !cproc.gateBooted {
 		cproc.gatePending = make(map[string]bool, len(tenants))
@@ -253,7 +260,30 @@ func (cproc *CommandDeliveryProcessor) syncDisabledGate(ctx context.Context) err
 		}
 		cproc.gateBooted = true
 	}
+	waiting := make([]string, 0, len(cproc.gatePending))
+	for tenant := range cproc.gatePending {
+		waiting = append(waiting, tenant)
+	}
 	cproc.gateMu.Unlock()
+	// The lifecycle lookup is asked outside the lock: it is another component's code, and the
+	// gate's lock is taken on the dispatch path.
+	listed := make(map[string]bool, len(tenants))
+	for _, tenant := range tenants {
+		listed[tenant] = true
+	}
+	var gone []string
+	for _, tenant := range waiting {
+		if !listed[tenant] || cproc.tenantDeleted(tenant) {
+			gone = append(gone, tenant)
+		}
+	}
+	if len(gone) > 0 {
+		cproc.gateMu.Lock()
+		for _, tenant := range gone {
+			delete(cproc.gatePending, tenant)
+		}
+		cproc.gateMu.Unlock()
+	}
 
 	var failed int
 	for _, tenant := range tenants {

@@ -140,9 +140,9 @@ mutation {
 Commands already waiting follow the new schedule within about a minute, because command delivery
 polls for it rather than being told. Do not expect the move to be instant.
 
-`deleteMaintenanceWindow` is refused while any device type uses the window; detach it first. Detaching
-a window from a type does not release commands already waiting on it: they keep waiting for that
-window until it opens, or until the window itself is deleted, which releases them. If a device is
+`deleteMaintenanceWindow` is refused while any device type uses the window; detach it first. Commands
+already waiting follow their device type: detaching the window from a type releases them, and moving
+the type to another window moves them to that window's next opening, within the same minute. If a device is
 offline through a whole opening, its command is rolled to the next opening rather than being sent
 whenever the device returns.
 
@@ -155,4 +155,5 @@ whenever the device returns.
   ungated.
 
 The counter `command_delivery_window_restamps_total` counts commands whose hold was moved by an edit,
-a delete, or a window that closed again before the device returned.
+a delete, a window that closed again before the device returned, or their device type moving to
+another window or losing its window.

@@ -922,7 +922,10 @@ func (d *Dispatcher) dispatch(ctx context.Context, w work) {
 //     device that stays connected sends no wake of its own, so without it that row would wait
 //     for a re-handshake. Drain also gates the device, so none of its later live commands can
 //     overtake the re-armed row. It only takes this worker's own shard lock briefly and never
-//     blocks, so calling it from here cannot deadlock.
+//     blocks, so calling it from here cannot deadlock. The other cause is the command's
+//     maintenance window closing between the sweep's claim and this confirmation: command-delivery
+//     then parks the row itself, in the same call, so it waits for the next opening rather than
+//     sitting in SENT on a dispatch nobody will actuate. Nothing here has to tell the two apart.
 //   - ERROR: FAIL CLOSED. Count LiveClaimErrors and leave the message UNACKED, so it
 //     redelivers at the ack deadline — never Nak'd, which would spend the whole delivery
 //     budget in the instant of an outage. Actuating on a confirmation we could not obtain is
@@ -1053,6 +1056,7 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) turnResult {
 			Msg("Could not fetch backlogged LwM2M commands; retrying shortly while the device stays live.")
 		return turnResult{failed: true}
 	}
+	won := 0
 	for _, c := range cmds {
 		if ctx.Err() != nil {
 			return turnResult{stopped: true} // evicted mid-turn: the remaining rows are untouched, for the next leader
@@ -1061,29 +1065,47 @@ func (d *Dispatcher) drain(ctx context.Context, job drainJob) turnResult {
 		if reach != ReachLive {
 			return turnResult{stopped: true} // the device dropped mid-turn: the remaining rows are untouched, for its next wake
 		}
-		// A lost claim below does not cost this turn a delivery, even though the page is exactly
-		// drainTurnMax rows with no over-fetch: it means someone else has already moved the row
-		// out of the dispatchable set, so a skipped row is one that has left the backlog, not a
-		// slot taken from a row still awaiting delivery. (A row the live path just dispatched is
-		// SENT, which is not drainable, so it was never on the page.)
+		// A lost claim below usually does not cost this turn a delivery, even though the page is
+		// exactly drainTurnMax rows with no over-fetch: it normally means someone else has already
+		// moved the row out of the dispatchable set, so a skipped row is one that has left the
+		// backlog. (A row the live path just dispatched is SENT, which is not drainable, so it was
+		// never on the page.)
+		//
+		// 🔴 BUT A LOST CLAIM DOES NOT PROVE THE ROW LEFT THE PAGE. It proves only that the claim
+		// refused it, and the claim can carry a predicate the read does not: a disabled device's
+		// rows were offered by the read and refused by every claim, so the next read returned the
+		// same full page, and the turn re-armed with no delay — a hot loop against
+		// command-delivery for as long as the device stayed registered. The read now carries that
+		// predicate too, and a page on which EVERY claim was lost is treated as failed below, so
+		// any gap that opens between the read and the claim again is a slow poll, not a spin.
 		//
 		// Take the command out of command-delivery's dispatchable set BEFORE actuating. A
 		// command we could not claim is one we must not fire.
-		nonce, won, failed := d.claim(ctx, job.tenant, c)
+		nonce, claimed, failed := d.claim(ctx, job.tenant, c)
 		if failed {
 			if ctx.Err() != nil {
 				return turnResult{stopped: true}
 			}
 			return turnResult{fetched: len(cmds), failed: true}
 		}
-		if !won {
+		if !claimed {
 			continue
 		}
+		won++
 		d.executeAndReport(ctx, conn, job.tenant, job.deviceToken, c.Name, c.Token, nonce, c.Payload)
 		incr(d.metrics.Drained, 1)
 	}
 	if ctx.Err() != nil {
 		return turnResult{stopped: true}
+	}
+	if len(cmds) > 0 && won == 0 {
+		// Every row on the page was refused. If they had all genuinely left the backlog, the
+		// next read is empty and the gate lifts after drainRetryDelay instead of at once, which
+		// costs nothing; if they had not, re-arming now would read the same page again, and
+		// again. Backing off is the answer that is right either way.
+		log.Debug().Str("tenant", job.tenant).Str("device", job.deviceToken).Int("rows", len(cmds)).
+			Msg("Every backlogged LwM2M command on this page was refused at the claim; retrying shortly rather than at once.")
+		return turnResult{fetched: len(cmds), failed: true}
 	}
 	return turnResult{fetched: len(cmds)}
 }

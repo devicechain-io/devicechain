@@ -711,6 +711,12 @@ type CommandDispatchSchedule {
     command expires, so it could only lapse unsent. Branch on code, not reason.
     """
     refusals: [BatchEnqueueRefusal!]!
+    """
+    Devices that exist, are enabled, and whose device type does not gate this command: no
+    maintenance window, or a command that is not DISRUPTIVE or DESTRUCTIVE. A device in none of
+    the three lists does not exist or is disabled, and nothing is decided about it.
+    """
+    ungated: [String!]!
 }
 
 """One page of the devices an entity group contains, for use as the target of a command."""

@@ -737,6 +737,12 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 		return err
 	}
 	if !claimed {
+		if cproc.refusedForDisabled(tenantCtx, cmd) {
+			incr(cproc.ClaimsRefusedDisabled, 1)
+			log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
+				Msg("Not publishing a command whose device was disabled after this dispatch read the record; it stays undelivered and the next sweep holds it.")
+			return nil
+		}
 		incrLabel(cproc.ClaimsLost, string(path))
 		log.Debug().Str("command", cmd.Token).Str("device", cmd.DeviceToken).
 			Msg("Another dispatcher claimed this command first; not publishing it again.")
@@ -790,6 +796,23 @@ func (cproc *CommandDeliveryProcessor) deliverCommand(ctx context.Context, cmd *
 	}
 	cproc.DeviceCommandsWriter.HandleResponse(nil)
 	return nil
+}
+
+// refusedForDisabled reports whether a refused claim was refused because the command's device is
+// now disabled, rather than lost to another dispatcher. MarkSent folds the disabled record into
+// its own predicate and cannot say which predicate refused, so the record is asked afterwards.
+//
+// It is a classification for the log and the counters only, never a decision: nothing is
+// published either way, and a read error or a missing reader answers false, which reports the
+// refusal as the lost claim it was always reported as. The read runs only on a refused claim,
+// so a healthy sweep pays nothing for it.
+func (cproc *CommandDeliveryProcessor) refusedForDisabled(ctx context.Context, cmd *model.Command) bool {
+	reader := cproc.gateReader()
+	if reader == nil {
+		return false
+	}
+	disabled, err := reader.DisabledAmong(ctx, []string{cmd.DeviceToken})
+	return err == nil && disabled[cmd.DeviceToken]
 }
 
 // releaseFailedClaim hands a claimed-but-undispatched command back, counting the failed
