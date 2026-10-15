@@ -4,13 +4,16 @@
 package main
 
 import (
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-management/processor"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -46,6 +49,43 @@ func TestConfiguredResolutionWorkersReachTheProcessor(t *testing.T) {
 			SecretTransit = testTransit(t)
 
 			require.Equal(t, tc.want, newInboundEventsProcessor(nil).Resolvers())
+		})
+	}
+}
+
+// resolution.publishWindow in the service's configuration document reaches BOTH writers the
+// service builds, and a document that omits it gets the default. A processor test builds its
+// own writers, so a service that stopped passing the setting would run the default while every
+// other test stayed green.
+func TestConfiguredPublishWindowReachesTheWriters(t *testing.T) {
+	savedMs, savedCfg, savedResolved, savedFailed := Microservice, Configuration, ResolvedEventsWriter, FailedEventsWriter
+	t.Cleanup(func() {
+		Microservice, Configuration, ResolvedEventsWriter, FailedEventsWriter = savedMs, savedCfg, savedResolved, savedFailed
+	})
+	host, port := startEmbeddedNats(t)
+
+	for _, tc := range []struct {
+		doc  string
+		want int
+	}{
+		{`{"resolution":{"publishWindow":300}}`, 300},
+		// Counterweight: with nothing set the writers get the default, so a wiring that
+		// always passed 300 (or any other fixed value) cannot pass both.
+		{`{}`, 512},
+	} {
+		t.Run(tc.doc, func(t *testing.T) {
+			Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+			Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+			Microservice.MicroserviceConfigurationRaw = []byte(tc.doc)
+			require.NoError(t, parseConfiguration())
+
+			nmgr := startNatsManager(t, host, port, fmt.Sprintf("pubwindow%d", time.Now().UnixNano()))
+			require.NoError(t, createPublishWriters(nmgr))
+			for name, w := range map[string]messaging.OrderedWriter{"resolved": ResolvedEventsWriter, "failed": FailedEventsWriter} {
+				require.Equal(t, tc.want, w.(interface{ Window() int }).Window(), "the %s events writer's window", name)
+			}
+			ResolvedEventsWriter.Close()
+			FailedEventsWriter.Close()
 		})
 	}
 }

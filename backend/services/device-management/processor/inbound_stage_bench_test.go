@@ -415,7 +415,7 @@ func runStageArm(b *testing.B, srv *natsserver.Server, instance string, arm stag
 	reg := prometheus.NewRegistry()
 	reader := &stampingReader{st: st}
 	p := startResolvePipeline(b, pipelineSpec{
-		srv: srv, instance: instance, replicas: 3, resolvers: arm.resolvers, window: PUBLISH_WINDOW,
+		srv: srv, instance: instance, replicas: 3, resolvers: arm.resolvers, window: config.DefaultPublishWindow,
 		events: arm.events, api: latencyApi{d: arm.lookup, st: st}, authMode: arm.auth, registry: reg,
 		event: func(i int) *esmodel.UnresolvedEvent {
 			e := benchMeasurement(i)

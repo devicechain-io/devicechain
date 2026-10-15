@@ -627,6 +627,7 @@ bucket is 5 ms, so a quantile below that is an estimate, not a measurement.
 | Setting (`device-management` config) | Default | What it does |
 | --- | --- | --- |
 | `resolution.workers` | `10` | Resolvers running at once. Each holds one database connection while it reads an event's credential from the database, which it does whenever the credential was not verified on that replica within `inMemoryCache.ttlSeconds` (see [Caches that stop answering](#kv-caches)). So it must be below the service's connection pool (`rdbConfiguration.maxOpenConnections`, 20 unless set), which it shares with the GraphQL API, the MQTT connect checks and the consumer that applies alarm raises and resolves. More than half the pool is allowed, and logged at startup. A resolver's lookups in the key-value store run at the same time, but its database reads still run one at a time, so it never holds more than one connection. |
+| `resolution.publishWindow` | `512` | How many resolved (and failed) events a pod keeps waiting for the broker's acknowledgement at once, from 1 to 1024. A value outside that range stops the service at startup; it is never adjusted. Publishing can go no faster than this number divided by how long an acknowledgement takes, and on a replicated broker an acknowledgement takes about 8 to 11 ms, so 128 held a pod near 11,000 events a second and 512 does not. Raise it when `devicechain_<area>_jetstream_publish_window_full_seconds_total` grows by close to a second per second. A deeper window holds more source events unacknowledged in the pod: if the pod dies they are redelivered after the consumer's acknowledgement wait and published again under the same message id, which the stream recognises (see `jetstream_publish_duplicates_total`). A fixed setting, read at startup. |
 | `inMemoryCache.ttlSeconds` | `300` | How long a replica keeps a value in its own memory, from 1 to 3600 seconds. A change drops the value on every replica at once, so this only bounds an eviction message that was lost. The key-value cache's own time to live caps it (see below). See [Caches that stop answering](#kv-caches). |
 | `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` | `300` | The time to live of each key-value cache in the broker, from 1 to 3600 seconds. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | The most entries each replica keeps in memory of each of the three caches kept per device: a device by its token, its tracked relationships, its group memberships. See [Caches that stop answering](#kv-caches). |
@@ -814,6 +815,14 @@ No alert reads the next series, but it is the one to look at when publishing is 
   5-second limit, so for that mode the count above the `le="5"` bucket is the publishes that ran
   into it. A `mode="pipelined"` publish can be counted above 5 seconds without having reached the
   limit.
+- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**: seconds a pipelined
+  writer could not send because its whole window was waiting for acknowledgements. A rate near 1
+  means the window, not the broker, limits publishing: raise `resolution.publishWindow`. A rate
+  near 0 means the window has room.
+- **`devicechain_<area>_jetstream_publish_duplicates_total{suffix}`**: publishes the broker
+  acknowledged as copies of a message it already held under the same message id. The message was
+  stored once. After a pod restart or a lost acknowledgement this rising is the stream absorbing
+  the republish, not a fault.
 
 ## Caches that stop answering {#kv-caches}
 

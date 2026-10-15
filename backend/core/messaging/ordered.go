@@ -15,12 +15,12 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// maxOrderedWindow bounds NewOrderedWriter's window well under the client library's own
+// MaxOrderedWindow bounds NewOrderedWriter's window well under the client library's own
 // per-context ceiling on unacknowledged publishes (4000), which the writer leaves in place as
 // a backstop rather than as its window. A caller-deadline give-up frees the writer's slot
 // while the library still holds that publish for up to publishWait, so a library ceiling
 // equal to the window would turn short caller deadlines into ErrTooManyStalledMsgs.
-const maxOrderedWindow = 1024
+const MaxOrderedWindow = 1024
 
 const (
 	// orderedBackoffStart is how long the settle loop holds a window slot after the first
@@ -123,8 +123,8 @@ type orderedPending struct {
 // status fan-out may be sending on, and the reply subscription and reconnect goroutine it
 // would release end anyway when the connection closes.
 func (nmgr *NatsManager) NewOrderedWriter(suffix string, window int) (OrderedWriter, error) {
-	if window < 1 || window > maxOrderedWindow {
-		return nil, fmt.Errorf("messaging: ordered writer window %d is outside [1, %d]", window, maxOrderedWindow)
+	if window < 1 || window > MaxOrderedWindow {
+		return nil, fmt.Errorf("messaging: ordered writer window %d is outside [1, %d]", window, MaxOrderedWindow)
 	}
 	if err := refuseTenantWide(suffix); err != nil {
 		return nil, err
@@ -180,7 +180,7 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 	// The slot is taken before anything else, so the ceiling below is measured from the
 	// send and not charged for time spent waiting for room in the window. ctx is not read
 	// here: see the interface doc.
-	o.slots <- struct{}{}
+	o.acquire()
 
 	subject, err := o.nmgr.tenantSubject(ctx, o.suffix, "")
 	if err != nil {
@@ -226,9 +226,26 @@ func (o *orderedWriter) Fail(err error, done func(error)) {
 	}
 	o.enter("Fail")
 	defer o.busy.Store(false)
-	o.slots <- struct{}{}
+	o.acquire()
 	o.pending <- orderedPending{err: err, reported: true, done: done}
 }
+
+// acquire takes a window slot, charging any time spent waiting for one to the writer's
+// window-full counter. A free slot is taken without reading the clock, so a window with room
+// pays nothing for the instrument.
+func (o *orderedWriter) acquire() {
+	select {
+	case o.slots <- struct{}{}:
+		return
+	default:
+	}
+	start := time.Now()
+	o.slots <- struct{}{}
+	o.nmgr.metrics.addWindowFull(o.suffix, time.Since(start))
+}
+
+// Window is how many publishes the writer keeps awaiting their acknowledgement at once.
+func (o *orderedWriter) Window() int { return cap(o.slots) }
 
 // Draining ends failure backoff for the rest of this writer's life; see the interface.
 func (o *orderedWriter) Draining() {
@@ -257,7 +274,11 @@ func (o *orderedWriter) settleLoop() {
 	for p := range o.pending {
 		err, brokerFailed := p.err, p.brokerFailed
 		if p.fut != nil {
-			err = awaitPubAck(p.fut, p.deadline, p.callerBound)
+			var ack *nats.PubAck
+			ack, err = awaitPubAckResult(p.fut, p.deadline, p.callerBound)
+			if err == nil && ack != nil && ack.Duplicate {
+				o.nmgr.metrics.countDuplicate(o.suffix)
+			}
 			o.nmgr.metrics.observePublish(o.suffix, publishModePipelined, time.Since(p.sent))
 			brokerFailed = err != nil
 		}
@@ -354,25 +375,32 @@ func (o *orderedWriter) release() int {
 // random between them — failing a message the broker has stored, which is a redelivery and
 // a duplicate for nothing. So the result is checked without blocking first.
 func awaitPubAck(fut nats.PubAckFuture, deadline time.Time, callerBound bool) error {
+	_, err := awaitPubAckResult(fut, deadline, callerBound)
+	return err
+}
+
+// awaitPubAckResult is awaitPubAck that also returns the PubAck the broker sent, so the
+// caller can read what it says (Duplicate) and not only that it arrived.
+func awaitPubAckResult(fut nats.PubAckFuture, deadline time.Time, callerBound bool) (*nats.PubAck, error) {
 	select {
-	case <-fut.Ok():
-		return nil
+	case ack := <-fut.Ok():
+		return ack, nil
 	case err := <-fut.Err():
-		return mapAsyncErr(err)
+		return nil, mapAsyncErr(err)
 	default:
 	}
 	t := time.NewTimer(time.Until(deadline))
 	defer t.Stop()
 	select {
-	case <-fut.Ok():
-		return nil
+	case ack := <-fut.Ok():
+		return ack, nil
 	case err := <-fut.Err():
-		return mapAsyncErr(err)
+		return nil, mapAsyncErr(err)
 	case <-t.C:
 		if callerBound {
-			return context.DeadlineExceeded
+			return nil, context.DeadlineExceeded
 		}
-		return nats.ErrTimeout
+		return nil, nats.ErrTimeout
 	}
 }
 

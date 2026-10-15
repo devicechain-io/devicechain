@@ -1241,6 +1241,10 @@ functionalAreas:
       #   resolution:
       #     workers: 10     # must be below rdbConfiguration.maxOpenConnections
       #                     # (20 unless set); above half of it is logged.
+      #     publishWindow: 512  # resolved/failed events a pod keeps awaiting the
+      #                     # broker's acknowledgement, 1 to 1024 (out of range stops
+      #                     # the service). Publishing cannot exceed this divided by
+      #                     # the acknowledgement time, ~8-11 ms on a replicated broker.
       #
       # What each replica keeps in its own memory of each of the three lookup caches
       # kept per device (a device by its token, its tracked relationships, its group

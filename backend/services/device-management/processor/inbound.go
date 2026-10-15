@@ -35,15 +35,6 @@ const (
 	MESSAGE_BACKLOG_SIZE        = 100
 	FAILED_EVENT_BACKLOG_SIZE   = 100 // Number of failed events that can be waiting to publish
 	RESOLVED_EVENT_BACKLOG_SIZE = 100 // Number of resolved events that can be waiting to publish
-
-	// PUBLISH_WINDOW is how many resolved (or failed) events may be awaiting their broker
-	// acknowledgement at once (messaging.OrderedWriter). Each publish is a round trip — on a
-	// replicated stream, a quorum commit — and a loop that waits for each before sending the
-	// next resolves at most one event per round trip however many resolvers it runs.
-	// Chosen with BenchmarkResolvedPublishThroughput: the whole pipeline measured no faster
-	// with a wider window, and a narrower one is fewer publishes a reconnect fails at once
-	// and fewer sources held unacked in the pod.
-	PUBLISH_WINDOW = 128
 )
 
 // ackCoord coordinates acknowledgement of one source message across the 1->N
@@ -499,7 +490,7 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(src messaging.Message, te
 // only after the last resolved event it produced has been durably published, and
 // left unacked if any publish fails so AckWait redelivers the whole message (A3).
 //
-// The publish is handed to the resolved writer, which keeps up to PUBLISH_WINDOW in
+// The publish is handed to the resolved writer, which keeps up to resolution.publishWindow (config.DefaultPublishWindow) in
 // flight and reports each outcome to settleResolved in the order submitted here.
 func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) bool {
 	item, more := <-iproc.resolved

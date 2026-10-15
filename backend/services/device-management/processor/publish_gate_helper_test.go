@@ -20,11 +20,11 @@ import (
 func newGateProcessor(t testing.TB, nmgr *messaging.NatsManager, reader messaging.MessageReader,
 	api dmodel.DeviceManagementApi) *InboundEventsProcessor {
 	t.Helper()
-	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, PUBLISH_WINDOW)
+	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, config.DefaultPublishWindow)
 	if err != nil {
 		t.Fatalf("resolved writer: %v", err)
 	}
-	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, PUBLISH_WINDOW)
+	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, config.DefaultPublishWindow)
 	if err != nil {
 		t.Fatalf("failed writer: %v", err)
 	}
