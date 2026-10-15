@@ -171,6 +171,16 @@ func (o *orderedWriter) enter(op string) {
 
 // Publish sends msg to the tenant's subject and reports its outcome to done, in order.
 func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(error)) {
+	o.publishGuarded(ctx, msg, done, nil)
+}
+
+// publishGuarded is Publish with a last word: guard, when not nil, runs once msg holds its
+// window slot and its tenant is known, immediately before the send, and a non-nil answer is
+// reported to done, in order, in place of publishing. AsyncWriter decides there both its
+// backpressure refusal and whether a piece follows a sibling that already failed, because
+// that is the latest moment either can be decided: before the slot, a wait for room would
+// sit between the decision and the send.
+func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done func(error), guard func() error) {
 	if done == nil {
 		panic("messaging: OrderedWriter.Publish needs a done callback: it is the only place the outcome goes")
 	}
@@ -186,6 +196,12 @@ func (o *orderedWriter) Publish(ctx context.Context, msg Message, done func(erro
 	if err != nil {
 		o.pending <- orderedPending{err: err, done: done}
 		return
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			o.pending <- orderedPending{err: err, reported: true, done: done}
+			return
+		}
 	}
 	sent := time.Now()
 	deadline, callerBound := sent.Add(publishWait), false

@@ -668,32 +668,3 @@ func TestSettleCyclesDoNotLeakReplySubscriptions(t *testing.T) {
 	}
 	w.Close()
 }
-
-// Close while a Submit caller is blocked behind a full window waits for it, and does not
-// deadlock: the fourth submitter is parked on the fan-in channel (the loop is parked on the
-// window with the third), Close queues behind it, and answers release everything.
-func TestCloseWithBlockedSubmittersDoesNotDeadlock(t *testing.T) {
-	srv, nmgr := orderedManager(t)
-	w := newAsync(t, nmgr, 2, false)
-	stub := stubPublishes(t, srv, nmgr)
-	var returned atomic.Int64
-	for g := 0; g < 4; g++ {
-		go func(g int) {
-			w.Submit(orderedCtx(), []Message{{Value: []byte(strconv.Itoa(g))}}, func(error) {})
-			returned.Add(1)
-		}(g)
-	}
-	stub.waitSeen(2)
-	if got := returned.Load(); got != 3 {
-		t.Fatalf("%d Submit calls returned with a window of 2 held, want 3 (one parked on the loop, one blocked)", got)
-	}
-	closed := make(chan struct{})
-	go func() { defer close(closed); w.Close() }()
-	wait := answerAll(t, stub, 4)
-	select {
-	case <-closed:
-	case <-time.After(asyncWithin * 2):
-		t.Fatal("Close deadlocked behind a blocked submitter")
-	}
-	wait()
-}

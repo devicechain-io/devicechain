@@ -524,24 +524,48 @@ type OrderedWriter interface {
 // NatsManager.NewAsyncWriter.
 //
 // Contract:
-//   - Submit and Settle are safe for concurrent use. Submissions made by ONE goroutine reach
-//     the stream, and their done callbacks run, in that goroutine's call order; submissions
-//     of different goroutines interleave arbitrarily.
-//   - done runs once per Submit, on the writer's goroutine (except after Close, below), nil
-//     ONLY after every message of the call was PubAcked, else the first error. A multi-message
-//     call publishes every piece even when an earlier one fails. done must be quick and must
-//     not call Submit or Settle.
-//   - Submit blocks while the window is full. A call is refused whole, in order, with a
-//     *BackpressureError when the writer was built to refuse, the gate is closed and any
-//     message lacks Message.BypassBackpressure.
+//   - Submit and Settle are safe for concurrent use.
+//   - ORDER IS PER SUBMITTING GOROUTINE, AND NOTHING MORE. A Submit that RETURNED before
+//     another was called is ahead of it: on the stream, and in when its done runs. In
+//     practice that is one goroutine's call order. Calls of different goroutines interleave
+//     arbitrarily, so there is NO per-key (per-device, per-edge-node) order across
+//     goroutines: a caller that needs one key's messages in order must submit that key's
+//     messages from one goroutine, or serialise them itself, as a serial MQTT receive
+//     goroutine does.
+//   - done runs exactly once per Submit, nil ONLY after every message of the call was
+//     PubAcked, else the first piece's error to fail. It normally runs on the writer's
+//     goroutine, in the order above. A call the writer never took, because the writer is
+//     closed (or closes while the call waits for room) or ctx ended while it waited, gets
+//     done(ErrAsyncWriterClosed) or done(ctx.Err()) on the caller's goroutine before Submit
+//     returns, which can be before the outcomes of that goroutine's earlier calls. done must
+//     be quick and must not call Submit or Settle.
+//   - A multi-message call is NOT atomic. Its pieces are published in order, several at once.
+//     When one fails, the pieces not yet sent are not sent, but those already in flight
+//     cannot be recalled, and any of them may be stored. So a failed call may have stored a
+//     subset of its pieces, including later pieces without an earlier one. Make every piece
+//     stand alone and give each its own Message.DedupID, so that resubmitting the whole call
+//     stores each piece exactly once.
+//   - Submit blocks while the window is full, until the writer takes the call, ctx ends or
+//     the writer closes. ctx also bounds the publish itself, as for OrderedWriter.Publish.
+//   - A call is refused whole, in order, with a *BackpressureError when the writer was built
+//     to refuse, the gate is closed and any message lacks Message.BypassBackpressure. The
+//     gate is read once per call, as its first piece is sent, which is what MessageWriter
+//     does: a gate that closes after that admits the rest of THAT call and nothing later.
 //   - Settle waits for every Submit that returned before it was called to have had its done
 //     run. It does not close the writer: it is the barrier a lease holder drains with before
 //     releasing, and the writer stays usable. ctx bounds the wait only; a cancelled Settle
 //     returns ctx.Err() and abandons nothing that was already submitted.
 //   - Retry is the caller's, from a goroutine of its own: the writer never retries (a retry
 //     is a reorder, and publish options would break the dedup reasoning on Message.DedupID).
-//   - Close settles what the writer holds and stops it. Submit after Close publishes nothing
-//     and calls done(ErrAsyncWriterClosed) on the caller's goroutine; Settle returns it.
+//   - Close releases every call still waiting to be taken (done(ErrAsyncWriterClosed)),
+//     settles every call the writer took, ends failure backoff and stops. It does not take a
+//     context: it returns only once no done is left to run, which a deadline would break.
+//     The wait is bounded by the publish ceiling (5 s): the publishes in flight run their
+//     ceilings concurrently, and the call in progress waits at most one ceiling for room per
+//     piece. With single-message calls that is about 5 s, inside any shutdown budget the
+//     chart grants. A drain bounded by the CALLER, before a lease is released, is Settle(ctx).
+//     Submit after Close publishes nothing and calls done(ErrAsyncWriterClosed); Settle
+//     returns it.
 type AsyncWriter interface {
 	Submit(ctx context.Context, msgs []Message, done func(error))
 	Settle(ctx context.Context) error
