@@ -652,6 +652,7 @@ medida.
 | Ajuste (configuración de `device-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
 | `resolution.workers` | `10` | Resolvedores que trabajan a la vez. Cada uno ocupa una conexión a la base de datos mientras lee de ella la credencial de un evento, lo que hace siempre que la credencial no se haya verificado en esa réplica dentro de `inMemoryCache.ttlSeconds` (consulte [Cachés que dejan de responder](#kv-caches)). Por eso debe ser menor que el pool de conexiones del servicio (`rdbConfiguration.maxOpenConnections`, 20 si no se indica), que comparte con la API GraphQL, las comprobaciones de conexión MQTT y el consumidor que aplica las activaciones y resoluciones de alarmas. Se permite más de la mitad del pool, y se registra al arrancar. Las consultas de un resolvedor al almacén clave-valor se hacen a la vez, pero sus lecturas de la base de datos siguen haciéndose de una en una, así que nunca ocupa más de una conexión. |
+| `resolution.publishWindow` | `512` | Cuántos eventos resueltos (y fallidos) mantiene un pod esperando la confirmación del broker a la vez, de 1 a 1024. Un valor fuera de ese rango detiene el servicio al arrancar; nunca se ajusta. La publicación no puede ir más rápido que este número dividido por lo que tarda una confirmación, y en un broker replicado una confirmación tarda de 8 a 11 ms aproximadamente, así que 128 dejaba a un pod cerca de 11.000 eventos por segundo y 512 no. Súbalo cuando `devicechain_<area>_jetstream_publish_window_full_seconds_total` crezca cerca de un segundo por segundo. Una ventana más profunda deja más eventos de origen sin confirmar en el pod: si el pod muere se reentregan tras la espera de confirmación del consumidor y se publican de nuevo con el mismo id de mensaje, que el stream reconoce (consulte `jetstream_publish_duplicates_total`). Cada evento de la ventana se guarda en memoria, junto con su origen, hasta que se confirma. Es un ajuste fijo, leído al arrancar. |
 | `inMemoryCache.ttlSeconds` | `300` | Cuánto tiempo guarda una réplica un valor en su propia memoria, de 1 a 3600 segundos. Un cambio descarta el valor en todas las réplicas a la vez, así que esto solo acota un mensaje de descarte que se perdió. El tiempo de vida de la propia caché de clave-valor lo limita (véase más abajo). Consulte [Cachés que dejan de responder](#kv-caches). |
 | `deviceCacheTtlSeconds`, `relationshipCacheTtlSeconds`, `metricDefCacheTtlSeconds`, `membershipCacheTtlSeconds` | `300` | El tiempo de vida de cada caché de clave-valor en el broker, de 1 a 3600 segundos. |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | Cuántas entradas, como máximo, guarda cada réplica en memoria de cada una de las tres cachés que se guardan por dispositivo: un dispositivo por su token, sus relaciones seguidas y sus pertenencias a grupos. Consulte [Cachés que dejan de responder](#kv-caches). |
@@ -857,6 +858,17 @@ Ningún aviso lee la serie siguiente, pero es la que hay que mirar cuando public
   bróker nunca respondió se cuenta en el límite de 5 segundos, así que para ese modo la cuenta por
   encima del bucket `le="5"` son las publicaciones que llegaron a él. Una publicación
   `mode="pipelined"` puede contarse por encima de 5 segundos sin haber llegado al límite.
+- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**: segundos en que un
+  escritor en pipeline no pudo enviar porque toda su ventana esperaba confirmaciones. Una tasa
+  cercana a 1 significa que la ventana, y no el broker, limita la publicación: suba
+  `resolution.publishWindow`. Una tasa cercana a 0 significa que la ventana tiene espacio.
+- **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**: cuántos envíos encontraron
+  la ventana llena y tuvieron que esperar. Los segundos anteriores divididos por esta cifra son la
+  espera media.
+- **`devicechain_<area>_jetstream_publish_duplicates_total{suffix}`**: publicaciones que el broker
+  confirmó como copias de un mensaje que ya tenía con el mismo id de mensaje. El mensaje se
+  guardó una sola vez. Tras un reinicio del pod o una confirmación perdida, que esta cifra suba es
+  el stream absorbiendo la republicación, no un fallo.
 
 ## Cachés que dejan de responder {#kv-caches}
 

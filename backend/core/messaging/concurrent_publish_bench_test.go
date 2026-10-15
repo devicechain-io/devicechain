@@ -43,7 +43,7 @@ func BenchmarkConcurrentAwaitedPublish(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	ow, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, maxOrderedWindow)
+	ow, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, MaxOrderedWindow)
 	if err != nil {
 		b.Fatal(err)
 	}

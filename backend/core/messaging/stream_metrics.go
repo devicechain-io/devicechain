@@ -217,6 +217,23 @@ type streamMetrics struct {
 	// comparing a latency with a latency-plus-queueing.
 	publishLatency *prometheus.HistogramVec
 
+	// publishWindowFull is the seconds an ordered writer's submitter spent blocked because
+	// every slot of its window was awaiting a PubAck, by stream suffix. A rate near 1 means
+	// the window is the limit on publishing (raise it); near 0, it is not. It counts only
+	// time actually spent waiting.
+	publishWindowFull *prometheus.CounterVec
+	// publishWindowFullWaits counts the submissions that found the window full and waited,
+	// by stream suffix: the same events publishWindowFull charges the time of. Seconds over
+	// waits is the mean wait. It is the count that makes the instrument checkable at all:
+	// a wait shorter than the clock's resolution charges zero seconds, and so does time
+	// charged by mistake to a submission that never waited.
+	publishWindowFullWaits *prometheus.CounterVec
+	// publishDuplicates counts PubAcks the broker marked Duplicate: a publish it had already
+	// stored under the same Nats-Msg-Id, so the republish of a redelivered source was
+	// absorbed instead of stored twice. Nonzero after a restart or a lost acknowledgement is
+	// the dedup doing its work.
+	publishDuplicates *prometheus.CounterVec
+
 	// The key-value caches (cache.go), by the cache's name in the kv inventory — a
 	// platform-declared set of a handful, never a tenant. They answer the question a cache
 	// that has stopped answering raises: is it being skipped (cacheUnavailable), since when
@@ -374,6 +391,20 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"behind an earlier publish still in flight. A publish the broker never answered is counted "+
 				"at the 5 s ceiling.",
 			[]string{"suffix", "mode"}, publishBuckets),
+		publishWindowFull: ms.NewCounterVec("jetstream_publish_window_full_seconds_total",
+			"Seconds a pipelined JetStream writer spent unable to send because its whole window was "+
+				"awaiting acknowledgements, by stream suffix. Time spent with room in the window is not counted.",
+			[]string{"suffix"}),
+		publishWindowFullWaits: ms.NewCounterVec("jetstream_publish_window_full_total",
+			"Submissions a pipelined JetStream writer made that found its whole window awaiting "+
+				"acknowledgements and had to wait, by stream suffix. jetstream_publish_window_full_seconds_total "+
+				"is the time they waited.",
+			[]string{"suffix"}),
+		publishDuplicates: ms.NewCounterVec("jetstream_publish_duplicates_total",
+			"Publishes the broker acknowledged as duplicates of a message it already held under the same "+
+				"message id, by stream suffix. The message was stored once; this counts the republishes "+
+				"that were absorbed.",
+			[]string{"suffix"}),
 		cacheLatency: ms.NewHistogramVec("kv_cache_request_duration_seconds",
 			"Time a key-value cache operation took at the bucket. A get or set is cut off at 0.5 s; a delete at "+
 				"5 s. A get answered from process memory never reaches the bucket and is not counted here.",
@@ -661,6 +692,30 @@ func (m *streamMetrics) initPublish(suffix, mode string) {
 		return
 	}
 	m.publishLatency.WithLabelValues(suffix, mode)
+	if mode == publishModePipelined {
+		m.publishWindowFull.WithLabelValues(suffix)
+		m.publishWindowFullWaits.WithLabelValues(suffix)
+		m.publishDuplicates.WithLabelValues(suffix)
+	}
+}
+
+// addWindowFull records one submission that waited d for room in suffix's window: one
+// wait, and d seconds. The two are recorded together so neither can be charged without the
+// other.
+func (m *streamMetrics) addWindowFull(suffix string, d time.Duration) {
+	if m == nil || m.publishWindowFull == nil {
+		return
+	}
+	m.publishWindowFullWaits.WithLabelValues(suffix).Inc()
+	m.publishWindowFull.WithLabelValues(suffix).Add(d.Seconds())
+}
+
+// countDuplicate records one PubAck the broker marked Duplicate.
+func (m *streamMetrics) countDuplicate(suffix string) {
+	if m == nil || m.publishDuplicates == nil {
+		return
+	}
+	m.publishDuplicates.WithLabelValues(suffix).Inc()
 }
 
 // observePublish records one publish's latency. See publishLatency for what each mode means.

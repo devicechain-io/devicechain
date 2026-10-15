@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -73,6 +74,36 @@ const DefaultMaxEventFutureSkewSeconds = 300
 // rdb.CheckWriterCount accepts without a warning. On a real PostgreSQL the credential read
 // did not wait for a connection at 10 (BenchmarkAuthenticateDeviceConcurrency).
 const DefaultResolutionWorkers = 10
+
+// DefaultPublishWindow is how many resolved (or failed) events one pod keeps awaiting the
+// broker's acknowledgement at once when resolution.publishWindow is not set.
+//
+// 🔑 THE WINDOW IS A THROUGHPUT CEILING: events per second can be no more than the window
+// divided by the time a PubAck takes (Little's law). On a replicated stream a PubAck is a
+// quorum commit plus a route hop. Measured on a three-node cluster it took 8.4 ms at the
+// median and 11.4 ms on average at saturation, so a window of 128 capped the pod at
+// 128 / 11.4 ms, about 11,200 events a second, and the window sat full in half the samples
+// taken at 12,400 and 14,000 offered. A window of 512 puts that cap near 45,000.
+//
+// The earlier 128 was chosen with an in-process benchmark whose PubAck took well under a
+// millisecond, where no window is ever full; it could not see this ceiling.
+//
+// The cost of a deeper window is bounded and small: more sources held unacked in the pod
+// (a crash redelivers them at AckWait, and the dedup id absorbs the republish), and more
+// publishes failed together by a reconnect, which pays one backoff for the whole window.
+//
+// Memory: each publish in the window holds its encoded event and its unacked source until
+// the PubAck, so a writer holds at most window x (event + source). At the few hundred bytes
+// of a typical event that is well under a megabyte at 512, and two writers are built (the
+// failed one is idle in steady state). The ceiling is window x the stream's maximum message
+// size (1 MiB unless raised) twice over: about 1 GiB at 512 if every event were that large,
+// a pathological case the fetch batch and the 100-slot backlogs ahead of the writer
+// already multiply the same way.
+//
+// A wider window is filled only as far as the inbound reader supplies it: in flight is the
+// rate times the PubAck time, about 130 at 11,400 events a second. So on its own a window
+// of 512 lifts this ceiling and leaves the next one, the inbound pull, to bind.
+const DefaultPublishWindow = 512
 
 // DefaultPerDeviceCacheEntries and DefaultPerDeviceCacheMiB bound what one replica keeps
 // in memory of EACH of the three caches keyed by device: a device by its token, a device's
@@ -313,6 +344,25 @@ type ResolutionConfiguration struct {
 	// consumer (which applies every alarm raise and resolve edge), by the same check the
 	// other services' writer counts use.
 	Workers int
+
+	// PublishWindow is how many resolved (or failed) events this pod keeps awaiting the
+	// broker's acknowledgement at once, from 1 to messaging.MaxOrderedWindow. Unset (absent)
+	// defaults to DefaultPublishWindow; an explicit 0 is refused, not defaulted, and so is
+	// anything outside the range: a window that is silently clamped is a throughput limit
+	// nobody chose. A fixed setting, read once at startup.
+	//
+	// It is a pointer so that "not written" and "written as 0" are different things; after
+	// ApplyDefaults it is never nil.
+	PublishWindow *int
+}
+
+// PublishWindowSize is the publish window in effect: the configured one, or the default
+// when the setting was never written.
+func (r ResolutionConfiguration) PublishWindowSize() int {
+	if r.PublishWindow == nil {
+		return DefaultPublishWindow
+	}
+	return *r.PublishWindow
 }
 
 // ApplyDefaults fills the worker count when it is unset. It is the ONE definition of that
@@ -322,10 +372,17 @@ func (r *ResolutionConfiguration) ApplyDefaults() {
 	if r.Workers == 0 {
 		r.Workers = DefaultResolutionWorkers
 	}
+	if r.PublishWindow == nil {
+		w := DefaultPublishWindow
+		r.PublishWindow = &w
+	}
 }
 
 // Validate bounds the worker count against the pool the resolvers draw from.
 func (r ResolutionConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration) error {
+	if w := r.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
+		return fmt.Errorf("resolution.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
 	return rdb.CheckWriterCount("resolution.workers", r.Workers, pool)
 }
 

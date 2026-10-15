@@ -316,6 +316,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | 设置（`device-management`） | 默认值 | 作用 |
 | --- | --- | --- |
 | `resolution.workers` | `10` | 并行解析器。凭据在副本 `inMemoryCache.ttlSeconds` 内未验证时，从数据库读取并持有一个连接，见[键值缓存](#kv-caches)。必须低于服务连接池 `rdbConfiguration.maxOpenConnections`（默认 20），池还供 GraphQL、MQTT 连接检查、告警触发解除消费者使用。允许超过一半，但启动时记录。键值查找并行，数据库查找仍串行，因此最多一个连接。 |
+| `resolution.publishWindow` | `512` | 单个 Pod 同时等待代理确认的已解析（及失败）事件数，范围 1 到 1024。超出范围时服务启动即失败，不会自动调整。发布速度不会超过该数值除以一次确认所需时间；在复制的代理上一次确认约需 8 到 11 毫秒，所以 128 会把单个 Pod 限制在约每秒 11,000 个事件，而 512 不会。当 `devicechain_<area>_jetstream_publish_window_full_seconds_total` 每秒增长接近一秒时应调高。更深的窗口会让更多源事件在 Pod 内处于未确认状态：Pod 崩溃后，这些事件会在消费者确认等待期后重新投递，并以相同消息 ID 再次发布，流会识别出重复（见 `jetstream_publish_duplicates_total`）。窗口中的每个事件连同其源事件都保留在内存中，直到被确认。固定设置，启动时读取。 |
 | `inMemoryCache.ttlSeconds` | `300` | 副本将值保留在自身内存中的时长，1 到 3600 秒。变更会同时清除所有副本中的该值，所以它只约束丢失的清除消息。键值缓存自身的存活时间对它设上限（见下文），见[键值缓存](#kv-caches)。 |
 | `deviceCacheTtlSeconds`、`relationshipCacheTtlSeconds`、`metricDefCacheTtlSeconds`、`membershipCacheTtlSeconds` | `300` | 代理中各键值缓存的存活时间，1 到 3600 秒。 |
 | `inMemoryCache.perDeviceCacheEntries` | `131072` | 每副本三个逐设备内存缓存各自的条目上限：按令牌设备、追踪关系和分组成员，见[键值缓存](#kv-caches)。 |
@@ -401,6 +402,9 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 以下没有告警，但发布缓慢时应查看：
 
 - **`devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`**：从发送到服务处理代理确认或失败的发布时长，按目标流区分。`sync` 为单独等待发布；`pipelined` 为多条同时执行，例如设备管理发布解析事件、事件来源转发平台 MQTT 设备事件。流水线时长还包括等待所有更早发布完成、失败后暂停，因此两模式不能直接比较。无响应同步发布在五秒上限计数，`le="5"` 桶以外即触及上限；流水线发布可超过五秒而未触限。
+- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**：流水线写入器因整个窗口都在等待确认而无法发送的秒数。速率接近 1 表示限制发布的是窗口而非代理，应调高 `resolution.publishWindow`；接近 0 表示窗口有余量。
+- **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**：发现窗口已满而必须等待的发送次数。上一项的秒数除以该值即为平均等待时间。
+- **`devicechain_<area>_jetstream_publish_duplicates_total{suffix}`**：代理确认为已持有相同消息 ID 的重复消息的发布数。消息只存储一次。Pod 重启或确认丢失后该值上升，是流在吸收重新发布，并非故障。
 
 ## 停止响应的缓存 {#kv-caches}
 

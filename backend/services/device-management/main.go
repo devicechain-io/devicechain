@@ -266,6 +266,30 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	return api, cached, nil
 }
 
+// createPublishWriters builds the resolved and failed events writers, each with the
+// configured publish window (resolution.publishWindow). It is a function of its own so
+// resolution_wiring_test.go can check the configured window reaches the writers: a processor
+// test builds its own writers, so a service that stopped passing the setting would run the
+// default while every other test stayed green.
+func createPublishWriters(nmgr *messaging.NatsManager) error {
+	// Add and initialize resolved events writer. Both inbound publish loops pipeline their
+	// publishes (see config.DefaultPublishWindow for why the window is a throughput limit);
+	// the processor closes these writers when it stops, before the connection drains.
+	revents, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, Configuration.Resolution.PublishWindowSize())
+	if err != nil {
+		return err
+	}
+	ResolvedEventsWriter = revents
+
+	// Add and initialize failed events writer.
+	fevents, err := nmgr.NewOrderedWriter(streams.FailedEvents, Configuration.Resolution.PublishWindowSize())
+	if err != nil {
+		return err
+	}
+	FailedEventsWriter = fevents
+	return nil
+}
+
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// Create reader for inbound events (wildcard across tenants).
 	ievents, err := nmgr.NewReader(streams.InboundEvents)
@@ -274,21 +298,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	InboundEventsReader = ievents
 
-	// Add and initialize resolved events writer. Both inbound publish loops pipeline their
-	// publishes (see processor.PUBLISH_WINDOW); the processor closes these writers when it
-	// stops, before the connection drains.
-	revents, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, processor.PUBLISH_WINDOW)
-	if err != nil {
+	if err := createPublishWriters(nmgr); err != nil {
 		return err
 	}
-	ResolvedEventsWriter = revents
-
-	// Add and initialize failed events writer.
-	fevents, err := nmgr.NewOrderedWriter(streams.FailedEvents, processor.PUBLISH_WINDOW)
-	if err != nil {
-		return err
-	}
-	FailedEventsWriter = fevents
 
 	// The ADR-024 dead-letter writer, built once and shared by every arm in this service.
 	// It is created BEFORE the arms that use it so a deployment that cannot create the
