@@ -196,8 +196,9 @@ type parityNulls struct {
 	Iv    sql.NullString
 }
 
-func selectParity(db *gorm.DB, where string) *gorm.DB {
-	return db.Table("pgx_classic_parity").Where(where).Order("id")
+// selectParity reads every row but skipID; 0 skips nothing, since the ids are 1-3.
+func selectParity(db *gorm.DB, skipID int) *gorm.DB {
+	return db.Table("pgx_classic_parity").Where("id <> ?", skipID).Order("id")
 }
 
 // TestPgxClassicScanParity scans every shape through gorm on both pools and requires the
@@ -207,17 +208,17 @@ func TestPgxClassicScanParity(t *testing.T) {
 	native, classic := openPgxPair(t, pgxClassicDSN(t, ""), quietGorm)
 	require.NoError(t, native.Exec(pgxClassicTable).Error)
 
-	scanBoth := func(t *testing.T, where string, newDest func() any) (any, any) {
+	scanBoth := func(t *testing.T, skipID int, newDest func() any) (any, any) {
 		t.Helper()
 		n, c := newDest(), newDest()
-		require.NoError(t, selectParity(native, where).Scan(n).Error, "native")
-		require.NoError(t, selectParity(classic, where).Scan(c).Error, "classic")
+		require.NoError(t, selectParity(native, skipID).Scan(n).Error, "native")
+		require.NoError(t, selectParity(classic, skipID).Scan(c).Error, "classic")
 		assert.Equal(t, n, c, "the wrapped pool scanned something different from the dialector's own")
 		return n, c
 	}
 
 	t.Run("values", func(t *testing.T) {
-		n, _ := scanBoth(t, "id <> 2", func() any { return &[]parityValues{} })
+		n, _ := scanBoth(t, 2, func() any { return &[]parityValues{} })
 		rows := *n.(*[]parityValues)
 		require.Len(t, rows, 2)
 		r := rows[0]
@@ -234,7 +235,7 @@ func TestPgxClassicScanParity(t *testing.T) {
 		assert.Equal(t, "1 day 02:03:04", r.Iv)
 	})
 	t.Run("pointers", func(t *testing.T) {
-		n, _ := scanBoth(t, "true", func() any { return &[]parityPointers{} })
+		n, _ := scanBoth(t, 0, func() any { return &[]parityPointers{} })
 		rows := *n.(*[]parityPointers)
 		require.Len(t, rows, 3)
 		require.NotNil(t, rows[0].Ts)
@@ -246,7 +247,7 @@ func TestPgxClassicScanParity(t *testing.T) {
 		assert.Empty(t, rows[2].By, "an empty bytea is not NULL")
 	})
 	t.Run("nulls and scanners", func(t *testing.T) {
-		n, _ := scanBoth(t, "true", func() any { return &[]parityNulls{} })
+		n, _ := scanBoth(t, 0, func() any { return &[]parityNulls{} })
 		rows := *n.(*[]parityNulls)
 		require.Len(t, rows, 3)
 		assert.True(t, rows[0].Ts.Valid)
@@ -260,29 +261,29 @@ func TestPgxClassicScanParity(t *testing.T) {
 	t.Run("maps", func(t *testing.T) {
 		// gorm's map scan sizes each cell from ColumnTypes().ScanType, so this is where a
 		// lost RowsColumnTypeScanType would show.
-		n, _ := scanBoth(t, "true", func() any { return &[]map[string]any{} })
+		n, _ := scanBoth(t, 0, func() any { return &[]map[string]any{} })
 		require.Len(t, *n.(*[]map[string]any), 3)
 	})
 	t.Run("single columns", func(t *testing.T) {
 		var nid, cid []int64
-		require.NoError(t, selectParity(native, "true").Pluck("id", &nid).Error)
-		require.NoError(t, selectParity(classic, "true").Pluck("id", &cid).Error)
+		require.NoError(t, selectParity(native, 0).Pluck("id", &nid).Error)
+		require.NoError(t, selectParity(classic, 0).Pluck("id", &cid).Error)
 		assert.Equal(t, []int64{1, 2, 3}, nid)
 		assert.Equal(t, nid, cid)
 		for _, col := range []string{"i", "ts", "tsn", "dt", "u", "js", "by", "num", "arr", "iv"} {
 			n, c := []any{}, []any{}
-			require.NoError(t, selectParity(native, "true").Pluck(col, &n).Error)
-			require.NoError(t, selectParity(classic, "true").Pluck(col, &c).Error)
+			require.NoError(t, selectParity(native, 0).Pluck(col, &n).Error)
+			require.NoError(t, selectParity(classic, 0).Pluck(col, &c).Error)
 			assert.Equal(t, n, c, "pluck %s into []any", col)
 		}
 	})
 	t.Run("database/sql directly", func(t *testing.T) {
 		// Below gorm: rows.Scan into each struct's field addresses, which is the call
 		// database/sql routes through ScanColumn on one pool and Next on the other.
-		scanDirect := func(db *gorm.DB, where string, newRow func() any) []any {
+		scanDirect := func(db *gorm.DB, skipID int, newRow func() any) []any {
 			sqldb, err := db.DB()
 			require.NoError(t, err)
-			rows, err := sqldb.Query("SELECT * FROM pgx_classic_parity WHERE " + where + " ORDER BY id")
+			rows, err := sqldb.Query("SELECT * FROM pgx_classic_parity WHERE id <> $1 ORDER BY id", skipID)
 			require.NoError(t, err)
 			defer rows.Close()
 			var out []any
@@ -300,15 +301,16 @@ func TestPgxClassicScanParity(t *testing.T) {
 			return out
 		}
 		for _, tc := range []struct {
-			name, where string
-			newRow      func() any
+			name   string
+			skipID int
+			newRow func() any
 		}{
-			{"values", "id <> 2", func() any { return &parityValues{} }},
-			{"pointers", "true", func() any { return &parityPointers{} }},
-			{"nulls", "true", func() any { return &parityNulls{} }},
+			{"values", 2, func() any { return &parityValues{} }},
+			{"pointers", 0, func() any { return &parityPointers{} }},
+			{"nulls", 0, func() any { return &parityNulls{} }},
 		} {
-			n := scanDirect(native, tc.where, tc.newRow)
-			assert.Equal(t, n, scanDirect(classic, tc.where, tc.newRow), tc.name)
+			n := scanDirect(native, tc.skipID, tc.newRow)
+			assert.Equal(t, n, scanDirect(classic, tc.skipID, tc.newRow), tc.name)
 			if tc.name == "nulls" {
 				require.Len(t, n, 3)
 				assert.Equal(t, upperScanner("<NULL>"), n[1].(*parityNulls).Ch, "the Scanner saw the NULL")
@@ -331,7 +333,7 @@ func TestPgxClassicScanParity(t *testing.T) {
 	})
 	t.Run("column types", func(t *testing.T) {
 		describe := func(db *gorm.DB) []string {
-			rows, err := selectParity(db, "true").Rows()
+			rows, err := selectParity(db, 0).Rows()
 			require.NoError(t, err)
 			defer rows.Close()
 			cts, err := rows.ColumnTypes()
@@ -355,8 +357,8 @@ func TestPgxClassicScanParity(t *testing.T) {
 			return &gorm.Config{Logger: logger.Discard, PrepareStmt: true}
 		})
 		var n, c []parityNulls
-		require.NoError(t, selectParity(pn, "true").Scan(&n).Error)
-		require.NoError(t, selectParity(pc, "true").Scan(&c).Error)
+		require.NoError(t, selectParity(pn, 0).Scan(&n).Error)
+		require.NoError(t, selectParity(pc, 0).Scan(&c).Error)
 		assert.Equal(t, n, c)
 		require.Len(t, n, 3)
 	})
