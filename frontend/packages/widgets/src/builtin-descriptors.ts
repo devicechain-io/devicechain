@@ -273,23 +273,37 @@ const ALARM_FILTERS = {
   acknowledged: { option: 'acknowledged' },
 } as const;
 
+// The timeseries chart's window, as a SPAN. Unset, the chart follows the board's time range (which
+// a viewer can change from the header); set, it is PINNED to this span whatever the viewer picks,
+// which is what a "last 5 minutes" strip on a wall board wants. The bounds are the board range's:
+// a minute to a week.
+const WINDOW_SECONDS = {
+  kind: 'number',
+  integer: true,
+  min: 60,
+  max: 604800,
+  labelId: 'widgetLabelWindowSeconds',
+  helpId: 'widgetHintWindowSeconds',
+  doc: 'Seconds of history the chart draws, back from now. Leave unset to follow the board’s time range; set it to pin this chart to a fixed span that the viewer’s range picker does not change. 60 to 604800.',
+} as const satisfies OptionSpec;
+
 export const builtinWidgetDescriptors = {
   'timeseries-chart': defineWidgetDescriptor({
     id: 'timeseries-chart',
     version: VERSION,
     sdkApiVersion: 1,
-    optionsVersion: 1,
+    optionsVersion: 2,
     display: { title: 'Timeseries chart', category: 'Telemetry', titleId: 'widgetTypeTimeseriesChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
     datasource: { mode: 'required', selectors: ALL_SELECTORS },
-    binding: { window: { option: 'window', min: 1 } },
+    binding: { windowSeconds: { option: 'windowSeconds' } },
     options: {
       title: TITLE,
       unit: UNIT,
       precision: PRECISION,
       thresholds: THRESHOLDS,
       staleAfterSeconds: STALE_AFTER_SECONDS,
-      window: WINDOW,
+      windowSeconds: WINDOW_SECONDS,
     },
     defaults: { title: 'Timeseries chart' },
     interactions: {},

@@ -67,7 +67,7 @@ describe('a board converted from the previous grid', () => {
       fireEvent.click(saveButton());
     });
     const sent = JSON.parse(api.updateDashboard.mock.calls[0][1].definition as string);
-    expect(sent.schemaVersion).toBe(2);
+    expect(sent.schemaVersion).toBe(3);
     expect('convertedFrom' in sent).toBe(false);
     expect(sent.widgets[0].layout.base).toEqual({ mode: 'grid', col: 0, row: 0, cols: 4, rows: 1 });
     expect(notice()).toBeNull();
@@ -77,6 +77,70 @@ describe('a board converted from the previous grid', () => {
   it('shows nothing for a board already in the current format', () => {
     mount({ ...stored, schemaVersion: 2, canvas: { sizing: 'fill' }, widgets: [] });
     expect(notice()).toBeNull();
+    expect((saveButton() as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// A board stored before the time span: its chart kept a sample count, which has no span.
+const storedWithCount = {
+  schemaVersion: 2,
+  title: 'Counted',
+  canvas: { grid: { columns: 12, minCellSize: 56, gutter: 8, padding: 0 }, sizing: 'fill', breakpoints: { base: 0 } },
+  widgets: [
+    {
+      id: 'c1',
+      type: 'timeseries-chart',
+      layout: { base: { mode: 'grid', col: 0, row: 0, cols: 6, rows: 4 } },
+      datasource: { kind: 'device', deviceToken: 'd-1', measurements: ['t'] },
+      options: { title: 'Zone temperature', window: 300 },
+    },
+    {
+      id: 'c2',
+      type: 'timeseries-chart',
+      layout: { base: { mode: 'grid', col: 6, row: 0, cols: 6, rows: 4 } },
+      datasource: { kind: 'device', deviceToken: 'd-1', measurements: ['t'] },
+      options: { window: 60 },
+    },
+    {
+      id: 'c3',
+      type: 'timeseries-chart',
+      layout: { base: { mode: 'grid', col: 0, row: 4, cols: 6, rows: 4 } },
+      datasource: { kind: 'device', deviceToken: 'd-1', measurements: ['t'] },
+      options: { title: 'Untouched' },
+    },
+  ],
+};
+
+describe('a board converted from sample-count windows', () => {
+  const windowsNotice = () => screen.queryByText(/kept a sample count/);
+
+  it('names the charts that lost their count (by title, else id), and not the ones that never had one', () => {
+    mount(storedWithCount);
+    const text = windowsNotice()?.textContent ?? '';
+    expect(text).toContain('Zone temperature');
+    expect(text).toContain('c2');
+    expect(text).not.toContain('Untouched');
+    // It is a different conversion from the grid's: that notice does not appear.
+    expect(notice()).toBeNull();
+    expect((saveButton() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('saves the span format with no window and no mark, after which the notice is gone', async () => {
+    api.updateDashboard.mockResolvedValue({ updatedAt: '2026-10-15T00:00:00Z' });
+    mount(storedWithCount);
+    await act(async () => {
+      fireEvent.click(saveButton());
+    });
+    const sent = JSON.parse(api.updateDashboard.mock.calls[0][1].definition as string);
+    expect(sent.schemaVersion).toBe(3);
+    expect(JSON.stringify(sent)).not.toContain('"window"');
+    expect('convertedWindows' in sent).toBe(false);
+    expect(windowsNotice()).toBeNull();
+  });
+
+  it('shows nothing for a version-2 board with no counts to lose', () => {
+    mount({ ...storedWithCount, widgets: [storedWithCount.widgets[2]] });
+    expect(windowsNotice()).toBeNull();
     expect((saveButton() as HTMLButtonElement).disabled).toBe(true);
   });
 });

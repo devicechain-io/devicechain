@@ -194,7 +194,7 @@ describe('legacy built-ins', () => {
     const def = parseDashboardDefinition(board([gauge]));
     expect(def.widgets[0]).toEqual(gauge);
     expect(isBuiltinWidget(def.widgets[0])).toBe(true);
-    expect(serializeDefinition(def)).toBe(JSON.stringify({ schemaVersion: 2, title: '', canvas: def.canvas, widgets: [gauge], slots: { tank: { type: 'device' } } }));
+    expect(serializeDefinition(def)).toBe(JSON.stringify({ schemaVersion: 3, title: '', canvas: def.canvas, widgets: [gauge], slots: { tank: { type: 'device' } } }));
   });
 
   // Deliberately unchanged for built-ins: only the owned envelope survives, as it always has.

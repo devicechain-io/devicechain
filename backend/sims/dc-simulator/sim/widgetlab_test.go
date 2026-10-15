@@ -895,8 +895,8 @@ func TestWidgetlabBoardsAreStructurallySound(t *testing.T) {
 			board := widgetlabBoard(t, token)
 			// A literal: the frontend parser converts anything older on load, and a sim board must
 			// not need converting.
-			if board.SchemaVersion != 2 {
-				t.Errorf("schemaVersion is %d, not 2", board.SchemaVersion)
+			if board.SchemaVersion != 3 {
+				t.Errorf("schemaVersion is %d, not 3", board.SchemaVersion)
 			}
 			if len(board.Widgets) == 0 {
 				t.Fatal("board carries no widgets")

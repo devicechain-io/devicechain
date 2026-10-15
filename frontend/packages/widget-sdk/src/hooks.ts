@@ -206,13 +206,32 @@ export function useCandidates(slot: string | undefined): CandidatesState {
 }
 
 export interface MeasurementStreamOptions {
-  // Max samples retained in the rolling window (oldest dropped past this).
+  // Max samples retained in the rolling window (oldest dropped past this). With `windowSeconds`
+  // this is the memory ceiling on a span (default MAX_SPAN_SAMPLES); without it, the whole
+  // window (default 300).
   window?: number;
+  // The window as a SPAN: only samples that occurred within this many seconds of now (or of
+  // `pausedAt`) are kept, whatever their number, and `window` is demoted to a ceiling so a
+  // busy device cannot grow the buffer without bound. Omit for the count-only window.
+  windowSeconds?: number;
+  // Freeze the stream at this instant (epoch ms). While set, live samples are BUFFERED, not merged:
+  // the returned state does not change, its newest sample keeps its time (so an age readout
+  // keeps counting), and the span is measured back from this instant. Clearing it merges
+  // everything that arrived in the meantime at once -- the catch-up.
+  pausedAt?: number;
+  // The clock the span is measured against (epoch ms). Default: the wall clock. A data source that
+  // plays a recorded run supplies its own, because the run's samples are dated by the run, not by
+  // today, and a span measured from today would drop every one of them.
+  now?: () => number;
   // Historical samples to seed the window with before live data arrives (from a
   // bucketedMeasurements backfill). Assumed chronological and older than the live
   // tail; live samples for the same measurement name override the seed's latest.
   initialSamples?: MeasurementSample[];
 }
+
+// The ceiling on retained samples when the window is a span. A span of days at a high event
+// rate would otherwise hold every raw reading; past this the OLDEST go first.
+export const MAX_SPAN_SAMPLES = 2000;
 
 const EMPTY: MeasurementStreamState = { latest: {}, samples: [], error: null };
 
@@ -221,6 +240,18 @@ function latestOf(samples: MeasurementSample[]): Record<string, MeasurementSampl
   const latest: Record<string, MeasurementSample> = {};
   for (const s of samples) latest[s.name] = s;
   return latest;
+}
+
+// withinSpan drops the samples that occurred before `end - spanSeconds`. A sample whose time is
+// missing or unparseable is KEPT: it cannot be shown to be outside the window, and dropping it
+// would hide a reading the count ceiling would have kept.
+export function withinSpan(samples: MeasurementSample[], spanSeconds: number, end: number): MeasurementSample[] {
+  const from = end - spanSeconds * 1000;
+  return samples.filter((s) => {
+    if (!s.occurredTime) return true;
+    const at = Date.parse(s.occurredTime);
+    return Number.isNaN(at) || at >= from;
+  });
 }
 
 // useMeasurementStream subscribes a widget's datasource through the hub and keeps
@@ -234,12 +265,27 @@ export function useMeasurementStream(
   datasource: DatasourceSelector | undefined,
   options: MeasurementStreamOptions = {},
 ): MeasurementStreamState {
-  const windowSize = options.window ?? 300;
+  const { windowSeconds, pausedAt } = options;
+  const windowSize = options.window ?? (windowSeconds !== undefined ? MAX_SPAN_SAMPLES : 300);
   const initialSamples = options.initialSamples;
+  const paused = pausedAt !== undefined;
 
   // Value-compare the selector so an unchanged-but-new object reference doesn't
   // resubscribe every render.
   const key = datasource ? JSON.stringify(datasource) : null;
+
+  // The span and the pause are read by the subscription's callback through refs, so changing the
+  // range (or pausing) never tears the subscription down and loses what it has buffered.
+  const spanRef = useRef(windowSeconds);
+  const clockRef = useRef(options.now ?? Date.now);
+  const pausedRef = useRef(paused);
+  const queueRef = useRef<MeasurementSample[]>([]);
+  const flushRef = useRef<() => void>(() => {});
+  const clock = options.now ?? Date.now;
+  useEffect(() => {
+    spanRef.current = windowSeconds;
+    clockRef.current = clock;
+  }, [windowSeconds, clock]);
 
   // The live buffer is TAGGED with the selector it was filled from. The effect below
   // resets it when the selector changes, but an effect runs after the render that
@@ -254,6 +300,8 @@ export function useMeasurementStream(
 
   useEffect(() => {
     setTagged({ key, state: EMPTY }); // reset the live buffer whenever the datasource changes (or clears)
+    queueRef.current = [];
+    flushRef.current = () => {};
     if (!datasource) return;
 
     // A callback for a selector the buffer has already moved past (a sink that answers
@@ -262,25 +310,61 @@ export function useMeasurementStream(
     const update = (fn: (prev: MeasurementStreamState) => MeasurementStreamState) =>
       setTagged((prev) => (prev.key === key ? { key, state: fn(prev.state) } : prev));
 
+    const fold = (prev: MeasurementStreamState, incoming: MeasurementSample[]): MeasurementStreamState => {
+      let samples = prev.samples.concat(incoming);
+      const span = spanRef.current;
+      if (span !== undefined) samples = withinSpan(samples, span, clockRef.current());
+      if (samples.length > windowSize) samples = samples.slice(samples.length - windowSize);
+      const latest = { ...prev.latest };
+      for (const s of incoming) latest[s.name] = s;
+      return { latest, samples, error: null };
+    };
+
+    flushRef.current = () => {
+      const queued = queueRef.current;
+      if (queued.length === 0) return;
+      queueRef.current = [];
+      update((prev) => fold(prev, queued));
+    };
+
     return hub.subscribeWidget(datasource, {
-      next: (sample) =>
-        update((prev) => {
-          const samples = prev.samples.concat(sample);
-          if (samples.length > windowSize) samples.splice(0, samples.length - windowSize);
-          return { latest: { ...prev.latest, [sample.name]: sample }, samples, error: null };
-        }),
+      next: (sample) => {
+        if (pausedRef.current) {
+          // Buffered, bounded: a pause that outlasts the ceiling keeps the newest.
+          const queue = queueRef.current;
+          queue.push(sample);
+          if (queue.length > windowSize) queue.splice(0, queue.length - windowSize);
+          return;
+        }
+        update((prev) => fold(prev, [sample]));
+      },
       error: (err) => update((prev) => ({ ...prev, error: err })),
     });
     // `datasource` is intentionally read via `key` (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub, key, windowSize]);
 
+  // The pause gate. Resuming merges what queued while frozen. The flag flips before the flush,
+  // so a sample landing between the two is merged rather than queued behind it.
+  useEffect(() => {
+    pausedRef.current = paused;
+    if (!paused) flushRef.current();
+  }, [paused]);
+
   // Layer the history seed under the live tail. Kept separate from the live buffer
   // so late-arriving history (async backfill) recomputes without touching the
   // subscription, and switching datasource clears live while the new seed applies.
   return useMemo(() => {
-    if (!initialSamples || initialSamples.length === 0) return live;
-    const merged = initialSamples.concat(live.samples);
+    // The span is measured back from the freeze instant while paused, from now otherwise.
+    const end = pausedAt ?? clock();
+    const bound = (samples: MeasurementSample[]) =>
+      windowSeconds === undefined ? samples : withinSpan(samples, windowSeconds, end);
+    if (!initialSamples || initialSamples.length === 0) {
+      if (windowSeconds === undefined) return live;
+      const samples = bound(live.samples);
+      return samples.length === live.samples.length ? live : { ...live, samples };
+    }
+    const merged = bound(initialSamples.concat(live.samples));
     const samples =
       merged.length > windowSize ? merged.slice(merged.length - windowSize) : merged;
     return {
@@ -288,7 +372,7 @@ export function useMeasurementStream(
       samples,
       error: live.error,
     };
-  }, [initialSamples, live, windowSize]);
+  }, [initialSamples, live, windowSize, windowSeconds, pausedAt, clock]);
 }
 
 const EMPTY_ALARMS: AlarmStreamState = { alarms: [], total: 0, loading: true, error: null };

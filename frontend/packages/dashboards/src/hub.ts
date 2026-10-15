@@ -315,6 +315,10 @@ export interface WidgetDataSource {
   // OPEN (true) on an inconclusive check, so a device-management blip never falsely marks
   // a live device unavailable.
   isDatasourceAvailable(datasource: DatasourceSelector | undefined): Promise<boolean>;
+  // The source's idea of "now" (epoch ms), for measuring a time span against its samples. Omitted
+  // = the wall clock, which is right for every live source. A source that plays back a recorded
+  // run implements it, because the run's samples are dated by the run.
+  now?(): number;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an

@@ -606,8 +606,16 @@ export interface SelectionTarget {
 }
 
 // The definition format this release writes. 2 is the square-cell grid with explicit placement
-// modes; a stored document below it is converted on load (see ./legacy-grid).
-export const CURRENT_SCHEMA_VERSION = 2;
+// modes; 3 is the time span (a time-series widget draws a span, `windowSeconds`, not a sample
+// count, and the board carries a `timeRange`). A stored document below it is converted on load
+// (see ./legacy-grid and ./legacy-window).
+export const CURRENT_SCHEMA_VERSION = 3;
+
+// The board's time range as authored: the span (seconds) its time-series widgets draw until a
+// viewer picks another. Absent = one hour (DEFAULT_TIME_RANGE_SECONDS).
+export interface BoardTimeRange {
+  defaultSeconds: number;
+}
 
 export interface DashboardDefinition {
   schemaVersion: number;
@@ -617,11 +625,18 @@ export interface DashboardDefinition {
   // Named entity roles bound at mount (ADR-039 runtime binding). Optional — absent
   // on a dashboard that uses no slots.
   slots?: Record<string, SlotDefinition>;
+  // The board's time range (D-1). Optional: a board that names none draws the default hour.
+  timeRange?: BoardTimeRange;
   // Set by the parser, NEVER stored: the schemaVersion of the document this definition was
   // converted from, when it was stored in an older format and its layout was mapped onto the
   // current grid approximately. An editor shows a "review the layout" notice while it is set;
   // the serializer drops it, so the next save writes the current format and the notice goes.
   convertedFrom?: number;
+  // Set by the parser, NEVER stored: the ids of the time-series widgets that carried a
+  // sample-count window when the board was stored. A sample count has no span without a sampling
+  // rate nobody recorded, so each of these now follows the board's time range instead; an editor
+  // names them so the author can pin a `windowSeconds` where the old window mattered.
+  convertedWindows?: string[];
 }
 
 // ---- Live telemetry ---------------------------------------------------------

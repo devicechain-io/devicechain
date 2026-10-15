@@ -111,7 +111,8 @@ describe('the built-in registry', () => {
 
     it('carries a per-widget version, not the platform version', () => {
       expect(descriptor.version).toBe('1.0.0');
-      expect(descriptor.optionsVersion).toBe(1);
+      // The timeseries chart's settings changed meaning when its window became a span.
+      expect(descriptor.optionsVersion).toBe(type === 'timeseries-chart' ? 2 : 1);
       expect(descriptor.sdkApiVersion).toBe(1);
     });
   });

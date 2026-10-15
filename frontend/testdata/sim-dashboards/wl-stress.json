@@ -11,7 +11,7 @@
     },
     "sizing": "fill"
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "slots": {
     "edgeExtremes": {
       "defaultBinding": {
@@ -78,7 +78,7 @@
       },
       "options": {
         "title": "Spikes and out-of-range",
-        "window": 180
+        "windowSeconds": 900
       },
       "type": "timeseries-chart"
     },
@@ -178,7 +178,7 @@
       },
       "options": {
         "title": "Goes silent",
-        "window": 180
+        "windowSeconds": 900
       },
       "type": "timeseries-chart"
     },

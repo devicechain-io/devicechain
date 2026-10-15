@@ -110,7 +110,13 @@ type PageSize<S extends WidgetOptionSpecs> = ConstBinding<number> | NumberOption
 
 export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOptionSpecs = WidgetOptionSpecs> =
   C extends 'measurement'
-    ? { window?: NumberOptionRef<S> }
+    ? {
+        window?: NumberOptionRef<S>;
+        // Declaring it makes the widget TIME-RANGED: it draws a span rather than a sample count.
+        // The referenced option pins the span (seconds); unset, the widget follows the board's
+        // time range, which a viewer may change.
+        windowSeconds?: NumberOptionRef<S>;
+      }
     : C extends 'alarm'
       ? {
           pageSize: PageSize<S>;

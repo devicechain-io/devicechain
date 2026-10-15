@@ -8,7 +8,7 @@
 import { WIDGET_TYPES, type WidgetDescriptor, type WidgetInstance } from '@devicechain/dashboards';
 import { describe, expect, it } from 'vitest';
 
-import { alarmSubscription, commandSubscription, measurementWindow } from './binding-policy';
+import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow } from './binding-policy';
 import { builtinWidgetCatalog } from './builtin-descriptors';
 
 const asDescriptor = (binding: Record<string, unknown>): WidgetDescriptor =>
@@ -92,8 +92,38 @@ describe('the built-in policies', () => {
     expect(sub).toMatchObject({ state: 'ACTIVE', severity: 'CRITICAL', acknowledged: false });
   });
 
-  it('measurement widgets read window', () => {
-    expect(measurementWindow(d('timeseries-chart'), widget({ window: 600 }, 'timeseries-chart'))).toBe(600);
+  it('measurement widgets read window, and the timeseries chart a span instead', () => {
+    expect(measurementWindow(d('latest-card'), widget({ window: 600 }, 'latest-card'))).toBe(600);
     expect(measurementWindow(d('gauge'), widget({}, 'gauge'))).toBeUndefined();
+    // The chart draws a span, so it carries no sample count at all.
+    expect(measurementWindow(d('timeseries-chart'), widget({ window: 600 }, 'timeseries-chart'))).toBeUndefined();
+  });
+
+  describe('measurementSpan', () => {
+    const BOARD = 6 * 3600;
+
+    it('follows the board span when the widget pins none', () => {
+      expect(measurementSpan(d('timeseries-chart'), widget({}, 'timeseries-chart'), BOARD)).toBe(BOARD);
+    });
+
+    it('is pinned by its own windowSeconds, whatever the board says', () => {
+      expect(measurementSpan(d('timeseries-chart'), widget({ windowSeconds: 300 }, 'timeseries-chart'), BOARD)).toBe(300);
+    });
+
+    it('ignores a pinned span that is not a usable one, rather than clamping it', () => {
+      for (const bad of [0, 59, 604801, 90.5, -60, Number.NaN]) {
+        expect(measurementSpan(d('timeseries-chart'), widget({ windowSeconds: bad }, 'timeseries-chart'), BOARD), String(bad)).toBe(BOARD);
+      }
+    });
+
+    it('is undefined for a widget that is not time-ranged, pinned or not', () => {
+      expect(measurementSpan(d('latest-card'), widget({ windowSeconds: 300 }, 'latest-card'), BOARD)).toBeUndefined();
+      expect(measurementSpan(d('gauge'), widget({}, 'gauge'), BOARD)).toBeUndefined();
+    });
+
+    it('is undefined outside a board (no range imposed) unless the widget pins one', () => {
+      expect(measurementSpan(d('timeseries-chart'), widget({}, 'timeseries-chart'), undefined)).toBeUndefined();
+      expect(measurementSpan(d('timeseries-chart'), widget({ windowSeconds: 300 }, 'timeseries-chart'), undefined)).toBe(300);
+    });
   });
 });

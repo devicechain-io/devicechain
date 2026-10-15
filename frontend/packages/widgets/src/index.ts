@@ -11,6 +11,14 @@
 // The view-only dashboard renderer: lays a parsed definition's widgets on the
 // canvas and binds each to the hub. The shared viewer for the console + external apps.
 export { DashboardRenderer, resolveWidgets, widgetSubjectLabel, type DashboardRendererProps } from './dashboard-renderer';
+export {
+  DEFAULT_TIME_RANGE_LABELS,
+  PausedIndicator,
+  TimeRangeBar,
+  useBoardTimeRange,
+  type TimeRangeControls,
+  type TimeRangeLabels,
+} from './time-range-bar';
 
 // Renderer entry point: binds the hub to a widget by type.
 export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';

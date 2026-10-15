@@ -245,12 +245,14 @@ function isChoiceKey(type: WidgetType, key: string): boolean {
 // what separates "stored what was typed" from "stored a constant" and from "stored the
 // neighbouring key's value".
 function numberValue(type: WidgetType, key: string): number {
-  const value = 2 + 3 * schemaOrder(type).indexOf(key);
   const spec = numberOptionSpec(type, key);
-  // Every numeric option in the table today is unbounded or has min ≤ 2 and max ≥ 23, so
-  // the spacing above lands inside all of them. An option it does NOT fit fails here,
-  // rather than being clamped on commit into a value the assertion then blames the panel
-  // for.
+  const spaced = 2 + 3 * schemaOrder(type).indexOf(key);
+  // Most numeric options are unbounded or have min ≤ 2 and max ≥ 23, so the spacing above lands
+  // inside them. One whose floor is higher (a time span of at least a minute) is lifted onto its
+  // floor, keeping the spacing, so it is still distinct from its neighbours. An option that even
+  // that does not fit fails here, rather than being clamped on commit into a value the
+  // assertion then blames the panel for.
+  const value = spec?.min !== undefined && spaced < spec.min ? spec.min + spaced : spaced;
   expect(value, `${type}.${key}: the driver's ${value} is below the option's min`).toBeGreaterThanOrEqual(
     spec?.min ?? value,
   );

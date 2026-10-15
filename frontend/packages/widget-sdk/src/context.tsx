@@ -14,7 +14,7 @@
 
 import { createContext, useContext, type ReactNode } from 'react';
 
-import type { ResolvedFrame, SelectionCandidate, SelectionTarget } from '@devicechain/dashboards';
+import type { ResolvedFrame, SelectionCandidate, SelectionTarget, TimeRangeState } from '@devicechain/dashboards';
 
 // WidgetSubjectContext carries the resolved entity a widget shows (its datasource's
 // bound device/anchor), computed once by the renderer and provided per widget. The
@@ -201,4 +201,28 @@ export function WidgetFrameStyleProvider({ frame, children }: { frame: ResolvedF
 
 export function useWidgetFrameStyle(): ResolvedFrame | undefined {
   return useContext(WidgetFrameStyleContext);
+}
+
+// The board's time range: the span its time-series widgets draw (seconds back from now) and
+// whether the viewer has frozen the board. Provided by the renderer. A widget that draws
+// history reads it to label its axis or to ask its own questions; the built-in time-series chart
+// needs no code of its own, because the host sizes its window from the same value. `pausedAt`
+// is set exactly while `paused`, and is the instant the window ends at while frozen.
+//
+// Undefined outside a board (a widget mounted on its own), which is "no range is imposed" -- not
+// a default span. A widget must handle that rather than assume an hour.
+const WidgetTimeRangeContext = createContext<TimeRangeState | undefined>(undefined);
+
+export function WidgetTimeRangeProvider({
+  range,
+  children,
+}: {
+  range: TimeRangeState | undefined;
+  children: ReactNode;
+}) {
+  return <WidgetTimeRangeContext.Provider value={range}>{children}</WidgetTimeRangeContext.Provider>;
+}
+
+export function useWidgetTimeRange(): TimeRangeState | undefined {
+  return useContext(WidgetTimeRangeContext);
 }

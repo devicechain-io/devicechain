@@ -9,12 +9,15 @@
 //   kiosk      1 | true  hide the chrome and offer fullscreen
 //   theme      dark | light
 //   density    compact | comfortable | wall
+//   range      15m | 1h | 6h | 24h | 7d  the time range the board opens at
+//   paused     1  open frozen at the moment of loading (any other value opens live)
 //
 // A parameter that is absent is simply unset. One that is PRESENT BUT INVALID is ignored
 // with a console warning: a typo in a bookmarked wall URL must still bring the board up
 // (with the default for that one setting) rather than a blank screen nobody is there to read.
 
 import { isValidToken } from '@devicechain/client';
+import { TIME_RANGE_PRESETS, parseRangeParam } from '@devicechain/dashboards';
 
 export type DashTheme = 'dark' | 'light';
 export type DashDensity = 'compact' | 'comfortable' | 'wall';
@@ -24,6 +27,11 @@ export interface DashParams {
   kiosk: boolean;
   theme: DashTheme | null;
   density: DashDensity | null;
+  // The time range's span in seconds (one of the presets), or null for the board's own default.
+  range: number | null;
+  // Open frozen. Only `paused=1` freezes: a malformed value opens LIVE, never frozen on an
+  // instant nobody chose.
+  paused: boolean;
 }
 
 const THEMES: readonly DashTheme[] = ['dark', 'light'];
@@ -67,5 +75,20 @@ export function parseDashParams(
     else bad('density', n, DENSITIES.join(' | '));
   }
 
-  return { dashboard, kiosk, theme, density };
+  let range: number | null = null;
+  const r = q.get('range');
+  if (r !== null) {
+    const seconds = parseRangeParam(r);
+    if (seconds !== undefined) range = seconds;
+    else bad('range', r, TIME_RANGE_PRESETS.map((p) => p.id).join(' | '));
+  }
+
+  let paused = false;
+  const p = q.get('paused');
+  if (p !== null) {
+    if (p === '1') paused = true;
+    else if (p !== '0') bad('paused', p, '1 or 0');
+  }
+
+  return { dashboard, kiosk, theme, density, range, paused };
 }

@@ -6,7 +6,12 @@
   "connectionReconnecting": "Reconnecting",
   "enterFullscreen": "Fullscreen",
   "exitFullscreen": "Exit fullscreen",
+  "pause": "Pause",
+  "paused": "Paused",
+  "pausedAt": "Paused at {{time}}",
+  "resume": "Resume",
   "themeToDark": "Dark theme",
   "themeToLight": "Light theme",
+  "timeRange": "Time range",
   "untitled": "Dashboard"
 }

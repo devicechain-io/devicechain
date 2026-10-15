@@ -37,6 +37,10 @@ import {
 } from './grid';
 import { CURRENT_SCHEMA_VERSION, type CanvasGrid, type GridPlacement } from './types';
 
+// The format this conversion produces: the square-cell grid. Later formats are layered on by
+// their own conversions (./legacy-window), never folded into this one.
+export const GRID_SCHEMA_VERSION = 2;
+
 // The width the old fixed-px rows are read at.
 export const LEGACY_REFERENCE_WIDTH = 1366;
 
@@ -218,7 +222,7 @@ export function convertLegacyDefinition(raw: Record<string, unknown>): Record<st
   }
   return {
     ...raw,
-    schemaVersion: CURRENT_SCHEMA_VERSION,
+    schemaVersion: GRID_SCHEMA_VERSION,
     canvas: { ...canvasIn, grid, breakpoints },
     widgets,
   };

@@ -8,11 +8,12 @@
 // no widget id is consulted, and an extension that declares `{ option: 'rows' }` is honored
 // exactly as a built-in declaring `{ option: 'maxRows' }` is.
 
-import type {
-  AlarmSubscription,
-  CommandSubscription,
-  WidgetDescriptor,
-  WidgetInstance,
+import {
+  isValidSpanSeconds,
+  type AlarmSubscription,
+  type CommandSubscription,
+  type WidgetDescriptor,
+  type WidgetInstance,
 } from '@devicechain/dashboards';
 
 import { optNumber, optString } from '@devicechain/widget-sdk';
@@ -52,6 +53,23 @@ function policy(descriptor: WidgetDescriptor): Record<string, unknown> {
 // The rolling-window size a measurement widget asked for, or undefined for the hook default.
 export function measurementWindow(descriptor: WidgetDescriptor, widget: WidgetInstance): number | undefined {
   return numberValue(policy(descriptor).window as NumberBinding | undefined, widget.options);
+}
+
+// The span (seconds) a TIME-RANGED measurement widget draws, or undefined for one that is not.
+// A widget is time-ranged by declaring `binding.windowSeconds`. Its option pins the span when set
+// to a usable one; otherwise the widget follows the board's range (`boardSpan`, which a viewer
+// can change). An option that is set but not a usable span (under a minute, over a week, not a
+// whole number) is ignored rather than clamped, for the reason the parser gives for the board's
+// own default: clamping turns a typo into a window nobody wrote.
+export function measurementSpan(
+  descriptor: WidgetDescriptor,
+  widget: WidgetInstance,
+  boardSpan: number | undefined,
+): number | undefined {
+  const binding = policy(descriptor).windowSeconds as NumberBinding | undefined;
+  if (!binding) return undefined;
+  const pinned = numberValue({ ...binding, min: undefined }, widget.options);
+  return isValidSpanSeconds(pinned) ? pinned : boardSpan;
 }
 
 // The acknowledged filter is stored as 'true' / 'false' (or absent = any).

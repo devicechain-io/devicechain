@@ -11,7 +11,7 @@
     },
     "sizing": "fill"
   },
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "slots": {
     "plant": {
       "defaultBinding": {
