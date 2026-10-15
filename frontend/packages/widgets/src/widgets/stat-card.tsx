@@ -145,5 +145,7 @@ function emptyMessage(r: Extract<StatReading, { kind: 'empty' }>, strings: Retur
       return strings.noReadings(r.spanSeconds === undefined ? '' : spanLabel(r.spanSeconds));
     case 'noData':
       return strings.noData;
+    case 'unbound':
+      return strings.unbound;
   }
 }

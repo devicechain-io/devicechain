@@ -10,7 +10,7 @@ import { pickSample, primaryMeasurementName } from '@devicechain/widget-sdk';
 
 import { AGGREGATE_STATS, type AggregateStat } from './aggregate-strings';
 
-export type EmptyReason = 'loading' | 'unsupported' | 'failed' | 'noReadings' | 'noData';
+export type EmptyReason = 'loading' | 'unsupported' | 'failed' | 'noReadings' | 'noData' | 'unbound';
 
 export type StatReading =
   | {
@@ -34,6 +34,9 @@ export function parseStat(v: unknown): AggregateStat {
 export function statReading(widget: WidgetInstance, data: AggregateStreamState, stat: AggregateStat): StatReading {
   const { aggregates } = data;
   const pinned = primaryMeasurementName(widget);
+  // A slot nothing is bound to names no device, so it has no figure -- not even a count of zero,
+  // which would say a device was asked and sent nothing. It says so, as the fleet widgets do.
+  if (widget.datasource?.kind === 'unbound') return { kind: 'empty', reason: 'unbound', name: pinned };
 
   // The latest reading is a reading, not an aggregate: it needs no aggregate read, and works
   // where the source cannot compute one. When the read did land, a reading older than the span is
@@ -57,7 +60,8 @@ export function statReading(widget: WidgetInstance, data: AggregateStreamState, 
   if (!a) {
     // The number of readings in a span that holds none is a number: zero, which is the figure a
     // "no readings in the last hour" tile exists to show. It needs a measurement the card is set
-    // to and a datasource it was read from; every other statistic of no readings is undefined.
+    // to and a device it was read from (an unbound slot was answered above); every other statistic
+    // of no readings is undefined.
     if (stat === 'count' && pinned !== undefined && widget.datasource) {
       return { kind: 'value', stat, name: pinned, value: 0, spanSeconds: aggregates.spanSeconds };
     }

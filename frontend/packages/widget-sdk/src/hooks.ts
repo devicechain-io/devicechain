@@ -421,24 +421,26 @@ export function useAlarmStream(
   hub: WidgetDataSource,
   subscription: AlarmSubscription,
 ): AlarmStreamState {
-  const [state, setState] = useState<AlarmStreamState>(EMPTY_ALARMS);
-
   // Value-compare the subscription so an unchanged-but-new object reference doesn't
   // resubscribe every render.
   const key = JSON.stringify(subscription);
+  // The snapshot is TAGGED with the subscription it came from, as the measurement buffer is: the
+  // effect that resets it runs after the render carrying the new subscription, and that render
+  // must not show the previous scope's rows under it (nor hand them to a pause hold to keep).
+  const [[at, state], setState] = useState<[string, AlarmStreamState]>([key, EMPTY_ALARMS]);
 
   useEffect(() => {
-    setState(EMPTY_ALARMS); // reset to loading whenever the subscription changes
+    setState([key, EMPTY_ALARMS]); // reset to loading whenever the subscription changes
     return hub.subscribeAlarms(subscription, {
       next: (snapshot) =>
-        setState({ alarms: snapshot.alarms, total: snapshot.total, loading: false, error: null }),
-      error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
+        setState([key, { alarms: snapshot.alarms, total: snapshot.total, loading: false, error: null }]),
+      error: (err) => setState(([, prev]) => [key, { ...prev, loading: false, error: err }]),
     });
     // `subscription` is intentionally read via `key` (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub, key]);
 
-  return state;
+  return at === key ? state : EMPTY_ALARMS;
 }
 
 const EMPTY_COMMANDS: CommandStreamState = {
@@ -505,17 +507,19 @@ export function useLocationStream(
   hub: WidgetDataSource,
   subscription: LocationSubscription,
 ): LocationStreamState {
-  const [state, setState] = useState<LocationStreamState>(EMPTY_LOCATIONS);
-
   // Value-compare the subscription so an unchanged-but-new object reference doesn't
   // resubscribe every render.
   const key = JSON.stringify(subscription);
+  // Tagged with its subscription, as useAlarmStream's snapshot is: no render shows the previous
+  // selector's markers under a new one.
+  const [[at, state], setState] = useState<[string, LocationStreamState]>([key, EMPTY_LOCATIONS]);
 
   useEffect(() => {
-    setState(EMPTY_LOCATIONS); // reset to loading whenever the subscription changes
+    setState([key, EMPTY_LOCATIONS]); // reset to loading whenever the subscription changes
     return hub.subscribeLocations(subscription, {
       next: (snapshot) =>
-        setState(
+        setState([
+          key,
           snapshot.kind === 'forbidden'
             ? { locations: [], deviceTokens: [], forbidden: true, loading: false, error: null }
             : {
@@ -525,14 +529,14 @@ export function useLocationStream(
                 loading: false,
                 error: null,
               },
-        ),
-      error: (err) => setState((prev) => ({ ...prev, loading: false, error: err })),
+        ]),
+      error: (err) => setState(([, prev]) => [key, { ...prev, loading: false, error: err }]),
     });
     // `subscription` is intentionally read via `key` (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub, key]);
 
-  return state;
+  return at === key ? state : EMPTY_LOCATIONS;
 }
 
 // A widget's bound-entity availability: 'unknown' until the async check resolves

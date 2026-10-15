@@ -219,6 +219,14 @@ describe('the stat card when there is no figure', () => {
     expect(r.caption).toBe('Readings · 1h');
   });
 
+  it('says its slot is unbound, not "0 Readings", when no device is bound to it', () => {
+    // An unbound slot resolves to no devices, so the read comes back ready and empty.
+    const w = { ...widget({ stat: 'count' }), datasource: { kind: 'unbound', measurements: ['temperature'] } } as unknown as WidgetInstance;
+    const { container } = render(<StatCard widget={w} data={data(ready({ byName: {} }))} />);
+    expect(container.querySelector('[data-level-readout]')).toBeNull();
+    expect(container.querySelector('[data-level-empty]')?.textContent).toBe('Choose a device for this widget');
+  });
+
   it('shows no count until the read lands, and none for a card that names no measurement', () => {
     expect(show({ stat: 'count' }, data({ status: 'loading' })).empty).toBe('Loading');
     const { container } = render(<StatCard widget={widget({ stat: 'count' }, [])} data={data(ready({ byName: {} }))} />);

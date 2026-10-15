@@ -389,6 +389,17 @@ describe('what the seed plan asks for', () => {
   });
 });
 
+describe('the live feed asks for what the seed asks for', () => {
+  it('subscribes a per-device bar chart to the measurement it compares, even one its datasource does not name', async () => {
+    const f = makeHub();
+    mount(widget({ groupBy: 'device', measurement: 'pressure' }, { ...ds, measurements: ['temperature'] }, 'bar-chart'), f.hub, live());
+    await flush();
+    // The hub's live feed delivers only the names the selector lists: without 'pressure' here, the
+    // bars would be seeded with it and then never move.
+    expect(f.subscribe.mock.calls[0][0].measurements).toEqual(['temperature', 'pressure']);
+  });
+});
+
 describe('which feed a widget gets', () => {
   it('reads a bar chart member by member only when it is set to one bar per device', async () => {
     const f = makeHub();

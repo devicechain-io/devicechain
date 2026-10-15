@@ -23,6 +23,14 @@
 // A table that names no columns gets the span read alone: its columns ARE the names its devices
 // reported in the span, which only a read of the whole span can list.
 //
+//   3. A value a span read found is the AVERAGE of a span bucket (42 minutes wide on a week), not the
+//      device's latest reading: a machine that read 14, was refuelled to 40 and then parked would
+//      show 27. So the newest span bucket is read again in one-minute buckets -- at most a bucket's
+//      worth of rows -- and its newest minute is what the cell shows, as for a device seen in the
+//      tail. Names whose newest buckets coincide share one such read, and a device gets at most
+//      MAX_NARROW_READS of them, newest bucket first. A name left past that bound is not shown
+//      rather than shown as an average (it stays observed): an average is never the latest reading.
+//
 // Ages. The store returns a bucket's start, not the time of its newest reading, so a seeded reading is
 // stamped at the start of its bucket (or of the span, when the bucket began before it). The reading
 // happened at or after that instant, so its age is OVERSTATED, never understated: by less than a
@@ -101,14 +109,59 @@ export function memberSeedPlan(window: HistoryWindow, names: readonly string[]):
     async seed(deviceToken, read) {
       const fold = (c: MemberBucketCriteria) => read(c).then((b) => foldMemberSeed(deviceToken, b, c.startTime));
       const tail = tailWindow(window);
-      if (wanted.length === 0 || !tail) return fold(window);
-      const recent = await fold(tail);
-      const missing = wanted.filter((name) => !has(recent.latest, name));
-      // Nothing missing falls through the loop below with no read: the tail was the whole answer.
-      if (recent.observed.length === 0 || missing.length > MAX_NARROW_READS) return mergeSeeds(recent, await fold(window));
-      let seed = recent;
-      for (const name of missing) seed = mergeSeeds(seed, await fold({ ...window, name }));
-      return seed;
+      let seed: MemberSeed;
+      let recent: MemberSeed | undefined;
+      if (wanted.length === 0 || !tail) seed = await fold(window);
+      else {
+        recent = await fold(tail);
+        const missing = wanted.filter((name) => !has(recent!.latest, name));
+        // Nothing missing falls through the loop below with no read: the tail was the whole answer.
+        if (recent.observed.length === 0 || missing.length > MAX_NARROW_READS) seed = mergeSeeds(recent, await fold(window));
+        else {
+          seed = recent;
+          for (const name of missing) seed = mergeSeeds(seed, await fold({ ...window, name }));
+        }
+      }
+      return window.intervalSeconds > 60 ? sharpen(seed, recent, window, fold) : seed;
     },
   };
+}
+
+// Step 3 above: replaces each value a span read found (any not from the tail's minutes) with the
+// newest minute of its span bucket. A span value is stamped at its bucket's start (or the window's),
+// so the bucket's readings lie between that stamp and one bucket width after it.
+async function sharpen(
+  seed: MemberSeed,
+  recent: MemberSeed | undefined,
+  window: HistoryWindow,
+  fold: (c: MemberBucketCriteria) => Promise<MemberSeed>,
+): Promise<MemberSeed> {
+  const byStamp = new Map<number, string[]>();
+  for (const [name, sample] of Object.entries(seed.latest)) {
+    if (recent && has(recent.latest, name)) continue;
+    const at = Date.parse(sample.occurredTime ?? '');
+    byStamp.set(at, [...(byStamp.get(at) ?? []), name]);
+  }
+  const latest = { ...seed.latest };
+  const end = Date.parse(window.endTime) + 1;
+  const stamps = [...byStamp.keys()].sort((a, b) => b - a);
+  for (const [i, at] of stamps.entries()) {
+    const names = byStamp.get(at)!;
+    const minutes =
+      i < MAX_NARROW_READS
+        ? (
+            await fold({
+              startTime: new Date(at).toISOString(),
+              endTime: new Date(Math.min(at + window.intervalSeconds * 1000, end) - 1).toISOString(),
+              intervalSeconds: 60,
+              ...(names.length === 1 ? { name: names[0] } : {}),
+            })
+          ).latest
+        : {};
+    for (const name of names) {
+      if (has(minutes, name)) latest[name] = minutes[name];
+      else delete latest[name];
+    }
+  }
+  return { latest, observed: seed.observed };
 }

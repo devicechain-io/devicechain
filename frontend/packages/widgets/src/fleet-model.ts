@@ -77,6 +77,10 @@ export function buildFleet(i: FleetInputs): FleetState {
   if (!i.roster) return { status: 'loading', members: [], total: 0, truncated: false };
   if (i.roster.unbound) return { status: 'unbound', members: [], total: 0, truncated: false };
 
+  // A seeded reading is stamped at the start of its minute (fleet-seed.ts, "Ages") and happened
+  // somewhere in that minute, so it is in range while its minute is. Held to the exact instant, a
+  // reading 59 minutes 45 seconds old on an hour's board was dropped as out of range.
+  const seedSince = Math.floor(i.since / MINUTE_MS) * MINUTE_MS;
   const members = i.roster.members.map((ref): FleetMember => {
     const seed = i.seeds.get(ref.token);
     const seeded = seed && seed !== 'failed' ? seed : undefined;
@@ -85,7 +89,7 @@ export function buildFleet(i: FleetInputs): FleetState {
     const names = new Set<string>([...Object.keys(seeded?.latest ?? {}), ...(live?.keys() ?? [])]);
     for (const name of names) {
       const best = newer(seeded?.latest[name], live?.get(name));
-      if (best && inRange(best, i.since)) latest[name] = best;
+      if (best && inRange(best, best === seeded?.latest[name] ? seedSince : i.since)) latest[name] = best;
     }
     const observed = new Set<string>(seeded?.observed ?? []);
     for (const name of Object.keys(latest)) observed.add(name);

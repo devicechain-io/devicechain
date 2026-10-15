@@ -92,6 +92,22 @@ describe('buildFleet: a value belongs to its device', () => {
     expect(cellFor(fleet.members[0], 'temperature').kind).toBe('no-data');
   });
 
+  it('keeps a seeded reading stamped at the start of the span’s first minute while that minute is in range', () => {
+    // An hour's board at 12:00:30. The device last reported at 11:00:45, so the seed read stamps it
+    // at the start of its minute, 11:00:00 -- half a minute before the span's exact start. The
+    // reading is 59 m 45 s old and inside the hour.
+    const now = T0 + 30_000;
+    const seeds = new Map([['a', seedOf('a', { temperature: 10 }, iso(T0 - 3600_000))]]);
+    const fleet = buildFleet(inputs({ seeds, since: now - 3600_000 }));
+    expect(fleet.members[0].latest.temperature?.value).toBe(10);
+    // Its minute out of range, it goes: the slack is the stamp's minute, and no more.
+    const later = buildFleet(inputs({ seeds, since: now + 60_000 - 3600_000 }));
+    expect(later.members[0].latest.temperature).toBeUndefined();
+    // A live reading carries its own time, and is held to the exact instant.
+    const exact = buildFleet(inputs({ live: live(s('a', 'temperature', 7, iso(T0 - 3600_000))), since: now - 3600_000 }));
+    expect(exact.members[0].latest.temperature).toBeUndefined();
+  });
+
   it('shows the same reading under a longer span (the range is honoured both ways)', () => {
     const seeds = new Map([['a', seedOf('a', { temperature: 10 }, iso(T0 - 7200_000))]]);
     const fleet = buildFleet(inputs({ seeds, since: T0 - 86400_000 }));

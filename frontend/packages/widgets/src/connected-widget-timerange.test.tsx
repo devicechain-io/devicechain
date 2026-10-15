@@ -189,6 +189,66 @@ describe('a paused alarm widget', () => {
   });
 });
 
+describe('a slot re-pointed while the board is paused', () => {
+  // One alarm stream per subscription, each fed by the test: what the hub would send for that device.
+  // `answered` maps a device to the count a source that already holds its snapshot answers with AT
+  // ONCE, inside subscribe (a cache, a recording): no loading state ever reaches the widget then.
+  function alarmHub(answered: Record<string, number> = {}) {
+    const sinks = new Map<string, AlarmStreamSink>();
+    const snap = (total: number): AlarmSnapshot => ({ alarms: [], total }) as unknown as AlarmSnapshot;
+    const hub = {
+      subscribeAlarms: (s: { datasource?: { deviceToken?: string } }, k: AlarmStreamSink) => {
+        const device = s.datasource?.deviceToken ?? '';
+        sinks.set(device, k);
+        if (answered[device] !== undefined) k.next(snap(answered[device]));
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+    return { hub, push: (device: string, total: number) => act(() => sinks.get(device)?.next(snap(total))) };
+  }
+  const on = (device: string) => widget('alarm-count', { state: 'ACTIVE' }, { kind: 'device', deviceToken: device, measurements: [] });
+  const mountOn = (hub: DashboardHub) => {
+    const tree = (w: WidgetInstance, r: TimeRangeState) => (
+      <WidgetTimeRangeProvider range={r}>
+        <ConnectedWidget widget={w} hub={hub} />
+      </WidgetTimeRangeProvider>
+    );
+    const view = render(tree(on('hauler-1'), live));
+    return { tree, view };
+  };
+
+  it('holds the new device’s first snapshot when its source answers at once', () => {
+    const f = alarmHub({ 'hauler-2': 8 });
+    const { tree, view } = mountOn(f.hub);
+    f.push('hauler-1', 3);
+    view.rerender(tree(on('hauler-1'), frozen));
+    view.rerender(tree(on('hauler-2'), frozen));
+    expect(screen.queryByText('3')).toBeNull();
+    expect(screen.getByText('8')).toBeTruthy();
+  });
+
+  it('never shows the previous device’s alarms under the new one, and holds the new one’s first snapshot', () => {
+    const f = alarmHub();
+    const { tree, view } = mountOn(f.hub);
+    f.push('hauler-1', 3);
+    view.rerender(tree(on('hauler-1'), frozen));
+    expect(screen.getByText('3')).toBeTruthy();
+
+    // The operator picks hauler-2 while paused: hauler-1's count must go at once.
+    view.rerender(tree(on('hauler-2'), frozen));
+    expect(screen.queryByText('3')).toBeNull();
+    f.push('hauler-2', 8);
+    expect(screen.getByText('8')).toBeTruthy();
+    // ...and that first snapshot is what the pause now holds.
+    f.push('hauler-2', 9);
+    expect(screen.getByText('8')).toBeTruthy();
+    expect(screen.queryByText('9')).toBeNull();
+    view.rerender(tree(on('hauler-2'), live));
+    expect(screen.getByText('9')).toBeTruthy();
+  });
+});
+
 describe('a chart says what span it draws whenever the header would say otherwise', () => {
   function measurementHub() {
     let sink: WidgetStreamSink | null = null;
