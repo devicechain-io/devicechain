@@ -90,9 +90,20 @@ func installBrokerMicroservice(t *testing.T) {
 // service.FromManagers, so beforeMicroserviceStopped drives core/service's real sequence.
 func startRunningManager(t *testing.T) {
 	t.Helper()
-	installBrokerMicroservice(t)
+	startRunningManagerWith(t, 0, core.NewNoOpLifecycleCallbacks())
+}
 
-	NatsManager = messaging.NewNatsManager(Microservice, core.NewNoOpLifecycleCallbacks(),
+// startRunningManagerWith is startRunningManager with the broker manager's own lifecycle
+// callbacks, so a test can observe what is true at the moment that manager stops, and with
+// the inbound-events stream bounded to streamMaxMsgs messages when that is positive.
+func startRunningManagerWith(t *testing.T, streamMaxMsgs int64, callbacks core.LifecycleCallbacks) {
+	t.Helper()
+	installBrokerMicroservice(t)
+	if streamMaxMsgs > 0 {
+		Microservice.InstanceConfiguration.Infrastructure.Nats.StreamMaxMsgs = streamMaxMsgs
+	}
+
+	NatsManager = messaging.NewNatsManager(Microservice, callbacks,
 		func(*messaging.NatsManager) error { return nil })
 	require.NoError(t, NatsManager.Initialize(context.Background()))
 	require.NoError(t, NatsManager.Start(context.Background()))

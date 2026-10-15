@@ -61,6 +61,12 @@ var (
 	NatsManager   *messaging.NatsManager
 	Lease         *messaging.DistributedLease
 
+	// PublishWriters are the AsyncWriters the sources publish through, one per source and each
+	// built ONCE for the life of the process (not per leadership term: a writer holds a reply
+	// subscription until the connection closes). A term only drains one (Settle, in the
+	// source's Stop); they are closed once, by beforeMicroserviceStopped.
+	PublishWriters []messaging.AsyncWriter
+
 	// Svc drives the broker and the HTTP surface (probes + metrics) in core/service's one
 	// sequence. The leadership loop is this service's own and is not in it: it starts after
 	// Svc and is unwound before it, because releasing the lease is a KV write over Svc's
@@ -153,6 +159,11 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	var limiter *adapter.IngestLimiter
 	var reconciler *host.Reconciler
 	if len(Configuration.Sources) > 0 {
+		// 🔑 THIS WRITER PUBLISHES NOTHING FROM THE RECEIVE PATH. Each source publishes through
+		// an AsyncWriter of its own (publisherFactory, below), so the receive goroutine never
+		// waits for an acknowledgement. The Emitter still needs a writer to be built (it is
+		// the shared adapter's synchronous Emit, which this service does not call), and a nil
+		// one is refused at startup.
 		writer, err := NatsManager.NewWriter(streams.InboundEvents)
 		if err != nil {
 			return err
@@ -171,7 +182,8 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			governance.NewUnresolvedAdmissions(Microservice, governance.Ingest))
 	}
 
-	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, limiter, reconciler, metrics)
+	clients, err := resolveSources(Configuration, Microservice.InstanceId, ingester, limiter, reconciler, metrics,
+		publisherFactory(NatsManager, Configuration))
 	if err != nil {
 		return err
 	}
@@ -228,7 +240,7 @@ func buildMetrics() host.Metrics {
 			[]string{"reason"})),
 		IngestFailures: Microservice.NewCounter("ingest_failures_total",
 			"Accepted messages whose samples or presence transitions were dropped, plus presence-reconciliation disconnect batches that could not be stored: samples at once when inbound-events refused them under backpressure; "+
-				"either after the in-handler ingest retry budget was exhausted (device-management or NATS unreachable) or on connection shutdown. "+
+				"either after the retry budget was exhausted (device-management or NATS unreachable, whether resolving the device failed or the stream did not acknowledge the publish) or on connection shutdown. "+
 				"A clean-session Host gets no redelivery, so each one is lost."),
 	}
 }
@@ -247,7 +259,8 @@ func skippedPrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
 // service closed at startup rather than dialing a mis-authenticated broker and
 // retry-looping silently — repo convention (ADR-022).
 func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, ingester *host.Ingester,
-	limiter *adapter.IngestLimiter, reconciler *host.Reconciler, metrics host.Metrics) ([]*host.Client, error) {
+	limiter *adapter.IngestLimiter, reconciler *host.Reconciler, metrics host.Metrics,
+	newPublisher func() (host.Publisher, error)) ([]*host.Client, error) {
 	// Convert a possibly-nil *Ingester into the interface as a real nil rather than a
 	// typed nil: passing a nil *Ingester directly would wrap into a NON-nil interface,
 	// so the Client's `ingester != nil` guard would pass and Ingest would panic. This
@@ -268,6 +281,10 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		return nil, fmt.Errorf("sparkplug sources were given an ingest path but no ingest ceiling: " +
 			"every client that ingests must charge its readings against the tenant's ceiling")
 	}
+	if si != nil && newPublisher == nil {
+		return nil, fmt.Errorf("sparkplug sources were given an ingest path but no way to publish: " +
+			"every client that ingests needs its own publisher, or what it accepts could not be stored")
+	}
 	clients := make([]*host.Client, 0, len(cfg.Sources))
 	for i := range cfg.Sources {
 		src := cfg.Sources[i]
@@ -276,6 +293,15 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 			return nil, err
 		}
 		client := host.NewClient(src, broker, si, sl, time.Now, metrics)
+		// One publisher per connection, so the window is per connection and a stalled broker
+		// holds only its own source's publishes. Set before Connect, like the reconciler.
+		if si != nil {
+			pub, err := newPublisher()
+			if err != nil {
+				return nil, fmt.Errorf("sources[%d]: %w", i, err)
+			}
+			client.SetPublisher(pub)
+		}
 		// The reconciler is shared across sources; a nil one (no ingest path) leaves
 		// reconciliation off. Set before Connect so the first onConnected can use it.
 		if reconciler != nil {
@@ -284,6 +310,42 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		clients = append(clients, client)
 	}
 	return clients, nil
+}
+
+// publisherFactory is how resolveSources gets each source's publisher: a writer of its own at
+// the configured ingest.publishWindow, recorded in PublishWriters so the stop hook can close
+// it. It is a function of its own so a test can drive the wiring itself: a processor test
+// builds its own writer, so a service that stopped passing the setting would run the default
+// while every other test stayed green.
+func publisherFactory(nmgr *messaging.NatsManager, cfg *config.SparkplugConfiguration) func() (host.Publisher, error) {
+	return func() (host.Publisher, error) {
+		w, err := newPublishWriter(nmgr, cfg.Ingest.PublishWindowSize())
+		if err != nil {
+			return nil, err
+		}
+		PublishWriters = append(PublishWriters, w)
+		return w, nil
+	}
+}
+
+// newPublishWriter builds the AsyncWriter one source publishes inbound-events through: window
+// publishes in flight, refusing at a closed backpressure gate as the synchronous writer it
+// replaced did (telemetry is refused; a presence transition carries BypassBackpressure and
+// is not). It is a function of its own so a wiring test can check that the writer main
+// wires is the one a test observes, at the configured window.
+func newPublishWriter(nmgr *messaging.NatsManager, window int) (messaging.AsyncWriter, error) {
+	return nmgr.NewAsyncWriter(streams.InboundEvents, window, true)
+}
+
+// closePublishWriters drains and closes every source's writer. A source's Stop has already
+// settled the term's publishes by the time this runs; what a settle that timed out left in
+// flight is failed and counted by its own writer here, rather than cut off by the broker
+// manager's drain.
+func closePublishWriters() {
+	for _, w := range PublishWriters {
+		w.Draining()
+		w.Close()
+	}
 }
 
 // buildSampleLimiter builds the per-tenant reading ceiling every DATA message is charged
@@ -617,6 +679,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	} else if Manager != nil {
 		Manager.Stop()
 	}
+	// 🔴 The writers are closed AFTER the sources have stopped (their last term settled its
+	// publishes) and BEFORE Svc.Stop drains the connection they publish on, so whatever is
+	// still in flight is settled by its own writer and not cut off by the drain. Not a defer:
+	// a deferred close runs after Svc.Stop, which is the order this exists to prevent.
+	closePublishWriters()
 	// 🔴 AFTER the unwind above, never before it: the unwind ends in a lease release, a KV
 	// write over the broker connection Svc.Stop drains. Svc then stops the broker and,
 	// last, the probe server, so /metrics answers through the whole of this.

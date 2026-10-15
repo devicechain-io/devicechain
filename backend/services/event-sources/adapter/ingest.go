@@ -473,11 +473,17 @@ func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string, au
 // event-management would collapse those rows by event_id anyway.)
 //
 // All pieces go to the writer in ONE call, which publishes them in order under the device
-// key and whose backpressure refusal is whole-call, before anything is published. A publish
-// failure part-way through leaves the LEADING pieces stored, each a complete event, and
-// returns the error: the Sparkplug host retries the whole batch (the stored pieces dedup),
-// and the LwM2M Notify path counts the Notify as dropped, which now means "not fully
-// stored" rather than "none of it stored".
+// key and whose backpressure refusal is whole-call, before anything is published. A call is
+// NOT atomic, and what a failure leaves stored depends on the writer. The synchronous writer
+// stops at the first piece that fails, so only LEADING pieces are stored. The asynchronous
+// one (messaging.AsyncWriter, which the Sparkplug host publishes through) sends several
+// pieces at once: when one fails, the pieces not yet sent are not sent, but those already in
+// flight cannot be recalled, so ANY subset of the pieces may be stored, including a later
+// piece without an earlier one. Either way every piece is a complete event that stands
+// alone, and the call reports the error. The Sparkplug host resubmits the whole batch and
+// each stored piece dedups (the ids below are functions of content), and the LwM2M Notify
+// path counts the Notify as dropped, which means "not fully stored" rather than "none of
+// it stored".
 //
 // Detection sees one event per piece. A piece advances the detection frontier to its own
 // latest time before its samples apply, so a sample never meets a later frontier than it
@@ -498,6 +504,22 @@ func NewEmitter(writer EventWriter, now func() time.Time, dedupPrefix string, au
 // a sample within milliseconds of the limit can be kept on one attempt and dropped on the next;
 // its piece then hashes differently and is stored as a new event.)
 func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, samples []Sample) (tooOld int, err error) {
+	msgs, tooOld, err := e.BuildMeasurements(tenant, source, deviceToken, samples)
+	if err != nil || len(msgs) == 0 {
+		return tooOld, err
+	}
+	return tooOld, e.writer.WriteMessages(core.WithTenant(ctx, tenant), msgs...)
+}
+
+// BuildMeasurements is Emit without the write: it returns the messages Emit would publish, in
+// order, and how many samples were dropped for age, and publishes nothing. It exists for a
+// caller that publishes through a writer of its own (the Sparkplug host's
+// messaging.AsyncWriter) and may have to publish the SAME messages again: each message
+// carries its content-derived DedupID and its already-stamped times, so submitting the
+// returned slice twice stores each piece once, which building it again from the samples
+// would not promise (a retry is stamped anew; see Emit). No message is returned for an empty
+// batch. The caller publishes them under core.WithTenant(ctx, tenant).
+func (e *Emitter) BuildMeasurements(tenant, source, deviceToken string, samples []Sample) (msgs []messaging.Message, tooOld int, err error) {
 	// ONE receipt instant per call, and one fallback event time for the whole batch. A piece
 	// whose samples carry no positive time of their own is dated at the BATCH's latest, not at
 	// the clock, so its dedup id is the same on a retry; only a batch with no positive time
@@ -506,7 +528,7 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 	samples, tooOld = e.dropTooOld(tenant, source, deviceToken, samples, now)
 	pieces := eventlimit.Split(samples)
 	if len(pieces) == 0 {
-		return tooOld, nil
+		return nil, tooOld, nil
 	}
 	var batchLatest int64
 	for _, s := range samples {
@@ -517,15 +539,15 @@ func (e *Emitter) Emit(ctx context.Context, tenant, source, deviceToken string, 
 	if batchLatest == 0 {
 		batchLatest = now.UnixMilli() // never emit a year-0/1970 event time
 	}
-	msgs := make([]messaging.Message, 0, len(pieces))
+	msgs = make([]messaging.Message, 0, len(pieces))
 	for _, piece := range pieces {
 		msg, err := e.measurementMessage(tenant, source, deviceToken, piece, now, batchLatest)
 		if err != nil {
-			return tooOld, err
+			return nil, tooOld, err
 		}
 		msgs = append(msgs, msg)
 	}
-	return tooOld, e.writer.WriteMessages(core.WithTenant(ctx, tenant), msgs...)
+	return msgs, tooOld, nil
 }
 
 // tooOldNamesLogged bounds how many metric names one warning lists: a birth can carry
@@ -745,6 +767,24 @@ func (e *Emitter) emitStateChange(ctx context.Context, tenant, source, deviceTok
 // use, so the two cannot drift apart in what they put on the wire.
 func (e *Emitter) buildStateChange(ctx context.Context, tenant, source, deviceToken string,
 	sc stateChange) (context.Context, messaging.Message, error) {
+	msg, err := e.stateChangeMessage(tenant, source, deviceToken, sc)
+	if err != nil {
+		return nil, messaging.Message{}, err
+	}
+	return core.WithTenant(ctx, tenant), msg, nil
+}
+
+// BuildPresence is EmitPresence without the write: the message EmitPresence would publish,
+// for a caller that publishes through a writer of its own and may submit it again (the
+// DedupID is a function of the transition, so a resubmission is stored once). It carries
+// BypassBackpressure, as the emitted one does. The caller publishes it under
+// core.WithTenant(ctx, tenant).
+func (e *Emitter) BuildPresence(tenant, source, deviceToken string, ev PresenceEvent) (messaging.Message, error) {
+	return e.stateChangeMessage(tenant, source, deviceToken, presenceStateChange(ev))
+}
+
+// stateChangeMessage is the single place a presence claim becomes a wire message.
+func (e *Emitter) stateChangeMessage(tenant, source, deviceToken string, sc stateChange) (messaging.Message, error) {
 	// 🔴 NEVER EMIT THE ZERO INSTANT, AND FOR A DEMOTION THAT IS NOT A TIDINESS RULE. The
 	// resolver refuses a demotion carrying no occurred time outright ("a demotion is applied
 	// only when it is newer than the row it releases"), so an unstamped one is dead-lettered
@@ -789,9 +829,9 @@ func (e *Emitter) buildStateChange(ctx context.Context, tenant, source, deviceTo
 	}
 	encoded, err := esproto.MarshalUnresolvedEvent(uev)
 	if err != nil {
-		return nil, messaging.Message{}, err
+		return messaging.Message{}, err
 	}
-	return core.WithTenant(ctx, tenant), messaging.Message{
+	return messaging.Message{
 		Key:     []byte(deviceToken),
 		Value:   encoded,
 		DedupID: stateChangeDedupID(e.dedupPrefix, tenant, deviceToken, sc),
@@ -930,23 +970,34 @@ func (ing *Ingester) meterDrop(outcome ResolveOutcome, tenant, externalId string
 		Msg("Dropping ingest for an unregistered device (auto-registration is off for this source).")
 }
 
-// Ingest resolves the device for externalId and emits its samples. It returns nil when
-// the message was fully handled — whether emitted OR definitively dropped (unknown
-// device, auto-register off) — and an error ONLY for a retryable failure
-// (device-management or NATS unreachable), which the caller may retry within the session.
-func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error {
+// resolveIngestible resolves the device for externalId and says whether it can be emitted
+// under: ok is false, with a nil error, for a definitive drop (counted and logged here), and
+// err is a RETRYABLE failure. n is the number of samples or events the drop is counted in.
+func (ing *Ingester) resolveIngestible(ctx context.Context, tenant string, policy IngestPolicy, externalId string, n int) (token string, ok bool, err error) {
 	token, outcome, err := ing.registrar.Resolve(ctx, tenant, externalId, policy)
 	if err != nil {
-		return err
+		return "", false, err
 	}
 	if !outcome.Ingestible() {
-		ing.meterDrop(outcome, tenant, externalId, len(samples))
-		return nil
+		ing.meterDrop(outcome, tenant, externalId, n)
+		return "", false, nil
 	}
 	if outcome == ResolveCreated {
 		incr(ing.metrics.DevicesRegistered, 1)
 		log.Info().Str("tenant", tenant).Str("externalId", externalId).Str("token", token).
 			Msg("Auto-registered a device on first sight.")
+	}
+	return token, true, nil
+}
+
+// Ingest resolves the device for externalId and emits its samples. It returns nil when
+// the message was fully handled — whether emitted OR definitively dropped (unknown
+// device, auto-register off) — and an error ONLY for a retryable failure
+// (device-management or NATS unreachable), which the caller may retry within the session.
+func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error {
+	token, ok, err := ing.resolveIngestible(ctx, tenant, policy, externalId, len(samples))
+	if err != nil || !ok {
+		return err
 	}
 	tooOld, err := ing.emitter.Emit(ctx, tenant, policy.Source, token, samples)
 	if err != nil {
@@ -957,6 +1008,51 @@ func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPol
 	return nil
 }
 
+// Publication is what a caller that publishes through a writer of its own is handed in
+// place of the Ingester doing the write: the messages, built and stamped once, and what to
+// record when they are all stored.
+//
+// 🔑 IT IS BUILT ONCE AND MAY BE SUBMITTED MORE THAN ONCE. Every message carries a DedupID
+// that is a function of its content, and its times were stamped when it was built, so a
+// resubmission after a failure is the same message, and the stream stores it once whichever
+// attempt landed. Do not rebuild it from the samples to retry: a rebuild is stamped anew.
+type Publication struct {
+	// Tenant the messages are published under (core.WithTenant).
+	Tenant string
+	// Messages in the order they must be published. Never empty.
+	Messages []messaging.Message
+	// Delivered records the publication's counters, and is called by the publisher exactly
+	// once, after every message was acknowledged. Never nil.
+	Delivered func()
+}
+
+// PrepareIngest is Ingest up to the write: it resolves (and if needed registers) the device
+// and builds the messages for its samples, and returns them for the caller to publish. A nil
+// Publication with a nil error means the message was definitively dropped (unknown device,
+// auto-register off, tenant gone, nothing left after the age limit) and nothing is to be
+// published; an error is the retryable failure Ingest reports.
+//
+// The resolve is the expensive, fallible half, and the caller runs it on its own goroutine
+// so that it can keep a serial observer in order. Only the publish wait leaves it.
+func (ing *Ingester) PrepareIngest(ctx context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) (*Publication, error) {
+	token, ok, err := ing.resolveIngestible(ctx, tenant, policy, externalId, len(samples))
+	if err != nil || !ok {
+		return nil, err
+	}
+	msgs, tooOld, err := ing.emitter.BuildMeasurements(tenant, policy.Source, token, samples)
+	if err != nil {
+		return nil, err
+	}
+	if len(msgs) == 0 {
+		incr(ing.metrics.TooOldDropped, tooOld)
+		return nil, nil
+	}
+	return &Publication{Tenant: tenant, Messages: msgs, Delivered: func() {
+		incr(ing.metrics.TooOldDropped, tooOld)
+		incr(ing.metrics.MeasurementsEmitted, len(samples)-tooOld)
+	}}, nil
+}
+
 // IngestPresence resolves each presence event's device (auto-registering it under the
 // source's policy — ASSERTED-on-first-sight happens in the projection when the
 // StateChange lands) and emits a StateChange. It returns nil when every event was fully
@@ -965,16 +1061,12 @@ func (ing *Ingester) Ingest(ctx context.Context, tenant string, policy IngestPol
 // idempotent, so re-running is safe.
 func (ing *Ingester) IngestPresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error {
 	for _, ev := range events {
-		token, outcome, err := ing.registrar.Resolve(ctx, tenant, ev.ExternalId, policy)
+		token, ok, err := ing.resolveIngestible(ctx, tenant, policy, ev.ExternalId, 1)
 		if err != nil {
 			return err
 		}
-		if !outcome.Ingestible() {
-			ing.meterDrop(outcome, tenant, ev.ExternalId, 1)
+		if !ok {
 			continue
-		}
-		if outcome == ResolveCreated {
-			incr(ing.metrics.DevicesRegistered, 1)
 		}
 		if err := ing.emitter.EmitPresence(ctx, tenant, policy.Source, token, ev); err != nil {
 			return err
@@ -982,6 +1074,34 @@ func (ing *Ingester) IngestPresence(ctx context.Context, tenant string, policy I
 		incr(ing.metrics.PresenceEmitted, 1)
 	}
 	return nil
+}
+
+// PreparePresence is IngestPresence up to the write: it resolves each event's device and
+// builds one StateChange message per ingestible event, in order, for the caller to publish
+// as ONE submission. A nil Publication with a nil error means every event was dropped.
+// Every message bypasses the backpressure gate, so the submission does.
+func (ing *Ingester) PreparePresence(ctx context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) (*Publication, error) {
+	msgs := make([]messaging.Message, 0, len(events))
+	for _, ev := range events {
+		token, ok, err := ing.resolveIngestible(ctx, tenant, policy, ev.ExternalId, 1)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		msg, err := ing.emitter.BuildPresence(tenant, policy.Source, token, ev)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	if len(msgs) == 0 {
+		return nil, nil
+	}
+	return &Publication{Tenant: tenant, Messages: msgs, Delivered: func() {
+		incr(ing.metrics.PresenceEmitted, len(msgs))
+	}}, nil
 }
 
 // incr adds n to a counter, tolerating a nil counter (tests) and a zero/negative n.

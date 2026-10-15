@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-sparkplug-ingest/codec"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	sppb "github.com/devicechain-io/dc-sparkplug-ingest/proto"
@@ -94,21 +95,27 @@ type ingestCall struct {
 	samples    []Sample
 }
 
-func (f *fakeIngester) Ingest(_ context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) error {
+func (f *fakeIngester) PrepareIngest(_ context.Context, tenant string, policy IngestPolicy, externalId string, samples []Sample) (*Publication, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, ingestCall{tenant, policy, externalId, samples})
 	if len(f.calls) <= f.failN {
-		return errors.New("transient")
+		return nil, errors.New("transient")
 	}
-	return f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &Publication{Tenant: tenant, Messages: []messaging.Message{{Key: []byte(externalId)}}, Delivered: func() {}}, nil
 }
 
-func (f *fakeIngester) IngestPresence(_ context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) error {
+func (f *fakeIngester) PreparePresence(_ context.Context, tenant string, policy IngestPolicy, events []PresenceEvent) (*Publication, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.presence = append(f.presence, events...)
-	return f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &Publication{Tenant: tenant, Messages: []messaging.Message{{Key: []byte("presence")}}, Delivered: func() {}}, nil
 }
 
 func (f *fakeIngester) presenceCount() int {
@@ -144,7 +151,7 @@ func (m fakeMessage) Ack()              {}
 func TestOnMessageIngestsWithConnectionTenant(t *testing.T) {
 	fake := &fakeIngester{}
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
-	c := NewClient(src, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
+	c := newTestClient(src, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 
 	enc, err := codec.Encode(&sppb.Payload{
 		Seq:     proto.Uint64(0),
@@ -169,7 +176,7 @@ func TestOnMessageIngestsWithConnectionTenant(t *testing.T) {
 func TestOnMessageEmitsPresence(t *testing.T) {
 	fake := &fakeIngester{}
 	src := config.SparkplugSource{Tenant: "acme", HostId: "h1", AutoRegister: true, DeviceTypeToken: "sp-node"}
-	c := NewClient(src, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
+	c := newTestClient(src, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 
 	enc, err := codec.Encode(&sppb.Payload{
 		Seq:     proto.Uint64(0),
@@ -195,7 +202,7 @@ func TestOnMessageEmitsPresence(t *testing.T) {
 // declare it dead. Mutation control: move the markSeen call above the NCMD/DCMD drop and
 // this turns red.
 func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{}, admitAllSamples{}, fixedNow, Metrics{})
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{}, admitAllSamples{}, fixedNow, Metrics{})
 	c.resetSeen()
 
 	payload, err := rebirthCommand(fixedNow().UnixMilli())
@@ -208,7 +215,7 @@ func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
 
 func TestIngestSamplesRetriesThenSucceeds(t *testing.T) {
 	fake := &fakeIngester{failN: 1}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow, Metrics{})
 	c.ingestSamples("g/n", []Sample{{Name: "t", Value: 1, Time: 1}})
 	assert.Equal(t, 2, fake.count(), "a transient failure is retried, then succeeds")
 }
@@ -219,7 +226,7 @@ func TestIngestSamplesRetriesThenSucceeds(t *testing.T) {
 func TestIngestSamplesDropsAndCountsWhenCancelled(t *testing.T) {
 	failures := prometheus.NewCounter(prometheus.CounterOpts{Name: "ingest_failures"})
 	fake := &fakeIngester{err: errors.New("always down")}
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow,
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h"}, Broker{}, fake, admitAllSamples{}, fixedNow,
 		Metrics{IngestFailures: failures})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -238,7 +245,7 @@ func TestIngestSamplesDropsAndCountsWhenCancelled(t *testing.T) {
 // message that yields no sample is now counted by reason, through the real receive path.
 func TestOnMessageCountsMetricsThatYieldNoSample(t *testing.T) {
 	skipped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "skipped_test"}, []string{"reason"})
-	c := NewClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{},
+	c := newTestClient(config.SparkplugSource{Tenant: "acme", HostId: "h1"}, Broker{}, &fakeIngester{},
 		admitAllSamples{}, fixedNow, Metrics{SamplesSkipped: skipped})
 
 	null := namedMetric("gone", datatypeDouble, float64(1))
