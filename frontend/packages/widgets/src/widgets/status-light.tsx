@@ -11,7 +11,6 @@ import { useMemo } from 'react';
 
 import {
   css,
-  defineWidget,
   fontVar,
   optNumber,
   optString,
@@ -21,7 +20,6 @@ import {
   type WidgetScale,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { useLevelReading, type LevelReading } from '../level-reading';
 
 export function StatusLight({ widget, data }: WidgetProps) {
@@ -101,8 +99,3 @@ function LampBody({ reading: r, onAt, scale: ws }: { reading: LevelReading; onAt
     </div>
   );
 }
-
-export const statusLightWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['status-light'],
-  implementation: { kind: 'trusted-react', component: StatusLight },
-});

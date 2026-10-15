@@ -10,7 +10,6 @@ import { useMemo } from 'react';
 
 import {
   css,
-  defineWidget,
   fontVar,
   formatValue,
   optNumber,
@@ -21,7 +20,6 @@ import {
   type WidgetScale,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
 import { LevelEmpty, LevelReadout } from '../level-readout';
 import { bandSpans, readRange } from '../value-scale';
@@ -235,8 +233,3 @@ function Track({ vertical, thickness, fraction, color, bands, bulb, aria }: Trac
     </div>
   );
 }
-
-export const linearGaugeWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['linear-gauge'],
-  implementation: { kind: 'trusted-react', component: LinearGauge },
-});

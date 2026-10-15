@@ -11,7 +11,6 @@ import { useMemo } from 'react';
 
 import {
   css,
-  defineWidget,
   optNumber,
   optString,
   optThresholds,
@@ -20,7 +19,6 @@ import {
   type WidgetScale,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { useLevelReading, type LevelReading } from '../level-reading';
 import { LevelEmpty, LevelReadout } from '../level-readout';
 import { litBars } from '../value-scale';
@@ -102,8 +100,3 @@ function BarsBody({ reading: r, scale: ws }: { reading: LevelReading; scale: Wid
     </div>
   );
 }
-
-export const signalBarsWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['signal-bars'],
-  implementation: { kind: 'trusted-react', component: SignalBars },
-});

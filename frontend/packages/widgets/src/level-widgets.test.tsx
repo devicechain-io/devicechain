@@ -92,6 +92,38 @@ describe('linear-gauge', () => {
     expect(screen.getByText('-5')).toBeTruthy();
   });
 
+  // Reviewer additions: the marker's direction, the meter's clamped value with the true text,
+  // the scale named before the data, and the readout's neutral in a normal band.
+  it('points the marker the way the value left the scale', () => {
+    render_(opts, 130);
+    expect(screen.getByRole('img', { name: 'Above scale' }).textContent).toBe('▲');
+    cleanup();
+    render_(opts, -5);
+    expect(screen.getByRole('img', { name: 'Below scale' }).textContent).toBe('▼');
+  });
+
+  it('keeps the meter value on the scale and states the true reading in its text', () => {
+    render_({ ...opts, unit: 'C' }, 130);
+    const meter = screen.getByRole('meter');
+    expect(meter.getAttribute('aria-valuenow')).toBe('100');
+    expect(meter.getAttribute('aria-valuetext')).toBe('130 C');
+  });
+
+  it('asks for the scale before it reports missing data', () => {
+    render_({}, 'none');
+    expect(screen.getByText('Set min and max')).toBeTruthy();
+    expect(screen.queryByText('No data')).toBeNull();
+  });
+
+  it('prints the readout in the foreground colour in a normal band, the band colour otherwise', () => {
+    const t = [{ value: 0, level: 'normal' }, { value: 80, level: 'warning' }];
+    render_({ ...opts, thresholds: t }, 50);
+    expect(styleOf('[data-level-readout]')).toContain('var(--foreground)');
+    cleanup();
+    render_({ ...opts, thresholds: t }, 90);
+    expect(styleOf('[data-level-readout]')).toContain(WARNING);
+  });
+
   it('draws the vertical bar as a column, and the thermometer with a bulb', () => {
     render_({ ...opts, orientation: 'vertical' }, 50);
     expect(styleOf('[data-fill-bar]')).toContain('height: 50%');

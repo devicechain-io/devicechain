@@ -10,7 +10,6 @@ import { useMemo } from 'react';
 
 import {
   css,
-  defineWidget,
   optNumber,
   optString,
   optThresholds,
@@ -19,7 +18,6 @@ import {
   type WidgetScale,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
 import { LevelEmpty, LevelReadout } from '../level-readout';
 import { readRange } from '../value-scale';
@@ -112,8 +110,3 @@ function BatteryBody({ reading: r, scale: ws }: { reading: LevelReading; scale: 
     </div>
   );
 }
-
-export const batteryWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['battery'],
-  implementation: { kind: 'trusted-react', component: Battery },
-});

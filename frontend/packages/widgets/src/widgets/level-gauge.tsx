@@ -10,7 +10,6 @@ import { useMemo } from 'react';
 
 import {
   css,
-  defineWidget,
   formatValue,
   optNumber,
   optString,
@@ -20,7 +19,6 @@ import {
   type WidgetScale,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { emptyReason, useLevelReading, type LevelReading } from '../level-reading';
 import { LevelEmpty, LevelReadout } from '../level-readout';
 import { bandSpans, readRange } from '../value-scale';
@@ -119,8 +117,3 @@ function TankBody({ reading: r, percent, scale: ws }: { reading: LevelReading; p
     </div>
   );
 }
-
-export const levelGaugeWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['level-gauge'],
-  implementation: { kind: 'trusted-react', component: LevelGauge },
-});
