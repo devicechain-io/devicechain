@@ -114,6 +114,9 @@ function ErrorBody({ error }: { error: ReplayLoadError | null }) {
         return t('errorRecordingInvalid', { detail });
       case 'boardInvalid':
         return t('errorBoardInvalid', { detail });
+      case 'boardTooNew':
+        // The words were fetched on demand by loadReplay and ride in `detail`.
+        return detail;
       case 'boardMismatch':
         return t('errorBoardMismatch');
       default:

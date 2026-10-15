@@ -28,6 +28,7 @@ import {
   migrateToSlots,
   parseBindingManifest,
   parseDashboardDefinition,
+  DashboardSchemaTooNewError,
   type DashboardDefinition,
   type SlotBinding,
 } from '@devicechain/dashboards';
@@ -60,6 +61,8 @@ export interface Loaded {
 export type LoadError =
   | { code: 'definitionTooLarge' }
   | { code: 'definitionInvalid'; detail: string | null }
+  // Saved by a newer release than this viewer: refused, never drawn at the wrong size.
+  | { code: 'definitionTooNew' }
   | { code: 'manifestInvalid'; detail: string | null }
   | { code: 'manifestNotObject' }
   | { code: 'manifestDropped'; slots: string[] }
@@ -108,6 +111,7 @@ export function loadDashboard(
   try {
     definition = migrateToSlots(parseDashboardDefinition(JSON.parse(definitionText), { catalog: registry.catalog }));
   } catch (err) {
+    if (err instanceof DashboardSchemaTooNewError) return { error: { code: 'definitionTooNew' } };
     return { error: { code: 'definitionInvalid', detail: errorDetail(err) } };
   }
 

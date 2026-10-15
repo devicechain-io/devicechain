@@ -7,6 +7,7 @@
   "errorDashboardNotPublished": "Ese panel aún no se ha publicado. Pide a un autor que lo publique.",
   "errorDefinitionInvalid": "Definición: {{detail}}",
   "errorDefinitionTooLarge": "La definición es demasiado grande (más de {{limit}} MiB).",
+  "errorDefinitionTooNew": "Este panel se guardó con una versión más reciente de DeviceChain. Actualiza este visor para abrirlo.",
   "errorManifestDropped_one": "Manifiesto de vinculación: se ignoró {{slots}}: comprueba la forma (kind + deviceToken, o anchor con targetToken).",
   "errorManifestDropped_other": "Manifiesto de vinculación: se ignoraron {{slots}}: comprueba la forma (kind + deviceToken, o anchor con targetToken).",
   "errorManifestInvalid": "Manifiesto de vinculación: {{detail}}",

@@ -86,6 +86,17 @@ export class DashboardDefinitionError extends Error {
   }
 }
 
+// Thrown, in place of DashboardDefinitionError's general case, when a document was saved by a
+// newer release than this build: its format is one this parser has no reading of, and
+// reading it as the current one draws it wrong without saying so (every widget collapsed to
+// a single cell). A subclass, so a caller that only knows DashboardDefinitionError still
+// refuses the document; a caller that wants to say WHY tests for this class.
+export class DashboardSchemaTooNewError extends DashboardDefinitionError {
+  constructor(public readonly found: number) {
+    super(`saved by a newer schema version, ${found}`);
+  }
+}
+
 function numberAt(rec: Record<string, unknown>, key: string, fallback: number): number {
   const v = rec[key];
   return typeof v === 'number' && Number.isFinite(v) ? v : fallback;
@@ -110,12 +121,14 @@ export interface ParseDefinitionOptions {
 
 export function parseDashboardDefinition(input: unknown, options: ParseDefinitionOptions = {}): DashboardDefinition {
   if (!isRecord(input)) throw new DashboardDefinitionError('not a JSON object');
+  // Before anything reads the shape: a newer format is refused whole, not read as this one.
+  const stored = storedSchemaVersion(input);
+  if (stored > CURRENT_SCHEMA_VERSION) throw new DashboardSchemaTooNewError(stored);
   if (!Array.isArray(input.widgets)) throw new DashboardDefinitionError('widgets must be an array');
 
   // A document stored in an older format is converted on load, one step at a time: the square-cell
   // grid (approximately; see ./legacy-grid), then the time span (./legacy-window). The result
   // says so. Everything below reads the current format only.
-  const stored = storedSchemaVersion(input);
   const legacy = stored < CURRENT_SCHEMA_VERSION;
   const gridConverted = stored < GRID_SCHEMA_VERSION;
   let raw: Record<string, unknown> = input;

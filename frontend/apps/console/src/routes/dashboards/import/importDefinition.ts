@@ -22,6 +22,7 @@
 import {
   migrateToSlots,
   parseDashboardDefinition,
+  DashboardSchemaTooNewError,
   serializeDefinition,
   setTitle,
   unresolvedWidgets,
@@ -54,7 +55,7 @@ export const MAX_IMPORT_TEXT_BYTES = 4 * MAX_DEFINITION_BYTES;
 // it. Checked on the text, before it is parsed, in one linear pass.
 export const MAX_IMPORT_NESTING = 128;
 
-export type ImportErrorCode = 'empty' | 'tooLarge' | 'notJson' | 'invalid';
+export type ImportErrorCode = 'empty' | 'tooLarge' | 'notJson' | 'invalid' | 'tooNew';
 
 export class DashboardImportError extends Error {
   constructor(
@@ -203,6 +204,8 @@ export function prepareImport(text: string, catalog: WidgetCatalog | undefined):
   try {
     definition = migrateToSlots(parseDashboardDefinition(raw, { catalog }));
   } catch (err) {
+    // The message is the drawer's to word (and translate); this carries only the class.
+    if (err instanceof DashboardSchemaTooNewError) throw new DashboardImportError('tooNew', err.message);
     throw new DashboardImportError('invalid', err instanceof Error ? err.message : 'Not a dashboard definition.');
   }
   if (byteLength(serializeDefinition(definition)) > MAX_DEFINITION_BYTES) {

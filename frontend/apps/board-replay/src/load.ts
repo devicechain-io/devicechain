@@ -22,6 +22,7 @@ import {
   migrateToSlots,
   parseBoardRecording,
   parseDashboardDefinition,
+  DashboardSchemaTooNewError,
   type AnchorTarget,
   type BoardRecording,
   type DashboardDefinition,
@@ -34,6 +35,7 @@ export type ReplayErrorCode =
   | 'fetch'
   | 'recordingInvalid'
   | 'boardInvalid'
+  | 'boardTooNew'
   | 'boardMismatch';
 
 export class ReplayLoadError extends Error {
@@ -145,6 +147,12 @@ export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
       parseDashboardDefinition(JSON.parse(new TextDecoder().decode(boardBytes)), { catalog: registry.catalog }),
     );
   } catch (err) {
+    // A board from a newer release would draw wrong, not fail: say so rather than play it.
+    if (err instanceof DashboardSchemaTooNewError) {
+      // The refusal's words are a separate chunk, fetched only here: the initial load is
+      // budgeted to within a few bytes. They are chosen in the page's language now.
+      throw new ReplayLoadError('boardTooNew', (await import('./BoardTooNew')).default());
+    }
     throw new ReplayLoadError('boardInvalid', detailOf(err));
   }
 

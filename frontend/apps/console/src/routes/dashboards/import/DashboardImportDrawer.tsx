@@ -101,6 +101,8 @@ function ImportFlow({ source, onCreated }: { source: ImportSource; onCreated: (t
             : t('importErrorTooLarge', { limit: MAX_DEFINITION_BYTES / (1 << 20) });
         case 'notJson':
           return t('importErrorNotJson', { detail: err.message });
+        case 'tooNew':
+          return t('schemaTooNew');
         case 'invalid':
           return t('importErrorInvalid', { detail: err.message });
       }

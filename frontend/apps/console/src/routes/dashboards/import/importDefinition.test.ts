@@ -6,6 +6,7 @@
 // and a widget this console cannot resolve survives as a placeholder that blocks publishing.
 
 import {
+  CURRENT_SCHEMA_VERSION,
   lintLayout,
   parseDashboardDefinition,
   serializeDefinition,
@@ -168,6 +169,12 @@ describe('foreign bindings', () => {
 });
 
 describe('refusals', () => {
+  it('refuses a definition saved by a newer version, with its own code', () => {
+    const text = JSON.stringify({ schemaVersion: CURRENT_SCHEMA_VERSION + 1, title: 'T', widgets: [] });
+    expect(() => prepareImport(text, catalog)).toThrow(expect.objectContaining({ code: 'tooNew' }));
+  });
+
+
   it.each([
     ['', 'empty'],
     ['   ', 'empty'],

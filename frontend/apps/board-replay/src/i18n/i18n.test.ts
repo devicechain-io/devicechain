@@ -17,7 +17,11 @@ const placeholders = (s: string) => [...s.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map(
 
 describe('chrome catalogs', () => {
   it('has exactly one catalog file per supported locale', () => {
-    expect(Object.keys(files).sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/chrome.json`).sort());
+    // refusal.json is the separately-loaded refusal message (see ../BoardTooNew.tsx): one per locale too.
+    const chrome = Object.keys(files).filter((f) => f.endsWith('/chrome.json'));
+    expect(chrome.sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/chrome.json`).sort());
+    const refusal = Object.keys(files).filter((f) => f.endsWith('/refusal.json'));
+    expect(refusal.sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/refusal.json`).sort());
   });
 
   // Plural forms differ by language (Chinese has only "other"), so keys are compared by

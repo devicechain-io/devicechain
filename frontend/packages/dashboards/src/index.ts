@@ -225,6 +225,7 @@ export {
   generateWidgetId,
   canScopeSlot,
   DashboardDefinitionError,
+  DashboardSchemaTooNewError,
   BASE_BREAKPOINT,
 } from './definition';
 
