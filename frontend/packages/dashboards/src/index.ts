@@ -231,6 +231,9 @@ export {
 // authoring host (console, /dash) wires these to its drag/resize + save UI.
 export {
   basePlacement,
+  clampSpan,
+  moveWidget,
+  resizeWidget,
   setWidgetPlacement,
   deleteWidget,
   setTitle,
@@ -309,6 +312,7 @@ export {
   type WidgetId,
   type WidgetInteractionDeclaration,
   FALLBACK_DEFAULT_SPAN,
+  pinnedAxes,
   type WidgetLayoutSpec,
   type WidgetResizeMode,
   type WidgetSpan,
@@ -363,6 +367,15 @@ export {
   type PlacedGrid,
   type Rect,
 } from './grid';
+// Adaptive columns and reflow: the column count a container width gets, the deterministic pour of
+// the base layout into fewer columns, and the layout a renderer draws for a width.
+export {
+  effectiveLayout,
+  liveColumns,
+  reflowGrid,
+  type EffectiveLayout,
+  type ReflowItem,
+} from './reflow';
 export { LEGACY_REFERENCE_WIDTH } from './legacy-grid';
 
 // The layout lint: placement against what each widget can show. Widget knowledge (span

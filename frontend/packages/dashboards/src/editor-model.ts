@@ -23,6 +23,7 @@ import {
   type Gutter,
   type PlacedGrid,
 } from './grid';
+import type { SpanLimits } from './layout-lint';
 import { DEFAULT_CANVAS_DENSITY } from './types';
 import type {
   CanvasDensity,
@@ -81,6 +82,67 @@ export function setWidgetPlacement(def: DashboardDefinition, id: string, placeme
     widgets: def.widgets.map((w) => (w.id === id ? { ...w, layout: { ...w.layout, [BASE_BREAKPOINT]: placement } } : w)),
   };
   return placement.mode === 'grid' ? resolveEverywhere(next, [id]) : next;
+}
+
+// clampSpan holds a span inside a widget's declared limits and inside the columns that remain to
+// the right of `col`. Where the two disagree the grid wins (a widget never leaves the canvas), so
+// a minSpan wider than what is left to the right of `col` yields to the edge: the caller moves
+// `col` back first when it can (see resizeWidget).
+export function clampSpan(
+  span: { cols: number; rows: number },
+  limits: SpanLimits | undefined,
+  room: number,
+): { cols: number; rows: number } {
+  const cols = Math.min(room, Math.max(limits?.minSpan?.cols ?? 1, Math.min(limits?.maxSpan?.cols ?? Infinity, span.cols)));
+  const rows = Math.max(limits?.minSpan?.rows ?? 1, Math.min(limits?.maxSpan?.rows ?? Infinity, span.rows));
+  return { cols: Math.max(1, Math.round(cols)), rows: Math.max(1, Math.round(rows)) };
+}
+
+// moveWidget drags a grid widget so its top-left cell is (col, row): the span is kept, the
+// footprint is held inside the columns and above row 0, and whatever it now covers is pushed
+// down out of its way (setWidgetPlacement). A relative widget has no cell to drag, so it is
+// returned unchanged.
+export function moveWidget(
+  def: DashboardDefinition,
+  id: string,
+  to: { col: number; row: number },
+  columns: number = def.canvas.grid.columns,
+): DashboardDefinition {
+  const w = def.widgets.find((x) => x.id === id);
+  if (!w) return def;
+  const p = basePlacement(w);
+  if (p.mode !== 'grid') return def;
+  const col = Math.min(Math.max(0, Math.round(to.col)), Math.max(0, columns - p.cols));
+  const row = Math.max(0, Math.round(to.row));
+  if (col === p.col && row === p.row) return def;
+  return setWidgetPlacement(def, id, { ...p, col, row });
+}
+
+// resizeWidget resizes a grid widget to `target` (a footprint, e.g. a snapped drag of a handle),
+// stopping at the widget's minSpan and maxSpan and at the canvas edge. `fromLeft` / `fromTop`
+// say which edge the handle moved: that edge follows the pointer and the opposite one stays put,
+// so a widget clamped at its minimum does not slide away from the edge it was held by.
+// Neighbours are pushed down.
+export function resizeWidget(
+  def: DashboardDefinition,
+  id: string,
+  target: { col: number; row: number; cols: number; rows: number },
+  limits: SpanLimits | undefined,
+  edges: { fromLeft?: boolean; fromTop?: boolean } = {},
+  columns: number = def.canvas.grid.columns,
+): DashboardDefinition {
+  const w = def.widgets.find((x) => x.id === id);
+  if (!w) return def;
+  const p = basePlacement(w);
+  if (p.mode !== 'grid') return def;
+  const right = target.col + target.cols;
+  const bottom = target.row + target.rows;
+  const room = edges.fromLeft ? Math.max(1, right) : Math.max(1, columns - Math.max(0, target.col));
+  const { cols, rows } = clampSpan(target, limits, Math.min(columns, room));
+  const col = edges.fromLeft ? Math.max(0, right - cols) : Math.max(0, target.col);
+  const row = edges.fromTop ? Math.max(0, bottom - rows) : Math.max(0, target.row);
+  if (col === p.col && row === p.row && cols === p.cols && rows === p.rows) return def;
+  return setWidgetPlacement(def, id, { mode: 'grid', col, row, cols, rows });
 }
 
 // deleteWidget removes a widget by id. A widget that was placed relative to it would be left

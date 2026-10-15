@@ -10,24 +10,27 @@
 // every grid widget. Gutters and padding are lengths or spacing tokens scaled by the density;
 // each widget's frame is the canvas default merged with its own (resolveFrame).
 //
-// Adaptive columns and reflow (a container too narrow for the authored column count at
-// minCellSize) are not here yet: the authored layout renders at every width. Container sizing
+// Adaptive columns and reflow: the board measures its CONTAINER (not the window), and while a
+// cell at the authored column count is at least `minCellSize` it renders as authored and the
+// cells stretch. Narrower than that the column count drops to what fits and the base layout is
+// poured into it in reading order (effectiveLayout), each widget clamped into the span limits
+// its descriptor declares. A breakpoint the author defined for the width wins over the automatic
+// reflow. Until the container has a measured width the authored layout is drawn. Container sizing
 // (fill / fixed-width / fixed-height) is a mount knob the host may override via the `sizing`
 // prop. It is view-only; the canvas editor lives in the console. This is the shared viewer the
 // console and the reference /dash app mount.
 
 import {
-  activeBreakpoint,
   anchorFraction,
-  breakpointColumns,
   DEFAULT_CANVAS_DENSITY,
   defaultHistoryWindow,
+  effectiveLayout,
   fetchWidgetHistory,
   resolveFrame,
   resolvePlacement,
   resolveWidgetDatasource,
+  spanLimitsOfLayout,
   UNKNOWN_WIDGET_TYPE,
-  type Breakpoints,
   type CanvasBackground,
   type CanvasDensity,
   type CanvasGrid,
@@ -51,7 +54,7 @@ import {
   WidgetTokenStyles,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from 'react';
 
 import { ConnectedWidget } from './connected-widget';
 import {
@@ -126,7 +129,7 @@ export function DashboardRenderer({
   themeRoot,
   density,
 }: DashboardRendererProps) {
-  const breakpoint = useActiveBreakpoint(definition.canvas.breakpoints);
+  const [boardRef, containerWidth] = useContainerWidth<HTMLDivElement>();
   // Each widget with its slot resolved to a concrete selector. Recomputed per render;
   // that is cheap, and every channel keys its subscription on the selector's VALUE, so a
   // widget whose concrete selector did not change keeps its subscription.
@@ -135,15 +138,25 @@ export function DashboardRenderer({
   const histories = useWidgetHistories(widgets, seedHistory, registry);
 
   const { grid, background: bg, frame: canvasFrame } = definition.canvas;
-  const columns = breakpointColumns(definition.canvas, breakpoint);
-  const lengths = gridCss(grid, columns);
   const effectiveSizing = sizing ?? definition.canvas.sizing;
   const effectiveDensity = density ?? definition.canvas.density ?? DEFAULT_CANVAS_DENSITY;
   const scale = densityScale(effectiveDensity);
+  const layout = useMemo(
+    () =>
+      effectiveLayout(definition, containerWidth, {
+        scale,
+        limitsOf: (w) => (w.type === UNKNOWN_WIDGET_TYPE ? undefined : spanLimitsOfLayout(registry.descriptor(w.type)?.layout)),
+      }),
+    [definition, containerWidth, scale, registry],
+  );
+  const { breakpoint, columns } = layout;
+  const lengths = gridCss(grid, columns);
 
   return (
     <div
+      ref={boardRef}
       data-density={effectiveDensity}
+      data-columns={columns}
       style={{ ...sizingStyle(effectiveSizing, bg), ...tokenStyle(scale) }}
     >
       <WidgetTokenStyles />
@@ -171,6 +184,7 @@ export function DashboardRenderer({
                 widgets={widgets}
                 breakpoint={breakpoint}
                 columns={columns}
+                grid={layout.grid}
                 lengths={lengths}
                 render={(widget) => (
                   <WidgetFrameStyleProvider frame={resolveFrame(canvasFrame, widgetFrame(widget))}>
@@ -285,12 +299,15 @@ function PlacedWidgets({
   widgets,
   breakpoint,
   columns,
+  grid,
   lengths,
   render,
 }: {
   widgets: WidgetInstance[];
   breakpoint: string;
   columns: number;
+  // Where each grid widget is DRAWN: its authored footprint, or the reflowed one.
+  grid: ReadonlyMap<string, GridPlacement>;
   lengths: GridCss;
   render: (widget: WidgetInstance) => ReactNode;
 }) {
@@ -313,7 +330,7 @@ function PlacedWidgets({
     <>
       {placed.map(({ widget, placement }) => {
         if (placement.mode !== 'grid') return null;
-        const style = gridItemStyle(placement, columns);
+        const style = gridItemStyle(grid.get(widget.id) ?? placement, columns);
         // Keyed by the widget, so removing or reordering widgets never remounts (and so never
         // re-subscribes) the ones that stay.
         return (
@@ -381,18 +398,23 @@ export function widgetSubjectLabel(widget: WidgetInstance): string | undefined {
   return undefined;
 }
 
-// useActiveBreakpoint tracks the viewport width and returns the active breakpoint
-// name, recomputing on resize.
-function useActiveBreakpoint(breakpoints: Breakpoints): string {
-  const [width, setWidth] = useState(() =>
-    typeof window === 'undefined' ? 0 : window.innerWidth,
-  );
-  useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
+// useContainerWidth tracks an element's content width with a ResizeObserver, measured
+// synchronously before first paint so a narrow container never flashes the authored layout. 0
+// means "not measured" (no layout engine, or not yet laid out) and draws the authored layout.
+function useContainerWidth<T extends HTMLElement>(): [RefObject<T | null>, number] {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => setWidth(el.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
   }, []);
-  return activeBreakpoint(breakpoints, width);
+  return [ref, width];
 }
 
 // A widget's seed, tagged with the concrete selector it was fetched for.

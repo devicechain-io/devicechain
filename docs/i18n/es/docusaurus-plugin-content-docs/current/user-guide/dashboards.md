@@ -108,7 +108,14 @@ diseño.
 
 Arrastra un widget para moverlo y arrastra sus bordes para cambiar su tamaño. Los widgets nunca
 se solapan: un widget que mueves o redimensionas sobre otros los empuja hacia abajo, y un widget
-nuevo ocupa el primer hueco libre. Un widget que todavía no ha
+nuevo ocupa el primer hueco libre. Al cambiar el tamaño, el widget se detiene en el tamaño mínimo y
+máximo que admite. El panel mide el espacio que se le da, no la pantalla. Mientras las columnas
+caben con **Celda mínima** o más, muestra tu diseño tal como lo dispusiste y las celdas se estiran
+para llenar el ancho, de modo que una pantalla grande obtiene celdas más grandes y no más celdas.
+En un espacio más estrecho usa tantas columnas como quepan y reparte los widgets en ellas en orden
+de lectura, de arriba abajo y de izquierda a derecha, de modo que un teléfono muestra una única
+pila legible. Cada widget conserva su tamaño dentro de los límites que admite, y un widget colocado
+en relación con otro se mueve con él. Un widget que todavía no ha
 recibido datos muestra un guion o *No data yet* (este texto aparece en inglés también en la consola
 en español).
 
