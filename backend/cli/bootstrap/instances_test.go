@@ -267,15 +267,17 @@ func TestListInstancesOnAnEmptyMachineIsEmptyNotAnError(t *testing.T) {
 	}
 }
 
-func TestResolveBindingPrefersFlagThenRecordThenGuess(t *testing.T) {
+func TestResolveBindingPrefersRecordThenFlagThenGuess(t *testing.T) {
 	fakeHome(t)
-	writeRecord(t, InstanceRecord{Instance: "harig", Provider: "local", Cluster: "devicechain-ha", KubeContext: "kind-devicechain-ha", Managed: false})
+	writeRecord(t, InstanceRecord{Instance: "harig", Provider: "local", Cluster: "devicechain-ha", KubeContext: "kind-devicechain-ha", Managed: false, ClusterUID: testUID})
 
 	// 1. A flag naming the recorded context IS the record (same Managed, same UID): it
 	// must not rebuild the binding by hand. A flag naming ANOTHER context conflicts with
 	// the record and is surfaced as such, with the recorded binding, for a caller to refuse.
 	b, src := ResolveBinding(Options{Instance: "harig", KubeContext: "kind-devicechain-ha"})
-	if src != BindingFromRecord || b.Cluster != "devicechain-ha" {
+	// ClusterUID is the field only the record carries: a binding rebuilt from the flag
+	// would match on every other one here.
+	if src != BindingFromRecord || b.Cluster != "devicechain-ha" || b.ClusterUID != testUID {
 		t.Fatalf("a flag naming the recorded context did not resolve to the record: %+v %v", b, src)
 	}
 	b, src = ResolveBinding(Options{Instance: "harig", KubeContext: "kind-somewhere-else"})

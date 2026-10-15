@@ -61,11 +61,13 @@ running whether or not dcctl created it. To delete a local cluster, do it by
 hand: kind delete cluster --name <name>
 
 Which cluster the instance is in comes from a record written at bootstrap, not
-from the instance's name; --kube-context overrides it. An instance bootstrapped
-before dcctl recorded this has no record, and destroy falls back to guessing the
-cluster from the instance name — saying so as it goes. Run "dcctl instances list"
-to see which instances are in that state. If the cluster is already gone, only
-the local state is cleared.
+from the instance's name. --kube-context may name that same context; one naming
+a different context is refused, and the refusal says how to remove a record that
+is wrong. With no record, --kube-context says where the instance is. An instance
+bootstrapped before dcctl recorded this has no record, and with no --kube-context
+destroy falls back to guessing the cluster from the instance name — saying so as
+it goes. Run "dcctl instances list" to see which instances are in that state.
+If the cluster is already gone, only the local state is cleared.
 
 Use --all to destroy every instance on this machine.`,
 	// Not ExactArgs(2): `--all` takes no instance, because the whole point of it is that
@@ -92,7 +94,7 @@ Use --all to destroy every instance on this machine.`,
 }
 
 func init() {
-	destroyCmd.Flags().StringVar(&destroyKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap)")
+	destroyCmd.Flags().StringVar(&destroyKubeContext, "kube-context", "", "kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)")
 	destroyCmd.Flags().BoolVar(&destroyDryRun, "dry-run", false, "print what would happen without destroying anything")
 	destroyCmd.Flags().BoolVarP(&destroyAssumeYes, "yes", "y", false, "assume yes for prompts")
 	destroyCmd.Flags().BoolVar(&destroyAll, "all", false, "destroy EVERY instance on this machine (takes no arguments)")

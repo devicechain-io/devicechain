@@ -95,11 +95,13 @@ const (
 // `destroy` reported success for it; `upgrade` would have failed to find the instance.
 //
 // Precedence, and each step is deliberate:
-//  1. An explicit --kube-context. The operator is standing in front of us; nothing on
-//     disk outranks that. It is Managed:false because a context named by hand is, by
-//     definition, not the cluster dcctl named by convention.
-//  2. The instance record. The one source that was written down when both halves were
-//     in hand.
+//  1. The instance record. The one source that was written down when both halves were
+//     in hand. An explicit --kube-context naming the recorded context resolves to it
+//     (the flag says where to look, not what is there); one naming a DIFFERENT context
+//     is BindingConflict, which every caller refuses.
+//  2. An explicit --kube-context, when there is no readable record. Managed:false,
+//     because a context named by hand is, by definition, not the cluster dcctl named by
+//     convention; `upgrade` takes Managed from the instance's declaration regardless.
 //  3. The guess. Kept so an instance bootstrapped before records existed is still
 //     actionable — degrading LOUDLY beats refusing to touch a live instance.
 func ResolveBinding(opts Options) (ClusterBinding, BindingSource) {
@@ -121,11 +123,14 @@ func ResolveBinding(opts Options) (ClusterBinding, BindingSource) {
 			// bound to, under a profile derived from the wrong binding.
 			return rec.Binding(), BindingConflict
 		}
-		if !errors.Is(err, ErrNoInstanceRecord) {
-			return ClusterBinding{}, BindingUnreadable
-		}
-		// No record: the operator's word is all there is. Managed:false because a context
-		// named by hand is, by definition, not the cluster dcctl named by convention.
+		// No record, or one that cannot be read: the operator's word is all there is.
+		// Managed:false because a context named by hand is, by definition, not the cluster
+		// dcctl named by convention.
+		//
+		// 🔴 AN UNREADABLE RECORD DOES NOT OUTRANK THE FLAG. refuseUnreadable's way out is
+		// "pass --kube-context to say where it is"; answering that flag with the same
+		// refusal turns the advice into a loop with no exit. There is nothing to conflict
+		// with: what cannot be read names no cluster.
 		return ClusterBinding{
 			Cluster:     clusterNameFromKindContext(opts.KubeContext),
 			KubeContext: opts.KubeContext,

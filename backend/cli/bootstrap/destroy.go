@@ -49,7 +49,7 @@ func Destroy(ctx context.Context, provider Provider, opts DestroyOptions) error 
 	if err := refuseUnreadable(source, opts.Instance); err != nil {
 		return err
 	}
-	if err := refuseConflictingContext(source, binding, opts.KubeContext, opts.Instance); err != nil {
+	if err := RefuseConflictingContext(source, binding, opts.KubeContext, opts.Instance); err != nil {
 		return err
 	}
 
@@ -227,7 +227,7 @@ func announceBinding(binding ClusterBinding, source BindingSource, instance stri
 	case BindingFromFlag:
 		fmt.Println(color.WhiteString("Targeting context %s, as given.", color.GreenString(binding.KubeContext)))
 	case BindingConflict:
-		// Refused by refuseConflictingContext right after; named here so the output says why.
+		// Refused by RefuseConflictingContext right after; named here so the output says why.
 		fmt.Println(color.RedString("--kube-context does not match the cluster instance %q is recorded in (%s).",
 			instance, binding.KubeContext))
 	case BindingUnreadable:
@@ -490,21 +490,22 @@ func refuseUnreadable(source BindingSource, instance string) error {
 		instance, instance, instance, instanceRecordFile)
 }
 
-// refuseConflictingContext stops a command whose --kube-context names a different cluster
-// than the one the instance is recorded in.
+// RefuseConflictingContext stops a command whose --kube-context names a different cluster
+// than the one the instance is recorded in. Exported for `dcctl sim`, the third caller
+// of ResolveBinding, so all three refuse in the same words.
 //
 // 🔴 LOUD, BECAUSE THE ALTERNATIVE IS A DIFFERENT INSTANCE UNDER THE SAME NAME. The flag
 // used to override the record silently, and the override also rebuilt the binding by hand,
 // so what was rendered or torn down depended on whether a flag naming the SAME cluster was
 // typed. The way out when the record is what is wrong is stated, as in refuseUnreadable.
-func refuseConflictingContext(source BindingSource, recorded ClusterBinding, flag, instance string) error {
+func RefuseConflictingContext(source BindingSource, recorded ClusterBinding, flag, instance string) error {
 	if source != BindingConflict {
 		return nil
 	}
 	return fmt.Errorf(
 		"--kube-context %q names a different cluster than the one instance %q is recorded in (context %q).\n"+
 			"  Refusing to act on the instance through a cluster it is not bound to. Drop --kube-context to use the\n"+
-			"  recorded one, or, if the record is what is wrong, remove ~/.devicechain/instances/%s/%s to name\n"+
-			"  the cluster by hand",
-		flag, instance, recorded.KubeContext, instance, instanceRecordFile)
+			"  recorded one, or, if the record is what is wrong (the cluster was rebuilt, or its context renamed),\n"+
+			"  remove ~/.devicechain/instances/%s/%s and re-run with --kube-context %s",
+		flag, instance, recorded.KubeContext, instance, instanceRecordFile, flag)
 }

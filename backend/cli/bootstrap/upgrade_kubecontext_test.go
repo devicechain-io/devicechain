@@ -4,6 +4,8 @@
 package bootstrap
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -102,7 +104,7 @@ func TestKubeContextNamingAnotherClusterIsRefused(t *testing.T) {
 	if source != BindingConflict {
 		t.Fatalf("source = %s, want conflict", source)
 	}
-	err := refuseConflictingContext(source, b, "kind-elsewhere", "guide")
+	err := RefuseConflictingContext(source, b, "kind-elsewhere", "guide")
 	if err == nil {
 		t.Fatal("a conflicting --kube-context was not refused")
 	}
@@ -111,7 +113,7 @@ func TestKubeContextNamingAnotherClusterIsRefused(t *testing.T) {
 			t.Errorf("refusal does not name %q: %v", want, err)
 		}
 	}
-	if err := refuseConflictingContext(BindingFromRecord, b, "kind-devicechain", "guide"); err != nil {
+	if err := RefuseConflictingContext(BindingFromRecord, b, "kind-devicechain", "guide"); err != nil {
 		t.Errorf("a matching context was refused: %v", err)
 	}
 }
@@ -125,5 +127,107 @@ func TestUpgradeRefusesAConflictingKubeContextBeforeAnyClusterRead(t *testing.T)
 		UpgradeOptions{Options: Options{Instance: "guide", KubeContext: "kind-elsewhere"}})
 	if err == nil || !strings.Contains(err.Error(), "different cluster") {
 		t.Fatalf("Upgrade with a conflicting context: err = %v, want the binding refusal", err)
+	}
+}
+
+// 🔴 THE WAY OUT OF refuseUnreadable MUST STAY OPEN. Its advice is "pass --kube-context
+// to say where it is"; a resolver that answers that flag with BindingUnreadable again
+// sends the operator round a loop with no exit.
+func TestAnUnreadableRecordYieldsToAnExplicitKubeContext(t *testing.T) {
+	home := fakeHome(t)
+	dir := filepath.Join(home, ".devicechain", "instances", "guide")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, instanceRecordFile), []byte(`{"instance":"guide","clus`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, src := ResolveBinding(Options{Instance: "guide"}); src != BindingUnreadable {
+		t.Fatalf("control: with no flag the corrupt record must be unreadable, got %s", src)
+	}
+	b, src := ResolveBinding(Options{Instance: "guide", KubeContext: "kind-devicechain"})
+	if src != BindingFromFlag || b.KubeContext != "kind-devicechain" {
+		t.Fatalf("the flag refuseUnreadable tells the operator to pass was not honoured: %+v %s", b, src)
+	}
+	if err := refuseUnreadable(src, "guide"); err != nil {
+		t.Fatalf("following refuseUnreadable's advice was refused again: %v", err)
+	}
+}
+
+// The refusal names a way out, and the way out works: removing the record it names and
+// re-running with the flag it names reaches the cluster, and the instance still renders
+// the profile its declaration holds.
+func TestTheConflictRefusalsWayOutWorks(t *testing.T) {
+	home := fakeHome(t)
+	writeRecord(t, InstanceRecord{Instance: "guide", Provider: "local", Cluster: "old",
+		KubeContext: "kind-old", Managed: true})
+	b, src := ResolveBinding(Options{Instance: "guide", KubeContext: "kind-devicechain"})
+	err := RefuseConflictingContext(src, b, "kind-devicechain", "guide")
+	if err == nil {
+		t.Fatal("control: a conflicting context was not refused")
+	}
+	const path = "~/.devicechain/instances/guide/" + instanceRecordFile
+	for _, want := range []string{path, "re-run with --kube-context kind-devicechain"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal does not name %q:\n%v", want, err)
+		}
+	}
+	if err := os.Remove(filepath.Join(home, ".devicechain", "instances", "guide", instanceRecordFile)); err != nil {
+		t.Fatal(err)
+	}
+	vals, b, src := upgradeValuesFor(t, "kind-devicechain")
+	if src != BindingFromFlag || b.KubeContext != "kind-devicechain" {
+		t.Fatalf("after removing the record the flag did not resolve: %+v %s", b, src)
+	}
+	if err := RefuseConflictingContext(src, b, "kind-devicechain", "guide"); err != nil {
+		t.Fatalf("still refused after following the advice: %v", err)
+	}
+	if got := colocateOf(t, vals); got != true {
+		t.Errorf("colocate = %v after the way out, want true: the declaration says Managed", got)
+	}
+}
+
+// Destroy refuses a conflicting context too, and before its dry-run guard: a rehearsal
+// that answered "would destroy" for a command the real run refuses rehearses nothing.
+func TestDestroyRefusesAConflictingKubeContextEvenUnderDryRun(t *testing.T) {
+	fakeHome(t)
+	writeRecord(t, InstanceRecord{Instance: "guide", Provider: "local", Cluster: "devicechain",
+		KubeContext: "kind-devicechain", Managed: true})
+	p := &fakeProvider{name: "local", present: map[string]bool{"devicechain": true, "elsewhere": true}}
+	var err error
+	captureOutput(t, func() {
+		err = Destroy(t.Context(), p, DestroyOptions{
+			Options: Options{Instance: "guide", KubeContext: "kind-elsewhere", AssumeYes: true, DryRun: true}})
+	})
+	if err == nil || !strings.Contains(err.Error(), "different cluster") {
+		t.Fatalf("destroy with a conflicting context: err = %v, want the binding refusal", err)
+	}
+	if p.existsCalls != 0 {
+		t.Fatalf("asked about clusters %v before refusing", p.asked)
+	}
+}
+
+// The declaration decides Managed in BOTH directions. With no record and no flag the
+// binding is the kind-<instance> guess, which says Managed; an instance bootstrapped
+// onto a cluster dcctl was pointed at declares Managed:false, and that is what renders.
+func TestUpgradeTakesUnmanagedFromTheDeclarationOverTheGuess(t *testing.T) {
+	fakeHome(t)
+	opts := UpgradeOptions{Options: Options{Instance: "guide"}}
+	binding, source := ResolveBinding(opts.Options)
+	if source != BindingGuessed || !binding.Managed {
+		t.Fatalf("control: with no record and no flag the guess says Managed, got %+v %s", binding, source)
+	}
+	inst := guideDeclaration()
+	inst.Spec.Managed = false
+	st := &State{Instance: "guide", KubeContext: binding.KubeContext, Binding: binding,
+		Provider: "local", Values: map[string]string{}}
+	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
+		t.Fatalf("applyUpgradeDeclaration: %v", err)
+	}
+	if st.Binding.Managed {
+		t.Fatal("the guess's Managed:true survived a declaration that says Managed:false")
+	}
+	if got := colocateOf(t, helmValues(st)); got == true {
+		t.Errorf("colocate = %v for an instance declared unmanaged", got)
 	}
 }

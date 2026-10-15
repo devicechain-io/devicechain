@@ -116,7 +116,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	if err := refuseUnreadable(source, opts.Instance); err != nil {
 		return err
 	}
-	if err := refuseConflictingContext(source, binding, opts.KubeContext, opts.Instance); err != nil {
+	if err := RefuseConflictingContext(source, binding, opts.KubeContext, opts.Instance); err != nil {
 		return err
 	}
 	announceBinding(binding, source, opts.Instance)
