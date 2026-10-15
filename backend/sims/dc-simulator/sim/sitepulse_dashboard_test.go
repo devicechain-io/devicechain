@@ -67,8 +67,17 @@ func widgetByID(t *testing.T, def dashboardDefinition, id string) dashboardWidge
 
 // cardsFor returns the latest-cards selecting a measurement, keyed by the slot each binds.
 func cardsFor(def dashboardDefinition, measurement string) map[string]dashboardWidget {
+	return widgetsFor(def, "latest-card", measurement)
+}
+
+// tanksFor returns the level-gauges (the fuel tanks) selecting a measurement, keyed by slot.
+func tanksFor(def dashboardDefinition, measurement string) map[string]dashboardWidget {
+	return widgetsFor(def, "level-gauge", measurement)
+}
+
+func widgetsFor(def dashboardDefinition, typ, measurement string) map[string]dashboardWidget {
 	out := map[string]dashboardWidget{}
-	for _, w := range widgetsOfType(def, "latest-card") {
+	for _, w := range widgetsOfType(def, typ) {
 		if w.Datasource != nil && len(w.Datasource.Measurements) == 1 && w.Datasource.Measurements[0] == measurement {
 			out[w.Datasource.Slot] = w
 		}
@@ -108,9 +117,9 @@ func TestSitepulseDeclaresTheSiteDashboard(t *testing.T) {
 func TestSitepulseBoardShowsEveryMachinesFuel(t *testing.T) {
 	m := sitepulseManifest(t)
 	def := sitepulseBoard(t, m)
-	cards := cardsFor(def, "fuel_pct")
+	cards := tanksFor(def, "fuel_pct")
 	if got, want := sortedKeys(cards), wantSitepulseMachineTokens(); !equalStrings(got, want) {
-		t.Fatalf("fuel cards bind %v, want one per machine %v", got, want)
+		t.Fatalf("fuel tanks bind %v, want one per machine %v", got, want)
 	}
 	externalIds := map[string]string{}
 	for _, d := range m.Expand(m.Seed) {
@@ -148,9 +157,9 @@ func TestSitepulseBoardStatesTheThresholds(t *testing.T) {
 		return string(raw)
 	}
 	const lowFuel = `[{"level":"major","value":0},{"level":"normal","value":15}]`
-	cards := cardsFor(def, "fuel_pct")
+	cards := tanksFor(def, "fuel_pct")
 	if len(cards) == 0 {
-		t.Fatal("premise: the board has no fuel cards")
+		t.Fatal("premise: the board has no fuel tanks")
 	}
 	for slot, w := range cards {
 		if got := thresholdsOf(w); got != lowFuel {
@@ -163,13 +172,19 @@ func TestSitepulseBoardStatesTheThresholds(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		id, title, thresholds string
-		min, max              float64
+		id, typ, title, thresholds string
+		min, max                   float64
 	}{
-		{"sp-engine-temp", "Engine temp", `[{"level":"critical","value":105}]`, 0, 130},
-		{"sp-tyre", "Tyre pressure", `[{"level":"major","value":0},{"level":"normal","value":600}]`, 0, 1000},
+		// The engine gauge is a bar with ONE edge at the overheat rule's 105 C and no warning band:
+		// the sim has no warning rule, so a band below the alarm would colour a reading the platform
+		// does not call a problem.
+		{"sp-engine-temp", "linear-gauge", "Engine temp", `[{"level":"normal","value":0},{"level":"critical","value":105}]`, 0, 130},
+		{"sp-tyre", "gauge", "Tyre pressure", `[{"level":"major","value":0},{"level":"normal","value":600}]`, 0, 1000},
 	} {
 		w := widgetByID(t, def, c.id)
+		if w.Type != c.typ {
+			t.Errorf("%s is a %s, want a %s", c.id, w.Type, c.typ)
+		}
 		if title, _ := w.Options["title"].(string); title != c.title {
 			t.Errorf("%s title = %q, want %q", c.id, title, c.title)
 		}
@@ -258,11 +273,15 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 	if !ok || plant.Type != "device" || plant.DefaultBinding == nil || plant.DefaultBinding.DeviceToken != "sp-plant-01" {
 		t.Fatalf("plant slot = %+v, want a device slot defaulting to sp-plant-01", plant)
 	}
-	for id, c := range map[string]struct{ metric, unit string }{
-		"sp-plant-throughput": {"throughput_tph", "t/h"},
-		"sp-plant-running":    {"plant_running", ""},
+	for id, c := range map[string]struct{ typ, metric, unit string }{
+		"sp-plant-throughput-avg": {"stat-card", "throughput_tph", "t/h"},
+		"sp-plant-throughput-max": {"stat-card", "throughput_tph", "t/h"},
+		"sp-plant-running":        {"status-light", "plant_running", ""},
 	} {
 		w := widgetByID(t, def, id)
+		if w.Type != c.typ {
+			t.Errorf("%s is a %s, want a %s", id, w.Type, c.typ)
+		}
 		if w.Datasource == nil || w.Datasource.Slot != "plant" ||
 			len(w.Datasource.Measurements) != 1 || w.Datasource.Measurements[0] != c.metric {
 			t.Errorf("%s datasource = %+v, want slot plant selecting %s", id, w.Datasource, c.metric)
@@ -275,8 +294,37 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 			t.Errorf("%s unit = %q (present %v), want %q (omitted when empty)", id, u, has, c.unit)
 		}
 	}
-	if title, _ := widgetByID(t, def, "sp-plant-running").Options["title"].(string); !strings.Contains(title, "1 = yes") {
-		t.Errorf("running card title %q does not say what 1 and 0 mean", title)
+	for id, stat := range map[string]string{"sp-plant-throughput-avg": "avg", "sp-plant-throughput-max": "max"} {
+		w := widgetByID(t, def, id)
+		if w.Options["stat"] != stat {
+			t.Errorf("%s stat = %v, want %s", id, w.Options["stat"], stat)
+		}
+		// Absent windowSeconds is what puts the card on the board's time range.
+		if _, pinned := w.Options["windowSeconds"]; pinned {
+			t.Errorf("%s pins its own span; it must follow the board's time range", id)
+		}
+		if _, banded := w.Options["thresholds"]; banded {
+			t.Errorf("%s carries threshold bands, but no rule fires on throughput", id)
+		}
+	}
+	// The lamp is lit by the flag itself (1 = running), and carries no band: nothing alarms on it.
+	lamp := widgetByID(t, def, "sp-plant-running")
+	if lamp.Options["onAt"] != 1.0 {
+		t.Errorf("crusher lamp onAt = %v, want 1", lamp.Options["onAt"])
+	}
+	if _, banded := lamp.Options["thresholds"]; banded {
+		t.Errorf("crusher lamp carries threshold bands, but no rule fires on the plant")
+	}
+	// The sim defines no shift target or plant capacity, so there is no honest progress-ring.
+	if got := widgetsOfType(def, "progress-ring"); len(got) != 0 {
+		t.Errorf("the board carries %d progress rings, but the sim defines no target or capacity to fill one against", len(got))
+	}
+}
+
+func TestSitepulseBoardCarriesAnExplicitHourTimeRange(t *testing.T) {
+	def := sitepulseBoard(t, sitepulseManifest(t))
+	if def.TimeRange == nil || def.TimeRange.DefaultSeconds != 3600 {
+		t.Errorf("timeRange = %+v, want an explicit 3600 s default", def.TimeRange)
 	}
 }
 
@@ -349,8 +397,8 @@ func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
 		}
 		m := s.Manifest()
 		def := sitepulseBoard(t, m)
-		if got, want := len(cardsFor(def, "fuel_pct")), 3*tc.perKind; got != want {
-			t.Errorf("--devices %d: %d fuel cards, want %d", tc.devices, got, want)
+		if got, want := len(tanksFor(def, "fuel_pct")), 3*tc.perKind; got != want {
+			t.Errorf("--devices %d: %d fuel tanks, want %d", tc.devices, got, want)
 		}
 		if got := len(cardsFor(def, "payload_t")); got != tc.perKind {
 			t.Errorf("--devices %d: %d payload cards, want %d", tc.devices, got, tc.perKind)
@@ -395,7 +443,7 @@ func TestSitepulseBoardKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
 		t.Errorf("premise: the board computes a fold of %d rows, want %d", sitepulseFoldRows, foldRows)
 	}
 	def := sitepulseBoard(t, sitepulseManifest(t))
-	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput", "sp-plant-running", "sp-alarms", "sp-map"} {
+	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput-avg", "sp-plant-throughput-max", "sp-plant-running", "sp-alarms", "sp-map"} {
 		b := widgetByID(t, def, id).Layout["base"]
 		if b.Mode != "grid" {
 			t.Fatalf("%s is placed %q; the fold is counted in grid rows", id, b.Mode)
