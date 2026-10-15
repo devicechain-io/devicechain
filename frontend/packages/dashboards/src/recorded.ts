@@ -64,6 +64,7 @@ import {
   type RecordedAlarmEvent,
   type RecordedAlarmSnapshot,
 } from './recording';
+import type { MemberSeed, MemberSeedPlan, MemberSink } from './members';
 
 // How far back from the cursor a fresh subscription back-fills measurement rows. Raw rows,
 // not buckets: a recording has no aggregate to show honestly.
@@ -623,6 +624,62 @@ export class RecordedDataSource implements WidgetDataSource {
       },
       advance: flush,
     });
+  }
+
+  // ── fleets ────────────────────────────────────────────────────────────────
+
+  // A fleet widget's roster (the run's devices, named by their external id) and then the same
+  // back-filled, ticking rows subscribeWidget delivers, each carrying its device.
+  subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void {
+    let members: Array<{ token: string; name: string | null }>;
+    try {
+      const ids = new Map(this.rec.devices.map((d) => [d.token, d.id]));
+      members = this.resolve(datasource).map((g) => ({ token: g.deviceToken, name: ids.get(g.deviceToken) ?? null }));
+    } catch (err) {
+      return this.failLater(err, sink);
+    }
+    let stop: (() => void) | undefined;
+    const off = this.open({
+      start: () => {
+        sink.roster({ members, total: members.length, unbound: datasource.kind === 'unbound' });
+        stop = this.subscribeWidget(datasource, sink);
+      },
+      advance: () => {},
+    });
+    return () => {
+      off();
+      stop?.();
+    };
+  }
+
+  // Each device's seed comes from the recording itself, with no read to make: its newest reading per
+  // measurement inside the history window, and every measurement it reported in that window, which
+  // is how "does not report this" (a dozer's tyres) is told from "sent nothing".
+  async readMemberSeeds(
+    deviceTokens: readonly string[],
+    _plan: MemberSeedPlan,
+    onSeed: (deviceToken: string, seed: MemberSeed | null) => void,
+  ): Promise<void> {
+    const { t, v } = this.rec.measurements;
+    for (const token of deviceTokens) {
+      const seed: MemberSeed = { latest: {}, observed: [] };
+      for (const s of this.index.byDevice.get(token) ?? []) {
+        const at = upperBound(s.times, this.cursor) - 1;
+        if (at < 0 || s.times[at] < this.cursor - RECORDED_HISTORY_WINDOW_MS) continue;
+        const row = s.rows[at];
+        seed.observed.push(s.name);
+        seed.latest[s.name] = {
+          id: `${token}|${s.name}|${row}`,
+          deviceToken: token,
+          eventType: 0,
+          occurredTime: this.iso(t[row]),
+          name: s.name,
+          value: v[row],
+          classifier: null,
+        };
+      }
+      onSeed(token, seed);
+    }
   }
 
   // ── alarms ────────────────────────────────────────────────────────────────

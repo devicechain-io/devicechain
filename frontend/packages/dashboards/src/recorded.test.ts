@@ -650,4 +650,47 @@ describe.skipIf(!existsSync(EXCERPT))('the converter excerpt of the first record
     ]);
     expect(tyre[tyre.length - 1].value).toBe(599.6);
   });
+
+  // A fleet table over the recorded run: a row per device, named by its external id, and a dozer
+  // says it does not report tyre pressure because the run holds none for it.
+  it('seeds a fleet: every device, a dozer observed without tyres, a hauler with them', async () => {
+    const r = load();
+    const clock = new RecordedClock(r.excerpt!.toMs, { minMs: r.excerpt!.fromMs, startMs: 441_200, ticker: idleTicker });
+    const source = new RecordedDataSource(r, clock, { siteAnchors: [SITE] });
+    const ds: DatasourceSelector = { kind: 'anchor', anchor: SITE, measurements: ['fuel_pct', 'tyre_pressure_kpa'] };
+    const rosters: Array<{ token: string; name: string | null }[]> = [];
+    const got: MeasurementSample[] = [];
+    const stop = source.subscribeMembers(ds, { roster: (x) => rosters.push(x.members), next: (x) => got.push(x) });
+    const seeds = new Map<string, { latest: Record<string, MeasurementSample>; observed: string[] }>();
+    await source.readMemberSeeds(
+      r.devices.map((d) => d.token),
+      { seed: async () => ({ latest: {}, observed: [] }) },
+      (token, seed) => seeds.set(token, seed!),
+    );
+    await settle();
+    stop();
+    expect(rosters).toHaveLength(1);
+    expect(rosters[0]).toHaveLength(r.devices.length);
+    expect(rosters[0].find((m) => m.token === 'sp-dozer-01')?.name).toBe('SP-DZ-0001');
+    expect(seeds.get('sp-dozer-01')!.observed).toContain('fuel_pct');
+    expect(seeds.get('sp-dozer-01')!.observed).not.toContain('tyre_pressure_kpa');
+    expect(seeds.get('sp-hauler-03')!.latest.tyre_pressure_kpa.value).toBe(599.6);
+    expect(seeds.get('sp-plant-01')!.observed).not.toContain('fuel_pct');
+    // The live rows carry their device, so one device's fuel never stands in for another's.
+    expect(new Set(got.map((x) => x.deviceToken)).size).toBeGreaterThan(1);
+  });
+
+  it('says nothing once the fleet subscription is disposed', async () => {
+    const r = load();
+    const clock = new RecordedClock(r.excerpt!.toMs, { minMs: r.excerpt!.fromMs, startMs: 441_200, ticker: idleTicker });
+    const source = new RecordedDataSource(r, clock, { siteAnchors: [SITE] });
+    const rosters: unknown[] = [];
+    const stop = source.subscribeMembers(
+      { kind: 'anchor', anchor: SITE, measurements: ['fuel_pct'] },
+      { roster: (x) => rosters.push(x), next: () => rosters.push('sample') },
+    );
+    stop();
+    await settle();
+    expect(rosters).toEqual([]);
+  });
 });

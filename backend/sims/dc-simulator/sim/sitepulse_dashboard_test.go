@@ -5,7 +5,7 @@ package sim
 
 import (
 	"encoding/json"
-	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -13,22 +13,6 @@ import (
 
 // The expected values below are LITERALS, never read from the constants the board is
 // built from: a comparison to the constant that produced a value cannot fail.
-
-var (
-	wantSitepulseDozerTokens  = []string{"sp-dozer-01", "sp-dozer-02", "sp-dozer-03", "sp-dozer-04", "sp-dozer-05", "sp-dozer-06"}
-	wantSitepulseLoaderTokens = []string{"sp-loader-01", "sp-loader-02", "sp-loader-03", "sp-loader-04", "sp-loader-05", "sp-loader-06"}
-	wantSitepulseHaulerTokens = []string{"sp-hauler-01", "sp-hauler-02", "sp-hauler-03", "sp-hauler-04", "sp-hauler-05", "sp-hauler-06"}
-)
-
-// wantSitepulseMachineTokens is every machine, SORTED, to compare with sortedKeys.
-func wantSitepulseMachineTokens() []string {
-	var all []string
-	all = append(all, wantSitepulseDozerTokens...)
-	all = append(all, wantSitepulseHaulerTokens...)
-	all = append(all, wantSitepulseLoaderTokens...)
-	sort.Strings(all)
-	return all
-}
 
 // sitepulseBoard decodes the scenario's one dashboard, failing loudly when there is
 // none so every test below fails by VALUE on a tree without the board.
@@ -65,35 +49,6 @@ func widgetByID(t *testing.T, def dashboardDefinition, id string) dashboardWidge
 	return dashboardWidget{}
 }
 
-// cardsFor returns the latest-cards selecting a measurement, keyed by the slot each binds.
-func cardsFor(def dashboardDefinition, measurement string) map[string]dashboardWidget {
-	return widgetsFor(def, "latest-card", measurement)
-}
-
-// tanksFor returns the level-gauges (the fuel tanks) selecting a measurement, keyed by slot.
-func tanksFor(def dashboardDefinition, measurement string) map[string]dashboardWidget {
-	return widgetsFor(def, "level-gauge", measurement)
-}
-
-func widgetsFor(def dashboardDefinition, typ, measurement string) map[string]dashboardWidget {
-	out := map[string]dashboardWidget{}
-	for _, w := range widgetsOfType(def, typ) {
-		if w.Datasource != nil && len(w.Datasource.Measurements) == 1 && w.Datasource.Measurements[0] == measurement {
-			out[w.Datasource.Slot] = w
-		}
-	}
-	return out
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -114,59 +69,85 @@ func TestSitepulseDeclaresTheSiteDashboard(t *testing.T) {
 	}
 }
 
-func TestSitepulseBoardShowsEveryMachinesFuel(t *testing.T) {
-	m := sitepulseManifest(t)
-	def := sitepulseBoard(t, m)
-	cards := tanksFor(def, "fuel_pct")
-	if got, want := sortedKeys(cards), wantSitepulseMachineTokens(); !equalStrings(got, want) {
-		t.Fatalf("fuel tanks bind %v, want one per machine %v", got, want)
+// asJSON renders a decoded option the way it is stored (a map marshals its keys sorted), so a
+// literal can be compared as text.
+func asJSON(t *testing.T, v any) string {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
 	}
-	externalIds := map[string]string{}
-	for _, d := range m.Expand(m.Seed) {
-		externalIds[d.Token] = d.ExternalId
+	return string(raw)
+}
+
+// The fleet is ONE table bound to the site anchor, with a column for each measurement the
+// machines really report and nothing per machine: no tank, no payload card, no heading row.
+func TestSitepulseBoardShowsTheFleetInOneTable(t *testing.T) {
+	def := sitepulseBoard(t, sitepulseManifest(t))
+	tables := widgetsOfType(def, "fleet-table")
+	if len(tables) != 1 || tables[0].Id != "sp-fleet" {
+		t.Fatalf("the board carries fleet tables %+v, want exactly sp-fleet", tables)
 	}
-	if externalIds["sp-dozer-01"] != "SP-DZ-0001" {
-		t.Errorf("premise: sp-dozer-01 externalId = %q, want SP-DZ-0001", externalIds["sp-dozer-01"])
+	w := tables[0]
+	if w.Datasource == nil || w.Datasource.Slot != "site" {
+		t.Fatalf("sp-fleet binds %+v, want the site anchor slot", w.Datasource)
 	}
-	for slot, w := range cards {
-		if w.Options["measurement"] != "fuel_pct" || w.Options["unit"] != "%" {
-			t.Errorf("%s: measurement/unit = %v/%v, want fuel_pct/%%", w.Id, w.Options["measurement"], w.Options["unit"])
+	// Columns follow the datasource's measurement order. Literals: the keys the profile declares.
+	if got, want := w.Datasource.Measurements, []string{"fuel_pct", "engine_temp_c", "payload_t", "tyre_pressure_kpa"}; !equalStrings(got, want) {
+		t.Errorf("sp-fleet selects %v, want %v", got, want)
+	}
+	const columns = `[{"label":"Fuel","measurement":"fuel_pct","precision":1,"unit":"%"},` +
+		`{"label":"Engine","measurement":"engine_temp_c","precision":1,"unit":"°C"},` +
+		`{"label":"Payload","measurement":"payload_t","precision":1,"unit":"t"},` +
+		`{"label":"Tyres","measurement":"tyre_pressure_kpa","precision":1,"unit":"kPa"}]`
+	if got := asJSON(t, w.Options["columns"]); got != columns {
+		t.Errorf("sp-fleet columns = %s, want %s", got, columns)
+	}
+	// Lowest fuel first: ascending on the fuel column.
+	if w.Options["sortBy"] != "fuel_pct" {
+		t.Errorf("sp-fleet sortBy = %v, want fuel_pct", w.Options["sortBy"])
+	}
+	if desc, _ := w.Options["sortDescending"].(bool); desc {
+		t.Errorf("sp-fleet sorts descending; the lowest fuel must come first")
+	}
+	// One page holds the 18 machines and the plant; the table follows the board's time range.
+	if n, _ := w.Options["pageSize"].(float64); n != 20 {
+		t.Errorf("sp-fleet pageSize = %v, want 20", w.Options["pageSize"])
+	}
+	// No stale threshold: a recorded replay would dim every cell (see the board's builder).
+	if _, ok := w.Options["staleAfterSeconds"]; ok {
+		t.Errorf("sp-fleet sets staleAfterSeconds = %v; a replay's readings are all older than any threshold", w.Options["staleAfterSeconds"])
+	}
+	if _, pinned := w.Options["windowSeconds"]; pinned {
+		t.Errorf("sp-fleet pins its own span; it must follow the board's time range")
+	}
+	// Nothing per machine is left: a tank, a payload card or a heading row would repeat the table.
+	for _, typ := range []string{"level-gauge", "latest-card", "label", "bar-chart"} {
+		if got := widgetsOfType(def, typ); len(got) != 0 {
+			t.Errorf("the board carries %d %s widgets; the fleet table replaced the per-machine cards", len(got), typ)
 		}
-		// The tank is titled with the MEASUREMENT; the machine is named by the frame's subject
-		// line, which shows the slot's device. A title that is the external id says it twice.
-		if want := externalIds[slot]; want == "" || w.Options["title"] != "Fuel level" || def.Slots[slot].Label != want {
-			t.Errorf("%s: title %v / slot label %q, want the title \"Fuel level\" and the externalId %q as the slot label", w.Id, w.Options["title"], def.Slots[slot].Label, want)
-		}
-		if def.Slots[slot].DefaultBinding == nil || def.Slots[slot].DefaultBinding.DeviceToken != slot {
-			t.Errorf("%s: slot %q does not default-bind the device it is named for", w.Id, slot)
+	}
+	for slot := range def.Slots {
+		if strings.HasPrefix(slot, "sp-dozer") || strings.HasPrefix(slot, "sp-loader") || strings.HasPrefix(slot, "sp-hauler") {
+			t.Errorf("slot %q: no machine needs a slot of its own any more", slot)
 		}
 	}
 }
 
-func TestSitepulseBoardStatesTheThresholds(t *testing.T) {
+// Each column that a rule watches carries that rule's bands, and the others carry none. The
+// numbers are LITERALS (the rules' 15 %, 105 C and 600 kPa and the severity each raises at); the
+// gauges beside the table are held to the same ones, so the table, the gauges and the alarms agree.
+func TestSitepulseFleetTableBandsAreTheRulesOwn(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
-
-	// The numbers live in `thresholds` rather than in prose: a label that restated them would be
-	// a second place to keep in step. Compared as JSON (a decoded map marshals its keys sorted) against literals (the rule's 15 %, 105 C
-	// and 600 kPa, and the severity each rule raises at).
-	thresholdsOf := func(w dashboardWidget) string {
-		raw, err := json.Marshal(w.Options["thresholds"])
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(raw)
-	}
-	const lowFuel = `[{"level":"major","value":0},{"level":"normal","value":15}]`
-	cards := tanksFor(def, "fuel_pct")
-	if len(cards) == 0 {
-		t.Fatal("premise: the board has no fuel tanks")
-	}
-	for slot, w := range cards {
-		if got := thresholdsOf(w); got != lowFuel {
-			t.Errorf("%s (%s): thresholds = %s, want %s", w.Id, slot, got, lowFuel)
-		}
+	const fuel, temp, tyre = `{"level":"major","measurement":"fuel_pct","value":0},{"level":"normal","measurement":"fuel_pct","value":15}`,
+		`{"level":"normal","measurement":"engine_temp_c","value":0},{"level":"critical","measurement":"engine_temp_c","value":105}`,
+		`{"level":"major","measurement":"tyre_pressure_kpa","value":0},{"level":"normal","measurement":"tyre_pressure_kpa","value":600}`
+	// No band for payload: nothing alarms on it.
+	if got, want := asJSON(t, widgetByID(t, def, "sp-fleet").Options["thresholds"]), "["+fuel+","+temp+","+tyre+"]"; got != want {
+		t.Errorf("sp-fleet thresholds = %s, want %s", got, want)
 	}
 
+	// The gauges, with the same edges (a gauge's entries carry no measurement).
 	for _, c := range []struct {
 		id, typ, title, thresholds string
 		min, max                   float64
@@ -184,13 +165,69 @@ func TestSitepulseBoardStatesTheThresholds(t *testing.T) {
 		if title, _ := w.Options["title"].(string); title != c.title {
 			t.Errorf("%s title = %q, want %q", c.id, title, c.title)
 		}
-		if got := thresholdsOf(w); got != c.thresholds {
+		if got := asJSON(t, w.Options["thresholds"]); got != c.thresholds {
 			t.Errorf("%s thresholds = %s, want %s", c.id, got, c.thresholds)
 		}
 		lo, _ := w.Options["min"].(float64)
 		hi, _ := w.Options["max"].(float64)
 		if lo != c.min || hi != c.max {
 			t.Errorf("%s scale = %v..%v, want %v..%v", c.id, lo, hi, c.min, c.max)
+		}
+	}
+}
+
+// 🔴 The table has no tyre value for a dozer because the PLAYER never sends one, not because the
+// board hides it: the fleet table says "does not report this" for a measurement a device never
+// reported. This pins that premise on the first recorded run (a stale premise would make the
+// table's honesty a claim about data it was not shown), and that nothing on the board bakes a
+// per-device value or override into the table.
+func TestSitepulseDozersReportNoTyrePressureInTheRecordedRun(t *testing.T) {
+	raw, err := os.ReadFile("../../../../frontend/testdata/board-replay/take2-tyre-excerpt.json")
+	if err != nil {
+		t.Fatalf("the recorded run is not readable: %v", err)
+	}
+	var rec struct {
+		Devices  []struct{ Token, Kind string } `json:"devices"`
+		Channels struct {
+			Measurements []string `json:"measurements"`
+		} `json:"channels"`
+		Measurements struct {
+			D []int `json:"d"`
+			N []int `json:"n"`
+		} `json:"measurements"`
+	}
+	if err := json.Unmarshal(raw, &rec); err != nil {
+		t.Fatal(err)
+	}
+	reported := map[string]map[string]bool{}
+	for i, d := range rec.Measurements.D {
+		kind := rec.Devices[d].Kind
+		if reported[kind] == nil {
+			reported[kind] = map[string]bool{}
+		}
+		reported[kind][rec.Channels.Measurements[rec.Measurements.N[i]]] = true
+	}
+	for kind, want := range map[string]map[string]bool{
+		"Hauler": {"fuel_pct": true, "engine_temp_c": true, "payload_t": true, "tyre_pressure_kpa": true},
+		"Loader": {"fuel_pct": true, "engine_temp_c": true, "payload_t": true, "tyre_pressure_kpa": true},
+		"Dozer":  {"fuel_pct": true, "engine_temp_c": true},
+		"Plant":  {"throughput_tph": true, "plant_running": true},
+	} {
+		if len(reported[kind]) != len(want) {
+			t.Errorf("%s reports %v in the recorded run, want exactly %v", kind, reported[kind], want)
+		}
+		for m := range want {
+			if !reported[kind][m] {
+				t.Errorf("%s never reports %s in the recorded run, want it to", kind, m)
+			}
+		}
+	}
+
+	// And the board states nothing per device: the table is a view of what arrives.
+	w := widgetByID(t, sitepulseBoard(t, sitepulseManifest(t)), "sp-fleet")
+	for _, key := range []string{"rows", "values", "devices", "members", "overrides"} {
+		if _, ok := w.Options[key]; ok {
+			t.Errorf("sp-fleet carries a %q option; a cell must come from a reading, never from the board", key)
 		}
 	}
 }
@@ -327,22 +364,6 @@ func TestSitepulseBoardCarriesAnExplicitHourTimeRange(t *testing.T) {
 	}
 }
 
-func TestSitepulseBoardPayloadIsHaulersOnly(t *testing.T) {
-	def := sitepulseBoard(t, sitepulseManifest(t))
-	cards := cardsFor(def, "payload_t")
-	if got := sortedKeys(cards); !equalStrings(got, wantSitepulseHaulerTokens) {
-		t.Fatalf("payload cards bind %v, want the six haul trucks %v", got, wantSitepulseHaulerTokens)
-	}
-	for _, w := range cards {
-		if w.Options["title"] != "Payload" {
-			t.Errorf("%s: title %v, want the measurement name \"Payload\"", w.Id, w.Options["title"])
-		}
-		if w.Options["measurement"] != "payload_t" || w.Options["unit"] != "t" {
-			t.Errorf("%s: measurement/unit = %v/%v, want payload_t/t", w.Id, w.Options["measurement"], w.Options["unit"])
-		}
-	}
-}
-
 func TestSitepulseBoardDrillsAnAlarmToTheMachineGauges(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
 	sel, ok := def.Slots["selectedMachine"]
@@ -356,6 +377,11 @@ func TestSitepulseBoardDrillsAnAlarmToTheMachineGauges(t *testing.T) {
 	}
 	if tgt := widgetByID(t, def, "sp-alarms").Options["selectionTarget"]; tgt != "selectedMachine" {
 		t.Errorf("alarm table drills to %v, want selectedMachine", tgt)
+	}
+	// The fleet table's device name re-points the same slot, so a click on a row moves the engine
+	// and tyre gauges exactly as an alarm's originator does.
+	if tgt := widgetByID(t, def, "sp-fleet").Options["selectionTarget"]; tgt != "selectedMachine" {
+		t.Errorf("fleet table drills to %v, want selectedMachine", tgt)
 	}
 	if tgt := widgetByID(t, def, "sp-machine-select").Options["selectionTarget"]; tgt != "selectedMachine" {
 		t.Errorf("machine selector drives %v, want selectedMachine", tgt)
@@ -387,75 +413,43 @@ func TestSitepulseBoardCarriesNoCommandWidgetYet(t *testing.T) {
 }
 
 func TestSitepulseBoardTracksTheResizedFleet(t *testing.T) {
-	for _, tc := range []struct{ devices, perKind int }{
-		{1, 1}, {3, 3}, {7, 7},
-		// The cap is one screen of rows per kind; one machine past it must say so.
-		{sitepulseCardsPerKind, sitepulseCardsPerKind}, {sitepulseCardsPerKind + 1, sitepulseCardsPerKind}, {250, sitepulseCardsPerKind},
-	} {
-		s, err := NewSim("sitepulse", 1, Load{DeviceCount: tc.devices})
+	// The table is bound to the anchor, not to a list of machines, so a resized run changes the
+	// rows it shows and nothing in the board: the same widgets, the same slots, no per-machine
+	// widget, and a definition far under the 1 MiB the service refuses at.
+	var first string
+	for _, devices := range []int{1, 3, 7, 18, 19, 250} {
+		s, err := NewSim("sitepulse", 1, Load{DeviceCount: devices})
 		if err != nil {
-			t.Fatalf("NewSim(%d): %v", tc.devices, err)
+			t.Fatalf("NewSim(%d): %v", devices, err)
 		}
 		m := s.Manifest()
 		def := sitepulseBoard(t, m)
-		if got, want := len(tanksFor(def, "fuel_pct")), 3*tc.perKind; got != want {
-			t.Errorf("--devices %d: %d fuel tanks, want %d", tc.devices, got, want)
+		ids := make([]string, 0, len(def.Widgets))
+		for _, w := range def.Widgets {
+			ids = append(ids, w.Id)
 		}
-		if got := len(cardsFor(def, "payload_t")); got != tc.perKind {
-			t.Errorf("--devices %d: %d payload cards, want %d", tc.devices, got, tc.perKind)
+		sort.Strings(ids)
+		if got := strings.Join(ids, ","); first == "" {
+			first = got
+		} else if got != first {
+			t.Errorf("--devices %d: widgets %s, want the same as the first run %s", devices, got, first)
 		}
-		// The note exists exactly when the rows are partial.
-		labels := widgetsOfType(def, "label")
-		if tc.devices > tc.perKind {
-			if len(labels) != 1 || labels[0].Id != "sp-fuel-label" {
-				t.Fatalf("--devices %d: the board carries labels %+v, want the one partial-rows note sp-fuel-label", tc.devices, labels)
-			}
-			text, _ := labels[0].Options["text"].(string)
-			if want := fmt.Sprintf("first %d of %d", tc.perKind, tc.devices); !strings.Contains(text, want) {
-				t.Errorf("--devices %d: label %q lacks the note %q", tc.devices, text, want)
-			}
-			if strings.Contains(text, "15") || strings.Contains(text, "fire") {
-				t.Errorf("--devices %d: label %q carries threshold prose; the bands are on the tanks", tc.devices, text)
-			}
-			if strings.Contains(text, "every machine") {
-				t.Errorf("--devices %d: label %q claims every machine is listed; the anchor membership is paged", tc.devices, text)
-			}
-		} else if len(labels) != 0 {
-			t.Errorf("--devices %d: the board carries %d labels, but every machine has a tank and there is nothing to note", tc.devices, len(labels))
+		if got := len(widgetsOfType(def, "fleet-table")); got != 1 {
+			t.Errorf("--devices %d: %d fleet tables, want 1", devices, got)
 		}
 		// dashboard-management refuses a definition over 1 MiB (model/api.go maxDefinitionBytes).
 		if len(m.Dashboards[0].Definition) >= 1<<20 {
-			t.Errorf("--devices %d: definition is %d bytes", tc.devices, len(m.Dashboards[0].Definition))
+			t.Errorf("--devices %d: definition is %d bytes", devices, len(m.Dashboards[0].Definition))
 		}
 	}
 }
 
-// The default 18-machine board has six per kind and every machine has a tank, so it carries
-// no partial-rows note, and no heading row either: each tank names itself and its machine.
-// The tanks start on the row the gauges' band ends on, so no empty row sits between them.
-func TestSitepulseDefaultBoardSpendsNoRowOnAFuelHeading(t *testing.T) {
-	def := sitepulseBoard(t, sitepulseManifest(t))
-	if got := widgetsOfType(def, "label"); len(got) != 0 {
-		t.Errorf("default board carries %d labels, want none", len(got))
-	}
-	tyre := widgetByID(t, def, "sp-tyre").Layout["base"]
-	first := 1 << 30
-	for _, w := range tanksFor(def, "fuel_pct") {
-		if r := w.Layout["base"].Row; r < first {
-			first = r
-		}
-	}
-	if end := tyre.Row + tyre.Rows; first != end {
-		t.Errorf("the first fuel tank starts at row %d, want %d, the row the gauge band ends on", first, end)
-	}
-}
-
-// The board is not capped to a screen (it may scroll), but the ORDERING RULE holds: the alarm
-// surfaces, the KPI row and the map end at or above the fold of a 1080 px-tall window, so a
-// scroll only ever hides cards and gauges. Whether the widgets overlap or leave the grid, and
-// whether each is a size it can be read at, is the frontend's to say: the parser refuses an
-// overlap and the layout lint checks the rest, over the committed fixture.
-func TestSitepulseBoardKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
+// Every widget ends at or above the fold of a 1080 px-tall window, so the whole board fits the
+// space beside the 3D window with nothing to scroll: the alarms, the KPIs, the map, the gauges
+// and the fleet table. Whether the widgets overlap or leave the grid, and whether each is a size
+// it can be read at, is the frontend's to say: the parser refuses an overlap and the layout lint
+// checks the rest, over the committed fixture.
+func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 	// A LITERAL, not the constant the board is built from: 960 px across 12 columns with 8 px
 	// gutters is a row pitch of ~80.7 px, and 1080 px holds 13 whole rows.
 	const foldRows = 13
@@ -463,13 +457,21 @@ func TestSitepulseBoardKeepsTheKeyWidgetsAboveTheFold(t *testing.T) {
 		t.Errorf("premise: the board computes a fold of %d rows, want %d", sitepulseFoldRows, foldRows)
 	}
 	def := sitepulseBoard(t, sitepulseManifest(t))
-	for _, id := range []string{"sp-alarms-critical", "sp-alarms-major", "sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-plant-throughput-max", "sp-plant-running", "sp-alarms", "sp-map"} {
-		b := widgetByID(t, def, id).Layout["base"]
+	lowest := 0
+	for _, w := range def.Widgets {
+		b := w.Layout["base"]
 		if b.Mode != "grid" {
-			t.Fatalf("%s is placed %q; the fold is counted in grid rows", id, b.Mode)
+			t.Fatalf("%s is placed %q; the fold is counted in grid rows", w.Id, b.Mode)
 		}
 		if end := b.Row + b.Rows; end > foldRows {
-			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (%d rows); the alarms, KPIs and map belong above it", id, end, foldRows)
+			t.Errorf("%s ends at row %d, below the fold of a 1080 px window (%d rows)", w.Id, end, foldRows)
+		} else if end > lowest {
+			lowest = end
 		}
+	}
+	// And the board spends the whole screen: the fleet table takes the rows the rest leave.
+	fleet := widgetByID(t, def, "sp-fleet").Layout["base"]
+	if fleet.Row+fleet.Rows != foldRows || fleet.Rows != 6 || fleet.Cols != 12 {
+		t.Errorf("fleet table = %+v, want the full width over the last 6 rows (rows 7-12)", fleet)
 	}
 }
