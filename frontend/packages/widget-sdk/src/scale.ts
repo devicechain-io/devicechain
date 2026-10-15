@@ -6,7 +6,7 @@
 // read those, so it asks this hook for the same box in numbers. Both read the one curve in
 // ./fit-text and the one box -- the frame's padded content column -- so they agree.
 
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useReducer, useRef } from 'react';
 
 import { useWidgetBodySize, useWidgetDensityScale, type WidgetBodySize } from './context';
 import { stickyChars, type StickyChars } from './fit-text';
@@ -61,11 +61,24 @@ export function useWidgetScale(): WidgetScale {
 const STICKY_HOLD_MS = 60_000;
 
 // useStickyChars -- the character count to hand the font curve for a live readout: the longest
-// seen in the last minute, so 9.99 -> 10.01 does not resize the number.
+// seen in the last minute, so 9.99 -> 10.01 does not resize the number. Holding the LONGER
+// length can only make the font smaller than the live value needs, never larger, so it cannot
+// make a readout overflow.
 export function useStickyChars(chars: number, holdMs = STICKY_HOLD_MS): number {
   const held = useRef<StickyChars | undefined>(undefined);
+  const [tick, wake] = useReducer((n: number) => n + 1, 0);
   // Written during render on purpose: the value is a pure function of (prev, chars, time) and
   // an extra render recomputes the same answer, so there is nothing to commit or clean up.
   held.current = stickyChars(held.current, chars, Date.now(), holdMs);
-  return held.current.value;
+  const { value, since } = held.current;
+  // A hold is released only by a render. A value that shrinks and then stays put (an alarm
+  // count falling from 1000 to 9 and holding there) brings no further render, so without this
+  // it would keep the long length's small font indefinitely, not for a minute: render again
+  // when the hold runs out. `tick` re-arms the timer should it ever fire a moment early.
+  useEffect(() => {
+    if (value <= chars) return;
+    const timer = setTimeout(wake, Math.max(0, since + holdMs - Date.now()));
+    return () => clearTimeout(timer);
+  }, [value, since, chars, holdMs, tick]);
+  return value;
 }

@@ -129,7 +129,7 @@
   "widgetAlignCenter": "Centre",
   "widgetAlignRight": "Right",
   "widgetLabelFontSize": "Text size",
-  "widgetHintFontSize": "Height of the text in pixels.",
+  "widgetHintFontSize": "Height of the text in pixels at the comfortable density. It grows and shrinks with the board density.",
   "widgetLabelImageUrl": "Image URL",
   "widgetLabelAltText": "Alt text",
   "widgetLabelFit": "Fit",

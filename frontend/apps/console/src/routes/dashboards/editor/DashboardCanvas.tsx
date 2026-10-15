@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import {
   baseBox,
   bringToFront,
+  DEFAULT_CANVAS_DENSITY,
   deleteWidget,
   gridBoxToPx,
   pxToGridBox,
@@ -28,6 +29,7 @@ import {
   type WidgetActions,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
+import { densityScale, tokenStyle, WidgetDensityProvider } from '@devicechain/widget-sdk';
 import { ConnectedWidget, WidgetSubjectProvider, resolveWidgets, widgetSubjectLabel } from '@devicechain/widgets';
 import { Rnd } from 'react-rnd';
 import { defaultWidgetRegistry, type EditorWidgetRegistry } from './widgetRegistry';
@@ -107,6 +109,10 @@ export function DashboardCanvas({
   // ResizeObserver tracks this capped element, so `colWidth` follows automatically.
   // Fixed-HEIGHT and fill both fill the pane width, so only {width} caps here.
   const maxWidth = typeof sizing === 'object' && 'width' in sizing ? sizing.width : undefined;
+  // The authored density, applied exactly as the viewer applies it (the size tokens on the
+  // board root, the scale in context), so a wall board is laid out at the type size it will
+  // show at: the frame's header thresholds and every fitted readout depend on it.
+  const scale = densityScale(definition.canvas.density);
 
   // Give the scroll area room below the lowest widget so there's somewhere to drag.
   const contentHeight =
@@ -120,7 +126,12 @@ export function DashboardCanvas({
       onMouseDown={() => onSelect(null)}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto' }}
     >
-      <div ref={contentRef} style={{ position: 'relative', width: '100%', maxWidth, minHeight: contentHeight }}>
+      <div
+        ref={contentRef}
+        data-density={definition.canvas.density ?? DEFAULT_CANVAS_DENSITY}
+        style={{ position: 'relative', width: '100%', maxWidth, minHeight: contentHeight, ...tokenStyle(scale) }}
+      >
+        <WidgetDensityProvider scale={scale}>
         {definition.widgets.map((widget) => {
           const box = baseBox(widget);
           const rect = gridBoxToPx(box, geom);
@@ -207,6 +218,7 @@ export function DashboardCanvas({
             </Rnd>
           );
         })}
+        </WidgetDensityProvider>
       </div>
     </div>
   );

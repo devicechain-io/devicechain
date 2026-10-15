@@ -5,7 +5,7 @@
 
 // No numeric font sizes in the built-ins.
 //
-// A built-in widget's text size comes from the type ramp (`fontVar('md')` -> --font-md, which
+// A built-in widget's text size comes from the type ramp (`fontVar('md')` -> --dc-font-md, which
 // multiplies by the board's density scale) or from the shared value curve (fitValueFont /
 // fitValueFontCss / useWidgetScale). A `fontSize: 12` is a size density cannot reach: on a wall
 // display it stays 12 px while everything around it grows. The failure is quiet -- it looks

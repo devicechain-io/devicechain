@@ -1,9 +1,10 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { SIZE_CLASS_BREAKS as B, makeWidgetScale, sizeClassOf } from './scale';
+import { SIZE_CLASS_BREAKS as B, makeWidgetScale, sizeClassOf, useStickyChars } from './scale';
 
 describe('sizeClassOf', () => {
   it('is regular before the first measure (the default rendering, not a degraded one)', () => {
@@ -32,5 +33,30 @@ describe('makeWidgetScale', () => {
     const s = makeWidgetScale({ width: 400, height: 200 }, 1.5);
     expect(s.px('font-md')).toBeCloseTo(13 * 1.5);
     expect(s.px('space-1')).toBeCloseTo(4 * 1.5);
+  });
+});
+
+describe('useStickyChars', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('holds a longer length, then lets it go when the hold runs out with NO new render', () => {
+    vi.useFakeTimers();
+    const { result, rerender } = renderHook(({ chars }) => useStickyChars(chars, 60_000), {
+      initialProps: { chars: 4 },
+    });
+    rerender({ chars: 1 });
+    expect(result.current).toBe(4);
+    act(() => {
+      vi.advanceTimersByTime(59_000);
+    });
+    expect(result.current).toBe(4);
+    // The value has not changed since, so nothing but the hook's own timer re-renders it: a
+    // count that fell to 9 and stays there must not keep the 4-character size forever.
+    act(() => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(result.current).toBe(1);
   });
 });

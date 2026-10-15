@@ -129,7 +129,7 @@
   "widgetAlignCenter": "Centro",
   "widgetAlignRight": "Derecha",
   "widgetLabelFontSize": "Tamaño del texto",
-  "widgetHintFontSize": "Altura del texto en píxeles.",
+  "widgetHintFontSize": "Altura del texto en píxeles con la densidad cómoda. Crece y se reduce con la densidad del panel.",
   "widgetLabelImageUrl": "URL de la imagen",
   "widgetLabelAltText": "Texto alternativo",
   "widgetLabelFit": "Ajuste",

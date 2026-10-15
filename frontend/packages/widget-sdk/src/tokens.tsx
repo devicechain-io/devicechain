@@ -4,12 +4,17 @@
 // Size tokens: the type ramp and spacing steps a widget draws from instead of writing px
 // literals, and the density scale they all multiply by.
 //
-//   --dc-scale   the board's density scale (0.9 compact / 1 comfortable / 1.5 wall)
-//   --font-<xs|sm|md|lg|xl|display>   calc(<base px> * var(--dc-scale))
-//   --space-<1..4>                     calc(<base px> * var(--dc-scale))
+//   --dc-scale                          the board's density scale (0.9 compact / 1 comfortable / 1.5 wall)
+//   --dc-font-<xs|sm|md|lg|xl|display>  calc(<base px> * var(--dc-scale))
+//   --dc-space-<1..4>                   calc(<base px> * var(--dc-scale))
+//
+// The `dc-` prefix is load-bearing: these are set on a board that lives inside someone else's
+// page, and the bare names collide -- Tailwind v4 keeps font FAMILIES in `--font-*` (a host's
+// `--font-display: "Inter"` is its documented example), so `var(--font-display, 28px)` in such
+// a host resolves to a family name and the font size is thrown away.
 //
 // The renderer sets them on its root (tokenStyle), so every widget under it scales with the
-// board's density; `fontVar('md')` is `var(--font-md, 13px)`, which still renders the base
+// board's density; `fontVar('md')` is `var(--dc-font-md, 13px)`, which still renders the base
 // size anywhere the tokens are not set (a host that mounts a bare WidgetFrame). Canvas widgets
 // cannot read a CSS variable and take the numeric equivalent from useWidgetScale().px().
 //
@@ -42,11 +47,11 @@ export function densityScale(density: CanvasDensity | undefined): number {
 }
 
 export function fontVar(token: FontToken): string {
-  return `var(--font-${token}, ${FONT_TOKENS[token]}px)`;
+  return `var(--dc-font-${token}, ${FONT_TOKENS[token]}px)`;
 }
 
 export function spaceVar(token: SpaceToken): string {
-  return `var(--space-${token}, ${SPACE_TOKENS[token]}px)`;
+  return `var(--dc-space-${token}, ${SPACE_TOKENS[token]}px)`;
 }
 
 // The numeric px of a size token at a scale, for a canvas that cannot read the variable.
@@ -59,8 +64,8 @@ export function tokenPx(token: SizeToken, scale = 1): number {
 // The custom properties a board root sets for a density scale.
 export function tokenStyle(scale: number): CSSProperties {
   const vars: Record<string, string> = { '--dc-scale': String(scale) };
-  for (const [name, px] of Object.entries(FONT_TOKENS)) vars[`--font-${name}`] = `calc(${px}px * var(--dc-scale))`;
-  for (const [name, px] of Object.entries(SPACE_TOKENS)) vars[`--space-${name}`] = `calc(${px}px * var(--dc-scale))`;
+  for (const [name, px] of Object.entries(FONT_TOKENS)) vars[`--dc-font-${name}`] = `calc(${px}px * var(--dc-scale))`;
+  for (const [name, px] of Object.entries(SPACE_TOKENS)) vars[`--dc-space-${name}`] = `calc(${px}px * var(--dc-scale))`;
   return vars as CSSProperties;
 }
 

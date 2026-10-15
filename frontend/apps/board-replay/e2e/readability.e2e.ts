@@ -143,10 +143,15 @@ for (const width of WIDTHS) {
       const { findings } = await measure(page, 'fixture/gate-negative-control', width, theme);
       const kinds = (id: string) => new Set(findings.filter((f) => f.widget === id).map((f) => f.kind));
       const where = `${theme}: ${JSON.stringify(findings, null, 1)}`;
-      // The card's reading outgrows its container (text-overflow) and the frame cuts it off
+      // The card's READING outgrows its container (text-overflow) and the frame cuts it off
       // (text-clipped): each check is pinned by its own expectation, so dropping either one
-      // from readability.ts fails here.
+      // from readability.ts fails here. Its title and subject line are cut too, and a cut
+      // ellipsis line alone yields both kinds (nc-long-title below), so the READING's findings
+      // are picked out by its text (the gate page's synthetic 888.8, at the card's precision):
+      // otherwise a check that stopped seeing a cut value would still pass on the header.
       expect([...kinds('nc-overflowing-card')].sort(), where).toEqual(['text-clipped', 'text-overflow']);
+      const reading = findings.filter((f) => f.widget === 'nc-overflowing-card' && f.detail.startsWith('"888.8000'));
+      expect([...new Set(reading.map((f) => f.kind))].sort(), where).toEqual(['text-clipped', 'text-overflow']);
       expect(kinds('nc-overflowing-label').has('text-clipped'), where).toBe(true);
       // A frame title cut to an ellipsis is a finding, though the frame truncates it on
       // purpose (readability.ts says why). This card's reading fits; only its title does not.

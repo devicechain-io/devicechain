@@ -81,7 +81,7 @@ describe('WidgetFrame size awareness', () => {
     expect(column.style.containerType).toBe('size');
     expect(body.style.containerType).toBe('');
     expect(body.contains(column)).toBe(true);
-    expect(column.style.padding).toContain('--space-3');
+    expect(column.style.padding).toContain('--dc-space-3');
   });
 
   it('flush removes the column padding', () => {

@@ -9,15 +9,15 @@ import { FONT_TOKENS, SPACE_TOKENS, WidgetTokenStyles, densityScale, fontVar, sp
 
 describe('size tokens', () => {
   it('fontVar / spaceVar read the variable with the base size as the fallback', () => {
-    expect(fontVar('md')).toBe(`var(--font-md, ${FONT_TOKENS.md}px)`);
-    expect(spaceVar(3)).toBe(`var(--space-3, ${SPACE_TOKENS[3]}px)`);
+    expect(fontVar('md')).toBe(`var(--dc-font-md, ${FONT_TOKENS.md}px)`);
+    expect(spaceVar(3)).toBe(`var(--dc-space-3, ${SPACE_TOKENS[3]}px)`);
   });
 
   it('tokenStyle defines every token as a multiple of --dc-scale', () => {
     const style = tokenStyle(1.5) as Record<string, string>;
     expect(style['--dc-scale']).toBe('1.5');
-    for (const name of Object.keys(FONT_TOKENS)) expect(style[`--font-${name}`]).toMatch(/var\(--dc-scale\)/);
-    for (const name of Object.keys(SPACE_TOKENS)) expect(style[`--space-${name}`]).toMatch(/var\(--dc-scale\)/);
+    for (const name of Object.keys(FONT_TOKENS)) expect(style[`--dc-font-${name}`]).toMatch(/var\(--dc-scale\)/);
+    for (const name of Object.keys(SPACE_TOKENS)) expect(style[`--dc-space-${name}`]).toMatch(/var\(--dc-scale\)/);
   });
 
   it('tokenPx is the numeric twin of the variable at a scale', () => {

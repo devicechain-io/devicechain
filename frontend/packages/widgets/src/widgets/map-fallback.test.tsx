@@ -114,7 +114,7 @@ describe('MapWidget — the renderer could not be loaded', () => {
     render(<MapWidget widget={widget()} data={twoDevices()} />);
     const note = await screen.findByTestId('map-no-tiles-note');
     // A type-ramp token (small = 12 px at normal density), not a px literal.
-    expect(note.style.fontSize).toBe('var(--font-sm, 12px)');
+    expect(note.style.fontSize).toBe('var(--dc-font-sm, 12px)');
   });
 
   it('falls back the same way when a tile source WAS configured', async () => {

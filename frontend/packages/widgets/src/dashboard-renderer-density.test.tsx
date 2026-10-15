@@ -55,8 +55,8 @@ describe('renderer density', () => {
     const el = await root(board('wall'));
     expect(el.getAttribute('data-density')).toBe('wall');
     expect(el.style.getPropertyValue('--dc-scale')).toBe('1.5');
-    expect(el.style.getPropertyValue('--font-md')).toBe('calc(13px * var(--dc-scale))');
-    expect(el.style.getPropertyValue('--space-3')).toBe('calc(12px * var(--dc-scale))');
+    expect(el.style.getPropertyValue('--dc-font-md')).toBe('calc(13px * var(--dc-scale))');
+    expect(el.style.getPropertyValue('--dc-space-3')).toBe('calc(12px * var(--dc-scale))');
   });
 
   it('lets the viewer override win over the authored density', async () => {
@@ -71,7 +71,7 @@ describe('renderer density', () => {
     await flush();
     hub.disposeAll();
     const span = Array.from(container.querySelectorAll('span')).find((s) => s.textContent === 'hello') as HTMLElement;
-    expect(span.style.fontSize).toBe('var(--font-lg, 16px)');
+    expect(span.style.fontSize).toBe('var(--dc-font-lg, 16px)');
   });
 
   it('injects the severity tokens the alarm widgets read, from the SDK table', async () => {
