@@ -199,7 +199,12 @@ describe('a chart says what span it draws whenever the header would say otherwis
       },
       isDatasourceAvailable: async () => true,
     } as unknown as DashboardHub;
-    return { hub, push: (m: MeasurementSample) => act(() => sink?.next(m)) };
+    return {
+      hub,
+      push: (m: MeasurementSample) => act(() => sink?.next(m)),
+      // Many samples in ONE act, so a flood renders once instead of once per sample.
+      pushAll: (ms: MeasurementSample[]) => act(() => ms.forEach((m) => sink?.next(m))),
+    };
   }
   const badge = () => document.querySelector<HTMLElement>('[data-chart-span]');
   const day: TimeRangeState = { spanSeconds: 86400, paused: false };
@@ -244,7 +249,7 @@ describe('a chart says what span it draws whenever the header would say otherwis
     const f = measurementHub();
     mount(widget('timeseries-chart', {}), f.hub, { spanSeconds: 604800, paused: false });
     expect(badge()).toBeNull();
-    for (let i = 0; i < 2010; i++) f.push(sample(i, at(2010 - i)));
+    f.pushAll(Array.from({ length: 2010 }, (_, i) => sample(i, at(2010 - i))));
     const b = badge();
     expect(b).not.toBeNull();
     expect(b?.hasAttribute('data-chart-truncated')).toBe(true);

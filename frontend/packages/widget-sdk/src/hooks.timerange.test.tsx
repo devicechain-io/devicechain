@@ -33,7 +33,13 @@ function fakeHub() {
     return () => {};
   });
   const hub = { subscribeWidget: subscribe } as unknown as DashboardHub;
-  return { hub, subscribe, push: (m: MeasurementSample) => act(() => sink?.next(m)) };
+  return {
+    hub,
+    subscribe,
+    push: (m: MeasurementSample) => act(() => sink?.next(m)),
+    // A flood in ONE act: one render instead of one per sample.
+    pushAll: (ms: MeasurementSample[]) => act(() => ms.forEach((m) => sink?.next(m))),
+  };
 }
 
 const clock = () => NOW;
@@ -73,7 +79,7 @@ describe('a window as a span', () => {
   it('is bounded by a sample ceiling so a busy device cannot grow the buffer for days', () => {
     const f = fakeHub();
     const { result } = mount(f, { windowSeconds: 604800, now: clock });
-    for (let i = 0; i < MAX_SPAN_SAMPLES + 25; i++) f.push(sample(i, ago(5)));
+    f.pushAll(Array.from({ length: MAX_SPAN_SAMPLES + 25 }, (_, i) => sample(i, ago(5))));
     expect(result.current.samples).toHaveLength(MAX_SPAN_SAMPLES);
     // The OLDEST went, not the newest.
     expect(result.current.samples[result.current.samples.length - 1].value).toBe(MAX_SPAN_SAMPLES + 24);
@@ -200,7 +206,7 @@ describe('the retention ceiling never passes for full coverage', () => {
   it('marks a span window the ceiling cut while it was still inside the span, with where it now starts', () => {
     const f = fakeHub();
     const { result } = mount(f, { windowSeconds: 604800, now: clock });
-    for (let i = 0; i < MAX_SPAN_SAMPLES + 25; i++) f.push(sample(i, ago(MAX_SPAN_SAMPLES + 25 - i)));
+    f.pushAll(Array.from({ length: MAX_SPAN_SAMPLES + 25 }, (_, i) => sample(i, ago(MAX_SPAN_SAMPLES + 25 - i))));
     expect(result.current.samples).toHaveLength(MAX_SPAN_SAMPLES);
     expect(result.current.truncatedBefore).toBe(result.current.samples[0].occurredTime);
     expect(result.current.truncatedBefore).toBe(ago(MAX_SPAN_SAMPLES));
