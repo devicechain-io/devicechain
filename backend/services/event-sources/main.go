@@ -982,6 +982,12 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	InboundEventsWriter = ievents
 
+	// The presence tap's asynchronous writer (see newPresenceWriter). Built here, once for
+	// the life of the process, and closed by stopBrokerPresence.
+	if err := buildPresenceWriter(nmgr); err != nil {
+		return err
+	}
+
 	// The capture stream's durable consumer. Created here rather than inside the
 	// source so the stream is ensured at startup even before any device publishes:
 	// the stream must EXIST before the broker can write a device's message into it,

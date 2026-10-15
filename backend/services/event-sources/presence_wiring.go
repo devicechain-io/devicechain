@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
@@ -30,6 +31,42 @@ import (
 // brokerPresence holds everything the $SYS tap owns, so shutdown can undo exactly what
 // startup did. nil when the tap is off.
 var brokerPresence *presenceRuntime
+
+// PresenceWriter is the asynchronous inbound-events writer the broker tap emits through, with
+// brokerPresence.publishWindow publishes awaiting their acknowledgement at once. Nil when the
+// tap is disabled by configuration, and in a test that never built the service's broker
+// components, where the tap then emits synchronously. It is closed by stopBrokerPresence.
+var PresenceWriter messaging.AsyncWriter
+
+// newPresenceWriter builds the tap's writer at the configured window. It does not refuse at a
+// closed backpressure gate: a presence transition bypasses the gate by design (see
+// adapter.Emitter), so a refusal could only ever be a wrong one. It is a function of its own
+// so a wiring test can check the configured window reaches the writer.
+func newPresenceWriter(nmgr *messaging.NatsManager) (messaging.AsyncWriter, error) {
+	return nmgr.NewAsyncWriter(streams.InboundEvents, Configuration.BrokerPresence.PublishWindowSize(), false)
+}
+
+// buildPresenceWriter builds PresenceWriter unless the tap is disabled by configuration, in
+// which case no advisory is ever read and a writer would hold a reply subscription for nothing.
+func buildPresenceWriter(nmgr *messaging.NatsManager) error {
+	if !Configuration.BrokerPresence.IsEnabled() {
+		return nil
+	}
+	w, err := newPresenceWriter(nmgr)
+	if err != nil {
+		return err
+	}
+	PresenceWriter = w
+	return nil
+}
+
+// closePresenceWriter settles what the tap queued and closes its writer. Idempotent, and a
+// no-op when there is none.
+func closePresenceWriter() {
+	if w := PresenceWriter; w != nil {
+		w.Close()
+	}
+}
 
 type presenceRuntime struct {
 	conn *nats.Conn
@@ -204,7 +241,13 @@ func startBrokerPresence(ctx context.Context) {
 		return
 	}
 
-	tap := presence.NewTap(Microservice.InstanceId, source, presenceEmitter(), presenceGate(), presenceMetrics())
+	tapEmitter := adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
+	tap := presence.NewTap(Microservice.InstanceId, source, tapEmitter, presenceGate(), presenceMetrics())
+	if PresenceWriter != nil {
+		// The advisories go through the async writer; the reconciler (which holds the same tap)
+		// keeps the synchronous InboundEventsWriter through Apply.
+		tap.WithAsyncEmitter(tapEmitter.WithAsyncWriter(PresenceWriter))
+	}
 	stopTap, err := tap.Subscribe(conn)
 	if err != nil {
 		guard.close(conn)
@@ -220,7 +263,10 @@ func startBrokerPresence(ctx context.Context) {
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
-	rt := &presenceRuntime{conn: conn, guard: guard, stops: []func(){stopTap}, cancel: cancel, stopped: make(chan struct{})}
+	// The writer closes right after the subscriptions stop and before the canary and the
+	// waker do, so the completions of what it settles still reach a live waker.
+	rt := &presenceRuntime{conn: conn, guard: guard, stops: []func(){stopTap, closePresenceWriter},
+		cancel: cancel, stopped: make(chan struct{})}
 
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-sources",
 		[]string{string(auth.TenantRead), string(auth.StateRead)})
@@ -658,9 +704,13 @@ func runCanaryLoop(ctx context.Context, c prober, interval time.Duration) {
 func stopBrokerPresence() {
 	rt := brokerPresence
 	if rt == nil {
+		closePresenceWriter()
 		return
 	}
 	brokerPresence = nil
+	// Whatever else happens below, the writer closes: a stop that returned early on a tap that
+	// never started must not leave it open.
+	defer closePresenceWriter()
 	rt.cancel()
 	select {
 	case <-rt.stopped:
@@ -876,8 +926,11 @@ func sanitizeReplica(name string) string {
 func presenceEmitter() presence.Emitter {
 	// "bp" namespaces this source's dedup ids so they can never collide with the
 	// Sparkplug ("sp") or LwM2M ("lw") ids sharing the inbound dedup window.
-	return adapter.NewEmitter(InboundEventsWriter, time.Now, "bp", true)
+	return adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
 }
+
+// presenceDedupPrefix namespaces the broker presence source's dedup ids; see presenceEmitter.
+const presenceDedupPrefix = "bp"
 
 func presenceMetrics() presence.Metrics {
 	return presence.Metrics{
