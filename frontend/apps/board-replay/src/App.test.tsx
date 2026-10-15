@@ -490,8 +490,8 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
     expect(text).toContain('Major alarmsacme-earthworks1alarm');
     expect(text).toContain('tyre-pressure-low');
 
-    // Before the drill the tyre gauge is on the default machine, a dozer, which reports no
-    // tyre pressure: it must not be showing the hauler's reading.
+    // Before the drill the tyre gauge is on the default machine, the first haul truck: it must
+    // be showing that truck's reading, not the drilled truck's.
     expect(gaugeReading('sp-tyre')).not.toContain('599.6');
 
     await act(async () => {

@@ -23,7 +23,7 @@
     },
     "selectedMachine": {
       "defaultBinding": {
-        "deviceToken": "sp-dozer-01",
+        "deviceToken": "sp-hauler-01",
         "kind": "device"
       },
       "label": "Machine",
@@ -190,6 +190,9 @@
       "type": "device"
     }
   },
+  "timeRange": {
+    "defaultSeconds": 3600
+  },
   "title": "Site Pulse",
   "widgets": [
     {
@@ -202,10 +205,10 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 3,
+          "cols": 4,
           "mode": "grid",
           "row": 0,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
@@ -224,11 +227,11 @@
       "id": "sp-alarms-major",
       "layout": {
         "base": {
-          "col": 3,
-          "cols": 3,
+          "col": 4,
+          "cols": 4,
           "mode": "grid",
           "row": 0,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
@@ -242,33 +245,6 @@
       "datasource": {
         "kind": "slot",
         "measurements": [
-          "throughput_tph"
-        ],
-        "slot": "plant"
-      },
-      "id": "sp-plant-throughput",
-      "layout": {
-        "base": {
-          "col": 6,
-          "cols": 3,
-          "mode": "grid",
-          "row": 0,
-          "rows": 2
-        }
-      },
-      "options": {
-        "flashOnChange": false,
-        "measurement": "throughput_tph",
-        "precision": 0,
-        "title": "Crusher throughput",
-        "unit": "t/h"
-      },
-      "type": "latest-card"
-    },
-    {
-      "datasource": {
-        "kind": "slot",
-        "measurements": [
           "plant_running"
         ],
         "slot": "plant"
@@ -276,38 +252,101 @@
       "id": "sp-plant-running",
       "layout": {
         "base": {
-          "col": 9,
-          "cols": 3,
+          "col": 8,
+          "cols": 4,
           "mode": "grid",
           "row": 0,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
         "measurement": "plant_running",
+        "onAt": 1,
         "precision": 0,
-        "title": "Crusher on (1 = yes)"
+        "title": "Crusher running"
       },
-      "type": "latest-card"
+      "type": "status-light"
     },
     {
-      "id": "sp-fuel-label",
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "throughput_tph"
+        ],
+        "slot": "plant"
+      },
+      "id": "sp-plant-throughput-now",
       "layout": {
         "base": {
           "col": 0,
-          "cols": 12,
+          "cols": 4,
           "mode": "grid",
-          "row": 9,
-          "rows": 1
+          "row": 3,
+          "rows": 3
         }
       },
       "options": {
-        "align": "left",
-        "fontSize": 14,
-        "text": "Fuel level"
+        "measurement": "throughput_tph",
+        "precision": 0,
+        "stat": "last",
+        "title": "Throughput now",
+        "unit": "t/h"
       },
-      "type": "label"
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "throughput_tph"
+        ],
+        "slot": "plant"
+      },
+      "id": "sp-plant-throughput-avg",
+      "layout": {
+        "base": {
+          "col": 4,
+          "cols": 4,
+          "mode": "grid",
+          "row": 3,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "throughput_tph",
+        "precision": 0,
+        "stat": "avg",
+        "title": "Avg throughput",
+        "unit": "t/h"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "throughput_tph"
+        ],
+        "slot": "plant"
+      },
+      "id": "sp-plant-throughput-max",
+      "layout": {
+        "base": {
+          "col": 8,
+          "cols": 4,
+          "mode": "grid",
+          "row": 3,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "throughput_tph",
+        "precision": 0,
+        "stat": "max",
+        "title": "Peak throughput",
+        "unit": "t/h"
+      },
+      "type": "stat-card"
     },
     {
       "datasource": {
@@ -321,16 +360,18 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 4,
+          "cols": 2,
           "mode": "grid",
-          "row": 10,
-          "rows": 2
+          "row": 13,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -341,10 +382,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -357,17 +398,19 @@
       "id": "sp-fuel-sp-dozer-02",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 2,
+          "cols": 2,
           "mode": "grid",
-          "row": 10,
-          "rows": 2
+          "row": 13,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -378,10 +421,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -394,17 +437,19 @@
       "id": "sp-fuel-sp-dozer-03",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 4,
+          "cols": 2,
           "mode": "grid",
-          "row": 10,
-          "rows": 2
+          "row": 13,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -415,10 +460,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -431,17 +476,19 @@
       "id": "sp-fuel-sp-dozer-04",
       "layout": {
         "base": {
-          "col": 0,
-          "cols": 4,
+          "col": 6,
+          "cols": 2,
           "mode": "grid",
-          "row": 12,
-          "rows": 2
+          "row": 13,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -452,10 +499,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -468,17 +515,19 @@
       "id": "sp-fuel-sp-dozer-05",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 8,
+          "cols": 2,
           "mode": "grid",
-          "row": 12,
-          "rows": 2
+          "row": 13,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -489,10 +538,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -505,17 +554,19 @@
       "id": "sp-fuel-sp-dozer-06",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 10,
+          "cols": 2,
           "mode": "grid",
-          "row": 12,
-          "rows": 2
+          "row": 13,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -526,10 +577,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -543,16 +594,18 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 4,
+          "cols": 2,
           "mode": "grid",
-          "row": 14,
-          "rows": 2
+          "row": 16,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -563,10 +616,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -579,17 +632,19 @@
       "id": "sp-fuel-sp-loader-02",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 2,
+          "cols": 2,
           "mode": "grid",
-          "row": 14,
-          "rows": 2
+          "row": 16,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -600,10 +655,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -616,17 +671,19 @@
       "id": "sp-fuel-sp-loader-03",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 4,
+          "cols": 2,
           "mode": "grid",
-          "row": 14,
-          "rows": 2
+          "row": 16,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -637,10 +694,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -653,17 +710,19 @@
       "id": "sp-fuel-sp-loader-04",
       "layout": {
         "base": {
-          "col": 0,
-          "cols": 4,
+          "col": 6,
+          "cols": 2,
           "mode": "grid",
           "row": 16,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -674,10 +733,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -690,17 +749,19 @@
       "id": "sp-fuel-sp-loader-05",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 8,
+          "cols": 2,
           "mode": "grid",
           "row": 16,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -711,10 +772,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -727,17 +788,19 @@
       "id": "sp-fuel-sp-loader-06",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 10,
+          "cols": 2,
           "mode": "grid",
           "row": 16,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -748,10 +811,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -765,16 +828,18 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 4,
+          "cols": 2,
           "mode": "grid",
-          "row": 18,
-          "rows": 2
+          "row": 19,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -785,10 +850,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -801,17 +866,19 @@
       "id": "sp-fuel-sp-hauler-02",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 2,
+          "cols": 2,
           "mode": "grid",
-          "row": 18,
-          "rows": 2
+          "row": 19,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -822,10 +889,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -838,17 +905,19 @@
       "id": "sp-fuel-sp-hauler-03",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 4,
+          "cols": 2,
           "mode": "grid",
-          "row": 18,
-          "rows": 2
+          "row": 19,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -859,10 +928,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -875,17 +944,19 @@
       "id": "sp-fuel-sp-hauler-04",
       "layout": {
         "base": {
-          "col": 0,
-          "cols": 4,
+          "col": 6,
+          "cols": 2,
           "mode": "grid",
-          "row": 20,
-          "rows": 2
+          "row": 19,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -896,10 +967,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -912,17 +983,19 @@
       "id": "sp-fuel-sp-hauler-05",
       "layout": {
         "base": {
-          "col": 4,
-          "cols": 4,
+          "col": 8,
+          "cols": 2,
           "mode": "grid",
-          "row": 20,
-          "rows": 2
+          "row": 19,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -933,10 +1006,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -949,17 +1022,19 @@
       "id": "sp-fuel-sp-hauler-06",
       "layout": {
         "base": {
-          "col": 8,
-          "cols": 4,
+          "col": 10,
+          "cols": 2,
           "mode": "grid",
-          "row": 20,
-          "rows": 2
+          "row": 19,
+          "rows": 3
         }
       },
       "options": {
-        "flashOnChange": false,
+        "max": 100,
         "measurement": "fuel_pct",
+        "min": 0,
         "precision": 0,
+        "readout": "value",
         "thresholds": [
           {
             "level": "major",
@@ -970,10 +1045,10 @@
             "value": 15
           }
         ],
-        "title": "Fuel %",
+        "title": "Fuel level",
         "unit": "%"
       },
-      "type": "latest-card"
+      "type": "level-gauge"
     },
     {
       "datasource": {
@@ -1149,7 +1224,7 @@
           "col": 0,
           "cols": 8,
           "mode": "grid",
-          "row": 2,
+          "row": 6,
           "rows": 3
         }
       },
@@ -1178,7 +1253,7 @@
           "col": 0,
           "cols": 8,
           "mode": "grid",
-          "row": 5,
+          "row": 9,
           "rows": 4
         }
       },
@@ -1194,7 +1269,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 2,
+          "row": 6,
           "rows": 1
         }
       },
@@ -1218,16 +1293,21 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 3,
+          "row": 7,
           "rows": 3
         }
       },
       "options": {
-        "flashOnChange": true,
         "max": 130,
         "measurement": "engine_temp_c",
         "min": 0,
+        "precision": 1,
+        "style": "bar",
         "thresholds": [
+          {
+            "level": "normal",
+            "value": 0
+          },
           {
             "level": "critical",
             "value": 105
@@ -1236,7 +1316,7 @@
         "title": "Engine temp",
         "unit": "°C"
       },
-      "type": "gauge"
+      "type": "linear-gauge"
     },
     {
       "datasource": {
@@ -1252,7 +1332,7 @@
           "col": 8,
           "cols": 4,
           "mode": "grid",
-          "row": 6,
+          "row": 10,
           "rows": 3
         }
       },

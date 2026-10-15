@@ -204,6 +204,15 @@ describe('buildGaugeOption', () => {
   it('rests the needle at min for a null value', () => {
     const gauge = seriesOf(buildGaugeOption(null, theme, { min: 10, max: 50 }))[0];
     expect(gauge.data[0].value).toBe(10);
+    expect(gauge.pointer.show).toBe(true);
+  });
+
+  it("draws no needle for a null value with emptyNeedle 'none', and still draws one for a value", () => {
+    // An empty dial with a needle on its minimum reads as a reading of the minimum.
+    expect(seriesOf(buildGaugeOption(null, theme, { min: 10, max: 50, emptyNeedle: 'none' }))[0].pointer.show).toBe(false);
+    for (const value of [10, 0, 30]) {
+      expect(seriesOf(buildGaugeOption(value, theme, { min: 10, max: 50, emptyNeedle: 'none' }))[0].pointer.show, `at ${value}`).toBe(true);
+    }
   });
 
   it('scales ticks and fonts down for a small widget', () => {

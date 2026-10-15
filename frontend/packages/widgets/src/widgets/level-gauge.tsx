@@ -23,6 +23,9 @@ import { emptyReason, useLevelReading, type LevelReading } from '../level-readin
 import { LevelEmpty, LevelReadout } from '../level-readout';
 import { bandSpans, readRange } from '../value-scale';
 
+// The strength of a band the level is not in: the linear gauge's track strength.
+const MUTED_BAND_OPACITY = 0.35;
+
 export function LevelGauge({ widget, data }: WidgetProps) {
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const reading = useLevelReading(widget, data, {
@@ -50,9 +53,13 @@ function TankBody({ reading: r, percent, scale: ws }: { reading: LevelReading; p
   // The percent is of the scale and is NOT clamped: 130 % of a tank is the truth the marker flags.
   const text = percent ? `${formatValue(fill.ratio * 100, r.precision ?? 0)}` : r.display;
   const unit = percent ? '%' : r.unit;
+  // A band is a SCALE MARKER until the level is in it: drawn muted, as the linear gauge draws its
+  // track, so a full tank's low-fuel band does not read as a warning at a glance. The band the
+  // level is in is drawn at full strength, agreeing with the liquid's colour.
   const bands = bandSpans(r.thresholds, range).flatMap((b) => {
     const color = r.colorOf(b.level);
-    return color === undefined ? [] : [{ from: b.from, to: b.to, color }];
+    const active = fill.fraction >= b.from && (fill.fraction < b.to || (b.to >= 1 && fill.fraction >= 1));
+    return color === undefined ? [] : [{ from: b.from, to: b.to, color, active }];
   });
   const inner = { width: Math.max(0, ws.size.width - wall * 2 - stripe), height: Math.max(0, ws.size.height - wall * 2) };
   return (
@@ -110,7 +117,16 @@ function TankBody({ reading: r, percent, scale: ws }: { reading: LevelReading; p
           <div
             key={i}
             data-band=""
-            style={{ position: 'absolute', left: 0, right: 0, bottom: `${b.from * 100}%`, height: `${(b.to - b.from) * 100}%`, background: b.color }}
+            data-band-active={b.active ? '' : undefined}
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              bottom: `${b.from * 100}%`,
+              height: `${(b.to - b.from) * 100}%`,
+              background: b.color,
+              opacity: b.active ? 1 : MUTED_BAND_OPACITY,
+            }}
           />
         ))}
       </div>

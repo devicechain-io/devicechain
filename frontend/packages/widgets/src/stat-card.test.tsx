@@ -6,15 +6,30 @@
 
 import type { AggregateResult, AggregateStreamState, MeasurementSample, WidgetInstance } from '@devicechain/dashboards';
 import { cleanup, render } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { aggregateStrings } from './aggregate-strings';
 import { StatCard } from './widgets/stat-card';
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   document.documentElement.lang = 'en';
 });
+
+// Every element the frame observes reports this content box, as a laid-out board would.
+function sizedAt(width: number, height: number) {
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      constructor(private cb: (entries: unknown[]) => void) {}
+      observe() {
+        this.cb([{ contentRect: { width, height } }]);
+      }
+      disconnect() {}
+    },
+  );
+}
 beforeAll(() => {
   document.documentElement.lang = 'en';
 });
@@ -119,6 +134,25 @@ describe('the stat card figure', () => {
     expect(render(<StatCard widget={widget()} data={data(ready())} />).container.textContent).toContain('temperature');
     cleanup();
     expect(render(<StatCard widget={widget({ title: 'Peak' })} data={data(ready())} />).container.textContent).toContain('Peak');
+  });
+});
+
+describe('the stat card at its smallest', () => {
+  // The 2-row minimum with a subject line and the latest reading's age footer, at the smallest
+  // cell, leaves the figure ~22 px: under it, the caption would push the figure out of the box.
+  it('lays the caption beside the figure when there is no room under it, and keeps both', () => {
+    sizedAt(364, 22);
+    const r = show({ stat: 'last', unit: 't/h' }, data(ready(), { temperature: sample(822) }));
+    expect(r.card?.getAttribute('data-stat-layout')).toBe('beside');
+    expect(r.caption).toBe('Latest');
+    expect(r.figure).toContain('822');
+    // Fitted to the height it has, not to the height a caption under it would have left.
+    expect(parseFloat(r.card!.querySelector<HTMLElement>('[data-level-readout]')!.style.fontSize)).toBeLessThanOrEqual(22);
+  });
+
+  it('keeps the caption under the figure when there is room for both', () => {
+    sizedAt(364, 80);
+    expect(show({ stat: 'last' }, data(ready(), { temperature: sample(822) })).card?.getAttribute('data-stat-layout')).toBe('under');
   });
 });
 

@@ -49,21 +49,30 @@ export function lampState(r: LevelReading, onAt: number | undefined): { lit: boo
 function LampBody({ reading: r, onAt, scale: ws }: { reading: LevelReading; onAt: number | undefined; scale: WidgetScale }) {
   const { lit, caption } = lampState(r, onAt);
   const captionRoom = ws.px('font-md') * 2.8;
+  const smallest = ws.px('space-4');
   const measured = ws.size.width > 0 && ws.size.height > 0;
-  const diameter = measured
-    ? Math.max(ws.px('space-4'), Math.floor(Math.min(ws.size.width, ws.size.height - captionRoom) * 0.8))
-    : ws.px('space-4') * 3;
+  // The caption goes UNDER the lamp while there is room for a lamp twice its smallest size and a
+  // caption; below that (the 2x2 minimum with a subject line and a freshness footer, at the
+  // smallest cell) it goes BESIDE it, on one line, so the minimum the descriptor declares holds
+  // its whole content rather than pushing the caption out of the box.
+  const beside = measured && ws.size.height - captionRoom < smallest * 2;
+  const diameter = !measured
+    ? smallest * 3
+    : beside
+      ? Math.max(Math.min(smallest, ws.size.height), Math.floor(Math.min(ws.size.height, ws.size.width * 0.4) * 0.8))
+      : Math.max(smallest, Math.floor(Math.min(ws.size.width, ws.size.height - captionRoom) * 0.8));
   const color = r.fillColor;
   return (
     <div
       data-threshold-level={lit ? r.band?.level : undefined}
       data-lit={lit === undefined ? undefined : String(lit)}
+      data-lamp-layout={beside ? 'beside' : 'under'}
       style={{
         height: '100%',
         boxSizing: 'border-box',
         overflow: 'hidden',
         display: 'flex',
-        flexDirection: 'column',
+        flexDirection: beside ? 'row' : 'column',
         alignItems: 'center',
         justifyContent: 'safe center',
         gap: ws.px('space-2'),
@@ -92,6 +101,7 @@ function LampBody({ reading: r, onAt, scale: ws }: { reading: LevelReading; onAt
           color: lit === undefined ? css('muted-foreground') : css('foreground'),
           overflowWrap: 'anywhere',
           maxWidth: '100%',
+          minWidth: 0,
         }}
       >
         {caption}

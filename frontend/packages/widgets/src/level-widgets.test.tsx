@@ -284,6 +284,31 @@ describe('level-gauge', () => {
     expect(liquid()).toBe(normal);
   });
 
+  it('draws a band as a muted scale marker until the level is in it', () => {
+    // A low-fuel band: critical below 30 on a 0..200 scale, normal above.
+    const thresholds = [
+      { value: 0, level: 'critical' },
+      { value: 30, level: 'normal' },
+    ];
+    const band = () => q('[data-band]')!;
+    // A full tank: the band is on the strip, at the marker strength, and not the active one.
+    render_({ ...opts, thresholds }, 190);
+    expect(document.querySelectorAll('[data-band]')).toHaveLength(1);
+    expect(band().style.opacity).toBe('0.35');
+    expect(band().hasAttribute('data-band-active')).toBe(false);
+    cleanup();
+    // In the band (and at its empty end): full strength, agreeing with the liquid.
+    for (const v of [10, 0]) {
+      render_({ ...opts, thresholds }, v);
+      expect(band().style.opacity, `at ${v}`).toBe('1');
+      expect(band().hasAttribute('data-band-active'), `at ${v}`).toBe(true);
+      cleanup();
+    }
+    // At the threshold itself the level has left the band (a "below 30" rule does not fire at 30).
+    render_({ ...opts, thresholds }, 30);
+    expect(band().style.opacity).toBe('0.35');
+  });
+
   it('refuses to guess the capacity, and to show a level it does not have', () => {
     render_({}, 50);
     expect(screen.getByText('Set min and max')).toBeTruthy();
@@ -406,6 +431,34 @@ describe('status-light', () => {
     // The normal band is what a lamp with no thresholds paints.
     render_({}, 20);
     expect(styleOf('[data-lamp]')).toBe(normal);
+  });
+
+  // Every element the frame observes reports this content box, as a laid-out board would.
+  const sizedAt = (width: number, height: number) =>
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private cb: (entries: unknown[]) => void) {}
+        observe() {
+          this.cb([{ contentRect: { width, height } }]);
+        }
+        disconnect() {}
+      },
+    );
+
+  it('lays the caption beside the lamp at its 2x2 minimum, and under it when there is room', () => {
+    // The 2x2 minimum with a subject line and a freshness footer, at the smallest cell: ~22 px.
+    sizedAt(231, 22);
+    render_({ onAt: 1 }, 1);
+    expect(q('[data-lamp-layout]')?.getAttribute('data-lamp-layout')).toBe('beside');
+    expect(q('[data-lamp-caption]')?.textContent).toBe('On');
+    expect(parseFloat(q('[data-lamp]')!.style.width)).toBeLessThanOrEqual(22);
+    cleanup();
+    sizedAt(231, 120);
+    render_({ onAt: 1 }, 1);
+    expect(q('[data-lamp-layout]')?.getAttribute('data-lamp-layout')).toBe('under');
+    // Under, the lamp takes the height the caption leaves, and is larger than the beside one.
+    expect(parseFloat(q('[data-lamp]')!.style.width)).toBeGreaterThan(22);
   });
 
   it('is hollow and says so with no data, never "off"', () => {

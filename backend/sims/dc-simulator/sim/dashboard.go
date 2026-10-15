@@ -29,6 +29,13 @@ type dashboardDefinition struct {
 	Canvas        dashboardCanvas          `json:"canvas"`
 	Widgets       []dashboardWidget        `json:"widgets"`
 	Slots         map[string]dashboardSlot `json:"slots,omitempty"`
+	TimeRange     *dashboardTimeRange      `json:"timeRange,omitempty"`
+}
+
+// dashboardTimeRange mirrors BoardTimeRange: the span (seconds) the board's time-aware widgets
+// cover until a viewer picks another. Omitted = the frontend's own default (one hour).
+type dashboardTimeRange struct {
+	DefaultSeconds int `json:"defaultSeconds"`
 }
 
 type dashboardCanvas struct {

@@ -192,6 +192,10 @@ export interface GaugeChartOptions {
   // bare for a caller that draws the number itself as DOM text in gaugeReadoutBox, which the
   // readability gate can measure (the built-in gauge does).
   readout?: 'canvas' | 'none';
+  // Where the needle is with no value. 'min' (the default) rests it at the scale's minimum, as the
+  // builder always has. 'none' draws no needle, so an empty dial cannot be read as a reading of
+  // its minimum (the built-in gauge, whose readout already says there is no value, asks for it).
+  emptyNeedle?: 'min' | 'none';
 }
 
 // The dial's geometry as fractions of its box: where its centre sits and how much of the short
@@ -275,7 +279,12 @@ export function buildGaugeOption(
         center: ['50%', `${GAUGE_CENTER_Y * 100}%`],
         // The progress arc would paint over the bands, so with bands the needle alone marks the value.
         progress: { show: !banded, width: arcWidth, itemStyle: { color: accent } },
-        pointer: { itemStyle: { color: accent }, length: '55%', width: clamp(Math.round(s / 50), 2, 6) },
+        pointer: {
+          show: value != null || options.emptyNeedle !== 'none',
+          itemStyle: { color: accent },
+          length: '55%',
+          width: clamp(Math.round(s / 50), 2, 6),
+        },
         anchor: { show: false },
         axisLine: { lineStyle: { width: arcWidth, color: gaugeArcColors(bands, min, max, theme) } },
         axisTick: { show: false },
