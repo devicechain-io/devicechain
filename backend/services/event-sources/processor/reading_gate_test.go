@@ -221,7 +221,7 @@ func TestSourcesRefuseToBeBuiltWithoutAReadingGate(t *testing.T) {
 	_, err = NewMqttEventSource("m", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		nil, nil, admitAll, alwaysOwns, func(error) {})
 	require.ErrorIs(t, err, errNoReadingGate)

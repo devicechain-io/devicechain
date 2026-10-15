@@ -144,6 +144,12 @@ The platform can also act as a client on a broker you already run, to ingest fro
   yet published is gone if the process restarts. Raising QoS on your side does not change that,
   and the platform makes no durability claim about a broker it does not own.
 
+  How much can be gone is bounded: the messages queued for decode or being decoded (up to 105),
+  plus the events waiting for the platform broker's acknowledgement, which is at most
+  `externalMqtt.publishWindow` (128 by default). A stop that lets the platform finish, such as a
+  rolling update or a handover of the source to another pod, waits for those to be stored first.
+  A publish that fails is counted on `total_msg_publish_failed` and logged; it is not retried.
+
   After your broker restarts or the connection drops, the platform reconnects and subscribes
   again on its own. A broker that refuses the subscription — at startup or after a reconnect,
   for example because an ACL change denies the topic — stops the **whole event-sources service**

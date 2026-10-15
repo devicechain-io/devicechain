@@ -152,6 +152,13 @@ La plataforma también puede actuar como cliente en un bróker que ya operes, pa
   de tu bróker y aún no ha publicado se pierde si el proceso se reinicia. Subir el QoS en tu lado
   no cambia eso, y la plataforma no reclama durabilidad sobre un bróker que no le pertenece.
 
+  Cuánto puede perderse tiene un límite: los mensajes en cola para decodificar o en decodificación
+  (hasta 105), más los eventos que esperan la confirmación del bróker de la plataforma, que son
+  como máximo `externalMqtt.publishWindow` (128 por defecto). Una parada que deja terminar a la
+  plataforma, como una actualización progresiva o ceder la fuente a otro pod, espera a que se
+  almacenen primero. Una publicación que falla se cuenta en `total_msg_publish_failed` y se
+  registra; no se reintenta.
+
   Si tu bróker se reinicia o la conexión se cae, la plataforma se reconecta y vuelve a suscribirse
   por sí sola. Un bróker que rechaza la suscripción, ya sea al arrancar o tras una reconexión (por
   ejemplo, porque un cambio de ACL deniega el topic), detiene **todo el servicio event-sources** con

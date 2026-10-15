@@ -470,6 +470,20 @@ it because they cannot reach the platform's message broker.
 - **`devicechain_eventsources_total_msg_not_owner{source}`**: messages a pod was still delivered
   after it lost the source, dropped rather than stored, because the pod that took over receives
   the same messages.
+- **`devicechain_eventsources_total_msg_publish_failed{source}`**: events from the source that were
+  read from your broker and decoded, but not stored because publishing them to the platform's
+  event stream failed. That source does not retry, so each one is lost. The pod's log has a line
+  for each, naming the source and the tenant. A rate above 0 means the platform's own broker was
+  refusing or not answering; look there, not at your broker.
+
+The source publishes through a window of events waiting for the platform broker's acknowledgement
+at once, so it is not held to one acknowledgement at a time per decode worker, which on a
+replicated broker (an acknowledgement takes about 11 ms) capped a source near 440 events a second
+for the whole cluster, because one pod reads each source.
+
+| Setting (`event-sources` config) | Default | What it does |
+| --- | --- | --- |
+| `externalMqtt.publishWindow` | `128` | How many events one external MQTT source keeps waiting for the platform broker's acknowledgement at once, from 1 to 1024. A value outside that range, or an explicit 0, stops the service at startup; it is never adjusted. Publishing can go no faster than this number divided by how long an acknowledgement takes. A fixed setting, read at startup. **It is also how much more a pod can lose.** This transport is at-most-once: your broker is told a message arrived as soon as the platform has queued it for decode, and a pod that stops suddenly loses what it had taken and not yet stored, which is up to 105 messages queued or being decoded, plus up to this many waiting for an acknowledgement. A pod that stops cleanly, or hands the source to another pod, waits (up to 8 seconds) for those to be stored first. Watch `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events"}`: a rate near 1 means the window is what limits publishing. |
 
 `ExternalMqttSourceNotReadByOnePod` (warning) fires when that sum has not been 1 for two minutes.
 At 0, nothing is reading the source and what your broker delivers meanwhile is lost; the log of

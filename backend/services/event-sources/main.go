@@ -122,6 +122,11 @@ var (
 	// Messaging.
 	InboundEventsWriter messaging.MessageWriter
 	FailedDecodeWriter  messaging.MessageWriter
+	// ExternalPublishers are the publishers of the external MQTT sources, one per source and
+	// each built ONCE for the life of the process (not per lease term: a writer holds a reply
+	// subscription until the connection closes). Built in INITIALIZE with the sources, given
+	// their writers in createNatsComponents, closed in beforeMicroserviceStopped.
+	ExternalPublishers []*processor.AsyncEventPublisher
 	// CaptureReader is the durable consumer of raw device telemetry (ADR-030
 	// amendment). It is the gateway's ingest path: the broker stores a device's
 	// publish here itself, so the message is in a stream before our code runs (the
@@ -200,6 +205,10 @@ var (
 	// NotOwnerCounter counts messages an external broker delivered to a pod that had
 	// already lost the source, which are dropped rather than stored a second time.
 	NotOwnerCounter *prometheus.CounterVec
+	// PublishFailedCounter counts decoded events from an external MQTT source whose publish to
+	// inbound-events failed. That transport is at-most-once and does not retry, so each is an
+	// event lost.
+	PublishFailedCounter *prometheus.CounterVec
 )
 
 func main() {
@@ -300,6 +309,11 @@ func initializeMetrics() {
 		"total_msg_not_owner",
 		"Count of messages from an external MQTT broker dropped because this pod no longer owns the source "+
 			"(another pod has taken it over and reads the same messages)",
+		[]string{"source"})
+	PublishFailedCounter = Microservice.NewCounterVec(
+		"total_msg_publish_failed",
+		"Count of decoded messages from an external MQTT broker that were not stored because the publish to "+
+			"the platform's inbound-events stream failed. That source does not retry, so each one is lost",
 		[]string{"source"})
 	initializePresenceMetrics()
 }
@@ -536,12 +550,18 @@ func buildEventSources() error {
 			// message on its filter and this path publishes no dedup id (see
 			// inboundEventMessage), so a second reading pod would store every event twice;
 			// and a shared client id has the pods take one session from each other.
+			publisher, err := processor.NewAsyncEventPublisher(source.Id, inboundEventMessage,
+				processor.PublishHooks{Backpressured: onExternalMqttBackpressured, Failed: onExternalMqttPublishFailed})
+			if err != nil {
+				return err
+			}
+			ExternalPublishers = append(ExternalPublishers, publisher)
 			owned, err := processor.NewOwnedMqttSource(source.Id, Microservice.InstanceId, replicaName(),
 				func(clientID string, owns func() bool) (processor.TermSource, error) {
 					// Never return the *MqttEventSource itself on error: a nil pointer in a
 					// non-nil interface.
 					mqtt, err := processor.NewMqttEventSource(source.Id, clientID, source.Configuration, nil, "", "",
-						decoder, onMessageReceived, onEventDecoded, onEventDecodeFailed,
+						decoder, onMessageReceived, publisher, onEventDecodeFailed,
 						ingestGate, readingGate, admitInbound, owns, failProcess)
 					if err != nil {
 						return nil, err
@@ -595,6 +615,21 @@ func onExternalMqttOwner(source string, owned bool) {
 		v = 1
 	}
 	ExternalMqttOwnerGauge.WithLabelValues(source).Set(v)
+}
+
+// onExternalMqttBackpressured counts an external MQTT event the writer refused because the
+// gate closed between the source's admit check and the publish.
+func onExternalMqttBackpressured(source string) {
+	if BackpressureCounter != nil {
+		BackpressureCounter.WithLabelValues(source).Inc()
+	}
+}
+
+// onExternalMqttPublishFailed counts an external MQTT event lost to a failed publish.
+func onExternalMqttPublishFailed(source string, _ error) {
+	if PublishFailedCounter != nil {
+		PublishFailedCounter.WithLabelValues(source).Inc()
+	}
 }
 
 // onExternalMqttNotOwner counts a message an external broker delivered to a pod that no
@@ -707,8 +742,9 @@ func shedClassOf(tenant string) string {
 
 // inboundEventMessage builds the inbound-events message for an event a source decoded:
 // the metric, the source stamp, the AuthenticatedTransport clamp, the tenant drop, the
-// marshal and the capture dedup id. It is the ONE definition both publish paths use —
-// onEventDecoded's synchronous one, and the gateway source's pipelined one.
+// marshal and the capture dedup id. It is the ONE definition every publish path uses —
+// onEventDecoded's synchronous one, the gateway source's pipelined one, and the external
+// MQTT source's asynchronous one.
 //
 // The tenant is derived by the source from its own addressing (MQTT topic / HTTP path)
 // before the event reaches here; an empty tenant cannot be published to a tenant-scoped
@@ -847,9 +883,10 @@ func sealPresentedToken(tenant string, event *model.UnresolvedEvent) bool {
 	return true
 }
 
-// onEventDecoded publishes a decoded event synchronously, for the sources that publish
-// on the goroutine that decoded it: HTTP and an external MQTT broker. The gateway source
-// pipelines the same message through its own ordered writer instead.
+// onEventDecoded publishes a decoded event synchronously, for the source that publishes
+// on the goroutine that decoded it: HTTP, whose 2xx follows the stream's acknowledgement.
+// The gateway source pipelines the same message through its own ordered writer, and an
+// external MQTT broker's source through its own AsyncWriter (processor.AsyncEventPublisher).
 //
 // It returns whether the event was DURABLY published, nil for a deliberate drop (see
 // inboundEventMessage). A source that acknowledges its broker does so on this answer, so
@@ -922,9 +959,9 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) er
 }
 
 // newGatewayWriter builds the gateway source's ordered inbound-events writer at the
-// configured capture.publishWindow. It is the ONLY ordered writer this service builds (the
-// other sources and the presence tap publish synchronously through InboundEventsWriter and
-// have no window to size), and it is a function of its own so a wiring test can check the
+// configured capture.publishWindow. (The external MQTT sources have windowed writers of their
+// own, sized by externalMqtt.publishWindow; HTTP and the presence tap publish synchronously
+// through InboundEventsWriter.) It is a function of its own so a wiring test can check the
 // configured window reaches it: a processor test builds its own writer, so a service that
 // stopped passing the setting would run the default while every other test stayed green.
 func newGatewayWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, error) {
@@ -958,7 +995,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// capture.publishWindow publishes in flight instead of one per decode
 	// worker; newGatewayWriter builds it at that window. The source owns it from here and settles and closes it in its own stop,
 	// which runs before the manager drains the connection. InboundEventsWriter above
-	// stays for the sources and the presence tap that publish synchronously; the two do
+	// stays for HTTP and the presence tap, which publish synchronously; the two do
 	// not share a JetStream context, since the ordered writer builds its own.
 	if GatewaySource != nil {
 		GatewaySource.SetReader(capture)
@@ -967,6 +1004,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 			return err
 		}
 		GatewaySource.SetWriter(pipeline)
+	}
+
+	// One AsyncWriter per external MQTT source, shared by every lease term of that source and
+	// sized by externalMqtt.publishWindow. A term only drains it (Settle); the writer is
+	// closed once, when the service stops.
+	for _, publisher := range ExternalPublishers {
+		w, err := processor.NewExternalMqttWriter(nmgr, Configuration.ExternalMqtt.PublishWindowSize())
+		if err != nil {
+			return err
+		}
+		publisher.SetWriter(w)
 	}
 
 	failed, err := nmgr.NewWriter(streams.FailedDecode)
@@ -1113,6 +1161,11 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// writer that is about to close.
 	stopBrokerPresence()
 
+	// The external sources' writers outlive their terms, so they are closed here, once the
+	// sources (and with them the last term, which settled its publishes) have stopped. On a
+	// failed stop too: a writer left open would keep the connection from draining.
+	defer closeExternalPublishers()
+
 	// Stop each event source.
 	for _, source := range EventSources {
 		err := source.Stop(ctx)
@@ -1123,6 +1176,13 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 	// Stop the GraphQL manager, then the broker manager.
 	return Svc.Stop(ctx)
+}
+
+// closeExternalPublishers drains and closes every external source's writer.
+func closeExternalPublishers() {
+	for _, publisher := range ExternalPublishers {
+		publisher.Close()
+	}
 }
 
 // Called before microservice has been terminated.

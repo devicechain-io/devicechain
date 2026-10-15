@@ -1398,6 +1398,16 @@ functionalAreas:
     #       canarySeconds: 60          # the liveness probe; see canaryDeadlineSeconds
     #       canaryDeadlineSeconds: 15
     #       inventoryGatherSeconds: 5  # how long to collect replies from the cluster
+    #
+    # Sources that read a broker you run. publishWindow is how many events one such source
+    # keeps waiting for the platform broker's acknowledgement at once, 1 to 1024 (out of
+    # range, or an explicit 0, stops the service). Publishing cannot exceed this divided by
+    # the acknowledgement time, ~11 ms on a replicated broker. It is also a loss bound:
+    # that transport is at-most-once, so a pod that stops suddenly loses up to this many
+    # events on top of the ~105 queued for decode; a clean stop waits for them (8 s).
+    #   config:
+    #     externalMqtt:
+    #       publishWindow: 128
     # Device-facing HTTP listener bounds. These apply ONLY to the HTTP event sources,
     # not to the 8080 GraphQL/management server, because the two have different callers:
     # a console reaches the management API over a datacentre network, while a device may
