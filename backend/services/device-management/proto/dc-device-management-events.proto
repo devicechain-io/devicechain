@@ -103,6 +103,13 @@ message PScopeMembership {
 	// every other event type must carry, and proto3 omits it from the wire, so there is
 	// nothing for an `optional` presence bit to distinguish.
 	int32 fence_set_version = 15;
+	// source_device_disabled is true when the reporting device was disabled when the event
+	// was resolved. Only a presence transition (a state change) is ever resolved for a
+	// disabled device: the platform's own transports produce it about a connection the
+	// platform holds, so it still reaches the presence projection and the history. Every
+	// other event from a disabled device is refused before it is resolved. A consumer that
+	// acts on the device's behalf, such as detection, skips an event that carries it.
+	bool source_device_disabled = 16;
 }
 
 /**

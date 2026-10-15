@@ -1049,7 +1049,33 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// is known, so the refusal names a device that exists. The credential path refused
 	// first when the presented credential was bad: a disabled device does not turn a
 	// failed authentication into a different answer.
+	//
+	// 🔴 EXCEPT A PRESENCE TRANSITION, and the exception is what keeps a quarantined
+	// device's status true. Disabling a device does not close a connection it already has:
+	// that connection stays open until it ends. A StateChange is the platform's own report
+	// of that connection — the broker, the LwM2M server and the Sparkplug host make it, and
+	// a device cannot (the device-facing decoder rejects one) — so refusing it refused the
+	// platform's account of its own connection, not the device's data. Refused, the
+	// DISCONNECTED that ends the connection never reached the projection, an asserted row
+	// takes Active only from a StateChange, and the device read CONNECTED for as long as it
+	// stayed disabled; the presence reconciler's repair was refused the same way, every pass.
+	//
+	// All three claims pass, CONNECTED included: a CONNECTED for a disabled device reports a
+	// connection that really is open (one opened in the moment before the disable reached
+	// the broker, or a Sparkplug device born behind an edge node that is not disabled), and
+	// recording it is what lets a re-enabled device's held commands be judged against the
+	// truth. The event is marked SourceDeviceDisabled, so detection, which acts on the
+	// device's behalf, skips it: a disabled device still raises no alarm.
 	if device.IsDisabled() {
+		if unrez.EventType == esmodel.StateChange {
+			results, reason, err := rez.HandleEvent(ctx, device, unrez)
+			for _, r := range results {
+				if r.Resolved != nil {
+					r.Resolved.SourceDeviceDisabled = true
+				}
+			}
+			return results, reason, err
+		}
 		if rez.deviceDisabled != nil {
 			rez.deviceDisabled.Inc()
 		}

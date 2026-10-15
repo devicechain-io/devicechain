@@ -621,19 +621,20 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 	}
 
 	event := &model.ResolvedEvent{
-		Source:              pbevent.Source,
-		AltId:               pbevent.AltId,
-		SourceDeviceToken:   pbevent.SourceDeviceToken,
-		Anchors:             anchors,
-		DeviceTypeToken:     pbevent.GetDeviceTypeToken(),
-		ProfileVersionToken: pbevent.GetProfileVersionToken(),
-		ScopeMemberships:    memberships,
-		ExternalId:          pbevent.GetExternalId(),
-		FenceSetVersion:     pbevent.GetFenceSetVersion(),
-		OccurredTime:        occurred,
-		ProcessedTime:       processed,
-		EventType:           esmodel.EventType(pbevent.EventType),
-		Payload:             payload,
+		Source:               pbevent.Source,
+		AltId:                pbevent.AltId,
+		SourceDeviceToken:    pbevent.SourceDeviceToken,
+		Anchors:              anchors,
+		DeviceTypeToken:      pbevent.GetDeviceTypeToken(),
+		ProfileVersionToken:  pbevent.GetProfileVersionToken(),
+		ScopeMemberships:     memberships,
+		ExternalId:           pbevent.GetExternalId(),
+		FenceSetVersion:      pbevent.GetFenceSetVersion(),
+		SourceDeviceDisabled: pbevent.GetSourceDeviceDisabled(),
+		OccurredTime:         occurred,
+		ProcessedTime:        processed,
+		EventType:            esmodel.EventType(pbevent.EventType),
+		Payload:              payload,
 	}
 
 	return event, nil

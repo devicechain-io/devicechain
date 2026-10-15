@@ -130,7 +130,7 @@ the device is disabled:
 
 - its events are discarded instead of stored, and they do not come back when you enable it;
 - it cannot open a new connection, although a connection it already has stays open until it
-  ends;
+  ends. When that connection ends, the device shows as disconnected;
 - new commands to it are refused;
 - commands that were already queued for it are **held**: they are neither sent nor cancelled.
 

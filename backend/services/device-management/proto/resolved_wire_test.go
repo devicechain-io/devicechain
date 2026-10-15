@@ -75,19 +75,20 @@ func referenceMarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		memberships = append(memberships, &PScopeMembership{GroupToken: m.GroupToken, Version: m.Version})
 	}
 	return proto.Marshal(&PResolvedEvent{
-		Source:              event.Source,
-		AltId:               event.AltId,
-		SourceDeviceToken:   event.SourceDeviceToken,
-		Anchors:             anchors,
-		DeviceTypeToken:     referenceOptionalString(event.DeviceTypeToken),
-		ProfileVersionToken: referenceOptionalString(event.ProfileVersionToken),
-		ScopeMemberships:    memberships,
-		ExternalId:          referenceOptionalString(event.ExternalId),
-		FenceSetVersion:     event.FenceSetVersion,
-		OccurredTime:        event.OccurredTime.Format(time.RFC3339Nano),
-		ProcessedTime:       event.ProcessedTime.Format(time.RFC3339Nano),
-		EventType:           int64(event.EventType),
-		Payload:             pybytes,
+		Source:               event.Source,
+		AltId:                event.AltId,
+		SourceDeviceToken:    event.SourceDeviceToken,
+		Anchors:              anchors,
+		DeviceTypeToken:      referenceOptionalString(event.DeviceTypeToken),
+		ProfileVersionToken:  referenceOptionalString(event.ProfileVersionToken),
+		ScopeMemberships:     memberships,
+		ExternalId:           referenceOptionalString(event.ExternalId),
+		FenceSetVersion:      event.FenceSetVersion,
+		SourceDeviceDisabled: event.SourceDeviceDisabled,
+		OccurredTime:         event.OccurredTime.Format(time.RFC3339Nano),
+		ProcessedTime:        event.ProcessedTime.Format(time.RFC3339Nano),
+		EventType:            int64(event.EventType),
+		Payload:              pybytes,
 	})
 }
 
@@ -146,6 +147,7 @@ func resolvedShapes() map[string]*model.ResolvedEvent {
 			e.ScopeMemberships = []model.GroupRef{{GroupToken: "g1", Version: 2}, {GroupToken: "g2", Version: 1 << 30}}
 			e.ExternalId = "grp/node/dev"
 			e.FenceSetVersion = 7
+			e.SourceDeviceDisabled = true
 		}),
 		"empty alt id is present": with(func(e *model.ResolvedEvent) { e.AltId = strp("") }),
 		"empty anchor and membership": with(func(e *model.ResolvedEvent) {
@@ -390,6 +392,9 @@ func FuzzResolvedEventWire(f *testing.F) {
 		}
 		if flags&8 != 0 {
 			event.DeviceTypeToken, event.ProfileVersionToken, event.ExternalId = anchor, token, group
+		}
+		if flags&128 != 0 {
+			event.SourceDeviceDisabled = true
 		}
 		payload := &model.ResolvedMeasurementsPayload{}
 		for i := 0; i < int(entries%6); i++ {

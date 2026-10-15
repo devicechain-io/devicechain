@@ -509,9 +509,17 @@ func (r *Registry) recentRegistration(identity string) (regId string, epoch uint
 	return "", 0, "", false
 }
 
-// endRegistration removes the identity's registration regId (if it is still the current one) and
-// fires its session end, so the downlink conn and observations go with it. It writes no presence:
-// the registration belongs to a disabled device, whose events are discarded at resolution.
+// endRegistration removes the identity's registration regId (if it is still the current one),
+// fires its session end, so the downlink conn and observations go with it, and emits the
+// session's DISCONNECTED.
+//
+// 🔴 THE DISCONNECTED IS WHAT KEEPS A DISABLED DEVICE'S STATUS TRUE. Every caller ends the
+// registration of a disabled device, and this used to write no presence on the reasoning that
+// a disabled device's events are discarded at resolution. Its presence transitions are not —
+// they are the platform's report of its own connection — so with nothing written the device
+// read CONNECTED for as long as it stayed disabled: an asserted row takes Active only from a
+// transition, and the inactivity sweep skips it. The emit is the same one Deregister makes,
+// stamped after the session's CONNECTED, and nothing is written for a deleted tenant.
 func (r *Registry) endRegistration(identity, regId string) bool {
 	r.mu.Lock()
 	e := r.byRegId[regId]
@@ -520,9 +528,12 @@ func (r *Registry) endRegistration(identity, regId string) bool {
 		return false
 	}
 	r.removeLocked(e)
-	epoch := e.epoch
+	tenant, token, externalId, epoch, connectedAt := e.tenant, e.token, e.externalId, e.epoch, e.connectedAt
 	r.mu.Unlock()
 	r.fireSessionEnd(identity, epoch)
+	if token != "" && !r.tenantDeleted(tenant) {
+		r.emitDisconnect(tenant, token, externalId, epoch, r.disconnectStamp(connectedAt), "disabled", registerAttempts)
+	}
 	return true
 }
 

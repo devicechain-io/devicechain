@@ -152,3 +152,33 @@ func TestPlanStateChangeIgnoresAStateItCannotMap(t *testing.T) {
 		t.Fatalf("a DEMOTED StateChange must be planned as a custody release: %+v", ok.Events)
 	}
 }
+
+// TestPlanADisabledDevicesTransitionFeedsNothing pins that a disabled device raises no alarm
+// now that its presence transitions are resolved. The same disconnect that feeds an enabled
+// device's connectivity rule feeds nothing once marked as a disabled device's, and descopes
+// nothing either: a group-scoped rule the device is outside of would otherwise drop its state
+// and resolve its alarm on the strength of an event from a device the operator cut off.
+func TestPlanADisabledDevicesTransitionFeedsNothing(t *testing.T) {
+	base := time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC)
+	offline := rules.Rule{ID: ComposeRuleID("acme", "zone-offline"), Name: "zone offline", Type: rules.TypeConnectivity}
+	reg := NewRuleRegistry([]ScopedRule{
+		compileScoped(t, "acme", "p@1", connRule()),
+		compileScopedGroup(t, "acme", "p@1", offline, "zone", 1),
+	})
+
+	enabled := planEv(reg, 1, "acme", stateChange("acme", "d1", "p@1", base, "DISCONNECTED", 100))
+	if len(enabled.Events) != 1 || len(enabled.Descopes) != 1 {
+		t.Fatalf("the control is not live: an enabled device's disconnect fed %d edges and %d descopes, want 1 and 1",
+			len(enabled.Events), len(enabled.Descopes))
+	}
+
+	ev := stateChange("acme", "d1", "p@1", base, "DISCONNECTED", 100)
+	ev.SourceDeviceDisabled = true
+	res := planEv(reg, 2, "acme", ev)
+	if len(res.Events) != 0 {
+		t.Fatalf("a disabled device's disconnect fed %d connectivity edges: %+v", len(res.Events), res.Events)
+	}
+	if len(res.Descopes) != 0 {
+		t.Fatalf("a disabled device's disconnect descoped %d rules: %+v", len(res.Descopes), res.Descopes)
+	}
+}

@@ -62,17 +62,23 @@ type ReconcileMetrics struct {
 	// that visited them and could read none, and "cancelled" is the service stopping —
 	// which is not a fault and must not sit on the series operators alert from.
 	Runs *prometheus.CounterVec
-	// Repaired counts synthetic transitions emitted, labelled by direction
+	// Repaired counts repairs the projection was SEEN TO APPLY, labelled by direction
 	// ("connect", "disconnect"). In a healthy instance this is near zero; a standing
 	// rate means advisories are being lost.
 	//
-	// 🔴 EMITTED, NOT APPLIED, AND NOTHING HERE CAN NARROW THAT. Whether the projection
-	// accepts a transition is decided asynchronously and downstream, so this counter
-	// cannot distinguish a repair that landed from one presence ordering threw away.
-	// That gap used to be reachable in a way that mattered — a repair rejected on every
-	// pass forever, counted as a success every time — which is why reconcileTenant now
-	// constructs repairs Decide will accept rather than leaving the counter to imply it.
+	// 🔴 APPLIED, NOT EMITTED, AND THAT IS WHY IT LAGS A PASS. Whether the projection
+	// accepts a transition is decided asynchronously and downstream — the resolver can
+	// refuse it, presence ordering can throw it away — so a successful publish says
+	// nothing about whether the device was repaired. Counting the publish is what let a
+	// repair refused on every pass (a disabled device's disconnect, once) read as a
+	// success every time. So a repair is counted when the next pass reads its tenant and
+	// finds the row showing what the repair said; see settleRepairs.
 	Repaired *prometheus.CounterVec
+	// Unapplied counts repairs the next pass found NOT applied, labelled by direction:
+	// the row still reads exactly what it read when the repair was emitted. The repair
+	// was refused or lost downstream, and is emitted again on that pass. A standing rate
+	// means repairs are being emitted and not landing.
+	Unapplied *prometheus.CounterVec
 	// RegressedSessions is the number of devices this pass found LIVE on a session id
 	// lower than the one the projection is holding — the trailing-clock population.
 	//
@@ -104,6 +110,40 @@ func (m ReconcileMetrics) repaired(direction string, n int) {
 	if m.Repaired != nil && n > 0 {
 		m.Repaired.WithLabelValues(direction).Add(float64(n))
 	}
+}
+
+func (m ReconcileMetrics) unapplied(direction string, n int) {
+	if m.Unapplied != nil && n > 0 {
+		m.Unapplied.WithLabelValues(direction).Add(float64(n))
+	}
+}
+
+// sentRepair is a repair this process emitted, kept until the next read of its tenant says
+// whether it landed. before is the row the repair was emitted against (hadRow false when
+// there was none); sessionId and connected are what the repair asked the row to become.
+type sentRepair struct {
+	before    StoredDevice
+	hadRow    bool
+	sessionId uint64
+	connected bool
+}
+
+// settle judges one sent repair against the row read on the following pass. A row showing
+// what the repair said is applied. A row exactly as it was when the repair was emitted is
+// NOT applied: nothing moved it, so the repair was refused or lost. Anything else — the
+// row has moved to another session or state since — is neither: something newer than the
+// repair decided the row, and whether the repair landed first cannot be told.
+func (s sentRepair) settle(row StoredDevice, seen bool) (applied, unapplied bool) {
+	if seen && row.SessionId == s.sessionId && row.Active == s.connected {
+		return true, false
+	}
+	if seen != s.hadRow {
+		return false, false
+	}
+	if !seen || (row.SessionId == s.before.SessionId && row.Active == s.before.Active) {
+		return false, true
+	}
+	return false, false
 }
 
 // Reconciler repairs the difference between what the broker holds and what the
@@ -149,6 +189,9 @@ type Reconciler struct {
 	// resumeAt is the index into the tenant list where the next pass begins — nonzero
 	// only after a pass ran out of time. See Run.
 	resumeAt int
+	// sent holds the repairs emitted for each tenant on the last pass that read it, keyed by
+	// DeviceKey, until the next read of that tenant settles them. See settleRepairs.
+	sent map[string]map[string]sentRepair
 }
 
 // 🔑 A REPAIR AND THE TRANSITION IT REPLACES SHARE A DEDUP ID, WHICH IS WANTED AND
@@ -275,9 +318,24 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	if cutShort && len(tenants) > 0 {
 		r.resumeAt = (startedAt + visited) % len(tenants)
 	}
+	// A tenant gone from the list is never read again, so its unsettled repairs never
+	// would be. Only a pass that saw the whole list can say which tenants those are.
+	if !cutShort {
+		listed := make(map[string]bool, len(tenants))
+		for _, tenant := range tenants {
+			listed[tenant] = true
+		}
+		for tenant := range r.sent {
+			if !listed[tenant] {
+				delete(r.sent, tenant)
+			}
+		}
+	}
 
-	r.metrics.repaired("connect", total.Connects)
-	r.metrics.repaired("disconnect", total.Disconnects)
+	r.metrics.repaired("connect", total.ConnectsApplied)
+	r.metrics.repaired("disconnect", total.DisconnectsApplied)
+	r.metrics.unapplied("connect", total.ConnectsUnapplied)
+	r.metrics.unapplied("disconnect", total.DisconnectsUnapplied)
 	if total.Withheld > 0 && r.metrics.SkippedDisconnects != nil {
 		r.metrics.SkippedDisconnects.Add(float64(total.Withheld))
 	}
@@ -327,7 +385,11 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	if total.Connects > 0 || total.Disconnects > 0 {
 		log.Info().Int("connects", total.Connects).Int("disconnects", total.Disconnects).
 			Int("regressedSessions", total.Regressed).
-			Msg("Reconciled broker-asserted presence against the broker's live connections.")
+			Msg("Emitted presence repairs for devices whose presence differed from the broker's live connections.")
+	}
+	if unapplied := total.ConnectsUnapplied + total.DisconnectsUnapplied; unapplied > 0 {
+		log.Warn().Int("connects", total.ConnectsUnapplied).Int("disconnects", total.DisconnectsUnapplied).
+			Msg("Presence repairs emitted on the previous pass were not applied; they were refused or lost downstream.")
 	}
 	if cutShort {
 		if parent.Err() != nil {
@@ -347,18 +409,63 @@ func (r *Reconciler) Run(ctx context.Context) error {
 // widening tuple of ints because every field has the same type and none of them is
 // distinguishable at a call site — a transposed pair would compile and quietly mislabel
 // an operator's metrics.
+//
+// Connects and Disconnects are repairs EMITTED this pass. The Applied and Unapplied pairs
+// are the previous pass's repairs, settled by this pass's read (settleRepairs).
 type passCounts struct {
-	Connects    int
-	Disconnects int
-	Withheld    int
-	Regressed   int
+	Connects             int
+	Disconnects          int
+	ConnectsApplied      int
+	DisconnectsApplied   int
+	ConnectsUnapplied    int
+	DisconnectsUnapplied int
+	Withheld             int
+	Regressed            int
 }
 
 func (c *passCounts) add(o passCounts) {
 	c.Connects += o.Connects
 	c.Disconnects += o.Disconnects
+	c.ConnectsApplied += o.ConnectsApplied
+	c.DisconnectsApplied += o.DisconnectsApplied
+	c.ConnectsUnapplied += o.ConnectsUnapplied
+	c.DisconnectsUnapplied += o.DisconnectsUnapplied
 	c.Withheld += o.Withheld
 	c.Regressed += o.Regressed
+}
+
+// settleRepairs judges the repairs emitted for tenant on the last pass that read it against
+// this pass's read of the same tenant, and forgets them. It runs before this pass emits, so
+// a repair found unapplied is counted once here and emitted again after it.
+func (r *Reconciler) settleRepairs(tenant string, stored map[string]StoredDevice) passCounts {
+	var counts passCounts
+	for key, s := range r.sent[tenant] {
+		row, seen := stored[key]
+		applied, unapplied := s.settle(row, seen)
+		switch {
+		case applied && s.connected:
+			counts.ConnectsApplied++
+		case applied:
+			counts.DisconnectsApplied++
+		case unapplied && s.connected:
+			counts.ConnectsUnapplied++
+		case unapplied:
+			counts.DisconnectsUnapplied++
+		}
+	}
+	delete(r.sent, tenant)
+	return counts
+}
+
+// remember records a repair that was emitted, for the next read of its tenant to settle.
+func (r *Reconciler) remember(tenant, key string, before StoredDevice, hadRow bool, session uint64, connected bool) {
+	if r.sent == nil {
+		r.sent = make(map[string]map[string]sentRepair)
+	}
+	if r.sent[tenant] == nil {
+		r.sent[tenant] = make(map[string]sentRepair)
+	}
+	r.sent[tenant][key] = sentRepair{before: before, hadRow: hadRow, sessionId: session, connected: connected}
 }
 
 // applyClusterHighWater raises the pass's expectation to the largest cluster ever seen,
@@ -380,7 +487,7 @@ func (r *Reconciler) applyClusterHighWater(inv Inventory) Inventory {
 // reconcileTenant diffs one tenant both ways.
 func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inventory,
 	stored map[string]StoredDevice) passCounts {
-	var counts passCounts
+	counts := r.settleRepairs(tenant, stored)
 
 	// One stamp for the pass, used both as the transitions' OccurredAt and as their dedup
 	// nonce, so every emission below is attributable to this pass and no two passes
@@ -483,6 +590,7 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 			},
 		}) {
 			counts.Connects++
+			r.remember(tenant, key, known, seen, live.SessionId, true)
 		}
 	}
 
@@ -523,6 +631,7 @@ func (r *Reconciler) reconcileTenant(ctx context.Context, tenant string, inv Inv
 			},
 		}) {
 			counts.Disconnects++
+			r.remember(tenant, key, believed, true, believed.SessionId, false)
 		}
 	}
 	return counts

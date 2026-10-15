@@ -140,7 +140,7 @@ Mientras el dispositivo está deshabilitado:
 
 - sus eventos se descartan en lugar de almacenarse, y no se recuperan al volver a habilitarlo;
 - no puede abrir una conexión nueva, aunque una conexión que ya tenga sigue abierta hasta que
-  termina;
+  termina. Cuando esa conexión termina, el dispositivo aparece como desconectado;
 - los comandos nuevos que se le envían se rechazan;
 - los comandos que ya estaban en cola para él quedan **retenidos**: ni se envían ni se cancelan.
 

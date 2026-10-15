@@ -52,19 +52,20 @@ var errResolvedNotUTF8 = errors.New("resolved event carries a string that is not
 
 // Field numbers, from dc-device-management-events.proto.
 const (
-	resolvedSource              = protowire.Number(1)
-	resolvedAltId               = protowire.Number(2)
-	resolvedSourceDeviceToken   = protowire.Number(3)
-	resolvedAnchors             = protowire.Number(4)
-	resolvedOccurredTime        = protowire.Number(7)
-	resolvedProcessedTime       = protowire.Number(8)
-	resolvedEventType           = protowire.Number(9)
-	resolvedPayload             = protowire.Number(10)
-	resolvedDeviceTypeToken     = protowire.Number(11)
-	resolvedProfileVersionToken = protowire.Number(12)
-	resolvedScopeMemberships    = protowire.Number(13)
-	resolvedExternalId          = protowire.Number(14)
-	resolvedFenceSetVersion     = protowire.Number(15)
+	resolvedSource               = protowire.Number(1)
+	resolvedAltId                = protowire.Number(2)
+	resolvedSourceDeviceToken    = protowire.Number(3)
+	resolvedAnchors              = protowire.Number(4)
+	resolvedOccurredTime         = protowire.Number(7)
+	resolvedProcessedTime        = protowire.Number(8)
+	resolvedEventType            = protowire.Number(9)
+	resolvedPayload              = protowire.Number(10)
+	resolvedDeviceTypeToken      = protowire.Number(11)
+	resolvedProfileVersionToken  = protowire.Number(12)
+	resolvedScopeMemberships     = protowire.Number(13)
+	resolvedExternalId           = protowire.Number(14)
+	resolvedFenceSetVersion      = protowire.Number(15)
+	resolvedSourceDeviceDisabled = protowire.Number(16)
 
 	anchorType           = protowire.Number(1)
 	anchorToken          = protowire.Number(2)
@@ -84,8 +85,12 @@ const (
 	measurementDataType   = protowire.Number(5)
 )
 
-// tagSize is the size of every tag here: every field number is at most 15, and a field
-// number up to 15 encodes with its wire type in a single byte.
+// tagSize is the size of every tag here but one: a field number up to 15 encodes with its
+// wire type in a single byte.
+//
+// 🔴 resolvedSourceDeviceDisabled (16) is the exception and is sized by disabledSize: a
+// field number from 16 on takes a TWO-byte tag, and sizing it with tagSize would allocate
+// one byte short and refuse every event from a disabled device.
 const tagSize = 1
 
 // marshalResolvedEvent writes event in the PResolvedEvent wire format into a buffer sized
@@ -174,6 +179,7 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	}
 	out = appendString(out, resolvedExternalId, event.ExternalId)
 	out = appendUint(out, resolvedFenceSetVersion, uint64(event.FenceSetVersion))
+	out = appendUint(out, resolvedSourceDeviceDisabled, boolVarint(event.SourceDeviceDisabled))
 
 	// The sizing and writing passes read the same event, so they agree unless it changed
 	// between them, which only a caller mutating it concurrently could do. That is a
@@ -214,7 +220,8 @@ func sizeResolvedEnvelope(event *model.ResolvedEvent, occurredLen, processedLen 
 		return 0, errResolvedNotUTF8
 	}
 	size += tagSize + protowire.SizeBytes(occurredLen) + tagSize + protowire.SizeBytes(processedLen)
-	size += uintSize(uint64(event.EventType)) + uintSize(uint64(event.FenceSetVersion))
+	size += uintSize(uint64(event.EventType)) + uintSize(uint64(event.FenceSetVersion)) +
+		disabledSize(event.SourceDeviceDisabled)
 	return size, nil
 }
 
@@ -382,6 +389,24 @@ func appendPresentString(out []byte, num protowire.Number, s string) []byte {
 }
 
 // appendUint writes an implicit-presence varint field: nothing when zero.
+// boolVarint is a proto3 bool's varint: 1 for true, and 0, which appendUint and uintSize
+// leave off the wire as proto.Marshal does, for false.
+func boolVarint(b bool) uint64 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// disabledSize is the encoded size of source_device_disabled: nothing when false, and a
+// two-byte tag (field 16) plus a one-byte varint when true.
+func disabledSize(disabled bool) int {
+	if !disabled {
+		return 0
+	}
+	return protowire.SizeTag(resolvedSourceDeviceDisabled) + protowire.SizeVarint(1)
+}
+
 func appendUint(out []byte, num protowire.Number, v uint64) []byte {
 	if v == 0 {
 		return out
