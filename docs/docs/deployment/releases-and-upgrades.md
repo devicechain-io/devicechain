@@ -3588,7 +3588,7 @@ board in the older console, because saving it there writes that layout.
   with one bar per device.
 - **Nothing else is required.** The new settings all have defaults.
 
-#### The broker remembers redelivered events for 10 minutes {#v0220-dedup}
+##### The broker remembers redelivered events for 10 minutes {#v0220-dedup}
 
 `resolved-events` and `failed-events` now drop a re-published event for 10 minutes, up from the
 broker's 2-minute default. Before, an event whose source was redelivered after two failed

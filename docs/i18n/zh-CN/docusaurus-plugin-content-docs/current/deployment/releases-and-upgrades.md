@@ -2116,7 +2116,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **找出现在拒绝设备组的组件**，改用设备群表格，或每台设备一根柱的柱状图。
 - **无需其他操作。** 新设置都有默认值。
 
-#### broker 在 10 分钟内记住重新投递的事件 {#v0220-dedup}
+##### broker 在 10 分钟内记住重新投递的事件 {#v0220-dedup}
 
 `resolved-events` 和 `failed-events` 现在在 10 分钟内丢弃重新发布的事件，而 broker 的默认值为 2
 分钟。以前，若事件的来源在两次发布失败后被重新投递，该事件可能被存储两次，并被检测计数两次。传入

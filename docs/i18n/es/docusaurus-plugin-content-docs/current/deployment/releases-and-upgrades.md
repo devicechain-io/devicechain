@@ -3855,7 +3855,7 @@ disposición.
   gráfico de barras con una barra por dispositivo.
 - **No hace falta nada más.** Todos los ajustes nuevos tienen valores por defecto.
 
-#### El broker recuerda los eventos reentregados durante 10 minutos {#v0220-dedup}
+##### El broker recuerda los eventos reentregados durante 10 minutos {#v0220-dedup}
 
 `resolved-events` y `failed-events` ahora descartan un evento publicado de nuevo durante 10
 minutos, frente a los 2 minutos por defecto del broker. Antes, un evento cuyo origen se reentregaba
