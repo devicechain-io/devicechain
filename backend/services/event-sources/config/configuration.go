@@ -9,11 +9,31 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/transport"
 	"github.com/rs/zerolog/log"
 )
 
 const (
+	// DefaultCapturePublishWindow is how many inbound-events publishes the gateway source
+	// keeps awaiting the broker's acknowledgement at once when capture.publishWindow is not
+	// set.
+	//
+	// 🔑 THE WINDOW IS A THROUGHPUT CEILING: events per second can be no more than the window
+	// divided by the time a PubAck takes (Little's law). On a replicated stream a PubAck is a
+	// quorum commit plus a route hop; measured on a three-node cluster it took 8.4 ms at the
+	// median and 11.4 ms on average at saturation, so the 128 this replaced capped a pod at
+	// 128 / 11.4 ms, about 11,200 events a second, at the platform's front door. 512 puts the
+	// cap near 45,000. The 128 was chosen with an in-process benchmark whose PubAck took well
+	// under a millisecond, where no window is ever full; it could not see this ceiling.
+	//
+	// MEMORY BOUND: at most window x (one built inbound event + the capture message it came
+	// from, held unacked until its publish is acknowledged) per pod. With typical payloads of
+	// a few KiB that is a few MiB at 512, and still small at the maximum of 1024 next to the
+	// reader's fetch batch and decode queue. A crash redelivers those sources at AckWait; the
+	// capture dedup id stores each once.
+	DefaultCapturePublishWindow = 512
+
 	// DefaultIngestReadingsPerSecond and DefaultIngestBurst are the platform
 	// per-tenant ingest ceiling applied when none is configured, counted in READINGS
 	// after decode and in messages before it, at the same number (see
@@ -172,6 +192,28 @@ func secondsOr(v, fallback int) time.Duration {
 	return time.Duration(v) * time.Second
 }
 
+// Capture configures the gateway source's publish into inbound-events.
+type Capture struct {
+	// PublishWindow is how many inbound-events publishes the gateway source keeps awaiting
+	// their PubAck at once, from 1 to messaging.MaxOrderedWindow. Unset (absent or null)
+	// defaults to DefaultCapturePublishWindow; an explicit 0 is refused, not defaulted, and
+	// so is anything outside the range: a window that is silently clamped is a throughput
+	// limit nobody chose. A fixed setting, read once at startup.
+	//
+	// It is a pointer so that "not written" and "written as 0" are different things; after
+	// ApplyDefaults it is never nil.
+	PublishWindow *int
+}
+
+// PublishWindowSize is the publish window in effect: the configured one, or the default
+// when the setting was never written.
+func (c Capture) PublishWindowSize() int {
+	if c.PublishWindow == nil {
+		return DefaultCapturePublishWindow
+	}
+	return *c.PublishWindow
+}
+
 type EventSourcesConfiguration struct {
 	EventSources    []EventSource
 	IngestRateLimit IngestRateLimit
@@ -180,6 +222,7 @@ type EventSourcesConfiguration struct {
 	HttpIngest     HttpIngest
 	Contention     Contention
 	BrokerPresence BrokerPresence
+	Capture        Capture
 }
 
 // Creates the default event sources configuration
@@ -251,6 +294,11 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 	if c.IngestRateLimit.Burst <= 0 {
 		c.IngestRateLimit.Burst = DefaultIngestBurst
 	}
+	// nil, not 0, means unset: an explicit 0 must reach Validate and be refused.
+	if c.Capture.PublishWindow == nil {
+		w := DefaultCapturePublishWindow
+		c.Capture.PublishWindow = &w
+	}
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -296,6 +344,9 @@ func (c *EventSourcesConfiguration) Validate() error {
 	// misconfiguration the operator must see, not one to silently reinterpret.
 	if c.Contention.ManualFloor < 0 || c.Contention.ManualFloor > governance.MaxShedLevel {
 		return fmt.Errorf("contention.manualFloor must be between 0 and %d (got %d)", governance.MaxShedLevel, c.Contention.ManualFloor)
+	}
+	if w := c.Capture.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
+		return fmt.Errorf("capture.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
 	}
 	if err := c.validateSourceIds(); err != nil {
 		return err

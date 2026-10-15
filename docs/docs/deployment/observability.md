@@ -643,6 +643,14 @@ second; detection applies them in the order they reach the resolved stream. An o
 stops the service from starting, and the error names the setting. The service logs the value it is
 using when it starts.
 
+### Ingest publish window {#ingest-publish-window}
+
+`event-sources` publishes each decoded event to the broker and keeps a number of those publishes waiting for the broker's acknowledgement at once, the same way `device-management` does.
+
+| Setting (`event-sources` config) | Default | What it does |
+| --- | --- | --- |
+| `capture.publishWindow` | `512` | How many events a pod keeps waiting for the broker's acknowledgement at once, from 1 to 1024. A value outside that range, including 0, stops the service at startup; it is never adjusted. Ingest can go no faster than this number divided by how long an acknowledgement takes, and on a replicated broker an acknowledgement takes about 8 to 11 ms, so 128 held a pod near 11,000 events a second and 512 does not. Raise it when `devicechain_eventsources_jetstream_publish_window_full_seconds_total` grows by close to a second per second. Each event in the window is held in memory, with the device message it came from, until it is acknowledged, so memory grows by the window times the size of one event and one source message: a few MiB at 512 for ordinary payloads. If the pod dies those source messages are redelivered after the consumer's acknowledgement wait and published again under the same message id, which the stream recognises (see `jetstream_publish_duplicates_total`). A fixed setting, read at startup. |
+
 ## Event persistence {#event-persistence}
 
 `event-management` writes events in batches. Each writer takes the events already waiting for it,
@@ -817,7 +825,8 @@ No alert reads the next series, but it is the one to look at when publishing is 
   limit.
 - **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**: seconds a pipelined
   writer could not send because its whole window was waiting for acknowledgements. A rate near 1
-  means the window, not the broker, limits publishing: raise `resolution.publishWindow`. A rate
+  means the window, not the broker, limits publishing: raise `resolution.publishWindow` (`device-management`) or
+  `capture.publishWindow` (`event-sources`). A rate
   near 0 means the window has room.
 - **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**: how many sends found the
   window full and had to wait. The seconds above divided by this is the average wait.

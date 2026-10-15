@@ -921,6 +921,16 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) er
 	return senderr
 }
 
+// newGatewayWriter builds the gateway source's ordered inbound-events writer at the
+// configured capture.publishWindow. It is the ONLY ordered writer this service builds (the
+// other sources and the presence tap publish synchronously through InboundEventsWriter and
+// have no window to size), and it is a function of its own so a wiring test can check the
+// configured window reaches it: a processor test builds its own writer, so a service that
+// stopped passing the setting would run the default while every other test stayed green.
+func newGatewayWriter(nmgr *messaging.NatsManager) (messaging.OrderedWriter, error) {
+	return processor.NewInboundWriter(nmgr, Configuration.Capture.PublishWindowSize())
+}
+
 // Create messaging components used by this microservice.
 func createNatsComponents(nmgr *messaging.NatsManager) error {
 	ievents, err := nmgr.NewWriter(streams.InboundEvents)
@@ -945,14 +955,14 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// in INITIALIZE, when there was nothing to give it.
 	//
 	// The gateway source also gets its OWN ordered writer to inbound-events, which keeps
-	// processor.CAPTURE_PUBLISH_WINDOW publishes in flight instead of one per decode
-	// worker; processor.NewInboundWriter builds it at that window. The source owns it from here and settles and closes it in its own stop,
+	// capture.publishWindow publishes in flight instead of one per decode
+	// worker; newGatewayWriter builds it at that window. The source owns it from here and settles and closes it in its own stop,
 	// which runs before the manager drains the connection. InboundEventsWriter above
 	// stays for the sources and the presence tap that publish synchronously; the two do
 	// not share a JetStream context, since the ordered writer builds its own.
 	if GatewaySource != nil {
 		GatewaySource.SetReader(capture)
-		pipeline, err := processor.NewInboundWriter(nmgr)
+		pipeline, err := newGatewayWriter(nmgr)
 		if err != nil {
 			return err
 		}

@@ -39,7 +39,7 @@ import (
 //	sync   the shape this source had before its publishes were pipelined: a synchronous
 //	       MessageWriter publish on each of DECODE_WORKER_COUNT goroutines at once
 //	w=N    the real ordered writer with a window of N (1 behaves as a serial writer;
-//	       CAPTURE_PUBLISH_WINDOW is what ships)
+//	       capture.publishWindow, default 512, is what ships; loopback cannot show why)
 //
 // In-process over loopback: the absolute numbers are a FLOOR, the ratios are the result.
 //
@@ -55,7 +55,7 @@ func BenchmarkCaptureIngestThroughput(b *testing.B) {
 	var cluster []*natsserver.Server
 	n := 0
 	for _, topology := range []string{"R1", "R3"} {
-		for _, mode := range []string{"none", "sync", "w=1", "w=128", "w=256"} {
+		for _, mode := range []string{"none", "sync", "w=1", "w=128", "w=256", "w=512"} {
 			n++
 			instance := fmt.Sprintf("capbench%d", n)
 			b.Run(fmt.Sprintf("topology=%s/publish=%s", topology, mode), func(b *testing.B) {
