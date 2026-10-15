@@ -8,7 +8,13 @@
 //   - a band from the column's thresholds colours the value; the normal band keeps the table's own
 //     colour, as everywhere else, so a table of healthy devices is calm;
 //   - each cell shows the reading's age, and is called stale only against the configured
-//     `staleAfterSeconds` (the freshness convention: no threshold, no stale mark);
+//     `staleAfterSeconds` (the freshness convention: no threshold, no stale mark). With
+//     `ageLagSeconds` a cell shows its age only when its reading lags the NEWEST reading in the
+//     table by at least that much (or is stale): on a fleet that reports every few seconds every
+//     age reads "a few seconds ago", which is noise that doubles each row, and the frame's footer
+//     already carries the fleet's own age. The lag is measured between readings, not against the
+//     viewer's clock, so a played-back run (whose readings are all days old) shows the machine
+//     that fell silent and no other;
 //   - a cell with no number says WHY: still loading, the read failed, the device sent nothing in
 //     the range, or it sent other measurements but not this one;
 //   - columns sort from their headings (real buttons, so the keyboard works), the device column
@@ -17,6 +23,7 @@
 //   - on a narrow board the table scrolls sideways inside its widget and keeps the device column
 //     in view.
 
+import type { FleetMember } from '@devicechain/dashboards';
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 
 import {
@@ -177,6 +184,9 @@ function Table({
   const formats = useMemo(() => columnFormats(widget.options?.columns), [widget.options?.columns]);
   const bands = useMemo(() => columnBands(widget.options?.thresholds), [widget.options?.thresholds]);
   const staleAfter = resolveStaleAfterSeconds(widget.options);
+  const ageLag = positiveSeconds(optNumber(widget.options, 'ageLagSeconds'));
+  // The newest reading among the cells the table shows: what a cell's lag is measured from.
+  const newest = useMemo(() => (ageLag === undefined ? undefined : newestShown(fleet.members, columns)), [ageLag, fleet.members, columns]);
   const pageSize = optNumber(widget.options, 'pageSize') ?? DEFAULT_PAGE_SIZE;
 
   // The author's order is the starting point; a click on a heading overrides it for this viewer.
@@ -257,6 +267,8 @@ function Table({
                     bands={bands.get(name)}
                     colors={colors}
                     staleAfter={staleAfter}
+                    ageLag={ageLag}
+                    newest={newest}
                     now={now}
                     strings={strings}
                   />
@@ -322,6 +334,8 @@ function Table({
                       bands={bands.get(name)}
                       colors={colors}
                       staleAfter={staleAfter}
+                      ageLag={ageLag}
+                      newest={newest}
                       now={now}
                       strings={strings}
                       wrap
@@ -385,6 +399,24 @@ function Table({
   );
 }
 
+// A seconds option that means something: a positive finite number, else unset.
+function positiveSeconds(v: number | undefined): number | undefined {
+  return v !== undefined && Number.isFinite(v) && v > 0 ? v : undefined;
+}
+
+// The newest reading time (epoch ms) among the shown columns of every member, or undefined.
+export function newestShown(members: readonly FleetMember[], columns: readonly string[]): number | undefined {
+  let newest: number | undefined;
+  for (const m of members) {
+    for (const name of columns) {
+      const t = m.latest[name]?.occurredTime;
+      const at = t ? Date.parse(t) : Number.NaN;
+      if (!Number.isNaN(at) && (newest === undefined || at > newest)) newest = at;
+    }
+  }
+  return newest;
+}
+
 const pagerButton: CSSProperties = {
   minWidth: '2em',
   padding: `0 ${spaceVar(2)}`,
@@ -402,6 +434,8 @@ function CellView({
   bands,
   colors,
   staleAfter,
+  ageLag,
+  newest,
   now,
   strings,
   wrap,
@@ -411,6 +445,9 @@ function CellView({
   bands: Threshold[] | undefined;
   colors: ReturnType<typeof useSeverityColors>;
   staleAfter: number | undefined;
+  // Show the age only past this lag behind `newest` (seconds), or when stale; undefined = always.
+  ageLag: number | undefined;
+  newest: number | undefined;
   now: number;
   strings: FleetStrings;
   // Let the text break (the narrow card) instead of holding one line (the table cell).
@@ -433,13 +470,14 @@ function CellView({
       const at = cell.sample.occurredTime ? Date.parse(cell.sample.occurredTime) : Number.NaN;
       const age = Number.isNaN(at) ? undefined : ageSeconds(at, now);
       const stale = age !== undefined && isStale(age, staleAfter);
+      const showAge = age !== undefined && (ageLag === undefined || stale || newest === undefined || newest - at >= ageLag * 1000);
       return (
         <span data-stale={stale ? '' : undefined} style={{ display: 'inline-flex', flexDirection: 'column', opacity: stale ? 0.6 : 1 }}>
           <span data-threshold-level={band?.level} style={{ fontVariantNumeric: 'tabular-nums', color }}>
             {formatValue(cell.value, format?.precision)}
             {format?.unit ? ` ${format.unit}` : ''}
           </span>
-          {age !== undefined && (
+          {age !== undefined && showAge && (
             <span style={muted} data-cell-age="">
               {formatAge(age)}
               {stale ? ` · ${strings.stale}` : ''}

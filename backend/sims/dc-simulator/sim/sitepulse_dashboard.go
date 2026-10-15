@@ -20,11 +20,11 @@ import (
 // descriptor declares, which the frontend layout lint enforces over the committed fixture. On a
 // full 1920 px screen the cells double and every widget only grows. From the top:
 //
-//	rows 0-3    nine columns of KPIs: the alarm counts and the crusher lamp, then the plant's
-//	            throughput now, on average and at peak; beside them the Machine selector and
-//	            the engine gauge
-//	rows 4-6    the alarm table, the map and the tyre gauge
-//	rows 7-12   the fleet table
+//	rows 0-4    nine columns of KPIs: the alarm counts and the crusher lamp (two rows), then the
+//	            plant's throughput now, on average and at peak (three rows); beside them the
+//	            Machine selector and the engine gauge
+//	rows 5-7    the alarm table, the map and the tyre gauge
+//	rows 8-12   the fleet table
 //
 // 🔴 THE FLEET IS ONE TABLE, NOT A TANK PER MACHINE. The fleet-table widget draws one row per
 // device of the site anchor and one column per measurement, each cell that DEVICE's own latest
@@ -39,11 +39,16 @@ import (
 // The table is sorted lowest fuel first, which is the order a site manager acts in, and the
 // device name drills to the selected-machine slot exactly as an alarm's originator does.
 //
-// 🔴 THE TABLE CANNOT SHOW ALL NINETEEN ROWS BESIDE THE REST. A row is two lines (the value and
-// its age), ~40 px, so the 18 machines and the plant are ~11 of the 13 rows of the screen and
-// leave two for everything else. The table gets the last six rows and shows the first nine or ten
-// machines at 960 px, and scrolls the rest inside itself (one page holds all 19). That is why the
-// order is lowest fuel first: the rows in view are the ones that need a person.
+// 🔴 A ROW IS ONE LINE, AND THE TABLE STILL CANNOT SHOW ALL NINETEEN BESIDE THE REST. Every
+// machine reports every second or so, so an age under every value would read "a few seconds ago"
+// nineteen times over (and "8 days ago" in the played-back run) and double each row. The table
+// sets `ageLagSeconds` instead: a cell shows its age only when its reading has fallen
+// sitepulseFleetAgeLagSeconds behind the newest reading in the table, which is a machine that
+// went quiet, in the live board and the replay alike, and the frame's footer carries the fleet's
+// own age. Even at one line (~25 px) the 19 rows need ~7 of the screen's 13 rows; the table gets
+// the last five, shows the first twelve at 960 px and scrolls the rest inside itself (one
+// page holds all 19). That is why the order is lowest fuel first: the rows in view are the ones
+// that need a person.
 //
 // Payload is a COLUMN, not a chart of its own: a bar per hauler would repeat the table's figure
 // in a second place, spend rows on it, and show fewer machines than the column does. The wheeled
@@ -117,28 +122,39 @@ const (
 	// header's range control is part of what this board is declared to carry.
 	sitepulseTimeRangeSeconds = 3600
 
-	// Rows. The KPIs lead in two bands of three tiles, each a third of NINE columns and two rows
-	// tall: the site's state (the two alarm counts and the crusher lamp), then the plant's
-	// throughput (now, on average and at peak). A tile is 3 columns wide because a stat card
-	// cannot be narrower (its descriptor's minimum); at two rows tall the lamp and the stat card
-	// lay their caption beside the figure. Three-row bands read larger but cost the fleet table
-	// two rows, which is the difference between six machines and nine in view.
+	// Rows. The KPIs lead in two bands of three tiles, each a third of NINE columns: the site's
+	// state (the two alarm counts and the crusher lamp) in two rows, then the plant's throughput
+	// (now, on average and at peak) in THREE. A tile is 3 columns wide because a stat card cannot
+	// be narrower (its descriptor's minimum). The throughput band is the taller one because a stat
+	// card spends its height on more than a count does: a subject line, the reading's age and a
+	// caption under the figure. At two rows, at 960 px, that left "822 t/h" in ~17 px type beside
+	// a 30 px alarm count; at three it is the largest figure on the board, which is what the
+	// plant's output should be. The alarm counts carry no age and no caption, so two rows hold a
+	// figure that reads at a distance. A third row for them too would cost the fleet table its
+	// fifth row, the difference between nine machines in view and seven.
 	//
 	// The remaining 3 columns carry the Machine selector and the engine gauge beside the KPIs,
 	// and the alarm table, the map and the tyre gauge share the three rows under them, so the
-	// fleet table has the six rows left to the fold.
-	sitepulseKPIBandRows = 2
-	sitepulseKPIRows     = 2 * sitepulseKPIBandRows
-	sitepulseKPITileCols = 3
-	sitepulseKPIColumns  = 3 * sitepulseKPITileCols
-	sitepulseGaugeCols   = dashboardGridColumns - sitepulseKPIColumns
-	sitepulseMidRows     = 3
-	sitepulseFleetRow    = sitepulseKPIRows + sitepulseMidRows
-	sitepulseFleetRows   = sitepulseFoldRows - sitepulseFleetRow
+	// fleet table has the five rows left to the fold.
+	sitepulseStateBandRows = 2
+	sitepulseFlowBandRows  = 3
+	sitepulseKPIRows       = sitepulseStateBandRows + sitepulseFlowBandRows
+	sitepulseKPITileCols   = 3
+	sitepulseKPIColumns    = 3 * sitepulseKPITileCols
+	sitepulseGaugeCols     = dashboardGridColumns - sitepulseKPIColumns
+	sitepulseMidRows       = 3
+	sitepulseFleetRow      = sitepulseKPIRows + sitepulseMidRows
+	sitepulseFleetRows     = sitepulseFoldRows - sitepulseFleetRow
 
 	// The fleet table pages at 20 devices: the 18 machines and the crusher plant fit one page.
 	// A longer fleet pages.
 	sitepulseFleetPageSize = 20
+
+	// A fleet-table cell shows its reading's age once the reading lags the newest one in the table
+	// by this much. The player reports every machine about once a second (the recorded run's
+	// readings at any instant sit within a second of each other), so 30 s is some thirty missed
+	// reports: a machine that has gone quiet, never one that is merely between two readings.
+	sitepulseFleetAgeLagSeconds = 30
 
 	// Display scales for the engine gauge and the tyre gauge. Not contract values: the only
 	// fixed points are the rule thresholds, and each scale keeps its threshold well inside the arc.
@@ -203,15 +219,18 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	}
 	onSite := widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}}
 
-	// kpiTile places the i-th tile (0..2, left to right) of KPI band `band` (0 or 1).
-	kpiTile := func(band, i int) box {
-		return box{sitepulseKPITileCols * i, sitepulseKPITileCols, sitepulseKPIBandRows * band, sitepulseKPIBandRows}
+	// stateTile and flowTile place the i-th tile (0..2, left to right) of the two KPI bands.
+	stateTile := func(i int) box {
+		return box{sitepulseKPITileCols * i, sitepulseKPITileCols, 0, sitepulseStateBandRows}
+	}
+	flowTile := func(i int) box {
+		return box{sitepulseKPITileCols * i, sitepulseKPITileCols, sitepulseStateBandRows, sitepulseFlowBandRows}
 	}
 
 	// The crusher lamp: lit while plant_running reports 1 (onAt), dark at 0. No threshold bands:
 	// no rule fires on the plant, so no band would have a source. No unit either (it is a flag).
 	onAt := 1.0
-	running := buildStatusLightWidget("sp-plant-running", kpiTile(0, 2), onPlant(SitepulsePlantRunningKey),
+	running := buildStatusLightWidget("sp-plant-running", stateTile(2), onPlant(SitepulsePlantRunningKey),
 		"Crusher running", SitepulsePlantRunningKey, "", &onAt, nil)
 	running.Options["precision"] = 0
 	// An empty unit is no unit: omit the key rather than author a blank one.
@@ -248,10 +267,12 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// with no fuel reading (the crusher) always sorts last. The device name drills to the
 	// selected-machine slot, so a click moves the engine and tyre gauges like an alarm's does.
 	//
-	// No `staleAfterSeconds`: the table then shows each reading's age under it and never dims a
-	// cell. This board is also PLAYED BACK from a recording (the website), where every reading is
-	// older than any threshold, and a washed-out table would read as a broken one; the age line
-	// is the honest signal in both places.
+	// No `staleAfterSeconds`: a stale mark is judged against the VIEWER's clock, and this board is
+	// also PLAYED BACK from a recording (the website) whose readings are all days old, so every
+	// cell would be dimmed and badged and the frame would say STALE: a washed-out table reads as a
+	// broken one. The board-replay harness does not re-time a run's samples to the present. The
+	// lag rule (`ageLagSeconds`, above) is measured between readings instead, so it marks the
+	// machine that went quiet in both places and nothing else.
 	fleet := buildFleetTableWidget("sp-fleet", box{0, dashboardGridColumns, sitepulseFleetRow, sitepulseFleetRows},
 		widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{SitepulseFuelKey, SitepulseEngineTempKey, SitepulsePayloadKey, SitepulseTyreKey}},
 		"Fleet",
@@ -267,6 +288,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	fleet.Options["sortDescending"] = false
 	fleet.Options["selectionTarget"] = sitepulseSlotMachine
 	fleet.Options["pageSize"] = sitepulseFleetPageSize
+	fleet.Options["ageLagSeconds"] = sitepulseFleetAgeLagSeconds
 
 	// Throughput three ways. "Now" is the newest reading (stat `last`), aged on screen and
 	// refused once it is older than the board's range; the average and the peak cover the
@@ -274,20 +296,20 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// in force. No thresholds: no rule fires on throughput, and the sim defines no target or
 	// capacity, so there is no honest progress-ring either.
 	widgets := []dashboardWidget{
-		buildAlarmCountWidget("sp-alarms-critical", kpiTile(0, 0), onSite, "Critical alarms", AlarmSeverityCriticalWire),
-		buildAlarmCountWidget("sp-alarms-major", kpiTile(0, 1), onSite, "Major alarms", AlarmSeverityMajorWire),
+		buildAlarmCountWidget("sp-alarms-critical", stateTile(0), onSite, "Critical alarms", AlarmSeverityCriticalWire),
+		buildAlarmCountWidget("sp-alarms-major", stateTile(1), onSite, "Major alarms", AlarmSeverityMajorWire),
 		running,
-		buildStatCardWidget("sp-plant-throughput-now", kpiTile(1, 0), onPlant(SitepulseThroughputKey),
+		buildStatCardWidget("sp-plant-throughput-now", flowTile(0), onPlant(SitepulseThroughputKey),
 			"Throughput now", SitepulseThroughputKey, "last", "t/h", 0, 0, nil),
-		buildStatCardWidget("sp-plant-throughput-avg", kpiTile(1, 1), onPlant(SitepulseThroughputKey),
+		buildStatCardWidget("sp-plant-throughput-avg", flowTile(1), onPlant(SitepulseThroughputKey),
 			"Avg throughput", SitepulseThroughputKey, "avg", "t/h", 0, 0, nil),
-		buildStatCardWidget("sp-plant-throughput-max", kpiTile(1, 2), onPlant(SitepulseThroughputKey),
+		buildStatCardWidget("sp-plant-throughput-max", flowTile(2), onPlant(SitepulseThroughputKey),
 			"Peak throughput", SitepulseThroughputKey, "max", "t/h", 0, 0, nil),
 		alarms,
 		buildMapWidget("sp-map", box{5, 4, sitepulseKPIRows, sitepulseMidRows},
 			widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions"),
 		buildEntitySelectorWidget("sp-machine-select", box{sitepulseKPIColumns, sitepulseGaugeCols, 0, 1}, "Machine", sitepulseSlotMachine),
-		buildLinearGaugeWidget("sp-engine-temp", box{sitepulseKPIColumns, sitepulseGaugeCols, 1, 3}, onMachine(SitepulseEngineTempKey),
+		buildLinearGaugeWidget("sp-engine-temp", box{sitepulseKPIColumns, sitepulseGaugeCols, 1, sitepulseKPIRows - 1}, onMachine(SitepulseEngineTempKey),
 			"Engine temp", SitepulseEngineTempKey, "°C", "bar", 0, sitepulseEngineTempGaugeMax, overheat),
 		withThresholds(buildGaugeWidget("sp-tyre", box{sitepulseKPIColumns, sitepulseGaugeCols, sitepulseKPIRows, sitepulseMidRows}, onMachine(SitepulseTyreKey),
 			"Tyre pressure",

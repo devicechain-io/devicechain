@@ -651,7 +651,8 @@ describe.skipIf(!existsSync(EXCERPT))('the converter excerpt of the first record
     expect(tyre[tyre.length - 1].value).toBe(599.6);
   });
 
-  // A fleet table over the recorded run: a row per device, named by its external id, and a dozer
+  // A fleet table over the recorded run: a row per device, unnamed so it is labelled by its token
+  // as every other widget labels it (never by its external id), and a dozer
   // says it does not report tyre pressure because the run holds none for it.
   it('seeds a fleet: every device, a dozer observed without tyres, a hauler with them', async () => {
     const r = load();
@@ -671,7 +672,8 @@ describe.skipIf(!existsSync(EXCERPT))('the converter excerpt of the first record
     stop();
     expect(rosters).toHaveLength(1);
     expect(rosters[0]).toHaveLength(r.devices.length);
-    expect(rosters[0].find((m) => m.token === 'sp-dozer-01')?.name).toBe('SP-DZ-0001');
+    expect(rosters[0].find((m) => m.token === 'sp-dozer-01')).toEqual({ token: 'sp-dozer-01', name: null });
+    expect(rosters[0].every((m) => m.name === null)).toBe(true);
     expect(seeds.get('sp-dozer-01')!.observed).toContain('fuel_pct');
     expect(seeds.get('sp-dozer-01')!.observed).not.toContain('tyre_pressure_kpa');
     expect(seeds.get('sp-hauler-03')!.latest.tyre_pressure_kpa.value).toBe(599.6);

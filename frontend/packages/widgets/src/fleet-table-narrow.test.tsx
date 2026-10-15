@@ -73,6 +73,13 @@ const show = (options: Record<string, unknown> = {}, extra?: { select: WidgetSel
 const devices = (c: HTMLElement) => [...c.querySelectorAll('[data-fleet-stacked] > [data-device]')].map((e) => e.getAttribute('data-device'));
 
 describe('the narrow layout', () => {
+  it('drops the age line under readings that keep up with the fleet, as the table does', () => {
+    // Every reading here is stamped together, so none lags the newest: with the option, no ages.
+    expect(show().container.querySelectorAll('[data-cell-age]').length).toBeGreaterThan(0);
+    cleanup();
+    expect(show({ ageLagSeconds: 30 }).container.querySelectorAll('[data-cell-age]')).toHaveLength(0);
+  });
+
   it('is cards, not a table, below the breakpoint', () => {
     const { container } = show();
     expect(container.querySelector('table')).toBeNull();

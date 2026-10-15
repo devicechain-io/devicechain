@@ -118,6 +118,11 @@ func TestSitepulseBoardShowsTheFleetInOneTable(t *testing.T) {
 	if _, ok := w.Options["staleAfterSeconds"]; ok {
 		t.Errorf("sp-fleet sets staleAfterSeconds = %v; a replay's readings are all older than any threshold", w.Options["staleAfterSeconds"])
 	}
+	// One line a row: a cell shows its age only once it lags the fleet's newest reading by 30 s, a
+	// LITERAL (the player reports each machine about once a second).
+	if n, _ := w.Options["ageLagSeconds"].(float64); n != 30 {
+		t.Errorf("sp-fleet ageLagSeconds = %v, want 30", w.Options["ageLagSeconds"])
+	}
 	if _, pinned := w.Options["windowSeconds"]; pinned {
 		t.Errorf("sp-fleet pins its own span; it must follow the board's time range")
 	}
@@ -471,7 +476,14 @@ func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 	}
 	// And the board spends the whole screen: the fleet table takes the rows the rest leave.
 	fleet := widgetByID(t, def, "sp-fleet").Layout["base"]
-	if fleet.Row+fleet.Rows != foldRows || fleet.Rows != 6 || fleet.Cols != 12 {
-		t.Errorf("fleet table = %+v, want the full width over the last 6 rows (rows 7-12)", fleet)
+	if fleet.Row+fleet.Rows != foldRows || fleet.Rows != 5 || fleet.Cols != 12 {
+		t.Errorf("fleet table = %+v, want the full width over the last 5 rows (rows 8-12)", fleet)
+	}
+	// The plant's throughput is the board's headline: its band is three rows, so the figure is
+	// fitted to a body that a subject line, an age footer and a caption leave room in.
+	for _, id := range []string{"sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-plant-throughput-max"} {
+		if b := widgetByID(t, def, id).Layout["base"]; b.Rows != 3 || b.Row != 2 || b.Cols != 3 {
+			t.Errorf("%s = %+v, want a 3x3 tile at row 2", id, b)
+		}
 	}
 }

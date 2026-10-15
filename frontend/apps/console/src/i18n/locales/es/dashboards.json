@@ -402,6 +402,8 @@
   "widgetHintSortBy": "La medición por la que se ordena la tabla. Déjela en blanco para ordenar por nombre de dispositivo. Los usuarios pueden reordenar desde los encabezados.",
   "widgetLabelSortDescending": "Mayor primero",
   "widgetLabelPageSize": "Dispositivos por página",
+  "widgetLabelAgeLag": "Mostrar antigüedad con retraso (segundos)",
+  "widgetHintAgeLag": "Muestra la antigüedad bajo una lectura solo cuando es al menos esos segundos más antigua que la lectura más reciente de la tabla, o está obsoleta. Déjelo vacío para mostrar la antigüedad de cada lectura.",
   "widgetLabelGroupBy": "Una barra por",
   "widgetHintGroupBy": "Qué representa una barra: cada medición de un dispositivo, o cada dispositivo del grupo para la medición elegida abajo.",
   "widgetGroupByMeasurement": "Medición",

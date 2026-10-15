@@ -628,13 +628,19 @@ export class RecordedDataSource implements WidgetDataSource {
 
   // ── fleets ────────────────────────────────────────────────────────────────
 
-  // A fleet widget's roster (the run's devices, named by their external id) and then the same
-  // back-filled, ticking rows subscribeWidget delivers, each carrying its device.
+  // A fleet widget's roster (the run's devices) and then the same back-filled, ticking rows
+  // subscribeWidget delivers, each carrying its device.
+  //
+  // 🔴 A member has NO NAME here, so the widget labels it by its token, exactly as the live board
+  // does. A recorded device's `id` is its external id (the scene's binding key, "SP-HL-0003"),
+  // not a device name: the live roster reads device NAMES, which the sim never sets, and every
+  // other surface of the board (a gauge's subject line, the machine selector, an alarm's
+  // originator) names a device by its token. Labelling the table's rows by external id made one
+  // machine "SP-HL-0003" in the table and "sp-hauler-03" in the alarm beside it.
   subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void {
     let members: Array<{ token: string; name: string | null }>;
     try {
-      const ids = new Map(this.rec.devices.map((d) => [d.token, d.id]));
-      members = this.resolve(datasource).map((g) => ({ token: g.deviceToken, name: ids.get(g.deviceToken) ?? null }));
+      members = this.resolve(datasource).map((g) => ({ token: g.deviceToken, name: null }));
     } catch (err) {
       return this.failLater(err, sink);
     }

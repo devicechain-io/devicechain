@@ -201,7 +201,10 @@ The settings depend on the widget. Common ones:
   measurements to show. **Columns** gives a heading, unit and precision per measurement;
   **Thresholds** colour the cells of one measurement's column (the normal band keeps the table's
   colour); **Stale after** marks a reading older than that many seconds as stale, and without it
-  the table only shows each reading's age. Click a column heading, or press it from the keyboard,
+  the table only shows each reading's age. **Show age when behind** prints a reading's age only
+  once it is that many seconds older than the newest reading in the table (or stale), so a fleet
+  that reports every few seconds keeps one line a row and the device that went quiet stands out;
+  the widget's footer still shows how old the newest reading is. Click a column heading, or press it from the keyboard,
   to sort; **Order by** and **Largest first** set the starting order, and devices with no value
   for the sorted column always come last. **Devices per page** pages a long fleet. **Target slot**
   makes the device name a link that selects that device in the widgets bound to the slot. On a

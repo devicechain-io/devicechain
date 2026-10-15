@@ -409,6 +409,7 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     columns: [{ measurement: 'temp_c', label: 'Temperature', unit: 'C', precision: 1 }],
     thresholds: [{ measurement: 'temp_c', value: 90, level: 'major' }],
     staleAfterSeconds: 300,
+    ageLagSeconds: 30,
     sortBy: 'temp_c',
     sortDescending: true,
     pageSize: 25,

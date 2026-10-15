@@ -138,7 +138,7 @@
           "cols": 3,
           "mode": "grid",
           "row": 2,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
@@ -165,7 +165,7 @@
           "cols": 3,
           "mode": "grid",
           "row": 2,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
@@ -192,7 +192,7 @@
           "cols": 3,
           "mode": "grid",
           "row": 2,
-          "rows": 2
+          "rows": 3
         }
       },
       "options": {
@@ -216,7 +216,7 @@
           "col": 0,
           "cols": 5,
           "mode": "grid",
-          "row": 4,
+          "row": 5,
           "rows": 3
         }
       },
@@ -245,7 +245,7 @@
           "col": 5,
           "cols": 4,
           "mode": "grid",
-          "row": 4,
+          "row": 5,
           "rows": 3
         }
       },
@@ -286,7 +286,7 @@
           "cols": 3,
           "mode": "grid",
           "row": 1,
-          "rows": 3
+          "rows": 4
         }
       },
       "options": {
@@ -324,7 +324,7 @@
           "col": 9,
           "cols": 3,
           "mode": "grid",
-          "row": 4,
+          "row": 5,
           "rows": 3
         }
       },
@@ -365,11 +365,12 @@
           "col": 0,
           "cols": 12,
           "mode": "grid",
-          "row": 7,
-          "rows": 6
+          "row": 8,
+          "rows": 5
         }
       },
       "options": {
+        "ageLagSeconds": 30,
         "columns": [
           {
             "label": "Fuel",

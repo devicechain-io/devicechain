@@ -494,8 +494,25 @@ describe.skipIf(!EXCERPT_AVAILABLE)('the first recorded run (converter excerpt)'
     // be showing that truck's reading, not the drilled truck's.
     expect(gaugeReading('sp-tyre')).not.toContain('599.6');
 
+    // The alarm's originator and the fleet table's row name the truck the SAME way, so a viewer
+    // can carry it from one to the other: two drills, one name.
+    const alarms = document.querySelector<HTMLElement>('[data-widget="sp-alarms"]')!;
+    const fleet = document.querySelector<HTMLElement>('[data-widget="sp-fleet"]')!;
+    expect(within(fleet).getByRole('button', { name: 'sp-hauler-03' })).toBeTruthy();
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'sp-hauler-03' }));
+      fireEvent.click(within(alarms).getByRole('button', { name: 'sp-hauler-03' }));
+    });
+    await settle();
+    expect((screen.getByLabelText('Machine') as HTMLSelectElement).value).toBe('sp-hauler-03');
+    expect(gaugeReading('sp-tyre')).toContain('599.6');
+  });
+
+  it('the fleet table row drills to the same gauge as the alarm', async () => {
+    await mountApp(await excerptOnCurrentBoardText());
+    await seekTo(441_200);
+    const fleet = document.querySelector<HTMLElement>('[data-widget="sp-fleet"]')!;
+    await act(async () => {
+      fireEvent.click(within(fleet).getByRole('button', { name: 'sp-hauler-03' }));
     });
     await settle();
     expect((screen.getByLabelText('Machine') as HTMLSelectElement).value).toBe('sp-hauler-03');

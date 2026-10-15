@@ -402,6 +402,8 @@
   "widgetHintSortBy": "The measurement the table is ordered by. Leave blank to order by device name. Viewers can re-order from the column headings.",
   "widgetLabelSortDescending": "Largest first",
   "widgetLabelPageSize": "Devices per page",
+  "widgetLabelAgeLag": "Show age when behind (seconds)",
+  "widgetHintAgeLag": "Show a reading's age under it only when it is at least this many seconds older than the newest reading in the table, or stale. Leave blank to show every reading's age.",
   "widgetLabelGroupBy": "One bar per",
   "widgetHintGroupBy": "What a bar stands for: each measurement of one device, or each device of the group for the one measurement chosen below.",
   "widgetGroupByMeasurement": "Measurement",
