@@ -1301,9 +1301,11 @@ func (api *Api) ParkClaim(ctx context.Context, token, nonce string) (CommandStat
 // actuate minutes after an operator was told the fleet write had stopped. Duplicating the
 // subquery per route is how one of them ends up without it.
 //
-// ConfirmDispatch runs it too, although a confirm keeps the row in SENT rather than taking it
-// back: the confirm is the last step before a transport actuates, so a called-off batch's
-// command stops there instead of reaching the device.
+// ConfirmDispatch runs it too: the confirm is the last step before a transport actuates, so a
+// called-off batch's command stops there instead of reaching the device. A confirm normally keeps
+// the row in SENT, but one refused because the window closed parks it (parkOutsideWindow) — a
+// fourth route back into the dispatchable set, which carries the cancelled-batch predicate in its
+// own UPDATE for the race this write cannot see.
 //
 // It runs before the caller's own write and both are predicated on SENT, so exactly one of
 // the two can move the row — which is what makes the sequence safe without a transaction.

@@ -419,6 +419,11 @@ device type moved to another window or lost its window.
   or `DESTRUCTIVE` on it, they are released and dispatch normally. A disabled device's commands
   stay on the window they were stamped with until the device is enabled; the next pass then moves
   them.
+- A release is not a pause. Released commands are sent as soon as delivery reaches them, outside
+  any window, so detaching the window from a type with many waiting disruptive commands sends them
+  all within about a minute. The same happens when a new profile version marks the command
+  `NORMAL` or no longer defines it. To stop waiting commands instead, cancel them (or their batch)
+  before you detach the window, or move the type to another window.
 - If an LwM2M command was claimed inside its window and the window closes before the device can be
   sent it, it is not sent. It goes back to waiting (`PARKED`) for the next opening.
 

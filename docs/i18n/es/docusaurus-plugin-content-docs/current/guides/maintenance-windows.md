@@ -148,7 +148,8 @@ sea instantáneo.
 `deleteMaintenanceWindow` se rechaza mientras algún tipo de dispositivo use la ventana; desvincúlala
 primero. Los comandos que ya esperan siguen a su tipo de dispositivo: desvincular la ventana de un
 tipo los libera, y pasar el tipo a otra ventana los mueve a la siguiente apertura de esa ventana, en
-ese mismo minuto. Si un dispositivo
+ese mismo minuto. Los comandos liberados se envían de inmediato, fuera de cualquier ventana: para
+detenerlos en lugar de liberarlos, cancélalos (o su lote) antes de desvincular la ventana. Si un dispositivo
 está desconectado durante toda una apertura, su comando pasa a la siguiente apertura en lugar de
 enviarse cuando el dispositivo vuelva.
 

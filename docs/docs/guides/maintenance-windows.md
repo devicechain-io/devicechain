@@ -142,7 +142,9 @@ polls for it rather than being told. Do not expect the move to be instant.
 
 `deleteMaintenanceWindow` is refused while any device type uses the window; detach it first. Commands
 already waiting follow their device type: detaching the window from a type releases them, and moving
-the type to another window moves them to that window's next opening, within the same minute. If a device is
+the type to another window moves them to that window's next opening, within the same minute.
+Released commands are sent at once, outside any window: to stop them rather than release them,
+cancel them (or their batch) before you detach the window. If a device is
 offline through a whole opening, its command is rolled to the next opening rather than being sent
 whenever the device returns.
 

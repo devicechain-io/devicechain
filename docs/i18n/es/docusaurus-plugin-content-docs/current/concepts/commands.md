@@ -439,6 +439,11 @@ ventana.
   `DISRUPTIVE` ni `DESTRUCTIVE` en él, se liberan y se despachan con normalidad. Los comandos de un
   dispositivo deshabilitado se quedan en la ventana con la que se marcaron hasta que el dispositivo
   se habilita; el pase siguiente los mueve entonces.
+- Liberar no es pausar. Los comandos liberados se envían en cuanto la entrega los alcanza, fuera de
+  cualquier ventana, así que desvincular la ventana de un tipo con muchos comandos disruptivos en
+  espera los envía todos en aproximadamente un minuto. Lo mismo ocurre cuando una nueva versión del
+  perfil marca el comando como `NORMAL` o deja de definirlo. Para detener los comandos en espera,
+  cancélalos (o su lote) antes de desvincular la ventana, o pasa el tipo a otra ventana.
 - Si un comando LwM2M se reclamó dentro de su ventana y la ventana se cierra antes de que pueda
   enviarse al dispositivo, no se envía. Vuelve a esperar (`PARKED`) a la siguiente apertura.
 
