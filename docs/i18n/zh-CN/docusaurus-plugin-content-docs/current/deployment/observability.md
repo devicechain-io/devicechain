@@ -229,8 +229,17 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 - **`devicechain_eventsources_external_mqtt_owner{source}`**：读取来源的 Pod 为 1，其他为 0。每个 Pod 从启动起为每个外部来源导出，以 `sum` 合并，1 健康。
 - **`devicechain_eventsources_total_msg_not_owner{source}`**：失去所有权后仍投递给旧 Pod 的消息，直接丢弃不存储，因为接管 Pod 收到相同消息。
+- **`devicechain_eventsources_total_msg_publish_failed{source}`**：已从你的代理读取并解码，但因发布到平台事件流失败而未存储的来源事件。该来源不重试，因此每一条都会丢失。Pod 日志为每条记录一行，注明来源和租户。速率大于 0 表示平台自身的代理在拒绝或无响应，应检查平台代理，而不是你的代理。
+
+来源以一个“窗口”的方式发布：同时有多条事件等待平台代理确认，而不是每个解码 worker 一次只等一条确认。在有复制的代理上（一次确认约 11 毫秒），后者会把一个来源限制在整个集群约每秒 440 条事件，因为每个来源只由一个 Pod 读取。
+
+| 设置（`event-sources` 配置） | 默认值 | 作用 |
+| --- | --- | --- |
+| `externalMqtt.publishWindow` | `128` | 一个外部 MQTT 来源同时等待平台代理确认的事件数，范围 1 到 1024。超出范围或显式写 0，服务启动时即停止，不会被调整。发布速度不会超过该数值除以一次确认耗时。固定设置，启动时读取。**它同时决定 Pod 最多还会多丢多少。**该传输为至多一次：平台把消息放入解码队列后，就告知你的代理消息已到达，突然停止的 Pod 会丢失已取走但尚未存储的内容，即最多 105 条排队或解码中的消息，加上最多该数值条等待确认的事件。正常停止或把来源交给其他 Pod 时，会先等待这些事件存储完成（最多 8 秒）。可观察 `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events"}`：速率接近 1 表示窗口是发布的瓶颈。 |
 
 总和两分钟不为 1 时，`ExternalMqttSourceNotReadByOnePod`（warning）触发。0 表示无人读取，期间外部代理投递内容丢失；最近接管 Pod 日志说明原因。没有外部来源的安装不导出此序列，告警安静。
+
+来源因发布失败持续丢失事件（`devicechain_eventsources_total_msg_publish_failed` 上升）十分钟时，`ExternalMqttSourceLosingEvents`（warning）触发。这些事件已从你的代理读取，已经丢失，应检查平台的消息代理，而不是你的代理；event-sources 日志注明每条的来源和租户。单次突发（例如停止时放弃等待而仍在途的事件）会自行消退，不会触发。
 
 ## 超过确认窗口的消息 {#held-past-ack-wait}
 

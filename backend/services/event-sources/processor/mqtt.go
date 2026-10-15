@@ -17,7 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
@@ -42,6 +41,13 @@ const (
 	// that the source fails loudly rather than hanging for the life of the pod.
 	subscribeTimeout = 30 * time.Second
 )
+
+// externalSettleTimeout bounds how long a stopping external source waits for the events it
+// submitted to be stored, before the lease is released. A variable, so that a test can
+// shorten it. It is longer than the 5 s ceiling of one publish: every publish in the window
+// runs its own ceiling concurrently, so after the last worker returns, everything settles
+// within about one ceiling.
+var externalSettleTimeout = 8 * time.Second
 
 // GatewayTopic is the MQTT topic filter the NATS-gateway event source subscribes
 // to for an instance: the device EVENTS shape, and nothing else.
@@ -190,7 +196,9 @@ type MqttEventSource struct {
 
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
-	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	// publisher takes a decoded event on from the decode workers, and is drained (Settle) on
+	// stop. Never nil (the constructor refuses one). See EventPublisher.
+	publisher EventPublisher
 	failed    func(string, string, []byte, error) error
 	// allow meters an inbound message against its tenant's ingest rate limit
 	// before it is queued for decode; a false return sheds the message. nil
@@ -247,6 +255,11 @@ var errNoAdmit = errors.New("an event source needs to ask whether the ingest pip
 var errNoReadingGate = errors.New("an event source needs a reading gate to charge each decoded " +
 	"message's readings against its tenant's ingest ceiling; none was given")
 
+// errNoPublisher is what NewMqttEventSource returns for a nil publisher. A source with
+// nowhere to hand its decoded events would decode and discard them, and nothing at the call
+// site would show it.
+var errNoPublisher = errors.New("an MQTT event source needs a publisher to hand its decoded events to; none was given")
+
 // errNoClientID is what NewMqttEventSource returns for an empty client id.
 var errNoClientID = errors.New("an MQTT event source needs its own client id: a broker keeps one " +
 	"session per id, so a shared or empty one is taken over by every other connection that uses it")
@@ -257,7 +270,8 @@ var errNoClientID = errors.New("an MQTT event source needs its own client id: a 
 var errNoOwnerGate = errors.New("an MQTT event source needs to ask whether this pod still owns it; " +
 	"none was given")
 
-// Create a new MQTT event source based on the given configuration. tlsConfig is
+// Create a new MQTT event source based on the given configuration. publisher takes each
+// decoded event on and is drained when the source stops (see ExecuteStop); nil is refused. tlsConfig is
 // non-nil when the broker terminates TLS on the MQTT gateway (ADR-025), in which
 // case the client dials ssl:// and verifies the server; nil dials plaintext.
 // username/password present the shared service credential when broker auth is on
@@ -269,12 +283,15 @@ var errNoOwnerGate = errors.New("an MQTT event source needs to ask whether this 
 func NewMqttEventSource(id string, clientID string, config map[string]string, tlsConfig *tls.Config,
 	username, password string, decoder Decoder,
 	received func(string, []byte),
-	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	publisher EventPublisher,
 	failed func(string, string, []byte, error) error,
 	allow RateGate, readings ReadingGate, admit func(source string) error, owns func() bool,
 	fail func(error)) (*MqttEventSource, error) {
 	if fail == nil {
 		return nil, errNoFailHook
+	}
+	if publisher == nil {
+		return nil, errNoPublisher
 	}
 	if admit == nil {
 		return nil, errNoAdmit
@@ -308,7 +325,7 @@ func NewMqttEventSource(id string, clientID string, config map[string]string, tl
 
 	es.lifecycle = core.NewLifecycleManager("mqtt-event-source", es, core.NewNoOpLifecycleCallbacks())
 	es.received = received
-	es.decoded = decoded
+	es.publisher = publisher
 	es.failed = failed
 	es.allow = allow
 	es.readings = readings
@@ -489,11 +506,13 @@ func (es *MqttEventSource) onMessage(client mqtt.Client, msg mqtt.Message) {
 	}
 
 	// Drop while the pipeline is applying backpressure. 🔴 THE PUBLISHER IS NOT TOLD: paho
-	// acknowledged the message to the external broker before this callback ran (auto-ack,
-	// clean session), so this protocol has no lever to make the device retry. The drop is
-	// counted by admit (total_msg_backpressured), which is all that can be done on a broker
-	// the platform does not own. The platform's own broker keeps such messages instead, in
-	// the capture stream (see GatewayJetStreamSource).
+	// acknowledges the message to the external broker (auto-ack, clean session) as soon as
+	// this callback RETURNS (paho v1.5.1 router.go, with the default ordered delivery), which
+	// is once the message is on the decode channel below and before it is decoded or
+	// published. So this protocol has no lever to make the device retry. The drop is counted
+	// by admit (total_msg_backpressured), which is all that can be done on a broker the
+	// platform does not own. The platform's own broker keeps such messages instead, in the
+	// capture stream (see GatewayJetStreamSource).
 	if es.admit(es.Id) != nil {
 		return
 	}
@@ -655,7 +674,7 @@ func (es *MqttEventSource) initializeDecodeWorkers() {
 	es.messages = make(chan rawMessage, DECODE_CHANNEL_DEPTH)
 	es.workers = make([]*DecodeWorker, 0)
 	for w := 1; w <= DECODE_WORKER_COUNT; w++ {
-		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.readings, Inline(es.decoded), es.failed)
+		worker := NewDecodeWorker(w, es.Id, es.Decoder, es.messages, es.readings, es.publisher.Publish, es.failed)
 		es.workers = append(es.workers, worker)
 		es.workersDone.Add(1)
 		go func() {
@@ -738,6 +757,20 @@ func (es *MqttEventSource) ExecuteStop(ctx context.Context) error {
 	es.sendMu.Unlock()
 	// Join the decode workers: they finish what was already queued, then return.
 	es.workersDone.Wait()
+	// Then settle what they submitted. 🔴 THE LEASE INVARIANT IS HERE: an owned source
+	// releases its lease after this returns, and "a message of this term must not be
+	// published after the next owner has begun" (see workersDone) holds only once the
+	// publisher has nothing in flight, which for an asynchronous one is not the same as
+	// the workers having returned. Bounded, because Stop is called with a context that
+	// never ends and a broker that has stopped answering must not hold the lease for ever.
+	sctx, cancel := context.WithTimeout(ctx, externalSettleTimeout)
+	defer cancel()
+	if err := es.publisher.Settle(sctx); err != nil {
+		log.Error().Err(err).Str("source", es.Id).Dur("waited", externalSettleTimeout).
+			Msg("An external MQTT source could not confirm that everything it published is stored before it " +
+				"stopped: what is still unconfirmed is lost, or may be stored after the next owner has begun.")
+		return fmt.Errorf("external MQTT source %q: publishes still in flight at stop: %w", es.Id, err)
+	}
 	return nil
 }
 

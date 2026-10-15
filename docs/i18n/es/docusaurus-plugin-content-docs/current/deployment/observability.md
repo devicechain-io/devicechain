@@ -486,11 +486,33 @@ no llegan al bróker de mensajería de la plataforma.
 - **`devicechain_eventsources_total_msg_not_owner{source}`**: mensajes que a un pod le seguían
   llegando después de perder la fuente, descartados en lugar de almacenados, porque el pod que la
   tomó recibe los mismos mensajes.
+- **`devicechain_eventsources_total_msg_publish_failed{source}`**: eventos de la fuente que se
+  leyeron de tu bróker y se decodificaron, pero no se almacenaron porque falló publicarlos en el
+  stream de eventos de la plataforma. Esa fuente no reintenta, así que cada uno se pierde. El
+  registro del pod tiene una línea por cada uno, con la fuente y el tenant. Una tasa mayor que 0
+  significa que el bróker propio de la plataforma rechazaba o no respondía; mira ahí, no en tu
+  bróker.
+
+La fuente publica con una ventana de eventos esperando a la vez la confirmación del bróker de la
+plataforma, de modo que no queda limitada a una confirmación a la vez por cada worker de
+decodificación, que en un bróker replicado (una confirmación tarda unos 11 ms) dejaba a una fuente
+cerca de 440 eventos por segundo para todo el clúster, porque un solo pod lee cada fuente.
+
+| Ajuste (configuración de `event-sources`) | Valor por defecto | Qué hace |
+| --- | --- | --- |
+| `externalMqtt.publishWindow` | `128` | Cuántos eventos mantiene una fuente MQTT externa esperando a la vez la confirmación del bróker de la plataforma, de 1 a 1024. Un valor fuera de ese rango, o un 0 explícito, detiene el servicio al arrancar; nunca se ajusta. La publicación no puede ir más rápido que este número dividido por lo que tarda una confirmación. Es un ajuste fijo, leído al arrancar. **También es cuánto más puede perder un pod.** Este transporte es como mucho una vez: a tu bróker se le dice que un mensaje llegó en cuanto la plataforma lo ha puesto en cola para decodificar, y un pod que se detiene de golpe pierde lo que había tomado y aún no almacenó, que son hasta 105 mensajes en cola o en decodificación, más hasta este número esperando confirmación. Un pod que se detiene limpiamente, o que cede la fuente a otro pod, espera (hasta 8 segundos) a que se almacenen primero. Vigila `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events"}`: una tasa cercana a 1 significa que la ventana es lo que limita la publicación. |
 
 `ExternalMqttSourceNotReadByOnePod` (aviso) salta cuando esa suma lleva dos minutos sin valer 1.
 En 0, nadie lee la fuente y lo que tu bróker entrega mientras tanto se pierde; el registro del
 último pod que tomó la fuente dice por qué. Una instalación sin fuentes externas no exporta esa
 serie, y la alerta no salta.
+
+`ExternalMqttSourceLosingEvents` (aviso) salta cuando una fuente lleva diez minutos perdiendo
+eventos por publicaciones fallidas (`devicechain_eventsources_total_msg_publish_failed` en aumento).
+Esos eventos ya se leyeron de tu bróker y se han perdido, así que revisa el bróker de mensajería de
+la plataforma, no el tuyo; el registro de event-sources indica la fuente y el tenant de cada uno. Una
+ráfaga aislada, como lo que estaba en vuelo cuando una parada dejó de esperar, se despeja sola y no
+la dispara.
 
 ## Mensajes retenidos más allá de su ventana de confirmación {#held-past-ack-wait}
 

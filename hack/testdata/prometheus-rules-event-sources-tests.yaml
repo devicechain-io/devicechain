@@ -126,3 +126,58 @@ tests:
       - eval_time: 30m
         alertname: ExternalMqttSourceNotReadByOnePod
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # ExternalMqttSourceLosingEvents. Every pod exports the lost-event counter at 0 for every
+  # external source from start. A healthy source never moves it: quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_msg_publish_failed{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ExternalMqttSourceLosingEvents
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE PLATFORM BROKER REFUSES PUBLISHES from 10m on: ext-a loses events every minute.
+  # Quiet inside the pending period, firing after it and naming only ext-a; ext-b on the
+  # same pod is healthy.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_msg_publish_failed{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x10 3+3x30'
+      - series: 'devicechain_eventsources_total_msg_publish_failed{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-b"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ExternalMqttSourceLosingEvents
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: ExternalMqttSourceLosingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              source: ext-a
+            exp_annotations:
+              summary: "An external MQTT source is losing events it has already read"
+              description: "For at least 10 minutes, external MQTT source ext-a has been losing events: they were read from your broker and decoded, but publishing them to the platform's event stream failed. That source does not retry, and your broker was already told they arrived, so each one is gone. The cause is on the platform's side, not your broker's: its message broker is refusing or not answering publishes. Check the platform's message broker, and the event-sources log for 'is lost: this transport does not retry', which names the source and tenant of each."
+
+  # ------------------------------------------------------------------
+  # A one-off burst (a settle that timed out at a handover) that then stops: it clears
+  # within one window and never outlasts the pending period. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_msg_publish_failed{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="ext-a"}'
+        values: '0x10 128x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ExternalMqttSourceLosingEvents
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ExternalMqttSourceLosingEvents
+        exp_alerts: []

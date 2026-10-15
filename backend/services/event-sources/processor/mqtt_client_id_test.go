@@ -113,7 +113,7 @@ func TestMqttEventSourceConnectsWithItsClientID(t *testing.T) {
 	es, err := NewMqttEventSource("ext", "cid-under-test", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		nil, admitAllReadings, admitAll, alwaysOwns, func(error) {})
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestNewMqttEventSourceRefusesAnEmptyClientIDOrNoOwnerGate(t *testing.T) {
 		_, err := NewMqttEventSource("ext", clientID, map[string]string{"host": "h", "port": "1883", "topic": "t"},
 			nil, "", "", NewJsonDecoder(map[string]string{}),
 			func(string, []byte) {},
-			func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+			InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
 			func(string, string, []byte, error) error { return nil },
 			nil, admitAllReadings, admitAll, owns, func(error) {})
 		return err
@@ -146,7 +146,7 @@ func TestAMessageDeliveredAfterTheSourceWasLostIsDropped(t *testing.T) {
 	es, err := NewMqttEventSource("ext", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { received++ },
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		func(string, string, time.Time, bool, Origin) bool { metered++; return true },
 		admitAllReadings, admitAll, func() bool { return owned }, func(error) {})

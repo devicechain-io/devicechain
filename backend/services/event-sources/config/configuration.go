@@ -107,6 +107,50 @@ type IngestRateLimit struct {
 	Burst int
 }
 
+// DefaultExternalMqttPublishWindow is how many events one external MQTT source keeps awaiting
+// the platform broker's acknowledgement at once. The source used to publish from five decode
+// workers, each waiting for its own acknowledgement, so it could not exceed five divided by
+// the acknowledgement time (about 440 events a second on a replicated broker, where one takes
+// about 11 ms) and, because one pod reads a source, that was the CLUSTER-WIDE ceiling for it.
+// 128 lifts that to about 128 / 11.4 ms, some 11,200 events a second for ONE source: more
+// than one MQTT subscription delivers in order to five decode workers, and about what the
+// whole platform downstream stores. It is deliberately NOT the gateway's 512
+// (DefaultCapturePublishWindow). There a deeper window costs only memory, because the capture
+// stream redelivers and its dedup id stores each event once; here the window is also a LOSS
+// BOUND (see ExternalMqtt.PublishWindow), so 512 would quadruple what a pod that dies can lose
+// and buy throughput this source cannot use. The window is a ceiling, not an occupancy: a
+// low-rate source keeps about rate x acknowledgement time in flight, a handful, whatever it is.
+const DefaultExternalMqttPublishWindow = 128
+
+// ExternalMqtt configures the sources of type mqtt that point at a broker other than the
+// platform's own.
+type ExternalMqtt struct {
+	// PublishWindow is how many events one external MQTT source keeps awaiting the platform
+	// broker's acknowledgement at once, from 1 to messaging.MaxOrderedWindow. Unset (absent)
+	// defaults to DefaultExternalMqttPublishWindow; an explicit 0 is refused, not defaulted,
+	// and so is anything outside the range: a window that is silently clamped is a throughput
+	// limit nobody chose. A fixed setting, read once at startup.
+	//
+	// 🔴 IT IS ALSO A LOSS BOUND. This transport is at-most-once by decision (a clean session,
+	// a client id of this pod's own, no dedup id), and the external broker is acknowledged as
+	// soon as the message is queued for decode, never on the publish. A pod that dies loses
+	// what it has not published, which was the decode queue plus one message per decode worker
+	// and is now also up to this many messages awaiting their acknowledgement.
+	//
+	// It is a pointer so that "not written" and "written as 0" are different things; after
+	// ApplyDefaults it is never nil.
+	PublishWindow *int
+}
+
+// PublishWindowSize is the publish window in effect: the configured one, or the default when
+// the setting was never written.
+func (e ExternalMqtt) PublishWindowSize() int {
+	if e.PublishWindow == nil {
+		return DefaultExternalMqttPublishWindow
+	}
+	return *e.PublishWindow
+}
+
 // Contention is the ADR-063 preferential-shedding control. At GA the whole trigger
 // surface is one operator knob, ManualFloor: the composite level L = max(auto, manual)
 // collapses to L = manualFloor because the automatic saturation controller is deferred
@@ -223,6 +267,8 @@ type EventSourcesConfiguration struct {
 	Contention     Contention
 	BrokerPresence BrokerPresence
 	Capture        Capture
+	// ExternalMqtt carries the settings of the sources that read a broker the operator runs.
+	ExternalMqtt ExternalMqtt
 }
 
 // Creates the default event sources configuration
@@ -299,6 +345,10 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 		w := DefaultCapturePublishWindow
 		c.Capture.PublishWindow = &w
 	}
+	if c.ExternalMqtt.PublishWindow == nil {
+		w := DefaultExternalMqttPublishWindow
+		c.ExternalMqtt.PublishWindow = &w
+	}
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -347,6 +397,9 @@ func (c *EventSourcesConfiguration) Validate() error {
 	}
 	if w := c.Capture.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("capture.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
+	if w := c.ExternalMqtt.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
+		return fmt.Errorf("externalMqtt.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
 	}
 	if err := c.validateSourceIds(); err != nil {
 		return err

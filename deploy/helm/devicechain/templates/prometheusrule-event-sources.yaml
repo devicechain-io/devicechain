@@ -49,4 +49,18 @@ spec:
           annotations:
             summary: "An external MQTT source is not being read by exactly one pod"
             description: "External MQTT source {{ "{{ $labels.source }}" }} has been read by {{ "{{ $value }}" }} event-sources pods for 2m; it should be read by exactly one. At 0, nothing is reading it, and whatever your broker delivers meanwhile is lost, because the session is not persistent. The usual cause is that your broker is unreachable or refusing the connection: the pod that took the source over logs why, releases the source and tries again every 15 seconds. Another cause is that event-sources cannot reach the platform's message broker to agree which pod reads the source; its log says so. Above 1, more than one pod reports reading it. A pod that has lost the source drops what it is still delivered rather than storing it, and stops reporting within a lease renewal, so a value above 1 that lasts points at a pod that has lost contact with the platform's message broker."
+        # One event per failed publish, lost: that transport is at-most-once and never retries.
+        # `for` equals the increase window, as for the sibling ingest-loss alerts: a failure
+        # that stops clears inside one window, one that lasts a full window is ingest losing
+        # data. Every pod exports the series at 0 for every external source from start, so
+        # the first loss after a restart is an increase and not a series appearing at 1.
+        - alert: ExternalMqttSourceLosingEvents
+          expr: sum by (source) (increase(devicechain_eventsources_total_msg_publish_failed{namespace="{{ $ns }}"}[10m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An external MQTT source is losing events it has already read"
+            description: "For at least 10 minutes, external MQTT source {{ "{{ $labels.source }}" }} has been losing events: they were read from your broker and decoded, but publishing them to the platform's event stream failed. That source does not retry, and your broker was already told they arrived, so each one is gone. The cause is on the platform's side, not your broker's: its message broker is refusing or not answering publishes. Check the platform's message broker, and the event-sources log for 'is lost: this transport does not retry', which names the source and tenant of each."
 {{- end }}

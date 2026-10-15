@@ -61,7 +61,7 @@ func newExternalMqttSourceAs(t *testing.T, clientID, host string, port int, topi
 		"host": host, "port": strconv.Itoa(port), "topic": topic,
 	}, nil, "", "", NewJsonDecoder(map[string]string{}),
 		received,
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		nil, admitAllReadings, admitAll, alwaysOwns, fail)
 	require.NoError(t, err)
@@ -407,7 +407,7 @@ func TestAnMqttSourceWithoutAFailHookIsRefused(t *testing.T) {
 	_, err := NewMqttEventSource("ext", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil },
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		nil, admitAllReadings, admitAll, alwaysOwns, nil)
 	require.Error(t, err)
