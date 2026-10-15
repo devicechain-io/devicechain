@@ -56,6 +56,10 @@ func startEmbeddedNats(t *testing.T) (string, uint32) {
 	return u.Hostname(), uint32(port)
 }
 
+// brokerMetrics is the registry installBrokerMicroservice gave the Microservice, for a test
+// that gathers what the service's broker manager and writers report.
+var brokerMetrics *prometheus.Registry
+
 // installBrokerMicroservice installs a Microservice pointed at an embedded broker, and
 // restores every global the callbacks read when the test ends.
 func installBrokerMicroservice(t *testing.T) {
@@ -79,7 +83,8 @@ func installBrokerMicroservice(t *testing.T) {
 		FunctionalArea: identity,
 		Readiness:      core.NewReadinessGate(),
 	}
-	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	brokerMetrics = prometheus.NewRegistry()
+	Microservice.UseMetricsRegistry(brokerMetrics)
 	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
 		Hostname: host,
 		Port:     port,

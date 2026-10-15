@@ -218,12 +218,13 @@ type streamMetrics struct {
 	publishLatency *prometheus.HistogramVec
 
 	// publishWindowFull is the seconds an ordered writer's submitter spent blocked because
-	// every slot of its window was awaiting a PubAck, by stream suffix. A rate near 1 means
+	// every slot of its window was awaiting a PubAck, by stream suffix and writer (the
+	// producer, a PublishWriter: several writers can share one suffix). A rate near 1 means
 	// the window is the limit on publishing (raise it); near 0, it is not. It counts only
 	// time actually spent waiting.
 	publishWindowFull *prometheus.CounterVec
 	// publishWindowFullWaits counts the submissions that found the window full and waited,
-	// by stream suffix: the same events publishWindowFull charges the time of. Seconds over
+	// by stream suffix and writer: the same events publishWindowFull charges the time of. Seconds over
 	// waits is the mean wait. It is the count that makes the instrument checkable at all:
 	// a wait shorter than the clock's resolution charges zero seconds, and so does time
 	// charged by mistake to a submission that never waited.
@@ -393,18 +394,19 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 			[]string{"suffix", "mode"}, publishBuckets),
 		publishWindowFull: ms.NewCounterVec("jetstream_publish_window_full_seconds_total",
 			"Seconds a pipelined JetStream writer spent unable to send because its whole window was "+
-				"awaiting acknowledgements, by stream suffix. Time spent with room in the window is not counted.",
-			[]string{"suffix"}),
+				"awaiting acknowledgements, by stream suffix and writer (the producer: resolution, capture, "+
+				"external-mqtt, presence or sparkplug). Time spent with room in the window is not counted.",
+			[]string{"suffix", "writer"}),
 		publishWindowFullWaits: ms.NewCounterVec("jetstream_publish_window_full_total",
 			"Submissions a pipelined JetStream writer made that found its whole window awaiting "+
-				"acknowledgements and had to wait, by stream suffix. jetstream_publish_window_full_seconds_total "+
-				"is the time they waited.",
-			[]string{"suffix"}),
+				"acknowledgements and had to wait, by stream suffix and writer. "+
+				"jetstream_publish_window_full_seconds_total is the time they waited.",
+			[]string{"suffix", "writer"}),
 		publishDuplicates: ms.NewCounterVec("jetstream_publish_duplicates_total",
 			"Publishes the broker acknowledged as duplicates of a message it already held under the same "+
-				"message id, by stream suffix. The message was stored once; this counts the republishes "+
-				"that were absorbed.",
-			[]string{"suffix"}),
+				"message id, by stream suffix and writer. The message was stored once; this counts the "+
+				"republishes that were absorbed.",
+			[]string{"suffix", "writer"}),
 		cacheLatency: ms.NewHistogramVec("kv_cache_request_duration_seconds",
 			"Time a key-value cache operation took at the bucket. A get or set is cut off at 0.5 s; a delete at "+
 				"5 s. A get answered from process memory never reaches the bucket and is not counted here.",
@@ -692,30 +694,36 @@ func (m *streamMetrics) initPublish(suffix, mode string) {
 		return
 	}
 	m.publishLatency.WithLabelValues(suffix, mode)
-	if mode == publishModePipelined {
-		m.publishWindowFull.WithLabelValues(suffix)
-		m.publishWindowFullWaits.WithLabelValues(suffix)
-		m.publishDuplicates.WithLabelValues(suffix)
-	}
 }
 
-// addWindowFull records one submission that waited d for room in suffix's window: one
-// wait, and d seconds. The two are recorded together so neither can be charged without the
-// other.
-func (m *streamMetrics) addWindowFull(suffix string, d time.Duration) {
+// initWindow creates a pipelined writer's window and duplicate series at 0 when it is built,
+// for the reason initPublish gives.
+func (m *streamMetrics) initWindow(suffix, writer string) {
 	if m == nil || m.publishWindowFull == nil {
 		return
 	}
-	m.publishWindowFullWaits.WithLabelValues(suffix).Inc()
-	m.publishWindowFull.WithLabelValues(suffix).Add(d.Seconds())
+	m.publishWindowFull.WithLabelValues(suffix, writer)
+	m.publishWindowFullWaits.WithLabelValues(suffix, writer)
+	m.publishDuplicates.WithLabelValues(suffix, writer)
+}
+
+// addWindowFull records one submission that waited d for room in writer's window on suffix:
+// one wait, and d seconds. The two are recorded together so neither can be charged without
+// the other.
+func (m *streamMetrics) addWindowFull(suffix, writer string, d time.Duration) {
+	if m == nil || m.publishWindowFull == nil {
+		return
+	}
+	m.publishWindowFullWaits.WithLabelValues(suffix, writer).Inc()
+	m.publishWindowFull.WithLabelValues(suffix, writer).Add(d.Seconds())
 }
 
 // countDuplicate records one PubAck the broker marked Duplicate.
-func (m *streamMetrics) countDuplicate(suffix string) {
+func (m *streamMetrics) countDuplicate(suffix, writer string) {
 	if m == nil || m.publishDuplicates == nil {
 		return
 	}
-	m.publishDuplicates.WithLabelValues(suffix).Inc()
+	m.publishDuplicates.WithLabelValues(suffix, writer).Inc()
 }
 
 // observePublish records one publish's latency. See publishLatency for what each mode means.

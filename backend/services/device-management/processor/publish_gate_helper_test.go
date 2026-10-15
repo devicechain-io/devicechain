@@ -20,11 +20,11 @@ import (
 func newGateProcessor(t testing.TB, nmgr *messaging.NatsManager, reader messaging.MessageReader,
 	api dmodel.DeviceManagementApi) *InboundEventsProcessor {
 	t.Helper()
-	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, config.DefaultPublishWindow)
+	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, messaging.WriterResolution, config.DefaultPublishWindow)
 	if err != nil {
 		t.Fatalf("resolved writer: %v", err)
 	}
-	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, config.DefaultPublishWindow)
+	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, messaging.WriterResolution, config.DefaultPublishWindow)
 	if err != nil {
 		t.Fatalf("failed writer: %v", err)
 	}
@@ -39,11 +39,11 @@ func newGateProcessor(t testing.TB, nmgr *messaging.NatsManager, reader messagin
 func newBenchProcessor(b testing.TB, nmgr *messaging.NatsManager, reader messaging.MessageReader,
 	api dmodel.DeviceManagementApi, window, resolvers int) *InboundEventsProcessor {
 	b.Helper()
-	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, window)
+	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, messaging.WriterResolution, window)
 	if err != nil {
 		b.Fatalf("resolved writer: %v", err)
 	}
-	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, window)
+	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, messaging.WriterResolution, window)
 	if err != nil {
 		b.Fatalf("failed writer: %v", err)
 	}

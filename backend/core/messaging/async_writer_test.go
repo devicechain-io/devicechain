@@ -26,7 +26,7 @@ const asyncWithin = 10 * time.Second
 
 func newAsync(t *testing.T, nmgr *NatsManager, window int, refuse bool) AsyncWriter {
 	t.Helper()
-	w, err := nmgr.NewAsyncWriter(streams.ResolvedEvents, window, refuse)
+	w, err := nmgr.NewAsyncWriter(streams.ResolvedEvents, WriterResolution, window, refuse)
 	if err != nil {
 		t.Fatalf("new async writer: %v", err)
 	}

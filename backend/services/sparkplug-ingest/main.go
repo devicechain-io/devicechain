@@ -334,7 +334,7 @@ func publisherFactory(nmgr *messaging.NatsManager, cfg *config.SparkplugConfigur
 // is not). It is a function of its own so a wiring test can check that the writer main
 // wires is the one a test observes, at the configured window.
 func newPublishWriter(nmgr *messaging.NatsManager, window int) (messaging.AsyncWriter, error) {
-	return nmgr.NewAsyncWriter(streams.InboundEvents, window, true)
+	return nmgr.NewAsyncWriter(streams.InboundEvents, messaging.WriterSparkplug, window, true)
 }
 
 // closePublishWriters drains and closes every source's writer. A source's Stop has already

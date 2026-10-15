@@ -652,7 +652,7 @@ func TestEveryWriterAsksForAMeasurementByVolume(t *testing.T) {
 			publishOK(t, es.writer(t, streams.InboundEvents), tenantCtx(), 1, []byte("x"))
 		}},
 		{name: "ordered writer", publish: func(t *testing.T, es *bpService) {
-			ow, err := es.nmgr.NewOrderedWriter(streams.InboundEvents, 4)
+			ow, err := es.nmgr.NewOrderedWriter(streams.InboundEvents, WriterCapture, 4)
 			if err != nil {
 				t.Fatal(err)
 			}

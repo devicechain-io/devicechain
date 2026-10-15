@@ -445,7 +445,7 @@ func TestAForwardingReaderParksWithoutSpendingDeliveries(t *testing.T) {
 func TestTheOrderedWriterDoesNotRefuse(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	_, es, _ := fullGate(t, srv, bpBounds{maxMsgs: 20})
-	ow, err := es.nmgr.NewOrderedWriter(streams.InboundEvents, 4)
+	ow, err := es.nmgr.NewOrderedWriter(streams.InboundEvents, WriterCapture, 4)
 	if err != nil {
 		t.Fatal(err)
 	}

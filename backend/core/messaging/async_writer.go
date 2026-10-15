@@ -71,8 +71,9 @@ type asyncItem struct {
 }
 
 // NewAsyncWriter builds an AsyncWriter for suffix with up to window publishes awaiting their
-// acknowledgement at once, on the same terms as NewOrderedWriter (window in [1, 1024], a
-// suffix with a tenant-wide publish path; the stream is created if needed).
+// acknowledgement at once, counted under writer, on the same terms as NewOrderedWriter
+// (window in [1, 1024], a writer name from the PublishWriter vocabulary, a suffix with a
+// tenant-wide publish path; the stream is created if needed).
 //
 // refuseOnBackpressure makes it consult the stream's gate as MessageWriter does: a Submit
 // whose messages do not ALL carry Message.BypassBackpressure is refused whole with a
@@ -83,8 +84,8 @@ type asyncItem struct {
 // 🔑 BUILD ONE FOR THE LIFE OF THE PROCESS, NOT ONE PER LEASE TERM. Each writer holds a
 // reply subscription (and a reconnect goroutine) until the connection closes; Settle is the
 // barrier that makes reuse across terms possible.
-func (nmgr *NatsManager) NewAsyncWriter(suffix string, window int, refuseOnBackpressure bool) (AsyncWriter, error) {
-	ow, err := nmgr.NewOrderedWriter(suffix, window)
+func (nmgr *NatsManager) NewAsyncWriter(suffix string, writer PublishWriter, window int, refuseOnBackpressure bool) (AsyncWriter, error) {
+	ow, err := nmgr.NewOrderedWriter(suffix, writer, window)
 	if err != nil {
 		return nil, err
 	}

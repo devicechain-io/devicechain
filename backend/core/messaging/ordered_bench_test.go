@@ -96,7 +96,7 @@ func BenchmarkPublishThroughput(b *testing.B) {
 			if a.window == 0 {
 				sync, err = nmgr.NewWriter(streams.ResolvedEvents)
 			} else {
-				ordered, err = nmgr.NewOrderedWriter(streams.ResolvedEvents, a.window)
+				ordered, err = nmgr.NewOrderedWriter(streams.ResolvedEvents, WriterResolution, a.window)
 			}
 			if err != nil {
 				b.Fatal(err)

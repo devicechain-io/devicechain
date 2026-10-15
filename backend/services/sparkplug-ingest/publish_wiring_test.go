@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/devicechain-io/dc-sparkplug-ingest/config"
 	"github.com/devicechain-io/dc-sparkplug-ingest/host"
 	"github.com/nats-io/nats.go"
@@ -330,4 +331,18 @@ func TestResolveSourcesGivesEachIngestingClientItsOwnPublisher(t *testing.T) {
 	failing := errors.New("no broker")
 	_, err = resolveSources(cfg, "inst", ingester, limiter, nil, host.Metrics{}, func() (host.Publisher, error) { return nil, failing })
 	require.ErrorIs(t, err, failing)
+}
+
+// The writer publisherFactory builds reports its window and duplicate counters under the
+// sparkplug writer label, so this service's inbound-events window is not summed with any
+// other producer's on a dashboard. A call site that named the wrong writer (or none) fails
+// here by value.
+func TestThePublishWriterReportsUnderTheSparkplugLabel(t *testing.T) {
+	keepPublishWriters(t)
+	startRunningManager(t)
+	_, err := publisherFactory(NatsManager, config.NewSparkplugConfiguration())()
+	require.NoError(t, err)
+	require.Equal(t, []string{"sparkplug"},
+		dctest.PublishWriterLabels(t, brokerMetrics, streams.InboundEvents),
+		"the writer labels of the inbound-events window series")
 }

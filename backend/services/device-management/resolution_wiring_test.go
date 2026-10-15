@@ -14,6 +14,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 )
@@ -87,6 +89,34 @@ func TestConfiguredPublishWindowReachesTheWriters(t *testing.T) {
 			ResolvedEventsWriter.Close()
 			FailedEventsWriter.Close()
 		})
+	}
+}
+
+// Both writers the service builds report their window and duplicate counters under the
+// resolution writer label, each on its own suffix. The label is what tells this service's
+// writers apart from any other producer's on a dashboard, so a call site that named the
+// wrong writer (or none) fails here by value.
+func TestThePublishWritersReportUnderTheResolutionLabel(t *testing.T) {
+	savedMs, savedCfg, savedResolved, savedFailed := Microservice, Configuration, ResolvedEventsWriter, FailedEventsWriter
+	t.Cleanup(func() {
+		Microservice, Configuration, ResolvedEventsWriter, FailedEventsWriter = savedMs, savedCfg, savedResolved, savedFailed
+	})
+	host, port := startEmbeddedNats(t)
+
+	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
+	require.NoError(t, parseConfiguration())
+
+	reg := prometheus.NewRegistry()
+	nmgr := startNatsManagerOn(t, host, port, fmt.Sprintf("writerlabel%d", time.Now().UnixNano()), reg)
+	require.NoError(t, createPublishWriters(nmgr))
+	defer ResolvedEventsWriter.Close()
+	defer FailedEventsWriter.Close()
+
+	for _, suffix := range []string{streams.ResolvedEvents, streams.FailedEvents} {
+		require.Equal(t, []string{"resolution"}, dctest.PublishWriterLabels(t, reg, suffix),
+			"the writer labels of the %s window series", suffix)
 	}
 }
 

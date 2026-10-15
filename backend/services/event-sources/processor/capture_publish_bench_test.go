@@ -188,7 +188,7 @@ func runCapturePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 			if err != nil {
 				return err
 			}
-			writer, err = n.NewOrderedWriter(streams.InboundEvents, window)
+			writer, err = n.NewOrderedWriter(streams.InboundEvents, messaging.WriterCapture, window)
 			return err
 		}
 	})

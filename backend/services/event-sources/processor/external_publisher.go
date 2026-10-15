@@ -104,7 +104,7 @@ func NewAsyncEventPublisher(source string, build InboundMessageFunc, hooks Publi
 // synchronous writer it replaces did. It lives here so that the writer main wires is the
 // one a test in this package observes.
 func NewExternalMqttWriter(nmgr *messaging.NatsManager, window int) (messaging.AsyncWriter, error) {
-	return nmgr.NewAsyncWriter(streams.InboundEvents, window, true)
+	return nmgr.NewAsyncWriter(streams.InboundEvents, messaging.WriterExternalMqtt, window, true)
 }
 
 // SetWriter installs the writer. A writer already installed is drained and closed, so a

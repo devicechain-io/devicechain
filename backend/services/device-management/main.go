@@ -275,14 +275,14 @@ func createPublishWriters(nmgr *messaging.NatsManager) error {
 	// Add and initialize resolved events writer. Both inbound publish loops pipeline their
 	// publishes (see config.DefaultPublishWindow for why the window is a throughput limit);
 	// the processor closes these writers when it stops, before the connection drains.
-	revents, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, Configuration.Resolution.PublishWindowSize())
+	revents, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, messaging.WriterResolution, Configuration.Resolution.PublishWindowSize())
 	if err != nil {
 		return err
 	}
 	ResolvedEventsWriter = revents
 
 	// Add and initialize failed events writer.
-	fevents, err := nmgr.NewOrderedWriter(streams.FailedEvents, Configuration.Resolution.PublishWindowSize())
+	fevents, err := nmgr.NewOrderedWriter(streams.FailedEvents, messaging.WriterResolution, Configuration.Resolution.PublishWindowSize())
 	if err != nil {
 		return err
 	}
