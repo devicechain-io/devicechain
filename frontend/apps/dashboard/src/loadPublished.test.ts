@@ -6,11 +6,18 @@
 // replaced, so what is measured is which operation is sent and how each answer is
 // classified -- not the transport.
 
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // A plain recording function rather than vi.fn(): vitest reports a spy whose last call
 // threw as a failure of the test, which is exactly what these tests provoke on purpose.
 const h = vi.hoisted(() => ({
+  preloaded: [] as unknown[][],
   calls: [] as unknown[][],
   impl: (async () => undefined) as (...args: unknown[]) => Promise<unknown>,
 }));
@@ -22,12 +29,21 @@ vi.mock('@devicechain/client', async (importOriginal) => ({
   },
 }));
 
+// The widget-code preload, recorded: the published door must ask for the board's own types.
+vi.mock('@devicechain/widgets', async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  preloadWidgets: async (...args: unknown[]) => {
+    h.preloaded.push(args);
+  },
+}));
+
 const { GraphQLRequestError } = await import('@devicechain/client');
 const { loadPublishedDashboard } = await import('./load');
 
 const board = JSON.stringify({ schemaVersion: 1, title: 'Live', widgets: [] });
 
 beforeEach(() => {
+  h.preloaded = [];
   h.calls = [];
 });
 
@@ -41,6 +57,20 @@ const rejectWith = (err: unknown) => {
 };
 
 describe('loadPublishedDashboard', () => {
+  it('fetches the code of the lazily loaded widgets before handing the board over', async () => {
+    const withWidgets = readFileSync(
+      join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'testdata', 'sim-dashboards', 'sp-dashboard.json'),
+      'utf8',
+    );
+    resolveWith({ publishedDashboard: { definition: withWidgets } });
+    const result = await loadPublishedDashboard('sp', '');
+    if (!('loaded' in result)) throw new Error('expected a loaded board');
+    expect(h.preloaded).toHaveLength(1);
+    expect(h.preloaded[0][0]).toBe(result.loaded.registry);
+    expect(h.preloaded[0][1]).toEqual(result.loaded.definition.widgets.map((w) => w.type));
+    expect(result.loaded.definition.widgets.length).toBeGreaterThan(1);
+  });
+
   it('asks the dashboard-management area for the published snapshot by token', async () => {
     resolveWith({ publishedDashboard: { definition: board } });
 

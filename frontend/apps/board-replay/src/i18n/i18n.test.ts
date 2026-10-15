@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import i18n, { CATALOG_LOADERS, DEFAULT_LOCALE, SUPPORTED_LOCALES, resolveLocale, setReplayLocale } from './config';
 import { LIVE_PATTERNS, liveMatches } from '../testing/live-scan';
@@ -105,5 +105,30 @@ describe('resolveLocale', () => {
     [null, DEFAULT_LOCALE],
   ])('%s -> %s', (tag, want) => {
     expect(resolveLocale(tag)).toBe(want);
+  });
+});
+
+// A catalog that cannot be fetched (a broken deploy, a chunk the CDN lost) leaves the replay in
+// English, and SAYS so: a Spanish page quietly showing English would read as working.
+describe('a catalog that fails to load', () => {
+  it('falls back to English and reports the failure on the console', async () => {
+    const saved = CATALOG_LOADERS.es;
+    i18n.removeResourceBundle('es', 'chrome');
+    CATALOG_LOADERS.es = () => Promise.reject(new Error('chunk lost'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(await setReplayLocale('es')).toBe(DEFAULT_LOCALE);
+      expect(i18n.language).toBe(DEFAULT_LOCALE);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain('es catalog could not be loaded');
+      // The control: the same call with the loader intact switches language and stays quiet.
+      CATALOG_LOADERS.es = saved;
+      expect(await setReplayLocale('es')).toBe('es');
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      CATALOG_LOADERS.es = saved;
+      warn.mockRestore();
+      await setReplayLocale('en');
+    }
   });
 });

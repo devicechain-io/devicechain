@@ -24,6 +24,7 @@ import {
   isNotPublishedError,
   type Dashboard,
 } from '@/lib/api/dashboards';
+import { preloadWidgets } from '@devicechain/widgets';
 import { DashboardWorkspace } from './editor/DashboardWorkspace';
 import { defaultWidgetRegistry } from './editor/widgetRegistry';
 
@@ -50,6 +51,23 @@ async function loadPublished(token: string): Promise<Dashboard | typeof NOT_PUBL
   }
 }
 
+// The widget types a stored definition names, read leniently: this only decides which widget code
+// to fetch ahead of the first frame. A definition that does not parse yields none, and the guarded
+// parse below reports it.
+function widgetTypesOf(definition: string): string[] {
+  try {
+    const widgets: unknown = (JSON.parse(definition) as { widgets?: unknown }).widgets;
+    if (!Array.isArray(widgets)) return [];
+    return widgets.flatMap((w: unknown) =>
+      w !== null && typeof w === 'object' && typeof (w as { type?: unknown }).type === 'string'
+        ? [(w as { type: string }).type]
+        : [],
+    );
+  } catch {
+    return [];
+  }
+}
+
 export default function DashboardDetailPage() {
   const { t } = useTranslation('dashboards');
   // useParams returns already-decoded values (React Router v6); the nav side
@@ -62,17 +80,24 @@ export default function DashboardDetailPage() {
   // authority). They see nothing until someone publishes.
   const { claims } = useAuth();
   const canEdit = hasAuthority(claims, 'dashboard:write');
+  // The one widget registry this deployment composed (shared with /dash and the replay
+  // player): parse, edit, validate, preview and render all go through it.
+  const registry = defaultWidgetRegistry();
   const { data, loading, error } = useQuery(
-    () => (canEdit ? getDashboard(token) : loadPublished(token)),
+    async () => {
+      const loaded = await (canEdit ? getDashboard(token) : loadPublished(token));
+      // The page stays on its loading state until the code of the board's lazily loaded widgets
+      // has arrived too, so the board's first frame is the whole board rather than empty boxes
+      // still filling in. Never rejects: a chunk that fails still fails in its widget's boundary.
+      if (loaded && loaded !== NOT_PUBLISHED) await preloadWidgets(registry, widgetTypesOf(loaded.definition));
+      return loaded;
+    },
     [token, canEdit],
   );
 
   // The resolver (anchor → device tokens) that backs the hub's stream resolution.
   // The hub itself is created by the workspace, once per (resolver, authorities).
   const resolver = useMemo(() => createDeviceResolver(), []);
-  // The one widget registry this deployment composed (shared with /dash and the replay
-  // player): parse, edit, validate, preview and render all go through it.
-  const registry = defaultWidgetRegistry();
 
   // Parse the stored JSON into a DashboardDefinition. A malformed definition must
   // surface as an error state, not a white screen — hence the guarded parse. The

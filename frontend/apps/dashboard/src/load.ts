@@ -164,10 +164,18 @@ export async function loadPublishedDashboard(
   } catch (err) {
     return { error: fetchError(err) };
   }
-  const result = loadDashboard(definition, manifestText, registry);
-  // The board's lazily loaded widget code arrives before the board is handed over, so its first
-  // frame is the whole board rather than empty boxes still filling in. Never rejects.
-  if ('loaded' in result) await preloadWidgets(registry, result.loaded.definition.widgets.map((w) => w.type));
+  return withWidgetCode(loadDashboard(definition, manifestText, registry));
+}
+
+// withWidgetCode waits for the code of a loaded board's lazily loaded widgets, so the board's
+// first frame is the whole board rather than empty boxes still filling in. BOTH doors go through
+// it -- the published snapshot above and the paste in App -- so neither can show the other's
+// half-drawn frame. Never rejects: a chunk that fails still fails in its widget, where the
+// widget's error boundary shows it.
+export async function withWidgetCode<R extends { loaded: Loaded } | { error: LoadError }>(result: R): Promise<R> {
+  if ('loaded' in result) {
+    await preloadWidgets(result.loaded.registry, result.loaded.definition.widgets.map((w) => w.type));
+  }
   return result;
 }
 

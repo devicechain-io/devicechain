@@ -338,11 +338,31 @@ describe('the built package', () => {
     expect(defines('LatestCard').test(entry), 'the definition pattern cannot see the eager card').toBe(true);
   });
 
-  // The one module with a side effect a host needs is the /vite entry, which loads the map
-  // stylesheet. See the test above for why the field exists at all.
+  // Audited, not assumed: no module this package builds does anything at import time that a host
+  // needs -- no stylesheet import, no registration with a global, no listener, no polyfill (the
+  // map stylesheet is a DYNAMIC import, called by the renderer). The /vite entry is listed anyway,
+  // conservatively: it is the one module whose import a bundler transforms (`?worker&url`), and it
+  // costs a host nothing it did not ask for. A module that gains an import-time effect must be
+  // added here. See the test above for why the field exists at all.
   it('declares its modules free of side effects, except the /vite entry', () => {
     const pkg = JSON.parse(readFileSync(path.join(distDir, '../package.json'), 'utf8')) as { sideEffects?: unknown };
     expect(pkg.sideEffects).toEqual(['./dist/vite.js']);
+  });
+
+  // The part of that audit a regex can hold: a bare `import "x"` -- an import kept ONLY for what
+  // it does on load -- is the shape a new import-time effect most often takes (a stylesheet, a
+  // polyfill, a module that registers itself), and under the field above a host bundler drops it.
+  // Between this package's own chunks a bare import is the bundler's wiring, so only a bare import
+  // of ANOTHER package is refused.
+  it('imports no other package for its side effects alone', () => {
+    const BARE = /(?:^|[;\n])\s*import\s*["']([^"'.][^"']*)["']/g;
+    // Reach control: the pattern sees a bare package import, and passes over a chunk's own wiring.
+    expect([...'x;import "polyfill";\nimport"./chunks/a.js"'.matchAll(BARE)].map((m) => m[1])).toEqual(['polyfill']);
+    const files = [path.join(distDir, 'index.js'), path.join(distDir, 'vite.js'), ...walkDist(path.join(distDir, 'chunks'))];
+    const found = files
+      .filter((f) => f.endsWith('.js'))
+      .flatMap((f) => [...readFileSync(f, 'utf8').matchAll(BARE)].map((m) => `${path.basename(f)}: ${m[1]}`));
+    expect(found).toEqual([]);
   });
 
   it('draws the bar and pie without ECharts: no chart type of either kind is imported anywhere in the build', () => {
