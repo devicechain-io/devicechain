@@ -138,7 +138,13 @@ func (g *Guest) Connect(ctx context.Context) error {
 	// goroutine, so it starves every other purging tenant in the pass, and because the
 	// coordinator stops by cancelling a context and joining, it stalls pod SHUTDOWN for
 	// the same two minutes. A context-less wait is not something a caller can get out of.
-	db, err := gorm.Open(postgres.New(postgres.Config{DSN: dsn}), guestGormConfig())
+	//
+	// newPostgresDialector, not postgres.New: see pgx_classic_scan.go.
+	dialector, err := newPostgresDialector(postgres.Config{DSN: dsn})
+	if err != nil {
+		return fmt.Errorf("connecting to the %q database: %w", g.name, err)
+	}
+	db, err := gorm.Open(dialector, guestGormConfig())
 	if err != nil {
 		return fmt.Errorf("connecting to the %q database: %w", g.name, err)
 	}
