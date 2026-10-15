@@ -31,12 +31,19 @@ The definition format and the renderer carry a per-breakpoint box for every widg
 
 Built-in widgets span six channels: telemetry, static (no data), alarm, control, selection, and location. The time-series chart and the gauge render over [Apache ECharts](https://echarts.apache.org/), and the map over [MapLibre GL](https://maplibre.org/). The rest are plain DOM.
 
+The level and indicator widgets (linear gauge, level gauge, battery, status light, signal bars) never guess a scale: a gauge with no min and max, or no data, says so rather than drawing a plausible fill. A value off the scale pins the fill to the end and marks the readout with ▲ or ▼. They colour by threshold band only when the value is in an abnormal band; a `normal` band keeps the widget's neutral colour.
+
 | Widget | Channel | Shows |
 |---|---|---|
 | **Time-series chart** | telemetry | one or more measurement series over a time window |
 | **Gauge** | telemetry | a single latest value against a range / thresholds |
 | **Latest-value card** | telemetry | a single current reading with its timestamp |
 | **Table** | telemetry | recent rows for a device or anchor |
+| **Linear gauge** | telemetry | a single latest value as a bar (horizontal or vertical) or a thermometer, on a required min/max scale |
+| **Level gauge** | telemetry | a tank filled to the latest value between a required min and max, read out as the value or a percent |
+| **Battery** | telemetry | a battery glyph filled to the latest value, on a 0–100 percent scale unless you set min and max |
+| **Status light** | telemetry | a lamp coloured by the value's threshold band, or lit and dark at an on-at value, with a text caption |
+| **Signal bars** | telemetry | one bar per threshold, lit for each threshold the latest value has reached |
 | **Label** | static | static text |
 | **Image** | static | a static image (e.g. a floor plan behind other widgets) |
 | **Alarm table** | alarm | live alarms for a device or anchor |

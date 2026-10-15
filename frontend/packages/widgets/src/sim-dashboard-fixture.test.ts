@@ -92,6 +92,8 @@ const PATHOLOGICAL_AXES = {
   table: 'rows that appear and disappear as metrics are dropped',
   label: 'text far longer than its box, which the frame clips',
   image: 'a source that cannot decode',
+  'linear-gauge': 'a value outside the scale, so the fill pins and the readout is marked',
+  'level-gauge': 'a value outside the scale, so the liquid pins and the readout is marked',
 } as const satisfies Partial<Record<WidgetType, string>>;
 
 describe('the sim dashboard fixtures', () => {

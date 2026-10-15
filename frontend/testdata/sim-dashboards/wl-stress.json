@@ -218,6 +218,92 @@
         "url": "data:image/png;base64,this-is-not-base64"
       },
       "type": "image"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-linear",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 6,
+          "mode": "grid",
+          "row": 11,
+          "rows": 3
+        }
+      },
+      "options": {
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "precision": 1,
+        "style": "bar",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Off the scale (bar)",
+        "unit": "C"
+      },
+      "type": "linear-gauge"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature"
+        ],
+        "slot": "edgeExtremes"
+      },
+      "id": "wl-stress-level",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 11,
+          "rows": 4
+        }
+      },
+      "options": {
+        "max": 35,
+        "measurement": "temperature",
+        "min": 15,
+        "precision": 0,
+        "readout": "value",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Off the scale (tank)",
+        "unit": "C"
+      },
+      "type": "level-gauge"
     }
   ]
 }

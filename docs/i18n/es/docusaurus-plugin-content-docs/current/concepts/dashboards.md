@@ -31,12 +31,19 @@ El formato de definición y el renderizador incluyen una caja por punto de quieb
 
 Los widgets integrados abarcan seis canales: telemetría, estático (sin datos), alarma, control, selección y ubicación. El gráfico de series temporales y el medidor se renderizan sobre [Apache ECharts](https://echarts.apache.org/), y el mapa sobre [MapLibre GL](https://maplibre.org/). El resto son DOM simple.
 
+Los widgets de nivel e indicadores (indicador lineal, indicador de nivel, batería, luz de estado, barras de señal) nunca suponen una escala: un indicador sin mín. ni máx., o sin datos, lo dice en lugar de dibujar un relleno verosímil. Un valor fuera de la escala fija el relleno en el extremo y marca la lectura con ▲ o ▼. Solo colorean por banda de umbral cuando el valor está en una banda anómala; una banda `normal` conserva el color neutro del widget.
+
 | Widget | Canal | Muestra |
 |---|---|---|
 | **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo de una ventana de tiempo |
 | **Medidor (gauge)** | telemetría | un único valor más reciente frente a un rango / umbrales |
 | **Tarjeta de último valor** | telemetría | una sola lectura actual con su marca de tiempo |
 | **Tabla** | telemetría | filas recientes de un dispositivo o ancla |
+| **Indicador lineal** | telemetría | un único valor más reciente como barra (horizontal o vertical) o termómetro, sobre una escala mín./máx. obligatoria |
+| **Indicador de nivel** | telemetría | un depósito lleno hasta el valor más reciente entre un mín. y un máx. obligatorios, leído como valor o como porcentaje |
+| **Batería** | telemetría | un icono de batería lleno hasta el valor más reciente, sobre una escala de 0 a 100 % salvo que se fijen mín. y máx. |
+| **Luz de estado** | telemetría | una lámpara coloreada por la banda de umbral del valor, o encendida y apagada en un valor de encendido, con un texto |
+| **Barras de señal** | telemetría | una barra por umbral, encendida por cada umbral que el valor más reciente ha alcanzado |
 | **Etiqueta** | estático | texto estático |
 | **Imagen** | estático | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |

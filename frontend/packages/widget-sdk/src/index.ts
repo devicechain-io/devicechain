@@ -80,6 +80,7 @@ export {
   isStale,
   newestSampleTime,
   resolveStaleAfterSeconds,
+  viewerLocale,
 } from './freshness';
 export { formatDateTime, formatTimestamp, formatValue } from './format';
 export {
