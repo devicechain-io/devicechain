@@ -131,7 +131,8 @@ for (const board of BOARDS) {
 // ---- The negative control --------------------------------------------------------
 //
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and
-// kept permanently: a card whose title and reading cannot fit it, a card whose title alone
+// kept permanently: a card whose title cannot fit its width (the frame drops a title only below
+// a height, so this card is tall enough to keep it) and whose reading is cut, a card whose title alone
 // cannot fit it, a label that cannot fit, and two widgets nudged on top of each other, beside
 // one widget that fits and must NOT be flagged (a check that flagged everything would pass the
 // first half of this test).
@@ -142,10 +143,15 @@ for (const width of WIDTHS) {
       const { findings } = await measure(page, 'fixture/gate-negative-control', width, theme);
       const kinds = (id: string) => new Set(findings.filter((f) => f.widget === id).map((f) => f.kind));
       const where = `${theme}: ${JSON.stringify(findings, null, 1)}`;
-      // The card's reading outgrows its container (text-overflow) and the frame cuts it off
+      // The card's READING outgrows its container (text-overflow) and the frame cuts it off
       // (text-clipped): each check is pinned by its own expectation, so dropping either one
-      // from readability.ts fails here.
+      // from readability.ts fails here. Its title and subject line are cut too, and a cut
+      // ellipsis line alone yields both kinds (nc-long-title below), so the READING's findings
+      // are picked out by its text (the gate page's synthetic 888.8, at the card's precision):
+      // otherwise a check that stopped seeing a cut value would still pass on the header.
       expect([...kinds('nc-overflowing-card')].sort(), where).toEqual(['text-clipped', 'text-overflow']);
+      const reading = findings.filter((f) => f.widget === 'nc-overflowing-card' && f.detail.startsWith('"888.8000'));
+      expect([...new Set(reading.map((f) => f.kind))].sort(), where).toEqual(['text-clipped', 'text-overflow']);
       expect(kinds('nc-overflowing-label').has('text-clipped'), where).toBe(true);
       // A frame title cut to an ellipsis is a finding, though the frame truncates it on
       // purpose (readability.ts says why). This card's reading fits; only its title does not.

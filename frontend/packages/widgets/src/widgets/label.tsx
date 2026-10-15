@@ -10,6 +10,8 @@ import type { CSSProperties } from 'react';
 import {
   css,
   defineWidget,
+  fontVar,
+  spaceVar,
   optNumber,
   optString,
   WidgetFrame,
@@ -27,10 +29,13 @@ const justify: Record<string, CSSProperties['justifyContent']> = {
 export function Label({ widget }: WidgetProps<null>) {
   const text = optString(widget.options, 'text') ?? '';
   const align = optString(widget.options, 'align') ?? 'center';
-  const fontSize = optNumber(widget.options, 'fontSize') ?? 16;
+  // An authored size is a design size in px at the board's normal density: it scales with it,
+  // so a wall board's label grows with the rest. Unset takes the large step of the type ramp.
+  const authored = optNumber(widget.options, 'fontSize');
+  const fontSize = authored !== undefined ? `calc(${authored}px * var(--dc-scale, 1))` : fontVar('lg');
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
+    <WidgetFrame title={optString(widget.options, 'title')} flush>
       <div
         style={{
           display: 'flex',
@@ -39,7 +44,9 @@ export function Label({ widget }: WidgetProps<null>) {
           height: '100%',
           boxSizing: 'border-box',
           overflow: 'hidden',
-          padding: 12,
+          // A label is often one row tall: the frame's uniform inset would leave it a line's
+          // height or less, so it keeps a slim vertical inset and the usual side inset.
+          padding: `${spaceVar(1)} ${spaceVar(3)}`,
         }}
       >
         <span

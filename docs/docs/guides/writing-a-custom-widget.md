@@ -265,6 +265,17 @@ box in which your widget is still readable. A widget without a `layout` block is
 with no limits, and `lintLayout` reports that it declared none. Cell sizes are tied to the current grid
 and may be recalibrated in a later release.
 
+Text follows the board's density. `WidgetFrame` pads the widget and sets its content area up as a size
+container, so inside it CSS container units (`cqw`, `cqh`) measure the space your widget really has.
+Take text sizes from the type ramp (`fontVar('md')` and the other `xs` to `display` steps) and spacing from
+`spaceVar(1)` to `spaceVar(4)` rather than writing pixel values: both multiply by the board's density
+(compact, comfortable or wall), which the dashboard's author sets and a viewer can override. For a large
+readout, `fitValueFontCss(chars)` gives the CSS font size for a number of characters. A canvas cannot read
+CSS variables, so call `useWidgetScale()` from a component rendered inside the frame (or pass the frame a
+function child) to get `sizeClass` (`compact`, `regular` or `large`), the content size in pixels, and
+`px('font-md')` for a token's pixel value. The frame hides the subtitle and then the title as the widget
+gets short; the title stays available to assistive technology.
+
 ## Interactions and the trust model
 
 `interactions` lists the host callbacks the widget uses: `alarmActions` (acknowledge and clear, alarm

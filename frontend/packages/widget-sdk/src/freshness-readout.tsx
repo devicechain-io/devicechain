@@ -10,6 +10,7 @@ import { useEffect, useState, type CSSProperties } from 'react';
 
 import { ageSeconds, formatAge, freshnessStrings, isStale } from './freshness';
 import { css } from './theme';
+import { fontVar } from './tokens';
 
 // One interval per period, shared by every subscriber: a board of two hundred widgets ticks
 // once a second, not two hundred times, and every readout on it moves together. The timer
@@ -87,7 +88,7 @@ export function StaleBadge({ label }: { label?: string }) {
     <span
       data-stale-badge=""
       style={{
-        fontSize: 10,
+        fontSize: fontVar('xs'),
         fontWeight: 600,
         textTransform: 'uppercase',
         letterSpacing: 0.4,
@@ -139,7 +140,7 @@ export function FreshnessReadout({
         display: 'inline-flex',
         alignItems: 'center',
         gap: 6,
-        fontSize: 11,
+        fontSize: fontVar('xs'),
         color: css('muted-foreground'),
         fontVariantNumeric: 'tabular-nums',
         ...style,

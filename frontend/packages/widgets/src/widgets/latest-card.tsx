@@ -10,7 +10,10 @@ import {
   css,
   defineWidget,
   fitValueFont,
+  fitValueFontCss,
+  FIT_MIN_FONT_PX,
   flashTextStyle,
+  fontVar,
   formatTimestamp,
   formatValue,
   levelColor,
@@ -20,8 +23,9 @@ import {
   optThresholds,
   pickSample,
   primaryMeasurementName,
-  useElementSize,
+  spaceVar,
   useSeverityColors,
+  useStickyChars,
   useFlashOnChange,
   useWidgetTimeZone,
   WidgetFrame,
@@ -30,15 +34,12 @@ import {
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
-// The column's padding, and the room a timestamp line needs under the value. useElementSize
-// reports the CONTENT box, which already excludes the padding.
-const PAD_X = 16;
-const PAD_Y = 12;
+// The room a timestamp line needs under the value. The frame's content column (what the
+// widget scale reports) is already net of the frame's padding.
 const TIMESTAMP_ROOM_PX = 18;
 
 export function LatestCard({ widget, data }: WidgetProps) {
   const severity = useSeverityColors();
-  const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const timeZone = useWidgetTimeZone();
   const name = primaryMeasurementName(widget);
   const sample = pickSample(data.latest, name);
@@ -63,57 +64,69 @@ export function LatestCard({ widget, data }: WidgetProps) {
   );
 
   // Fit the value to the card from both dimensions and the string length (the unit renders at
-  // half size, so it counts for half its characters). Falls back to a comfortable size before
-  // first measure / in a non-DOM test.
-  const chars = display.length + (sample?.value != null && unit ? Math.ceil(unit.length / 2) + 1 : 0);
-  const valueFont = fitValueFont(size, chars);
-  // The timestamp is the first thing to give: it shows only when the measured box has room
-  // for it under the value (unmeasured -- first frame, jsdom -- it shows).
-  const showTimestamp =
-    size.height <= 0 || size.height - Math.ceil(valueFont * 1.1) >= TIMESTAMP_ROOM_PX;
-
+  // half size, so it counts for half its characters).
+  // Sticky: the longest length seen lately, so a value crossing 9.99 -> 10.01 holds its size.
+  const chars = useStickyChars(display.length + (sample?.value != null && unit ? Math.ceil(unit.length / 2) + 1 : 0));
   return (
     <WidgetFrame title={title} sampleTime={sample?.occurredTime ?? null}>
-      <div
-        ref={sizeRef}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          justifyContent: 'safe center',
-          height: '100%',
-          boxSizing: 'border-box',
-          overflow: 'hidden',
-          padding: `${PAD_Y}px ${PAD_X}px`,
-        }}
-      >
-        <div
-          data-threshold-level={band?.level}
-          title={band?.label}
-          style={{
-            fontSize: valueFont,
-            fontWeight: 600,
-            lineHeight: 1.1,
-            // One line, and digits of one width: the fit counts characters, so a live value
-            // must not wrap or shift sideways as its digits change.
-            whiteSpace: 'nowrap',
-            fontVariantNumeric: 'tabular-nums',
-            color: valueColor,
-            ...flashTextStyle(flashDirection),
-          }}
-        >
-          {display}
-          {sample?.value != null && unit ? (
-            <span style={{ fontSize: Math.round(valueFont / 2), color: css('muted-foreground'), marginLeft: 6 }}>
-              {unit}
-            </span>
-          ) : null}
-        </div>
-        {sample?.occurredTime && showTimestamp ? (
-          <div style={{ fontSize: 11, color: css('muted-foreground'), marginTop: 4 }}>
-            {formatTimestamp(sample.occurredTime, timeZone)}
+      {({ size, scale }) => {
+        // Measured: the JS curve. Unmeasured (first frame): the SAME curve in cq units, resolved
+        // by the browser against the frame's content column, so there is no fallback-size flash.
+        const floor = Math.round(FIT_MIN_FONT_PX * scale);
+        const measured = size.width > 0 && size.height > 0;
+        const valuePx = measured ? fitValueFont(size, chars, { floor }) : undefined;
+        const valueFont = valuePx ?? fitValueFontCss(chars, { floor });
+        // The timestamp is the first thing to give: it shows only when the measured box has room
+        // for it under the value (unmeasured -- first frame, jsdom -- it shows).
+        const showTimestamp =
+          valuePx === undefined || size.height - Math.ceil(valuePx * 1.1) >= TIMESTAMP_ROOM_PX * scale;
+        return (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'safe center',
+              height: '100%',
+              boxSizing: 'border-box',
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              data-threshold-level={band?.level}
+              title={band?.label}
+              style={{
+                fontSize: valueFont,
+                fontWeight: 600,
+                lineHeight: 1.1,
+                // One line, and digits of one width: the fit counts characters, so a live value
+                // must not wrap or shift sideways as its digits change.
+                whiteSpace: 'nowrap',
+                fontVariantNumeric: 'tabular-nums',
+                color: valueColor,
+                ...flashTextStyle(flashDirection),
+              }}
+            >
+              {display}
+              {sample?.value != null && unit ? (
+                <span
+                  style={{
+                    fontSize: valuePx !== undefined ? Math.round(valuePx / 2) : `calc(${valueFont} / 2)`,
+                    color: css('muted-foreground'),
+                    marginLeft: spaceVar(1),
+                  }}
+                >
+                  {unit}
+                </span>
+              ) : null}
+            </div>
+            {sample?.occurredTime && showTimestamp ? (
+              <div style={{ fontSize: fontVar('xs'), color: css('muted-foreground'), marginTop: spaceVar(1) }}>
+                {formatTimestamp(sample.occurredTime, timeZone)}
+              </div>
+            ) : null}
           </div>
-        ) : null}
-      </div>
+        );
+      }}
     </WidgetFrame>
   );
 }

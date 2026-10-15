@@ -18,6 +18,7 @@ import {
   bindWidgetSlot,
   clearWidgetDatasource,
   createEntityLister,
+  DEFAULT_CANVAS_DENSITY,
   effectiveBindings,
   isDirty,
   migrateToSlots,
@@ -26,6 +27,7 @@ import {
   resolveConcrete,
   serializeDefinition,
   setCanvasGrid,
+  setCanvasDensity,
   setCanvasSizing,
   setSlotScope,
   setTitle,
@@ -35,6 +37,7 @@ import {
   widgetSlotName,
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
+  type CanvasDensity,
   type CanvasSizing,
   type ConcreteSelector,
   type DashboardDefinition,
@@ -159,6 +162,24 @@ function CanvasSettings({
         {mode !== 'fill' && (
           <NumberField label={t('workspacePx')} value={fixedPx} min={1} onChange={setFixedPx} />
         )}
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-muted-foreground">{t('workspaceDensity')}</label>
+        <Combobox
+          options={[
+            // The values are the CanvasDensity discriminants, not user text.
+            // eslint-disable-next-line i18next/no-literal-string
+            { value: 'compact', label: t('workspaceDensityCompact') },
+            // eslint-disable-next-line i18next/no-literal-string
+            { value: 'comfortable', label: t('workspaceDensityComfortable') },
+            // eslint-disable-next-line i18next/no-literal-string
+            { value: 'wall', label: t('workspaceDensityWall') },
+          ]}
+          value={definition.canvas.density ?? DEFAULT_CANVAS_DENSITY}
+          onChange={(v) => onChange(setCanvasDensity(definition, v as CanvasDensity))}
+          allowClear={false}
+          className="h-9 w-36"
+        />
       </div>
     </div>
   );

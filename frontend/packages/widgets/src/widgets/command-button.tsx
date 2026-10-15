@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   type CommandStreamState,
   css,
+  fontVar,
   defineWidget,
   formatDateTime,
   optString,
@@ -219,14 +220,14 @@ function ParamField({
   const unit = param.unit ? ` (${param.unit})` : '';
   return (
     <label htmlFor={labelId} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-      <span style={{ fontSize: 12, color: css('muted-foreground') }}>
+      <span style={{ fontSize: fontVar('sm'), color: css('muted-foreground') }}>
         {param.name}
         {unit}
         {param.required ? <span style={{ color: commandStatusColor('FAILED') }}> *</span> : null}
       </span>
       <ParamInput id={labelId} param={param} value={value} disabled={disabled} onChange={onChange} />
       {error ? (
-        <span style={{ fontSize: 11, color: commandStatusColor('FAILED') }}>{error}</span>
+        <span style={{ fontSize: fontVar('xs'), color: commandStatusColor('FAILED') }}>{error}</span>
       ) : null}
     </label>
   );
@@ -329,7 +330,7 @@ function CommandHistory({
                 display: 'flex',
                 alignItems: 'center',
                 gap: 8,
-                fontSize: 12,
+                fontSize: fontVar('sm'),
                 // Highlight the command just issued from this widget.
                 fontWeight: command.token === sentToken ? 600 : 400,
               }}
@@ -358,7 +359,7 @@ function StatusBadge({ status }: { status: string }) {
         alignItems: 'center',
         gap: 4,
         flexShrink: 0,
-        fontSize: 11,
+        fontSize: fontVar('xs'),
         fontWeight: 600,
         color,
       }}
@@ -371,7 +372,7 @@ function StatusBadge({ status }: { status: string }) {
 
 // ── styles / helpers ─────────────────────────────────────────────────────
 
-const hint: CSSProperties = { fontSize: 11, color: css('muted-foreground') };
+const hint: CSSProperties = { fontSize: fontVar('xs'), color: css('muted-foreground') };
 
 // What a viewer is told when the platform could not decide the enqueue. It is fixed
 // prose on purpose: the thrown error's text describes in-cluster machinery, and a
@@ -382,7 +383,7 @@ const inputStyle: CSSProperties = {
   width: '100%',
   boxSizing: 'border-box',
   padding: '4px 8px',
-  fontSize: 13,
+  fontSize: fontVar('md'),
   borderRadius: 4,
   border: `1px solid ${css('border')}`,
   background: css('background'),
@@ -391,7 +392,7 @@ const inputStyle: CSSProperties = {
 
 const sendButton: CSSProperties = {
   padding: '6px 12px',
-  fontSize: 13,
+  fontSize: fontVar('md'),
   fontWeight: 600,
   borderRadius: 4,
   border: 'none',

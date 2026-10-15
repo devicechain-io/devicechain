@@ -311,6 +311,12 @@ func TestSitepulseBoardDrillsAnAlarmToTheMachineGauges(t *testing.T) {
 	if tgt := widgetByID(t, def, "sp-machine-select").Options["selectionTarget"]; tgt != "selectedMachine" {
 		t.Errorf("machine selector drives %v, want selectedMachine", tgt)
 	}
+	// The selector's control is labelled by its title (the widget falls back to "Select
+	// selectedMachine" without one), and the frame may hide a title in a short box, so the
+	// name must be a real word.
+	if title := widgetByID(t, def, "sp-machine-select").Options["title"]; title != "Machine" {
+		t.Errorf("machine selector title = %v, want Machine", title)
+	}
 	for id, metric := range map[string]string{"sp-engine-temp": "engine_temp_c", "sp-tyre": "tyre_pressure_kpa"} {
 		w := widgetByID(t, def, id)
 		if w.Datasource == nil || w.Datasource.Slot != "selectedMachine" ||

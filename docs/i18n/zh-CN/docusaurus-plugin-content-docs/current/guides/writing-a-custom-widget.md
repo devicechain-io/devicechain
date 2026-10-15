@@ -203,6 +203,13 @@ layout: {
 编辑器以 `defaultSpan` 添加新组件。`@devicechain/dashboards` 中的 `lintLayout` 会把超出限制放置该组件的仪表板报告为错误。请把 `minSpan` 设为组件仍然清晰可读的最小尺寸。
 未声明 `layout` 块的组件会以 4 x 2 个单元添加且不设限制，`lintLayout` 会提示它没有声明。单元尺寸与当前网格绑定，后续版本中可能会重新校准。
 
+文字遵循仪表板的密度。`WidgetFrame` 会为组件添加内边距，并把组件的内容区设为尺寸容器，因此在其中，CSS 容器单位（`cqw`、`cqh`）
+量到的就是组件实际拥有的空间。请使用字号阶梯（`fontVar('md')` 以及 `xs` 到 `display` 的其他档位）和 `spaceVar(1)` 到
+`spaceVar(4)` 的间距，而不要写像素值：两者都会乘以仪表板的密度（紧凑、舒适或墙面显示），密度由仪表板作者设定，查看者可以覆盖。
+大号读数可用 `fitValueFontCss(chars)` 得到按字符数计算的 CSS 字号。画布无法读取 CSS 变量，请在框架内渲染的组件中调用
+`useWidgetScale()`（或给框架传入函数子节点），获取 `sizeClass`（`compact`、`regular` 或 `large`）、以像素计的内容尺寸，
+以及某个令牌的像素值 `px('font-md')`。组件变矮时，框架会先隐藏副标题，再隐藏标题；标题仍可供辅助技术读取。
+
 ## 交互与信任模型 {#interactions-and-the-trust-model}
 
 `interactions` 列出组件使用的宿主回调：`alarmActions`（确认与清除，仅限告警通道）、`commandSend`（仅限控制通道）、`selection` 和 `candidates`。宿主只提供你声明过的回调，并进一步限制在宿主支持且查看者被允许的范围内。没有回调的组件表现为只读。服务器始终是权威：查看者无权执行的操作会被服务器拒绝，且该拒绝会传达到你的组件。

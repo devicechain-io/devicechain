@@ -111,6 +111,14 @@ export { resolveSlotCandidates } from './candidates';
 export { createEntityLister } from './entity-lister';
 
 export { WIDGET_TYPES, UNKNOWN_WIDGET_TYPE } from './types';
+export {
+  CANVAS_DENSITIES,
+  DEFAULT_CANVAS_DENSITY,
+  DENSITY_SCALE,
+  isCanvasDensity,
+  type CanvasDensity,
+} from './types';
+export { sameLabel } from './same-label';
 
 export { ConnectionTracker, OFFLINE_AFTER_MS, type ConnectionHandle, type HubConnectionState } from './connection';
 
@@ -201,6 +209,7 @@ export {
   setTitle,
   setCanvasGrid,
   setCanvasSizing,
+  setCanvasDensity,
   updateWidget,
   addWidget,
   gridBoxToPx,

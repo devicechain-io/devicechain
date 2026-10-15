@@ -704,9 +704,9 @@ export function View({
   /** Hide the chrome (header and its controls) and offer fullscreen instead. */
   kiosk?: boolean;
   /**
-   * The viewer's ?density= override, validated. NOT APPLIED YET: the canvas density option
-   * and the scale it drives arrive with the size-aware frame. It is plumbed to the board
-   * root as `data-density` and nothing reads it, so that change has one place to read from.
+   * The viewer's ?density= override, validated. It is handed to the renderer, where it wins over
+   * the definition's own `canvas.density`; `data-density` on this root stays as the hook for
+   * kiosk styling and for tests.
    */
   density?: DashDensity | null;
   theme?: DashTheme;
@@ -796,6 +796,7 @@ export function View({
               bindings={bindings}
               select={select}
               candidates={candidates}
+              density={density ?? undefined}
             />
           </MapRuntimeProvider>
         </TenantBasemapProvider>

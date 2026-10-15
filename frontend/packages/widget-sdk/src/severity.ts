@@ -63,10 +63,17 @@ export function severityVar(level: AlarmLevel): string {
 }
 
 // The tokens as CSS, `:root` light and `.dark` dark -- what a host stylesheet pastes (or a
-// build step writes) so the host and this package cannot disagree about a colour.
-export function severityTokenCss(): string {
+// build step writes) so the host and this package cannot disagree about a colour. `hostWins`
+// wraps the selectors in `:where()` (zero specificity) for a stylesheet injected alongside a
+// host's own: any ordinary host rule for the same variable then beats it.
+export function severityTokenCss(options: { hostWins?: boolean } = {}): string {
+  const wrap = (selector: string) => (options.hostWins ? `:where(${selector})` : selector);
   const block = (selector: string, side: 'light' | 'dark') =>
-    `${selector} {\n${ALARM_LEVELS.map((l) => `  ${severityVar(l)}: ${SEVERITY_TOKENS[l][side]};`).join('\n')}\n}`;
+    [
+      `${wrap(selector)} {`,
+      ...ALARM_LEVELS.map((l) => `  ${severityVar(l)}: ${SEVERITY_TOKENS[l][side]};`),
+      '}',
+    ].join('\n');
   return `${block(':root', 'light')}\n${block('.dark', 'dark')}\n`;
 }
 

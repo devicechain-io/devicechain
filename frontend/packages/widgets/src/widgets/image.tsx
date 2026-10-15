@@ -9,6 +9,7 @@ import type { CSSProperties } from 'react';
 import {
   css,
   defineWidget,
+  fontVar,
   optString,
   WidgetFrame,
   type WidgetProps,
@@ -25,7 +26,7 @@ export function Image({ widget }: WidgetProps<null>) {
   const objectFit = (fitOption && FITS.has(fitOption) ? fitOption : 'contain') as CSSProperties['objectFit'];
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
+    <WidgetFrame title={optString(widget.options, 'title')} flush>
       {url ? (
         <img src={url} alt={alt} style={{ width: '100%', height: '100%', objectFit, display: 'block' }} />
       ) : (
@@ -36,7 +37,7 @@ export function Image({ widget }: WidgetProps<null>) {
             justifyContent: 'center',
             height: '100%',
             color: css('muted-foreground'),
-            fontSize: 13,
+            fontSize: fontVar('md'),
           }}
         >
           No image URL

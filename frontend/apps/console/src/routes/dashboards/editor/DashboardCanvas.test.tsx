@@ -127,4 +127,21 @@ describe('the edit canvas', () => {
       datasource: { kind: 'unbound', measurements: ['fuel'] },
     });
   });
+
+  it('lays the board out at its authored density, as the viewer will show it', () => {
+    const { container } = render(
+      <DashboardCanvas
+        definition={{ ...definition, canvas: { ...definition.canvas, density: 'wall' } }}
+        onChange={vi.fn()}
+        hub={new RecordingSource()}
+        bindings={{}}
+        selectedId={null}
+        onSelect={vi.fn()}
+      />,
+    );
+    const root = container.querySelector<HTMLElement>('[data-density]');
+    expect(root?.dataset.density).toBe('wall');
+    expect(root?.style.getPropertyValue('--dc-scale')).toBe('1.5');
+    expect(root?.style.getPropertyValue('--dc-font-md')).toBe('calc(13px * var(--dc-scale))');
+  });
 });

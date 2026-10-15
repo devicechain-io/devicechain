@@ -7,7 +7,7 @@
 
 import type { MeasurementSample } from '@devicechain/dashboards';
 
-import { fitValueFont } from '../fit-text';
+import { FIT_MIN_FONT_PX, fitValueFont } from '../fit-text';
 import { formatValue } from '../format';
 import type { ElementSize } from '../hooks';
 import { isAlarmLevel, levelColor, type AlarmLevel } from '../severity';
@@ -57,6 +57,8 @@ export interface LineChartOptions {
   // Severity thresholds, drawn as a labelled line each plus a faint band between them.
   // Any order: the builder sorts them.
   thresholds?: readonly Threshold[];
+  // The board's density scale (useWidgetScale().scale): multiplies the axis-font clamp. Default 1.
+  scale?: number;
 }
 
 // The markLine / markArea for a chart's thresholds, attached to the first series (the markers
@@ -106,7 +108,8 @@ export function buildLineOption(
   size?: ElementSize,
 ): EChartOption {
   const names = options.measurements?.length ? options.measurements : distinctNames(samples);
-  const axisFont = clamp(Math.round(shortSide(size) / 22), 8, 12);
+  const scale = options.scale ?? 1;
+  const axisFont = clamp(Math.round(shortSide(size) / 22), Math.round(8 * scale), Math.round(12 * scale));
 
   // Re-parsed (validated + sorted): the builder is public, and a caller may hand it a list
   // that never went through parseThresholds. Every rule below assumes ascending order.
@@ -182,6 +185,8 @@ export interface GaugeChartOptions {
   precision?: number;
   // Severity thresholds, drawn as coloured bands on the arc (any order).
   thresholds?: readonly Threshold[];
+  // The board's density scale: multiplies the label-font clamp and the readout's floor. Default 1.
+  scale?: number;
 }
 
 // Below this short side (px) the gauge drops its axis labels: at that size they would be
@@ -223,11 +228,14 @@ export function buildGaugeOption(
 
   const s = shortSide(size);
   const arcWidth = clamp(Math.round(s / 26), 4, 12);
-  const labelFont = clamp(Math.round(s / 20), 8, 13);
+  const scale = options.scale ?? 1;
+  const labelFont = clamp(Math.round(s / 20), Math.round(8 * scale), Math.round(13 * scale));
   const showAxisLabels = s >= GAUGE_AXIS_LABELS_MIN_SIDE;
   // The readout is fitted to the dial's inner box and its own length, like every big number.
   const readout = value == null ? '—' : `${formatValue(value, options.precision)}${unitSuffix}`;
-  const valueFont = fitValueFont({ width: s * 0.7, height: s * 0.25 }, readout.length);
+  const valueFont = fitValueFont({ width: s * 0.7, height: s * 0.25 }, readout.length, {
+    floor: Math.round(FIT_MIN_FONT_PX * scale),
+  });
 
   return {
     animation: false,

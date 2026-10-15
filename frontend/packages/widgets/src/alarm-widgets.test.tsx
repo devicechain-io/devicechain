@@ -255,3 +255,28 @@ describe('AlarmTable raised time zone', () => {
     expect(want).toContain('UTC');
   });
 });
+
+describe('alarm severity colours', () => {
+  // One palette: the stripe an alarm row paints is the SDK severity token (here the light
+  // fallback, as jsdom has no host tokens), the same colour a threshold band uses.
+  it('paints a row in the SDK severity token colour, and INDETERMINATE in the muted foreground', () => {
+    const { container } = render(
+      <AlarmTable
+        widget={widget('alarm-table')}
+        data={state({
+          alarms: [
+            alarm({ token: 'a-1', severity: 'CRITICAL' }),
+            alarm({ token: 'a-2', severity: 'INDETERMINATE', alarmKey: 'k2' }),
+          ],
+          total: 2,
+        })}
+      />,
+    );
+    const stripes = Array.from(container.querySelectorAll('tbody td[aria-hidden="true"]')) as HTMLElement[];
+    // jsdom normalises colours to rgb(), so compare against the same value set the same way.
+    const reference = document.createElement('div');
+    reference.style.background = 'hsl(0, 72%, 46%)';
+    expect(stripes[0].style.background).toBe(reference.style.background);
+    expect(stripes[1].style.background).toBe('hsl(var(--muted-foreground))');
+  });
+});

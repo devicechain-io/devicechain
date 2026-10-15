@@ -319,8 +319,27 @@ export type CanvasSizing = 'fill' | { width: number } | { height: number };
 // Breakpoint name → min viewport width in px. 'base' is required.
 export type Breakpoints = Record<string, number>;
 
+// How roomy the board renders: a scale applied to every size token (font, spacing) and to the
+// floor of the value-font curve. `comfortable` is the default and is not written when it is
+// the choice; a wall display picks `wall`. A viewer can override it (the /dash app's
+// `?density=`), so this is the AUTHORED default, not a fixed property of the board.
+export const CANVAS_DENSITIES = ['compact', 'comfortable', 'wall'] as const;
+export type CanvasDensity = (typeof CANVAS_DENSITIES)[number];
+export const DEFAULT_CANVAS_DENSITY: CanvasDensity = 'comfortable';
+export const DENSITY_SCALE: Readonly<Record<CanvasDensity, number>> = {
+  compact: 0.9,
+  comfortable: 1,
+  wall: 1.5,
+};
+
+export function isCanvasDensity(value: unknown): value is CanvasDensity {
+  return typeof value === 'string' && (CANVAS_DENSITIES as readonly string[]).includes(value);
+}
+
 export interface Canvas {
   background?: CanvasBackground;
+  // Absent = `comfortable`.
+  density?: CanvasDensity;
   grid: CanvasGrid;
   sizing: CanvasSizing;
   breakpoints: Breakpoints;

@@ -14,7 +14,9 @@
 // pixels (gridBoxToPx / pxToGridBox) so react-rnd drag+resize snap to real grid lines.
 
 import { BASE_BREAKPOINT, generateWidgetId } from './definition';
+import { DEFAULT_CANVAS_DENSITY } from './types';
 import type {
+  CanvasDensity,
   CanvasGrid,
   CanvasSizing,
   DashboardDefinition,
@@ -92,6 +94,13 @@ function clampWidgetColumns(widget: WidgetInstance, columns: number): WidgetInst
 // setCanvasSizing replaces the container-sizing knob (fill / fixed width / fixed height).
 export function setCanvasSizing(def: DashboardDefinition, sizing: CanvasSizing): DashboardDefinition {
   return { ...def, canvas: { ...def.canvas, sizing } };
+}
+
+// setCanvasDensity sets the authored density. `comfortable` (the default) is stored as absent so
+// a board nobody densified serializes exactly as before.
+export function setCanvasDensity(def: DashboardDefinition, density: CanvasDensity): DashboardDefinition {
+  const { density: _prev, ...rest } = def.canvas;
+  return { ...def, canvas: density === DEFAULT_CANVAS_DENSITY ? rest : { ...rest, density } };
 }
 
 // updateWidget replaces the widget with the matching id, returning a new definition.

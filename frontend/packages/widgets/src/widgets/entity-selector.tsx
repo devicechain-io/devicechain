@@ -16,6 +16,7 @@ import { useEffect, useState, type ChangeEvent, type CSSProperties } from 'react
 
 import {
   css,
+  fontVar,
   defineWidget,
   optString,
   useCandidates,
@@ -35,7 +36,7 @@ function tokenOf(b: SlotBinding): string {
 
 const control: CSSProperties = {
   width: '100%',
-  fontSize: 14,
+  fontSize: fontVar('md'),
   padding: '8px 10px',
   borderRadius: 6,
   border: `1px solid ${css('border')}`,
@@ -44,7 +45,7 @@ const control: CSSProperties = {
 };
 
 const hint: CSSProperties = {
-  fontSize: 12,
+  fontSize: fontVar('sm'),
   color: css('muted-foreground'),
 };
 
@@ -89,7 +90,6 @@ export function EntitySelector({ widget }: WidgetProps<null>) {
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
-          padding: '12px 16px',
           height: '100%',
           boxSizing: 'border-box',
           overflow: 'auto',

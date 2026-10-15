@@ -9,6 +9,8 @@ import type { CSSProperties } from 'react';
 import {
   css,
   defineWidget,
+  fontVar,
+  spaceVar,
   FlashValue,
   formatTimestamp,
   optBoolean,
@@ -21,10 +23,10 @@ import {
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
-const cell: CSSProperties = { padding: '6px 12px', textAlign: 'left' };
+const cell: CSSProperties = { padding: `${spaceVar(1)} ${spaceVar(3)}`, textAlign: 'left' };
 const headCell: CSSProperties = {
   ...cell,
-  fontSize: 11,
+  fontSize: fontVar('xs'),
   fontWeight: 600,
   textTransform: 'uppercase',
   letterSpacing: '0.04em',
@@ -43,9 +45,9 @@ export function Table({ widget, data }: WidgetProps) {
   const flash = optBoolean(widget.options, 'flashOnChange');
 
   return (
-    <WidgetFrame title={optString(widget.options, 'title')}>
+    <WidgetFrame title={optString(widget.options, 'title')} flush>
       <div style={{ height: '100%', overflow: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, color: css('foreground') }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: fontVar('md'), color: css('foreground') }}>
           <thead>
             <tr>
               <th style={headCell}>Measurement</th>

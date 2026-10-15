@@ -278,6 +278,19 @@ pequeña en la que tu widget siga siendo legible. Un widget sin bloque `layout` 
 sin límites, y `lintLayout` indica que no declaró ninguno. Los tamaños de celda están ligados a la
 cuadrícula actual y podrían recalibrarse en una versión posterior.
 
+El texto sigue la densidad del panel. `WidgetFrame` añade el relleno y configura el área de contenido del
+widget como un contenedor de tamaño, de modo que dentro de él las unidades de contenedor CSS (`cqw`, `cqh`)
+miden el espacio que el widget tiene de verdad. Toma los tamaños de texto de la escala tipográfica
+(`fontVar('md')` y los demás pasos de `xs` a `display`) y el espaciado de `spaceVar(1)` a `spaceVar(4)` en
+lugar de escribir valores en píxeles: ambos se multiplican por la densidad del panel (compacta, cómoda o
+mural), que define quien crea el panel y puede cambiar quien lo ve. Para una lectura grande,
+`fitValueFontCss(chars)` devuelve el tamaño de fuente CSS para un número de caracteres. Un canvas no puede
+leer variables CSS: llama a `useWidgetScale()` desde un componente dibujado dentro del marco (o pasa al
+marco una función como hijo) para obtener `sizeClass` (`compact`, `regular` o `large`), el tamaño del
+contenido en píxeles y `px('font-md')` con el valor en píxeles de un token. El marco oculta el subtítulo y
+después el título cuando el widget se vuelve bajo; el título sigue disponible para las tecnologías de
+asistencia.
+
 ## Interacciones y modelo de confianza {#interactions-and-the-trust-model}
 
 `interactions` enumera los callbacks del anfitrión que usa el widget: `alarmActions` (reconocer y

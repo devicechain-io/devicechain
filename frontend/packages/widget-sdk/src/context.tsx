@@ -79,6 +79,35 @@ export function useWidgetThemeRoot(): Element | undefined {
   return useContext(WidgetThemeRootContext);
 }
 
+// The density scale the board renders at (0.9 compact / 1 comfortable / 1.5 wall), provided by
+// the renderer. Outside a renderer it is 1.
+const WidgetDensityContext = createContext<number>(1);
+
+export function WidgetDensityProvider({ scale, children }: { scale: number; children: ReactNode }) {
+  return <WidgetDensityContext.Provider value={scale}>{children}</WidgetDensityContext.Provider>;
+}
+
+export function useWidgetDensityScale(): number {
+  return useContext(WidgetDensityContext);
+}
+
+// The size of the widget frame's padded content column in px (quantised), provided by
+// WidgetFrame to everything rendered inside it. {0,0} until measured, and outside a frame.
+export interface WidgetBodySize {
+  width: number;
+  height: number;
+}
+const ZERO_SIZE: WidgetBodySize = { width: 0, height: 0 };
+const WidgetBodySizeContext = createContext<WidgetBodySize>(ZERO_SIZE);
+
+export function WidgetBodySizeProvider({ size, children }: { size: WidgetBodySize; children: ReactNode }) {
+  return <WidgetBodySizeContext.Provider value={size}>{children}</WidgetBodySizeContext.Provider>;
+}
+
+export function useWidgetBodySize(): WidgetBodySize {
+  return useContext(WidgetBodySizeContext);
+}
+
 // WidgetSelect is a view-interaction callback (ADR-039 selection amendment): a widget
 // drives a slot selection (an alarm-table originator drill, a context-selector pick) by
 // naming its target slot + the entity to bind. Kept DISTINCT from WidgetActions (the

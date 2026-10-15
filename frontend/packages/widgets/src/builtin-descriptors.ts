@@ -354,7 +354,7 @@ export const builtinWidgetDescriptors = {
         min: 1,
         labelId: 'widgetLabelFontSize',
         helpId: 'widgetHintFontSize',
-        doc: 'Text size in pixels. Default 16.',
+        doc: 'Text size in pixels at the comfortable density; it scales with the board density. Default 16.',
       },
     },
     defaults: { text: 'New label' },

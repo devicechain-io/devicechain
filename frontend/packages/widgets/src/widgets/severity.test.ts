@@ -22,15 +22,22 @@ describe('severityRank', () => {
 });
 
 describe('severityColor', () => {
-  it('maps a known severity to its fixed color', () => {
-    expect(severityColor('CRITICAL')).toBe('#dc2626');
-    expect(severityColor('MAJOR')).toBe('#f97316');
-    expect(severityColor('WARNING')).toBe('#0ea5e9'); // sky — aligned with the console ramp
+  // The colours come from the SDK's severity tokens (one palette with the threshold bands), so
+  // the test hands in a distinct colour per level and asserts the VOCABULARY mapping.
+  const colors = { warning: 'W', minor: 'MI', major: 'MA', critical: 'C' };
+
+  it('maps each alarm severity onto its token level colour', () => {
+    expect(severityColor(colors, 'CRITICAL')).toBe('C');
+    expect(severityColor(colors, 'MAJOR')).toBe('MA');
+    expect(severityColor(colors, 'MINOR')).toBe('MI');
+    expect(severityColor(colors, 'WARNING')).toBe('W');
   });
 
-  it('falls back to a muted slate for an unknown severity', () => {
-    expect(severityColor('MYSTERY')).toBe('#64748b');
-    expect(severityColor('')).toBe('#64748b');
+  it('gives INDETERMINATE and an unknown severity the muted foreground, not a hue', () => {
+    const muted = severityColor(colors, 'INDETERMINATE');
+    expect(muted).toBe('hsl(var(--muted-foreground))');
+    expect(severityColor(colors, 'MYSTERY')).toBe(muted);
+    expect(severityColor(colors, '')).toBe(muted);
   });
 });
 

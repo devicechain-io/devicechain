@@ -37,9 +37,9 @@
       "layout": {
         "base": {
           "col": 8,
-          "colSpan": 2,
+          "colSpan": 1,
           "row": 0,
-          "rowSpan": 1,
+          "rowSpan": 3,
           "z": 0
         }
       },
@@ -52,6 +52,7 @@
       },
       "options": {
         "measurement": "value",
+        "precision": 4,
         "title": "A card title far too long for a card this small",
         "unit": "kPa"
       }

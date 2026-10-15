@@ -25,6 +25,7 @@ export type {
 // in this package and nowhere else — see ./context.
 export {
   WidgetCandidatesProvider,
+  WidgetDensityProvider,
   WidgetFreshnessProvider,
   WidgetSelectProvider,
   WidgetSubjectProvider,
@@ -36,6 +37,7 @@ export {
   useWidgetSubject,
   useWidgetThemeRoot,
   useWidgetTimeZone,
+  type WidgetBodySize,
   type WidgetCandidates,
   type WidgetFreshness,
   type WidgetSelect,
@@ -48,7 +50,25 @@ export {
 // never pulls Apache ECharts (nor MapLibre, nor the built-in catalog).
 export { WidgetFrame, type WidgetFrameProps } from './frame';
 export { css, type ThemeVar } from './theme';
-export { fitValueFont } from './fit-text';
+// The curve's constants and the pure sticky-length step stay internal: a widget reaches them
+// through fitValueFont / fitValueFontCss / useStickyChars, so the curve can be retuned.
+export { FIT_MIN_FONT_PX, fitValueFont, fitValueFontCss, type FitOptions } from './fit-text';
+export {
+  FONT_TOKENS,
+  SPACE_TOKENS,
+  WidgetTokenStyles,
+  densityScale,
+  fontVar,
+  spaceVar,
+  tokenPx,
+  tokenStyle,
+  type FontToken,
+  type SizeToken,
+  type SpaceToken,
+} from './tokens';
+// The body-size and density contexts are plumbing between the frame, the renderer and this
+// hook: a widget reads them through useWidgetScale, and only the renderer provides density.
+export { SIZE_CLASS_BREAKS, useStickyChars, useWidgetScale, type SizeClass, type WidgetScale } from './scale';
 export { HubConnectionBadge, type HubConnectionBadgeProps } from './connection-badge';
 export { Freshness, FreshnessReadout, StaleBadge, useFreshness, useNow, type FreshnessProps, type FreshnessReading } from './freshness-readout';
 export {

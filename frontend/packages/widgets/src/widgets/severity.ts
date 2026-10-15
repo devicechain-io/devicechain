@@ -2,19 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Alarm-severity presentation shared by the alarm widgets (ADR-041 vocabulary:
-// CRITICAL | MAJOR | MINOR | WARNING | INDETERMINATE). Severity is SEMANTIC color —
-// deliberately fixed, not derived from the dashboard accent — so a critical alarm
-// reads the same red on every tenant's theme. The warm-to-cool ramp mirrors the
-// console's alarm badges (red → orange → amber → sky → slate) so an operator reads the
-// same hue for the same severity on both surfaces; shades are tuned to hold contrast as
-// a foreground color on both light and dark widget backgrounds.
+// CRITICAL | MAJOR | MINOR | WARNING | INDETERMINATE). Severity is SEMANTIC color --
+// deliberately fixed, not derived from the dashboard accent -- so a critical alarm reads the
+// same red on every tenant's theme.
+//
+// 🔑 ONE PALETTE. The hues are the SDK's severity tokens (`--sev-*`, widget-sdk/severity.ts):
+// the same colour a threshold band uses is the colour an alarm row uses, in light and dark, and
+// a host that re-themes a token re-themes both. This file keeps only the VOCABULARY mapping
+// (the backend's UPPER_CASE severities onto the token levels). INDETERMINATE -- and anything
+// unrecognized -- has no alarm hue: it renders in the muted foreground, the same neutral an
+// absent alarm gets.
 
-const SEVERITY_COLORS: Record<string, string> = {
-  CRITICAL: '#dc2626', // red-600
-  MAJOR: '#f97316', // orange-500
-  MINOR: '#d97706', // amber-600 (readable as foreground; console uses amber-400 as a fill)
-  WARNING: '#0ea5e9', // sky-500 — cool end of the ramp, matching the console
-  INDETERMINATE: '#64748b', // slate-500
+import { css, type AlarmLevel } from '@devicechain/widget-sdk';
+
+const LEVEL_OF: Record<string, AlarmLevel> = {
+  CRITICAL: 'critical',
+  MAJOR: 'major',
+  MINOR: 'minor',
+  WARNING: 'warning',
 };
 
 const SEVERITY_ORDER: Record<string, number> = {
@@ -25,12 +30,13 @@ const SEVERITY_ORDER: Record<string, number> = {
   INDETERMINATE: 4,
 };
 
-const UNKNOWN_COLOR = '#64748b';
-
-// severityColor maps a severity to its badge/stripe color, falling back to a muted
-// slate for an unrecognized value (a hand-edited or future severity).
-export function severityColor(severity: string): string {
-  return SEVERITY_COLORS[severity] ?? UNKNOWN_COLOR;
+// severityColor maps a severity to its badge/stripe color. `colors` is useSeverityColors() --
+// the concrete token colours in scope -- so the result follows the host's theme and dark mode.
+// An INDETERMINATE or unrecognized severity (a hand-edited or future one) takes the muted
+// foreground rather than a hue it has not earned.
+export function severityColor(colors: Readonly<Record<AlarmLevel, string>>, severity: string): string {
+  const level = LEVEL_OF[severity];
+  return level ? colors[level] : css('muted-foreground');
 }
 
 // severityRank orders severities most-severe-first; unknown severities sort last.
