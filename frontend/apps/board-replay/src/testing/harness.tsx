@@ -19,6 +19,7 @@ export const BOARD_PATH = path.join(FRONTEND, 'testdata/sim-dashboards/sp-dashbo
 // change and is NOT copied here; suites that need it skip, by name, while it is absent.
 export const EXCERPT_PATH = path.join(FRONTEND, 'testdata/board-replay/take2-tyre-excerpt.json');
 export const EXCERPT_AVAILABLE = existsSync(EXCERPT_PATH);
+export const SHOWCASE_PATH = path.join(FRONTEND, 'testdata/board-replay/sitepulse-showcase.json');
 
 export const ORIGIN = 'https://site.test';
 export const RECORDING_URL = `${ORIGIN}/assets/run.json`;
@@ -59,6 +60,14 @@ export async function fixtureRecordingText(mutate?: (doc: Record<string, any>) =
 // commit that a squash merge leaves unreachable, which the converter test refuses in CI.
 export async function excerptOnCurrentBoardText(): Promise<string> {
   const doc = JSON.parse(readFileSync(EXCERPT_PATH, 'utf-8'));
+  doc.board = { ...doc.board, sha256: await boardSha256() };
+  return JSON.stringify(doc);
+}
+
+// The showcase recording (format 2, with positions), re-pinned at the current board for the
+// reason excerptOnCurrentBoardText gives.
+export async function showcaseOnCurrentBoardText(): Promise<string> {
+  const doc = JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8'));
   doc.board = { ...doc.board, sha256: await boardSha256() };
   return JSON.stringify(doc);
 }

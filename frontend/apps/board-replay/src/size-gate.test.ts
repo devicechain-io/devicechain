@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { check, checkShape, initialFiles, lazyBoundaries, measure, type Budget } from '../scripts/check-bundle-size.mjs';
@@ -65,6 +66,12 @@ describe('bundle size gate', () => {
     expect(committed.maxInitial).toBeGreaterThan(0);
     expect(committed.maxTotal).toBeGreaterThan(0);
     expect(check({ initial: 0, total: 0 }, committed)).toEqual([]);
+  });
+
+  it('the showcase recording fits the allowance the budget holds for the recording the page plays', () => {
+    const committed = JSON.parse(readFileSync(path.resolve(import.meta.dirname, '../size-budget.json'), 'utf8')) as Budget;
+    const recording = readFileSync(path.resolve(import.meta.dirname, '../../../testdata/board-replay/sitepulse-showcase.json'));
+    expect(gzipSync(recording, { level: 9 }).length).toBeLessThanOrEqual(committed.recordingGzip);
   });
 });
 

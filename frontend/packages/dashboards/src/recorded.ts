@@ -26,6 +26,16 @@
 // another row, in either direction) and `isStale` reports it, so a host that forgets to
 // swap it freezes visibly in a test instead of replaying the wrong moment.
 //
+// ── Re-timing ───────────────────────────────────────────────────────────────
+// A source may be built with a TIME SHIFT (RecordedSourceOptions.timeShiftMs, usually
+// retimeShiftMs: "the cursor is now"). Every instant the source hands out is then moved by
+// that one amount: sample and position times, alarm raise and clear times, now(), and the
+// windows a stat asks buckets for are moved back by it before the rows are read. One
+// shift for everything, so ages, alarm times, aggregates and positions agree with each
+// other exactly as they did in the run; only the date they claim is different. A shift is
+// a presentation choice of the HOST (the showcase embed), which must say on screen that it
+// is a replay.
+//
 // ── What the recording does not hold ────────────────────────────────────────
 // A channel the recording did not capture raises NotInRecordingError through the sink's
 // error path. It NEVER answers with an empty snapshot: an empty map would read as "no
@@ -56,8 +66,11 @@ import type {
   EntityListKind,
   MeasurementSample,
 } from './types';
+import type { HistoryWindow } from './history';
+import type { MeasurementBucket } from './queries';
 import {
   compareInstants,
+  recordedWallTimeMs,
   recordingBounds,
   type BoardRecording,
   type RecordedAlarm,
@@ -297,6 +310,19 @@ export interface RecordedSiteOptions {
   siteAnchors?: readonly AnchorTarget[];
 }
 
+// A source's options: the site, and an optional time shift (see "Re-timing" above).
+export interface RecordedSourceOptions extends RecordedSiteOptions {
+  // Milliseconds added to every instant the source hands out. 0 (the default) shows the
+  // run's own times.
+  timeShiftMs?: number;
+}
+
+// retimeShiftMs is the shift that makes recording offset `cursorMs` read as `nowMs` (the
+// wall clock by default): the source built with it says the cursor is now.
+export function retimeShiftMs(rec: BoardRecording, cursorMs: number, nowMs: number = Date.now()): number {
+  return Math.round(nowMs - recordedWallTimeMs(rec, cursorMs));
+}
+
 function sameAnchor(a: AnchorTarget, b: AnchorTarget): boolean {
   return a.relationship === b.relationship && a.targetType === b.targetType && a.targetToken === b.targetToken;
 }
@@ -377,6 +403,8 @@ interface Indexed {
   byDevice: Map<string, Series[]>;
   timeline: TimelineEntry[];
   timelineTimes: number[];
+  // Each device's position rows (indices into the location columns) and their times.
+  positions: Map<string, { rows: number[]; times: number[] }>;
 }
 
 // A view is rebuilt after every seek, so the index is built once per parsed recording.
@@ -410,7 +438,17 @@ function indexOf(rec: BoardRecording): Indexed {
   // Array.prototype.sort is stable: snapshots were listed first, so they stay first at ties.
   timeline.sort((a, b) => a.tMs - b.tMs);
 
-  const indexed: Indexed = { byDevice, timeline, timelineTimes: timeline.map((e) => e.tMs) };
+  const positions = new Map<string, { rows: number[]; times: number[] }>();
+  const loc = rec.locations;
+  for (let i = 0; i < loc.t.length; i++) {
+    const token = rec.devices[loc.d[i]].token;
+    let p = positions.get(token);
+    if (!p) positions.set(token, (p = { rows: [], times: [] }));
+    p.rows.push(i);
+    p.times.push(loc.t[i]);
+  }
+
+  const indexed: Indexed = { byDevice, timeline, timelineTimes: timeline.map((e) => e.tMs), positions };
   indexCache.set(rec, indexed);
   return indexed;
 }
@@ -454,14 +492,19 @@ export class RecordedDataSource implements WidgetDataSource {
   private readonly unlisten: () => void;
   private cursor: number;
   private stale = false;
+  private readonly shiftMs: number;
 
   // `clock` is the shared replay clock; the view starts at its current time. `options`
-  // names the site anchors this recording's devices belong to (see RecordedSiteOptions).
-  constructor(rec: BoardRecording, clock: RecordedClock, options: RecordedSiteOptions = {}) {
+  // names the site anchors this recording's devices belong to (see RecordedSiteOptions)
+  // and the time shift, if any (see "Re-timing" above).
+  constructor(rec: BoardRecording, clock: RecordedClock, options: RecordedSourceOptions = {}) {
     this.rec = rec;
     this.site = declaredSite(options);
     this.index = indexOf(rec);
     this.cursor = clock.timeMs;
+    const shift = options.timeShiftMs ?? 0;
+    if (!Number.isFinite(shift)) throw new RangeError(`RecordedDataSource: timeShiftMs must be finite, got ${shift}`);
+    this.shiftMs = shift;
     this.startMs = Date.parse(rec.startedAtUtc);
     this.devices = new Set(rec.devices.map((d) => d.token));
     this.unlisten = clock.subscribe((ev) => this.onClock(ev));
@@ -473,10 +516,15 @@ export class RecordedDataSource implements WidgetDataSource {
     return this.stale;
   }
 
-  // The recorded instant the view is at: samples are dated by the run, so a time span is measured
-  // from here, not from the wall clock.
+  // The instant the view is at: samples are dated by the run (moved by the shift, if any), so a
+  // time span is measured from here, not from the wall clock.
   now(): number {
-    return this.startMs + this.cursor;
+    return this.startMs + this.cursor + this.shiftMs;
+  }
+
+  // The shift every instant is moved by (0 for the run's own times).
+  get timeShiftMs(): number {
+    return this.shiftMs;
   }
 
   private onClock(ev: ClockEvent): void {
@@ -492,7 +540,14 @@ export class RecordedDataSource implements WidgetDataSource {
   }
 
   private iso(offsetMs: number): string {
-    return new Date(this.startMs + offsetMs).toISOString();
+    return new Date(this.startMs + offsetMs + this.shiftMs).toISOString();
+  }
+
+  // A recorded instant (an alarm's raise or clear time), moved by the shift. Unshifted, the
+  // recording's own string is kept, digits and all.
+  private shifted(instant: string | null): string | null {
+    if (instant === null || this.shiftMs === 0) return instant;
+    return new Date(Date.parse(instant) + this.shiftMs).toISOString();
   }
 
   // open tracks a subscription and returns its disposer. `start` runs once, in a
@@ -768,7 +823,10 @@ export class RecordedDataSource implements WidgetDataSource {
       const signature = JSON.stringify([matches.length, page]);
       if (signature === lastSignature || isDisposed()) return;
       lastSignature = signature;
-      const snapshot: AlarmSnapshot = { alarms: page.map(toAlarmRow), total: matches.length };
+      const snapshot: AlarmSnapshot = {
+        alarms: page.map((a) => toAlarmRow({ ...a, raised: this.shifted(a.raised), cleared: this.shifted(a.cleared) })),
+        total: matches.length,
+      };
       sink.next(snapshot);
     };
 
@@ -784,10 +842,14 @@ export class RecordedDataSource implements WidgetDataSource {
 
   // ── locations ─────────────────────────────────────────────────────────────
 
-  // This format version records no positions. A selector that names no location series
-  // asks for nothing, and one that resolves to no device has nothing to place: both get the
-  // empty snapshot, as from the hub. Naming a location series for devices that exist is a
-  // request for data the recording does not have, which is an error, never an empty map.
+  // A selector that names no location series asks for nothing, and one that resolves to no
+  // device has nothing to place: both get the empty snapshot, as from the hub. Naming a
+  // location series for devices that exist, on a recording with no positions, is a request
+  // for data the recording does not have, which is an error, never an empty map.
+  //
+  // With positions recorded, each snapshot is every bound device's LAST position at the
+  // cursor, as device-state answers the live map: a device not yet located is absent (the
+  // service's contract), and the snapshot is sent again whenever one of them moves on.
   subscribeLocations(subscription: LocationSubscription, sink: LocationStreamSink): () => void {
     const ds = subscription.datasource;
     let tokens: string[] = [];
@@ -797,16 +859,74 @@ export class RecordedDataSource implements WidgetDataSource {
       } catch (err) {
         return this.failLater(err, sink);
       }
-      if (tokens.length > 0) {
+      if (tokens.length > 0 && !this.rec.channels.locations) {
         return this.failLater(new NotInRecordingError('locations', 'no positions were recorded'), sink);
       }
     }
+    if (tokens.length === 0) {
+      return this.open({
+        start: (_cursor, isDisposed) => {
+          if (!isDisposed()) sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
+        },
+        advance: () => {},
+      });
+    }
+    let extra: typeof import('./recorded-extra') | null = null;
+    let lastSignature: string | null = null;
+    const emit = (cursor: number, isDisposed: () => boolean): void => {
+      if (!extra) return;
+      const { signature, locations } = extra.lastPositions(this.rec, this.index.positions, tokens, cursor, (t) => this.iso(t));
+      if (signature === lastSignature || isDisposed()) return;
+      lastSignature = signature;
+      sink.next({ kind: 'positions', deviceTokens: tokens, locations });
+    };
     return this.open({
       start: (_cursor, isDisposed) => {
-        if (!isDisposed()) sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
+        import('./recorded-extra').then(
+          (m) => {
+            extra = m;
+            if (!this.stale) emit(this.cursor, isDisposed);
+          },
+          (err: unknown) => {
+            if (!isDisposed()) sink.error?.(err);
+          },
+        );
       },
-      advance: () => {},
+      advance: emit,
     });
+  }
+
+  // ── aggregates ────────────────────────────────────────────────────────────
+
+  // The buckets a stat widget folds into a span's aggregates, computed from the recording's
+  // own rows: every (device, measurement) row whose time falls in the window AND at or
+  // before the cursor (a replay must not know what happens next), grouped into buckets
+  // `intervalSeconds` wide aligned on the epoch like the event store's, each with its exact
+  // count, minimum, maximum and sum. Like the store, a bucket that holds no reading is not
+  // returned. The window is in the source's own (shifted) time and is moved back by the
+  // shift before the rows are read, so a re-timed board aggregates the same rows.
+  async bucketMeasurements(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
+    const groups = this.resolve(datasource);
+    const series: Series[] = [];
+    for (const g of groups) {
+      for (const name of g.names) {
+        if (!this.rec.channels.measurements.includes(name)) {
+          throw new NotInRecordingError('measurements', `no '${name}' series was recorded`);
+        }
+      }
+      for (const s of this.index.byDevice.get(g.deviceToken) ?? []) {
+        if (g.names.size === 0 || g.names.has(s.name)) series.push(s);
+      }
+    }
+    const widthMs = window.intervalSeconds * 1000;
+    const origin = this.startMs + this.shiftMs;
+    const from = Date.parse(window.startTime) - origin;
+    const to = Math.min(Date.parse(window.endTime) - origin, this.cursor);
+    if (!(widthMs > 0) || !Number.isFinite(from) || !Number.isFinite(to)) {
+      throw new RangeError(`bucketMeasurements: not a window: ${JSON.stringify(window)}`);
+    }
+    const { foldBuckets } = await import('./recorded-extra');
+    return foldBuckets(this.rec, series, from, to, origin, widthMs);
   }
 
   // ── availability ──────────────────────────────────────────────────────────

@@ -223,3 +223,130 @@ for (const width of WIDTHS) {
     }
   });
 }
+
+// ---- The showcase embed ------------------------------------------------------------
+//
+// The public site shows sitepulse through the replay's EMBED: the board laid out once on a
+// fixed 960x1080 canvas, then scaled as one picture to whatever box the page gives it. A widget
+// change that breaks that picture must fail here, so the embed is gated at the sizes the site
+// uses, in both themes, three ways:
+//
+//   1. at the canvas's own size (scale 1) the board reads cleanly and every widget lies
+//      inside the canvas: nothing cut off at its bottom or right edge;
+//   2. in each container the canvas is scaled to exactly the largest size that fits, centred,
+//      and wholly inside the container (letterboxed, never cropped);
+//   3. in each container the board's layout, measured in CANVAS pixels, is the layout of
+//      step 1: the container changed the scale and nothing else. That is what makes step 1's
+//      readability hold at every scale, and it is the check a reflowing embed fails.
+//
+// Readability is measured at scale 1 only because measureReadability compares glyph boxes
+// (which a transform scales) with element sizes (which it does not); step 3 is what carries
+// the result to the scaled sizes.
+
+const EMBED_CANVAS = { width: 960, height: 1080 } as const;
+const EMBED_CONTAINERS: ReadonlyArray<readonly [number, number]> = [
+  [1280, 720],
+  [640, 360],
+];
+
+// The board's layout in canvas pixels: each widget's box relative to the canvas, divided by the
+// canvas's scale, plus its text. Runs in the page.
+function canvasLayout(): { scale: number; canvas: number[]; viewport: number[]; widgets: string[]; outside: string[] } {
+  const c = document.querySelector<HTMLElement>('[data-testid="embed-canvas"]')!;
+  const scale = Number(c.dataset.scale);
+  const r = c.getBoundingClientRect();
+  const q = (n: number) => Math.round(n * 2) / 2;
+  const widgets: string[] = [];
+  const outside: string[] = [];
+  for (const w of Array.from(document.querySelectorAll<HTMLElement>('[data-widget]'))) {
+    const b = w.getBoundingClientRect();
+    const box = [(b.left - r.left) / scale, (b.top - r.top) / scale, b.width / scale, b.height / scale];
+    widgets.push(`${w.dataset.widget}:${box.map(q).join(',')}:${w.textContent ?? ''}`);
+    if (box[0] < -1 || box[1] < -1 || box[0] + box[2] > c.offsetWidth + 1 || box[1] + box[3] > c.offsetHeight + 1) {
+      outside.push(`${w.dataset.widget} ${JSON.stringify(box.map(Math.round))}`);
+    }
+  }
+  return { scale, canvas: [r.left, r.top, r.width, r.height], viewport: [innerWidth, innerHeight], widgets, outside };
+}
+
+async function embedAt(page: Page, size: readonly [number, number], theme: string, extra = '') {
+  await page.setViewportSize({ width: size[0], height: size[1] });
+  await page.goto(`/e2e/page/gate.html?board=sim/sp-dashboard&recording=showcase&theme=${theme}&embed=960x1080${extra}`);
+  await page.waitForFunction(() => document.documentElement.dataset.gate !== undefined);
+  const state = await page.evaluate(() => ({ ...document.documentElement.dataset }));
+  expect(state.gate, `the gate page could not draw the embed: ${state.gateError}`).toBe('ready');
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  await page.waitForLoadState('networkidle');
+  await page.addScriptTag({ content: `window.__gateSignature = ${layoutSignature.toString()};` });
+  await page.waitForFunction(
+    (frames) => {
+      const w = window as unknown as { __gateSignature: () => string; __gateLast?: string; __gateSame?: number };
+      const sig = w.__gateSignature();
+      w.__gateSame = sig === w.__gateLast ? (w.__gateSame ?? 0) + 1 : 0;
+      w.__gateLast = sig;
+      return w.__gateSame >= frames;
+    },
+    SETTLE_FRAMES,
+    { polling: 'raf', timeout: 30_000 },
+  );
+  const layout = await page.evaluate(canvasLayout);
+  await page.screenshot({ path: path.join(test.info().project.outputDir, 'readability', `embed-${size[0]}x${size[1]}-${theme}${extra ? '-control' : ''}.png`) });
+  return layout;
+}
+
+test('the embed is gated at the canvas and the container sizes the site uses', () => {
+  // Dropping a size from this list drops it from the gate; this pins the list.
+  expect(EMBED_CANVAS).toEqual({ width: 960, height: 1080 });
+  expect(EMBED_CONTAINERS).toEqual([
+    [1280, 720],
+    [640, 360],
+  ]);
+});
+
+for (const theme of THEMES) {
+  test(`the showcase embed holds its layout at every container size, ${theme}`, async ({ page }) => {
+    // 1. The canvas at its own size: readable, and every widget inside it.
+    const native = await embedAt(page, [EMBED_CANVAS.width, EMBED_CANVAS.height], theme);
+    expect(native.scale).toBe(1);
+    const { findings, widgets } = await page.evaluate(measureReadability);
+    expect(widgets.length).toBeGreaterThan(0);
+    expect(findings.map((f) => `${f.widget} ${f.kind}: ${describeFinding(f)}`), 'the embed canvas does not read cleanly').toEqual([]);
+    expect(native.outside, 'widgets that run past the embed canvas').toEqual([]);
+
+    for (const size of EMBED_CONTAINERS) {
+      const at = await embedAt(page, size, theme);
+      // 2. The largest scale that fits, centred, inside the container.
+      const want = Math.min(size[0] / EMBED_CANVAS.width, size[1] / EMBED_CANVAS.height);
+      expect(at.scale, `${size}: scale`).toBeCloseTo(want, 6);
+      const [left, top, width, height] = at.canvas;
+      expect(width).toBeCloseTo(EMBED_CANVAS.width * want, 1);
+      expect(height).toBeCloseTo(EMBED_CANVAS.height * want, 1);
+      expect(left).toBeGreaterThanOrEqual(-0.5);
+      expect(top).toBeGreaterThanOrEqual(-0.5);
+      expect(left + width).toBeLessThanOrEqual(size[0] + 0.5);
+      expect(top + height).toBeLessThanOrEqual(size[1] + 0.5);
+      expect(Math.abs(left - (size[0] - width - left)), `${size}: centred across`).toBeLessThanOrEqual(1);
+      expect(Math.abs(top - (size[1] - height - top)), `${size}: centred down`).toBeLessThanOrEqual(1);
+      // 3. The same layout, in canvas pixels, as at the canvas's own size.
+      expect(at.widgets, `${size}: the embed reflowed`).toEqual(native.widgets);
+      expect(at.outside).toEqual([]);
+    }
+  });
+}
+
+// The negative control: the same board laid out at the container's width (no fixed canvas),
+// which is the defect the embed prevents. The layout check must see it at both sizes.
+test('the negative control: a reflowing embed fails the layout check', async ({ page }) => {
+  const native = await embedAt(page, [EMBED_CANVAS.width, EMBED_CANVAS.height], 'dark');
+  for (const size of EMBED_CONTAINERS) {
+    const at = await embedAt(page, size, 'dark', '&reflow=1');
+    expect(at.widgets, `${size}: a reflowed board passed the layout check`).not.toEqual(native.widgets);
+  }
+  // And a canvas too short for the board fails the inside-the-canvas check.
+  await page.setViewportSize({ width: 960, height: 600 });
+  await page.goto(`/e2e/page/gate.html?board=sim/sp-dashboard&recording=showcase&theme=dark&embed=960x600`);
+  await page.waitForFunction(() => document.documentElement.dataset.gate === 'ready');
+  await page.waitForSelector('[data-widget]');
+  const short = await page.evaluate(canvasLayout);
+  expect(short.outside.length, 'a board cut off by its canvas passed the inside-the-canvas check').toBeGreaterThan(0);
+});

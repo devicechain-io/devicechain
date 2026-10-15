@@ -99,3 +99,33 @@ export function fixtureJson(): Json {
 export function fixtureRecording(): BoardRecording {
   return parseBoardRecording(fixtureJson());
 }
+
+// The same run as formatVersion 2, with POSITIONS: hauler-01 is located at 0, 10 and 30 s,
+// hauler-02 once at 5 s (with no heading or speed), and the plant never.
+export const FIXTURE_POSITIONS: Array<[number, number, number, number, number | null, number | null]> = [
+  // [device index, t ms, lat, lon, heading, speed]
+  [0, 0, 39.0001, -117.0001, 90, 0],
+  [1, 5_000, 39.0005, -117.0005, null, null],
+  [0, 10_000, 39.0002, -117.0002, 95.5, 4.2],
+  [0, 30_000, 39.0003, -117.0003, 180, 6.25],
+];
+
+export function fixtureJsonV2(): Json {
+  const doc = fixtureJson();
+  doc.formatVersion = 2;
+  doc.channels.locations = true;
+  doc.converter = { version: 1, name: 'fixture' };
+  doc.locations = {
+    d: FIXTURE_POSITIONS.map((r) => r[0]),
+    t: FIXTURE_POSITIONS.map((r) => r[1]),
+    lat: FIXTURE_POSITIONS.map((r) => r[2]),
+    lon: FIXTURE_POSITIONS.map((r) => r[3]),
+    hdg: FIXTURE_POSITIONS.map((r) => r[4]),
+    spd: FIXTURE_POSITIONS.map((r) => r[5]),
+  };
+  return doc;
+}
+
+export function fixtureRecordingV2(): BoardRecording {
+  return parseBoardRecording(fixtureJsonV2());
+}

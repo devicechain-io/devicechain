@@ -1,6 +1,7 @@
 {
   "replayBadge": "Reproducción de una ejecución grabada",
   "replayLabel": "Reproducción de una ejecución grabada · {{date}} · {{runId}}",
+  "embedLabelRetimed": "Reproducción de una ejecución grabada · horas trasladadas al momento actual",
   "loading": "Cargando la grabación…",
   "errorTitle": "No se puede mostrar esta grabación",
   "errorMissingUrl": "No se indicó la dirección de la grabación.",

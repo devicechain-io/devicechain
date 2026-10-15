@@ -150,6 +150,27 @@ describe('kiosk mode', () => {
     Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: undefined });
   });
 
+  it('chrome=0 also hides the floating connection badge and fullscreen button, for a capture', async () => {
+    landOn('?dashboard=wall&kiosk=1&chrome=0');
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true });
+    serve();
+    render(<App />);
+    await signIn();
+    expect(screen.getByTestId('board')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('view:enterFullscreen') })).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: undefined });
+  });
+
+  it('chrome=0 never hides that a board is paused', async () => {
+    landOn('?dashboard=wall&kiosk=1&chrome=0&paused=1');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(screen.getByTestId('board')).toBeTruthy();
+    expect(document.body.textContent).toContain(t('view:paused'));
+  });
+
   it('without kiosk=1 the chrome is there', async () => {
     landOn('?dashboard=wall');
     serve();

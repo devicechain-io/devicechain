@@ -86,17 +86,32 @@ describe('mounting into a host page', () => {
       m[1].split(',').map((s) => s.trim()).filter(Boolean),
     );
     expect(selectors.length).toBeGreaterThan(1);
-    for (const s of selectors) expect(s, s).toMatch(/^\.board-replay-root(\s|$)/);
+    for (const s of selectors) expect(s, s).toMatch(/^\.board-replay-root(\[data-theme='light'\])?(\s|$)/);
   });
 
   it('repeats the brand tokens it needs exactly as the generated brand stylesheet has them', () => {
     const brand = readFileSync(path.resolve(import.meta.dirname, '../../../packages/brand/css/shadcn.css'), 'utf8');
     const dark = brand.slice(brand.indexOf('.dark {'));
+    const light = brand.slice(brand.indexOf(':root {'), brand.indexOf('.dark {'));
+    const lightCss = themeCss.slice(themeCss.indexOf("[data-theme='light'] {"));
     for (const token of ['--primary', '--primary-foreground', '--ring']) {
       const re = new RegExp(`${token}:\\s*([^;]+);`);
       const want = dark.match(re)?.[1];
       expect(want, `${token} in the brand .dark block`).toBeTruthy();
       expect(themeCss.match(re)?.[1], token).toBe(want);
+      expect(lightCss.match(re)?.[1], `light ${token}`).toBe(light.match(re)?.[1]);
+    }
+  });
+
+  it('takes its light tokens from the viewer, so a light replay reads the colours /dash ships', () => {
+    const dash = readFileSync(path.resolve(import.meta.dirname, '../../dashboard/src/theme.css'), 'utf8');
+    const dashLight = dash.slice(dash.indexOf(':root {'), dash.indexOf('.dark {'));
+    const lightCss = themeCss.slice(themeCss.indexOf("[data-theme='light'] {"));
+    const tokens = ['--background', '--foreground', '--card', '--card-foreground', '--muted', '--muted-foreground', '--destructive', '--border', '--input'];
+    for (const token of tokens) {
+      const re = new RegExp(`${token}:\\s*([^;]+);`);
+      expect(dashLight.match(re)?.[1], `${token} in /dash's light block`).toBeTruthy();
+      expect(lightCss.match(re)?.[1], token).toBe(dashLight.match(re)?.[1]);
     }
   });
 });

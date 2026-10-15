@@ -1,6 +1,7 @@
 {
   "replayBadge": "Replay of a recorded run",
   "replayLabel": "Replay of a recorded run · {{date}} · {{runId}}",
+  "embedLabelRetimed": "Replay of a recorded run · times moved to now",
   "loading": "Loading the recording…",
   "errorTitle": "This recording cannot be shown",
   "errorMissingUrl": "No recording address was given.",

@@ -22,9 +22,12 @@ import {
   boardBytes,
   excerptOnCurrentBoardText,
   fixtureRecordingText,
+  SHOWCASE_PATH,
   manualTicker,
+  showcaseOnCurrentBoardText,
   stubFetch,
 } from './testing/harness';
+import { readFileSync } from 'node:fs';
 import { canvasStrings, liveMatches, readableStrings } from './testing/live-scan';
 
 // Counts every data source the app builds (a seek must build exactly one).
@@ -40,6 +43,12 @@ vi.mock('@devicechain/dashboards', async (importOriginal) => {
   return { ...actual, RecordedDataSource: CountingSource };
 });
 const { RecordedDataSource } = dashboards;
+
+// jsdom has no WebGL: a recording WITH positions (the showcase) draws its map through the
+// widget's own fallback panel, the one it shows when the renderer cannot be loaded.
+vi.mock('maplibre-gl', () => {
+  throw new Error('jsdom: no WebGL for the map renderer');
+});
 
 const canvasText = (globalThis as unknown as { __canvasText: string[] }).__canvasText;
 
@@ -474,6 +483,45 @@ describe('selection', () => {
     expect(pick().value).toBe('sp-hauler-02');
     await seekTo(40_000);
     expect(pick().value).toBe('sp-hauler-02');
+  });
+});
+
+describe('the showcase recording (format 2)', () => {
+  // The stat cards' aggregates come from the recording itself (RecordedDataSource folds its own
+  // rows into the buckets a card asks for). The oracle here is the excerpt's rows, read straight
+  // from the file and folded by hand over the window a card over an hour reads: whole minutes,
+  // ending at the last minute boundary before the cursor.
+  it('computes Avg and Peak throughput from the recorded rows, exactly', async () => {
+    const at = JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8')).chapters[0].tMs as number;
+    const text = await showcaseOnCurrentBoardText();
+    await mountApp(text);
+    await seekTo(at);
+    await settle();
+    const doc = JSON.parse(text);
+    const start = Date.parse(doc.startedAtUtc);
+    const end = Math.floor((start + at) / 60_000) * 60_000;
+    const from = Math.ceil((end - 3_600_000) / 60_000) * 60_000;
+    const n = doc.channels.measurements.indexOf('throughput_tph');
+    const values: number[] = [];
+    doc.measurements.t.forEach((t: number, i: number) => {
+      if (doc.measurements.n[i] === n && start + t >= from && start + t <= end - 1 && t <= at) values.push(doc.measurements.v[i]);
+    });
+    expect(values.length).toBeGreaterThan(0);
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const card = (id: string) => document.querySelector(`[data-widget="${id}"]`)?.textContent ?? '';
+    expect(card('sp-plant-throughput-avg')).toContain(`${Math.round(avg)}t/h`);
+    expect(card('sp-plant-throughput-max')).toContain(`${Math.round(Math.max(...values))}t/h`);
+    expect(document.body.textContent).not.toMatch(/cannot compute/i);
+  });
+
+  it('places the machines on the map from the recorded positions', async () => {
+    await mountApp(await showcaseOnCurrentBoardText());
+    await seekTo(JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8')).chapters[0].tMs);
+    await settle();
+    const map = document.querySelector('[data-widget="sp-map"]')?.textContent ?? '';
+    expect(map).not.toContain('Not in this recording');
+    expect(map).not.toContain('No positions reported');
+    expect(map).toContain('positions are shown');
   });
 });
 

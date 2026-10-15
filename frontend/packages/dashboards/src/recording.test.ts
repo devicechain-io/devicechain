@@ -77,7 +77,7 @@ describe('parseBoardRecording', () => {
 
   it('refuses a wrong kind and an unsupported or absent format version', () => {
     expect(refusal((d) => (d.kind = 'something-else')).path).toBe('$.kind');
-    expect(refusal((d) => (d.formatVersion = 2)).path).toBe('$.formatVersion');
+    expect(refusal((d) => (d.formatVersion = 3)).path).toBe('$.formatVersion');
     expect(refusal((d) => (d.formatVersion = '1')).path).toBe('$.formatVersion');
   });
 

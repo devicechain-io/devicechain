@@ -1,6 +1,7 @@
 {
   "replayBadge": "已录制运行的回放",
   "replayLabel": "已录制运行的回放 · {{date}} · {{runId}}",
+  "embedLabelRetimed": "已录制运行的回放 · 时间已平移至当前",
   "loading": "正在加载录制内容…",
   "errorTitle": "无法显示此录制内容",
   "errorMissingUrl": "未提供录制文件的地址。",

@@ -43,10 +43,13 @@ describe('chrome catalogs', () => {
     }
   });
 
-  it('loads the same bundles that are on disk', async () => {
+  it('loads the same bundles that are on disk, and registers each one a page asks for', async () => {
     for (const locale of SUPPORTED_LOCALES) {
       expect(await CATALOG_LOADERS[locale]()).toEqual(files[`./locales/${locale}/chrome.json`].default);
+      await setReplayLocale(locale);
+      expect(i18n.getResourceBundle(locale, 'chrome')).toEqual(files[`./locales/${locale}/chrome.json`].default);
     }
+    await setReplayLocale(DEFAULT_LOCALE);
   });
 
   it('never uses the word "live", in any locale', () => {

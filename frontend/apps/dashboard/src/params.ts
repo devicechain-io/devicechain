@@ -7,6 +7,9 @@
 //
 //   dashboard  the dashboard token to load right after sign-in
 //   kiosk      1 | true  hide the chrome and offer fullscreen
+//   chrome     0 | false  with kiosk: also hide the kiosk's own floating controls (the
+//                         connection badge and the fullscreen button), for a capture or an
+//                         embed that frames the board itself. A paused board still says so.
 //   theme      dark | light
 //   density    compact | comfortable | wall
 //   range      15m | 1h | 6h | 24h | 7d  the time range the board opens at
@@ -25,6 +28,8 @@ export type DashDensity = 'compact' | 'comfortable' | 'wall';
 export interface DashParams {
   dashboard: string | null;
   kiosk: boolean;
+  // With kiosk: whether the kiosk's floating controls show (true unless chrome=0).
+  kioskChrome: boolean;
   theme: DashTheme | null;
   density: DashDensity | null;
   // The time range's span in seconds (one of the presets), or null for the board's own default.
@@ -61,6 +66,13 @@ export function parseDashParams(
     else if (!FALSE_VALUES.includes(k)) bad('kiosk', k, '1 or 0');
   }
 
+  let kioskChrome = true;
+  const c = q.get('chrome');
+  if (c !== null) {
+    if (FALSE_VALUES.includes(c)) kioskChrome = false;
+    else if (!TRUE_VALUES.includes(c)) bad('chrome', c, '1 or 0');
+  }
+
   let theme: DashTheme | null = null;
   const t = q.get('theme');
   if (t !== null) {
@@ -90,5 +102,5 @@ export function parseDashParams(
     else if (p !== '0') bad('paused', p, '1 or 0');
   }
 
-  return { dashboard, kiosk, theme, density, range, paused };
+  return { dashboard, kiosk, kioskChrome, theme, density, range, paused };
 }

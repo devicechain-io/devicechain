@@ -11,11 +11,15 @@
 //   data-board      the board definition it was captured against (same-origin); defaults
 //                   to sp-dashboard.json beside the recording
 //   data-locale     the page's language (en, es, zh-CN); defaults to <html lang>
+//   data-theme      dark (the default) or light
+//   data-embed      1 for the fixed-canvas embed (embed.ts lists it and its options, and
+//                   how a page that IS the embed sets them on its URL instead)
 
 import { StrictMode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import ReplayApp from './App';
+import { parseEmbedOptions, parseTheme } from './embed';
 import { setReplayLocale } from './i18n/config';
 import themeCss from './theme.css?inline';
 
@@ -48,10 +52,12 @@ export async function mountBoardReplay(el: HTMLElement): Promise<Root> {
   // (Read-only: the page's language is a default for the replay, never something it sets.)
   const recordingUrl = el.dataset.recording ?? null;
   const boardUrl = el.dataset.board ?? defaultBoardUrl(recordingUrl);
+  const embed = parseEmbedOptions(el.dataset, location.search);
+  const theme = parseTheme(el.dataset, location.search);
   const root = createRoot(el);
   root.render(
     <StrictMode>
-      <ReplayApp recordingUrl={recordingUrl} boardUrl={boardUrl} />
+      <ReplayApp recordingUrl={recordingUrl} boardUrl={boardUrl} embed={embed} theme={theme} />
     </StrictMode>,
   );
   return root;

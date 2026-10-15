@@ -16,11 +16,13 @@ import {
   type RecordedClock,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { WidgetRegistry } from '@devicechain/host-widgets';
 import { Board } from './Board';
+import type { EmbedOptions, ReplayTheme } from './embed';
+import { EmbedLabel } from './EmbedLabel';
 import { loadReplay, ReplayLoadError, type LoadedReplay } from './load';
 import { ProvenancePanel, ReplayHeader } from './ReplayHeader';
 import { TransportBar, replayState, useClockView } from './TransportBar';
@@ -39,9 +41,15 @@ export interface ReplayAppProps {
   ticker?: ClockTicker;
   // The widget registry to parse and render with; defaults to the deployment's.
   registry?: WidgetRegistry;
+  // The embed mode (embed.ts), or nothing for the full replay page.
+  embed?: EmbedOptions | null;
+  theme?: ReplayTheme;
 }
 
-export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker, registry }: ReplayAppProps) {
+// The embed's canvas and player are loaded only in embed mode.
+const EmbedPlayer = lazy(() => import('./EmbedPlayer'));
+
+export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker, registry, embed, theme = 'dark' }: ReplayAppProps) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [rootEl, setRootEl] = useState<HTMLElement | null>(null);
@@ -65,11 +73,38 @@ export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, tic
   }, [recordingUrl, boardUrl]);
 
   const recording = load.status === 'ready' ? load.replay.recording : null;
+  if (embed) {
+    // The embed: a fixed canvas holding the replay label and the board, and nothing else.
+    return (
+      <div
+        ref={setRootEl}
+        className="board-replay-root"
+        lang={i18n.language}
+        data-theme={theme}
+        data-embed=""
+        style={{ minHeight: 0 }}
+        data-testid="replay-root"
+      >
+        {load.status === 'ready' ? (
+          <Suspense fallback={<EmbedLabel retimed={embed.retime} />}>
+            <EmbedPlayer replay={load.replay} options={embed} ticker={ticker} themeRoot={rootEl ?? undefined} />
+          </Suspense>
+        ) : (
+          // Before the canvas: the label, then loading or the error, filling the host box.
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+            <EmbedLabel retimed={embed.retime} />
+            {load.status === 'loading' ? <StatusBody /> : <ErrorBody error={load.error} />}
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div
       ref={setRootEl}
       className="board-replay-root"
       lang={i18n.language}
+      data-theme={theme}
       style={{ display: 'flex', flexDirection: 'column' }}
       data-testid="replay-root"
     >
