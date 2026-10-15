@@ -58,6 +58,9 @@ var readSuperuserPassword = func(ctx context.Context, kubeContext, instance stri
 	if source == bootstrap.BindingUnreadable {
 		return "", fmt.Errorf("the record of which cluster instance %q lives on could not be read; pass --kube-context", instance)
 	}
+	if source == bootstrap.BindingConflict {
+		return "", fmt.Errorf("--kube-context %q is not the cluster instance %q is recorded in (%s); drop the flag or pass the recorded context", kubeContext, instance, binding.KubeContext)
+	}
 	return bootstrap.ReadSuperuserPassword(ctx, binding.KubeContext, instance)
 }
 

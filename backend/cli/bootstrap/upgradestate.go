@@ -197,6 +197,17 @@ func hydrateUpgradeState(
 // path simply never set.
 func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOptions) error {
 	applyDeclaration(st, inst.Spec)
+	// 🔴 THE BINDING'S FACTS COME FROM THE DECLARATION, which bootstrap wrote from the very
+	// binding it rendered with (InstanceSpecFrom) and which ValidateInstanceSpecChange
+	// holds fixed. The local record is a machine's memory and a flag is an operator's
+	// say-so; neither may change what the instance renders. Managed decides the
+	// object-store default, so an upgrade resolved through a hand-named context (no record
+	// on this machine, or none that matches) would otherwise drop the colocate default and
+	// render a different profile than bootstrap did.
+	st.Binding.Managed = inst.Spec.Managed
+	if inst.Spec.Cluster != "" {
+		st.Binding.Cluster = inst.Spec.Cluster
+	}
 	st.InstanceUID = string(inst.GetUID())
 	if st.InstanceUID == "" {
 		// The same refusal the bootstrap path makes, for the same reason: every

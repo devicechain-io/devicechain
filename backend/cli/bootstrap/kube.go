@@ -79,6 +79,9 @@ const (
 	// knew" and "we knew and the answer is unusable" call for different behaviour, and
 	// collapsing them is what let a corrupt file become a confident deletion.
 	BindingUnreadable BindingSource = "unreadable"
+	// BindingConflict: a record exists and --kube-context names a DIFFERENT context than
+	// it. The binding returned is the RECORDED one, so a refusal can name both.
+	BindingConflict BindingSource = "conflict"
 )
 
 // ResolveBinding resolves which cluster to act on for an instance that already
@@ -100,14 +103,35 @@ const (
 //  3. The guess. Kept so an instance bootstrapped before records existed is still
 //     actionable — degrading LOUDLY beats refusing to touch a live instance.
 func ResolveBinding(opts Options) (ClusterBinding, BindingSource) {
+	rec, err := ReadInstanceRecord(opts.Instance)
 	if opts.KubeContext != "" {
+		// 🔴 A FLAG THAT NAMES THE RECORDED CLUSTER IS THE RECORD, NOT A DIFFERENT BINDING.
+		// This used to return a hand-built Managed:false binding for ANY flag, so
+		// `dcctl upgrade local guide --kube-context kind-devicechain` rendered an instance
+		// that was not the one the same command renders without the flag: Managed decides
+		// the object-store default, so the colocate default vanished and the chart refused
+		// a ReadWriteOnce claim mounted by two pods. The flag says where to look; it must
+		// not rewrite what is known about what is there.
+		if err == nil {
+			if rec.KubeContext == opts.KubeContext {
+				return rec.Binding(), BindingFromRecord
+			}
+			// 🔴 A DIFFERENT CONTEXT THAN THE ONE RECORDED IS REFUSED, NOT HONOURED. Acting
+			// on it would render (or tear down) an instance against a cluster it was not
+			// bound to, under a profile derived from the wrong binding.
+			return rec.Binding(), BindingConflict
+		}
+		if !errors.Is(err, ErrNoInstanceRecord) {
+			return ClusterBinding{}, BindingUnreadable
+		}
+		// No record: the operator's word is all there is. Managed:false because a context
+		// named by hand is, by definition, not the cluster dcctl named by convention.
 		return ClusterBinding{
 			Cluster:     clusterNameFromKindContext(opts.KubeContext),
 			KubeContext: opts.KubeContext,
 			Managed:     false,
 		}, BindingFromFlag
 	}
-	rec, err := ReadInstanceRecord(opts.Instance)
 	switch {
 	case err == nil:
 		return rec.Binding(), BindingFromRecord
