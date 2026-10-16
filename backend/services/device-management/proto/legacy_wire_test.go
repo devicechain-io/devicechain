@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -89,7 +90,7 @@ func TestTheCurrentFormatCarriesTheLegacyEventInFewerBytes(t *testing.T) {
 		fromLegacy, err := UnmarshalResolvedEvent(legacy)
 		require.NoError(t, err, name)
 
-		current, err := MarshalResolvedEvent(fromLegacy)
+		current, err := MarshalResolvedEventAs(fromLegacy, eventtime.WireCompact)
 		require.NoError(t, err, name)
 		require.Equal(t, currentResolvedSize[name], len(current), "%s: written in %d bytes (legacy %d)", name, len(current), len(legacy))
 
@@ -137,7 +138,7 @@ func TestResolvedInstantsRoundTripToTheNanosecond(t *testing.T) {
 			EventType: esmodel.Measurement,
 			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
 				{OccurredTime: at.Add(-3), Entries: []model.ResolvedMeasurementEntry{{Name: "a", Value: "1"}}}}}}
-		encoded, err := MarshalResolvedEvent(ev)
+		encoded, err := MarshalResolvedEventAs(ev, eventtime.WireCompact)
 		require.NoError(t, err)
 		got, err := UnmarshalResolvedEvent(encoded)
 		require.NoError(t, err)

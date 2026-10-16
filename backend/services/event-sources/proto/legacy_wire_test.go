@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -100,7 +101,7 @@ func TestTheCurrentFormatCarriesTheLegacyInboundEventInFewerBytes(t *testing.T) 
 		fromLegacy, err := UnmarshalUnresolvedEvent(raw)
 		require.NoError(t, err, name)
 
-		current, err := MarshalUnresolvedEvent(fromLegacy)
+		current, err := MarshalUnresolvedEventAs(fromLegacy, eventtime.WireCompact)
 		require.NoError(t, err, name)
 		require.Equal(t, currentInboundSize[name], len(current), "%s: written in %d bytes (legacy %d)", name, len(current), len(raw))
 
@@ -119,7 +120,7 @@ func TestTheCurrentFormatCarriesTheLegacyInboundEventInFewerBytes(t *testing.T) 
 	// The binary seal the current format carries is the one that opens.
 	raw, _ := hex.DecodeString(legacyInboundHex["token measurement"])
 	ev, _ := UnmarshalUnresolvedEvent(raw)
-	current, err := MarshalUnresolvedEvent(ev)
+	current, err := MarshalUnresolvedEventAs(ev, eventtime.WireCompact)
 	require.NoError(t, err)
 	var pb PUnresolvedEvent
 	require.NoError(t, proto.Unmarshal(current, &pb))
@@ -159,7 +160,7 @@ func TestInboundInstantsRoundTripToTheNanosecond(t *testing.T) {
 			EventType: model.Measurement,
 			Payload: &model.UnresolvedMeasurementsPayload{Entries: []model.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"a": "1"}, OccurredTime: &entryAt}}}}
-		encoded, err := MarshalUnresolvedEvent(ev)
+		encoded, err := MarshalUnresolvedEventAs(ev, eventtime.WireCompact)
 		require.NoError(t, err)
 		got, err := UnmarshalUnresolvedEvent(encoded)
 		require.NoError(t, err)

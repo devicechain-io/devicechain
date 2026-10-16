@@ -13,6 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -30,7 +31,40 @@ func referenceOptionalString(s string) *string {
 	return &s
 }
 
-func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload) ([]byte, error) {
+// referenceInstant is an instant as the oracle writes it, decided here rather than by the
+// code it judges. Legacy is the string, exactly as the release before the count formatted
+// it: an entry's in UTC, the envelope's in its own offset. Compact is the count when it
+// holds the instant, else the string in UTC.
+func referenceInstant(at time.Time, format eventtime.WireFormat, entry bool) (*int64, *string) {
+	if format == eventtime.WireCompact {
+		if n, ok := eventtime.WireNanos(at); ok {
+			return &n, nil
+		}
+	}
+	s := oracleString(at, format == eventtime.WireLegacy && !entry)
+	return nil, &s
+}
+
+// oracleString is the string form, restated here rather than shared with the code it judges:
+// RFC 3339 carries the years 0000 to 9999 in the offset the string is written in, so the
+// preferred offset (UTC, or for a legacy envelope the instant's own) is used when it can
+// carry the instant, and the other one otherwise.
+func oracleString(at time.Time, ownOffset bool) string {
+	fits := func(t time.Time) bool { return t.Year() >= 0 && t.Year() <= 9999 }
+	first, second := at.UTC(), at
+	if ownOffset {
+		first, second = at, at.UTC()
+	}
+	if fits(first) || !fits(second) {
+		return first.Format(time.RFC3339Nano)
+	}
+	return second.Format(time.RFC3339Nano)
+}
+
+// bothFormats is every format a producer writes, which every equivalence below holds.
+var bothFormats = []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact}
+
+func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
 	pbpayload := &PResolvedMeasurementsPayload{}
 	for _, mxsentry := range payload.Entries {
 		pmxentries := make([]*PResolvedMeasurementEntry, 0)
@@ -43,7 +77,7 @@ func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayl
 				DataType:   mxentry.DataType,
 			})
 		}
-		nanos, text := marshalEntryTime(mxsentry.OccurredTime)
+		nanos, text := referenceInstant(mxsentry.OccurredTime, format, true)
 		pbpayload.Entries = append(pbpayload.Entries, &PResolvedMeasurementsEntry{
 			Measurements: pmxentries,
 			Occurred:     nanos,
@@ -53,13 +87,13 @@ func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayl
 	return proto.Marshal(pbpayload)
 }
 
-func referenceMarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
+func referenceMarshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
 	var pybytes []byte
 	var err error
 	if mx, ok := event.Payload.(*model.ResolvedMeasurementsPayload); ok && event.EventType == esmodel.Measurement {
-		pybytes, err = referenceMarshalMeasurementsPayload(mx)
+		pybytes, err = referenceMarshalMeasurementsPayload(mx, format)
 	} else {
-		pybytes, err = MarshalResolvedPayload(event.EventType, event.Payload)
+		pybytes, err = MarshalResolvedPayload(event.EventType, event.Payload, format)
 	}
 	if err != nil {
 		return nil, err
@@ -76,8 +110,8 @@ func referenceMarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	for _, m := range event.ScopeMemberships {
 		memberships = append(memberships, &PScopeMembership{GroupToken: m.GroupToken, Version: m.Version})
 	}
-	occurred, occurredText := marshalEntryTime(event.OccurredTime)
-	processed, processedText := marshalEntryTime(event.ProcessedTime)
+	occurred, occurredText := referenceInstant(event.OccurredTime, format, false)
+	processed, processedText := referenceInstant(event.ProcessedTime, format, false)
 	deref := func(s *string) string {
 		if s == nil {
 			return ""
@@ -255,10 +289,21 @@ func resolvedShapes() map[string]*model.ResolvedEvent {
 // and to every consumer's decoder.
 func TestResolvedEventWireMatchesProtoMarshal(t *testing.T) {
 	for name, event := range resolvedShapes() {
-		t.Run(name, func(t *testing.T) {
-			want, err := referenceMarshalResolvedEvent(event)
+		for _, format := range bothFormats {
+			t.Run(name+"/"+format.String(), func(t *testing.T) {
+				assertResolvedWireMatchesReference(t, event, format)
+			})
+		}
+	}
+}
+
+func assertResolvedWireMatchesReference(t *testing.T, event *model.ResolvedEvent, format eventtime.WireFormat) {
+	t.Helper()
+	{
+		{
+			want, err := referenceMarshalResolvedEvent(event, format)
 			require.NoError(t, err)
-			got, err := MarshalResolvedEvent(event)
+			got, err := MarshalResolvedEventAs(event, format)
 			require.NoError(t, err)
 			require.Equal(t, want, got, "the writer's bytes differ from proto.Marshal's")
 
@@ -270,13 +315,13 @@ func TestResolvedEventWireMatchesProtoMarshal(t *testing.T) {
 			assert.Equal(t, wantEv, gotEv)
 
 			if mx, ok := event.Payload.(*model.ResolvedMeasurementsPayload); ok {
-				wantPayload, err := referenceMarshalMeasurementsPayload(mx)
+				wantPayload, err := referenceMarshalMeasurementsPayload(mx, format)
 				require.NoError(t, err)
-				gotPayload, err := MarshalPayloadForMeasurementsEvent(mx)
+				gotPayload, err := MarshalPayloadForMeasurementsEvent(mx, format)
 				require.NoError(t, err)
 				require.Equal(t, wantPayload, gotPayload, "the payload writer's bytes differ from proto.Marshal's")
 			}
-		})
+		}
 	}
 }
 
@@ -296,10 +341,12 @@ func TestResolvedEventWireRefusesWhatProtoMarshalRefuses(t *testing.T) {
 		"unknown event type": {EventType: esmodel.EventType(99)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, refErr := referenceMarshalResolvedEvent(event)
-			require.Error(t, refErr, "the oracle accepts this; the test's premise is wrong")
-			_, err := MarshalResolvedEvent(event)
-			require.Error(t, err)
+			for _, format := range bothFormats {
+				_, refErr := referenceMarshalResolvedEvent(event, format)
+				require.Error(t, refErr, "the oracle accepts this; the test's premise is wrong")
+				_, err := MarshalResolvedEventAs(event, format)
+				require.Error(t, err, format)
+			}
 		})
 	}
 }
@@ -339,15 +386,17 @@ func TestResolvedEventWireRefusesInvalidUTF8(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			event := fresh()
-			_, err := referenceMarshalResolvedEvent(event)
+			_, err := referenceMarshalResolvedEvent(event, eventtime.WireCompact)
 			require.NoError(t, err)
 			spoil(event)
-			_, err = referenceMarshalResolvedEvent(event)
+			_, err = referenceMarshalResolvedEvent(event, eventtime.WireCompact)
 			require.Error(t, err, "proto.Marshal no longer refuses invalid UTF-8 here: the writer's refusal has no premise")
-			_, err = MarshalResolvedEvent(event)
-			require.ErrorIs(t, err, errResolvedNotUTF8)
+			for _, format := range bothFormats {
+				_, err = MarshalResolvedEventAs(event, format)
+				require.ErrorIs(t, err, errResolvedNotUTF8, format)
+			}
 			if strings.HasPrefix(name, "reading") {
-				_, err = MarshalPayloadForMeasurementsEvent(event.Payload.(*model.ResolvedMeasurementsPayload))
+				_, err = MarshalPayloadForMeasurementsEvent(event.Payload.(*model.ResolvedMeasurementsPayload), eventtime.WireCompact)
 				require.ErrorIs(t, err, errResolvedNotUTF8)
 			}
 		})
@@ -370,7 +419,7 @@ func TestResolvedEventWireAllocatesOnlyItsOutput(t *testing.T) {
 				{OccurredTime: at, Entries: readings(n)}}},
 		}
 		allocs := testing.AllocsPerRun(100, func() {
-			if _, err := MarshalResolvedEvent(event); err != nil {
+			if _, err := MarshalResolvedEventAs(event, eventtime.WireCompact); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -379,7 +428,7 @@ func TestResolvedEventWireAllocatesOnlyItsOutput(t *testing.T) {
 		}
 		payload := event.Payload.(*model.ResolvedMeasurementsPayload)
 		allocs = testing.AllocsPerRun(100, func() {
-			if _, err := MarshalPayloadForMeasurementsEvent(payload); err != nil {
+			if _, err := MarshalPayloadForMeasurementsEvent(payload, eventtime.WireCompact); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -465,13 +514,17 @@ func FuzzResolvedEventWire(f *testing.F) {
 			refused = event.EventType != esmodel.Measurement
 		}
 
-		want, wantErr := referenceMarshalResolvedEvent(event)
-		got, err := MarshalResolvedEvent(event)
-		if (wantErr == nil) != (err == nil) {
-			t.Fatalf("proto.Marshal err %v, writer err %v", wantErr, err)
-		}
-		if err == nil && !bytes.Equal(want, got) {
-			t.Fatalf("bytes differ:\n proto.Marshal %x\n writer        %x", want, got)
+		var got []byte
+		var err error
+		for _, format := range bothFormats {
+			want, wantErr := referenceMarshalResolvedEvent(event, format)
+			got, err = MarshalResolvedEventAs(event, format)
+			if (wantErr == nil) != (err == nil) {
+				t.Fatalf("%s: proto.Marshal err %v, writer err %v", format, wantErr, err)
+			}
+			if err == nil && !bytes.Equal(want, got) {
+				t.Fatalf("%s: bytes differ:\n proto.Marshal %x\n writer        %x", format, want, got)
+			}
 		}
 		if refused && err == nil {
 			t.Fatalf("event type %v with a measurements payload was written", event.EventType)
@@ -480,8 +533,8 @@ func FuzzResolvedEventWire(f *testing.F) {
 		for _, s := range []string{source, device, alt, anchor, token, group, value, unit} {
 			allValid = allValid && utf8.ValidString(s)
 		}
-		if wantErr != nil && allValid && !refused {
-			t.Fatalf("proto.Marshal refused valid UTF-8: %v", wantErr)
+		if err != nil && allValid && !refused {
+			t.Fatalf("refused valid UTF-8: %v", err)
 		}
 	})
 }

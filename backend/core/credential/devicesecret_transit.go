@@ -207,3 +207,23 @@ func SealedFromText(text string) []byte {
 	// Never nil, even for an empty text: a present seal stays present, and fails to open.
 	return append(make([]byte, 0, len(text)), text...)
 }
+
+// SealedText is the text form of a binary seal, dcs2$<key id, 8 hex>$<base64 raw std>:
+// exactly the string a release before the binary form wrote for the same seal, and the
+// form SealedFromText reads back to these bytes. Nothing is re-sealed.
+//
+// It exists for the producer that writes the legacy wire format (eventtime.WireLegacy),
+// which a consumer still on that release must be able to open. A value that is not a
+// binary seal is refused: a producer has only ever sealed it itself, so anything else is
+// a defect, and writing it as text would hand the consumer a seal that cannot open.
+//
+// 🔴 Delete it with SealedFromText, once no release that writes the legacy format is
+// supported.
+func SealedText(sealed []byte) (string, error) {
+	if len(sealed) <= sealedHeaderN || sealed[0] != sealedMagic {
+		return "", ErrSealedSecretInvalid
+	}
+	return strings.Join([]string{sealedTextPrefix,
+		hex.EncodeToString(sealed[1:sealedHeaderN]),
+		base64.RawStdEncoding.EncodeToString(sealed[sealedHeaderN:])}, sealedTextSep), nil
+}

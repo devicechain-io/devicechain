@@ -10,6 +10,7 @@ import (
 	"time"
 
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -31,7 +32,7 @@ func TestDetectionTakesALegacyMessageAsTheCurrentFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := dmproto.MarshalResolvedEvent(ev)
+	current, err := dmproto.MarshalResolvedEventAs(ev, eventtime.WireCompact)
 	if err != nil {
 		t.Fatal(err)
 	}

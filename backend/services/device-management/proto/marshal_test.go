@@ -10,7 +10,9 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -56,11 +58,11 @@ func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
 		},
 	}
 
-	bytes, err := MarshalResolvedEvent(event)
-	assert.NoError(t, err)
+	bytes, err := MarshalResolvedEventAs(event, eventtime.WireCompact)
+	require.NoError(t, err)
 
 	got, err := UnmarshalResolvedEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip: got %s want %s", got.OccurredTime, occurred)
 	assert.True(t, got.ProcessedTime.Equal(processed), "processed time round-trip: got %s want %s", got.ProcessedTime, processed)
 	// The full anchor set survives the round-trip.
@@ -89,10 +91,10 @@ func TestMarshalResolvedEventEmptyProfileScope(t *testing.T) {
 		Payload:           &model.ResolvedMeasurementsPayload{},
 	}
 
-	bytes, err := MarshalResolvedEvent(event)
-	assert.NoError(t, err)
+	bytes, err := MarshalResolvedEventAs(event, eventtime.WireCompact)
+	require.NoError(t, err)
 	got, err := UnmarshalResolvedEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "", got.DeviceTypeToken)
 	assert.Equal(t, "", got.ProfileVersionToken)
 }
@@ -128,10 +130,10 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 	}
 
 	bytes, err := MarshalAlarmStateChangeEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	got, err := UnmarshalAlarmStateChangeEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip (nanos): got %s want %s", got.OccurredTime, occurred)
 	assert.True(t, got.RaisedTime.Equal(raised), "raised time round-trip (nanos): got %s want %s", got.RaisedTime, raised)
 	// Zero the times so the rest of the struct can be compared by value.
@@ -153,9 +155,9 @@ func TestMarshalAlarmStateChangeEventRoundTrips(t *testing.T) {
 		OccurredTime:   occurred,
 	}
 	bytes, err = MarshalAlarmStateChangeEvent(bare)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	gotBare, err := UnmarshalAlarmStateChangeEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Nil(t, gotBare.AcknowledgedBy)
 	assert.Nil(t, gotBare.LastValue)
 	assert.Equal(t, "", gotBare.PreviousSeverity)
@@ -182,10 +184,10 @@ func TestMarshalDetectionRulesPublishedEventRoundTrips(t *testing.T) {
 		PublishedAt: publishedAt,
 	}
 	bytes, err := MarshalDetectionRulesPublishedEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	got, err := UnmarshalDetectionRulesPublishedEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "sensor-profile@3", got.ProfileVersionToken)
 	assert.Equal(t, event.Rules, got.Rules, "every rule's token + opaque definition must round-trip in order")
 	assert.True(t, got.PublishedAt.Equal(publishedAt), "published-at round-trip (nanos): got %s want %s", got.PublishedAt, publishedAt)
@@ -203,10 +205,10 @@ func TestMarshalDeviceRosterEventRoundTrips(t *testing.T) {
 		ExpectedSince: since,
 	}
 	bytes, err := MarshalDeviceRosterEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	got, err := UnmarshalDeviceRosterEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "device-001", got.DeviceToken)
 	assert.Equal(t, "sensor-profile", got.ProfileToken)
 	assert.True(t, got.ExpectedSince.Equal(since), "expected-since round-trip (nanos): got %s want %s", got.ExpectedSince, since)
@@ -214,17 +216,17 @@ func TestMarshalDeviceRosterEventRoundTrips(t *testing.T) {
 
 	event.Disabled = true
 	bytes, err = MarshalDeviceRosterEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	got, err = UnmarshalDeviceRosterEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, got.Disabled, "the disabled flag survives the wire")
 	assert.False(t, got.Enabled)
 
 	event.Disabled, event.Enabled = false, true
 	bytes, err = MarshalDeviceRosterEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	got, err = UnmarshalDeviceRosterEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, got.Enabled, "the enable-transition flag survives the wire")
 }
 
@@ -236,7 +238,7 @@ func TestUnmarshalDeviceRosterEventWithoutDisabledField(t *testing.T) {
 	old = protowire.AppendTag(old, 2, protowire.BytesType)
 	old = protowire.AppendString(old, "sensor-profile")
 	got, err := UnmarshalDeviceRosterEvent(old)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "device-001", got.DeviceToken)
 	assert.False(t, got.Disabled)
 }
@@ -252,10 +254,10 @@ func TestMarshalDeviceAttributeEventRoundTrips(t *testing.T) {
 		UpdatedAt:   at,
 	}
 	bytes, err := MarshalDeviceAttributeEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	got, err := UnmarshalDeviceAttributeEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "device-001", got.DeviceToken)
 	assert.Equal(t, "maxTemp", got.AttrKey)
 	assert.Equal(t, "SERVER", got.Scope)
@@ -270,9 +272,9 @@ func TestMarshalDeviceAttributeEventRoundTrips(t *testing.T) {
 func TestMarshalDeviceAttributeZeroValueIsNotRemoval(t *testing.T) {
 	event := &model.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "floor", Scope: "SHARED", Value: 0.0, Removed: false}
 	bytes, err := MarshalDeviceAttributeEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	got, err := UnmarshalDeviceAttributeEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 0.0, got.Value)
 	assert.False(t, got.Removed, "a genuine zero value is not a removal")
 }
@@ -282,9 +284,9 @@ func TestMarshalDeviceAttributeRemovalRoundTrips(t *testing.T) {
 	at := time.Date(2026, 7, 10, 9, 31, 0, 0, time.UTC)
 	event := &model.DeviceAttributeEvent{DeviceToken: "d1", AttrKey: "maxTemp", Removed: true, UpdatedAt: at}
 	bytes, err := MarshalDeviceAttributeEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	got, err := UnmarshalDeviceAttributeEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, got.Removed)
 	assert.Equal(t, 0.0, got.Value)
 	assert.True(t, got.UpdatedAt.Equal(at))
@@ -297,17 +299,17 @@ func TestMarshalDeviceAttributeRemovalRoundTrips(t *testing.T) {
 func TestMarshalOptionalTimeAndProfileAbsent(t *testing.T) {
 	roster := &model.DeviceRosterEvent{DeviceToken: "d1", ProfileToken: "", ExpectedSince: time.Time{}}
 	bytes, err := MarshalDeviceRosterEvent(roster)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	got, err := UnmarshalDeviceRosterEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "", got.ProfileToken)
 	assert.True(t, got.ExpectedSince.IsZero(), "absent expected-since must decode to the zero time, got %s", got.ExpectedSince)
 
 	rules := &model.DetectionRulesPublishedEvent{ProfileVersionToken: "p@1"}
 	bytes, err = MarshalDetectionRulesPublishedEvent(rules)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	gotRules, err := UnmarshalDetectionRulesPublishedEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, gotRules.PublishedAt.IsZero(), "absent published-at must decode to the zero time, got %s", gotRules.PublishedAt)
 }
 
@@ -315,9 +317,9 @@ func TestMarshalOptionalTimeAndProfileAbsent(t *testing.T) {
 // empty, non-panicking slice.
 func TestMarshalDetectionRulesPublishedEventEmpty(t *testing.T) {
 	bytes, err := MarshalDetectionRulesPublishedEvent(&model.DetectionRulesPublishedEvent{ProfileVersionToken: "p@1"})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	got, err := UnmarshalDetectionRulesPublishedEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, "p@1", got.ProfileVersionToken)
 	assert.Empty(t, got.Rules)
 }
@@ -331,10 +333,10 @@ func TestMarshalEntityDeletedEventRoundTrips(t *testing.T) {
 		DeletedTime: when,
 	}
 	bytes, err := MarshalEntityDeletedEvent(event)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	got, err := UnmarshalEntityDeletedEvent(bytes)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, entity.TypeCustomer, got.EntityType)
 	assert.Equal(t, uint(4242), got.EntityId)
 	assert.Equal(t, "acme-corp", got.EntityToken)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -36,7 +37,7 @@ func disabledPresence(disabled bool) *model.ResolvedEvent {
 // encoding: tag 0x80 0x01, value 0x01. Only the two envelope instants (fields 17 and 18, ten
 // bytes each) follow it.
 func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
-	encoded, err := MarshalResolvedEvent(disabledPresence(true))
+	encoded, err := MarshalResolvedEventAs(disabledPresence(true), eventtime.WireCompact)
 	require.NoError(t, err)
 	const instants = 2 * envelopeNanosSize
 	require.Greater(t, len(encoded), instants+3)
@@ -53,7 +54,7 @@ func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
 	assert.True(t, decoded.SourceDeviceDisabled, "UnmarshalResolvedEvent lost the mark")
 
 	// Unmarked, the field is absent from the wire, as proto3 leaves a false bool.
-	plain, err := MarshalResolvedEvent(disabledPresence(false))
+	plain, err := MarshalResolvedEventAs(disabledPresence(false), eventtime.WireCompact)
 	require.NoError(t, err)
 	assert.Equal(t, len(encoded)-3, len(plain))
 	at := len(encoded) - instants - 3
@@ -87,7 +88,7 @@ func TestAPreviousReleaseDecodesAMarkedEvent(t *testing.T) {
 	md := file.Messages().ByName("PResolvedEvent")
 	require.Nil(t, md.Fields().ByNumber(16), "the previous-release descriptor still declares field 16")
 
-	encoded, err := MarshalResolvedEvent(disabledPresence(true))
+	encoded, err := MarshalResolvedEventAs(disabledPresence(true), eventtime.WireCompact)
 	require.NoError(t, err)
 	old := dynamicpb.NewMessage(md)
 	require.NoError(t, proto.Unmarshal(encoded, old))

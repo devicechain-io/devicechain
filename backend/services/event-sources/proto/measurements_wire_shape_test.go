@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -37,7 +38,7 @@ func measurementsHop(encoded []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	return MarshalPayloadForMeasurementsEvent(decoded)
+	return MarshalPayloadForMeasurementsEvent(decoded, eventtime.WireCompact)
 }
 
 // populatedTime is the value every string field is given. It is valid UTF-8, a usable

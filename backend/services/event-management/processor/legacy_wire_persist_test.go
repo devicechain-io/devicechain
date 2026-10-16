@@ -12,6 +12,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestALegacyResolvedMessagePersistsAsTheCurrentFormatDoes(t *testing.T) {
 	require.NoError(t, err)
 	decoded, err := dmproto.UnmarshalResolvedEvent(legacy)
 	require.NoError(t, err)
-	current, err := dmproto.MarshalResolvedEvent(decoded)
+	current, err := dmproto.MarshalResolvedEventAs(decoded, eventtime.WireCompact)
 	require.NoError(t, err)
 	require.Less(t, len(current), len(legacy))
 
@@ -51,6 +52,13 @@ func TestALegacyResolvedMessagePersistsAsTheCurrentFormatDoes(t *testing.T) {
 	fromLegacy, fromCurrent := persist(legacy), persist(current)
 
 	require.Equal(t, fromLegacy.measurements, fromCurrent.measurements)
+
+	// And this release writing the LEGACY format (its default) persists the same rows under
+	// the same id: a producer's format choice never moves an event's identity, whichever way
+	// it is set during a rollout.
+	rewritten, err := dmproto.MarshalResolvedEventAs(decoded, eventtime.WireLegacy)
+	require.NoError(t, err)
+	require.Equal(t, fromLegacy.measurements, persist(rewritten).measurements)
 	got := fromLegacy.measurements[0]
 	// The id the historian derived for this very message BEFORE the upgrade (origin/main
 	// 9b680acf6, the same tenant): the change moved no event's identity.

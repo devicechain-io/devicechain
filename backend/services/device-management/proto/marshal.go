@@ -26,8 +26,11 @@ import (
 // other. A resolved entry always carries one, so this never encodes absence — the fields
 // stay proto3 `optional` so bytes published before per-sample times existed still decode
 // (see unmarshalEntryTime).
-func marshalEntryTime(occurred time.Time) (*int64, *string) {
-	if nanos, ok := eventtime.WireNanos(occurred); ok {
+//
+// format says which form: WireLegacy always writes the string, in UTC, as every release
+// before the count did; WireCompact writes the count when it can hold the instant.
+func marshalEntryTime(occurred time.Time, format eventtime.WireFormat) (*int64, *string) {
+	if nanos, ok := eventtime.WireNanos(occurred); ok && format == eventtime.WireCompact {
 		return &nanos, nil
 	}
 	formatted := eventtime.WireString(occurred)
@@ -40,11 +43,7 @@ func readWireTime(nanos *int64, text string) (time.Time, error) {
 	if nanos != nil {
 		return eventtime.FromWireNanos(*nanos), nil
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, text)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return parsed.UTC(), nil
+	return eventtime.ParseWireString(text)
 }
 
 // unmarshalEntryTime reads one sample's own instant back off the wire — the count, else
@@ -67,11 +66,11 @@ func unmarshalEntryTime(nanos *int64, raw *string, envelope time.Time) (time.Tim
 	if raw == nil {
 		return envelope, nil
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, *raw)
+	parsed, err := eventtime.ParseWireString(*raw)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("entry occurredTime %q is not an RFC3339 timestamp: %w", *raw, err)
 	}
-	return parsed.UTC(), nil
+	return parsed, nil
 }
 
 // Marshal a failed event to protobuf bytes.
@@ -130,10 +129,13 @@ func MarshalPayloadForNewRelationshipEvent(payload *model.ResolvedNewRelationshi
 }
 
 // Marshal payload for a locations event.
-func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([]byte, error) {
+func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
 	pbpayload := &PResolvedLocationsPayload{}
 	for _, entry := range payload.Entries {
-		nanos, text := marshalEntryTime(entry.OccurredTime)
+		nanos, text := marshalEntryTime(entry.OccurredTime, format)
 		pbentry := &PResolvedLocationEntry{
 			Latitude:     entry.Latitude,
 			Longitude:    entry.Longitude,
@@ -155,15 +157,18 @@ func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([
 
 // Marshal payload for a measurements event. It is written directly onto the wire
 // (resolved_wire.go), byte for byte what proto.Marshal writes for the generated message.
-func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPayload) ([]byte, error) {
-	return marshalMeasurementsPayload(payload)
+func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+	return marshalMeasurementsPayload(payload, format)
 }
 
 // Marshal payload for an alerts event.
-func MarshalPayloadForAlertsEvent(payload *model.ResolvedAlertsPayload) ([]byte, error) {
+func MarshalPayloadForAlertsEvent(payload *model.ResolvedAlertsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
 	pbpayload := &PResolvedAlertsPayload{}
 	for _, entry := range payload.Entries {
-		nanos, text := marshalEntryTime(entry.OccurredTime)
+		nanos, text := marshalEntryTime(entry.OccurredTime, format)
 		pbentry := &PResolvedAlertEntry{
 			Type:         entry.Type,
 			Level:        entry.Level,
@@ -323,8 +328,8 @@ func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.ResolvedStateCh
 	}, nil
 }
 
-// Marshal unresolved payload based on event type.
-func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byte, error) {
+// Marshal resolved payload based on event type, its instants in format.
+func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}, format eventtime.WireFormat) ([]byte, error) {
 	switch etype {
 	case esmodel.NewRelationship:
 		if rnapayload, ok := payload.(*model.ResolvedNewRelationshipPayload); ok {
@@ -333,17 +338,17 @@ func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byt
 		return nil, fmt.Errorf("invalid new assignment payload: %+v", payload)
 	case esmodel.Location:
 		if locpayload, ok := payload.(*model.ResolvedLocationsPayload); ok {
-			return MarshalPayloadForLocationsEvent(locpayload)
+			return MarshalPayloadForLocationsEvent(locpayload, format)
 		}
 		return nil, fmt.Errorf("invalid location payload: %+v", payload)
 	case esmodel.Measurement:
 		if mxpayload, ok := payload.(*model.ResolvedMeasurementsPayload); ok {
-			return MarshalPayloadForMeasurementsEvent(mxpayload)
+			return MarshalPayloadForMeasurementsEvent(mxpayload, format)
 		}
 		return nil, fmt.Errorf("invalid measurement payload: %+v", payload)
 	case esmodel.Alert:
 		if apayload, ok := payload.(*model.ResolvedAlertsPayload); ok {
-			return MarshalPayloadForAlertsEvent(apayload)
+			return MarshalPayloadForAlertsEvent(apayload, format)
 		}
 		return nil, fmt.Errorf("invalid alert payload: %+v", payload)
 	case esmodel.StateChange:
@@ -607,8 +612,17 @@ func parseOptionalTime(s string) (time.Time, error) {
 // Marshal a resolved event to protobuf bytes. It is written directly onto the wire
 // (resolved_wire.go), byte for byte what proto.Marshal writes for the generated message:
 // every resolved event device-management publishes passes through here.
+//
+// It writes the format this process is configured to write (eventtime.ProducerWireFormat,
+// from infrastructure.messaging.wireFormat), which every producer of the message shares.
 func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
-	return marshalResolvedEvent(event)
+	return marshalResolvedEvent(event, eventtime.ProducerWireFormat())
+}
+
+// MarshalResolvedEventAs is MarshalResolvedEvent in an explicit format. An unknown format,
+// the zero value included, is refused.
+func MarshalResolvedEventAs(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
+	return marshalResolvedEvent(event, format)
 }
 
 // Unmarshal encoded resolved event.

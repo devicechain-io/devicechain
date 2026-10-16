@@ -119,12 +119,23 @@ type wireInstant struct {
 
 // appendInstant decides the form of at, formatting the string into times when it is the
 // string form, and returns the grown scratch.
-func appendInstant(times []byte, at time.Time) ([]byte, wireInstant) {
-	if nanos, ok := eventtime.WireNanos(at); ok {
-		return times, wireInstant{nanos: nanos, isCount: true, start: len(times), end: len(times)}
+//
+// compact (eventtime.WireCompact) writes the count when it can hold the instant. Otherwise
+// it is the string: in UTC where RFC 3339 can carry it there (eventtime.AppendWireString),
+// except a LEGACY envelope instant, which is in its own offset, as the release before the
+// count formatted it (eventtime.AppendOwnOffsetWireString).
+func appendInstant(times []byte, at time.Time, compact, envelope bool) ([]byte, wireInstant) {
+	if compact {
+		if nanos, ok := eventtime.WireNanos(at); ok {
+			return times, wireInstant{nanos: nanos, isCount: true, start: len(times), end: len(times)}
+		}
 	}
 	start := len(times)
-	times = at.UTC().AppendFormat(times, time.RFC3339Nano)
+	if envelope && !compact {
+		times = eventtime.AppendOwnOffsetWireString(times, at)
+	} else {
+		times = eventtime.AppendWireString(times, at)
+	}
 	return times, wireInstant{start: start, end: len(times)}
 }
 
@@ -165,13 +176,17 @@ func (w wireInstant) appendCount(out []byte, num protowire.Number) []byte {
 }
 
 // marshalResolvedEvent writes event in the PResolvedEvent wire format into a buffer sized
-// exactly once.
-func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
+// exactly once, every instant in format. An unknown format is refused.
+func marshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
+	compact := format == eventtime.WireCompact
 	// Both envelope times take their form once. A string form, for an instant the count
 	// cannot hold, is formatted into a scratch on the stack and copied in.
 	var envelopeScratch [96]byte
-	times, occurred := appendInstant(envelopeScratch[:0], event.OccurredTime)
-	times, processed := appendInstant(times, event.ProcessedTime)
+	times, occurred := appendInstant(envelopeScratch[:0], event.OccurredTime, compact, true)
+	times, processed := appendInstant(times, event.ProcessedTime, compact, true)
 
 	// The payload: a measurements payload is sized here and written in place below; any
 	// other is marshalled now and copied in.
@@ -188,13 +203,13 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	}
 	if mx != nil {
 		var err error
-		if mxSizing, err = sizeMeasurementsPayload(mx, entryScratch[:0], boundsScratch[:0]); err != nil {
+		if mxSizing, err = sizeMeasurementsPayload(mx, entryScratch[:0], boundsScratch[:0], compact); err != nil {
 			return nil, err
 		}
 		payloadSize = mxSizing.size
 	} else {
 		var err error
-		if other, err = MarshalResolvedPayload(event.EventType, event.Payload); err != nil {
+		if other, err = MarshalResolvedPayload(event.EventType, event.Payload, format); err != nil {
 			return nil, err
 		}
 		payloadSize = len(other)
@@ -320,14 +335,14 @@ type measurementsSizing struct {
 // a string proto.Marshal would refuse. times and entries are scratch the caller usually
 // keeps on its stack: a one-entry payload, which is what every device sends, needs neither
 // to grow.
-func sizeMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, times []byte, entries []wireInstant) (measurementsSizing, error) {
+func sizeMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, times []byte, entries []wireInstant, compact bool) (measurementsSizing, error) {
 	size := 0
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
 		// Every resolved entry carries its own time, so it is always written
 		// (marshalEntryTime in marshal.go), in one form or the other.
 		var at wireInstant
-		times, at = appendInstant(times, entry.OccurredTime)
+		times, at = appendInstant(times, entry.OccurredTime, compact, false)
 		entries = append(entries, at)
 		body, err := measurementsEntrySize(entry, at)
 		if err != nil {
@@ -407,10 +422,13 @@ func appendMeasurementsPayload(out []byte, payload *model.ResolvedMeasurementsPa
 
 // marshalMeasurementsPayload writes payload alone in the PResolvedMeasurementsPayload wire
 // format, into a buffer sized exactly once.
-func marshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload) ([]byte, error) {
+func marshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
 	var entryScratch [64]byte
 	var boundsScratch [4]wireInstant
-	sizing, err := sizeMeasurementsPayload(payload, entryScratch[:0], boundsScratch[:0])
+	sizing, err := sizeMeasurementsPayload(payload, entryScratch[:0], boundsScratch[:0], format == eventtime.WireCompact)
 	if err != nil {
 		return nil, err
 	}

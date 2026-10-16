@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog"
@@ -614,6 +615,46 @@ type InfrastructureConfiguration struct {
 	GraphQL          GraphQLConfiguration
 	Shutdown         ShutdownConfiguration
 	Logging          LoggingConfiguration
+	Messaging        MessagingConfiguration
+}
+
+// MessagingConfiguration is how every producer in the instance writes the event messages
+// (the inbound event an ingest source publishes and the resolved event device-management
+// publishes) onto the retained streams.
+//
+// It is FIXED configuration, like the log level: part of the mounted instance document,
+// validated at startup, applied once by each service's own load
+// (core.Microservice.LoadInstanceConfigurationFrom), and adopted by rolling the pods.
+type MessagingConfiguration struct {
+	// WireFormat is legacy or compact, exactly as written. Absent means
+	// eventtime.DefaultWireFormat, which in this release is legacy.
+	//
+	//   - legacy: every instant as an RFC 3339 string and every seal in its text form,
+	//     byte for byte what the release before this one wrote.
+	//   - compact: instants as nanosecond counts and seals in binary, about a third
+	//     smaller. Only this release on reads it.
+	//
+	// 🔴 Every reader in this release takes both, but a pod on an EARLIER release takes only
+	// legacy, and drops or dead-letters a compact message. Set compact only once every pod
+	// of the instance runs this release or later; never in the same change that upgrades
+	// to it. Set legacy again before rolling back to an earlier release. The full plan is
+	// on eventtime.WireFormat.
+	WireFormat string
+}
+
+// EventWireFormat is the format WireFormat names, defaulted at the point of use as well
+// as in ApplyDefaults, for the same reason as ShutdownConfiguration.DrainWindow: a
+// Microservice built as a struct literal never loads a document. A value that names no
+// format is an error, never the default.
+func (c MessagingConfiguration) EventWireFormat() (eventtime.WireFormat, error) {
+	if c.WireFormat == "" {
+		return eventtime.DefaultWireFormat, nil
+	}
+	f, err := eventtime.ParseWireFormat(c.WireFormat)
+	if err != nil {
+		return 0, fmt.Errorf("infrastructure.messaging.wireFormat: %w", err)
+	}
+	return f, nil
 }
 
 // LoggingConfiguration sets how much every service in the instance logs.
@@ -1151,6 +1192,11 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if c.Infrastructure.Logging.Level == "" {
 		c.Infrastructure.Logging.Level = DefaultLogLevel
 	}
+	// Absence only, as with the log level: a present value that names no format is refused
+	// in Validate, never rewritten.
+	if c.Infrastructure.Messaging.WireFormat == "" {
+		c.Infrastructure.Messaging.WireFormat = eventtime.DefaultWireFormat.String()
+	}
 }
 
 // Validate fails closed on an instance configuration missing the infrastructure
@@ -1192,6 +1238,9 @@ func (c *InstanceConfiguration) Validate() error {
 		if _, err := c.Infrastructure.Logging.ZerologLevel(); err != nil {
 			return err
 		}
+	}
+	if _, err := c.Infrastructure.Messaging.EventWireFormat(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1349,6 +1398,9 @@ func NewDefaultInstanceConfiguration() *InstanceConfiguration {
 			},
 			Logging: LoggingConfiguration{
 				Level: DefaultLogLevel,
+			},
+			Messaging: MessagingConfiguration{
+				WireFormat: eventtime.DefaultWireFormat.String(),
 			},
 		},
 		Persistence: PersistenceConfiguration{

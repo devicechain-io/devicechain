@@ -11,6 +11,7 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -48,7 +49,7 @@ func resolvedHop(encoded []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	return MarshalResolvedEvent(decoded)
+	return MarshalResolvedEventAs(decoded, eventtime.WireCompact)
 }
 
 // populatedString is the value every string field is given. It is valid UTF-8 and an RFC

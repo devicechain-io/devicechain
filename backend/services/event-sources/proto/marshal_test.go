@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,7 +29,7 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 		SealedCredentialSecret: []byte("\xd2sealed-form"),
 	}
 
-	bytes, err := MarshalUnresolvedEvent(event)
+	bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 	assert.NoError(t, err)
 
 	got, err := UnmarshalUnresolvedEvent(bytes)
@@ -57,7 +58,7 @@ func TestMarshalRefusesAnUnsealedCredentialSecret(t *testing.T) {
 		CredentialId:     strptr("device-user"),
 		CredentialSecret: strptr("device-pass-as-sent"),
 	}
-	bytes, err := MarshalUnresolvedEvent(event)
+	bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 	assert.ErrorIs(t, err, ErrUnsealedCredentialSecret)
 	assert.Nil(t, bytes)
 }
@@ -74,7 +75,7 @@ func TestMarshalRoundTripWithoutCredential(t *testing.T) {
 		Payload:       &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 	}
 
-	bytes, err := MarshalUnresolvedEvent(event)
+	bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 	assert.NoError(t, err)
 
 	got, err := UnmarshalUnresolvedEvent(bytes)
@@ -103,7 +104,7 @@ func TestMarshalUnresolvedEventCarriesSubSecondTimestamps(t *testing.T) {
 		Payload:       &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 	}
 
-	bytes, err := MarshalUnresolvedEvent(event)
+	bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 	assert.NoError(t, err)
 
 	got, err := UnmarshalUnresolvedEvent(bytes)
@@ -127,7 +128,7 @@ func TestMarshalRoundTripCarriesAuthenticatedTransport(t *testing.T) {
 			Payload:                &model.UnresolvedStateChangePayload{State: model.PresenceConnected, SessionId: "1"},
 			AuthenticatedTransport: marked,
 		}
-		bytes, err := MarshalUnresolvedEvent(event)
+		bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 		assert.NoError(t, err)
 		got, err := UnmarshalUnresolvedEvent(bytes)
 		assert.NoError(t, err)
@@ -148,13 +149,13 @@ func TestMarshalRefusesAnUnsealedAccessToken(t *testing.T) {
 		CredentialType: strptr("ACCESS_TOKEN"),
 		CredentialId:   strptr("tok-as-sent"),
 	}
-	bytes, err := MarshalUnresolvedEvent(event)
+	bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 	assert.ErrorIs(t, err, ErrUnsealedCredentialId)
 	assert.Nil(t, bytes)
 
 	event.CredentialId = nil
 	event.SealedCredentialId = []byte("\xd2sealed-token")
-	bytes, err = MarshalUnresolvedEvent(event)
+	bytes, err = MarshalUnresolvedEventAs(event, eventtime.WireCompact)
 	assert.NoError(t, err)
 	got, err := UnmarshalUnresolvedEvent(bytes)
 	assert.NoError(t, err)

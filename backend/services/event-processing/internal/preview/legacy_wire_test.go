@@ -13,6 +13,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -43,7 +44,7 @@ func TestPreviewReplaysAWindowThatSpansTheFormatChange(t *testing.T) {
 		OccurredTime: sampleAt.Add(time.Minute),
 		Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "10"}},
 	}}}
-	current, err := dmproto.MarshalResolvedEvent(&later)
+	current, err := dmproto.MarshalResolvedEventAs(&later, eventtime.WireCompact)
 	if err != nil {
 		t.Fatal(err)
 	}

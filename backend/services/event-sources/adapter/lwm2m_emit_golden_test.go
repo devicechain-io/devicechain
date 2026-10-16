@@ -24,10 +24,6 @@ import (
 // the write is made under, the drop count): the literals were computed from the implementation
 // BEFORE the split, so their survival is the proof the split changed no byte LwM2M sends. A
 // test that compares Emit with BuildMeasurements cannot show that, because both sides moved.
-//
-// The digests were re-captured once, deliberately, when the inbound event's wire format
-// changed (each instant a count of nanoseconds rather than an RFC 3339 string); every dedup id
-// pinned beside them is unchanged.
 
 // writtenDigest hashes every message a writer received, with the tenant each write was made
 // under. %#v prints every field, maps in key order.
@@ -56,7 +52,7 @@ func TestGoldenLwm2mEmitWritesUnchanged(t *testing.T) {
 	require.Len(t, w.msgs, 2)
 	assert.Equal(t, "lwih3ffszln5b9", w.msgs[0].DedupID)
 	assert.Equal(t, "lw3v4hl6gazr6qt", w.msgs[1].DedupID)
-	assert.Equal(t, "e39c29945c8fbb64c3ce7501f5da63b4c55d554455cdba94e68866cd60fc3c3f", writtenDigest(t, w),
+	assert.Equal(t, "abf2921c10d09c3919a14397e280b705592a110b31d7c651c15b7d01ac4ff563", writtenDigest(t, w),
 		"the bytes LwM2M's Emit writes must not drift")
 }
 
@@ -72,7 +68,7 @@ func TestGoldenLwm2mEmitPresenceWritesUnchanged(t *testing.T) {
 	require.Len(t, w.msgs, 2)
 	assert.Equal(t, "lw2qmgm3hd1ei3w", w.msgs[0].DedupID)
 	assert.Equal(t, "lw2qmq169wjn4ut", w.msgs[1].DedupID)
-	assert.Equal(t, "85b768b46ab8468cf2622db4e6ef110438ff6058be1843ec2a5ebd01e76b1863", writtenDigest(t, w),
+	assert.Equal(t, "618456ef764575ca9e94d57e0fee66660fddac945b86d9dd426da5a86bfecc5c", writtenDigest(t, w),
 		"the bytes LwM2M's EmitPresence writes must not drift")
 }
 
@@ -107,6 +103,6 @@ func TestGoldenLwm2mIngestErrorPaths(t *testing.T) {
 		[]Sample{{Name: "t", Value: 1, Time: fixedNowMs}, {Name: "u", Value: 2, Time: fixedNowMs}}))
 	assert.Equal(t, 2.0, read("emitted"))
 	require.Len(t, ok.msgs, 1)
-	assert.Equal(t, "8b0676c42de0e6b66e838a48d865b2580ed0d814c9f3529b6821d6a8aa2e4187", writtenDigest(t, ok),
+	assert.Equal(t, "d44918923ba45c9cdf395009821e7068592d34b4a732366faf4cb74f6a465c3f", writtenDigest(t, ok),
 		"the bytes LwM2M's Ingest writes must not drift")
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 )
 
 // BenchmarkInboundEventCost is the in-process CPU device-management spends on one inbound
@@ -69,7 +70,7 @@ func BenchmarkInboundEventCost(b *testing.B) {
 			b.Fatal(err)
 		}
 		payloadWire, err := esproto.MarshalPayloadForMeasurementsEvent(
-			event.Payload.(*esmodel.UnresolvedMeasurementsPayload))
+			event.Payload.(*esmodel.UnresolvedMeasurementsPayload), eventtime.ProducerWireFormat())
 		if err != nil {
 			b.Fatal(err)
 		}

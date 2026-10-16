@@ -6,7 +6,6 @@ package proto
 import (
 	"errors"
 	"fmt"
-	"time"
 	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-event-sources/model"
@@ -71,7 +70,15 @@ const nanosSize = tagSize + 8
 // It sizes the message first and then writes it, so each entry's time is formatted once,
 // into a scratch buffer both passes share, and each entry's size is remembered for the
 // second pass. A one-entry payload — what every device sends — needs neither to grow.
-func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload) ([]byte, error) {
+//
+// format says which form an entry's time takes: WireLegacy always writes the string (2),
+// as every release before the count did; WireCompact writes the count (3) when it can
+// hold the instant. Any other format is refused.
+func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
+	compact := format == eventtime.WireCompact
 	var timeScratch [64]byte
 	times := timeScratch[:0]
 	var boundsScratch [4]entryBounds
@@ -87,11 +94,11 @@ func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload) ([
 			b.size += tagSize + protowire.SizeBytes(mapItemSize(name, value))
 		}
 		if entry.OccurredTime != nil {
-			if nanos, ok := eventtime.WireNanos(*entry.OccurredTime); ok {
+			if nanos, ok := eventtime.WireNanos(*entry.OccurredTime); ok && compact {
 				b.nanos, b.hasNanos = nanos, true
 				b.size += nanosSize
 			} else {
-				times = entry.OccurredTime.UTC().AppendFormat(times, time.RFC3339Nano)
+				times = eventtime.AppendWireString(times, *entry.OccurredTime)
 				b.timeEnd = len(times)
 				b.size += tagSize + protowire.SizeBytes(b.timeEnd-b.timeStart)
 			}

@@ -12,15 +12,27 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/proto"
 )
 
 // referenceMarshalMeasurements is the implementation the direct wire writer replaced, kept
-// verbatim as the oracle: the protobuf runtime's own encoding of the same message.
-func referenceMarshalMeasurements(payload *model.UnresolvedMeasurementsPayload) ([]byte, error) {
+// as the oracle: the protobuf runtime's own encoding of the same message. The entry time is
+// decided here, not by marshalEntryTime, so the oracle does not share the code it judges:
+// legacy is the string, in UTC, exactly as the release before the count wrote it.
+func referenceMarshalMeasurements(payload *model.UnresolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
 	pbpayload := &PUnresolvedMeasurementsPayload{}
 	for _, entry := range payload.Entries {
-		nanos, text := marshalEntryTime(entry.OccurredTime)
+		var nanos *int64
+		var text *string
+		if entry.OccurredTime != nil {
+			if n, ok := eventtime.WireNanos(*entry.OccurredTime); ok && format == eventtime.WireCompact {
+				nanos = &n
+			} else {
+				formatted := oracleString(*entry.OccurredTime, false)
+				text = &formatted
+			}
+		}
 		pbentry := &PUnresolvedMeasurementsEntry{
 			Measurements: entry.Measurements,
 			Occurred:     nanos,
@@ -29,6 +41,22 @@ func referenceMarshalMeasurements(payload *model.UnresolvedMeasurementsPayload) 
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
 	return proto.Marshal(pbpayload)
+}
+
+// oracleString is the string form, restated here rather than shared with the code it judges:
+// RFC 3339 carries the years 0000 to 9999 in the offset the string is written in, so the
+// preferred offset (UTC, or for a legacy envelope the instant's own) is used when it can
+// carry the instant, and the other one otherwise.
+func oracleString(at time.Time, ownOffset bool) string {
+	fits := func(t time.Time) bool { return t.Year() >= 0 && t.Year() <= 9999 }
+	first, second := at.UTC(), at
+	if ownOffset {
+		first, second = at, at.UTC()
+	}
+	if fits(first) || !fits(second) {
+		return first.Format(time.RFC3339Nano)
+	}
+	return second.Format(time.RFC3339Nano)
 }
 
 // readings builds n readings with names and values of the given lengths.
@@ -52,6 +80,8 @@ func measurementShapes() map[string]*model.UnresolvedMeasurementsPayload {
 	farFuture := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 	zero := time.Time{}
 	farOffset := time.Date(9999, 12, 30, 1, 2, 3, 5, time.FixedZone("z", 2*3600))
+	// The year 10000 in UTC, which RFC 3339 cannot carry there: its own offset carries it.
+	pastUTC := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.FixedZone("w", -5*3600))
 	entry := func(m map[string]string, at *time.Time) model.UnresolvedMeasurementsEntry {
 		return model.UnresolvedMeasurementsEntry{Measurements: m, OccurredTime: at}
 	}
@@ -68,31 +98,32 @@ func measurementShapes() map[string]*model.UnresolvedMeasurementsPayload {
 		many[i] = entry(readings(i, 6, i), t)
 	}
 	return map[string]*model.UnresolvedMeasurementsPayload{
-		"no entries":                         one(),
-		"nil entries":                        {Entries: nil},
-		"one empty entry":                    one(entry(nil, nil)),
-		"one entry, empty map":               one(entry(map[string]string{}, nil)),
-		"time only":                          one(entry(nil, &utc)),
-		"one reading":                        one(entry(map[string]string{"cpu": "42.17"}, nil)),
-		"one reading, timed":                 one(entry(map[string]string{"cpu": "42.17"}, &utc)),
-		"whole-second time":                  one(entry(map[string]string{"cpu": "1"}, &whole)),
-		"non-UTC time":                       one(entry(map[string]string{"cpu": "1"}, &offset)),
-		"the epoch itself":                   one(entry(map[string]string{"cpu": "1"}, &epoch)),
-		"past the count (string)":            one(entry(map[string]string{"cpu": "1"}, &farFuture)),
-		"zero time (string)":                 one(entry(map[string]string{"cpu": "1"}, &zero)),
-		"offset past the count (UTC string)": one(entry(map[string]string{"cpu": "1"}, &farOffset)),
-		"count then string":                  one(entry(map[string]string{"a": "1"}, &utc), entry(nil, &farFuture), entry(nil, &whole)),
-		"empty name and value":               one(entry(map[string]string{"": ""}, &utc)),
-		"empty value":                        one(entry(map[string]string{"cpu": ""}, nil)),
-		"unicode":                            one(entry(map[string]string{"température": "21,5 °C", "湿度": "40%"}, &utc)),
-		"ten readings":                       one(entry(readings(10, 8, 4), &utc)),
-		"max readings":                       one(entry(readings(256, 8, 6), &utc)),
-		"long value (2-byte length)":         one(entry(map[string]string{"blob": strings.Repeat("x", 200)}, &utc)),
-		"long value (3-byte length)":         one(entry(map[string]string{"blob": strings.Repeat("x", 20000)}, &utc)),
-		"item over 127 bytes":                one(entry(map[string]string{strings.Repeat("k", 70): strings.Repeat("v", 70)}, nil)),
-		"entry over 127 bytes":               one(entry(readings(12, 8, 6), &utc)),
-		"several entries":                    one(entry(readings(2, 4, 2), &utc), entry(nil, nil), entry(readings(3, 5, 3), &whole)),
-		"many entries, scratch grows":        one(many...),
+		"no entries":                             one(),
+		"nil entries":                            {Entries: nil},
+		"one empty entry":                        one(entry(nil, nil)),
+		"one entry, empty map":                   one(entry(map[string]string{}, nil)),
+		"time only":                              one(entry(nil, &utc)),
+		"one reading":                            one(entry(map[string]string{"cpu": "42.17"}, nil)),
+		"one reading, timed":                     one(entry(map[string]string{"cpu": "42.17"}, &utc)),
+		"whole-second time":                      one(entry(map[string]string{"cpu": "1"}, &whole)),
+		"non-UTC time":                           one(entry(map[string]string{"cpu": "1"}, &offset)),
+		"the epoch itself":                       one(entry(map[string]string{"cpu": "1"}, &epoch)),
+		"past the count (string)":                one(entry(map[string]string{"cpu": "1"}, &farFuture)),
+		"zero time (string)":                     one(entry(map[string]string{"cpu": "1"}, &zero)),
+		"offset past the count (UTC string)":     one(entry(map[string]string{"cpu": "1"}, &farOffset)),
+		"past the UTC years (own-offset string)": one(entry(map[string]string{"cpu": "1"}, &pastUTC)),
+		"count then string":                      one(entry(map[string]string{"a": "1"}, &utc), entry(nil, &farFuture), entry(nil, &whole)),
+		"empty name and value":                   one(entry(map[string]string{"": ""}, &utc)),
+		"empty value":                            one(entry(map[string]string{"cpu": ""}, nil)),
+		"unicode":                                one(entry(map[string]string{"température": "21,5 °C", "湿度": "40%"}, &utc)),
+		"ten readings":                           one(entry(readings(10, 8, 4), &utc)),
+		"max readings":                           one(entry(readings(256, 8, 6), &utc)),
+		"long value (2-byte length)":             one(entry(map[string]string{"blob": strings.Repeat("x", 200)}, &utc)),
+		"long value (3-byte length)":             one(entry(map[string]string{"blob": strings.Repeat("x", 20000)}, &utc)),
+		"item over 127 bytes":                    one(entry(map[string]string{strings.Repeat("k", 70): strings.Repeat("v", 70)}, nil)),
+		"entry over 127 bytes":                   one(entry(readings(12, 8, 6), &utc)),
+		"several entries":                        one(entry(readings(2, 4, 2), &utc), entry(nil, nil), entry(readings(3, 5, 3), &whole)),
+		"many entries, scratch grows":            one(many...),
 	}
 }
 
@@ -108,13 +139,21 @@ func TestMeasurementsPayloadWireMatchesProtoMarshal(t *testing.T) {
 	}
 }
 
+// assertWireMatchesReference holds the writer to the reference in BOTH wire formats.
 func assertWireMatchesReference(t *testing.T, payload *model.UnresolvedMeasurementsPayload) {
 	t.Helper()
-	got, err := MarshalPayloadForMeasurementsEvent(payload)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
+	for _, format := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
+		assertWireMatchesReferenceIn(t, payload, format)
 	}
-	want, err := referenceMarshalMeasurements(payload)
+}
+
+func assertWireMatchesReferenceIn(t *testing.T, payload *model.UnresolvedMeasurementsPayload, format eventtime.WireFormat) {
+	t.Helper()
+	got, err := MarshalPayloadForMeasurementsEvent(payload, format)
+	if err != nil {
+		t.Fatalf("%s: marshal: %v", format, err)
+	}
+	want, err := referenceMarshalMeasurements(payload, format)
 	if err != nil {
 		t.Fatalf("reference marshal: %v", err)
 	}
@@ -136,7 +175,7 @@ func assertWireMatchesReference(t *testing.T, payload *model.UnresolvedMeasureme
 		ordered = ordered && len(e.Measurements) <= 1
 	}
 	if ordered && !bytes.Equal(got, want) {
-		t.Fatalf("bytes differ where no map order can:\n got %x\nwant %x", got, want)
+		t.Fatalf("%s: bytes differ where no map order can:\n got %x\nwant %x", format, got, want)
 	}
 }
 
@@ -149,7 +188,7 @@ func TestMeasurementsPayloadWireRoundTrips(t *testing.T) {
 		{Measurements: map[string]string{"cpu": "42.17", "mem": "", "": "x"}, OccurredTime: &at},
 		{Measurements: map[string]string{"cpu": "43"}},
 	}}
-	encoded, err := MarshalPayloadForMeasurementsEvent(in)
+	encoded, err := MarshalPayloadForMeasurementsEvent(in, eventtime.WireCompact)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,10 +224,10 @@ func TestMeasurementsPayloadWireRefusesInvalidUTF8(t *testing.T) {
 			payload := &model.UnresolvedMeasurementsPayload{Entries: []model.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"ok": "1"}}, {Measurements: m},
 			}}
-			if _, err := referenceMarshalMeasurements(payload); err == nil {
+			if _, err := referenceMarshalMeasurements(payload, eventtime.WireCompact); err == nil {
 				t.Fatal("the protobuf runtime accepted it: this test's premise no longer holds")
 			}
-			got, err := MarshalPayloadForMeasurementsEvent(payload)
+			got, err := MarshalPayloadForMeasurementsEvent(payload, eventtime.WireCompact)
 			if !errors.Is(err, errMeasurementsNotUTF8) {
 				t.Fatalf("marshal = %x, %v; want the UTF-8 refusal", got, err)
 			}
@@ -208,7 +247,7 @@ func TestMeasurementsPayloadWireAllocatesOnlyItsOutput(t *testing.T) {
 			{Measurements: readings(n, 8, 5), OccurredTime: &at},
 		}}
 		allocs := testing.AllocsPerRun(100, func() {
-			if _, err := MarshalPayloadForMeasurementsEvent(payload); err != nil {
+			if _, err := MarshalPayloadForMeasurementsEvent(payload, eventtime.WireCompact); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -235,8 +274,8 @@ func FuzzMeasurementsPayloadWire(f *testing.F) {
 			{Measurements: map[string]string{n1: v1, n2: v2}, OccurredTime: at},
 			{Measurements: map[string]string{n2: v1}},
 		}}
-		_, refErr := referenceMarshalMeasurements(payload)
-		_, err := MarshalPayloadForMeasurementsEvent(payload)
+		_, refErr := referenceMarshalMeasurements(payload, eventtime.WireCompact)
+		_, err := MarshalPayloadForMeasurementsEvent(payload, eventtime.WireCompact)
 		if (refErr == nil) != (err == nil) {
 			t.Fatalf("runtime err %v, writer err %v: they must refuse the same payloads", refErr, err)
 		}
@@ -255,7 +294,7 @@ func BenchmarkMeasurementsPayloadMarshal(b *testing.B) {
 	at := time.Date(2026, 10, 1, 12, 0, 0, 123000000, time.UTC)
 	impls := []struct {
 		name string
-		fn   func(*model.UnresolvedMeasurementsPayload) ([]byte, error)
+		fn   func(*model.UnresolvedMeasurementsPayload, eventtime.WireFormat) ([]byte, error)
 	}{
 		{"reference", referenceMarshalMeasurements},
 		{"wire", MarshalPayloadForMeasurementsEvent},
@@ -268,7 +307,7 @@ func BenchmarkMeasurementsPayloadMarshal(b *testing.B) {
 			b.Run(fmt.Sprintf("readings=%d/%s", n, impl.name), func(b *testing.B) {
 				b.ReportAllocs()
 				for i := 0; i < b.N; i++ {
-					if _, err := impl.fn(payload); err != nil {
+					if _, err := impl.fn(payload, eventtime.WireCompact); err != nil {
 						b.Fatal(err)
 					}
 				}

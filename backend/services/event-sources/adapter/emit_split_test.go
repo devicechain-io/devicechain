@@ -105,18 +105,14 @@ func TestASplitBatchIsIdempotentUnderRetry(t *testing.T) {
 // lets an in-flight duplicate from before an upgrade through the dedup window again.
 // Pinning measurementDedupID alone would not catch that: it is the pure function, not the
 // caller.
-//
-// The byte digests were re-captured once, deliberately, when the inbound event's wire format
-// changed (each instant a count of nanoseconds rather than an RFC 3339 string). The dedup ids
-// did not move, which is the half that lets a redelivery straddling the upgrade be dropped.
 func TestABatchAtOrUnderTheLimitIsPublishedExactlyAsBefore(t *testing.T) {
 	for _, c := range []struct {
 		n      int
 		dedup  string
 		sha256 string
 	}{
-		{3, "spy2068tpcdekh", "25b5f4f830932306148e1714deda1098df630c6d8c035c38841e7c200b74cc66"},
-		{256, "sp3ksr7wzo2aawh", "77453a1cc7c517604814d0745b461907a8eb984bcd200aa06df24be0208bde69"},
+		{3, "spy2068tpcdekh", "911615560d90773da4fc827343a68d654d47373f83a19a3e0c0aa1a864df7ea3"},
+		{256, "sp3ksr7wzo2aawh", "a96d189266f2686ce11a0fa76f2bda82634dc93fa5add600353e2e4432c10817"},
 	} {
 		w := &fakeWriter{}
 		e := NewEmitter(w, fixedNow, "sp", true)

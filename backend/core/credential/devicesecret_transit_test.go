@@ -152,6 +152,60 @@ func TestSealedFromTextPassesAnythingElseThroughToBeRefused(t *testing.T) {
 	require.ErrorIs(t, err, ErrSealedSecretInvalid, "another key's id")
 }
 
+// SealedText writes a binary seal in the text form exactly as a release before the binary
+// form wrote it, so a consumer still on that release opens what a legacy-format producer
+// of this one sends. Checked against seals made by the text-form sealer itself
+// (legacyTextSeal is that code, as it stood), and against one made on origin/main and
+// pinned here verbatim.
+func TestSealedTextIsTheTextFormTheOldReleaseWrote(t *testing.T) {
+	tr := testTransit(t, 1)
+	for name, text := range map[string]string{
+		"token":    legacyTextSeal(t, tr.tokenAEAD, tr, "0123456789abcdef0123456789abcdef", tokenAAD("acme", "ACCESS_TOKEN")),
+		"password": legacyTextSeal(t, tr.aead, tr, "pw", transitAAD("acme", "c1")),
+		// SealToken("acme", "ACCESS_TOKEN", "tok-golden-0123456789") under the root key of
+		// nine bytes 0x09, sealed by origin/main 9b680acf6.
+		"origin/main": "dcs2$e296a0ea$k2uVMY1Lw4kk4W5MZnYEmDnVDAIHLFV/VOGGLMWQBmaGqVH5uY5HTXU/O1KBJSEERqZFb3bxhDFxr7aTDg",
+	} {
+		back, err := SealedText(SealedFromText(text))
+		require.NoError(t, err, name)
+		require.Equal(t, text, back, name)
+	}
+
+	// A seal this release makes, written as text, opens through the old reader's path.
+	sealed, err := tr.SealToken("acme", "ACCESS_TOKEN", "tok-1")
+	require.NoError(t, err)
+	text, err := SealedText(sealed)
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(text, "dcs2$"+hex.EncodeToString(tr.id[:])+"$"), text)
+	got, err := tr.OpenToken("acme", "ACCESS_TOKEN", SealedFromText(text))
+	require.NoError(t, err)
+	require.Equal(t, "tok-1", got)
+
+	// The origin/main seal opens under the key it was made with.
+	root, err := DeriveSecretTransit(bytes.Repeat([]byte{9}, 32))
+	require.NoError(t, err)
+	got, err = root.OpenToken("acme", "ACCESS_TOKEN", SealedFromText("dcs2$e296a0ea$k2uVMY1Lw4kk4W5MZnYEmDnVDAIHLFV/VOGGLMWQBmaGqVH5uY5HTXU/O1KBJSEERqZFb3bxhDFxr7aTDg"))
+	require.NoError(t, err)
+	require.Equal(t, "tok-golden-0123456789", got)
+}
+
+// What is not a binary seal is refused rather than written as a text seal that cannot open.
+func TestSealedTextRefusesWhatIsNotABinarySeal(t *testing.T) {
+	tr := testTransit(t, 1)
+	sealed, err := tr.Seal("acme", "c1", "pw")
+	require.NoError(t, err)
+	for name, value := range map[string][]byte{
+		"nil":         nil,
+		"header only": sealed[:sealedHeaderN],
+		"text form":   []byte("dcs2$" + hex.EncodeToString(tr.id[:]) + "$AAAA"),
+		"plaintext":   []byte("pw"),
+		"wrong magic": append([]byte{0xd3}, sealed[1:]...),
+	} {
+		_, err := SealedText(value)
+		require.ErrorIs(t, err, ErrSealedSecretInvalid, name)
+	}
+}
+
 // The transit key and the digest key come from the same root key under different contexts.
 // Compared as KEY MATERIAL, not ids: a value sealed under the digest key must not open.
 func TestSecretTransitKeyIsSeparateFromTheDigestKey(t *testing.T) {
