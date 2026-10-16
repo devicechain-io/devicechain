@@ -1515,6 +1515,18 @@ jobs:
         working-directory: docs
         run: node --test scripts/graphql-reference.test.mjs
 
+      # The file-set guard above proves a translated page EXISTS; this proves it kept
+      # English's skeleton — explicit heading anchors (console deep links and release
+      # notes point at them, and the build's broken-anchor check only sees links from
+      # inside the site), heading count per level, code fences and admonitions. Needs
+      # the docs dependencies: the self-test pins its slug mirror against the real
+      # github-slugger. Self-test first, so a green check is known to be able to fail.
+      - name: Structure-parity guard self-test
+        run: node --test docs/scripts/structure-parity.test.mjs
+
+      - name: Translated docs keep English's anchors and structure
+        run: node docs/scripts/check-structure-parity.mjs
+
       # English remains the reference; locale refreshes may happen in batches.
       # Report changed source pages without blocking unrelated English edits.
       - name: Chinese translation review status

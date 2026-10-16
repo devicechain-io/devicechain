@@ -1,0 +1,16 @@
+[
+  {
+    "locale": "es",
+    "page": "reference/dcctl.md",
+    "check": "admonitions",
+    "detail": "admonitions differ: English [], translated [note]",
+    "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about."
+  },
+  {
+    "locale": "zh-CN",
+    "page": "reference/dcctl.md",
+    "check": "admonitions",
+    "detail": "admonitions differ: English [], translated [note]",
+    "reason": "The command reference below the intro is generated from the dcctl binary and ships in English only; the translation adds one :::note telling the reader so. English has nothing to warn about."
+  }
+]

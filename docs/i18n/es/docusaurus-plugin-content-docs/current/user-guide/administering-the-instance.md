@@ -51,10 +51,10 @@ Elige **Nuevo inquilino**. El formulario pide:
   la [máscara de token](../concepts/system-settings.md#token-masks) de la instancia, que aparece bajo
   el campo, y el botón de al lado genera otro. No se puede cambiar después.
 - **Nombre**: un nombre para mostrar.
-- **Nivel**: el empaquetado al que se sujeta el inquilino (consulta [Niveles](#niveles)). Todo
+- **Nivel**: el empaquetado al que se sujeta el inquilino (consulta [Niveles](#tiers)). Todo
   inquilino tiene uno.
 - **Configuración (JSON)**: un objeto JSON libre y opcional.
-- Los límites propios del inquilino, descritos más abajo en [Ajustes](#ajustes-de-un-inquilino).
+- Los límites propios del inquilino, descritos más abajo en [Ajustes](#a-tenants-settings).
   Déjalos en blanco para heredarlos.
 
 Después elige **Crear inquilino**.
@@ -79,7 +79,7 @@ puede cambiar. Un cambio de nivel se aplica en menos de un minuto.
 
 <GuideShot id="admin-tenant-basic" alt="La página del inquilino acme (sim), con token sim-acme, insignias de nivel silver y Habilitado, y botones Deshabilitar y Eliminar. El panel Inicio de sesión único explica el ajuste, indica que no se exige y ofrece el botón Exigir SSO. Debajo están las pestañas Básico, Ajustes, Ajustes efectivos y Modelos de IA, con Básico abierta: el token sim-acme en gris, el nombre acme (sim), el nivel Silver y un campo de configuración JSON vacío." />
 
-### Los ajustes de un inquilino {#ajustes-de-un-inquilino}
+### Los ajustes de un inquilino {#a-tenants-settings}
 
 La pestaña **Ajustes** contiene los límites de este inquilino concreto, cuando deben diferir de los de
 su nivel. Un campo que dejes en blanco se hereda: primero el valor del nivel y, si no hay, el valor
@@ -163,7 +163,7 @@ inquilino desaparecen, así que una eliminación terminada solo aparece aquí. �
 pida demostrar que se borraron los datos de un cliente. Para el calendario completo, consulta
 [Eliminación de inquilinos](../deployment/tenant-deletion.md).
 
-## Niveles {#niveles}
+## Niveles {#tiers}
 
 Un nivel es el empaquetado que se le vende a un inquilino: los límites predeterminados a los que se
 sujeta todo inquilino de ese nivel y qué modelos de IA pueden usar esos inquilinos. **Inquilinos →
