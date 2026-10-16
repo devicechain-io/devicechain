@@ -284,7 +284,8 @@ func TestDetectionValueCarried(t *testing.T) {
 // current sample and the PRIOR sample held in snapshotted state — so if restore lost or corrupted
 // that prior sample, the delta (and thus the alarm's stamped value) would be wrong while the
 // detection identity stayed correct. Feed a priming sample, snapshot, kill, restore, then feed the
-// next sample and assert the delta value is exact.
+// next sample and assert the delta value is exact. The priming sample is still HELD when the
+// snapshot is taken (the frontier is not past it), so this also proves the pending run restores.
 func TestReplayRestoresValue(t *testing.T) {
 	rules := []Rule{{ID: "rd", Kind: DeltaRate, Op: GT, Thresh: 50}}
 	e := NewEngine(rules, 0)
@@ -302,6 +303,7 @@ func TestReplayRestoresValue(t *testing.T) {
 		t.Fatalf("restore: %v", err)
 	}
 	e2.ProcessEvent(Event{Seq: 2, Key: SeriesKey{Rule: "rd", Series: "d"}, Time: at(3), Value: 160, HasValue: true, Match: true})
+	e2.Advance(at(4)) // finalizes the sample at 3
 	d := e2.Drain()
 	if len(d) != 1 || !d[0].HasValue || d[0].Value != 60 {
 		t.Fatalf("delta value after restore must be 160-100=60 (proving the prior sample restored); got %+v", d)

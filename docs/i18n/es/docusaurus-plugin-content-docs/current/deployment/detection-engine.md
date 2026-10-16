@@ -240,9 +240,21 @@ dimensionar el ajuste:
   lectura que no cumple la condición termina una alarma de duración elevada por tarde que llegue,
   salvo que sea anterior a la alarma: una lectura tardía de antes de que se elevara la alarma, que
   llega después, no la retira.
-- **Las reglas sin ventana la siguen evaluando** — umbral, ventana de conteo y tasa. Cada una
-  compara una lectura con la anterior o con un límite fijo, así que no hay intervalo del que una
-  lectura tardía pueda quedar fuera.
+- **Las reglas de umbral la siguen evaluando.** Un umbral compara una lectura con un límite fijo,
+  así que no hay intervalo del que una lectura tardía pueda quedar fuera.
+- **Las reglas de ventana de conteo y de tasa colocan la lectura según su propia hora**, como hacen
+  las reglas de duración. Una tasa es el cambio entre lecturas consecutivas y una ventana de conteo
+  es cada N lecturas consecutivas, así que una lectura que llega fuera de orden se coloca donde dice
+  su marca de tiempo, y la regla evalúa una lectura solo cuando la frontera la ha sobrepasado — por
+  eso estos dos tipos elevan y retiran sus alarmas una tolerancia de retraso por detrás de la
+  lectura más reciente. Cuando no llega ninguna lectura más reciente — la última antes de que la
+  flota se quede en silencio —, se decide según el reloj de pared una vez que el motor ha estado
+  inactivo, igual que se dispara una regla de ausencia, de modo que con los valores
+  predeterminados tarda unos quince segundos desde su llegada; con `idleAdvanceGuardSeconds`
+  negativo espera al siguiente evento. Una lectura más antigua que la más reciente que la regla ya ha asentado se
+  descarta: el par o la ventana a la que pertenecía ya se decidió. Una lectura que no cumple la
+  condición sigue terminando una alarma de tasa elevada por tarde que llegue, salvo que sea
+  anterior a la alarma.
 
 En todos los casos la lectura se **almacena y grafica con normalidad**; esto afecta solo a la detección.
 
@@ -251,12 +263,14 @@ se incorpora con normalidad, que es para lo que existe la tolerancia. Como conse
 puede estirarse hasta la tolerancia — eso es lo que significa tolerar la llegada fuera de orden —
 pero no más.
 
-Los tipos deslizantes y las reglas de duración **cuentan lo que descartan**, una vez por cada
-regla que descarta una lectura. `detect_late_samples_total` sube cada vez que una lectura llega
-después de que haya pasado la ventana a la que pertenecía, cuando una regla de duración descarta una
-lectura que cumple la condición y queda más atrás de la frontera que su tiempo de sostenimiento, y
-cuando una lectura que no cumple la condición de una regla de duración llega después de que se
-elevara su alarma pero se tomó dentro de la racha que la elevó, antes de la elevación. Una lectura
+Los tipos deslizantes, las reglas de duración y las reglas de ventana de conteo y de tasa
+**cuentan lo que descartan**, una vez por cada regla que descarta una lectura.
+`detect_late_samples_total` sube cada vez que una lectura llega después de que haya pasado la
+ventana a la que pertenecía, cuando una regla de duración descarta una lectura que cumple la
+condición y queda más atrás de la frontera que su tiempo de sostenimiento, cuando una regla de
+ventana de conteo o de tasa descarta una lectura más antigua que otra que ya ha asentado, y cuando
+una lectura que no cumple la condición de una regla de duración llega después de que se elevara su
+alarma pero se tomó dentro de la racha que la elevó, antes de la elevación. Una lectura
 tardía anterior a toda la racha se ignora y no se cuenta: la racha empezó después de ella. Así, una
 flota cuyas reglas se han quedado calladas tiene algo que mirar en lugar de silencio; una subida acumulada
 es la causa habitual. Los agregados de ventana fija y las reglas de sesión descartan en silencio y
@@ -467,8 +481,8 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, una regla de duración lo coloca según su propia hora, y las demás reglas ignoran una lectura más antigua que otra que ya han visto. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
-| `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. |
+| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral evalúa cada lectura según llega. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
+| `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. Del mismo modo, las reglas de ventana de conteo y de tasa deciden la última lectura antes de un periodo de silencio solo cuando llega un evento posterior. |
 | `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. En esta versión las partes se procesan una tras otra, por lo que un valor superior a 1 todavía no acelera la detección: déjelo en 1 salvo que esté midiendo. El valor en vigor es la métrica `detect_shards`. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
 | `checkpointIntervalSeconds` | 10 | Tiempo máximo entre puntos de control, para que un flujo tranquilo también confirme. **Como máximo 30**: un punto de control es lo que confirma el flujo, así que un intervalo cercano o superior a la ventana de confirmación de 60 segundos del broker hace que los mensajes de un flujo tranquilo se vuelvan a entregar. 30 deja margen para el propio punto de control, y el servicio rechaza al arrancar cualquier valor mayor. |

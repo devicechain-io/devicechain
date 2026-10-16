@@ -188,19 +188,29 @@ func TestCorrelationFallingEdgeOnNonMatch(t *testing.T) {
 func TestDeltaRateFallingEdgeOnNonMatch(t *testing.T) {
 	rules := []Rule{{ID: "r", Kind: DeltaRate, Op: GT, Thresh: 10}} // raw delta
 	e := NewEngine(rules, 0)
+	// Each sample is evaluated once the frontier is past it (reorder.go): the verdict on a sample
+	// is drained after the NEXT event, stamped at the sample's own time.
 	if d := feedEvent(e, 1, "r", "d", 0, 0, true); len(d) != 0 {
 		t.Fatalf("prime must not fire: %+v", d)
 	}
-	if d := feedEvent(e, 2, "r", "d", 2, 100, true); len(d) != 1 || d[0].Edge != EdgeRaised { // +100 > 10
+	if d := feedEvent(e, 2, "r", "d", 2, 100, true); len(d) != 0 {
+		t.Fatalf("a held sample must not fire yet: %+v", d)
+	}
+	// A non-matching sample (the filtering leaf went false) resolves the raised alarm. Its value is
+	// LOW on purpose: a base poisoned to it would make the following +5 read as +105 and re-raise,
+	// which is the failure this test exists to see (a high poison value would hide it behind GT).
+	d := feedEvent(e, 3, "r", "d", 5, 0, false) // finalizes +100@2 > 10: raise
+	if len(d) != 1 || d[0].Edge != EdgeRaised || !d[0].At.Equal(at(2)) {
 		t.Fatalf("a +100 delta must raise: %+v", d)
 	}
-	// A non-matching sample (the filtering leaf went false) resolves the raised alarm.
-	if d := feedEvent(e, 3, "r", "d", 5, 999, false); len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(5)) {
+	d = feedEvent(e, 4, "r", "d", 8, 105, true) // finalizes the non-match@5: resolve
+	if len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(5)) {
 		t.Fatalf("a non-matching sample must resolve the raise: %+v", d)
 	}
 	// The non-match did NOT become the delta base: a following match pairs against the last MATCHING
-	// value (100@t2), so +5 (=105-100) does NOT re-raise; a base poisoned to 999 would (105-999<0).
-	if d := feedEvent(e, 4, "r", "d", 8, 105, true); len(d) != 0 {
+	// value (100@t2), so +5 (=105-100) does NOT re-raise; a base poisoned to 0 would (+105 > 10).
+	e.Advance(at(9))
+	if d := e.Drain(); len(d) != 0 {
 		t.Fatalf("delta base must stay on the last matching sample (100), so +5 must not re-raise: %+v", d)
 	}
 }

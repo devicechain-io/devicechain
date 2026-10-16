@@ -179,6 +179,11 @@ func TestRetainedSampleCountsIgnoresFixedSizeKinds(t *testing.T) {
 				Time: at(i), Value: float64(i), HasValue: true, Match: true})
 		}
 	}
+	// DeltaRate HOLDS a sample until the frontier is past it (reorder.go), and a held sample IS a
+	// retained record — TestPendingSamplesAreRetainedRecords pins that it is counted. Here the
+	// frontier is moved past the last sample, so the held one is folded into the fixed-size base
+	// and the kind is back to contributing zero.
+	e.Advance(at(51))
 	e.Drain()
 
 	retained := e.RetainedSampleCounts()

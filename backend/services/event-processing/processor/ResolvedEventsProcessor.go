@@ -2884,9 +2884,9 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 				drop = d.Edge != detectcore.EdgeResolved || raiseDropped || rp.armer.AbsenceCarriedForward(key)
 			}
 		case frontierTriggeredKind(d.Kind):
-			// The OTHER frontier kinds (Duration/Session timers, Aggregate pane closes) ride the shared
-			// watermark, so a SUPERSEDED version's retained rule still fires them even though the fan-out
-			// starves it of events (ADR-057 D6). Left unchecked, a stale unsatisfied pane-close resolves
+			// The OTHER frontier kinds (Duration/Session timers, Aggregate pane closes, the DeltaRate and
+			// CountWindow flush of held samples) ride the shared watermark, so a SUPERSEDED version's
+			// retained rule still fires them even though the fan-out starves it of events (ADR-057 D6). Left unchecked, a stale unsatisfied pane-close resolves
 			// the ACTIVE version's genuine raise at the same epoch-aligned timestamp under the stable
 			// contributor id — a fail-open false clear. Drop ONLY on a CONFIRMED version mismatch, so a
 			// real alarm is never dropped for a momentarily-incomplete projection.
@@ -2918,15 +2918,17 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 }
 
 // frontierTriggeredKind reports whether a NON-absence detection kind fires off the shared event-time
-// watermark (a timer or a window/pane close) rather than only on an arriving event: Duration (hold
-// timer), Session (gap timer), and Aggregate (tumbling pane close). These are the kinds whose superseded
-// firings starvation does NOT silence, so they need the publish-time version gate (D6). The purely
-// event-driven kinds (Threshold/DeltaRate/Repeating/SlidingAgg/CountWindow/Correlation) are already
-// version-scoped by the fan-out and pass through as legitimate late contributions. Absence is handled
-// separately (stricter AbsenceLive membership gate).
+// watermark rather than only on an arriving event: Duration (hold timer), Session (gap timer),
+// Aggregate (tumbling pane close), and the sample-pairing kinds DeltaRate and CountWindow, which hold
+// a sample until the frontier is past it and emit on that flush (detectcore reorder.go) — an idle
+// advance can emit for them with no event at all. These are the kinds whose superseded firings
+// starvation does NOT silence, so they need the publish-time version gate (D6). The purely
+// event-driven kinds (Threshold/Repeating/SlidingAgg/Correlation) are already version-scoped by the
+// fan-out and pass through as legitimate late contributions. Absence is handled separately (stricter
+// AbsenceLive membership gate).
 func frontierTriggeredKind(k detectcore.RuleKind) bool {
 	switch k {
-	case detectcore.Duration, detectcore.Session, detectcore.Aggregate:
+	case detectcore.Duration, detectcore.Session, detectcore.Aggregate, detectcore.DeltaRate, detectcore.CountWindow:
 		return true
 	default:
 		return false
