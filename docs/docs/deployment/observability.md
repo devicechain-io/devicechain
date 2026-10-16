@@ -59,7 +59,9 @@ message:
 | `erased` | Its tenant has been deleted and the service's database refused the write. It was settled on the delivery it arrived on and recorded nowhere. See [Tenant deletion](./tenant-deletion.md#database-writes). |
 
 Every result is exported at zero from the moment the service starts, so an alert on the increase of
-one of them sees the first message counted, not only the second.
+one of them sees the first message counted, not only the second. The one exception is a message
+counted before Prometheus has scraped the pod at all: the series is first seen at 1, which is no
+increase.
 
 Each service can also serve Go runtime profiles on a listener of its own. This is off
 by default; see [Profiling a service](#profiling).

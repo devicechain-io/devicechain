@@ -59,7 +59,9 @@ mensaje:
 | `erased` | Su inquilino se ha eliminado y la base de datos del servicio rechazó la escritura. Se liquidó en la misma entrega en que llegó y no se registró en ningún sitio. Consulte [Eliminación de inquilinos](./tenant-deletion.md#database-writes). |
 
 Todos los resultados se exportan a cero desde que arranca el servicio, así que una alerta sobre el
-aumento de uno de ellos ve el primer mensaje contado, no solo el segundo.
+aumento de uno de ellos ve el primer mensaje contado, no solo el segundo. La única excepción es un
+mensaje contado antes de que Prometheus haya leído el pod por primera vez: la serie se ve por primera
+vez en 1, lo que no es un aumento.
 
 Cada servicio puede servir además perfiles del runtime de Go en un listener propio. Está
 desactivado por defecto; consulta [Perfilar un servicio](#profiling).
