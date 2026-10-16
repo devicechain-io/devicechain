@@ -13,9 +13,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	gql "github.com/graph-gophers/graphql-go"
-	"gorm.io/gorm"
 )
 
 // THE WIRE HALF of the partial-update guarantee, for every converted mutation.
@@ -124,36 +123,13 @@ func (m partialUpdateMutation) probeOrDefault() map[string]any {
 	return map[string]any{"name": "Renamed"}
 }
 
-// 🔴 THE TEST NAME IS SANITIZED BEFORE IT GOES IN A URI, AND IT WAS NOT.
-//
-// This built the DSN from a raw t.Name(), which carries "/" for every subtest and "#01",
-// "#02" … whenever one name repeats within a run — and a URI reads "#" as the start of a
-// FRAGMENT. So the database name silently truncates at the "#" and sqlite falls back to
-// an ON-DISK FILE in the working directory: a fixture that writes real files, shares
-// state with every other test truncating to the same prefix, and outlives the run. It
-// took no failure to be wrong, which is why it needed looking for rather than waiting for.
-//
-// 🔴 AND THE POOL IS CLOSED, for the reason spelled out in the model harness: a
-// shared-cache in-memory database lives while a connection to it is open, gorm closes
-// none, and the next test with the same name inherits the rows.
+// The database comes from sqlitetest.OpenMemory, which names it per call — so a
+// repeat of this test in one process (`go test -count=2`) starts empty, and the "#" Go
+// appends to a repeated subtest name cannot send sqlite to an on-disk file — and closes
+// its pool when the test ends.
 func newPartialUpdateWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	dsn := "file:" + wireDSNName(t) + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, cerr := db.DB()
-		if cerr != nil {
-			t.Errorf("reach the underlying pool to close it: %v", cerr)
-			return
-		}
-		if cerr := sqlDB.Close(); cerr != nil {
-			t.Errorf("close the fixture's pool: %v — the shared-cache database outlives this "+
-				"test and the next one to reuse its name inherits these rows", cerr)
-		}
-	})
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
@@ -393,20 +369,4 @@ func TestPartialUpdateInputsOmitTheirIdentityFields(t *testing.T) {
 	if drove == 0 {
 		t.Fatal("no forbidden field was driven; this test is asserting nothing")
 	}
-}
-
-// wireDSNName turns a test's name into something safe to sit in a SQLite URI.
-//
-// It duplicates partialUpdateDSNName from the model harness rather than importing it:
-// that one lives in a _test.go file, which Go does not export across packages, and
-// promoting it to non-test code would ship a test helper in the service binary. The
-// duplication is a few lines and the comment on newPartialUpdateWireCtx says what it is
-// for, which is a better trade than either alternative.
-func wireDSNName(t *testing.T) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '_'
-	}, t.Name())
 }

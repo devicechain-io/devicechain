@@ -12,9 +12,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/gorm"
 )
 
 // newScopingTestApi builds an Api with every table the ADR-062 S2 membership subsystem
@@ -25,11 +24,7 @@ func newScopingTestApi(t *testing.T) (*Api, context.Context) {
 	// Shared-cache named in-memory DB: an attribute write now opens a transaction while
 	// ResolveEntityToken already ran on the pool connection, so all connections must see
 	// the same tables (a bare ":memory:" gives one DB per connection).
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

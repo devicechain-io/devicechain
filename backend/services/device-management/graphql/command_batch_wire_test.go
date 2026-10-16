@@ -14,9 +14,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/entity"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	gql "github.com/graph-gophers/graphql-go"
-	"gorm.io/gorm"
 )
 
 // batchApiOf pulls the Api back out of a wire context for seeding.
@@ -33,11 +32,7 @@ func batchApiOf(t *testing.T, ctx context.Context) *model.Api {
 // tables the batch target/validation queries touch.
 func newBatchWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

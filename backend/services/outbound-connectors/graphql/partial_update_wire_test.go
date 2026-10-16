@@ -11,11 +11,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
-	"github.com/glebarez/sqlite"
 	gql "github.com/graph-gophers/graphql-go"
-	"gorm.io/gorm"
 )
 
 // THE WIRE HALF of the connector's partial-update guarantee.
@@ -31,23 +30,7 @@ const testWireRootKey = "0123456789abcdef0123456789abcdef"
 
 func connectorWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+wireDSNName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	// 🔴 A shared-cache in-memory database lives while a connection to it is open, and
-	// gorm closes none — so without this the name survives the test that made it and the
-	// next test to reuse it inherits these rows.
-	t.Cleanup(func() {
-		sqlDB, cerr := db.DB()
-		if cerr != nil {
-			t.Errorf("reach the underlying pool to close it: %v", cerr)
-			return
-		}
-		if cerr := sqlDB.Close(); cerr != nil {
-			t.Errorf("close the fixture's pool: %v", cerr)
-		}
-	})
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
@@ -68,20 +51,6 @@ func connectorWireCtx(t *testing.T) context.Context {
 	ctx = auth.WithClaims(ctx, &auth.Claims{Authorities: []string{string(auth.ConnectorWrite)}})
 	api := model.NewApi(&rdb.RdbManager{Database: db}, secrets.NewStore(db, kek))
 	return context.WithValue(ctx, gqlcore.ContextApiKey, api)
-}
-
-// wireDSNName turns a test's name into something safe to sit in a SQLite URI. Subtest
-// names carry "/" and Go appends "#01" whenever one name repeats within a run — and a
-// URI reads "#" as the start of a FRAGMENT, so the name silently truncates and sqlite
-// falls back to an ON-DISK FILE in the working directory.
-func wireDSNName(t *testing.T) string {
-	out := []rune(t.Name())
-	for i, r := range out {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
-			out[i] = '_'
-		}
-	}
-	return string(out)
 }
 
 const updateConnectorDoc = `

@@ -13,7 +13,7 @@ import (
 	dccore "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"gorm.io/gorm"
 )
 
@@ -34,16 +34,7 @@ import (
 func newFencedRuleStatStore(t *testing.T) (*RuleStatStore, *gorm.DB, *rdbtest.StatementCounter) {
 	t.Helper()
 	counter := rdbtest.NewStatementCounter(rdb.FenceTable)
-	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: counter})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() {
-		if sqldb, err := db.DB(); err == nil {
-			_ = sqldb.Close()
-		}
-	})
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: counter})
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

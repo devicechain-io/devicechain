@@ -24,14 +24,13 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
-	"github.com/glebarez/sqlite"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // These tests run the configuration delivery loop over a real embedded broker, through the
@@ -73,9 +72,7 @@ func startDeliveryFixture(t *testing.T) *deliveryFixture {
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	buildMetrics()
 
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
+	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceCredential{}, &model.DeviceReplacement{},
 		&model.EntityAttribute{}, &model.EntityGroup{}, &model.EntityGroupVersion{}, &model.EntityGroupMembership{},

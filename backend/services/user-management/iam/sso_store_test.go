@@ -11,9 +11,9 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/schema"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -36,9 +36,7 @@ func newSsoStore(t *testing.T) *Store {
 // connection's sealed client secret written and removed alongside its row.
 func newSsoFixture(t *testing.T) (*Store, secrets.SecretStore) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(
-		"file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
-	require.NoError(t, err)
+	db := sqlitetest.OpenMemory(t, nil, "_pragma=foreign_keys(1)")
 	// Migrate BEFORE the callbacks, as production does: gorm's own schema introspection is
 	// a statement the tenant guard (rightly) refuses.
 	for _, m := range schema.Migrations {
@@ -51,7 +49,7 @@ func newSsoFixture(t *testing.T) (*Store, secrets.SecretStore) {
 	require.NoError(t, db.Raw(`PRAGMA foreign_keys`).Scan(&fk).Error)
 	require.Equal(t, 1, fk, "a test of foreign keys on a database not enforcing them proves nothing")
 	raw := make([]byte, 32)
-	_, err = rand.Read(raw)
+	_, err := rand.Read(raw)
 	require.NoError(t, err)
 	sealed, err := secrets.NewFromConfig(context.Background(),
 		config.SecretsConfiguration{RootKey: base64.StdEncoding.EncodeToString(raw)}, db)

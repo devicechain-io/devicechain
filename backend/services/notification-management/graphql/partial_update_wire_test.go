@@ -12,12 +12,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
-	"github.com/glebarez/sqlite"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/ast"
-	"gorm.io/gorm"
 )
 
 // THE WIRE HALF of this service's partial-update guarantee.
@@ -55,31 +54,13 @@ import (
 // (the channel resolvers reach it for hasSecret), a tenant, and the write authority these
 // mutations require.
 //
-// 🔴 THE TEST NAME IS SANITIZED BEFORE IT GOES IN A URI. A raw t.Name() carries "/" for
-// every subtest and "#01", "#02" … whenever one name repeats within a run, and a URI reads
-// "#" as the start of a FRAGMENT — so the database name silently truncates and sqlite falls
-// back to an ON-DISK FILE in the working directory, shared with every other test that
-// truncates the same way and outliving the run.
-//
-// 🔴 AND THE POOL IS CLOSED. A shared-cache in-memory database lives while a connection to
-// it is open, gorm closes none, and the next test with the same name inherits its rows.
+// The database comes from sqlitetest.OpenMemory, which names it per call — so a
+// repeat of this test in one process (`go test -count=2`) starts empty, and the "#" Go
+// appends to a repeated subtest name cannot send sqlite to an on-disk file — and closes
+// its pool when the test ends.
 func newWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+wireDSNName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, cerr := db.DB()
-		if cerr != nil {
-			t.Errorf("reach the underlying pool to close it: %v", cerr)
-			return
-		}
-		if cerr := sqlDB.Close(); cerr != nil {
-			t.Errorf("close the fixture's pool: %v — the shared-cache database outlives this "+
-				"test and the next one to reuse its name inherits these rows", cerr)
-		}
-	})
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
@@ -105,17 +86,6 @@ func newWireCtx(t *testing.T) context.Context {
 	ctx = context.WithValue(ctx, gqlcore.ContextRdbKey, rdbManager)
 	return context.WithValue(ctx, gqlcore.ContextApiKey,
 		model.NewApi(rdbManager, secrets.NewStore(db, kek)))
-}
-
-// wireDSNName turns a test's name into something safe to sit in a SQLite URI. See the "#"
-// note on newWireCtx for why this is not cosmetic.
-func wireDSNName(t *testing.T) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '_'
-	}, t.Name())
 }
 
 func apiOf(t *testing.T, ctx context.Context) *model.Api {
