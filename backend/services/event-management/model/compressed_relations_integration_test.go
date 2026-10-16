@@ -44,29 +44,43 @@ func TestIntegrationCompressedRelationsFindWhatCompressionCreated(t *testing.T) 
 	assert.Empty(t, none, "nothing is compressed yet")
 
 	require.NoError(t, sys.Exec(enableCompressionStmt("events")).Error)
-	var chunk string
+	var chunks []string
 	require.NoError(t, sys.Raw(`SELECT format('%I.%I', chunk_schema, chunk_name)
 		FROM timescaledb_information.chunks
 		WHERE hypertable_schema = 'event-management' AND hypertable_name = 'events'
-		ORDER BY range_start LIMIT 1`).Scan(&chunk).Error)
-	require.NotEmpty(t, chunk)
+		ORDER BY range_start`).Scan(&chunks).Error)
+	require.Len(t, chunks, 2, "twoChunkSeed gives events two chunks")
 
-	before := internalTables(t, sys)
-	require.NoError(t, sys.Exec(`SELECT compress_chunk(?::regclass)`, chunk).Error)
-	var created []string
-	for _, rel := range internalTables(t, sys) {
-		if !slices.Contains(before, rel) {
-			created = append(created, rel)
+	// compress compresses one chunk and returns the one relation that made.
+	compress := func(chunk string) string {
+		t.Helper()
+		before := internalTables(t, sys)
+		require.NoError(t, sys.Exec(`SELECT compress_chunk(?::regclass)`, chunk).Error)
+		var created []string
+		for _, rel := range internalTables(t, sys) {
+			if !slices.Contains(before, rel) {
+				created = append(created, rel)
+			}
 		}
+		require.Len(t, created, 1, "compress_chunk creates one relation for one chunk")
+		return created[0]
 	}
-	require.Len(t, created, 1, "compress_chunk creates one relation for one chunk")
 
+	first := compress(chunks[0])
 	got, err := compressedRelations(sys, "events")
 	require.NoError(t, err)
-	require.Equal(t, created, got, "the compressed relation of the one compressed chunk")
+	require.Equal(t, []string{first}, got, "the compressed relation of the one compressed chunk")
 	var rows int64
 	require.NoError(t, sys.Raw(`SELECT count(*) FROM `+got[0]).Scan(&rows).Error)
 	assert.Positive(t, rows, "%s holds the chunk's compressed batches", got[0])
+
+	// Every compressed chunk, not one of them: a relation the lookup misses is one the
+	// migrations do not lock up front, and the build then meets its holder inside the
+	// build instead of at the bounded LOCK.
+	second := compress(chunks[1])
+	both, err := compressedRelations(sys, "events")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{first, second}, both, "both compressed chunks' relations")
 
 	other, err := compressedRelations(sys, "measurement_events")
 	require.NoError(t, err)
@@ -76,7 +90,12 @@ func TestIntegrationCompressedRelationsFindWhatCompressionCreated(t *testing.T) 
 	require.NoError(t, err)
 	assert.Empty(t, missing, "a table that does not exist has no compressed relations, and is not an error")
 
-	require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, chunk).Error)
+	require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, chunks[0]).Error)
+	left, err := compressedRelations(sys, "events")
+	require.NoError(t, err)
+	assert.Equal(t, []string{second}, left, "decompressing one chunk drops its relation and only its relation")
+
+	require.NoError(t, sys.Exec(`SELECT decompress_chunk(?::regclass)`, chunks[1]).Error)
 	after, err := compressedRelations(sys, "events")
 	require.NoError(t, err)
 	assert.Empty(t, after, "a decompressed chunk has no compressed relation to lock")

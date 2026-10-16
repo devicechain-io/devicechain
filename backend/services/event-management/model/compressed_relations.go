@@ -29,7 +29,12 @@ import "gorm.io/gorm"
 //
 // Measured against the 2.28.3, 2.29.0, 2.29.2 and 2.30.2 catalogs with a compressed
 // chunk, a decompressed one and an uncompressed one, it returns exactly the relations the
-// 2.28 query returned. to_regclass keeps the old query's answer for a missing table — no
+// 2.28 query returned; on 2.28.3 it also matched it for partially compressed, frozen,
+// recompressed and merged chunks, dropped chunks, and chunks in another schema. It holds
+// for chunks compressed by an OLDER TimescaleDB too: with chunks compressed under 2.13.0
+// through 2.27.0 and the extension then updated in place (ALTER EXTENSION timescaledb
+// UPDATE), it matched the old query on 2.28.3 and found every compressed chunk on 2.30.2,
+// because the update scripts write the per-chunk rows it reads. to_regclass keeps the old query's answer for a missing table — no
 // rows — rather than an error.
 const compressedRelationsSQL = `SELECT format('%I.%I', n.nspname, r.relname)
 	FROM pg_inherits i
