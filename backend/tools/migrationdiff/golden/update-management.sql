@@ -46,6 +46,7 @@ CREATE INDEX "idx_update-management_update_assignments_device_token" ON "update-
 CREATE INDEX "idx_update-management_update_assignments_tenant_id" ON "update-management".update_assignments USING btree (tenant_id);
 CREATE INDEX "idx_update-management_update_attempts_tenant_id" ON "update-management".update_attempts USING btree (tenant_id);
 CREATE INDEX idx_audit_tenant_time ON "update-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_update_assignments_scope_anchors ON "update-management".update_assignments USING gin (scope_anchors);
 CREATE INDEX ix_update_attempts_state_report ON "update-management".update_attempts USING btree (state, last_report_at);
 CREATE SCHEMA "update-management";
 CREATE SEQUENCE "update-management".artifact_signatures_id_seq
@@ -177,7 +178,8 @@ CREATE TABLE "update-management".update_assignments (
  artifact_id bigint NOT NULL,
  actor character varying(256),
  superseded_at timestamp with time zone,
- signature_id bigint
+ signature_id bigint,
+ scope_anchors text[]
 );
 CREATE TABLE "update-management".update_attempts (
  id bigint NOT NULL,

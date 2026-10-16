@@ -353,6 +353,32 @@ Los datos generados se quedan en tu navegador y nunca se guardan.
 El historial solo crece. Publicar, activar una versión y revertir dejan las versiones anteriores en
 su sitio.
 
+## Compartir con clientes {#sharing-with-customers}
+
+Un miembro cuyo acceso está limitado a algunos de tus clientes ve un panel solo cuando se comparte con
+uno de esos clientes. Comparte un panel con la mutación `shareDashboard`, que requiere
+`dashboard:write`:
+
+```graphql
+mutation {
+  shareDashboard(token: "plant-overview", anchors: [{ kind: CUSTOMER, token: "acme" }]) {
+    token
+    sharedWith { kind token }
+  }
+}
+```
+
+- La lista que envías sustituye a la anterior. Una lista vacía no comparte el panel con nadie.
+- Todos los clientes deben existir. Si uno no existe, la solicitud falla con `NOT_FOUND` y nada
+  cambia.
+- Ese miembro solo ve en la lista los paneles **publicados** compartidos con sus clientes, y abre su
+  versión publicada. Nunca ve un borrador ni el historial de versiones. Cualquier otro panel se
+  responde como si no existiera.
+- Compartir un panel no comparte datos. Cada widget sigue mostrando solo lo que el miembro puede ver.
+- Un miembro con acceso limitado no puede compartir un panel ni ver con quién está compartido.
+- Eliminar el panel elimina sus comparticiones. Eliminar un cliente elimina las comparticiones que lo
+  nombran.
+
 ## Relacionado
 
 - [Paneles](../concepts/dashboards.md): widgets, fuentes de datos, versiones e incrustación

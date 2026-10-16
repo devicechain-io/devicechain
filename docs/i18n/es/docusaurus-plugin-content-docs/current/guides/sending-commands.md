@@ -245,6 +245,27 @@ informan desenlaces, un comando permanece en `SENT` toda la semana antes de que 
 registre lo que ya sospechabas. Fija `expiresAt` con lo que signifique «todavía útil» para esa
 actuación — un reinicio que no ha ocurrido en diez minutos ya no va a ocurrir.
 
+## Miembros limitados a algunos clientes {#members-limited-to-some-customers}
+
+El acceso de un miembro a tu tenant puede limitarse a algunos de tus clientes. Ese miembro trabaja
+solo con los dispositivos [asignados](./managing-assignments.md) a esos clientes:
+
+- **Lectura.** `commands`, `commandsById` y `commandsByToken` devuelven los comandos enviados a un
+  dispositivo mientras estaba asignado a uno de los clientes del miembro. Un comando registra a quién
+  estaba asignado el dispositivo cuando se envió, así que reasignar el dispositivo después no mueve
+  los comandos que ya se le enviaron. Los comandos enviados antes de que tu instancia registrara esto
+  no se muestran a ese miembro.
+- **Envío.** Con `command:write`, el miembro puede enviar un comando a un dispositivo asignado ahora a
+  uno de sus clientes. Cualquier otro dispositivo se rechaza con `DEVICE_NOT_FOUND`, con el mismo
+  texto que para un dispositivo que no existe, sea cual sea el otro problema que tuviera el comando.
+- **Retenciones.** `deviceCommandHold` responde para un dispositivo asignado ahora a uno de los
+  clientes del miembro, y cuenta todos los comandos retenidos para él. Cualquier otro dispositivo
+  falla con `NOT_FOUND`.
+- **Todo lo demás** falla con `FORBIDDEN`: cancelar y todas las operaciones de comandos de flota.
+
+El límite de comandos no entregados (`HELD_CEILING_EXCEEDED`) cuenta los comandos de todo el tenant,
+no solo los del miembro.
+
 ## Comandar muchos dispositivos a la vez {#commanding-many-devices-at-once}
 
 Todo lo anterior emite un comando para un dispositivo. Para enviar un solo comando a una flota

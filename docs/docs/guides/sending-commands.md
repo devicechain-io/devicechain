@@ -233,6 +233,25 @@ outcomes, a command sits in `SENT` for the whole week before `TIMEOUT` records w
 suspected. Set `expiresAt` to whatever "still useful" means for that actuation — a reboot that
 has not landed in ten minutes is not going to.
 
+## Members limited to some customers {#members-limited-to-some-customers}
+
+A member's access to your tenant can be limited to some of your customers. Such a member works only
+with the devices [assigned](./managing-assignments.md) to those customers:
+
+- **Reading.** `commands`, `commandsById` and `commandsByToken` return the commands sent to a device
+  while it was assigned to one of the member's customers. A command records who the device was
+  assigned to when it was sent, so reassigning the device later does not move the commands already
+  sent to it. Commands sent before your instance recorded this are not shown to such a member.
+- **Sending.** With `command:write`, the member can send a command to a device that is assigned to
+  one of its customers now. Any other device is refused with `DEVICE_NOT_FOUND`, worded exactly as
+  for a device that does not exist, whatever else would have been wrong with the command.
+- **Holds.** `deviceCommandHold` answers for a device assigned to one of the member's customers now,
+  counting every command held for it. Any other device fails with `NOT_FOUND`.
+- **Everything else** fails with `FORBIDDEN`: cancelling, and every fleet command operation.
+
+The limit on undelivered commands (`HELD_CEILING_EXCEEDED`) counts the whole tenant's commands, not
+only the member's.
+
 ## Commanding many devices at once {#commanding-many-devices-at-once}
 
 Everything above issues one command to one device. To send one command to a whole fleet — named

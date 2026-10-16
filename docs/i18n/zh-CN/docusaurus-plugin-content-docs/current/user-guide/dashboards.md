@@ -199,6 +199,26 @@ import GuideShot from '@site/src/components/GuideShot';
 
 历史只增不减。发布、设为生效和回滚都会保留较早的版本。
 
+## 与客户共享 {#sharing-with-customers}
+
+访问仅限部分客户的成员，只有在仪表盘共享给其中某个客户之后才能看到它。使用需要 `dashboard:write` 的 `shareDashboard` 变更共享仪表盘：
+
+```graphql
+mutation {
+  shareDashboard(token: "plant-overview", anchors: [{ kind: CUSTOMER, token: "acme" }]) {
+    token
+    sharedWith { kind token }
+  }
+}
+```
+
+- 你发送的列表会替换之前的列表。空列表表示不与任何人共享。
+- 每个客户都必须存在。若有一个不存在，请求以 `NOT_FOUND` 失败，且不做任何更改。
+- 这样的成员只能在列表中看到共享给其客户的**已发布**仪表盘，并打开其已发布版本。它永远看不到草稿或版本历史。其他任何仪表盘都按不存在作答。
+- 共享仪表盘并不共享数据。每个小部件仍只显示该成员可以查看的内容。
+- 访问受限的成员不能共享仪表盘，也不能查看仪表盘共享给了谁。
+- 删除仪表盘会删除其共享。删除客户会删除指向该客户的共享。
+
 ## 相关内容 {#related}
 
 - [仪表板](/concepts/dashboards)：组件、数据源、版本管理与嵌入
