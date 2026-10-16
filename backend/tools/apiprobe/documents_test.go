@@ -172,6 +172,9 @@ func TestEveryEntityDocumentValidatesAgainstItsServedSchema(t *testing.T) {
 		if e.ReadInput != "" {
 			readVars = map[string]any{"c": e.ReadVars}
 		}
+		if e.ReadAll {
+			readVars = map[string]any{}
+		}
 		if errs := schema.ValidateWithVariables(e.readDoc(), readVars); len(errs) > 0 {
 			t.Errorf("entity %q: the read-back does not validate against %s: %v\n  document: %s",
 				e.Name, e.Area, errs, e.readDoc())

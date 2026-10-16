@@ -226,6 +226,20 @@ func (b *baseline) supports(e entity) (bool, string) {
 		}
 		return true, ""
 	}
+	if e.ReadAll {
+		// An argument-less read is matched on the query's existence alone: there is no
+		// argument to spell, which is the whole of its shape.
+		if !rootFieldTakes(s, "mutation", e.Mutation, e.arg()) {
+			return false, "the baseline does not declare " + e.Mutation + "(" + e.arg() + ":…)"
+		}
+		if rootField(s, "query", e.Read) == nil {
+			return false, "the baseline does not declare " + e.Read
+		}
+		if input := inputTypeName(e.Input); !declaresInput(s, input) {
+			return false, "the baseline does not declare input " + input
+		}
+		return true, ""
+	}
 	if e.Publish {
 		if !rootFieldTakes(s, "mutation", e.Mutation, "token") {
 			return false, "the baseline does not declare " + e.Mutation + "(token:…)"
