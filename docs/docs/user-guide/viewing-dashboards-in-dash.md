@@ -42,13 +42,16 @@ See [Exporting](/user-guide/dashboards#exporting) and, for binding manifests,
 
 ## The board
 
-The loaded board fills the page under a slim header. The header shows the dashboard's title and
-offers the language switch, **Dark theme** (or **Light theme**), **Change**, which returns to the
-load form, and **Sign out**.
+The loaded board fills the page under a slim header. The header shows the dashboard's title, the
+time range and **Pause** (see [Time range and pause](#time-range-and-pause)) and a connection
+indicator, and offers the language switch, **Dark theme** (or **Light theme**), **Change**, which
+returns to the load form, and **Sign out**.
 
-<GuideShot id="dash-view" alt="The Widget Lab board in the /dash viewer, light theme. The header shows Widget Lab and the buttons English, Español, Dark theme, Change and Sign out. Below: a title card, a temperature readout of 35.0 C, a temperature gauge, an Active alarms count of 2 with worst severity Major, an image, a line chart of temperature and humidity, a Latest values table, an Alarms table with two Major active alarms and Ack and Clear buttons, and a Setpoint command form with a Send Set Setpoint button." />
+<GuideShot id="dash-view" alt="The Widget Lab board in the /dash viewer, light theme. The header shows Widget Lab, the time ranges 15m, 1h (selected), 6h, 24h and 7d, a Pause button, a Live indicator, and the buttons English, Español, Dark theme, Change and Sign out. Below: a title card, a temperature readout, a temperature gauge, an Active alarms count, an image, a line chart of temperature and humidity marked 15m, and a Latest values table." />
 
-The widgets are live: values, charts and alarms update as data arrives. The viewer cannot change the
+The widgets are live: values, charts and alarms update as data arrives. The connection indicator
+reads **Live** while they do. If the connection drops it reads **Reconnecting**, then **Offline**
+once it has been down for 20 seconds, and the widgets pick up again on their own when it returns. The viewer cannot change the
 dashboard, but widget actions still work for those allowed to use them. Someone whose role grants
 `alarm:write` can acknowledge and clear alarms from the board, and someone with `command:write` can
 send commands to real devices. The server checks those rights for every action. See
@@ -62,7 +65,7 @@ language the viewer is set to.
 The theme button switches the board between light and dark, and this browser remembers your choice
 for next time.
 
-<GuideShot id="dash-dark" alt="The same Widget Lab board in the dark theme: dark backgrounds, light text, the header button now reading Light theme, and the charts, gauge, alarm table and command form restyled for the dark background." />
+<GuideShot id="dash-dark" alt="The same Widget Lab board in the dark theme: dark backgrounds, light text, the header button now reading Light theme, and the readout, gauge, alarm count, chart and table restyled for the dark background." />
 
 ## Time range and pause {#time-range-and-pause}
 
@@ -102,21 +105,23 @@ the right mode:
 | --- | --- | --- |
 | `dashboard` | a dashboard token | Loads that dashboard straight after sign-in, including after single sign-on. |
 | `kiosk` | `1` or `true` | Kiosk mode: hides the header and its controls, and shows a **Fullscreen** button instead. |
+| `chrome` | `0` or `false` | With `kiosk`, also hides the connection indicator and the **Fullscreen** button, for a page that frames the board itself. The indicator still appears whenever the board is not live. |
 | `theme` | `dark` or `light` | Sets the theme. Unlike the theme button, the parameter is not remembered. |
 | `density` | `compact`, `comfortable` or `wall` | Scales the board's text and spacing: `compact` is smaller, `wall` is larger, for a display read from across a room. Overrides the density the board was saved with. |
 | `range` | `15m`, `1h`, `6h`, `24h` or `7d` | Opens the board on that time range instead of the board's own. |
 | `paused` | `1` | Opens the board frozen at the moment it loads, with the **Paused** badge showing. Any other value opens it live. |
 
-A parameter with a value the viewer does not recognise is ignored, and the other parameters still
+A parameter with a value the viewer does not recognize is ignored, and the other parameters still
 apply.
 
-In kiosk mode the board takes the whole page. The only control is **Fullscreen** in the top right
-corner, which turns into **Exit fullscreen**; it is hidden if the browser cannot go full screen.
+In kiosk mode the board takes the whole page. The connection indicator sits in the top left corner.
+The only control is **Fullscreen** in the top right corner, which turns into **Exit fullscreen**; it
+is hidden if the browser cannot go full screen.
 There is no sign-out control in kiosk mode, so a wall display stays on its board. Kiosk mode has no
 time-range or pause controls either, but a board opened with `paused=1` still shows its **Paused**
 badge beside the connection indicator, so a frozen wall display says so.
 
-<GuideShot id="dash-kiosk" alt="The Widget Lab board in kiosk mode: no header, the title card at the top with a Fullscreen button in the top right corner, and the same live widgets below, including the alarm table with Ack and Clear and the Setpoint command form." />
+<GuideShot id="dash-kiosk" alt="The Widget Lab board in kiosk mode: no header, a Live indicator in the top left corner, a Fullscreen button in the top right corner, and the title card and the same live widgets below." />
 
 ## Staying signed in
 

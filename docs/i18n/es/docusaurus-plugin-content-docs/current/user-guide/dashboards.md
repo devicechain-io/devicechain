@@ -77,10 +77,16 @@ plantillas usan la misma revisión.
 
 Al abrir un panel se muestra con datos en vivo.
 
-<GuideShot id="dashboard-view" alt="El panel Widget Lab en modo de visualización, con los botones Vista previa, Exportar, Historial, Editar y Eliminar. Los widgets incluyen una etiqueta de título, una tarjeta de último valor y un indicador de temperatura de wl-sensor-01, un recuento de alarmas activas de wl-zone-01, una imagen, un gráfico de temperatura y humedad y una tabla de últimos valores con battery, humidity, pressure y temperature." />
+<GuideShot id="dashboard-view" alt="El panel Widget Lab en modo de visualización. La cabecera tiene los intervalos 15m, 1h (seleccionado), 6h, 24h y 7d, un botón Pausar, un indicador En vivo y los botones Vista previa, Exportar, Historial, Editar y Eliminar. Los widgets incluyen una etiqueta de título, una tarjeta de último valor y un indicador de temperatura de wl-sensor-01, un recuento de alarmas activas de wl-zone-01, una imagen, un gráfico de temperatura y humedad marcado 15m y una tabla de últimos valores con battery, humidity, pressure y temperature." />
 
-Los botones de la parte superior:
+En la parte superior:
 
+- **15m**, **1h**, **6h**, **24h** y **7d** fijan el intervalo de tiempo que dibujan los gráficos, y
+  **Pausar** congela el panel. Funcionan igual que en el visor /dash; consulta
+  [Intervalo de tiempo y pausa](./viewing-dashboards-in-dash.md#time-range-and-pause).
+- **En vivo** indica que el panel recibe los datos a medida que llegan. Si se corta la conexión
+  muestra **Reconectando**, y **Sin conexión** cuando lleva 20 segundos caída. Los widgets se
+  reanudan solos cuando vuelve la conexión.
 - **Vista previa** sustituye los datos en vivo por datos generados (consulta
   [Vista previa con datos sintéticos](#previewing-with-synthetic-data)).
 - **Exportar** copia o descarga el panel (consulta [Exportar](#exporting)).
@@ -91,13 +97,41 @@ Los botones de la parte superior:
 Los widgets con acciones, como reconocer una alarma o enviar un comando, también funcionan aquí. La
 plataforma comprueba cada acción contra tus propios permisos.
 
+### Cómo se ven los widgets {#what-the-widgets-look-like}
+
+El panel *Widget Lab* del inquilino de prueba contiene un widget de cada tipo integrado. Más abajo en
+la página:
+
+<GuideShot id="dashboard-gauges" alt="Widgets indicadores de wl-sensor-01: un indicador lineal y un termómetro de temperatura, ambos en rojo en su banda caliente, un indicador de nivel Tank level lleno hasta su porcentaje de humedad, un icono Battery con su carga, una luz de estado que indica Hot, barras de señal, una luz Powered que indica Off y, debajo, una brújula y dos anillos de progreso." />
+
+El indicador lineal, el indicador de nivel, la batería, la luz de estado, las barras de señal, la
+brújula y el anillo de progreso muestran cada uno una medición de un dispositivo. Los umbrales
+colorean la lectura según su banda, como en el indicador lineal y el termómetro de arriba.
+
+<GuideShot id="dashboard-stat-cards" alt="Ocho tarjetas de estadística de wl-sensor-01: Average temperature, Peak temperature (en rojo), Lowest temperature y Readings, cada una con su estadística y 1h; después Humidity total, Latest temperature, Average, last 5 min con Promedio · 5m, y Peak (smallest)." />
+
+Una tarjeta de estadística muestra una cifra sobre el intervalo de tiempo del panel, con la
+estadística y el intervalo que abarca, por ejemplo «Máximo · 1h». Una tarjeta con su propio **Intervalo
+de tiempo** lo conserva, como *Average, last 5 min* arriba.
+
+<GuideShot id="dashboard-bar-pie" alt="Dos gráficos de barras con las últimas lecturas de temperatura, humedad y batería de wl-sensor-01: Latest readings, con barras verticales en el orden de la fuente de datos, y Largest first, con barras horizontales de mayor a menor. Debajo, dos gráficos circulares de las mismas lecturas." />
+
+Los gráficos de barras y circulares comparan las últimas lecturas de un dispositivo. Un gráfico de
+barras dibuja columnas en un widget ancho y filas en uno alto.
+
+<GuideShot id="dashboard-fleet-table" alt="La tabla de flota Sensors in the zone de wl-zone-01: una fila por dispositivo (wl-sensor-01 y wl-sensor-03) con Temperature (C), ordenada por esa columna, Humidity (%) y Battery (%), cada valor con su antigüedad. Debajo, una tabla de flota más pequeña y un gráfico de barras Temperature by sensor." />
+
+La tabla de flota muestra una fila por dispositivo de un grupo y una columna por medición. Haz clic en
+el encabezado de una columna para ordenar por ella. Sus ajustes se describen en
+[Configurar un widget](#configurar-un-widget).
+
 ## Editar en el lienzo
 
 **Editar** convierte el panel en un lienzo. Los botones pasan a ser **Deshacer**, **Rehacer**,
 **Añadir widget**, **Pegar**, **Vista previa**, **Exportar**, **Historial**, **Guardar** y
 **Hecho**, y aparece una barra de ajustes de diseño.
 
-<GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra Añadir widget, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 12, Celda mínima 56, Separación 8, Margen 0 y Tamaño Llenar área. Los widgets aparecen enmarcados en el lienzo; algunos muestran un guion o el texto de que aún no hay datos." />
+<GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra un indicador En vivo, Deshacer y Rehacer, Añadir widget, Pegar, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 12, Celda mínima 56, Separación 8, Margen 0, Tamaño Llenar área, Intervalo de tiempo 1h y Densidad Cómoda. Los widgets aparecen enmarcados en el lienzo; algunos muestran un guion o el texto de que aún no hay datos." />
 
 - **Título** es el nombre del panel.
 - **Columnas**, **Celda mínima**, **Separación** y **Margen** definen la cuadrícula a la que se
@@ -109,6 +143,9 @@ plataforma comprueba cada acción contra tus propios permisos.
   24h o 7d. Una hora es el valor predeterminado. Los espectadores pueden elegir otro desde la cabecera
   y pausar el panel; consulta
   [Visualización de paneles en /dash](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
+- **Densidad** escala el texto y el espaciado de todos los widgets: **Compacta**, **Cómoda** (el
+  valor predeterminado) o **Pantalla mural**, para una pantalla que se lee desde el otro lado de una
+  sala. El visor /dash puede cambiarla para una pantalla concreta.
 
 Arrastra un widget para moverlo. Un contorno discontinuo muestra las celdas que ocupará al soltarlo,
 y queda exactamente ahí. Un widget que esté en su camino pasa al hueco libre más cercano, encima o
@@ -152,7 +189,7 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 
 **Añadir widget** abre el menú de widgets, agrupados según lo que hace cada uno.
 
-<GuideShot id="dashboard-add-widget" alt="El menú Añadir widget abierto en modo de edición, agrupado en Telemetría, Estático, Alarmas, Control, Navegación y Ubicación. Cada entrada muestra su identificador y su versión, por ejemplo timeseries-chart · v1.0.0." />
+<GuideShot id="dashboard-add-widget" alt="El menú Añadir widget abierto en modo de edición, con su grupo Telemetría: gráfico de series temporales 6×4, tarjeta de último valor 3×2, indicador 3×3, tabla 6×3, indicador lineal 4×3, indicador de nivel 3×4, batería 3×2, luz de estado 2×2, barras de señal 2×2, brújula 4×4, anillo de progreso 3×3, tarjeta de estadística 3×3, gráfico de barras 6×4, gráfico circular 4×4 y tabla de flota 12×6. Cada entrada muestra su identificador y su versión, por ejemplo timeseries-chart · v1.0.0, y su tamaño en celdas." />
 
 | Grupo | Widgets |
 |---|---|
@@ -163,15 +200,17 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 | Navegación | Selector de entidad, que permite al espectador elegir qué dispositivo o entidad muestra el panel |
 | Ubicación | Mapa, que dibuja sobre el mapa del inquilino (consulta [Configuración del inquilino](./tenant-settings.md)) |
 
-Cada entrada muestra el tamaño, en celdas, con el que se añade el widget, por ejemplo *4×3*. Elige
-uno para añadirlo en el primer hueco libre del lienzo y después configúralo.
+Cada entrada muestra el tamaño, en celdas, con el que se añade el widget, por ejemplo *4×3*. Desplaza
+el menú para ver los grupos que siguen a **Telemetría**. Elige un widget para añadirlo en el primer
+hueco libre del lienzo y después configúralo.
 
 ### Configurar un widget
 
 Selecciona un widget en el lienzo para abrir sus ajustes a la derecha. **Cuadrícula**, **Relativo
-a…** y **Eliminar** aparecen sobre el propio widget.
+a…**, **Duplicar**, **Copiar** y **Eliminar** aparecen sobre el propio widget, con tiradores en sus
+bordes y esquinas para cambiar su tamaño.
 
-<GuideShot id="dashboard-widget-config" alt="Modo de edición con la tarjeta de último valor Temperature seleccionada, con los botones Al frente y Eliminar sobre el widget. El panel de ajustes de la derecha muestra el título Temperature, una sección Contexto con Se vincula a en Con ámbito a un principal, Slot principal zone y Estrategia Selección manual, una sección Fuente de datos que explica que deriva del contexto principal, slot sensor, y un campo Medición." />
+<GuideShot id="dashboard-widget-config" alt="Modo de edición con la tarjeta de último valor Temperature seleccionada, con los botones Cuadrícula, Relativo a…, Duplicar, Copiar y Eliminar y los tiradores de tamaño sobre el widget. El panel de ajustes de la derecha muestra el título Temperature, una sección Contexto con Se vincula a en Con ámbito a un principal, Slot principal zone y Estrategia Selección manual, y el comienzo de una sección Fuente de datos." />
 
 Los ajustes dependen del widget. Los más comunes:
 
@@ -275,7 +314,7 @@ aleatorio). Estos nombres aparecen en inglés también en la consola en español
 funciona en los modos de visualización y de edición. Elige **Vista previa** de nuevo para volver a
 los datos en vivo.
 
-<GuideShot id="dashboard-preview" alt="El panel Widget Lab en modo de vista previa, con el selector de generador en Sine wave y el botón Vista previa resaltado. El gráfico muestra curvas sinusoidales suaves, el recuento de alarmas muestra 1 alarma de severidad mayor y las tarjetas y el indicador muestran valores generados." />
+<GuideShot id="dashboard-preview" alt="El panel Widget Lab en modo de vista previa, con el selector de generador en Sine wave y el botón Vista previa resaltado. El gráfico muestra curvas sinusoidales suaves, el recuento de alarmas muestra 1 alarma de severidad mayor, las tarjetas y el indicador muestran valores generados y la tabla muestra un único valor generado." />
 
 Los datos generados se quedan en tu navegador y nunca se guardan.
 
@@ -297,7 +336,7 @@ Los datos generados se quedan en tu navegador y nunca se guardan.
 **Historial** abre el historial de versiones. El borrador de un panel es lo que editas; una
 **versión** es una copia congelada del borrador que se muestra a los espectadores.
 
-<GuideShot id="dashboard-history" alt="El panel Historial de versiones. Una sección Publicar borrador actual tiene un campo Etiqueta opcional, un campo de descripción, la nota de que al publicar la versión nueva pasa a ser la que ven los espectadores y un botón Publicar versión. Debajo, Versiones publicadas muestra la versión 1, marcada como Activa, publicada por dana.okafor@acme-properties.example, con un botón Revertir." />
+<GuideShot id="dashboard-history" alt="El panel Historial de versiones. Una sección Publicar borrador actual tiene un campo Etiqueta opcional, un campo de descripción, la nota de que al publicar la versión nueva pasa a ser la que ven los espectadores y un botón Publicar versión. Debajo, Versiones publicadas muestra la versión 2, marcada como Activa, y la versión 1, ambas publicadas por sam.rivera@widgetlab.example. La versión 1 tiene un botón Activar, y cada versión tiene un botón Revertir en el borde derecho del panel." />
 
 - **Publicar borrador actual.** Añade una etiqueta opcional, como el nombre de una entrega, y una
   descripción, y elige **Publicar versión**. La versión nueva queda activa de inmediato. Guarda antes

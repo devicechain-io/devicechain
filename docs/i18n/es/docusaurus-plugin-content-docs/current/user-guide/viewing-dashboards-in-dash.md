@@ -44,14 +44,17 @@ si quieres, un manifiesto de vinculación que apunte sus slots a dispositivos co
 
 ## El panel
 
-El panel cargado ocupa la página bajo una cabecera estrecha. La cabecera muestra el título del panel y
-ofrece el selector de idioma, **Tema oscuro** (o **Tema claro**), **Cambiar**, que vuelve al
-formulario de carga, y **Cerrar sesión**.
+El panel cargado ocupa la página bajo una cabecera estrecha. La cabecera muestra el título del
+panel, el intervalo de tiempo y **Pausar** (consulta [Intervalo de tiempo y pausa](#time-range-and-pause))
+y un indicador de conexión, y ofrece el selector de idioma, **Tema oscuro** (o **Tema claro**),
+**Cambiar**, que vuelve al formulario de carga, y **Cerrar sesión**.
 
-<GuideShot id="dash-view" alt="El panel Widget Lab en el visor /dash, con tema claro. La cabecera muestra Widget Lab y los botones de idioma, Tema oscuro, Cambiar y Cerrar sesión. Debajo: una tarjeta de título, una lectura de temperatura, un indicador de temperatura, un recuento de alarmas activas, una imagen, un gráfico de líneas de temperatura y humedad, una tabla de últimos valores, una tabla de alarmas y un formulario de comando Setpoint con un botón Send Set Setpoint." />
+<GuideShot id="dash-view" alt="El panel Widget Lab en el visor /dash, con tema claro. La cabecera muestra Widget Lab, los intervalos 15m, 1h (seleccionado), 6h, 24h y 7d, un botón Pausar, un indicador En vivo y los botones de idioma, Tema oscuro, Cambiar y Cerrar sesión. Debajo: una tarjeta de título, una lectura de temperatura, un indicador de temperatura, un recuento de alarmas activas, una imagen, un gráfico de líneas de temperatura y humedad marcado 15m y una tabla de últimos valores." />
 
 Los widgets están en vivo: los valores, los gráficos y las alarmas se actualizan a medida que llegan
-datos. El visor no puede cambiar el panel, pero las acciones de los widgets siguen funcionando para
+datos. Mientras tanto, el indicador de conexión muestra **En vivo**. Si se corta la conexión muestra
+**Reconectando**, y **Sin conexión** cuando lleva 20 segundos caída; los widgets se reanudan solos
+cuando vuelve. El visor no puede cambiar el panel, pero las acciones de los widgets siguen funcionando para
 quien tiene permiso para usarlas. Quien tenga un rol con `alarm:write` puede reconocer y borrar
 alarmas desde el panel, y quien tenga `command:write` puede enviar comandos a dispositivos reales. El
 servidor comprueba esos permisos en cada acción. Consulta
@@ -67,7 +70,7 @@ estados de las alarmas, también aparecen en inglés en el visor en español.
 El botón de tema cambia el panel entre claro y oscuro, y este navegador recuerda tu elección para la
 próxima vez.
 
-<GuideShot id="dash-dark" alt="El mismo panel Widget Lab con el tema oscuro: fondos oscuros, texto claro, el botón de la cabecera que ahora dice Tema claro, y los gráficos, el indicador, la tabla de alarmas y el formulario de comando adaptados al fondo oscuro." />
+<GuideShot id="dash-dark" alt="El mismo panel Widget Lab con el tema oscuro: fondos oscuros, texto claro, el botón de la cabecera que ahora dice Tema claro, y la lectura, el indicador, el recuento de alarmas, el gráfico y la tabla adaptados al fondo oscuro." />
 
 ## Intervalo de tiempo y pausa {#time-range-and-pause}
 
@@ -110,6 +113,7 @@ panel adecuado en el modo adecuado:
 | --- | --- | --- |
 | `dashboard` | un token de panel | Carga ese panel justo después de iniciar sesión, también tras el inicio de sesión único. |
 | `kiosk` | `1` o `true` | Modo quiosco: oculta la cabecera y sus controles, y muestra en su lugar un botón **Pantalla completa**. |
+| `chrome` | `0` o `false` | Con `kiosk`, oculta también el indicador de conexión y el botón **Pantalla completa**, para una página que enmarca el panel por su cuenta. El indicador sigue apareciendo siempre que el panel no está en vivo. |
 | `theme` | `dark` o `light` | Fija el tema. A diferencia del botón de tema, el parámetro no se recuerda. |
 | `density` | `compact`, `comfortable` o `wall` | Escala el texto y el espaciado del panel: `compact` lo reduce y `wall` lo amplía, para una pantalla que se lee desde el otro lado de una sala. Sustituye la densidad con la que se guardó el panel. |
 | `range` | `15m`, `1h`, `6h`, `24h` o `7d` | Abre el panel con ese intervalo de tiempo en lugar del propio del panel. |
@@ -118,14 +122,14 @@ panel adecuado en el modo adecuado:
 Si un parámetro lleva un valor que el visor no reconoce, se ignora, y los demás parámetros se siguen
 aplicando.
 
-En modo quiosco el panel ocupa toda la página. El único control es **Pantalla completa**, en la
-esquina superior derecha, que pasa a ser **Salir de pantalla completa**; se oculta si el navegador no
+En modo quiosco el panel ocupa toda la página. El indicador de conexión está en la esquina superior
+izquierda. El único control es **Pantalla completa**, en la esquina superior derecha, que pasa a ser **Salir de pantalla completa**; se oculta si el navegador no
 puede pasar a pantalla completa. En modo quiosco no hay control para cerrar sesión, así que una
 pantalla mural se queda en su panel. El modo quiosco tampoco tiene controles de intervalo ni de pausa,
 pero un panel abierto con `paused=1` muestra igualmente su insignia **En pausa** junto al indicador de
 conexión, de modo que una pantalla mural congelada lo dice.
 
-<GuideShot id="dash-kiosk" alt="El panel Widget Lab en modo quiosco: sin cabecera, la tarjeta de título arriba con un botón de pantalla completa en la esquina superior derecha, y debajo los mismos widgets en vivo, incluidos la tabla de alarmas y el formulario de comando Setpoint." />
+<GuideShot id="dash-kiosk" alt="El panel Widget Lab en modo quiosco: sin cabecera, un indicador En vivo en la esquina superior izquierda, un botón de pantalla completa en la esquina superior derecha, y debajo la tarjeta de título y los mismos widgets en vivo." />
 
 ## Mantener la sesión
 
