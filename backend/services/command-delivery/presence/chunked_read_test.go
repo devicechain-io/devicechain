@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -221,7 +222,6 @@ func TestAReadWithNoTenantAsksNothing(t *testing.T) {
 type budgetSpy struct {
 	deadlines []time.Time
 	hadNone   int
-	sleep     time.Duration
 }
 
 func (b *budgetSpy) Query(ctx context.Context, _, _, _ string, vars map[string]any, out any) error {
@@ -229,13 +229,6 @@ func (b *budgetSpy) Query(ctx context.Context, _, _, _ string, vars map[string]a
 		b.deadlines = append(b.deadlines, deadline)
 	} else {
 		b.hadNone++
-	}
-	if b.sleep > 0 {
-		select {
-		case <-time.After(b.sleep):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
 	}
 	// 🔑 IT ANSWERS FOR ITS TOKENS, and that is not decoration. A spy that recorded the
 	// deadline and returned an empty response would leave the states map empty however
@@ -301,6 +294,59 @@ func TestTheChunksOfOneReadShareONEBudget(t *testing.T) {
 	}
 }
 
+// budgetClock is a parent context whose deadline passes when the test says so, not when
+// the wall clock does. Its Err is DeadlineExceeded once expired — the same error a real
+// spent budget produces — and it carries the tenant through the embedded context.
+//
+// 🔴 WHY NOT A SHORT REAL TIMEOUT. This test used to give the read a 60 ms parent budget
+// and make each chunk sleep 40 ms, betting that the first chunk's timer would fire before
+// the deadline. On a loaded -race runner the 40 ms timer slipped past the 60 ms deadline,
+// the FIRST chunk lost the race, nothing was kept, and the test failed on a read that
+// had behaved correctly: a chunk that did not complete in time is not supposed to be
+// kept. Which chunks complete inside the budget is the test's input, so the test decides
+// it rather than the scheduler.
+type budgetClock struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newBudgetClock(parent context.Context) *budgetClock {
+	return &budgetClock{Context: parent, done: make(chan struct{})}
+}
+
+func (c *budgetClock) Done() <-chan struct{} { return c.done }
+
+func (c *budgetClock) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *budgetClock) expire() { c.once.Do(func() { close(c.done) }) }
+
+// exhaustingClient answers like chunkingClient until call expireOn, where the budget runs
+// out while that chunk is in flight: it spends the budget, waits for the read's own
+// context to notice, and fails the way a call cut off by its deadline does.
+type exhaustingClient struct {
+	chunkingClient
+	expireOn int
+	expire   func()
+}
+
+func (c *exhaustingClient) Query(ctx context.Context, url, tenant, query string, vars map[string]any, out any) error {
+	if c.calls == c.expireOn {
+		c.calls++
+		c.expire()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return c.chunkingClient.Query(ctx, url, tenant, query, vars, out)
+}
+
 // TestChunksNotReachedInTimeDoNotReadAsAnswers covers what the budget does when it runs
 // out: the devices it never got to must not be mistaken for devices with no row.
 //
@@ -308,29 +354,40 @@ func TestTheChunksOfOneReadShareONEBudget(t *testing.T) {
 // devices, so both must reach the hold reconciler as "do not act on this" rather than as
 // "the projection has no row" — which is the release direction.
 func TestChunksNotReachedInTimeDoNotReadAsAnswers(t *testing.T) {
-	spy := &budgetSpy{sleep: 40 * time.Millisecond}
-	reader := NewGraphQLReader(spy, "http://device-state/graphql")
-	// A parent budget far shorter than readBudget, so the read runs out part-way through
-	// without the test waiting the real budget out.
-	ctx, cancel := context.WithTimeout(core.WithTenant(context.Background(), "acme"), 60*time.Millisecond)
-	defer cancel()
+	budget := newBudgetClock(core.WithTenant(context.Background(), "acme"))
+	// Chunks 0 and 1 complete; the budget runs out while chunk 2 is in flight; chunks 3
+	// and 4 are never reached.
+	client := &exhaustingClient{expireOn: 2, expire: budget.expire}
+	reader := NewGraphQLReader(client, "http://device-state/graphql")
 
 	asked := tokens(readChunkSize * 5)
-	states, err := reader.StatesFor(ctx, asked)
+	states, err := reader.StatesFor(budget, asked)
 	if err == nil {
 		t.Fatal("a read that ran out of budget must report it")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a read that ran out of budget must report the spent budget, got %v", err)
 	}
 	if len(states) == 0 {
 		t.Fatal("the chunks that DID complete before the budget ran out must still be kept")
 	}
-	if len(states) == len(asked) {
-		t.Fatal("the fixture did not actually run out of budget; this test measured nothing")
+	if len(states) != 2*readChunkSize {
+		t.Fatalf("exactly the two chunks that completed must be kept, got %d states", len(states))
 	}
-	// The last chunk is certainly unreached, and must not read as "the projection has no
-	// row for this device".
-	last := asked[len(asked)-1]
-	if Resolved(states, last, err) {
-		t.Fatalf("%s was never asked about and must not read as resolved", last)
+	for _, token := range asked[:2*readChunkSize] {
+		if !Resolved(states, token, err) {
+			t.Fatalf("%s was answered before the budget ran out and must stay resolved", token)
+		}
+	}
+	if client.calls != 3 {
+		t.Fatalf("the read must stop at the spent budget: expected 3 calls, got %d", client.calls)
+	}
+	// Every device in the cut-off chunk and the unreached ones must not read as "the
+	// projection has no row for this device".
+	for _, token := range asked[2*readChunkSize:] {
+		if Resolved(states, token, err) {
+			t.Fatalf("%s was never answered for and must not read as resolved", token)
+		}
 	}
 }
 
