@@ -338,3 +338,75 @@ describe('a board that reads more than one area', () => {
     expect(hub.connectionState).toBe('live');
   });
 });
+
+// A stream that resumes has missed whatever was sent while it was down, and nothing will ever
+// deliver it. The hub says so, per widget, so a widget that draws history reads it back instead of
+// joining the readings either side of the outage with a straight line.
+describe('a widget whose stream resumes after an interruption', () => {
+  function watch(hub: DashboardHub, deviceToken: string) {
+    const w = { values: [] as number[], resumed: 0 };
+    const dispose = hub.subscribeWidget(
+      { kind: 'device', deviceToken, measurements: ['t'] },
+      { next: (s) => w.values.push(s.value as number), reconnected: () => w.resumed++ },
+    );
+    return { w, dispose };
+  }
+
+  it('is told once per reconnect of its socket, and not on the first connect', async () => {
+    const hub = new DashboardHub({ resolver });
+    const { w } = watch(hub, 'd0');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(w.resumed).toBe(0);
+
+    FakeSocket.down = true;
+    live().drop(1006);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    expect(w.resumed).toBe(0);
+    FakeSocket.down = false;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(w.resumed).toBe(1);
+
+    live().drop(1006);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(w.resumed).toBe(2);
+  });
+
+  it('is told when the server ended its stream and it was opened again', async () => {
+    const hub = new DashboardHub({ resolver });
+    const { w } = watch(hub, 'd0');
+    const other = watch(hub, 'd1');
+    await vi.advanceTimersByTimeAsync(10);
+    const socket = live();
+    socket.end(socket.subscriptions.find((f) => (f.payload as { variables: { deviceToken: string } }).variables.deviceToken === 'd0')!);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(w.resumed).toBe(0);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(w.resumed).toBe(1);
+    // Only the stream that was ended resumed.
+    expect(other.w.resumed).toBe(0);
+  });
+
+  it('is not told once it has gone', async () => {
+    const hub = new DashboardHub({ resolver });
+    const { w, dispose } = watch(hub, 'd0');
+    watch(hub, 'd1'); // keeps the stream's socket wanted
+    await vi.advanceTimersByTimeAsync(10);
+    dispose();
+    live().drop(1006);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(w.resumed).toBe(0);
+  });
+
+  it('every member of a fleet widget is told, through the member feed', async () => {
+    const hub = new DashboardHub({ resolver: { ...resolver, devicesForAnchor: async () => ['m1', 'm2'] } });
+    let resumed = 0;
+    hub.subscribeMembers(
+      { kind: 'anchor', anchor: { kind: 'area', token: 'a' }, measurements: ['t'] } as never,
+      { roster: () => {}, next: () => {}, reconnected: () => resumed++ },
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    live().drop(1006);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(resumed).toBe(2);
+  });
+});

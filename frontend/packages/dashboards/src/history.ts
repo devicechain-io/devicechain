@@ -45,9 +45,14 @@ export function defaultHistoryWindow(): HistoryWindow {
 // It takes the widget with its CONCRETE datasource — a slot already resolved through the
 // bindings (resolveWidgetDatasource), as the renderer passes it — so the seed is for
 // exactly the device the widget's live stream is for. A raw slot seeds nothing.
+//
+// `rethrow` makes a failed read reject instead. A caller REPLACING a seed it already shows (the
+// re-read after a live feed was interrupted) must not mistake a failure for "no history": an empty
+// answer would wipe the history on screen and claim the outage held no readings.
 export async function fetchWidgetHistory(
   widget: WidgetInstance,
   window: HistoryWindow,
+  options: { rethrow?: boolean } = {},
 ): Promise<MeasurementSample[]> {
   const ds = widget.datasource;
   if (!ds || ds.kind !== 'device') return [];
@@ -86,7 +91,8 @@ export async function fetchWidgetHistory(
         classifier: null,
       }))
       .sort((a, b) => (a.occurredTime! < b.occurredTime! ? -1 : 1));
-  } catch {
+  } catch (err) {
+    if (options.rethrow) throw err;
     return [];
   }
 }

@@ -425,3 +425,86 @@ describe('which feed a widget gets', () => {
     expect(stream).toHaveBeenCalledTimes(1);
   });
 });
+
+// A member stream that resumes after an outage has missed whatever its device sent meanwhile. The
+// table must not go on showing the reading from before the outage as the device's latest.
+describe('after the live feed was interrupted', () => {
+  const at = (deviceToken: string, value: number, ms: number): MeasurementSample => ({
+    id: `${deviceToken}-${value}-${ms}`,
+    deviceToken,
+    eventType: 0,
+    occurredTime: iso(ms),
+    name: 'temperature',
+    value,
+    classifier: null,
+  });
+
+  it('reads the seeds again, so a reading sent during the outage is the one shown', async () => {
+    const f = makeHub();
+    mount(widget(), f.hub, live(3600));
+    act0(() => f.sink().roster(roster(['a'])));
+    await flush();
+    act0(() => f.seed('a', { latest: { temperature: at('a', 11, NOW - 600_000) }, observed: ['temperature'] }));
+    act0(() => f.sink().next(at('a', 21, NOW + 5_000)));
+    await flush();
+    expect(cellText('a', 'temperature')).toContain('21');
+
+    // Down for five minutes; the device reported 30 two minutes in, and nothing since.
+    vi.setSystemTime(NOW + 5 * 60_000 + 30_000);
+    act0(() => f.sink().reconnected?.());
+    await flush();
+    // Answered through the read made after the reconnect only, as the hub answers it.
+    const reread = f.seeds.mock.calls[1]?.[2] as ((t: string, s: MemberSeed | null) => void) | undefined;
+    act0(() => reread?.('a', { latest: { temperature: at('a', 30, NOW + 2 * 60_000) }, observed: ['temperature'] }));
+    await flush();
+    expect(cellText('a', 'temperature')).toContain('30');
+  });
+
+  it('reads once at once and once more past the next minute boundary, however many members resumed', async () => {
+    const f = makeHub();
+    mount(widget(), f.hub, live(3600));
+    act0(() => f.sink().roster(roster(['a', 'b', 'c'])));
+    await flush();
+    expect(f.seeds).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(NOW + 5 * 60_000 + 30_000);
+    act0(() => {
+      for (let i = 0; i < 3; i++) f.sink().reconnected?.();
+    });
+    await flush();
+    expect(f.seeds).toHaveBeenCalledTimes(2);
+    // The read that reaches the outage's last minute: its window ends on the boundary after it.
+    await act(async () => void (await vi.advanceTimersByTimeAsync(32_000)));
+    expect(f.seeds).toHaveBeenCalledTimes(3);
+    expect(f.windows[2].endTime).toBe(iso(NOW + 6 * 60_000 - 1));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(5 * 60_000)));
+    expect(f.seeds).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the reading it had when the re-read fails', async () => {
+    const f = makeHub();
+    mount(widget(), f.hub, live(3600));
+    act0(() => f.sink().roster(roster(['a'])));
+    await flush();
+    act0(() => f.seed('a', { latest: { temperature: at('a', 11, NOW - 600_000) }, observed: ['temperature'] }));
+    await flush();
+    act0(() => f.sink().reconnected?.());
+    await flush();
+    const reread = f.seeds.mock.calls[1]?.[2] as ((t: string, s: MemberSeed | null, x?: SeedFailure) => void) | undefined;
+    act0(() => reread?.('a', null, 'failed'));
+    await flush();
+    expect(cellText('a', 'temperature')).toContain('11');
+  });
+
+  it('stops its boundary read when the widget goes away', async () => {
+    const f = makeHub();
+    const { unmount } = mount(widget(), f.hub, live(3600));
+    act0(() => f.sink().roster(roster(['a'])));
+    await flush();
+    act0(() => f.sink().reconnected?.());
+    await flush();
+    const asked = f.seeds.mock.calls.length;
+    unmount();
+    await act(async () => void (await vi.advanceTimersByTimeAsync(2 * 60_000)));
+    expect(f.seeds).toHaveBeenCalledTimes(asked);
+  });
+});

@@ -113,10 +113,15 @@ export interface DeviceResolver {
 
 // WidgetStreamSink receives live samples for one widget, across every device its
 // datasource resolves to. next() fires per sample; error() once if selector
-// resolution or the socket fails.
+// resolution or the socket fails. reconnected() fires when one of its device streams resumes
+// after an interruption -- the socket dropped and came back, or the server ended the stream and it
+// was opened again. The samples sent meanwhile were never delivered and never will be: a widget
+// that draws history re-reads it rather than joining the readings either side of the outage.
+// Optional (a source that never drops a feed does not call it).
 export interface WidgetStreamSink {
   next: (sample: MeasurementSample) => void;
   error?: (err: unknown) => void;
+  reconnected?: () => void;
 }
 
 // ── Alarm channel ────────────────────────────────────────────────────────
@@ -450,7 +455,11 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
         sink.roster(roster);
         for (const member of roster.members) {
           detachers.push(
-            this.attach(member.token, names, { next: (sample) => sink.next(sample), error: (err) => sink.error?.(err) }),
+            this.attach(member.token, names, {
+              next: (sample) => sink.next(sample),
+              error: (err) => sink.error?.(err),
+              reconnected: () => sink.reconnected?.(),
+            }),
           );
         }
       })
@@ -1116,14 +1125,23 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     const open = (): void => {
       closeSocket = subscribe(EVENT_AREA, MEASUREMENT_STREAM, variables, adapter);
     };
+    // The stream resumed after an interruption: whatever was sent meanwhile was never delivered,
+    // and each subscriber is told so it can read the missed history back. Sent to the stream's own
+    // subscribers (not through `streams`), so an evicted stream's lingering ones hear nothing.
+    const resumed = (): void => {
+      if (!operationOpen) return;
+      for (const subscriber of [...stream.subscribers]) subscriber.sink.reconnected?.();
+    };
     const adapter: SubscriptionSink<MeasurementStreamResult> = {
       next: (data) => {
         ended = 0;
         this.fanout(deviceToken, data.measurementStream);
       },
-      connected: () => {
+      connected: (wasRetry) => {
         up = true;
         handle.connected();
+        // graphql-ws re-sends this operation on the new socket; a first connect is no gap.
+        if (wasRetry) resumed();
       },
       closed: () => {
         up = false;
@@ -1141,7 +1159,11 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       complete: () => {
         if (!operationOpen || !up) return;
         closeSocket?.();
-        reopen = setTimeout(open, Math.min(1000 * 2 ** ended++, 30_000));
+        reopen = setTimeout(() => {
+          open();
+          // Opened on a socket that is already up, so no connection_ack follows to say so.
+          resumed();
+        }, Math.min(1000 * 2 ** ended++, 30_000));
       },
       error: (err) => {
         // The upstream is dead. Evict it (and drop the socket-level subscription)

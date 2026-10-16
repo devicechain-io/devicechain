@@ -143,10 +143,20 @@ for as long as the board is open, and a stream the server ends is opened again a
 doubles up to 30 seconds. A widget whose code failed to download shows the failure in its own frame,
 and **Reset widget** downloads it again.
 
-:::note Known limitation
-When a board reconnects, the history it missed is not read again. A line chart draws a straight line
-across the outage, and fleet and aggregate figures leave out the readings sent during it.
-:::
+#### After a reconnect {#after-a-reconnect}
+
+Readings sent while a board's connection is down never arrive on the live stream, so when a stream
+comes back (the network or the server returned, or the server ended the stream and the board
+opened it again) each widget reads them from stored history instead:
+
+- a **line chart** reads its history again and replaces what it drew before the outage with it.
+  Until that read lands, or if it fails, the chart breaks its line across the outage instead of
+  drawing a straight line from the last reading before it to the first one after. A failed read is
+  tried again every 30 seconds. On a paused board the read waits until you resume;
+- a **fleet table** or a **bar chart with one bar per device** reads each device's latest values
+  again, at once and once more just after the next whole minute, so a reading sent in the outage's
+  last minute is included. A device whose read fails keeps the value it showed;
+- a **stat card** reads its figure again at once instead of at its next scheduled refresh.
 
 ## Authoring, versioning, and preview
 

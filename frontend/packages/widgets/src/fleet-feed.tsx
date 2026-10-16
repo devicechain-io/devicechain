@@ -15,7 +15,11 @@
 //     freeze instant while paused;
 //   - paused, live readings queue (newest per device and measurement) and merge on resume, so the
 //     table on screen does not move under a "Paused" badge;
-//   - a change of span re-reads the seeds; a reading older than the span is no longer shown.
+//   - a change of span re-reads the seeds; a reading older than the span is no longer shown;
+//   - a member stream that resumes after an interruption re-reads the seeds, at once and again just
+//     after the next minute boundary: the readings sent during the outage were never delivered, and
+//     a seed window ends on a minute boundary, so only the second read reaches the outage's last
+//     minute. A re-read that fails keeps the seed it would have replaced.
 //
 // Rebuilding the whole state per sample would re-render a 500-row table hundreds of times a
 // second, so changes are folded into a store and flushed at most once per FLUSH_MS.
@@ -45,6 +49,10 @@ import { LevelEmpty } from './level-readout';
 export const FLUSH_MS = 250;
 // How often a reading that has aged out of the span is dropped when nothing else changes.
 const AGE_OUT_MS = 30_000;
+// How long past a minute boundary the second re-read after an interruption waits, so the minute
+// that just closed is in the store's one-minute summaries before it is read.
+export const RESEED_SETTLE_MS = 2_000;
+const MINUTE_MS = 60_000;
 
 interface Store {
   // The selector this store was filled for: a render that carries a new selector must not show the
@@ -129,6 +137,9 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
   const [version, bump] = useReducer((n: number) => n + 1, 0);
   const [rosterKey, setRosterKey] = useState<string | null>(null);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Re-reads asked for by a member stream that resumed; the seeds effect re-runs on each.
+  const [resumes, resumed] = useReducer((n: number) => n + 1, 0);
+  const boundaryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const schedule = (): void => {
     if (flushTimer.current !== undefined) return;
@@ -164,11 +175,24 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
         s.error = err;
         schedule();
       },
+      // Every member stream on the socket resumes at once; the reducer folds them into one render,
+      // and one boundary read covers them all.
+      reconnected: () => {
+        resumed();
+        if (boundaryTimer.current !== undefined) return;
+        const at = now();
+        boundaryTimer.current = setTimeout(() => {
+          boundaryTimer.current = undefined;
+          resumed();
+        }, MINUTE_MS - (at % MINUTE_MS) + RESEED_SETTLE_MS);
+      },
     });
     return () => {
       dispose();
       if (flushTimer.current !== undefined) clearTimeout(flushTimer.current);
       flushTimer.current = undefined;
+      if (boundaryTimer.current !== undefined) clearTimeout(boundaryTimer.current);
+      boundaryTimer.current = undefined;
     };
     // `ds` is read through `dsKey` (value identity), not by reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -198,7 +222,9 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
       memberSeedPlan(seedWindow(spanSeconds, pausedAt ?? now()), names),
       (token, seed, failure) => {
         if (failure === 'forbidden') s.forbidden = true;
-        else s.seeds.set(token, seed ?? 'failed');
+        else if (seed) s.seeds.set(token, seed);
+        // A re-read that failed keeps the seed it would have replaced: that reading is still true.
+        else if (s.seeds.get(token) === undefined) s.seeds.set(token, 'failed');
         schedule();
       },
       () => cancelled,
@@ -207,7 +233,7 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hub, supported, dsKey, rosterKey, spanSeconds, pausedAt, namesKey]);
+  }, [hub, supported, dsKey, rosterKey, spanSeconds, pausedAt, namesKey, resumes]);
 
   // A reading ages out of the span with no event to say so.
   useEffect(() => {

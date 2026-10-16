@@ -3,7 +3,8 @@
 
 // timeseries-chart — a live line chart of the rolling measurement window, one
 // series per measurement name. The window is seeded from bucketedMeasurements
-// history (via useMeasurementStream's initialSamples) and extended by the live tail.
+// history (via useMeasurementStream's initialSamples) and extended by the live tail. An
+// interruption of the live feed that history has not filled yet is drawn as a break in the line.
 
 import { useMemo } from 'react';
 
@@ -49,8 +50,8 @@ function TimeSeriesBody({ widget, data }: WidgetProps) {
   const precision = optNumber(widget.options, 'precision');
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
   const option = useMemo(
-    () => buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale }, size),
-    [data.samples, theme, measurements, unit, precision, thresholds, scale, size],
+    () => buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale, gaps: data.gaps }, size),
+    [data.samples, data.gaps, theme, measurements, unit, precision, thresholds, scale, size],
   );
 
   return (

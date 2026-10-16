@@ -228,6 +228,15 @@ export interface MeasurementStreamOptions {
   // bucketedMeasurements backfill). Assumed chronological and older than the live
   // tail; live samples for the same measurement name override the seed's latest.
   initialSamples?: MeasurementSample[];
+  // When `initialSamples` was read up to (epoch ms, wall clock). After the live feed is interrupted,
+  // only a seed read at or after the moment it resumed covers the outage: such a seed REPLACES the
+  // live samples from before the interruption, and until one arrives the window reports the outage
+  // as a gap (MeasurementStreamState.gaps) rather than joining the readings either side. Omitted:
+  // no seed is ever taken as covering an outage, so an interruption stays a gap.
+  initialSamplesAsOf?: number;
+  // Called when the live feed resumes after an interruption, after the gap is recorded: the host
+  // reads the widget's history again and hands it back as `initialSamples` + `initialSamplesAsOf`.
+  onReconnect?: () => void;
 }
 
 // The ceiling on retained samples when the window is a span. A span of days at a high event
@@ -235,6 +244,7 @@ export interface MeasurementStreamOptions {
 export const MAX_SPAN_SAMPLES = 2000;
 
 const EMPTY: MeasurementStreamState = { latest: {}, samples: [], error: null };
+const NO_GAPS: Gap[] = [];
 
 // Build a name→last-sample map from a chronological list (last occurrence wins).
 function latestOf(samples: MeasurementSample[]): Record<string, MeasurementSample> {
@@ -253,6 +263,73 @@ function evictOldest(samples: MeasurementSample[], max: number, evicted: { curre
     if (at > evicted.current) evicted.current = at;
   }
   return samples.slice(cut);
+}
+
+// An interruption of the live feed: `after` is the time (epoch ms) of the newest sample known when
+// the feed resumed, `at` the wall-clock instant it resumed. Nothing is known between `after` and the
+// next sample until a seed read at or after `at` arrives.
+interface Gap {
+  after: number;
+  at: number;
+}
+
+interface LiveBuffer {
+  key: string | null;
+  state: MeasurementStreamState;
+  gaps: Gap[];
+}
+
+function timeOf(sample: MeasurementSample): number {
+  return sample.occurredTime ? Date.parse(sample.occurredTime) : Number.NaN;
+}
+
+// The newest sample time among the given samples, or -Infinity when none carries one.
+function newestTime(samples: Iterable<MeasurementSample> | undefined): number {
+  let newest = -Infinity;
+  if (!samples) return newest;
+  for (const s of samples) {
+    const at = timeOf(s);
+    if (at > newest) newest = at;
+  }
+  return newest;
+}
+
+// The oldest sample time among the given samples, or Infinity when none carries one.
+function oldestTime(samples: Iterable<MeasurementSample> | undefined): number {
+  let oldest = Infinity;
+  if (!samples) return oldest;
+  for (const s of samples) {
+    const at = timeOf(s);
+    if (at < oldest) oldest = at;
+  }
+  return oldest;
+}
+
+// settleGaps folds into the live buffer every gap a seed answers -- one read at or after the
+// moment the feed resumed. The seed is then the history up to and across the outage, so the live
+// samples it covers go: those from before the interruption, and any older than the seed's newest
+// (they would draw backwards). A measurement's latest value from before the interruption gives way
+// to the seed's when the seed has one. A sample with no readable time is kept: it cannot be shown
+// to be covered. Pure: the render applies it at once, and an effect commits it to the buffer.
+function settleGaps(buffer: LiveBuffer, seed: MeasurementSample[] | undefined, asOf: number | undefined): LiveBuffer {
+  if (buffer.gaps.length === 0 || !seed || asOf === undefined) return buffer;
+  const answered = buffer.gaps.filter((g) => asOf >= g.at);
+  if (answered.length === 0) return buffer;
+  const cutoff = Math.max(newestTime(seed), ...answered.map((g) => g.after));
+  const kept = (s: MeasurementSample): boolean => {
+    const at = timeOf(s);
+    return Number.isNaN(at) || at > cutoff;
+  };
+  const seeded = new Set(seed.map((s) => s.name));
+  const latest: Record<string, MeasurementSample> = {};
+  for (const [name, s] of Object.entries(buffer.state.latest)) {
+    if (kept(s) || !seeded.has(name)) latest[name] = s;
+  }
+  return {
+    key: buffer.key,
+    state: { ...buffer.state, latest, samples: buffer.state.samples.filter(kept) },
+    gaps: buffer.gaps.filter((g) => asOf < g.at),
+  };
 }
 
 // withinSpan drops the samples that occurred before `end - spanSeconds`. A sample whose time is
@@ -281,6 +358,7 @@ export function useMeasurementStream(
   const { windowSeconds, pausedAt } = options;
   const windowSize = options.window ?? (windowSeconds !== undefined ? MAX_SPAN_SAMPLES : 300);
   const initialSamples = options.initialSamples;
+  const seedAsOf = options.initialSamplesAsOf;
   const paused = pausedAt !== undefined;
 
   // Value-compare the selector so an unchanged-but-new object reference doesn't
@@ -304,24 +382,34 @@ export function useMeasurementStream(
   const evictedRef = useRef(-Infinity);
   const flushRef = useRef<() => void>(() => {});
   const clock = options.now ?? Date.now;
+  // Read by the subscription's callbacks: the seed on hand when the feed resumes (part of what was
+  // known before the gap), and the host's re-read.
+  const seedRef = useRef(initialSamples);
+  const onReconnectRef = useRef(options.onReconnect);
   useEffect(() => {
     spanRef.current = windowSeconds;
     clockRef.current = clock;
-  }, [windowSeconds, clock]);
+    seedRef.current = initialSamples;
+    onReconnectRef.current = options.onReconnect;
+  });
 
   // The live buffer is TAGGED with the selector it was filled from. The effect below
   // resets it when the selector changes, but an effect runs after the render that
   // carried the new selector — so without the tag that render would show the previous
   // device's values under the new one. A buffer whose tag is not the current key is
   // treated as empty, synchronously.
-  const [tagged, setTagged] = useState<{ key: string | null; state: MeasurementStreamState }>({
-    key,
-    state: EMPTY,
-  });
-  const live = tagged.key === key ? tagged.state : EMPTY;
+  const [tagged, setTagged] = useState<LiveBuffer>({ key, state: EMPTY, gaps: [] });
+  // The buffer as the current seed leaves it: a seed that covers an outage replaces what it covers
+  // in this very render, and the effect below commits that so the buffer does not keep it.
+  const settled = settleGaps(tagged, initialSamples, seedAsOf);
+  const live = settled.key === key ? settled.state : EMPTY;
+  const gaps = settled.key === key ? settled.gaps : NO_GAPS;
+  useEffect(() => {
+    if (initialSamples && seedAsOf !== undefined) setTagged((prev) => settleGaps(prev, initialSamples, seedAsOf));
+  }, [initialSamples, seedAsOf]);
 
   useEffect(() => {
-    setTagged({ key, state: EMPTY }); // reset the live buffer whenever the datasource changes (or clears)
+    setTagged({ key, state: EMPTY, gaps: [] }); // reset the live buffer whenever the datasource changes (or clears)
     queueRef.current = [];
     queueLatestRef.current = {};
     evictedRef.current = -Infinity;
@@ -332,7 +420,7 @@ export function useMeasurementStream(
     // after its subscription was released) leaves the buffer alone rather than re-tagging
     // it to the old selector, which would blank the current one's values.
     const update = (fn: (prev: MeasurementStreamState) => MeasurementStreamState) =>
-      setTagged((prev) => (prev.key === key ? { key, state: fn(prev.state) } : prev));
+      setTagged((prev) => (prev.key === key ? { ...prev, state: fn(prev.state) } : prev));
 
     const fold = (
       prev: MeasurementStreamState,
@@ -366,6 +454,28 @@ export function useMeasurementStream(
         update((prev) => fold(prev, [sample]));
       },
       error: (err) => update((prev) => ({ ...prev, error: err })),
+      // The feed resumed: what was sent meanwhile never arrived. Record where knowledge stops --
+      // the newest sample known, live, queued or seeded -- so the window shows a gap there, then
+      // ask the host for the history across it. Nothing known yet: no gap to show, but the
+      // history is still read again.
+      reconnected: () => {
+        const at = Date.now();
+        setTagged((prev) => {
+          if (prev.key !== key) return prev;
+          const after = Math.max(
+            newestTime(Object.values(prev.state.latest)),
+            newestTime(prev.state.samples),
+            newestTime(Object.values(queueLatestRef.current)),
+            newestTime(seedRef.current),
+          );
+          if (after === -Infinity) return prev;
+          // A gap from before the oldest sample still held breaks nothing; dropping it keeps the
+          // list from growing with every reconnect of a display left open for months.
+          const oldest = Math.min(oldestTime(prev.state.samples), oldestTime(seedRef.current));
+          return { ...prev, gaps: [...prev.gaps.filter((g) => g.after >= oldest), { after, at }] };
+        });
+        onReconnectRef.current?.();
+      },
     });
     // `datasource` is intentionally read via `key` (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -381,7 +491,7 @@ export function useMeasurementStream(
   // Layer the history seed under the live tail. Kept separate from the live buffer
   // so late-arriving history (async backfill) recomputes without touching the
   // subscription, and switching datasource clears live while the new seed applies.
-  return useMemo(() => {
+  const state = useMemo(() => {
     // The span is measured back from the freeze instant while paused, from now otherwise.
     const end = pausedAt ?? clock();
     if (windowSeconds === undefined) {
@@ -408,6 +518,17 @@ export function useMeasurementStream(
     if (truncatedBefore) state.truncatedBefore = truncatedBefore;
     return state;
   }, [initialSamples, live, windowSize, windowSeconds, pausedAt, clock]);
+
+  // The gaps still open, as instants. One from before the window's span says nothing about it.
+  const gapKey = gaps.map((g) => g.after).join(',');
+  return useMemo(() => {
+    if (gaps.length === 0) return state;
+    const from = windowSeconds === undefined ? -Infinity : (pausedAt ?? clock()) - windowSeconds * 1000;
+    const open = gaps.filter((g) => g.after >= from).map((g) => new Date(g.after).toISOString());
+    return open.length === 0 ? state : { ...state, gaps: open };
+    // `gaps` is read through gapKey (value identity).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, gapKey, windowSeconds, pausedAt, clock]);
 }
 
 const EMPTY_ALARMS: AlarmStreamState = { alarms: [], total: 0, loading: true, error: null };

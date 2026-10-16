@@ -454,3 +454,35 @@ describe('a stat card with nothing to show, says why', () => {
     expect(screen.getByText(/socket closed/)).toBeTruthy();
   });
 });
+
+// A live feed that resumes after an outage: the readings sent meanwhile are in the store, and the
+// figure must take them in now -- not when the next scheduled read comes round, which on a week's
+// span is 42 minutes later.
+describe('after the live feed was interrupted', () => {
+  it('reads the figure again at once', async () => {
+    let sink: WidgetStreamSink | null = null;
+    let max = 40;
+    const read = vi.fn(async () => [bucket({ max })]);
+    const hub = {
+      subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+      bucketMeasurements: read,
+    } as unknown as DashboardHub;
+    mount(widget(), hub, live(7 * 86400));
+    await settle();
+    expect(figure()).toContain('40');
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // The device peaked at 90 during the outage.
+    max = 90;
+    await advance(5 * 60_000);
+    expect(read).toHaveBeenCalledTimes(1);
+    act(() => sink!.reconnected?.());
+    await settle();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(figure()).toContain('90');
+  });
+});

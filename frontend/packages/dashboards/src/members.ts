@@ -44,6 +44,11 @@ export interface MemberSink {
   // rather than showing the generic error pane every ordinary member would see for a working platform.
   forbidden?(): void;
   error?(err: unknown): void;
+  // A member's live feed resumed after an interruption (a dropped socket, or the server ending
+  // the stream): readings sent meanwhile were never delivered, so a widget that seeds from history
+  // reads it again. Called once per member stream that resumed. Optional on both sides: a source
+  // that never drops a feed does not call it.
+  reconnected?(): void;
 }
 
 // Why one member's seed read did not come back.

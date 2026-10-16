@@ -584,3 +584,88 @@ describe('useLocationStream', () => {
     expect(f.unsub).not.toHaveBeenCalled();
   });
 });
+
+describe('useMeasurementStream across an interruption of the live feed', () => {
+  function resumingHub() {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+    } as unknown as DashboardHub;
+    return {
+      hub,
+      push: (m: MeasurementSample) => act(() => sink?.next(m)),
+      resume: () => act(() => sink?.reconnected?.()),
+    };
+  }
+  const t = (minute: number) => `2026-10-15T12:${String(minute).padStart(2, '0')}:00.000Z`;
+  type Props = { seed?: MeasurementSample[]; asOf?: number };
+
+  it('reports a gap after the newest known sample, and asks for the history again', () => {
+    const f = resumingHub();
+    const onReconnect = vi.fn();
+    const { result } = renderHook(() => useMeasurementStream(f.hub, ds, { onReconnect }));
+    f.push(sample('temperature', 1, t(0)));
+    f.resume();
+    f.push(sample('temperature', 2, t(5)));
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(result.current.gaps).toEqual([t(0)]);
+  });
+
+  it('asks for the history again with nothing known yet, but reports no gap', () => {
+    const f = resumingHub();
+    const onReconnect = vi.fn();
+    const { result } = renderHook(() => useMeasurementStream(f.hub, ds, { onReconnect }));
+    f.resume();
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(result.current.gaps).toBeUndefined();
+  });
+
+  it('a seed read before the feed resumed does not close the gap; one read after it does', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(t(6)));
+      const f = resumingHub();
+      const old = [sample('temperature', 9, t(0))];
+      const { result, rerender } = renderHook((p: Props) => useMeasurementStream(f.hub, ds, { initialSamples: p.seed, initialSamplesAsOf: p.asOf }), {
+        initialProps: { seed: old, asOf: Date.parse(t(1)) } as Props,
+      });
+      f.push(sample('temperature', 1, t(1)));
+      f.resume();
+      f.push(sample('temperature', 2, t(7)));
+      // A different array, but read before the feed resumed: still a gap.
+      rerender({ seed: [...old], asOf: Date.parse(t(5)) });
+      expect(result.current.gaps).toEqual([t(1)]);
+
+      rerender({ seed: [sample('temperature', 9, t(0)), sample('temperature', 50, t(3))], asOf: Date.parse(t(6)) });
+      expect(result.current.gaps).toBeUndefined();
+      expect(result.current.samples.map((s) => s.value)).toEqual([9, 50, 2]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a latest value from before the outage gives way to the seed, and one after it does not', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(t(6)));
+      const f = resumingHub();
+      const { result, rerender } = renderHook((p: Props) => useMeasurementStream(f.hub, ds, { initialSamples: p.seed, initialSamplesAsOf: p.asOf }), {
+        initialProps: {} as Props,
+      });
+      f.push(sample('temperature', 1, t(1)));
+      f.push(sample('humidity', 40, t(1)));
+      f.resume();
+      rerender({ seed: [sample('temperature', 50, t(3))], asOf: Date.parse(t(6)) });
+      expect(result.current.latest.temperature.value).toBe(50);
+      // The seed holds no humidity: the reading from before is still the newest known.
+      expect(result.current.latest.humidity.value).toBe(40);
+      f.push(sample('temperature', 2, t(7)));
+      expect(result.current.latest.temperature.value).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

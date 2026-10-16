@@ -4134,7 +4134,8 @@ ni se eliminó.
 
 Cuando un panel se reconecta, el historial que se perdió no se vuelve a leer. Un gráfico de líneas
 traza una línea recta sobre la caída, y las cifras de flota y agregadas omiten las lecturas
-enviadas durante ella. Hay una corrección prevista.
+enviadas durante ella. Corregido en la próxima versión: al reconectarse, un panel vuelve a leer la
+caída desde el historial almacenado (consulte [tras una reconexión](../concepts/dashboards.md#after-a-reconnect)).
 
 ##### También en esta versión {#v0220-also}
 

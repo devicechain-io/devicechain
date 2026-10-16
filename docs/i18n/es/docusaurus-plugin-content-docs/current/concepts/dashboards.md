@@ -141,11 +141,23 @@ Una conexión caída se reintenta mientras el panel esté abierto, y un flujo qu
 se vuelve a abrir tras una espera que se duplica hasta 30 segundos. Un widget cuyo código no se pudo
 descargar muestra el fallo en su propio marco, y **Reset widget** lo vuelve a descargar.
 
-:::note Limitación conocida
-Cuando un panel se reconecta, el historial que se perdió no se vuelve a leer. Un gráfico de líneas
-dibuja una línea recta a través de la interrupción, y las cifras de flota y de agregados omiten las
-lecturas enviadas durante ella.
-:::
+#### Tras una reconexión {#after-a-reconnect}
+
+Las lecturas enviadas mientras la conexión de un panel está caída nunca llegan por el flujo en
+vivo, así que cuando un flujo se recupera (volvió la red o el servidor, o el servidor terminó el
+flujo y el panel lo abrió de nuevo) cada widget las lee del historial almacenado:
+
+- un **gráfico de líneas** vuelve a leer su historial y lo usa en lugar de lo que dibujó antes de
+  la interrupción. Hasta que esa lectura llega, o si falla, el gráfico corta su línea durante la
+  interrupción en lugar de trazar una línea recta desde la última lectura anterior hasta la primera
+  posterior. Una lectura fallida se reintenta cada 30 segundos. En un panel en pausa la lectura
+  espera hasta que lo reanudes;
+- una **tabla de flota** o un **gráfico de barras con una barra por dispositivo** vuelve a leer los
+  últimos valores de cada dispositivo, de inmediato y otra vez justo después del siguiente minuto
+  completo, para incluir una lectura enviada en el último minuto de la interrupción. Un dispositivo
+  cuya lectura falla conserva el valor que mostraba;
+- una **tarjeta de estadística** vuelve a leer su cifra de inmediato en lugar de esperar a su
+  siguiente actualización programada.
 
 ## Creación, versionado y vista previa {#authoring-versioning-and-preview}
 

@@ -3846,8 +3846,9 @@ removed.
 ##### Known limitation: history after a reconnect {#v0220-known-limitation}
 
 When a board reconnects, the history it missed is not read again. A line chart draws a straight
-line across the outage, and fleet and aggregate figures leave out the readings sent during it. A
-fix is planned.
+line across the outage, and fleet and aggregate figures leave out the readings sent during it.
+Fixed in the next release: a board reads the outage back from stored history when it reconnects
+(see [after a reconnect](../concepts/dashboards.md#after-a-reconnect)).
 
 ##### Also in this release {#v0220-also}
 
