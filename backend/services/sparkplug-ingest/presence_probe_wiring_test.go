@@ -22,17 +22,19 @@ import (
 // interval it was given.
 func TestResolveSourcesPassesTheConfiguredProbeInterval(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		seconds int
-		want    time.Duration
+		name       string
+		seconds    int
+		window     int
+		want       time.Duration
+		wantWindow time.Duration
 	}{
-		{"unset", 0, config.DefaultPresenceProbeSeconds * time.Second},
-		{"written", 900, 900 * time.Second},
+		{"unset", 0, 0, config.DefaultPresenceProbeSeconds * time.Second, config.DefaultPresenceProbeWindowSeconds * time.Second},
+		{"written", 900, 25, 900 * time.Second, 25 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := &config.SparkplugConfiguration{
 				Sources:  []config.SparkplugSource{src("tcp://a:1883"), src("ssl://b:8883")},
-				Presence: config.Presence{ProbeSeconds: tc.seconds},
+				Presence: config.Presence{ProbeSeconds: tc.seconds, ProbeWindowSeconds: tc.window},
 			}
 			cfg.ApplyDefaults()
 			require.NoError(t, cfg.Validate())
@@ -43,6 +45,7 @@ func TestResolveSourcesPassesTheConfiguredProbeInterval(t *testing.T) {
 			require.Len(t, clients, 2)
 			for i, c := range clients {
 				assert.Equal(t, tc.want, c.PresenceProbeInterval(), "sources[%d] runs at a different interval than configured", i)
+				assert.Equal(t, tc.wantWindow, c.PresenceProbeWindow(), "sources[%d] waits a different answer window than configured", i)
 			}
 		})
 	}

@@ -54,3 +54,48 @@ func TestPresenceProbeRefusesBelowFloor(t *testing.T) {
 		assert.Contains(t, err.Error(), "presence.probeSeconds")
 	}
 }
+
+// TestPresenceProbeWindowDefaultsAndBounds: the answer window is the platform default
+// when unwritten, and a written one must sit in [floor, interval) — refused, not clamped,
+// outside it. The interval it is compared against is the EFFECTIVE one, so a window
+// written alongside no interval is checked against the default.
+func TestPresenceProbeWindowDefaultsAndBounds(t *testing.T) {
+	c := NewSparkplugConfiguration()
+	assert.Equal(t, 1800, c.Presence.ProbeSeconds, "the default interval is thirty minutes")
+	assert.Equal(t, 10, c.Presence.ProbeWindowSeconds, "the default answer window is ten seconds")
+	assert.Equal(t, 10*time.Second, c.Presence.ProbeWindow())
+	assert.Equal(t, 10*time.Second, Presence{}.ProbeWindow())
+	assert.Equal(t, 10*time.Second, Presence{ProbeWindowSeconds: -3}.ProbeWindow())
+
+	for _, tc := range []struct {
+		interval, window int
+		ok               bool
+	}{
+		{0, MinPresenceProbeWindowSeconds, true},
+		{0, MinPresenceProbeWindowSeconds - 1, false},
+		{0, 1, false},
+		{0, -1, false},
+		{0, DefaultPresenceProbeSeconds - 1, true},
+		{0, DefaultPresenceProbeSeconds, false},
+		{60, 59, true},
+		{60, 60, false},
+		{60, 61, false},
+		{900, 30, true},
+	} {
+		c := &SparkplugConfiguration{Presence: Presence{ProbeSeconds: tc.interval, ProbeWindowSeconds: tc.window}}
+		c.ApplyDefaults()
+		assert.Equal(t, tc.window, c.Presence.ProbeWindowSeconds, "ApplyDefaults rewrote a written window (%d)", tc.window)
+		err := c.Validate()
+		if tc.ok {
+			assert.NoError(t, err, "interval=%d window=%d", tc.interval, tc.window)
+			assert.Equal(t, time.Duration(tc.window)*time.Second, c.Presence.ProbeWindow())
+		} else if assert.Error(t, err, "interval=%d window=%d must be refused", tc.interval, tc.window) {
+			assert.Contains(t, err.Error(), "presence.probeWindowSeconds")
+		}
+	}
+
+	// Validate's own contract, without a defaults pass first: an unwritten interval is the
+	// effective default, not zero, so a window written alone is judged against 1800.
+	assert.NoError(t, (&SparkplugConfiguration{Presence: Presence{ProbeWindowSeconds: 30}}).Validate(),
+		"a window written with no interval was judged against an interval of zero")
+}

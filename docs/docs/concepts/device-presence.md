@@ -33,7 +33,7 @@ Three transports assert presence today:
 
 Skipping the inactivity sweep is deliberate, and it has a consequence you need to plan for: **an asserted device has no inactivity backstop.** Its offline signal can only come from the transport, so each asserting transport has its own way of noticing a death it was never told about, and each has a bound:
 
-- A Sparkplug death certificate lost along with the connection. The host periodically asks the node of every asserted device that has gone quiet to re-announce itself, and marks a device that does not answer offline. The default interval is five minutes, so a silent death is noticed within about ten.
+- A Sparkplug death certificate lost along with the connection. The host periodically asks the node of every asserted device that has gone quiet to re-announce itself, and marks a device that does not answer offline. The default interval is thirty minutes, so a silent death is noticed within about an hour.
 - An LwM2M device whose registration lifetime has not yet lapsed. The lifetime is the bound: when it lapses without a refresh, the device is marked offline. LwM2M's own default lifetime is 86400 seconds, a full day.
 
 What to watch for, and how to bound each window, is in [Running the Edge Services](../deployment/edge-services.md#a-device-that-reads-online-and-is-not). If the transport that would have reported the disconnect is gone for good rather than merely quiet, [release the device back to inferred presence](../deployment/edge-services.md#demoting-a-device) so a correction is possible again.

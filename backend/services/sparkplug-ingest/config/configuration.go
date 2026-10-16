@@ -55,20 +55,33 @@ const DefaultIngestPublishWindow = 32
 
 const (
 	// DefaultPresenceProbeSeconds is how often a connected Host re-checks its asserted
-	// devices for liveness when none is configured. It matches event-sources'
-	// brokerPresence.reconcileSeconds, the same question asked of the platform broker: a
-	// device the platform believes connected is asked to speak, and one that does not is
-	// declared dead. At this interval a Sparkplug device that dies without a death
-	// certificate is noticed within about ten minutes (two intervals plus the probe window)
-	// — the same order as the inactivity sweep's timeout for an inferred device — on
-	// evidence (asked, no answer) rather than on silence.
-	DefaultPresenceProbeSeconds = 300
+	// devices for liveness when none is configured: a device the platform believes
+	// connected is asked to speak, and one that does not is declared dead. At this interval
+	// a Sparkplug device that dies without a death certificate is noticed within about an
+	// hour (two intervals plus the answer window), on evidence (asked, no answer) rather
+	// than on silence.
+	//
+	// 🔴 IT IS LONGER THAN brokerPresence.reconcileSeconds ON PURPOSE. Asking the platform
+	// broker for its connection list is one cheap query; asking a Sparkplug node is a full
+	// rebirth — every metric value of the node and all its devices, re-sent and stored —
+	// and Sparkplug reports by exception, so a healthy device can be quiet for hours and
+	// its node is asked every other interval. Thirty minutes still closes "online
+	// indefinitely" without making routine rebirths the dominant birth traffic of a quiet
+	// fleet.
+	DefaultPresenceProbeSeconds = 1800
 	// MinPresenceProbeSeconds is the floor a WRITTEN probe interval must clear. The probe
 	// waits ten seconds for a rebirthed node to answer before declaring it dead, so the
 	// interval must dominate that window comfortably; below it, probes overlap their own
 	// verdicts. A value under the floor is refused at load rather than clamped — an interval
 	// silently raised is a cadence nobody chose.
 	MinPresenceProbeSeconds = 60
+
+	// DefaultPresenceProbeWindowSeconds is how long a probe waits for a node it asked to
+	// rebirth to answer before declaring its still-silent devices DISCONNECTED.
+	DefaultPresenceProbeWindowSeconds = 10
+	// MinPresenceProbeWindowSeconds floors a WRITTEN answer window: below it a healthy
+	// node's ordinary round trip reads as a death.
+	MinPresenceProbeWindowSeconds = 5
 )
 
 // Presence configures how the host keeps its asserted devices honest between the
@@ -94,6 +107,16 @@ type Presence struct {
 	// a periodic rebirth is expensive sets the interval long. A fixed setting, read once at
 	// startup, the same for every source.
 	ProbeSeconds int
+
+	// ProbeWindowSeconds is how long a probe waits for a node it asked to rebirth to
+	// answer — its NBIRTH and every device's DBIRTH — before declaring the devices it has
+	// not heard from DISCONNECTED. A node whose births take longer has those devices
+	// marked offline until they arrive (they come back on their own), so a fleet of large
+	// nodes on slow links raises it. Unset or 0 falls back to
+	// DefaultPresenceProbeWindowSeconds. A written value below
+	// MinPresenceProbeWindowSeconds, or not below the probe interval, is refused at load
+	// rather than clamped. It applies to the connect probe too.
+	ProbeWindowSeconds int
 }
 
 // ProbeInterval renders the configured seconds as a duration, applying the fail-safe
@@ -104,6 +127,15 @@ func (p Presence) ProbeInterval() time.Duration {
 		return DefaultPresenceProbeSeconds * time.Second
 	}
 	return time.Duration(p.ProbeSeconds) * time.Second
+}
+
+// ProbeWindow renders the configured answer window as a duration, applying the same
+// fail-safe default as ProbeInterval.
+func (p Presence) ProbeWindow() time.Duration {
+	if p.ProbeWindowSeconds <= 0 {
+		return DefaultPresenceProbeWindowSeconds * time.Second
+	}
+	return time.Duration(p.ProbeWindowSeconds) * time.Second
 }
 
 // Ingest configures how the host publishes what it ingests.
@@ -287,6 +319,9 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 	if c.Presence.ProbeSeconds == 0 {
 		c.Presence.ProbeSeconds = DefaultPresenceProbeSeconds
 	}
+	if c.Presence.ProbeWindowSeconds == 0 {
+		c.Presence.ProbeWindowSeconds = DefaultPresenceProbeWindowSeconds
+	}
 }
 
 // Validate fails the load closed on a configuration that would connect with no
@@ -302,7 +337,18 @@ func (c *SparkplugConfiguration) Validate() error {
 	// 0 is "unset" (ApplyDefaults fills it); anything else written must clear the floor.
 	// A negative value is a written value, and it is refused rather than defaulted.
 	if s := c.Presence.ProbeSeconds; s != 0 && s < MinPresenceProbeSeconds {
-		return fmt.Errorf("presence.probeSeconds must be at least %d (got %d): the probe waits ten seconds for a rebirthed node to answer, and the interval must dominate that window", MinPresenceProbeSeconds, s)
+		return fmt.Errorf("presence.probeSeconds must be at least %d (got %d): the probe waits for a rebirthed node to answer, and the interval must dominate that window", MinPresenceProbeSeconds, s)
+	}
+	// Same rule for the answer window: 0 is unset, anything written must be inside
+	// [floor, interval). The interval compared against is the effective one, so a window
+	// written without an interval is checked against the default.
+	if w := c.Presence.ProbeWindowSeconds; w != 0 {
+		if w < MinPresenceProbeWindowSeconds {
+			return fmt.Errorf("presence.probeWindowSeconds must be at least %d (got %d): a shorter window reads a healthy node's round trip as a death", MinPresenceProbeWindowSeconds, w)
+		}
+		if iv := int(c.Presence.ProbeInterval() / time.Second); w >= iv {
+			return fmt.Errorf("presence.probeWindowSeconds must be below presence.probeSeconds (got %d, interval %d): a probe whose window outlasts its interval never finishes before the next one is due", w, iv)
+		}
 	}
 	// endpointTenant enforces the M7 invariant that a broker connection is the
 	// tenant trust boundary: a normalized broker endpoint may serve exactly one

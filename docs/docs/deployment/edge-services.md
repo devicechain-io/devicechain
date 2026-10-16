@@ -155,13 +155,14 @@ How each transport bounds a death it was never told about:
 
 - **A lost Sparkplug death certificate.** If the broker never delivers the node's DEATH, the device
   stays online until the next liveness probe. A probe runs when the host connects to the broker, and
-  then every `presence.probeSeconds` (five minutes by default) for as long as the session lasts. Each
+  then every `presence.probeSeconds` (thirty minutes by default) for as long as the session lasts. Each
   periodic probe asks the node of every asserted device that has produced nothing within the last
-  interval to rebirth, waits ten seconds, and marks a device that still produced nothing offline. A
+  interval to rebirth, waits `presence.probeWindowSeconds` (ten seconds by default), and marks a
+  device that still produced nothing offline. A
   device heard from inside the interval is never asked and never judged, and any message from a
   device also counts for its node, so devices that report more often than the interval cost nothing.
-  A silent death is therefore noticed within about two intervals, the same order as the inactivity
-  sweep's ten-minute timeout, but on evidence (asked, no answer) rather than on silence. Watch
+  A silent death is therefore noticed within about two intervals (about an hour at the default), on
+  evidence (asked, no answer) rather than on silence. Watch
   `presence_probes_total{trigger="periodic"}`: on a connected host it must rise; flat means the probe
   is not running.
 
@@ -169,10 +170,14 @@ How each transport bounds a death it was never told about:
   legitimately say nothing for hours. Its node is then rebirthed every other interval: the node
   re-sends every metric value it has, for itself and all its devices, which is stored as readings
   (births are not charged against the tenant's ingest limit), and each device records a fresh connect.
-  Every quiet node is asked on the same tick. If that is too much for your fleet, raise
-  `presence.probeSeconds`; the detection bound grows with it. A node that takes longer than the
-  ten-second window to re-announce a device has that device marked offline until its birth arrives,
-  and it comes back online on its own when it does.
+  The nodes are not all asked at once: the interval is cut into slots at least two answer windows
+  long, and each node is always asked in the same slot, picked from its group and node id, so the
+  rebirths of a quiet fleet arrive spread across the interval. Each slot still waits its own full
+  window for its own nodes before the next slot starts. If the cost is still too much for your fleet,
+  raise `presence.probeSeconds`; the detection bound grows with it. A node that takes longer than the
+  answer window to re-announce a device has that device marked offline until its birth arrives, and
+  it comes back online on its own when it does; raise `presence.probeWindowSeconds` for large nodes
+  on slow links.
 - **A node re-announcing itself.** When an edge node births a new session, its previous session's
   child devices are replaced along with it. A child device that does not re-announce under the new
   session keeps showing connected until the next periodic probe, which asks its node to rebirth and
@@ -189,8 +194,9 @@ How each transport bounds a death it was never told about:
   will not tell the platform anything more.
 
 The three bounds, side by side: `brokerPresence.reconcileSeconds` for the platform broker,
-`presence.probeSeconds` for Sparkplug, and `maxLifetimeSeconds` for LwM2M. The first two default to
-five minutes; the third to a day, because it is the device's own registration lifetime, not a
+`presence.probeSeconds` for Sparkplug, and `maxLifetimeSeconds` for LwM2M. The first defaults to five
+minutes, the second to thirty, because asking a Sparkplug node costs a full rebirth; the third to a
+day, because it is the device's own registration lifetime, not a
 platform setting. If a device reading online is operationally load-bearing for you, you can still pair
 the connectivity signal with a timeout-based [absence rule](../concepts/event-processing.md), which
 fires on silence regardless of what presence says.
@@ -552,7 +558,8 @@ before the lease is released.
 | Setting | Default | What it does |
 |---|---|---|
 | `ingest.publishWindow` | `32` | How many messages one Sparkplug connection keeps waiting for the platform broker's acknowledgement at once, from 1 to 1024. A value outside that range, or an explicit 0, stops the service at startup; it is never adjusted. Publishing can go no faster than this number divided by how long an acknowledgement takes (about 2,800 messages a second per connection at 32). A fixed setting, read at startup, the same for every source. **It is also how much more a pod can lose.** The Host is a clean-session client that acknowledges each message to your broker as soon as it has taken it, and a broker does not redeliver to a host that restarted, so a pod that stops suddenly loses what it had taken and not yet stored: up to this many messages per connection, where it used to be one, plus, only while publishes are failing, those waiting to be tried again (about one more window at most). A new leader restores each node's presence and current metric values through rebirths, not the readings lost in between. An edge node's store-and-forward covers the time the Host is offline, not messages already delivered to a Host that then died. Watch `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events", writer="sparkplug"}`: a rate near 1 means the window is what limits publishing. |
-| `presence.probeSeconds` | `300` | How often a connected Host re-checks its asserted devices for liveness. On every tick, the node of each device the platform holds connected that has produced nothing within the last interval is asked to rebirth; a device still silent after the ten-second probe window is marked offline. A device heard from inside the interval is never asked and never judged, and a device's messages count for its node too, so only a node with a quiet device is asked, at most every other interval. Each ask makes that node re-send every metric value it has and records a fresh connect for each of its devices; see the cost note under [devices stuck online](#a-device-that-reads-online-and-is-not). This is what catches a death certificate the broker never delivered on a Host that stays connected; see [devices stuck online](#a-device-that-reads-online-and-is-not). Unset or 0 means 300. A written value below 60 stops the service at startup; it is never adjusted. There is no off switch: a fleet for which a periodic rebirth is expensive sets it long. A fixed setting, read at startup, the same for every source. |
+| `presence.probeSeconds` | `1800` | How often a connected Host re-checks its asserted devices for liveness. Once per interval, the node of each device the platform holds connected that has produced nothing within the last interval is asked to rebirth; a device still silent after the answer window (`presence.probeWindowSeconds`) is marked offline. The nodes are spread across the interval, each asked at its own fixed point in it, rather than all at once. A device heard from inside the interval is never asked and never judged, and a device's messages count for its node too, so only a node with a quiet device is asked, at most every other interval. Each ask makes that node re-send every metric value it has and records a fresh connect for each of its devices; see the cost note under [devices stuck online](#a-device-that-reads-online-and-is-not). This is what catches a death certificate the broker never delivered on a Host that stays connected; see [devices stuck online](#a-device-that-reads-online-and-is-not). Unset or 0 means 1800. A written value below 60 stops the service at startup; it is never adjusted. There is no off switch: a fleet for which a periodic rebirth is expensive sets it long. A fixed setting, read at startup, the same for every source. |
+| `presence.probeWindowSeconds` | `10` | How long a probe waits for a node it asked to rebirth to answer, with its own birth and every device's, before marking the devices it has not heard from offline. Applies to the probe run at connect too. A node slower than this has those devices marked offline until their births arrive, when they come back online on their own, so raise it for large nodes on slow links. Unset or 0 means 10. A written value below 5, or not below `presence.probeSeconds`, stops the service at startup; it is never adjusted. A fixed setting, read at startup, the same for every source. |
 
 **The reading limit is applied by splitting.** The
 [per-event reading limit](../guides/connecting-a-device.md#how-much-one-message-may-carry) is applied
@@ -705,8 +712,8 @@ Prefix: `devicechain_sparkplugingest_`.
 | `subscribe_failures_total` | The broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. The source stays offline, ingests none of its groups, and retries. `SparkplugIngestSubscriptionRefused` fires on an increase. |
 | `messages_total` | Inbound Sparkplug traffic. A flat line on a live fleet is the symptom of a lost subscription or a dead source. |
 | `presence_emitted_total` | Connect/disconnect signals produced. |
-| `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. The liveness probe's rebirths count here too, so on a fleet with quiet devices expect a step every `presence.probeSeconds`. |
-| `presence_probes_total` | Liveness probes that reached a verdict, by `trigger`: `connect` (the reconciliation run once per broker session) or `periodic` (every `presence.probeSeconds` on a steady session). A probe asks every asserted device that has gone quiet to rebirth and marks the ones that do not answer offline; a tick that finds nothing quiet still counts. **On a connected Host the periodic series must rise.** Flat means the probe is not running, and a quiet fleet and a probe that never runs are otherwise indistinguishable. |
+| `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. The liveness probe's rebirths count here too, so on a fleet with quiet devices expect a steady trickle spread across each `presence.probeSeconds`. |
+| `presence_probes_total` | Liveness probes that reached a verdict, by `trigger`: `connect` (the reconciliation run once per broker session) or `periodic` (one per slot of the rotation that visits every node once per `presence.probeSeconds` on a steady session). A probe asks the nodes of the quiet asserted devices it covers to rebirth and marks the devices that do not answer offline; a slot that finds nothing quiet still counts. **On a connected Host the periodic series must rise.** Flat means the probe is not running, and a quiet fleet and a probe that never runs are otherwise indistinguishable. |
 | `presence_probe_disconnects_total` | Asserted devices a liveness probe marked offline for not answering a rebirth inside the window, by the same `trigger`. Near zero in a healthy fleet. A standing `periodic` rate means death certificates are being lost between the nodes and the Host. |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths the session machine asked for, and the ones its publish queue was too full to take. A drop is a latency signal rather than a failure — the request is re-made on the node's next window — but a standing drop rate means rebirths are going out slower than they are being asked for. Read it against `rebirth_requests_total`, which counts only what reached the wire and is therefore capped by the publisher rather than by demand: **drops while `rebirth_requests_total` climbs to a steady ceiling** is fan-out outrunning a publisher that is otherwise healthy; **drops while it is flat** is the publishes themselves stalling, which points at the broker connection. |
 | `unknown_device_dropped_total` | Traffic from identities with no device, with auto-registration off. |

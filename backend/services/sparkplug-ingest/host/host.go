@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,12 +82,6 @@ const (
 	// At the default window of 32 the queue normally holds at most 32. It is a channel of
 	// pointers, so the headroom costs 16 KiB per connection.
 	publishRetryDepth = 2 * messaging.MaxOrderedWindow
-	// reconcileProbeWindow is how long the failover reconciliation waits after
-	// rebirthing a tenant's asserted-active nodes before it declares the still-silent
-	// ones dead (ADR-067 SP4b). It must comfortably exceed a healthy node's
-	// rebirth→NBIRTH round-trip so a live-but-slow node is not falsely disconnected
-	// (and if one is, its later NBIRTH — a higher epoch — supersedes the timeout).
-	reconcileProbeWindow = 10 * time.Second
 	// reconcileQueryTimeout bounds the device-state read the reconciliation runs BEFORE
 	// subscribing (to floor the epoch generator). It caps how long a slow/absent
 	// device-state can stall connection setup — on timeout the floor+probe are skipped
@@ -282,7 +277,10 @@ type Client struct {
 	seenMu     sync.Mutex
 	seen       map[string]time.Time
 	// probeWindow is how long the reconcile probe waits before declaring silent nodes
-	// dead; defaulted to reconcileProbeWindow, overridable in tests.
+	// dead (config.Presence.ProbeWindowSeconds, ADR-067 SP4b). It must comfortably exceed
+	// a healthy node's rebirth→births round trip so a live-but-slow node is not falsely
+	// disconnected (and if one is, its later births — higher epochs — supersede the
+	// timeout). Defaulted by NewClient, set by the service before Connect.
 	probeWindow time.Duration
 	// probeInterval is how often the periodic liveness probe re-checks the asserted set on
 	// a steadily connected session (config.Presence.ProbeSeconds). Defaulted to the
@@ -435,7 +433,7 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		subscribe:     messaging.SubscribeMqttConfirmed,
 		backoffSleep:  sleep,
 		rebirthCh:     make(chan nodeKey, rebirthQueueDepth),
-		probeWindow:   reconcileProbeWindow,
+		probeWindow:   config.DefaultPresenceProbeWindowSeconds * time.Second,
 		probeInterval: config.DefaultPresenceProbeSeconds * time.Second,
 		settleTimeout: publishSettleTimeout,
 	}
@@ -488,6 +486,23 @@ func (c *Client) SetPresenceProbeInterval(d time.Duration) {
 // the setting can be gated, for the same reason as Metrics.
 func (c *Client) PresenceProbeInterval() time.Duration {
 	return c.probeInterval
+}
+
+// SetPresenceProbeWindow sets how long a probe (connect or periodic) waits for a node it
+// asked to rebirth to answer (config.Presence.ProbeWindow). Set at wiring time before
+// Connect; a non-positive value panics for the same reason as SetPresenceProbeInterval —
+// a zero window declares every asked node dead before it can answer.
+func (c *Client) SetPresenceProbeWindow(d time.Duration) {
+	if d <= 0 {
+		panic("host.SetPresenceProbeWindow: the window must be positive (config.Presence.ProbeWindow never yields otherwise)")
+	}
+	c.probeWindow = d
+}
+
+// PresenceProbeWindow returns the probe's answer window, so the service's wiring of the
+// setting can be gated.
+func (c *Client) PresenceProbeWindow() time.Duration {
+	return c.probeWindow
 }
 
 // SetPublisher binds the publisher the receive path submits its prepared publications to. It
@@ -821,12 +836,13 @@ func (c *Client) goWhileLive(sessionCtx context.Context, wg *sync.WaitGroup, fn 
 // device whose NDEATH the broker never delivered reads online for as long as the session
 // lasts (ADR-067 SP4b closed the no-host window; this closes the steady one).
 //
-// Every probeInterval it reads the projection's asserted-active set for this source and
-// probes only the devices that have produced NO traffic on this session within the last
-// interval. That selection is what keeps the cost bounded: a device heard from inside the
-// interval is alive by its own evidence and is neither rebirthed nor judged, so a chatty
-// fleet costs nothing per tick, and a node is asked to re-announce only when one of its
-// asserted devices has gone quiet — at most once per interval.
+// Every probeInterval each node with an asserted-active device on this source gets one
+// look, and only the devices that have produced NO traffic on this session within the
+// last interval are asked about. That selection is what keeps the cost bounded: a device
+// heard from inside the interval is alive by its own evidence and is neither rebirthed nor
+// judged. The interval is cut into slots (probeSlots) and each node is asked in its own
+// slot (slotOf), so the rebirths of a quiet fleet are spread across the interval instead
+// of arriving on one tick; see probeTick.
 //
 // 🔴 IT JUDGES AGAINST ITS OWN START, NOT THE SESSION'S. A device that was heard from an
 // hour ago and not since is exactly the one being asked about, so "seen at any time this
@@ -836,15 +852,17 @@ func (c *Client) goWhileLive(sessionCtx context.Context, wg *sync.WaitGroup, fn 
 // It reads the projection through readAssertedAndFloor, which also raises the epoch floor.
 // That is harmless — the floor only ever moves up — and it keeps the two readers of the
 // asserted set the same code. A tick that lands while the CONNECT probe is still in its
-// window is skipped, before it reads anything: rebirthing the same nodes twice inside one
-// window buys nothing, and the in-flight probe will deliver the verdict. The connect probe
+// window stands down before it reads anything, and its slot runs on the next tick instead:
+// rebirthing the same nodes twice inside one window buys nothing, and the in-flight probe
+// will deliver the verdict. The connect probe
 // is the only probe a tick can overlap — this loop runs its own probes inline, so a tick
 // cannot arrive while one of them is in its window.
 //
 // It runs under the session context, so it ends with the session, and a tick's probe
 // aborts without emitting if the session ends mid-window, like the connect probe.
 func (c *Client) presenceProbeLoop(ctx context.Context) {
-	ticker := time.NewTicker(c.probeInterval)
+	round := &probeRound{slots: probeSlots(c.probeInterval, c.probeWindow)}
+	ticker := time.NewTicker(c.probeInterval / time.Duration(round.slots))
 	defer ticker.Stop()
 	for {
 		select {
@@ -853,25 +871,86 @@ func (c *Client) presenceProbeLoop(ctx context.Context) {
 		case <-ticker.C:
 		}
 		if c.probing.Load() {
-			log.Debug().Str("tenant", c.tenant).Msg("Skipping a periodic presence probe: another probe is still in its window.")
+			// The slot is not consumed: it runs on the next tick, late rather than skipped.
+			log.Debug().Str("tenant", c.tenant).Msg("Deferring a periodic presence probe slot: another probe is still in its window.")
 			continue
 		}
+		c.probeTick(ctx, round)
+	}
+}
+
+// probeRound is the periodic probe's position in its rotation: which slot runs next, how
+// many there are, and the asserted set read at the start of the current round.
+type probeRound struct {
+	slot     int
+	slots    int
+	asserted []AssertedDevice
+}
+
+// probeSlots is how many slots one interval is divided into: as many as fit with each
+// slot at least twice the answer window, so a slot's probe (its rebirths, then its window)
+// is over before the next slot is due. One slot when the window is too long for more.
+func probeSlots(interval, window time.Duration) int {
+	if window <= 0 {
+		return 1
+	}
+	if n := int(interval / (2 * window)); n > 1 {
+		return n
+	}
+	return 1
+}
+
+// slotOf is a node's slot in the rotation: a hash of its group/node identity, so a node
+// is always asked at the same point of every round and the fleet's rebirths are spread
+// evenly across the interval rather than all landing on one tick.
+func slotOf(key nodeKey, slots int) int {
+	if slots <= 1 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(nodeExternalId(key)))
+	return int(h.Sum32() % uint32(slots))
+}
+
+// probeTick runs one slot of the periodic probe.
+//
+// 🔑 THE ROTATION SPREADS THE COST, NOT THE RULE. Every node is still judged once per
+// interval, against the same silence cutoff (no traffic within the last interval) and
+// with its own full answer window: a slot asks only its own nodes, waits the window, and
+// delivers their verdict before the next slot starts. What changes is that a fleet's
+// rebirths arrive a slot at a time instead of all at once.
+//
+// The asserted set is read at the start of each round (slot 0) and reused for the round's
+// slots, so device-state is queried once per interval, as before. A device asserted
+// mid-round waits for the next round. A failed read consumes nothing — the round retries
+// on the next tick — and counts nothing; every slot that runs counts as a verdict, even one
+// with nothing to ask.
+func (c *Client) probeTick(ctx context.Context, r *probeRound) {
+	if r.slot == 0 {
 		asserted, read := c.readAssertedAndFloor(ctx)
 		if !read {
-			continue // decided nothing, so counts nothing: a flat series is the right alarm
+			return // decided nothing, so counts nothing: a flat series is the right alarm
 		}
-		now := c.now()
-		silent := c.silentDevices(asserted, now.Add(-c.probeInterval))
-		if len(silent) == 0 {
-			log.Debug().Str("tenant", c.tenant).Int("asserted", len(asserted)).
-				Msg("Periodic presence probe: every asserted device was heard from inside the interval; nothing to ask.")
-			if c.metrics.PresenceProbes != nil {
-				c.metrics.PresenceProbes.WithLabelValues(ProbeTriggerPeriodic).Inc()
-			}
-			continue
-		}
-		c.reconcileProbe(ctx, silent, now, ProbeTriggerPeriodic)
+		r.asserted = asserted
 	}
+	slot := r.slot
+	r.slot = (r.slot + 1) % r.slots
+
+	now := c.now()
+	mine := make([]AssertedDevice, 0)
+	for _, d := range r.asserted {
+		if key, ok := parseReconcileNodeKey(d.ExternalId); ok && slotOf(key, r.slots) == slot {
+			mine = append(mine, d)
+		}
+	}
+	silent := c.silentDevices(mine, now.Add(-c.probeInterval))
+	if len(silent) == 0 {
+		if c.metrics.PresenceProbes != nil {
+			c.metrics.PresenceProbes.WithLabelValues(ProbeTriggerPeriodic).Inc()
+		}
+		return
+	}
+	c.reconcileProbe(ctx, silent, now, ProbeTriggerPeriodic)
 }
 
 // silentDevices returns the devices among asserted that have NOT produced traffic on this

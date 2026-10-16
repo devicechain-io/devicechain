@@ -243,7 +243,7 @@ func buildMetrics() host.Metrics {
 				"either after the retry budget was exhausted (device-management or NATS unreachable, whether resolving the device failed or the stream did not acknowledge the publish) or on connection shutdown. "+
 				"A clean-session Host gets no redelivery, so each one is lost."),
 		PresenceProbes: probePrecreated(Microservice.NewCounterVec("presence_probes_total",
-			"Liveness probes that reached a verdict, by trigger: connect (the failover reconciliation run once per broker session) or periodic (the re-check run every presence.probeSeconds on a steady session). "+
+			"Liveness probes that reached a verdict, by trigger: connect (the failover reconciliation run once per broker session) or periodic (one slot of the re-check that visits every node once per presence.probeSeconds on a steady session). "+
 				"A probe asks every asserted device that has gone quiet to rebirth and declares the ones that do not answer DISCONNECTED. A flat periodic series on a connected Host means the probe is not running.",
 			[]string{"trigger"})),
 		PresenceProbeDisconnects: probePrecreated(Microservice.NewCounterVec("presence_probe_disconnects_total",
@@ -326,6 +326,7 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		// The periodic liveness probe's cadence, the same for every source. Set before
 		// Connect so the first session's loop runs at the configured interval.
 		client.SetPresenceProbeInterval(cfg.Presence.ProbeInterval())
+		client.SetPresenceProbeWindow(cfg.Presence.ProbeWindow())
 		clients = append(clients, client)
 	}
 	return clients, nil
