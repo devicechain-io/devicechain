@@ -9,7 +9,8 @@
 //
 //   Version history  every Make live and Roll back button lies wholly inside every box that
 //                    clips it (the drawer, the table's rounded frame) and inside the viewport,
-//                    and shows its whole label.
+//                    and shows its whole label; the live badge sits on one line, never broken
+//                    inside its word as the address beside it may be.
 //   Canvas toolbar   the selected widget's toolbar (Grid, Relative, Duplicate, Copy, Delete)
 //                    lies wholly OUTSIDE the widget it edits (so it can never cover its title
 //                    or its content), and inside what the canvas can show: not cut off above
@@ -20,9 +21,15 @@
 // artifact for a reviewer; nothing compares it with a baseline.
 
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const LANGS = ['en', 'es'] as const;
+
+// The live badge's label in each locale, read from the shipped catalogue so the gate follows a
+// rewording. Spanish's ("Activa") is the longer one, and the one that broke.
+const liveLabel = (lang: (typeof LANGS)[number]): string =>
+  JSON.parse(readFileSync(new URL(`../src/i18n/locales/${lang}/dashboards.json`, import.meta.url), 'utf8')).versionLive;
 
 interface Box {
   x: number;
@@ -104,9 +111,12 @@ test.beforeEach(async ({ page, baseURL }) => {
 const VERSION_WIDTHS = [320, 390, 560, 600, 700, 1440] as const;
 
 for (const lang of LANGS) {
+  // Labelled (the widest rows) and unlabelled (the narrowest first column, where the live badge
+  // is the widest thing in it, so a table short of room squeezes it hardest).
+  for (const labels of ['some', 'none'] as const) {
   for (const width of VERSION_WIDTHS) {
-    test(`version history actions are whole at ${width} px (${lang})`, async ({ page }) => {
-      await open(page, `surface=versions&lang=${lang}`, width, 900);
+    test(`version history actions are whole at ${width} px (${lang}, labels: ${labels})`, async ({ page }) => {
+      await open(page, `surface=versions&lang=${lang}&labels=${labels}`, width, 900);
       const rows = page.getByRole('dialog').locator('tbody tr');
       await expect(rows).toHaveCount(4);
       const buttons = rows.getByRole('button');
@@ -127,11 +137,30 @@ for (const lang of LANGS) {
           if (tops.some((t) => Math.abs(t - tops[0]) > 1)) findings.push(`a row's actions are not on one line: tops ${tops.join(', ')}`);
         }
       }
+      // The cells holding an address or a label may break anywhere, so that a long one cannot
+      // hold the row wider than the drawer; a short label must never break inside its word.
+      // The live badge once rendered as "Activ" over "a". Each line its text occupies is one
+      // client rect of that text, so a whole badge has exactly one.
+      const live = liveLabel(lang);
+      const badge = rows.getByText(live, { exact: true });
+      await expect(badge).toHaveCount(1);
+      const lines = await badge.evaluate((el) => {
+        const tops = new Set<number>();
+        for (const node of Array.from(el.childNodes)) {
+          if (node.nodeType !== Node.TEXT_NODE || !node.textContent?.trim()) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const r of Array.from(range.getClientRects())) if (r.width > 0) tops.add(Math.round(r.top));
+        }
+        return tops.size;
+      });
+      if (lines !== 1) findings.push(`the live badge "${live}" is laid out on ${lines} lines`);
       // The drawer scrolls inside itself; bring the history into the picture.
       await buttons.last().scrollIntoViewIfNeeded();
-      await shot(page, `versions-${width}-${lang}`);
+      await shot(page, `versions-${width}-${lang}-labels-${labels}`);
       expect(findings).toEqual([]);
     });
+  }
   }
 }
 
