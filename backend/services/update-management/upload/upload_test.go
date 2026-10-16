@@ -27,11 +27,10 @@ import (
 	"github.com/devicechain-io/dc-microservice/blob"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/devicechain-io/dc-update-management/schema"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 type profiles struct{}
@@ -53,8 +52,7 @@ func newEnv(t *testing.T) *env { return newEnvWith(t, 4) }
 
 func newEnvWith(t *testing.T, maxConcurrent int) *env {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	// The chain runs before the tenant callbacks exist, as core/rdb runs it in the system
 	// context: gorm's AutoMigrate reads an existing table through a statement the tenant
 	// scope cannot classify.

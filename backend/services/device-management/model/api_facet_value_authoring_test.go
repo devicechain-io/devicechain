@@ -10,9 +10,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/gorm"
 )
 
 // 🔴 THIS FILE IS THE OTHER HALF OF A PROOF, AND ON ITS OWN IT IS NOT THE INTERESTING
@@ -61,11 +60,7 @@ const authoredSelector = `attr["climate"] == "arid"`
 // touches.
 func newFacetAuthoringTestApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

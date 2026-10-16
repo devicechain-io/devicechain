@@ -18,12 +18,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/devicechain-io/dc-update-management/schema"
-	"github.com/glebarez/sqlite"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // TestSchemaParses validates that the GraphQL schema parses against the resolver -
@@ -156,8 +155,7 @@ type plane struct {
 
 func newPlane(t *testing.T) *plane {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	// The chain runs before the tenant callbacks exist, as core/rdb runs it in the system
 	// context: gorm's AutoMigrate reads an existing table through a statement the tenant
 	// scope cannot classify.

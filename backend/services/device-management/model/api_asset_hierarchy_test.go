@@ -12,10 +12,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // hierarchyTestApi builds the sqlite-backed Api these tests run against. It
@@ -32,9 +31,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	// open (the production Postgres pattern), so every connection in the pool has to
 	// see the same tables — which a bare ":memory:" (one database per connection)
 	// does not provide.
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err, "open sqlite")
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
 	require.NoError(t, db.AutoMigrate(

@@ -23,7 +23,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,6 +36,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -45,12 +45,10 @@ import (
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/devicechain-io/dc-update-management/processor"
 	"github.com/devicechain-io/dc-update-management/schema"
-	"github.com/glebarez/sqlite"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // These tests run the whole update flow over a real embedded broker, through the service own
@@ -216,9 +214,7 @@ func startE2E(t *testing.T) *e2e {
 	Configuration.Updates.Deadlines = config.DeadlinesConfiguration{
 		AcknowledgeSeconds: 3600, DownloadSeconds: 600, VerifySeconds: 300, InstallSeconds: 1800, ConfirmSeconds: 1200}
 
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	for _, m := range schema.Migrations {
 		require.NoError(t, m.Migrate(db))
 	}

@@ -26,12 +26,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/devicechain-io/dc-update-management/schema"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // countingStore wraps a real store and counts how artifact bytes were opened, and by how large a
@@ -111,8 +110,7 @@ func ctxOf(tenant string) context.Context {
 
 func newEnv(t *testing.T, maxConcurrent int) *env {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	for _, m := range schema.Migrations {
 		require.NoError(t, m.Migrate(db))
 	}

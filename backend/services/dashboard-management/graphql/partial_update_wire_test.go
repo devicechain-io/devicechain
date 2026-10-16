@@ -13,9 +13,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	gql "github.com/graph-gophers/graphql-go"
-	"gorm.io/gorm"
 )
 
 // THE WIRE HALF of updateDashboard's partial-update guarantee.
@@ -56,29 +55,13 @@ const wireDefinition = `{"schemaVersion":1,"widgets":[]}`
 // plus dashboard:write, and returns both so a test can seed and read back around a real
 // schema.Exec.
 //
-// 🔴 THE DSN IS A NAMED SHARED-CACHE DATABASE AND THE POOL IS CLOSED, for the reasons
-// core's putest.NewSQLiteDB spells out: a bare ":memory:" gives every pooled connection
-// its own database, and a shared-cache one outlives the test that made it unless the pool
-// is closed, so the next test with the same name inherits its rows. The test name is
-// sanitized first because a URI reads the "#" Go appends to a repeated name as the start
-// of a FRAGMENT, silently truncating the name and falling back to an on-disk file.
+// The database comes from rdbtest.OpenSQLiteMemory, which names it per call — so a
+// repeat of this test in one process (`go test -count=2`) starts empty, and the "#" Go
+// appends to a repeated subtest name cannot send sqlite to an on-disk file — and closes
+// its pool when the test ends.
 func newWireFixture(t *testing.T) (*model.Api, context.Context) {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file:"+wireDSNName(t)+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() {
-		sqlDB, cerr := db.DB()
-		if cerr != nil {
-			t.Errorf("reach the underlying pool to close it: %v", cerr)
-			return
-		}
-		if cerr := sqlDB.Close(); cerr != nil {
-			t.Errorf("close the fixture's pool: %v — the shared-cache database outlives this "+
-				"test and the next one to reuse its name inherits these rows", cerr)
-		}
-	})
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
@@ -92,15 +75,6 @@ func newWireFixture(t *testing.T) (*model.Api, context.Context) {
 	ctx := withAuthorities(core.WithTenant(context.Background(), "acme"),
 		auth.DashboardRead, auth.DashboardWrite)
 	return api, context.WithValue(ctx, gqlcore.ContextApiKey, api)
-}
-
-func wireDSNName(t *testing.T) string {
-	return strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '_'
-	}, t.Name())
 }
 
 func seedWireDashboard(t *testing.T, api *model.Api, ctx context.Context, token string) {

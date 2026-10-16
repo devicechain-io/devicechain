@@ -12,9 +12,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/stretchr/testify/assert"
-	"gorm.io/gorm"
 )
 
 // newGroupMemberTestApi builds an Api with the tables group-member resolution touches:
@@ -25,11 +24,7 @@ func newGroupMemberTestApi(t *testing.T) (*Api, context.Context) {
 	// source/target on a non-transaction connection WHILE a write transaction is open (the
 	// production Postgres pattern), so the pool's connections must all see the same tables —
 	// which a bare ":memory:" (one DB per connection) does not provide.
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

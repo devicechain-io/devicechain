@@ -6,7 +6,7 @@ package schema
 import (
 	"testing"
 
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -16,9 +16,7 @@ import (
 // as a statement configures only the one that happened to serve it.
 func newFKMigratedDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open(
-		"file:"+t.Name()+"?mode=memory&cache=shared&_pragma=foreign_keys(1)"), &gorm.Config{})
-	require.NoError(t, err)
+	db := rdbtest.OpenSQLiteMemory(t, nil, "_pragma=foreign_keys(1)")
 	for _, m := range Migrations {
 		require.NoErrorf(t, m.Migrate(db), "migration %s", m.ID)
 	}

@@ -18,7 +18,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"gorm.io/gorm"
 	gormschema "gorm.io/gorm/schema"
 )
@@ -28,13 +28,16 @@ import (
 // declaration resolves through, and the two configuration tables.
 func configTestApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
+	return configTestApiAt(t, rdbtest.SQLiteMemoryDSN(t))
+}
+
+// configTestApiAt is configTestApi over the database at dsn, for a test that needs a second
+// handle on it.
+func configTestApiAt(t *testing.T, dsn string) (*Api, context.Context) {
+	t.Helper()
 	// Shared-cache named in-memory DB: the attribute write opens a transaction while the
 	// token resolve ran on the pool connection, so every connection must see one DB.
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := rdbtest.OpenSQLiteDSN(t, dsn, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

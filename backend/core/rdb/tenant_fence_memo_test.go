@@ -34,16 +34,7 @@ import (
 func newFenceMemoDB(t *testing.T) (*gorm.DB, *rdbtest.StatementCounter) {
 	t.Helper()
 	counter := rdbtest.NewStatementCounter(FenceTable)
-	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_").Replace(t.Name()) + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: counter})
-	if err != nil {
-		t.Fatalf("opening sqlite: %v", err)
-	}
-	t.Cleanup(func() {
-		if sqldb, err := db.DB(); err == nil {
-			_ = sqldb.Close()
-		}
-	})
+	db := rdbtest.OpenSQLiteMemory(t, &gorm.Config{Logger: counter})
 	if err := RegisterTenantScoping(db); err != nil {
 		t.Fatalf("registering tenant scoping: %v", err)
 	}

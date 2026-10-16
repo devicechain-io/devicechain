@@ -5,11 +5,9 @@ package rdbtest
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -32,19 +30,10 @@ func (calibOther) TableName() string { return "calib_other" }
 func openCounted(t *testing.T) (*gorm.DB, *StatementCounter) {
 	t.Helper()
 	c := NewStatementCounter(testMarker)
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: c})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := OpenSQLiteMemory(t, &gorm.Config{Logger: c})
 	if err := db.AutoMigrate(&calibMarker{}, &calibOther{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("sql db: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
 	return db, c
 }
 

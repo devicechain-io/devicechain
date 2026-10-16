@@ -13,7 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"gorm.io/gorm"
 )
 
@@ -390,12 +390,10 @@ func (p *visibilityPublisher) PublishDesiredConfiguration(_ context.Context, _ s
 }
 
 func TestRevisionsArePublishedOnlyOnceCommitted(t *testing.T) {
-	api, ctx := configTestApi(t)
-	// configTestApi names its database after ITS test, which is this one.
-	other, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	// A second handle on the SAME database, to watch from outside the writer's transaction.
+	dsn := rdbtest.SQLiteMemoryDSN(t)
+	api, ctx := configTestApiAt(t, dsn)
+	other := rdbtest.OpenSQLiteDSN(t, dsn, nil)
 	pub := &visibilityPublisher{t: t, other: other}
 	api.DeviceDesiredPublisher = pub
 	seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}, {Key: "level", ValueType: "STRING"}})

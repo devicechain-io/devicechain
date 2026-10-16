@@ -17,7 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -46,18 +46,11 @@ import (
 
 // newSQLiteProjectionApi is an Api over a fresh in-memory SQLite database of its own, with the
 // tenant-scope callbacks and all three projection tables migrated from the live models.
-func newSQLiteProjectionApi(t *testing.T, name string) *Api {
+// The name is newPostgresProjectionApi's, kept so the two share assertEquivalent's
+// signature; here every call is a fresh database whatever it is called.
+func newSQLiteProjectionApi(t *testing.T, _ string) *Api {
 	t.Helper()
-	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_", "#", "_").Replace(t.Name()+"-"+name) + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	t.Cleanup(func() {
-		if sqldb, err := db.DB(); err == nil {
-			_ = sqldb.Close()
-		}
-	})
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

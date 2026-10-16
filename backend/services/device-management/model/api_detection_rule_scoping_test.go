@@ -10,10 +10,9 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
 // The ADR-062 S4 rule-side glue: a DetectionRule pins an optional {group}@{version} scope, and
@@ -31,11 +30,7 @@ func newRuleScopeTestApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
 	// Shared-cache named in-memory DB: publish + attribute writes open transactions while other
 	// reads run on the pool connection, so all connections must see the same tables.
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
+	db := rdbtest.OpenSQLiteMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
