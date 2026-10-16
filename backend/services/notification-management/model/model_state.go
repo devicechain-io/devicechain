@@ -14,8 +14,11 @@ import (
 // row per RAISED alarm (keyed by its unique AlarmToken), tracking what the service
 // has done about that alarm, not the alarm itself. It is deliberately a small
 // upserted state row — NOT an alarm-transition history (which is owned by
-// device-management/event-management, ADR-041); a re-raise after a clear is a new
-// alarm token and thus a new row.
+// device-management/event-management, ADR-041).
+//
+// 🔴 A RE-RAISE IS NOT A NEW ROW. device-management reactivates the SAME alarm on a fresh
+// cycle — same token, back to ACTIVE, acknowledgement reset — so one row serves every
+// cycle of an alarm, and CycleRaisedAt says which cycle its per-cycle fields describe.
 //
 // This slice (N.B) defines the table and its read surface as the substrate the
 // dispatcher (N.C) writes on each delivery and the escalation scheduler (N.D)
@@ -47,6 +50,17 @@ type NotificationState struct {
 	// Escalation tiering (written by the N.D scheduler).
 	EscalationLevel int
 	LastEscalatedAt sql.NullTime
+
+	// CycleRaisedAt is the RaisedTime of the alarm cycle this row's per-cycle fields
+	// belong to: the two terminal stamps, the escalation tier, FirstNotifiedAt and
+	// NotifyCount. An event from a LATER cycle resets them before it applies (see
+	// Api.RecordNotification and Api.markTerminal); an event from an EARLIER cycle is
+	// stale and changes nothing. LastNotifiedAt is deliberately NOT per-cycle: it is the
+	// throttle basis, and a flapping alarm's re-raise is exactly what the throttle is
+	// for. NULL on a row written before the column existed; the first event that names
+	// a cycle adopts it, resetting the row only when that cycle was raised after the
+	// row's clear (see enterCycle).
+	CycleRaisedAt sql.NullTime
 }
 
 // DefaultOrder implements rdb.Sortable: newest first, tiebroken on the row id.

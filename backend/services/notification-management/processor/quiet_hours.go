@@ -132,6 +132,8 @@ func anyRuleMatches(p *model.NotificationPolicy, severity string) bool {
 //   - the alarm was acknowledged or cleared AFTER the held event occurred: dropped — the
 //     page would be about an alarm a human has already dealt with. A stamp from BEFORE it
 //     belongs to an earlier cycle of the same alarm token and does not count;
+//   - the held event is of an EARLIER alarm cycle than the notification state is on:
+//     dropped the same way, since that cycle has cleared (see heldForEarlierCycle);
 //   - the policy holds it again (its quiet hours were edited, or the next stretch began):
 //     moved to the new end;
 //   - otherwise it is LEASED (a compare-and-swap so exactly one replica wins; the row stays
@@ -215,7 +217,7 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			}
 			continue
 		}
-		if resolvedSince(state, d.OccurredTime) {
+		if resolvedSince(state, d.OccurredTime) || heldForEarlierCycle(state, d) {
 			if err := n.drop(ctx, d, quietDroppedResolved); err != nil {
 				return err
 			}
@@ -275,7 +277,12 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		n.countQuiet(quietReleased, len(claimed))
 		sctx, scancel := context.WithTimeout(ctx, recordTimeout)
 		defer scancel()
-		if err := n.api.RecordNotification(sctx, alarm, latest.AlarmKey, latest.Severity, now); err != nil {
+		// The cycle is the HELD event's (its RaisedTime travels in the stored event), not
+		// whatever cycle the state row is on now: a page held through a clear and re-raise
+		// describes the cycle it was raised in, and RecordNotification ignores it as stale
+		// rather than writing it into the newer cycle as that cycle's first page.
+		if err := n.api.RecordNotification(sctx, alarm, latest.AlarmKey, latest.Severity,
+			event.RaisedTime, now); err != nil {
 			log.Error().Err(err).Str("alarm", alarm).
 				Msg("Released a held notification but failed to record notification state")
 		}
@@ -387,9 +394,28 @@ func (n *PolicyNotifier) drop(ctx context.Context, d *model.NotificationDeferral
 	return nil
 }
 
+// heldForEarlierCycle reports whether a deferral holds a page of an EARLIER alarm cycle
+// than the one the notification state is on. That cycle has been cleared — an alarm only
+// re-raises from cleared — so its page is dropped as resolved, exactly as it would have
+// been had its CLEARED arrived first; releasing it would page about an alarm that has
+// since cleared and been raised again, as if it were the current one. A held event that
+// cannot be decoded names no cycle, and is left to the release, which dead-letters it.
+func heldForEarlierCycle(state *model.NotificationState, d *model.NotificationDeferral) bool {
+	if state == nil || !state.CycleRaisedAt.Valid {
+		return false
+	}
+	var held dmmodel.AlarmStateChangeEvent
+	if err := json.Unmarshal(d.Event, &held); err != nil {
+		return false
+	}
+	return state.OnLaterCycleThan(held.RaisedTime)
+}
+
 // resolvedSince reports whether the alarm was acknowledged or cleared after `occurred`.
-// The alarm token outlives a clear (a re-raise reuses it), so a stamp from before the held
-// event belongs to an earlier cycle and does not resolve this one.
+// The alarm token outlives a clear (a re-raise reuses it). The state's stamps describe the
+// cycle the row is on (NotificationState.CycleRaisedAt), which can be OLDER than the held
+// event's — a re-raise that quiet hours held records nothing — so a stamp from before the
+// held event belongs to an earlier cycle and does not resolve this one.
 func resolvedSince(state *model.NotificationState, occurred time.Time) bool {
 	if state == nil {
 		return false

@@ -27,5 +27,6 @@ var (
 		secrets.NewSecretStoreSchema(),
 		NewBaselineSchema(),
 		NewQuietHoursSchema(),
+		NewNotificationStateCycleSchema(),
 	}
 )

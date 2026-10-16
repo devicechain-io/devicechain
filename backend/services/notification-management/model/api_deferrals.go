@@ -122,9 +122,9 @@ func (api *Api) RetryNotificationDeferral(ctx context.Context, d *NotificationDe
 // alarm token and stays held.
 //
 // This is what makes "acknowledged or cleared while held" hold across alarm cycles. The
-// notification state's terminal stamps record the FIRST acknowledgement and clear of the
-// alarm token and never move, so for a second cycle they are stamps from before its held
-// event and cannot show that it was resolved.
+// notification state's terminal stamps describe the cycle the state row is on, and a cycle
+// whose only page is held has not been recorded there (nothing was sent), so the state
+// alone cannot show that the held cycle was resolved.
 func (api *Api) ResolveNotificationDeferrals(ctx context.Context, alarmToken string, at time.Time) (int64, error) {
 	result := api.RDB.DB(ctx).Where("alarm_token = ? AND occurred_time <= ?", alarmToken, at).
 		Delete(&NotificationDeferral{})

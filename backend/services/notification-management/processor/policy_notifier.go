@@ -272,14 +272,16 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 	case dmmodel.AlarmEventAcknowledged:
 		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
 		return n.applyLifecycle(ctx, event.AlarmToken, "acknowledgement", func(c context.Context) error {
-			if err := n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
+			if err := n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity,
+				event.RaisedTime, event.OccurredTime); err != nil {
 				return err
 			}
 			return n.resolveHeld(c, event)
 		})
 	case dmmodel.AlarmEventCleared:
 		return n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
-			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
+			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity,
+				event.RaisedTime, event.OccurredTime); err != nil {
 				return err
 			}
 			return n.resolveHeld(c, event)
@@ -301,9 +303,10 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 // acknowledged or cleared. It is idempotent, so it shares the transition's redelivery.
 //
 // The release checks the notification state too, but that is not enough on its own: the
-// state's terminal stamps record the alarm token's FIRST acknowledgement and clear and never
-// move, so for a later cycle of the same token they predate the held event and the release
-// would page about an alarm somebody already dealt with.
+// state's terminal stamps describe the cycle the row is ON, and a cycle whose only page so
+// far is held has never been recorded there (nothing was sent, so nothing was written; a
+// lifecycle transition can also be stale for the row and change nothing). The held row is
+// what knows about that cycle, so it is resolved here directly, by event time.
 func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
 	dropped, err := n.api.ResolveNotificationDeferrals(ctx, event.AlarmToken, event.OccurredTime)
 	if err != nil {
@@ -471,7 +474,8 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 	// recordTimeout is smaller than dispatchMargin so this still lands inside AckWait.
 	rctx, rcancel := context.WithTimeout(ctx, recordTimeout)
 	defer rcancel()
-	if err := n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
+	if err := n.api.RecordNotification(rctx, event.AlarmToken, event.AlarmKey, event.Severity,
+		event.RaisedTime, event.OccurredTime); err != nil {
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Delivered notification but failed to record notification state")
 	}
@@ -630,7 +634,10 @@ func (n *PolicyNotifier) plan(event *dmmodel.AlarmStateChangeEvent,
 // measured against the LAST cycle's notification. That is the behaviour a minimum gap is
 // for — a flapping sensor re-raising inside the window is exactly what it suppresses —
 // but it is behaviour, not a no-op, and the state it reads is the same row
-// Api.PruneResolvedStates eventually removes.
+// Api.PruneResolvedStates eventually removes. That is why a new cycle resets the row's
+// per-cycle fields but NOT LastNotifiedAt (see NotificationState.CycleRaisedAt). A
+// re-raise the throttle suppresses records nothing, so its cycle is not escalated either:
+// escalation follows up a page, and that cycle was never paged.
 func (n *PolicyNotifier) throttled(event *dmmodel.AlarmStateChangeEvent,
 	p *model.NotificationPolicy, state *model.NotificationState) bool {
 	if event.EventType == dmmodel.AlarmEventEscalated {
@@ -694,7 +701,7 @@ func (n *PolicyNotifier) Escalate(ctx context.Context, state *model.Notification
 	ectx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
 
-	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, now)
+	claimed, err := n.api.ClaimEscalation(ectx, state.AlarmToken, state.EscalationLevel, state.CycleRaisedAt, now)
 	if err != nil {
 		// 🔴 A PURGED TENANT IS TERMINAL HERE TOO. ClaimEscalation is an UPDATE, so the
 		// ADR-077 erasure fence refuses it — and this is the path the gate above is least
