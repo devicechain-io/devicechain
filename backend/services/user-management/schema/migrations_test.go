@@ -27,9 +27,9 @@ import (
 // So the IDs get their own assertions here. They are pure data checks, they need no
 // database, and they run in the same `go test ./...` a maintainer runs before pushing.
 //
-// 🔴 The same gap exists in every OTHER area's schema package — each has its own
-// `Migrations` slice and its own newMigratedDB-shaped helper. Closing it there wants a
-// shared helper rather than nine copies of this file, which is a separate change.
+// Every OTHER area closes the same gap with the shared rdb.CheckMigrationIDs, the check the
+// runtime itself runs before gormigrate.New (migration_ids_test.go in each area, this one
+// included). The tests here stay because they assert more than it does: ID order.
 
 // TestEveryMigrationIDIsUnique is the one that would have caught it. gormigrate keys
 // its bookkeeping table by ID, so two migrations claiming one ID is not a naming
