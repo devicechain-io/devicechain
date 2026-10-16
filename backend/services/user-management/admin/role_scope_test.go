@@ -19,7 +19,7 @@ import (
 func TestTenantScopedRoleCannotGrantAnOperatorAuthority(t *testing.T) {
 	for _, a := range []auth.Authority{
 		auth.AIAdmin, auth.TenantWrite, auth.TenantRead, auth.SettingsWrite,
-		auth.ClientWrite, auth.UserWrite, auth.RoleWrite,
+		auth.ClientWrite, auth.UserWrite,
 	} {
 		err := validateAuthorities(iam.ScopeTenant, []string{string(a)})
 		if err == nil {
@@ -130,6 +130,27 @@ func TestAuditReadIsGrantableAtEitherScope(t *testing.T) {
 		}
 		if !found {
 			t.Error("audit:read must appear in both scopes' authority checklists")
+		}
+	}
+}
+
+// The tenant plane's self-administration authorities (ADR-081) at the grant: role:read
+// and role:write are dual-tier, so a role at EITHER scope may grant them — the operator
+// catalogue on the admin plane, a tenant's own roles on its data plane — while
+// member:read and member:write are tenant-only, and a system role naming them is
+// refused like any other tenant-tier authority.
+func TestTheSelfAdministrationAuthoritiesAtTheGrant(t *testing.T) {
+	for _, scope := range []iam.RoleScope{iam.ScopeSystem, iam.ScopeTenant} {
+		if err := validateAuthorities(scope, []string{string(auth.RoleRead), string(auth.RoleWrite)}); err != nil {
+			t.Errorf("role:read/role:write must be grantable at %s scope: %v", scope, err)
+		}
+	}
+	if err := validateAuthorities(iam.ScopeTenant, []string{string(auth.MemberRead), string(auth.MemberWrite)}); err != nil {
+		t.Errorf("member:read/member:write must be grantable on a tenant role: %v", err)
+	}
+	for _, a := range []auth.Authority{auth.MemberRead, auth.MemberWrite} {
+		if err := validateAuthorities(iam.ScopeSystem, []string{string(a)}); err == nil {
+			t.Errorf("a system-scoped role was allowed to grant tenant-only %q", a)
 		}
 	}
 }

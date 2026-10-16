@@ -67,6 +67,20 @@ type Claims struct {
 	// already capped to the scope at issue time. The audience a scoped token is
 	// bound to (RFC 8707) rides the standard "aud" registered claim.
 	Scope string `json:"scope,omitempty"`
+	// ScopeAnchors (the "scp" claim) is the membership's SCOPE (ADR-081): the anchors —
+	// "customer:<token>" or "group:<token>", at most MaxScopeAnchors — that bound which of
+	// the tenant's device-derived rows the bearer may see. Absent means the whole tenant.
+	//
+	// 🔴 IT IS NOT Scope, AND THE TWO MUST NEVER BE CONFLATED. Scope above is the OAuth
+	// 2.1 scope string, which caps AUTHORITIES (what the bearer may do); this caps ROWS
+	// (which of the tenant's records it may do it to). A token can carry both.
+	//
+	// It rides tenant access (and refresh) tokens only; Validator.Parse refuses it on an
+	// identity or service token, refuses it beside the superuser marker, and refuses a
+	// present-but-malformed or empty list. Read it through ScopeFromContext, never
+	// directly: a non-nil list is scoped whatever it holds, and that reading lives in one
+	// place.
+	ScopeAnchors []string `json:"scp,omitempty"`
 	// ClientId is the OAuth 2.1 client the token was minted for (ADR-047 / RFC 9068);
 	// empty on non-OAuth tokens. It binds the refresh grant to its client so a token
 	// minted for a confidential client can only be refreshed by that same
@@ -114,6 +128,11 @@ type SessionID string
 
 // HasAuthority reports whether the claims grant the required authority. A subject
 // holding the super-authority AuthorityAll ("*") passes every check.
+//
+// 🔴 IT IS NOT AN AUTHORIZATION. It answers "does the token name this authority?" and
+// nothing else: not the tier (ADR-065), and not the scope (ADR-081). Gate on Authorize,
+// AuthorizeAny, AuthorizeScoped or AuthorizeCatalogue — a gate written on HasAuthority
+// admits a scoped member to an operation that refuses every scoped caller elsewhere.
 func (c *Claims) HasAuthority(required Authority) bool {
 	for _, held := range c.Authorities {
 		if held == string(AuthorityAll) || held == string(required) {

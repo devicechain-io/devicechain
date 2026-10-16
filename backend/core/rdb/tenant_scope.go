@@ -169,7 +169,9 @@ func RegisterTenantScoping(db *gorm.DB) error {
 			return err
 		}
 	}
-	return nil
+	// The scope callbacks (ADR-081) ride the same registration, so no handle can have
+	// tenant isolation without scope isolation. They act only for a scoped caller.
+	return registerScopeCallbacks(db)
 }
 
 // ensureSchema makes sure db.Statement.Schema is populated. Returns true when a

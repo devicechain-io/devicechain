@@ -759,6 +759,31 @@ Decide según el código, no según el mensaje, al que un servicio puede antepon
 haciendo. Algunas operaciones responden a un registro que falta con un código propio que dice qué
 falta, como `ARTIFACT_NOT_FOUND`, y esas conservan su propio código.
 
+### Una operación que no puedes realizar {#forbidden}
+
+Una operación que se rechaza porque no puedes realizarla lleva `extensions.code` con el valor
+`FORBIDDEN`. Tu token es válido, pero no tiene la autoridad que la operación requiere:
+
+```json
+{
+  "errors": [{
+    "message": "forbidden: missing required authority",
+    "path": ["deleteDevice"],
+    "extensions": { "code": "FORBIDDEN" }
+  }]
+}
+```
+
+Una solicitud sin un token válido no recibe esta respuesta. Un token no válido o caducado se
+rechaza con HTTP 401 antes de que se ejecute ninguna operación. Sin ningún token, una operación que
+lo necesita falla con un mensaje que empieza por `unauthenticated` y sin código.
+
+Un rechazo tiene prioridad sobre cualquier otra respuesta a la misma operación. Si no puedes
+realizar una operación, recibes `FORBIDDEN` aunque el registro que nombra no exista, de modo que la
+respuesta nunca te dice si el registro existe. Algunos rechazos añaden `extensions.reason` para
+decir por qué. Decide según `code` y trata `reason` como un detalle: un `FORBIDDEN` sin motivo sigue
+siendo un rechazo.
+
 ## Límites de las solicitudes {#request-limits}
 
 Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,

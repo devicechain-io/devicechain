@@ -19,7 +19,41 @@ var (
 	// ErrForbidden means the subject is authenticated but does not hold the
 	// required authority.
 	ErrForbidden = errors.New("forbidden: missing required authority")
+	// ErrScopeUnsupported is the refusal a SCOPED caller (ADR-081) meets at any
+	// operation that has not opted in to scoped callers: at Authorize/AuthorizeAny, at
+	// core/rdb's scope callback for a model that declares no scope rule, and at a
+	// service-to-service call made on its behalf. It IS an ErrForbidden
+	// (errors.Is(err, ErrForbidden) holds), so every caller that already handles a
+	// refusal handles this one, and the wire answers it FORBIDDEN with the reason
+	// SCOPE_UNSUPPORTED. Its message starts with "forbidden" for the same reason the
+	// clients match on that prefix.
+	ErrScopeUnsupported error = scopeUnsupported{}
 )
+
+// scopeUnsupported is ErrScopeUnsupported's type: a distinct sentinel that also
+// reports itself as ErrForbidden.
+type scopeUnsupported struct{}
+
+func (scopeUnsupported) Error() string {
+	return "forbidden: this operation is not available to a member whose access is limited to part of the tenant"
+}
+
+// Is makes ErrScopeUnsupported an ErrForbidden to errors.Is.
+func (scopeUnsupported) Is(target error) bool { return target == ErrForbidden }
+
+// ReasonScopeUnsupported is the wire reason (extensions.reason) of an
+// ErrScopeUnsupported refusal.
+const ReasonScopeUnsupported = "SCOPE_UNSUPPORTED"
+
+// ForbiddenReason returns the wire reason of a refusal, or "" when it carries none.
+// It is the one mapping from a refusal's sentinel to its published reason, read by the
+// GraphQL boundary.
+func ForbiddenReason(err error) string {
+	if errors.Is(err, ErrScopeUnsupported) {
+		return ReasonScopeUnsupported
+	}
+	return ""
+}
 
 // satisfies reports whether claims may be granted the required authority, tier
 // included. It is the one place the tier is enforced at check time, so every
@@ -73,10 +107,20 @@ func satisfies(claims *Claims, required Authority) bool {
 // across services. Returns ErrUnauthenticated when the request was
 // unauthenticated and ErrForbidden when the subject lacks the authority or holds
 // it on the wrong tier.
+//
+// 🔴 IT REFUSES EVERY SCOPED CALLER (ADR-081), with ErrScopeUnsupported, whatever
+// authorities the token holds. That is the deny-by-default half of scoped memberships:
+// every resolver written before scopes existed — hundreds of call sites — answers a
+// customer user FORBIDDEN with no edit, and a resolver written later fails closed until
+// it opts in. Opting in is switching to AuthorizeScoped (and applying the scope it
+// returns) or AuthorizeCatalogue; there is no other door.
 func Authorize(ctx context.Context, required Authority) error {
 	claims, ok := ClaimsFromContext(ctx)
 	if !ok {
 		return ErrUnauthenticated
+	}
+	if scopeOf(claims).IsScoped() {
+		return ErrScopeUnsupported
 	}
 	if !satisfies(claims, required) {
 		return ErrForbidden
@@ -88,11 +132,14 @@ func Authorize(ctx context.Context, required Authority) error {
 // required authorities, at a tier the claims' token may carry it on. With no
 // authorities supplied it authorizes nothing and returns ErrForbidden
 // (fail-closed), so a caller cannot accidentally leave a resolver ungated by
-// passing an empty set.
+// passing an empty set. Like Authorize, it refuses every scoped caller.
 func AuthorizeAny(ctx context.Context, required ...Authority) error {
 	claims, ok := ClaimsFromContext(ctx)
 	if !ok {
 		return ErrUnauthenticated
+	}
+	if scopeOf(claims).IsScoped() {
+		return ErrScopeUnsupported
 	}
 	for _, authority := range required {
 		if satisfies(claims, authority) {
@@ -100,4 +147,49 @@ func AuthorizeAny(ctx context.Context, required ...Authority) error {
 		}
 	}
 	return ErrForbidden
+}
+
+// AuthorizeScoped is Authorize for a resolver that ADMITS scoped callers (ADR-081). It
+// checks the authority exactly as Authorize does — tier included — and returns the
+// caller's scope instead of refusing a scoped one: the zero Scope for an unscoped
+// caller, a scoped one otherwise.
+//
+// Calling it is a promise the resolver keeps: every row it returns is filtered by the
+// scope. For a model read through gorm that is done by core/rdb's scope callback, which
+// applies the model's ScopedBy rule — and refuses a model that declares none — with no
+// further code here. A resolver that reaches rows any other way (raw SQL, a projection
+// struct, another service) applies the returned scope itself, and carries a
+// cross-customer test that proves it. A by-token read of a row outside the scope answers
+// NOT_FOUND, never FORBIDDEN: a scoped caller must not learn that a row it may not see
+// exists.
+func AuthorizeScoped(ctx context.Context, required Authority) (Scope, error) {
+	claims, ok := ClaimsFromContext(ctx)
+	if !ok {
+		return Scope{}, ErrUnauthenticated
+	}
+	if !satisfies(claims, required) {
+		return Scope{}, ErrForbidden
+	}
+	return scopeOf(claims), nil
+}
+
+// AuthorizeCatalogue is Authorize for a tenant CATALOGUE read that is safe for any
+// member, scoped or not (ADR-081): tenant configuration that is not device-derived —
+// device types, profile versions and their metric and command vocabularies, units —
+// which a customer's console needs to render what it is allowed to see. It checks the
+// authority exactly as Authorize does and admits a scoped caller unfiltered.
+//
+// Use it only for reads of configuration. A resolver that returns a device-derived row
+// through it hands a scoped caller the whole tenant; core/rdb still refuses a scoped
+// read of any model that does not declare rdb.Catalogue() or another rule, so the
+// mistake surfaces as a refusal at the model rather than as a leak.
+func AuthorizeCatalogue(ctx context.Context, required Authority) error {
+	claims, ok := ClaimsFromContext(ctx)
+	if !ok {
+		return ErrUnauthenticated
+	}
+	if !satisfies(claims, required) {
+		return ErrForbidden
+	}
+	return nil
 }

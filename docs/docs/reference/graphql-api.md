@@ -718,6 +718,30 @@ Branch on the code, not on the message, which a service may prefix with what it 
 operations answer a missing record with a code of their own that says what is missing, such as
 `ARTIFACT_NOT_FOUND`, and those keep their own code.
 
+### An operation you may not perform {#forbidden}
+
+An operation refused because you may not perform it carries `extensions.code` set to `FORBIDDEN`.
+Your token is valid, but it does not hold the authority the operation requires:
+
+```json
+{
+  "errors": [{
+    "message": "forbidden: missing required authority",
+    "path": ["deleteDevice"],
+    "extensions": { "code": "FORBIDDEN" }
+  }]
+}
+```
+
+A request without a valid token is not answered this way. An invalid or expired token is refused
+with HTTP 401 before any operation runs. With no token at all, an operation that needs one fails
+with a message starting `unauthenticated` and no code.
+
+A refusal takes precedence over every other answer to the same operation. If you may not perform
+an operation, you get `FORBIDDEN` even when the record it names does not exist, so the answer never
+tells you whether the record is there. Some refusals add `extensions.reason` to say why. Branch on
+`code`, and treat `reason` as detail: a `FORBIDDEN` without a reason is still a refusal.
+
 ## Request limits {#request-limits}
 
 Every GraphQL endpoint refuses a request that is too large or does too much, before any of it runs.

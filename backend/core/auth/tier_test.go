@@ -6,6 +6,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -53,7 +55,11 @@ func TestTenantAdminStarCannotReachAiAdmin(t *testing.T) {
 // same authority, rather than reaching instance config from inside a tenant.
 func TestSudoSuperuserCannotReachSystemTierFromATenant(t *testing.T) {
 	sudo := &Claims{TokenType: TokenTypeAccess, Tenant: "acme", ActingAsSuperuser: true, Authorities: []string{string(AuthorityAll)}}
-	for _, a := range []Authority{AIAdmin, TenantWrite, SettingsWrite, ClientWrite, RoleWrite, UserWrite} {
+	// role:write is not in the list: since ADR-081 it is dual-tier, and a tenant access
+	// token reaches only the roles its tenant owns, on the tenant plane. The operator
+	// catalogue stays out of reach because it is served only on the admin plane
+	// (core/graphql's TestAnAccessTokenHoldingRoleWriteCannotReachTheAdminPlane).
+	for _, a := range []Authority{AIAdmin, TenantWrite, SettingsWrite, ClientWrite, UserWrite} {
 		if err := Authorize(ctxWith(sudo), a); !errors.Is(err, ErrForbidden) {
 			t.Fatalf("a sudo access token satisfied system-tier %q: %v", a, err)
 		}
@@ -141,7 +147,7 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 		DashboardRead, DashboardWrite,
 		NotificationRead, NotificationWrite, AuditRead, SettingsRead, SettingsWrite,
 		ClientRead, ClientWrite, ConnectorRead, ConnectorWrite, ArtifactRead, ArtifactWrite, ArtifactTrust, BrandingWrite,
-		BasemapWrite, LocaleWrite, AIAdmin, AIInfer,
+		BasemapWrite, LocaleWrite, AIAdmin, AIInfer, MemberRead, MemberWrite,
 	}
 	for _, a := range expected {
 		tiers, known := TiersOf(a)
@@ -178,7 +184,7 @@ func TestEveryAuthorityDeclaresATier(t *testing.T) {
 func TestTheOperatorSurfacesAreSystemTier(t *testing.T) {
 	for _, a := range []Authority{
 		AIAdmin, TenantRead, TenantWrite, UserRead, UserWrite,
-		RoleRead, RoleWrite, SettingsRead, SettingsWrite, ClientRead, ClientWrite,
+		SettingsRead, SettingsWrite, ClientRead, ClientWrite,
 	} {
 		tiers, _ := TiersOf(a)
 		if !tiers.Has(TierSystem) {
@@ -194,8 +200,9 @@ func TestTheOperatorSurfacesAreSystemTier(t *testing.T) {
 	}
 }
 
-// TestAuditReadIsTheOnlyDualTierAuthority pins the model's one deliberate exception,
-// and pins that it stays the only one.
+// TestDualTierAuthoritiesAreTheArguedSet pins the model's deliberate exceptions, and
+// pins that they stay the only ones. It replaces TestAuditReadIsTheOnlyDualTierAuthority,
+// whose set was {audit:read}; ADR-081 is the argument for the two it adds.
 //
 // audit:read must be BOTH: device-management's data plane gates a tenant reading its
 // OWN journal on it, and user-management's ADMIN plane gates an operator reading the
@@ -205,20 +212,52 @@ func TestTheOperatorSurfacesAreSystemTier(t *testing.T) {
 // system role holding it uneditable, since UpdateRole revalidates the whole
 // replacement set.
 //
+// role:read and role:write are both on the same argument (ADR-081): the operator
+// reads and writes the instance catalogue on the admin plane, and a tenant
+// administrator reads the roles assignable in its tenant and writes the roles its
+// tenant OWNS on the data plane. One capability, two scopes, told apart by the plane
+// and the row's tenant. user:read/user:write were deliberately NOT re-tiered: the
+// tenant plane uses member:read/member:write instead.
+//
 // Dual-tier is the weakest thing in this model (it is satisfiable from an access
-// token), so this test names the whole set rather than just asserting audit:read is
-// in it: a second dual-tier authority must be an argued decision, not a slip.
-func TestAuditReadIsTheOnlyDualTierAuthority(t *testing.T) {
-	var dual []Authority
+// token), so this test names the whole set rather than just asserting membership: a
+// fourth dual-tier authority must be an argued decision, not a slip. The set is
+// spelled as literal strings so it pins the published names, not the constants.
+func TestDualTierAuthoritiesAreTheArguedSet(t *testing.T) {
+	var dual []string
 	for a, tiers := range vocabulary {
 		if tiers.Has(TierSystem) && tiers.Has(TierTenant) {
-			dual = append(dual, a)
+			dual = append(dual, string(a))
 		}
 	}
-	if len(dual) != 1 || dual[0] != AuditRead {
-		t.Fatalf("audit:read must be the only dual-tier authority; got %v. A new one is a "+
+	sort.Strings(dual)
+	want := []string{"audit:read", "role:read", "role:write"}
+	if !reflect.DeepEqual(dual, want) {
+		t.Fatalf("the dual-tier authorities must be exactly %v; got %v. A new one is a "+
 			"real decision: a dual-tier authority is satisfiable from a tenant access token, "+
-			"so it must never gate anything instance-global.", dual)
+			"so it must never gate anything instance-global.", want, dual)
+	}
+}
+
+// TestTheTenantPlaneAuthoritiesOfADR081 states the tiers of the two new names
+// directly: tenant-only, so an identity token's system-role authorities can never
+// carry them and the admin plane keeps gating memberships on user:write.
+func TestTheTenantPlaneAuthoritiesOfADR081(t *testing.T) {
+	for _, a := range []Authority{"member:read", "member:write"} {
+		tiers, known := TiersOf(a)
+		if !known {
+			t.Fatalf("%q must be in the vocabulary", a)
+		}
+		if !reflect.DeepEqual(tiers, Tiers{TierTenant}) {
+			t.Errorf("%q must be tenant-tier only, got %v", a, tiers)
+		}
+	}
+	// The user directory stays operator-only: it is NOT the tenant plane's member noun.
+	for _, a := range []Authority{"user:read", "user:write"} {
+		tiers, _ := TiersOf(a)
+		if tiers.Has(TierTenant) {
+			t.Errorf("%q must stay system-tier only; the tenant plane uses member:*", a)
+		}
 	}
 }
 

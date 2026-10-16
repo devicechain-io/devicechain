@@ -22,6 +22,16 @@ const (
 	// the sync-call primitive, and it must stay comfortably longer than svcclient's
 	// refresh skew so a caller isn't forced to mint on every call.
 	ServiceTokenTTL = 15 * time.Minute
+	// DefaultScopedAccessTTL is the lifetime of a SCOPED tenant access token (ADR-081
+	// decision 8). Revoking a scoped member's access — narrowing the scope, removing a
+	// role, disabling the membership — ends their refresh token at its next exchange,
+	// but cannot refuse a request on an access token already issued: access tokens do
+	// not carry the session epoch, and the data-plane validator does not read it. The
+	// access lifetime IS the revocation window, so it is shorter for the members whose
+	// access is the one most likely to be narrowed. It never exceeds the issuer's
+	// unscoped access TTL (see NewIssuer). The value is provisional until
+	// user-management fixes and documents it.
+	DefaultScopedAccessTTL = 5 * time.Minute
 )
 
 // Issuer mints RS256-signed access and refresh tokens. Only user-management
@@ -33,6 +43,9 @@ type Issuer struct {
 	issuer     string
 	accessTTL  time.Duration
 	refreshTTL time.Duration
+	// scopedAccessTTL is the lifetime of a scoped access token: never longer than
+	// accessTTL. See DefaultScopedAccessTTL.
+	scopedAccessTTL time.Duration
 }
 
 // NewIssuer builds an Issuer from the instance private key. The issuer string
@@ -47,13 +60,17 @@ func NewIssuer(priv *rsa.PrivateKey, issuer string, accessTTL, refreshTTL time.D
 		refreshTTL = DefaultRefreshTTL
 	}
 	return &Issuer{
-		privateKey: priv,
-		kid:        Thumbprint(&priv.PublicKey),
-		issuer:     issuer,
-		accessTTL:  accessTTL,
-		refreshTTL: refreshTTL,
+		privateKey:      priv,
+		kid:             Thumbprint(&priv.PublicKey),
+		issuer:          issuer,
+		accessTTL:       accessTTL,
+		refreshTTL:      refreshTTL,
+		scopedAccessTTL: min(DefaultScopedAccessTTL, accessTTL),
 	}
 }
+
+// ScopedAccessTTL is the lifetime this issuer gives a scoped access token.
+func (i *Issuer) ScopedAccessTTL() time.Duration { return i.scopedAccessTTL }
 
 // Kid is the id (RFC 7638 thumbprint) of this issuer's signing key.
 func (i *Issuer) Kid() string { return i.kid }
@@ -101,6 +118,9 @@ type tokenSpec struct {
 	// only on refresh and identity tokens; see Claims.SessionEpoch.
 	sessionEpoch SessionEpoch
 	sessionID    SessionID
+	// scopeAnchors is a scoped membership's scope (the "scp" claim, ADR-081). Set only
+	// by the two scoped access mints, from a Scope that was validated when it was built.
+	scopeAnchors []string
 	jti          string
 	ttl          time.Duration
 }
@@ -123,6 +143,58 @@ func (i *Issuer) IssueTenantAccess(tenant, email string, roles, authorities []st
 		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
 		roles: roles, authorities: authorities, actingAsSuperuser: actingAsSuperuser,
 		jti: jti, ttl: i.accessTTL,
+	})
+}
+
+// ErrUnscopedScope is returned by the scoped mints when given an unscoped Scope. An
+// unscoped member is minted with IssueTenantAccess / IssueOAuthAccess, which carry no
+// "scp" at all; a scoped mint with nothing to put in it would otherwise write a claim
+// the validator refuses, a success that fails at the next request.
+var ErrUnscopedScope = errors.New("a scoped access token requires a scoped Scope")
+
+// mintableScope refuses a Scope a scoped mint cannot write faithfully: an unscoped one
+// (ErrUnscopedScope), and a scoped one whose anchors are empty or malformed. The second
+// matters because the claim is omitempty: a scoped Scope with no anchors — "sees
+// nothing", which ScopeFromContext can return — would otherwise be minted with no
+// "scp" at all, which is the WHOLE TENANT.
+func mintableScope(scope Scope) error {
+	if !scope.IsScoped() {
+		return ErrUnscopedScope
+	}
+	return validateAnchors(scope.anchors)
+}
+
+// IssueScopedTenantAccess mints the access token of a SCOPED membership (ADR-081): an
+// ordinary tenant access token that also carries the membership's scope as the "scp"
+// claim and lives for the scoped access TTL. It has no superuser parameter because a
+// superuser entering a tenant is never scoped — the absence is the rule, not a default.
+// Every resolver that has not opted in refuses the token (Authorize), and core/rdb
+// filters what the opted-in ones read.
+func (i *Issuer) IssueScopedTenantAccess(tenant, email string, roles, authorities []string, scope Scope, jti string) (IssuedToken, error) {
+	if err := mintableScope(scope); err != nil {
+		return IssuedToken{}, err
+	}
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
+		roles: roles, authorities: authorities, scopeAnchors: scope.Anchors(),
+		jti: jti, ttl: i.scopedAccessTTL,
+	})
+}
+
+// IssueScopedOAuthAccess is IssueOAuthAccess for a SCOPED membership: the OAuth access
+// token an MCP client holds carries the member's scope as well, so the tools — which
+// forward the caller's own token — inherit it with no change of their own (ADR-047,
+// ADR-081). oauthScope is the OAuth scope string (Claims.Scope); scope is the
+// membership's anchors (Claims.ScopeAnchors). Like IssueScopedTenantAccess it has no
+// superuser parameter and uses the scoped access TTL.
+func (i *Issuer) IssueScopedOAuthAccess(tenant, email string, roles, authorities []string, oauthScope string, audience []string, scope Scope, clientID, jti string) (IssuedToken, error) {
+	if err := mintableScope(scope); err != nil {
+		return IssuedToken{}, err
+	}
+	return i.sign(tokenSpec{
+		tokenType: TokenTypeAccess, tenant: tenant, username: email, email: email,
+		roles: roles, authorities: authorities, scope: oauthScope, audience: audience,
+		scopeAnchors: scope.Anchors(), clientID: clientID, jti: jti, ttl: i.scopedAccessTTL,
 	})
 }
 
@@ -225,6 +297,7 @@ func (i *Issuer) sign(spec tokenSpec) (IssuedToken, error) {
 		Authorities:       spec.authorities,
 		ActingAsSuperuser: spec.actingAsSuperuser,
 		Scope:             spec.scope,
+		ScopeAnchors:      spec.scopeAnchors,
 		ClientId:          spec.clientID,
 		SessionEpoch:      spec.sessionEpoch,
 		SessionID:         spec.sessionID,

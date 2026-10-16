@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
@@ -20,6 +21,15 @@ import (
 // gorm.ErrRecordNotFound and no code of its own: the record the request named does not
 // exist (in the caller's tenant). See answerIntegrity.
 const CodeNotFound = "NOT_FOUND"
+
+// CodeForbidden is the extensions.code of a resolver error whose chain holds
+// auth.ErrForbidden: the caller is authenticated but may not perform the operation —
+// it lacks the authority, holds it on the wrong tier, or is a scoped member the
+// operation has not opted in to (ADR-081). Such a refusal used to reach the client as a
+// bare message with no code, so a client could tell it from a failure only by matching
+// prose. When the refusal has a reason, it rides extensions.reason beside the code
+// (auth.ForbiddenReason; today only SCOPE_UNSUPPORTED). See answerIntegrity.
+const CodeForbidden = "FORBIDDEN"
 
 // answerIntegrity gives every resolver error whose chain holds an integrity refusal its
 // code — CONFLICT for a taken unique value, REFERENCE_VIOLATION for a refused reference
@@ -37,7 +47,13 @@ const CodeNotFound = "NOT_FOUND"
 // from Schema.Exec and from the subscription pump, which between them serve every
 // response.
 //
-// The code, in order:
+// Ahead of everything else, an authorization refusal — auth.ErrForbidden in the chain,
+// which includes auth.ErrScopeUnsupported — answers FORBIDDEN (CodeForbidden), with the
+// refusal's reason, if it has one, as extensions.reason. It comes first because a caller
+// who may not perform an operation is told only that, never what else the attempt ran
+// into (a taken value, a missing record) on the way to being refused. A code a typed
+// error already set is still kept, as for every code below. Otherwise, the code, in
+// order:
 //
 //  0. a limit refusal (core/limit) in the chain answers LIMIT_EXCEEDED, ahead of the
 //     integrity classes below (but still behind a code a typed error already set, step 1);
@@ -73,8 +89,10 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 			continue
 		}
 		err := qe.ResolverError
-		chosen := ""
-		if _, ok := limit.As(err); ok {
+		chosen, reason := "", ""
+		if errors.Is(err, auth.ErrForbidden) {
+			chosen, reason = CodeForbidden, auth.ForbiddenReason(err)
+		} else if _, ok := limit.As(err); ok {
 			chosen = limit.Code
 		} else if class, ok := integrity.Refused(err); ok {
 			chosen, _, _ = integrity.Answer(class)
@@ -88,9 +106,12 @@ func answerIntegrity(errs []*gqlerrors.QueryError) {
 				// A copy, never a write into the map the typed error returned: an
 				// Extensions() that hands out a shared map would otherwise be mutated
 				// by every request that reaches here.
-				ext := make(map[string]any, len(qe.Extensions)+1)
+				ext := make(map[string]any, len(qe.Extensions)+2)
 				maps.Copy(ext, qe.Extensions)
 				ext["code"] = chosen
+				if _, has := ext["reason"]; reason != "" && !has {
+					ext["reason"] = reason
+				}
 				qe.Extensions = ext
 			}
 		}

@@ -145,10 +145,17 @@ func (v *Validator) ValidateService(tokenString string) (*Claims, error) {
 // or a service token (tenant from an explicit header) through one verified path;
 // the type-asserting Validate* helpers are the right choice everywhere a single
 // tier is expected.
+//
+// It also applies the scope-claim rule (validateScopeClaim, ADR-081) to every token,
+// so every Validate* helper inherits it: a malformed or empty "scp", or one on a token
+// tier that may not carry it, refuses the whole token.
 func (v *Validator) Parse(tokenString string) (*Claims, error) {
 	claims := &Claims{}
 	if _, err := v.parser.ParseWithClaims(tokenString, claims, v.keyfunc); err != nil {
 		return nil, err
+	}
+	if err := validateScopeClaim(claims); err != nil {
+		return nil, fmt.Errorf("auth: %w", err)
 	}
 	return claims, nil
 }

@@ -56,7 +56,7 @@ func checkUpdatedTenant(db *gorm.DB, field *schema.Field, tenant string) error {
 	}
 	if m, ok := db.Statement.Dest.(map[string]interface{}); ok {
 		for k, v := range m {
-			if !isTenantColumnName(db, field, k) {
+			if !namesColumn(db, field, k) {
 				continue
 			}
 			stamp, err := resolveTenantValue(v, tenant)
@@ -126,7 +126,7 @@ func checkSetClause(db *gorm.DB, field *schema.Field, tenant string) error {
 	}
 	var stamped clause.Set
 	for i, a := range set {
-		if !isTenantColumnName(db, field, a.Column.Name) {
+		if !namesColumn(db, field, a.Column.Name) {
 			continue
 		}
 		stamp, err := resolveTenantValue(a.Value, tenant)
@@ -167,10 +167,11 @@ func updatedTenantMismatch(named, tenant string) error {
 		ErrTenantMismatch, named, tenant)
 }
 
-// isTenantColumnName reports whether name, as a map key or a SET column, is the tenant
-// column: either gorm resolves it to that field, or, as a name gorm would pass through as a
-// raw column, it is the column once its quoting and any table prefix are removed.
-func isTenantColumnName(db *gorm.DB, field *schema.Field, name string) bool {
+// namesColumn reports whether name, as a map key or a SET column, is field's column (the
+// tenant column here; the scope callback asks it of a model's anchor column): either gorm
+// resolves it to that field, or, as a name gorm would pass through as a raw column, it is
+// the column once its quoting and any table prefix are removed.
+func namesColumn(db *gorm.DB, field *schema.Field, name string) bool {
 	if db.Statement.Schema != nil && db.Statement.Schema.LookUpField(name) == field {
 		return true
 	}
@@ -190,7 +191,7 @@ func tenantColumnIsWritten(db *gorm.DB, field *schema.Field) bool {
 		return true
 	}
 	for name, on := range selected {
-		if on && isTenantColumnName(db, field, name) {
+		if on && namesColumn(db, field, name) {
 			return true
 		}
 	}
