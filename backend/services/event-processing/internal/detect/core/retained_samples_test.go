@@ -56,8 +56,9 @@ func TestRetainedSampleCountsSeesWhatLiveKeyCountsCannot(t *testing.T) {
 			t.Fatalf("%s: live keys moved from %d to %d after %d samples on ONE series — this test no longer "+
 				"demonstrates the blindness it guards against; re-derive it", id, keysAfterFirst[id], keys[id], samples)
 		}
-		if keys[id] != 1 {
-			t.Fatalf("%s: want exactly 1 live key for a single series, got %d", id, keys[id])
+		// Two entries: the window, and the series' newest instant (trailingWindow).
+		if keys[id] != 2 {
+			t.Fatalf("%s: want exactly 2 live keys for a single series (window + newest instant), got %d", id, keys[id])
 		}
 		// Half two: the new gauge tracks the data. This is the assertion that fails if the
 		// retained-sample count is ever reduced to another entry count.

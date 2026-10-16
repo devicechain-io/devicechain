@@ -73,17 +73,25 @@ func TestLateSampleDoesNotRewindTheSlidingCutoff(t *testing.T) {
 //
 // With wm.now=100 and Window=10s the boundary sits at exactly 90: a sample at 90 is refused
 // (evict is at-or-before), 91 is admitted. A session-shaped guard would put it at 80.
+//
+// Admitted is not the same as counted toward the alarm. An admitted sample is read in the window
+// open at the series' NEWEST instant (105, so (95, 105]), and 91 lies outside it: 91, 100 and 105
+// span 14 s and were never inside one 10 s window, so it is admitted — not late — and raises
+// nothing. 96 and 99 lie inside it and complete the count.
 func TestSlidingAdmissionBoundaryIsTheFrontierNotTheSample(t *testing.T) {
 	for _, tc := range []struct {
 		sec      int
 		admitted bool
+		fires    bool
 	}{
-		{80, false}, // admitted by a session-shaped guard; must be refused here
-		{85, false},
-		{89, false},
-		{90, false}, // exactly at the cutoff: evict drops at-or-before, so this cannot be folded in
-		{91, true},  // first instant inside the frontier's window
-		{99, true},
+		{80, false, false}, // admitted by a session-shaped guard; must be refused here
+		{85, false, false},
+		{89, false, false},
+		{90, false, false}, // exactly at the cutoff: evict drops at-or-before, so this cannot be folded in
+		{91, true, false},  // first instant inside the frontier's window, but older than the window open at 105
+		{95, true, false},  // exactly at the newest window's cutoff
+		{96, true, true},   // first instant inside the window open at the series' newest
+		{99, true, true},
 	} {
 		e := NewEngine([]Rule{{ID: "r", Kind: Repeating, Window: 10 * time.Second, Count: 3}}, 5*time.Second)
 		key := SeriesKey{Rule: "r", Series: "dev"}
@@ -92,8 +100,8 @@ func TestSlidingAdmissionBoundaryIsTheFrontierNotTheSample(t *testing.T) {
 		e.Drain()
 		e.ProcessResolved(3, at(tc.sec), []Event{{Seq: 3, Key: key, Time: at(tc.sec), Match: true}})
 		fired, late := len(e.Drain()) > 0, e.DrainLateSamples()
-		if fired != tc.admitted {
-			t.Errorf("sample@%d: folded in = %v, want %v (frontier 100, cutoff 90)", tc.sec, fired, tc.admitted)
+		if fired != tc.fires {
+			t.Errorf("sample@%d: fired = %v, want %v (frontier 100, newest 105, window (95, 105])", tc.sec, fired, tc.fires)
 		}
 		if wantLate := uint64(0); tc.admitted && late != wantLate {
 			t.Errorf("sample@%d: counted %d late, want %d", tc.sec, late, wantLate)
@@ -242,6 +250,25 @@ func TestLateSampleDoesNotResolveASeriesWhoseWindowIsGone(t *testing.T) {
 		e.ProcessResolved(4, at(105), []Event{{Seq: 4, Key: a, Time: at(105), Value: 1, HasValue: true, Match: true}})
 		if d := e.Drain(); len(d) != 0 {
 			t.Errorf("a buffered sample cleared a live alarm for a series with no open window: %+v", d)
+		}
+	})
+
+	t.Run("repeating", func(t *testing.T) {
+		e := NewEngine([]Rule{{ID: "r", Kind: Repeating, Window: 10 * time.Second, Count: 2}}, 5*time.Second)
+		a := SeriesKey{Rule: "r", Series: "devA"}
+		b := SeriesKey{Rule: "r", Series: "devB"}
+		e.ProcessResolved(1, at(100), []Event{{Seq: 1, Key: a, Time: at(100), Match: true}})
+		e.ProcessResolved(2, at(101), []Event{{Seq: 2, Key: a, Time: at(101), Match: true}})
+		if d := e.Drain(); len(d) != 1 || d[0].Edge == EdgeResolved {
+			t.Fatalf("setup: expected one raise for devA, got %+v", d)
+		}
+		e.ProcessResolved(3, at(300), []Event{{Seq: 3, Key: b, Time: at(300), Match: true}})
+		e.Drain()
+		// A redelivered reading from before the raise empties the window the frontier reads, but it
+		// is no news about devA: its newest reading still supports the alarm.
+		e.ProcessResolved(4, at(99), []Event{{Seq: 4, Key: a, Time: at(99), Match: true}})
+		if d := e.Drain(); len(d) != 0 {
+			t.Fatalf("a sample predating the raise must not resolve it, got %+v", d)
 		}
 	})
 

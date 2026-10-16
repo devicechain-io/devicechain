@@ -236,9 +236,18 @@ size the setting:
 
 In every case the reading is **stored and charted normally**; this is a detection-only effect.
 
-Inside the tolerance nothing changes: an out-of-order reading that still falls within the window is
-folded in as normal, which is what the tolerance is for. The window can stretch by up to the
-tolerance as a result — that is what tolerating out-of-order arrival means — but no further.
+Inside the tolerance an out-of-order reading is folded in as normal, which is what the tolerance is
+for. The sliding kinds read their window as of the **newest reading** the device has sent (for
+correlation, the newest sighting in the area), whatever order the readings arrived in. A late
+reading therefore counts only alongside readings that were inside one window with it at that
+moment, and an alarm it raises or clears is stamped at that newest reading, never earlier than an
+alarm change the rule has already reported. After a burst of out-of-order readings, the alarm is
+raised or clear as the readings imply in timestamp order. Exactly when inside the burst it changed
+is approximate. For a sliding aggregate one case waits: when a late reading would clear an alarm
+that a newer reading raised, the clear is held until readings up to one tolerance newer have had
+time to arrive. If one of them breaches again, the alarm stays raised instead of clearing and
+raising again a moment later; otherwise it clears, stamped at the newest reading. A late reading too old for that window no longer bears on the alarm, and it is not
+counted as discarded.
 
 The sliding kinds, duration rules and the count-window and rate rules **count what they
 discard**, once for each rule that discards a reading. `detect_late_samples_total` rises every time

@@ -162,7 +162,8 @@ func TestDropStaleAbsences(t *testing.T) {
 
 // TestDropSupersededFrontierDetections is the ADR-057 D6 gate: a superseded profile version's retained
 // rule still fires its FRONTIER-triggered detections (Duration/Session/Aggregate timers + pane closes,
-// and the DeltaRate/CountWindow flush of samples held until the frontier passes them) off the shared
+// the DeltaRate/CountWindow flush of samples held until the frontier passes them, and the SlidingAgg
+// falling edge a late sample found, held one lateness budget and emitted off the frontier) off the shared
 // watermark even though the fan-out starves it of events, so those must be dropped at publish lest
 // they contribute a false edge to the alarm object under the stable contributor id. It drops ONLY on
 // a CONFIRMED version mismatch: the active version's detection, an unrostered device's, and a
@@ -190,6 +191,7 @@ func TestDropSupersededFrontierDetections(t *testing.T) {
 		{RuleID: v1, Series: "dev", Kind: detectcore.Duration},        // superseded frontier → DROP
 		{RuleID: v1, Series: "dev", Kind: detectcore.DeltaRate},       // superseded held-sample flush → DROP
 		{RuleID: v1, Series: "dev", Kind: detectcore.CountWindow},     // superseded held-sample flush → DROP
+		{RuleID: v1, Series: "dev", Kind: detectcore.SlidingAgg},      // superseded held falling edge → DROP
 		{RuleID: v2, Series: "dev", Kind: detectcore.Duration},        // active version → keep
 		{RuleID: v1, Series: "dev", Kind: detectcore.Threshold},       // superseded but event-driven → keep
 		{RuleID: v1, Series: "unrostered", Kind: detectcore.Duration}, // unrostered → keep (fail toward not-dropping)
@@ -206,9 +208,9 @@ func TestDropSupersededFrontierDetections(t *testing.T) {
 	if kept[key(detectcore.Duration, v1, "dev")] {
 		t.Fatal("a superseded version's Duration (frontier) detection must be dropped")
 	}
-	for _, kind := range []detectcore.RuleKind{detectcore.DeltaRate, detectcore.CountWindow} {
+	for _, kind := range []detectcore.RuleKind{detectcore.DeltaRate, detectcore.CountWindow, detectcore.SlidingAgg} {
 		if kept[key(kind, v1, "dev")] {
-			t.Fatalf("a superseded version's kind-%d detection comes off a frontier flush and must be dropped", kind)
+			t.Fatalf("a superseded version's kind-%d detection can come off the frontier and must be dropped", kind)
 		}
 	}
 	for _, want := range []string{
