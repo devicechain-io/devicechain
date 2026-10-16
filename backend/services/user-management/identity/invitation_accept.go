@@ -126,7 +126,7 @@ func (m *Manager) AcceptInvitation(ctx context.Context, code string, password, i
 				return admin.ErrInvalidInvitation
 			}
 		} else {
-			pristine, err := neverUsed(ctx, tx, id)
+			pristine, err := neverUsed(ctx, tx, id, mem)
 			if err != nil {
 				return err
 			}
@@ -181,10 +181,19 @@ func (m *Manager) AcceptInvitation(ctx context.Context, code string, password, i
 }
 
 // neverUsed reports whether an identity has never been usable: no password, no system
-// role, and no link to an identity provider — the state an invitation creates an
-// identity in, and the only one the password path of AcceptInvitation may set a password
-// on.
-func neverUsed(ctx context.Context, tx *iam.Store, id *iam.Identity) (bool, error) {
+// role, no link to an identity provider, and no membership but pending invitations — the
+// state an invitation creates an identity in, and the only one the password path of
+// AcceptInvitation may set a password on.
+//
+// 🔴 THE MEMBERSHIP CHECK IS NOT REDUNDANT WITH THE OTHER THREE. An identity can lose its
+// way in and keep its grants: deleting an identity provider connection removes its links
+// and leaves the memberships it did not manage, enabled; a tenant can enable a member
+// whose invitation it revoked. Such an identity was usable, and a password set on it by
+// whoever holds a NEW tenant's invitation code would enter every tenant it belongs to.
+// Other memberships are allowed only while they are disabled and waiting on an
+// invitation of their own — two tenants inviting the same new person — which is the one
+// state in which the identity has provably never had a session anywhere.
+func neverUsed(ctx context.Context, tx *iam.Store, id *iam.Identity, accepting *iam.Membership) (bool, error) {
 	if id.PasswordHash != "" || len(id.SystemRoles) > 0 {
 		return false, nil
 	}
@@ -192,5 +201,33 @@ func neverUsed(ctx context.Context, tx *iam.Store, id *iam.Identity) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	return len(links) == 0, nil
+	if len(links) > 0 {
+		return false, nil
+	}
+	others := make([]uint, 0, len(id.Memberships))
+	for _, m := range id.Memberships {
+		if m.ID == accepting.ID {
+			continue
+		}
+		if m.Enabled {
+			return false, nil
+		}
+		others = append(others, m.ID)
+	}
+	invs, err := tx.InvitationsForMemberships(ctx, others)
+	if err != nil {
+		return false, err
+	}
+	for _, mid := range others {
+		open := false
+		for _, inv := range invs[mid] {
+			if inv.AcceptedAt == nil && inv.RevokedAt == nil {
+				open = true
+			}
+		}
+		if !open {
+			return false, nil
+		}
+	}
+	return true, nil
 }

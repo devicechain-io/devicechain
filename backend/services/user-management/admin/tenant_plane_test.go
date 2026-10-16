@@ -655,3 +655,57 @@ func TestATenantCannotReachAnotherTenantsRole(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, acme.Name.Valid, "acme's role was changed from globex")
 }
+
+// 🔴 A MEMBERSHIP THAT GRANTS NOTHING HAS NOTHING TO TAKE AWAY. A disabled membership — a
+// pending invitation is one — admits no session in this tenant, so narrowing, stripping or
+// removing it must not rotate the person's session epoch: that epoch is per IDENTITY, and
+// rotating it signs the person out of EVERY tenant they belong to. Without this rule an
+// administrator of one tenant could sign any identity on the instance out of all its
+// tenants, repeatedly, by inviting the address and removing the pending member — no
+// acceptance needed, no membership of the victim's ever enabled.
+func TestAPendingMemberIsNotSignedOutOfTheirOtherTenants(t *testing.T) {
+	e := newPlaneEnv(t)
+	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
+	// The victim is a member of globex only.
+	e.member(t, "victim@globex.example", "globex", []string{iam.ViewerRoleToken})
+	me := as("boss@acme.example", "acme", "*")
+
+	steps := []struct {
+		name string
+		op   func() error
+	}{
+		{"scoped while pending", func() error { _, err := e.s.SetMemberScope(me, "victim@globex.example", customers("a")); return err }},
+		{"stripped while pending", func() error { _, err := e.s.SetMemberRoles(me, "victim@globex.example", nil); return err }},
+		{"removed while pending", func() error { _, err := e.s.RemoveMember(me, "victim@globex.example"); return err }},
+	}
+	for _, st := range steps {
+		if _, err := e.s.Member(me, "victim@globex.example"); errors.Is(err, ErrMemberNotFound) {
+			_, _, err := e.s.InviteMember(me, InviteInput{Email: "victim@globex.example", RoleTokens: []string{"operator"}})
+			require.NoError(t, err)
+		}
+		before := e.epoch(t, "victim@globex.example")
+		require.NoErrorf(t, st.op(), st.name)
+		require.Equalf(t, before, e.epoch(t, "victim@globex.example"),
+			"%s: a membership that admitted no session rotated the person's epoch, signing them out of globex", st.name)
+	}
+
+	// A disabled holder of a tenant role is not signed out when the role is narrowed either.
+	_, err := e.s.CreateTenantRole(me, TenantRoleInput{Token: "tech", Authorities: []string{"command:write", "alarm:write"}})
+	require.NoError(t, err)
+	_, _, err = e.s.InviteMember(me, InviteInput{Email: "victim@globex.example", RoleTokens: []string{"tech"}})
+	require.NoError(t, err)
+	before := e.epoch(t, "victim@globex.example")
+	_, err = e.s.UpdateTenantRole(me, "tech", &RoleUpdateRequest{Authorities: dcgraphql.OptionalStringListOf([]string{"alarm:write"})})
+	require.NoError(t, err)
+	require.Equal(t, before, e.epoch(t, "victim@globex.example"), "narrowing a role a pending member holds signed them out")
+
+	// The admin plane applies the same rule.
+	before = e.epoch(t, "victim@globex.example")
+	_, err = e.s.SetMembershipRoles(context.Background(), "victim@globex.example", "acme", nil)
+	require.NoError(t, err)
+	_, err = e.s.SetMembershipScope(context.Background(), "victim@globex.example", "acme", customers("a"))
+	require.NoError(t, err)
+	_, err = e.s.RemoveMembership(context.Background(), "victim@globex.example", "acme")
+	require.NoError(t, err)
+	require.Equal(t, before, e.epoch(t, "victim@globex.example"), "the admin plane signed out a person whose membership was disabled")
+}

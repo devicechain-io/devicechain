@@ -537,6 +537,14 @@ type InvitationView struct {
 // exists here, is not the caller, is not managed by an identity provider, and holds
 // nothing the caller does not. fn returns the membership's state after the change (nil
 // when it removes it); the last-administrator rule is then decided over the whole tenant.
+//
+// fn also reports whether the change NARROWED the membership, which rotates the person's
+// session epoch — but only for a membership that was ENABLED before the change. 🔴 A
+// disabled membership (a pending invitation is one) admits no session in this tenant, so
+// there is nothing of it to end, and the epoch is per IDENTITY: rotating it signs the
+// person out of every other tenant they belong to. Without the gate, inviting any address
+// on the instance and removing the pending member would sign that identity out
+// everywhere, as often as the inviter liked.
 func (s *Service) memberChange(ctx context.Context, caller TenantCaller, email string,
 	fn func(tx *iam.Store, a actor, id *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error)) error {
 	return s.iam.InTransaction(ctx, func(tx *iam.Store) error {
@@ -564,6 +572,7 @@ func (s *Service) memberChange(ctx context.Context, caller TenantCaller, email s
 		if err != nil {
 			return err
 		}
+		wasEnabled := mem.Enabled
 		after, narrowed, err := fn(tx, a, id, mem)
 		if err != nil {
 			return err
@@ -571,7 +580,7 @@ func (s *Service) memberChange(ctx context.Context, caller TenantCaller, email s
 		if err := requireAnAdminRemains(before, map[uint]*iam.Membership{mem.ID: after}); err != nil {
 			return err
 		}
-		if narrowed {
+		if narrowed && wasEnabled {
 			// ADR-081 decision 8: a change that takes something away rotates the person's
 			// session epoch. Already-issued access tokens run to their expiry (the scoped
 			// lifetime bounds a scoped one); every refresh token, identity token and
@@ -988,8 +997,9 @@ func loadOwnedRole(ctx context.Context, tx *iam.Store, tenant, token string) (*i
 }
 
 // UpdateTenantRole applies a partial update to a role the caller's tenant owns. Removing
-// an authority rotates the session epoch of every member holding the role (ADR-081
-// decision 8), and may not leave the tenant without an administrator.
+// an authority rotates the session epoch of every ENABLED member holding the role (ADR-081
+// decision 8; a disabled holder has no session here to end — see memberChange), and may
+// not leave the tenant without an administrator.
 func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *RoleUpdateRequest) (*iam.Role, error) {
 	caller, err := tenantCaller(ctx)
 	if err != nil {
@@ -1042,6 +1052,9 @@ func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *R
 		}
 		if narrowed {
 			for _, h := range holders {
+				if !h.Enabled {
+					continue
+				}
 				if err := tx.RotateSessionEpochByID(ctx, h.IdentityID); err != nil {
 					return err
 				}

@@ -184,3 +184,77 @@ func TestASsoTenantRefusesThePasswordPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, id.PasswordHash, "an SSO tenant's invitation set a password")
 }
+
+// 🔴 "NEVER USED" MEANS NEVER GRANTED ANYTHING EITHER. An identity with no password, no
+// system role and no provider link can still carry memberships someone granted it: a
+// single-sign-on user whose identity provider connection the operator has since deleted
+// (the deletion removes the links and keeps the memberships), or a member a tenant enabled
+// without an acceptance. Such an identity has been usable, and a password set on it by
+// whoever holds a NEW tenant's invitation code would enter every tenant it belongs to.
+// The password path is for an identity whose only memberships are pending invitations.
+func TestAnAccountWithGrantsElsewhereCannotHaveItsPasswordSetThroughAnInvitation(t *testing.T) {
+	e, boss := inviteEnv(t)
+	ctx := context.Background()
+	ts, err := e.store.ListTenants(ctx)
+	require.NoError(t, err)
+	require.NoError(t, e.store.CreateTenant(ctx, &iam.Tenant{Token: "globex", Enabled: true, TierID: ts[0].TierID, PurgeState: iam.PurgeActive}))
+
+	// Formerly SSO-only, enabled member of globex; the connection and its links are gone.
+	_, err = e.admin.CreateIdentity(ctx, admin.CreateIdentityInput{Email: "orphan@example.com", Password: "x", Enabled: true})
+	require.NoError(t, err)
+	_, err = e.admin.AddMembership(ctx, "orphan@example.com", "globex", nil)
+	require.NoError(t, err)
+	orphan, err := e.store.IdentityByEmail(ctx, "orphan@example.com")
+	require.NoError(t, err)
+	require.NoError(t, e.db().WithContext(core.WithSystemContext(ctx)).Model(orphan).Update("password_hash", "").Error)
+
+	_, code, err := e.admin.InviteMember(boss, admin.InviteInput{Email: "orphan@example.com"})
+	require.NoError(t, err)
+	_, err = e.m.AcceptInvitation(ctx, code, ptr("attacker-chosen"), nil)
+	require.True(t, isInvalidInvitation(err), "an invitation set the password of an account that is a member elsewhere: %v", err)
+	after, err := e.store.IdentityByEmail(ctx, "orphan@example.com")
+	require.NoError(t, err)
+	require.Empty(t, after.PasswordHash, "the password was set")
+	mem, err := e.store.MembershipByIdentityTenant(ctx, after.ID, "acme")
+	require.NoError(t, err)
+	require.False(t, mem.Enabled, "the membership was enabled by a refused acceptance")
+
+	// The counterweight: two tenants inviting the same new person is the ordinary case, and
+	// the first acceptance sets the password while the other invitation is still pending.
+	_, codeA, err := e.admin.InviteMember(boss, admin.InviteInput{Email: "twice@example.com"})
+	require.NoError(t, err)
+	globexBoss := auth.WithClaims(ctx, &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "globex",
+		Username: "boss@example.com", Authorities: []string{"*"}})
+	_, err = e.admin.AddMembership(ctx, "boss@example.com", "globex", []string{iam.TenantAdminRoleToken})
+	require.NoError(t, err)
+	_, codeB, err := e.admin.InviteMember(globexBoss, admin.InviteInput{Email: "twice@example.com"})
+	require.NoError(t, err)
+	ia, err := e.m.AcceptInvitation(ctx, codeA, ptr("twice-pw"), nil)
+	require.NoError(t, err, "a person invited by two tenants could not accept the first with a password")
+	_, err = e.m.AcceptInvitation(ctx, codeB, nil, &ia.IdentityToken)
+	require.NoError(t, err, "the second invitation could not be accepted by signing in")
+
+	// An ENABLED membership blocks the password path even while its own invitation is
+	// still open — the one state the open-invitation rule alone would admit. Only the admin
+	// plane can produce it (the tenant plane refuses enabling a pending member).
+	_, codeG, err := e.admin.InviteMember(globexBoss, admin.InviteInput{Email: "enabled-early@example.com"})
+	require.NoError(t, err)
+	_, err = e.admin.SetMembershipEnabled(ctx, "enabled-early@example.com", "globex", true)
+	require.NoError(t, err)
+	_, codeA2, err := e.admin.InviteMember(boss, admin.InviteInput{Email: "enabled-early@example.com"})
+	require.NoError(t, err)
+	_, err = e.m.AcceptInvitation(ctx, codeA2, ptr("attacker-chosen"), nil)
+	require.True(t, isInvalidInvitation(err), "a member already enabled elsewhere had a password set through another tenant's invitation: %v", err)
+	_ = codeG
+
+	// A DISABLED membership elsewhere whose invitation was revoked blocks it too: nothing is
+	// waiting on that membership, so it is a grant someone made, not an invitation in flight.
+	_, _, err = e.admin.InviteMember(globexBoss, admin.InviteInput{Email: "revoked-elsewhere@example.com"})
+	require.NoError(t, err)
+	_, err = e.admin.RevokeInvitation(globexBoss, "revoked-elsewhere@example.com")
+	require.NoError(t, err)
+	_, codeA3, err := e.admin.InviteMember(boss, admin.InviteInput{Email: "revoked-elsewhere@example.com"})
+	require.NoError(t, err)
+	_, err = e.m.AcceptInvitation(ctx, codeA3, ptr("attacker-chosen"), nil)
+	require.True(t, isInvalidInvitation(err), "a disabled membership with no invitation in flight did not block the password path: %v", err)
+}

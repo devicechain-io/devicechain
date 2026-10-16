@@ -195,9 +195,12 @@ func (s *Service) AddScopedMembership(ctx context.Context, email, tenant string,
 }
 
 // narrowMembership applies a change to a membership and, when the change takes anything
-// away, rotates the identity's session epoch in the same transaction (ADR-081 decision 8).
-// It is the admin plane's half of the rule the tenant plane applies in memberChange: a
-// narrowing is the same event whichever plane makes it, so it has the same consequence.
+// away from a membership that was ENABLED, rotates the identity's session epoch in the
+// same transaction (ADR-081 decision 8). It is the admin plane's half of the rule the
+// tenant plane applies in memberChange: a narrowing is the same event whichever plane
+// makes it, so it has the same consequence — and the same gate: a disabled membership
+// admits no session, so narrowing or removing one ends nothing and must not sign the
+// person out of their other tenants.
 //
 // What the rotation does and does not reach: every refresh token, identity token and
 // authorization code minted before it is refused at its next exchange, in EVERY tenant the
@@ -205,12 +208,13 @@ func (s *Service) AddScopedMembership(ctx context.Context, email, tenant string,
 // expiry, because access tokens do not carry the epoch.
 func (s *Service) narrowMembership(ctx context.Context, mem *iam.Membership,
 	change func(tx *iam.Store) (narrowed bool, err error)) error {
+	wasEnabled := mem.Enabled
 	return s.iam.InTransaction(ctx, func(tx *iam.Store) error {
 		narrowed, err := change(tx)
 		if err != nil {
 			return err
 		}
-		if narrowed {
+		if narrowed && wasEnabled {
 			return tx.RotateSessionEpochByID(ctx, mem.IdentityID)
 		}
 		return nil
