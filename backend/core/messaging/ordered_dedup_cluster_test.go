@@ -72,6 +72,13 @@ func dedupID(i int) string { return fmt.Sprintf("resolved:acme:%d:0", i) }
 // publishes them again under the same ids: the stream must end up with exactly one copy of
 // each, and the duplicates counter must show the republish was absorbed rather than skipped.
 //
+// The republish races the first run's publishes the broker is still replicating, and the
+// broker answers a republish whose original is not yet committed with "duplicate message id
+// is in process". That is not a failure — the writer sends it again until the id resolves —
+// so every republish must still succeed: a writer that reported the conflict failed this
+// test intermittently, by how many of the first run's proposals were still uncommitted.
+// TestOrderedWriterResendsAPublishWhoseIdIsInProcess pins the same behaviour every time.
+//
 // GUARD: kills a window or writer that publishes without the dedup id (more than N stored),
 // and a duplicates counter that is never incremented (reads 0).
 func TestCrashBetweenPublishAndAckStoresEachEventOnce(t *testing.T) {

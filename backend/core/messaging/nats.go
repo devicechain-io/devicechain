@@ -1231,11 +1231,12 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		// on the client's internals alone.
 		err := pctx.Err()
 		if err == nil {
-			// Timed around the request alone, success or failure: a publish the
-			// expired-deadline guard above never sent is not a publish, and counting it
-			// would put a zero-latency sample into the fastest bucket.
+			// Timed around the request alone (and its in-process re-sends), success or
+			// failure: a publish the expired-deadline guard above never sent is not a
+			// publish, and counting it would put a zero-latency sample into the fastest
+			// bucket.
 			start := time.Now()
-			_, err = w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
+			err = w.publishOne(pctx, nm)
 			w.nmgr.metrics.observePublish(w.suffix, publishModeSync, time.Since(start))
 			if err == nil {
 				// Subject, headers and data, as sent (wireSize: nats.Msg.Size, counted
@@ -1257,6 +1258,24 @@ func (w *natsWriter) publish(ctx context.Context, deviceToken string, msgs ...Me
 		}
 	}
 	return nil
+}
+
+// publishOne sends nm and waits for its PubAck under pctx, re-sending it while the broker
+// answers that its id is still in process (duplicateInProcess). The re-sends are of the same
+// message and go before the next message of the call, so a call's order is kept.
+func (w *natsWriter) publishOne(pctx context.Context, nm *nats.Msg) error {
+	deadline, _ := pctx.Deadline() // publishContext always sets one
+	var delay time.Duration
+	for {
+		_, err := w.nmgr.js.PublishMsg(nm, nats.Context(pctx))
+		if !duplicateInProcess(err) {
+			return err
+		}
+		var again bool
+		if delay, again = waitToResendInProcess(delay, deadline); !again {
+			return err
+		}
+	}
 }
 
 // publishWait is the per-publish ceiling. Every publish waited exactly this long
@@ -1281,6 +1300,56 @@ func publishContext(ctx context.Context) (pctx context.Context, callerBound bool
 	}
 	pctx, cancel = context.WithDeadline(context.WithoutCancel(ctx), ceiling)
 	return pctx, callerBound, cancel
+}
+
+// jsErrCodeDuplicateMsgIdInProcess is the JetStream error code (HTTP 409) a replicated stream
+// answers a publish with when a message carrying the same Nats-Msg-Id has been proposed and
+// not yet committed: nats-server's JSStreamDuplicateMessageConflict, "duplicate message id is
+// in process" (the same code in 2.14.4, which the chart runs, and 2.15.x). nats.go names no
+// constant for it and returns it as a plain *nats.APIError, so the code is matched here. The
+// code belongs to this error alone, so the description is not part of the match.
+const jsErrCodeDuplicateMsgIdInProcess nats.ErrorCode = 10158
+
+const (
+	// inProcessRetryStart is the first wait before re-sending a publish whose id was in
+	// process. The proposal it races commits, or is dropped, in about a replication round
+	// trip, so the first re-send is soon.
+	inProcessRetryStart = 10 * time.Millisecond
+	// inProcessRetryMax caps the doubling. The re-sends stop at the publish's own deadline.
+	inProcessRetryMax = 250 * time.Millisecond
+)
+
+// duplicateInProcess reports whether err is the broker saying a publish's id is still in
+// process: another publish under the same id is being replicated and its outcome is not yet
+// known.
+//
+// 🔴 IT IS NOT A FAILED PUBLISH, AND MUST NOT BE REPORTED AS ONE. It is what a re-publish that
+// races its own original gets: the replacement for a pod that died between publishing and
+// hearing the PubAck, two replicas emitting the same presence transition. The id resolves
+// within a replication round trip — to a duplicate PubAck when the original commits (the
+// message is stored, once), or to a stored one when the original was dropped. Reported as a
+// failure instead, it leaves a source unacked for an AckWait and spends one of its
+// deliveries, starts the ordered writer's failure backoff, and counts as lost an event the
+// broker holds. Both writers re-send until the id resolves or the publish's deadline passes.
+func duplicateInProcess(err error) bool {
+	var apiErr *nats.APIError
+	return errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeDuplicateMsgIdInProcess
+}
+
+// waitToResendInProcess waits before the next re-send of a publish whose id was in process
+// and reports true, or reports false at once when that wait would reach deadline: the publish
+// is then reported with the in-process error it last got. delay is the wait before the
+// previous re-send, 0 before the first; next is what to pass on the following call.
+func waitToResendInProcess(delay time.Duration, deadline time.Time) (next time.Duration, again bool) {
+	next = inProcessRetryStart
+	if delay > 0 {
+		next = min(2*delay, inProcessRetryMax)
+	}
+	if !time.Now().Add(next).Before(deadline) {
+		return next, false
+	}
+	time.Sleep(next)
+	return next, true
 }
 
 // HandleResponse logs the result of a write operation.
