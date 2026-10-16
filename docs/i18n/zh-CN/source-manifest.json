@@ -171,16 +171,16 @@
       "translationSha256": "0dd46bfb66b76d0089a4283b39973d5089bf6e9798bb4b724542d71984ca6f92"
     },
     "guides/widget-versions-and-compatibility.md": {
-      "sourceSha256": "63c15bfe14de24f1e16df72a353e59057b4e13737aae89c0541befa747554dd5",
-      "translationSha256": "3c576db7729655c7abeff0d723dcdc096f185f2a42fe3ca7e7127a3a7bf5f463"
+      "sourceSha256": "11cdfdffa5b333142fb41b13646e9aa523d0abb5c605fe55835569c2232a0098",
+      "translationSha256": "a39e7ad7208d03548a365a4499ce22b3208871ededb3fd44174b4f4720e94a4d"
     },
     "guides/writing-a-custom-widget.md": {
-      "sourceSha256": "bb34773968cfe6b1edde17fc0bea326467b7fccc69595efac7cbd8ae301b5e92",
-      "translationSha256": "b5ba0a8dc2f60628171fa0dcfb1d54929ac1c42ef487ed77125cd2f6107a986e"
+      "sourceSha256": "1e081af58709849dffed0bb8c7fddc958e9195bb8e9e7aab01487c6138d38c51",
+      "translationSha256": "8f0ba1eb6eeda3469c617013336c07cde30c8b7b601ba13d94128be242caedea"
     },
     "intro.md": {
-      "sourceSha256": "d9392ca34177f9b4a4f5115563090fae455c1250fba42a7e7ce7df0ef370befb",
-      "translationSha256": "150a472a0642705d70a509fcd4630178666df785759f2b7c92619f161da59edb"
+      "sourceSha256": "63b902b68868c15a2c34211b58c57041d04818bb2e56d1b3fbfa0f8a6db1a5ae",
+      "translationSha256": "ff1e1c27fc4bfcb9bb485140aada02a1e460f680e5f33b9a110d7c53f8b3c931"
     },
     "quickstart/first-device.md": {
       "sourceSha256": "3326c4310411c61934d714cb70b192a87b90ef4a3052df6b33bd9986b260e2c4",
@@ -195,8 +195,8 @@
       "translationSha256": "3b5c00a019d68f004dfde7c57e8c709d6125fec14d42b42f3c8a3e3ab03313e3"
     },
     "reference/npm-packages.md": {
-      "sourceSha256": "0a555426464f5b0dca5770ed01ed45b2c72487298af3f3c453ef2828f90f81fd",
-      "translationSha256": "4a48c36e4e1d38a2b063b32992202d4f0bbbc57d521c6bc2e58d44ae3f01a670"
+      "sourceSha256": "a2950de3cf160b9a6e5194c6f92f67c99edc262295fe328236b98224fdf73aa4",
+      "translationSha256": "0bd6042326c009bc39bb1c428c61320c00b46259113be4d9773b9bd005a955c1"
     },
     "reference/transport-matrix.md": {
       "sourceSha256": "ba33ad7f0231e2fbfbc42c31b76329dc426da287dc61b50d7d52fd54285cc5ff",

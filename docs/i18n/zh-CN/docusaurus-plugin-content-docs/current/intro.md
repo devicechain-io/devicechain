@@ -39,7 +39,7 @@ DeviceChain 由一组基于共享核心库协作的微服务组成：
 | **notification-management** | 通过电子邮件（SMTP）和 webhook 将已触发的告警通知相关人员，支持按严重程度路由，并升级持续未确认、未解除的告警。 |
 | **outbound-connectors** | 通过支持版本管理、使用密钥认证的连接器，将流水线的出站动作（webhook `httpCall`，以及向 MQTT/Kafka/AWS SNS/SQS 执行 `publish`）投递到外部系统。 |
 | **ai-inference** _（可选启用）_ | 根据自然语言描述起草检测规则，并提交给人工编写规则所用的同一编译器。AI 只提出建议；编译器决定哪些内容有效。AI 不参与实时检测，因此规则在事件重放时产生相同结果。参见 [AI 辅助编写](./concepts/ai-authoring.md)。 |
-| **user-management** | 管理全局身份、各租户的成员关系、角色目录、JWT 签发与验证、通过租户自己的 OpenID Connect 身份提供方登录（[单点登录](./concepts/single-sign-on.md)），以及租户层级（平台运营方定义并分配给租户的服务组合）。 |
+| **user-management** | 管理全局身份、各租户的成员关系、角色目录、JWT 签发与验证、通过租户自己的 OpenID Connect 身份提供商登录（[单点登录](./concepts/single-sign-on.md)），以及租户层级（平台运营方定义并分配给租户的服务组合）。 |
 | **mcp** _（可选启用）_ | 只读的 [Model Context Protocol](./concepts/mcp.md) 服务器，使 AI 助手（Claude、Cursor、VS Code）能够使用用户自己的令牌，代表用户查询租户。 |
 | **operator (k8s)** | 管理 `Instance` 自定义资源。目前其协调循环只观察资源；平台工作负载由 Helm Chart 渲染。 |
 
