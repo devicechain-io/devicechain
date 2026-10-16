@@ -18,8 +18,9 @@
 //                                     first-run excerpt
 //
 // DATA. A board with a committed recording is drawn from it (sitepulse: the first recorded
-// run's excerpt), with the clock paused at the run's first chapter, so its values, device ids
-// and alarm rows are real ones. Every other board is drawn from the synthetic source with
+// run's excerpt), with the clock paused at the run's first chapter and `Date.now` pinned to
+// the recorded instant there, so its values, device ids and alarm rows are real ones and its
+// ages read the same on every run. Every other board is drawn from the synthetic source with
 // min = max, so each reading is ONE constant, and with `Date.now` pinned (SYNTHETIC_NOW), so
 // every timestamp the source stamps is one instant too. The text is then the same on every
 // run, at whatever time of day it runs: a clock that read 3:05 one run and 12:58 the next would
@@ -52,6 +53,7 @@ import {
   migrateToSlots,
   parseBoardRecording,
   parseDashboardDefinition,
+  recordedWallTimeMs,
   type DashboardDefinition,
   type DeviceResolver,
   type EntityCandidateLister,
@@ -145,6 +147,13 @@ async function prepare(boardParam: string | null, recordingParam: string | null)
   const clock = createRecordedClock(recording, { ticker: { start: () => () => {} } });
   const chapter = recording.chapters[0]?.tMs ?? recording.durationMs;
   clock.seek(chapter);
+  // NOW is the recorded instant at the cursor, so every age reads as the embed draws it (the
+  // embed re-times the recording so that its cursor reads as now) and the text is the same on
+  // every run. Left at the wall clock, an age grows by the hour, and two renders a few seconds
+  // apart can straddle "13 hr. ago" -> "14 hr. ago": a text change the embed's layout check
+  // reads as a reflow.
+  const recordedNow = recordedWallTimeMs(recording, clock.timeMs);
+  Date.now = () => recordedNow;
   const site = { siteAnchors: anchorsOf(definition) };
   return {
     definition,
