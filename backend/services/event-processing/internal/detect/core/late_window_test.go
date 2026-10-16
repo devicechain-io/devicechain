@@ -73,17 +73,25 @@ func TestLateSampleDoesNotRewindTheSlidingCutoff(t *testing.T) {
 //
 // With wm.now=100 and Window=10s the boundary sits at exactly 90: a sample at 90 is refused
 // (evict is at-or-before), 91 is admitted. A session-shaped guard would put it at 80.
+//
+// Admitted is not the same as counted toward the alarm. An admitted sample is read in the window
+// open at the series' NEWEST instant (105, so (95, 105]), and 91 lies outside it: 91, 100 and 105
+// span 14 s and were never inside one 10 s window, so it is admitted — not late — and raises
+// nothing. 96 and 99 lie inside it and complete the count.
 func TestSlidingAdmissionBoundaryIsTheFrontierNotTheSample(t *testing.T) {
 	for _, tc := range []struct {
 		sec      int
 		admitted bool
+		fires    bool
 	}{
-		{80, false}, // admitted by a session-shaped guard; must be refused here
-		{85, false},
-		{89, false},
-		{90, false}, // exactly at the cutoff: evict drops at-or-before, so this cannot be folded in
-		{91, true},  // first instant inside the frontier's window
-		{99, true},
+		{80, false, false}, // admitted by a session-shaped guard; must be refused here
+		{85, false, false},
+		{89, false, false},
+		{90, false, false}, // exactly at the cutoff: evict drops at-or-before, so this cannot be folded in
+		{91, true, false},  // first instant inside the frontier's window, but older than the window open at 105
+		{95, true, false},  // exactly at the newest window's cutoff
+		{96, true, true},   // first instant inside the window open at the series' newest
+		{99, true, true},
 	} {
 		e := NewEngine([]Rule{{ID: "r", Kind: Repeating, Window: 10 * time.Second, Count: 3}}, 5*time.Second)
 		key := SeriesKey{Rule: "r", Series: "dev"}
@@ -92,8 +100,8 @@ func TestSlidingAdmissionBoundaryIsTheFrontierNotTheSample(t *testing.T) {
 		e.Drain()
 		e.ProcessResolved(3, at(tc.sec), []Event{{Seq: 3, Key: key, Time: at(tc.sec), Match: true}})
 		fired, late := len(e.Drain()) > 0, e.DrainLateSamples()
-		if fired != tc.admitted {
-			t.Errorf("sample@%d: folded in = %v, want %v (frontier 100, cutoff 90)", tc.sec, fired, tc.admitted)
+		if fired != tc.fires {
+			t.Errorf("sample@%d: fired = %v, want %v (frontier 100, newest 105, window (95, 105])", tc.sec, fired, tc.fires)
 		}
 		if wantLate := uint64(0); tc.admitted && late != wantLate {
 			t.Errorf("sample@%d: counted %d late, want %d", tc.sec, late, wantLate)
@@ -208,13 +216,14 @@ func TestDrainLateSamplesResets(t *testing.T) {
 
 // The early return when a late sample finds NO window is load-bearing, and not for the reason it
 // reads as. It looks like an optimisation — there is nothing to evict, so why build state — but a
-// series can genuinely be RAISED with its window already gone, and in that state the fall-through
-// reaches resolve and clears the alarm on the strength of a buffered sample.
+// series can be RAISED with its window already gone, and in that state the fall-through reaches
+// resolve and clears the alarm on the strength of a sample that folded nothing.
 //
-// Reaching it takes the global frontier: another series drags logical time far forward, which lets
-// a late sample for THIS series evict its whole window. That pass empties the buffer and deletes
-// the entry, while resolve refuses to fire because the sample predates the raise. What is left is
-// raised-with-no-window — and the next late sample, stamped AFTER the raise, would resolve it.
+// That state used to be reachable live: another series drags the shared frontier far forward, a
+// late sample for THIS series evicts its whole window, and resolve refused the falling edge as
+// older than the raise. A late sample is now read at the series' newest instant, so that resolve
+// is no longer refused (first half below). The state survives in checkpoints written before then,
+// and the second half restores into it directly.
 //
 // Both nil-guard mutants survived the first mutation run, which is why this test exists: they were
 // predicted equivalent and are not.
@@ -230,18 +239,39 @@ func TestLateSampleDoesNotResolveASeriesWhoseWindowIsGone(t *testing.T) {
 		// A different series carries the shared frontier to 295.
 		e.ProcessResolved(2, at(300), []Event{{Seq: 2, Key: b, Time: at(300), Value: 1, HasValue: true, Match: true}})
 		e.Drain()
-		// Late, and stamped BEFORE the raise: evicts devA's whole window, resolve refused as stale.
+		// Late, and stamped BEFORE the raise: it evicts devA's whole window, and the falling edge
+		// is read at devA's newest instant (100) — at, not before, the raise — so it resolves.
 		e.ProcessResolved(3, at(99), []Event{{Seq: 3, Key: a, Time: at(99), Value: 1, HasValue: true, Match: true}})
-		if d := e.Drain(); len(d) != 0 {
-			t.Fatalf("setup: a sample predating the raise must not resolve it, got %+v", d)
+		if d := e.Drain(); len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(100)) {
+			t.Fatalf("an emptied window resolves at the series' newest instant, got %+v", d)
 		}
-		if _, raised := e.raised[a]; !raised || e.slides[a] != nil {
-			t.Fatalf("setup did not reach raised-with-no-window: raised=%v window=%v", raised, e.slides[a] != nil)
+
+		// The raised-with-no-window state, as an earlier checkpoint can hold it.
+		e.raised[a] = at(100)
+		if e.slides[a] != nil {
+			t.Fatal("setup: devA still holds a window")
 		}
 		// Late, and stamped AFTER the raise. Nothing may come of it.
 		e.ProcessResolved(4, at(105), []Event{{Seq: 4, Key: a, Time: at(105), Value: 1, HasValue: true, Match: true}})
 		if d := e.Drain(); len(d) != 0 {
 			t.Errorf("a buffered sample cleared a live alarm for a series with no open window: %+v", d)
+		}
+	})
+
+	t.Run("repeating", func(t *testing.T) {
+		e := NewEngine([]Rule{{ID: "r", Kind: Repeating, Window: 10 * time.Second, Count: 2}}, 5*time.Second)
+		a := SeriesKey{Rule: "r", Series: "devA"}
+		b := SeriesKey{Rule: "r", Series: "devB"}
+		e.ProcessResolved(1, at(100), []Event{{Seq: 1, Key: a, Time: at(100), Match: true}})
+		e.ProcessResolved(2, at(101), []Event{{Seq: 2, Key: a, Time: at(101), Match: true}})
+		if d := e.Drain(); len(d) != 1 || d[0].Edge == EdgeResolved {
+			t.Fatalf("setup: expected one raise for devA, got %+v", d)
+		}
+		e.ProcessResolved(3, at(300), []Event{{Seq: 3, Key: b, Time: at(300), Match: true}})
+		e.Drain()
+		e.ProcessResolved(4, at(99), []Event{{Seq: 4, Key: a, Time: at(99), Match: true}})
+		if d := e.Drain(); len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(101)) {
+			t.Fatalf("an emptied window resolves at the series' newest instant, got %+v", d)
 		}
 	})
 
@@ -257,11 +287,13 @@ func TestLateSampleDoesNotResolveASeriesWhoseWindowIsGone(t *testing.T) {
 		e.ProcessResolved(3, at(300), []Event{{Seq: 3, Key: other, Member: "devZ", Time: at(300), Match: true}})
 		e.Drain()
 		e.ProcessResolved(4, at(99), []Event{{Seq: 4, Key: area, Member: "devC", Time: at(99), Match: true}})
-		if d := e.Drain(); len(d) != 0 {
-			t.Fatalf("setup: a sighting predating the raise must not resolve it, got %+v", d)
+		if d := e.Drain(); len(d) != 1 || d[0].Edge != EdgeResolved || !d[0].At.Equal(at(101)) {
+			t.Fatalf("an emptied cohort resolves at the anchor's newest instant, got %+v", d)
 		}
-		if _, raised := e.raised[area]; !raised || e.corr[area] != nil {
-			t.Fatalf("setup did not reach raised-with-no-cohort: raised=%v cohort=%v", raised, e.corr[area] != nil)
+
+		e.raised[area] = at(101)
+		if e.corr[area] != nil {
+			t.Fatal("setup: the anchor still holds a cohort")
 		}
 		e.ProcessResolved(5, at(105), []Event{{Seq: 5, Key: area, Member: "devD", Time: at(105), Match: true}})
 		if d := e.Drain(); len(d) != 0 {

@@ -350,9 +350,17 @@ func (s *slidingState) value(op AggOp) float64 {
 // device keeps reporting NON-matching samples — the qualifying samples age out and the aggregate
 // stops satisfying — rather than staying raised until the next match. For a match-every rule (the
 // common case) every sample folds in, so this is byte-identical to always-insert.
+//
+// The window is read at the series' newest instant (trailingWindow), and every edge is stamped
+// there. That is what lets a late sample that pulls the aggregate back under the line RESOLVE: at
+// its own time the falling edge would precede the raise a newer sample made, and resolve refuses
+// a falling edge older than its raise — the alarm then stayed raised over a window that did not
+// breach. A sample may RAISE only if it folded into that window: one older than the window open
+// now no longer bears on the level, so it is gated like a non-match. For an in-order sample that is
+// the match gate it always was: the only in-order match that does not fold is one already behind
+// the frontier's window, and that sample finds its window empty, which never satisfies.
 func (e *Engine) applySlidingAgg(ev Event, r Rule) {
-	cutoff := e.windowCutoff(ev.Time, r.Window)
-	folds := e.foldsIn(ev, cutoff)
+	now, cutoff, folds := e.trailingWindow(ev, r.Window)
 	st := e.slides[ev.Key]
 	if st == nil {
 		if !folds {
@@ -383,11 +391,11 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 	// every other event-driven kind (see the package silence note) — raised across the gap, not flapping.
 	switch {
 	case st.satisfies(r):
-		if ev.Match {
-			e.emitValue(r, ev.Key, ev.Time, st.value(r.Agg))
+		if folds {
+			e.emitValue(r, ev.Key, now, st.value(r.Agg))
 		}
 	default:
-		e.resolve(r, ev.Key, ev.Time)
+		e.resolve(r, ev.Key, now)
 	}
 	if st.count() == 0 {
 		delete(e.slides, ev.Key) // a fully-aged-out window leaks no state entry against the budget

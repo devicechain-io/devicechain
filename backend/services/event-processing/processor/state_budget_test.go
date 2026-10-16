@@ -85,7 +85,8 @@ func TestComputeStateBudgetSeesRetainedSamplesTheKeyBudgetCannot(t *testing.T) {
 
 	rp.applyRuleUpdate(ruleUpdate{upserts: []runtime.ScopedRule{slidingScopedFor("acme", "p@1", "acme/p@1/slide")}})
 
-	// 50 samples, ONE series: one live key, fifty retained records.
+	// 50 samples, ONE series: two live keys (the window and the series' newest instant), fifty
+	// retained records.
 	for i := 0; i < 50; i++ {
 		rp.engine.ProcessEvent(detectcore.Event{Seq: uint64(200 + i),
 			Key:  detectcore.SeriesKey{Rule: "acme/p@1/slide", Series: "d1"},
@@ -94,11 +95,11 @@ func TestComputeStateBudgetSeesRetainedSamplesTheKeyBudgetCannot(t *testing.T) {
 	rp.engine.Drain()
 
 	s := rp.computeStateBudget()
-	if s.totalLiveKeys != 1 {
-		t.Fatalf("50 samples on one series is ONE live key; got %d", s.totalLiveKeys)
+	if s.totalLiveKeys != 2 {
+		t.Fatalf("50 samples on one series is TWO live keys (window + newest instant); got %d", s.totalLiveKeys)
 	}
 	if s.tenantsOverKeys != 0 {
-		t.Fatalf("the live-key budget (100) must NOT be breached by 1 key — this test no longer isolates "+
+		t.Fatalf("the live-key budget (100) must NOT be breached by 2 keys — this test no longer isolates "+
 			"the blind spot it guards; got tenantsOverKeys=%d", s.tenantsOverKeys)
 	}
 	if s.totalRetainedSamples != 50 {

@@ -327,7 +327,8 @@ func TestLiveKeyCounts(t *testing.T) {
 	// dur: two devices holding -> 2 active + 2 wheel timers = 4 entries.
 	// delta: one device primed -> 1 lastVal, no timer -> 1. agg: one open pane -> 1.
 	// abs: one device reporting arms a wheel-ONLY dead-man timer -> 1 (the regression guard).
-	// corr: one anchor with 3 distinct members -> 1 anchor + 3 members = 4 (not anchor-only 1).
+	// corr: one anchor with 3 distinct members -> 1 anchor + 3 members + 1 newest instant = 5 (not
+	// anchor-only 1). The instant is the trailing-window kinds' permanent per-series entry.
 	e.ProcessEvent(Event{Seq: 1, Key: SeriesKey{Rule: "acme/p@1/dur", Series: "d1"}, Time: at(1), Match: true})
 	e.ProcessEvent(Event{Seq: 2, Key: SeriesKey{Rule: "acme/p@1/dur", Series: "d2"}, Time: at(1), Match: true})
 	e.ProcessEvent(Event{Seq: 3, Key: SeriesKey{Rule: "acme/p@1/delta", Series: "d1"}, Time: at(1), Value: 5, HasValue: true, Match: true})
@@ -353,8 +354,8 @@ func TestLiveKeyCounts(t *testing.T) {
 	if counts["acme/p@1/abs"] != 1 {
 		t.Fatalf("a heartbeat-armed absence timer (wheel-only) must be counted, not 0; got %d", counts["acme/p@1/abs"])
 	}
-	if counts["acme/p@1/corr"] != 4 {
-		t.Fatalf("correlation must count anchor + members (1+3=4), not anchor-only; got %d", counts["acme/p@1/corr"])
+	if counts["acme/p@1/corr"] != 5 {
+		t.Fatalf("correlation must count anchor + members + its newest instant (1+3+1=5), not anchor-only; got %d", counts["acme/p@1/corr"])
 	}
 
 	// Removing a rule GCs its keyed state (maps + wheel), so it no longer contributes.

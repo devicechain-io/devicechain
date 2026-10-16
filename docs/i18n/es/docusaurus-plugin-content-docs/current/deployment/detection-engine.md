@@ -258,10 +258,16 @@ dimensionar el ajuste:
 
 En todos los casos la lectura se **almacena y grafica con normalidad**; esto afecta solo a la detección.
 
-Dentro de la tolerancia no cambia nada: una lectura fuera de orden que aún cae dentro de la ventana
-se incorpora con normalidad, que es para lo que existe la tolerancia. Como consecuencia la ventana
-puede estirarse hasta la tolerancia — eso es lo que significa tolerar la llegada fuera de orden —
-pero no más.
+Dentro de la tolerancia, una lectura fuera de orden se incorpora con normalidad, que es para lo que
+existe la tolerancia. Los tipos deslizantes leen su ventana tal como está en la **lectura más
+reciente** que ha enviado el dispositivo (en la correlación, el avistamiento más reciente del área),
+sea cual sea el orden en que llegaron las lecturas. Por eso una lectura tardía solo cuenta junto a
+lecturas que estaban dentro de una misma ventana con ella en ese momento, y una alarma que eleva o
+retira se registra en esa lectura más reciente, nunca antes de un cambio de alarma que la regla ya
+haya notificado. Tras una ráfaga de lecturas fuera de orden, la alarma queda elevada o retirada
+según lo que indican las lecturas en orden de marca de tiempo. El momento exacto del cambio dentro
+de la ráfaga es aproximado. Una lectura tardía demasiado antigua para esa ventana ya no influye en
+la alarma, y no se cuenta como descartada.
 
 Los tipos deslizantes, las reglas de duración y las reglas de ventana de conteo y de tasa
 **cuentan lo que descartan**, una vez por cada regla que descarta una lectura.

@@ -190,8 +190,9 @@ func (h *closeHeap) purgeSeriesKey(key SeriesKey) {
 }
 
 // windowCutoff is the trailing-window boundary the three SLIDING kinds (Repeating, SlidingAgg,
-// Correlation) evict by: one window behind the LATER of this event's own time and the engine's
-// frontier.
+// Correlation) evict by: one window behind the LATER of the given instant and the engine's
+// frontier. trailingWindow passes the series' newest instant; foldsIn's lateness test passes the
+// sample's own time.
 //
 // 🔴 Taking it from the arriving event ALONE is what a store-and-forward upload breaks. Samples
 // carry their own instants, so a device that buffered an hour of readings presents events well
@@ -238,6 +239,41 @@ func (e *Engine) foldsIn(ev Event, cutoff time.Time) bool {
 	return true
 }
 
+// trailingWindow is where a sliding-kind sample is evaluated: the instant `now` the window is
+// read at, the window's cutoff, and whether this sample folds into it.
+//
+// 🔑 `now` IS THE SERIES' NEWEST EVENT TIME, NOT THE SAMPLE'S OWN. Under bounded reordering a
+// sample can arrive after newer ones of its series. Evaluated at its own time it was counted with
+// every sample still held, newer ones included — a window up to W + lateness wide — so a pair
+// further apart than the window raised an alarm that was never true at any instant (stamped in
+// the past, too); and an edge it caused was stamped before the edge the newer sample had already
+// made, so a falling edge was refused as stale (resolve) and an alarm stayed raised over a window
+// that no longer breached. Read at the newest instant instead, the window is the one actually open
+// now, the level is the one the series' samples imply there, and every edge for the series is
+// stamped at a monotone instant. What it gives up is WHEN, inside a reorder burst, an edge
+// happened: the history inside the burst is approximate, the level after it is not.
+//
+// It is the same instant for a matching and a non-matching sample, which is why it is tracked
+// apart from the window (Engine.newest): a non-match folds nothing, yet a newer non-match still
+// moves the window that a later-arriving older match is read against.
+//
+// Two different reasons not to fold, kept apart because only one is counted. foldsIn's test is
+// unchanged — a sample behind ITS OWN trailing window at the frontier is late, and counted. A
+// sample inside the lateness budget but older than the window open at `now` is not late: it simply
+// no longer bears on the level. For an in-order sample `now` is its own time, both cutoffs are the
+// same, and this is exactly the arrival-time evaluation it replaces.
+func (e *Engine) trailingWindow(ev Event, window time.Duration) (now, cutoff time.Time, folds bool) {
+	now = ev.Time
+	if n, ok := e.newest[ev.Key]; ok && n.After(now) {
+		now = n
+	} else {
+		e.newest[ev.Key] = now
+	}
+	cutoff = e.windowCutoff(now, window)
+	folds = e.foldsIn(ev, e.windowCutoff(ev.Time, window)) && ev.Time.After(cutoff)
+	return now, cutoff, folds
+}
+
 // applyRepeating handles a Repeating rule: keep a sliding buffer of matching-event times
 // within Window, and fire on the rising edge where the trailing count reaches Count.
 //
@@ -248,8 +284,12 @@ func (e *Engine) foldsIn(ev Event, cutoff time.Time) bool {
 // some future matching event. For a match-every rule (the common case) every event matches, so
 // this is byte-identical to always-append. A fully silent series still stays raised until it
 // reports again (the window kinds are event-driven; see the package silence note).
+//
+// The count is read at the series' newest instant (trailingWindow), so the level after every
+// event is exactly "at least Count matches in the window open at the newest instant" — whatever
+// order the samples arrived in.
 func (e *Engine) applyRepeating(ev Event, r Rule) {
-	cutoff := e.windowCutoff(ev.Time, r.Window)
+	now, cutoff, folds := e.trailingWindow(ev, r.Window)
 	buf := e.sliding[ev.Key]
 	kept := make([]time.Time, 0, len(buf)+1)
 	for _, ts := range buf {
@@ -258,7 +298,7 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 		}
 	}
 	prev := len(kept)
-	if e.foldsIn(ev, cutoff) {
+	if folds {
 		kept = append(kept, ev.Time)
 	}
 	if len(kept) == 0 {
@@ -268,13 +308,13 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 	}
 	switch {
 	case prev < r.Count && len(kept) >= r.Count:
-		e.emitSample(r, ev) // rising edge: the sample that completed the N-in-window run (none for a metric-less leaf)
+		e.emitSampleAt(r, ev, now) // rising edge: the sample that completed the N-in-window run (none for a metric-less leaf)
 	case len(kept) < r.Count:
 		// Falling edge (ADR-057): enough prior matches aged out of the window that the count is back
 		// below N — the burst has passed, so resolve a raised alarm. A no-op when never raised. The
 		// rising case can only fire on a matching event (a non-match never grows kept), so a
 		// non-matching event only ever ages the window down toward this falling edge.
-		e.resolve(r, ev.Key, ev.Time)
+		e.resolve(r, ev.Key, now)
 	}
 }
 
@@ -475,6 +515,63 @@ func (e *Engine) snapshotCounts() []snapCount {
 func (e *Engine) restoreCounts(in []snapCount) {
 	for _, c := range in {
 		e.counts[SeriesKey{Rule: c.Rule, Series: c.Series}] = &countState{paneAgg: paneAgg{count: c.Count, sum: c.Sum, min: c.Min, max: c.Max}, last: c.Last}
+	}
+}
+
+// snapNewest persists one trailing-window evaluation instant (trailingWindow).
+type snapNewest struct {
+	Rule   string    `json:"rule"`
+	Series string    `json:"series"`
+	At     time.Time `json:"at"`
+}
+
+func (e *Engine) snapshotNewest() []snapNewest {
+	out := make([]snapNewest, 0, len(e.newest))
+	for k, t := range e.newest {
+		out = append(out, snapNewest{Rule: k.Rule, Series: k.Series, At: t})
+	}
+	sortByRuleSeries(out, func(i int) (string, string) { return out[i].Rule, out[i].Series })
+	return out
+}
+
+// restoreNewest reloads the evaluation instants, then seeds one for every series the snapshot
+// holds trailing-window state or a raise for but no instant — a checkpoint written before the
+// instant existed. The seed is the newest time that state proves the series reached: its newest
+// retained sample, and its rising edge (which was stamped at or before the newest event). It is a
+// lower bound, which is the safe direction: a late sample is read at it or later than it would
+// have been, never before an edge already emitted, so a falling edge is never refused as stale.
+// A series that held no state carries no instant either way, and its next sample starts one.
+func (e *Engine) restoreNewest(in []snapNewest) {
+	for _, x := range in {
+		e.newest[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
+	}
+	// A restored instant is already at or after everything below, so seeding leaves it alone; only
+	// a series the snapshot carries no instant for is changed.
+	seed := func(k SeriesKey, t time.Time) {
+		if cur, ok := e.newest[k]; ok && !cur.Before(t) {
+			return
+		}
+		e.newest[k] = t
+	}
+	for k, times := range e.sliding {
+		for _, t := range times {
+			seed(k, t)
+		}
+	}
+	for k, st := range e.slides {
+		if n := len(st.buf); n > 0 {
+			seed(k, st.buf[n-1].t) // restoreSlides hands over one sorted run
+		}
+	}
+	for k, members := range e.corr {
+		for _, ns := range members {
+			seed(k, time.Unix(0, ns).UTC())
+		}
+	}
+	for k, at := range e.raised {
+		if r, ok := e.rules[k.Rule]; ok && (r.Kind == Repeating || r.Kind == SlidingAgg || r.Kind == Correlation) {
+			seed(k, at)
+		}
 	}
 }
 

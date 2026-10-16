@@ -332,6 +332,7 @@ func (s *Sharded) Snapshot() ([]byte, error) {
 		m.Raised = append(m.Raised, x.Raised...)
 		m.Presence = append(m.Presence, x.Presence...)
 		m.Pending = append(m.Pending, x.Pending...)
+		m.Newest = append(m.Newest, x.Newest...)
 	}
 	// Each shard's sections are sorted already; the concatenation of K of them is not, and the
 	// canonical order is a total order over (rule, series), so a sort restores it exactly.
@@ -348,6 +349,7 @@ func (s *Sharded) Snapshot() ([]byte, error) {
 	sortByRuleSeries(m.Raised, func(i int) (string, string) { return m.Raised[i].Rule, m.Raised[i].Series })
 	sortByRuleSeries(m.Presence, func(i int) (string, string) { return m.Presence[i].Rule, m.Presence[i].Series })
 	sortByRuleSeries(m.Pending, func(i int) (string, string) { return m.Pending[i].Rule, m.Pending[i].Series })
+	sortByRuleSeries(m.Newest, func(i int) (string, string) { return m.Newest[i].Rule, m.Newest[i].Series })
 	sort.Slice(m.Timers, func(i, j int) bool {
 		a, b := m.Timers[i], m.Timers[j]
 		if !a.Deadline.Equal(b.Deadline) {
@@ -406,6 +408,7 @@ func restoreSharded(k int, salt uint32, rules []Rule, allowedLateness time.Durat
 	splitBy(snap.Raised, k, salt, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Raised = append(parts[i].Raised, x) })
 	splitBy(snap.Presence, k, salt, func(x snapPresence) (string, string) { return x.Rule, x.Series }, func(i int, x snapPresence) { parts[i].Presence = append(parts[i].Presence, x) })
 	splitBy(snap.Pending, k, salt, func(x snapPending) (string, string) { return x.Rule, x.Series }, func(i int, x snapPending) { parts[i].Pending = append(parts[i].Pending, x) })
+	splitBy(snap.Newest, k, salt, func(x snapNewest) (string, string) { return x.Rule, x.Series }, func(i int, x snapNewest) { parts[i].Newest = append(parts[i].Newest, x) })
 	s := &Sharded{salt: salt, lateness: allowedLateness, shards: make([]*Engine, k), scratch: make([][]Event, k)}
 	for i := range parts {
 		s.shards[i] = restoreState(rules, allowedLateness, parts[i])

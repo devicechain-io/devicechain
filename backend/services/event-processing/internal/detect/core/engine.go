@@ -232,6 +232,13 @@ type Engine struct {
 	slides   map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
 	corr     map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
 	expected map[SeriesKey]expectedState    // Absence: dead-man arming for never-seen devices (ADR-051 slice 4c-2b)
+	// newest is the trailing-window kinds' (Repeating, SlidingAgg, Correlation) evaluation instant
+	// per series: the newest event time the series has presented, matching or not. A sample older
+	// than it is folded into the window open AT it and any edge it causes is stamped there
+	// (window.go, trailingWindow). It outlives the window itself — a non-matching reading opens no
+	// window yet still moves the instant — so it is one permanent entry per series, like a
+	// DeltaRate base, swept with the rest of the series' state.
+	newest map[SeriesKey]time.Time
 	// pending holds the samples of the sample-pairing kinds (DeltaRate, CountWindow) the frontier
 	// is not yet past, per series, in event-time order; pendHeap orders those runs by their
 	// earliest sample so advance flushes them deterministically (reorder.go).
@@ -315,6 +322,7 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		slides:        map[SeriesKey]*slidingState{},
 		corr:          map[SeriesKey]map[string]int64{},
 		expected:      map[SeriesKey]expectedState{},
+		newest:        map[SeriesKey]time.Time{},
 		pending:       map[SeriesKey]*pendingRun{},
 		raised:        map[SeriesKey]time.Time{},
 		presenceState: map[SeriesKey]presence.Prior{},
@@ -397,6 +405,7 @@ func (e *Engine) RemoveMatching(match func(ruleID string) bool) int {
 	n += deleteSeriesKeysMatching(e.slides, match)
 	n += deleteSeriesKeysMatching(e.corr, match)
 	n += deleteSeriesKeysMatching(e.expected, match)
+	n += deleteSeriesKeysMatching(e.newest, match)
 	n += deleteSeriesKeysMatching(e.raised, match)
 	n += deleteSeriesKeysMatching(e.presenceState, match)
 	n += deleteSeriesKeysMatching(e.pending, match)
@@ -508,6 +517,7 @@ func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n += dropOneKey(e.slides, key)
 	n += dropOneKey(e.corr, key)
 	n += dropOneKey(e.expected, key)
+	n += dropOneKey(e.newest, key)
 	n += dropOneKey(e.presenceState, key)
 	if e.dropPendingRun(key) {
 		n++
@@ -587,6 +597,7 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
+	countSeriesKeys(counts, e.newest)        // trailing-window evaluation instant: one permanent entry per (rule, series-ever-seen)
 	countSeriesKeys(counts, e.pending)       // a sample-pairing kind's open reorder run (reorder.go)
 	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
 	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
@@ -1130,16 +1141,21 @@ func (e *Engine) emitValue(r Rule, key SeriesKey, at time.Time, value float64) {
 // latch already set, would suppress every later raise for this series (review F5/H2). CEL numeric
 // comparisons are false for NaN so a structured threshold cannot match one; this guards the raw-CEL
 // gate that could match on another field while the value metric is non-finite.
-func (e *Engine) emitSample(r Rule, ev Event) {
+func (e *Engine) emitSample(r Rule, ev Event) { e.emitSampleAt(r, ev, ev.Time) }
+
+// emitSampleAt is emitSample stamped at a given instant rather than the event's own time: a
+// Repeating run completed by a late sample raises at the series' newest instant (trailingWindow),
+// still carrying the sample that completed it.
+func (e *Engine) emitSampleAt(r Rule, ev Event, at time.Time) {
 	if _, ok := e.raised[ev.Key]; ok {
 		return
 	}
-	e.raised[ev.Key] = ev.Time
+	e.raised[ev.Key] = at
 	value, hasValue := ev.Value, ev.HasValue
 	if hasValue && (math.IsNaN(value) || math.IsInf(value, 0)) {
 		value, hasValue = 0, false
 	}
-	e.out = append(e.out, Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: ev.Time, Value: value, HasValue: hasValue})
+	e.out = append(e.out, Detection{RuleID: r.ID, Series: ev.Key.Series, Kind: r.Kind, At: at, Value: value, HasValue: hasValue})
 }
 
 // resolve emits a Resolved detection (ADR-057 falling edge) for a series that is currently raised,
@@ -1269,6 +1285,10 @@ type snapshot struct {
 	// Pending is the sample-pairing kinds' held samples (reorder.go). A checkpoint written
 	// before it existed restores with none, which is exact: that model held nothing back.
 	Pending []snapPending `json:"pending"`
+	// Newest is the trailing-window kinds' per-series evaluation instant (window.go). A checkpoint
+	// written before it existed restores a lower bound from the retained window and the rising
+	// edge instead (seedNewest).
+	Newest []snapNewest `json:"newest"`
 }
 
 // Snapshot serializes the full engine state. In the service this is committed to Postgres
@@ -1340,6 +1360,7 @@ func (e *Engine) snapshotState() snapshot {
 		Raised:    raised,
 		Presence:  presenceCursors,
 		Pending:   e.snapshotPending(),
+		Newest:    e.snapshotNewest(),
 	}
 }
 
@@ -1374,6 +1395,7 @@ func restoreState(rules []Rule, allowedLateness time.Duration, s snapshot) *Engi
 		e.raised[SeriesKey{Rule: x.Rule, Series: x.Series}] = x.At
 	}
 	e.restoreRuns(s.Active, s.Breaks) // after the latch: a raise written without its run gets one
+	e.restoreNewest(s.Newest)         // after the windows and the latch: a missing instant is seeded from them
 	for _, x := range s.Presence {
 		e.presenceState[SeriesKey{Rule: x.Rule, Series: x.Series}] = presence.Prior{
 			SessionId: x.Session, Time: x.At, HasTime: x.HasTime, Connected: x.Connected,

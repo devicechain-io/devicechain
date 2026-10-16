@@ -17,12 +17,15 @@ import "sort"
 // distinct count drops below N — rather than staying raised until the next qualifying member. For a
 // match-every rule (the common case) every member qualifies, so this is byte-identical to
 // always-record. A fully silent anchor still stays raised until it reports again.
+//
+// The cohort is read at the anchor's newest instant (trailingWindow) and every edge is stamped
+// there, so a late sighting is counted only with members inside the window open now — never with
+// sightings more than a window apart, which is a cohort that did not exist at any instant.
 func (e *Engine) applyCorrelation(ev Event, r Rule) {
 	if r.Count <= 0 || ev.Member == "" {
 		return
 	}
-	cutoff := e.windowCutoff(ev.Time, r.Window)
-	records := e.foldsIn(ev, cutoff)
+	now, cutoff, records := e.trailingWindow(ev, r.Window)
 	members := e.corr[ev.Key]
 	if members == nil {
 		if !records {
@@ -60,12 +63,12 @@ func (e *Engine) applyCorrelation(ev Event, r Rule) {
 	}
 	switch {
 	case prev < r.Count && len(members) >= r.Count:
-		e.emit(r, ev.Key, ev.Time) // rising edge: a newly-seen member pushed the distinct count over the line
+		e.emit(r, ev.Key, now) // rising edge: a newly-seen member pushed the distinct count over the line
 	case len(members) < r.Count:
 		// Falling edge (ADR-057): enough members aged out that the distinct count is back below N —
 		// the cohort dispersed, so resolve a raised alarm. A no-op when never raised. The rising case
 		// can only fire on a matching event (a non-match never grows the cohort).
-		e.resolve(r, ev.Key, ev.Time)
+		e.resolve(r, ev.Key, now)
 	}
 	if len(members) == 0 {
 		delete(e.corr, ev.Key) // an emptied cohort leaks no state entry against the budget

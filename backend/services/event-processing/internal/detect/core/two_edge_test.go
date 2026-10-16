@@ -385,11 +385,13 @@ func TestMatchGatedFallingEdgeReplayCorrect(t *testing.T) {
 	}
 }
 
-// TestSlidingAggAtRegressionReplay covers the out-of-order At-regression the D2/D5 falling edge makes
-// newly reachable for the sliding kinds: a Resolved is emitted, then a bounded-late matching event
-// reopens a fresh window and stamps a Raised at an EARLIER event time than the Resolved. Both edges
-// are dedup-distinct and must survive every (checkpoint, crash) pair — the alarm object's monotonic
-// decision-time guard (not arrival order) is what orders them downstream.
+// TestSlidingAggAtRegressionReplay covers the out-of-order case the D2/D5 falling edge makes
+// reachable for the sliding kinds: a Resolved is emitted, then a bounded-late matching event
+// reopens the window. That raise used to be stamped at the late sample's own time — EARLIER than
+// the Resolved before it. It is now read and stamped at the series' newest instant (trailingWindow),
+// so it lands at the Resolved's instant rather than before it. Both edges are dedup-distinct and
+// must survive every (checkpoint, crash) pair — which now also takes the series' newest instant
+// through the snapshot, or a restore would stamp the raise back at 15.
 func TestSlidingAggAtRegressionReplay(t *testing.T) {
 	rules := []Rule{{ID: "r", Kind: SlidingAgg, Window: 10 * time.Second, Agg: AggSum, Op: GT, Thresh: 100}}
 	steps := []step{
@@ -426,19 +428,12 @@ func TestSlidingAggAtRegressionReplay(t *testing.T) {
 			assertSetEqual(t, want, dedup(all))
 		}
 	}
-	// Sanity: the clean run really does produce the At-regression (raise@15 after resolve@22).
+	// Sanity: the clean run reopens the alarm after the resolve, and stamps it at the newest
+	// instant (22), not back at the late sample's 15.
 	got := runClean(rules, steps)
-	var sawResolve22, sawRaise15After bool
-	for _, d := range got {
-		if d.Edge == EdgeResolved && d.At.Equal(at(22)) {
-			sawResolve22 = true
-		}
-		if d.Edge == EdgeRaised && d.At.Equal(at(15)) && sawResolve22 {
-			sawRaise15After = true
-		}
-	}
-	if !sawRaise15After {
-		t.Fatalf("expected a raise@15 emitted AFTER resolve@22 (the At-regression): %+v", got)
+	if len(got) != 3 || got[1].Edge != EdgeResolved || !got[1].At.Equal(at(22)) ||
+		got[2].Edge != EdgeRaised || !got[2].At.Equal(at(22)) {
+		t.Fatalf("want Raised@10, Resolved@22, Raised@22 (the late match re-raises at the newest instant): %+v", got)
 	}
 }
 
