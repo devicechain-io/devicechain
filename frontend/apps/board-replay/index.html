@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Board replay</title>
   </head>
-  <body>
-    <div id="board-replay" data-recording="/dev-data/recording.json" data-board="/dev-data/board.json"></div>
+  <body style="margin: 0">
+    <!-- The page is the replay's host: it gives the mount element the whole viewport, which an
+         embed (?embed=1, in an iframe) scales its canvas to fit. -->
+    <div id="board-replay" style="height: 100vh" data-recording="/dev-data/recording.json" data-board="/dev-data/board.json"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

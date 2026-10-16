@@ -37,6 +37,7 @@ function BoardView({
   resolver,
   lister,
   themeRoot,
+  timeZone = 'UTC',
 }: {
   definition: DashboardDefinition;
   // The registry the definition was parsed with (see LoadedReplay).
@@ -45,6 +46,8 @@ function BoardView({
   resolver: DeviceResolver;
   lister: EntityCandidateLister;
   themeRoot: Element | undefined;
+  // The zone instants print in: the recording's own clock (UTC) unless the host re-timed it.
+  timeZone?: string;
 }) {
   const base = useMemo(() => effectiveBindings(definition), [definition]);
   const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
@@ -66,7 +69,7 @@ function BoardView({
           registry={registry}
           seedHistory={false}
           // Recorded instants print on the recording's own clock, not the viewer's.
-          timeZone="UTC"
+          timeZone={timeZone}
           themeRoot={themeRoot}
           bindings={bindings}
           select={select}

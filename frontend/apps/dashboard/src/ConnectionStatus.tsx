@@ -8,9 +8,13 @@ import type { DashboardHub } from '@devicechain/dashboards';
 import { HubConnectionBadge, useHubConnectionState } from '@devicechain/widgets';
 import { useTranslation } from 'react-i18next';
 
-export function ConnectionStatus({ hub }: { hub: DashboardHub }) {
+// `onlyWhenDown` (a kiosk with ?chrome=0) leaves the badge out while the board is LIVE, and
+// only then: a capture wants no badge on a healthy board, but a board whose socket dropped,
+// or could not re-authenticate, must never look live.
+export function ConnectionStatus({ hub, onlyWhenDown = false }: { hub: DashboardHub; onlyWhenDown?: boolean }) {
   const { t } = useTranslation('view');
   const state = useHubConnectionState(hub);
+  if (onlyWhenDown && state === 'live') return null;
   return (
     <span title={t('connectionLabel')} style={{ flex: '0 0 auto' }}>
       <HubConnectionBadge

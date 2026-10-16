@@ -182,6 +182,7 @@ export {
 // its fail-closed parser, the replay clock, the source itself and the recorded resolver/lister.
 export {
   RECORDING_FORMAT_VERSION,
+  RECORDING_FORMAT_VERSIONS,
   RECORDING_KIND,
   RecordingFormatError,
   parseBoardRecording,
@@ -196,6 +197,7 @@ export {
   type RecordedChapter,
   type RecordedClockSegment,
   type RecordedDevice,
+  type RecordedLocationColumns,
   type RecordedMeasurementColumns,
 } from './recording';
 export {
@@ -207,11 +209,13 @@ export {
   createRecordedClock,
   createRecordedLister,
   createRecordedResolver,
+  retimeShiftMs,
   type ClockEvent,
   type ClockTicker,
   type PlaybackRate,
   type RecordedChannel,
   type RecordedSiteOptions,
+  type RecordedSourceOptions,
 } from './recorded';
 
 export {

@@ -2,16 +2,18 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 /*
- * The design-token contract the @devicechain/widgets package reads (HSL channels), dark
- * only. EVERY rule here is scoped to .board-replay-root, the app's own root element: the
- * page that embeds the replay owns :root, <html> and <body>, and its stylesheet defines
- * tokens of the same names (--muted, --border, ...) that this one must not override.
- * A test fails the build if a selector here is not under the root.
+ * The design-token contract the @devicechain/widgets package reads (HSL channels): dark by
+ * default, light under data-theme="light" (the host's choice, host-options.ts), whose tokens
+ * are in theme-light.css, fetched only for a light page. EVERY rule here and there is scoped
+ * to .board-replay-root, the app's own root element: the page that embeds the replay owns
+ * :root, <html> and <body>, and its stylesheet defines tokens of the same names (--muted,
+ * --border, ...) that this one must not override. A test fails the build if a selector in
+ * either file is not under the root.
  *
  * The three brand-derived tokens repeat the values in @devicechain/brand's generated
- * shadcn.css (.dark block). They are repeated rather than @imported because that file sets
- * them on :root/.dark, i.e. page-wide; a test compares them with the brand file so they
- * cannot drift.
+ * shadcn.css (its .dark block here, its :root block in theme-light.css). They are repeated
+ * rather than @imported because that file sets them on :root/.dark, i.e. page-wide; a test
+ * compares them with the brand file so they cannot drift.
  */
 
 .board-replay-root {

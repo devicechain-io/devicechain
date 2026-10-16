@@ -1,0 +1,26 @@
+/* Copyright The DeviceChain Authors */
+/* SPDX-License-Identifier: Apache-2.0 */
+
+/*
+ * The light theme's tokens, over the dark defaults in theme.css (which has the contract and
+ * the scoping rule, and both hold here). mount.tsx installs this only for a page that asks for
+ * data-theme="light", so a dark page never downloads it. The three brand-derived tokens repeat
+ * @devicechain/brand's shadcn.css :root block; the rest are /dash's own
+ * (apps/dashboard/src/theme.css), so a light replay reads the colours the viewer ships. Tests
+ * compare both.
+ */
+
+.board-replay-root[data-theme='light'] {
+  --primary: 197.1 70.2% 42.2%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 197.1 70.2% 42.2%;
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --destructive: 0 72.2% 50.6%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 59%;
+}

@@ -200,6 +200,7 @@ export default function App() {
       onChange={() => setLoaded(null)}
       onSignOut={signOut}
       kiosk={params.kiosk}
+      kioskChrome={params.kioskChrome}
       density={params.density}
       range={params.range}
       paused={params.paused}
@@ -699,6 +700,7 @@ export function View({
   onChange,
   onSignOut,
   kiosk = false,
+  kioskChrome = true,
   density = null,
   range = null,
   paused = false,
@@ -711,6 +713,11 @@ export function View({
   onSignOut: () => void;
   /** Hide the chrome (header and its controls) and offer fullscreen instead. */
   kiosk?: boolean;
+  /**
+   * With kiosk: show its floating connection badge and fullscreen button. ?chrome=0 hides the
+   * button, and the badge while the board is live; never a paused or disconnected state.
+   */
+  kioskChrome?: boolean;
   /**
    * The viewer's ?density= override, validated. It is handed to the renderer, where it wins over
    * the definition's own `canvas.density`; `data-density` on this root stays as the hook for
@@ -779,11 +786,12 @@ export function View({
           {/* A wall display has no header, but a frozen board must never look live: the
               connection state floats in the corner opposite the fullscreen button. */}
           <div style={{ position: 'fixed', top: 8, left: 8, zIndex: 10, display: 'flex', gap: 8 }}>
-            <ConnectionStatus hub={hub} />
+            {/* chrome=0 hides it only while the board is live: a dropped board still says so. */}
+            <ConnectionStatus hub={hub} onlyWhenDown={!kioskChrome} />
             {/* A wall board has no controls, but it must never be frozen without saying so. */}
             {timeRange.paused && <PausedIndicator pausedAt={timeRange.pausedAt} labels={timeLabels} />}
           </div>
-          <FullscreenButton />
+          {kioskChrome && <FullscreenButton />}
         </>
       ) : (
         <header

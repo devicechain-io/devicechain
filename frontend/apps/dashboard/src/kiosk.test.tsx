@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   getter: null as null | (() => Promise<string | null>),
   // The props the board renderer was last mounted with.
   rendered: null as null | { timeRange?: { spanSeconds: number; paused: boolean; pausedAt?: number } },
+  // What the hub says of its socket.
+  connection: 'live' as 'live' | 'reconnecting' | 'offline',
 }));
 
 vi.mock('@devicechain/client', async (orig) => ({
@@ -34,6 +36,7 @@ vi.mock('@devicechain/widgets', async (orig) => {
       return React.createElement('div', { 'data-testid': 'board' });
     },
     useDashboardHub: () => ({}),
+    useHubConnectionState: () => h.connection,
     useSlotCandidates: () => undefined,
   };
 });
@@ -100,6 +103,7 @@ async function signIn() {
 
 beforeEach(async () => {
   vi.useFakeTimers();
+  h.connection = 'live';
   vi.setSystemTime(NOW);
   h.gql.mockReset();
   h.load.mockReset();
@@ -148,6 +152,40 @@ describe('kiosk mode', () => {
     fireEvent.click(screen.getByRole('button', { name: t('view:enterFullscreen') }));
     expect(request).toHaveBeenCalledTimes(1);
     Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: undefined });
+  });
+
+  it('chrome=0 also hides the floating connection badge and fullscreen button, for a capture', async () => {
+    landOn('?dashboard=wall&kiosk=1&chrome=0');
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: true });
+    serve();
+    render(<App />);
+    await signIn();
+    expect(screen.getByTestId('board')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: t('view:enterFullscreen') })).toBeNull();
+    expect(screen.queryByRole('status')).toBeNull();
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: undefined });
+  });
+
+  it('chrome=0 never hides that the board has lost its connection', async () => {
+    for (const state of ['reconnecting', 'offline'] as const) {
+      h.connection = state;
+      landOn('?dashboard=wall&kiosk=1&chrome=0');
+      serve();
+      const { unmount } = render(<App />);
+      await signIn();
+      expect(screen.getByTestId('board')).toBeTruthy();
+      expect(screen.getByRole('status').textContent).toContain(t(state === 'offline' ? 'view:connectionOffline' : 'view:connectionReconnecting'));
+      unmount();
+    }
+  });
+
+  it('chrome=0 never hides that a board is paused', async () => {
+    landOn('?dashboard=wall&kiosk=1&chrome=0&paused=1');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(screen.getByTestId('board')).toBeTruthy();
+    expect(document.body.textContent).toContain(t('view:paused'));
   });
 
   it('without kiosk=1 the chrome is there', async () => {

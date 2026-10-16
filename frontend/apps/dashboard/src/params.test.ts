@@ -10,13 +10,13 @@ describe('parseDashParams', () => {
     const warn = vi.fn();
     expect(
       parseDashParams('?dashboard=site-pulse&kiosk=1&theme=dark&density=wall', warn),
-    ).toEqual({ dashboard: 'site-pulse', kiosk: true, theme: 'dark', density: 'wall', range: null, paused: false });
+    ).toEqual({ dashboard: 'site-pulse', kiosk: true, kioskChrome: true, theme: 'dark', density: 'wall', range: null, paused: false });
     expect(warn).not.toHaveBeenCalled();
   });
 
   it('leaves everything unset, silently, when there are no parameters', () => {
     const warn = vi.fn();
-    expect(parseDashParams('', warn)).toEqual({ dashboard: null, kiosk: false, theme: null, density: null, range: null, paused: false });
+    expect(parseDashParams('', warn)).toEqual({ dashboard: null, kiosk: false, kioskChrome: true, theme: null, density: null, range: null, paused: false });
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -30,12 +30,12 @@ describe('parseDashParams', () => {
   it('ignores each invalid value with a warning and keeps the valid ones', () => {
     const warn = vi.fn();
     const got = parseDashParams('?dashboard=has%20space&kiosk=maybe&theme=neon&density=huge', warn);
-    expect(got).toEqual({ dashboard: null, kiosk: false, theme: null, density: null, range: null, paused: false });
+    expect(got).toEqual({ dashboard: null, kiosk: false, kioskChrome: true, theme: null, density: null, range: null, paused: false });
     expect(warn).toHaveBeenCalledTimes(4);
     expect(warn.mock.calls.map((c) => String(c[0])).join('\n')).toMatch(/theme.*neon/);
 
     const mixed = parseDashParams('?theme=neon&density=compact&kiosk=1', vi.fn());
-    expect(mixed).toEqual({ dashboard: null, kiosk: true, theme: null, density: 'compact', range: null, paused: false });
+    expect(mixed).toEqual({ dashboard: null, kiosk: true, kioskChrome: true, theme: null, density: 'compact', range: null, paused: false });
   });
 
   it('warns on the console by default instead of throwing', () => {

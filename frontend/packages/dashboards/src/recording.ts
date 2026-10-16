@@ -4,8 +4,9 @@
 // The board-recording format: one captured run of a board, as a plain JSON document a
 // RecordedDataSource can play back. This file owns the SHAPE and the parser; playback is in
 // recorded.ts. The document is produced by the Sitepulse recording converter
-// (demos/sitepulse-unity/tools/recording_to_board.py), whose module docstring is the
-// writer's side of this contract; the two must change together.
+// (demos/sitepulse-unity/tools/recording_to_board.py, version 1) and by dc-simulator's
+// sitepulse-record (backend/sims/dc-simulator/recording, version 2); each writer's own
+// documentation is its side of this contract, and they must change together.
 //
 // 🔴 THE PARSER IS FAIL-CLOSED, AND THAT IS ITS WHOLE JOB. A recording is data produced by
 // another tool and published as a static file, so the reader is the last place a bad one
@@ -26,12 +27,28 @@
 // holds only the measurement rows of that window, but ALL alarm history up to its end.
 //
 // What a recording does NOT hold is declared, not implied: `channels` says which channels
-// were recorded at all. This version records no positions and no command data
-// (`channels.locations` and `channels.commands` are false and `locations` is empty), and a
-// player must answer those channels with "not in this recording" rather than with empty
-// data, which would read as a fact about the machines.
+// were recorded at all. A player answers a channel that was not recorded with "not in this
+// recording" rather than with empty data, which would read as a fact about the machines.
+// No version records command data (`channels.commands` is always false).
+//
+// formatVersion 2 adds POSITIONS. `channels.locations` may be true, and `locations` is then
+// columns like the measurements': `d` (device index), `t` (ms from the start), `lat` and
+// `lon` (WGS84 degrees), `hdg` (degrees clockwise from north) and `spd` (m/s), the last two
+// null where the fix did not carry them. With `channels.locations` false the columns are
+// empty. Version 1 (no positions, `locations: []`) is still read, and parses to the same
+// shape with empty columns. Version 2 also lets `converter` carry the producing tool's
+// `name`: a recording read back from the platform's own history (dc-simulator's
+// sitepulse-record) times every row by the device's own stamp, where the Unity converter
+// times it by when the recording viewer applied it. And in version 2 an alarm may carry `val`:
+// the reading that RAISED it, which the platform shows as the alarm's value. sitepulse-record
+// writes it only from the device's own publish log (the value it sent for the alarm's metric
+// at the raise instant), so an alarm raised before the run carries none, and plays with no
+// value rather than a guessed one.
 
-export const RECORDING_FORMAT_VERSION = 1;
+// The newest version this reader understands; it reads every version in
+// RECORDING_FORMAT_VERSIONS.
+export const RECORDING_FORMAT_VERSION = 2;
+export const RECORDING_FORMAT_VERSIONS = [1, 2] as const;
 export const RECORDING_KIND = 'sitepulse-board-recording';
 
 const ALARM_STATES = ['ACTIVE', 'CLEARED'] as const;
@@ -64,8 +81,9 @@ export interface RecordedDevice {
 export interface RecordedChannels {
   measurements: string[];
   alarms: boolean;
-  // Always false in this version: the format carries no positions and no command data.
-  locations: false;
+  // Whether positions were recorded (only ever true from formatVersion 2).
+  locations: boolean;
+  // Always false: no version carries command data.
   commands: false;
 }
 
@@ -96,6 +114,8 @@ export interface RecordedAlarm {
   sev: (typeof ALARM_SEVERITIES)[number];
   occ: string;
   ack?: true;
+  // The reading that raised the alarm (version 2; absent when the recording does not know it).
+  val?: number;
 }
 
 // A snapshot is the whole alarm set as the recorder's query returned it. `requestedAtMs` is
@@ -113,9 +133,19 @@ export interface RecordedAlarmEvent extends RecordedAlarm {
   tMs: number;
 }
 
+// The position rows, as parallel columns sorted by `t`. Empty unless channels.locations.
+export interface RecordedLocationColumns {
+  d: number[];
+  t: number[];
+  lat: number[];
+  lon: number[];
+  hdg: Array<number | null>;
+  spd: Array<number | null>;
+}
+
 export interface BoardRecording {
   kind: typeof RECORDING_KIND;
-  formatVersion: typeof RECORDING_FORMAT_VERSION;
+  formatVersion: (typeof RECORDING_FORMAT_VERSIONS)[number];
   runId: string;
   startedAtUtc: string;
   durationMs: number;
@@ -128,12 +158,12 @@ export interface BoardRecording {
   channels: RecordedChannels;
   board: { path: string; sourceCommit: string; sha256: string };
   sourceHashes: Record<string, string>;
-  converter: { version: number };
+  converter: { version: number; name?: string };
   chapters: RecordedChapter[];
   excerpt?: { fromMs: number; toMs: number };
   measurements: RecordedMeasurementColumns;
   alarms: { snapshots: RecordedAlarmSnapshot[]; events: RecordedAlarmEvent[] };
-  locations: [];
+  locations: RecordedLocationColumns;
 }
 
 // ---- helpers that read a parsed recording ---------------------------------
@@ -285,10 +315,11 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   if (root.kind !== RECORDING_KIND) {
     throw new RecordingFormatError('$.kind', `expected ${JSON.stringify(RECORDING_KIND)}`);
   }
-  if (root.formatVersion !== RECORDING_FORMAT_VERSION) {
+  const version = root.formatVersion;
+  if (version !== 1 && version !== 2) {
     throw new RecordingFormatError(
       '$.formatVersion',
-      `unsupported version ${JSON.stringify(root.formatVersion)}; this reader understands ${RECORDING_FORMAT_VERSION}`,
+      `unsupported version ${JSON.stringify(root.formatVersion)}; this reader understands ${RECORDING_FORMAT_VERSIONS.join(', ')}`,
     );
   }
   const durationMs = num(root.durationMs, '$.durationMs');
@@ -320,8 +351,8 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   }
 
   const ch = strict(root.channels, '$.channels', ['measurements', 'alarms', 'locations', 'commands']);
-  if (ch.locations !== false) {
-    throw new RecordingFormatError('$.channels.locations', 'this version records no positions; must be false');
+  if (version === 1 && ch.locations !== false) {
+    throw new RecordingFormatError('$.channels.locations', 'version 1 records no positions; must be false');
   }
   if (ch.commands !== false) {
     throw new RecordingFormatError('$.channels.commands', 'this version records no command data; must be false');
@@ -329,7 +360,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   const channels: RecordedChannels = {
     measurements: column(ch.measurements, '$.channels.measurements', str),
     alarms: bool(ch.alarms, '$.channels.alarms'),
-    locations: false,
+    locations: bool(ch.locations, '$.channels.locations'),
     commands: false,
   };
   if (new Set(channels.measurements).size !== channels.measurements.length) {
@@ -352,8 +383,9 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     sourceHashes[key] = matching(sh[key], `$.sourceHashes.${key}`, HEX64, 'a lowercase hex SHA-256');
   }
 
-  const cv = strict(root.converter, '$.converter', ['version']);
-  const converter = { version: num(cv.version, '$.converter.version') };
+  const cv = strict(root.converter, '$.converter', ['version'], version >= 2 ? ['name'] : []);
+  const converter: BoardRecording['converter'] = { version: num(cv.version, '$.converter.version') };
+  if (cv.name !== undefined) converter.name = str(cv.name, '$.converter.name');
 
   let excerpt: { fromMs: number; toMs: number } | undefined;
   if (root.excerpt !== undefined) {
@@ -378,13 +410,18 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   });
 
   const m = strict(root.measurements, '$.measurements', ['d', 'n', 't', 'v', 's']);
-  const t = column(m.t, '$.measurements.t', num);
-  let prev = lo;
-  t.forEach((x, i) => {
-    if (x < lo || x > hi) throw new RecordingFormatError(`$.measurements.t[${i}]`, `${x} is outside [${lo}, ${hi}]`);
-    if (x < prev) throw new RecordingFormatError(`$.measurements.t[${i}]`, 'time column must not decrease');
-    prev = x;
-  });
+  // A time column (measurements and positions alike): offsets inside [lo, hi], never decreasing.
+  const times = (v: unknown, path: string): number[] => {
+    const col = column(v, path, num);
+    let prev = lo;
+    col.forEach((x, i) => {
+      if (x < lo || x > hi) throw new RecordingFormatError(`${path}[${i}]`, `${x} is outside [${lo}, ${hi}]`);
+      if (x < prev) throw new RecordingFormatError(`${path}[${i}]`, 'time column must not decrease');
+      prev = x;
+    });
+    return col;
+  };
+  const t = times(m.t, '$.measurements.t');
   const index = (name: string, limit: number) => (x: unknown, p: string): number => {
     const n = num(x, p);
     if (!Number.isInteger(n) || n < 0 || n >= limit) throw new RecordingFormatError(p, `${name} index out of range`);
@@ -412,6 +449,9 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     const dev = str(o.dev, `${p}.dev`);
     if (!tokens.has(dev)) throw new RecordingFormatError(`${p}.dev`, `device '${dev}' is not in $.devices`);
     if (o.ack !== undefined && o.ack !== true) throw new RecordingFormatError(`${p}.ack`, 'present only when true');
+    if (o.val !== undefined && (typeof o.val !== 'number' || !Number.isFinite(o.val))) {
+      throw new RecordingFormatError(`${p}.val`, 'expected a finite number');
+    }
     const out: RecordedAlarm = {
       id,
       dev,
@@ -422,16 +462,19 @@ export function parseBoardRecording(input: unknown): BoardRecording {
       occ: instant(o.occ, `${p}.occ`),
     };
     if (o.ack === true) out.ack = true;
+    if (typeof o.val === 'number') out.val = o.val;
     return out;
   };
   const ALARM_KEYS = ['id', 'dev', 'key', 'metric', 'state', 'sev', 'occ'];
+  // `val` is a version 2 field: a version 1 document that carries it is refused, not read.
+  const ALARM_OPTIONAL = version >= 2 ? ['ack', 'val'] : ['ack'];
   const checkTime = (tMs: number, p: string): number => {
     if (tMs < 0 || tMs > hi) throw new RecordingFormatError(p, `${tMs} is outside [0, ${hi}]`);
     return tMs;
   };
   const snapshots = column(al.snapshots, '$.alarms.snapshots', (x, p): RecordedAlarmSnapshot => {
     const o = strict(x, p, ['tMs', 'requestedAtMs', 'total', 'alarms']);
-    const alarms = column(o.alarms, `${p}.alarms`, (a, ap) => alarm(strict(a, ap, ALARM_KEYS, ['ack']), ap));
+    const alarms = column(o.alarms, `${p}.alarms`, (a, ap) => alarm(strict(a, ap, ALARM_KEYS, ALARM_OPTIONAL), ap));
     const ids = new Set<string>();
     alarms.forEach((a, i) => {
       if (ids.has(a.id)) throw new RecordingFormatError(`${p}.alarms[${i}].id`, `duplicate alarm ${a.id} in one snapshot`);
@@ -450,7 +493,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     return { tMs, requestedAtMs, total, alarms };
   });
   const events = column(al.events, '$.alarms.events', (x, p): RecordedAlarmEvent => {
-    const o = strict(x, p, [...ALARM_KEYS, 'tMs'], ['ack']);
+    const o = strict(x, p, [...ALARM_KEYS, 'tMs'], ALARM_OPTIONAL);
     return { ...alarm(o, p), tMs: checkTime(num(o.tMs, `${p}.tMs`), `${p}.tMs`) };
   });
   for (const [name, list] of [['snapshots', snapshots], ['events', events]] as const) {
@@ -475,13 +518,38 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     throw new RecordingFormatError('$.alarms', 'history present but $.channels.alarms is false');
   }
 
-  if (!Array.isArray(root.locations) || root.locations.length !== 0) {
-    throw new RecordingFormatError('$.locations', 'this version carries no positions; must be an empty array');
+  let locations: RecordedLocationColumns;
+  if (version === 1) {
+    if (!Array.isArray(root.locations) || root.locations.length !== 0) {
+      throw new RecordingFormatError('$.locations', 'version 1 carries no positions; must be an empty array');
+    }
+    locations = { d: [], t: [], lat: [], lon: [], hdg: [], spd: [] };
+  } else {
+    const lc = strict(root.locations, '$.locations', ['d', 't', 'lat', 'lon', 'hdg', 'spd']);
+    const lt = times(lc.t, '$.locations.t');
+    const within = (min: number, max: number, what: string) => (x: unknown, p: string): number => {
+      const n = num(x, p);
+      if (n < min || n > max) throw new RecordingFormatError(p, `${what} ${n} is outside [${min}, ${max}]`);
+      return n;
+    };
+    const optional = (min: number, max: number, what: string) => (x: unknown, p: string): number | null =>
+      x === null ? null : within(min, max, what)(x, p);
+    locations = {
+      d: column(lc.d, '$.locations.d', index('device', devices.length), lt.length),
+      t: lt,
+      lat: column(lc.lat, '$.locations.lat', within(-90, 90, 'latitude'), lt.length),
+      lon: column(lc.lon, '$.locations.lon', within(-180, 180, 'longitude'), lt.length),
+      hdg: column(lc.hdg, '$.locations.hdg', optional(0, 360, 'heading'), lt.length),
+      spd: column(lc.spd, '$.locations.spd', optional(0, Number.MAX_VALUE, 'speed'), lt.length),
+    };
+    if (!channels.locations && lt.length > 0) {
+      throw new RecordingFormatError('$.locations', 'positions present but $.channels.locations is false');
+    }
   }
 
   const rec: BoardRecording = {
     kind: RECORDING_KIND,
-    formatVersion: RECORDING_FORMAT_VERSION,
+    formatVersion: version,
     runId: str(root.runId, '$.runId'),
     startedAtUtc: instant(root.startedAtUtc, '$.startedAtUtc'),
     durationMs,
@@ -498,7 +566,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     chapters,
     measurements,
     alarms: { snapshots, events },
-    locations: [],
+    locations,
   };
   if (excerpt) rec.excerpt = excerpt;
   return rec;

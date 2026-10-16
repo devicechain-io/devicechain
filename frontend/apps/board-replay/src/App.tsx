@@ -16,11 +16,13 @@ import {
   type RecordedClock,
   type WidgetDataSource,
 } from '@devicechain/dashboards';
-import { useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { WidgetRegistry } from '@devicechain/host-widgets';
 import { Board } from './Board';
+import type { EmbedOptions } from './embed';
+import type { ReplayTheme } from './host-options';
 import { loadReplay, ReplayLoadError, type LoadedReplay } from './load';
 import { ProvenancePanel, ReplayHeader } from './ReplayHeader';
 import { TransportBar, replayState, useClockView } from './TransportBar';
@@ -39,9 +41,17 @@ export interface ReplayAppProps {
   ticker?: ClockTicker;
   // The widget registry to parse and render with; defaults to the deployment's.
   registry?: WidgetRegistry;
+  // The embed mode (embed.ts), or nothing for the full replay page.
+  embed?: EmbedOptions | null;
+  theme?: ReplayTheme;
 }
 
-export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker, registry }: ReplayAppProps) {
+// The embed is loaded only in embed mode. mount.tsx fetches it (loadEmbed) before it renders an
+// embed, so by the first render this resolves at once and the label is on the first frame.
+export const loadEmbed = () => import('./EmbedPlayer');
+const EmbedView = lazy(loadEmbed);
+
+export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker, registry, embed, theme = 'dark' }: ReplayAppProps) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
   const [provenanceOpen, setProvenanceOpen] = useState(false);
   const [rootEl, setRootEl] = useState<HTMLElement | null>(null);
@@ -70,18 +80,35 @@ export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, tic
       ref={setRootEl}
       className="board-replay-root"
       lang={i18n.language}
-      style={{ display: 'flex', flexDirection: 'column' }}
+      data-theme={theme}
+      data-embed={embed ? '' : undefined}
+      style={embed ? { minHeight: 0 } : { display: 'flex', flexDirection: 'column' }}
       data-testid="replay-root"
     >
-      <ReplayHeader
-        recording={recording}
-        provenanceOpen={provenanceOpen}
-        onToggleProvenance={() => setProvenanceOpen((v) => !v)}
-      />
-      {recording && provenanceOpen && <ProvenancePanel recording={recording} />}
-      {load.status === 'loading' && <StatusBody />}
-      {load.status === 'error' && <ErrorBody error={load.error} />}
-      {load.status === 'ready' && <Player replay={load.replay} ticker={ticker} themeRoot={rootEl ?? undefined} />}
+      {embed ? (
+        // The embed: the replay label and the board on a fixed canvas, and nothing else.
+        <Suspense fallback={null}>
+          <EmbedView
+            replay={load.status === 'ready' ? load.replay : null}
+            options={embed}
+            ticker={ticker}
+            themeRoot={rootEl ?? undefined}
+            pending={load.status === 'loading' ? <StatusBody /> : load.status === 'error' && <ErrorBody error={load.error} />}
+          />
+        </Suspense>
+      ) : (
+        <>
+          <ReplayHeader
+            recording={recording}
+            provenanceOpen={provenanceOpen}
+            onToggleProvenance={() => setProvenanceOpen((v) => !v)}
+          />
+          {recording && provenanceOpen && <ProvenancePanel recording={recording} />}
+          {load.status === 'loading' && <StatusBody />}
+          {load.status === 'error' && <ErrorBody error={load.error} />}
+          {load.status === 'ready' && <Player replay={load.replay} ticker={ticker} themeRoot={rootEl ?? undefined} />}
+        </>
+      )}
     </div>
   );
 }
