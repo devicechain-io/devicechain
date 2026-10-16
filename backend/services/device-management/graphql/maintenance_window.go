@@ -220,7 +220,7 @@ func (r *CommandDispatchScheduleResolver) Refusals() []*BatchEnqueueRefusalResol
 
 // CommandDispatchSchedule decides which devices must wait for a maintenance window and which
 // are refused because the window opens after the command expires. See the SDL for the
-// contract; the work is model.Api.CommandDispatchSchedule.
+// contract; the work is model.Api.DispatchScheduleFor.
 func (r *SchemaResolver) CommandDispatchSchedule(ctx context.Context, args struct {
 	DeviceTokens []string
 	CommandKey   string

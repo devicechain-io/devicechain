@@ -360,7 +360,18 @@ type typeWindowDecision struct {
 func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, commandKey string, at time.Time,
 	windows map[uint]*MaintenanceWindow, alreadyHeld bool) (typeWindowDecision, error) {
 	type result = typeWindowDecision
-	definitions, err := api.CommandDefinitionsByDeviceType(ctx, deviceTypeId)
+	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
+	if err != nil {
+		return result{}, err
+	}
+	if len(types) == 0 {
+		// The device exists and names this type, so a type that cannot be found is a breach,
+		// not an answer: reading it as "defines nothing" would FAIL every waiting command of
+		// its devices.
+		return result{}, fmt.Errorf("device type %d cannot be found; its command vocabulary is not decided",
+			deviceTypeId)
+	}
+	definitions, err := api.decidedCommandDefinitions(ctx, types[0])
 	if err != nil {
 		return result{}, err
 	}
@@ -377,11 +388,7 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 	if !alreadyHeld && !matched.WindowGated() {
 		return result{defined: true}, nil
 	}
-	types, err := api.DeviceTypesById(ctx, []uint{deviceTypeId})
-	if err != nil {
-		return result{}, err
-	}
-	if len(types) == 0 || types[0].MaintenanceWindowId == nil {
+	if types[0].MaintenanceWindowId == nil {
 		return result{defined: true}, nil // gated command, but the type has no window: nothing to wait for
 	}
 	windowId := *types[0].MaintenanceWindowId
@@ -404,6 +411,49 @@ func (api *Api) typeWindowVerdict(ctx context.Context, deviceTypeId uint, comman
 	}
 	iv := schedule.Next(at)
 	return result{defined: true, gated: true, windowToken: window.Token, after: iv.Start, until: iv.End}, nil
+}
+
+// decidedCommandDefinitions is the command vocabulary of the profile version a device type is
+// on now, for a caller that ACTS on "not defined".
+//
+// 🔴 IT IS NOT CommandDefinitionsByDeviceType, AND THE DIFFERENCE IS DATA LOSS. That lookup
+// serves ingest and the enqueue vocabulary gate, where an unreadable vocabulary failing to
+// "nothing defined" refuses a command or ignores a reading: safe directions. Here "not defined"
+// FAILS every command the re-stamp pass finds waiting for the type's devices, so only a
+// definitive answer may produce it: the type has no profile, or its profile has never been
+// published. A profile row that is missing, or an active-version pointer naming a version row
+// that is missing, is an invariant breach and an error, never an empty vocabulary. (The same
+// stance activeConfigurationDeclaration takes, for the same reason.)
+func (api *Api) decidedCommandDefinitions(ctx context.Context, deviceType *DeviceType) ([]*CommandDefinition, error) {
+	if deviceType.ProfileId == nil {
+		return []*CommandDefinition{}, nil
+	}
+	profiles, err := api.DeviceProfilesById(ctx, []uint{*deviceType.ProfileId})
+	if err != nil {
+		return nil, err
+	}
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("device type %q references device profile %d, which cannot be found",
+			deviceType.Token, *deviceType.ProfileId)
+	}
+	if !profiles[0].ActiveVersion.Valid {
+		return []*CommandDefinition{}, nil
+	}
+	var versions []DeviceProfileVersion
+	if err := api.RDB.DB(ctx).Where("device_profile_id = ? AND version = ?", profiles[0].ID,
+		profiles[0].ActiveVersion.Int32).Find(&versions).Error; err != nil {
+		return nil, err
+	}
+	if len(versions) == 0 {
+		return nil, fmt.Errorf("device profile %q: active version %d is missing",
+			profiles[0].Token, profiles[0].ActiveVersion.Int32)
+	}
+	snap, err := parseProfileSnapshot(versions[0].Snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("device profile %q version %d cannot be read: %w",
+			profiles[0].Token, profiles[0].ActiveVersion.Int32, err)
+	}
+	return snap.Commands, nil
 }
 
 // WindowOpening is the answer to "when may an operation under this window start?".

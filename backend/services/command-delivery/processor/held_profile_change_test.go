@@ -39,6 +39,9 @@ type stubOwner struct {
 	impact   map[string]string // command key -> DISRUPTIVE | NORMAL; absent = not defined
 	window   string            // the type's window now; "" = none
 	openings map[string]model.WindowOpening
+	// blip, when set, is how the schedule question fails: "500", "graphql" (an errors envelope
+	// beside data that names every device undefined), "drop" (the connection is cut).
+	blip string
 }
 
 func (o *stubOwner) serve(t *testing.T) string {
@@ -64,6 +67,23 @@ func (o *stubOwner) serve(t *testing.T) string {
 				ans["closes"] = op.Closes.UTC().Format(time.RFC3339)
 			}
 			data = map[string]any{"maintenanceWindowOpening": ans}
+		case strings.Contains(req.Query, "commandDispatchSchedule") && o.blip != "":
+			switch o.blip {
+			case "500":
+				http.Error(w, "upstream unavailable", http.StatusInternalServerError)
+			case "graphql":
+				devices, _ := req.Variables["deviceTokens"].([]any)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"data": map[string]any{"commandDispatchSchedule": map[string]any{
+						"holds": []any{}, "refusals": []any{}, "ungated": []any{}, "undefined": devices}},
+					"errors": []any{map[string]any{"message": "context deadline exceeded"}}})
+			case "drop":
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err == nil {
+					_ = conn.Close()
+				}
+			}
+			return
 		case strings.Contains(req.Query, "commandDispatchSchedule"):
 			alreadyHeld := strings.Contains(req.Query, "alreadyHeld: true")
 			key, _ := req.Variables["commandKey"].(string)
@@ -246,4 +266,32 @@ func TestACommandEnqueuedAfterTheProfileChangeFollowsTheNewProfile(t *testing.T)
 	require.NoError(t, err)
 	got = rowOf(t, api, "acme", "after-disruptive")
 	require.Equal(t, "plant-a", got.WindowToken.String, "a DISRUPTIVE command was not held at enqueue")
+}
+
+// 🔴 A BLIP IS NOT A VERDICT. When device-management cannot answer the schedule question (a 5xx,
+// a GraphQL error envelope even beside data that names every device undefined, a cut
+// connection), nothing is decided: every waiting command stays exactly as stamped, none is
+// failed and none is released. Reading a failed answer as "undefined" would FAIL a fleet's
+// waiting commands over a network blip.
+func TestADeviceManagementBlipFailsNothing(t *testing.T) {
+	for _, blip := range []string{"500", "graphql", "drop"} {
+		t.Run(blip, func(t *testing.T) {
+			api := realApi(t)
+			rows := seedWaitingInEveryState(t, api)
+			owner := &stubOwner{impact: map[string]string{}, window: "plant-a", openings: twoWindows(), blip: blip}
+			writer := &recordingWriter{}
+			proc := procWith(api, writer)
+			proc.WindowOpenings = stubScheduler(t, owner)
+
+			require.Error(t, proc.restampWindows(context.Background()), "a failed schedule question was not reported")
+			for token, status := range rows {
+				got := rowOf(t, api, "acme", token)
+				require.Equal(t, status.String(), got.Status, "%s changed status on a blip", token)
+				require.Equal(t, "plant-a", got.WindowToken.String, "%s left its window on a blip", token)
+				require.False(t, got.Error.Valid, "%s carries an error after a blip: %q", token, got.Error.String)
+			}
+			require.NoError(t, proc.deliverPendingCommands(context.Background()))
+			require.Zero(t, writer.count(), "a waiting command was sent after a blip")
+		})
+	}
 }

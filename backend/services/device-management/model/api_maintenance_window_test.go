@@ -423,3 +423,49 @@ func TestAlreadyHeldFollowsTheWindowAndNamesUndefinedCommands(t *testing.T) {
 		t.Fatalf("undefined, no window: %+v err=%v, want both undefined", gone, err)
 	}
 }
+
+// 🔴 "UNDEFINED" FAILS COMMANDS, SO ONLY A DEFINITIVE ANSWER MAY PRODUCE IT. A profile whose
+// active-version pointer names a version row that is missing, or a type naming a profile that
+// cannot be found, is an invariant breach: the schedule must ERROR (the re-stamp pass then leaves
+// every row as stamped), never name the devices undefined. A type with no profile at all is the
+// definitive case, and is undefined.
+func TestAnUnreadableVocabularyIsAnErrorNeverUndefined(t *testing.T) {
+	at := utcAt(2026, 1, 14, 12, 0)
+	for _, held := range []bool{false, true} {
+		api := newWindowTestApi(t)
+		ctx := core.WithTenant(context.Background(), "A")
+		tokens := seedGatedType(t, api, ctx, "plant", 2)
+		types, err := api.DeviceTypesByToken(ctx, []string{"type-plant"})
+		if err != nil || len(types) != 1 || types[0].ProfileId == nil {
+			t.Fatalf("resolve type: %v", err)
+		}
+		profileId := *types[0].ProfileId
+
+		// The active version's row vanishes.
+		if err := api.RDB.DB(ctx).Where("device_profile_id = ?", profileId).
+			Delete(&DeviceProfileVersion{}).Error; err != nil {
+			t.Fatalf("delete versions: %v", err)
+		}
+		if got, err := api.DispatchScheduleFor(ctx, tokens, "reboot", nil, at, held); err == nil {
+			t.Fatalf("alreadyHeld=%v missing version row: %+v, want an error", held, got)
+		}
+
+		// The profile itself vanishes.
+		if err := api.RDB.DB(ctx).Unscoped().Where("id = ?", profileId).Delete(&DeviceProfile{}).Error; err != nil {
+			t.Fatalf("delete profile: %v", err)
+		}
+		if got, err := api.DispatchScheduleFor(ctx, tokens, "reboot", nil, at, held); err == nil {
+			t.Fatalf("alreadyHeld=%v missing profile: %+v, want an error", held, got)
+		}
+
+		// The type has no profile: definitive, so undefined.
+		if err := api.RDB.DB(ctx).Model(&DeviceType{}).Where("id = ?", types[0].ID).
+			Update("profile_id", nil).Error; err != nil {
+			t.Fatalf("detach profile: %v", err)
+		}
+		got, err := api.DispatchScheduleFor(ctx, tokens, "reboot", nil, at, held)
+		if err != nil || len(got.Undefined) != 2 || len(got.Holds) != 0 || len(got.Ungated) != 0 {
+			t.Fatalf("alreadyHeld=%v no profile: %+v err=%v, want both undefined", held, got, err)
+		}
+	}
+}
