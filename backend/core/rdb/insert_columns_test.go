@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -52,7 +53,7 @@ var colReadings = NewColumnTable(colReadingTenant, []string{"tenant_id", "key"},
 func newColumnsDB(t *testing.T, fence bool) (*gorm.DB, *rdbtest.StatementCounter) {
 	t.Helper()
 	counter := rdbtest.NewStatementCounter(FenceTable)
-	db := rdbtest.OpenSQLiteMemory(t, &gorm.Config{Logger: counter})
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: counter})
 	if err := RegisterTenantScoping(db); err != nil {
 		t.Fatalf("registering tenant scoping: %v", err)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-notification-management/model"
 	gql "github.com/graph-gophers/graphql-go"
@@ -54,13 +54,13 @@ import (
 // (the channel resolvers reach it for hasSecret), a tenant, and the write authority these
 // mutations require.
 //
-// The database comes from rdbtest.OpenSQLiteMemory, which names it per call — so a
+// The database comes from sqlitetest.OpenMemory, which names it per call — so a
 // repeat of this test in one process (`go test -count=2`) starts empty, and the "#" Go
 // appends to a repeated subtest name cannot send sqlite to an on-disk file — and closes
 // its pool when the test ends.
 func newWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

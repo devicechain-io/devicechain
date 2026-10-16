@@ -11,7 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -36,7 +36,7 @@ import (
 func assetPropertyTestApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
 
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
 	require.NoError(t, db.AutoMigrate(&AssetType{}, &Asset{}, &AssetTypeVersion{}), "migrate")

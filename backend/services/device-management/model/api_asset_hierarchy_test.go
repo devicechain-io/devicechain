@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -31,7 +31,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	// open (the production Postgres pattern), so every connection in the pool has to
 	// see the same tables — which a bare ":memory:" (one database per connection)
 	// does not provide.
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
 	require.NoError(t, db.AutoMigrate(

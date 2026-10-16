@@ -26,7 +26,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-update-management/model"
 	"github.com/devicechain-io/dc-update-management/schema"
@@ -110,7 +110,7 @@ func ctxOf(tenant string) context.Context {
 
 func newEnv(t *testing.T, maxConcurrent int) *env {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	for _, m := range schema.Migrations {
 		require.NoError(t, m.Migrate(db))
 	}

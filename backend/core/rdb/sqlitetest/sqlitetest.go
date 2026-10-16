@@ -1,7 +1,11 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package rdbtest
+// Package sqlitetest opens throwaway in-memory SQLite databases for tests: one per call,
+// closed when the test ends. It is its own package rather than part of rdbtest because
+// rdbtest is also linked into the schema tools under backend/tools, which have no use for
+// a SQLite driver.
+package sqlitetest
 
 import (
 	"strconv"
@@ -13,11 +17,11 @@ import (
 	"gorm.io/gorm"
 )
 
-// sqliteNonce makes every SQLiteMemoryDSN distinct for the life of the process. In-memory
+// sqliteNonce makes every MemoryDSN distinct for the life of the process. In-memory
 // databases are per process, so a process-wide counter is all the uniqueness they need.
 var sqliteNonce atomic.Uint64
 
-// SQLiteMemoryDSN returns the DSN of a named, shared-cache, in-memory SQLite database that
+// MemoryDSN returns the DSN of a named, shared-cache, in-memory SQLite database that
 // belongs to this call alone. Each extra query parameter ("_pragma=foreign_keys(1)") is
 // appended as given.
 //
@@ -30,10 +34,10 @@ var sqliteNonce atomic.Uint64
 // lives while any connection to it is open, and is found again by its name. Built from
 // t.Name() alone, the name repeats whenever the same test runs twice in one process
 // (`go test -count=2`, or a flake hunt with -count=N), and the second run reopens the
-// first run's database, rows included. That is what made ten device-management model
-// tests fail at -count=2 while CI, which runs -count=1, stayed green: a publish minted
-// version 2 instead of 1, containment checks found doubled members, and every failure
-// looked like a real defect. The nonce makes a fresh database a property of the call
+// first run's database, rows included. That made some three hundred tests across core,
+// device-management, update-management and user-management fail at -count=2 while CI,
+// which runs -count=1, stayed green: a publish minted version 2 instead of 1, containment
+// checks found doubled members, and every failure looked like a real defect. The nonce makes a fresh database a property of the call
 // rather than of how the test binary happened to be invoked.
 //
 // A caller that needs a SECOND handle on the same database (to watch a write from outside
@@ -47,7 +51,7 @@ var sqliteNonce atomic.Uint64
 // This is the only place in the repository that writes a shared-cache DSN; the
 // repository guard in core/test refuses one anywhere else, so the nonce cannot be left
 // out of the next fixture by copying an older one.
-func SQLiteMemoryDSN(t testing.TB, params ...string) string {
+func MemoryDSN(t testing.TB, params ...string) string {
 	t.Helper()
 	name := strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
@@ -62,7 +66,7 @@ func SQLiteMemoryDSN(t testing.TB, params ...string) string {
 	return dsn
 }
 
-// OpenSQLiteMemory opens a fresh database at SQLiteMemoryDSN(t, params...) and closes its
+// OpenMemory opens a fresh database at MemoryDSN(t, params...) and closes its
 // pool when the test ends. A nil cfg means a zero gorm.Config.
 //
 // 🔴 THE CLOSE IS NOT TIDINESS. gorm closes nothing on its own, and a shared-cache
@@ -70,15 +74,15 @@ func SQLiteMemoryDSN(t testing.TB, params ...string) string {
 // Cleanup every database a test opened would live until the process exits. The nonce
 // already keeps a later run from seeing it; the Close is what keeps a -count=N run, or a
 // large package, from holding N copies of every fixture's tables in memory at once.
-func OpenSQLiteMemory(t testing.TB, cfg *gorm.Config, params ...string) *gorm.DB {
+func OpenMemory(t testing.TB, cfg *gorm.Config, params ...string) *gorm.DB {
 	t.Helper()
-	return OpenSQLiteDSN(t, SQLiteMemoryDSN(t, params...), cfg)
+	return OpenDSN(t, MemoryDSN(t, params...), cfg)
 }
 
-// OpenSQLiteDSN opens dsn — normally one SQLiteMemoryDSN returned — and closes the pool
+// OpenDSN opens dsn — normally one MemoryDSN returned — and closes the pool
 // when the test ends. It is for the caller that needs the DSN as well as the handle, to
 // open a second one on the same database. A nil cfg means a zero gorm.Config.
-func OpenSQLiteDSN(t testing.TB, dsn string, cfg *gorm.Config) *gorm.DB {
+func OpenDSN(t testing.TB, dsn string, cfg *gorm.Config) *gorm.DB {
 	t.Helper()
 	if cfg == nil {
 		cfg = &gorm.Config{}

@@ -36,7 +36,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -214,7 +214,7 @@ func startE2E(t *testing.T) *e2e {
 	Configuration.Updates.Deadlines = config.DeadlinesConfiguration{
 		AcknowledgeSeconds: 3600, DownloadSeconds: 600, VerifySeconds: 300, InstallSeconds: 1800, ConfirmSeconds: 1200}
 
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	for _, m := range schema.Migrations {
 		require.NoError(t, m.Migrate(db))
 	}

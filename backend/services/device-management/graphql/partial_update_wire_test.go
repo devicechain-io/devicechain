@@ -13,7 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
@@ -123,13 +123,13 @@ func (m partialUpdateMutation) probeOrDefault() map[string]any {
 	return map[string]any{"name": "Renamed"}
 }
 
-// The database comes from rdbtest.OpenSQLiteMemory, which names it per call — so a
+// The database comes from sqlitetest.OpenMemory, which names it per call — so a
 // repeat of this test in one process (`go test -count=2`) starts empty, and the "#" Go
 // appends to a repeated subtest name cannot send sqlite to an on-disk file — and closes
 // its pool when the test ends.
 func newPartialUpdateWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

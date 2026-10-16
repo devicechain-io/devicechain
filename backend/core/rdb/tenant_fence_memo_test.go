@@ -15,6 +15,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -34,7 +35,7 @@ import (
 func newFenceMemoDB(t *testing.T) (*gorm.DB, *rdbtest.StatementCounter) {
 	t.Helper()
 	counter := rdbtest.NewStatementCounter(FenceTable)
-	db := rdbtest.OpenSQLiteMemory(t, &gorm.Config{Logger: counter})
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: counter})
 	if err := RegisterTenantScoping(db); err != nil {
 		t.Fatalf("registering tenant scoping: %v", err)
 	}

@@ -24,7 +24,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/ota"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
@@ -72,7 +72,7 @@ func startDeliveryFixture(t *testing.T) *deliveryFixture {
 	Svc = service.New(Microservice, service.Spec{Nats: &service.NatsSpec{OnCreate: createNatsComponents}})
 	buildMetrics()
 
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceCredential{}, &model.DeviceReplacement{},
 		&model.EntityAttribute{}, &model.EntityGroup{}, &model.EntityGroupVersion{}, &model.EntityGroupMembership{},

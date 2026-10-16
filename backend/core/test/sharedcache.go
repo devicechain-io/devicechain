@@ -22,8 +22,8 @@ const sharedCacheParam = "cache=" + "shared"
 // relative to the workspace root: the helper that builds one with a per-call nonce, and
 // the test that pins it.
 var SharedCacheDSNOwners = []string{
-	"backend/core/rdb/rdbtest/sqlite.go",
-	"backend/core/rdb/rdbtest/sqlite_test.go",
+	"backend/core/rdb/sqlitetest/sqlitetest.go",
+	"backend/core/rdb/sqlitetest/sqlitetest_test.go",
 }
 
 // sharedCacheLiteral is one string literal holding a shared-cache DSN, and where.

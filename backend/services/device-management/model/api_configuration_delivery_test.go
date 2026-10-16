@@ -13,7 +13,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"gorm.io/gorm"
 )
 
@@ -391,9 +391,9 @@ func (p *visibilityPublisher) PublishDesiredConfiguration(_ context.Context, _ s
 
 func TestRevisionsArePublishedOnlyOnceCommitted(t *testing.T) {
 	// A second handle on the SAME database, to watch from outside the writer's transaction.
-	dsn := rdbtest.SQLiteMemoryDSN(t)
+	dsn := sqlitetest.MemoryDSN(t)
 	api, ctx := configTestApiAt(t, dsn)
-	other := rdbtest.OpenSQLiteDSN(t, dsn, nil)
+	other := sqlitetest.OpenDSN(t, dsn, nil)
 	pub := &visibilityPublisher{t: t, other: other}
 	api.DeviceDesiredPublisher = pub
 	seedConfiguredDevice(t, api, ctx, []ConfigurationKey{{Key: "mode", ValueType: "STRING"}, {Key: "level", ValueType: "STRING"}})

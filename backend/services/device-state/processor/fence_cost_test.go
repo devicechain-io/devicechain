@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"gorm.io/gorm"
 )
 
@@ -65,7 +66,7 @@ func consumed(m messaging.Message, ack *recordingAck) messaging.Message {
 func newFencedStateProcessor(t *testing.T) (*StateProcessor, *gorm.DB, *rdbtest.StatementCounter) {
 	t.Helper()
 	counter := rdbtest.NewStatementCounter(rdb.FenceTable)
-	db := rdbtest.OpenSQLiteMemory(t, &gorm.Config{Logger: counter})
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: counter})
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
@@ -37,7 +37,7 @@ import (
 
 func newReplacementWireCtx(t *testing.T, authorities ...auth.Authority) context.Context {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

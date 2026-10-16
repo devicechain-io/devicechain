@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// No file in the repository but the rdbtest helper may spell out a shared-cache SQLite DSN.
+// No file in the repository but the sqlitetest helper may spell out a shared-cache SQLite DSN.
 //
 // 🔴 WHY. A shared-cache in-memory database is found again by its NAME and lives while any
 // connection to it is open. Fixtures named theirs after t.Name() and many never closed the
@@ -16,7 +16,7 @@ import (
 // reaches for when chasing a flake) reopened the first run's database, rows and all: a
 // publish minted version 2 instead of 1, a containment check found doubled members. CI
 // runs -count=1, so every one of those was green there. The fix was one helper —
-// rdbtest.OpenSQLiteMemory, which puts a per-call nonce in the name and closes the pool
+// sqlitetest.OpenMemory, which puts a per-call nonce in the name and closes the pool
 // with the test — and this is what keeps the next fixture from copying an older shape.
 //
 // It reads files outside this module, so `-count=1` is load-bearing (Go's test cache does
@@ -46,7 +46,7 @@ func TestNoFixtureBuildsItsOwnSharedCacheDSN(t *testing.T) {
 	}
 	for _, r := range refused {
 		t.Errorf("%s writes a shared-cache SQLite DSN. Open the database with "+
-			"rdbtest.OpenSQLiteMemory (or rdbtest.SQLiteMemoryDSN + OpenSQLiteDSN for a second "+
+			"sqlitetest.OpenMemory (or sqlitetest.MemoryDSN + sqlitetest.OpenDSN for a second "+
 			"handle): a name built from the test alone repeats when the test runs twice in one "+
 			"process, and the second run inherits the first one's rows", r.Pos)
 	}

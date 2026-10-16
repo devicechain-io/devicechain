@@ -17,7 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -50,7 +50,7 @@ import (
 // signature; here every call is a fresh database whatever it is called.
 func newSQLiteProjectionApi(t *testing.T, _ string) *Api {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

@@ -11,7 +11,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	gql "github.com/graph-gophers/graphql-go"
@@ -30,7 +30,7 @@ const testWireRootKey = "0123456789abcdef0123456789abcdef"
 
 func connectorWireCtx(t *testing.T) context.Context {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

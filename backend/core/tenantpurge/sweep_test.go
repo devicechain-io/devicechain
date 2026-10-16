@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -251,7 +251,7 @@ func TestADeferredTableIsCarriedOnEveryResult(t *testing.T) {
 // never enforcing the constraint they exist to exercise.
 func sqliteDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	return rdbtest.OpenSQLiteMemory(t, nil, "_pragma=foreign_keys(1)")
+	return sqlitetest.OpenMemory(t, nil, "_pragma=foreign_keys(1)")
 }
 
 // testEpoch is the purge epoch the tests sweep under. It carries fractional seconds so the

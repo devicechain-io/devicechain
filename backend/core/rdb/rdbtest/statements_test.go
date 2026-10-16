@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"gorm.io/gorm"
 )
 
@@ -30,7 +31,7 @@ func (calibOther) TableName() string { return "calib_other" }
 func openCounted(t *testing.T) (*gorm.DB, *StatementCounter) {
 	t.Helper()
 	c := NewStatementCounter(testMarker)
-	db := OpenSQLiteMemory(t, &gorm.Config{Logger: c})
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: c})
 	if err := db.AutoMigrate(&calibMarker{}, &calibOther{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

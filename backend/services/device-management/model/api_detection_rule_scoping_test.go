@@ -10,7 +10,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -30,7 +30,7 @@ func newRuleScopeTestApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
 	// Shared-cache named in-memory DB: publish + attribute writes open transactions while other
 	// reads run on the pool connection, so all connections must see the same tables.
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

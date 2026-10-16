@@ -9,7 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"gorm.io/gorm"
 )
 
@@ -21,7 +21,7 @@ import (
 // whose seed opens a transaction — publishing an entity group or an asset type, minting a
 // fence-set version — writes into one database and reads back from another, and the
 // failure reads as a missing table rather than as the connection-per-database it is.
-// rdbtest.OpenSQLiteMemory names it per call and closes it with the test, which keeps the
+// sqlitetest.OpenMemory names it per call and closes it with the test, which keeps the
 // isolation that ":memory:" was chosen for — including when the same test runs twice in
 // one process, which is how `go test -count=2` used to find the first run's rows here.
 //
@@ -54,7 +54,7 @@ import (
 // Migrate list cannot be grown by having been passed here.
 func NewSQLiteDB(t *testing.T, tables ...any) *gorm.DB {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

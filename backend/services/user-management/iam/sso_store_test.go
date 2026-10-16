@@ -11,7 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/secrets"
 	"github.com/devicechain-io/dc-user-management/schema"
 	"github.com/stretchr/testify/require"
@@ -36,7 +36,7 @@ func newSsoStore(t *testing.T) *Store {
 // connection's sealed client secret written and removed alongside its row.
 func newSsoFixture(t *testing.T) (*Store, secrets.SecretStore) {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil, "_pragma=foreign_keys(1)")
+	db := sqlitetest.OpenMemory(t, nil, "_pragma=foreign_keys(1)")
 	// Migrate BEFORE the callbacks, as production does: gorm's own schema introspection is
 	// a statement the tenant guard (rightly) refuses.
 	for _, m := range schema.Migrations {

@@ -13,7 +13,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	gql "github.com/graph-gophers/graphql-go"
 )
 
@@ -55,13 +55,13 @@ const wireDefinition = `{"schemaVersion":1,"widgets":[]}`
 // plus dashboard:write, and returns both so a test can seed and read back around a real
 // schema.Exec.
 //
-// The database comes from rdbtest.OpenSQLiteMemory, which names it per call — so a
+// The database comes from sqlitetest.OpenMemory, which names it per call — so a
 // repeat of this test in one process (`go test -count=2`) starts empty, and the "#" Go
 // appends to a repeated subtest name cannot send sqlite to an on-disk file — and closes
 // its pool when the test ends.
 func newWireFixture(t *testing.T) (*model.Api, context.Context) {
 	t.Helper()
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

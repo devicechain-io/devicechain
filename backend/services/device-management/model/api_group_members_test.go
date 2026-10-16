@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -24,7 +24,7 @@ func newGroupMemberTestApi(t *testing.T) (*Api, context.Context) {
 	// source/target on a non-transaction connection WHILE a write transaction is open (the
 	// production Postgres pattern), so the pool's connections must all see the same tables —
 	// which a bare ":memory:" (one DB per connection) does not provide.
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

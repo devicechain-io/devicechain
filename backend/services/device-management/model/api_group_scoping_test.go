@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -24,7 +24,7 @@ func newScopingTestApi(t *testing.T) (*Api, context.Context) {
 	// Shared-cache named in-memory DB: an attribute write now opens a transaction while
 	// ResolveEntityToken already ran on the pool connection, so all connections must see
 	// the same tables (a bare ":memory:" gives one DB per connection).
-	db := rdbtest.OpenSQLiteMemory(t, nil)
+	db := sqlitetest.OpenMemory(t, nil)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

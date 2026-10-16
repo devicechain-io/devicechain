@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package rdbtest
+package sqlitetest
 
 import (
 	"strings"
@@ -33,10 +33,10 @@ func hasTable(db *gorm.DB) bool { return db.Migrator().HasTable(&memRow{}) }
 // the second must not find what the first left. Two calls within ONE test stand in for
 // two runs of it, which is what a test binary cannot do to itself.
 func TestEachCallGetsItsOwnDatabase(t *testing.T) {
-	first := OpenSQLiteMemory(t, nil)
+	first := OpenMemory(t, nil)
 	seedOneRow(t, first)
 
-	second := OpenSQLiteMemory(t, nil)
+	second := OpenMemory(t, nil)
 	if hasTable(second) {
 		t.Fatal("a second database opened under the same test name found the first one's " +
 			"table, so a test run twice in one process inherits its own earlier rows")
@@ -46,11 +46,11 @@ func TestEachCallGetsItsOwnDatabase(t *testing.T) {
 // The counterweight: the DSN must still NAME one shared database, or a fixture's second
 // handle (and every pooled connection behind one handle) would each get a private one.
 func TestTheSameDSNReachesTheSameDatabase(t *testing.T) {
-	dsn := SQLiteMemoryDSN(t)
-	a := OpenSQLiteDSN(t, dsn, nil)
+	dsn := MemoryDSN(t)
+	a := OpenDSN(t, dsn, nil)
 	seedOneRow(t, a)
 
-	b := OpenSQLiteDSN(t, dsn, nil)
+	b := OpenDSN(t, dsn, nil)
 	var n int64
 	if err := b.Model(&memRow{}).Count(&n).Error; err != nil {
 		t.Fatalf("a second handle on %s cannot read the first one's table: %v", dsn, err)
@@ -65,8 +65,8 @@ func TestTheSameDSNReachesTheSameDatabase(t *testing.T) {
 func TestTheDatabaseDoesNotOutliveItsTest(t *testing.T) {
 	var dsn string
 	t.Run("owner", func(t *testing.T) {
-		dsn = SQLiteMemoryDSN(t)
-		seedOneRow(t, OpenSQLiteDSN(t, dsn, nil))
+		dsn = MemoryDSN(t)
+		seedOneRow(t, OpenDSN(t, dsn, nil))
 	})
 
 	after, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -89,7 +89,7 @@ func TestTheDatabaseDoesNotOutliveItsTest(t *testing.T) {
 func TestTheNameIsSafeInAURI(t *testing.T) {
 	for range 2 { // the second iteration's name gets Go's "#01" suffix
 		t.Run("a/b c", func(t *testing.T) {
-			dsn := SQLiteMemoryDSN(t, "_pragma=foreign_keys(1)")
+			dsn := MemoryDSN(t, "_pragma=foreign_keys(1)")
 			name, query, ok := strings.Cut(strings.TrimPrefix(dsn, "file:"), "?")
 			if !ok {
 				t.Fatalf("%s has no query", dsn)
