@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -57,7 +58,12 @@ const (
 //     downstream refusal or failure — including the caller lacking the permission, which
 //     is the same refusal a person gets.
 //   - rejected: the call was refused as a protocol error before any tool ran — a tool
-//     name this server does not serve, or malformed parameters.
+//     name this server does not serve.
+//
+// 🔴 A tools/call WHOSE PARAMS DO NOT DECODE WRITES NO LINE, and no middleware can make it.
+// The SDK unmarshals params before it calls the receiving middleware chain
+// (handleReceive), and answers a failure itself with invalid-params; such a request names
+// no tool and runs none, so nothing was read. The docs say so, rather than "every call".
 const (
 	auditOutcomeOK       = "ok"
 	auditOutcomeError    = "error"
@@ -170,7 +176,10 @@ func argumentsDigest(raw json.RawMessage) string {
 	var v any
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.UseNumber()
-	if len(raw) > 0 && dec.Decode(&v) == nil && !dec.More() {
+	// The input must be exactly one value: a second Decode reaching io.EOF is the test,
+	// not dec.More, which answers "no more" at a stray ']' or '}' and would digest
+	// `{"a":1}]` as `{"a":1}`.
+	if len(raw) > 0 && dec.Decode(&v) == nil && dec.Decode(new(any)) == io.EOF {
 		if b, err := json.Marshal(v); err == nil {
 			canonical = b
 		}

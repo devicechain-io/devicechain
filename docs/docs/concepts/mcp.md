@@ -77,7 +77,7 @@ Every tool call writes one line to the `mcp` service's log, whatever the call's 
 | `sudo` | `true` when the user is a superuser. |
 | `tool` | The tool called. A call to a tool the server does not have is recorded as `(unregistered)`, and the name the client sent is not copied. |
 | `args_sha256` | The SHA-256 of the call's arguments, with keys sorted and whitespace removed, so identical requests share a value. The arguments themselves are never written. |
-| `outcome` | `ok`, `error` (the call ran but failed or was refused, including a refusal because the user lacks the permission) or `rejected` (refused before any tool ran, such as an unknown tool). |
+| `outcome` | `ok`, `error` (the tool refused or failed the call, including arguments it does not accept and a refusal because the user lacks the permission) or `rejected` (a call to a tool the server does not have). A request too malformed to name a tool at all is refused by the protocol layer before it reaches any tool, and writes no line. |
 | `duration_ms` | How long the call took. |
 
 Some properties of these lines matter when you rely on them:

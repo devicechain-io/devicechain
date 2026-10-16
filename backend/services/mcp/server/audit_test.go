@@ -31,6 +31,10 @@ func TestArgumentsDigestSeparatesDifferentArguments(t *testing.T) {
 		{`{"a":1}`, `not json`},
 		// Trailing content after a valid value is not dropped from the digest.
 		{`{"a":1}`, `{"a":1} {"b":2}`},
+		// ...including a stray closing delimiter, which json.Decoder.More reports as "no
+		// more values" and so cannot be the test of trailing content.
+		{`{"a":1}`, `{"a":1}]`},
+		{`{"a":1}`, `{"a":1}}`},
 	}
 	for _, c := range cases {
 		if argumentsDigest(json.RawMessage(c[0])) == argumentsDigest(json.RawMessage(c[1])) {
@@ -42,7 +46,13 @@ func TestArgumentsDigestSeparatesDifferentArguments(t *testing.T) {
 		t.Errorf("digest of absent arguments = %s, want %s", got, want)
 	}
 	// Arguments that are not JSON are digested exactly as sent.
-	if got, want := argumentsDigest(json.RawMessage(`not json`)), sha256Hex(`not json`); got != want {
-		t.Errorf("digest of non-JSON arguments = %s, want %s", got, want)
+	for _, raw := range []string{`not json`, `{"a":1}]`} {
+		if got, want := argumentsDigest(json.RawMessage(raw)), sha256Hex(raw); got != want {
+			t.Errorf("digest of non-JSON arguments %s = %s, want %s", raw, got, want)
+		}
+	}
+	// Whitespace after the value is insignificant, so it does not change the digest.
+	if got, want := argumentsDigest(json.RawMessage("{\"a\":1} \n")), sha256Hex(`{"a":1}`); got != want {
+		t.Errorf("digest of arguments with trailing whitespace = %s, want %s", got, want)
 	}
 }

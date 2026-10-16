@@ -77,7 +77,7 @@ Cada llamada a una herramienta escribe una línea en el registro del servicio `m
 | `sudo` | `true` cuando el usuario es superusuario. |
 | `tool` | La herramienta llamada. Una llamada a una herramienta que el servidor no tiene se registra como `(unregistered)`, y el nombre que envió el cliente no se copia. |
 | `args_sha256` | El SHA-256 de los argumentos de la llamada, con las claves ordenadas y sin espacios, de modo que solicitudes idénticas comparten valor. Los argumentos nunca se escriben. |
-| `outcome` | `ok`, `error` (la llamada se ejecutó pero falló o fue rechazada, incluido un rechazo porque el usuario no tiene el permiso) o `rejected` (rechazada antes de que se ejecutara ninguna herramienta, como una herramienta desconocida). |
+| `outcome` | `ok`, `error` (la herramienta rechazó la llamada o falló, incluidos argumentos que no acepta y un rechazo porque el usuario no tiene el permiso) o `rejected` (una llamada a una herramienta que el servidor no tiene). Una solicitud tan mal formada que ni siquiera nombra una herramienta la rechaza la capa de protocolo antes de que llegue a ninguna herramienta, y no escribe ninguna línea. |
 | `duration_ms` | Cuánto tardó la llamada. |
 
 Algunas propiedades de estas líneas importan cuando dependes de ellas:
