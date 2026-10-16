@@ -118,6 +118,15 @@ for (const lang of LANGS) {
         const label = (await b.textContent())?.trim();
         for (const f of await b.evaluate(clippingOf)) findings.push(`${label}: ${f}`);
       }
+      // On a phone the history is lines, not a table, so a row's actions get the drawer's whole
+      // width and sit side by side under it: squeezed into a fourth column they would stack, one above
+      // the other.
+      if (width < 560) {
+        for (const row of await rows.all()) {
+          const tops = await row.getByRole('button').evaluateAll((bs) => bs.map((b) => b.getBoundingClientRect().top));
+          if (tops.some((t) => Math.abs(t - tops[0]) > 1)) findings.push(`a row's actions are not on one line: tops ${tops.join(', ')}`);
+        }
+      }
       // The drawer scrolls inside itself; bring the history into the picture.
       await buttons.last().scrollIntoViewIfNeeded();
       await shot(page, `versions-${width}-${lang}`);
@@ -144,12 +153,31 @@ for (const lang of LANGS) {
         await expect(buttons).toHaveCount(5);
         await expect(page.getByTestId('placement-grid')).toBeVisible();
         const wbox = boxOf((await widget.boundingBox())!);
+        // The resize handles straddle the widget's edges, so they reach past its box: a toolbar
+        // that clears the box can still sit on a handle.
+        const handles = await Promise.all(
+          (await widget.locator('[data-testid^="handle-"]').all()).map(async (h) => ({
+            name: await h.getAttribute('data-testid'),
+            box: boxOf((await h.boundingBox())!),
+          })),
+        );
+        expect(handles.length, 'a selected grid widget shows its resize handles').toBeGreaterThan(0);
         const findings: string[] = [];
+        let lowest = -Infinity;
         for (const b of await buttons.all()) {
           const label = (await b.textContent())?.trim();
           const bbox = boxOf((await b.boundingBox())!);
+          lowest = Math.max(lowest, bbox.y + bbox.h);
           if (intersects(bbox, wbox)) findings.push(`${label}: covers the widget it edits ${JSON.stringify(wbox)}`);
+          for (const h of handles) if (intersects(bbox, h.box)) findings.push(`${label}: covers the ${h.name} resize handle`);
           for (const f of await b.evaluate(clippingOf)) findings.push(`${label}: ${f}`);
+        }
+        // Above is where the toolbar belongs whenever it fits there: always for a widget with a
+        // row above it, and for a first-row widget wherever the toolbar is one line (the editor
+        // keeps a line's room above the first row). Below is only for a first row whose toolbar
+        // has wrapped, on a phone.
+        if (!id.startsWith('top-') || width >= 960) {
+          if (lowest > wbox.y + 0.5) findings.push(`the toolbar is not above the widget (its bottom ${lowest} > the widget's top ${wbox.y})`);
         }
         await shot(page, `canvas-${id}-${width}-${lang}`);
         expect(findings).toEqual([]);
@@ -157,3 +185,29 @@ for (const lang of LANGS) {
     }
   }
 }
+
+// While a widget picks its host, a banner sticks to the top of the canvas saying so. Scrolled,
+// the selected widget's toolbar passes under it, and the banner must stay on top: it is the
+// one thing telling the author what the next click does.
+test('the pick-a-host banner stays over the toolbar when the canvas scrolls', async ({ page }) => {
+  await open(page, 'surface=canvas&selected=below&lang=en', 390, 160);
+  await page.getByTestId('placement-relative').click();
+  const banner = page.getByTestId('pick-host-hint');
+  await expect(banner).toBeVisible();
+  const covered = await page.evaluate(() => {
+    const hint = document.querySelector('[data-testid="pick-host-hint"]')!;
+    const scroller = hint.parentElement!;
+    const toolbar = document.querySelector('[data-testid="widget-toolbar"]')!;
+    // Scroll until the toolbar's middle sits on the banner's middle.
+    const h = hint.getBoundingClientRect();
+    const t = toolbar.getBoundingClientRect();
+    scroller.scrollTop += t.top + t.height / 2 - (h.top + h.height / 2);
+    const h2 = hint.getBoundingClientRect();
+    const t2 = toolbar.getBoundingClientRect();
+    if (Math.abs(t2.top + t2.height / 2 - (h2.top + h2.height / 2)) > 2) return `could not scroll the toolbar under the banner (${t2.top} vs ${h2.top})`;
+    const hit = document.elementFromPoint(t2.left + t2.width / 2, h2.top + h2.height / 2);
+    return hit && hint.contains(hit) ? null : `the toolbar is drawn over the banner (hit ${hit?.outerHTML.slice(0, 80)})`;
+  });
+  await shot(page, 'canvas-pick-host-banner');
+  expect(covered).toBeNull();
+});

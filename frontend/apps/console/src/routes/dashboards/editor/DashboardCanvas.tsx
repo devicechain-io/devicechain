@@ -610,10 +610,13 @@ export function DashboardCanvas({
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto' }}
     >
       {pickingFor && (
+        // Over everything on the canvas, the selected widget's toolbar (250) and the placement
+        // guides (300) included: scrolled, they pass under it, and it is what tells the author
+        // what the next click does.
         <div
           role="status"
           data-testid="pick-host-hint"
-          className="sticky left-0 top-0 z-[200] bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+          className="sticky left-0 top-0 z-[400] bg-primary px-3 py-1.5 text-sm text-primary-foreground"
         >
           {t('canvasPickHost')}
         </div>
