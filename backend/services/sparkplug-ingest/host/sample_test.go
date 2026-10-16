@@ -156,3 +156,26 @@ func TestAliasResolvesToBirthName(t *testing.T) {
 		assert.Equal(t, 21.5, out[0].Value)
 	}
 }
+
+// TestTheMessageCapIsTheStatedNumber ties the constant to the number message_cap_test.go
+// drives the receive path with.
+func TestTheMessageCapIsTheStatedNumber(t *testing.T) {
+	assert.Equal(t, wantMetricCap, MaxMetricsPerMessage)
+}
+
+// TestSamplesFromRefusesAMessageOverTheCap pins the extraction itself: over the cap, no
+// Sample and every metric counted oversize; at the cap, every Sample and no oversize.
+func TestSamplesFromRefusesAMessageOverTheCap(t *testing.T) {
+	over := make([]*sppb.Payload_Metric, 0, MaxMetricsPerMessage+1)
+	for i := 0; i <= MaxMetricsPerMessage; i++ {
+		over = append(over, namedMetric("m", datatypeDouble, float64(i)))
+	}
+	samples, skips := samplesFrom(&sppb.Payload{Metrics: over}, nil, fixedNow)
+	assert.Empty(t, samples)
+	assert.Equal(t, Skips{Oversize: MaxMetricsPerMessage + 1}, skips)
+	assert.Equal(t, MaxMetricsPerMessage+1, skips.Total(), "oversize counts towards the total")
+
+	samples, skips = samplesFrom(&sppb.Payload{Metrics: over[:MaxMetricsPerMessage]}, nil, fixedNow)
+	assert.Len(t, samples, MaxMetricsPerMessage)
+	assert.Equal(t, Skips{}, skips)
+}
