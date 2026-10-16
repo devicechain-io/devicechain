@@ -91,9 +91,6 @@ const (
 	SkipDivZero SkipReason = "div_zero"
 	// SkipOverflow: an integer result or conversion overflowed 64 bits.
 	SkipOverflow SkipReason = "overflow"
-	// SkipCost: the runtime cost limit tripped (a backstop; the static gate should make
-	// this unreachable).
-	SkipCost SkipReason = "cost"
 	// SkipRange: the result is outside the definition's Min/Max.
 	SkipRange SkipReason = "range"
 	// SkipEvalError: any other evaluation failure (for example clamp with its bounds
@@ -104,7 +101,7 @@ const (
 // SkipReasons is every non-empty SkipReason, in a fixed order, for registering counters.
 var SkipReasons = []SkipReason{
 	SkipMissingInput, SkipInvalidInput, SkipNonFinite, SkipDivZero, SkipOverflow,
-	SkipCost, SkipRange, SkipEvalError,
+	SkipRange, SkipEvalError,
 }
 
 // Result is the outcome of evaluating one formula against one sample. Exactly one of Value

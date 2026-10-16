@@ -305,20 +305,6 @@ func TestRange(t *testing.T) {
 	assert.Equal(t, Result{Value: "1"}, compile("temp > 50", Boolean).Eval(s))
 }
 
-// The runtime cost limit is a backstop behind the static gate. With the static ceiling
-// lifted, a formula over its runtime limit is skipped as cost, never returned.
-func TestRuntimeCostLimit(t *testing.T) {
-	env := fixtureEnv(t)
-	f, err := env.compile(Definition{Key: "out", Expression: "voltage + voltage + voltage + voltage", Type: Double}, 1000, 2)
-	require.NoError(t, err)
-	s := env.Sample()
-	defer s.Release()
-	_, _ = s.Set("voltage", "1")
-	r := f.Eval(s)
-	assert.Equal(t, SkipCost, r.Skip, "err: %v", r.Err)
-	assert.Empty(t, r.Value)
-}
-
 // TestCompileRefusals pins every class of formula the gate refuses, with the author-facing
 // message fragment that says why.
 func TestCompileRefusals(t *testing.T) {
@@ -427,9 +413,9 @@ func TestStaticCostGate(t *testing.T) {
 	f, err := env.Compile(Definition{Key: "out", Expression: "voltage * current / 1000", Type: Double})
 	require.NoError(t, err)
 	assert.Equal(t, uint64(4), f.CostMax())
-	_, err = env.compile(Definition{Key: "out", Expression: "voltage * current / 1000", Type: Double}, 4, 4)
+	_, err = env.compile(Definition{Key: "out", Expression: "voltage * current / 1000", Type: Double}, 4)
 	assert.NoError(t, err, "at the ceiling")
-	_, err = env.compile(Definition{Key: "out", Expression: "voltage * current / 1000", Type: Double}, 3, 3)
+	_, err = env.compile(Definition{Key: "out", Expression: "voltage * current / 1000", Type: Double}, 3)
 	assert.True(t, errors.As(err, &ce), "one over the ceiling")
 }
 
@@ -669,5 +655,5 @@ func TestParseType(t *testing.T) {
 	_, ok = ParseType("double")
 	assert.False(t, ok)
 	assert.Equal(t, "Type(0)", Type(0).String())
-	assert.Len(t, SkipReasons, 8)
+	assert.Equal(t, []SkipReason{"missing_input", "invalid_input", "non_finite", "div_zero", "overflow", "range", "eval_error"}, SkipReasons)
 }

@@ -35,8 +35,9 @@
 //
 // [Env.Compile] parses, type-checks the result to the declared type exactly (an int formula
 // for a DOUBLE metric is refused; write double()), requires at least one input, bounds the
-// source length and the static worst-case cost, and builds a program carrying a runtime
-// cost limit at the same ceiling.
+// source length and the static worst-case cost. The static cost is the only cost bound: the
+// language admits nothing whose cost grows with its input, so the estimate bounds every
+// evaluation and the program carries no runtime cost limit (see [CostCeiling]).
 //
 // [Formula.Eval] never fails the sample: a formula that cannot produce a value for it
 // returns a [SkipReason] and no value — never a plausible default. An input the formula never

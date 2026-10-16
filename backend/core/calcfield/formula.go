@@ -14,15 +14,22 @@ import (
 	"github.com/google/cel-go/checker"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
-	"github.com/google/cel-go/interpreter"
 )
 
 // MaxExpressionBytes bounds a formula's source.
 const MaxExpressionBytes = 1024
 
 // CostCeiling is the static worst-case cost one formula may estimate to, in cel-go cost
-// units, and its program's runtime CostLimit. It is the DETECT predicate ceiling: a formula
-// is the same kind of small arithmetic expression over one sample.
+// units. It is the DETECT predicate ceiling: a formula is the same kind of small arithmetic
+// expression over one sample.
+//
+// It is the ONLY cost bound: the program carries no runtime cel.CostLimit. The language this
+// package admits has no loops, comprehensions or size-dependent operations, so every node is
+// charged at most once and the static estimate is an upper bound on the cost of every
+// evaluation; TestStaticEstimateBoundsRuntimeCost pins that over generated formulas. A
+// runtime limit would only re-check it, at more than twice the cost of the evaluation itself
+// (cel-go clones a cost tracker and observes every node). Anything that admits a
+// size-dependent operation must fail that test first, and bring the limit back.
 const CostCeiling uint64 = 100
 
 // ProfileCostCeiling bounds the summed static cost of every formula on one profile (see
@@ -85,12 +92,12 @@ type Formula struct {
 //   - it reads no input at all (a constant is not a measurement);
 //   - its static worst-case cost exceeds CostCeiling.
 func (e *Env) Compile(def Definition) (*Formula, error) {
-	return e.compile(def, CostCeiling, CostCeiling)
+	return e.compile(def, CostCeiling)
 }
 
-// compile is Compile at arbitrary ceilings. Only this package's tests pass anything but
-// CostCeiling, to reach the static gate's boundary and the runtime limit behind it.
-func (e *Env) compile(def Definition, staticCeiling, runtimeLimit uint64) (*Formula, error) {
+// compile is Compile at an arbitrary ceiling. Only this package's tests pass anything but
+// CostCeiling, to reach the static gate's boundary.
+func (e *Env) compile(def Definition, staticCeiling uint64) (*Formula, error) {
 	refuse := func(err error) (*Formula, error) {
 		return nil, &CompileError{Key: def.Key, Expression: def.Expression, Err: err}
 	}
@@ -129,7 +136,8 @@ func (e *Env) compile(def Definition, staticCeiling, runtimeLimit uint64) (*Form
 	if est.Max > staticCeiling {
 		return nil, &CostError{Key: def.Key, EstimatedMax: est.Max, Ceiling: staticCeiling}
 	}
-	program, err := e.cel.Program(ast, cel.CostLimit(runtimeLimit))
+	// No cel.CostLimit: the static gate above is the bound (see CostCeiling).
+	program, err := e.cel.Program(ast)
 	if err != nil {
 		return refuse(fmt.Errorf("build program: %w", err))
 	}
@@ -207,8 +215,8 @@ var errForeignSample = errors.New("calcfield: the sample belongs to a different 
 //     inputs' values;
 //   - otherwise the formula runs, and an evaluation that ends in an error is skipped by that
 //     error: an input the formula guards somewhere but read outside its guard while absent →
-//     SkipMissingInput, or unparseable → SkipInvalidInput; the runtime cost limit tripped →
-//     SkipCost; an integer division or modulus by zero → SkipDivZero; an integer overflow →
+//     SkipMissingInput, or unparseable → SkipInvalidInput; an integer division or modulus
+//     by zero → SkipDivZero; an integer overflow →
 //     SkipOverflow; a double operation producing NaN or ±Inf → SkipNonFinite, wherever it
 //     occurs (so `voltage / current > 10.0` skips when current is 0 rather than storing a
 //     true); anything else → SkipEvalError. A failed read that CEL's && or || absorbs
@@ -247,10 +255,7 @@ var (
 
 // classify maps an evaluation error to its skip reason.
 func classify(err error) SkipReason {
-	var cancelled interpreter.EvalCancelledError
 	switch {
-	case errors.As(err, &cancelled) && cancelled.Cause == interpreter.CostLimitExceeded:
-		return SkipCost
 	case errors.Is(err, errDivideByZero), errors.Is(err, errModulusByZero):
 		return SkipDivZero
 	case errors.Is(err, errIntOverflow):

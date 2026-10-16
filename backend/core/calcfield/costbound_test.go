@@ -137,13 +137,17 @@ func fillRandom(r *rand.Rand, s *Sample) {
 	}
 }
 
-// TestRuntimeCostWithinStaticEstimate pins the property that makes the runtime CostLimit a
-// pure backstop: for every admitted formula and every sample, the cost cel-go's tracker
-// actually charges never exceeds the static worst-case estimate the gate admitted. The
-// language has no loops, comprehensions or size-dependent operations, so each node is
-// charged at most once; this test is what will catch a future construct (or a cel-go
-// change in how it charges) that breaks that, before the runtime limit is removed.
-func TestRuntimeCostWithinStaticEstimate(t *testing.T) {
+// TestStaticEstimateBoundsRuntimeCost is WHY Formula programs carry no runtime cel.CostLimit.
+//
+// For every admitted formula and every sample, the cost cel-go's tracker actually charges
+// must never exceed the static worst-case estimate the compile gate admitted. The language
+// has no loops, comprehensions or size-dependent operations, so each node is charged at most
+// once, and the static gate is a complete bound. If this test fails — because the allowlist,
+// the generator's language or cel-go's cost model changed so that something's cost grows
+// with its input — the static gate is no longer enough: restore a runtime CostLimit (and a
+// "cost" skip reason) before admitting the construct. Extend exprGen whenever the language
+// grows, or this test stops covering it.
+func TestStaticEstimateBoundsRuntimeCost(t *testing.T) {
 	env := fixtureEnv(t)
 	r := rand.New(rand.NewPCG(1, 2))
 	g := exprGen{r: r}
@@ -191,6 +195,7 @@ func TestRuntimeCostWithinStaticEstimate(t *testing.T) {
 		}
 	}
 	require.GreaterOrEqual(t, admitted, 3000, "the generator must reach the admitted set")
+	require.Positive(t, tight, "some evaluations must land exactly on the estimate, or the comparison is not being exercised at its boundary")
 	t.Logf("%d admitted formulas, %d evaluations, %d at exactly the estimate", admitted, samples, tight)
 }
 
