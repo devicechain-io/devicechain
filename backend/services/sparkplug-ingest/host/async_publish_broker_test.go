@@ -765,7 +765,15 @@ func TestSparkplugHandlesOneConnectionsMessagesOneAtATimeInOrder(t *testing.T) {
 	for i := 1; i <= data; i++ {
 		feed.publish(spDataTopic, uniqueData(t, uint64(i), float64(1000+i)))
 	}
-	require.Eventually(t, func() bool { return m.received("NDATA") == data }, 30*time.Second, 5*time.Millisecond)
+	// Wait for the PROBE to have seen every message, not for the received counter: the
+	// counter is bumped when a message is described, before its samples reach PrepareIngest,
+	// so waiting on it alone could read the probe one message short and report a correct
+	// order as a wrong one.
+	require.Eventually(t, func() bool {
+		probe.mu.Lock()
+		defer probe.mu.Unlock()
+		return m.received("NDATA") == data && len(probe.values) >= data+1
+	}, 30*time.Second, 5*time.Millisecond)
 	assert.False(t, probe.overlap.Load(), "two messages were being handled at once: Observe is no longer a serial check")
 	probe.mu.Lock()
 	defer probe.mu.Unlock()
