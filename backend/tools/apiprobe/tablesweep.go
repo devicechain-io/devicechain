@@ -178,6 +178,11 @@ var tableSweepExemptions = map[string]string{
 	"device-management.alarms": "alarm objects are RAISED by the REACT pipeline when a rule fires. " +
 		"Nothing fires in a drill that sends no telemetry, and creating one by hand would assert " +
 		"the row rather than the engine that produces it.",
+	"notification-management.notification_deferrals": "a page HELD by a policy's quiet hours. The only " +
+		"writer is DeferNotifications, called by the policy notifier when an ALARM state change arrives " +
+		"inside a quiet stretch, and the row is deleted when it is released. No alarm is raised in a " +
+		"drill that sends no telemetry (see device-management.alarms), so nothing is held. The policy's " +
+		"quiet-hours configuration itself lives on notification_policies, which the seed covers.",
 	"event-processing.rule_stats": "written only by RuleStatStore.RecordFire, i.e. when a rule actually " +
 		"FIRES. No telemetry, no fire, no row.",
 
