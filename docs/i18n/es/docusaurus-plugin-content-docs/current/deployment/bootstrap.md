@@ -735,6 +735,7 @@ imágenes. La canalización, el chart y el operador son idénticos.
 | `--cluster <name>` | Proveedor `local`: el clúster de kind en el que crear la instancia (por defecto `devicechain`). Debe estar ya [instalado](#install); el arranque inicial nunca crea un clúster. |
 | `--kube-context <name>` | Apunta en su lugar a un clúster instalado a través de este kube-context. |
 | `--profile <profile>` | Perfil de área funcional: `default` (el sistema estándar, usado cuando se omite), `full` (todo: añade inferencia de IA, conectores salientes, MCP, ingesta de Sparkplug B, ingesta de LwM2M y gestión de actualizaciones), `telemetry` o `ingest-only`. |
+| `--enable-area <area>` | Despliega un área funcional además de las del perfil, por ejemplo `--enable-area update-management`. Repetible. Para añadir una a una instancia que ya está en marcha, consulta [Añadir un área funcional más adelante](#enable-area). |
 | `--build` | Compila las imágenes desde el código fuente en un registro local (ruta para desarrolladores; necesita el árbol de código fuente + Docker + ko). |
 | `--registry` / `--version` | Sobrescribe el registro/etiqueta de imagen (por defecto: `ghcr.io/devicechain-io` publicado, o `localhost:5000` + `dev` con `--build`). |
 | `--host <name>` | Host de ingress en el que exponer la instancia (por defecto `devicechain.local`). Usa `localhost` en un clúster local para llegar a la consola sin editar `/etc/hosts`. |
@@ -1764,6 +1765,41 @@ dcctl sim create demo --instance my-instance --server localhost
 El simulador inyecta entonces telemetría y alarmas por el mismo canal de dispositivo que usa
 el hardware real; consulta
 [Probarlo con datos simulados](../intro.md#trying-it-with-simulated-data).
+
+### Añadir un área funcional más adelante {#enable-area}
+
+Una instancia ejecuta las áreas que nombra su perfil, más las que se añadieron con
+`--enable-area` en el bootstrap. Para añadir una a una instancia que ya está en marcha (por
+ejemplo, actualizaciones por aire, conectores salientes, inferencia de IA o MCP en una instancia
+`default`), usa `dcctl enable-area`:
+
+```bash
+dcctl enable-area local my-instance update-management --dry-run
+dcctl enable-area local my-instance update-management
+```
+
+- Los nombres se comprueban contra el catálogo de áreas antes de tocar el clúster. El nuevo
+  conjunto de áreas de la instancia se comprueba en busca de dependencias que falten antes de
+  escribir nada: por ejemplo, `outbound-connectors` necesita `event-processing`, que el perfil
+  `telemetry` no ejecuta, así que nombra las dos.
+- El área queda registrada en la instancia, de modo que un `dcctl upgrade` posterior la conserva.
+- La instancia se aplica como la aplica `dcctl upgrade` (el broker de mensajería y el almacén de
+  eventos, el documento de configuración y después los servicios), en la versión que ya ejecuta,
+  y el comando espera a que todos los servicios estén listos. Así que, como una actualización, se
+  ejecuta en la máquina que guarda el estado de la instancia, necesita `tofu` y no acuña
+  credenciales.
+- No cambia de versión. Se niega cuando tu `dcctl` es de una versión distinta a la de la
+  instancia; [actualiza](./releases-and-upgrades.md) primero la instancia.
+- Nombrar un área que la instancia ya ejecuta no cambia nada. Si la última ejecución sobre la
+  instancia no terminó, el comando vuelve a aplicar la instancia, lo que completa un
+  `enable-area` que se detuvo a medias.
+- Habilitar un área la despliega; no la configura. Algunas áreas necesitan ajustes antes de hacer
+  trabajo útil. `update-management` guarda los artefactos en el
+  [almacén de objetos](#object-store), que se elige en el bootstrap y no se puede añadir después;
+  sin él, el servicio se ejecuta y rechaza todos los artefactos, y el comando lo avisa.
+
+No hay ningún comando que quite un área. Un área puede guardar datos, y sacarla del despliegue
+dejaría esos datos sin nada que los sirva.
 
 ## Eliminar una instancia {#destroy}
 

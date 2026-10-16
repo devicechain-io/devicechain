@@ -307,7 +307,8 @@ The profile, the topology and the enabled functional areas come from the instanc
 declaration — what `dcctl bootstrap` recorded in the cluster — not from flags typed here.
 Changing what an instance *is* is a different question with different answers: raising the
 replica count, for one, does not re-replicate messaging streams that were created at the old
-one.
+one. To add a functional area to a running instance, use
+[`dcctl enable-area`](./bootstrap.md#enable-area), which records it in that declaration.
 
 One thing is deliberately outside this command as well: it does not touch the databases' data
 beyond letting the services run their own migrations, and it never resizes a volume.

@@ -218,18 +218,6 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 				"to read cannot be matched to it", opts.Instance)
 	}
 
-	// 🔴 RE-DERIVED, NOT COPIED. The declaration records the area DELTA — what
-	// --enable-area asked for on top of the profile — and applyDeclaration writes
-	// only that. A State carrying the extras with EnabledAreas empty makes helmValues
-	// emit `profile` and drop every extra area, so an upgrade would quietly undeploy
-	// exactly the areas an operator added on purpose.
-	areas, err := ResolveEnabledAreas(st.Profile, st.EnableAreas)
-	if err != nil {
-		return fmt.Errorf("the declaration for instance %q names an area set this dcctl "+
-			"cannot deploy: %w", opts.Instance, err)
-	}
-	st.EnabledAreas = areas
-
 	// The image source. The declaration records what the instance is running; the
 	// flags say what it is moving to, and an absent flag means "stay".
 	//
@@ -250,6 +238,33 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 		return err
 	}
 	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
+
+	// `dcctl enable-area`: the requested areas join the declaration's delta here, so
+	// the resolution below — and everything downstream of it, the chart values, the
+	// login's connection limit, the event store's reserve, the declaration write — sees
+	// the instance as it will be. After the image source is resolved, because the
+	// refusal it can make is about the version the instance is on.
+	if len(opts.EnableAreas) > 0 {
+		requested, err := normalizeAreaRequest(opts.EnableAreas)
+		if err != nil {
+			return err
+		}
+		if err := applyAreaChange(st, inst, requested, inst.Spec.Provider); err != nil {
+			return err
+		}
+	}
+
+	// 🔴 RE-DERIVED, NOT COPIED. The declaration records the area DELTA — what
+	// --enable-area asked for on top of the profile — and applyDeclaration writes
+	// only that. A State carrying the extras with EnabledAreas empty makes helmValues
+	// emit `profile` and drop every extra area, so an upgrade would quietly undeploy
+	// exactly the areas an operator added on purpose.
+	areas, err := ResolveEnabledAreas(st.Profile, st.EnableAreas)
+	if err != nil {
+		return fmt.Errorf("the declaration for instance %q names an area set this dcctl "+
+			"cannot deploy: %w", opts.Instance, err)
+	}
+	st.EnabledAreas = areas
 
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a
