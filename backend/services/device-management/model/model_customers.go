@@ -4,6 +4,8 @@
 package model
 
 import (
+	"time"
+
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -139,4 +141,25 @@ type CustomerSearchCriteria struct {
 type CustomerSearchResults struct {
 	Results    []Customer
 	Pagination rdb.SearchResultsPagination
+}
+
+// IssuedCustomerToken records that a customer token has been issued in a tenant. A row is
+// written when the customer is created and is NEVER removed when the customer is deleted:
+// it is what keeps a deleted customer's token retired (see ErrCustomerTokenRetired). Only
+// a tenant purge removes it, with every other row the tenant owns.
+//
+// 🔑 A TABLE OF ITS OWN, NOT A SOFT-DELETED CUSTOMER ROW. Customers are hard-deleted, like
+// every registry entity here (api_delete.go). Keeping the deleted customer's row as a
+// tombstone instead would keep its name, description and metadata after the delete, and
+// would keep refusing the delete of its customer type forever (that refusal counts
+// soft-deleted children). A retired token is a different fact from a customer, so it gets
+// a row that holds the token and nothing else.
+//
+// The primary key is the constraint: a token can be issued once per tenant, so two creates
+// racing for one token, or a create racing the delete of the customer that held it, are
+// decided by the database rather than by a read that cannot see an uncommitted writer.
+type IssuedCustomerToken struct {
+	TenantId  string `gorm:"primaryKey;not null;size:128"`
+	Token     string `gorm:"primaryKey;not null;size:128"`
+	CreatedAt time.Time
 }

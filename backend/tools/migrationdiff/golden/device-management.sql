@@ -149,6 +149,8 @@ ALTER TABLE ONLY "device-management".geo_fence_set_versions ALTER COLUMN id SET 
 ALTER TABLE ONLY "device-management".geo_fences
  ADD CONSTRAINT geo_fences_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".geo_fences ALTER COLUMN id SET DEFAULT nextval('"device-management".geo_fences_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".issued_customer_tokens
+ ADD CONSTRAINT issued_customer_tokens_pkey PRIMARY KEY (tenant_id, token);
 ALTER TABLE ONLY "device-management".maintenance_windows
  ADD CONSTRAINT maintenance_windows_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".maintenance_windows ALTER COLUMN id SET DEFAULT nextval('"device-management".maintenance_windows_id_seq'::regclass);
@@ -950,6 +952,11 @@ CREATE TABLE "device-management".geo_fences (
  description character varying(1024),
  metadata jsonb,
  geometry jsonb NOT NULL
+);
+CREATE TABLE "device-management".issued_customer_tokens (
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ created_at timestamp with time zone
 );
 CREATE TABLE "device-management".maintenance_windows (
  id bigint NOT NULL,

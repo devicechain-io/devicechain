@@ -68,6 +68,11 @@ botón para copiarlo) y el tipo. **Eliminar** está arriba a la derecha; pide co
 eliminación no se puede deshacer. Si algo depende todavía de la instancia, la consola muestra el
 rechazo del servidor.
 
+Eliminar un cliente también retira su token: no puedes crear otro cliente con el mismo token en este
+tenant. Las alarmas, los comandos, las asignaciones de actualización, los paneles compartidos y el
+historial de eventos nombran al cliente por su token y permanecen después de eliminarlo, así que un
+cliente nuevo con ese token los heredaría. Elige otro token para el cliente nuevo.
+
 La pestaña **Básico** contiene el mismo formulario que usaste para crear la instancia. Puedes cambiar
 el tipo, el nombre y la descripción y hacer clic en **Guardar cambios**. El token se muestra, pero no
 se puede editar.

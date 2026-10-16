@@ -175,7 +175,7 @@ func TestDeleteDevice_EvictsCaches(t *testing.T) {
 // tracking device's relationship cache but touches no device-by-token entry.
 func TestDeleteCustomer_EvictsTrackers(t *testing.T) {
 	api := newDeleteEmitTestApi(t)
-	if err := api.RDB.DB(context.Background()).AutoMigrate(&Customer{}); err != nil {
+	if err := api.RDB.DB(context.Background()).AutoMigrate(&Customer{}, &IssuedCustomerToken{}); err != nil {
 		t.Fatalf("migrate customer: %v", err)
 	}
 	ctx := core.WithTenant(context.Background(), "acme")

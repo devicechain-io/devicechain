@@ -811,6 +811,14 @@ Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no
 miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
 registran sus clientes solo a partir de esta versión.
 
+Como estos registros nombran a un cliente por su token, el token de un cliente eliminado queda
+retirado: ningún otro cliente del tenant puede usarlo, porque los miembros del cliente nuevo verían
+como propios las alarmas, los comandos, las asignaciones de actualización, los paneles compartidos
+y el historial de eventos del cliente eliminado. `createCustomer` con un token retirado responde
+`INVALID_VALUE`, y el mensaje indica que el token está retirado. Elige otro token. Un token solo se
+libera cuando se elimina el tenant completo. Un cliente que todavía existe con ese token responde
+`CONFLICT`, como antes.
+
 ### Rechazos al administrar un tenant {#tenant-administration-refusals}
 
 Los administradores de un tenant gestionan sus miembros, invitaciones y roles a través de la API de

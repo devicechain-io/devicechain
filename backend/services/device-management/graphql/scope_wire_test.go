@@ -50,7 +50,7 @@ func newScopeFixture(t *testing.T) scopeFixture {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&model.DeviceType{}, &model.Device{}, &model.DeviceProfile{},
-		&model.CustomerType{}, &model.Customer{}, &model.Area{}, &model.EntityRelationshipType{},
+		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
 		&model.EntityRelationship{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{}); err != nil {
 		t.Fatalf("migrate: %v", err)

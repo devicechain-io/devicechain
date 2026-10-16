@@ -194,7 +194,7 @@ func customerTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "customerType",
 		Token:   "ct-1",
-		Migrate: []any{&CustomerType{}, &Customer{}},
+		Migrate: []any{&CustomerType{}, &Customer{}, &IssuedCustomerToken{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateCustomerType(ctx, &CustomerTypeCreateRequest{
 				Token: "ct-1", Name: strp(brandedSeed.Name), Description: strp(brandedSeed.Description),
@@ -357,7 +357,7 @@ func customerFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "customer",
 		Token:   "c-1",
-		Migrate: []any{&CustomerType{}, &Customer{}},
+		Migrate: []any{&CustomerType{}, &Customer{}, &IssuedCustomerToken{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
 				if _, err := api.CreateCustomerType(ctx, &CustomerTypeCreateRequest{Token: tok}); err != nil {

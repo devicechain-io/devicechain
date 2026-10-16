@@ -43,7 +43,7 @@ func trackedRig(t *testing.T, targets int) (*Api, context.Context) {
 	t.Helper()
 	api := newPartialUpdateApi(t, &DeviceType{}, &Device{}, &DeviceCredential{},
 		&EntityRelationshipType{}, &EntityRelationship{}, &EntityAttribute{}, &Alarm{},
-		&EntityGroup{}, &EntityGroupMembership{}, &CustomerType{}, &Customer{}, &DeviceClaim{})
+		&EntityGroup{}, &EntityGroupMembership{}, &CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DeviceClaim{})
 	ctx := partialUpdateCtx()
 	dt := &DeviceType{}
 	dt.Token = "src-type"
