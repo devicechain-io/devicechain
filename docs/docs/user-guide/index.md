@@ -43,3 +43,4 @@ Chapters are published as they are completed.
 | 16 | [Updates (over the air)](./updates.md) | Artifacts: uploading an update image, its trust and signatures, and retiring it; registering and revoking signers; and the device Updates tab: assigning, cancelling and abandoning an update, and what a disabled device means for updates. |
 | 17 | [Viewing dashboards in /dash](./viewing-dashboards-in-dash.md) | The standalone dashboard viewer: signing in, loading a dashboard by token, kiosk mode for wall displays, and staying signed in. |
 | 18 | [Notification policies](./notification-policies.md) | The policy list, and giving a policy quiet hours: time zone, weekly slots and a bypass severity. |
+| 19 | [Members, roles and customer users](./members-roles-and-customer-users.md) | Inviting members and changing their access, the tenant's own roles, and logins limited to your customers: what they see, and sharing dashboards with them. |

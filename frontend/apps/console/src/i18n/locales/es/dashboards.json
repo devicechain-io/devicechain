@@ -446,5 +446,21 @@
   "widgetLabelGroupBy": "Una barra por",
   "widgetHintGroupBy": "Qué representa una barra: cada medición de un dispositivo, o cada dispositivo del grupo para la medición elegida abajo.",
   "widgetGroupByMeasurement": "Medición",
-  "widgetGroupByDevice": "Dispositivo"
+  "widgetGroupByDevice": "Dispositivo",
+  "descriptionShared": "Los paneles compartidos contigo.",
+  "emptyShared": "Todavía no se ha compartido ningún panel contigo.",
+  "share": "Compartir",
+  "shareTitle": "Compartir {{name}}",
+  "shareDescription": "Los usuarios limitados a los clientes elegidos pueden ver este panel en la lista y abrir su versión publicada, aquí y en la aplicación de paneles. Nunca ven el borrador.",
+  "shareLoading": "Cargando con quién se comparte el panel…",
+  "shareNotPublished": "Este panel todavía no se ha publicado. Los clientes con los que se comparte lo verán cuando se publique.",
+  "shareCustomersLabel": "Clientes",
+  "shareCustomersDescription": "Sustituye la lista actual. Déjala vacía para no compartirlo con nadie.",
+  "shareCustomersPlaceholder": "Elige clientes",
+  "shareCustomersSearchPlaceholder": "Filtrar clientes…",
+  "shareCustomersEmpty": "Ningún cliente coincide.",
+  "shareSave": "Guardar uso compartido",
+  "sharedToast_one": "{{name}} se comparte con {{count}} cliente.",
+  "sharedToast_other": "{{name}} se comparte con {{count}} clientes.",
+  "sharedWithNobody": "{{name}} ya no se comparte con ningún cliente."
 }

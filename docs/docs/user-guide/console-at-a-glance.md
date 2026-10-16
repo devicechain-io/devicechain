@@ -49,11 +49,15 @@ to its first page. Only one sub-menu is open at a time.
 | **Browse** | A query builder for finding entities by their facets. |
 | **Audit** | The tenant's record of who changed what. |
 | **Updates** | **Artifacts** and **Signers** for over-the-air updates. |
-| **Settings** | **Branding**, **Map** and **Language**. |
+| **Settings** | **Members**, **Roles**, **Branding**, **Map** and **Language**. |
 
 You see only the entries your role allows. If your role cannot read alarms, for example,
 **Alarms** is not in your sidebar. **Updates** appears only when your installation runs the
 update service. The **Settings** entries are for tenant administrators.
+
+If your access is limited to some of the tenant's customers, the sidebar holds only **Dashboard**,
+**Dashboards**, **Alarms** and **Devices**. See
+[What a customer user sees](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees).
 
 Your name and email address sit at the bottom of the sidebar. They open the user menu, which
 is described in [Signing in](/user-guide/signing-in#the-user-menu).
@@ -72,6 +76,9 @@ name, with its token underneath.
 <GuideShot id="console-tenant-chip" alt="The tenant chip: a small card with a building icon, the tenant name 'acme (sim)' and, below it, the token 'sim-acme' in a monospace font." />
 
 If your tenant has uploaded a logo, the chip shows the logo in place of the building icon.
+If your access is limited to some of the tenant's customers, the second line names those customers
+and your role in place of the token: for example **Acme · viewer**, the customer's name and then
+the token of your role.
 Everything you see and change in the console belongs to this tenant. To work in a different
 tenant, sign out and choose it when you sign in again.
 

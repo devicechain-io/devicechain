@@ -46,12 +46,27 @@ export type DashboardUpdateRequest = {
   name?: string | null | undefined;
 };
 
+/** A customer or group to share with. */
+export type ScopeAnchorInput = {
+  /** What the anchor names. Only CUSTOMER is accepted. */
+  kind: ScopeAnchorKind;
+  /** Token of the customer or group. */
+  token: string;
+};
+
+/** What a scope anchor names. */
+export type ScopeAnchorKind =
+  /** A customer, named by its token. */
+  | 'CUSTOMER'
+  /** An entity group, named by its token. Not accepted yet. */
+  | 'GROUP';
+
 export type DashboardsQueryVariables = Exact<{
   criteria: DashboardSearchCriteria;
 }>;
 
 
-export type DashboardsQuery = { dashboards: { results: Array<{ token: string, name: string | null, description: string | null, createdAt: string | null, updatedAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type DashboardsQuery = { dashboards: { results: Array<{ token: string, name: string | null, description: string | null, createdAt: string | null, updatedAt: string | null, publishedVersion: number | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type DashboardQueryVariables = Exact<{
   token: string;
@@ -140,6 +155,21 @@ export type DeleteDashboardMutationVariables = Exact<{
 
 export type DeleteDashboardMutation = { deleteDashboard: boolean };
 
+export type DashboardSharingQueryVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DashboardSharingQuery = { dashboard: { token: string, sharedWith: Array<{ kind: ScopeAnchorKind, token: string }> } | null };
+
+export type ShareDashboardMutationVariables = Exact<{
+  token: string;
+  anchors: Array<ScopeAnchorInput> | ScopeAnchorInput;
+}>;
+
+
+export type ShareDashboardMutation = { shareDashboard: { token: string, sharedWith: Array<{ kind: ScopeAnchorKind, token: string }> } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -168,6 +198,7 @@ export const DashboardsDocument = new TypedDocumentString(`
       description
       createdAt
       updatedAt
+      publishedVersion
     }
     pagination {
       pageStart
@@ -286,3 +317,25 @@ export const DeleteDashboardDocument = new TypedDocumentString(`
   deleteDashboard(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDashboardMutation, DeleteDashboardMutationVariables>;
+export const DashboardSharingDocument = new TypedDocumentString(`
+    query DashboardSharing($token: String!) {
+  dashboard(token: $token) {
+    token
+    sharedWith {
+      kind
+      token
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DashboardSharingQuery, DashboardSharingQueryVariables>;
+export const ShareDashboardDocument = new TypedDocumentString(`
+    mutation ShareDashboard($token: String!, $anchors: [ScopeAnchorInput!]!) {
+  shareDashboard(token: $token, anchors: $anchors) {
+    token
+    sharedWith {
+      kind
+      token
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<ShareDashboardMutation, ShareDashboardMutationVariables>;

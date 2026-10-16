@@ -15,6 +15,21 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
+    "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.MembersDocument,
+    "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.InvitationsDocument,
+    "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n": typeof types.TenantRolesDocument,
+    "\n  query TenantAuthorities {\n    tenantAuthorities\n  }\n": typeof types.TenantAuthoritiesDocument,
+    "\n  mutation InviteMember($request: InviteMemberRequest!) {\n    inviteMember(request: $request) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n": typeof types.InviteMemberDocument,
+    "\n  mutation SetMemberRoles($email: String!, $roleTokens: [String!]!) {\n    setMemberRoles(email: $email, roleTokens: $roleTokens) {\n      email\n    }\n  }\n": typeof types.SetMemberRolesDocument,
+    "\n  mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {\n    setMemberScope(email: $email, scope: $scope) {\n      email\n    }\n  }\n": typeof types.SetMemberScopeDocument,
+    "\n  mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {\n    setMemberEnabled(email: $email, enabled: $enabled) {\n      email\n    }\n  }\n": typeof types.SetMemberEnabledDocument,
+    "\n  mutation RemoveMember($email: String!) {\n    removeMember(email: $email)\n  }\n": typeof types.RemoveMemberDocument,
+    "\n  mutation RevokeInvitation($email: String!) {\n    revokeInvitation(email: $email) {\n      email\n    }\n  }\n": typeof types.RevokeInvitationDocument,
+    "\n  mutation ReissueInvitation($email: String!) {\n    reissueInvitation(email: $email) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n": typeof types.ReissueInvitationDocument,
+    "\n  mutation CreateTenantRole($request: TenantRoleCreateRequest!) {\n    createTenantRole(request: $request) {\n      token\n    }\n  }\n": typeof types.CreateTenantRoleDocument,
+    "\n  mutation UpdateTenantRole($token: String!, $request: TenantRoleUpdateRequest!) {\n    updateTenantRole(token: $token, request: $request) {\n      token\n    }\n  }\n": typeof types.UpdateTenantRoleDocument,
+    "\n  mutation DeleteTenantRole($token: String!) {\n    deleteTenantRole(token: $token)\n  }\n": typeof types.DeleteTenantRoleDocument,
+    "\n  mutation AcceptInvitation($code: String!, $password: String, $identityToken: String) {\n    acceptInvitation(code: $code, password: $password, identityToken: $identityToken) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.AcceptInvitationDocument,
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.LoginDocument,
     "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n": typeof types.BeginSsoDocument,
     "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": typeof types.CompleteSsoDocument,
@@ -35,6 +50,21 @@ type Documents = {
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": typeof types.TenantTokenMasksDocument,
 };
 const documents: Documents = {
+    "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.MembersDocument,
+    "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.InvitationsDocument,
+    "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n": types.TenantRolesDocument,
+    "\n  query TenantAuthorities {\n    tenantAuthorities\n  }\n": types.TenantAuthoritiesDocument,
+    "\n  mutation InviteMember($request: InviteMemberRequest!) {\n    inviteMember(request: $request) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n": types.InviteMemberDocument,
+    "\n  mutation SetMemberRoles($email: String!, $roleTokens: [String!]!) {\n    setMemberRoles(email: $email, roleTokens: $roleTokens) {\n      email\n    }\n  }\n": types.SetMemberRolesDocument,
+    "\n  mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {\n    setMemberScope(email: $email, scope: $scope) {\n      email\n    }\n  }\n": types.SetMemberScopeDocument,
+    "\n  mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {\n    setMemberEnabled(email: $email, enabled: $enabled) {\n      email\n    }\n  }\n": types.SetMemberEnabledDocument,
+    "\n  mutation RemoveMember($email: String!) {\n    removeMember(email: $email)\n  }\n": types.RemoveMemberDocument,
+    "\n  mutation RevokeInvitation($email: String!) {\n    revokeInvitation(email: $email) {\n      email\n    }\n  }\n": types.RevokeInvitationDocument,
+    "\n  mutation ReissueInvitation($email: String!) {\n    reissueInvitation(email: $email) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n": types.ReissueInvitationDocument,
+    "\n  mutation CreateTenantRole($request: TenantRoleCreateRequest!) {\n    createTenantRole(request: $request) {\n      token\n    }\n  }\n": types.CreateTenantRoleDocument,
+    "\n  mutation UpdateTenantRole($token: String!, $request: TenantRoleUpdateRequest!) {\n    updateTenantRole(token: $token, request: $request) {\n      token\n    }\n  }\n": types.UpdateTenantRoleDocument,
+    "\n  mutation DeleteTenantRole($token: String!) {\n    deleteTenantRole(token: $token)\n  }\n": types.DeleteTenantRoleDocument,
+    "\n  mutation AcceptInvitation($code: String!, $password: String, $identityToken: String) {\n    acceptInvitation(code: $code, password: $password, identityToken: $identityToken) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.AcceptInvitationDocument,
     "\n  mutation Login($email: String!, $password: String!) {\n    login(email: $email, password: $password) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.LoginDocument,
     "\n  mutation BeginSso($email: String, $connection: String, $returnTo: String!, $codeChallenge: String!) {\n    beginSso(\n      email: $email\n      connection: $connection\n      returnTo: $returnTo\n      codeChallenge: $codeChallenge\n    ) {\n      authorizationUrl\n    }\n  }\n": types.BeginSsoDocument,
     "\n  mutation CompleteSso($code: String!, $codeVerifier: String!) {\n    completeSso(code: $code, codeVerifier: $codeVerifier) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n": types.CompleteSsoDocument,
@@ -55,6 +85,66 @@ const documents: Documents = {
     "\n  query TenantTokenMasks {\n    tokenMasks\n  }\n": types.TenantTokenMasksDocument,
 };
 
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query Members($criteria: MemberSearchCriteria!) {\n    members(criteria: $criteria) {\n      results {\n        email\n        firstName\n        lastName\n        enabled\n        roles {\n          token\n          name\n          owner\n        }\n        scope {\n          kind\n          token\n        }\n        managedByIdentityProvider\n        invitationPending\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').MembersDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query Invitations($criteria: InvitationSearchCriteria!) {\n    invitations(criteria: $criteria) {\n      results {\n        email\n        state\n        createdAt\n        expiresAt\n        acceptedAt\n        revokedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').InvitationsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TenantRoles {\n    tenantRoles {\n      token\n      name\n      description\n      authorities\n      owner\n    }\n  }\n"): typeof import('./graphql').TenantRolesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query TenantAuthorities {\n    tenantAuthorities\n  }\n"): typeof import('./graphql').TenantAuthoritiesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation InviteMember($request: InviteMemberRequest!) {\n    inviteMember(request: $request) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n"): typeof import('./graphql').InviteMemberDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetMemberRoles($email: String!, $roleTokens: [String!]!) {\n    setMemberRoles(email: $email, roleTokens: $roleTokens) {\n      email\n    }\n  }\n"): typeof import('./graphql').SetMemberRolesDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {\n    setMemberScope(email: $email, scope: $scope) {\n      email\n    }\n  }\n"): typeof import('./graphql').SetMemberScopeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {\n    setMemberEnabled(email: $email, enabled: $enabled) {\n      email\n    }\n  }\n"): typeof import('./graphql').SetMemberEnabledDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RemoveMember($email: String!) {\n    removeMember(email: $email)\n  }\n"): typeof import('./graphql').RemoveMemberDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation RevokeInvitation($email: String!) {\n    revokeInvitation(email: $email) {\n      email\n    }\n  }\n"): typeof import('./graphql').RevokeInvitationDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ReissueInvitation($email: String!) {\n    reissueInvitation(email: $email) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n"): typeof import('./graphql').ReissueInvitationDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation CreateTenantRole($request: TenantRoleCreateRequest!) {\n    createTenantRole(request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').CreateTenantRoleDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation UpdateTenantRole($token: String!, $request: TenantRoleUpdateRequest!) {\n    updateTenantRole(token: $token, request: $request) {\n      token\n    }\n  }\n"): typeof import('./graphql').UpdateTenantRoleDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation DeleteTenantRole($token: String!) {\n    deleteTenantRole(token: $token)\n  }\n"): typeof import('./graphql').DeleteTenantRoleDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation AcceptInvitation($code: String!, $password: String, $identityToken: String) {\n    acceptInvitation(code: $code, password: $password, identityToken: $identityToken) {\n      identityToken\n      expiresAt\n      superuser\n      memberships {\n        tenant\n        roles\n        ssoRequired\n      }\n    }\n  }\n"): typeof import('./graphql').AcceptInvitationDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

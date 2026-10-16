@@ -41,6 +41,11 @@ export interface DetailTab<T> {
   value: string;
   /** i18n key for the tab label (resolved against `entities` + `common`). */
   label: string;
+  /**
+   * Authority the tab's content needs; the tab is left out for a caller without it rather
+   * than rendered to fail. Omit for a tab the detail page's own read already covers.
+   */
+  requires?: string;
   render: (item: T, reload: () => void) => ReactNode;
 }
 

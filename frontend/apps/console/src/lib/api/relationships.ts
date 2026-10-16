@@ -186,3 +186,23 @@ export async function listAssetDevices(
   });
   return data.entityRelationships;
 }
+
+// List the devices assigned to a customer — the devices whose data the customer's users
+// see. The same tracked "assigned" edges as listAssetDevices, read from the customer's
+// end. Requires device:read and is refused to a member limited to part of the tenant (the
+// relationship graph is not served to them); the customer page is never offered to one.
+export async function listCustomerDevices(
+  customerToken: string,
+  opts: { pageNumber: number; pageSize: number },
+): Promise<EntityRelationshipSearchResults> {
+  const data = await gql('device-management', ENTITY_RELATIONSHIPS, {
+    criteria: {
+      sourceType: 'device',
+      targetType: 'customer',
+      target: customerToken,
+      relationshipType: ASSIGNED,
+      ...opts,
+    },
+  });
+  return data.entityRelationships;
+}

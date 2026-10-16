@@ -29,6 +29,8 @@ import {
   SlidersHorizontal,
   Tags,
   UploadCloud,
+  UserCog,
+  Users,
   Webhook,
   type LucideIcon,
 } from 'lucide-react';
@@ -52,7 +54,7 @@ import {
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentTenant } from '@/auth/TenantProvider';
 import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
-import { hasAuthority, type DecodedClaims } from '@devicechain/client';
+import { hasAuthority, isScoped, type DecodedClaims } from '@devicechain/client';
 import { NavUser } from '@/routes/NavUser';
 import { useUpdateAccess } from '@/lib/updateAuthority';
 
@@ -67,6 +69,12 @@ interface NavLeaf {
   // Names a gate beyond authority. 'updates' hides the item unless the update-management
   // area is KNOWN to be deployed and the caller may read it (see useUpdateAccess).
   gate?: 'updates';
+  // Shown to a member limited to part of the tenant (a customer user). Everything else is
+  // hidden from one, because the server refuses it to them whatever their role says. The
+  // opt-in mirrors the server's: a new leaf is hidden from scoped members until someone
+  // marks it, rather than shown until someone remembers to hide it. The route guard
+  // (lib/scope.ts) applies the same rule to the route table.
+  scoped?: true;
 }
 
 type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
@@ -78,9 +86,9 @@ type NavGroupNode = { labelKey: string; icon: LucideIcon; children: NavLeaf[] };
 type NavNode = NavLeaf | NavGroupNode;
 
 export const NAV: NavNode[] = [
-  { labelKey: 'dashboard', href: '/', icon: LayoutGrid },
-  { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read' },
-  { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read' },
+  { labelKey: 'dashboard', href: '/', icon: LayoutGrid, scoped: true },
+  { labelKey: 'dashboards', href: '/dashboards', icon: LayoutDashboard, requires: 'dashboard:read', scoped: true },
+  { labelKey: 'alarms', href: '/alarms', icon: AlertTriangle, requires: 'alarm:read', scoped: true },
   // Who gets paged for an alarm, and when they are left alone. notification-management has its
   // own authority pair, separate from alarm:read.
   { labelKey: 'notificationPolicies', href: '/notification-policies', icon: BellRing, requires: 'notification:read' },
@@ -91,7 +99,7 @@ export const NAV: NavNode[] = [
     children: [
       // All of device-management is gated by device:read (there is no separate
       // devicetype:read), so both share the same requirement.
-      { labelKey: 'devices', href: '/devices', icon: Cpu, requires: 'device:read' },
+      { labelKey: 'devices', href: '/devices', icon: Cpu, requires: 'device:read', scoped: true },
       { labelKey: 'deviceTypes', href: '/device-types', icon: Boxes, requires: 'device:read' },
       { labelKey: 'deviceProfiles', href: '/device-profiles', icon: SlidersHorizontal, requires: 'device:read' },
       { labelKey: 'deviceGroups', href: '/device-groups', icon: Layers, requires: 'device:read' },
@@ -181,6 +189,11 @@ export const NAV: NavNode[] = [
     labelKey: 'settings',
     icon: SlidersHorizontal,
     children: [
+      // Who belongs to the tenant and what they may do. Two leaves for the two separate
+      // grants (member:read, role:read), for the same reason the rest of this group is
+      // split by grant.
+      { labelKey: 'members', href: '/members', icon: Users, requires: 'member:read' },
+      { labelKey: 'roles', href: '/roles', icon: UserCog, requires: 'role:read' },
       { labelKey: 'branding', href: '/branding', icon: Palette, requires: 'branding:write' },
       // Labelled "Map", not "Basemap": inside Settings the longer name is redundant,
       // and the page sets the default view (centre/zoom) as well as the tile source,
@@ -205,6 +218,7 @@ export function isLeaf(node: NavNode): node is NavLeaf {
 }
 
 function canSee(leaf: NavLeaf, claims: DecodedClaims | null, updatesVisible: boolean): boolean {
+  if (isScoped(claims) && !leaf.scoped) return false;
   if (leaf.gate === 'updates' && !updatesVisible) return false;
   return !leaf.requires || hasAuthority(claims, leaf.requires);
 }
@@ -212,7 +226,7 @@ function canSee(leaf: NavLeaf, claims: DecodedClaims | null, updatesVisible: boo
 // Drop nav the user can't use: leaves they lack the authority for, and any group
 // left with no visible children. Pages stay fail-closed server-side regardless;
 // this just avoids advertising what would only return "forbidden".
-function visibleNav(claims: DecodedClaims | null, updatesVisible: boolean): NavNode[] {
+export function visibleNav(claims: DecodedClaims | null, updatesVisible: boolean): NavNode[] {
   return NAV.flatMap<NavNode>((node) => {
     if (isLeaf(node)) return canSee(node, claims, updatesVisible) ? [node] : [];
     const children = node.children.filter((c) => canSee(c, claims, updatesVisible));

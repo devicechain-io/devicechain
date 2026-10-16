@@ -359,8 +359,18 @@ versions in place.
 ## Sharing with customers {#sharing-with-customers}
 
 A member whose access is limited to some of your customers sees a dashboard only once it is shared
-with one of those customers. Share a dashboard with the `shareDashboard` mutation, which needs
-`dashboard:write`:
+with one of those customers and published. In the dashboard list, choose **Share** on a dashboard,
+pick the customers, and choose **Save sharing**. The list you save replaces the one before it, and
+an empty list shares the dashboard with nobody. You can share a dashboard before it is published;
+its customers see it once it is.
+
+{/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
+
+Bind the widgets of a dashboard you share to devices. A widget bound to a customer, an asset or an
+area finds its devices through relationships, which a member with limited access cannot read, so
+it shows them nothing.
+
+A program does the same with the `shareDashboard` mutation, which needs `dashboard:write`:
 
 ```graphql
 mutation {

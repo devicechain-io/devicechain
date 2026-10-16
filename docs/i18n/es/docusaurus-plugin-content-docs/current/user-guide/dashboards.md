@@ -356,8 +356,18 @@ su sitio.
 ## Compartir con clientes {#sharing-with-customers}
 
 Un miembro cuyo acceso está limitado a algunos de tus clientes ve un panel solo cuando se comparte con
-uno de esos clientes. Comparte un panel con la mutación `shareDashboard`, que requiere
-`dashboard:write`:
+uno de esos clientes y se publica. En la lista de paneles, elige **Compartir** en un panel, elige los
+clientes y elige **Guardar uso compartido**. La lista que guardas sustituye a la anterior, y una lista
+vacía no comparte el panel con nadie. Puedes compartir un panel antes de publicarlo; sus clientes lo
+ven en cuanto se publica.
+
+{/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
+
+Vincula a dispositivos los widgets de un panel que compartes. Un widget vinculado a un cliente, un
+activo o un área encuentra sus dispositivos a través de las relaciones, que un miembro con acceso
+limitado no puede leer, así que no le muestra nada.
+
+Un programa hace lo mismo con la mutación `shareDashboard`, que requiere `dashboard:write`:
 
 ```graphql
 mutation {

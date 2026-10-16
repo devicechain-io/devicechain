@@ -42,9 +42,11 @@ import GuideShot from '@site/src/components/GuideShot';
 | **Browse**（浏览） | 按分面查找实体的查询构建器。 |
 | **Audit**（审计） | 租户内“谁修改了什么”的记录。 |
 | **Updates**（更新） | 用于空中升级的 **Artifacts**（制品）和 **Signers**（签名者）。 |
-| **Settings**（设置） | **Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
+| **Settings**（设置） | **Members**（成员）、**Roles**（角色）、**Branding**（品牌）、**Map**（地图）和 **Language**（语言）。 |
 
 你只会看到角色允许访问的条目。例如，如果你的角色无权读取告警，侧边栏中就没有 **Alarms**。只有当你的安装环境运行了更新服务时，才会出现 **Updates**。**Settings** 下的各项面向租户管理员。
+
+如果你的访问权限仅限于租户的部分客户，侧边栏只有 **Dashboard**、**Dashboards**、**Alarms** 和 **Devices**。参见[客户用户能看到什么](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees)。
 
 你的姓名和邮箱地址位于侧边栏底部，选择它们会打开用户菜单，参见[登录](/user-guide/signing-in#the-user-menu)。
 
@@ -58,7 +60,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="console-tenant-chip" alt="租户标识：一张小卡片，包含建筑图标、租户名称“acme (sim)”，下方是等宽字体显示的令牌“sim-acme”。" />
 
-如果租户上传了徽标，标识中会用徽标取代建筑图标。你在控制台中看到和修改的一切都属于这个租户。若要切换到其他租户，请退出登录，再次登录时选择该租户。
+如果租户上传了徽标，标识中会用徽标取代建筑图标。如果你的访问权限仅限于租户的部分客户，第二行会显示这些客户和你的角色，而不是令牌：例如 **Acme · viewer**，即客户名称，然后是你角色的令牌。你在控制台中看到和修改的一切都属于这个租户。若要切换到其他租户，请退出登录，再次登录时选择该租户。
 
 ## 功能区不可用时 {#when-an-area-is-unavailable}
 

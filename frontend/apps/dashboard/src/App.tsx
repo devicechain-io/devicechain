@@ -54,7 +54,8 @@ import { ConnectionStatus } from './ConnectionStatus';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
 import { signInErrorKey } from './i18n/signInError';
-import { loadDashboard, loadPublishedDashboard, withWidgetCode, type Loaded } from './load';
+import { listOpenableDashboards, loadDashboard, loadPublishedDashboard, withWidgetCode, type Loaded } from './load';
+import type { DashboardListItem } from './queries';
 import { MAP_RUNTIME } from './map-runtime';
 import { type DashDensity, type DashTheme, parseDashParams } from './params';
 import { LOGIN, type Membership, REFRESH, SELECT_TENANT, TENANT_BASEMAP } from './queries';
@@ -593,10 +594,10 @@ export function Load({
   const render = async () => show(await withWidgetCode(loadDashboard(definitionText, manifestText)));
 
   // The default door: the dashboard's published snapshot, by token.
-  const loadPublished = async () => {
+  const loadPublished = async (token: string = dashboardToken) => {
     setFetching(true);
     try {
-      show(await loadPublishedDashboard(dashboardToken, manifestText));
+      show(await loadPublishedDashboard(token, manifestText));
     } finally {
       setFetching(false);
     }
@@ -636,6 +637,14 @@ export function Load({
           margin: '0 auto',
         }}
       >
+        <DashboardList
+          disabled={fetching}
+          onOpen={(token) => {
+            setDashboardToken(token);
+            void loadPublished(token);
+          }}
+        />
+
         <Field label={t('load:tokenLabel')} hint={t('load:tokenHint')}>
           <TextInput
             value={dashboardToken}
@@ -646,7 +655,7 @@ export function Load({
         </Field>
         <div>
           <HeaderButton
-            onClick={loadPublished}
+            onClick={() => void loadPublished()}
             primary
             disabled={dashboardToken.trim() === '' || fetching}
             data-shot="dash-load-published"
@@ -686,6 +695,93 @@ export function Load({
         </div>
       </main>
     </div>
+  );
+}
+
+// DashboardList offers the dashboards this viewer may open, so nobody has to know a token.
+// A member limited to part of the tenant (a customer user) is served exactly the published
+// dashboards shared with their customers; anyone else, every published dashboard. The token
+// field below it stays, for a dashboard past the first page and for the deep-link habit.
+function DashboardList({ onOpen, disabled }: { onOpen: (token: string) => void; disabled: boolean }) {
+  const { t } = useTranslation();
+  const [state, setState] = useState<
+    { status: 'loading' } | { status: 'ready'; dashboards: DashboardListItem[]; more: boolean } | { status: 'error'; message: string }
+  >({ status: 'loading' });
+
+  useEffect(() => {
+    let live = true;
+    void listOpenableDashboards().then((result) => {
+      if (!live) return;
+      if ('error' in result) setState({ status: 'error', message: loadErrorMessage(result.error, t) });
+      else setState({ status: 'ready', dashboards: result.dashboards, more: result.more });
+    });
+    return () => {
+      live = false;
+    };
+    // Once per visit to this step: the list is what the viewer may open right now.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return (
+    <section data-shot="dash-list" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ fontWeight: 600 }}>{t('load:listHeading')}</div>
+      {state.status === 'loading' ? (
+        <div style={{ color: 'hsl(var(--muted-foreground))' }}>{t('load:loading')}</div>
+      ) : state.status === 'error' ? (
+        <ErrorText>{state.message}</ErrorText>
+      ) : state.dashboards.length === 0 ? (
+        <div style={{ color: 'hsl(var(--muted-foreground))' }}>{t('load:listEmpty')}</div>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
+            {state.dashboards.map((d) => (
+              <ListItemButton key={d.token} onClick={() => onOpen(d.token)} disabled={disabled}>
+                <span style={{ fontWeight: 600 }}>{d.name || d.token}</span>
+                {d.description && (
+                  <span style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>{d.description}</span>
+                )}
+              </ListItemButton>
+            ))}
+          </div>
+          {state.more && <div style={{ fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>{t('load:listMore')}</div>}
+        </>
+      )}
+    </section>
+  );
+}
+
+function ListItemButton({
+  children,
+  onClick,
+  disabled,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      data-shot="dash-list-item"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+        gap: 4,
+        textAlign: 'left',
+        padding: '10px 12px',
+        borderRadius: 8,
+        border: '1px solid hsl(var(--border))',
+        background: 'hsl(var(--card))',
+        color: 'hsl(var(--foreground))',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
+      }}
+    >
+      {children}
+    </button>
   );
 }
 

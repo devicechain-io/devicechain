@@ -4,6 +4,8 @@
 import { RegistryInstanceForm, tokenColumn, nameColumn, createdColumn, type RegistryResource } from '@/components/registry';
 import { TypeCapsule, appearanceOf } from '@/components/TypeCapsule';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
+import { CustomerDevicesPanel } from './CustomerDevicesPanel';
+import { CustomerUsersPanel } from './CustomerUsersPanel';
 import {
   listCustomers,
   getCustomer,
@@ -79,6 +81,20 @@ export const customerResource: RegistryResource<Customer> = {
       render: (c) => (
         <EntityAttributesPanel entityType="customer" entityToken={c.token} />
       ),
+    },
+    // The devices assigned to this customer: what its users see.
+    {
+      value: 'devices',
+      label: 'members:customerDevicesTab',
+      render: (c) => <CustomerDevicesPanel customerToken={c.token} />,
+    },
+    // The people limited to this customer — its own users — and the door to invite one.
+    // Left out for a caller who may not read members, rather than shown to fail.
+    {
+      value: 'users',
+      label: 'members:customerUsersTab',
+      requires: 'member:read',
+      render: (c) => <CustomerUsersPanel customerToken={c.token} />,
     },
   ],
 };

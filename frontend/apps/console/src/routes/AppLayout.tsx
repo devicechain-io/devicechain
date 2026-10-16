@@ -55,6 +55,8 @@ export const NAV_SECTION_KEY: Record<string, string> = {
   branding: 'branding',
   basemap: 'map',
   locale: 'language',
+  members: 'members',
+  roles: 'roles',
   'command-batches': 'commandBatches',
   updates: 'updates',
 };

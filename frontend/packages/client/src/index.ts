@@ -23,7 +23,7 @@ export {
   type TypedDocument,
 } from './transport';
 
-export { isForbiddenError } from './errors';
+export { isForbiddenError, errorCode } from './errors';
 
 // The client half of the basemap cascade (ADR-079). Lives in the SDK because the
 // console's fence editor, the map widget and the /dash viewer app must all resolve a
@@ -50,7 +50,10 @@ export {
   decodeToken,
   isExpired,
   hasAuthority,
+  isScoped,
+  scopeAnchorRefs,
   type DecodedClaims,
+  type ScopeAnchorRef,
 } from './jwt';
 
 export {

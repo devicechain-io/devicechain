@@ -16,7 +16,7 @@ import { PageShell } from '@/components/ui/page-shell';
 import { LoadingState } from '@/components/ui/loading-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { useQuery } from '@/lib/hooks/use-query';
-import { hasAuthority } from '@devicechain/client';
+import { mayWrite } from '@/lib/scope';
 import { useAuth } from '@/auth/AuthProvider';
 import {
   getDashboard,
@@ -79,7 +79,9 @@ export default function DashboardDetailPage() {
   // snapshot instead, shown read-only (the workspace derives canEdit from the same
   // authority). They see nothing until someone publishes.
   const { claims } = useAuth();
-  const canEdit = hasAuthority(claims, 'dashboard:write');
+  // A member limited to part of the tenant (a customer user) is served only the published
+  // versions shared with their customers, whatever their role says about writing.
+  const canEdit = mayWrite(claims, 'dashboard:write');
   // The one widget registry this deployment composed (shared with /dash and the replay
   // player): parse, edit, validate, preview and render all go through it.
   const registry = defaultWidgetRegistry();
