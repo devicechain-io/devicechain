@@ -498,6 +498,36 @@ var afterPublish = []entity{
 			}
 		},
 	},
+	{
+		// Depends on: dashboard, customer.
+		//
+		// 🔑 THIS WRITE CREATES dashboard_shares: sharing the probe dashboard with the probe
+		// customer stores the anchor row a customer-scoped member's dashboard list is
+		// filtered by. The read-back selects sharedWith, so verify fails if an upgrade loses
+		// the share — which would not look like loss at all, only like a customer member
+		// whose dashboards quietly disappeared.
+		//
+		// A release that predates sharing cannot express shareDashboard, so a baseline seed
+		// skips this row by the mutation's name; nothing reads a token out of it, so the
+		// skip strands no dependent. It is in this phase only because it writes onto a
+		// dashboard that already exists, and sharing freezes nothing a publish would need.
+		Name:     "dashboard-share",
+		Area:     "dashboard-management",
+		Mutation: "shareDashboard",
+		Params: []param{
+			{Name: "token", Type: "String!"},
+			{Name: "anchors", Type: "[ScopeAnchorInput!]!"},
+		},
+		Read:   "dashboard",
+		Single: true,
+		Fields: "token sharedWith{kind token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{
+				"token":   s.tok("dashboard"),
+				"anchors": []any{map[string]any{"kind": "CUSTOMER", "token": s.tok("customer")}},
+			}
+		},
+	},
 }
 
 // probeArtifactContent is the bytes the probe uploads for its AVAILABLE artifact. A fixed literal,
