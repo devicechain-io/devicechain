@@ -158,8 +158,8 @@ func Run(t Reporter, cfg Config) []Outcome {
 	return outcomes
 }
 
-// Find returns the outcome of the named operation ("query devices").
-func Find(outcomes []Outcome, operation string) (Outcome, bool) {
+// OutcomeOf returns the outcome of the named operation ("query devices").
+func OutcomeOf(outcomes []Outcome, operation string) (Outcome, bool) {
 	for _, o := range outcomes {
 		if o.Operation == operation {
 			return o, true

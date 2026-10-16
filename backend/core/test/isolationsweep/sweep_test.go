@@ -188,13 +188,13 @@ func TestACorrectServiceSweepsClean(t *testing.T) {
 	}
 	for _, name := range []string{"query devices", "query device", "query echo", "mutation rename", "subscription stream", "subscription watch",
 		"query device (all arguments)"} {
-		if _, ok := Find(out, name); !ok {
+		if _, ok := OutcomeOf(out, name); !ok {
 			t.Errorf("the sweep never reached %s", name)
 		}
 	}
 	// A refused stream answers an error (its code is added by the transport, which this
 	// in-process sweep does not run), and no data.
-	if o, _ := Find(out, "subscription stream"); len(o.Codes) == 0 || o.Data {
+	if o, _ := OutcomeOf(out, "subscription stream"); len(o.Codes) == 0 || o.Data {
 		t.Errorf("the gated stream answered %+v, want a refusal", o)
 	}
 }

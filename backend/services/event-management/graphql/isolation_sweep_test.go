@@ -59,6 +59,6 @@ func TestIsolationSweep(t *testing.T) {
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},
 	})
-	o, ok := isolationsweep.Find(out, "query events")
+	o, ok := isolationsweep.OutcomeOf(out, "query events")
 	require.True(t, ok && o.Data, "the opted-in events read answered acme's member %+v", o)
 }

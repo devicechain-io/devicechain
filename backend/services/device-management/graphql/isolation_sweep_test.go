@@ -47,7 +47,7 @@ func TestIsolationSweep(t *testing.T) {
 	}
 	// The sweep reached the opted-in reads, and they answered data rather than a refusal.
 	for _, op := range []string{"query devices", "query customers", "query deviceTypes"} {
-		o, ok := isolationsweep.Find(out, op)
+		o, ok := isolationsweep.OutcomeOf(out, op)
 		if !ok || !o.Data {
 			t.Errorf("%s: %+v (reached=%v), want data for acme's member", op, o, ok)
 		}
@@ -55,7 +55,7 @@ func TestIsolationSweep(t *testing.T) {
 	// deviceScopeAnchors stays closed to a scoped member even though Device now admits one:
 	// a device's anchors can name another customer sharing it, so the query is gated on
 	// Authorize, not AuthorizeScoped. The sweep must reach it and see it refused.
-	if o, ok := isolationsweep.Find(out, "query deviceScopeAnchors"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+	if o, ok := isolationsweep.OutcomeOf(out, "query deviceScopeAnchors"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
 		t.Errorf("query deviceScopeAnchors: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
 	}
 }

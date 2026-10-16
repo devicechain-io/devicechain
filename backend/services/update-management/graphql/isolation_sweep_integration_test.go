@@ -62,10 +62,10 @@ func TestIsolationSweep(t *testing.T) {
 	// its answer over acme's own assignment is that refusal rather than data;
 	// TestScopedAssignmentsReturnOnlyAcme reads the rows themselves. The by-token read,
 	// aimed at a token naming nothing of acme's, answers null as for a missing one.
-	if o, ok := isolationsweep.Find(out, "query updateAssignments"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+	if o, ok := isolationsweep.OutcomeOf(out, "query updateAssignments"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
 		t.Errorf("query updateAssignments: %+v (reached=%v), want the staff fields refused to acme's member", o, ok)
 	}
-	if o, ok := isolationsweep.Find(out, "query updateAssignment"); !ok || !o.Data {
+	if o, ok := isolationsweep.OutcomeOf(out, "query updateAssignment"); !ok || !o.Data {
 		t.Errorf("query updateAssignment: %+v (reached=%v), want null data for acme's member", o, ok)
 	}
 }

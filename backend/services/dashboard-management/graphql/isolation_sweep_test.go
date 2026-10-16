@@ -46,7 +46,7 @@ func TestIsolationSweep(t *testing.T) {
 	t.Logf("swept %d operations as acme's member: %v", len(out), counts)
 	// The sweep reached the opted-in reads, and they answered data rather than a refusal.
 	for _, op := range []string{"query dashboards", "query publishedDashboard"} {
-		o, ok := isolationsweep.Find(out, op)
+		o, ok := isolationsweep.OutcomeOf(out, op)
 		if !ok || !o.Data {
 			t.Errorf("%s: %+v (reached=%v), want data for acme's member", op, o, ok)
 		}
