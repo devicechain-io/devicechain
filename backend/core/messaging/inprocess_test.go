@@ -201,8 +201,8 @@ func TestMessageWriterResendsAPublishWhoseIdIsInProcess(t *testing.T) {
 // An id that stays in process is not re-sent forever: the publish fails at its deadline,
 // with the conflict it last got, having been re-sent meanwhile.
 //
-// GUARD: kills a re-send loop that ignores the deadline (the watchdog fires) and one that
-// never re-sends (one request).
+// GUARD: kills a re-send loop that ignores the deadline (the watchdog fires), one that
+// never re-sends (one request), and one that does not wait between re-sends (dozens).
 func TestAnIdStillInProcessAtTheDeadlineFailsThePublish(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	nmgr, _ := metricsManager(t, srv)
@@ -236,6 +236,11 @@ func TestAnIdStillInProcessAtTheDeadlineFailsThePublish(t *testing.T) {
 		}
 		if got := stub.requests(dedupID(i)); got < 2 {
 			t.Fatalf("publish %d was sent %d times before failing, want it re-sent", i, got)
+		}
+		// Paced, not a hot loop against a broker that is still replicating: waits of 10, 20,
+		// 40, 80 and 160 ms fit about five sends into the limit.
+		if got := stub.requests(dedupID(i)); got > 8 {
+			t.Fatalf("publish %d was sent %d times in %v, want the re-sends paced (about 5)", i, got, limit)
 		}
 	}
 	ordered.Close()
