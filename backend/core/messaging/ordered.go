@@ -91,6 +91,9 @@ type orderedPending struct {
 	// fut is the publish in flight; nil for an outcome decided without a PubAck to wait
 	// for, which err then holds.
 	fut nats.PubAckFuture
+	// msg is what fut was sent, kept so a publish whose id was still in process can be sent
+	// again (settle).
+	msg *nats.Msg
 	err error
 	// brokerFailed marks an err the broker side produced (the send itself failed), as
 	// opposed to a refusal decided locally; only the former is backed off.
@@ -227,7 +230,9 @@ func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done fu
 	// time.AfterFunc, which re-sends it BEHIND whatever was published meanwhile — a retry
 	// here is a reorder. A failure is instead reported in order and backed off in the settle
 	// loop. (The library also refuses a context or a per-publish timeout on this path; the
-	// deadline is enforced by awaitPubAck.)
+	// deadline is enforced by awaitPubAck.) The one re-send the writer makes, of a publish
+	// whose id is still in process, is settle's, which says when that reorders and why it is
+	// the lesser cost.
 	nm := natsMsg(subject, msg)
 	fut, err := o.js.PublishMsgAsync(nm)
 	if err != nil {
@@ -238,7 +243,7 @@ func (o *orderedWriter) publishGuarded(ctx context.Context, msg Message, done fu
 	// broker holds, and a publish in flight is about to be held.
 	// Subject, headers and data, as sent: what natsWriter counts.
 	o.gate.notePublished(wireSize(nm))
-	o.pending <- orderedPending{fut: fut, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
+	o.pending <- orderedPending{fut: fut, msg: nm, sent: sent, deadline: deadline, callerBound: callerBound, done: done}
 }
 
 // Fail reports err to done, in order, without publishing anything. The settle loop does not
@@ -301,7 +306,7 @@ func (o *orderedWriter) settleLoop() {
 		err, brokerFailed := p.err, p.brokerFailed
 		if p.fut != nil {
 			var ack *nats.PubAck
-			ack, err = awaitPubAckResult(p.fut, p.deadline, p.callerBound)
+			ack, err = o.settle(p)
 			if err == nil && ack != nil && ack.Duplicate {
 				o.nmgr.metrics.countDuplicate(o.suffix, string(o.writer))
 			}
@@ -314,6 +319,33 @@ func (o *orderedWriter) settleLoop() {
 		p.done(err)
 		for n := o.pace(p.fut != nil && err == nil, brokerFailed, p.sent); n > 0; n-- {
 			<-o.slots
+		}
+	}
+}
+
+// settle waits for p's PubAck, sending p.msg again while the broker answers that its id is
+// still in process (duplicateInProcess), until the id resolves or p's deadline passes.
+//
+// The re-send goes out behind the publishes sent since, which is the reorder the publish path
+// refuses nats.go's retry for — but here it moves nothing in the usual case: the id's
+// original, which the broker is replicating, was sent before them, and when it commits the
+// re-send is answered as its duplicate and stores nothing. Only when the original is dropped
+// does the re-send store the message behind them, and reporting a failure instead would have
+// the source redelivered an AckWait later and stored later still.
+func (o *orderedWriter) settle(p orderedPending) (*nats.PubAck, error) {
+	fut := p.fut
+	var delay time.Duration
+	for {
+		ack, err := awaitPubAckResult(fut, p.deadline, p.callerBound)
+		if !duplicateInProcess(err) {
+			return ack, err
+		}
+		var again bool
+		if delay, again = waitToResendInProcess(delay, p.deadline); !again {
+			return nil, err
+		}
+		if fut, err = o.js.PublishMsgAsync(p.msg); err != nil {
+			return nil, err
 		}
 	}
 }
