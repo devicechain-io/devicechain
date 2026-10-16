@@ -73,11 +73,13 @@ async function openPage(widgets: unknown[], installed: boolean) {
       </Routes>
     </MemoryRouter>,
   );
-  await waitFor(() => expect(h.workspace).toBeTruthy());
+  // The page awaits preloadWidgets first, and for a board holding a gauge that fetches the chart
+  // engine, whose first import in this file's module graph can outlast the 1 s default.
+  await waitFor(() => expect(h.workspace).toBeTruthy(), { timeout: 15_000 });
   return h.workspace!;
 }
 
-describe('the console dashboard page parses with the deployment catalog', () => {
+describe('the console dashboard page parses with the deployment catalog', { timeout: 30_000 }, () => {
   it('reads an installed extension widget as that widget, and gives the workspace the same registry', async () => {
     const workspace = await openPage([{ ...ACME_TANK_WIDGET_JSON, layout: box }], true);
     expect(workspace.loaded.widgets[0].type).toBe(ACME_TANK_WIDGET_JSON.type);
