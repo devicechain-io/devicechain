@@ -113,7 +113,7 @@ func NewEnv(inputs []Input) (*Env, error) {
 		return nil, fmt.Errorf("calcfield: declare inputs: %w", err)
 	}
 	e.pool.New = func() any {
-		return &Sample{env: e, vals: make([]ref.Val, len(e.inputs)), bad: make([]bool, len(e.inputs))}
+		return &Sample{env: e, vals: make([]ref.Val, len(e.inputs)), bad: make([]SkipReason, len(e.inputs))}
 	}
 	return e, nil
 }
@@ -216,7 +216,8 @@ var intArithmetic = map[string]func(a types.Int, b ref.Val) ref.Val{
 // (double, int) and (int, double) promote the int operand to double, so the formulas people
 // write — `voltage * current / 1000`, `degC * 1.8 + 32` — compile; standard CEL has no
 // implicit numeric conversion. The promotion is exact below 2^53 and deterministic above it.
-// A double division by zero is ±Inf or NaN, skipped as non-finite like any double.
+// A double result that is NaN or ±Inf — a division by zero, an overflow — is an error, skipped
+// as non-finite, never a value a comparison could turn into a plausible boolean.
 func arithmetic() []cel.EnvOption {
 	d, i := cel.DoubleType, cel.IntType
 	opts := make([]cel.EnvOption, 0, len(arithmeticOps))
@@ -227,19 +228,33 @@ func arithmetic() []cel.EnvOption {
 				cel.BinaryBinding(func(x, y ref.Val) ref.Val { return intOp(x.(types.Int), y) })),
 			cel.Overload("calcfield_"+a.name+"_double_double", []*cel.Type{d, d}, d,
 				cel.BinaryBinding(func(x, y ref.Val) ref.Val {
-					return types.Double(f(float64(x.(types.Double)), float64(y.(types.Double))))
+					return finiteDouble(f(float64(x.(types.Double)), float64(y.(types.Double))))
 				})),
 			cel.Overload("calcfield_"+a.name+"_double_int", []*cel.Type{d, i}, d,
 				cel.BinaryBinding(func(x, y ref.Val) ref.Val {
-					return types.Double(f(float64(x.(types.Double)), float64(y.(types.Int))))
+					return finiteDouble(f(float64(x.(types.Double)), float64(y.(types.Int))))
 				})),
 			cel.Overload("calcfield_"+a.name+"_int_double", []*cel.Type{i, d}, d,
 				cel.BinaryBinding(func(x, y ref.Val) ref.Val {
-					return types.Double(f(float64(x.(types.Int)), float64(y.(types.Double))))
+					return finiteDouble(f(float64(x.(types.Int)), float64(y.(types.Double))))
 				})),
 		))
 	}
 	return opts
+}
+
+// errNonFinite is the error of a double operation whose result is NaN or ±Inf. cel-go's
+// types.Err compares by message in errors.Is, so classify matches it by this sentinel.
+var errNonFinite = errors.New("calcfield: non-finite double")
+
+// finiteDouble is f as a CEL double, or the non-finite error. Every double-producing function
+// of this environment returns through it, and inputs are refused non-finite at Sample.Set, so
+// no double inside an evaluation is ever NaN or ±Inf.
+func finiteDouble(f float64) ref.Val {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return types.WrapErr(errNonFinite)
+	}
+	return types.Double(f)
 }
 
 // errIntOverflowVal is the CEL error an int function returns on overflow. Its message is the
@@ -259,10 +274,10 @@ var mathFunctionNames = map[string]struct{}{
 func mathFunctions() []cel.EnvOption {
 	d, i := cel.DoubleType, cel.IntType
 	dd := func(f func(float64) float64) cel.OverloadOpt {
-		return cel.UnaryBinding(func(v ref.Val) ref.Val { return types.Double(f(toFloat(v))) })
+		return cel.UnaryBinding(func(v ref.Val) ref.Val { return finiteDouble(f(toFloat(v))) })
 	}
 	dd2 := func(f func(a, b float64) float64) cel.OverloadOpt {
-		return cel.BinaryBinding(func(a, b ref.Val) ref.Val { return types.Double(f(toFloat(a), toFloat(b))) })
+		return cel.BinaryBinding(func(a, b ref.Val) ref.Val { return finiteDouble(f(toFloat(a), toFloat(b))) })
 	}
 	return []cel.EnvOption{
 		cel.Function("math.abs",
@@ -283,10 +298,14 @@ func mathFunctions() []cel.EnvOption {
 		cel.Function("math.sqrt",
 			cel.Overload("calcfield_math_sqrt_double", []*cel.Type{d}, d, dd(math.Sqrt)),
 			cel.Overload("calcfield_math_sqrt_int", []*cel.Type{i}, d, dd(math.Sqrt))),
+		// math.pow takes an INT exponent only. Go's math.Pow computes a fractional power
+		// through Exp and Log, whose polynomial steps the compiler fuses into FMA
+		// instructions on arm64 but not on amd64, so the same inputs give results one ulp
+		// apart by CPU architecture — a stored value that depends on which replica computed
+		// it. An integer power is repeated squaring (multiplications only) and is identical
+		// on both; math.sqrt is correctly rounded everywhere.
 		cel.Function("math.pow",
-			cel.Overload("calcfield_math_pow_double_double", []*cel.Type{d, d}, d, dd2(math.Pow)),
 			cel.Overload("calcfield_math_pow_double_int", []*cel.Type{d, i}, d, dd2(math.Pow)),
-			cel.Overload("calcfield_math_pow_int_double", []*cel.Type{i, d}, d, dd2(math.Pow)),
 			cel.Overload("calcfield_math_pow_int_int", []*cel.Type{i, i}, d, dd2(math.Pow))),
 		cel.Function("math.min",
 			cel.Overload("calcfield_math_min_double_double", []*cel.Type{d, d}, d, dd2(math.Min)),

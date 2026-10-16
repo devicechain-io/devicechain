@@ -84,7 +84,8 @@ const (
 	// declared type. Validation normally rejects such a value before resolution, so this is
 	// a backstop, kept distinct from a missing input so it is not mistaken for one.
 	SkipInvalidInput SkipReason = "invalid_input"
-	// SkipNonFinite: a DOUBLE result is NaN or ±Inf.
+	// SkipNonFinite: a double the formula read or computed is NaN or ±Inf: a non-finite input
+	// value, a double division by zero, a double overflow, the square root of a negative.
 	SkipNonFinite SkipReason = "non_finite"
 	// SkipDivZero: an integer division or modulus by zero.
 	SkipDivZero SkipReason = "div_zero"

@@ -120,7 +120,21 @@ func TestEvalValues(t *testing.T) {
 		{"math.max mixed", "math.max(fan, 2.5)", Double, map[string]string{"fan": "1"}, "2.5"},
 		{"math.clamp double", "math.clamp(temp, 0.0, 100.0)", Double, map[string]string{"temp": "140"}, "100"},
 		{"math.clamp int", "math.clamp(fan, 0, 3)", Integer, map[string]string{"fan": "-4"}, "0"},
+		{"math.clamp int with equal bounds", "math.clamp(fan, 3, 3)", Integer, map[string]string{"fan": "-4"}, "3"},
+		{"math.clamp double with equal bounds", "math.clamp(temp, 2.5, 2.5)", Double, map[string]string{"temp": "9"}, "2.5"},
 		{"inclusive range bound passes", "temp", Double, map[string]string{"temp": "100"}, "100"},
+		// fan is guarded (has) somewhere, so it is not required; on a hot reading the || is
+		// true whichever side is written first, although only one order ever reads fan.
+		{"a guarded absent input absorbed by || (read first)", "fan > 1 || temp > 80.0 || has(m.fan)", Boolean,
+			map[string]string{"temp": "90"}, "1"},
+		{"a guarded absent input absorbed by || (never reached)", "temp > 80.0 || fan > 1 || has(m.fan)", Boolean,
+			map[string]string{"temp": "90"}, "1"},
+		{"a guarded absent input absorbed by && (read first)", "fan > 1 && temp > 80.0 && has(m.fan)", Boolean,
+			map[string]string{"temp": "70"}, "0"},
+		{"a guarded absent input absorbed by && (never reached)", "temp > 80.0 && fan > 1 && has(m.fan)", Boolean,
+			map[string]string{"temp": "70"}, "0"},
+		{"a non-finite intermediate absorbed by ||", "voltage / current > 10.0 || door", Boolean,
+			map[string]string{"voltage": "1", "current": "0", "door": "true"}, "1"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -158,10 +172,30 @@ func TestEvalSkips(t *testing.T) {
 			map[string]string{"temp": "1e300"}, SkipNonFinite},
 		{"NaN is non-finite", "math.sqrt(temp)", Double,
 			map[string]string{"temp": "-1"}, SkipNonFinite},
-		{"a NaN input propagates to a non-finite result", "temp + 1.0", Double,
-			map[string]string{"temp": "NaN"}, SkipNonFinite},
+		{"a guarded absent input whose read reaches the result", "fan > 1 || temp > 80.0 || has(m.fan)", Boolean,
+			map[string]string{"temp": "70"}, SkipMissingInput},
+		{"a double division by zero inside a comparison", "voltage / current > 10.0", Boolean,
+			map[string]string{"voltage": "1", "current": "0"}, SkipNonFinite},
+		{"0/0 inside a comparison", "voltage / current < 10.0", Boolean,
+			map[string]string{"voltage": "0", "current": "0"}, SkipNonFinite},
+		{"a double overflow inside a comparison", "temp * temp > 1.0", Boolean,
+			map[string]string{"temp": "1e300"}, SkipNonFinite},
+		{"a NaN square root inside a comparison", "math.sqrt(temp) > 1.0", Boolean,
+			map[string]string{"temp": "-1"}, SkipNonFinite},
+		{"pow to +Inf inside a comparison", "math.pow(fan, -1) > 0.0", Boolean,
+			map[string]string{"fan": "0"}, SkipNonFinite},
+		{"int() of a non-finite double", "int(temp / 0.0)", Integer,
+			map[string]string{"temp": "1"}, SkipNonFinite},
+		{"a promoted int over a zero double", "fan / temp", Double,
+			map[string]string{"fan": "1", "temp": "0"}, SkipNonFinite},
+		{"an int over a zero double", "temp / fan", Double,
+			map[string]string{"fan": "0", "temp": "1"}, SkipNonFinite},
 		{"int division by zero", "fan / 0", Integer, map[string]string{"fan": "1"}, SkipDivZero},
 		{"int modulus by zero", "fan % 0", Integer, map[string]string{"fan": "1"}, SkipDivZero},
+		{"int addition overflow", "fan + 9223372036854775807", Integer,
+			map[string]string{"fan": "1"}, SkipOverflow},
+		{"int subtraction overflow", "fan - 1", Integer,
+			map[string]string{"fan": "-9223372036854775808"}, SkipOverflow},
 		{"int multiplication overflow", "fan * 9223372036854775807", Integer,
 			map[string]string{"fan": "2"}, SkipOverflow},
 		{"math.abs of the minimum int", "math.abs(fan)", Integer,
@@ -179,6 +213,36 @@ func TestEvalSkips(t *testing.T) {
 			assert.Empty(t, r.Value, "a skipped formula must carry no value")
 		})
 	}
+}
+
+// A DOUBLE input that parses to NaN or ±Inf — which the measurement validator admits — is
+// refused at Set and skips any formula reading it as non-finite, required or guarded: no
+// comparison ever sees one and turns it into a plausible boolean.
+func TestNonFiniteInput(t *testing.T) {
+	env := fixtureEnv(t)
+	for _, raw := range []string{"NaN", "+Inf", "-Inf", "inf", "Infinity"} {
+		for _, expr := range []string{"temp > 80.0", "has(m.door) && door || temp > 80.0", "temp != temp"} {
+			f, err := env.Compile(Definition{Key: "out", Expression: expr, Type: Boolean})
+			require.NoError(t, err)
+			s := env.Sample()
+			_, _ = s.Set("door", "false")
+			known, err := s.Set("temp", raw)
+			assert.True(t, known)
+			assert.ErrorContains(t, err, "is not a finite DOUBLE")
+			r := f.Eval(s)
+			assert.Equal(t, Result{Skip: SkipNonFinite}, Result{Value: r.Value, Skip: r.Skip}, "%s with temp=%s", expr, raw)
+			s.Release()
+		}
+	}
+	// A guarded read that reaches the result names the input.
+	f, err := env.Compile(Definition{Key: "out", Expression: "has(m.temp) || temp > 1.0", Type: Boolean})
+	require.NoError(t, err)
+	s := env.Sample()
+	defer s.Release()
+	_, _ = s.Set("temp", "NaN")
+	r := f.Eval(s)
+	assert.Equal(t, SkipNonFinite, r.Skip)
+	assert.ErrorContains(t, r.Err, `input "temp" is not finite`)
 }
 
 // An input whose value did not parse is reported as invalid, not missing, whether the formula
@@ -211,6 +275,10 @@ func TestInvalidInput(t *testing.T) {
 	assert.ErrorContains(t, err, "not a valid INT")
 	_, err = s.Set("door", "yes")
 	assert.ErrorContains(t, err, "not a valid BOOLEAN")
+	for _, raw := range []string{"0x10", "1_000", "010e"} {
+		_, err = s.Set("fan", raw)
+		assert.ErrorContains(t, err, "not a valid INT", "an INT is base-10 only, as the validator parses it: %q", raw)
+	}
 	known, err := s.Set("undeclared", "1")
 	assert.False(t, known)
 	assert.NoError(t, err)
@@ -323,6 +391,12 @@ func TestCompileRefusals(t *testing.T) {
 		{"math function not in the set", Definition{Key: "out", Expression: "math.greatest(temp, 1.0)", Type: Double},
 			"undeclared reference"},
 		{"wrong arity", Definition{Key: "out", Expression: "math.min(temp, 1.0, 2.0)", Type: Double}, "found no matching overload"},
+		{"fractional power", Definition{Key: "out", Expression: "math.pow(temp, 0.5)", Type: Double},
+			"hint: math.pow takes an int exponent"},
+		{"double exponent", Definition{Key: "out", Expression: "math.pow(fan, temp)", Type: Double},
+			"hint: math.pow takes an int exponent"},
+		{"list literals compared", Definition{Key: "out", Expression: "[temp] == [temp]", Type: Boolean}, "lists are not allowed"},
+		{"map literals compared", Definition{Key: "out", Expression: "{1: temp} == {1: temp}", Type: Boolean}, "map literals are not allowed"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -407,6 +481,14 @@ func TestNewEnvRefusals(t *testing.T) {
 			assert.ErrorContains(t, err, c.want)
 		})
 	}
+	// Exactly MaxInputs is allowed.
+	most := make([]Input, MaxInputs)
+	for i := range most {
+		most[i] = Input{Key: fmt.Sprintf("k%d", i), Type: Double}
+	}
+	_, err := NewEnv(most)
+	require.NoError(t, err, "MaxInputs inputs are allowed")
+
 	// The caller's slice is copied: changing it afterwards does not change the Env.
 	in := []Input{{Key: "x", Type: Double}}
 	env, err := NewEnv(in)
@@ -446,6 +528,8 @@ func TestSampleReuseCarriesNothing(t *testing.T) {
 	require.Error(t, s.SetAt(i, "bad"))
 	require.NoError(t, s.SetAt(i, "5"))
 	assert.Equal(t, Result{Value: "10"}, f.Eval(s))
+	require.Error(t, s.SetAt(i, "bad"))
+	assert.Equal(t, SkipInvalidInput, f.Eval(s).Skip, "an unparseable value replaces the previous valid one")
 }
 
 // A Sample from a different Env is a caller bug, skipped loudly rather than read.
@@ -476,7 +560,12 @@ func TestConcurrentEval(t *testing.T) {
 				_, _ = s.Set("voltage", v)
 				_, _ = s.Set("current", "1000")
 				if r := f.Eval(s); r.Value != v {
-					errs <- fmt.Sprintf("goroutine %d: got %q want %q", g, r.Value, v)
+					// Never block: a wrong value on every evaluation must fail this test, not
+					// fill the buffer and hang it until the package timeout.
+					select {
+					case errs <- fmt.Sprintf("goroutine %d: got %q want %q", g, r.Value, v):
+					default:
+					}
 				}
 				s.Release()
 			}

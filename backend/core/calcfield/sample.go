@@ -5,6 +5,7 @@ package calcfield
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"strconv"
 
@@ -19,17 +20,16 @@ import (
 // builds no map — and pooled: take one with Env.Sample, fill it, evaluate every formula, and
 // Release it.
 //
-// A Sample is NOT safe for concurrent use: evaluation records which absent inputs a formula
-// touched on the Sample itself. Use one per goroutine.
+// A Sample is NOT safe for concurrent use while it is being filled or reset. Evaluation only
+// reads it.
 type Sample struct {
 	env *Env
 	// vals holds each input's value, boxed once at Set; nil means absent.
 	vals []ref.Val
-	// bad marks an input that was set but did not parse as its declared type.
-	bad []bool
-	// missing / invalid record, for the evaluation in progress, that the formula read an
-	// absent / unparseable input. Reset by Formula.Eval before every evaluation.
-	missing, invalid bool
+	// bad is why an input that was set holds no value: SkipInvalidInput when it did not parse
+	// as its declared type, SkipNonFinite for a DOUBLE that parsed to NaN or ±Inf. SkipNone
+	// for an input that is present or simply absent.
+	bad []SkipReason
 }
 
 // Sample takes an empty Sample for this Env from its pool.
@@ -47,7 +47,6 @@ func (s *Sample) Release() {
 func (s *Sample) Reset() {
 	clear(s.vals)
 	clear(s.bad)
-	s.missing, s.invalid = false, false
 }
 
 // Set records the raw string value of the input with the given key, parsing it once as the
@@ -64,28 +63,37 @@ func (s *Sample) Set(key, raw string) (bool, error) {
 }
 
 // SetAt is Set by input position (Env.Index), for a caller that resolved the position once.
+// A DOUBLE that parses to NaN or ±Inf is refused the same way, and a formula that reads it is
+// skipped as SkipNonFinite.
 func (s *Sample) SetAt(i int, raw string) error {
 	in := s.env.inputs[i]
-	s.vals[i], s.bad[i] = nil, false
+	s.vals[i], s.bad[i] = nil, SkipNone
 	switch in.Type {
 	case Double:
 		f, err := strconv.ParseFloat(raw, 64)
 		if err != nil {
-			s.bad[i] = true
+			s.bad[i] = SkipInvalidInput
 			return fmt.Errorf("calcfield: input %q: %q is not a valid DOUBLE", in.Key, raw)
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			// The measurement validator admits "NaN" and "Inf" (ParseFloat does), but no double
+			// in an evaluation is ever non-finite: a comparison would turn one into a plausible
+			// false (NaN > 80) or true (+Inf > 80).
+			s.bad[i] = SkipNonFinite
+			return fmt.Errorf("calcfield: input %q: %q is not a finite DOUBLE", in.Key, raw)
 		}
 		s.vals[i] = types.Double(f)
 	case Integer:
 		n, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
-			s.bad[i] = true
+			s.bad[i] = SkipInvalidInput
 			return fmt.Errorf("calcfield: input %q: %q is not a valid INT", in.Key, raw)
 		}
 		s.vals[i] = types.Int(n)
 	case Boolean:
 		b, err := strconv.ParseBool(raw)
 		if err != nil {
-			s.bad[i] = true
+			s.bad[i] = SkipInvalidInput
 			return fmt.Errorf("calcfield: input %q: %q is not a valid BOOLEAN", in.Key, raw)
 		}
 		s.vals[i] = types.Bool(b)
@@ -93,27 +101,49 @@ func (s *Sample) SetAt(i int, raw string) error {
 	return nil
 }
 
-// value returns input i's value for an evaluation that READS it, recording an absent or
-// unparseable input as touched.
-func (s *Sample) value(i int) (ref.Val, bool) {
-	if v := s.vals[i]; v != nil {
-		return v, true
-	}
-	if s.bad[i] {
-		s.invalid = true
-	} else {
-		s.missing = true
-	}
-	return nil, false
+// inputError is the evaluation error of a READ of an absent or unparseable input. It
+// propagates through CEL like any other error, so it decides the skip reason exactly when the
+// failed read reaches the result, and not when && or || absorbed it into a value.
+type inputError struct {
+	key string
+	// reason is SkipMissingInput, SkipInvalidInput or SkipNonFinite.
+	reason SkipReason
 }
 
-// present reports whether input i holds a usable value, for a presence test. It does not
-// mark anything touched: has(m.x) on an absent x is the guard working, not a missing input.
+func (e *inputError) Error() string {
+	switch e.reason {
+	case SkipInvalidInput:
+		return fmt.Sprintf("calcfield: input %q did not parse as its declared type", e.key)
+	case SkipNonFinite:
+		return fmt.Sprintf("calcfield: input %q is not finite", e.key)
+	}
+	return fmt.Sprintf("calcfield: input %q is absent", e.key)
+}
+
+// absentReason is why input i, which holds no value, cannot be read.
+func (s *Sample) absentReason(i int) SkipReason {
+	if r := s.bad[i]; r != SkipNone {
+		return r
+	}
+	return SkipMissingInput
+}
+
+// value returns input i's value for an evaluation that READS it or, when it is absent or
+// unparseable, the CEL error saying so.
+func (s *Sample) value(i int) ref.Val {
+	if v := s.vals[i]; v != nil {
+		return v
+	}
+	return types.WrapErr(&inputError{key: s.env.inputs[i].Key, reason: s.absentReason(i)})
+}
+
+// present reports whether input i holds a usable value, for a presence test: has(m.x) on an
+// absent x is the guard working, not a missing input.
 func (s *Sample) present(i int) bool { return s.vals[i] != nil }
 
 // ResolveName implements interpreter.Activation. `m` resolves to the sample map; an input
-// identifier resolves to its value, or — when absent — to not-found, which CEL reports as an
-// unbound attribute and Eval classifies from the touched flags.
+// identifier resolves to its value or, when absent or unparseable, to the inputError CEL then
+// propagates as the attribute's error.
 func (s *Sample) ResolveName(name string) (any, bool) {
 	if name == VarM {
 		return sampleMap{s: s}, true
@@ -122,7 +152,7 @@ func (s *Sample) ResolveName(name string) (any, bool) {
 	if !ok {
 		return nil, false
 	}
-	return s.value(i)
+	return s.value(i), true
 }
 
 // Parent implements interpreter.Activation: a Sample has no enclosing scope.
@@ -148,17 +178,13 @@ func (m sampleMap) position(key ref.Val) (int, bool) {
 	return i, ok
 }
 
-// Get implements traits.Indexer: a READ of an input, so an absent one is recorded touched.
+// Get implements traits.Indexer: a READ of an input.
 func (m sampleMap) Get(key ref.Val) ref.Val {
 	i, ok := m.position(key)
 	if !ok {
 		return types.NewErr("no such key: %v", key)
 	}
-	v, ok := m.s.value(i)
-	if !ok {
-		return types.NewErr("no such key: %v", key)
-	}
-	return v
+	return m.s.value(i)
 }
 
 // IsSet implements traits.FieldTester for has(m.key).

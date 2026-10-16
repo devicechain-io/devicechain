@@ -151,6 +151,9 @@ func CheckProfileCost(formulas []*Formula) error {
 // withHint appends a hint to a checker error that is almost always a missing decimal point.
 func withHint(err error) error {
 	msg := err.Error()
+	if strings.Contains(msg, "'math.pow'") {
+		return fmt.Errorf("%w\nhint: math.pow takes an int exponent, as math.pow(x, 2); for a square root use math.sqrt(x)", err)
+	}
 	if strings.Contains(msg, "double, int") || strings.Contains(msg, "int, double") {
 		return fmt.Errorf("%w\nhint: an int and a double do not mix here; write 0.0 rather than 0, or convert with double(...)", err)
 	}
@@ -196,17 +199,27 @@ var errForeignSample = errors.New("calcfield: the sample belongs to a different 
 // cannot produce a value returns a SkipReason and no value. See the package documentation
 // for the policy; in order of precedence:
 //
-//   - an input the formula never tests for presence is absent → SkipMissingInput, or
-//     unparseable → SkipInvalidInput, decided BEFORE evaluation. So `temp > 80 || fan == 0`
+//   - an input the formula never tests for presence is absent → SkipMissingInput,
+//     unparseable → SkipInvalidInput, or a non-finite DOUBLE → SkipNonFinite, decided BEFORE
+//     evaluation. So `temp > 80 || fan == 0`
 //     skips when fan is absent although CEL would short-circuit to true on a hot reading:
 //     whether an absent input is noticed must not depend on operand order or on the other
 //     inputs' values;
-//   - an input the formula does guard somewhere, read while absent or unparseable (a guard
-//     that did not cover the read) → SkipMissingInput / SkipInvalidInput, even when CEL's
-//     && or || absorbed the error into a value;
-//   - the runtime cost limit tripped → SkipCost; an integer division or modulus by zero →
-//     SkipDivZero; an integer overflow → SkipOverflow; any other error → SkipEvalError;
-//   - a DOUBLE result that is NaN or ±Inf → SkipNonFinite;
+//   - otherwise the formula runs, and an evaluation that ends in an error is skipped by that
+//     error: an input the formula guards somewhere but read outside its guard while absent →
+//     SkipMissingInput, or unparseable → SkipInvalidInput; the runtime cost limit tripped →
+//     SkipCost; an integer division or modulus by zero → SkipDivZero; an integer overflow →
+//     SkipOverflow; a double operation producing NaN or ±Inf → SkipNonFinite, wherever it
+//     occurs (so `voltage / current > 10.0` skips when current is 0 rather than storing a
+//     true); anything else → SkipEvalError. A failed read that CEL's && or || absorbs
+//     into a value (`temp > 80.0 || fan > 1` on a hot reading, fan guarded elsewhere) does not
+//     skip: that value is the result. CEL's logical operators are commutative over errors, so
+//     the value is the same in either operand order, whereas whether the read is REACHED is
+//     not (|| short-circuits left to right), which is why nothing here depends on it. When two
+//     different failures both reach the result CEL reports the first it met, so the reason,
+//     never whether the formula skips, can follow operand order;
+//   - a DOUBLE result that is NaN or ±Inf → SkipNonFinite (a backstop: no double operation
+//     produces one);
 //   - a DOUBLE or INT result outside the definition's Min/Max → SkipRange.
 func (f *Formula) Eval(s *Sample) Result {
 	if s.env != f.env {
@@ -214,20 +227,11 @@ func (f *Formula) Eval(s *Sample) Result {
 	}
 	for _, i := range f.required {
 		if s.vals[i] == nil {
-			if s.bad[i] {
-				return Result{Skip: SkipInvalidInput}
-			}
-			return Result{Skip: SkipMissingInput}
+			return Result{Skip: s.absentReason(i)}
 		}
 	}
-	s.missing, s.invalid = false, false
 	out, _, err := f.program.Eval(s)
-	switch {
-	case s.invalid:
-		return Result{Skip: SkipInvalidInput, Err: err}
-	case s.missing:
-		return Result{Skip: SkipMissingInput, Err: err}
-	case err != nil:
+	if err != nil {
 		return Result{Skip: classify(err), Err: err}
 	}
 	return f.finish(out)
@@ -251,6 +255,12 @@ func classify(err error) SkipReason {
 		return SkipDivZero
 	case errors.Is(err, errIntOverflow):
 		return SkipOverflow
+	case errors.Is(err, errNonFinite):
+		return SkipNonFinite
+	}
+	var in *inputError
+	if errors.As(err, &in) {
+		return in.reason
 	}
 	return SkipEvalError
 }

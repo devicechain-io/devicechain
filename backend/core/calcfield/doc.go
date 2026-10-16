@@ -21,7 +21,8 @@
 // Allowed: `+ - * / %`, comparisons, `&& || !`, the ternary, `has()`, `in m`, int/double/bool
 // literals, the conversions int(), double() and bool() (the last only to read a BOOLEAN input
 // through m), and the fixed-arity functions math.abs, math.floor, math.ceil, math.round,
-// math.sqrt, math.pow, math.min, math.max and math.clamp. int and double mix in + - * / and
+// math.sqrt, math.pow (with an int exponent: a fractional power is not bit-identical across
+// CPU architectures), math.min, math.max and math.clamp. int and double mix in + - * / and
 // in ordering (the int operand is promoted to double), so `voltage * current / 1000`
 // compiles; they do not mix in == != or in the two branches of a ternary, where `80.0` or
 // `0.0` is needed. Everything else is refused at [Env.Compile] — first by the checker, since
@@ -43,7 +44,15 @@
 // formula is skipped as [SkipMissingInput] before it runs, so `temp > 80 || fan == 0` skips
 // on a reading without fan even though CEL would short-circuit it to true on a hot one —
 // whether an absent input is noticed never depends on operand order or on the other inputs'
-// values. `has(m.fan) ? fan : 0` is the author's explicit choice of a default.
+// values. `has(m.fan) ? fan : 0` is the author's explicit choice of a default. An input that
+// is guarded is read like any other value; if a read of it while absent reaches the result,
+// the formula skips, and if && or || absorbs it (`temp > 80.0 || fan > 1` on a hot reading),
+// the absorbed value is the result, the same in either operand order.
+//
+// No double inside an evaluation is ever NaN or ±Inf: a non-finite input value is refused
+// at [Sample.Set], and a division, overflow or square root producing one is an error. Either
+// skips the formula as [SkipNonFinite] wherever it occurs, so `voltage / current > 10.0`
+// skips when current is 0 instead of storing a plausible true.
 //
 // # Determinism
 //
