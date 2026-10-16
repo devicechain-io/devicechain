@@ -365,6 +365,23 @@ test('the showcase embed in a host with no height takes the canvas aspect ratio'
   }
 });
 
+// What step 3 compares is the text as well as the boxes, so the text must not depend on WHEN
+// the gate runs: two renders a few seconds apart that straddle the instant an age turns from
+// "13 hr. ago" to "14 hr. ago" would otherwise read as a reflow. The recording's ages are
+// drawn as the embed draws them (its cursor read as now), whatever the wall clock says, so the
+// same board drawn a day apart is the same text, and its ages read seconds, as a visitor's do.
+test('the showcase embed reads the same whenever the gate runs', async ({ page }) => {
+  const at = (iso: string) => Date.parse(iso);
+  await page.clock.setFixedTime(at('2027-01-01T00:00:00Z'));
+  const first = await embedAt(page, [EMBED_CANVAS.width, EMBED_CANVAS.height], 'dark');
+  await page.clock.setFixedTime(at('2027-01-02T07:30:00Z'));
+  const later = await embedAt(page, [EMBED_CANVAS.width, EMBED_CANVAS.height], 'dark');
+  expect(later.widgets, 'the embed text moved with the wall clock').toEqual(first.widgets);
+  const ages = first.widgets.join('\n').match(/\d+ [a-z]+\. ago|\d+ days? ago/g) ?? [];
+  expect(ages.length, 'the embed shows no ages: this check has nothing to hold').toBeGreaterThan(0);
+  expect(ages.filter((a) => !a.endsWith('sec. ago')), 'ages the embed would not show a visitor').toEqual([]);
+});
+
 // The negative control: the same board laid out at the container's width (no fixed canvas),
 // which is the defect the embed prevents. The layout check must see it at both sizes.
 test('the negative control: a reflowing embed fails the layout check', async ({ page }) => {
