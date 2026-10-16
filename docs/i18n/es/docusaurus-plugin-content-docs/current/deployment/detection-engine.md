@@ -266,7 +266,11 @@ lecturas que estaban dentro de una misma ventana con ella en ese momento, y una 
 retira se registra en esa lectura más reciente, nunca antes de un cambio de alarma que la regla ya
 haya notificado. Tras una ráfaga de lecturas fuera de orden, la alarma queda elevada o retirada
 según lo que indican las lecturas en orden de marca de tiempo. El momento exacto del cambio dentro
-de la ráfaga es aproximado. Una lectura tardía demasiado antigua para esa ventana ya no influye en
+de la ráfaga es aproximado. En una agregación deslizante hay un caso que espera: cuando una lectura
+tardía retiraría una alarma que elevó una lectura más reciente, la retirada se retiene hasta que
+hayan podido llegar las lecturas de hasta una tolerancia más recientes. Si alguna vuelve a superar
+el umbral, la alarma sigue elevada en lugar de retirarse y volver a elevarse un instante después; si
+no, se retira, registrada en la lectura más reciente. Una lectura tardía demasiado antigua para esa ventana ya no influye en
 la alarma, y no se cuenta como descartada.
 
 Los tipos deslizantes, las reglas de duración y las reglas de ventana de conteo y de tasa

@@ -236,8 +236,9 @@ type Engine struct {
 	// per series: the newest event time the series has presented, matching or not. A sample older
 	// than it is folded into the window open AT it and any edge it causes is stamped there
 	// (window.go, trailingWindow). It outlives the window itself — a non-matching reading opens no
-	// window yet still moves the instant — so it is one permanent entry per series, like a
-	// DeltaRate base, swept with the rest of the series' state.
+	// window yet still moves the instant — so it is kept while it can still change an outcome: the
+	// series is raised, or its instant is inside its window of the frontier. pruneNewest drops the
+	// rest, and a snapshot omits any instant the restore re-derives (snapshotNewest).
 	newest map[SeriesKey]time.Time
 	// pending holds the samples of the sample-pairing kinds (DeltaRate, CountWindow) the frontier
 	// is not yet past, per series, in event-time order; pendHeap orders those runs by their
@@ -589,6 +590,7 @@ func countSeriesKeys[V any](counts map[string]int, m map[SeriesKey]V) {
 // per rule by distinct-series-ever-timed and reclaimed on RemoveRule. Computed on demand on the
 // single-writer loop (no lock, no hot-path cost).
 func (e *Engine) LiveKeyCounts() map[string]int {
+	e.pruneNewest() // count the evaluation instants that still bear on an outcome, not every series ever seen
 	counts := make(map[string]int)
 	countSeriesKeys(counts, e.runs)
 	countSeriesKeys(counts, e.sliding)
@@ -597,7 +599,7 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
-	countSeriesKeys(counts, e.newest)        // trailing-window evaluation instant: one permanent entry per (rule, series-ever-seen)
+	countSeriesKeys(counts, e.newest)        // trailing-window evaluation instant: one per series active within its window of the frontier, or raised
 	countSeriesKeys(counts, e.pending)       // a sample-pairing kind's open reorder run (reorder.go)
 	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
 	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
@@ -1078,6 +1080,12 @@ func (e *Engine) fire(key SeriesKey, deadline time.Time) {
 		return
 	}
 	switch r.Kind {
+	case SlidingAgg:
+		// A falling edge a late sample found, held until the frontier was one lateness budget past it
+		// (holdLateResolve) and not settled by any later evaluation: emit it now, stamped at the series' newest instant —
+		// where the window was read when it stopped breaching. resolveLatched clamps to the raise
+		// and is a no-op when the latch was cleared meanwhile (ClearRaised).
+		e.resolveLatched(r, key, e.newest[key])
 	case Absence:
 		e.emit(r, key, deadline) // stamped at the deadline the silence elapsed
 		// NOTHING is latched here, deliberately. Restart reconciliation (slice 4c-2b-2b) must not

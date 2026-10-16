@@ -389,13 +389,21 @@ func (e *Engine) applySlidingAgg(ev Event, r Rule) {
 	// at no real instant and would flap the alarm on every regular-cadence sample. A breach that ends
 	// purely because the window emptied during a silent GAP is not observed until the next event, like
 	// every other event-driven kind (see the package silence note) — raised across the gap, not flapping.
+	//
+	// A falling edge found by a sample OLDER than the raise it would clear is held rather than
+	// emitted (holdLateResolve): resolved at once it is a zero-length pair that the next reading
+	// usually re-raises.
 	switch {
 	case st.satisfies(r):
+		e.cancelLateResolve(ev.Key)
 		if folds {
 			e.emitValue(r, ev.Key, now, st.value(r.Agg))
 		}
 	default:
-		e.resolve(r, ev.Key, now)
+		if !e.holdLateResolve(ev, now) {
+			e.cancelLateResolve(ev.Key)
+			e.resolve(r, ev.Key, now)
+		}
 	}
 	if st.count() == 0 {
 		delete(e.slides, ev.Key) // a fully-aged-out window leaks no state entry against the budget
@@ -491,5 +499,77 @@ func (e *Engine) restoreSlides(in []snapSlide) {
 			st.buf = append(st.buf, sample{t: s.Times[i], v: s.Values[i]})
 		}
 		e.slides[SeriesKey{Rule: s.Rule, Series: s.Series}] = st
+	}
+}
+
+// holdLateResolve keeps the falling edge a LATE sample found from being emitted at once, and
+// reports whether it did. Inside the lateness budget it is held; beyond it, refused.
+//
+// 🔑 A SAMPLE OLDER THAN THE RAISE IT WOULD CLEAR IS THE ONE CASE WHERE RESOLVING AT ONCE FLAPS. The
+// raise came from a newer sample that arrived first; it has already left for REACT and the
+// notifier, and nothing can recall it. Resolving now emits a zero-length Raised+Resolved pair at
+// the newest instant, and on a device reporting faster than the lateness budget the very next
+// reading usually breaches again — a second raise, a second page, a second command, for what an
+// event-time walk reports as at most one episode. Measured on a 1 Hz device in reordered bursts, a
+// quarter of series emitted such a pair; before the window was read at the newest instant none
+// did, because this same resolve was refused as stale and the alarm stayed raised until the next
+// reading.
+//
+// So the edge waits until every in-budget reading up to one lateness budget NEWER than the instant
+// it was found at has arrived: until the frontier reaches that instant plus the budget. A device
+// reporting at least that often is settled by its own next reading. Any
+// evaluation of the series in that time settles it — one that satisfies keeps the alarm raised and
+// cancels the wait (cancelLateResolve), one that does not resolves through the ordinary path — and
+// a series that goes quiet is resolved when the frontier reaches it (fire), stamped at its
+// newest instant. The level after a reordered burst is therefore still the event-time level, at
+// most two lateness budgets of event time later (the frontier itself trails the newest time seen by
+// one), and only a resolve the stale guard used to refuse is delayed.
+//
+// Refused, as the stale guard always did: a sample whose deadline the frontier has already reached,
+// which is a sample beyond the budget (staleFallingEdge) — typically a redelivery of an old reading.
+// It may well find the window empty, because the frontier's window has moved past everything the
+// series holds, but that is the frontier's age, not news about the device: the device's own
+// newest reading still supports the alarm, and a silent series stays raised until it reports again
+// (the package silence note). Clearing it on the strength of a redelivered reading would be a
+// false clear. An existing wait is never pushed back either: a burst of late samples is bounded by
+// the first one's deadline.
+//
+// The wait is a timer in the wheel, so it is snapshotted, replayed and swept with every other timer.
+// A binary that predates it fires the timer into no case at all, which is that binary's own
+// behaviour: the alarm stays raised until the next reading.
+func (e *Engine) holdLateResolve(ev Event, now time.Time) bool {
+	if !e.staleFallingEdge(ev) {
+		return false
+	}
+	if _, armed := e.wheel.live[ev.Key]; armed {
+		return true
+	}
+	if deadline := now.Add(e.wm.lateness); deadline.After(e.wm.now) {
+		e.wheel.schedule(ev.Key, deadline)
+	}
+	return true
+}
+
+// staleFallingEdge reports whether a falling edge this sample found would clear a raise made by a
+// NEWER sample — the edge resolve's stale guard refused while edges were stamped at the sample's
+// own time. The sliding kinds now stamp at the series' newest instant, which is never before the
+// raise, so the guard no longer sees these; this is where they are told apart.
+//
+// For Repeating and Correlation it can only happen beyond the lateness budget: a sample inside it
+// is newer than the frontier, so its window is cut at the newest instant exactly as the newest
+// sample's own evaluation was, and with nothing newly evicted a late sample can only add to the
+// count. A sliding aggregate is the kind where an in-budget late sample changes the value itself;
+// it holds that edge (holdLateResolve).
+func (e *Engine) staleFallingEdge(ev Event) bool {
+	raisedAt, raised := e.raised[ev.Key]
+	return raised && ev.Time.Before(raisedAt)
+}
+
+// cancelLateResolve drops a held falling edge (holdLateResolve) once an evaluation has settled
+// it. SlidingAgg arms no other timer, so a live timer on its key is always this one; the lookup
+// keeps the common path — no wait held — free of a generation bump.
+func (e *Engine) cancelLateResolve(key SeriesKey) {
+	if _, armed := e.wheel.live[key]; armed {
+		e.wheel.cancel(key)
 	}
 }

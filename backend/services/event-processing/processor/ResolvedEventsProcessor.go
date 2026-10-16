@@ -2921,14 +2921,16 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 // watermark rather than only on an arriving event: Duration (hold timer), Session (gap timer),
 // Aggregate (tumbling pane close), and the sample-pairing kinds DeltaRate and CountWindow, which hold
 // a sample until the frontier is past it and emit on that flush (detectcore reorder.go) — an idle
-// advance can emit for them with no event at all. These are the kinds whose superseded firings
+// advance can emit for them with no event at all — and SlidingAgg, which holds the falling edge a
+// late sample found until the frontier is one lateness budget past it, and emits it off the frontier
+// if no later reading settles it (detectcore holdLateResolve). These are the kinds whose superseded firings
 // starvation does NOT silence, so they need the publish-time version gate (D6). The purely
-// event-driven kinds (Threshold/Repeating/SlidingAgg/Correlation) are already version-scoped by the
+// event-driven kinds (Threshold/Repeating/Correlation) are already version-scoped by the
 // fan-out and pass through as legitimate late contributions. Absence is handled separately (stricter
 // AbsenceLive membership gate).
 func frontierTriggeredKind(k detectcore.RuleKind) bool {
 	switch k {
-	case detectcore.Duration, detectcore.Session, detectcore.Aggregate, detectcore.DeltaRate, detectcore.CountWindow:
+	case detectcore.Duration, detectcore.Session, detectcore.Aggregate, detectcore.DeltaRate, detectcore.CountWindow, detectcore.SlidingAgg:
 		return true
 	default:
 		return false

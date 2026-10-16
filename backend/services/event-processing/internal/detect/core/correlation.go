@@ -67,8 +67,12 @@ func (e *Engine) applyCorrelation(ev Event, r Rule) {
 	case len(members) < r.Count:
 		// Falling edge (ADR-057): enough members aged out that the distinct count is back below N —
 		// the cohort dispersed, so resolve a raised alarm. A no-op when never raised. The rising case
-		// can only fire on a matching event (a non-match never grows the cohort).
-		e.resolve(r, ev.Key, now)
+		// can only fire on a matching event (a non-match never grows the cohort). A sighting older than
+		// the raise does not clear it (staleFallingEdge): only one beyond the lateness budget can find
+		// it, and an old sighting is not evidence the cohort dispersed.
+		if !e.staleFallingEdge(ev) {
+			e.resolve(r, ev.Key, now)
+		}
 	}
 	if len(members) == 0 {
 		delete(e.corr, ev.Key) // an emptied cohort leaks no state entry against the budget

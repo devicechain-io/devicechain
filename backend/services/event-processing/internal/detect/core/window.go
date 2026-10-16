@@ -313,8 +313,12 @@ func (e *Engine) applyRepeating(ev Event, r Rule) {
 		// Falling edge (ADR-057): enough prior matches aged out of the window that the count is back
 		// below N — the burst has passed, so resolve a raised alarm. A no-op when never raised. The
 		// rising case can only fire on a matching event (a non-match never grows kept), so a
-		// non-matching event only ever ages the window down toward this falling edge.
-		e.resolve(r, ev.Key, now)
+		// non-matching event only ever ages the window down toward this falling edge. A sample older
+		// than the raise does not clear it (staleFallingEdge): only one beyond the lateness budget can
+		// find it, and an old reading is not evidence the burst has passed.
+		if !e.staleFallingEdge(ev) {
+			e.resolve(r, ev.Key, now)
+		}
 	}
 }
 
@@ -525,14 +529,83 @@ type snapNewest struct {
 	At     time.Time `json:"at"`
 }
 
+// snapshotNewest persists only the instants a restore could not rebuild. It first drops every
+// instant that no longer bears on anything (pruneNewest), then omits one equal to what
+// restoreNewest seeds from the rest of the snapshot (newestFloor) — for a match-every rule, whose
+// newest sample is always retained, that is nearly every series. A restore of the result therefore
+// holds exactly the instants this engine holds, and snapshotting it again gives the same bytes.
 func (e *Engine) snapshotNewest() []snapNewest {
+	e.pruneNewest()
 	out := make([]snapNewest, 0, len(e.newest))
 	for k, t := range e.newest {
+		if floor, ok := e.newestFloor(k); ok && !t.After(floor) {
+			continue
+		}
 		out = append(out, snapNewest{Rule: k.Rule, Series: k.Series, At: t})
 	}
 	sortByRuleSeries(out, func(i int) (string, string) { return out[i].Rule, out[i].Series })
 	return out
 }
+
+// pruneNewest drops every evaluation instant that can no longer change an outcome, so the map holds
+// one entry per series active within its window of the frontier (or raised), not one per series
+// ever seen. It runs where the engine is already walking its state — a snapshot, a live-key count —
+// rather than on the hot path.
+//
+// 🔑 AN INSTANT AT OR BEHIND THE FRONTIER'S WINDOW IS INERT FOR A SERIES THAT IS NOT RAISED. Every
+// cutoff is max(instant, frontier) − window, and with the instant at or before the frontier that is
+// the frontier's cutoff with or without it. A sample older than the instant is then at or behind
+// that cutoff, so it folds nothing; with nothing folded and no latch, no edge can be emitted (a
+// raise needs a fold, a resolve needs the latch). A sample newer than the instant is evaluated at
+// its own time either way. So dropping the instant changes no cutoff, no fold and no edge — only the
+// stored instant itself, which stays inert on both sides until a newer sample replaces it. A raised
+// series keeps its instant: its resolve, and a held one (holdLateResolve), are stamped there.
+func (e *Engine) pruneNewest() {
+	for k, t := range e.newest {
+		if _, raised := e.raised[k]; raised {
+			continue
+		}
+		r, ok := e.rules[k.Rule]
+		if !ok || !t.After(e.wm.now.Add(-r.Window)) {
+			delete(e.newest, k)
+		}
+	}
+}
+
+// newestFloor is the instant restoreNewest seeds for key from the rest of the state: its newest
+// retained sample (each kind's own window) and, for a sliding kind, its rising edge. ok is false
+// when the state holds nothing to seed from. It must agree with restoreNewest exactly, because
+// snapshotNewest omits an instant on the strength of it.
+func (e *Engine) newestFloor(k SeriesKey) (floor time.Time, ok bool) {
+	take := func(t time.Time) {
+		if !ok || t.After(floor) {
+			floor, ok = t, true
+		}
+	}
+	for _, t := range e.sliding[k] {
+		take(t)
+	}
+	if st := e.slides[k]; st != nil {
+		for _, x := range st.buf {
+			take(x.t)
+		}
+		for _, x := range st.late {
+			take(x.t)
+		}
+	}
+	for _, ns := range e.corr[k] {
+		take(time.Unix(0, ns).UTC())
+	}
+	if at, raised := e.raised[k]; raised {
+		if r, known := e.rules[k.Rule]; known && slidingKind(r.Kind) {
+			take(at)
+		}
+	}
+	return floor, ok
+}
+
+// slidingKind reports whether a kind reads its window at the series' newest instant (trailingWindow).
+func slidingKind(k RuleKind) bool { return k == Repeating || k == SlidingAgg || k == Correlation }
 
 // restoreNewest reloads the evaluation instants, then seeds one for every series the snapshot
 // holds trailing-window state or a raise for but no instant — a checkpoint written before the
@@ -569,7 +642,7 @@ func (e *Engine) restoreNewest(in []snapNewest) {
 		}
 	}
 	for k, at := range e.raised {
-		if r, ok := e.rules[k.Rule]; ok && (r.Kind == Repeating || r.Kind == SlidingAgg || r.Kind == Correlation) {
+		if r, ok := e.rules[k.Rule]; ok && slidingKind(r.Kind) {
 			seed(k, at)
 		}
 	}
