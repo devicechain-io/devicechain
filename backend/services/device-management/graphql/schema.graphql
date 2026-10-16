@@ -3999,11 +3999,13 @@ type Mutation {
         token: String!
     ): Boolean!
 
-    # Create a new customer.
+    # Create a new customer. A token a deleted customer held is retired and answers
+    # INVALID_VALUE; a token a live customer holds answers CONFLICT.
     createCustomer(request: CustomerCreateRequest): Customer!
     # Update an existing customer.
     updateCustomer(token: String!, request: CustomerUpdateRequest!): Customer!
-    # Delete a customer and its relationship edges.
+    # Delete a customer and its relationship edges. Its token is retired: no other
+    # customer in the tenant can be created with it.
     deleteCustomer(token: String!): Boolean!
 
     # Create a new area type.

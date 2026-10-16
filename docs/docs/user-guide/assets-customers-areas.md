@@ -67,6 +67,11 @@ button) and the type. **Delete** is at the top right; it asks for confirmation, 
 cannot be undone. If something still depends on the instance, the console shows the server's
 refusal instead.
 
+Deleting a customer also retires its token: you cannot create another customer with the same token
+in this tenant. Alarms, commands, update assignments, shared dashboards and event history name the
+customer by its token and stay after it is deleted, so a new customer at that token would inherit
+them. Choose a different token for the new customer.
+
 The **Basic** tab holds the same form you used to create the instance. You can change the type,
 name and description, then click **Save changes**. The token is shown but cannot be edited.
 

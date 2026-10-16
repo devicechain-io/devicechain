@@ -136,7 +136,7 @@ func newPartialUpdateWireCtx(t *testing.T) context.Context {
 	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
 		&model.DeviceProfileVersion{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 		&model.DetectionRule{}, &model.DetectionRuleScopeRef{},
-		&model.AssetType{}, &model.Asset{}, &model.CustomerType{}, &model.Customer{},
+		&model.AssetType{}, &model.Asset{}, &model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{},
 		&model.AreaType{}, &model.Area{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
 		&model.EntityGroup{}, &model.DeviceCredential{}, &model.ProvisioningProfile{},
 		&model.EntityRelationshipType{}, &model.MaintenanceWindow{}); err != nil {

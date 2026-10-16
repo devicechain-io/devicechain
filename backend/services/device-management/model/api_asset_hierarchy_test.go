@@ -36,7 +36,7 @@ func hierarchyTestApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, rdb.RegisterTokenGrammar(db), "register token grammar")
 	require.NoError(t, db.AutoMigrate(
 		&AssetType{}, &Asset{}, &DeviceType{}, &Device{},
-		&CustomerType{}, &Customer{}, &DeviceClaim{},
+		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DeviceClaim{},
 		&EntityRelationshipType{}, &EntityRelationship{},
 	), "migrate")
 

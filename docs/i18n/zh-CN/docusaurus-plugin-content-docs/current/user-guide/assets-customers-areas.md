@@ -49,6 +49,8 @@ import GuideShot from '@site/src/components/GuideShot';
 
 打开某个实例即可看到它的详情页。页眉显示名称、令牌（带复制按钮）和类型。右上角是 **Delete**（删除）；它会要求确认，且删除无法撤销。如果仍有其他对象依赖该实例，控制台会显示服务器的拒绝原因。
 
+删除客户还会停用它的令牌：在此租户中不能再用同一令牌创建另一个客户。告警、命令、更新分配、共享仪表板和事件历史都通过令牌指向客户，并在客户删除后保留，因此使用该令牌的新客户会继承它们。请为新客户选择其他令牌。
+
 **Basic**（基本信息）选项卡的表单与创建实例时相同。你可以修改类型、名称和描述，然后点击 **Save changes**（保存更改）。令牌可见但不可编辑。
 
 <GuideShot id="asset-detail-basic" alt="HVAC Unit 1 的详情页，位于 Basic 选项卡：Asset type 为 HVAC Unit，只读的 Token 并附说明资产 ID 不可更改，以及 Name、Description 和“Save changes”按钮。Basic 旁边是 Facets、Hierarchy、Properties 和 Devices 选项卡。" />

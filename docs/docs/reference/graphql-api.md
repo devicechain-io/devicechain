@@ -768,6 +768,13 @@ An event recorded while the device belonged to no customer is not visible to a m
 limited access. Neither is an alarm raised before this release: alarms record their customers only
 from this release on.
 
+Because these records name a customer by its token, a deleted customer's token is retired: no other
+customer in the tenant can take it, or the new customer's members would see the deleted customer's
+alarms, commands, update assignments, shared dashboards and event history as their own.
+`createCustomer` at a retired token answers `INVALID_VALUE`, and the message says the token is
+retired. Choose another token. A token is freed only when the whole tenant is deleted. A customer
+that still exists at the token answers `CONFLICT`, as before.
+
 ### Refusals when administering a tenant {#tenant-administration-refusals}
 
 A tenant's own administrators manage its members, invitations and roles through user-management's

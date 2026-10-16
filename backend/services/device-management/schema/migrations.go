@@ -44,5 +44,6 @@ var (
 		NewMaintenanceWindowsSchema(),
 		NewCommandImpactSchema(),
 		NewAlarmScopeAnchorsSchema(),
+		NewIssuedCustomerTokensSchema(),
 	}
 )

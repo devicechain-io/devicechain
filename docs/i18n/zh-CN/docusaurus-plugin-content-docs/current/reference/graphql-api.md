@@ -632,6 +632,8 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。
 
+由于这些记录通过令牌指向客户，已删除客户的令牌会被停用：租户中的其他客户都不能再使用它，否则新客户的成员会把已删除客户的告警、命令、更新分配、共享仪表板和事件历史当作自己的。用已停用的令牌调用 `createCustomer` 会返回 `INVALID_VALUE`，消息会说明该令牌已停用。请换一个令牌。只有删除整个租户时，令牌才会被释放。如果该令牌上的客户仍然存在，则与以前一样返回 `CONFLICT`。
+
 ### 管理租户时的拒绝 {#tenant-administration-refusals}
 
 租户自己的管理员通过 user-management 的租户 API（`inviteMember`、`setMemberRoles`、`setMemberScope`、`setMemberEnabled`、`removeMember`、`createTenantRole`、`updateTenantRole`、`deleteTenantRole` 等）管理该租户的成员、邀请和角色。这些操作使用各自的代码拒绝请求，因此客户端无需读取消息就能判断原因：

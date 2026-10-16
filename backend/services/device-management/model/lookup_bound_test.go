@@ -29,7 +29,7 @@ func TestKeyLookupsAreBounded(t *testing.T) {
 	api := newPartialUpdateApi(t,
 		&Alarm{}, &AreaType{}, &Area{}, &AssetType{}, &Asset{}, &CommandDefinition{},
 		&DeviceProfile{}, &EntityRelationshipType{}, &EntityRelationship{}, &DeviceCredential{},
-		&Device{}, &DeviceType{}, &CustomerType{}, &Customer{}, &DetectionRule{}, &GeoFence{},
+		&Device{}, &DeviceType{}, &CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DetectionRule{}, &GeoFence{},
 		&EntityGroup{}, &MetricDefinition{}, &ProvisioningProfile{}, &EntityAttribute{})
 	ctx := core.WithTenant(context.Background(), "acme")
 

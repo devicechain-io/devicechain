@@ -407,9 +407,11 @@ func (api *Api) DeleteCustomerType(ctx context.Context, token string) (bool, err
 		func(m *CustomerType) uint { return m.ID }, &CustomerType{}, token, &Customer{}, "customer_type_id")
 }
 
-// DeleteCustomer deletes a customer and its relationship edges.
+// DeleteCustomer deletes a customer and its relationship edges, and retires its token: no
+// other customer in the tenant may take it (see ErrCustomerTokenRetired).
 func (api *Api) DeleteCustomer(ctx context.Context, token string) (bool, error) {
-	return api.deleteEdgeEntity(ctx, entity.TypeCustomer, &Customer{}, token, nil)
+	return api.deleteEdgeEntity(ctx, entity.TypeCustomer, &Customer{}, token,
+		func(tx *gorm.DB, _ uint) error { return retireCustomerToken(tx, token) })
 }
 
 // --- Relationships (ADR-013) ---------------------------------------------------
