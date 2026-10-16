@@ -1604,6 +1604,13 @@ export type DeviceLocationDeclarationQueryVariables = Exact<{
 
 export type DeviceLocationDeclarationQuery = { deviceLocationDeclaration: { declared: boolean, declaration: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null } | null };
 
+export type DeviceMetricVocabularyQueryVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type DeviceMetricVocabularyQuery = { deviceMetricVocabulary: { metrics: Array<{ metricKey: string, dataType: string, unit: string | null, minValue: number | null, maxValue: number | null, allowedValues: Array<string> | null }> } | null };
+
 export type CreateCommandDefinitionMutationVariables = Exact<{
   request?: CommandDefinitionCreateRequest | null | undefined;
 }>;
@@ -3397,6 +3404,20 @@ export const DeviceLocationDeclarationDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceLocationDeclarationQuery, DeviceLocationDeclarationQueryVariables>;
+export const DeviceMetricVocabularyDocument = new TypedDocumentString(`
+    query DeviceMetricVocabulary($deviceToken: String!) {
+  deviceMetricVocabulary(deviceToken: $deviceToken) {
+    metrics {
+      metricKey
+      dataType
+      unit
+      minValue
+      maxValue
+      allowedValues
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceMetricVocabularyQuery, DeviceMetricVocabularyQueryVariables>;
 export const CreateCommandDefinitionDocument = new TypedDocumentString(`
     mutation CreateCommandDefinition($request: CommandDefinitionCreateRequest) {
   createCommandDefinition(request: $request) {

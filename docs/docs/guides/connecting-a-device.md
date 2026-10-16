@@ -192,6 +192,10 @@ A bad client id, a missing `{tenant}:` prefix and a bad credential all produce t
 
 ### Publishing an event {#publishing-an-event}
 
+:::tip Let the console write it
+The **Send data** tab of a device's page in the console builds this command, and the HTTP one below, for that device: its token, its credential and example readings for the metrics its published profile declares. See [Send data](/user-guide/devices#send-data).
+:::
+
 Publish the event body to your device's events topic:
 
 ```bash

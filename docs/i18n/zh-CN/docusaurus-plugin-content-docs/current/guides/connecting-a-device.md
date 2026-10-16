@@ -192,6 +192,10 @@ MQTT 主题直接映射为 NATS subject。发布到 `{instanceId}/{tenant}/devic
 
 ### 发布事件 {#publishing-an-event}
 
+:::tip 让控制台来写
+控制台设备页面上的 **Send data**（发送数据）选项卡会为该设备生成这条命令以及下文的 HTTP 命令：包括它的令牌、凭据，以及其已发布配置文件所声明指标的示例读数。参见[发送数据](/user-guide/devices#send-data)。
+:::
+
 将事件正文发布到设备自己的事件主题：
 
 ```bash

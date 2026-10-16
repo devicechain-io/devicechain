@@ -813,6 +813,36 @@ type DeviceLocationCapability {
     declaration: DeviceLocationDeclaration
 }
 
+"""
+The metrics a device's measurements are validated against, from the active published
+version of its profile (not the draft).
+"""
+type DeviceMetricVocabulary {
+    """
+    The published metrics. Empty when the device's type has no profile, the profile was
+    never published, or the published version declares no metric. Empty does not mean the
+    device may send nothing: a measurement whose key is not declared is accepted without
+    validation, provided its value is a number.
+    """
+    metrics: [PublishedMetric!]!
+}
+
+"""A metric in a device's published profile version, as inbound measurements are checked against it."""
+type PublishedMetric {
+    """The key a measurement uses to report this metric."""
+    metricKey: String!
+    """DOUBLE, INT or BOOLEAN; a measurement's value must parse as this type."""
+    dataType: String!
+    """The unit, or null when none is declared."""
+    unit: String
+    """The smallest value accepted, or null when there is no lower bound."""
+    minValue: Float
+    """The largest value accepted, or null when there is no upper bound."""
+    maxValue: Float
+    """The only values accepted, or null when any value of the type is accepted."""
+    allowedValues: [String!]
+}
+
 # Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema
 # is the ordered []ParameterSpec argument contract as a JSON string, which drives the
 # console command form and constrains an issued command's payload at enqueue (the
@@ -3179,6 +3209,15 @@ type Query {
         """Token of the device."""
         deviceToken: String!
     ): DeviceLocationCapability
+    """
+    Lists the metrics a device's measurements are validated against, from the active
+    published version of its profile: the same reading ingest validates and stores each
+    measurement by. Returns null when no device has the token. Requires device:read.
+    """
+    deviceMetricVocabulary(
+        """Token of the device."""
+        deviceToken: String!
+    ): DeviceMetricVocabulary
     # Find detection rules by unique id.
     detectionRulesById(ids: [ID!]!): [DetectionRule!]!
     # Find detection rules by unique token.

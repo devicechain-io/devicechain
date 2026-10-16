@@ -88,6 +88,13 @@ func (r ProfileResolution) Metric(key string) (ResolvedMetric, bool) {
 	return ResolvedMetric{}, false
 }
 
+// MetricAt is the i-th declared metric (0 <= i < MetricCount), in declaration order, as a
+// copy. Indexed rather than handed out as a slice, so nothing a caller holds is the
+// resolution's own (TestAResolutionHandsOutNothingWritable).
+func (r ProfileResolution) MetricAt(i int) ResolvedMetric {
+	return r.metrics[i]
+}
+
 // MetricCount is how many metrics the version declares: 0 for an untyped device type or
 // an unpublished profile.
 func (r ProfileResolution) MetricCount() int {

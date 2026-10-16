@@ -166,7 +166,7 @@ dispositivo, su token (con un botón para copiarlo), su tipo y, si está deshabi
 distintivo **Deshabilitado**. A la derecha están **Deshabilitar** (o **Habilitar**) y
 **Eliminar**. Eliminar un dispositivo no se puede deshacer.
 
-La página se organiza en pestañas. Puede que no las veas todas: **Credenciales** y
+La página se organiza en pestañas. Puede que no las veas todas: **Credenciales**, **Enviar datos** y
 **Sustitución** requieren permiso para modificar dispositivos, y **Actualizaciones** solo aparece
 cuando tu instalación ejecuta el servicio de actualizaciones y tienes permiso para verlas.
 
@@ -348,6 +348,47 @@ Copia la contraseña, dásela al dispositivo y elige **Listo**. Cuando establece
 nueva, la anterior deja de funcionar en cuanto guardas.
 
 Consulta [Credenciales de dispositivo](../guides/device-credentials.md).
+
+### Enviar datos {#send-data}
+
+**Enviar datos** construye un comando listo para ejecutar que envía la primera medición del
+dispositivo: un `mosquitto_pub` para MQTT o un `curl` para HTTP. Elige el transporte, y la
+credencial si el dispositivo tiene más de una, y copia el comando con el botón de copiar.
+
+El comando usa el token y la credencial del dispositivo, y las métricas de la versión
+**publicada** de su perfil, con valores de ejemplo que el perfil acepta. Una métrica que solo
+existe en el borrador no se usa, porque la plataforma comprueba las lecturas contra la versión
+publicada. Cuando la versión publicada no tiene ninguna métrica que el ejemplo pueda usar, el
+comando envía en su lugar una lectura no declarada, que se almacena siempre que su valor sea un
+número. Se incluyen como máximo ocho métricas.
+
+La consola no puede conocer algunos valores, así que el comando deja un marcador para cada uno:
+
+| Marcador | Sustitúyelo por |
+| --- | --- |
+| `<instance-id>` | El id de instancia elegido al instalar la instancia. Es el espacio de nombres de Kubernetes de la instancia sin el prefijo `dci-`. |
+| `<mqtt-host>` | El host en el que se expone el listener MQTT. El listener usa TLS, así que guarda el certificado de la CA de la instancia como `instance-ca.crt`. |
+| `<ingest-host>` | El host del listener de ingesta HTTP, puerto 8081. Una instalación predeterminada no lo expone fuera del clúster; consulta [Tu primer dispositivo](../quickstart/first-device.md#5-open-a-path-to-the-ingest-endpoint). |
+| `<password>` | La contraseña de una credencial `MQTT_BASIC`. Solo se muestra una vez, al establecerla. Si la has perdido, establece una nueva en la pestaña **Credenciales**. |
+
+La pestaña no ofrece ningún comando cuando el comando no podría funcionar, y en su lugar indica
+qué corregir:
+
+- El dispositivo está **deshabilitado**. Los eventos de un dispositivo deshabilitado se descartan
+  al llegar.
+- El dispositivo no tiene ninguna credencial habilitada y sin caducar. Por defecto, la plataforma
+  exige una credencial en cada conexión y en cada evento. Añade una primero en la pestaña
+  **Credenciales**.
+
+Un dispositivo que no está asignado a nada puede enviar datos; sus eventos se almacenan.
+
+Como **Credenciales**, la pestaña requiere permiso para modificar dispositivos, porque el comando
+incluye el token de acceso.
+
+Un `202` de HTTP, o un acuse de recibo MQTT, significa que el evento se recibió, no que se
+almacenó. Búscalo en la pestaña **Eventos**.
+
+Consulta [Conectar un dispositivo](../guides/connecting-a-device.md).
 
 ### Sustitución
 

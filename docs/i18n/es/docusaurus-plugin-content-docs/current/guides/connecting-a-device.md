@@ -192,6 +192,10 @@ Un client id incorrecto, un prefijo `{tenant}:` ausente y una credencial incorre
 
 ### Publicación de un evento {#publishing-an-event}
 
+:::tip Deja que la consola lo escriba
+La pestaña **Enviar datos** de la página de un dispositivo en la consola construye este comando, y el de HTTP más abajo, para ese dispositivo: su token, su credencial y lecturas de ejemplo para las métricas que declara su perfil publicado. Consulta [Enviar datos](../user-guide/devices.md#send-data).
+:::
+
 Publica el cuerpo del evento en el topic de eventos de tu dispositivo:
 
 ```bash
