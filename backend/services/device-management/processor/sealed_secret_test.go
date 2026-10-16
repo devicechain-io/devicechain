@@ -55,7 +55,7 @@ func TestOnlyASecretSealedForThisCredentialAuthenticates(t *testing.T) {
 		rez    *EventResolver
 		mutate func(*esmodel.UnresolvedEvent)
 	}{
-		"the plaintext of an older message": {keyed, func(e *esmodel.UnresolvedEvent) { e.SealedCredentialSecret = &plaintext }},
+		"the plaintext of an older message": {keyed, func(e *esmodel.UnresolvedEvent) { e.SealedCredentialSecret = []byte(plaintext) }},
 		"sealed for another credential id":  {keyed, func(e *esmodel.UnresolvedEvent) { e.CredentialId = &otherCred }},
 		"no key to open it with":            {keyless, func(*esmodel.UnresolvedEvent) {}},
 	} {

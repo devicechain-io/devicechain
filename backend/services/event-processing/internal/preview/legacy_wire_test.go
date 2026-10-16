@@ -1,0 +1,81 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package preview
+
+import (
+	"context"
+	"encoding/hex"
+	"testing"
+	"time"
+
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	dmproto "github.com/devicechain-io/dc-device-management/proto"
+	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/messaging"
+)
+
+// legacyResolvedMeasurementHex is a resolved measurement as device-management wrote it before
+// each instant became a count of nanoseconds, byte for byte (origin/main 9b680acf6; the same
+// message device-management/proto/legacy_wire_test.go decodes): devicepulse-00001 under
+// profile version pulse@3 reports temp 21.5 at 2026-10-16T09:30:14.987654321Z, with an
+// envelope carrying the device's +02:00 offset.
+const legacyResolvedMeasurementHex = "0a04687474701a1164657669636570756c73652d303030303122150a08637573746f6d6572120761636d652d636f18053a23323032362d31302d31365431313a33303a31352e3132333435363738392b30323a3030421e323032362d31302d31365430393a33303a31352e3132353030303030375a4802523f0a3d0a1b0a0474656d70120432312e351801220343656c2a06444f55424c45121e323032362d31302d31365430393a33303a31342e3938373635343332315a5a0b64657669636570756c7365620770756c7365403372156578742d64657669636570756c73652d3030303031"
+
+// THE PREVIEW REPLAYS HISTORY, and history spans the upgrade: a window that opens before it
+// reads messages in the string form and then messages in the count form, off one retained
+// stream. Both must evaluate, at their own instants: the legacy reading raises, the
+// current-format one a minute later resolves.
+func TestPreviewReplaysAWindowThatSpansTheFormatChange(t *testing.T) {
+	legacy, err := hex.DecodeString(legacyResolvedMeasurementHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ev, err := dmproto.UnmarshalResolvedEvent(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sampleAt := time.Date(2026, 10, 16, 9, 30, 14, 987654321, time.UTC)
+	later := *ev
+	later.OccurredTime, later.ProcessedTime = ev.OccurredTime.Add(time.Minute), ev.ProcessedTime.Add(time.Minute)
+	later.Payload = &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		OccurredTime: sampleAt.Add(time.Minute),
+		Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "10"}},
+	}}}
+	current, err := dmproto.MarshalResolvedEvent(&later)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(seq uint64, b []byte) messaging.Message {
+		m := messaging.NewConsumedMessage("dc.acme.resolved-events", b, 0, nil, nil)
+		m.StreamSeq = seq
+		return m
+	}
+
+	thr := 20.0
+	cr, err := rules0.Compile(rules0.Rule{
+		ID: "acme/pulse@3/hot", Name: "hot", Type: rules0.TypeThreshold, Severity: rules0.SeverityCritical,
+		When: rules0.Condition{Metric: "temp", Op: rules0.OpGt, Threshold: &thr},
+	}, rules0.Limits{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	reg := runtime.NewRuleRegistry([]runtime.ScopedRule{{Tenant: "acme", ProfileVersionToken: "pulse@3", Compiled: cr}})
+
+	op := &fakeOpener{msgs: []messaging.Message{at(1, legacy), at(2, current)}}
+	window := TimeRange{Start: sampleAt.Add(-time.Hour), End: sampleAt.Add(time.Hour)}
+	res, err := Run(context.Background(), op, "resolved-events", reg, "acme", "pulse@3", window, 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Stats.EventsScanned != 2 || len(res.Firings) != 2 {
+		t.Fatalf("scanned %d, firings %+v; want both messages scanned, a raise and a resolve", res.Stats.EventsScanned, res.Firings)
+	}
+	if !res.Firings[0].Raise || !res.Firings[0].OccurredAt.Equal(sampleAt) || res.Firings[0].Value != 21.5 {
+		t.Fatalf("firing[0] = %+v; want the legacy reading's RAISE at %s", res.Firings[0], sampleAt)
+	}
+	if res.Firings[1].Raise || !res.Firings[1].OccurredAt.Equal(sampleAt.Add(time.Minute)) {
+		t.Fatalf("firing[1] = %+v; want the current-format reading's RESOLVE a minute later", res.Firings[1])
+	}
+}

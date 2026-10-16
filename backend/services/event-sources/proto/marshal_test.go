@@ -25,7 +25,7 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 		Payload:                &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 		CredentialType:         strptr(string("MQTT_BASIC")),
 		CredentialId:           strptr("device-user"),
-		SealedCredentialSecret: strptr("dcs2$00000000$sealed-form"),
+		SealedCredentialSecret: []byte("\xd2sealed-form"),
 	}
 
 	bytes, err := MarshalUnresolvedEvent(event)
@@ -39,7 +39,7 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 	assert.Equal(t, "device-user", *got.CredentialId)
 	assert.Nil(t, got.CredentialSecret, "the plaintext field never crosses the wire")
 	assert.NotNil(t, got.SealedCredentialSecret)
-	assert.Equal(t, "dcs2$00000000$sealed-form", *got.SealedCredentialSecret)
+	assert.Equal(t, []byte("\xd2sealed-form"), got.SealedCredentialSecret)
 }
 
 // The stream keeps what is marshalled, so an event that still carries the secret as the
@@ -153,12 +153,12 @@ func TestMarshalRefusesAnUnsealedAccessToken(t *testing.T) {
 	assert.Nil(t, bytes)
 
 	event.CredentialId = nil
-	event.SealedCredentialId = strptr("dcs2$00000000$sealed-token")
+	event.SealedCredentialId = []byte("\xd2sealed-token")
 	bytes, err = MarshalUnresolvedEvent(event)
 	assert.NoError(t, err)
 	got, err := UnmarshalUnresolvedEvent(bytes)
 	assert.NoError(t, err)
 	assert.Nil(t, got.CredentialId)
-	assert.Equal(t, "dcs2$00000000$sealed-token", *got.SealedCredentialId)
+	assert.Equal(t, []byte("\xd2sealed-token"), got.SealedCredentialId)
 	assert.NotContains(t, string(bytes), "tok-as-sent")
 }

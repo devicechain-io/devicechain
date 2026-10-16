@@ -30,14 +30,18 @@ func disabledPresence(disabled bool) *model.ResolvedEvent {
 	}
 }
 
-// 🔴 The mark is the only field past 15, so it is the only one whose TAG is two bytes. The
-// direct writer's bytes, decoded by the GENERATED decoder (not by this package's own
-// UnmarshalResolvedEvent, which an equal-but-wrong pair could satisfy), must carry it, and
-// they must end in exactly the field-16 varint encoding: tag 0x80 0x01, value 0x01.
+// 🔴 The mark is past field 15, so its TAG is two bytes. The direct writer's bytes, decoded by
+// the GENERATED decoder (not by this package's own UnmarshalResolvedEvent, which an
+// equal-but-wrong pair could satisfy), must carry it, and in exactly the field-16 varint
+// encoding: tag 0x80 0x01, value 0x01. Only the two envelope instants (fields 17 and 18, ten
+// bytes each) follow it.
 func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
 	encoded, err := MarshalResolvedEvent(disabledPresence(true))
 	require.NoError(t, err)
-	require.True(t, bytes.HasSuffix(encoded, []byte{0x80, 0x01, 0x01}), "field 16 is not the last three bytes: % x", encoded)
+	const instants = 2 * envelopeNanosSize
+	require.Greater(t, len(encoded), instants+3)
+	require.Equal(t, []byte{0x80, 0x01, 0x01}, encoded[len(encoded)-instants-3:len(encoded)-instants],
+		"field 16 is not the three bytes before the instants: % x", encoded)
 
 	var pb PResolvedEvent
 	require.NoError(t, proto.Unmarshal(encoded, &pb))
@@ -52,8 +56,11 @@ func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
 	plain, err := MarshalResolvedEvent(disabledPresence(false))
 	require.NoError(t, err)
 	assert.Equal(t, len(encoded)-3, len(plain))
-	_, _, n := protowire.ConsumeField(encoded[len(plain):])
+	at := len(encoded) - instants - 3
+	_, _, n := protowire.ConsumeField(encoded[at:])
 	assert.Equal(t, 3, n)
+	assert.Equal(t, plain, append(bytes.Clone(encoded[:at]), encoded[at+3:]...),
+		"marked and unmarked differ in the mark alone")
 }
 
 // A consumer built before the field existed — every pod still on the previous release during a

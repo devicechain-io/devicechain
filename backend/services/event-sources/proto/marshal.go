@@ -10,19 +10,51 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/credential"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/proto"
 )
 
-// marshalEntryTime renders one sample's own instant onto the wire, or nil when the
-// device timed only the message. Absence is meaningful BEFORE resolution — it is what
-// tells the resolver to fall back to the envelope — so it survives the round trip
-// rather than being defaulted here.
-func marshalEntryTime(occurred *time.Time) *string {
-	if occurred == nil {
-		return nil
+// Every instant on this message is written in exactly one of two forms (eventtime.WireNanos):
+// nanoseconds since the Unix epoch in an sfixed64 field, or, for an instant that count
+// cannot hold, an RFC 3339 string in the field every instant was written in before. A
+// reader takes the number when it is present and the string otherwise, which is also what
+// reads a message written before the number existed.
+
+// wireTime is an envelope instant in whichever form it takes: the count, or the string.
+func wireTime(at time.Time) (*int64, string) {
+	if nanos, ok := eventtime.WireNanos(at); ok {
+		return &nanos, ""
 	}
-	formatted := occurred.UTC().Format(time.RFC3339Nano)
-	return &formatted
+	return nil, eventtime.WireString(at)
+}
+
+// readWireTime reads an envelope instant back: the count when present, else the string.
+// A message with neither fails, as a message with an unparseable string always has.
+func readWireTime(nanos *int64, text string) (time.Time, error) {
+	if nanos != nil {
+		return eventtime.FromWireNanos(*nanos), nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, text)
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.UTC(), nil
+}
+
+// marshalEntryTime renders one sample's own instant onto the wire, in one form or the
+// other, or in neither when the device timed only the message. Absence is meaningful
+// BEFORE resolution — it is what tells the resolver to fall back to the envelope — so it
+// survives the round trip rather than being defaulted here.
+func marshalEntryTime(occurred *time.Time) (*int64, *string) {
+	if occurred == nil {
+		return nil, nil
+	}
+	nanos, text := wireTime(*occurred)
+	if nanos != nil {
+		return nanos, nil
+	}
+	return nil, &text
 }
 
 // unmarshalEntryTime reads one sample's own instant back off the wire.
@@ -34,7 +66,11 @@ func marshalEntryTime(occurred *time.Time) *string {
 // that defect into a batch silently collapsed onto one instant — the exact failure this
 // whole change removes. The envelope's own time has always been handled this way
 // (UnmarshalUnresolvedEvent below); this makes the entries match.
-func unmarshalEntryTime(raw *string) (*time.Time, error) {
+func unmarshalEntryTime(nanos *int64, raw *string) (*time.Time, error) {
+	if nanos != nil {
+		at := eventtime.FromWireNanos(*nanos)
+		return &at, nil
+	}
 	if raw == nil {
 		return nil, nil
 	}
@@ -42,7 +78,21 @@ func unmarshalEntryTime(raw *string) (*time.Time, error) {
 	if err != nil {
 		return nil, fmt.Errorf("entry occurredTime %q is not an RFC3339 timestamp: %w", *raw, err)
 	}
+	parsed = parsed.UTC()
 	return &parsed, nil
+}
+
+// readSeal reads a sealed credential value: the binary form, or the text form a message
+// written before it carries, brought to the binary form (credential.SealedFromText). nil
+// when the message carries neither.
+func readSeal(binary []byte, text *string) []byte {
+	if binary != nil {
+		return binary
+	}
+	if text != nil {
+		return credential.SealedFromText(*text)
+	}
+	return nil
 }
 
 // Marshal payload for a new relationship event.
@@ -63,6 +113,7 @@ func MarshalPayloadForNewRelationshipEvent(payload *model.UnresolvedNewRelations
 func MarshalPayloadForLocationsEvent(payload *model.UnresolvedLocationsPayload) ([]byte, error) {
 	pbpayload := &PUnresolvedLocationsPayload{}
 	for _, entry := range payload.Entries {
+		nanos, text := marshalEntryTime(entry.OccurredTime)
 		pbentry := &PUnresolvedLocationEntry{
 			Latitude:     entry.Latitude,
 			Longitude:    entry.Longitude,
@@ -70,7 +121,8 @@ func MarshalPayloadForLocationsEvent(payload *model.UnresolvedLocationsPayload) 
 			Accuracy:     entry.Accuracy,
 			Speed:        entry.Speed,
 			Heading:      entry.Heading,
-			OccurredTime: marshalEntryTime(entry.OccurredTime),
+			Occurred:     nanos,
+			OccurredTime: text,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -91,12 +143,14 @@ func MarshalPayloadForMeasurementsEvent(payload *model.UnresolvedMeasurementsPay
 func MarshalPayloadForAlertsEvent(payload *model.UnresolvedAlertsPayload) ([]byte, error) {
 	pbpayload := &PUnresolvedAlertsPayload{}
 	for _, entry := range payload.Entries {
+		nanos, text := marshalEntryTime(entry.OccurredTime)
 		pbentry := &PUnresolvedAlertEntry{
 			Type:         entry.Type,
 			Level:        entry.Level,
 			Message:      entry.Message,
 			Source:       entry.Source,
-			OccurredTime: marshalEntryTime(entry.OccurredTime),
+			Occurred:     nanos,
+			OccurredTime: text,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -147,7 +201,7 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte) (*model.UnresolvedLocatio
 	payload := &model.UnresolvedLocationsPayload{}
 	entries := make([]model.UnresolvedLocationEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
-		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime)
+		occurred, terr := unmarshalEntryTime(pbentry.Occurred, pbentry.OccurredTime)
 		if terr != nil {
 			return nil, terr
 		}
@@ -176,7 +230,7 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte) (*model.UnresolvedMeas
 	payload := &model.UnresolvedMeasurementsPayload{}
 	entries := make([]model.UnresolvedMeasurementsEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
-		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime)
+		occurred, terr := unmarshalEntryTime(pbentry.Occurred, pbentry.OccurredTime)
 		if terr != nil {
 			return nil, terr
 		}
@@ -200,7 +254,7 @@ func UnmarshalPayloadForAlertsEvent(encoded []byte) (*model.UnresolvedAlertsPayl
 	payload := &model.UnresolvedAlertsPayload{}
 	entries := make([]model.UnresolvedAlertEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
-		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime)
+		occurred, terr := unmarshalEntryTime(pbentry.Occurred, pbentry.OccurredTime)
 		if terr != nil {
 			return nil, terr
 		}
@@ -318,20 +372,25 @@ func MarshalUnresolvedEvent(event *model.UnresolvedEvent) ([]byte, error) {
 		return nil, err
 	}
 
-	// Encode protobuf event.
+	// Encode protobuf event. Each instant in one form (wireTime), each seal in the binary
+	// form only: the text fields of the seal are read, never written.
+	occurred, occurredText := wireTime(event.OccurredTime)
+	processed, processedText := wireTime(event.ProcessedTime)
 	pbevent := &PUnresolvedEvent{
 		SourceId:               event.Source,
 		AltId:                  event.AltId,
 		Device:                 event.Device,
 		Relationship:           event.Relationship,
-		OccurredTime:           event.OccurredTime.Format(time.RFC3339Nano),
-		ProcessedTime:          event.ProcessedTime.Format(time.RFC3339Nano),
+		Occurred:               occurred,
+		OccurredTime:           occurredText,
+		Processed:              processed,
+		ProcessedTime:          processedText,
 		EventType:              int64(event.EventType),
 		Payload:                plbytes,
 		CredentialType:         event.CredentialType,
 		CredentialId:           event.CredentialId,
-		CredentialSecret:       event.SealedCredentialSecret,
-		SealedCredentialId:     event.SealedCredentialId,
+		SealedSecret:           event.SealedCredentialSecret,
+		SealedToken:            event.SealedCredentialId,
 		AuthenticatedTransport: event.AuthenticatedTransport,
 	}
 
@@ -362,11 +421,11 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		return nil, err
 	}
 
-	occtime, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
+	occtime, err := readWireTime(pbevent.Occurred, pbevent.OccurredTime)
 	if err != nil {
 		return nil, err
 	}
-	proctime, err := time.Parse(time.RFC3339Nano, pbevent.ProcessedTime)
+	proctime, err := readWireTime(pbevent.Processed, pbevent.ProcessedTime)
 	if err != nil {
 		return nil, err
 	}
@@ -381,8 +440,8 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		Payload:                payload,
 		CredentialType:         pbevent.CredentialType,
 		CredentialId:           pbevent.CredentialId,
-		SealedCredentialSecret: pbevent.CredentialSecret,
-		SealedCredentialId:     pbevent.SealedCredentialId,
+		SealedCredentialSecret: readSeal(pbevent.SealedSecret, pbevent.CredentialSecret),
+		SealedCredentialId:     readSeal(pbevent.SealedToken, pbevent.SealedCredentialId),
 		AuthenticatedTransport: pbevent.AuthenticatedTransport,
 	}
 

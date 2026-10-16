@@ -20,9 +20,11 @@ import (
 func referenceMarshalMeasurements(payload *model.UnresolvedMeasurementsPayload) ([]byte, error) {
 	pbpayload := &PUnresolvedMeasurementsPayload{}
 	for _, entry := range payload.Entries {
+		nanos, text := marshalEntryTime(entry.OccurredTime)
 		pbentry := &PUnresolvedMeasurementsEntry{
 			Measurements: entry.Measurements,
-			OccurredTime: marshalEntryTime(entry.OccurredTime),
+			Occurred:     nanos,
+			OccurredTime: text,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -46,6 +48,10 @@ func measurementShapes() map[string]*model.UnresolvedMeasurementsPayload {
 	utc := time.Date(2026, 10, 1, 12, 0, 0, 123456789, time.UTC)
 	whole := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	offset := time.Date(2026, 10, 1, 14, 30, 0, 5000, time.FixedZone("x", 2*3600+30*60))
+	epoch := time.Unix(0, 0)
+	farFuture := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	zero := time.Time{}
+	farOffset := time.Date(9999, 12, 30, 1, 2, 3, 5, time.FixedZone("z", 2*3600))
 	entry := func(m map[string]string, at *time.Time) model.UnresolvedMeasurementsEntry {
 		return model.UnresolvedMeasurementsEntry{Measurements: m, OccurredTime: at}
 	}
@@ -62,26 +68,31 @@ func measurementShapes() map[string]*model.UnresolvedMeasurementsPayload {
 		many[i] = entry(readings(i, 6, i), t)
 	}
 	return map[string]*model.UnresolvedMeasurementsPayload{
-		"no entries":                  one(),
-		"nil entries":                 {Entries: nil},
-		"one empty entry":             one(entry(nil, nil)),
-		"one entry, empty map":        one(entry(map[string]string{}, nil)),
-		"time only":                   one(entry(nil, &utc)),
-		"one reading":                 one(entry(map[string]string{"cpu": "42.17"}, nil)),
-		"one reading, timed":          one(entry(map[string]string{"cpu": "42.17"}, &utc)),
-		"whole-second time":           one(entry(map[string]string{"cpu": "1"}, &whole)),
-		"non-UTC time":                one(entry(map[string]string{"cpu": "1"}, &offset)),
-		"empty name and value":        one(entry(map[string]string{"": ""}, &utc)),
-		"empty value":                 one(entry(map[string]string{"cpu": ""}, nil)),
-		"unicode":                     one(entry(map[string]string{"température": "21,5 °C", "湿度": "40%"}, &utc)),
-		"ten readings":                one(entry(readings(10, 8, 4), &utc)),
-		"max readings":                one(entry(readings(256, 8, 6), &utc)),
-		"long value (2-byte length)":  one(entry(map[string]string{"blob": strings.Repeat("x", 200)}, &utc)),
-		"long value (3-byte length)":  one(entry(map[string]string{"blob": strings.Repeat("x", 20000)}, &utc)),
-		"item over 127 bytes":         one(entry(map[string]string{strings.Repeat("k", 70): strings.Repeat("v", 70)}, nil)),
-		"entry over 127 bytes":        one(entry(readings(12, 8, 6), &utc)),
-		"several entries":             one(entry(readings(2, 4, 2), &utc), entry(nil, nil), entry(readings(3, 5, 3), &whole)),
-		"many entries, scratch grows": one(many...),
+		"no entries":                         one(),
+		"nil entries":                        {Entries: nil},
+		"one empty entry":                    one(entry(nil, nil)),
+		"one entry, empty map":               one(entry(map[string]string{}, nil)),
+		"time only":                          one(entry(nil, &utc)),
+		"one reading":                        one(entry(map[string]string{"cpu": "42.17"}, nil)),
+		"one reading, timed":                 one(entry(map[string]string{"cpu": "42.17"}, &utc)),
+		"whole-second time":                  one(entry(map[string]string{"cpu": "1"}, &whole)),
+		"non-UTC time":                       one(entry(map[string]string{"cpu": "1"}, &offset)),
+		"the epoch itself":                   one(entry(map[string]string{"cpu": "1"}, &epoch)),
+		"past the count (string)":            one(entry(map[string]string{"cpu": "1"}, &farFuture)),
+		"zero time (string)":                 one(entry(map[string]string{"cpu": "1"}, &zero)),
+		"offset past the count (UTC string)": one(entry(map[string]string{"cpu": "1"}, &farOffset)),
+		"count then string":                  one(entry(map[string]string{"a": "1"}, &utc), entry(nil, &farFuture), entry(nil, &whole)),
+		"empty name and value":               one(entry(map[string]string{"": ""}, &utc)),
+		"empty value":                        one(entry(map[string]string{"cpu": ""}, nil)),
+		"unicode":                            one(entry(map[string]string{"température": "21,5 °C", "湿度": "40%"}, &utc)),
+		"ten readings":                       one(entry(readings(10, 8, 4), &utc)),
+		"max readings":                       one(entry(readings(256, 8, 6), &utc)),
+		"long value (2-byte length)":         one(entry(map[string]string{"blob": strings.Repeat("x", 200)}, &utc)),
+		"long value (3-byte length)":         one(entry(map[string]string{"blob": strings.Repeat("x", 20000)}, &utc)),
+		"item over 127 bytes":                one(entry(map[string]string{strings.Repeat("k", 70): strings.Repeat("v", 70)}, nil)),
+		"entry over 127 bytes":               one(entry(readings(12, 8, 6), &utc)),
+		"several entries":                    one(entry(readings(2, 4, 2), &utc), entry(nil, nil), entry(readings(3, 5, 3), &whole)),
+		"many entries, scratch grows":        one(many...),
 	}
 }
 

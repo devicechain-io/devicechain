@@ -849,7 +849,7 @@ func sealPresentedSecret(tenant string, event *model.UnresolvedEvent) bool {
 		log.Error().Err(err).Msg("Dropping an event carrying a credential secret: it could not be sealed")
 		return false
 	}
-	event.SealedCredentialSecret = &sealed
+	event.SealedCredentialSecret = sealed
 	return true
 }
 
@@ -885,7 +885,7 @@ func sealPresentedToken(tenant string, event *model.UnresolvedEvent) bool {
 		log.Error().Err(err).Msg("Dropping an event carrying an access token: it could not be sealed")
 		return false
 	}
-	event.SealedCredentialId = &sealed
+	event.SealedCredentialId = sealed
 	return true
 }
 

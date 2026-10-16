@@ -43,9 +43,11 @@ func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayl
 				DataType:   mxentry.DataType,
 			})
 		}
+		nanos, text := marshalEntryTime(mxsentry.OccurredTime)
 		pbpayload.Entries = append(pbpayload.Entries, &PResolvedMeasurementsEntry{
 			Measurements: pmxentries,
-			OccurredTime: marshalEntryTime(mxsentry.OccurredTime),
+			Occurred:     nanos,
+			OccurredTime: text,
 		})
 	}
 	return proto.Marshal(pbpayload)
@@ -74,6 +76,14 @@ func referenceMarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	for _, m := range event.ScopeMemberships {
 		memberships = append(memberships, &PScopeMembership{GroupToken: m.GroupToken, Version: m.Version})
 	}
+	occurred, occurredText := marshalEntryTime(event.OccurredTime)
+	processed, processedText := marshalEntryTime(event.ProcessedTime)
+	deref := func(s *string) string {
+		if s == nil {
+			return ""
+		}
+		return *s
+	}
 	return proto.Marshal(&PResolvedEvent{
 		Source:               event.Source,
 		AltId:                event.AltId,
@@ -85,8 +95,10 @@ func referenceMarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		ExternalId:           referenceOptionalString(event.ExternalId),
 		FenceSetVersion:      event.FenceSetVersion,
 		SourceDeviceDisabled: event.SourceDeviceDisabled,
-		OccurredTime:         event.OccurredTime.Format(time.RFC3339Nano),
-		ProcessedTime:        event.ProcessedTime.Format(time.RFC3339Nano),
+		Occurred:             occurred,
+		OccurredTime:         deref(occurredText),
+		Processed:            processed,
+		ProcessedTime:        deref(processedText),
 		EventType:            int64(event.EventType),
 		Payload:              pybytes,
 	})
@@ -170,6 +182,21 @@ func resolvedShapes() map[string]*model.ResolvedEvent {
 			e.OccurredTime, e.ProcessedTime = offset, whole
 			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: offset, Entries: readings(1)},
 				model.ResolvedMeasurementsEntry{OccurredTime: whole, Entries: readings(1)})
+		}),
+		"instants past the count (string form)": with(func(e *model.ResolvedEvent) {
+			far := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+			e.OccurredTime = far
+			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: far, Entries: readings(1)},
+				model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(1)})
+		}),
+		"an offset instant past the count (string form, in UTC)": with(func(e *model.ResolvedEvent) {
+			far := time.Date(9999, 12, 30, 1, 2, 3, 5, time.FixedZone("z", 2*3600))
+			e.ProcessedTime = far
+			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: far, Entries: readings(1)})
+		}),
+		"the epoch itself is a count": with(func(e *model.ResolvedEvent) {
+			e.OccurredTime, e.ProcessedTime = time.Unix(0, 0), time.Unix(0, 0)
+			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: time.Unix(0, 0), Entries: readings(1)})
 		}),
 		"zero times": with(func(e *model.ResolvedEvent) {
 			e.OccurredTime, e.ProcessedTime = time.Time{}, time.Time{}

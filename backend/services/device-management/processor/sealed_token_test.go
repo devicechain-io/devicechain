@@ -54,10 +54,10 @@ func TestOnlyATokenSealedForThisTenantAndTypeAuthenticates(t *testing.T) {
 			mutate func(*esmodel.UnresolvedEvent)
 		}{
 			"the clear id of an older message":   {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId, e.CredentialId = nil, &clear }},
-			"the token itself in the sealed id":  {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = &clear }},
-			"sealed for another tenant":          {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = &foreign }},
-			"sealed for another credential type": {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = &wrongType }},
-			"a sealed password":                  {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = &asSecret }},
+			"the token itself in the sealed id":  {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = []byte(clear) }},
+			"sealed for another tenant":          {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = foreign }},
+			"sealed for another credential type": {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = wrongType }},
+			"a sealed password":                  {mode(m, true), func(e *esmodel.UnresolvedEvent) { e.SealedCredentialId = asSecret }},
 			"no key to open it with":             {mode(m, false), func(*esmodel.UnresolvedEvent) {}},
 		} {
 			reason, err := resolve(c.rez, c.mutate)
@@ -93,7 +93,7 @@ func TestASealedTokenBesideASecretIsRefusedNotPanicked(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		e.SealedCredentialSecret = &sealed
+		e.SealedCredentialSecret = sealed
 		_, reason, err := rez.ResolveEvent(rig.ctx, e)
 		if err == nil || reason != uint(dmproto.FailureReason_Unauthenticated) {
 			t.Errorf("%s: reason %d, err %v, want Unauthenticated", m, reason, err)
@@ -105,8 +105,8 @@ func TestASealedTokenBesideASecretIsRefusedNotPanicked(t *testing.T) {
 // against, so it is refused rather than read as an absent credential.
 func TestATypelessSealedIdIsRefused(t *testing.T) {
 	rez := &EventResolver{SecretTransit: testSecretTransit(t)}
-	sealed := "dcs2$00000000$x"
-	got, err := rez.presentedCredential(credCtx(), &esmodel.UnresolvedEvent{SealedCredentialId: &sealed})
+	sealed := []byte("\xd2sealed")
+	got, err := rez.presentedCredential(credCtx(), &esmodel.UnresolvedEvent{SealedCredentialId: sealed})
 	if err == nil || got != nil {
 		t.Fatalf("got %v, %v; want a refusal", got, err)
 	}
