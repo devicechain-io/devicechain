@@ -394,7 +394,8 @@ renameNotificationChannel(token: String!, newToken: String!): NotificationChanne
 
 **user-management。**每个 `update*` 同样接受专用请求：
 
-`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile`
+`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile` ·
+`updateTenantRole`
 
 **这就是全部更新接口。**没有任何 `update*` 使用对应 `create*` 的输入，
 因此本页不再提供供你逐项核对的变更清单。早期版本曾两次提供：
@@ -630,6 +631,23 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
 
 设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。
+
+### 管理租户时的拒绝 {#tenant-administration-refusals}
+
+租户自己的管理员通过 user-management 的租户 API（`inviteMember`、`setMemberRoles`、`setMemberScope`、`setMemberEnabled`、`removeMember`、`createTenantRole`、`updateTenantRole`、`deleteTenantRole` 等）管理该租户的成员、邀请和角色。这些操作使用各自的代码拒绝请求，因此客户端无需读取消息就能判断原因：
+
+| `extensions.code` | 含义 |
+| --- | --- |
+| `ESCALATION` | 该更改会授予你自己并不拥有的权限：你定义或分配的角色只能包含你拥有的权限，租户角色只能包含租户级权限，并且你不能更改拥有你所没有的权限的成员。 |
+| `SELF_MODIFICATION` | 该更改针对你自己的成员关系。任何人都不能通过此 API 更改自己的角色、范围或状态，也不能移除自己。 |
+| `LAST_ADMIN` | 该更改会使租户中不再有任何已启用、可查看整个租户且能管理成员的成员。 |
+| `MANAGED_BY_IDP` | 该成员关系由租户的身份提供方管理，只能在那里更改。 |
+| `READ_ONLY` | 该角色属于实例运营者。它可以在你的租户中分配，但你的租户不能更改它。 |
+| `INVALID_INVITATION` | 该邀请码无法使用。所有原因（未知、已过期、已撤销、已使用，或由非受邀者提交）都使用同一个代码，因此无法据此探测具体原因。 |
+
+访问权限仅限于租户部分客户的成员，在上述所有操作中都会收到带有原因 `SCOPE_UNSUPPORTED` 的 `FORBIDDEN`。查询其他租户的成员会得到 `NOT_FOUND`，与查询不存在账户的地址完全相同。
+
+从成员身上移除某些内容（缩小其范围、移除某项权限、禁用或移除该成员）会使其登出：其刷新令牌和身份令牌在下次使用时失效，并且在其所属的所有租户中都是如此。已经签发的访问令牌会继续有效，直到过期：最多 15 分钟；对于仅限部分客户的成员，最多 5 分钟。
 
 ## 请求限制 {#request-limits}
 

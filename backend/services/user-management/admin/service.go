@@ -50,6 +50,20 @@ type Service struct {
 	// table filled — and that is exactly what happened: the store was created AFTER the
 	// admin handler captured it. The fail-open did not soften a defect, it concealed one.
 	dead *deadletters.Store
+
+	// viewerBaseline is the read-only authority set every enabled tenant member receives
+	// on top of its roles (identity.ViewerAuthorities). The tenant plane counts it as held
+	// by every member — an administrator holding device:read only through the baseline may
+	// still assign the built-in viewer role. Nil until SetViewerBaseline, which is the
+	// strict reading: nothing is held that a role does not grant.
+	viewerBaseline []string
+}
+
+// SetViewerBaseline tells the service which authorities every enabled tenant member holds
+// without a role granting them. main wires it from the identity package, which owns the
+// list.
+func (s *Service) SetViewerBaseline(authorities []string) {
+	s.viewerBaseline = append([]string(nil), authorities...)
 }
 
 // NewService builds the admin Service over the iam store, carrying the purge coordinator's

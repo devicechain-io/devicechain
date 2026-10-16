@@ -137,7 +137,8 @@ func (r *SchemaResolver) UpdateProfile(ctx context.Context, args struct {
 	if err != nil {
 		return nil, err
 	}
-	return &CurrentIdentityResolver{id: id}, nil
+	scope, _ := auth.ScopeFromContext(ctx)
+	return &CurrentIdentityResolver{id: id, scope: scope}, nil
 }
 
 // SsoBeginResolver resolves the SsoBegin GraphQL type.

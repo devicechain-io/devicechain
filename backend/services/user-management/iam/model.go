@@ -123,19 +123,38 @@ const TenantAdminRoleToken = "tenant-admin"
 // cannot be, which is why it now points at the list instead of restating it.
 const ViewerRoleToken = "viewer"
 
-// Role is a globally-defined, named bundle of authorities. Uniqueness is the
-// composite (scope, token) — a token like "admin" can exist once per scope — so
-// the catalog can hold both a system "superuser" and tenant roles without
-// collision. Authorities is a JSON-encoded set of auth.Authority strings,
-// validated against the code vocabulary on write (same as the legacy Role).
+// Role is a named bundle of authorities. Authorities is a JSON-encoded set of
+// auth.Authority strings, validated against the code vocabulary on write.
+//
+// A role is either part of the operator's CATALOGUE (TenantID nil: defined once per
+// instance and assignable in every tenant) or OWNED by one tenant (TenantID set to that
+// tenant's token: defined by its own administrators and visible and assignable there
+// only, ADR-081). Uniqueness is (scope, token) among catalogue roles and (scope, tenant,
+// token) among a tenant's own — two partial unique indexes rather than one, because a
+// NULL tenant is distinct from every other NULL in a plain unique index, which would let
+// the catalogue hold "viewer" twice.
+//
+// 🔴 EVERY LOOKUP OF A ROLE BY TOKEN MUST SAY WHICH OF THE TWO IT MEANS. A query on
+// (scope, token) alone now matches one tenant's "operator" for another tenant, or for the
+// catalogue — and a gorm struct condition (Where(Role{Scope:…, Token:…})) is exactly that
+// query, because it skips the nil TenantID. The store's lookups each name their side:
+// CatalogueRole* for the operator plane, AssignableRoles* / TenantOwnedRole for a tenant.
 type Role struct {
 	gorm.Model
 	rdb.NamedEntity
 
-	Scope       RoleScope `gorm:"uniqueIndex:idx_iam_role_scope_token;not null;size:16"`
-	Token       string    `gorm:"uniqueIndex:idx_iam_role_scope_token;not null;size:128"`
-	Authorities []string  `gorm:"serializer:json"`
+	Scope RoleScope `gorm:"uniqueIndex:idx_iam_roles_catalogue_token,where:tenant_id IS NULL;uniqueIndex:idx_iam_roles_owned_token,where:tenant_id IS NOT NULL;not null;size:16"`
+	// TenantID is the owning tenant's TOKEN (as iam_memberships.tenant_id), or nil for a
+	// catalogue role. It is written only by the tenant plane, which stamps the caller's
+	// own tenant by construction — never from the request.
+	TenantID    *string  `gorm:"uniqueIndex:idx_iam_roles_owned_token,where:tenant_id IS NOT NULL;size:128"`
+	Token       string   `gorm:"uniqueIndex:idx_iam_roles_catalogue_token,where:tenant_id IS NULL;uniqueIndex:idx_iam_roles_owned_token,where:tenant_id IS NOT NULL;not null;size:128"`
+	Authorities []string `gorm:"serializer:json"`
 }
+
+// IsCatalogue reports whether the role belongs to the operator's catalogue rather than to
+// one tenant.
+func (r Role) IsCatalogue() bool { return r.TenantID == nil }
 
 func (Role) TableName() string { return "iam_roles" }
 
@@ -200,12 +219,76 @@ type Membership struct {
 	// would silently turn IdP-granted roles into manual grants nobody reviews.
 	ManagedBy *uint `gorm:"index:idx_iam_memberships_managed_by"`
 
+	// Scope bounds what this membership sees inside its tenant (ADR-081): the anchors,
+	// "customer:<token>" (and, later, "group:<token>"), at most auth.MaxScopeAnchors. NIL
+	// is the whole tenant, as every membership was before scopes existed; a non-empty
+	// list rides the tenant access token as the "scp" claim. It is never stored empty —
+	// the writers fold an empty list to nil — so "scoped to nothing" is not a state a
+	// membership can be in.
+	Scope []string `gorm:"type:jsonb;serializer:json"`
+
 	// Tenant (data-plane) roles for this identity in this tenant. Their
 	// authorities ride the tenant token and gate the data services.
 	TenantRoles []Role `gorm:"many2many:iam_membership_tenant_roles;"`
 }
 
 func (Membership) TableName() string { return "iam_memberships" }
+
+// IsScoped reports whether the membership is limited to part of its tenant.
+func (m *Membership) IsScoped() bool { return len(m.Scope) > 0 }
+
+// Invitation is a one-time link a tenant administrator issues to bring a person into the
+// tenant (ADR-081). The membership it names is created DISABLED and is enabled only when
+// the link is accepted. The link carries a secret; the row carries only its SHA-256
+// digest, so a database read cannot be turned back into a working link.
+//
+// Instance-global like the rest of this package (reached through the system context), and
+// filtered by tenant in the store. It carries the tenant column so the tenant purge sweeps
+// it with no list to maintain.
+type Invitation struct {
+	ID        uint `gorm:"primarykey"`
+	CreatedAt time.Time
+
+	TenantId     string `gorm:"not null;size:128;index:idx_iam_invitations_tenant"`
+	MembershipID uint   `gorm:"not null;index:idx_iam_invitations_membership"`
+	// Membership is here for the foreign key only: a membership's invitations go with it.
+	Membership  *Membership `gorm:"constraint:OnDelete:CASCADE" json:"-"`
+	TokenDigest []byte      `gorm:"not null;uniqueIndex:idx_iam_invitations_digest"`
+	// InvitedBy is the inviting identity, kept for the record; it is cleared, not
+	// refused, when that identity is deleted.
+	InvitedBy  *uint     `gorm:"index:idx_iam_invitations_invited_by"`
+	Inviter    *Identity `gorm:"foreignKey:InvitedBy;constraint:OnDelete:SET NULL" json:"-"`
+	ExpiresAt  time.Time `gorm:"not null"`
+	AcceptedAt *time.Time
+	RevokedAt  *time.Time
+}
+
+func (Invitation) TableName() string { return "iam_invitations" }
+
+// InvitationState is where an invitation sits in its life.
+type InvitationState string
+
+const (
+	InvitationPending  InvitationState = "PENDING"
+	InvitationAccepted InvitationState = "ACCEPTED"
+	InvitationExpired  InvitationState = "EXPIRED"
+	InvitationRevoked  InvitationState = "REVOKED"
+)
+
+// State reports the invitation's state at now. Accepted and revoked are final; an
+// unaccepted, unrevoked invitation is pending until it expires.
+func (i *Invitation) State(now time.Time) InvitationState {
+	switch {
+	case i.AcceptedAt != nil:
+		return InvitationAccepted
+	case i.RevokedAt != nil:
+		return InvitationRevoked
+	case !now.Before(i.ExpiresAt):
+		return InvitationExpired
+	default:
+		return InvitationPending
+	}
+}
 
 // Well-known seeded tenant tiers (ADR-065 decision 4). The vocabulary ships
 // pre-populated but is operator-editable — what "bronze includes" is a product

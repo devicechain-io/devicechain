@@ -463,6 +463,11 @@ type CurrentIdentity {
     firstName: String
     """The user's last name. Null when none has been set."""
     lastName: String
+    """
+    The customers the signed-in member is limited to in the current tenant. Empty when they
+    see the whole tenant.
+    """
+    scope: [ScopeAnchor!]!
 }
 
 """
@@ -486,14 +491,232 @@ input ProfileUpdateRequest {
     lastName: String
 }
 
+"""The kind of thing a scope anchor names."""
+enum ScopeAnchorKind {
+    """A customer: the anchor covers the devices assigned to that customer."""
+    CUSTOMER
+    """
+    An entity group. Not available yet: a scope naming a group is refused with the error code
+    INVALID_VALUE.
+    """
+    GROUP
+}
+
+"""One entry of a member's scope: a customer (or, later, a group) whose devices the member can see."""
+type ScopeAnchor {
+    """What the anchor names."""
+    kind: ScopeAnchorKind!
+    """Token of the customer (or group) the anchor names."""
+    token: String!
+}
+
+"""One entry of a scope to set on a member."""
+input ScopeAnchorInput {
+    """What the anchor names. Only CUSTOMER is accepted for now."""
+    kind: ScopeAnchorKind!
+    """Token of the customer the anchor names."""
+    token: String!
+}
+
+"""Who defined a role."""
+enum RoleOwner {
+    """A role the instance operator defined. It can be assigned here but not changed here."""
+    INSTANCE
+    """A role this tenant defined for itself. It exists only in this tenant."""
+    TENANT
+}
+
+"""A role that can be assigned to members of this tenant."""
+type TenantRole {
+    """Token of the role, unique among the roles assignable in this tenant."""
+    token: String!
+    """Human-readable name of the role. Null when none has been set."""
+    name: String
+    """Free-text description of the role. Null when none has been set."""
+    description: String
+    """
+    The authorities the role grants, such as `device:read` or `alarm:write`. `*` grants
+    every tenant authority.
+    """
+    authorities: [String!]!
+    """Whether the instance operator or this tenant defined the role."""
+    owner: RoleOwner!
+}
+
+"""A person's membership in this tenant, as the tenant's administrators see it."""
+type Member {
+    """The member's email address, which is their sign-in name."""
+    email: String!
+    """
+    The member's first name. Null when none has been set, and always null while the
+    member's invitation is pending.
+    """
+    firstName: String
+    """
+    The member's last name. Null when none has been set, and always null while the
+    member's invitation is pending.
+    """
+    lastName: String
+    """False when the membership is disabled, or the member has not accepted their invitation yet."""
+    enabled: Boolean!
+    """The roles the member holds in this tenant."""
+    roles: [TenantRole!]!
+    """
+    The customers whose devices the member is limited to. Empty when the member sees the
+    whole tenant.
+    """
+    scope: [ScopeAnchor!]!
+    """
+    True when the membership is managed by the tenant's identity provider. Such a membership
+    cannot be changed here.
+    """
+    managedByIdentityProvider: Boolean!
+    """True when the member was invited and has not accepted yet."""
+    invitationPending: Boolean!
+}
+
+"""Where a page of search results sits in the full result set. Positions are 1-based and inclusive."""
+type SearchResultsPagination {
+    """Position of the first result on this page within the full result set (1-based)."""
+    pageStart: Int
+    """Position of the last result on this page within the full result set (1-based, inclusive)."""
+    pageEnd: Int
+    """Number of records matching the criteria across all pages."""
+    totalRecords: Int
+}
+
+"""Filters and paging for listing this tenant's members. Filters are combined with AND."""
+input MemberSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Only members whose email starts with this text, ignoring case."""
+    emailPrefix: String
+    """True for enabled memberships only, false for disabled ones only. Omit it for both."""
+    enabled: Boolean
+}
+
+"""One page of this tenant's members, ordered by email."""
+type MemberSearchResults {
+    """The members on this page."""
+    results: [Member!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""Where an invitation is in its life."""
+enum InvitationState {
+    """Issued and still usable."""
+    PENDING
+    """Accepted: the member has joined."""
+    ACCEPTED
+    """Not accepted before it expired. Reissue it to send a new one."""
+    EXPIRED
+    """Revoked by an administrator."""
+    REVOKED
+}
+
+"""An invitation to join this tenant."""
+type Invitation {
+    """The email address the invitation was issued to."""
+    email: String!
+    """Where the invitation is in its life."""
+    state: InvitationState!
+    """When the invitation was issued, as an RFC 3339 timestamp."""
+    createdAt: String!
+    """When the invitation stops being usable, as an RFC 3339 timestamp."""
+    expiresAt: String!
+    """When the invitation was accepted, as an RFC 3339 timestamp. Null until it is."""
+    acceptedAt: String
+    """When the invitation was revoked, as an RFC 3339 timestamp. Null unless it was."""
+    revokedAt: String
+}
+
+"""Paging for listing this tenant's invitations."""
+input InvitationSearchCriteria {
+    """Page to return, starting at 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+}
+
+"""One page of this tenant's invitations, newest first."""
+type InvitationSearchResults {
+    """The invitations on this page."""
+    results: [Invitation!]!
+    """Where this page sits in the full result set."""
+    pagination: SearchResultsPagination!
+}
+
+"""A person to invite into this tenant."""
+input InviteMemberRequest {
+    """The person's email address."""
+    email: String!
+    """Tokens of the roles to give them. Each must be assignable in this tenant."""
+    roleTokens: [String!]!
+    """
+    The customers to limit them to. Omit it, or send an empty list, for the whole tenant. At
+    most 16 anchors.
+    """
+    scope: [ScopeAnchorInput!]
+}
+
+"""The result of inviting a person or reissuing their invitation."""
+type MemberInvitation {
+    """The member, disabled until they accept."""
+    member: Member!
+    """
+    The one-time invitation code. Give it to the person to accept with acceptInvitation; it
+    is shown only here, is never stored, and cannot be read back later. It is valid for 7
+    days.
+    """
+    invitationCode: String!
+}
+
+"""A role to define for this tenant."""
+input TenantRoleCreateRequest {
+    """
+    Unique identifier for the role: letters, digits, hyphens and underscores, starting with a
+    letter or digit, at most 128 characters. It may not be the token of an instance role.
+    """
+    token: String!
+    """Human-readable name of the role."""
+    name: String
+    """Free-text description of the role."""
+    description: String
+    """
+    The authorities the role grants. Each must be a tenant authority that you hold yourself;
+    `*` only if you hold `*`.
+    """
+    authorities: [String!]!
+}
+
 """
-Sign-in, session and self-service reads. Everything here is scoped to the caller's own
-tenant or identity; instance-level administration is a separate API.
+Changes to a role this tenant defined. For each field, leaving it out keeps the stored value,
+a value sets it, and null clears it.
 """
-# The tenant-scoped user-management API is the authentication surface only
-# (ADR-033). Identities, memberships, the role catalog, and tenants are
-# administered through the instance-scoped admin API (admin_schema.gql) — the one
-# exception is `tenant`, which lets a caller read their own tenant for display.
+input TenantRoleUpdateRequest {
+    """New name. Omit to keep it, send null to clear it."""
+    name: String
+    """New description. Omit to keep it, send null to clear it."""
+    description: String
+    """
+    New authorities, replacing the current set. Omit to keep them; null or an empty list
+    removes them all. Each must be a tenant authority that you hold yourself.
+    """
+    authorities: [String!]
+}
+
+"""
+Sign-in, session and self-service reads, and this tenant's own members, invitations and
+roles. Everything here is scoped to the caller's own tenant or identity; instance-level
+administration is a separate API.
+"""
+# The tenant-scoped user-management API: authentication, self-service, and since ADR-081
+# the tenant's delegated administration of its OWN members, invitations and tenant-owned
+# roles. The identity directory, the role catalogue and the tenant registry stay on the
+# instance-scoped admin API (admin_schema.graphql).
 type Query {
     """Liveness check. Always returns the string "pong". Needs no token."""
     ping: String!
@@ -570,6 +793,34 @@ type Query {
     # problem: an identity session and no tenant at all. Neither plane can serve
     # both, so both serve.
     tokenMasks: String!
+    """
+    One page of this tenant's members, with their roles, scope and status. Requires
+    member:read. Refused (error code FORBIDDEN) for a member whose access is limited to part
+    of the tenant.
+    """
+    members(
+        """Filters and paging."""
+        criteria: MemberSearchCriteria!
+    ): MemberSearchResults!
+    """
+    One member of this tenant by email. An email that is not a member of this tenant fails
+    with the error code NOT_FOUND, whether or not an account with that email exists. Requires
+    member:read.
+    """
+    member(
+        """Email of the member."""
+        email: String!
+    ): Member!
+    """
+    The roles that can be assigned in this tenant: the instance roles (owner INSTANCE) and the
+    roles this tenant defined (owner TENANT). Requires role:read.
+    """
+    tenantRoles: [TenantRole!]!
+    """One page of this tenant's invitations, newest first. Requires member:read."""
+    invitations(
+        """Paging."""
+        criteria: InvitationSearchCriteria!
+    ): InvitationSearchResults!
 }
 
 """
@@ -602,8 +853,8 @@ type SignOut {
 }
 
 """
-Sign in, choose a tenant, refresh the session, sign out, and edit the signed-in user's profile and
-their tenant's look and defaults.
+Sign in, choose a tenant, refresh the session, sign out, edit the signed-in user's profile and
+their tenant's look and defaults, and manage the tenant's members, invitations and roles.
 """
 type Mutation {
     """
@@ -831,6 +1082,138 @@ type Mutation {
         """The language tag, such as "en" or "pt-BR". Null clears it."""
         locale: String
     ): Tenant!
+
+    """
+    Invites a person into this tenant with the given roles and scope, and returns the new
+    member with a one-time invitation code. The membership stays disabled until the code is
+    accepted. The answer is the same whether or not the person already has an account. Fails
+    with the error code CONFLICT if they are already a member, ESCALATION if a role grants an
+    authority you do not hold, NOT_FOUND if a role token is not assignable here,
+    LIMIT_EXCEEDED for more than 16 scope anchors, and INVALID_VALUE for a group anchor.
+    Requires member:write.
+    """
+    inviteMember(
+        """The person to invite."""
+        request: InviteMemberRequest!
+    ): MemberInvitation!
+    """
+    Replaces a member's roles with exactly those given and returns the member. Taking an
+    authority away signs the member out: their refresh and identity tokens stop working at
+    their next use, in every tenant they belong to, while an access token already issued keeps
+    working until it expires (at most 15 minutes, or 5 for a member limited to part of the
+    tenant). Fails with ESCALATION (a role grants, or the member holds, an authority you do not
+    hold), SELF_MODIFICATION (your own membership), LAST_ADMIN (it would leave nobody able to
+    manage members), MANAGED_BY_IDP (the identity provider manages it) or NOT_FOUND. Requires
+    member:write.
+    """
+    setMemberRoles(
+        """Email of the member."""
+        email: String!
+        """Tokens of the roles the member should hold."""
+        roleTokens: [String!]!
+    ): Member!
+    """
+    Replaces the customers a member is limited to and returns the member. An empty list gives
+    them the whole tenant. Narrowing the scope signs the member out exactly as setMemberRoles
+    does when it takes an authority away. Fails with the same error codes as setMemberRoles,
+    plus LIMIT_EXCEEDED for more than 16 anchors and INVALID_VALUE for a group anchor. Requires
+    member:write.
+    """
+    setMemberScope(
+        """Email of the member."""
+        email: String!
+        """The customers to limit the member to; empty for the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): Member!
+    """
+    Enables or disables a member and returns the member. Disabling signs them out exactly as
+    setMemberRoles does when it takes an authority away. A member whose invitation is still
+    pending cannot be enabled (error code INVALID_VALUE): reissue or revoke the invitation.
+    Fails with the same error codes as setMemberRoles. Requires member:write.
+    """
+    setMemberEnabled(
+        """Email of the member."""
+        email: String!
+        """True to enable, false to disable."""
+        enabled: Boolean!
+    ): Member!
+    """
+    Removes a member from this tenant, and their open invitation with them; their account is
+    kept. Signs them out exactly as setMemberRoles does when it takes an authority away. Returns
+    true. Fails with the same error codes as setMemberRoles. Requires member:write.
+    """
+    removeMember(
+        """Email of the member."""
+        email: String!
+    ): Boolean!
+    """
+    Revokes a member's open invitation so its code stops working, and returns the member, who
+    stays disabled. Fails with NOT_FOUND if no invitation of theirs is waiting to be accepted.
+    Requires member:write.
+    """
+    revokeInvitation(
+        """Email of the member."""
+        email: String!
+    ): Member!
+    """
+    Revokes a member's open invitation, if any, and issues a new code, valid for 7 days. Fails
+    with NOT_FOUND if the member has already joined. Requires member:write.
+    """
+    reissueInvitation(
+        """Email of the member."""
+        email: String!
+    ): MemberInvitation!
+    """
+    Defines a role for this tenant and returns it. Fails with ESCALATION if an authority is
+    not a tenant authority or is one you do not hold, CONFLICT if the token is taken, and
+    INVALID_VALUE for an unknown authority. Requires role:write.
+    """
+    createTenantRole(
+        """The role to define."""
+        request: TenantRoleCreateRequest!
+    ): TenantRole!
+    """
+    Changes a role this tenant defined and returns it. Members holding it receive the change at
+    their next refresh; removing an authority also signs them out, as setMemberRoles does.
+    Fails with READ_ONLY for an instance role, NOT_FOUND for an unknown token, ESCALATION if
+    the resulting set grants an authority you do not hold, and LAST_ADMIN if it would leave
+    nobody able to manage members. Requires role:write.
+    """
+    updateTenantRole(
+        """Token of the role."""
+        token: String!
+        """The changes to apply."""
+        request: TenantRoleUpdateRequest!
+    ): TenantRole!
+    """
+    Deletes a role this tenant defined. Returns true if one was deleted and false if there was
+    no such role. Fails with REFERENCE_VIOLATION while a member holds it, READ_ONLY for an
+    instance role, and ESCALATION if it grants an authority you do not hold. Requires
+    role:write.
+    """
+    deleteTenantRole(
+        """Token of the role."""
+        token: String!
+    ): Boolean!
+    """
+    Accepts an invitation and returns what login returns: an identity token and the tenants
+    the identity may enter, the new one among them. Needs no token. Give exactly one of:
+    `password`, to create the password of a new account the invitation was issued to; or
+    `identityToken`, from signing in to an existing account, which must be the account the
+    invitation was issued to. A tenant that requires single sign-on refuses `password` with
+    the error code SSO_REQUIRED: sign in through the identity provider and accept with the
+    identity token. Every way the code cannot be used (unknown, expired, revoked, already
+    used, or presented for another account) fails with the one error code
+    INVALID_INVITATION.
+    """
+    acceptInvitation(
+        """The invitation code."""
+        code: String!
+        """The password to set on a new account."""
+        password: String
+        """The identity token of an existing account, from login or completeSso."""
+        identityToken: String
+    ): IdentityAuth!
 }
 
 schema {

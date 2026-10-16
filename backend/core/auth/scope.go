@@ -115,12 +115,18 @@ func validateAnchors(anchors []string) error {
 //   - Present, it must be well-formed (validateAnchors) — including NON-EMPTY. The issuer
 //     never writes an empty "scp" (omitempty), so an empty one was minted by something
 //     else, and accepting it would leave its meaning to whoever reads it next.
-//   - It rides tenant access and refresh tokens only. An identity or service token
-//     carrying it is refused (ADR-081 decision 2): those are the tiers that act above a
-//     single tenant, and a scope on one would be either ignored — a confused deputy
-//     handed a scoped caller's request with unscoped credentials — or obeyed somewhere
-//     it was never meant to reach. The rule is an ALLOW-LIST, like satisfies(): a token
-//     type this build does not recognise is refused rather than admitted.
+//   - It rides tenant ACCESS tokens only. An identity or service token carrying it is
+//     refused (ADR-081 decision 2): those are the tiers that act above a single tenant,
+//     and a scope on one would be either ignored — a confused deputy handed a scoped
+//     caller's request with unscoped credentials — or obeyed somewhere it was never
+//     meant to reach. A REFRESH token carrying it is refused too: nothing reads a scope
+//     from a refresh token, because every refresh re-reads the membership and mints the
+//     scope it finds there. A claim no reader consults is a second, stale copy of the
+//     answer waiting for the first reader that trusts it — a refresh path that copied
+//     the old token's scope forward would carry a narrowed member's wider scope past the
+//     narrowing. Refusing it at the parse makes that mistake unwritable. The rule is an
+//     ALLOW-LIST, like satisfies(): a token type this build does not recognise is
+//     refused rather than admitted.
 //   - A superuser is never scoped, so a token carrying both the superuser marker and a
 //     scope was not minted by this platform's rules and is refused.
 func validateScopeClaim(c *Claims) error {
@@ -128,7 +134,7 @@ func validateScopeClaim(c *Claims) error {
 		return nil
 	}
 	switch c.TokenType {
-	case TokenTypeAccess, TokenTypeRefresh:
+	case TokenTypeAccess:
 	default:
 		return fmt.Errorf("%w: a %q token may not carry a scope", ErrMalformedScope, c.TokenType)
 	}

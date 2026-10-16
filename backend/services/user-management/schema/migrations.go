@@ -111,5 +111,15 @@ var (
 		// A connection's private CA bundle: extra trust anchors for that provider's TLS
 		// certificate, beside the system roots. Empty for every existing connection.
 		NewSsoCaBundleMigration(),
+		// Customer users and delegated tenant administration (ADR-081). A membership may
+		// carry a scope — the anchors that bound what it sees inside its tenant; NULL is the
+		// whole tenant, as before.
+		NewMembershipScopeMigration(),
+		// A role may be owned by one tenant: iam_roles.tenant_id, NULL for the operator's
+		// catalogue, and token uniqueness per catalogue and per tenant.
+		NewRoleTenantMigration(),
+		// The one-time invitation links a tenant administrator issues; the row keeps only
+		// the digest of the link's secret.
+		NewInvitationsMigration(),
 	}
 )

@@ -29,8 +29,14 @@ const (
 	// not carry the session epoch, and the data-plane validator does not read it. The
 	// access lifetime IS the revocation window, so it is shorter for the members whose
 	// access is the one most likely to be narrowed. It never exceeds the issuer's
-	// unscoped access TTL (see NewIssuer). The value is provisional until
-	// user-management fixes and documents it.
+	// unscoped access TTL (see NewIssuer).
+	//
+	// Five minutes is the value, not a placeholder. It is a third of the unscoped default,
+	// so the window in which a narrowed customer user keeps their old reach is bounded at
+	// five minutes, and it costs one refresh per five minutes per signed-in scoped user —
+	// a refresh the console already performs on its own. It is not configurable: the
+	// window is a promise the user guide states to the tenant admin doing the narrowing,
+	// and a promise one operator can quietly lengthen is not one the guide can make.
 	DefaultScopedAccessTTL = 5 * time.Minute
 )
 

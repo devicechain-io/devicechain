@@ -17,9 +17,8 @@ import (
 
 // 🔴 CONFUSED DEPUTY. A service token carries no scope, so a cross-service call made
 // while serving a SCOPED member's request (ADR-081) would read the whole tenant on that
-// member's behalf. Query refuses it — before minting, before dialling — unless the call
-// site marked the context with OnBehalfOfScopedCaller, a decision it has to make in
-// writing.
+// member's behalf. Query refuses it — before minting, before dialling — and only the
+// call that names the decision, QueryOnBehalfOfScopedCaller, proceeds.
 func TestQueryRefusesToActForAScopedCallerUnlessToldItMay(t *testing.T) {
 	var mints, hits int32
 	mint := mintServer(t, "shh", &mints)
@@ -44,9 +43,17 @@ func TestQueryRefusesToActForAScopedCallerUnlessToldItMay(t *testing.T) {
 		t.Fatalf("the refused call still reached the network: %d mint(s), %d call(s)", mints, hits)
 	}
 
-	// The deliberate door: the same call, marked, proceeds.
-	if err := c.Query(OnBehalfOfScopedCaller(scoped), target.URL, "acme", "query{x}", nil, &out); err != nil {
-		t.Fatalf("a call marked OnBehalfOfScopedCaller was refused: %v", err)
+	// The deliberate door: the same caller, through the call that names the decision,
+	// proceeds.
+	if err := c.QueryOnBehalfOfScopedCaller(scoped, target.URL, "acme", "query{x}", nil, &out); err != nil {
+		t.Fatalf("QueryOnBehalfOfScopedCaller was refused: %v", err)
+	}
+	// 🔴 And the decision does not outlive the call: the SAME context, handed to a plain
+	// Query afterwards — the next call down the request, written by someone who never saw
+	// the decision — is refused again. (When the permission was a context mark, it was
+	// inherited by every call below the one that set it.)
+	if err := c.Query(scoped, target.URL, "acme", "query{x}", nil, &out); !errors.Is(err, auth.ErrScopeUnsupported) {
+		t.Fatalf("a plain Query after a deliberate scoped call was not refused: %v", err)
 	}
 	// Negative control: an unscoped caller, and a call with no caller at all (a
 	// background consumer), proceed as they always have.

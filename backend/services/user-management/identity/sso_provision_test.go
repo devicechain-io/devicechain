@@ -375,7 +375,7 @@ func TestSystemRoleNeverMapped(t *testing.T) {
 
 	// Second lock: even a mapping row written around the call (a stale restore, a direct
 	// write) cannot grant a system role from a claim.
-	sys, err := e.store.RoleByScopeToken(ctx, iam.ScopeSystem, "ops-admin")
+	sys, err := e.store.CatalogueRoleByScopeToken(ctx, iam.ScopeSystem, "ops-admin")
 	require.NoError(t, err)
 	conn := e.reloadConn(t, "acme-idp")
 	require.NoError(t, e.sysDB().Create(&iam.IdpRoleMapping{

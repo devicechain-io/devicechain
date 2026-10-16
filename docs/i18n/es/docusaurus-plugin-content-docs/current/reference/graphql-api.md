@@ -509,7 +509,8 @@ precondición obsoleta sobre ella se sigue rechazando como escritura obsoleta (s
 
 **user-management.** Toda `update*` toma también una petición propia:
 
-`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile`
+`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile` ·
+`updateTenantRole`
 
 **Esa es toda la superficie de actualización.** Ninguna mutación `update*` toma en ningún sitio la
 entrada de su hermana `create*`, así que esta página ya no incluye una lista con la que contrastar
@@ -809,6 +810,32 @@ dispositivo ajeno a sus clientes se acepta y no entrega nada. Cualquier otra ope
 Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no es visible para un
 miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
 registran sus clientes solo a partir de esta versión.
+
+### Rechazos al administrar un tenant {#tenant-administration-refusals}
+
+Los administradores de un tenant gestionan sus miembros, invitaciones y roles a través de la API de
+tenant de user-management (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberEnabled`,
+`removeMember`, `createTenantRole`, `updateTenantRole`, `deleteTenantRole` y las demás). Esas
+operaciones rechazan con códigos propios, para que un cliente conozca el motivo sin leer el mensaje:
+
+| `extensions.code` | Significado |
+| --- | --- |
+| `ESCALATION` | El cambio concedería una autoridad que tú no tienes: un rol que defines o asignas solo puede llevar autoridades que tienes, un rol de tenant solo puede llevar autoridades de tenant, y no puedes cambiar a un miembro que tiene algo que tú no tienes. |
+| `SELF_MODIFICATION` | El cambio es sobre tu propia membresía. Nadie cambia sus propios roles, alcance o estado, ni se elimina a sí mismo, con esta API. |
+| `LAST_ADMIN` | El cambio dejaría al tenant sin ningún miembro habilitado que vea todo el tenant y pueda gestionar miembros. |
+| `MANAGED_BY_IDP` | La membresía la gestiona el proveedor de identidad del tenant y solo puede cambiar allí. |
+| `READ_ONLY` | El rol pertenece al operador de la instancia. Se puede asignar en tu tenant, pero tu tenant no puede cambiarlo. |
+| `INVALID_INVITATION` | El código de invitación no se puede usar. Un solo código cubre todos los motivos (desconocido, caducado, revocado, ya usado o presentado por alguien a quien no se emitió), de modo que no se puede averiguar cuál. |
+
+Un miembro cuyo acceso está limitado a algunos de los clientes del tenant recibe `FORBIDDEN` con el
+motivo `SCOPE_UNSUPPORTED` en todas estas operaciones. Preguntar por un miembro de otro tenant
+responde `NOT_FOUND`, exactamente como para una dirección sin cuenta.
+
+Quitarle algo a un miembro (reducir su alcance, retirarle una autoridad, deshabilitarlo o eliminarlo)
+cierra su sesión: su token de actualización y su token de identidad dejan de funcionar en su
+siguiente uso, en todos los tenants a los que pertenece. Un token de acceso ya emitido sigue
+funcionando hasta que caduca: como máximo 15 minutos, o 5 minutos para un miembro limitado a algunos
+clientes.
 
 ## Límites de las solicitudes {#request-limits}
 

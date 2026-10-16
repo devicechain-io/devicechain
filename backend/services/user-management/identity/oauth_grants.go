@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -470,6 +471,10 @@ type scopedGrant struct {
 	accessCapped, refreshCaps []string
 	accessScope, refreshScope string
 	su                        bool
+	// anchors is the membership's scope (ADR-081), which the ACCESS token carries as "scp"
+	// so MCP tools — which forward the caller's own token — inherit it. Unscoped for a
+	// superuser and for a membership with no scope.
+	anchors auth.Scope
 }
 
 // resolveScopedGrant is the READ half of mintScopedGrant: it re-resolves the identity's
@@ -510,7 +515,7 @@ func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch au
 	if mem == nil && !su {
 		return scopedGrant{}, errInvalidGrant("subject is no longer a member of the tenant")
 	}
-	roles, authorities, err := m.resolveTenantGrant(ctx, sid, id, tenant, mem, su)
+	roles, authorities, anchors, err := m.resolveTenantGrant(ctx, sid, id, tenant, mem, su)
 	if err != nil {
 		if errors.Is(err, errTenantAccessDenied) {
 			return scopedGrant{}, errInvalidGrant("tenant access denied")
@@ -530,7 +535,7 @@ func (m *Manager) resolveScopedGrant(ctx context.Context, email string, epoch au
 		email: email, tenant: tenant, epoch: auth.SessionEpoch(id.SessionEpoch), sid: sid, roles: roles,
 		accessCapped: capToScope(authorities, su, accessAllow),
 		refreshCaps:  capToScope(authorities, su, refreshAllow),
-		accessScope:  accessScope, refreshScope: refreshScope, su: su,
+		accessScope:  accessScope, refreshScope: refreshScope, su: su, anchors: anchors,
 	}, nil
 }
 
@@ -541,7 +546,13 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString())
+	var access auth.IssuedToken
+	var err error
+	if g.anchors.IsScoped() && !g.su {
+		access, err = issuer.IssueScopedOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.anchors, clientID, uuid.NewString())
+	} else {
+		access, err = issuer.IssueOAuthAccess(g.tenant, g.email, g.roles, g.accessCapped, g.accessScope, audience, g.su, clientID, uuid.NewString())
+	}
 	if err != nil {
 		return nil, errServer(err.Error())
 	}
@@ -557,8 +568,20 @@ func (m *Manager) mintScoped(g scopedGrant, audience []string, clientID string) 
 		AccessToken:  access.Token,
 		RefreshToken: refresh.Token,
 		Scope:        g.accessScope,
-		ExpiresIn:    int(m.accessTTL.Seconds()),
+		ExpiresIn:    expiresInSeconds(access.ExpiresAt, time.Now()),
 	}, nil
+}
+
+// expiresInSeconds is the OAuth expires_in of an access token: the seconds from now until
+// its own expiry, rounded.
+//
+// 🔴 IT IS READ FROM THE TOKEN, NOT FROM A CONFIGURED LIFETIME. It used to be the
+// manager's unscoped access TTL, which was right only while every access token had that
+// lifetime. A scoped member's token lives for the shorter scoped lifetime (ADR-081), and a
+// client told 900 seconds about a token that dies at 300 refreshes ten minutes late,
+// failing every call in between. Asking the token cannot disagree with the token.
+func expiresInSeconds(expiresAt, now time.Time) int {
+	return int(math.Round(expiresAt.Sub(now).Seconds()))
 }
 
 // effectiveAuthorities is the full authority set a grant would carry: the

@@ -55,6 +55,10 @@ var (
 	// DeadLetterStore is the ADR-024 record of work a consumer accepted and gave up on,
 	// with the consumer that fills it and the sweep that bounds it.
 	DeadLetterStore *deadletters.Store
+
+	// AdminService is the user-management control plane, shared by the admin plane and the
+	// tenant plane's delegated administration (see the providers in afterMicroserviceInitialized).
+	AdminService *admin.Service
 	// DeadLetterMetrics is built ONCE, in the initialize phase, and shared by every
 	// consumer the NATS manager's oncreate callback builds.
 	DeadLetterMetrics  deadletters.Metrics
@@ -287,8 +291,17 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
+	// The admin Service, built once and served on BOTH planes: the admin plane's resolvers
+	// call its catalogue and directory methods, the tenant plane's call its delegated
+	// tenant-administration methods (ADR-081), which take the tenant from the caller's own
+	// token. One instance, so the two planes cannot be wired to different stores.
+	AdminService = admin.NewService(iam.NewStore(RdbManager),
+		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
+	AdminService.SetViewerBaseline(identity.ViewerAuthorities())
+
 	// Map of providers injected into the graphql http context.
 	providers := map[gqlcore.ContextKey]interface{}{
+		graphql.ContextMembersKey:  AdminService,
 		graphql.ContextIdentityKey: IdentityManager,
 		graphql.ContextSettingsKey: SettingsService,
 		graphql.ContextBlobKey:     BlobStore,
@@ -444,10 +457,8 @@ func buildBlobStore(ctx context.Context) (blob.Store, error) {
 // handler on the default mux (ADR-033). The admin Service shares the instance
 // RdbManager via its own iam store wrapper.
 func registerAdminHandler() {
-	adminSvc := admin.NewService(iam.NewStore(RdbManager),
-		Configuration.TenantPurgeSettle(), Configuration.TenantPurgeTokenHold(), DeadLetterStore)
 	adminProviders := map[gqlcore.ContextKey]interface{}{
-		graphql.ContextAdminKey:    adminSvc,
+		graphql.ContextAdminKey:    AdminService,
 		graphql.ContextAdminSsoKey: IdentityManager,
 	}
 	adminSchema := gqlcore.MustParseSchema(graphql.AdminSchemaContent, &graphql.AdminResolver{})

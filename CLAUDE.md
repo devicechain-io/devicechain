@@ -16,7 +16,9 @@ backend/
                               authorization server (PKCE, RFC 8414/8707) securing MCP access (ADR-047);
                               tenant TIER — operator-defined packaging entity subsystems READ but never
                               redefine (governance ceilings + AI model entitlement, ADR-065); tenant
-                              branding/white-label control record (ADR-038)
+                              branding/white-label control record (ADR-038); membership SCOPES (the
+                              "scp" claim, customer anchors) + a tenant's own members, invitations and
+                              tenant-owned roles on its data plane, under no-escalation rules (ADR-081)
     event-management/         persists + queries time-series events (TimescaleDB hypertables;
                               data-lifecycle reconciler + measurement_rollups continuous aggregate, ADR-026)
     event-sources/            inbound device transports (MQTT/NATS), decode → pipeline; per-tenant

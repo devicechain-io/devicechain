@@ -71,7 +71,7 @@ func roleFamily() putest.Family[*Service] {
 			}
 		},
 		Read: func(t *testing.T, s *Service, ctx context.Context) map[string]string {
-			r, err := s.iam.RoleByScopeToken(ctx, iam.ScopeSystem, token)
+			r, err := s.iam.CatalogueRoleByScopeToken(ctx, iam.ScopeSystem, token)
 			if err != nil {
 				t.Fatalf("reload role: %v", err)
 			}

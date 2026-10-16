@@ -143,11 +143,15 @@ func (s *Store) CreateIdentity(ctx context.Context, id *Identity) error {
 	return s.sys(ctx).Create(id).Error
 }
 
-// RolesByScopeTokens resolves a set of role tokens within a single scope, erroring
-// if any token is unknown — so an admin assignment that names a non-existent (or
-// wrong-scope) role fails closed rather than silently granting nothing. Duplicate
-// input tokens are de-duplicated.
-func (s *Store) RolesByScopeTokens(ctx context.Context, scope RoleScope, tokens []string) ([]Role, error) {
+// CatalogueRolesByScopeTokens resolves a set of role tokens within a single scope of the
+// operator's CATALOGUE, erroring if any token is unknown — so an assignment that names a
+// non-existent (or wrong-scope) role fails closed rather than silently granting nothing.
+// Duplicate input tokens are de-duplicated.
+//
+// It never resolves a role a tenant owns (ADR-081): system roles and identity-provider
+// grants are catalogue-only. A tenant's assignments resolve through AssignableRolesByTokens,
+// which adds that tenant's own roles and nobody else's.
+func (s *Store) CatalogueRolesByScopeTokens(ctx context.Context, scope RoleScope, tokens []string) ([]Role, error) {
 	want := make(map[string]struct{}, len(tokens))
 	uniq := make([]string, 0, len(tokens))
 	for _, t := range tokens {
@@ -161,7 +165,7 @@ func (s *Store) RolesByScopeTokens(ctx context.Context, scope RoleScope, tokens 
 		return nil, nil
 	}
 	var roles []Role
-	if err := s.sys(ctx).Where("scope = ? AND token IN ?", scope, uniq).Find(&roles).Error; err != nil {
+	if err := s.sys(ctx).Where("scope = ? AND token IN ? AND tenant_id IS NULL", scope, uniq).Find(&roles).Error; err != nil {
 		return nil, err
 	}
 	if len(roles) != len(uniq) {
@@ -327,26 +331,33 @@ func (s *Store) RemoveMembership(ctx context.Context, mem *Membership) error {
 	})
 }
 
-// UpsertRole returns the role for (scope, token), creating it from r if absent.
-// On a hit r is overwritten with the stored row; on a miss r is inserted as-is.
-func (s *Store) UpsertRole(ctx context.Context, r *Role) error {
-	return s.sys(ctx).Where(Role{Scope: r.Scope, Token: r.Token}).FirstOrCreate(r).Error
+// UpsertCatalogueRole returns the catalogue role for (scope, token), creating it from r if
+// absent. On a hit r is overwritten with the stored row; on a miss r is inserted as-is.
+//
+// 🔴 The tenant_id IS NULL is not decoration. A struct condition skips the nil TenantID,
+// so without it the lookup matched a TENANT's role of the same token — and an upsert meant
+// for the catalogue returned, and its caller then trusted, one tenant's role.
+func (s *Store) UpsertCatalogueRole(ctx context.Context, r *Role) error {
+	return s.sys(ctx).Where(Role{Scope: r.Scope, Token: r.Token}).Where("tenant_id IS NULL").FirstOrCreate(r).Error
 }
 
-// RoleByScopeToken resolves a single role by its (scope, token) identity.
-func (s *Store) RoleByScopeToken(ctx context.Context, scope RoleScope, token string) (*Role, error) {
+// CatalogueRoleByScopeToken resolves a single CATALOGUE role by its (scope, token)
+// identity. A role a tenant owns is never returned: the admin plane's role operations are
+// the operator's catalogue, and a tenant's own roles are managed on its own plane.
+func (s *Store) CatalogueRoleByScopeToken(ctx context.Context, scope RoleScope, token string) (*Role, error) {
 	var r Role
-	err := s.sys(ctx).Where("scope = ? AND token = ?", scope, token).First(&r).Error
+	err := s.sys(ctx).Where("scope = ? AND token = ? AND tenant_id IS NULL", scope, token).First(&r).Error
 	if err != nil {
 		return nil, err
 	}
 	return &r, nil
 }
 
-// ListRoles returns the role catalog, optionally filtered to a single scope,
-// ordered by scope then token for a stable listing.
-func (s *Store) ListRoles(ctx context.Context, scope *RoleScope) ([]Role, error) {
-	q := s.sys(ctx).Order("scope").Order("token")
+// ListCatalogueRoles returns the operator's role catalogue, optionally filtered to a single
+// scope, ordered by scope then token for a stable listing. Roles a tenant owns are not in
+// it (ADR-081).
+func (s *Store) ListCatalogueRoles(ctx context.Context, scope *RoleScope) ([]Role, error) {
+	q := s.sys(ctx).Where("tenant_id IS NULL").Order("scope").Order("token")
 	if scope != nil {
 		q = q.Where("scope = ?", *scope)
 	}
@@ -355,8 +366,8 @@ func (s *Store) ListRoles(ctx context.Context, scope *RoleScope) ([]Role, error)
 	return roles, err
 }
 
-// CreateRole inserts a new role; a duplicate (scope, token) violates the unique
-// index and surfaces as an error.
+// CreateRole inserts a new role, catalogue or tenant-owned as r.TenantID says; a duplicate
+// token on the same side violates a unique index and surfaces as an error.
 func (s *Store) CreateRole(ctx context.Context, r *Role) error {
 	return s.sys(ctx).Create(r).Error
 }
@@ -677,10 +688,13 @@ func (s *Store) UpdateIdentityFields(ctx context.Context, id *Identity, fields m
 // EnsureRole idempotently upserts a well-known role by (scope, token), keeping
 // its name and authorities current. Safe to call on every startup — used to keep
 // the built-in `viewer` role in the catalog and in sync with the code.
+//
+// Catalogue only (tenant_id IS NULL): see UpsertCatalogueRole for why the struct
+// condition alone is not enough.
 func (s *Store) EnsureRole(ctx context.Context, scope RoleScope, token, name string, authorities []string) error {
 	role := Role{Scope: scope, Token: token}
 	return s.sys(ctx).
-		Where(Role{Scope: scope, Token: token}).
+		Where(Role{Scope: scope, Token: token}).Where("tenant_id IS NULL").
 		Assign(Role{NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&name)}, Authorities: authorities}).
 		FirstOrCreate(&role).Error
 }
@@ -701,12 +715,12 @@ func (s *Store) SeedSuperuser(ctx context.Context, email, passwordHash string, s
 	return s.sys(ctx).Transaction(func(tx *gorm.DB) error {
 		suRole := Role{Scope: ScopeSystem, Token: SuperuserRoleToken,
 			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&suName)}, Authorities: systemAuthorities}
-		if err := tx.Where(Role{Scope: ScopeSystem, Token: SuperuserRoleToken}).FirstOrCreate(&suRole).Error; err != nil {
+		if err := tx.Where(Role{Scope: ScopeSystem, Token: SuperuserRoleToken}).Where("tenant_id IS NULL").FirstOrCreate(&suRole).Error; err != nil {
 			return err
 		}
 		adminRole := Role{Scope: ScopeTenant, Token: TenantAdminRoleToken,
 			NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&adminName)}, Authorities: tenantAdminAuthorities}
-		if err := tx.Where(Role{Scope: ScopeTenant, Token: TenantAdminRoleToken}).FirstOrCreate(&adminRole).Error; err != nil {
+		if err := tx.Where(Role{Scope: ScopeTenant, Token: TenantAdminRoleToken}).Where("tenant_id IS NULL").FirstOrCreate(&adminRole).Error; err != nil {
 			return err
 		}
 

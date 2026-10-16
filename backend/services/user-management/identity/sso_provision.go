@@ -129,7 +129,7 @@ func (m *Manager) provisionIdentity(ctx context.Context, conn *iam.IdpConnection
 func (m *Manager) syncSsoMemberships(ctx context.Context, conn *iam.IdpConnection, id *iam.Identity,
 	groups map[string]struct{}, mappings []iam.IdpRoleMappingView) error {
 
-	defaults, err := m.iam.RolesByScopeTokens(ctx, iam.ScopeTenant, conn.DefaultTenantRoles)
+	defaults, err := m.iam.CatalogueRolesByScopeTokens(ctx, iam.ScopeTenant, conn.DefaultTenantRoles)
 	if err != nil {
 		return fmt.Errorf("the connection's default roles: %w", err)
 	}
@@ -255,7 +255,7 @@ func (m *Manager) SetIdpRoleMappings(ctx context.Context, token, tenant string, 
 		}
 		tokens = append(tokens, mp.Role)
 	}
-	roles, err := m.iam.RolesByScopeTokens(ctx, iam.ScopeTenant, tokens)
+	roles, err := m.iam.CatalogueRolesByScopeTokens(ctx, iam.ScopeTenant, tokens)
 	if err != nil {
 		return nil, invalid("%v", err)
 	}
@@ -302,7 +302,7 @@ func (m *Manager) SetIdpJit(ctx context.Context, token string, enabled bool, def
 	if len(defaultTenantRoles) > maxDefaultRoles {
 		return nil, invalid("at most %d default roles", maxDefaultRoles)
 	}
-	roles, err := m.iam.RolesByScopeTokens(ctx, iam.ScopeTenant, defaultTenantRoles)
+	roles, err := m.iam.CatalogueRolesByScopeTokens(ctx, iam.ScopeTenant, defaultTenantRoles)
 	if err != nil {
 		return nil, invalid("%v", err)
 	}

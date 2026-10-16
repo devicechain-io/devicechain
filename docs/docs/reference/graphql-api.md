@@ -485,7 +485,8 @@ refused, because a dashboard with no definition is not a thing. It keeps its opt
 
 **user-management.** Every `update*` takes a dedicated request too:
 
-`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile`
+`updateRole` · `updateTenant` · `updateTenantTier` · `updateOauthClient` · `updateProfile` ·
+`updateTenantRole`
 
 **That is the whole update surface.** No `update*` mutation anywhere takes a `create*` sibling's
 input, so this page no longer carries a list for you to check a mutation against. Earlier releases
@@ -766,6 +767,31 @@ with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
 An event recorded while the device belonged to no customer is not visible to a member with
 limited access. Neither is an alarm raised before this release: alarms record their customers only
 from this release on.
+
+### Refusals when administering a tenant {#tenant-administration-refusals}
+
+A tenant's own administrators manage its members, invitations and roles through user-management's
+tenant API (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberEnabled`, `removeMember`,
+`createTenantRole`, `updateTenantRole`, `deleteTenantRole` and the rest). Those operations refuse
+with codes of their own, so a client can tell the reason without reading the message:
+
+| `extensions.code` | Meaning |
+| --- | --- |
+| `ESCALATION` | The change would grant an authority you do not hold yourself: a role you define or assign may carry only authorities you hold, a tenant role may carry only tenant authorities, and you cannot change a member who holds something you do not. |
+| `SELF_MODIFICATION` | The change is to your own membership. Nobody changes their own roles, scope or status, or removes themselves, through this API. |
+| `LAST_ADMIN` | The change would leave the tenant with no enabled member who sees the whole tenant and can manage members. |
+| `MANAGED_BY_IDP` | The membership is managed by the tenant's identity provider and can only change there. |
+| `READ_ONLY` | The role belongs to the instance operator. It can be assigned in your tenant but not changed by it. |
+| `INVALID_INVITATION` | The invitation code cannot be used. One code covers every reason (unknown, expired, revoked, already used, or presented by someone it was not issued to), so a code cannot be probed for which. |
+
+A member whose access is limited to some of the tenant's customers is refused all of these with
+`FORBIDDEN` and the reason `SCOPE_UNSUPPORTED`. Asking about a member of another tenant answers
+`NOT_FOUND`, exactly as for an address with no account.
+
+Taking something away from a member (narrowing their scope, removing an authority, disabling or
+removing them) signs them out: their refresh token and identity token stop working at their next
+use, in every tenant they belong to. An access token already issued keeps working until it expires:
+at most 15 minutes, or 5 minutes for a member limited to some customers.
 
 ## Request limits {#request-limits}
 
