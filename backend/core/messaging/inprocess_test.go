@@ -151,7 +151,7 @@ func TestOrderedWriterResendsAPublishWhoseIdIsInProcess(t *testing.T) {
 func TestAsyncWriterResendsAPublishWhoseIdIsInProcess(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	nmgr, _ := metricsManager(t, srv)
-	w, err := nmgr.NewAsyncWriter(streams.ResolvedEvents, 8, false)
+	w, err := nmgr.NewAsyncWriter(streams.ResolvedEvents, WriterResolution, 8, false)
 	if err != nil {
 		t.Fatal(err)
 	}
