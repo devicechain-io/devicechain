@@ -19,6 +19,7 @@ type Detector interface {
 	Descope(ruleID, series string, at time.Time) bool
 	ProcessEvent(ev Event)
 	ProcessResolved(seq uint64, t time.Time, evs []Event)
+	ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event)
 	Skip(seq uint64) bool
 	Advance(w time.Time) bool
 	SetExpected(key SeriesKey, since time.Time)

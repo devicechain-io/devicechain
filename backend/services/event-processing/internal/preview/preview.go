@@ -266,7 +266,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		// headline feature.
 		plan := reg.Plan(msg.StreamSeq, tenant, event, occurred, nil, fenceSets.Resolve(ctx, event.FenceSetVersion))
 		res.Stats.EvalErrors += plan.EvalErrors
-		engine.ProcessResolved(msg.StreamSeq, occurred, plan.Events)
+		engine.ProcessReceived(msg.StreamSeq, occurred, runtime.ReceiptOf(event, msg.AppendTime), plan.Events)
 		res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
 	}
 	// A cancellation mid-replay surfaces as io.EOF from the reader; re-check so a cancelled preview
@@ -297,7 +297,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 
 	// Readings the engine declined as late (a sliding window that had already passed them, a
 	// duration reading further behind the frontier than its hold, or a threshold reading older than
-	// an alarm's newest, or a threshold match behind the frontier) reached the engine and were not
+	// an alarm's newest, or a redelivered threshold match behind the frontier) reached the engine and were not
 	// used. Unreported, the preview would answer "the rule would not have fired" about readings it
 	// never looked at — the confident wrong answer this package exists to avoid. The live engine
 	// declines the same readings, but counts them on a metric; here the count is the only trace.
