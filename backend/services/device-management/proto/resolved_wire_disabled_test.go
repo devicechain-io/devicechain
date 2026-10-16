@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -30,14 +31,18 @@ func disabledPresence(disabled bool) *model.ResolvedEvent {
 	}
 }
 
-// 🔴 The mark is the only field past 15, so it is the only one whose TAG is two bytes. The
-// direct writer's bytes, decoded by the GENERATED decoder (not by this package's own
-// UnmarshalResolvedEvent, which an equal-but-wrong pair could satisfy), must carry it, and
-// they must end in exactly the field-16 varint encoding: tag 0x80 0x01, value 0x01.
+// 🔴 The mark is past field 15, so its TAG is two bytes. The direct writer's bytes, decoded by
+// the GENERATED decoder (not by this package's own UnmarshalResolvedEvent, which an
+// equal-but-wrong pair could satisfy), must carry it, and in exactly the field-16 varint
+// encoding: tag 0x80 0x01, value 0x01. Only the two envelope instants (fields 17 and 18, ten
+// bytes each) follow it.
 func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
-	encoded, err := MarshalResolvedEvent(disabledPresence(true))
+	encoded, err := MarshalResolvedEventAs(disabledPresence(true), eventtime.WireCompact)
 	require.NoError(t, err)
-	require.True(t, bytes.HasSuffix(encoded, []byte{0x80, 0x01, 0x01}), "field 16 is not the last three bytes: % x", encoded)
+	const instants = 2 * envelopeNanosSize
+	require.Greater(t, len(encoded), instants+3)
+	require.Equal(t, []byte{0x80, 0x01, 0x01}, encoded[len(encoded)-instants-3:len(encoded)-instants],
+		"field 16 is not the three bytes before the instants: % x", encoded)
 
 	var pb PResolvedEvent
 	require.NoError(t, proto.Unmarshal(encoded, &pb))
@@ -49,11 +54,14 @@ func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
 	assert.True(t, decoded.SourceDeviceDisabled, "UnmarshalResolvedEvent lost the mark")
 
 	// Unmarked, the field is absent from the wire, as proto3 leaves a false bool.
-	plain, err := MarshalResolvedEvent(disabledPresence(false))
+	plain, err := MarshalResolvedEventAs(disabledPresence(false), eventtime.WireCompact)
 	require.NoError(t, err)
 	assert.Equal(t, len(encoded)-3, len(plain))
-	_, _, n := protowire.ConsumeField(encoded[len(plain):])
+	at := len(encoded) - instants - 3
+	_, _, n := protowire.ConsumeField(encoded[at:])
 	assert.Equal(t, 3, n)
+	assert.Equal(t, plain, append(bytes.Clone(encoded[:at]), encoded[at+3:]...),
+		"marked and unmarked differ in the mark alone")
 }
 
 // A consumer built before the field existed — every pod still on the previous release during a
@@ -80,7 +88,7 @@ func TestAPreviousReleaseDecodesAMarkedEvent(t *testing.T) {
 	md := file.Messages().ByName("PResolvedEvent")
 	require.Nil(t, md.Fields().ByNumber(16), "the previous-release descriptor still declares field 16")
 
-	encoded, err := MarshalResolvedEvent(disabledPresence(true))
+	encoded, err := MarshalResolvedEventAs(disabledPresence(true), eventtime.WireCompact)
 	require.NoError(t, err)
 	old := dynamicpb.NewMessage(md)
 	require.NoError(t, proto.Unmarshal(encoded, old))

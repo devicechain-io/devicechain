@@ -6,10 +6,10 @@ package proto
 import (
 	"errors"
 	"fmt"
-	"time"
 	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -26,7 +26,10 @@ import (
 //	payload  entries = 1        repeated message, every entry written, an empty one too
 //	entry    measurements = 1   map<string,string>, one length-delimited item per reading,
 //	                            the item's key (1) and value (2) ALWAYS written, empty or not
-//	         occurred_time = 2  proto3 optional string, written when set, empty or not
+//	         occurred_time = 2  proto3 optional string: the entry's time when the count
+//	                            below cannot hold it (eventtime.WireNanos)
+//	         occurred = 3       proto3 optional sfixed64: the entry's time, nanoseconds
+//	                            since the Unix epoch; at most one of 2 and 3 is written
 //
 // so proto.Unmarshal reads back the same message (measurements_wire_test.go holds this
 // against proto.Marshal itself). The readings come out in map iteration order, which is
@@ -50,13 +53,16 @@ const (
 	measurementsPayloadEntries = protowire.Number(1)
 	measurementsEntryReadings  = protowire.Number(1)
 	measurementsEntryTime      = protowire.Number(2)
+	measurementsEntryNanos     = protowire.Number(3)
 	mapItemKey                 = protowire.Number(1)
 	mapItemValue               = protowire.Number(2)
 )
 
-// tagSize is the size of every tag here: field numbers 1 and 2 with the bytes wire type
-// encode in a single byte.
+// tagSize is the size of every tag here: field numbers 1 to 3 encode in a single byte.
 const tagSize = 1
+
+// nanosSize is the encoded size of an entry's time as a count: its tag and eight bytes.
+const nanosSize = tagSize + 8
 
 // marshalMeasurementsPayload writes payload in the PUnresolvedMeasurementsPayload wire
 // format into a buffer sized exactly once.
@@ -64,7 +70,15 @@ const tagSize = 1
 // It sizes the message first and then writes it, so each entry's time is formatted once,
 // into a scratch buffer both passes share, and each entry's size is remembered for the
 // second pass. A one-entry payload — what every device sends — needs neither to grow.
-func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload) ([]byte, error) {
+//
+// format says which form an entry's time takes: WireLegacy always writes the string (2),
+// as every release before the count did; WireCompact writes the count (3) when it can
+// hold the instant. Any other format is refused.
+func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
+	compact := format == eventtime.WireCompact
 	var timeScratch [64]byte
 	times := timeScratch[:0]
 	var boundsScratch [4]entryBounds
@@ -80,9 +94,14 @@ func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload) ([
 			b.size += tagSize + protowire.SizeBytes(mapItemSize(name, value))
 		}
 		if entry.OccurredTime != nil {
-			times = entry.OccurredTime.UTC().AppendFormat(times, time.RFC3339Nano)
-			b.timeEnd = len(times)
-			b.size += tagSize + protowire.SizeBytes(b.timeEnd-b.timeStart)
+			if nanos, ok := eventtime.WireNanos(*entry.OccurredTime); ok && compact {
+				b.nanos, b.hasNanos = nanos, true
+				b.size += nanosSize
+			} else {
+				times = eventtime.AppendWireString(times, *entry.OccurredTime)
+				b.timeEnd = len(times)
+				b.size += tagSize + protowire.SizeBytes(b.timeEnd-b.timeStart)
+			}
 		}
 		bounds = append(bounds, b)
 		size += tagSize + protowire.SizeBytes(b.size)
@@ -105,6 +124,10 @@ func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload) ([
 			out = protowire.AppendTag(out, measurementsEntryTime, protowire.BytesType)
 			out = protowire.AppendBytes(out, times[b.timeStart:b.timeEnd])
 		}
+		if b.hasNanos {
+			out = protowire.AppendTag(out, measurementsEntryNanos, protowire.Fixed64Type)
+			out = protowire.AppendFixed64(out, uint64(b.nanos))
+		}
 	}
 	// The two passes walk the same maps, so they agree unless a map changed between them,
 	// which only a caller mutating the payload concurrently could do. That is a defect, and
@@ -117,10 +140,13 @@ func marshalMeasurementsPayload(payload *model.UnresolvedMeasurementsPayload) ([
 }
 
 // entryBounds is what the sizing pass remembers about one entry for the writing pass: its
-// encoded size, and where its formatted time sits in the shared scratch (timeEnd -1: none).
+// encoded size, and its time: as a count (hasNanos), or formatted, where
+// it sits in the shared scratch (timeEnd -1: no string).
 type entryBounds struct {
 	size               int
 	timeStart, timeEnd int
+	nanos              int64
+	hasNanos           bool
 }
 
 // mapItemSize is the encoded size of one map item's body: the key and the value, each

@@ -55,17 +55,17 @@ type UnresolvedEvent struct {
 	CredentialId     *string
 	CredentialSecret *string
 	// SealedCredentialSecret is CredentialSecret sealed for the hop to device-management
-	// (credential.SecretTransit): the only form of the secret an event carries on the
-	// stream. The resolver opens it to compare. A value that is not a sealed secret for
-	// this credential, such as a plaintext left in a message from before sealing,
-	// authenticates nothing.
-	SealedCredentialSecret *string
+	// (credential.SecretTransit), in the seal's binary form: the only form of the secret an
+	// event carries on the stream. The resolver opens it to compare. A value that is not a
+	// sealed secret for this credential, such as a plaintext left in a message from before
+	// sealing, authenticates nothing. nil when none was presented.
+	SealedCredentialSecret []byte
 	// SealedCredentialId is the CredentialId of an ACCESS_TOKEN credential sealed for the
 	// hop to device-management (credential.SecretTransit.SealToken). A bearer token is
 	// itself the credential, so the stream carries only this form of it and CredentialId
 	// stays empty on the wire. The resolver opens it, bound to the tenant and credential
-	// type, before it looks the credential up.
-	SealedCredentialId *string
+	// type, before it looks the credential up. Binary, like SealedCredentialSecret.
+	SealedCredentialId []byte
 
 	// AuthenticatedTransport marks an event whose device was authenticated at the
 	// TRANSPORT by a trusted internal ingest source (LwM2M DTLS-PSK / Sparkplug

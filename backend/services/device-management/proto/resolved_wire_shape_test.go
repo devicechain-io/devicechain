@@ -11,6 +11,7 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -48,7 +49,7 @@ func resolvedHop(encoded []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	return MarshalResolvedEvent(decoded)
+	return MarshalResolvedEventAs(decoded, eventtime.WireCompact)
 }
 
 // populatedString is the value every string field is given. It is valid UTF-8 and an RFC
@@ -94,8 +95,25 @@ func populatedScalar(t *testing.T, fd protoreflect.FieldDescriptor, n int) proto
 	return protoreflect.Value{}
 }
 
+// isStringFormOfACount reports whether fd is the RFC 3339 string form of an instant whose
+// usual form is a count of nanoseconds in a sibling field: "<name>_time" beside an sfixed64
+// "<name>". The two forms are alternatives, written one or the other and never both, and a
+// reader takes the count when both are present; so a message populated with both cannot
+// survive the hop, and must not be asked to. The string form has its own shapes in the
+// equivalence test (an instant past what the count holds). Read off the descriptor, like
+// everything else here.
+func isStringFormOfACount(fd protoreflect.FieldDescriptor) bool {
+	name := string(fd.Name())
+	if fd.Kind() != protoreflect.StringKind || !strings.HasSuffix(name, "_time") {
+		return false
+	}
+	count := fd.ContainingMessage().Fields().ByName(protoreflect.Name(strings.TrimSuffix(name, "_time")))
+	return count != nil && count.Kind() == protoreflect.Sfixed64Kind
+}
+
 // populate sets every field m's descriptor declares, recursively, with two elements in
-// each list, so a writer that wrote only the first would differ.
+// each list, so a writer that wrote only the first would differ. The string form of a
+// counted instant is left unset (isStringFormOfACount).
 func populate(t *testing.T, m protoreflect.Message, depth int) {
 	t.Helper()
 	if depth > 4 {
@@ -104,6 +122,9 @@ func populate(t *testing.T, m protoreflect.Message, depth int) {
 	fields := m.Descriptor().Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
+		if isStringFormOfACount(fd) {
+			continue
+		}
 		switch {
 		case fd.IsMap():
 			t.Fatalf("field %s is a map, which this test does not populate: a map's order is not "+
@@ -253,6 +274,8 @@ var resolvedWireMessages = []string{
 // "every field" case then fails as a sized-versus-written mismatch if it is sized wrong.
 var sizedByTheirOwnTag = map[string]bool{
 	"io.devicechain.devicemanagement.PResolvedEvent.source_device_disabled": true,
+	"io.devicechain.devicemanagement.PResolvedEvent.occurred":               true,
+	"io.devicechain.devicemanagement.PResolvedEvent.processed":              true,
 }
 
 // fieldsBeyondOneByteTags names every field of the writer's messages whose number does
@@ -286,14 +309,14 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 			"do not fit; size their tags with protowire.SizeTag:\n  %s", tagSize, strings.Join(beyond, "\n  "))
 	}
 
-	// The negative control: field 17 added to each message must be named. (17, because
-	// PResolvedEvent already holds a field 16, sized by its own tag.)
+	// The negative control: field 19 added to each message must be named. (19, because
+	// PResolvedEvent already holds fields 16 to 18, each sized by its own tag.)
 	for _, message := range resolvedWireMessages {
 		fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
 		for _, m := range fdp.MessageType {
 			if m.GetName() == message {
 				m.Field = append(m.Field, &descriptorpb.FieldDescriptorProto{
-					Name: proto.String("seventeenth"), JsonName: proto.String("seventeenth"), Number: proto.Int32(17),
+					Name: proto.String("nineteenth"), JsonName: proto.String("nineteenth"), Number: proto.Int32(19),
 					Label: descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL.Enum(),
 					Type:  descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
 				})
@@ -304,8 +327,8 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 			t.Fatalf("the extended descriptor does not build: %v", err)
 		}
 		beyond := fieldsBeyondOneByteTags(t, file)
-		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".seventeenth") {
-			t.Errorf("field 17 added to %s: named %v, want exactly it", message, beyond)
+		if len(beyond) != 1 || !strings.Contains(beyond[0], message+".nineteenth") {
+			t.Errorf("field 19 added to %s: named %v, want exactly it", message, beyond)
 		}
 	}
 }

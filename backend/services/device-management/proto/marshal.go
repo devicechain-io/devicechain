@@ -11,20 +11,43 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/proto"
 )
 
-// marshalEntryTime renders one sample's own instant onto the wire. A resolved entry
-// always carries one, so this never encodes absence — the field stays proto3 `optional`
-// only so bytes published before per-sample times existed still decode (see
-// unmarshalEntryTime).
-func marshalEntryTime(occurred time.Time) *string {
-	formatted := occurred.UTC().Format(time.RFC3339Nano)
-	return &formatted
+// Every instant on a resolved event is written in exactly one of two forms
+// (eventtime.WireNanos): nanoseconds since the Unix epoch in an sfixed64 field, or, for an
+// instant that count cannot hold, an RFC 3339 string in the field every instant was written
+// in before. A reader takes the count when it is present and the string otherwise, which is
+// also what reads a message written before the count existed: the retained stream the
+// replay preview reads holds those.
+
+// marshalEntryTime renders one sample's own instant onto the wire, in one form or the
+// other. A resolved entry always carries one, so this never encodes absence — the fields
+// stay proto3 `optional` so bytes published before per-sample times existed still decode
+// (see unmarshalEntryTime).
+//
+// format says which form: WireLegacy always writes the string, in UTC, as every release
+// before the count did; WireCompact writes the count when it can hold the instant.
+func marshalEntryTime(occurred time.Time, format eventtime.WireFormat) (*int64, *string) {
+	if nanos, ok := eventtime.WireNanos(occurred); ok && format == eventtime.WireCompact {
+		return &nanos, nil
+	}
+	formatted := eventtime.WireString(occurred)
+	return nil, &formatted
 }
 
-// unmarshalEntryTime reads one sample's own instant back off the wire, falling back to
-// the message envelope's time when the field is absent.
+// readWireTime reads an envelope instant: the count when present, else the string. A
+// message with neither fails, as a message with an unparseable string always has.
+func readWireTime(nanos *int64, text string) (time.Time, error) {
+	if nanos != nil {
+		return eventtime.FromWireNanos(*nanos), nil
+	}
+	return eventtime.ParseWireString(text)
+}
+
+// unmarshalEntryTime reads one sample's own instant back off the wire — the count, else
+// the string — falling back to the message envelope's time when neither is present.
 //
 // 🔴 THE FALLBACK IS FOR HISTORY, NOT FOR PRODUCERS. Every resolved event published from
 // this version on carries a per-entry time, because resolution always sets one. What is
@@ -36,11 +59,14 @@ func marshalEntryTime(occurred time.Time) *string {
 // A value that is PRESENT but unparseable is a different thing entirely and fails: this
 // seam is internal, so a malformed instant here is a defect in this repository, and
 // swallowing it would silently collapse a batch onto one time.
-func unmarshalEntryTime(raw *string, envelope time.Time) (time.Time, error) {
+func unmarshalEntryTime(nanos *int64, raw *string, envelope time.Time) (time.Time, error) {
+	if nanos != nil {
+		return eventtime.FromWireNanos(*nanos), nil
+	}
 	if raw == nil {
 		return envelope, nil
 	}
-	parsed, err := time.Parse(time.RFC3339Nano, *raw)
+	parsed, err := eventtime.ParseWireString(*raw)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("entry occurredTime %q is not an RFC3339 timestamp: %w", *raw, err)
 	}
@@ -103,9 +129,13 @@ func MarshalPayloadForNewRelationshipEvent(payload *model.ResolvedNewRelationshi
 }
 
 // Marshal payload for a locations event.
-func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([]byte, error) {
+func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
 	pbpayload := &PResolvedLocationsPayload{}
 	for _, entry := range payload.Entries {
+		nanos, text := marshalEntryTime(entry.OccurredTime, format)
 		pbentry := &PResolvedLocationEntry{
 			Latitude:     entry.Latitude,
 			Longitude:    entry.Longitude,
@@ -113,7 +143,8 @@ func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([
 			Accuracy:     entry.Accuracy,
 			Speed:        entry.Speed,
 			Heading:      entry.Heading,
-			OccurredTime: marshalEntryTime(entry.OccurredTime),
+			Occurred:     nanos,
+			OccurredTime: text,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -126,20 +157,25 @@ func MarshalPayloadForLocationsEvent(payload *model.ResolvedLocationsPayload) ([
 
 // Marshal payload for a measurements event. It is written directly onto the wire
 // (resolved_wire.go), byte for byte what proto.Marshal writes for the generated message.
-func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPayload) ([]byte, error) {
-	return marshalMeasurementsPayload(payload)
+func MarshalPayloadForMeasurementsEvent(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+	return marshalMeasurementsPayload(payload, format)
 }
 
 // Marshal payload for an alerts event.
-func MarshalPayloadForAlertsEvent(payload *model.ResolvedAlertsPayload) ([]byte, error) {
+func MarshalPayloadForAlertsEvent(payload *model.ResolvedAlertsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
 	pbpayload := &PResolvedAlertsPayload{}
 	for _, entry := range payload.Entries {
+		nanos, text := marshalEntryTime(entry.OccurredTime, format)
 		pbentry := &PResolvedAlertEntry{
 			Type:         entry.Type,
 			Level:        entry.Level,
 			Message:      entry.Message,
 			Source:       entry.Source,
-			OccurredTime: marshalEntryTime(entry.OccurredTime),
+			Occurred:     nanos,
+			OccurredTime: text,
 		}
 		pbpayload.Entries = append(pbpayload.Entries, pbentry)
 	}
@@ -177,7 +213,7 @@ func UnmarshalPayloadForLocationsEvent(encoded []byte, envelope time.Time) (*mod
 	payload := &model.ResolvedLocationsPayload{}
 	entries := make([]model.ResolvedLocationEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
-		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime, envelope)
+		occurred, terr := unmarshalEntryTime(pbentry.Occurred, pbentry.OccurredTime, envelope)
 		if terr != nil {
 			return nil, terr
 		}
@@ -218,7 +254,7 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte, envelope time.Time) (*
 			}
 			mxs = append(mxs, mx)
 		}
-		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime, envelope)
+		occurred, terr := unmarshalEntryTime(pbentry.Occurred, pbentry.OccurredTime, envelope)
 		if terr != nil {
 			return nil, terr
 		}
@@ -243,7 +279,7 @@ func UnmarshalPayloadForAlertsEvent(encoded []byte, envelope time.Time) (*model.
 	payload := &model.ResolvedAlertsPayload{}
 	entries := make([]model.ResolvedAlertEntry, 0)
 	for _, pbentry := range pbpayload.Entries {
-		occurred, terr := unmarshalEntryTime(pbentry.OccurredTime, envelope)
+		occurred, terr := unmarshalEntryTime(pbentry.Occurred, pbentry.OccurredTime, envelope)
 		if terr != nil {
 			return nil, terr
 		}
@@ -292,8 +328,8 @@ func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.ResolvedStateCh
 	}, nil
 }
 
-// Marshal unresolved payload based on event type.
-func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byte, error) {
+// Marshal resolved payload based on event type, its instants in format.
+func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}, format eventtime.WireFormat) ([]byte, error) {
 	switch etype {
 	case esmodel.NewRelationship:
 		if rnapayload, ok := payload.(*model.ResolvedNewRelationshipPayload); ok {
@@ -302,17 +338,17 @@ func MarshalResolvedPayload(etype esmodel.EventType, payload interface{}) ([]byt
 		return nil, fmt.Errorf("invalid new assignment payload: %+v", payload)
 	case esmodel.Location:
 		if locpayload, ok := payload.(*model.ResolvedLocationsPayload); ok {
-			return MarshalPayloadForLocationsEvent(locpayload)
+			return MarshalPayloadForLocationsEvent(locpayload, format)
 		}
 		return nil, fmt.Errorf("invalid location payload: %+v", payload)
 	case esmodel.Measurement:
 		if mxpayload, ok := payload.(*model.ResolvedMeasurementsPayload); ok {
-			return MarshalPayloadForMeasurementsEvent(mxpayload)
+			return MarshalPayloadForMeasurementsEvent(mxpayload, format)
 		}
 		return nil, fmt.Errorf("invalid measurement payload: %+v", payload)
 	case esmodel.Alert:
 		if apayload, ok := payload.(*model.ResolvedAlertsPayload); ok {
-			return MarshalPayloadForAlertsEvent(apayload)
+			return MarshalPayloadForAlertsEvent(apayload, format)
 		}
 		return nil, fmt.Errorf("invalid alert payload: %+v", payload)
 	case esmodel.StateChange:
@@ -576,8 +612,17 @@ func parseOptionalTime(s string) (time.Time, error) {
 // Marshal a resolved event to protobuf bytes. It is written directly onto the wire
 // (resolved_wire.go), byte for byte what proto.Marshal writes for the generated message:
 // every resolved event device-management publishes passes through here.
+//
+// It writes the format this process is configured to write (eventtime.ProducerWireFormat,
+// from infrastructure.messaging.wireFormat), which every producer of the message shares.
 func MarshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
-	return marshalResolvedEvent(event)
+	return marshalResolvedEvent(event, eventtime.ProducerWireFormat())
+}
+
+// MarshalResolvedEventAs is MarshalResolvedEvent in an explicit format. An unknown format,
+// the zero value included, is refused.
+func MarshalResolvedEventAs(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
+	return marshalResolvedEvent(event, format)
 }
 
 // Unmarshal encoded resolved event.
@@ -592,11 +637,11 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 	// The envelope's time is parsed BEFORE the payload because the payload needs it: an
 	// entry published before per-sample times were honoured carries no time of its own
 	// and decodes at the envelope's, which is what it meant when it was written.
-	occurred, err := time.Parse(time.RFC3339Nano, pbevent.OccurredTime)
+	occurred, err := readWireTime(pbevent.Occurred, pbevent.OccurredTime)
 	if err != nil {
 		return nil, err
 	}
-	processed, err := time.Parse(time.RFC3339Nano, pbevent.ProcessedTime)
+	processed, err := readWireTime(pbevent.Processed, pbevent.ProcessedTime)
 	if err != nil {
 		return nil, err
 	}

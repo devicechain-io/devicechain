@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
@@ -37,7 +38,7 @@ func measurementsHop(encoded []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode: %w", err)
 	}
-	return MarshalPayloadForMeasurementsEvent(decoded)
+	return MarshalPayloadForMeasurementsEvent(decoded, eventtime.WireCompact)
 }
 
 // populatedTime is the value every string field is given. It is valid UTF-8, a usable
@@ -79,9 +80,26 @@ func populatedScalar(t *testing.T, fd protoreflect.FieldDescriptor, n int) proto
 	return protoreflect.Value{}
 }
 
+// isStringFormOfACount reports whether fd is the RFC 3339 string form of an instant whose
+// usual form is a count of nanoseconds in a sibling field: "<name>_time" beside an sfixed64
+// "<name>". The two forms are alternatives, written one or the other and never both, and a
+// reader takes the count when both are present; so a message populated with both cannot
+// survive the hop, and must not be asked to. The string form has its own shapes in the
+// equivalence test (an instant past what the count holds). Read off the descriptor, like
+// everything else here.
+func isStringFormOfACount(fd protoreflect.FieldDescriptor) bool {
+	name := string(fd.Name())
+	if fd.Kind() != protoreflect.StringKind || !strings.HasSuffix(name, "_time") {
+		return false
+	}
+	count := fd.ContainingMessage().Fields().ByName(protoreflect.Name(strings.TrimSuffix(name, "_time")))
+	return count != nil && count.Kind() == protoreflect.Sfixed64Kind
+}
+
 // populate sets every field m's descriptor declares, recursively: two elements in each
 // list and two entries in each map, so a writer that wrote only the first would differ.
 // A map value is never equal to its key, so a writer that swapped them would differ too.
+// The string form of a counted instant is left unset (isStringFormOfACount).
 func populate(t *testing.T, m protoreflect.Message, depth int) {
 	t.Helper()
 	if depth > 4 {
@@ -90,6 +108,9 @@ func populate(t *testing.T, m protoreflect.Message, depth int) {
 	fields := m.Descriptor().Fields()
 	for i := 0; i < fields.Len(); i++ {
 		fd := fields.Get(i)
+		if isStringFormOfACount(fd) {
+			continue
+		}
 		switch {
 		case fd.IsMap():
 			mp := m.Mutable(fd).Map()

@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -33,6 +34,10 @@ import (
 //	proto3 optional             written whenever it is set, zero value or not
 //	repeated message            every element written, an empty one as a zero-length item
 //	int32 / int64               a negative value sign-extended to a ten-byte varint
+//
+// Every instant is written in exactly one of its two forms (eventtime.WireNanos): the count
+// of nanoseconds in its proto3 optional sfixed64 field, or, for an instant the count cannot
+// hold, the RFC 3339 string in the field every instant was written in before.
 //
 // Only the measurements payload is written in place. Every other payload is marshalled as
 // before (MarshalResolvedPayload) and copied in: those events are not the ingest hot path.
@@ -66,6 +71,8 @@ const (
 	resolvedExternalId           = protowire.Number(14)
 	resolvedFenceSetVersion      = protowire.Number(15)
 	resolvedSourceDeviceDisabled = protowire.Number(16)
+	resolvedOccurred             = protowire.Number(17)
+	resolvedProcessed            = protowire.Number(18)
 
 	anchorType           = protowire.Number(1)
 	anchorToken          = protowire.Number(2)
@@ -77,6 +84,7 @@ const (
 	measurementsPayloadEntries = protowire.Number(1)
 	measurementsEntryReadings  = protowire.Number(1)
 	measurementsEntryTime      = protowire.Number(2)
+	measurementsEntryNanos     = protowire.Number(3)
 
 	measurementName       = protowire.Number(1)
 	measurementValue      = protowire.Number(2)
@@ -88,19 +96,97 @@ const (
 // tagSize is the size of every tag here but one: a field number up to 15 encodes with its
 // wire type in a single byte.
 //
-// 🔴 resolvedSourceDeviceDisabled (16) is the exception and is sized by disabledSize: a
-// field number from 16 on takes a TWO-byte tag, and sizing it with tagSize would allocate
-// one byte short and refuse every event from a disabled device.
+// 🔴 resolvedSourceDeviceDisabled (16), resolvedOccurred (17) and resolvedProcessed (18) are
+// the exceptions, sized by disabledSize and envelopeNanosSize: a field number from 16 on
+// takes a TWO-byte tag, and sizing one with tagSize would allocate one byte short and refuse
+// every event that carries it.
 const tagSize = 1
 
+// entryNanosSize is the encoded size of an entry's time as a count: a one-byte tag and eight
+// bytes. envelopeNanosSize is an envelope instant's: its field number takes a two-byte tag.
+const (
+	entryNanosSize    = tagSize + 8
+	envelopeNanosSize = 2 + 8
+)
+
+// wireInstant is one instant in the form it is written in: the count (isCount), or the
+// string, laid in a scratch buffer from start to end.
+type wireInstant struct {
+	nanos      int64
+	isCount    bool
+	start, end int
+}
+
+// appendInstant decides the form of at, formatting the string into times when it is the
+// string form, and returns the grown scratch.
+//
+// compact (eventtime.WireCompact) writes the count when it can hold the instant. Otherwise
+// it is the string: in UTC where RFC 3339 can carry it there (eventtime.AppendWireString),
+// except a LEGACY envelope instant, which is in its own offset, as the release before the
+// count formatted it (eventtime.AppendOwnOffsetWireString).
+func appendInstant(times []byte, at time.Time, compact, envelope bool) ([]byte, wireInstant) {
+	if compact {
+		if nanos, ok := eventtime.WireNanos(at); ok {
+			return times, wireInstant{nanos: nanos, isCount: true, start: len(times), end: len(times)}
+		}
+	}
+	start := len(times)
+	if envelope && !compact {
+		times = eventtime.AppendOwnOffsetWireString(times, at)
+	} else {
+		times = eventtime.AppendWireString(times, at)
+	}
+	return times, wireInstant{start: start, end: len(times)}
+}
+
+// stringSize is the encoded size of the instant's string form at a one-byte-tag field, or
+// nothing when it is written as a count.
+func (w wireInstant) stringSize() int {
+	if w.isCount {
+		return 0
+	}
+	return tagSize + protowire.SizeBytes(w.end-w.start)
+}
+
+// countSize is the encoded size of the instant's count at a field whose tag and eight bytes
+// take fieldSize (entryNanosSize or envelopeNanosSize), or nothing when it is a string.
+func (w wireInstant) countSize(fieldSize int) int {
+	if !w.isCount {
+		return 0
+	}
+	return fieldSize
+}
+
+// appendString writes the instant's string form at num, or nothing when it is a count.
+func (w wireInstant) appendString(out []byte, num protowire.Number, times []byte) []byte {
+	if w.isCount {
+		return out
+	}
+	out = protowire.AppendTag(out, num, protowire.BytesType)
+	return protowire.AppendBytes(out, times[w.start:w.end])
+}
+
+// appendCount writes the instant's count at num, or nothing when it is a string.
+func (w wireInstant) appendCount(out []byte, num protowire.Number) []byte {
+	if !w.isCount {
+		return out
+	}
+	out = protowire.AppendTag(out, num, protowire.Fixed64Type)
+	return protowire.AppendFixed64(out, uint64(w.nanos))
+}
+
 // marshalResolvedEvent writes event in the PResolvedEvent wire format into a buffer sized
-// exactly once.
-func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
-	// Both envelope times are formatted once, into a scratch on the stack, and copied in.
+// exactly once, every instant in format. An unknown format is refused.
+func marshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
+	compact := format == eventtime.WireCompact
+	// Both envelope times take their form once. A string form, for an instant the count
+	// cannot hold, is formatted into a scratch on the stack and copied in.
 	var envelopeScratch [96]byte
-	times := event.OccurredTime.AppendFormat(envelopeScratch[:0], time.RFC3339Nano)
-	occurredEnd := len(times)
-	times = event.ProcessedTime.AppendFormat(times, time.RFC3339Nano)
+	times, occurred := appendInstant(envelopeScratch[:0], event.OccurredTime, compact, true)
+	times, processed := appendInstant(times, event.ProcessedTime, compact, true)
 
 	// The payload: a measurements payload is sized here and written in place below; any
 	// other is marshalled now and copied in.
@@ -108,7 +194,7 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		mx            *model.ResolvedMeasurementsPayload
 		mxSizing      measurementsSizing
 		entryScratch  [64]byte
-		boundsScratch [4]int
+		boundsScratch [4]wireInstant
 		other         []byte
 		payloadSize   int
 	)
@@ -117,19 +203,19 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	}
 	if mx != nil {
 		var err error
-		if mxSizing, err = sizeMeasurementsPayload(mx, entryScratch[:0], boundsScratch[:0]); err != nil {
+		if mxSizing, err = sizeMeasurementsPayload(mx, entryScratch[:0], boundsScratch[:0], compact); err != nil {
 			return nil, err
 		}
 		payloadSize = mxSizing.size
 	} else {
 		var err error
-		if other, err = MarshalResolvedPayload(event.EventType, event.Payload); err != nil {
+		if other, err = MarshalResolvedPayload(event.EventType, event.Payload, format); err != nil {
 			return nil, err
 		}
 		payloadSize = len(other)
 	}
 
-	size, err := sizeResolvedEnvelope(event, occurredEnd, len(times)-occurredEnd)
+	size, err := sizeResolvedEnvelope(event, occurred, processed)
 	if err != nil {
 		return nil, err
 	}
@@ -151,10 +237,8 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 		out = appendString(out, anchorToken, a.AnchorToken)
 		out = appendUint(out, anchorRelationshipId, uint64(a.RelationshipId))
 	}
-	out = protowire.AppendTag(out, resolvedOccurredTime, protowire.BytesType)
-	out = protowire.AppendBytes(out, times[:occurredEnd])
-	out = protowire.AppendTag(out, resolvedProcessedTime, protowire.BytesType)
-	out = protowire.AppendBytes(out, times[occurredEnd:])
+	out = occurred.appendString(out, resolvedOccurredTime, times)
+	out = processed.appendString(out, resolvedProcessedTime, times)
 	out = appendUint(out, resolvedEventType, uint64(event.EventType))
 	if payloadSize > 0 {
 		out = protowire.AppendTag(out, resolvedPayload, protowire.BytesType)
@@ -180,6 +264,8 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 	out = appendString(out, resolvedExternalId, event.ExternalId)
 	out = appendUint(out, resolvedFenceSetVersion, uint64(event.FenceSetVersion))
 	out = appendUint(out, resolvedSourceDeviceDisabled, boolVarint(event.SourceDeviceDisabled))
+	out = occurred.appendCount(out, resolvedOccurred)
+	out = processed.appendCount(out, resolvedProcessed)
 
 	// The sizing and writing passes read the same event, so they agree unless it changed
 	// between them, which only a caller mutating it concurrently could do. That is a
@@ -193,9 +279,9 @@ func marshalResolvedEvent(event *model.ResolvedEvent) ([]byte, error) {
 }
 
 // sizeResolvedEnvelope is the encoded size of every envelope field but the payload, and
-// refuses a string proto.Marshal would refuse. The times are already formatted and are
-// never empty.
-func sizeResolvedEnvelope(event *model.ResolvedEvent, occurredLen, processedLen int) (int, error) {
+// refuses a string proto.Marshal would refuse. The times have already taken their form, and
+// a string form is never empty.
+func sizeResolvedEnvelope(event *model.ResolvedEvent, occurred, processed wireInstant) (int, error) {
 	size := stringSize(event.Source) + stringSize(event.SourceDeviceToken) +
 		stringSize(event.DeviceTypeToken) + stringSize(event.ProfileVersionToken) +
 		stringSize(event.ExternalId)
@@ -219,7 +305,8 @@ func sizeResolvedEnvelope(event *model.ResolvedEvent, occurredLen, processedLen 
 	if !valid {
 		return 0, errResolvedNotUTF8
 	}
-	size += tagSize + protowire.SizeBytes(occurredLen) + tagSize + protowire.SizeBytes(processedLen)
+	size += occurred.stringSize() + occurred.countSize(envelopeNanosSize) +
+		processed.stringSize() + processed.countSize(envelopeNanosSize)
 	size += uintSize(uint64(event.EventType)) + uintSize(uint64(event.FenceSetVersion)) +
 		disabledSize(event.SourceDeviceDisabled)
 	return size, nil
@@ -236,40 +323,40 @@ func membershipSize(m *model.GroupRef) int {
 }
 
 // measurementsSizing is what sizing a measurements payload remembers for writing it: its
-// encoded size, every entry's formatted time laid end to end, and where each entry's time
-// ends in that buffer (an entry's time starts where the previous one's ends).
+// encoded size, the string-form times laid end to end, and each entry's time.
 type measurementsSizing struct {
-	size     int
-	times    []byte
-	timeEnds []int
+	size    int
+	times   []byte
+	entries []wireInstant
 }
 
 // sizeMeasurementsPayload sizes payload in the PResolvedMeasurementsPayload wire format,
-// formatting each entry's time once into times, and refuses a string proto.Marshal would
-// refuse. times and timeEnds are scratch the caller usually keeps on its stack: a
-// one-entry payload, which is what every device sends, needs neither to grow.
-func sizeMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, times []byte, timeEnds []int) (measurementsSizing, error) {
+// deciding each entry's time form once (formatting a string form into times), and refuses
+// a string proto.Marshal would refuse. times and entries are scratch the caller usually
+// keeps on its stack: a one-entry payload, which is what every device sends, needs neither
+// to grow.
+func sizeMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, times []byte, entries []wireInstant, compact bool) (measurementsSizing, error) {
 	size := 0
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
-		start := len(times)
 		// Every resolved entry carries its own time, so it is always written
-		// (marshalEntryTime in marshal.go), in UTC.
-		times = entry.OccurredTime.UTC().AppendFormat(times, time.RFC3339Nano)
-		timeEnds = append(timeEnds, len(times))
-		body, err := measurementsEntrySize(entry, len(times)-start)
+		// (marshalEntryTime in marshal.go), in one form or the other.
+		var at wireInstant
+		times, at = appendInstant(times, entry.OccurredTime, compact, false)
+		entries = append(entries, at)
+		body, err := measurementsEntrySize(entry, at)
 		if err != nil {
 			return measurementsSizing{}, err
 		}
 		size += tagSize + protowire.SizeBytes(body)
 	}
-	return measurementsSizing{size: size, times: times, timeEnds: timeEnds}, nil
+	return measurementsSizing{size: size, times: times, entries: entries}, nil
 }
 
-// measurementsEntrySize is the encoded size of one PResolvedMeasurementsEntry's body,
-// whose time formats to timeLen bytes.
-func measurementsEntrySize(entry *model.ResolvedMeasurementsEntry, timeLen int) (int, error) {
-	size := tagSize + protowire.SizeBytes(timeLen)
+// measurementsEntrySize is the encoded size of one PResolvedMeasurementsEntry's body, whose
+// time is at.
+func measurementsEntrySize(entry *model.ResolvedMeasurementsEntry, at wireInstant) (int, error) {
+	size := at.stringSize() + at.countSize(entryNanosSize)
 	for j := range entry.Entries {
 		mx := &entry.Entries[j]
 		if !measurementValid(mx) {
@@ -304,11 +391,10 @@ func measurementSize(mx *model.ResolvedMeasurementEntry) int {
 
 // appendMeasurementsPayload writes payload's PResolvedMeasurementsPayload body as sized.
 func appendMeasurementsPayload(out []byte, payload *model.ResolvedMeasurementsPayload, sizing measurementsSizing) []byte {
-	start := 0
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
-		end := sizing.timeEnds[i]
-		body, _ := measurementsEntrySize(entry, end-start) // validity was checked when sizing
+		at := sizing.entries[i]
+		body, _ := measurementsEntrySize(entry, at) // validity was checked when sizing
 		out = protowire.AppendTag(out, measurementsPayloadEntries, protowire.BytesType)
 		out = protowire.AppendVarint(out, uint64(body))
 		for j := range entry.Entries {
@@ -328,19 +414,21 @@ func appendMeasurementsPayload(out []byte, payload *model.ResolvedMeasurementsPa
 				out = appendPresentString(out, measurementDataType, *mx.DataType)
 			}
 		}
-		out = protowire.AppendTag(out, measurementsEntryTime, protowire.BytesType)
-		out = protowire.AppendBytes(out, sizing.times[start:end])
-		start = end
+		out = at.appendString(out, measurementsEntryTime, sizing.times)
+		out = at.appendCount(out, measurementsEntryNanos)
 	}
 	return out
 }
 
 // marshalMeasurementsPayload writes payload alone in the PResolvedMeasurementsPayload wire
 // format, into a buffer sized exactly once.
-func marshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload) ([]byte, error) {
+func marshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+	if !format.Valid() {
+		return nil, eventtime.ErrUnknownWireFormat
+	}
 	var entryScratch [64]byte
-	var boundsScratch [4]int
-	sizing, err := sizeMeasurementsPayload(payload, entryScratch[:0], boundsScratch[:0])
+	var boundsScratch [4]wireInstant
+	sizing, err := sizeMeasurementsPayload(payload, entryScratch[:0], boundsScratch[:0], format == eventtime.WireCompact)
 	if err != nil {
 		return nil, err
 	}

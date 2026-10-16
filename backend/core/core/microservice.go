@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
@@ -830,7 +831,19 @@ func (ms *Microservice) LoadInstanceConfigurationFrom(path string) error {
 	if err != nil {
 		return fmt.Errorf("instance configuration invalid: %w", err)
 	}
+	// The event wire format is applied here for the same reason, and to the same scope:
+	// one process setting, read by every producer of the event messages in this process
+	// (eventtime.ProducerWireFormat), so no producer can be wired to a different format
+	// from its neighbours. Validate has already refused a value that names none.
+	wire, err := cfg.Infrastructure.Messaging.EventWireFormat()
+	if err != nil {
+		return fmt.Errorf("instance configuration invalid: %w", err)
+	}
+	if err := eventtime.SetProducerWireFormat(wire); err != nil {
+		return fmt.Errorf("instance configuration invalid: %w", err)
+	}
 	ms.InstanceConfiguration = *cfg
+	log.Info().Str("eventWireFormat", wire.String()).Msg("Event wire format set from instance configuration")
 	log.Info().Str("level", logging.Level).Msg("Log level set from instance configuration")
 	zerolog.SetGlobalLevel(lvl)
 	return nil

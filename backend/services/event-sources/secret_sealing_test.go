@@ -49,10 +49,10 @@ func TestThePublishedMessageNeverCarriesThePresentedSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, decoded.CredentialSecret)
 	require.NotNil(t, decoded.SealedCredentialSecret)
-	opened, err := tr.Open("acme", "sensor-001", *decoded.SealedCredentialSecret)
+	opened, err := tr.Open("acme", "sensor-001", decoded.SealedCredentialSecret)
 	require.NoError(t, err)
 	require.Equal(t, secret, opened)
-	_, err = tr.Open("other", "sensor-001", *decoded.SealedCredentialSecret)
+	_, err = tr.Open("other", "sensor-001", decoded.SealedCredentialSecret)
 	require.Error(t, err, "sealed for one tenant, it opens for no other")
 }
 
@@ -139,14 +139,14 @@ func TestThePublishedMessageNeverCarriesTheAccessToken(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, decoded.CredentialId, "the clear id is not on the wire")
 	require.NotNil(t, decoded.SealedCredentialId)
-	opened, err := tr.OpenToken("acme", "ACCESS_TOKEN", *decoded.SealedCredentialId)
+	opened, err := tr.OpenToken("acme", "ACCESS_TOKEN", decoded.SealedCredentialId)
 	require.NoError(t, err)
 	require.Equal(t, token, opened)
-	_, err = tr.OpenToken("other", "ACCESS_TOKEN", *decoded.SealedCredentialId)
+	_, err = tr.OpenToken("other", "ACCESS_TOKEN", decoded.SealedCredentialId)
 	require.Error(t, err, "sealed for one tenant, it opens for no other")
-	_, err = tr.OpenToken("acme", "MQTT_BASIC", *decoded.SealedCredentialId)
+	_, err = tr.OpenToken("acme", "MQTT_BASIC", decoded.SealedCredentialId)
 	require.Error(t, err, "sealed for one credential type, it opens for no other")
-	_, err = tr.Open("acme", token, *decoded.SealedCredentialId)
+	_, err = tr.Open("acme", token, decoded.SealedCredentialId)
 	require.Error(t, err, "a sealed token is not a sealed password")
 }
 

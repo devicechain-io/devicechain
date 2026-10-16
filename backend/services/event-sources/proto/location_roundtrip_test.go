@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 )
 
 // A location payload survives the protobuf hop with its VALUES intact.
@@ -50,7 +51,7 @@ func TestLocationPayloadRoundTripsWithItsValues(t *testing.T) {
 		},
 	}
 
-	encoded, err := MarshalPayloadForLocationsEvent(original)
+	encoded, err := MarshalPayloadForLocationsEvent(original, eventtime.WireCompact)
 	if err != nil {
 		t.Fatalf("marshalling a locations payload: %v", err)
 	}

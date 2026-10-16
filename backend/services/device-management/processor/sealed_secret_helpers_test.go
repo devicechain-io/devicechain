@@ -36,7 +36,7 @@ func presentSealed(t testing.TB, ctx context.Context, e *esmodel.UnresolvedEvent
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.CredentialType, e.CredentialId, e.SealedCredentialSecret = &ctype, &cid, &sealed
+	e.CredentialType, e.CredentialId, e.SealedCredentialSecret = &ctype, &cid, sealed
 }
 
 // presentSealedToken makes e present the ACCESS_TOKEN credential token, sealed for the
@@ -52,5 +52,5 @@ func presentSealedToken(t testing.TB, ctx context.Context, e *esmodel.Unresolved
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.CredentialType, e.CredentialId, e.SealedCredentialId = &ctype, nil, &sealed
+	e.CredentialType, e.CredentialId, e.SealedCredentialId = &ctype, nil, sealed
 }

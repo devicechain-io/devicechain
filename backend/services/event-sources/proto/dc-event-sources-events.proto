@@ -16,6 +16,13 @@ message PUnresolvedEvent {
     optional string alt_id = 2;
     string device = 3;
     optional string relationship = 4;
+    // The two envelope instants, each written in exactly ONE of two forms. The usual form is
+    // occurred / processed (14 / 15): nanoseconds since the Unix epoch, nine bytes on the wire
+    // with the tag. An instant outside what that count holds (before 1677 or after 2262: a
+    // device clock can report one, and only resolution bounds it) is written here instead,
+    // as an RFC 3339 string at full precision, which is also how every message written
+    // before the numeric form existed carries it. A reader takes the number when it is
+    // present and this string otherwise.
     string occurred_time = 5;
     string processed_time = 6;
     int64 event_type = 7;
@@ -29,6 +36,11 @@ message PUnresolvedEvent {
     // it: this message is stored for the stream's retention period). A value that is not
     // a sealed secret for this credential, such as a plaintext from a message written
     // before sealing, authenticates nothing.
+    //
+    // 🔴 READ ONLY: this is the TEXT form of the seal, written by producers before the
+    // binary form (sealed_secret, 16) replaced it. A producer never writes it; a reader still
+    // accepts it so a message already on the stream across an upgrade authenticates. Reserve
+    // it once no stream can hold a message that old.
     optional string credential_secret = 11;
     // Set by an internal ingest source that authenticated the device at the
     // TRANSPORT (LwM2M DTLS-PSK / Sparkplug broker) upstream, so the device
@@ -41,7 +53,23 @@ message PUnresolvedEvent {
     // credential, so it never crosses this stream as the device sent it; credential_id is left
     // empty for that credential type. A value that does not open for this tenant and credential
     // type, or a clear token left in a message from before sealing, is refused as unauthenticated.
+    //
+    // 🔴 READ ONLY, like credential_secret (11): the text form of the seal, replaced by the
+    // binary sealed_token (17).
     optional string sealed_credential_id = 13;
+    // The envelope instants as nanoseconds since the Unix epoch (see occurred_time, 5).
+    // Fixed-width, because a present-day count needs nine varint bytes and eight fixed ones.
+    // optional so an instant of exactly the epoch is still written: absence means the
+    // instant is in the string form.
+    optional sfixed64 occurred = 14;
+    optional sfixed64 processed = 15;
+    // The presented secret SEALED for the hop to the resolver, in the seal's binary form
+    // (credential.SecretTransit). Same rule as credential_secret (11), which it replaces:
+    // a value that is not a sealed secret for this credential authenticates nothing.
+    optional bytes sealed_secret = 16;
+    // The ACCESS_TOKEN credential id SEALED for the hop to the resolver, in the seal's binary
+    // form. Same rule as sealed_credential_id (13), which it replaces.
+    optional bytes sealed_token = 17;
 }
 
 /**
@@ -65,6 +93,11 @@ message PUnresolvedLocationEntry {
     optional string accuracy = 5;
     optional string speed = 6;
     optional string heading = 7;
+    // The sample's own instant as nanoseconds since the Unix epoch. An entry carries its time
+    // in at most one form: this one, or occurred_time as an RFC 3339 string for an instant
+    // this count cannot hold and for a message written before the numeric form existed.
+    // Neither present: the device timed only the message.
+    optional sfixed64 occurred = 8;
 }
 
 /**
@@ -80,6 +113,11 @@ message PUnresolvedLocationsPayload {
 message PUnresolvedMeasurementsEntry {
     map<string, string> measurements = 1;
     optional string occurred_time = 2;
+    // The sample's own instant as nanoseconds since the Unix epoch. An entry carries its time
+    // in at most one form: this one, or occurred_time as an RFC 3339 string for an instant
+    // this count cannot hold and for a message written before the numeric form existed.
+    // Neither present: the device timed only the message.
+    optional sfixed64 occurred = 3;
 }
 
 /**
@@ -98,6 +136,11 @@ message PUnresolvedAlertEntry {
     string message = 3;
     string source = 4;
     optional string occurred_time = 5;
+    // The sample's own instant as nanoseconds since the Unix epoch. An entry carries its time
+    // in at most one form: this one, or occurred_time as an RFC 3339 string for an instant
+    // this count cannot hold and for a message written before the numeric form existed.
+    // Neither present: the device timed only the message.
+    optional sfixed64 occurred = 6;
 }
 
 /**

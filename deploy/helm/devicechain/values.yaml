@@ -331,6 +331,24 @@ instance:
       # checksum, rolling every pod on upgrade to arrive where it already was.
       # logging:
       #   level: info
+      # How every producer writes the event messages on the retained inbound and
+      # resolved streams: legacy or compact, lowercase and exactly as written; anything
+      # else is refused at startup. Absent means legacy in this release.
+      #
+      # compact carries each instant as a nanosecond count and each device-credential
+      # seal in binary, about a third smaller per message. Every service in this release
+      # reads BOTH formats, but a service on an earlier release reads only legacy and
+      # drops (or dead-letters) a compact message. So:
+      #   - never set compact in the same change that upgrades to this release: finish
+      #     the upgrade first, then set it, which rolls the pods once more;
+      #   - set legacy again before rolling back to an earlier release, and let the
+      #     consumers drain the streams first;
+      #   - the next release makes compact the default.
+      #
+      # Left commented out for the same reason as the log level: the default has one
+      # definition, in the service code (eventtime.DefaultWireFormat).
+      # messaging:
+      #   wireFormat: legacy
       userManagement:
         # user-management is a functional area deployed by THIS chart into the
         # instance namespace (not infra in dc-system), so peers reach it by its

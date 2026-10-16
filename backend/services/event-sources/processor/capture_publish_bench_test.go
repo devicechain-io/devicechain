@@ -105,7 +105,7 @@ func benchInboundMessage(source, tenant string, event *model.UnresolvedEvent, pa
 		if err != nil {
 			return nil, messaging.Message{}, false
 		}
-		event.CredentialId, event.SealedCredentialId = nil, &sealed
+		event.CredentialId, event.SealedCredentialId = nil, sealed
 	}
 	bytes, err := esproto.MarshalUnresolvedEvent(event)
 	if err != nil {

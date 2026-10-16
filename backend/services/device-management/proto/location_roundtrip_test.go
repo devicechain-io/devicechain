@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -53,7 +54,7 @@ func TestLocationPayloadRoundTripCarriesEveryField(t *testing.T) {
 		}},
 	}
 
-	encoded, err := MarshalPayloadForLocationsEvent(payload)
+	encoded, err := MarshalPayloadForLocationsEvent(payload, eventtime.WireCompact)
 	require.NoError(t, err)
 
 	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, time.Time{})
@@ -92,7 +93,7 @@ func TestLocationPayloadRoundTripPreservesNilAndEmpty(t *testing.T) {
 		}},
 	}
 
-	encoded, err := MarshalPayloadForLocationsEvent(payload)
+	encoded, err := MarshalPayloadForLocationsEvent(payload, eventtime.WireCompact)
 	require.NoError(t, err)
 
 	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, time.Time{})
@@ -133,7 +134,7 @@ func TestLocationPayloadRoundTripKeepsPerEntryValuesAndOrder(t *testing.T) {
 		},
 	}
 
-	encoded, err := MarshalPayloadForLocationsEvent(payload)
+	encoded, err := MarshalPayloadForLocationsEvent(payload, eventtime.WireCompact)
 	require.NoError(t, err)
 
 	decoded, err := UnmarshalPayloadForLocationsEvent(encoded, time.Time{})
@@ -161,7 +162,7 @@ func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
 		}},
 	}
 
-	encoded, err := MarshalResolvedPayload(esmodel.Location, payload)
+	encoded, err := MarshalResolvedPayload(esmodel.Location, payload, eventtime.WireCompact)
 	require.NoError(t, err)
 
 	generic, err := UnmarshalResolvedPayload(esmodel.Location, encoded, time.Time{})
@@ -195,7 +196,7 @@ func TestResolvedEventCarriesLocationValues(t *testing.T) {
 		},
 	}
 
-	encoded, err := MarshalResolvedEvent(event)
+	encoded, err := MarshalResolvedEventAs(event, eventtime.WireCompact)
 	require.NoError(t, err)
 
 	decoded, err := UnmarshalResolvedEvent(encoded)
@@ -245,7 +246,7 @@ func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
 			Entries: []model.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: occurred}},
 		},
 	}
-	encoded, err := MarshalResolvedEvent(location)
+	encoded, err := MarshalResolvedEventAs(location, eventtime.WireCompact)
 	require.NoError(t, err)
 	decoded, err := UnmarshalResolvedEvent(encoded)
 	require.NoError(t, err)
@@ -261,7 +262,7 @@ func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
 			}},
 		},
 	}
-	mencoded, err := MarshalResolvedEvent(measurement)
+	mencoded, err := MarshalResolvedEventAs(measurement, eventtime.WireCompact)
 	require.NoError(t, err)
 	mdecoded, err := UnmarshalResolvedEvent(mencoded)
 	require.NoError(t, err)

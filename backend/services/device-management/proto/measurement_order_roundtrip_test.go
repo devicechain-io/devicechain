@@ -9,6 +9,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +63,7 @@ func descendingSample(occurred time.Time) *model.ResolvedMeasurementsPayload {
 func TestMeasurementPayloadRoundTripCarriesTheProducersOrderVerbatim(t *testing.T) {
 	occurred := at(t, "2026-08-09T14:32:07.125Z")
 
-	encoded, err := MarshalResolvedPayload(esmodel.Measurement, descendingSample(occurred))
+	encoded, err := MarshalResolvedPayload(esmodel.Measurement, descendingSample(occurred), eventtime.WireCompact)
 	require.NoError(t, err)
 
 	generic, err := UnmarshalResolvedPayload(esmodel.Measurement, encoded, time.Time{})
@@ -104,7 +105,7 @@ func TestMeasurementRoundTripPreservesSampleOrder(t *testing.T) {
 		},
 	}
 
-	encoded, err := MarshalResolvedPayload(esmodel.Measurement, payload)
+	encoded, err := MarshalResolvedPayload(esmodel.Measurement, payload, eventtime.WireCompact)
 	require.NoError(t, err)
 	generic, err := UnmarshalResolvedPayload(esmodel.Measurement, encoded, time.Time{})
 	require.NoError(t, err)
