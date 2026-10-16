@@ -29,6 +29,7 @@ type windowRepointer interface {
 	WaitingCommandKeys(ctx context.Context, windowToken string) ([]model.WaitingCommandKey, error)
 	RepointWindow(ctx context.Context, from, commandKey string, deviceTokens []string,
 		hold *model.DispatchHold) (int64, error)
+	FailUndefinedWaiting(ctx context.Context, from, commandKey string, deviceTokens []string) (int64, error)
 }
 
 // repointChunk is how many devices one ownership question names: device-management's own bound
@@ -36,9 +37,15 @@ type windowRepointer interface {
 const repointChunk = 2000
 
 // repointWaiting moves the commands stamped from one window whose device TYPE is no longer on it:
-// onto the window the type is on now, or out of any window when the type has none (or no longer
-// gates the command). It runs before the window's own re-stamp, so what is left on the window
-// afterwards is exactly the commands whose type still uses it.
+// onto the window the type is on now, or out of any window when the type has none. It runs before
+// the window's own re-stamp, so what is left on the window afterwards is exactly the commands
+// whose type still uses it. It reports the rows it moved and, separately, the rows it failed.
+//
+// 🔴 ONLY A CHANGE TO THE WINDOW RELEASES A WAITING COMMAND, NEVER A CHANGE TO THE PROFILE. The
+// owner is asked with alreadyHeld, so a profile version that now marks the command NORMAL leaves
+// it on its type's window (in holds, on this same window, and so untouched here). A profile
+// version that no longer defines the command at all puts the device in `undefined`, and its rows
+// are FAILED with model.CommandUndefinedReason rather than released: they are never sent.
 //
 // 🔴 WHY THE PASS RESOLVES THROUGH THE TYPE, AND NOT AN EVENT FROM UpdateDeviceType. A stamp
 // records the window the type was on at ENQUEUE, but the operator's intent is the type's window:
@@ -53,10 +60,10 @@ const repointChunk = 2000
 // Fail-closed as the rest of the pass: an error leaves every unmoved row as stamped, and a device
 // the owner decided nothing about (disabled, gone) is left as stamped too.
 func (cproc *CommandDeliveryProcessor) repointWaiting(ctx context.Context, repointer windowRepointer,
-	assignments model.WindowAssignmentResolver, window string) (int64, error) {
+	assignments model.WindowAssignmentResolver, window string) (moved, failed int64, err error) {
 	keys, err := repointer.WaitingCommandKeys(ctx, window)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	devicesByKey := make(map[string][]string)
 	var names []string
@@ -70,14 +77,20 @@ func (cproc *CommandDeliveryProcessor) repointWaiting(ctx context.Context, repoi
 		window       string
 		after, until time.Time
 	}
-	var moved int64
 	for _, name := range names {
 		devices := devicesByKey[name]
 		for start := 0; start < len(devices); start += repointChunk {
 			chunk := devices[start:min(start+repointChunk, len(devices))]
-			holds, ungated, err := assignments.CurrentWindows(ctx, chunk, name)
+			holds, ungated, undefined, err := assignments.CurrentWindows(ctx, chunk, name)
 			if err != nil {
-				return moved, err
+				return moved, failed, err
+			}
+			if len(undefined) > 0 {
+				n, err := repointer.FailUndefinedWaiting(ctx, window, name, undefined)
+				failed += n
+				if err != nil {
+					return moved, failed, err
+				}
 			}
 			// The devices that left this window, grouped by the opening they now belong to: one
 			// write per distinct (window, opening), which is one per device type.
@@ -98,19 +111,19 @@ func (cproc *CommandDeliveryProcessor) repointWaiting(ctx context.Context, repoi
 					WindowToken: t.window, DispatchAfter: t.after, DispatchUntil: t.until})
 				moved += n
 				if err != nil {
-					return moved, err
+					return moved, failed, err
 				}
 			}
 			if len(ungated) > 0 {
 				n, err := repointer.RepointWindow(ctx, window, name, ungated, nil)
 				moved += n
 				if err != nil {
-					return moved, err
+					return moved, failed, err
 				}
 			}
 		}
 	}
-	return moved, nil
+	return moved, failed, nil
 }
 
 // windowRestampInterval is the minimum spacing of the pass.
@@ -171,7 +184,12 @@ func (cproc *CommandDeliveryProcessor) restampWindows(ctx context.Context) error
 		tenantCtx := core.WithTenant(ctx, pair.TenantId)
 		if repointer, ok := cproc.Api.(windowRepointer); ok {
 			if assignments, ok := cproc.WindowOpenings.(model.WindowAssignmentResolver); ok {
-				moved, err := cproc.repointWaiting(tenantCtx, repointer, assignments, pair.WindowToken)
+				moved, failed, err := cproc.repointWaiting(tenantCtx, repointer, assignments, pair.WindowToken)
+				if failed > 0 {
+					incr(cproc.WindowCommandsUndefined, float64(failed))
+					log.Info().Str("tenant", pair.TenantId).Str("window", pair.WindowToken).Int64("commands", failed).
+						Msg("Failed waiting commands their device's profile no longer defines; they were never sent.")
+				}
 				if moved > 0 {
 					incr(cproc.WindowRestamps, float64(moved))
 					log.Info().Str("tenant", pair.TenantId).Str("window", pair.WindowToken).Int64("commands", moved).

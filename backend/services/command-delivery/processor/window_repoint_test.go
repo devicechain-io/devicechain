@@ -18,24 +18,28 @@ import (
 
 // fakeAssignments answers both questions the re-stamp pass asks the owner: a window's opening and
 // which window each device's type is on now. byDevice maps a device to the window its type uses
-// now ("" = no window: ungated); a device absent from it is one the owner decides nothing about
-// (disabled, gone).
+// now ("" = no window: ungated; undefinedMark = the profile no longer defines the command); a
+// device absent from it is one the owner decides nothing about (disabled, gone).
 type fakeAssignments struct {
 	fakeOpenings
 	byDevice map[string]string
 	err      error
 }
 
-func (f *fakeAssignments) CurrentWindows(_ context.Context, devices []string, _ string) ([]model.DispatchHold, []string, error) {
+const undefinedMark = "<undefined>"
+
+func (f *fakeAssignments) CurrentWindows(_ context.Context, devices []string, _ string) ([]model.DispatchHold, []string, []string, error) {
 	if f.err != nil {
-		return nil, nil, f.err
+		return nil, nil, nil, f.err
 	}
 	var holds []model.DispatchHold
-	var ungated []string
+	var ungated, undefined []string
 	for _, d := range devices {
 		w, decided := f.byDevice[d]
 		switch {
 		case !decided:
+		case w == undefinedMark:
+			undefined = append(undefined, d)
 		case w == "":
 			ungated = append(ungated, d)
 		default:
@@ -44,7 +48,7 @@ func (f *fakeAssignments) CurrentWindows(_ context.Context, devices []string, _ 
 				DispatchAfter: o.DispatchAfter, DispatchUntil: o.Closes})
 		}
 	}
-	return holds, ungated, nil
+	return holds, ungated, undefined, nil
 }
 
 const repointFleet = 50

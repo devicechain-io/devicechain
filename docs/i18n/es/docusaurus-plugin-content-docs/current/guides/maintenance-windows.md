@@ -149,8 +149,10 @@ sea instantáneo.
 primero. Los comandos que ya esperan siguen a su tipo de dispositivo: desvincular la ventana de un
 tipo los libera, y pasar el tipo a otra ventana los mueve a la siguiente apertura de esa ventana, en
 ese mismo minuto. Los comandos liberados se envían de inmediato, fuera de cualquier ventana: para
-detenerlos en lugar de liberarlos, cancélalos (o su lote) antes de desvincular la ventana. Si un dispositivo
-está desconectado durante toda una apertura, su comando pasa a la siguiente apertura en lugar de
+detenerlos en lugar de liberarlos, cancélalos (o su lote) antes de desvincular la ventana. Cambiar el
+perfil del tipo no los libera: una versión del perfil que marca el comando como `NORMAL` deja en la
+ventana los comandos que ya esperan, y una que ya no define el comando los hace fallar (`FAILED`,
+nunca se envían). Si un dispositivo está desconectado durante toda una apertura, su comando pasa a la siguiente apertura en lugar de
 enviarse cuando el dispositivo vuelva.
 
 ## Límites {#limits}
@@ -163,4 +165,6 @@ enviarse cuando el dispositivo vuelva.
 
 El contador `command_delivery_window_restamps_total` cuenta los comandos cuya retención se movió por
 una edición, una eliminación, una ventana que se cerró de nuevo antes de que volviera el
-dispositivo, o porque su tipo de dispositivo pasó a otra ventana o se quedó sin ventana.
+dispositivo, o porque su tipo de dispositivo pasó a otra ventana o se quedó sin ventana. El
+contador `command_delivery_window_commands_undefined_total` cuenta los comandos en espera que
+fallaron porque el perfil de su dispositivo ya no los define.

@@ -80,7 +80,8 @@ These states are terminal. Nothing moves out of a terminal state.
   `FAILED` when it cannot complete a command itself:
   - the device's transport cannot carry commands at all;
   - a device did answer, but the platform could not record the answer after every attempt;
-  - the platform could not publish the command to its device and stopped retrying.
+  - the platform could not publish the command to its device and stopped retrying;
+  - the command was waiting for a maintenance window and its device's profile no longer defines it.
 
   In each of these the command's `error` field says which, so you never mistake a
   platform-side `FAILED` for the device reporting a fault.
@@ -98,7 +99,7 @@ device.
 Every terminal command also carries an `outcome` that says what physically happened, because `FAILED` alone spans three different facts:
 
 - **`SUCCEEDED`** — the device reported success.
-- **`NOT_DELIVERED`** — proven never to have reached the device (`EXPIRED`, `CANCELLED`, and the `FAILED` cases where the transport cannot carry commands or the platform stopped trying to publish).
+- **`NOT_DELIVERED`** — proven never to have reached the device (`EXPIRED`, `CANCELLED`, and the `FAILED` cases where the transport cannot carry commands, the platform stopped trying to publish, or the device's profile no longer defines a command that was waiting for a window).
 - **`REJECTED`** — the device received the command and reported a failure.
 - **`UNKNOWN`** — it may have acted: `TIMEOUT`, or a `FAILED` where the device answered and the platform lost the answer.
 
@@ -285,9 +286,11 @@ own:
 - `TIMEOUT`, `EXPIRED` or `CANCELLED`;
 - `FAILED` because the transport cannot carry the command at all;
 - `FAILED` because a device's answer arrived and could not be recorded against the command;
-- `FAILED` because the platform could not publish the command and stopped retrying.
+- `FAILED` because the platform could not publish the command and stopped retrying;
+- `FAILED` because the command was waiting for a maintenance window and its device's profile no
+  longer defines it.
 
-Neither of the last two is `TIMEOUT`, for the same reason in opposite directions: in one the
+Neither of the second and third is `TIMEOUT`, for the same reason in opposite directions: in one the
 device did answer, and in the other it was never sent anything. `TIMEOUT` would send you to
 inspect working hardware in both cases.
 
@@ -415,15 +418,20 @@ device type moved to another window or lost its window.
   reach the window's owner, waiting commands stay waiting; none is released.
 - Waiting commands follow their device **type**, not the window they were stamped with. If a type
   is moved to another window, the same pass moves the commands already waiting onto the new
-  window's next opening. If the type's window is removed, or the command is no longer `DISRUPTIVE`
-  or `DESTRUCTIVE` on it, they are released and dispatch normally. A disabled device's commands
-  stay on the window they were stamped with until the device is enabled; the next pass then moves
-  them.
+  window's next opening. If the type's window is removed, they are released and dispatch normally.
+  A disabled device's commands stay on the window they were stamped with until the device is
+  enabled; the next pass then moves them.
+- Only a change to the window releases a waiting command; a change to the profile does not. If the
+  device type moves to a profile version that marks the command `NORMAL`, commands already waiting
+  keep waiting for the window until it opens, or until you cancel them. Commands enqueued after the
+  change follow the new profile version and are not held. If the new profile version no longer
+  defines the command at all, the waiting commands are never sent: they end `FAILED` with outcome
+  `NOT_DELIVERED`, and their `error` reads "Command no longer defined by this device's profile".
+  The counter `command_delivery_window_commands_undefined_total` counts them.
 - A release is not a pause. Released commands are sent as soon as delivery reaches them, outside
   any window, so detaching the window from a type with many waiting disruptive commands sends them
-  all within about a minute. The same happens when a new profile version marks the command
-  `NORMAL` or no longer defines it. To stop waiting commands instead, cancel them (or their batch)
-  before you detach the window, or move the type to another window.
+  all within about a minute. To stop waiting commands instead, cancel them (or their batch) before
+  you detach the window, or move the type to another window.
 - If an LwM2M command was claimed inside its window and the window closes before the device can be
   sent it, it is not sent. It goes back to waiting (`PARKED`) for the next opening.
 

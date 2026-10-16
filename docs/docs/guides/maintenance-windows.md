@@ -144,8 +144,10 @@ polls for it rather than being told. Do not expect the move to be instant.
 already waiting follow their device type: detaching the window from a type releases them, and moving
 the type to another window moves them to that window's next opening, within the same minute.
 Released commands are sent at once, outside any window: to stop them rather than release them,
-cancel them (or their batch) before you detach the window. If a device is
-offline through a whole opening, its command is rolled to the next opening rather than being sent
+cancel them (or their batch) before you detach the window. Changing the type's profile does not
+release them: a profile version that marks the command `NORMAL` leaves the commands already waiting
+on the window, and one that no longer defines the command fails them (`FAILED`, never sent). If a
+device is offline through a whole opening, its command is rolled to the next opening rather than being sent
 whenever the device returns.
 
 ## Limits {#limits}
@@ -158,4 +160,5 @@ whenever the device returns.
 
 The counter `command_delivery_window_restamps_total` counts commands whose hold was moved by an edit,
 a delete, a window that closed again before the device returned, or their device type moving to
-another window or losing its window.
+another window or losing its window. The counter `command_delivery_window_commands_undefined_total`
+counts waiting commands failed because their device's profile no longer defines them.

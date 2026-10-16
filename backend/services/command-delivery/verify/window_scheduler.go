@@ -104,23 +104,27 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 var _ model.WindowAssignmentResolver = (*WindowScheduler)(nil)
 
 const currentDispatchWindows = `query($deviceTokens: [String!]!, $commandKey: String!) {
-  commandDispatchSchedule(deviceTokens: $deviceTokens, commandKey: $commandKey) {
+  commandDispatchSchedule(deviceTokens: $deviceTokens, commandKey: $commandKey, alreadyHeld: true) {
     holds { deviceToken windowToken dispatchAfter dispatchUntil }
     ungated
+    undefined
   }
 }`
 
 // CurrentWindows implements model.WindowAssignmentResolver over the same owner-side decision
-// enqueue asks for, with no expiry: a command already waiting is not refused again, only rebound.
+// enqueue asks for, with no expiry (a command already waiting is not refused again, only
+// rebound) and with alreadyHeld: true, so the owner answers by the device type's window alone
+// and a profile version that now marks the command NORMAL does not release it.
 //
-// 🔴 BOTH LISTS ARE DECODED THROUGH POINTERS, for ScheduleDispatch's reason with the stakes
-// raised: a lost `ungated` would read as "nothing is ungated" and a lost `holds` as every device
-// having left its window. An absent field is an error, so the pass leaves every row as stamped.
+// 🔴 EVERY LIST IS DECODED THROUGH A POINTER, for ScheduleDispatch's reason with the stakes
+// raised: a lost `ungated` would read as "nothing is ungated", a lost `holds` as every device
+// having left its window, and a lost `undefined` as every command still being defined. An
+// absent field is an error, so the pass leaves every row as stamped.
 func (s *WindowScheduler) CurrentWindows(ctx context.Context, deviceTokens []string,
-	commandKey string) ([]model.DispatchHold, []string, error) {
+	commandKey string) ([]model.DispatchHold, []string, []string, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
-		return nil, nil, fmt.Errorf("verify: no tenant in context")
+		return nil, nil, nil, fmt.Errorf("verify: no tenant in context")
 	}
 	var out struct {
 		CommandDispatchSchedule *struct {
@@ -130,31 +134,32 @@ func (s *WindowScheduler) CurrentWindows(ctx context.Context, deviceTokens []str
 				DispatchAfter string `json:"dispatchAfter"`
 				DispatchUntil string `json:"dispatchUntil"`
 			} `json:"holds"`
-			Ungated *[]string `json:"ungated"`
+			Ungated   *[]string `json:"ungated"`
+			Undefined *[]string `json:"undefined"`
 		} `json:"commandDispatchSchedule"`
 	}
 	vars := map[string]any{"deviceTokens": deviceTokens, "commandKey": commandKey}
 	if err := s.client.Query(ctx, s.url, tenant, currentDispatchWindows, vars, &out); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if out.CommandDispatchSchedule == nil || out.CommandDispatchSchedule.Holds == nil ||
-		out.CommandDispatchSchedule.Ungated == nil {
-		return nil, nil, fmt.Errorf("verify: device-management returned no current dispatch windows")
+		out.CommandDispatchSchedule.Ungated == nil || out.CommandDispatchSchedule.Undefined == nil {
+		return nil, nil, nil, fmt.Errorf("verify: device-management returned no current dispatch windows")
 	}
 	holds := make([]model.DispatchHold, 0, len(*out.CommandDispatchSchedule.Holds))
 	for _, h := range *out.CommandDispatchSchedule.Holds {
 		after, err := time.Parse(time.RFC3339, h.DispatchAfter)
 		if err != nil {
-			return nil, nil, fmt.Errorf("verify: device-management returned an unreadable dispatch time %q", h.DispatchAfter)
+			return nil, nil, nil, fmt.Errorf("verify: device-management returned an unreadable dispatch time %q", h.DispatchAfter)
 		}
 		until, err := time.Parse(time.RFC3339, h.DispatchUntil)
 		if err != nil {
-			return nil, nil, fmt.Errorf("verify: device-management returned an unreadable window close %q", h.DispatchUntil)
+			return nil, nil, nil, fmt.Errorf("verify: device-management returned an unreadable window close %q", h.DispatchUntil)
 		}
 		holds = append(holds, model.DispatchHold{DeviceToken: h.DeviceToken, WindowToken: h.WindowToken,
 			DispatchAfter: after, DispatchUntil: until})
 	}
-	return holds, *out.CommandDispatchSchedule.Ungated, nil
+	return holds, *out.CommandDispatchSchedule.Ungated, *out.CommandDispatchSchedule.Undefined, nil
 }
 
 const maintenanceWindowOpening = `query($token: String!, $at: String) {
