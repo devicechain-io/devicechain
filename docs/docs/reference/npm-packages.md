@@ -70,6 +70,22 @@ const definition = parseDashboardDefinition(json);
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
 ```
 
+The renderer draws the board over its own default time range, live, with no control. To give
+viewers the time-range picker and pause, hold the range with `useBoardTimeRange` and pass it as
+`timeRange`, and put `TimeRangeBar` wherever your header is. To show whether live data is arriving,
+render `HubConnectionBadge` with the state from `useHubConnectionState(hub)`. All of them come from
+`@devicechain/widgets`. The badge takes its words from you, as `labels`, and so does the bar (it
+falls back to English), so both can follow your application's language. `density` overrides the density the board was authored with.
+
+```tsx
+const [range, controls] = useBoardTimeRange(definition.timeRange?.defaultSeconds);
+const connection = useHubConnectionState(hub);
+
+<TimeRangeBar state={range} controls={controls} />
+<HubConnectionBadge state={connection} labels={{ live: 'Live', reconnecting: 'Reconnecting', offline: 'Offline' }} />
+<DashboardRenderer definition={definition} hub={hub} actions={hub} timeRange={range} />;
+```
+
 Omit `actions` for a strictly read-only mount, and the acting widgets render inert:
 
 - The alarm table omits its acknowledge and clear controls altogether.
@@ -190,7 +206,7 @@ DeviceChain surface resolves a per-user override over the tenant default in the 
 
 ## Theming
 
-Every colour, radius and font the widgets use comes from a CSS custom property, so you restyle them
+Every color, radius and font the widgets use comes from a CSS custom property, so you restyle them
 by setting variables on any ancestor element. There is no Tailwind, no global stylesheet and no
 opinion about your application's shell. The DeviceChain values ship as `@devicechain/brand`; nothing
 requires them.

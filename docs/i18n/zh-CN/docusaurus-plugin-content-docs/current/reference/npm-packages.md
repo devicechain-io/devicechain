@@ -62,6 +62,17 @@ const definition = parseDashboardDefinition(json);
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
 ```
 
+渲染器会按看板自身的默认时间范围实时绘制，不提供任何控件。若要向查看者提供时间范围选择和暂停，请用 `useBoardTimeRange` 保存时间范围并作为 `timeRange` 传入，再把 `TimeRangeBar` 放在你的顶栏中。若要显示实时数据是否正在到达，请用 `useHubConnectionState(hub)` 的状态渲染 `HubConnectionBadge`。它们都来自 `@devicechain/widgets`；徽标的文字由你通过 `labels` 提供，时间范围栏也一样（未提供时使用英文），因此两者都能跟随应用的语言。`density` 会覆盖看板创作时设定的密度。
+
+```tsx
+const [range, controls] = useBoardTimeRange(definition.timeRange?.defaultSeconds);
+const connection = useHubConnectionState(hub);
+
+<TimeRangeBar state={range} controls={controls} />
+<HubConnectionBadge state={connection} labels={{ live: '实时', reconnecting: '正在重连', offline: '离线' }} />
+<DashboardRenderer definition={definition} hub={hub} actions={hub} timeRange={range} />;
+```
+
 严格只读的挂载方式可以省略 `actions`；具备操作能力的组件此时不会执行操作：
 
 - 告警表完全隐藏确认和清除控件。

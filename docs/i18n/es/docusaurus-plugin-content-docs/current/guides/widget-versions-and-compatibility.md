@@ -86,6 +86,12 @@ panel. Una versión publicada creada con `1.2.0` que ahora renderiza `1.2.1` no 
 exacta; la reproducción exacta requiere la misma `version`. Un anfitrión instala una sola versión de
 cada id.
 
+El gráfico de series temporales integrado es el único widget cuyas opciones almacenadas se convierten
+por ti. Su `optionsVersion` pasó de 1 a 2 cuando su `window` de número de muestras se convirtió en un
+lapso de tiempo, y la conversión del formato del panel lleva un gráfico almacenado a 2 al cargar el
+panel, así que se renderiza en lugar de convertirse en un marcador de posición. Consulta
+[Paneles](../concepts/dashboards.md#authoring-versioning-and-preview).
+
 ## Paquetes ausentes en un panel publicado {#missing-packages-in-a-published-dashboard}
 
 Como la implementación no forma parte del panel, una aplicación visora a la que le falta un paquete

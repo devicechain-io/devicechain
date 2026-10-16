@@ -71,6 +71,24 @@ const definition = parseDashboardDefinition(json);
 <DashboardRenderer definition={definition} hub={hub} actions={hub} />;
 ```
 
+El renderizador dibuja el panel en vivo sobre su propio intervalo de tiempo predeterminado, sin
+ningún control. Para ofrecer a los espectadores el selector de intervalo y la pausa, mantén el
+intervalo con `useBoardTimeRange`, pásalo como `timeRange` y coloca `TimeRangeBar` donde esté tu
+cabecera. Para mostrar si llegan los datos en vivo, renderiza `HubConnectionBadge` con el estado de
+`useHubConnectionState(hub)`. Todos proceden de `@devicechain/widgets`. La insignia toma sus textos de
+ti, como `labels`, y la barra también (si no se los pasas, usa inglés), para que ambas sigan el idioma
+de tu aplicación. `density` anula la
+densidad con la que se creó el panel.
+
+```tsx
+const [range, controls] = useBoardTimeRange(definition.timeRange?.defaultSeconds);
+const connection = useHubConnectionState(hub);
+
+<TimeRangeBar state={range} controls={controls} />
+<HubConnectionBadge state={connection} labels={{ live: 'En vivo', reconnecting: 'Reconectando', offline: 'Sin conexión' }} />
+<DashboardRenderer definition={definition} hub={hub} actions={hub} timeRange={range} />;
+```
+
 Omite `actions` para un montaje estrictamente de solo lectura, y los widgets que actúan se renderizan
 inertes:
 

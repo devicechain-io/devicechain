@@ -29,8 +29,8 @@ host and every widget package must therefore resolve one copy of the SDK.
 
 The SDK root entry has no chart or map code. A widget that only draws DOM imports from the root and
 adds neither Apache ECharts nor MapLibre nor the built-in widgets to the host's bundle. Chart helpers
-(`EChart`, `buildLineOption`, `buildGaugeOption`, `useChartTheme`) are on
-`@devicechain/widget-sdk/echarts`, and `echarts` is an optional peer needed only by a package that
+(`EChart`, `buildLineOption`, `buildGaugeOption`, `buildCompassOption`, `useChartTheme`,
+`resolveChartTheme` and `severityFill`) are on `@devicechain/widget-sdk/echarts`, and `echarts` is an optional peer needed only by a package that
 imports that entry.
 
 ## Declare a widget
@@ -88,7 +88,7 @@ so the definition parser and the validators can read it without loading or trust
 | `constraints` | Optional rules that span more than one option, such as `greater-than`. |
 | `defaults` | The starting options of a newly added widget. |
 | `interactions` | The host callbacks the widget asks for. |
-| `freshness` | Optional, `true` to opt in. On the `measurement` channel only: the frame shows how old the widget's newest sample is. If the widget also declares a numeric `staleAfterSeconds` option, a value older than that is greyed out and badged as stale. Without that option the age is shown and nothing is ever marked stale. A widget that shows a single value passes that sample's time as `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>`, so the age is of the value on screen rather than of whichever measurement arrived last. |
+| `freshness` | Optional, `true` to opt in. On the `measurement` channel only: the frame shows how old the widget's newest sample is. If the widget also declares a numeric `staleAfterSeconds` option, a value older than that is grayed out and badged as stale. Without that option the age is shown and nothing is ever marked stale. A widget that shows a single value passes that sample's time as `<WidgetFrame sampleTime={sample?.occurredTime ?? null}>`, so the age is of the value on screen rather than of whichever measurement arrived last. |
 | `layout` | Optional size limits in grid cells. See [Size](#size). |
 
 ### Channels and binding policy
@@ -97,7 +97,8 @@ A widget declares one channel:
 
 | Channel | Component receives | Binding policy |
 | --- | --- | --- |
-| `measurement` | `latest` by measurement name, a rolling `samples` window, and an `error` | `window`: how many samples to keep |
+| `measurement` | `latest` by measurement name, a rolling `samples` window, and an `error`; `members` for a fleet widget | `window`: how many samples to keep. `windowSeconds`: makes the widget draw a span of time instead (see [the board's time range](#the-boards-time-range)). `members`: makes it a fleet widget (see below) |
+| `aggregate` | `aggregates` (the count, minimum, maximum, sum and average of each measurement over the span, or why they could not be computed) and the newest live reading per measurement | `windowSeconds`: the span the figures cover |
 | `alarm` | The current alarm rows, a total count, and load and error flags | `pageSize`, and optionally `state`, `severity` and `acknowledged` filters |
 | `control` | Command history for a target device | `pageSize` |
 | `location` | Location samples for the bound entity | none |
@@ -109,6 +110,14 @@ A binding value is either a constant, `{ const: 25 }`, or a reference to an opti
 you compile. You cannot supply a GraphQL string or a subscription function: the host owns the
 transport. The `selection` and `none` channels open no data channel and must declare
 `datasource: { mode: 'none' }`.
+
+A `measurement` widget that declares `members` reads its data source device by device: bound to a
+group, `data.members` lists each device with its own latest reading per measurement, so two devices
+reporting the same name stay apart. `{ const: true }` turns the mode on always, and an option
+reference with `equals` turns it on for one value of an enum option, as the bar chart's *one bar per
+device* does. A `measurement` or `aggregate` widget without the mode shows one device: offer only
+`device` and `slot` as its selectors, because the host refuses a group that reaches it, with a
+sentence pointing to the fleet table, rather than show whichever device reported last.
 
 When a slot has no device, or a bound device is deleted, the host shows its standard unbound or
 unavailable state and does not hand your component the previous entity's data.
@@ -125,10 +134,13 @@ A `list` option stores an array of small objects, such as a widget's thresholds.
 `item` object whose fields are `string`, `number`, `boolean` or `enum` specs (a field can be
 `required`, and a list cannot be nested), and an optional `maxItems`. A stored entry with a field the
 `item` does not declare is rejected, and the settings form renders one row per entry with one control
-per field. The built-in `thresholds` option on the gauge, latest card and timeseries chart is one: each
-entry names a severity (`normal`, `warning`, `minor`, `major` or `critical`), never a colour, so the
-theme decides how it looks in light and dark. Only the abnormal levels have a colour: a value in a
+per field. The built-in `thresholds` option, which most built-in telemetry widgets carry, is one: each
+entry names a severity (`normal`, `warning`, `minor`, `major` or `critical`), never a color, so the
+theme decides how it looks in light and dark. Only the abnormal levels have a color: a value in a
 `normal` band looks exactly as it would with no thresholds, so a healthy reading is never painted.
+
+`optThresholds`, `bandAt` and `thresholdBands` read the same option in your own widget, and
+`useSeverityColors` gives the theme's color for each abnormal level.
 
 Read options defensively with the SDK helpers `optString`, `optNumber` and `optBoolean`. For a hand-edited
 value of the wrong type they do not throw: `optString` and `optNumber` return `undefined`, and
@@ -282,6 +294,25 @@ CSS variables, so call `useWidgetScale()` from a component rendered inside the f
 function child) to get `sizeClass` (`compact`, `regular` or `large`), the content size in pixels, and
 `px('font-md')` for a token's pixel value. The frame hides the subtitle and then the title as the widget
 gets short; the title stays available to assistive technology.
+
+## The board's time range {#the-boards-time-range}
+
+A board has a time range that the viewer can change and pause (see
+[Dashboards](../concepts/dashboards.md#time-range-and-pause)). A `measurement` widget that declares
+`binding.windowSeconds` draws a span of time rather than a sample count: the span the referenced
+option pins, or the board's range when the option is unset. The host seeds the span's history and
+keeps at most `MAX_SPAN_SAMPLES` (2,000) live samples; when it had to drop older samples that were
+still inside the span, `data.truncatedBefore` says from when the window really covers, and your
+widget should say so rather than label a short window with the long span.
+
+`useWidgetTimeRange()` returns the range: `spanSeconds`, `paused`, and `pausedAt` while paused. It
+is `undefined` when the widget is rendered outside a board, so handle that case instead of assuming an
+hour. `withinSpan(samples, spanSeconds, end)` drops the samples older than the span. While the board
+is paused the host holds every data channel except `control` at the snapshot on screen, so your
+widget needs no pause logic of its own.
+
+`formatValue(value)` with no precision prints at most 3 decimals, or 4 significant digits below 1;
+pass a precision to fix the number of decimals.
 
 ## Interactions and the trust model
 

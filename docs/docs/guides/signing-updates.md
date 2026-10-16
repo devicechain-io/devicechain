@@ -5,7 +5,7 @@ title: Signing Updates
 
 # Signing Updates
 
-A digest check proves an image is the image that was declared. It does not prove who made it. This guide shows how to attach that proof: you register the public keys your organisation signs with, sign each artifact's digest, and let the platform hand the matching signature to the device, which makes the final decision.
+A digest check proves an image is the image that was declared. It does not prove who made it. This guide shows how to attach that proof: you register the public keys your organization signs with, sign each artifact's digest, and let the platform hand the matching signature to the device, which makes the final decision.
 
 :::note Status
 Signing ships with the signer registry in the update service. Until your instance runs a build that includes it, artifacts stay `UNVERIFIED` and assignments carry no signature. For the concepts behind this, see [Over-the-Air Updates](../concepts/over-the-air-updates.md#verified); for the messages a device receives, see [Connecting a Device](./connecting-a-device.md#over-the-air-updates).
@@ -76,7 +76,7 @@ Both algorithms sign the **raw 32-byte SHA-256 digest** of the artifact. Sign th
 openssl dgst -sha256 -sign signer.pem -binary firmware.bin | base64 | tr -d '\n'
 ```
 
-`cosign sign-blob --key` is documented to produce a signature of the same form for ECDSA keys, so its base64 output should be accepted too. That behaviour comes from cosign's documentation and was not tested for this guide; confirm it on a throwaway artifact before relying on it.
+`cosign sign-blob --key` is documented to produce a signature of the same form for ECDSA keys, so its base64 output should be accepted too. That behavior comes from cosign's documentation and was not tested for this guide; confirm it on a throwaway artifact before relying on it.
 
 **Ed25519.** Ed25519 signs a message directly, so the message must be the 32 digest bytes, not the file:
 
@@ -109,6 +109,8 @@ mutation {
 ```
 
 A signature that does not verify is refused, and so is one from a revoked signer. Signing again with the same signer changes nothing. An artifact may carry signatures from several signers. When it is assigned, the platform pins the **oldest** signature by an active signer, and the device is sent that signature with its `keyId` and algorithm (`ECDSA_P256_SHA256` or `ED25519`).
+
+An artifact lists the signatures on record in its `signatures` field, oldest first. Each entry names the `signer`, `createdAt`, `createdBy` and `countsTowardTrust`, which is true while the signer is active and false once it is revoked. Signatures by revoked signers stay listed. The signature bytes are never returned. The console's artifact page shows the same list under **Signatures and trust**.
 
 ## 6. Put the key on your devices
 

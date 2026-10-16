@@ -110,6 +110,8 @@ mutation {
 
 Se rechaza una firma que no se verifica, y también la de un firmante revocado. Volver a firmar con el mismo firmante no cambia nada. Un artefacto puede llevar firmas de varios firmantes. Al asignarlo, la plataforma fija la firma **más antigua** de un firmante activo, y al dispositivo se le envía esa firma con su `keyId` y algoritmo (`ECDSA_P256_SHA256` o `ED25519`).
 
+Un artefacto lista las firmas registradas en su campo `signatures`, de la más antigua a la más reciente. Cada entrada indica el `signer`, `createdAt`, `createdBy` y `countsTowardTrust`, que es verdadero mientras el firmante está activo y falso una vez revocado. Las firmas de firmantes revocados siguen en la lista. Los bytes de la firma nunca se devuelven. La página del artefacto en la consola muestra la misma lista en **Firmas y confianza**.
+
 ## 6. Poner la clave en los dispositivos
 
 La plataforma no gestiona la confianza en el dispositivo. Todo dispositivo que deba aceptar tus actualizaciones debe tener la clave pública (o al menos su `keyId` y la clave) antes de recibir una asignación firmada. Falla la actualización con `UNKNOWN_SIGNER` para un `keyId` que no tiene y con `SIGNATURE_INVALID` para una firma que no se verifica. Aprovisiona las claves en la imagen de fábrica o mediante una actualización de configuración que ya hayas verificado.

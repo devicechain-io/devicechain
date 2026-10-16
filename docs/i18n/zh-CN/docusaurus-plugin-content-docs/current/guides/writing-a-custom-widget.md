@@ -19,7 +19,7 @@ npm install @devicechain/widget-sdk @devicechain/dashboards react
 
 在你的组件包中，将 `@devicechain/widget-sdk`、`@devicechain/dashboards` 和 `react` 声明为**对等依赖（peer dependencies）**，不要声明为普通依赖。SDK 定义了组件读取的 React 上下文（选择、时区、主题根），而上下文由创建它的对象标识。因此宿主和每个组件包必须解析到同一份 SDK。
 
-SDK 根入口不含图表或地图代码。只绘制 DOM 的组件从根入口导入，不会向宿主的打包产物加入 Apache ECharts、MapLibre 或内置组件。图表辅助工具（`EChart`、`buildLineOption`、`buildGaugeOption`、`useChartTheme`）位于 `@devicechain/widget-sdk/echarts`，而 `echarts` 是可选的对等依赖，只有导入该入口的包才需要它。
+SDK 根入口不含图表或地图代码。只绘制 DOM 的组件从根入口导入，不会向宿主的打包产物加入 Apache ECharts、MapLibre 或内置组件。图表辅助工具（`EChart`、`buildLineOption`、`buildGaugeOption`、`buildCompassOption`、`useChartTheme`、`resolveChartTheme` 和 `severityFill`）位于 `@devicechain/widget-sdk/echarts`，而 `echarts` 是可选的对等依赖，只有导入该入口的包才需要它。
 
 ## 声明组件 {#declare-a-widget}
 
@@ -81,7 +81,8 @@ export const tankLevelWidget = defineWidget({
 
 | 通道 | 组件接收 | 绑定策略 |
 | --- | --- | --- |
-| `measurement` | 按测量名称组织的 `latest`、滚动的 `samples` 窗口和 `error` | `window`：保留多少个样本 |
+| `measurement` | 按测量名称组织的 `latest`、滚动的 `samples` 窗口和 `error`；车队组件还会收到 `members` | `window`：保留多少个样本。`windowSeconds`：让组件改为绘制一段时间跨度（参见[看板的时间范围](#the-boards-time-range)）。`members`：使其成为车队组件（见下文） |
+| `aggregate` | `aggregates`（每个测量在跨度内的读数个数、最小值、最大值、总和与平均值，或无法计算的原因），以及每个测量最新的实时读数 | `windowSeconds`：这些数值覆盖的跨度 |
 | `alarm` | 当前告警行、总数以及加载与错误标志 | `pageSize`，以及可选的 `state`、`severity`、`acknowledged` 过滤器 |
 | `control` | 目标设备的命令历史 | `pageSize` |
 | `location` | 所绑定实体的位置样本 | 无 |
@@ -90,13 +91,17 @@ export const tankLevelWidget = defineWidget({
 
 绑定值要么是常量 `{ const: 25 }`，要么是对选项键的引用 `{ option: 'window', min: 1, default: 1 }`。引用在编译时会按选项类型检查。你不能提供 GraphQL 字符串或订阅函数：传输由宿主负责。`selection` 和 `none` 通道不打开任何数据通道，且必须声明 `datasource: { mode: 'none' }`。
 
+声明了 `members` 的 `measurement` 组件会逐台设备读取其数据源：绑定到设备组时，`data.members` 列出每台设备及其各测量的最新读数，因此上报同名测量的两台设备不会互相覆盖。`{ const: true }` 始终开启该模式；带 `equals` 的选项引用则在某个枚举选项取特定值时开启，例如柱状图的*每台设备一根柱*。没有该模式的 `measurement` 或 `aggregate` 组件只显示一台设备：只提供 `device` 和 `slot` 选择器，因为宿主会拒绝到达它的设备组，并给出一句指向车队表格的说明，而不是显示最后上报的那台设备。
+
 当槽位没有设备，或所绑定的设备被删除时，宿主会显示其标准的未绑定或不可用状态，不会把之前那个实体的数据交给你的组件。
 
 ## 选项 {#options}
 
 选项有 `kind`（`string`、`number`、`boolean`、`enum` 或 `list`）和一句 `doc` 说明。数字可声明 `min`、`max` 和 `integer`。枚举声明其 `values`。字符串可声明 `format: 'json'`，要求其值能解析为 JSON。`required` 标记一个缺失就会让组件无内容可显示的选项；空字符串视为缺失。宿主会依据模式校验已存储的选项，控制台也据此生成设置表单。
 
-`list` 选项存储一个由小对象组成的数组，例如组件的阈值。它声明一个 `item` 对象，其字段为 `string`、`number`、`boolean` 或 `enum` 规格（字段可以是 `required`，列表不能嵌套），以及可选的 `maxItems`。存储的条目若含有 `item` 未声明的字段，则会被拒绝；设置表单为每个条目渲染一行，每个字段一个控件。仪表盘、最新值卡片和时序图内置的 `thresholds` 选项就是这样一个列表：每个条目指明一个严重级别（`normal`、`warning`、`minor`、`major` 或 `critical`），而不是颜色，因此由主题决定它在浅色和深色下的外观。只有异常级别才有颜色：处于 `normal` 区间的值与没有阈值时完全相同，因此正常读数永远不会被着色。
+`list` 选项存储一个由小对象组成的数组，例如组件的阈值。它声明一个 `item` 对象，其字段为 `string`、`number`、`boolean` 或 `enum` 规格（字段可以是 `required`，列表不能嵌套），以及可选的 `maxItems`。存储的条目若含有 `item` 未声明的字段，则会被拒绝；设置表单为每个条目渲染一行，每个字段一个控件。大多数内置遥测组件都带有的 `thresholds` 选项就是这样一个列表：每个条目指明一个严重级别（`normal`、`warning`、`minor`、`major` 或 `critical`），而不是颜色，因此由主题决定它在浅色和深色下的外观。只有异常级别才有颜色：处于 `normal` 区间的值与没有阈值时完全相同，因此正常读数永远不会被着色。
+
+`optThresholds`、`bandAt` 和 `thresholdBands` 可在你自己的组件中读取同一选项，`useSeverityColors` 则给出主题中每个异常级别的颜色。
 
 使用 SDK 的辅助函数 `optString`、`optNumber` 和 `optBoolean` 以防御方式读取选项。对于手工编辑后类型错误的值，它们不会抛出异常：`optString` 和 `optNumber` 返回 `undefined`，`optBoolean` 对除已存储的 `true` 以外的任何值都返回 `false`。
 
@@ -211,6 +216,14 @@ layout: {
 大号读数可用 `fitValueFontCss(chars)` 得到按字符数计算的 CSS 字号。画布无法读取 CSS 变量，请在框架内渲染的组件中调用
 `useWidgetScale()`（或给框架传入函数子节点），获取 `sizeClass`（`compact`、`regular` 或 `large`）、以像素计的内容尺寸，
 以及某个令牌的像素值 `px('font-md')`。组件变矮时，框架会先隐藏副标题，再隐藏标题；标题仍可供辅助技术读取。
+
+## 看板的时间范围 {#the-boards-time-range}
+
+看板有一个查看者可以更改和暂停的时间范围（参见[仪表板](../concepts/dashboards.md#time-range-and-pause)）。声明了 `binding.windowSeconds` 的 `measurement` 组件绘制的是一段时间跨度，而不是样本数量：跨度由所引用的选项固定，选项未设置时使用看板的时间范围。宿主会预先加载该跨度的历史数据，并最多保留 `MAX_SPAN_SAMPLES`（2,000）个实时样本；如果不得不丢弃仍在跨度内的旧样本，`data.truncatedBefore` 会说明窗口实际从何时开始覆盖，你的组件应当说明这一点，而不是用长跨度的标签标注一个短窗口。
+
+`useWidgetTimeRange()` 返回时间范围：`spanSeconds`、`paused`，以及暂停时的 `pausedAt`。组件在看板之外渲染时它为 `undefined`，因此请处理这种情况，而不要假定为一小时。`withinSpan(samples, spanSeconds, end)` 会丢弃早于跨度的样本。看板暂停时，宿主会把除 `control` 以外的所有数据通道保持在屏幕上的快照，因此你的组件无需自行实现暂停逻辑。
+
+不指定精度时，`formatValue(value)` 最多显示 3 位小数；小于 1 的数值保留 4 位有效数字。传入精度可固定小数位数。
 
 ## 交互与信任模型 {#interactions-and-the-trust-model}
 
