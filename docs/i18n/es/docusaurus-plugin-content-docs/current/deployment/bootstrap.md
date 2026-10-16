@@ -1011,7 +1011,7 @@ usando la CPU de otro nodo. Los dos pods
 prefieren nodos distintos, pero es una preferencia, no una garantía. Cada pod llena sus propios
 lotes, así que un lote contiene más o menos la mitad de eventos y el almacén de eventos confirma más
 o menos el doble de transacciones por evento; el nodo del almacén de eventos se mantuvo por debajo
-del 70% de CPU. Los 6000 eventos por segundo de la última fila de [Rendimiento medido](#measured-throughput) se midieron con dos pods. Dos pods solicitan el doble de CPU, 1,8 núcleos entre los dos. Cada pod
+del 70% de CPU. Los 6000 eventos por segundo de la fila de v0.19.0 de [Rendimiento medido](#measured-throughput), y los 10 000 de las filas siguientes, se midieron con dos pods. Dos pods solicitan el doble de CPU, 1,8 núcleos entre los dos. Cada pod
 tiene además sus propias conexiones al almacén de eventos, así que estas instancias reservan 80 de
 sus conexiones para la plataforma en lugar de 40 (consulta
 [Límite de conexiones](../guides/sql-and-bi-access.md#connection-cap)). Con `--compact --ha`, y sin
@@ -1440,10 +1440,13 @@ de `event-management` (consulta [Rendimiento medido](#measured-throughput)).
 - **Las solicitudes son lo que cada servicio usó a 6000 eventos por segundo.** Una solicitud es la
   CPU que el planificador reserva para un pod en su nodo, y nada más: decide dónde va el pod. Cada
   una de las de arriba es lo que ese servicio usó, medido, a 6000 eventos por segundo, redondeado
-  hacia arriba: el ritmo que sostuvo una instalación `--ha` predeterminada, con `event-management`
-  en dos pods, en un clúster de tres nodos de base de datos y tres nodos de servicios de 4 vCPU,
+  hacia arriba: el ritmo que sostuvo la versión candidata v0.19.0 como instalación `--ha`
+  predeterminada, con `event-management` en dos pods y la ubicación de los pods decidida por el
+  planificador, en un clúster de tres nodos de base de datos y tres nodos de servicios de 4 vCPU,
   con la resolución, el almacenamiento y el estado en vivo de los dispositivos siguiendo el ritmo
-  (consulta [Rendimiento medido](#measured-throughput)). `event-processing` es la excepción: su
+  (consulta [Rendimiento medido](#measured-throughput)). La cifra de `device-management` se volvió
+  a medir a ese ritmo en una versión de desarrollo anterior a v0.22.0, después de que bajara su
+  coste por evento: unos 0,43 núcleos, redondeados hacia arriba a 450m. `event-processing` es la excepción: su
   solicitud es lo que usó con su límite de 1 núcleo a 6800 eventos por segundo ofrecidos. Con esa
   solicitud y ese límite, en la versión candidata, la detección siguió el ritmo a 6000 (cola máxima
   por debajo de 1000) y se quedó atrás a partir de 7600 ofrecidos; queda fuera de la comprobación de
@@ -1621,10 +1624,30 @@ un nodo se quedaba sin memoria.
 | después de v0.18.0 | el mismo | ajustada: `event-management` con `persistence.writers: 10` y `persistence.maxBatch: 64`; ver abajo | unos 6000 eventos/s | Ejecuciones de 180 segundos. A 6000 ofrecidos, cada etapa mantuvo al menos el 98% del ritmo ofrecido, la cola se vació en 5 segundos y el número de eventos almacenados fue igual al de aceptados (se compararon los totales, no cada evento). Mantenido 5 minutos a 6000, el almacenamiento conservó el 96%, así que la cifra sostenida es de unos 5800 a 6000. |
 | después de v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-4 nodos de base de datos (con taint, solo bases de datos) y 3 × n2-highcpu-4 nodos de servicios, discos persistentes SSD, `--ha` | los valores predeterminados anteriores a las solicitudes de arriba (`device-management` 500m, `event-management` y `device-state` 400m, `event-sources` 150m, `event-processing` 100m), con los valores de persistencia actuales de `event-management` | unos 6000 eventos/s | Sustituida por la fila siguiente, medida con las solicitudes de arriba y los tamaños de volumen predeterminados. Dos ejecuciones de 10 minutos a 6000 eventos/s ofrecidos almacenaron cada una 3 600 000 eventos, tantos como se aceptaron (se compararon los totales, no cada evento). La resolución, el almacenamiento y el estado en vivo de los dispositivos mantuvieron cada uno el 99,7% del ritmo ofrecido o más, y la cola se vació en 10 segundos. La detección (`event-processing`) se quedó atrás: su cola llegó a unos 93 000 eventos. Los volúmenes del almacén de eventos y de las copias de seguridad eran más pequeños que los predeterminados. Las solicitudes de arriba se dimensionaron a partir de estas ejecuciones. |
 | versión candidata v0.19.0 | Google Kubernetes Engine (`us-east4-b`), 3 × n2-standard-4 nodos de base de datos (16 GB; con taint, solo bases de datos) y 3 × n2-custom-4-8192 nodos de servicios (4 vCPU, 8 GB), discos de arranque persistentes estándar, `--ha`, los tamaños de volumen predeterminados | los valores predeterminados de arriba, con `event-management` en dos pods (el valor predeterminado de `--ha`) y la generación de perfiles de Go activada pero inactiva | 6000 eventos/s | Dos ejecuciones de 10 minutos a 6000 eventos/s ofrecidos aceptaron cada una 5997 eventos/s y almacenaron exactamente una vez los 3 600 000 eventos aceptados. Se comprobó evento por evento, por el dispositivo y el instante de ocurrencia de cada uno: ninguno faltante, ninguno almacenado dos veces, ninguno inesperado. La resolución, el almacenamiento y el estado en vivo de los dispositivos siguieron cada uno el ritmo, y la cola se vació en unos 2 segundos. La detección (`event-processing`), que esa comprobación no cubre, siguió el ritmo con una cola máxima por debajo de 1000 eventos, y se quedó atrás a partir de 7600 ofrecidos. |
+| versión de desarrollo anterior a v0.22.0 (`46a616c2`) | el mismo | los valores predeterminados de esa versión, con `event-management` en dos pods y la generación de perfiles de Go activada, y con la ubicación fijada (ver abajo) | 10 000 eventos/s | Una ejecución de 10 minutos a 10 000 eventos/s ofrecidos: la resolución, el almacenamiento y el estado en vivo de los dispositivos mantuvieron cada uno de 9999 a 10 003 eventos por segundo, y cada uno de los unos 6 millones de eventos aceptados se almacenó exactamente una vez, comprobado evento por evento: ninguno faltante, ninguno almacenado dos veces, ninguno inesperado. La cola se vació en unos 7 segundos. En ejecuciones de 3 minutos desde 11 600 ofrecidos, la resolución se mantuvo en unos 11 100 a 11 400 por segundo y el estado en vivo de los dispositivos fue el primero en quedarse atrás, a unos 10 000. |
+| versión de desarrollo anterior a v0.22.0 (`65b580d9`) | el mismo | como la fila anterior, con el líder de cada consumidor también fijado en un servidor del bróker | 10 000 eventos/s | Una ejecución de 10 minutos a 10 000 eventos/s ofrecidos: cada etapa mantuvo de 9953 a 9990 eventos por segundo, y cada uno de los unos 6 millones de eventos aceptados se almacenó exactamente una vez, comprobado evento por evento. La cola se vació en unos 6 segundos. En ejecuciones de 3 minutos una réplica de `device-management` resolvió como mucho unos 10 300 por segundo, la primera etapa en quedarse atrás. |
+| después de v0.22.0 (`75b4f2e6`) | el mismo | los valores predeterminados de esa versión (un lote de lectura de 256), con la ubicación fijada como arriba, la instancia sirviendo HTTP sin cifrar (`dcctl bootstrap --no-tls`) y [la publicación en el líder del stream](./observability.md#leader-affinity) desactivada y luego activada | no medido: solo ejecuciones de 3 minutos | A 14 000 ofrecidos, la ingesta aceptó 13 825 eventos por segundo y una réplica de `device-management` resolvió 12 729, con cada evento almacenado exactamente una vez, comprobado evento por evento; la cola se vació en 19 segundos. Con la publicación en el líder del stream activada (el valor predeterminado desde entonces), resolvió 13 512 por segundo con 13 397 aceptados, y la cola se vació en 8 segundos. Son techos de 3 minutos, no ritmos sostenidos. El nodo que ejecutaba el servidor líder del stream de eventos entrantes estuvo al 93-95% de CPU. |
 
-Las filas de v0.18.0 se midieron en v0.18.0, la última fila en la versión candidata v0.19.0, y las
-demás en la versión de desarrollo entre ambas, todas con el generador de carga en un nodo aparte y un almacén de eventos replicado
-(`--ha`). Con la configuración predeterminada de v0.18.0, lo que frenó el ritmo fue el grupo de
+Las filas de v0.18.0 se midieron en v0.18.0, la fila de v0.19.0 en su versión candidata, las dos
+filas de 10 000 en versiones de desarrollo que entraron en v0.22.0, la última fila en una versión
+de desarrollo posterior a v0.22.0, y las demás en la versión de desarrollo entre v0.18.0 y v0.19.0,
+todas con el generador de carga en un nodo aparte y un almacén de eventos replicado (`--ha`). En
+las cuatro últimas filas cada evento llevaba una lectura, de un inquilino cuyo límite de ingesta se
+elevó para la prueba.
+
+En las tres últimas filas la ubicación se fijó en lugar de dejarla al planificador, para poder
+comparar las ejecuciones: un nodo de servicios ejecutaba el servidor del bróker líder del stream de
+eventos entrantes con `device-management`, `event-processing` y un pod de `event-management`; otro
+ejecutaba `event-sources` y el otro pod de `event-management`; el tercero ejecutaba `device-state`
+con el servidor líder del stream de eventos resueltos. Los pods se reiniciaron hasta que la conexión
+al bróker de cada servicio quedó en el mismo servidor en todas las ejecuciones. La ubicación importa
+en este clúster: en una ejecución de 3 minutos a 10 800 ofrecidos, el líder de un solo consumidor en
+el servidor líder de los eventos entrantes costó alrededor del 9% del ritmo de resolución. Una
+instalación predeterminada deja la ubicación al planificador y al bróker, y no se ha medido así a
+10 000 eventos por segundo; la fila de v0.19.0 sí se midió así. Estos resultados describen esa carga
+y ese clúster, no son una garantía de capacidad.
+
+Con la configuración predeterminada de v0.18.0, lo que frenó el ritmo fue el grupo de
 resolutores de `device-management` y, más allá de él, los límites de CPU de `event-sources` y
 `device-state` que el dimensionamiento de arriba aumenta. Con ellos aumentados, el límite pasó a
 ser el almacenamiento de eventos: 5 escritores que confirmaban hasta 32 eventos cada uno llenaban
@@ -1649,9 +1672,9 @@ con lotes de 28 a 30 eventos de media, por debajo del límite, mientras dos de l
 de ellos el del almacén de eventos, estaban al 86-95% de CPU. No se aisló cuál de esas dos cosas
 limitó el ritmo, pero para más rendimiento en ese clúster de tres nodos hacen falta más nodos antes
 que más ajustes por servicio. Una instalación predeterminada con los nuevos valores de persistencia
-se midió en los clústeres divididos de las dos últimas filas, donde sostuvo 6000 eventos por
-segundo con `event-management` en dos pods en la última fila; no se ha medido en el clúster de tres nodos de las
-demás filas.
+se midió en los clústeres divididos de las filas desde la sustituida en adelante, donde sostuvo
+6000 eventos por segundo, y 10 000 con la ubicación fijada, con `event-management` en dos pods desde
+la fila de v0.19.0; no se ha medido en el clúster de tres nodos de las cuatro primeras filas.
 
 #### Volumen del almacén de eventos {#event-store-volume}
 

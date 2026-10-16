@@ -117,9 +117,14 @@ All tenants share one set of services
 A default install sizes the CPU request of each service on the event path from measurement
 ([service sizing](https://docs.devicechain.io/deployment/bootstrap#service-sizing)). On
 Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU, 8 GB service
-nodes, a default HA install accepted 6,000 events a second for 10 minutes, twice, and stored every
-accepted event exactly once, checked event by event: none missing, none stored twice, none
-unexpected. See
+nodes, an HA install at its defaults sustained 10,000 events a second for 10 minutes, on each of
+two development builds that went into v0.22.0, and stored every accepted event exactly once,
+checked event by event: none missing, none stored twice, none unexpected. In those runs the
+event-path services and the broker's stream leaders were held to one balanced placement across
+the three service nodes. With placement left to the scheduler, the v0.19.0 release candidate was
+measured the same way at 6,000 events a second. Each event carried one reading, from one tenant
+whose ingest ceiling was raised for the test. These results describe that workload and cluster,
+not a capacity guarantee. See
 [measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput). Each
 tenant is allowed 1,000 readings a second by default
 ([governance](https://docs.devicechain.io/concepts/governance)).
