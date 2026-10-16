@@ -560,13 +560,18 @@ func (e *Engine) snapshotNewest() []snapNewest {
 // its own time either way. So dropping the instant changes no cutoff, no fold and no edge — only the
 // stored instant itself, which stays inert on both sides until a newer sample replaces it. A raised
 // series keeps its instant: its resolve, and a held one (holdLateResolve), are stamped there.
+//
+// A Threshold cursor exists only while its series is raised (threshold.go: applyThreshold drops it
+// on the clear and never reads one on an unraised series), so one on an unraised series — left by
+// ClearRaised — is dropped outright. Threshold is deliberately not a sliding kind here: its cursor
+// at the raise is never stored (the raise is its floor), so nothing needs seeding on restore.
 func (e *Engine) pruneNewest() {
 	for k, t := range e.newest {
 		if _, raised := e.raised[k]; raised {
 			continue
 		}
 		r, ok := e.rules[k.Rule]
-		if !ok || !t.After(e.wm.now.Add(-r.Window)) {
+		if !ok || r.Kind == Threshold || !t.After(e.wm.now.Add(-r.Window)) {
 			delete(e.newest, k)
 		}
 	}
