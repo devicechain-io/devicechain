@@ -193,8 +193,9 @@ func clientFramesAtA(t *testing.T, servers []*natsserver.Server, w OrderedWriter
 	return (a1 - a0) - (c1 - c0), b1 - b0
 }
 
+// publishLocal reads the gauge for the resolution writer newOrdered builds.
 func publishLocal(nmgr *NatsManager, suffix string) float64 {
-	return testutil.ToFloat64(nmgr.metrics.publishLeaderLocal.WithLabelValues(suffix))
+	return testutil.ToFloat64(nmgr.metrics.publishLeaderLocal.WithLabelValues(suffix, string(WriterResolution)))
 }
 
 // Publishes go straight to the stream leader, not through a route.

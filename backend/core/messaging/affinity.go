@@ -615,8 +615,10 @@ func (a *affinity) afterSample(ctx context.Context, seen *sampleSeen) {
 	}
 }
 
-// samplePublish sets jetstream_publish_leader_local for each written suffix: 1 only while
-// every writer on it publishes on a connection attached to the stream's leader.
+// samplePublish sets jetstream_publish_leader_local for each written (suffix, writer) pair: 1
+// only while every writer of that name on the suffix publishes on a connection attached to the
+// stream's leader. Writers share a name (one external-mqtt writer per source), so the series
+// folds them; it is labelled like the window metrics so a remote leader names its writer.
 func (a *affinity) samplePublish(seen *sampleSeen) {
 	a.mu.Lock()
 	writers := make(map[string][]*orderedWriter, len(a.writers))
@@ -624,12 +626,13 @@ func (a *affinity) samplePublish(seen *sampleSeen) {
 		writers[s] = slices.Clone(ws)
 	}
 	a.mu.Unlock()
-	local := map[string]bool{}
+	type series struct{ suffix, writer string }
+	local := map[series]bool{}
 	for stream, ws := range writers {
 		info, ok := seen.streams[stream]
 		if !ok {
 			for _, w := range ws {
-				a.nmgr.metrics.publishLeaderLocal.DeleteLabelValues(w.suffix)
+				a.nmgr.metrics.publishLeaderLocal.DeleteLabelValues(w.suffix, string(w.writer))
 			}
 			continue
 		}
@@ -640,16 +643,17 @@ func (a *affinity) samplePublish(seen *sampleSeen) {
 				nc = a.nmgr.nc
 			}
 			here := leader != "" && nc != nil && nc.IsConnected() && nc.ConnectedServerName() == leader
-			if prev, seen := local[w.suffix]; !seen || prev {
-				local[w.suffix] = here
+			k := series{w.suffix, string(w.writer)}
+			if prev, seen := local[k]; !seen || prev {
+				local[k] = here
 			}
 			if !here && a.publishOn() {
 				a.markDirty(stream)
 			}
 		}
 	}
-	for suffix, here := range local {
-		a.nmgr.metrics.publishLeaderLocal.WithLabelValues(suffix).Set(boolGauge(here))
+	for k, here := range local {
+		a.nmgr.metrics.publishLeaderLocal.WithLabelValues(k.suffix, k.writer).Set(boolGauge(here))
 	}
 }
 

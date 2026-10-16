@@ -275,7 +275,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 将任一设置设为 `true` 即可开启。移动消费者的领导者会短暂暂停该消费者的投递，因此在集群负载下测量之前两者都不开启。单服务器代理上两者都无事可做。
 
 - **`devicechain_<area>_jetstream_consumer_leader_local{stream, durable}`**：消费者的领导者是本服务所连接的服务器时为 1，是其他服务器时为 0。无法读取消费者时不存在。多个副本从不同服务器读取同一消费者时，处于少数的副本读数为 0，这是预期的。
-- **`devicechain_<area>_jetstream_publish_leader_local{suffix}`**：该流上所有此类写入方都通过连接到领导者的连接发布时为 1，有任一写入方经由其他服务器发布时为 0。
+- **`devicechain_<area>_jetstream_publish_leader_local{suffix, writer}`**：该流上所有同名的此类写入方都通过连接到领导者的连接发布时为 1，有任一写入方经由其他服务器发布时为 0。`writer` 与发布窗口指标所带的名称相同。
 - **`devicechain_<area>_jetstream_consumer_leader_moves_total{stream, durable, result}`**：本服务向代理请求的移动次数。`result="moved"` 表示已完成的移动；`result="failed"` 表示代理拒绝或未应答的请求，未做任何改变。
 
 关闭设置时这两个指标仍会导出，因此关闭某个设置可以看出它原本在做什么。

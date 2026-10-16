@@ -580,9 +580,10 @@ carga. En un broker de un solo servidor ninguno tiene nada que hacer.
   del consumidor es el servidor al que está conectado este servicio, 0 mientras es otro. Ausente
   mientras no se puede leer el consumidor. Cuando varias réplicas leen un consumidor desde
   servidores distintos, las que están en minoría marcan 0, y es lo esperado.
-- **`devicechain_<area>_jetstream_publish_leader_local{suffix}`**: 1 mientras todos esos
-  escritores del stream publican por una conexión a su líder, 0 mientras alguno publica a través
-  de otro servidor.
+- **`devicechain_<area>_jetstream_publish_leader_local{suffix, writer}`**: 1 mientras todos esos
+  escritores de ese nombre en el stream publican por una conexión a su líder, 0 mientras alguno
+  publica a través de otro servidor. `writer` es el mismo nombre que llevan las métricas de la
+  ventana de publicación.
 - **`devicechain_<area>_jetstream_consumer_leader_moves_total{stream, durable, result}`**:
   movimientos que este servicio pidió al broker. `result="moved"` es un movimiento hecho;
   `result="failed"` es uno que el broker rechazó o no respondió, y que no cambió nada.

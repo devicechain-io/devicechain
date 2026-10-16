@@ -429,11 +429,12 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"the last 30 s sample. Absent while the durable cannot be read.",
 			[]string{"stream", "durable"}),
 		publishLeaderLocal: ms.NewGaugeVec("jetstream_publish_leader_local",
-			"1 while every pipelined writer on this stream suffix publishes on a connection to the server "+
-				"leading the stream, 0 while one publishes through another server (each publish and its "+
-				"acknowledgement then cross a route), as of the last 30 s sample. Absent while the stream "+
-				"cannot be read.",
-			[]string{"suffix"}),
+			"1 while every pipelined writer of this name on this stream suffix publishes on a connection "+
+				"to the server leading the stream, 0 while one publishes through another server (each "+
+				"publish and its acknowledgement then cross a route), as of the last 30 s sample, by stream "+
+				"suffix and writer (the same names as jetstream_publish_window_full_seconds_total). Absent "+
+				"while the stream cannot be read.",
+			[]string{"suffix", "writer"}),
 		leaderMoves: ms.NewCounterVec("jetstream_consumer_leader_moves_total",
 			"Times this service asked the broker to move a durable's consumer leader to the server its "+
 				"readers are connected to, by result: moved, or failed (refused or unanswered; nothing changed).",

@@ -560,9 +560,9 @@ single-server broker neither has anything to do.
   consumer's leader is the server this service is connected to, 0 while it is another server.
   Absent while the consumer cannot be read. When several replicas read one consumer from
   different servers, the ones in the minority read 0, and that is expected.
-- **`devicechain_<area>_jetstream_publish_leader_local{suffix}`**: 1 while every such writer on
-  the stream publishes on a connection to its leader, 0 while one publishes through another
-  server.
+- **`devicechain_<area>_jetstream_publish_leader_local{suffix, writer}`**: 1 while every such
+  writer of that name on the stream publishes on a connection to its leader, 0 while one
+  publishes through another server. `writer` is the same name the publish-window metrics carry.
 - **`devicechain_<area>_jetstream_consumer_leader_moves_total{stream, durable, result}`**: moves
   this service asked the broker for. `result="moved"` is a move made; `result="failed"` is one
   the broker refused or did not answer, which changed nothing.
