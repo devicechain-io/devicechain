@@ -169,6 +169,11 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 			sayAreaChangeSettled(st.AreaChange, opts.Instance)
 			return nil
 		}
+		// Before the first write, like the budget and the plan below: see
+		// precheckAreaChange for why a refusal found at the Helm step is a permanent one.
+		if err := precheckAreaChange(ctx, st); err != nil {
+			return err
+		}
 	} else {
 		fmt.Println(GreenUnderline(fmt.Sprintf(
 			"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))

@@ -227,6 +227,14 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	// left on the local one — two halves of what is defined as ONE version across the
 	// images, the chart, the operator and this CLI.
 	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	// 🔴 AN AREA CHANGE STAYS ON THE DECLARED IMAGES, AND THAT IS NOT LEFT TO THE CALLER.
+	// The release refusal in applyAreaChange compares this dcctl with the version the run
+	// is about to deploy; an image source supplied beside the areas would make that the
+	// supplied one, and the run a version move under a verb that promises none.
+	if len(opts.EnableAreas) > 0 && (opts.ImageRegistry != "" || opts.ImageVersion != "") {
+		return fmt.Errorf("enabling an area on instance %q keeps the images it runs (%s:%s); "+
+			"moving them is `dcctl upgrade`", opts.Instance, inst.Spec.ImageRegistry, inst.Spec.ImageVersion)
+	}
 	if opts.ImageRegistry != "" {
 		st.ImageRegistry = opts.ImageRegistry
 	}
@@ -235,6 +243,16 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 	}
 	img, err := resolveUpgradeImageSource(st)
 	if err != nil {
+		if len(opts.EnableAreas) > 0 {
+			// 🔴 NOT THE UPGRADE'S ADVICE. That one says to pass --registry/--version,
+			// which enable-area does not have, and an area on images built from source
+			// would need its own image built — which this verb does not do.
+			return fmt.Errorf("instance %q runs images tagged %q, which no registry publishes "+
+				"(an instance built with --build). Enabling an area deploys it at the version the "+
+				"instance runs and builds no image, so it cannot add one here: move the instance onto "+
+				"a published or pushed tag first (`dcctl upgrade %s %s --registry <registry> --version <tag>`)",
+				opts.Instance, st.ImageVersion, inst.Spec.Provider, opts.Instance)
+		}
 		return err
 	}
 	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version

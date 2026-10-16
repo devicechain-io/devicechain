@@ -1649,10 +1649,17 @@ dcctl enable-area local my-instance update-management
 - Naming an area the instance already runs changes nothing. If the last run on the instance did
   not finish, the command applies the instance again, which completes an `enable-area` that
   stopped part of the way.
+- The area is recorded before anything is applied. If the command stops part of the way, the area
+  stays recorded: running `dcctl enable-area` again, or the next `dcctl upgrade`, finishes
+  deploying it.
 - Enabling an area deploys it; it does not configure it. Some areas need settings before they do
   useful work. `update-management` keeps artifacts in the [object store](#object-store), which is
   chosen at bootstrap and cannot be added later; without one, the service runs and refuses every
-  artifact, and the command says so.
+  artifact, and the command says so. On a cluster `dcctl` did not create, a `filesystem` store
+  with the `ReadWriteOnce` access mode can back only one pod, so adding `update-management` beside
+  `user-management` is refused before anything is written. `lwm2m-ingest` authenticates devices
+  against the pre-shared keys given at bootstrap (`--lwm2m-identities`); added later, it runs and
+  refuses every handshake.
 
 There is no command that removes an area. An area may hold data, and taking it out of the
 deployment would leave that data with nothing serving it.

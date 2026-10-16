@@ -4,6 +4,9 @@
 package bootstrap
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"slices"
 	"strings"
@@ -335,5 +338,152 @@ func TestAddingUpdatesWithoutAnObjectStoreIsSaid(t *testing.T) {
 	}
 	if notes := areaChangeNotes(st); len(notes) != 0 {
 		t.Errorf("mcp was told about an object store: %q", notes)
+	}
+}
+
+// 🔴 A CHART REFUSAL OF THE NEW AREA SET IS MADE BEFORE THE DECLARATION IS WRITTEN. An
+// instance on a cluster dcctl was only pointed at, with a ReadWriteOnce filesystem store,
+// mounts that store in user-management alone; update-management mounts it too, and the
+// chart refuses two pods on one ReadWriteOnce claim. Found at the Helm step, that refusal
+// comes after the declaration already records update-management — so the instance is left
+// Failed with an area every later `dcctl upgrade` re-renders and is refused over, and there
+// is no command that takes it back out. It has to be found here, while nothing is written.
+func TestEnableAreaRefusesAnAreaSetTheObjectStoreCannotMount(t *testing.T) {
+	pointedAt := func(accessMode string) *dcv1beta1.Instance {
+		inst := readyGuide()
+		inst.Spec.Managed = false
+		inst.Spec.ObjectStore = &dcv1beta1.ObjectStoreSpec{
+			Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi", AccessMode: accessMode,
+		}
+		return inst
+	}
+
+	precheck := func(inst *dcv1beta1.Instance, areas ...string) error {
+		t.Helper()
+		st, err := enableAreaState(t, inst, areas...)
+		if err != nil {
+			t.Fatalf("settling %v: %v", areas, err)
+		}
+		return precheckAreaChange(t.Context(), st)
+	}
+
+	err := precheck(pointedAt(""), "update-management")
+	if err == nil {
+		t.Fatal("update-management was let through onto a ReadWriteOnce store user-management already mounts")
+	}
+	if !strings.Contains(err.Error(), "ReadWriteOnce") || !strings.Contains(err.Error(), "update-management") {
+		t.Errorf("the refusal does not say why: %v", err)
+	}
+
+	// The controls: a store that can be shared takes the area, and an area that does not
+	// mount the store is not judged by it.
+	if err := precheck(pointedAt("ReadWriteMany"), "update-management"); err != nil {
+		t.Errorf("a ReadWriteMany store was refused: %v", err)
+	}
+	if err := precheck(pointedAt(""), "mcp"); err != nil {
+		t.Errorf("mcp, which mounts no store, was refused: %v", err)
+	}
+	// And dcctl's own cluster colocates the pods, so the same store takes the area there.
+	if err := precheck(readyGuide(), "update-management"); err != nil {
+		t.Errorf("a colocated store on dcctl's own cluster was refused: %v", err)
+	}
+}
+
+// The check above is worth nothing unless Upgrade asks it before the declaration is
+// written: after, its refusal is the permanent one it exists to prevent. Held by the
+// source, as the teardown refusal's order is, because Upgrade itself needs a cluster.
+func TestTheAreaPrecheckIsMadeBeforeTheDeclarationIsWritten(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "upgrade.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var precheck, record token.Pos
+	ast.Inspect(file, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if ok && fn.Name.Name != "Upgrade" {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); ok {
+			switch {
+			case id.Name == "precheckAreaChange" && precheck == token.NoPos:
+				precheck = call.Pos()
+			case id.Name == "recordUpgradedVersion" && record == token.NoPos:
+				record = call.Pos()
+			}
+		}
+		return true
+	})
+	if record == token.NoPos {
+		t.Fatal("Upgrade no longer calls recordUpgradedVersion; this test is looking at the wrong thing")
+	}
+	if precheck == token.NoPos {
+		t.Fatal("Upgrade does not call precheckAreaChange: an area the object store cannot take is refused only after it is recorded")
+	}
+	if precheck > record {
+		t.Errorf("Upgrade calls precheckAreaChange (%s) after recordUpgradedVersion (%s)",
+			fset.Position(precheck), fset.Position(record))
+	}
+}
+
+// 🔴 THE VERB HOLDS THE IMAGES, NOT ITS CALLER. An image source supplied beside the areas
+// would become the version the release refusal compares, and the run a version move.
+func TestEnableAreaRefusesAnImageSourceBesideTheAreas(t *testing.T) {
+	for _, o := range []Options{
+		{Instance: "guide", ImageVersion: "v0.22.0"},
+		{Instance: "guide", ImageRegistry: "registry.example.com/dc"},
+	} {
+		st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+		err := applyUpgradeDeclaration(st, readyGuide(), UpgradeOptions{Options: o, EnableAreas: []string{"mcp"}})
+		if err == nil || !strings.Contains(err.Error(), "dcctl upgrade") {
+			t.Errorf("enable-area with %+v: err = %v, want a refusal naming `dcctl upgrade`", o, err)
+		}
+	}
+	// The counterweight: a plain upgrade still takes them.
+	st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, readyGuide(), UpgradeOptions{
+		Options: Options{Instance: "guide", ImageVersion: "v0.22.0"}}); err != nil || st.ImageVersion != "v0.22.0" {
+		t.Errorf("a plain upgrade to v0.22.0: err = %v, version %q", err, st.ImageVersion)
+	}
+}
+
+// An instance built with --build runs "dev", which no registry publishes. enable-area
+// builds no image, so it is refused — in enable-area's terms, not with the upgrade's
+// advice to pass flags this verb does not have.
+func TestEnableAreaOverSourceBuiltImagesSaysWhatToDo(t *testing.T) {
+	inst := readyGuide()
+	inst.Spec.ImageRegistry, inst.Spec.ImageVersion = LocalRegistry, "dev"
+	_, err := enableAreaState(t, inst, "mcp")
+	if err == nil {
+		t.Fatal("enable-area over images tagged dev was let through")
+	}
+	if !strings.Contains(err.Error(), "builds no image") || !strings.Contains(err.Error(), "dcctl upgrade local guide") {
+		t.Errorf("the refusal does not say what enable-area cannot do and what to run: %v", err)
+	}
+}
+
+// A dcctl with no image version at all is a broken stamp, not a source build: the release
+// refusal must not read it as "no release, let it through".
+func TestEnableAreaRefusesADcctlWithNoImageVersion(t *testing.T) {
+	saved := DefaultImageVersion
+	t.Cleanup(func() { DefaultImageVersion = saved })
+	DefaultImageVersion = ""
+	if _, err := enableAreaState(t, readyGuide(), "mcp"); err == nil || !strings.Contains(err.Error(), "no image version") {
+		t.Errorf("an unstamped dcctl: err = %v, want a refusal", err)
+	}
+}
+
+func TestAddingLwm2mDayTwoIsSaid(t *testing.T) {
+	st, err := enableAreaState(t, readyGuide(), "lwm2m-ingest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	notes := areaChangeNotes(st)
+	if len(notes) != 1 || !strings.Contains(notes[0], "--lwm2m-identities") {
+		t.Errorf("notes = %q, want one about the pre-shared keys", notes)
 	}
 }

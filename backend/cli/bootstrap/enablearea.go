@@ -4,6 +4,7 @@
 package bootstrap
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -129,14 +130,26 @@ func knownAreaNames() []string {
 // images where they were — a version change nobody asked for, under a command that
 // promises not to make one. Moving versions is `dcctl upgrade`, and the refusal says
 // so. A dcctl built from source carries no release version and is let through: it is
-// what a developer enables an area with on images they built themselves.
+// what a developer enables an area with on an instance running a release's images, or
+// images they pushed under a tag of their own. (An instance built with --build runs the
+// unpublished tag "dev", which the image resolution has already refused — see
+// applyUpgradeDeclaration.)
 func applyAreaChange(st *State, inst *dcv1beta1.Instance, requested []string, provider string) error {
 	newDelta, added, err := planAreaChange(st.Profile, st.EnableAreas, requested)
 	if err != nil {
 		return fmt.Errorf("enabling %s on instance %q: %w", strings.Join(requested, ", "), st.Instance, err)
 	}
 
-	if v := DefaultImageVersion; v != "" && !IsUnpublishedImageVersion(v) && st.ImageVersion != v {
+	// 🔴 AN EMPTY STAMP IS NOT A SOURCE BUILD. A source build carries "dev"; "" is what a
+	// broken ldflags stamp produces, and reading it as "no release, let it through" would
+	// turn a build defect into a skipped refusal.
+	v := DefaultImageVersion
+	if v == "" {
+		return fmt.Errorf("this dcctl carries no image version at all, so whether it belongs to "+
+			"the release instance %q runs (%q) cannot be judged; enable the area with a released "+
+			"dcctl, or one built from source", st.Instance, st.ImageVersion)
+	}
+	if !IsUnpublishedImageVersion(v) && st.ImageVersion != v {
 		return fmt.Errorf(
 			"instance %q runs release %q and this dcctl is release %q. Enabling an area applies "+
 				"this dcctl's chart and infrastructure configuration, so here it would also move the "+
@@ -158,6 +171,29 @@ func applyAreaChange(st *State, inst *dcv1beta1.Instance, requested []string, pr
 		// stands over a Ready phase (bootstrapUnfinished).
 		Settled: len(added) == 0 &&
 			inst.Annotations[dcv1beta1.AnnotationPhase] == dcv1beta1.PhaseReady,
+	}
+	return nil
+}
+
+// precheckAreaChange refuses, before anything is written, an added area the instance's
+// object store cannot be mounted by.
+//
+// 🔴 THE DECLARATION IS WRITTEN BEFORE THE HELM STEP, SO A CHART REFUSAL FOUND THERE IS
+// PERMANENT. update-management mounts the filesystem object store beside user-management;
+// on a cluster dcctl was only pointed at, a ReadWriteOnce store that one pod mounted at
+// bootstrap is two pods' after the change, and the chart refuses that. Met at the Helm
+// step, the refusal arrives after recordUpgradedVersion has recorded the area — the run
+// ends Failed, every later `dcctl upgrade` renders the same area set and is refused the
+// same way, and there is no command that takes the area back out. Here, nothing has been
+// written. It is the check bootstrap makes for the same reason (checkObjectStoreMountable),
+// asked of the area set this run is about to record.
+func precheckAreaChange(ctx context.Context, st *State) error {
+	if st.AreaChange == nil || len(st.AreaChange.Added) == 0 {
+		return nil
+	}
+	if err := checkObjectStoreMountable(ctx, st); err != nil {
+		return fmt.Errorf("enabling %s on instance %q: %w. Nothing has been changed",
+			strings.Join(st.AreaChange.Added, ", "), st.Instance, err)
 	}
 	return nil
 }
@@ -239,6 +275,11 @@ func areaChangeNotes(st *State) []string {
 		return nil
 	}
 	var notes []string
+	if slices.Contains(st.AreaChange.Added, string(functionalarea.Lwm2mIngest)) {
+		notes = append(notes, "lwm2m-ingest authenticates devices against the pre-shared keys given at "+
+			"bootstrap (--lwm2m-identities), and none can be given here: the adapter will run and refuse "+
+			"every handshake.")
+	}
 	if slices.Contains(st.AreaChange.Added, string(functionalarea.UpdateMgmt)) && st.ObjectStore == nil {
 		notes = append(notes, "update-management keeps artifact content in the instance's object store, "+
 			"and this instance was built without one: the service will run and refuse every artifact. "+

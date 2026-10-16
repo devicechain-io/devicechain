@@ -1793,10 +1793,18 @@ dcctl enable-area local my-instance update-management
 - Nombrar un área que la instancia ya ejecuta no cambia nada. Si la última ejecución sobre la
   instancia no terminó, el comando vuelve a aplicar la instancia, lo que completa un
   `enable-area` que se detuvo a medias.
+- El área se registra antes de aplicar nada. Si el comando se detiene a medias, el área sigue
+  registrada: volver a ejecutar `dcctl enable-area`, o el siguiente `dcctl upgrade`, termina de
+  desplegarla.
 - Habilitar un área la despliega; no la configura. Algunas áreas necesitan ajustes antes de hacer
   trabajo útil. `update-management` guarda los artefactos en el
   [almacén de objetos](#object-store), que se elige en el bootstrap y no se puede añadir después;
-  sin él, el servicio se ejecuta y rechaza todos los artefactos, y el comando lo avisa.
+  sin él, el servicio se ejecuta y rechaza todos los artefactos, y el comando lo avisa. En un
+  clúster que `dcctl` no creó, un almacén `filesystem` con el modo de acceso `ReadWriteOnce` solo
+  puede servir a un pod, así que añadir `update-management` junto a `user-management` se rechaza
+  antes de escribir nada. `lwm2m-ingest` autentica los dispositivos con las claves precompartidas
+  indicadas en el bootstrap (`--lwm2m-identities`); si se añade después, se ejecuta y rechaza
+  todos los handshakes.
 
 No hay ningún comando que quite un área. Un área puede guardar datos, y sacarla del despliegue
 dejaría esos datos sin nada que los sirva.
