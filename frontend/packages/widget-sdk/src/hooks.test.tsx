@@ -661,9 +661,64 @@ describe('useMeasurementStream across an interruption of the live feed', () => {
       rerender({ seed: [sample('temperature', 50, t(3))], asOf: Date.parse(t(6)) });
       expect(result.current.latest.temperature.value).toBe(50);
       // The seed holds no humidity: the reading from before is still the newest known.
-      expect(result.current.latest.humidity.value).toBe(40);
+      expect(result.current.latest.humidity?.value).toBe(40);
       f.push(sample('temperature', 2, t(7)));
       expect(result.current.latest.temperature.value).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('useMeasurementStream gaps: where knowledge stops, and what a covering seed replaces', () => {
+  const t = (minute: number, second = 0) =>
+    `2026-10-15T12:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}.000Z`;
+  function resumingHub() {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+    } as unknown as DashboardHub;
+    return { hub, push: (m: MeasurementSample) => act(() => sink?.next(m)), resume: () => act(() => sink?.reconnected?.()) };
+  }
+  type Props = { seed?: MeasurementSample[]; asOf?: number };
+
+  it('a board that holds only its seed still marks the gap after the seed', () => {
+    const f = resumingHub();
+    const seed = [sample('temperature', 1, t(0)), sample('temperature', 2, t(3))];
+    const { result } = renderHook(() => useMeasurementStream(f.hub, ds, { initialSamples: seed }));
+    f.resume();
+    f.push(sample('temperature', 5, t(9)));
+    expect(result.current.gaps).toEqual([t(3)]);
+  });
+
+  it('keeps only the newest eight gaps, however often the feed drops', () => {
+    const f = resumingHub();
+    const { result } = renderHook(() => useMeasurementStream(f.hub, ds, {}));
+    for (let m = 0; m < 10; m++) {
+      f.push(sample('temperature', m, t(m)));
+      f.resume();
+    }
+    expect(result.current.gaps).toEqual([2, 3, 4, 5, 6, 7, 8, 9].map((m) => t(m)));
+  });
+
+  it('a covering seed whose newest bucket starts before the last reading still replaces that reading', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(Date.parse(t(6)));
+      const f = resumingHub();
+      const { result, rerender } = renderHook((p: Props) => useMeasurementStream(f.hub, ds, { initialSamples: p.seed, initialSamplesAsOf: p.asOf }), {
+        initialProps: {} as Props,
+      });
+      f.push(sample('temperature', 7, t(1, 30)));
+      f.resume();
+      // The device went quiet before the outage: the store's newest bucket is the 12:01 one, which
+      // already holds the 12:01:30 reading. Drawing both would show that minute twice.
+      rerender({ seed: [sample('temperature', 4, t(0)), sample('temperature', 6, t(1))], asOf: Date.parse(t(6)) });
+      expect(result.current.samples.map((s) => s.occurredTime)).toEqual([t(0), t(1)]);
+      expect(result.current.gaps).toBeUndefined();
     } finally {
       vi.useRealTimers();
     }

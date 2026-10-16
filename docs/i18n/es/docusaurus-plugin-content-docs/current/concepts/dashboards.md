@@ -151,7 +151,8 @@ flujo y el panel lo abrió de nuevo) cada widget las lee del historial almacenad
   la interrupción. Hasta que esa lectura llega, o si falla, el gráfico corta su línea durante la
   interrupción en lugar de trazar una línea recta desde la última lectura anterior hasta la primera
   posterior. Una lectura fallida se reintenta cada 30 segundos. En un panel en pausa la lectura
-  espera hasta que lo reanudes;
+  espera hasta que lo reanudes. Un gráfico que no está vinculado a un único dispositivo no tiene
+  historial almacenado que leer, así que su corte se mantiene;
 - una **tabla de flota** o un **gráfico de barras con una barra por dispositivo** vuelve a leer los
   últimos valores de cada dispositivo, de inmediato y otra vez justo después del siguiente minuto
   completo, para incluir una lectura enviada en el último minuto de la interrupción. Un dispositivo

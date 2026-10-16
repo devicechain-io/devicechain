@@ -102,6 +102,7 @@ function fakeHub() {
     hub,
     push: (s: MeasurementSample) => act(() => sinks.forEach((k) => k.next(s))),
     reconnect: () => act(() => sinks.forEach((k) => k.reconnected?.())),
+    sinks,
     get subscribed() {
       return sinks.length;
     },
@@ -239,6 +240,26 @@ describe('the re-read racing the feed', () => {
     expect(longestSegment(pts)).toBeLessThanOrEqual(2 * MIN);
   });
 
+  it('a read asked for before the outage that lands as the feed resumes is kept, but does not close the gap', async () => {
+    const f = fakeHub();
+    const view = render(<DashboardRenderer definition={board} hub={f.hub} timeRange={live} />);
+    await flush();
+    await f.push(sample(10, T0 + 10_000));
+    vi.setSystemTime(T0 + 5 * MIN);
+    // The first read answers in the same turn the feed resumes, before the re-read is asked for:
+    // it is still the current ask, so it is taken -- as history up to when it was asked.
+    await act(async () => {
+      f.sinks.forEach((k) => k.reconnected?.());
+      h.fetches[0].resolve(history(T0 - 30 * MIN, T0 - MIN, () => 1));
+      await Promise.resolve();
+    });
+    await f.push(sample(20, T0 + 5 * MIN + 10_000));
+    const pts = points(view.container);
+    expect(pts.filter(([, v]) => v === 1)).toHaveLength(30);
+    expect(pts.some(([, v]) => v === null)).toBe(true);
+    expect(longestSegment(pts)).toBeLessThanOrEqual(2 * MIN);
+  });
+
   it('two reconnects back to back: only the read asked for after the second is taken', async () => {
     const { f, view } = await openAndLoseTheFeed();
     await f.reconnect();
@@ -319,5 +340,59 @@ describe('the re-read racing the feed', () => {
     await flush();
     expect(h.fetches).toHaveLength(2);
     expect(Date.parse(h.fetches[1].window.endTime)).toBeGreaterThanOrEqual(T0 + 5 * MIN);
+  });
+});
+
+describe('a line chart with no stored history to read back', () => {
+  // A chart over several devices (an anchor, a device list) has no stored history to read: the
+  // read would answer with nothing at once. That empty answer is not history across the outage,
+  // so it must not replace what the chart drew before it -- the outage stays a gap.
+  const fleet: DatasourceSelector = { kind: 'devices', deviceTokens: ['d-1', 'd-2'], measurements: ['t'] };
+  const fleetBoard: DashboardDefinition = { ...board, widgets: [{ ...board.widgets[0], datasource: fleet } as WidgetInstance] };
+
+  it('keeps the readings from before the outage and draws the outage as a gap', async () => {
+    const f = fakeHub();
+    const view = render(<DashboardRenderer definition={fleetBoard} hub={f.hub} timeRange={live} />);
+    await flush();
+    await f.push(sample(10, T0 + 10_000));
+    await f.push(sample(11, T0 + 20_000));
+    vi.setSystemTime(T0 + 5 * MIN + 20_000);
+    await f.reconnect();
+    await flush();
+    // Whatever a read of this selector would answer, it is not taken as covering the outage.
+    for (const read of h.fetches) await act(async () => read.resolve([]));
+    await f.push(sample(20, T0 + 5 * MIN + 30_000));
+
+    const pts = points(view.container);
+    expect(pts.filter(([, v]) => v === 10 || v === 11)).toHaveLength(2);
+    expect(pts.some(([, v]) => v === null)).toBe(true);
+    expect(longestSegment(pts)).toBeLessThanOrEqual(2 * MIN);
+  });
+});
+
+describe('a frozen board whose span changes after a reconnect', () => {
+  it('reads the outage back once it resumes: the read made at the freeze instant cannot cover it', async () => {
+    const paused: TimeRangeState = { spanSeconds: 3600, paused: true, pausedAt: T0 + 20_000 };
+    const f = fakeHub();
+    const view = render(<DashboardRenderer definition={board} hub={f.hub} timeRange={live} />);
+    await flush();
+    await act(async () => h.fetches[0].resolve(history(T0 - 30 * MIN, T0 - MIN, () => 1)));
+    await f.push(sample(11, T0 + 20_000));
+    view.rerender(<DashboardRenderer definition={board} hub={f.hub} timeRange={paused} />);
+    vi.setSystemTime(T0 + 5 * MIN);
+    await f.reconnect();
+    await flush();
+    // A new span while still frozen: read at the freeze instant, before the outage.
+    view.rerender(<DashboardRenderer definition={board} hub={f.hub} timeRange={{ ...paused, spanSeconds: 6 * 3600 }} />);
+    await flush();
+    await act(async () => h.fetches[h.fetches.length - 1].resolve(history(T0 - 30 * MIN, T0, () => 1)));
+    const asked = h.fetches.length;
+
+    view.rerender(<DashboardRenderer definition={board} hub={f.hub} timeRange={{ spanSeconds: 6 * 3600, paused: false }} />);
+    await flush();
+    expect(h.fetches).toHaveLength(asked + 1);
+    expect(Date.parse(h.fetches[asked].window.endTime)).toBeGreaterThanOrEqual(T0 + 5 * MIN);
+    await act(async () => h.fetches[asked].resolve(storedAfterOutage()));
+    expect(points(view.container).some(([, v]) => v === null)).toBe(false);
   });
 });

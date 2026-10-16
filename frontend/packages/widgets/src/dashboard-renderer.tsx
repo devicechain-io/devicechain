@@ -560,7 +560,9 @@ function useWidgetHistories(
       // What was asked for: the selector, the span and the re-reads. Equal = fetched, or in flight.
       const base = `${key}|${span ?? ''}|`;
       const n = reseeds.current[id] ?? 0;
-      const asked = `${base}${n}`;
+      // A read made while frozen ends at the freeze instant, so it answers no re-read: it is asked
+      // as `p`, and resuming reads the outage back.
+      const asked = `${base}${range.paused && n ? 'p' : n}`;
       const previous = requested.current[id];
       // Already asked; or only the re-read is new and the board is frozen, so it waits for resume.
       if (previous === asked || (range.paused && previous?.startsWith(base))) {
@@ -569,7 +571,10 @@ function useWidgetHistories(
       }
       next[id] = asked;
       const widget = byId.get(id);
-      if (!widget) continue;
+      // Only a single device has stored history to read (fetchWidgetHistory answers any other
+      // selector with nothing, at once). That empty answer is not history across an outage, and
+      // taken as one it would wipe what the chart drew before it: such a widget gets no seed.
+      if (widget?.datasource?.kind !== 'device') continue;
       // A frozen board reads up to the freeze instant, so a range change while paused re-fetches
       // the same moment at the new span instead of sliding forward.
       const end = range.paused && range.pausedAt !== undefined ? range.pausedAt : now;

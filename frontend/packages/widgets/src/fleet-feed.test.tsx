@@ -472,8 +472,12 @@ describe('after the live feed was interrupted', () => {
     });
     await flush();
     expect(f.seeds).toHaveBeenCalledTimes(2);
+    // Nothing more before the boundary: a read then would end where the immediate one did. (Each
+    // advance is its own act, so a read a timer asks for is made when it is asked for.)
+    await act(async () => void (await vi.advanceTimersByTimeAsync(29_000)));
+    expect(f.seeds).toHaveBeenCalledTimes(2);
     // The read that reaches the outage's last minute: its window ends on the boundary after it.
-    await act(async () => void (await vi.advanceTimersByTimeAsync(32_000)));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(3_000)));
     expect(f.seeds).toHaveBeenCalledTimes(3);
     expect(f.windows[2].endTime).toBe(iso(NOW + 6 * 60_000 - 1));
     await act(async () => void (await vi.advanceTimersByTimeAsync(5 * 60_000)));

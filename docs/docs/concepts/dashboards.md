@@ -152,7 +152,8 @@ opened it again) each widget reads them from stored history instead:
 - a **line chart** reads its history again and replaces what it drew before the outage with it.
   Until that read lands, or if it fails, the chart breaks its line across the outage instead of
   drawing a straight line from the last reading before it to the first one after. A failed read is
-  tried again every 30 seconds. On a paused board the read waits until you resume;
+  tried again every 30 seconds. On a paused board the read waits until you resume. A chart not
+  bound to a single device has no stored history to read, so its break stays;
 - a **fleet table** or a **bar chart with one bar per device** reads each device's latest values
   again, at once and once more just after the next whole minute, so a reading sent in the outage's
   last minute is included. A device whose read fails keeps the value it showed;
