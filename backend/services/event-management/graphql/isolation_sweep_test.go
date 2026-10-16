@@ -14,8 +14,8 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/test/isolationsweep"
-	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -30,8 +30,7 @@ import (
 func TestIsolationSweep(t *testing.T) {
 	// One shared in-memory database: a bare ":memory:" is one database per pooled
 	// connection, and the anchor subquery may run on another.
-	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{Logger: logger.Discard})
-	require.NoError(t, err)
+	db := sqlitetest.OpenMemory(t, &gorm.Config{Logger: logger.Discard})
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Event{}, &model.EventAnchor{}, &model.MeasurementEvent{},
 		&model.LocationEvent{}, &model.AlertEvent{}))
