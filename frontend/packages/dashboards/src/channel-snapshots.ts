@@ -23,7 +23,7 @@ export interface MeasurementStreamState {
   // when the feed resumed: nothing is known between it and the next sample, so a chart breaks its
   // line there instead of joining the readings on either side as if the device had reported a
   // straight line. Once a history read made after the interruption lands, the entry goes away and
-  // the window holds that history across the outage.
+  // the window holds that history across the outage. Oldest first.
   gaps?: string[];
   // Present only on a widget that reads a whole fleet (its descriptor declares `binding.members`
   // and the mode is on): every member of the anchor with its OWN latest reading per measurement.

@@ -264,6 +264,19 @@ describe('the re-read racing the feed', () => {
     expect(longestSegment(pts)).toBeLessThanOrEqual(2 * MIN);
   });
 
+  it('a failed re-read that a newer one superseded is not tried again', async () => {
+    const { f } = await openAndLoseTheFeed();
+    await f.reconnect();
+    await flush();
+    await f.reconnect();
+    await flush();
+    expect(h.fetches).toHaveLength(3);
+    await act(async () => h.fetches[1].reject(new Error('down')));
+    await act(async () => h.fetches[2].resolve(storedAfterOutage()));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(RESEED_RETRY_MS * 2)));
+    expect(h.fetches).toHaveLength(3);
+  });
+
   it('unmounting while the re-read is in flight, or waiting to be retried, does nothing after', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {

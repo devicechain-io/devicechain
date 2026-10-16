@@ -513,25 +513,21 @@ function useWidgetHistories(
   // widget id → the (selector, span, re-read) ask most recently REQUESTED for it. A fetch whose
   // ask is no longer the requested one is stale when it lands.
   const requested = useRef<Record<string, string>>({});
-  // widget id → how many re-reads its live feed has asked for. Read synchronously by a landing
-  // fetch, so one asked for before the latest interruption is discarded even before the effect
-  // below has run.
+  // widget id → how many re-reads its live feed has asked for (part of the ask). A read asked for
+  // before the latest interruption that lands before the effect below has run is still taken, but
+  // it cannot close the gap: it is handed over with the instant it was read up to, which is before
+  // the interruption (useMeasurementStream).
   const reseeds = useRef<Record<string, number>>({});
   const [reseedTick, bumpReseeds] = useState(0);
-  const retries = useRef(new Set<ReturnType<typeof setTimeout>>());
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
-    const timers = retries.current;
     return () => {
       mounted.current = false;
-      for (const t of timers) clearTimeout(t);
-      timers.clear();
     };
   }, []);
 
   const reseed = useCallback((id: string) => {
-    if (!mounted.current) return;
     reseeds.current[id] = (reseeds.current[id] ?? 0) + 1;
     bumpReseeds((n) => n + 1);
   }, []);
@@ -566,13 +562,9 @@ function useWidgetHistories(
       const n = reseeds.current[id] ?? 0;
       const asked = `${base}${n}`;
       const previous = requested.current[id];
-      if (previous === asked) {
-        next[id] = asked;
-        continue;
-      }
-      // Only the re-read is new, and the board is frozen: it waits for the board to resume.
-      if (range.paused && previous !== undefined && previous.startsWith(base)) {
-        next[id] = previous;
+      // Already asked; or only the re-read is new and the board is frozen, so it waits for resume.
+      if (previous === asked || (range.paused && previous?.startsWith(base))) {
+        next[id] = previous!;
         continue;
       }
       next[id] = asked;
@@ -582,22 +574,18 @@ function useWidgetHistories(
       // the same moment at the new span instead of sliding forward.
       const end = range.paused && range.pausedAt !== undefined ? range.pausedAt : now;
       const historyWindow = span === null ? defaultHistoryWindow() : historyWindowFor(span, end);
-      const asOf = span === null ? now : end;
-      const current = () => mounted.current && requested.current[id] === asked && (reseeds.current[id] ?? 0) === n;
+      const current = () => mounted.current && requested.current[id] === asked;
       void fetchWidgetHistory(widget, historyWindow, { rethrow: n > 0 }).then(
         (samples) => {
           if (!current()) return; // superseded or unmounted
-          setSeeds((prev) => ({ ...prev, [id]: { key, samples, asOf } }));
+          // `asOf`: what the read covers up to (the fixed hour reads to now, a moment after `now`).
+          setSeeds((prev) => ({ ...prev, [id]: { key, samples, asOf: end } }));
         },
         () => {
           // Only a re-read rejects. The seed on screen stays, the outage stays a gap, and it is
-          // read again later -- unless something newer has been asked for meanwhile.
-          if (!current()) return;
-          const timer = setTimeout(() => {
-            retries.current.delete(timer);
-            if (current()) reseed(id);
-          }, RESEED_RETRY_MS);
-          retries.current.add(timer);
+          // read again later -- unless something newer has been asked for meanwhile, or the board
+          // has gone (current() says both).
+          setTimeout(() => current() && reseed(id), RESEED_RETRY_MS);
         },
       );
     }

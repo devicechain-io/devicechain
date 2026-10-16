@@ -669,3 +669,35 @@ describe('useMeasurementStream across an interruption of the live feed', () => {
     }
   });
 });
+
+describe('useMeasurementStream after a seed covers an outage', () => {
+  it('drops what the seed covers from the buffer, so the retention ceiling never reports a cut it did not make', () => {
+    vi.useFakeTimers();
+    try {
+      const t = (minute: number) => `2026-10-15T12:${String(minute).padStart(2, '0')}:00.000Z`;
+      vi.setSystemTime(Date.parse(t(6)));
+      let sink: WidgetStreamSink | null = null;
+      const hub = {
+        subscribeWidget: (_d: DatasourceSelector, s: WidgetStreamSink) => {
+          sink = s;
+          return () => {};
+        },
+      } as unknown as DashboardHub;
+      type Props = { seed?: MeasurementSample[]; asOf?: number };
+      const { result, rerender } = renderHook(
+        (p: Props) => useMeasurementStream(hub, ds, { window: 3, windowSeconds: 3600, initialSamples: p.seed, initialSamplesAsOf: p.asOf }),
+        { initialProps: {} as Props },
+      );
+      for (const m of [0, 1, 2]) act(() => sink!.next(sample('temperature', m, t(m))));
+      act(() => sink!.reconnected?.());
+      rerender({ seed: [sample('temperature', 50, t(4))], asOf: Date.parse(t(6)) });
+      // Three readings after the outage: with the covered ones still buffered, the ceiling of
+      // three would evict them and call the window cut.
+      for (const m of [7, 8]) act(() => sink!.next(sample('temperature', m, t(m))));
+      expect(result.current.samples.map((s) => s.value)).toEqual([50, 7, 8]);
+      expect(result.current.truncatedBefore).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

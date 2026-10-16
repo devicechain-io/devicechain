@@ -244,7 +244,6 @@ export interface MeasurementStreamOptions {
 export const MAX_SPAN_SAMPLES = 2000;
 
 const EMPTY: MeasurementStreamState = { latest: {}, samples: [], error: null };
-const NO_GAPS: Gap[] = [];
 
 // Build a name→last-sample map from a chronological list (last occurrence wins).
 function latestOf(samples: MeasurementSample[]): Record<string, MeasurementSample> {
@@ -284,25 +283,13 @@ function timeOf(sample: MeasurementSample): number {
 }
 
 // The newest sample time among the given samples, or -Infinity when none carries one.
-function newestTime(samples: Iterable<MeasurementSample> | undefined): number {
+function newestTime(samples: Iterable<MeasurementSample>): number {
   let newest = -Infinity;
-  if (!samples) return newest;
   for (const s of samples) {
     const at = timeOf(s);
     if (at > newest) newest = at;
   }
   return newest;
-}
-
-// The oldest sample time among the given samples, or Infinity when none carries one.
-function oldestTime(samples: Iterable<MeasurementSample> | undefined): number {
-  let oldest = Infinity;
-  if (!samples) return oldest;
-  for (const s of samples) {
-    const at = timeOf(s);
-    if (at < oldest) oldest = at;
-  }
-  return oldest;
 }
 
 // settleGaps folds into the live buffer every gap a seed answers -- one read at or after the
@@ -312,24 +299,18 @@ function oldestTime(samples: Iterable<MeasurementSample> | undefined): number {
 // to the seed's when the seed has one. A sample with no readable time is kept: it cannot be shown
 // to be covered. Pure: the render applies it at once, and an effect commits it to the buffer.
 function settleGaps(buffer: LiveBuffer, seed: MeasurementSample[] | undefined, asOf: number | undefined): LiveBuffer {
-  if (buffer.gaps.length === 0 || !seed || asOf === undefined) return buffer;
-  const answered = buffer.gaps.filter((g) => asOf >= g.at);
-  if (answered.length === 0) return buffer;
-  const cutoff = Math.max(newestTime(seed), ...answered.map((g) => g.after));
-  const kept = (s: MeasurementSample): boolean => {
-    const at = timeOf(s);
-    return Number.isNaN(at) || at > cutoff;
-  };
-  const seeded = new Set(seed.map((s) => s.name));
+  const { gaps, state } = buffer;
+  if (!seed || asOf === undefined) return buffer;
+  // Gaps are recorded oldest first, so the ones this seed answers are a prefix.
+  const open = gaps.filter((g) => asOf < g.at);
+  if (open.length === gaps.length) return buffer;
+  const cutoff = Math.max(newestTime(seed), gaps[gaps.length - open.length - 1].after);
+  const kept = (s: MeasurementSample): boolean => !(timeOf(s) <= cutoff);
   const latest: Record<string, MeasurementSample> = {};
-  for (const [name, s] of Object.entries(buffer.state.latest)) {
-    if (kept(s) || !seeded.has(name)) latest[name] = s;
+  for (const [name, s] of Object.entries(state.latest)) {
+    if (kept(s) || !seed.some((x) => x.name === name)) latest[name] = s;
   }
-  return {
-    key: buffer.key,
-    state: { ...buffer.state, latest, samples: buffer.state.samples.filter(kept) },
-    gaps: buffer.gaps.filter((g) => asOf < g.at),
-  };
+  return { key: buffer.key, state: { ...state, latest, samples: state.samples.filter(kept) }, gaps: open };
 }
 
 // withinSpan drops the samples that occurred before `end - spanSeconds`. A sample whose time is
@@ -403,9 +384,9 @@ export function useMeasurementStream(
   // in this very render, and the effect below commits that so the buffer does not keep it.
   const settled = settleGaps(tagged, initialSamples, seedAsOf);
   const live = settled.key === key ? settled.state : EMPTY;
-  const gaps = settled.key === key ? settled.gaps : NO_GAPS;
+  const gaps = settled.key === key ? settled.gaps : [];
   useEffect(() => {
-    if (initialSamples && seedAsOf !== undefined) setTagged((prev) => settleGaps(prev, initialSamples, seedAsOf));
+    setTagged((prev) => settleGaps(prev, initialSamples, seedAsOf));
   }, [initialSamples, seedAsOf]);
 
   useEffect(() => {
@@ -462,17 +443,12 @@ export function useMeasurementStream(
         const at = Date.now();
         setTagged((prev) => {
           if (prev.key !== key) return prev;
-          const after = Math.max(
-            newestTime(Object.values(prev.state.latest)),
-            newestTime(prev.state.samples),
-            newestTime(Object.values(queueLatestRef.current)),
-            newestTime(seedRef.current),
-          );
+          // `latest` holds the newest sample of every name the window holds.
+          const after = newestTime([...Object.values(prev.state.latest), ...Object.values(queueLatestRef.current), ...(seedRef.current ?? [])]);
           if (after === -Infinity) return prev;
-          // A gap from before the oldest sample still held breaks nothing; dropping it keeps the
-          // list from growing with every reconnect of a display left open for months.
-          const oldest = Math.min(oldestTime(prev.state.samples), oldestTime(seedRef.current));
-          return { ...prev, gaps: [...prev.gaps.filter((g) => g.after >= oldest), { after, at }] };
+          // The newest eight only, so a display left open for months with a flaky link does not
+          // grow the list with every reconnect. An older gap lies before most of the window anyway.
+          return { ...prev, gaps: [...prev.gaps.slice(-7), { after, at }] };
         });
         onReconnectRef.current?.();
       },
@@ -519,16 +495,8 @@ export function useMeasurementStream(
     return state;
   }, [initialSamples, live, windowSize, windowSeconds, pausedAt, clock]);
 
-  // The gaps still open, as instants. One from before the window's span says nothing about it.
-  const gapKey = gaps.map((g) => g.after).join(',');
-  return useMemo(() => {
-    if (gaps.length === 0) return state;
-    const from = windowSeconds === undefined ? -Infinity : (pausedAt ?? clock()) - windowSeconds * 1000;
-    const open = gaps.filter((g) => g.after >= from).map((g) => new Date(g.after).toISOString());
-    return open.length === 0 ? state : { ...state, gaps: open };
-    // `gaps` is read through gapKey (value identity).
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state, gapKey, windowSeconds, pausedAt, clock]);
+  // The gaps still open, as instants. One before the window's first sample breaks nothing.
+  return gaps.length ? { ...state, gaps: gaps.map((g) => new Date(g.after).toISOString()) } : state;
 }
 
 const EMPTY_ALARMS: AlarmStreamState = { alarms: [], total: 0, loading: true, error: null };

@@ -1127,10 +1127,10 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     };
     // The stream resumed after an interruption: whatever was sent meanwhile was never delivered,
     // and each subscriber is told so it can read the missed history back. Sent to the stream's own
-    // subscribers (not through `streams`), so an evicted stream's lingering ones hear nothing.
+    // subscribers. Never called once the operation is closed: closing it drops its connection
+    // listener and clears a pending re-open.
     const resumed = (): void => {
-      if (!operationOpen) return;
-      for (const subscriber of [...stream.subscribers]) subscriber.sink.reconnected?.();
+      stream.subscribers.forEach((s) => s.sink.reconnected?.());
     };
     const adapter: SubscriptionSink<MeasurementStreamResult> = {
       next: (data) => {

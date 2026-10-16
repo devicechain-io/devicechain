@@ -443,11 +443,11 @@ describe('buildLineOption across an interruption of the live feed', () => {
 
   it('puts one break between two points however many gaps fall there, and ignores an unreadable one', () => {
     const option = buildLineOption([sample('temperature', 1, t(0)), sample('temperature', 2, t(9))], theme, {
-      gaps: [t(5), 'not a time', t(3)],
+      gaps: [t(3), 'not a time', t(5)],
     });
     expect(seriesOf(option)[0].data).toEqual([
       [t(0), 1],
-      [t(3), null],
+      [t(5), null],
       [t(9), 2],
     ]);
   });

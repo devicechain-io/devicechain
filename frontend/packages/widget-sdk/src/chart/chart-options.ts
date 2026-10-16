@@ -59,31 +59,22 @@ export interface LineChartOptions {
   thresholds?: readonly Threshold[];
   // The board's density scale (useWidgetScale().scale): multiplies the axis-font clamp. Default 1.
   scale?: number;
-  // Instants (ISO-8601) after which nothing is known until the next sample: the live feed was
-  // interrupted (MeasurementStreamState.gaps). Every line breaks at each one instead of joining
-  // the samples on either side.
+  // Instants (ISO-8601, oldest first) after which nothing is known until the next sample: the live
+  // feed was interrupted (MeasurementStreamState.gaps). Every line breaks at each one instead of
+  // joining the samples on either side.
   gaps?: readonly string[];
 }
 
 // breakAtGaps puts an empty point -- which ECharts draws as a break in the line -- at each gap
 // that falls between two of a series' points. Points are in sample order (chronological).
 function breakAtGaps(points: Array<[string, number]>, gaps: readonly number[]): Array<[string, number | null]> {
-  if (gaps.length === 0) return points;
-  const out: Array<[string, number | null]> = [];
   let g = 0;
-  for (const point of points) {
-    const at = Date.parse(point[0]);
-    let broke = false;
-    while (g < gaps.length && gaps[g] < at) {
-      if (out.length > 0 && !broke) {
-        out.push([new Date(gaps[g]).toISOString(), null]);
-        broke = true;
-      }
-      g++;
-    }
-    out.push(point);
-  }
-  return out;
+  return points.flatMap((point, i): Array<[string, number | null]> => {
+    // The last gap before this point; past the end of `gaps` the comparison is false.
+    let gap = Number.NaN;
+    while (gaps[g] < Date.parse(point[0])) gap = gaps[g++];
+    return i > 0 && !Number.isNaN(gap) ? [[new Date(gap).toISOString(), null], point] : [point];
+  });
 }
 
 // The markLine / markArea for a chart's thresholds, attached to the first series (the markers
@@ -144,10 +135,7 @@ export function buildLineOption(
   const marks = thresholds.length > 0 ? thresholdMarks(theme, thresholds, options.unit, options.precision, axisFont) : undefined;
   const suffix = options.unit ? ` ${options.unit}` : '';
   const precision = options.precision;
-  const gaps = (options.gaps ?? [])
-    .map((g) => Date.parse(g))
-    .filter((g) => !Number.isNaN(g))
-    .sort((a, b) => a - b);
+  const gaps = (options.gaps ?? []).map(Date.parse).filter((g) => !Number.isNaN(g));
 
   const series = names.map((name, i) => {
     const color = theme.series[i % theme.series.length];
