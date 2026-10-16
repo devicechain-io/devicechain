@@ -338,7 +338,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	if err != nil {
 		return nil, reason, err
 	}
-	_, memberships, reason, err := rez.deviceAnchors(ctx, api, device)
+	existing, memberships, reason, err := rez.deviceAnchors(ctx, api, device)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -358,10 +358,18 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 		TargetId:           proto.NullUint64Of(&created.TargetId),
 	}
 
-	// Merge info from device and created assignment into event — the new
-	// relationship is itself the event's single anchor, addressed by target token.
-	anchors := []model.ResolvedAnchor{
-		{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID},
+	// Merge info from device and created assignment into event. The event's anchors are the
+	// device's anchors AFTER the write, exactly as its next telemetry event will carry them:
+	// every tracked relationship it already had, the access scopes it is in, and the new
+	// relationship, addressed by target token. Stamping only the new one left this event —
+	// in the history, and in the live view until the ownership fact arrived — visible to
+	// the new target alone, and denied to the device's other owners (ADR-081).
+	anchors := existing
+	newAnchor := model.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
+	if !slices.ContainsFunc(anchors, func(a model.ResolvedAnchor) bool {
+		return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
+	}) {
+		anchors = append(anchors, newAnchor)
 	}
 	scope := res.Scope()
 	resolved := rez.MergeToResolveEvent(device, anchors, memberships, event, payload, &scope)

@@ -71,6 +71,7 @@ type grpFixture struct {
 //	area-row      — an AREA member of north@2 whose id is idle-pump's (only the member
 //	                type keeps an area's membership from being read as the device's)
 //	idle-pump     — nothing at all
+//	retired-pump  — a member of "retired"@1, a group that is enabled but soft-deleted
 //
 // and tenant B with the group "north" (enabled, version 1) and b-pump in it, plus a forged
 // tenant-B membership row naming tenant A's idle-pump in B's north.
@@ -123,6 +124,11 @@ func newGroupMembersFixture(t *testing.T) grpFixture {
 	create("A", &ownEdge{SourceType: "device", SourceId: acme, TargetType: "customer", TargetToken: "acme", RelationshipTypeId: rt.ID})
 	idle := device("A", "idle-pump")
 	member("A", "area", idle, north, 2)
+	retired := group("A", "retired", 1, true)
+	member("A", "device", device("A", "retired-pump"), retired, 1)
+	if err := db.WithContext(ctxOf("A")).Delete(&grpGroup{Model: gorm.Model{ID: retired}}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	bNorth := group("B", "north", 1, true)
 	member("B", "device", device("B", "b-pump"), bNorth, 1)
@@ -158,6 +164,11 @@ func TestADeviceIsVisibleThroughAGroupItIsAMemberOf(t *testing.T) {
 	if got := grpDeviceNames(t, f.db, scopedCtx("A", "group:draft")); len(got) != 0 {
 		t.Fatalf("a group that is not enabled reached %v", got)
 	}
+	// A deleted group confers nothing, whatever rows still name it (device-management deletes
+	// hard, so this is the rule's own promise, not a path it takes today).
+	if got := grpDeviceNames(t, f.db, scopedCtx("A", "group:retired")); len(got) != 0 {
+		t.Fatalf("a deleted group reached %v", got)
+	}
 	// Both branches at once: a customer and a group.
 	if got := grpDeviceNames(t, f.db, scopedCtx("A", "customer:acme", "group:north")); !reflect.DeepEqual(got,
 		[]string{"acme-pump", "north-pump"}) {
@@ -172,7 +183,7 @@ func TestADeviceIsVisibleThroughAGroupItIsAMemberOf(t *testing.T) {
 		t.Fatalf("tenant B's north member saw %v", got)
 	}
 	// Negative control: unscoped, tenant A sees every one of its devices.
-	if got := grpDeviceNames(t, f.db, unscopedCtx("A")); len(got) != 6 {
+	if got := grpDeviceNames(t, f.db, unscopedCtx("A")); len(got) != 7 {
 		t.Fatalf("the unscoped control saw %d devices: %v", len(got), got)
 	}
 	// A by-token read outside the scope finds nothing, as a missing one does.

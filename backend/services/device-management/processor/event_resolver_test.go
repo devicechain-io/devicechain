@@ -456,6 +456,49 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 	}, results[0].Resolved.ScopeMemberships)
 }
 
+// A new-relationship event carries the device's anchors as they are AFTER the write — the
+// tracked relationships it already had, the access scopes it is in, and the new one — as
+// its next telemetry event will. Stamping only the new relationship left the event visible
+// to the new target alone and, through device-state's live view, denied the device's other
+// owners until the ownership fact arrived (ADR-081).
+func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDeviceHas() {
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			trackedRel(7, "customer", "acme"),
+		}}, nil)
+	suite.API.Mock.On("CreateEntityRelationship").Return(
+		&dmodel.EntityRelationship{Model: gorm.Model{ID: 9}, TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		if entityType == "device" && entityId == 500 {
+			return []dmodel.GroupMembership{{GroupToken: "north", SelectorVersion: 1, AccessScope: true}}
+		}
+		return nil
+	}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "connected-to", TargetType: "gateway", Target: "gw-1",
+		},
+	}
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), device, event)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	if assert.Len(suite.T(), results, 1) {
+		assert.ElementsMatch(suite.T(), []dmodel.ResolvedAnchor{
+			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 7},
+			{AnchorType: "group", AnchorToken: "north"},
+			{AnchorType: "gateway", AnchorToken: "gw-1", RelationshipId: 9},
+		}, results[0].Resolved.Anchors)
+	}
+}
+
 // A measurement violating a declared metric definition routes to the dead-letter
 // path (FailureReason_Invalid) before any relationship fan-out is attempted.
 func (suite *EventResolverTestSuite) TestMeasurementValidationRejects() {

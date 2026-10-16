@@ -15,6 +15,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -283,4 +284,68 @@ func deviceId(t *testing.T, api *Api, ctx context.Context, token string) uint {
 	require.NoError(t, err)
 	require.Len(t, found, 1)
 	return found[0].ID
+}
+
+// A rule pinning an OLD version beside the access scope on the published one: the old
+// version's rows stay (the rule reads them) but confer nothing — a device in the group only
+// at the pinned version is not visible to the group's member, carries no group anchor on
+// its records, and its membership row does not read as an access scope. Only the published
+// version is the access scope.
+func TestARulePinOnAnOldVersionConfersNoAccess(t *testing.T) {
+	api, ctx, _ := accessFixture(t)
+	require.NoError(t, api.RDB.DB(ctx).Create(&DetectionRuleScopeRef{DeviceProfileId: 1, RuleToken: "r",
+		GroupToken: "arid", GroupVersion: 1}).Error)
+	_, err := api.SetEntityGroupAccessScope(ctx, "arid", true)
+	require.NoError(t, err)
+	// v2 selects humid; v1 (pinned by the rule) keeps selecting arid.
+	require.NoError(t, api.RDB.DB(ctx).Model(&EntityGroup{}).Where("token = ?", "arid").
+		Update("selector", `attr["climate"] == "humid"`).Error)
+	_, err = api.PublishEntityGroup(ctx, "arid", nil, nil, "tester")
+	require.NoError(t, err)
+	arid, humid := deviceId(t, api, ctx, "d-arid"), deviceId(t, api, ctx, "d-humid")
+
+	var v1 int64
+	require.NoError(t, api.RDB.DB(ctx).Model(&EntityGroupMembership{}).
+		Where("selector_version = 1 AND entity_id = ?", arid).Count(&v1).Error)
+	require.Equal(t, int64(1), v1, "the rule's pinned rows were torn down")
+
+	require.Equal(t, []string{"d-humid"}, visibleDevices(t, api, groupMember("group:arid")))
+	batch, err := api.DeviceScopeAnchors(ctx, []string{"d-arid", "d-humid"})
+	require.NoError(t, err)
+	require.Equal(t, map[string][]string{"d-arid": {}, "d-humid": {"group:arid"}}, batch)
+	stamp, err := api.deviceScopeAnchors(ctx, arid)
+	require.NoError(t, err)
+	require.Empty(t, stamp)
+	ms, err := api.MembershipsForEntity(ctx, "device", arid)
+	require.NoError(t, err)
+	require.Len(t, ms, 1)
+	require.False(t, ms[0].AccessScope, "a row at the rule's pinned version read as an access scope")
+	ms, err = api.MembershipsForEntity(ctx, "device", humid)
+	require.NoError(t, err)
+	require.Len(t, ms, 1)
+	require.True(t, ms[0].AccessScope)
+}
+
+// The search criterion a scope picker uses: accessScope true lists the access scopes,
+// false the rest, and unset both.
+func TestEntityGroupsCanBeListedByAccessScope(t *testing.T) {
+	api, ctx, _ := accessFixture(t)
+	publishAridGroup(t, api, ctx, "other")
+	_, err := api.SetEntityGroupAccessScope(ctx, "arid", true)
+	require.NoError(t, err)
+	tokens := func(flag *bool) []string {
+		found, err := api.EntityGroups(ctx, EntityGroupSearchCriteria{
+			Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}, AccessScope: flag})
+		require.NoError(t, err)
+		out := []string{}
+		for _, g := range found.Results {
+			out = append(out, g.Token)
+		}
+		sort.Strings(out)
+		return out
+	}
+	yes, no := true, false
+	require.Equal(t, []string{"arid"}, tokens(&yes))
+	require.Equal(t, []string{"other"}, tokens(&no))
+	require.Equal(t, []string{"arid", "other"}, tokens(nil))
 }

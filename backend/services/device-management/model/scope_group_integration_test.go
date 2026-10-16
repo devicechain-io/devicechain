@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -85,4 +86,57 @@ func TestAGroupMemberOnTheRealEngine(t *testing.T) {
 	require.True(t, deleted)
 	_, err = r.api.CreateEntityGroup(r.operator, &EntityGroupCreateRequest{Token: "north", MemberType: "device"})
 	require.True(t, errors.Is(err, ErrGroupTokenRetired), "a create at a deleted group's token: %v", err)
+}
+
+// TestAnAccessScopeAgreesWithAConcurrentPublish: the access-scope switch and a publish of
+// the same group, run at the same time, must leave the read-model at the version the group
+// now holds — never an enabled scope with nothing materialized at its active version (a
+// member who silently sees nothing), and never an error from the engine (a deadlock between
+// the group row's lock and the family lock, taken in opposite orders). The toggle reads the
+// pointer under the family lock, so the publish must move it under that lock too.
+func TestAnAccessScopeAgreesWithAConcurrentPublish(t *testing.T) {
+	r := newScopeAlarmRig(t)
+	r.region(t, "acme-pump", "north")
+	dynamic, selector := "dynamic", `attr["region"] == "north"`
+	_, err := r.api.CreateEntityGroup(r.operator, &EntityGroupCreateRequest{Token: "north",
+		MemberType: "device", MembershipMode: &dynamic, Selector: &selector})
+	require.NoError(t, err)
+	_, err = r.api.PublishEntityGroup(r.operator, "north", nil, nil, "tester")
+	require.NoError(t, err)
+	member := r.member("group:north")
+
+	for round := 0; round < 24; round++ {
+		enabled := round%2 == 0
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, err := r.api.PublishEntityGroup(r.operator, "north", nil, nil, "tester")
+			errs <- err
+		}()
+		go func() {
+			defer wg.Done()
+			_, err := r.api.SetEntityGroupAccessScope(r.operator, "north", enabled)
+			errs <- err
+		}()
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			require.NoError(t, err, "round %d", round)
+		}
+		var g EntityGroup
+		require.NoError(t, r.api.RDB.DB(r.operator).Where("token = ?", "north").First(&g).Error)
+		require.True(t, g.ActiveVersion.Valid)
+		var atActive int64
+		require.NoError(t, r.api.RDB.DB(r.operator).Model(&EntityGroupMembership{}).
+			Where("group_id = ? AND selector_version = ?", g.ID, g.ActiveVersion.Int32).Count(&atActive).Error)
+		if enabled {
+			require.Equal(t, int64(1), atActive, "round %d: enabled at v%d with no member materialized", round, g.ActiveVersion.Int32)
+			require.Equal(t, []string{"acme-pump"}, r.deviceTokens(t, member), "round %d", round)
+		} else {
+			require.Zero(t, atActive, "round %d: disabled, yet v%d is still materialized", round, g.ActiveVersion.Int32)
+			require.Empty(t, r.deviceTokens(t, member), "round %d", round)
+		}
+	}
 }
