@@ -316,12 +316,12 @@ type stampingWriter struct {
 }
 
 func (w *stampingWriter) Publish(ctx context.Context, msg messaging.Message, done func(error)) {
-	// DedupID is resolved:<tenant>:<inbound seq>:<fan-out index> (resolvedDedupID).
+	// DedupID is r:<tenant>:<inbound seq, base 36>:<fan-out index, base 36> (resolvedDedupID).
 	parts := strings.Split(msg.DedupID, ":")
 	i := -1
 	if len(parts) == 4 {
-		if seq, err := strconv.Atoi(parts[2]); err == nil {
-			i = seq - 1
+		if seq, err := strconv.ParseInt(parts[2], 36, 64); err == nil {
+			i = int(seq) - 1
 		}
 	}
 	if want := fmt.Sprintf("dev-%d", i); string(msg.Key) != want {

@@ -70,5 +70,22 @@ func DedupID(tenant string, captureSeq uint64) string {
 	if tenant == "" || captureSeq == 0 {
 		return ""
 	}
-	return tenant + ":" + strconv.FormatUint(captureSeq, 10)
+	// The sequence in base 36: a bijection, so the id stays exactly as unique and as
+	// stable across a redelivery as the decimal form, in fewer bytes. The id rides every
+	// captured event, stored on every replica and held in each broker's duplicate table for
+	// the window.
+	//
+	// 🔴 THE SEPARATOR IS '.', AND IT MUST NOT GO BACK TO ':'. The build before this one
+	// published "<tenant>:<sequence in decimal>", and every decimal string is also a
+	// base-36 one: under ':' this build's id for sequence 46,656 would be "acme:1000",
+	// exactly the previous build's id for sequence 1,000. Both builds publish into one
+	// stream during a rolling upgrade, so on a young stream (where the two sequences fall
+	// inside one duplicate window) the broker would answer the newer event as a duplicate
+	// and it would be discarded with a successful publish. '.' appears in no id the
+	// previous build wrote, and in no tenant or base-36 digit, so the two shapes are
+	// disjoint and the separator costs no byte. TestDedupIDNeverMatchesAPreviousBuildsID.
+	//
+	// What remains is the cost of any shape change: a capture message published by one
+	// build and redelivered to a pod of the other carries two ids, and both are stored.
+	return tenant + "." + strconv.FormatUint(captureSeq, 36)
 }

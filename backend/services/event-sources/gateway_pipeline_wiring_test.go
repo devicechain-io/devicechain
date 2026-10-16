@@ -40,7 +40,7 @@ func TestTheInboundMessageCarriesTheCaptureDedupID(t *testing.T) {
 	}
 	ctx, msg, ok := inboundEventMessage("gw", "acme", event(), &model.UnresolvedMeasurementsPayload{}, 4242)
 	require.True(t, ok)
-	require.Equal(t, "acme:4242", msg.DedupID)
+	require.Equal(t, "acme.39u", msg.DedupID, "tenant, then the capture sequence in base 36")
 	require.Equal(t, []byte("sensor-001"), msg.Key)
 	tenant, found := core.TenantFromContext(ctx)
 	require.True(t, found)
@@ -147,7 +147,7 @@ func TestCreateNatsComponentsHandsTheGatewayItsWriter(t *testing.T) {
 	require.NoError(t, err)
 	m, err := js.GetMsg(inbound, info.State.LastSeq)
 	require.NoError(t, err)
-	require.Equal(t, "acme:"+strconv.FormatUint(ack.Sequence, 10), m.Header.Get(nats.MsgIdHdr),
+	require.Equal(t, "acme."+strconv.FormatUint(ack.Sequence, 36), m.Header.Get(nats.MsgIdHdr),
 		"the published event must carry the dedup id of the capture message it came from")
 }
 

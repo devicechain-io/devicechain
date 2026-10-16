@@ -7,6 +7,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -124,10 +126,14 @@ func (w *heldWriter) message(t *testing.T, i int) int {
 	t.Helper()
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	var seq int
-	_, err := fmt.Sscanf(w.msgs[i].DedupID, "acme:%d", &seq)
-	require.NoError(t, err, "held publish %d carries dedup id %q", i, w.msgs[i].DedupID)
-	return seq - 1
+	// The id is DedupID's "<tenant>.<capture sequence, base 36>"; decoded in full rather than
+	// scanned, since a scan stops at the first non-digit and reports success for the prefix.
+	id := w.msgs[i].DedupID
+	enc, ok := strings.CutPrefix(id, "acme.")
+	require.True(t, ok, "held publish %d carries dedup id %q", i, id)
+	seq, err := strconv.ParseUint(enc, 36, 64)
+	require.NoError(t, err, "held publish %d carries dedup id %q", i, id)
+	return int(seq) - 1
 }
 
 // releaseAll releases every held done that has not been released, with nil, until
