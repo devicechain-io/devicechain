@@ -4088,8 +4088,9 @@ datos que ya publicó la `v0.21.1`.
 
 Con la misma forma de clúster de GKE que la ronda de mediciones anterior, una compilación con los
 cambios de device-state, device-management y event-sources de esta versión sostuvo 10.000 eventos
-por segundo durante 10 minutos en todas las etapas: 6 millones de eventos, ninguno perdido,
-duplicado ni desordenado. Es el mismo ritmo sostenido que antes, no uno mayor: con la ingesta ahora
+por segundo durante 10 minutos en todas las etapas, con la ubicación de los servicios fijada, y
+almacenó exactamente una vez cada uno de los 6 millones de eventos, comprobado evento por evento
+(consulta [Rendimiento medido](./bootstrap.md#measured-throughput)). Es el mismo ritmo sostenido que antes, no uno mayor: con la ingesta ahora
 más rápida, el lado de lectura de device-management pasó a ser la primera etapa en retrasarse, a
 unos 10.300 eventos por segundo con una sola réplica. El lote de lectura de 256 es el cambio
 dirigido a ello, y dio un 12 % más en una ejecución de 3 minutos. En los cinco servicios de la ruta

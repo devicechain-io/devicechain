@@ -3804,7 +3804,9 @@ database-read fix `v0.21.1` already shipped.
 
 On the same GKE cluster shape as the previous round of measurements, a build with this release's
 device-state, device-management and event-sources changes sustained 10,000 events a second for 10
-minutes through every stage, 6 million events with none lost, duplicated or out of order. That is
+minutes through every stage, with service placement held, and stored each of the 6 million
+events exactly once, checked event by event (see
+[Measured throughput](./bootstrap.md#measured-throughput)). That is
 the same sustained rate as before, not a higher one: with ingest now faster, device-management's
 read side became the first stage to fall behind, at about 10,300 events a second for a single
 replica. The 256 fetch batch is the change aimed at it, and gave 12% more in a 3-minute run. Across

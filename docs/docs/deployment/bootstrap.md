@@ -941,7 +941,7 @@ offered, with one pod, storage fell to 6,592 per second over three minutes, the 
 behind. A second pod lets storing use another node's CPU. The two pods prefer different nodes, but that is a preference, not a
 guarantee. Each pod fills its own batches, so a batch holds about half as many events and the
 event store commits about twice as many transactions per event; the event store's node stayed
-below 70% CPU. The 6,000 events per second in the last row of [Measured throughput](#measured-throughput) was measured with two pods. Two pods request twice the CPU, 1.8 cores together. Each pod
+below 70% CPU. The 6,000 events per second in the v0.19.0 row of [Measured throughput](#measured-throughput), and the 10,000 in the rows after it, were measured with two pods. Two pods request twice the CPU, 1.8 cores together. Each pod
 also holds its own connections to the event store, so these instances keep 80 of its connections
 for the platform instead of 40 (see
 [Connection cap](../guides/sql-and-bi-access.md#connection-cap)). With `--compact --ha`, and
@@ -1329,9 +1329,12 @@ sustained before `event-management`'s persistence defaults were raised (see
 - **Requests are what each service used at 6,000 events per second.** A request is the CPU the
   scheduler sets aside for a pod on its node, and nothing else: it decides where the pod goes. Each
   one above is what that service was measured to use at 6,000 events per second, rounded up: the
-  rate a default `--ha` installation sustained, with `event-management` at two pods, on a cluster of
-  three 4-vCPU database nodes and three 4-vCPU service nodes, with resolution, storage and live
-  device state each keeping pace (see [Measured throughput](#measured-throughput)).
+  rate the v0.19.0 release candidate sustained as a default `--ha` installation, with
+  `event-management` at two pods and placement left to the scheduler, on a cluster of three 4-vCPU
+  database nodes and three 4-vCPU service nodes, with resolution, storage and live device state each
+  keeping pace (see [Measured throughput](#measured-throughput)). `device-management`'s figure was
+  measured again at that rate on a development build before v0.22.0, after its cost per event fell:
+  about 0.43 cores, rounded up to 450m.
   `event-processing` is the exception: its request is what it used with its 1-core limit at 6,800
   events per second offered. With that request and limit, on the release candidate, detection kept
   up at 6,000 (peak backlog under 1,000) and fell behind from 7,600 offered; it is outside the
@@ -1492,9 +1495,28 @@ first in line for eviction when a node ran short of memory.
 | after v0.18.0 | the same | tuned: `event-management` at `persistence.writers: 10` and `persistence.maxBatch: 64`; see below | about 6,000 events/s | 180-second runs. At 6,000 offered, every stage kept at least 98% of the offered rate, the backlog drained in 5 seconds, and the number of events stored equalled the number accepted (the totals were compared, not each event). Held for 5 minutes at 6,000, storing kept 96%, so about 5,800 to 6,000 is the sustained figure. |
 | after v0.18.0 | Google Kubernetes Engine, 3 × n2-standard-4 database nodes (tainted, databases only) and 3 × n2-highcpu-4 service nodes, SSD persistent disks, `--ha` | the defaults before the requests above (`device-management` 500m, `event-management` and `device-state` 400m, `event-sources` 150m, `event-processing` 100m), with `event-management`'s current persistence defaults | about 6,000 events/s | Superseded by the next row, measured with the requests above and the default volume sizes. Two 10-minute runs at 6,000 events/s offered each stored 3,600,000 events, as many as were accepted (the totals were compared, not each event). Resolution, storage and live device state each kept 99.7% of the offered rate or more, and the backlog drained within 10 seconds. Detection (`event-processing`) fell behind: its backlog peaked at about 93,000 events. The event-store and backup volumes were smaller than the defaults. The requests above were sized from these runs. |
 | v0.19.0 release candidate | Google Kubernetes Engine (`us-east4-b`), 3 × n2-standard-4 database nodes (16 GB; tainted, databases only) and 3 × n2-custom-4-8192 service nodes (4 vCPU, 8 GB), standard persistent boot disks, `--ha`, the default volume sizes | the defaults above, with `event-management` at two pods (the `--ha` default) and Go profiling enabled but idle | 6,000 events/s | Two 10-minute runs at 6,000 events/s offered each accepted 5,997 events/s and stored all 3,600,000 accepted events exactly once. That was checked event by event, on each event's device and occurrence time: none missing, none stored twice, none unexpected. Resolution, storage and live device state each kept pace, and the backlog drained in about 2 seconds. Detection (`event-processing`), which that check does not cover, kept up with a peak backlog under 1,000 events, and fell behind from 7,600 offered. |
+| development build before v0.22.0 (`46a616c2`) | the same | that build's defaults, with `event-management` at two pods and Go profiling enabled, and with placement held (see below) | 10,000 events/s | One 10-minute run at 10,000 events/s offered: resolution, storage and live device state each kept 9,999 to 10,003 events per second, and about 6 million accepted events were each stored exactly once, checked event by event: none missing, none stored twice, none unexpected. The backlog drained in about 7 seconds. In 3-minute runs from 11,600 offered, resolution held about 11,100 to 11,400 per second and live device state fell behind first, at about 10,000. |
+| development build before v0.22.0 (`65b580d9`) | the same | as the row above, with each consumer's leader also held to one broker server | 10,000 events/s | One 10-minute run at 10,000 events/s offered: every stage kept 9,953 to 9,990 events per second, and about 6 million accepted events were each stored exactly once, checked event by event. The backlog drained in about 6 seconds. In 3-minute runs one `device-management` replica resolved at most about 10,300 per second, the first stage to fall behind. |
+| after v0.22.0 (`75b4f2e6`) | the same | that build's defaults (a fetch batch of 256), with placement held as above, the instance serving plain HTTP (`dcctl bootstrap --no-tls`), and [publishing to the stream leader](./observability.md#leader-affinity) off, then on | not measured: 3-minute runs only | At 14,000 offered, ingest accepted 13,825 events per second and one `device-management` replica resolved 12,729, with every event stored exactly once, checked event by event; the backlog drained in 19 seconds. With publishing to the stream leader on (the default since then), it resolved 13,512 per second with 13,397 accepted, and the backlog drained in 8 seconds. These are 3-minute ceilings, not sustained rates. The node running the server that leads the incoming-event stream was at 93 to 95% CPU. |
 
-The v0.18.0 rows were measured on v0.18.0, the last row on the v0.19.0 release candidate, and the
-others on the development build between them, all with the load generator on a separate node and a replicated (`--ha`) event store. At
+The v0.18.0 rows were measured on v0.18.0, the v0.19.0 row on its release candidate, the two
+10,000 rows on development builds that went into v0.22.0, the last row on a development build after
+v0.22.0, and the others on the development build between v0.18.0 and v0.19.0, all with the load
+generator on a separate node and a replicated (`--ha`) event store. In the last four rows each
+event carried one reading, from one tenant whose ingest ceiling was raised for the test.
+
+In the last three rows placement was held rather than left to the scheduler, so that runs could be
+compared: one service node ran the broker server leading the incoming-event stream with
+`device-management`, `event-processing` and one `event-management` pod; another ran
+`event-sources` and the other `event-management` pod; the third ran `device-state` with the server
+leading the resolved-event stream. Pods were restarted until each service's broker connection was
+on the same server in every run. Placement matters on this cluster: in one 3-minute run at 10,800
+offered, a single consumer's leader on the incoming-event leader's server cost about 9% of the
+resolved rate. A default installation leaves placement to the scheduler and the broker, and has
+not been measured at 10,000 events per second that way; the v0.19.0 row was. These results describe
+that workload and cluster, not a capacity guarantee.
+
+At
 v0.18.0's defaults, what held the rate was `device-management`'s pool of resolvers, and past it the
 CPU limits of `event-sources` and `device-state` that the sizing above raises. With those raised,
 storing events became the limit: 5 writers committing up to 32 events each filled every batch from
@@ -1516,9 +1538,10 @@ of 64 helping over 32. Batches averaged about 21 events at 6,000 per second; pas
 stopped rising with batches averaging 28 to 30, below the limit, while two of the three nodes, one
 of them the event store's, were at 86 to 95% CPU. Which of those held the rate was not isolated,
 but more throughput on that three-node cluster needs more nodes before more per-service tuning. A
-default installation with the new persistence settings was measured on the split clusters in the
-last two rows, where it sustained 6,000 events per second, with `event-management` at two pods in the last row; it
-has not been measured on the three-node cluster of the other rows.
+default installation with the new persistence settings was measured on the split clusters of the
+rows from the superseded one on, where it sustained 6,000 events per second, and 10,000 with
+placement held, with `event-management` at two pods from the v0.19.0 row on; it has not been
+measured on the three-node cluster of the first four rows.
 
 #### Event store volume {#event-store-volume}
 
