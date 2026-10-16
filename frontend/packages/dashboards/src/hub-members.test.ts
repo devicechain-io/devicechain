@@ -10,7 +10,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardHub, type DeviceResolver } from './hub';
 import { MEMBER_SEED_CONCURRENCY, type MemberBucketCriteria, type MemberRoster, type MemberSeed, type MemberSeedPlan } from './members';
-import { BUCKETED_MEASUREMENTS, DEVICE_NAMES, DEVICES_FOR_ANCHOR } from './queries';
+import { GraphQLRequestError } from '@devicechain/client';
+
+import { BUCKETED_MEASUREMENTS, CUSTOMER_DEVICES, DEVICE_NAMES, DEVICES_FOR_ANCHOR } from './queries';
 import { ANCHOR_PAGE_SIZE, createDeviceResolver } from './resolver';
 import type { DatasourceSelector, MeasurementSample } from './types';
 
@@ -354,5 +356,92 @@ describe('a resolver without member support', () => {
     new DashboardHub({ resolver }).subscribeMembers(ANCHOR, { roster: (r) => (roster = r), next: () => {} });
     await flush();
     expect(roster).toEqual({ members: [{ token: 'a', name: null }, { token: 'b', name: null }], total: 2, unbound: false });
+  });
+});
+
+// A customer anchor reads customerDevices -- the read a customer user is answered on -- and every
+// other anchor reads the relationship graph, whoever is viewing.
+describe('the read each anchor kind takes', () => {
+  const CUSTOMER: DatasourceSelector = {
+    kind: 'anchor',
+    anchor: { relationship: 'assigned', targetType: 'customer', targetToken: 'acme' },
+    measurements: ['temperature'],
+  };
+
+  it('lists a customer anchor through customerDevices, names and size included, with no second read', async () => {
+    h.gql.mockImplementation(async (_area: string, doc: unknown) => {
+      if (doc === CUSTOMER_DEVICES) {
+        return {
+          customerDevices: {
+            results: [
+              { token: 'd-001', name: 'Pump one' },
+              { token: 'd-002', name: null },
+            ],
+            pagination: { totalRecords: 7 },
+          },
+        };
+      }
+      throw new Error('unexpected query');
+    });
+    let roster: MemberRoster | undefined;
+    newHub().subscribeMembers(CUSTOMER, { roster: (r) => (roster = r), next: () => {} });
+    await flush();
+    expect(roster!.members).toEqual([
+      { token: 'd-001', name: 'Pump one' },
+      { token: 'd-002', name: null },
+    ]);
+    expect(roster!.total).toBe(7);
+    const call = h.gql.mock.calls.find((c) => c[1] === CUSTOMER_DEVICES)!;
+    expect(call[0]).toBe('device-management');
+    expect(call[2]).toEqual({
+      criteria: { pageNumber: 1, pageSize: ANCHOR_PAGE_SIZE, customer: 'acme', relationshipType: 'assigned' },
+    });
+    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(0);
+    expect(countOf(DEVICE_NAMES)).toBe(0);
+  });
+
+  it('lists an asset or area anchor through the relationship graph', async () => {
+    backend(2);
+    for (const targetType of ['area', 'asset'] as const) {
+      const ds: DatasourceSelector = { ...ANCHOR, anchor: { ...ANCHOR.anchor, targetType } } as DatasourceSelector;
+      newHub().subscribeMembers(ds, { roster: () => {}, next: () => {} });
+    }
+    await flush();
+    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(2);
+    expect(countOf(CUSTOMER_DEVICES)).toBe(0);
+  });
+});
+
+describe('isDatasourceSupported', () => {
+  const scopeUnsupported = () =>
+    new GraphQLRequestError('GraphQL error', 200, [
+      { message: 'not available', extensions: { code: 'FORBIDDEN', reason: 'SCOPE_UNSUPPORTED' } },
+    ]);
+
+  it('is false only for an anchor whose resolution is refused as not offered to the viewer', async () => {
+    h.gql.mockRejectedValue(scopeUnsupported());
+    expect(await newHub().isDatasourceSupported(ANCHOR)).toBe(false);
+  });
+
+  it('is true for an ordinary refusal, a failure, a resolved anchor and anything that is not an anchor', async () => {
+    h.gql.mockRejectedValue(new GraphQLRequestError('GraphQL error', 200, [{ message: 'forbidden', extensions: { code: 'FORBIDDEN' } }]));
+    expect(await newHub().isDatasourceSupported(ANCHOR)).toBe(true);
+    h.gql.mockRejectedValue(new Error('boom'));
+    expect(await newHub().isDatasourceSupported(ANCHOR)).toBe(true);
+    backend(3);
+    expect(await newHub().isDatasourceSupported(ANCHOR)).toBe(true);
+    h.gql.mockRejectedValue(scopeUnsupported());
+    const hub = newHub();
+    expect(await hub.isDatasourceSupported({ kind: 'device', deviceToken: 'd-001', measurements: [] })).toBe(true);
+    expect(await hub.isDatasourceSupported(undefined)).toBe(true);
+  });
+
+  it('shares the resolution the widget channel makes: a supported anchor is read once', async () => {
+    backend(4);
+    const hub = newHub();
+    expect(await hub.isDatasourceSupported(ANCHOR)).toBe(true);
+    hub.subscribeWidget(ANCHOR, { next: () => {} });
+    await flush();
+    expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
   });
 });

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
@@ -839,4 +840,33 @@ func (api *Api) Devices(ctx context.Context, criteria DeviceSearchCriteria) (*De
 		Results:    results,
 		Pagination: pag,
 	}, nil
+}
+
+// CustomerDevices pages the devices with a live edge of the criteria's relationship type
+// to the customer, newest first. The edge is matched by the customer's TOKEN, which the
+// edge carries (ADR-044) and a deleted customer never hands on (its token is retired), so
+// an unknown customer or type is an empty page rather than an error — and so is an empty
+// one, as a half-authored dashboard binding sends.
+//
+// The device rows are read like every other device read: a scoped caller's device rule
+// applies beside the filter (rdb.EdgeTo), so this can narrow what a caller sees and never
+// widen it. Who may ask about which customer is the resolver's to decide.
+func (api *Api) CustomerDevices(ctx context.Context, criteria CustomerDeviceSearchCriteria) (*DeviceSearchResults, error) {
+	results := make([]Device, 0)
+	db, pag := api.RDB.ListOf(ctx, &Device{}, func(result *gorm.DB) *gorm.DB {
+		if criteria.Customer == "" || criteria.RelationshipType == "" {
+			return result.Where("1 = 0")
+		}
+		return result.Scopes(rdb.EdgeTo(deviceOwnership, rdb.EdgeTarget{
+			Kind:        string(entity.TypeCustomer),
+			Token:       criteria.Customer,
+			Type:        criteria.RelationshipType,
+			TrackedOnly: criteria.OwnershipOnly,
+		})).Preload("DeviceType")
+	}, criteria.Pagination)
+	db.Find(&results)
+	if db.Error != nil {
+		return nil, db.Error
+	}
+	return &DeviceSearchResults{Results: results, Pagination: pag}, nil
 }

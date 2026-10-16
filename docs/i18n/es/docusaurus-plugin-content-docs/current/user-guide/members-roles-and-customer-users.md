@@ -185,9 +185,10 @@ la lista de **Paneles**, elige **Compartir** en un panel y elige los clientes. C
 [Compartir con clientes](/user-guide/dashboards#sharing-with-customers).
 
 Un panel compartido muestra a cada usuario de cliente solo sus propios datos. Vincula sus widgets a
-dispositivos: un widget vinculado a un cliente, un activo o un área lee el grafo de relaciones para
-encontrar sus dispositivos, y los usuarios de cliente no tienen acceso a él, así que no les muestra
-nada.
+dispositivos, o al cliente con la relación `assigned`: un widget así muestra a los usuarios del
+cliente los dispositivos asignados a él. Un widget vinculado a un activo o un área lee el grafo de
+relaciones para encontrar sus dispositivos, y los usuarios de cliente no tienen acceso a él, así que
+les muestra **Not available for customer users** (no disponible para usuarios de cliente).
 
 ### Lo que todavía no se cubre {#not-covered-yet}
 

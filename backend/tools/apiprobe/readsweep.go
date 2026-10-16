@@ -543,6 +543,10 @@ var sweepExemptions = map[string]string{
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +
 		"exempt for the same reason",
+	"device-management.customerDevices": "its criteria names a customer and a relationship type as " +
+		"required input FIELDS, and the planner supplies tokens to top-level arguments only; the probe " +
+		"also seeds no device-to-customer edge, so the call could only read an empty page. The edges it " +
+		"reads are swept through entityRelationships and the device rows through devices",
 	"device-management.commandDispatchSchedule": "a pre-flight decision about a command the CALLER is " +
 		"about to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a " +
 		"token. The window it reads is swept through maintenanceWindowOpening",

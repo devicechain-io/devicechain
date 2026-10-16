@@ -200,6 +200,10 @@ type OwnershipEdges struct {
 	// EdgeType is the edge column holding its type's id; TypeID is that id column on the
 	// type table; Tracked is the type table's boolean column.
 	EdgeType, TypeID, Tracked string
+	// TypeToken is the type table's token column. DeviceEdge does not read it (ownership
+	// is keyed on the tracked flag, never on a type's token); EdgeTo, which matches one
+	// type by its token, requires it.
+	TypeToken string
 }
 
 // DeviceEdge is the rule of the DEVICE row itself (ADR-081): a scoped caller sees a device
