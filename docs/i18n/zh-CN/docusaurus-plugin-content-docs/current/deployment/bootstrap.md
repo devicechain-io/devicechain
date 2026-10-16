@@ -674,6 +674,18 @@ kubectl get pods -A -l cnpg.io/cluster -o wide
 - **现有实例升级时获得此配置。** `dcctl upgrade` 应用实例代理配置，早期版本实例升级后获得这些请求和上限，服务器重启生效，高可用下逐个重启。详见[升级应用哪些基础设施配置](./releases-and-upgrades.md#upgrade-infrastructure)。
 - 更改时，在实例 OpenTofu 状态目录（`~/.devicechain/instances/<instance>/infra/instance/`）旁的 `terraform.tfvars` 中设置 `nats_cpu_request`、`nats_memory_request`、`nats_memory_limit`。每次实例 `dcctl` 应用，包括升级，均读取文件。内存单位为 `Mi` 或 `Gi`。`--compact` 实例每次应用由 dcctl 自行传入两个请求，覆盖文件，所以此时仅 `nats_memory_limit` 可用文件修改。
 
+#### 代理服务器之间的压缩 {#route-compression}
+
+集群代理（`--ha`）的各服务器通过彼此之间的连接（称为路由）相互复制每个已存储的事件。`nats_route_compression` 压缩这部分流量。**默认关闭。**
+
+- **取值为 `off`、`s2_fast`、`s2_better`、`s2_best` 和 `s2_auto`。** 其他任何值，包括这些值的其他写法，在应用实例时都会被拒绝。`off` 不向代理配置添加任何内容，所有路由都不压缩。
+- **建议尝试 `s2_fast`。** `s2_better` 和 `s2_best` 消耗更多 CPU 以换取更小的消息。`s2_auto` 根据每条路由的往返时间选择级别，低于 10 ms 时不压缩，同一可用区内的所有路由都属于这种情况，因此在单可用区集群上不起作用。
+- **只影响代理服务器之间的流量。** 设备和服务的连接不压缩，代理写入磁盘的数据也不压缩。
+- **尚未在集群上测量其得失。** 在单进程内三个服务器、无 TLS 的测试中，对于含一个读数的事件，`s2_fast` 使服务器之间的流量减少 57% 至 66%，增加的 CPU 在测量噪声范围内。在集群上开启和关闭 TLS 时的实测结果将在此公布。在此之前默认保持关闭。
+- **开启方法**：在实例 OpenTofu 状态目录（`~/.devicechain/instances/<instance>/infra/instance/`）旁的 `terraform.tfvars` 中设置 `nats_route_compression = "s2_fast"`，然后运行 `dcctl upgrade`。代理服务器逐个重启以应用该设置。重启期间，新旧设置的服务器按每条连接协商：尚未重启的服务器会跟随请求压缩的对端。关闭时，设置为 `off` 或删除该行，然后再次升级，服务器会再次重启。
+- **不带 `--ha` 的代理会拒绝该设置。** 单个服务器没有路由，该设置不会起任何作用。
+- **检查方法**：读取代理监控端口 8222 上的 `/routez`，每条路由的 `compression` 字段显示正在使用的模式。其中的字节计数统计的是压缩前的消息，因此看不出节省量；代理 Pod 的网络字节数可以体现。
+
 #### 实测吞吐量 {#measured-throughput}
 
 | 版本 | 集群 | 设置 | 持续速率 | 结果 |

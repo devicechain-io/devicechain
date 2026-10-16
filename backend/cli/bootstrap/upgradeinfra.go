@@ -973,6 +973,9 @@ var shownValuePaths = []string{
 	"backup.schedule", "backup.walCompression", "backup.dataCompression",
 	"backup.snapshotClass", "backup.objectStoreSchedule", "backup.walMaxParallel",
 	"config.jetstream.fileStore.pvc.size",
+	// The broker's route compression mode (nats_route_compression): one of five
+	// words, and the reason the servers are about to restart.
+	"config.cluster.merge.compression",
 }
 
 func shownValue(path string) bool {
