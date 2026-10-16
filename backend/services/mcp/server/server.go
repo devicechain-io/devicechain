@@ -112,7 +112,17 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 // visible from the outside to exist at all.
 func newServer(gql *GraphQLClient) (*mcp.Server, *Catalog) {
 	s := mcp.NewServer(&mcp.Implementation{Name: serverName, Version: serverVersion}, nil)
-	return s, registerTools(s, NewTools(gql))
+	c := registerTools(s, NewTools(gql))
+	// Every tools/call this server answers writes one audit record (audit.go). It is a
+	// middleware on the served server rather than a wrapper inside register, so a call
+	// that never reaches a handler — an unknown tool, arguments that fail validation — is
+	// recorded too.
+	registered := map[string]bool{}
+	for _, name := range c.Names() {
+		registered[name] = true
+	}
+	s.AddReceivingMiddleware(auditToolCalls(registered))
+	return s, c
 }
 
 // registerTools wires every read tool onto the server, each with its declared risk

@@ -13,10 +13,16 @@ import (
 )
 
 // extraTokenKey / extraTenantKey are the TokenInfo.Extra keys the tools read to
-// forward the caller's identity downstream.
+// forward the caller's identity downstream. extraActorKey, extraClientKey and
+// extraSudoKey are read only by the tool-call audit record (audit.go): who the verified
+// token names, which OAuth client it was minted for, and whether its subject is a
+// superuser.
 const (
 	extraTokenKey  = "dc_token"
 	extraTenantKey = "dc_tenant"
+	extraActorKey  = "dc_actor"
+	extraClientKey = "dc_client"
+	extraSudoKey   = "dc_sudo"
 )
 
 // NewTokenVerifier builds the OAuth 2.1 Resource Server token verifier (ADR-047).
@@ -58,6 +64,9 @@ func NewTokenVerifier(validator func() *coreauth.Validator, resourceID string) s
 			Extra: map[string]any{
 				extraTokenKey:  token,
 				extraTenantKey: claims.Tenant,
+				extraActorKey:  claims.Username,
+				extraClientKey: claims.ClientId,
+				extraSudoKey:   claims.ActingAsSuperuser,
 			},
 		}
 		if claims.ExpiresAt != nil {

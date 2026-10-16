@@ -123,6 +123,10 @@ escritura del broker y diagnósticos similares ya no aparecen en el nivel por de
 perdido nada: fije `debug` para volver a verlos.
 :::
 
+### Líneas que se escriben en todos los niveles {#audit-lines}
+
+Un tipo de línea ignora el nivel: el registro que escribe el servicio `mcp` por cada llamada de herramienta de IA. No lleva campo `level` y se escribe también con `warn` y `error`, porque bajar la verbosidad no es una decisión de dejar de auditar. Selecciónalo por su campo `audit`; su formato se describe en [Qué se registra](../concepts/mcp.md#audit).
+
 ### Lo que nunca se registra
 
 El documento de configuración propio de un servicio nunca se escribe en el registro, en ningún
