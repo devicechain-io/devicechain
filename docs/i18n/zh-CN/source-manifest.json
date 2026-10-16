@@ -3,12 +3,12 @@
   "locale": "zh-CN",
   "pages": {
     "concepts/ai-authoring.md": {
-      "sourceSha256": "3749d6a23699bdabfdb7637c2cd3316d088a7d267268594f78def2a2f5531fd4",
-      "translationSha256": "8ec23ccc7bae657461b6138009fc4bf996b06c4d76d942477aa656e5cb2e0cf9"
+      "sourceSha256": "f356d85aa96e163e5b6bd9d002ae649ba1ef6e00427c2394f89b256f229b2d2a",
+      "translationSha256": "c30d9cd6e9a67112f4ecce789071b8eb0ac3564620db4bf5263866c16a31006e"
     },
     "concepts/architecture.md": {
-      "sourceSha256": "0f1aaeb25a152e61eb06163be9f5faaadc2ed7462a66e10ccf4d190da7055ddc",
-      "translationSha256": "8b663035e12fa704ddf9922c9924f36322d1f45fbb9b2adb7a6851b0e7be36b9"
+      "sourceSha256": "3b57a1578b661807cbebbd0220f22da17f3a3c5312f947e7636a368cfec3928b",
+      "translationSha256": "1fe485558931aa8846b9534c3763b47107ae98e994b79546a86820893d07ec47"
     },
     "concepts/basemaps.md": {
       "sourceSha256": "666a3022f84eaee28f122c2a771e2bf33ee9da37545210ab36af3949072aa882",
@@ -31,8 +31,8 @@
       "translationSha256": "61cb4c08c458885262165bd1949dd8bc917f840d09aa16b34568603773026b20"
     },
     "concepts/event-processing.md": {
-      "sourceSha256": "388795cc358b8cc43e2d6ab876448c44365f5fb75523470eaf7923b714a6ff85",
-      "translationSha256": "048415192995e367d0be9761aa52217a638b05c687bc1b1520f03ee1e1708b57"
+      "sourceSha256": "86e0d584335f7a2803defea67a92765105e20fd9e74c89b7012c8871adcafee5",
+      "translationSha256": "ef9f52ac6aebac71e1c4d727546935e2385d6a5cf92a4b183d1421542a29d1d3"
     },
     "concepts/geofencing.md": {
       "sourceSha256": "d771892bd8753469921e5181d93fe2b901528c9edd62580181bd3241516faad4",
@@ -43,8 +43,8 @@
       "translationSha256": "43acc2e96d96499fd2591b3eb9c37d671759c656c296baed9e1816c4a6f24711"
     },
     "concepts/lwm2m.md": {
-      "sourceSha256": "6bae0af2c2efd219add0c0ff5f48e93feab56175ed48215bbfc65baeb5237e6c",
-      "translationSha256": "380d9a58c77f0ff8b7313f0067eb66bd4c72c7554085c7de4ab8c1f59db32aff"
+      "sourceSha256": "1cd975c5d5360cbcd0c0ba8babaf11bd67f77b400b64d86564ea9c2f9aba95d1",
+      "translationSha256": "5dfb365b7ad34a0f6ac553438840784e51717af3b74f42da4343f02e92566854"
     },
     "concepts/mcp.md": {
       "sourceSha256": "ff847b38b21efeca67b108715793880ca2a0b307049ef9955f03e66eec97838c",
@@ -55,20 +55,20 @@
       "translationSha256": "8a60eff9f68fad58331a477deb2956276fe9422500d470e5b172d9a363645fa4"
     },
     "concepts/object-storage.md": {
-      "sourceSha256": "d929ae7a8fb446c8a78f86f5221dccebfa5c03608d652bb0ee2e570d55494c7e",
-      "translationSha256": "ea76cd0738e3d0f84f68c76a57e94f1dc268009a72e7abc9d3bceef3dfc828d9"
+      "sourceSha256": "5d444b1bbc5ca2646f46a828b3b2818b4c3c1b3d4a72e52ab67e63e301453600",
+      "translationSha256": "728ef970b81cd1cb25ee8cb4f3fa85b4b55b36f6efeed961841da43c33c316e2"
     },
     "concepts/outbound-connectors.md": {
-      "sourceSha256": "1ba29dfe2911de7ad5e883661f3a98beea5bfdac0f3ded4a5dcecc9fe6c8e0de",
-      "translationSha256": "12adcdfb098a473cf02eaa5e52d8be48f233f62d9bd16fb7bd9c3c6ec03f9f41"
+      "sourceSha256": "61ceb818bdd8c550296a6bfe9a6bea46e81b7875c5dbedf6f55f91cf7caafe10",
+      "translationSha256": "45f34ed117e5479f3426d22deec46ea48d8f64182032b409601907f89dc63cad"
     },
     "concepts/over-the-air-updates.md": {
-      "sourceSha256": "934af0f96162cababb46b23280799a0238a4e766c382c4cd5e1cb44b3007a268",
-      "translationSha256": "ff7ce7142c62817d2071f5a4eddae8306e6df37ad5e7c2c4c6e455a773c1e67f"
+      "sourceSha256": "8c96ef1494e685af96d573bedd3ef7401bac7dfa73b4f17df7871f2946b5cfd6",
+      "translationSha256": "ab5592d549847e6695514622d11434b05dcafce2ec6b0224d869428830f5d2cc"
     },
     "concepts/single-sign-on.md": {
-      "sourceSha256": "e31ba494aa05050918005edc2ddfe9635841b4a83f94f69abf15c037c92a907e",
-      "translationSha256": "9e3e7d4879c652f45a66d70fd2872bc4d89652fd408a1fadf272e99e13011208"
+      "sourceSha256": "9979f642b5846262c252585b0e00da2c96703cc6313a4fa38813f14b96d504b4",
+      "translationSha256": "de9d9023e8b7c311f6ea913fdd40c22c63f67dda23f0840d742159ad0cd565ae"
     },
     "concepts/sparkplug.md": {
       "sourceSha256": "c5755e76a94f2f592689eff34ebacf5694b2615cbe5ade6f7d396b31354203d9",
