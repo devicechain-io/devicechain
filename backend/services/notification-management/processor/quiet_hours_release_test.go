@@ -102,8 +102,8 @@ func TestAReleaseInFlightIsNotSentByAnotherReplica(t *testing.T) {
 }
 
 // An alarm token outlives a clear. A SECOND cycle cleared (or acknowledged) while held must
-// be dropped like the first: the state's terminal stamps are the first cycle's and do not
-// move, so they cannot show it.
+// be dropped like the first, though the cycle's only page so far is the held one and the
+// state never recorded it.
 func TestASecondCycleResolvedWhileHeldIsNotPaged(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -115,13 +115,17 @@ func TestASecondCycleResolvedWhileHeldIsNotPaged(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			clock := insideQuiet
 			n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-			// Cycle 1, resolved an hour before.
-			if err := n.Notify(ctx, eventAt(tc.kind, "MAJOR", clock.Add(-time.Hour))); err != nil {
+			// Cycle 1 (raised two hours before), resolved an hour before.
+			first := eventAt(tc.kind, "MAJOR", clock.Add(-time.Hour))
+			first.RaisedTime = clock.Add(-2 * time.Hour)
+			if err := n.Notify(ctx, first); err != nil {
 				t.Fatal(err)
 			}
-			// Cycle 2 is held, then resolved too.
+			// Cycle 2 (raised at clock) is held, then resolved too.
 			holdOne(t, n, api, ctx, clock)
-			if err := n.Notify(ctx, eventAt(tc.kind, "MAJOR", clock.Add(10*time.Minute))); err != nil {
+			second := eventAt(tc.kind, "MAJOR", clock.Add(10*time.Minute))
+			second.RaisedTime = clock
+			if err := n.Notify(ctx, second); err != nil {
 				t.Fatal(err)
 			}
 			if err := n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), quietEnds); err != nil {

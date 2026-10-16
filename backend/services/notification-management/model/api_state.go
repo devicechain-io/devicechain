@@ -199,6 +199,15 @@ func (api *Api) markTerminal(ctx context.Context, alarmToken, alarmKey, severity
 	})
 }
 
+// OnLaterCycleThan reports whether the row describes a LATER alarm cycle than the one
+// raised at `raised` (an event's RaisedTime). An alarm only re-raises from cleared, so an
+// event of an earlier cycle is about an alarm that has since been cleared. A row with no
+// cycle recorded, or an event naming none, cannot be ordered and reports false.
+func (s *NotificationState) OnLaterCycleThan(raised time.Time) bool {
+	k := cycleKey(raised)
+	return s != nil && s.CycleRaisedAt.Valid && k.Valid && k.Time.Before(s.CycleRaisedAt.Time)
+}
+
 // cycleKey normalizes an event's RaisedTime into the value stored as CycleRaisedAt.
 //
 // 🔴 THE TRUNCATION IS LOAD-BEARING. PostgreSQL keeps microseconds, and the events of ONE
@@ -218,17 +227,30 @@ func cycleKey(raised time.Time) sql.NullTime {
 // fields (see NotificationState.CycleRaisedAt) and is applied; the same cycle is applied
 // as-is; an earlier cycle is stale and is not.
 //
-// An event that names no cycle, or a row that has none recorded, cannot be ordered, so
-// the event is applied with the old per-row semantics, and the row adopts the event's
-// cycle if it names one so ordering works from the next event on. Adopting rather than
-// resetting is the fail-quiet choice for a row written before cycles were tracked: a
-// reset there could let a stale RAISED reopen an acknowledged alarm.
+// An event that names no cycle cannot be ordered, so it is applied with the old per-row
+// semantics.
+//
+// 🔴 A ROW WITH NO CYCLE RECORDED (written before cycles were tracked) is ordered by its
+// CLEAR. Such a row kept its FIRST cycle's stamps for ever, so on an upgraded instance
+// every alarm that has cleared at least once carries a NULL-cycle row stamped cleared.
+// A cycle raised AFTER that clear is a later cycle — an alarm only re-raises from cleared
+// — and resets the row like any other new cycle; adopting it onto the old stamps would
+// leave that cycle unescalated, which is the defect the cycle key exists to fix. Anything
+// else (a cycle raised before the clear, a row never cleared) is adopted WITHOUT a reset:
+// it is the row's own cycle redelivered, or a cycle nothing can place, and resetting
+// there could let a stale RAISED reopen an acknowledged alarm. The clear is the stamp to
+// order by because it and the raise are both detection event times; an acknowledgement is
+// stamped when an operator acts, which is a different clock.
 func enterCycle(s *NotificationState, raised sql.NullTime) bool {
 	if !raised.Valid {
 		return true
 	}
 	if !s.CycleRaisedAt.Valid {
-		s.CycleRaisedAt = raised
+		if s.ClearedAt.Valid && s.ClearedAt.Time.Before(raised.Time) {
+			startCycle(s, raised)
+		} else {
+			s.CycleRaisedAt = raised
+		}
 		return true
 	}
 	current := s.CycleRaisedAt.Time
@@ -236,15 +258,21 @@ func enterCycle(s *NotificationState, raised sql.NullTime) bool {
 	case raised.Time.Before(current):
 		return false
 	case raised.Time.After(current):
-		s.AcknowledgedAt = sql.NullTime{}
-		s.ClearedAt = sql.NullTime{}
-		s.EscalationLevel = 0
-		s.LastEscalatedAt = sql.NullTime{}
-		s.FirstNotifiedAt = sql.NullTime{}
-		s.NotifyCount = 0
-		s.CycleRaisedAt = raised
+		startCycle(s, raised)
 	}
 	return true
+}
+
+// startCycle resets a state row's per-cycle fields for the cycle raised at `raised`.
+// LastNotifiedAt is kept: it is the throttle basis, not per-cycle progress.
+func startCycle(s *NotificationState, raised sql.NullTime) {
+	s.AcknowledgedAt = sql.NullTime{}
+	s.ClearedAt = sql.NullTime{}
+	s.EscalationLevel = 0
+	s.LastEscalatedAt = sql.NullTime{}
+	s.FirstNotifiedAt = sql.NullTime{}
+	s.NotifyCount = 0
+	s.CycleRaisedAt = raised
 }
 
 // stamp sets the named terminal timestamp column on a state row.

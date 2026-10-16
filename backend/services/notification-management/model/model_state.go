@@ -58,7 +58,8 @@ type NotificationState struct {
 	// stale and changes nothing. LastNotifiedAt is deliberately NOT per-cycle: it is the
 	// throttle basis, and a flapping alarm's re-raise is exactly what the throttle is
 	// for. NULL on a row written before the column existed; the first event that names
-	// a cycle adopts it without a reset.
+	// a cycle adopts it, resetting the row only when that cycle was raised after the
+	// row's clear (see enterCycle).
 	CycleRaisedAt sql.NullTime
 }
 

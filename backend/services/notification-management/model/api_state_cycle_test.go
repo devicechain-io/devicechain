@@ -289,3 +289,161 @@ func TestAnEscalationClaimForAnEarlierCycleLoses(t *testing.T) {
 		t.Fatalf("a claim against the current cycle must win: won=%v err=%v", won, err)
 	}
 }
+
+// 🔴 THE UPGRADE CASE. A row written before cycles were tracked kept its FIRST cycle's
+// stamps for ever, so on an upgraded instance every alarm that had cleared at least once
+// has a NULL-cycle row stamped cleared. The next cycle's events must reopen it: adopting
+// that cycle onto the old stamps would leave it unescalated — the very defect the cycle
+// key exists to fix, once more for every such alarm.
+func TestALegacyClearedRowReopensForALaterCycle(t *testing.T) {
+	for _, first := range []string{"raise", "acknowledgement"} {
+		t.Run(first, func(t *testing.T) {
+			api := newTestApi(t)
+			ctx := tenantCtx("A")
+			c1 := time.Now().Add(-3 * time.Hour).UTC().Truncate(time.Second)
+			c2 := c1.Add(time.Hour)
+			// The pre-upgrade history: paged, acknowledged and cleared, no cycle recorded.
+			if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", time.Time{}, c1); err != nil {
+				t.Fatal(err)
+			}
+			if err := api.MarkAcknowledged(ctx, "a", "k", "CRITICAL", time.Time{}, c1.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			if err := api.MarkCleared(ctx, "a", "k", "CRITICAL", time.Time{}, c1.Add(2*time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			switch first {
+			case "raise":
+				if err := api.RecordNotification(ctx, "a", "k", "MAJOR", c2, c2); err != nil {
+					t.Fatal(err)
+				}
+				s := mustState(t, api, ctx, "a")
+				if s.AcknowledgedAt.Valid || s.ClearedAt.Valid || s.NotifyCount != 1 {
+					t.Fatalf("the cycle after the upgrade inherited the old cycle: ack=%v clear=%v count=%d",
+						s.AcknowledgedAt, s.ClearedAt, s.NotifyCount)
+				}
+				if got := openTokens(t, api, ctx); len(got) != 1 {
+					t.Fatalf("the cycle after the upgrade must escalate; open = %v", got)
+				}
+			case "acknowledgement":
+				ackAt := c2.Add(time.Minute)
+				if err := api.MarkAcknowledged(ctx, "a", "k", "CRITICAL", c2, ackAt); err != nil {
+					t.Fatal(err)
+				}
+				s := mustState(t, api, ctx, "a")
+				if s.ClearedAt.Valid || !s.AcknowledgedAt.Time.Equal(ackAt) {
+					t.Fatalf("the new cycle's acknowledgement: clear=%v ack=%v, want no clear and ack at %v",
+						s.ClearedAt, s.AcknowledgedAt, ackAt)
+				}
+			}
+			if s := mustState(t, api, ctx, "a"); !s.CycleRaisedAt.Time.Equal(c2) {
+				t.Fatalf("CycleRaisedAt = %v, want %v", s.CycleRaisedAt, c2)
+			}
+		})
+	}
+}
+
+// The counterweight: an event of the cycle a legacy row's clear belongs to — raised BEFORE
+// that clear — is the same cycle redelivered, and must not reopen it.
+func TestALegacyClearedRowIsNotReopenedByItsOwnCycle(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	c1 := time.Now().Add(-3 * time.Hour).UTC().Truncate(time.Second)
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", time.Time{}, c1); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.MarkCleared(ctx, "a", "k", "CRITICAL", time.Time{}, c1.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", c1, c1.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s := mustState(t, api, ctx, "a")
+	if !s.ClearedAt.Valid || s.NotifyCount != 2 {
+		t.Fatalf("a redelivery of the cleared cycle reopened it: clear=%v count=%d", s.ClearedAt, s.NotifyCount)
+	}
+	if !s.CycleRaisedAt.Time.Equal(c1) {
+		t.Fatalf("CycleRaisedAt = %v, want adopted %v", s.CycleRaisedAt, c1)
+	}
+	if got := openTokens(t, api, ctx); len(got) != 0 {
+		t.Fatalf("open = %v, want none", got)
+	}
+}
+
+// LastNotifiedAt is the throttle basis, not per-cycle progress: a new cycle's first event
+// — here its acknowledgement, overtaking its RAISED — must not forget when the alarm was
+// last paged.
+func TestANewCycleKeepsTheThrottleBasis(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	c1 := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	c2 := c1.Add(time.Hour)
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", c1, c1); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.MarkAcknowledged(ctx, "a", "k", "CRITICAL", c2, c2.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s := mustState(t, api, ctx, "a")
+	if !s.CycleRaisedAt.Time.Equal(c2) {
+		t.Fatalf("CycleRaisedAt = %v, want %v", s.CycleRaisedAt, c2)
+	}
+	if !s.LastNotifiedAt.Valid || !s.LastNotifiedAt.Time.Equal(c1) {
+		t.Fatalf("LastNotifiedAt = %v, want %v kept across the cycle", s.LastNotifiedAt, c1)
+	}
+}
+
+// A pre-upgrade row that was acknowledged but never cleared is ordered by nothing: an
+// alarm only re-raises from cleared, so without a clear no cycle can be placed after it,
+// and the acknowledgement stays (the acknowledgement is an operator's clock, not the
+// detection's, so it does not order a raise).
+func TestALegacyAcknowledgedOnlyRowIsAdopted(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	c1 := time.Now().Add(-3 * time.Hour).UTC().Truncate(time.Second)
+	c2 := c1.Add(time.Hour)
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", time.Time{}, c1); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.MarkAcknowledged(ctx, "a", "k", "CRITICAL", time.Time{}, c1.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", c2, c2); err != nil {
+		t.Fatal(err)
+	}
+	s := mustState(t, api, ctx, "a")
+	if !s.AcknowledgedAt.Valid || s.NotifyCount != 2 || !s.CycleRaisedAt.Time.Equal(c2) {
+		t.Fatalf("ack=%v count=%d cycle=%v, want the acknowledgement kept, 2, and %v adopted",
+			s.AcknowledgedAt, s.NotifyCount, s.CycleRaisedAt, c2)
+	}
+}
+
+// A claim planned against a row with NO cycle recorded must lose once the row has one: in
+// between, the alarm can have cleared and re-raised onto tier 0, the level the claim
+// expects.
+func TestAnEscalationClaimForAnUnrecordedCycleLosesOnceOneIsRecorded(t *testing.T) {
+	api := newTestApi(t)
+	ctx := tenantCtx("A")
+	c1 := time.Now().Add(-3 * time.Hour).UTC().Truncate(time.Second)
+	c2 := c1.Add(time.Hour)
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", time.Time{}, c1); err != nil {
+		t.Fatal(err)
+	}
+	read := mustState(t, api, ctx, "a")
+	if read.CycleRaisedAt.Valid {
+		t.Fatalf("precondition: a legacy row, got cycle %v", read.CycleRaisedAt)
+	}
+	if err := api.MarkCleared(ctx, "a", "k", "CRITICAL", c1, c1.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.RecordNotification(ctx, "a", "k", "CRITICAL", c2, c2); err != nil {
+		t.Fatal(err)
+	}
+	won, err := api.ClaimEscalation(ctx, "a", read.EscalationLevel, read.CycleRaisedAt, c2.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if won {
+		t.Fatal("a claim planned against the unrecorded cycle escalated cycle two")
+	}
+}
