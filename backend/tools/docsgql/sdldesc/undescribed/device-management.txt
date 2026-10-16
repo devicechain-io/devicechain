@@ -365,7 +365,6 @@ DeviceClaimRequest
 DeviceClaimRequest.claimSecret
 DeviceClaimRequest.customerToken
 DeviceClaimRequest.deviceToken
-DeviceClaimRequest.relationshipType
 DeviceCredential
 DeviceCredential.createdAt
 DeviceCredential.credentialId

@@ -16,7 +16,7 @@ import (
 func (r *SchemaResolver) MetricDefinitionsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*MetricDefinitionResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -46,7 +46,7 @@ func (r *SchemaResolver) MetricDefinitionsById(ctx context.Context, args struct 
 func (r *SchemaResolver) MetricDefinitionsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*MetricDefinitionResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -72,7 +72,7 @@ func (r *SchemaResolver) MetricDefinitionsByToken(ctx context.Context, args stru
 func (r *SchemaResolver) MetricDefinitions(ctx context.Context, args struct {
 	Criteria model.MetricDefinitionSearchCriteria
 }) (*MetricDefinitionSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

@@ -26,11 +26,21 @@ import (
 // a historical query share one type. The feed is torn down when the client
 // unsubscribes or disconnects (ctx cancelled). Named distinctly from the
 // measurementEvents query because both resolve off the one root resolver.
+//
+// A SCOPED caller (ADR-081) is admitted, and receives a reading only when its resolved
+// event carries an anchor in the caller's scope (inScope) — the same rule the stored
+// reads apply, on the anchors the resolver stamped on the event as it happened. Nothing
+// here is a gorm read, so no storage callback applies the scope: this filter is the
+// whole of it. There is deliberately NO subscribe-time ownership check: event-management
+// cannot see a device's current owner, so a subscription naming a device outside the
+// scope is accepted and simply stays silent, exactly as one naming a device that never
+// reports would — which also tells the caller nothing about whether that device exists.
 func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	DeviceToken *string
 	Name        *string
 }) (<-chan *MeasurementEventResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	scope, err := auth.AuthorizeScoped(ctx, auth.EventRead)
+	if err != nil {
 		return nil, err
 	}
 	tenant, ok := core.TenantFromContext(ctx)
@@ -58,6 +68,9 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 			if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {
 				continue
 			}
+			if !inScope(scope, resolved) {
+				continue
+			}
 			payload, ok := resolved.Payload.(*dmmodel.ResolvedMeasurementsPayload)
 			if !ok {
 				continue
@@ -82,6 +95,26 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 		}
 	}()
 	return out, nil
+}
+
+// inScope reports whether a resolved event may be delivered to a caller acting under
+// scope: always for an unscoped caller, and for a scoped one only when one of the event's
+// anchors is in the scope. An event with no anchors (an unassigned device) matches no
+// scope, as its stored rows match none.
+func inScope(scope auth.Scope, resolved *dmmodel.ResolvedEvent) bool {
+	if !scope.IsScoped() {
+		return true
+	}
+	anchors := scope.Anchors()
+	for _, a := range resolved.Anchors {
+		have := a.AnchorType + ":" + a.AnchorToken
+		for _, want := range anchors {
+			if have == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // measurementFromResolved maps a single resolved measurement reading onto the

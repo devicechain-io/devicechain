@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -71,7 +72,7 @@ func NewCachedApi(api *Api, caches *Caches) *CachedApi {
 // method, which returns the same sentinels as before.
 func (capi *CachedApi) AuthenticateDevice(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error) {
 	creds := capi.caches.Credentials
-	tenant, hasTenant := core.TenantFromContext(ctx)
+	tenant, hasTenant := cacheTenant(ctx)
 	if creds == nil || !hasTenant || presented == nil || presented.CredentialId == "" ||
 		!CredentialType(presented.CredentialType).Valid() {
 		return capi.Api.AuthenticateDevice(ctx, presented, now)
@@ -237,7 +238,7 @@ func (capi *CachedApi) EvictFenceSetVersion(ctx context.Context) {
 // per-tenant cache: whether the tenant has any rule-scoped group. A lookup without a
 // tenant in context bypasses the cache and goes straight to the DB.
 func (capi *CachedApi) AnyScopedGroups(ctx context.Context) (bool, error) {
-	tenant, hasTenant := core.TenantFromContext(ctx)
+	tenant, hasTenant := cacheTenant(ctx)
 	if !hasTenant {
 		return capi.Api.AnyScopedGroups(ctx)
 	}
@@ -330,7 +331,7 @@ func (capi *CachedApi) loadAnyScopedGroups(ctx context.Context, tenant string) (
 // margin for it today: a rule scoped to a new group can miss that group's members for up
 // to the TTL on the events of a replica still holding the old membership.
 func (capi *CachedApi) MembershipsForEntity(ctx context.Context, entityType string, entityId uint) ([]GroupMembership, error) {
-	tenant, hasTenant := core.TenantFromContext(ctx)
+	tenant, hasTenant := cacheTenant(ctx)
 	if !hasTenant {
 		return capi.Api.MembershipsForEntity(ctx, entityType, entityId)
 	}
@@ -362,6 +363,21 @@ func (capi *CachedApi) loadMemberships(ctx context.Context, key, entityType stri
 	return memberships, nil
 }
 
+// cacheTenant is the tenant a cached READ is filed under, or false when the read must not
+// touch the cache at all. Every cache here is keyed by tenant and nothing narrower, so it
+// cannot tell one customer's member from another's: a SCOPED caller (ADR-081) is sent
+// to the database, where core/rdb's scope callback filters the rows — or refuses the
+// model — exactly as it does for an uncached read. Serving such a caller a hit would hand
+// it whatever an unscoped caller had filled, past every predicate. No GraphQL read goes
+// through this cache today (GetApi is the plain Api); this is what keeps the next one
+// that does from becoming the leak.
+func cacheTenant(ctx context.Context) (string, bool) {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return "", false
+	}
+	return core.TenantFromContext(ctx)
+}
+
 // deviceByTokenKey builds the tenant-scoped cache key for a single device token.
 // The tenant is part of the key so a hit can never cross tenant boundaries.
 func deviceByTokenKey(tenant string, token string) string {
@@ -384,7 +400,7 @@ func relationshipsBySourceKey(tenant string, sourceId uint) string {
 // next event rather than waiting out the TTL. Multi-token lookups and lookups
 // without a tenant in context bypass the cache and go straight to the DB.
 func (capi *CachedApi) DevicesByToken(ctx context.Context, tokens []string) ([]*Device, error) {
-	tenant, hasTenant := core.TenantFromContext(ctx)
+	tenant, hasTenant := cacheTenant(ctx)
 	if !hasTenant || len(tokens) != 1 {
 		return capi.Api.DevicesByToken(ctx, tokens)
 	}
@@ -436,7 +452,7 @@ func (capi *CachedApi) getDevice(ctx context.Context, key string) *Device {
 // that may be paged are now different methods, so there is no shape left to confuse.
 func (capi *CachedApi) TrackedRelationshipsForDevice(ctx context.Context,
 	deviceId uint) (*EntityRelationshipSearchResults, error) {
-	tenant, hasTenant := core.TenantFromContext(ctx)
+	tenant, hasTenant := cacheTenant(ctx)
 	if !hasTenant {
 		return capi.Api.TrackedRelationshipsForDevice(ctx, deviceId)
 	}
@@ -520,7 +536,7 @@ func profileResolutionByTypeKey(tenant string, deviceTypeId uint) string {
 // copied: ProfileResolution cannot be changed once built (see its comment), and it is
 // returned by value, so the holder's copy is the only thing it can assign to.
 func (capi *CachedApi) ProfileResolutionByDeviceType(ctx context.Context, deviceTypeId uint) (ProfileResolution, error) {
-	tenant, hasTenant := core.TenantFromContext(ctx)
+	tenant, hasTenant := cacheTenant(ctx)
 	if !hasTenant {
 		return capi.Api.ProfileResolutionByDeviceType(ctx, deviceTypeId)
 	}

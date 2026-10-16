@@ -82,7 +82,8 @@ type Event {
     altId: String
     """
     The relationship anchors recorded for this event. Empty for an event from a device that had
-    no assignment when it arrived.
+    no assignment when it arrived. A member whose access is limited to some customers sees only
+    the anchors naming one of them.
     """
     anchors: [EventAnchorRef!]!
 }
@@ -369,7 +370,8 @@ type MeasurementBucket {
 type Query {
     """
     Searches stored event envelopes, newest first by occurred time, one page at a time. Requires
-    event:read.
+    event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
     """
     events(
         """Filters and page to return."""
@@ -377,7 +379,8 @@ type Query {
     ): EventSearchResults!
     """
     Searches stored location fixes, newest first by occurred time, one page at a time. Requires
-    location:read, which is separate from event:read.
+    location:read, which is separate from event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
     """
     locationEvents(
         """Filters and page to return."""
@@ -385,7 +388,8 @@ type Query {
     ): LocationEventSearchResults!
     """
     Searches stored measurements, newest first by occurred time, one page at a time. Requires
-    event:read.
+    event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
     """
     measurementEvents(
         """Filters and page to return."""
@@ -393,7 +397,8 @@ type Query {
     ): MeasurementEventSearchResults!
     """
     Searches stored device alerts, newest first by occurred time, one page at a time. Requires
-    event:read.
+    event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
     """
     alertEvents(
         """Filters and page to return."""
@@ -406,7 +411,8 @@ type Query {
     refused with LIMIT_EXCEEDED; because buckets align to fixed instants, a result can hold one
     more bucket per name than that count. A result of more than 50,000 rows (buckets times
     measurement names) is also refused with LIMIT_EXCEEDED. Returns an empty list when nothing
-    matches. Requires event:read.
+    matches. Requires event:read. A member whose access is limited to some customers sees only
+    events recorded while the device belonged to one of them.
     """
     bucketedMeasurements(
         """Filters and bucket width."""
@@ -431,7 +437,9 @@ type Subscription {
     """
     Streams measurements as they arrive, live from the moment of subscription: there is no
     historical backfill, so use measurementEvents for history. Scoped to the caller's tenant and
-    optionally filtered to one device and/or one measurement name. Requires event:read.
+    optionally filtered to one device and/or one measurement name. Requires event:read. A member
+    whose access is limited to some customers receives only measurements recorded while the
+    device belongs to one of them; a stream for any other device stays silent.
     """
     # Streams measurement events as they resolve, optionally filtered to one
     # device (by token) and/or one measurement name. Drives live charts, gauges,

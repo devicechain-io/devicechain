@@ -43,5 +43,6 @@ var (
 		NewDeviceDisabledIndexSchema(),
 		NewMaintenanceWindowsSchema(),
 		NewCommandImpactSchema(),
+		NewAlarmScopeAnchorsSchema(),
 	}
 )

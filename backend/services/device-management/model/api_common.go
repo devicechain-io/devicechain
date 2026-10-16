@@ -70,6 +70,7 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 		return nil, err
 	}
 	updated.Metadata = metadataJSON
+	flipped := tracked != updated.Tracked
 	updated.Tracked = tracked
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
@@ -77,8 +78,17 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	// The `tracked` flag decides which edges a device's cached set holds, and the cached
 	// edges carry the type's own fields: so every device with an edge of this type has a
 	// stale set. Not bounded by a device list the caller named, so it is read from the edges.
-	api.evictRelationshipSources(ctx,
-		api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID))
+	sources := api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID)
+	if flipped {
+		// Flipping `tracked` makes every edge of the type ownership, or stops it being
+		// ownership (ADR-081): the funnel evicts AND publishes each device's new anchors.
+		api.evictRelationshipSources(ctx, sources)
+	} else if api.CacheEvictor != nil && len(sources) > 0 {
+		// A rename or a description edit changes the cached edges' copy of the type and
+		// nobody's ownership, so it evicts without publishing a fact per device — on the
+		// built-in "assigned" type that would be one fact per assigned device in the tenant.
+		api.CacheEvictor.EvictRelationshipSources(ctx, sources)
+	}
 	return updated, nil
 }
 

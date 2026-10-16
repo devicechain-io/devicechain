@@ -232,6 +232,12 @@ message PAlarmStateChangeEvent {
     reserved "message";
     string occurred_time = 14;
     string raised_time = 15;
+    // The alarm's scope stamp: its device's anchors ("customer:acme") when the alarm was
+    // raised (ADR-081). It is what the live alarm stream filters on for a member whose
+    // access is limited to some customers, so a stream delivers exactly the alarms the
+    // alarms query would return them. Empty for an alarm raised before the stamp existed,
+    // which such a member never sees.
+    repeated string scope_anchors = 16;
 }
 
 /**
@@ -346,4 +352,21 @@ message PDeviceAttributeEvent {
     double value = 4;
     bool removed = 5;
     string updated_at = 6;
+}
+
+/**
+ * Device ownership-changed event (ADR-081): emitted post-commit whenever a write may have
+ * changed which tracked relationships a device has — an edge created or removed (singly,
+ * in bulk, by a claim, by a claim's reopen), a relationship type's tracked flag flipped,
+ * or the target of a tracked edge deleted. It carries the device's COMPLETE current anchor
+ * set ("customer:acme", one per tracked relationship), read after the commit, so it is a
+ * statement of state rather than a delta: a consumer overwrites what it holds, and a
+ * duplicate, a reorder or a fact for a device whose ownership did not in fact move is
+ * harmless. An empty set means the device is owned by nobody. The tenant travels on the
+ * per-tenant subject, not in the payload. At-most-once, like the other control facts.
+ */
+message PDeviceOwnershipChangedEvent {
+    string device_token = 1;
+    repeated string anchors = 2;
+    string changed_time = 3;
 }

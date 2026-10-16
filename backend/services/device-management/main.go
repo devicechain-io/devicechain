@@ -182,7 +182,7 @@ func buildMetrics() {
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
 	FactPublishFails = Microservice.NewCounterVec("fact_publish_failures_total",
-		"Detection-rule, device-roster, device-attribute and device-desired notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once (a device-desired miss is repaired by the device's next sync). A sustained rate means changes are taking minutes to take effect.",
+		"Detection-rule, device-roster, device-attribute, device-desired and device-ownership notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once (a device-desired miss is repaired by the device's next sync, a device-ownership miss by the device's next event). A sustained rate means changes are taking minutes to take effect.",
 		[]string{"fact"})
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
@@ -192,7 +192,7 @@ func buildMetrics() {
 }
 
 // factPublishLabels are the fact label values of FactPublishFails, one per fact writer.
-var factPublishLabels = []string{factDetectionRules, factDeviceRoster, factDeviceAttribute, factDeviceDesired}
+var factPublishLabels = []string{factDetectionRules, factDeviceRoster, factDeviceAttribute, factDeviceDesired, factDeviceOwnership}
 
 const (
 	factDetectionRules  = "detection_rules"
@@ -201,6 +201,9 @@ const (
 	// factDeviceDesired is a configuration revision that could not be put on the device's
 	// device-desired channel. Unlike the facts above, the repair is the DEVICE's next sync.
 	factDeviceDesired = "device_desired"
+	// factDeviceOwnership is a device ownership-changed fact (ADR-081) that could not be
+	// published. The repair is the device's next resolved event, which carries its anchors.
+	factDeviceOwnership = "device_ownership"
 )
 
 // newDeadLetterSink builds this service's sink over the platform dead-letter stream, stamped
@@ -374,6 +377,16 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	}
 	Api.DeviceRosterPublisher = processor.NewDeviceRosterWriter(rosterpub,
 		FactPublishFails.WithLabelValues(factDeviceRoster))
+
+	// Add the device-ownership writer (ADR-081): every write that may change a device's
+	// tracked relationships publishes the device's complete current anchor set, so a
+	// projection keyed by device can keep a customer-scoped stamp current between events.
+	ownershippub, err := nmgr.NewWriter(streams.DeviceOwnership)
+	if err != nil {
+		return err
+	}
+	Api.DeviceOwnershipPublisher = processor.NewDeviceOwnershipWriter(ownershippub,
+		FactPublishFails.WithLabelValues(factDeviceOwnership))
 
 	// Add the device-attribute writer and inject a publisher into the shared Api (ADR-051
 	// slice 4c-3): a numeric, platform-set device attribute upsert/delete emits a fact so

@@ -17,7 +17,7 @@ import (
 func (r *SchemaResolver) CommandDefinitionsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CommandDefinitionResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -46,7 +46,7 @@ func (r *SchemaResolver) CommandDefinitionsById(ctx context.Context, args struct
 func (r *SchemaResolver) CommandDefinitionsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CommandDefinitionResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -71,7 +71,7 @@ func (r *SchemaResolver) CommandDefinitionsByToken(ctx context.Context, args str
 func (r *SchemaResolver) CommandDefinitions(ctx context.Context, args struct {
 	Criteria model.CommandDefinitionSearchCriteria
 }) (*CommandDefinitionSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

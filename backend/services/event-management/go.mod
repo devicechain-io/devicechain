@@ -8,6 +8,7 @@ require (
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/graph-gophers/graphql-go v1.10.2
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/nats-io/nats-server/v2 v2.15.0
@@ -35,7 +36,6 @@ require (
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

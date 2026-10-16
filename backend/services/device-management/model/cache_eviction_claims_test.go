@@ -37,7 +37,7 @@ func TestAClaimEvictsTheDevicesTrackedSet(t *testing.T) {
 	require.Empty(t, evictor.relSources, "opening a claim writes no edge, so it evicts nothing")
 
 	_, err = api.ClaimDevice(ctx, &DeviceClaimRequest{DeviceToken: "dozer-01", ClaimSecret: "s3cret",
-		CustomerToken: "acme-mining", RelationshipType: assignment.Token}, time.Now())
+		CustomerToken: "acme-mining", RelationshipType: &assignment.Token}, time.Now())
 	require.NoError(t, err)
 	require.Equal(t, [][]uint{{deviceId}}, evictor.relSources,
 		"redeeming a claim added an edge from the device but did not evict its cached set")

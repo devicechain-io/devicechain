@@ -742,6 +742,31 @@ an operation, you get `FORBIDDEN` even when the record it names does not exist, 
 tells you whether the record is there. Some refusals add `extensions.reason` to say why. Branch on
 `code`, and treat `reason` as detail: a `FORBIDDEN` without a reason is still a refusal.
 
+### When your access is limited to some customers {#limited-access}
+
+A tenant member's access can be limited to some of the tenant's customers. A device belongs to a
+customer through a tracked relationship to it, such as the built-in `assigned` relationship that
+`claimDevice` writes when you name no `relationshipType`. A member with limited access can call
+these operations, and each answers only with what those customers own:
+
+| Operation | What a member with limited access sees |
+| --- | --- |
+| `devices`, `devicesById`, `devicesByToken`, `devicesByExternalId` | The devices the customers own now. A device moved to another customer leaves the list at once. |
+| `customers`, `customersById`, `customersByToken` | Only the member's own customer records. |
+| `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Alarms raised while the device belonged to one of the customers. |
+| `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | The same alarms. |
+| `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Events recorded while the device belonged to one of the customers. A customer keeps the history from the time it owned a device, and does not see the history from before. |
+| Device types, device profiles and their versions, metric and command definitions, customer types | Everything, because this is configuration. These can be read but not changed. |
+
+A record the member cannot see is answered exactly as one that does not exist: it is left out of a
+list, or the operation answers `NOT_FOUND`. A `measurementStream` subscription for a device outside
+the member's customers is accepted and delivers nothing. Every other operation answers `FORBIDDEN`
+with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
+
+An event recorded while the device belonged to no customer is not visible to a member with
+limited access. Neither is an alarm raised before this release: alarms record their customers only
+from this release on.
+
 ## Request limits {#request-limits}
 
 Every GraphQL endpoint refuses a request that is too large or does too much, before any of it runs.

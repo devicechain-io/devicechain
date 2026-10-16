@@ -1,0 +1,61 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package model
+
+import (
+	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/rdb"
+)
+
+// The scope rules of this service's models (ADR-081): how a member whose access is limited
+// to part of the tenant — a customer user — may read each of them. core/rdb's scope
+// callback applies a model's rule beside the tenant predicate, and REFUSES a scoped read
+// of every tenant-scoped model that declares none. So this file is the whole list of what
+// a scoped caller can reach in device-management's store, and everything absent from it —
+// relationships, groups, assets, areas, rules, geofences, credentials, attributes,
+// provisioning, the audit journal — is refused at the model, whatever a resolver does.
+//
+// Three kinds, by what decides visibility:
+//
+//   - the DEVICE row is visible while the caller's scope currently owns it: an edge of a
+//     TRACKED relationship type from the device to a customer the scope names
+//     (rdb.DeviceEdge). Keyed on the tracked flag, not on a type token: "assigned" is only
+//     the default, and any tracked type to a customer is ownership;
+//   - a device-derived row (an alarm) carries the anchors its device had when it was
+//     written (rdb.AnchorColumn), so it keeps the owner it had then;
+//   - tenant configuration a customer's console needs to render what it may see — device
+//     types, profiles, their published versions and vocabularies, customer types — is
+//     readable unfiltered (rdb.Catalogue), and never writable.
+
+// deviceOwnership is the ownership graph the Device rule reads: this service's
+// relationship edges and their types.
+var deviceOwnership = rdb.OwnershipEdges{
+	Edge: &EntityRelationship{}, Type: &EntityRelationshipType{},
+	SourceType: "source_type", SourceID: "source_id", SourceKind: string(entity.TypeDevice), Row: "id",
+	TargetType: "target_type", TargetToken: "target_token",
+	EdgeType: "relationship_type_id", TypeID: "id", Tracked: "tracked",
+}
+
+// ScopedBy: a scoped caller sees the devices its scope currently owns.
+func (Device) ScopedBy() rdb.ScopeRule { return rdb.DeviceEdge(deviceOwnership) }
+
+// ScopedBy: an alarm carries its device's anchors from when it was raised; a scoped caller
+// may acknowledge and clear the alarms it can see, and never rewrite the stamp.
+func (Alarm) ScopedBy() rdb.ScopeRule {
+	return rdb.AnchorColumn("scope_anchors", rdb.AllowScopedUpdate)
+}
+
+// ScopedBy: a customer member reads its own customer record, and no other.
+func (Customer) ScopedBy() rdb.ScopeRule {
+	return rdb.NamedAnchor(string(entity.TypeCustomer), "token")
+}
+
+// The catalogue: configuration, not device-derived.
+
+func (DeviceType) ScopedBy() rdb.ScopeRule           { return rdb.Catalogue() }
+func (DeviceProfile) ScopedBy() rdb.ScopeRule        { return rdb.Catalogue() }
+func (DeviceProfileVersion) ScopedBy() rdb.ScopeRule { return rdb.Catalogue() }
+func (MetricDefinition) ScopedBy() rdb.ScopeRule     { return rdb.Catalogue() }
+func (CommandDefinition) ScopedBy() rdb.ScopeRule    { return rdb.Catalogue() }
+func (CustomerType) ScopedBy() rdb.ScopeRule         { return rdb.Catalogue() }

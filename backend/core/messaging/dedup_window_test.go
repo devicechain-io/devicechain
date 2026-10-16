@@ -117,6 +117,7 @@ func TestEveryDuplicateWindowCoversItsRepublishInterval(t *testing.T) {
 		streams.CommandResponses:        noID,
 		streams.DetectionRulesPublished: noID,
 		streams.DeviceRoster:            noID,
+		streams.DeviceOwnership:         noID,
 		streams.GeoFenceSetManifest:     noID,
 		streams.EntityDeleted:           noID,
 		streams.AlarmEvents:             noID,

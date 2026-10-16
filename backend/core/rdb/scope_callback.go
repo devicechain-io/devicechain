@@ -270,9 +270,193 @@ func addScopePredicate(db *gorm.DB, rule *scopeRule, tenant string, scope auth.S
 			return
 		}
 		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
+	case ruleDeviceEdge:
+		expr, err := deviceEdgeExpr(db, rule.edges, tenant, anchors)
+		if err != nil {
+			refuseScoped(db, err.Error())
+			return
+		}
+		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
+	case ruleOwnAnchor:
+		expr, err := ownAnchorExpr(db, rule, anchors)
+		if err != nil {
+			refuseScoped(db, err.Error())
+			return
+		}
+		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
 	default:
 		refuseScoped(db, "an unknown scope rule")
 	}
+}
+
+// Aliases of the edge and type tables inside a DeviceEdge predicate.
+const (
+	scopeEdgeAlias = "dc_scope_edge"
+	scopeTypeAlias = "dc_scope_type"
+)
+
+// parseRuleModel parses a model a rule names and returns its schema, refusing one that is
+// not tenant-scoped: every table a scope predicate reads carries its own tenant clause.
+func parseRuleModel(db *gorm.DB, model any, what string) (*schema.Schema, *schema.Field, error) {
+	if model == nil {
+		return nil, nil, fmt.Errorf("a %s rule with no model", what)
+	}
+	stmt := &gorm.Statement{DB: db}
+	if err := stmt.Parse(model); err != nil || stmt.Schema == nil {
+		return nil, nil, fmt.Errorf("a %s rule whose model does not parse", what)
+	}
+	tenant := schemaTenantField(stmt.Schema)
+	if tenant == nil {
+		return nil, nil, fmt.Errorf("a %s rule over a table that is not tenant-scoped (%q)", what, stmt.Schema.Table)
+	}
+	return stmt.Schema, tenant, nil
+}
+
+// aliasedColumn resolves a field or column name of s to a column under alias.
+func aliasedColumn(s *schema.Schema, alias, name string) (clause.Column, error) {
+	if name == "" {
+		return clause.Column{}, fmt.Errorf("an ownership rule naming an empty column on %q", s.Table)
+	}
+	f := s.LookUpField(name)
+	if f == nil {
+		return clause.Column{}, fmt.Errorf("an ownership rule naming no column %q on %q", name, s.Table)
+	}
+	return clause.Column{Table: alias, Name: f.DBName}, nil
+}
+
+// softDeleteColumn returns the soft-delete column of s, if it has one: a deleted edge or
+// type row never confers visibility, whether or not its writers delete hard today.
+func softDeleteColumn(s *schema.Schema) *schema.Field {
+	for _, f := range s.Fields {
+		if f.DBName != "" && f.FieldType == reflect.TypeOf(gorm.DeletedAt{}) {
+			return f
+		}
+	}
+	return nil
+}
+
+// deviceEdgeExpr builds a DeviceEdge predicate (see DeviceEdge). Every name comes from a
+// parsed schema and is quoted by gorm; the tenant, the source kind, the tracked flag and
+// every anchor are bound parameters.
+func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []string) (clause.Expression, error) {
+	edge, edgeTenant, err := parseRuleModel(db, e.Edge, "device-edge")
+	if err != nil {
+		return nil, err
+	}
+	typ, typeTenant, err := parseRuleModel(db, e.Type, "device-edge type")
+	if err != nil {
+		return nil, err
+	}
+	col := func(s *schema.Schema, alias, name string) clause.Column {
+		c, cerr := aliasedColumn(s, alias, name)
+		if cerr != nil && err == nil {
+			err = cerr
+		}
+		return c
+	}
+	typeID := col(typ, scopeTypeAlias, e.TypeID)
+	edgeType := col(edge, scopeEdgeAlias, e.EdgeType)
+	tracked := col(typ, scopeTypeAlias, e.Tracked)
+	sourceType := col(edge, scopeEdgeAlias, e.SourceType)
+	sourceID := col(edge, scopeEdgeAlias, e.SourceID)
+	targetType := col(edge, scopeEdgeAlias, e.TargetType)
+	targetToken := col(edge, scopeEdgeAlias, e.TargetToken)
+	if err != nil {
+		return nil, err
+	}
+	if e.SourceKind == "" {
+		return nil, fmt.Errorf("a device-edge rule with no source kind")
+	}
+	row := db.Statement.Schema.LookUpField(e.Row)
+	if row == nil {
+		return nil, fmt.Errorf("a device-edge rule naming no row column %q", e.Row)
+	}
+
+	var sql strings.Builder
+	vars := []any{
+		clause.Table{Name: edge.Table}, clause.Table{Name: scopeEdgeAlias},
+		clause.Table{Name: typ.Table}, clause.Table{Name: scopeTypeAlias},
+		typeID, edgeType,
+		clause.Column{Table: scopeEdgeAlias, Name: edgeTenant.DBName}, tenant,
+		clause.Column{Table: scopeTypeAlias, Name: typeTenant.DBName}, tenant,
+	}
+	sql.WriteString("EXISTS (SELECT 1 FROM ? AS ? JOIN ? AS ? ON ? = ? WHERE ? = ? AND ? = ?")
+	if f := softDeleteColumn(edge); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: scopeEdgeAlias, Name: f.DBName})
+	}
+	if f := softDeleteColumn(typ); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: scopeTypeAlias, Name: f.DBName})
+	}
+	sql.WriteString(" AND ? = ? AND ? = ? AND ? = ?")
+	vars = append(vars, tracked, true, sourceType, e.SourceKind,
+		sourceID, clause.Column{Table: db.Statement.Table, Name: row.DBName})
+	if len(anchors) == 0 {
+		sql.WriteString(" AND 1 = 0)")
+		return clause.Expr{SQL: sql.String(), Vars: vars}, nil
+	}
+	sql.WriteString(" AND (")
+	for i, a := range anchors {
+		kind, token, perr := auth.ParseAnchor(a)
+		if perr != nil {
+			return nil, perr
+		}
+		if i > 0 {
+			sql.WriteString(" OR ")
+		}
+		sql.WriteString("(? = ? AND ? = ?)")
+		vars = append(vars, targetType, kind, targetToken, token)
+	}
+	sql.WriteString("))")
+	return clause.Expr{SQL: sql.String(), Vars: vars}, nil
+}
+
+// ownAnchorExpr builds an OwnAnchor or NamedAnchor predicate: the row's own (kind, token)
+// is one of the scope's anchors.
+func ownAnchorExpr(db *gorm.DB, rule *scopeRule, anchors []string) (clause.Expression, error) {
+	table := db.Statement.Table
+	tokenField := db.Statement.Schema.LookUpField(rule.column)
+	if tokenField == nil {
+		return nil, fmt.Errorf("an own-anchor rule naming no column %q", rule.column)
+	}
+	tokenCol := clause.Column{Table: table, Name: tokenField.DBName}
+	var kindCol clause.Column
+	if rule.kindColumn != "" {
+		kf := db.Statement.Schema.LookUpField(rule.kindColumn)
+		if kf == nil {
+			return nil, fmt.Errorf("an own-anchor rule naming no column %q", rule.kindColumn)
+		}
+		kindCol = clause.Column{Table: table, Name: kf.DBName}
+	} else if rule.kindConst == "" {
+		return nil, fmt.Errorf("an own-anchor rule with neither a kind column nor a kind")
+	}
+	var sql strings.Builder
+	var vars []any
+	for _, a := range anchors {
+		kind, token, err := auth.ParseAnchor(a)
+		if err != nil {
+			return nil, err
+		}
+		if rule.kindColumn == "" && kind != rule.kindConst {
+			continue
+		}
+		if sql.Len() > 0 {
+			sql.WriteString(" OR ")
+		}
+		if rule.kindColumn != "" {
+			sql.WriteString("(? = ? AND ? = ?)")
+			vars = append(vars, kindCol, kind, tokenCol, token)
+		} else {
+			sql.WriteString("? = ?")
+			vars = append(vars, tokenCol, token)
+		}
+	}
+	if sql.Len() == 0 {
+		// No anchor of a kind this model's rows can be: nothing, never everything.
+		return clause.Expr{SQL: "1 = 0"}, nil
+	}
+	return clause.Expr{SQL: "(" + sql.String() + ")", Vars: vars}, nil
 }
 
 // addNothingPredicate limits a statement to no rows.

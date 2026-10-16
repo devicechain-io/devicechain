@@ -16,7 +16,7 @@ import (
 func (r *SchemaResolver) CustomerTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CustomerTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -47,7 +47,7 @@ func (r *SchemaResolver) CustomerTypesById(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomerTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CustomerTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +73,7 @@ func (r *SchemaResolver) CustomerTypesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomerTypes(ctx context.Context, args struct {
 	Criteria model.CustomerTypeSearchCriteria
 }) (*CustomerTypeSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +95,7 @@ func (r *SchemaResolver) CustomerTypes(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomersById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CustomerResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +125,7 @@ func (r *SchemaResolver) CustomersById(ctx context.Context, args struct {
 func (r *SchemaResolver) CustomersByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CustomerResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +151,7 @@ func (r *SchemaResolver) CustomersByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Customers(ctx context.Context, args struct {
 	Criteria model.CustomerSearchCriteria
 }) (*CustomerSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

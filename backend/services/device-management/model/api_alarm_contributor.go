@@ -143,7 +143,16 @@ func (api *Api) applyContributorEdgeOnce(ctx context.Context, deviceId uint,
 func (api *Api) createAlarmFromContributors(ctx context.Context, deviceId uint,
 	alarmKey, metricKey, severity string, anyActive bool, lastValue sql.NullFloat64,
 	contributors []byte, occurredTime time.Time) error {
+	// The scope stamp (ADR-081): the device's owners NOW, at the alarm's first raise. Read
+	// before the row exists so a failed read leaves no unstamped alarm behind — the edge
+	// stays unacked and the redelivery stamps it. An unstamped alarm would be invisible to
+	// the customer who owns the device, which fails closed but is still wrong.
+	anchors, err := api.deviceScopeAnchors(ctx, deviceId)
+	if err != nil {
+		return err
+	}
 	created := &Alarm{
+		ScopeAnchors:       anchors,
 		TokenReference:     rdb.TokenReference{Token: uuid.New().String()},
 		OriginatorType:     string(entity.TypeDevice),
 		OriginatorId:       deviceId,
@@ -218,7 +227,15 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 	var mutate func()
 	switch {
 	case anyActive && prevState == string(AlarmStateCleared):
-		// Reactivation: a fresh alarm cycle. Reset the acknowledgment and clear the cleared-time.
+		// Reactivation: a fresh alarm cycle. Reset the acknowledgment and clear the cleared-time,
+		// and re-stamp the scope (ADR-081): a cycle carries the owners the device has when the
+		// cycle begins, so a device sold while its alarm was cleared raises its next alarm for
+		// the new owner, not the old one.
+		anchors, err := api.deviceScopeAnchors(ctx, existing.OriginatorId)
+		if err != nil {
+			return err
+		}
+		updates["scope_anchors"] = anchors
 		updates["state"] = string(AlarmStateActive)
 		updates["severity"] = severity
 		updates["raised_time"] = occurredTime
@@ -232,6 +249,7 @@ func (api *Api) updateAlarmFromContributors(ctx context.Context, existing *Alarm
 			existing.State, existing.Severity, existing.RaisedTime = string(AlarmStateActive), severity, occurredTime
 			existing.ClearedTime, existing.Acknowledged = sql.NullTime{}, false
 			existing.AcknowledgedTime, existing.AcknowledgedBy = sql.NullTime{}, sql.NullString{}
+			existing.ScopeAnchors = anchors
 			applyLastValue()
 		}
 	case anyActive:

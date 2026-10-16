@@ -557,7 +557,7 @@ func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
 		DeviceToken:      "dozer-01",
 		ClaimSecret:      secret,
 		CustomerToken:    "acme-mining",
-		RelationshipType: ContainmentRelationshipType,
+		RelationshipType: new(ContainmentRelationshipType),
 	}, time.Now())
 	require.ErrorIs(t, err, ErrContainmentEndsMustBeAssets,
 		"a claim redeemed as \"contains\" wrote a device-to-customer containment edge")
@@ -570,7 +570,7 @@ func TestClaimDeviceCannotWriteAContainmentEdge(t *testing.T) {
 		DeviceToken:      "dozer-01",
 		ClaimSecret:      secret,
 		CustomerToken:    "acme-mining",
-		RelationshipType: assignment.Token,
+		RelationshipType: &assignment.Token,
 	}, time.Now())
 	require.NoError(t, err, "a legitimate claim was refused")
 	require.NotNil(t, edge, "no edge returned")

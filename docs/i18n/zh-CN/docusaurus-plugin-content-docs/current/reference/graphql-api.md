@@ -614,6 +614,23 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 对同一操作而言，拒绝优先于其他任何响应。如果你无权执行某个操作，即使它指定的记录不存在，你得到的也是 `FORBIDDEN`，因此响应不会透露该记录是否存在。
 部分拒绝会附带 `extensions.reason` 说明原因。请根据 `code` 进行判断，并把 `reason` 视为补充信息：没有原因的 `FORBIDDEN` 同样是拒绝。
 
+### 访问权限仅限部分客户时 {#limited-access}
+
+租户成员的访问权限可以仅限于该租户的部分客户。设备通过一条指向客户的受跟踪关系归属于该客户，例如内置的 `assigned` 关系：调用 `claimDevice` 时如果不指定 `relationshipType`，写入的就是这种关系。访问权限受限的成员可以调用以下操作，每个操作只返回这些客户拥有的内容：
+
+| 操作 | 访问权限受限的成员能看到的内容 |
+| --- | --- |
+| `devices`、`devicesById`、`devicesByToken`、`devicesByExternalId` | 这些客户当前拥有的设备。设备一旦转给其他客户，就会立即从列表中消失。 |
+| `customers`、`customersById`、`customersByToken` | 仅成员自己的客户记录。 |
+| `alarms`、`alarmsById`、`alarmsByToken`、`alarmStream` | 设备属于其中某个客户期间产生的告警。 |
+| `acknowledgeAlarm`、`acknowledgeAlarms`、`clearAlarm` | 同样的这些告警。 |
+| `events`、`measurementEvents`、`locationEvents`、`alertEvents`、`bucketedMeasurements`、`measurementStream` | 设备属于其中某个客户期间记录的事件。客户保留其拥有设备期间的历史，看不到此前的历史。 |
+| 设备类型、设备配置文件及其版本、指标和命令定义、客户类型 | 全部可见，因为这些是配置。只能读取，不能修改。 |
+
+成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
+
+设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。
+
 ## 请求限制 {#request-limits}
 
 每个 GraphQL 端点都会在执行前拒绝过大或工作量过多的请求。

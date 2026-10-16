@@ -15,7 +15,7 @@ import (
 func (r *SchemaResolver) DeviceProfilesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*DeviceProfileResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -41,7 +41,7 @@ func (r *SchemaResolver) DeviceProfilesById(ctx context.Context, args struct {
 func (r *SchemaResolver) DeviceProfilesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*DeviceProfileResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -62,7 +62,7 @@ func (r *SchemaResolver) DeviceProfilesByToken(ctx context.Context, args struct 
 func (r *SchemaResolver) DeviceProfiles(ctx context.Context, args struct {
 	Criteria model.DeviceProfileSearchCriteria
 }) (*DeviceProfileSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

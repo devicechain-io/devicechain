@@ -16,7 +16,7 @@ import (
 func (r *SchemaResolver) AlarmsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*AlarmResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmRead); err != nil {
 		return nil, err
 	}
 
@@ -41,7 +41,7 @@ func (r *SchemaResolver) AlarmsById(ctx context.Context, args struct {
 func (r *SchemaResolver) AlarmsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*AlarmResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmRead); err != nil {
 		return nil, err
 	}
 
@@ -62,7 +62,7 @@ func (r *SchemaResolver) AlarmsByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) Alarms(ctx context.Context, args struct {
 	Criteria model.AlarmSearchCriteria
 }) (*AlarmSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmRead); err != nil {
 		return nil, err
 	}
 

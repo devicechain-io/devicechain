@@ -33,7 +33,7 @@ func newContributorTestApi(t *testing.T) (*Api, *captureAlarmPublisher) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Alarm{}); err != nil {
+	if err := db.AutoMigrate(&Alarm{}, &EntityRelationship{}, &EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})

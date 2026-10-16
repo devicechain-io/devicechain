@@ -303,6 +303,7 @@ func TestPlatformAuthoredStreamsArePinned(t *testing.T) {
 		ResolvedEvents: true, DerivedEvents: true, DeviceAttribute: true, DeviceCommands: true,
 		DeviceDesired: true, ConnectorDispatch: true, DetectionRulesPublished: true, DeviceRoster: true,
 		GeoFenceSetManifest: true, EntityDeleted: true, AlarmEvents: true, RaiseAlarm: true, FailedEvents: true,
+		DeviceOwnership: true,
 	}
 	got := map[string]bool{}
 	for _, s := range All {

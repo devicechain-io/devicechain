@@ -129,6 +129,10 @@ type Api struct {
 	// a NATS writer) and may be nil — in tests, or before wiring — disabling emission.
 	// Emission is post-commit and best-effort (at-most-once), like the other fact publishers.
 	DeviceRosterPublisher DeviceRosterPublisher
+	// DeviceOwnershipPublisher, when set, publishes a device's complete current anchor set
+	// after every write that may have changed which tracked relationships it has
+	// (ADR-081). Nil disables the fact; nothing else reads it.
+	DeviceOwnershipPublisher DeviceOwnershipPublisher
 
 	// DeviceAttributePublisher emits device-attribute events (ADR-051 slice 4c-3) when a
 	// numeric, platform-set attribute of a device is upserted or deleted, so
@@ -299,10 +303,14 @@ func (api *Api) emitGeoFenceSet(ctx context.Context, manifest *GeoFenceSetManife
 
 // evictEntityDelete drops the caches a delete invalidated when an evictor is wired,
 // and is a no-op otherwise. Called post-commit alongside emitEntityDeleted.
+//
+// The devices in sources tracked the deleted entity, so each has lost an owner (or an
+// anchor): their ownership facts go out here too, from the same funnel.
 func (api *Api) evictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, sources []uint) {
 	if api.CacheEvictor != nil {
 		api.CacheEvictor.EvictEntityDelete(ctx, etype, id, token, sources)
 	}
+	api.emitOwnershipChanged(ctx, sources)
 }
 
 // evictDeviceCredentials drops the cached credentials of the given devices of tenant when
@@ -333,10 +341,18 @@ func (api *Api) evictDeviceByToken(ctx context.Context, token string) {
 
 // evictRelationshipSources drops the cached tracked-relationship sets of the given
 // source devices when an evictor is wired (ADR-044 F2). No-op otherwise.
+//
+// 🔑 IT IS ALSO THE OWNERSHIP FUNNEL (ADR-081). Every write that changes a device's tracked
+// set must come through here — or ingest stamps stale anchors until the cache entry
+// expires — so it is the one place that publishes the device ownership-changed fact, and a
+// new edge writer gets the fact by doing what it already had to do. The fact is published
+// whether or not an evictor is wired: the cache and the fact are two consumers of the same
+// event, and an Api without a cache still changes ownership.
 func (api *Api) evictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
 	if api.CacheEvictor != nil && len(sourceDeviceIds) > 0 {
 		api.CacheEvictor.EvictRelationshipSources(ctx, sourceDeviceIds)
 	}
+	api.emitOwnershipChanged(ctx, sourceDeviceIds)
 }
 
 // evictMemberships drops the cached membership entries of the given entities when an
