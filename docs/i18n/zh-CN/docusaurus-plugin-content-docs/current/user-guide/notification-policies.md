@@ -7,7 +7,7 @@ sidebar_position: 18
 
 **通知策略**决定一条已触发的告警要通知谁、通过哪个渠道，以及何时通知。本章介绍如何在控制台中查看通知策略，以及如何为策略设置**静默时段**，使其在夜间不再打扰人员，并在静默时段结束时发出此前暂存的通知。本章面向负责值班路由的管理员。静默时段的行为，以及如何通过 API 设置，请参阅[静默时段](/guides/notification-channels#quiet-hours)。
 
-通知策略位于侧边栏的 **Notification Policies**（通知策略）。如果你的角色可以读取通知，就会看到这一项。
+通知策略位于侧边栏的 **Notification Policies**（通知策略）。如果你的角色可以读取通知，就会看到这一项。修改策略还需要写入通知的权限；没有该权限时，策略以只读方式打开。
 
 ## 策略列表 {#the-policy-list}
 
@@ -19,7 +19,7 @@ sidebar_position: 18
 
 - **Token**（令牌）：策略的标识符。创建后不能更改。
 - **Name**（名称）和 **Description**（描述）。
-- **Enabled**（启用）：已停用的策略不会发送任何内容。
+- **Enabled**（启用）：已停用的策略不会发送任何内容，并会丢弃它为静默时段暂存的通知。
 - **Throttle (seconds)**（节流，秒）：针对同一告警的两次通知之间的最短间隔。留空表示不节流。
 - **Escalate after (seconds)**（升级等待，秒）和 **Max escalations**（最大升级次数）：未确认的告警等待多久会被再次通知，以及最多通知几次。参阅[节流与升级](/guides/notification-channels#throttling-and-escalation)。
 - **Quiet hours**（静默时段），见下文。

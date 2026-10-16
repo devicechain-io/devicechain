@@ -12,6 +12,7 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-notification-management/model"
 	"github.com/rs/zerolog/log"
@@ -26,6 +27,9 @@ const (
 	quietDroppedResolved  = "dropped_resolved"
 	quietDroppedPolicy    = "dropped_policy"
 	quietDroppedExhausted = "dropped_exhausted"
+	// superseded: a page about the alarm as it is now went out through the policy outside
+	// quiet hours (or above the bypass), which answers what the policy was holding.
+	quietSuperseded = "superseded"
 )
 
 // maxReleaseAttempts is how many times a held notification whose release reached no
@@ -130,14 +134,17 @@ func anyRuleMatches(p *model.NotificationPolicy, severity string) bool {
 //     belongs to an earlier cycle of the same alarm token and does not count;
 //   - the policy holds it again (its quiet hours were edited, or the next stretch began):
 //     moved to the new end;
-//   - otherwise it is CLAIMED (deleted, a compare-and-swap so exactly one replica wins) and
-//     sent through the policy's rules, deduplicated across every policy releasing the same
-//     alarm in this pass.
+//   - otherwise it is LEASED (a compare-and-swap so exactly one replica wins; the row stays
+//     until the send is decided, see Api.LeaseNotificationDeferral) and sent through the
+//     policy's rules, deduplicated across every policy releasing the same alarm in this
+//     pass.
 //
-// When at least one channel takes it, the alarm's notification state is stamped NOW, which
-// starts the escalation clock at the moment somebody was actually paged. When none does
-// and a retry could help, the claimed deferrals are written back with their attempt count
-// raised, up to maxReleaseAttempts.
+// When at least one channel takes it, the rows are removed and the alarm's notification
+// state is stamped NOW, which starts the escalation clock at the moment somebody was
+// actually paged. When none does and a retry could help, the rows are put back with their
+// attempt count raised and a growing delay (releaseRetryDelay); the last of
+// maxReleaseAttempts that fails is dead-lettered, as the ordinary dispatch dead-letters an
+// alarm that reached nobody.
 func (n *PolicyNotifier) ReleaseHeld(ctx context.Context, policies []*model.NotificationPolicy, now time.Time) error {
 	tenant, _ := core.TenantFromContext(ctx)
 	// ADR-077: a deleted tenant pages nobody, and its rows are the purge's to erase.
@@ -220,13 +227,17 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 			}
 			continue
 		}
-		won, err := n.api.ClaimNotificationDeferral(ctx, d)
+		// LEASED, not deleted: the row stays until the send is decided, so a sender that
+		// dies here leaves it to come due again when the lease runs out. The lease is
+		// measured from the wall clock at THIS moment, not the pass's `now`, which is as old
+		// as every release this pass has already sent.
+		won, err := n.api.LeaseNotificationDeferral(ctx, d, n.clock().Add(n.releaseLease()))
 		if err != nil {
-			return fmt.Errorf("claiming held notification: %w", err)
+			return fmt.Errorf("leasing held notification: %w", err)
 		}
 		if !won {
-			// Another replica released it, or a newer event replaced it since it was read;
-			// either way this copy must not be sent.
+			// Another replica is releasing it, or a newer event replaced it since it was
+			// read; either way this copy must not be sent.
 			continue
 		}
 		claimed = append(claimed, d)
@@ -239,8 +250,9 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		return nil
 	}
 	if len(deliveries) == 0 {
-		// Claimed, but the policies route this severity nowhere any more (a rule was
-		// edited, a channel disabled). Nobody to page; the rows are already gone.
+		// Leased, but the policies route this severity nowhere any more (a rule was
+		// edited, a channel disabled). Nobody to page.
+		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietDroppedPolicy, len(claimed))
 		return nil
 	}
@@ -248,14 +260,18 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 	var event dmmodel.AlarmStateChangeEvent
 	if err := json.Unmarshal(latest.Event, &event); err != nil {
 		// Unreadable is permanent; putting it back would fail the same way forever.
+		err = fmt.Errorf("decoding held alarm event: %w", err)
+		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietDroppedExhausted, len(claimed))
-		return fmt.Errorf("decoding held alarm event: %w", err)
+		n.deadLetterHeld(ctx, latest, deadletter.ReasonUnprocessable, err)
+		return err
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, n.wholeDispatchBudget())
 	defer cancel()
 	tally := n.deliverAll(rctx, deliveries, renderNotification(&event), alarm)
 	if tally.delivered > 0 {
+		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietReleased, len(claimed))
 		sctx, scancel := context.WithTimeout(ctx, recordTimeout)
 		defer scancel()
@@ -266,29 +282,96 @@ func (n *PolicyNotifier) releaseAlarm(ctx context.Context, alarm string, due []*
 		return nil
 	}
 	if tally.retryable() == 0 {
-		// Every channel refused it; a retry cannot change a refusal.
+		// Every channel refused it; a retry cannot change a refusal. The ordinary dispatch
+		// acks this case too, and deliveries_refused_total has already counted it.
+		n.finish(ctx, alarm, claimed)
 		n.countQuiet(quietDroppedExhausted, len(claimed))
 		return nil
 	}
-	var requeue []*model.NotificationDeferral
+	failure := fmt.Errorf("all %d deliveries failed releasing held notifications for alarm %q",
+		len(deliveries), alarm)
 	for _, d := range claimed {
 		if d.Attempts+1 >= maxReleaseAttempts {
+			n.finish(ctx, alarm, []*model.NotificationDeferral{d})
 			n.countQuiet(quietDroppedExhausted, 1)
 			log.Error().Str("alarm", alarm).Uint("policy", d.PolicyId).Int("attempts", d.Attempts+1).
-				Msg("Dropping a held notification: every release attempt reached no channel")
+				Msg("Dead-lettering a held notification: every release attempt reached no channel, " +
+					"so nobody was paged about it")
+			n.deadLetterHeld(ctx, d, deadletter.ReasonExhausted, failure)
 			continue
 		}
-		requeue = append(requeue, &model.NotificationDeferral{
-			AlarmToken: d.AlarmToken, PolicyId: d.PolicyId, AlarmKey: d.AlarmKey,
-			Severity: d.Severity, OccurredTime: d.OccurredTime, ReleaseAt: now,
-			Attempts: d.Attempts + 1, Event: d.Event,
-		})
+		// If this write fails the row keeps its lease, and comes due again when it ends.
+		if err := n.api.RetryNotificationDeferral(ctx, d, now.Add(releaseRetryDelay(d.Attempts+1))); err != nil {
+			return fmt.Errorf("putting back held notifications after a failed release: %w", err)
+		}
 	}
-	if err := n.api.DeferNotifications(ctx, requeue); err != nil {
-		return fmt.Errorf("putting back held notifications after a failed release: %w", err)
+	return failure
+}
+
+// releaseLease is how long a leased deferral is left alone by every other release: long
+// enough for this one to send it (the whole-dispatch budget) and then record what happened.
+func (n *PolicyNotifier) releaseLease() time.Duration {
+	return n.wholeDispatchBudget() + 2*recordTimeout
+}
+
+// releaseRetryDelay is how long a held notification whose release reached no channel waits
+// before attempt number `attempt` (1-based count of failures so far): 1, 2, 4 then 8
+// minutes, so the five attempts span about a quarter of an hour of channel outage rather
+// than five consecutive scheduler ticks. A notification that has waited all night can wait
+// minutes more; one dropped because a mail relay restarted at the end of the night cannot
+// be taken back.
+func releaseRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
 	}
-	return fmt.Errorf("all %d deliveries failed releasing held notifications for alarm %q",
-		len(deliveries), alarm)
+	if attempt > 4 {
+		attempt = 4
+	}
+	return time.Minute << (attempt - 1)
+}
+
+// finish removes leased deferrals whose release is decided. A failure is logged and not
+// returned: the row keeps its lease and comes due again, so the cost of a failed finish is
+// the same release a second time — a duplicate, the side to err on.
+func (n *PolicyNotifier) finish(ctx context.Context, alarm string, done []*model.NotificationDeferral) {
+	for _, d := range done {
+		if err := n.api.FinishNotificationDeferral(ctx, d); err != nil {
+			log.Error().Err(err).Str("alarm", alarm).Uint("policy", d.PolicyId).
+				Msg("Could not remove a released held notification; it will be released again " +
+					"when its lease ends")
+		}
+	}
+}
+
+// deadLetterHeld records a held notification that will never be sent, the way the
+// ordinary dispatch records an alarm that reached nobody: a counter and a log line are not
+// enough for a page that was never sent.
+func (n *PolicyNotifier) deadLetterHeld(ctx context.Context, d *model.NotificationDeferral,
+	reason deadletter.Reason, cause error) {
+	sink := n.dead.Load()
+	if sink == nil {
+		return
+	}
+	detail := ""
+	if cause != nil {
+		detail = cause.Error()
+	}
+	err := sink.Write(ctx, deadletter.Envelope{
+		Kind:   deadletter.KindNotification,
+		Reason: reason,
+		Summary: "an alarm notification held for a policy's quiet hours could not be delivered " +
+			"to any configured channel when the quiet hours ended, so nobody was paged about it",
+		Detail:     detail,
+		Attempts:   d.Attempts + 1,
+		Reference:  d.AlarmToken,
+		OccurredAt: n.clock().UTC(),
+		Payload:    d.Event,
+	})
+	if err != nil {
+		// The loss is already counted, on dead_letter_lost_total, by the sink.
+		log.Error().Err(err).Str("alarm", d.AlarmToken).
+			Msg("LOST notification: a held alarm notification reached nobody and could not be dead-lettered.")
+	}
 }
 
 // drop claims a deferral and counts it as dropped for the given reason. A lost claim is

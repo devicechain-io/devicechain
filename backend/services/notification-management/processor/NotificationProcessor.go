@@ -146,8 +146,9 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 			"Notifications affected by a policy's quiet hours, by outcome: held (deferred to the "+
 				"end of the quiet stretch), released (sent when it ended), dropped_resolved (the "+
 				"alarm was acknowledged or cleared while held), dropped_policy (the policy was "+
-				"disabled or deleted while holding it) or dropped_exhausted (every release attempt "+
-				"reached no channel).",
+				"disabled or deleted while holding it), dropped_exhausted (every release attempt "+
+				"reached no channel; the notification is dead-lettered) or superseded (a newer page "+
+				"about the alarm went out through the policy first).",
 			[]string{"outcome"}),
 	}
 }

@@ -401,7 +401,8 @@ func TestAFailedReleaseIsRetriedThenDropped(t *testing.T) {
 		} else if len(held) != 0 {
 			t.Fatalf("after %d failed releases the row is still held", pass)
 		}
-		at = at.Add(time.Minute)
+		at = at.Add(releaseRetryDelay(pass))
+		clock = at
 	}
 	if fa.calls != maxReleaseAttempts {
 		t.Fatalf("adapter called %d times, want %d", fa.calls, maxReleaseAttempts)

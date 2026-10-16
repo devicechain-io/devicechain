@@ -263,7 +263,7 @@ Notifications that fail every delivery attempt are written to the dead-letter st
 | Metric | Means |
 | --- | --- |
 | `notifications_dead_lettered_total` | Alarms written to the dead-letter stream after every delivery attempt failed, so an operator can see which pages were never sent. |
-| `quiet_hours_total{outcome}` | What quiet hours did to a notification, by outcome: held (held instead of sent), released (sent when the quiet stretch ended), dropped_resolved (dropped because the alarm was acknowledged or cleared), dropped_policy (dropped because the policy was disabled or deleted) or dropped_exhausted (dropped after 5 releases reached no channel). |
+| `quiet_hours_total{outcome}` | What quiet hours did to a notification, by outcome: held (held instead of sent), released (sent when the quiet stretch ended), dropped_resolved (dropped because the alarm was acknowledged or cleared), dropped_policy (dropped because the policy was disabled or deleted), dropped_exhausted (dropped and dead-lettered after 5 releases reached no channel) or superseded (dropped because the policy paged a newer event for the same alarm). |
 
 ## User management {#user-management}
 

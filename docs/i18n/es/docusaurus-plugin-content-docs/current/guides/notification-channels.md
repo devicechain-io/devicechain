@@ -179,15 +179,16 @@ mutation {
 
 #### Qué ocurre durante las horas de silencio {#quiet-hours-behavior}
 
-- **Retenida y luego enviada.** Cuando una alarma generada o escalada coincide con una política que está dentro de sus horas de silencio, y la severidad de la alarma es inferior a la severidad de excepción (o no hay excepción), la notificación se **retiene**, no se descarta. La política la envía por sus reglas cuando termina el periodo de silencio. El planificador de escaladas libera las notificaciones retenidas en su pasada, que se ejecuta una vez por minuto por defecto, así que un envío puede retrasarse hasta una pasada.
+- **Retenida y luego enviada.** Cuando una alarma generada o escalada coincide con una política que está dentro de sus horas de silencio, y la severidad de la alarma es inferior a la severidad de excepción (o no hay excepción), la notificación se **retiene**, no se descarta. La política la envía por sus reglas cuando termina el periodo de silencio. El planificador de escaladas libera las notificaciones retenidas en su pasada, que se ejecuta una vez por minuto por defecto, así que un envío puede retrasarse hasta una pasada. Un envío interrumpido por un reinicio del servicio de notificaciones no se pierde: se envía unos minutos después. En casos poco frecuentes, eso significa que el mismo aviso se envía dos veces.
 - **Reconocer o cerrar la descarta.** Una notificación retenida se descarta en lugar de enviarse si la alarma fue reconocida o cerrada después del evento retenido.
 - **Una notificación retenida por alarma y política.** Si la misma política retiene un evento posterior, generado o escalado, de la misma alarma, el posterior sustituye al anterior. El aviso de la mañana describe la alarma tal como quedó por última vez, y una alarma que oscila durante la noche cuesta un aviso, no uno por oscilación.
 - **La severidad de excepción se envía de inmediato.** Una alarma con la severidad de excepción o superior se envía al instante, incluso dentro de las horas de silencio. Una alarma cuya severidad no es uno de los niveles conocidos se envía siempre.
 - **Primero la limitación.** Una notificación que la limitación de la política suprime se suprime, no se retiene.
 - **La escalada espera.** Mientras una política está en horas de silencio, sus renotificaciones por escalada esperan para las alarmas por debajo de la severidad de excepción. Se reanudan cuando termina el periodo: una alarma que sigue sin reconocer y sin cerrar se vuelve a notificar en la primera pasada posterior. Las horas de silencio no consumen niveles de escalada.
 - **Cada política es independiente.** Una política sin horas de silencio, o que no está en silencio en ese momento, sigue avisando de inmediato por la misma alarma. Una notificación retenida se envía igualmente al final del periodo aunque otra política ya haya avisado a alguien, porque los destinatarios pueden ser distintos.
+- **Un aviso nuevo responde al retenido.** Cuando la propia política avisa por la alarma, porque terminaron sus horas de silencio o porque la alarma alcanzó la severidad de excepción, lo que retenía para esa alarma se descarta en lugar de enviarse después.
 - **Las ediciones reevalúan lo retenido.** Cambiar las horas de silencio o la severidad de excepción de una política, o habilitarla o deshabilitarla, se aplica en la siguiente pasada. Una notificación retenida se envía si la política ya no la retiene, o sigue retenida hasta el nuevo final si todavía la retiene. Una política deshabilitada o eliminada descarta lo que retenía.
-- **Un envío fallido se reintenta.** Un envío que no llega a ningún canal, porque todas las entregas fallaron, se reintenta en pasadas posteriores, hasta 5 veces. Después se descarta y se cuenta.
+- **Un envío fallido se reintenta.** Un envío que no llega a ningún canal, porque todas las entregas fallaron, se reintenta al cabo de 1, 2, 4 y 8 minutos, 5 intentos en total. Después se descarta, se cuenta y se registra como mensaje fallido (dead letter), igual que una alarma que no llegó a nadie cuando se generó.
 
 #### Zonas horarias y horario de verano {#quiet-hours-time-zones}
 
@@ -215,7 +216,8 @@ El contador `devicechain_notificationmanagement_quiet_hours_total` cuenta lo que
 | `released` | Una notificación retenida se envió al terminar su periodo. |
 | `dropped_resolved` | Una notificación retenida se descartó porque la alarma fue reconocida o cerrada. |
 | `dropped_policy` | Una notificación retenida se descartó porque su política se deshabilitó o se eliminó. |
-| `dropped_exhausted` | Una notificación retenida se descartó tras 5 envíos que no llegaron a ningún canal. |
+| `dropped_exhausted` | Una notificación retenida se descartó tras 5 envíos que no llegaron a ningún canal. También se registra como mensaje fallido (dead letter). |
+| `superseded` | Una notificación retenida se descartó porque la política avisó de un evento más reciente de la misma alarma. |
 
 En la consola, las horas de silencio se editan en la página **Políticas de notificación**; consulta [Políticas de notificación](../user-guide/notification-policies.md).
 

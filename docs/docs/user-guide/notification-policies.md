@@ -12,7 +12,8 @@ administrators who look after on-call routing. How quiet hours behave, and how t
 the API, is in [Quiet hours](/guides/notification-channels#quiet-hours).
 
 Notification policies are under **Notification Policies** in the sidebar. The entry appears if your
-role can read notifications.
+role can read notifications. Changing a policy also needs permission to write notifications;
+without it, a policy opens read-only.
 
 ## The policy list
 
@@ -26,7 +27,8 @@ Click **New notification policy**. The form asks for:
 
 - **Token**: the identifier of the policy. It cannot change after you create it.
 - **Name** and **Description**.
-- **Enabled**: a disabled policy sends nothing.
+- **Enabled**: a disabled policy sends nothing, and drops any notifications it was holding for
+  quiet hours.
 - **Throttle (seconds)**: the minimum time between notifications about the same alarm. Leave it
   blank for no throttle.
 - **Escalate after (seconds)** and **Max escalations**: how long an unacknowledged alarm waits

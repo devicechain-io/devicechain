@@ -9,6 +9,7 @@
 
 import type { ReactNode } from 'react';
 import type { TypeAppearance } from '@/components/TypeCapsule';
+import type { Area } from '@devicechain/client';
 
 // Matches the Pagination component's prop shape and every *SearchResults
 // pagination block, so a resource's `list` can return the API result directly.
@@ -66,6 +67,13 @@ export interface RegistryResource<T> {
    * (types, groups) so they render a plain header.
    */
   banner?: string;
+
+  /**
+   * The functional area serving this resource, when it is one a deployment profile can
+   * leave out. Set, the list and detail routes render the area-unavailable state instead
+   * of failing requests against a service that is not there.
+   */
+  area?: Area;
 
   // ── Data plane ──
   list: (page: { pageNumber: number; pageSize: number }) => Promise<RegistryListResult<T>>;

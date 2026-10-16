@@ -23,6 +23,9 @@ import { ErrorBanner } from '@/components/ui/error-banner';
 import { Combobox } from '@/components/ui/combobox';
 import { Select, SelectItem } from '@/components/ui/select';
 import { HintText } from '@/components/ui/hint-text';
+import { hasAuthority } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
+import { CONFLICT_MARKER } from '@/lib/api/connectors';
 import { errMessage } from '@/routes/common';
 import {
   createNotificationPolicy,
@@ -77,6 +80,11 @@ export function NotificationPolicyForm({
   onDone: (message: string) => void;
 }) {
   const { t } = useTranslation(['entities', 'common', 'alarms']);
+  const { claims } = useAuth();
+  // Reading a policy needs notification:read; changing one needs notification:write, which
+  // the server enforces. Without it the form is shown read-only rather than offering a save
+  // that can only be refused.
+  const canWrite = hasAuthority(claims, 'notification:write');
   const editing = entity != null;
   const storedQuiet = editing && hasQuietHours(entity);
   const storedSlots = useMemo(() => (entity ? parseSlots(entity.quietHoursSlots) : null), [entity]);
@@ -146,7 +154,10 @@ export function NotificationPolicyForm({
         onDone(t('entities:notificationPolicyCreatedToast', { token: trimmed }));
       }
     } catch (err) {
-      setFormError(errMessage(err));
+      const message = errMessage(err);
+      setFormError(
+        message.includes(CONFLICT_MARKER) ? t('entities:notificationPolicyConflict') : message,
+      );
     } finally {
       setBusy(false);
     }
@@ -160,6 +171,8 @@ export function NotificationPolicyForm({
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      {!canWrite && <HintText size="md">{t('entities:notificationPolicyReadOnly')}</HintText>}
+      <fieldset disabled={!canWrite} className="contents">
       <FormField
         label={t('common:colToken')}
         htmlFor="np-token"
@@ -337,15 +350,18 @@ export function NotificationPolicyForm({
         <HintText size="md">{t('entities:notificationPolicyRulesHelp')}</HintText>
       </section>
 
-      <div className="flex gap-2">
-        <Button
-          onClick={submit}
-          loading={busy}
-          disabled={busy || !quietValid || !numbersValid || (editing ? !dirty : !token.trim())}
-        >
-          {editing ? t('common:saveChanges') : t('entities:notificationPolicyCreateAction')}
-        </Button>
-      </div>
+      </fieldset>
+      {canWrite && (
+        <div className="flex gap-2">
+          <Button
+            onClick={submit}
+            loading={busy}
+            disabled={busy || !quietValid || !numbersValid || (editing ? !dirty : !token.trim())}
+          >
+            {editing ? t('common:saveChanges') : t('entities:notificationPolicyCreateAction')}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

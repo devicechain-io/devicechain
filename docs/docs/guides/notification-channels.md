@@ -179,15 +179,16 @@ mutation {
 
 #### What happens during quiet hours {#quiet-hours-behavior}
 
-- **Held, then sent.** When a raised or escalated alarm matches a policy that is inside its quiet hours, and the alarm's severity is below the bypass severity (or no bypass is set), the notification is **held**, not dropped. The policy sends it through its rules when the quiet stretch ends. The escalation scheduler releases held notifications on its pass, which runs once a minute by default, so a release can be up to a pass late.
+- **Held, then sent.** When a raised or escalated alarm matches a policy that is inside its quiet hours, and the alarm's severity is below the bypass severity (or no bypass is set), the notification is **held**, not dropped. The policy sends it through its rules when the quiet stretch ends. The escalation scheduler releases held notifications on its pass, which runs once a minute by default, so a release can be up to a pass late. A release interrupted by a restart of the notification service is not lost: it is sent a few minutes later. In rare cases that means the same page is sent twice.
 - **Acknowledged or cleared drops it.** A held notification is dropped instead of sent if the alarm was acknowledged or cleared after the event that was held.
 - **One held notification per alarm per policy.** If the same policy holds a later raised or escalated event for the same alarm, the later one replaces the earlier. The page in the morning describes the alarm as it last was, and an alarm that flaps overnight costs one page, not one per flap.
 - **The bypass severity sends at once.** An alarm at or above the bypass severity is sent immediately, even inside quiet hours. An alarm whose severity is not one of the known tiers is always sent.
 - **Throttling comes first.** A notification the policy's throttle suppresses is suppressed, not held.
 - **Escalation waits.** While a policy is in quiet hours, its escalation re-notifications wait for alarms below the bypass severity. They resume after the stretch ends: an alarm still unacknowledged and uncleared is re-notified on the first pass after it. Quiet hours do not use up escalation tiers.
 - **Each policy is independent.** A policy without quiet hours, or one that is not quiet right now, still pages immediately for the same alarm. A held notification is still sent at the end of the stretch even if another policy has already paged someone, because the recipients can differ.
+- **A fresh page answers the held one.** When the policy itself pages for the alarm, because its quiet hours have ended or the alarm reached the bypass severity, what it was holding for that alarm is dropped rather than sent afterwards.
 - **Edits re-evaluate what is held.** Changing a policy's quiet hours or bypass severity, or enabling or disabling it, is applied on the next pass. A held notification is sent if the policy no longer holds it, or held until the new end if it still does. A disabled or deleted policy drops what it was holding.
-- **A failed release is retried.** A release that reaches no channel, because every delivery failed, is retried on later passes, up to 5 times. It is then dropped and counted.
+- **A failed release is retried.** A release that reaches no channel, because every delivery failed, is retried after 1, 2, 4 and 8 minutes, 5 attempts in all. It is then dropped, counted and recorded as a dead letter, the same way as an alarm that reached nobody when it was raised.
 
 #### Time zones and daylight saving {#quiet-hours-time-zones}
 
@@ -215,7 +216,8 @@ The counter `devicechain_notificationmanagement_quiet_hours_total` counts what q
 | `released` | A held notification was sent when its stretch ended. |
 | `dropped_resolved` | A held notification was dropped because the alarm was acknowledged or cleared. |
 | `dropped_policy` | A held notification was dropped because its policy was disabled or deleted. |
-| `dropped_exhausted` | A held notification was dropped after 5 releases reached no channel. |
+| `dropped_exhausted` | A held notification was dropped after 5 releases reached no channel. It is also recorded as a dead letter. |
+| `superseded` | A held notification was dropped because the policy paged a newer event for the same alarm. |
 
 In the console, quiet hours are edited on the **Notification Policies** page; see [Notification policies](../user-guide/notification-policies.md).
 

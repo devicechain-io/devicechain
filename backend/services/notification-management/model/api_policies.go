@@ -148,15 +148,28 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 	// Quiet hours are validated as they will be STORED: each field folded over the stored
 	// value first, so a request that clears the zone but leaves the slots is refused as the
 	// half-configured policy it would produce.
-	quiet, err := validateQuietHours(
-		request.QuietHoursTimezone.ApplyTo(nullStrPtr(policy.QuietHoursTimezone)),
-		request.QuietHoursSlots.ApplyTo(dcgraphql.MetadataStr(policy.QuietHoursSlots)),
-		request.QuietHoursBypassSeverity.ApplyTo(nullStrPtr(policy.QuietHoursBypassSeverity)))
-	if err != nil {
-		return nil, err
+	//
+	// Only when the request names one of them. A stored triple that no longer validates (a
+	// hand-edited row, or a rule tightened since) is ignored by the dispatcher, which pages;
+	// refusing every OTHER edit of such a policy would also refuse the one an operator most
+	// needs then — disabling it — and leave it un-fixable short of rewriting its quiet hours.
+	quietEdited := request.QuietHoursTimezone.Set || request.QuietHoursSlots.Set ||
+		request.QuietHoursBypassSeverity.Set
+	quiet := quietHoursColumns{
+		timezone: nullStrPtr(policy.QuietHoursTimezone),
+		slots:    policy.QuietHoursSlots,
+		bypass:   nullStrPtr(policy.QuietHoursBypassSeverity),
 	}
-	quietChanged := request.QuietHoursTimezone.Set || request.QuietHoursSlots.Set ||
-		request.QuietHoursBypassSeverity.Set || request.Enabled.Set
+	if quietEdited {
+		quiet, err = validateQuietHours(
+			request.QuietHoursTimezone.ApplyTo(nullStrPtr(policy.QuietHoursTimezone)),
+			request.QuietHoursSlots.ApplyTo(dcgraphql.MetadataStr(policy.QuietHoursSlots)),
+			request.QuietHoursBypassSeverity.ApplyTo(nullStrPtr(policy.QuietHoursBypassSeverity)))
+		if err != nil {
+			return nil, err
+		}
+	}
+	quietChanged := quietEdited || request.Enabled.Set
 
 	requestedRules, replaceRules := request.Rules.Requested()
 

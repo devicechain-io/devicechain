@@ -147,6 +147,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
+	// The same arm for a notification quiet hours held and that could never be released:
+	// the escalation scheduler releases it, through the notifier, not through the consumer.
+	Notifier.UseDeadLetters(deadLetters)
 
 	// The policy-driven channel dispatcher (N.C, built in afterMicroserviceInitialized so
 	// the escalation scheduler can share it) drives the consumer behind the Notifier seam.

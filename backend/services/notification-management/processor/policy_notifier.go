@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/httpsink"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -141,9 +143,20 @@ type PolicyNotifier struct {
 	// quiet counts quiet-hours outcomes. MAY BE NIL; read it through countQuiet.
 	quiet *prometheus.CounterVec
 
+	// dead records a held notification whose release will never be sent. Set once the
+	// dead-letter stream exists (UseDeadLetters, from the NATS callback), read on the
+	// scheduler's goroutine — hence atomic. Nil disables it, as for the processor.
+	dead atomic.Pointer[deadletter.Sink]
+
 	// now is the clock quiet hours are evaluated against. Nil means time.Now; read it
 	// through clock. A field so a test can stand at a chosen instant of a chosen week.
 	now func() time.Time
+}
+
+// UseDeadLetters hands the notifier the sink a held notification that can never be sent is
+// recorded on. Safe to call while the scheduler runs.
+func (n *PolicyNotifier) UseDeadLetters(sink *deadletter.Sink) {
+	n.dead.Store(sink)
 }
 
 // clock is the notifier's current time.
@@ -259,11 +272,17 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 	case dmmodel.AlarmEventAcknowledged:
 		// Idempotent tombstone upsert; a DB error is safe to retry (no side effects).
 		return n.applyLifecycle(ctx, event.AlarmToken, "acknowledgement", func(c context.Context) error {
-			return n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
+			if err := n.api.MarkAcknowledged(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
+				return err
+			}
+			return n.resolveHeld(c, event)
 		})
 	case dmmodel.AlarmEventCleared:
 		return n.applyLifecycle(ctx, event.AlarmToken, "clear", func(c context.Context) error {
-			return n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime)
+			if err := n.api.MarkCleared(c, event.AlarmToken, event.AlarmKey, event.Severity, event.OccurredTime); err != nil {
+				return err
+			}
+			return n.resolveHeld(c, event)
 		})
 	case dmmodel.AlarmEventDeescalated:
 		return n.applyLifecycle(ctx, event.AlarmToken, "de-escalation", func(c context.Context) error {
@@ -276,6 +295,22 @@ func (n *PolicyNotifier) Notify(ctx context.Context, event *dmmodel.AlarmStateCh
 		// will send, so it fails (and the processor dead-letters it) rather than vanishing.
 		return fmt.Errorf("%w: %q (alarm %q)", ErrUnknownAlarmEventType, event.EventType.String(), event.AlarmToken)
 	}
+}
+
+// resolveHeld drops what quiet hours are holding about an alarm that has just been
+// acknowledged or cleared. It is idempotent, so it shares the transition's redelivery.
+//
+// The release checks the notification state too, but that is not enough on its own: the
+// state's terminal stamps record the alarm token's FIRST acknowledgement and clear and never
+// move, so for a later cycle of the same token they predate the held event and the release
+// would page about an alarm somebody already dealt with.
+func (n *PolicyNotifier) resolveHeld(ctx context.Context, event *dmmodel.AlarmStateChangeEvent) error {
+	dropped, err := n.api.ResolveNotificationDeferrals(ctx, event.AlarmToken, event.OccurredTime)
+	if err != nil {
+		return fmt.Errorf("dropping held notifications for a resolved alarm: %w", err)
+	}
+	n.countQuiet(quietDroppedResolved, int(dropped))
+	return nil
 }
 
 // applyLifecycle runs one of the three state-only transitions (acknowledge, clear,
@@ -440,7 +475,35 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
 			Msg("Delivered notification but failed to record notification state")
 	}
+	// A page about the alarm as it is NOW has gone out through these policies, so whatever
+	// they were holding about it from earlier is answered. Released later it would page a
+	// second time, about an older event — and stamp the notification state with that older
+	// severity, which the escalation that follows would then page at.
+	if ids := n.pagingPolicyIDs(event, sendNow, state); len(ids) > 0 {
+		superseded, err := n.api.SupersedeNotificationDeferrals(rctx, event.AlarmToken, ids, event.OccurredTime)
+		if err != nil {
+			log.Error().Err(err).Str("tenant", tenant).Str("alarm", event.AlarmToken).
+				Msg("Paged, but could not drop what quiet hours held about the alarm; it will be " +
+					"sent again when released")
+		}
+		n.countQuiet(quietSuperseded, int(superseded))
+	}
 	return nil
+}
+
+// pagingPolicyIDs is the ids of the policies plan routed this event through: the same
+// filters plan applies (not scoped, not throttled, a rule matching the severity).
+func (n *PolicyNotifier) pagingPolicyIDs(event *dmmodel.AlarmStateChangeEvent,
+	policies []*model.NotificationPolicy, state *model.NotificationState) []uint {
+	var ids []uint
+	for _, p := range policies {
+		if p.DeviceTypeToken.Valid && p.DeviceTypeToken.String != "" ||
+			n.throttled(event, p, state) || !anyRuleMatches(p, event.Severity) {
+			continue
+		}
+		ids = append(ids, p.ID)
+	}
+	return ids
 }
 
 // dispatchTally counts how one alarm's planned deliveries ended. delivered/refused/failed

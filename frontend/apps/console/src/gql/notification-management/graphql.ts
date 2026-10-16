@@ -97,7 +97,9 @@ export type NotificationPolicyUpdateRequest = {
   /**
    * New quiet-hours time zone, or null to clear it. The quiet-hours fields are checked
    * together after the update is applied, so to remove quiet hours clear quietHoursTimezone
-   * and quietHoursSlots (and quietHoursBypassSeverity, if set) in the same request.
+   * and quietHoursSlots in the same request. A stored quietHoursBypassSeverity is kept, and
+   * has no effect while the policy has no quiet hours. An update that names none of the
+   * three leaves the stored quiet hours exactly as they are, without checking them.
    */
   quietHoursTimezone?: string | null | undefined;
   /**

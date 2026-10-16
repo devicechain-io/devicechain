@@ -13,6 +13,7 @@ import {
   deleteNotificationPolicy,
   type NotificationPolicyRecord,
 } from '@/lib/api/notifications';
+import { AREA } from '@/lib/capabilities';
 import { NotificationPolicyForm } from './NotificationPolicyForm';
 
 function EnabledCell({ enabled }: { enabled: boolean }) {
@@ -25,6 +26,8 @@ export const notificationPolicyResource: RegistryResource<NotificationPolicyReco
   basePath: '/notification-policies',
   i18nKey: 'notificationPolicy',
   banner: 'dashboard',
+  // notification-management is absent from the telemetry and ingest-only profiles.
+  area: AREA.notificationManagement,
   list: listNotificationPolicyRecords,
   load: getNotificationPolicy,
   remove: deleteNotificationPolicy,

@@ -13,7 +13,8 @@ comportan las horas de silencio, y cómo definirlas mediante la API, está en
 [Horas de silencio](../guides/notification-channels.md#quiet-hours).
 
 Las políticas de notificación están en **Políticas de notificación** en la barra lateral. La entrada
-aparece si tu rol puede leer notificaciones.
+aparece si tu rol puede leer notificaciones. Para cambiar una política, tu rol también necesita
+permiso para escribir notificaciones; sin él, la política se abre en solo lectura.
 
 ## La lista de políticas
 
@@ -28,7 +29,8 @@ Haz clic en **Nueva política de notificación**. El formulario pide:
 
 - **Token**: el identificador de la política. No puede cambiar después de crearla.
 - **Nombre** y **Descripción**.
-- **Habilitado**: una política deshabilitada no envía nada.
+- **Habilitado**: una política deshabilitada no envía nada y descarta las notificaciones que
+  estuviera reteniendo por las horas de silencio.
 - **Limitación (segundos)**: el tiempo mínimo entre notificaciones sobre la misma alarma. Déjalo en
   blanco para no limitar.
 - **Escalar tras (segundos)** y **Escaladas máximas**: cuánto espera una alarma sin reconocer antes

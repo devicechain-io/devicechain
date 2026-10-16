@@ -9,14 +9,17 @@ import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
+const { gqlMock, auth } = vi.hoisted(() => ({
+  gqlMock: vi.fn(),
+  auth: { authorities: ['notification:write'] as string[] },
+}));
 
 vi.mock('@devicechain/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/client')>();
   return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
 });
 vi.mock('@/auth/AuthProvider', () => ({
-  useAuth: () => ({ isAuthenticated: true, isIdentityAuthenticated: false, claims: { authorities: ['notification:write'] } }),
+  useAuth: () => ({ isAuthenticated: true, isIdentityAuthenticated: false, claims: { authorities: auth.authorities } }),
 }));
 vi.mock('@/lib/token-masks', () => ({ getTokenMasks: () => Promise.resolve({}) }));
 
@@ -63,10 +66,37 @@ const quietToggle = () => screen.getByRole('checkbox', { name: 'Hold notificatio
 
 afterEach(cleanup);
 beforeEach(() => {
+  auth.authorities = ['notification:write'];
   gqlMock.mockReset();
   gqlMock.mockResolvedValue({
     createNotificationPolicy: { token: 'x', updatedAt: 't' },
     updateNotificationPolicy: { token: 'x', updatedAt: 't' },
+  });
+});
+
+describe('NotificationPolicyForm authority', () => {
+  it('is read-only without notification:write: no save, every field disabled', () => {
+    auth.authorities = ['notification:read'];
+    render(<NotificationPolicyForm entity={stored()} onDone={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+    expect(screen.getByLabelText('Name').matches(':disabled')).toBe(true);
+    expect(quietToggle().matches(':disabled')).toBe(true);
+  });
+
+  it('offers the save with notification:write', () => {
+    render(<NotificationPolicyForm entity={stored()} onDone={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeTruthy();
+    expect(screen.getByLabelText('Name').matches(':disabled')).toBe(false);
+  });
+
+  it('says so in words when the save loses to a concurrent edit', async () => {
+    gqlMock.mockRejectedValue(
+      new Error('notification policy was modified by another writer; reload and try again'),
+    );
+    render(<NotificationPolicyForm entity={stored()} onDone={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Night 2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    expect(await screen.findByText(/Someone else saved this policy after you opened it/)).toBeTruthy();
   });
 });
 

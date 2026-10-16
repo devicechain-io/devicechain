@@ -65,7 +65,7 @@ vi.mock('@/routes/geofences/FenceMap', () => ({
 // respects the gate from one that ignores it.
 vi.mock('@/auth/AuthProvider', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/auth/AuthProvider')>();
-  return { ...actual, useAuth: () => ({ claims: { authorities: ['device:write'] } }) };
+  return { ...actual, useAuth: () => ({ claims: { authorities: ['device:write', 'notification:write'] } }) };
 });
 
 import { REGISTRY_RESOURCES } from './resources';
