@@ -286,7 +286,13 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 	// duration hold that completed, an aggregate pane that closed) due within the window, then collect
 	// the final batch. A cold-started engine only sees timers armed by in-window events, which is the
 	// documented approximation.
-	engine.Advance(tr.End)
+	//
+	// The advance goes one nanosecond PAST End, not to it. The window is [Start, End], so a reading
+	// at End is in it, and the rate and count-window kinds decide a reading only once the frontier is
+	// strictly past it: advancing to End exactly would replay that reading and never decide it. A
+	// timer or pane due in (End, End+1ns] stamps its edge after End, which appendFirings drops, so
+	// nothing outside the window gets in.
+	engine.Advance(tr.End.Add(time.Nanosecond))
 	res.Firings = appendFirings(res.Firings, engine.Drain(), tr)
 
 	// Readings the engine declined as late (a sliding window that had already passed them, or a

@@ -294,15 +294,11 @@ func (e *Engine) restorePending(in []snapPending) {
 			continue
 		}
 		run := &pendingRun{key: SeriesKey{Rule: s.Rule, Series: s.Series}, index: -1}
+		// The three slices are parallel by construction (snapshotPending). Index them directly, as
+		// restoreSlides does: a short Values or Matches is a corrupt checkpoint, and filling the gap
+		// with 0 / non-match would restore a plausible sample that was never reported.
 		for i := range s.Times {
-			x := pendingSample{t: s.Times[i]}
-			if i < len(s.Values) {
-				x.v = s.Values[i]
-			}
-			if i < len(s.Matches) {
-				x.match = s.Matches[i]
-			}
-			run.samples = append(run.samples, x)
+			run.samples = append(run.samples, pendingSample{t: s.Times[i], v: s.Values[i], match: s.Matches[i]})
 		}
 		sort.SliceStable(run.samples, func(i, j int) bool { return run.samples[i].before(run.samples[j]) })
 		e.pending[run.key] = run

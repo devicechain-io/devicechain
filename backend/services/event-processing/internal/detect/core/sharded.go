@@ -231,7 +231,7 @@ func (s *Sharded) Watermark() time.Time { return s.shards[0].Watermark() }
 // LastSeq is the shared position. Every shard holds the same one; Snapshot fails if they do not.
 func (s *Sharded) LastSeq() uint64 { return s.shards[0].LastSeq() }
 
-// HasPendingWork reports whether any shard has a timer or pane close scheduled.
+// HasPendingWork reports whether any shard has a timer, pane close or held sample waiting on the frontier.
 func (s *Sharded) HasPendingWork() bool {
 	for _, e := range s.shards {
 		if e.HasPendingWork() {

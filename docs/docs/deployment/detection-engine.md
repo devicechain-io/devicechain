@@ -225,7 +225,11 @@ size the setting:
   rate is the change between consecutive readings and a count window is every N consecutive
   readings, so a reading that arrives out of order is slotted where its timestamp says, and the
   rule evaluates a reading only once the frontier has passed it — which is also why these two
-  kinds raise and clear their alarms one lateness tolerance behind the newest reading. A reading
+  kinds raise and clear their alarms one lateness tolerance behind the newest reading. When no
+  newer reading arrives — the last reading before a fleet goes quiet — it is decided on wall-clock
+  time once the engine has been idle, as an absence rule fires, so with shipped defaults about
+  fifteen seconds after it arrived; with `idleAdvanceGuardSeconds` negative it waits for the next
+  event. A reading
   older than the newest one the rule has already settled is discarded: the pair or window it
   belonged to has already been decided. A reading that does not meet the condition still ends a
   raised rate alarm however late it arrives, unless it is older than the alarm.
@@ -435,7 +439,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | Setting | Default | What it does |
 |---|---|---|
 | `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, duration, count-window and rate rules place it by its own time, and a threshold rule evaluates each reading as it arrives. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
-| `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. |
+| `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. Count-window and rate rules likewise decide the last reading before a quiet spell only when a later event arrives. |
 | `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. In this release the shards are processed one after another, so a value above 1 does not make detection faster yet: leave it at 1 unless you are measuring. The value in force is the `detect_shards` metric. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |
 | `checkpointIntervalSeconds` | 10 | Maximum time between checkpoints, so a quiet stream still commits. **At most 30**: a checkpoint is what acknowledges the stream, so an interval near or past the broker's 60-second acknowledgement window makes messages on a quiet stream redeliver. 30 leaves room for the checkpoint itself, and the service refuses anything longer at startup. |
