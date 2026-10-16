@@ -847,6 +847,7 @@ instance was bootstrapped on).
 * [dcctl](#dcctl)	 - DeviceChain CLI
 * [dcctl sim create](#dcctl-sim-create)	 - Mint a scoped identity + tenant for a sim and write its handshake
 * [dcctl sim destroy](#dcctl-sim-destroy)	 - Delete a sim's scoped identity and its tenant
+* [dcctl sim run](#dcctl-sim-run)	 - Run the dc-simulator process for a sim, in the foreground
 * [dcctl sim start](#dcctl-sim-start)	 - Start (resume) a stopped sim's emit loop
 * [dcctl sim status](#dcctl-sim-status)	 - Show a running sim's lifecycle state
 * [dcctl sim stop](#dcctl-sim-stop)	 - Stop a running sim's emit loop (tenant + data are kept)
@@ -949,6 +950,52 @@ dcctl sim destroy <name> [flags]
 
 ```
   -h, --help   help for destroy
+```
+
+### Options inherited from parent commands
+
+```
+      --admin-email string      superuser identity that mints the scoped sim identity (default "superuser@devicechain.local")
+      --admin-password string   superuser password (default: $DC_ADMIN_PASSWORD, else read from the instance's Secret on the cluster)
+      --control-addr string     the dc-simulator process's control API address (default "http://localhost:8090")
+  -i, --instance string         instance id (the literal event-ingress path segment; must match the deployed instance.id) (default "devicechain")
+      --kube-context string     kube-context to read the superuser password from when none is given (default: the one the instance was bootstrapped on)
+  -s, --server string           instance host for platform API calls (default "localhost")
+      --tls                     use https/wss for platform endpoints
+```
+
+### SEE ALSO
+
+* [dcctl sim](#dcctl-sim)	 - Create and drive DeviceChain simulations
+
+## dcctl sim run {#dcctl-sim-run}
+
+Run the dc-simulator process for a sim, in the foreground
+
+### Synopsis
+
+Run the dc-simulator process for a sim that 'sim create' made, in the foreground,
+with that sim's handshake file and the control port 'sim status/start/stop' reach.
+
+dc-simulator is looked up on PATH unless --simulator names it. Interrupt (Ctrl+C) stops
+it gracefully.
+
+--play-devices (sitepulse only) makes the simulator play the device plane itself, the
+scene's machine model driving the scene's fleet tracks, instead of a Unity player. Do not
+run a player against the same sim while it is on.
+
+```
+dcctl sim run <name> [flags]
+```
+
+### Options
+
+```
+      --emit-interval duration   override the telemetry cadence, e.g. 3s (0 keeps the scenario's own)
+  -h, --help                     help for run
+      --play-devices             sitepulse only: play the device plane in the simulator instead of a Unity player
+      --publish-log string       with --play-devices: append every event the ingress accepted to this NDJSON file
+      --simulator string         path to the dc-simulator binary (default: dc-simulator on PATH)
 ```
 
 ### Options inherited from parent commands

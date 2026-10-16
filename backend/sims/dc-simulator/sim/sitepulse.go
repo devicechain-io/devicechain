@@ -47,6 +47,9 @@ type sitepulse struct {
 	// load carries the run-time cadence/count overrides. Unlike widgetlab's this one
 	// is honoured: the site is a scale knob, not a composed fixture.
 	load Load
+	// player, when set (PlayDevices), makes this process the device plane: Tick then
+	// publishes every device's telemetry and position. Nil by default; see Tick.
+	player *sitepulsePlayer
 }
 
 // Sitepulse sizing. S0 was the vertical at ONE machine — the same move devicepulse
@@ -558,6 +561,15 @@ func (s *sitepulse) Bootstrap(ctx context.Context, rt *Runtime) error {
 // the shed-transition logging and the tick accounting are the same code paths for every
 // scenario, and special-casing a scenario out of the loop would make the one archetype
 // that behaves differently ALSO the one whose lifecycle is untested.
-func (s *sitepulse) Tick(context.Context, *Runtime) error {
+//
+// 🔴 THE ONE EXCEPTION IS OPT-IN: a process started with --play-devices (PlayDevices)
+// has no Unity player, and plays the device plane itself (sitepulse_device_plane.go),
+// porting the scene's machine model and fleet tracks. That is the same device plane,
+// moved, not a second one, and it is only sound while no player runs against the sim:
+// the operator who turns it on is the one who knows that.
+func (s *sitepulse) Tick(ctx context.Context, rt *Runtime) error {
+	if s.player != nil {
+		return s.player.tick(ctx, rt)
+	}
 	return nil
 }
