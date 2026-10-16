@@ -800,6 +800,7 @@ esos clientes:
 | `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Las alarmas generadas mientras el dispositivo pertenecía a uno de los clientes. |
 | `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | Las mismas alarmas. |
 | `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Los eventos registrados mientras el dispositivo pertenecía a uno de los clientes. Un cliente conserva el historial del tiempo en que poseyó un dispositivo y no ve el historial anterior. |
+| `deviceStates`, `deviceStatesByDeviceToken`, `deviceStatesByExternalId`, `latestMeasurements`, `latestLocation`, `latestLocations` | El estado en vivo, las lecturas más recientes y la última posición conocida de los dispositivos que los clientes poseen ahora. Cuando un dispositivo pasa a otro cliente, su estado en vivo pasa con él, sin esperar a que el dispositivo vuelva a informar. `latestLocation` y `latestLocations` requieren además `location:read`, que el conjunto básico de solo lectura no incluye. |
 | Tipos de dispositivo, perfiles de dispositivo y sus versiones, definiciones de métricas y comandos, tipos de cliente | Todo, porque es configuración. Se puede leer pero no modificar. |
 
 Un registro que el miembro no puede ver se responde exactamente igual que uno que no existe: se
@@ -809,7 +810,10 @@ dispositivo ajeno a sus clientes se acepta y no entrega nada. Cualquier otra ope
 
 Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no es visible para un
 miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
-registran sus clientes solo a partir de esta versión.
+registran sus clientes solo a partir de esta versión. El estado en vivo de un dispositivo anterior a
+esta versión se vuelve visible cuando el dispositivo vuelve a informar o cambia de propietario. Una
+alarma conserva los clientes con los que se generó, así que un cliente que vende un dispositivo
+sigue viendo las alarmas generadas mientras lo poseía, incluida una que siga activa.
 
 ### Rechazos al administrar un tenant {#tenant-administration-refusals}
 

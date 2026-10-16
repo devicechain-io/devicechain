@@ -571,9 +571,10 @@ var heartbeatGuard = clause.Where{Exprs: []clause.Expression{clause.Expr{SQL: "N
 
 // heartbeatSet is the DO UPDATE's SET: applyEvent's data-event rule for a row heartbeatGuard
 // let through, which cannot flip. There each event's only effects are the identity overwrite
-// (the last non-empty value) and the monotone advance of last_activity_time when the event is
-// not older — effects that commute, so one SET over the batch's folded row (excluded) equals
-// folding its events in any order. updated_at is stamped as Save stamped it.
+// (the last non-empty value), the monotone advance of last_activity_time when the event is
+// not older, and the owners stamp's strictly-later replacement — effects that commute, so one
+// SET over the batch's folded row (excluded) equals folding its events in any order. updated_at
+// is stamped as Save stamped it.
 //
 // applyEvent's data branch is the Go twin of this; model/projection_equivalence_test.go pins
 // the two together.
@@ -585,8 +586,20 @@ var heartbeatSet = clause.Set{
 	{Column: clause.Column{Name: "last_activity_time"}, Value: clause.Expr{SQL: "CASE WHEN " +
 		"device_states.last_activity_time IS NULL OR excluded.last_activity_time >= device_states.last_activity_time " +
 		"THEN excluded.last_activity_time ELSE device_states.last_activity_time END"}},
+	// The owners stamp (applyOwners): the batch's latest stamp replaces the stored one when
+	// strictly later. Both arms test the OLD row's precedence — a SET reads the row as it was
+	// before the statement on both databases — so they agree on whether to move.
+	{Column: clause.Column{Name: "scope_anchors"}, Value: clause.Expr{SQL: "CASE WHEN " + ownersNewer +
+		" THEN excluded.scope_anchors ELSE device_states.scope_anchors END"}},
+	{Column: clause.Column{Name: "scope_anchors_at"}, Value: clause.Expr{SQL: "CASE WHEN " + ownersNewer +
+		" THEN excluded.scope_anchors_at ELSE device_states.scope_anchors_at END"}},
 	{Column: clause.Column{Name: "updated_at"}, Value: clause.Column{Table: "excluded", Name: "updated_at"}},
 }
+
+// ownersNewer is applyOwners' test in SQL: the batch carries a stamp, and the stored row has
+// none or an older one.
+const ownersNewer = "excluded.scope_anchors_at IS NOT NULL AND (device_states.scope_anchors_at IS NULL " +
+	"OR excluded.scope_anchors_at > device_states.scope_anchors_at)"
 
 // heartbeatUpsert is tdb with mergeHeartbeats' conflict clause.
 func heartbeatUpsert(tdb *gorm.DB) *gorm.DB {

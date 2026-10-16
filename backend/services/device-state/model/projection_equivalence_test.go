@@ -185,9 +185,14 @@ func projectionRows(t *testing.T, api *Api) []string {
 	}
 	var out []string
 	for _, s := range states {
-		out = append(out, fmt.Sprintf("state %s/%s ext=%q src=%q active=%v conn=%s disc=%s act=%s alarm=%s timeout=%d presence=%s session=%d ptime=%s",
+		owners := "null"
+		if s.ScopeAnchors != nil {
+			owners = "[" + strings.Join(s.ScopeAnchors, ",") + "]"
+		}
+		out = append(out, fmt.Sprintf("state %s/%s ext=%q src=%q active=%v conn=%s disc=%s act=%s alarm=%s timeout=%d presence=%s session=%d ptime=%s owners=%s owned=%s",
 			s.TenantId, s.DeviceToken, s.ExternalId, s.Source, s.Active, nt(s.LastConnectTime), nt(s.LastDisconnectTime),
-			nt(s.LastActivityTime), nt(s.InactivityAlarmTime), s.InactivityTimeout, s.PresenceSource, s.SessionId, nt(s.PresenceTime)))
+			nt(s.LastActivityTime), nt(s.InactivityAlarmTime), s.InactivityTimeout, s.PresenceSource, s.SessionId, nt(s.PresenceTime),
+			owners, nt(s.ScopeAnchorsAt)))
 	}
 	for _, r := range readings {
 		out = append(out, fmt.Sprintf("reading %s/%s/%s value=%s class=%s unit=%s type=%s at=%s",
@@ -284,7 +289,15 @@ func fix(tenant, tok string, when time.Time, lat float64) ProjectionUpdate {
 }
 
 func withIdentity(u ProjectionUpdate, ext string) ProjectionUpdate {
-	u.Identity = DeviceIdentity{ExternalId: ext, Source: "mqtt1"}
+	u.Identity.ExternalId, u.Identity.Source = ext, "mqtt1"
+	return u
+}
+
+// withOwners stamps u with the owners its event was resolved with, received at `received`.
+// Receipt is independent of the event's own time, as it is on the wire: a store-and-forward
+// event is old when it arrives, and a redelivery arrives with its first receipt time.
+func withOwners(u ProjectionUpdate, received time.Time, anchors ...string) ProjectionUpdate {
+	u.Identity.Owners = Owners{Anchors: anchors, At: received}
 	return u
 }
 
@@ -423,6 +436,39 @@ func equivalenceCases() []equivalenceCase {
 				data(A, "fresh", at(2*time.Hour+time.Second))},
 			want: []string{"state tenant-a/swept ext=\"\" src=\"\" active=true", "state tenant-a/live ext=\"\" src=\"\" active=true",
 				"state tenant-a/fresh ext=\"\" src=\"\" active=true"}},
+		// The owners stamp (applyOwners and heartbeatSet's scope_anchors arms): strictly later
+		// receipt wins, a tie keeps the first, a batch with no stamp leaves the stored one, and an
+		// empty set is a stamp of its own.
+		{name: "owners: an event received earlier does not replace a later stamp",
+			seed: []ProjectionUpdate{withOwners(data(A, "d1", at(0)), at(time.Minute), "customer:globex")},
+			updates: []ProjectionUpdate{withOwners(data(A, "d1", at(2*time.Minute)), at(30*time.Second), "customer:acme"),
+				withOwners(data(A, "d1", at(3*time.Minute)), at(45*time.Second), "customer:acme")},
+			want: []string{"owners=[customer:globex] owned=2026-09-20T12:01:00Z"}},
+		{name: "owners: the latest receipt in a batch wins, whatever the arrival order",
+			seed: []ProjectionUpdate{withOwners(data(A, "d1", at(0)), at(0), "customer:acme")},
+			updates: []ProjectionUpdate{withOwners(data(A, "d1", at(time.Minute)), at(2*time.Minute), "customer:globex"),
+				withOwners(data(A, "d1", at(2*time.Minute)), at(time.Minute), "customer:initech")},
+			want: []string{"owners=[customer:globex] owned=2026-09-20T12:02:00Z"}},
+		{name: "owners: two stamps received in the same microsecond keep the first",
+			updates: []ProjectionUpdate{withOwners(data(A, "d1", at(0)), at(1100*time.Nanosecond), "customer:acme"),
+				withOwners(data(A, "d1", at(time.Second)), at(1300*time.Nanosecond), "customer:globex")},
+			want: []string{"owners=[customer:acme]"}},
+		{name: "owners: a batch carrying no stamp leaves the stored one",
+			seed:    []ProjectionUpdate{withOwners(data(A, "d1", at(0)), at(0), "customer:acme", "area:north")},
+			updates: []ProjectionUpdate{data(A, "d1", at(time.Minute)), reading(A, "d1", at(time.Minute), "temp", 1)},
+			want:    []string{"owners=[area:north,customer:acme]"}},
+		{name: "owners: an event carrying no stamp leaves a new row unstamped",
+			updates: []ProjectionUpdate{data(A, "d1", at(0))},
+			want:    []string{"owners=null owned=null"}},
+		{name: "owners: owned by nobody is a stamp, and replaces an older owner",
+			seed:    []ProjectionUpdate{withOwners(data(A, "d1", at(0)), at(0), "customer:acme")},
+			updates: []ProjectionUpdate{withOwners(data(A, "d1", at(time.Minute)), at(time.Minute))},
+			want:    []string{"owners=[] owned=2026-09-20T12:01:00Z"}},
+		{name: "owners: a swept device brought back by a stamped event takes the stamp (the Go fold)",
+			seed:    []ProjectionUpdate{withOwners(data(A, "d1", at(0)), at(0), "customer:acme")},
+			sweepAt: at(2 * time.Hour),
+			updates: []ProjectionUpdate{withOwners(data(A, "d1", at(2*time.Hour+time.Second)), at(2*time.Hour+time.Second), "customer:globex")},
+			want:    []string{"active=true", "owners=[customer:globex]"}},
 		{name: "heartbeat: one tenant carries a claim (locked path), the other does not (heartbeat path)",
 			seed: []ProjectionUpdate{data(A, "d1", at(0)), data(B, "d1", at(0))},
 			updates: []ProjectionUpdate{claim(A, "d1", at(time.Minute), presence.ClaimDisconnected, 2), data(A, "d2", at(time.Minute)),
@@ -464,9 +510,17 @@ func randomUpdates(r *rand.Rand) []ProjectionUpdate {
 		if r.Intn(3) == 0 {
 			u = withIdentity(u, []string{"", "ext-1", "ext-2"}[r.Intn(3)])
 		}
+		if r.Intn(2) == 0 {
+			u = withOwners(u, eqT0.Add(offsets[r.Intn(len(offsets))]), randomOwners(r)...)
+		}
 		out = append(out, u)
 	}
 	return out
+}
+
+// randomOwners is an owner set drawn from a few, the empty one included.
+func randomOwners(r *rand.Rand) []string {
+	return [][]string{{}, {"customer:acme"}, {"customer:globex"}, {"customer:globex", "customer:acme"}}[r.Intn(4)]
 }
 
 // randomDataUpdates is randomUpdates without a presence claim: data events, readings and fixes
@@ -494,6 +548,9 @@ func randomDataUpdates(r *rand.Rand) []ProjectionUpdate {
 		}
 		if r.Intn(3) == 0 {
 			u = withIdentity(u, []string{"", "ext-1", "ext-2"}[r.Intn(3)])
+		}
+		if r.Intn(2) == 0 {
+			u = withOwners(u, eqT0.Add(offsets[r.Intn(len(offsets))]), randomOwners(r)...)
 		}
 		out = append(out, u)
 	}

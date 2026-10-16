@@ -757,6 +757,7 @@ these operations, and each answers only with what those customers own:
 | `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Alarms raised while the device belonged to one of the customers. |
 | `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | The same alarms. |
 | `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Events recorded while the device belonged to one of the customers. A customer keeps the history from the time it owned a device, and does not see the history from before. |
+| `deviceStates`, `deviceStatesByDeviceToken`, `deviceStatesByExternalId`, `latestMeasurements`, `latestLocation`, `latestLocations` | The live state, latest readings and last-known position of the devices the customers own now. When a device moves to another customer, its live state moves with it, without waiting for the device to report again. `latestLocation` and `latestLocations` also require `location:read`, which the read-only baseline does not include. |
 | Device types, device profiles and their versions, metric and command definitions, customer types | Everything, because this is configuration. These can be read but not changed. |
 
 A record the member cannot see is answered exactly as one that does not exist: it is left out of a
@@ -766,7 +767,10 @@ with `extensions.reason` set to `SCOPE_UNSUPPORTED`.
 
 An event recorded while the device belonged to no customer is not visible to a member with
 limited access. Neither is an alarm raised before this release: alarms record their customers only
-from this release on.
+from this release on. A device's live state from before this release becomes visible when the
+device next reports or changes owner. An alarm keeps the customers it was raised with, so a customer
+that sells a device keeps seeing the alarms raised while it owned it, including one that is still
+active.
 
 ### Refusals when administering a tenant {#tenant-administration-refusals}
 

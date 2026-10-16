@@ -270,6 +270,13 @@ func addScopePredicate(db *gorm.DB, rule *scopeRule, tenant string, scope auth.S
 			return
 		}
 		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
+	case ruleHeldAnchors:
+		expr, err := heldAnchorsExpr(db, rule.holder, tenant, anchors)
+		if err != nil {
+			refuseScoped(db, err.Error())
+			return
+		}
+		db.Statement.AddClause(clause.Where{Exprs: []clause.Expression{expr}})
 	case ruleDeviceEdge:
 		expr, err := deviceEdgeExpr(db, rule.edges, tenant, anchors)
 		if err != nil {
@@ -537,6 +544,57 @@ func anchorTableExpr(db *gorm.DB, set AnchorSet, tenant string, anchors []string
 		vars = append(vars, kindCol, kind, tokenCol, token)
 	}
 	sql.WriteString("))")
+	return clause.Expr{SQL: sql.String(), Vars: vars}, nil
+}
+
+// scopeHolderAlias is the holder table's alias inside a HeldAnchors predicate.
+const scopeHolderAlias = "dc_scope_holder"
+
+// heldAnchorsExpr builds a HeldAnchors predicate (see HeldAnchors). Every name comes from a
+// parsed schema — the holder's and the statement's — and is quoted by gorm; the tenant and
+// every anchor are bound parameters.
+func heldAnchorsExpr(db *gorm.DB, h AnchorHolder, tenant string, anchors []string) (clause.Expression, error) {
+	if len(h.Keys) == 0 || h.Column == "" {
+		return nil, fmt.Errorf("an incomplete held-anchors rule")
+	}
+	holder, holderTenant, err := parseRuleModel(db, h.Model, "held-anchors")
+	if err != nil {
+		return nil, err
+	}
+	column := holder.LookUpField(h.Column)
+	if column == nil {
+		return nil, fmt.Errorf("a held-anchors rule naming no column %q on %q", h.Column, holder.Table)
+	}
+
+	var sql strings.Builder
+	vars := []any{clause.Table{Name: holder.Table}, clause.Table{Name: scopeHolderAlias},
+		clause.Column{Table: scopeHolderAlias, Name: holderTenant.DBName}, tenant}
+	sql.WriteString("EXISTS (SELECT 1 FROM ? AS ? WHERE ? = ?")
+	for _, k := range h.Keys {
+		hc, err := aliasedColumn(holder, scopeHolderAlias, k.Set)
+		if err != nil {
+			return nil, err
+		}
+		rf := db.Statement.Schema.LookUpField(k.Row)
+		if rf == nil {
+			return nil, fmt.Errorf("a held-anchors rule naming no row column %q", k.Row)
+		}
+		sql.WriteString(" AND ? = ?")
+		vars = append(vars, hc, clause.Column{Table: db.Statement.Table, Name: rf.DBName})
+	}
+	if f := softDeleteColumn(holder); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: scopeHolderAlias, Name: f.DBName})
+	}
+	if len(anchors) == 0 {
+		sql.WriteString(" AND 1 = 0)")
+		return clause.Expr{SQL: sql.String(), Vars: vars}, nil
+	}
+	sql.WriteString(" AND ? && ARRAY[?" + strings.Repeat(", ?", len(anchors)-1) + "]::text[])")
+	vars = append(vars, clause.Column{Table: scopeHolderAlias, Name: column.DBName})
+	for _, a := range anchors {
+		vars = append(vars, a)
+	}
 	return clause.Expr{SQL: sql.String(), Vars: vars}, nil
 }
 

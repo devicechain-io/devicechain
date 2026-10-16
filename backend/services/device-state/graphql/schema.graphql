@@ -297,7 +297,8 @@ type DeviceStateSearchResults {
 type Query {
     """
     Returns the states of the given devices, in no particular order. Devices with no state yet
-    are omitted. Requires state:read.
+    are omitted. Requires state:read. A member whose access is limited to some customers sees
+    only the devices those customers own now; any other device is omitted.
     """
     # Get device states for one or more devices by device token.
     deviceStatesByDeviceToken(
@@ -306,7 +307,8 @@ type Query {
     ): [DeviceState!]!
     """
     Returns the states of the devices carrying the given external ids, in no particular order.
-    External ids that match nothing are omitted. Requires state:read.
+    External ids that match nothing are omitted. Requires state:read. A member whose access is
+    limited to some customers sees only the devices those customers own now.
     """
     # Get device states for one or more devices by their (denormalized) external id.
     deviceStatesByExternalId(
@@ -321,7 +323,8 @@ type Query {
     id order: the set an adapter reconciles against after a failover. Walk it with a cursor:
     pass the id of the last row of the previous page as afterId and keep asking until a page
     comes back with fewer rows than pageSize. A pageSize outside 1 to 1000 is an error, not
-    adjusted. Requires state:read.
+    adjusted. Requires state:read, and is refused to a member whose access is limited to some
+    customers.
     """
     # ASSERTED device states for the calling tenant AND the given event source — the
     # set an adapter reconciles against on failover (ADR-067 SP4b): it enumerates the
@@ -363,7 +366,11 @@ type Query {
         """Rows per page, between 1 and 1000 inclusive; anything else is an error."""
         pageSize: Int!
     ): [DeviceState!]!
-    """Searches device states, newest first, one page at a time. Requires state:read."""
+    """
+    Searches device states, newest first, one page at a time. Requires state:read. A member whose
+    access is limited to some customers sees, and has counted, only the devices those customers
+    own now.
+    """
     # Search for device states that match the given criteria.
     deviceStates(
         """Filter and page to return."""
@@ -371,7 +378,8 @@ type Query {
     ): DeviceStateSearchResults!
     """
     Returns the current value of every measurement the device has reported, ordered by
-    measurement name. Empty when the device has reported none. Requires state:read.
+    measurement name. Empty when the device has reported none. Requires state:read. Empty for a
+    member whose access is limited to some customers when none of them owns the device now.
     """
     # Current value of every measurement name for a device (live readings).
     latestMeasurements(
@@ -380,7 +388,8 @@ type Query {
     ): [LatestMeasurement!]!
     """
     Returns the last-known position of one device, or null when it has never been located.
-    Requires location:read.
+    Requires location:read. Null for a member whose access is limited to some customers when
+    none of them owns the device now.
     """
     # Last-known position of one device; null when it has never been located.
     # Requires location:read.
@@ -390,7 +399,9 @@ type Query {
     ): LatestLocation
     """
     Returns the last-known position of each of the given devices, ordered by device token. A
-    device that has never been located is absent from the result. Requires location:read.
+    device that has never been located is absent from the result. Requires location:read. A
+    member whose access is limited to some customers sees only the devices those customers own
+    now.
     """
     # Last-known position of each of the given devices — the fleet-map batch. A device
     # that has never been located is absent from the result rather than present with

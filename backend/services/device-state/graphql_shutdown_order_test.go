@@ -207,10 +207,10 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 	host, port := startEmbeddedNats(t)
 
 	prevMs, prevGql, prevNats, prevRdb := Microservice, GraphQLManager, NatsManager, RdbManager
-	prevProc, prevWriter, prevSvc := StateProcessor, InboundEventsWriter, Svc
+	prevProc, prevWriter, prevSvc, prevOwners := StateProcessor, InboundEventsWriter, Svc, OwnershipProcessor
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, RdbManager = prevMs, prevGql, prevNats, prevRdb
-		StateProcessor, InboundEventsWriter, Svc = prevProc, prevWriter, prevSvc
+		StateProcessor, InboundEventsWriter, Svc, OwnershipProcessor = prevProc, prevWriter, prevSvc, prevOwners
 	})
 
 	area := fmt.Sprintf("device-state-shutdown-%d", time.Now().UnixNano())
@@ -276,6 +276,9 @@ func startShutdownFixture(t *testing.T) (*shutdownProbe, string) {
 		core.NewNoOpLifecycleCallbacks(), nil, processor.NewStateMetrics(Microservice),
 		Microservice.NewPeriodicTaskMetrics("inactivity_sweep"))
 	require.NoError(t, StateProcessor.Initialize(context.Background()))
+	// The ownership consumer is stopped unconditionally too, for the same reason.
+	OwnershipProcessor = processor.NewOwnershipProcessor(Microservice, nil, nil, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, OwnershipProcessor.Initialize(context.Background()))
 
 	// Leave nothing behind for the rest of the package: a failed require unwinds through
 	// Cleanup without ever closing this connection, and the client reconnects forever.

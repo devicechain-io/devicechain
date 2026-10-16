@@ -87,7 +87,36 @@ type DeviceState struct {
 	// PresenceSource, to ask whether any source has ever spoken for this device.
 	SessionId    uint64 `gorm:"not null;default:0"`
 	PresenceTime sql.NullTime
+	// ScopeAnchors are the device's owners ("customer:acme", one per tracked relationship)
+	// as the live view last learned them: what a member limited to some customers is
+	// matched against (ADR-081), here and — through HeldAnchors — on the device's latest
+	// readings and position. NULL until the first event or ownership fact that carries
+	// them; NULL and empty both match no scope.
+	//
+	// Two writers stamp it, the resolved event (its anchors) and the device ownership-changed
+	// fact (the device's whole current set), and nothing orders one stream against the
+	// other. ScopeAnchorsAt is what does: see ownershipPrecedence.
+	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
+	// ScopeAnchorsAt is the PRECEDENCE of the stamp in ScopeAnchors: a stamp replaces it only
+	// when strictly later. An event's stamp is its receipt time; a fact's is the moment of the
+	// change plus ownershipSettle. NULL until the first stamp.
+	ScopeAnchorsAt sql.NullTime
 }
+
+// ScopedBy implements rdb.ScopedModel (ADR-081): a member limited to some customers sees
+// the live state of the devices those customers currently own, by the stamp the row
+// carries. Scoped writes are refused; only the projection writes this table.
+func (DeviceState) ScopedBy() rdb.ScopeRule { return rdb.AnchorColumn("scope_anchors") }
+
+// deviceOwners is the rule of a row that belongs to one device's live view — a latest
+// reading, a last-known position — and so is visible exactly when the device's state row
+// is: its owners are held ONCE, on that row, and never copied, so an ownership change moves
+// every row of the device in one write.
+var deviceOwners = rdb.HeldAnchors(rdb.AnchorHolder{
+	Model:  &DeviceState{},
+	Keys:   []rdb.KeyPair{{Set: "device_token", Row: "device_token"}},
+	Column: "scope_anchors",
+})
 
 // DefaultOrder implements rdb.Sortable: newest projection row first, tiebroken on the
 // row id.
@@ -142,6 +171,10 @@ type LatestMeasurement struct {
 // AuditExempt: a high-volume derived telemetry projection, not a control-plane
 // mutation (ADR-019) — same rationale as DeviceState.
 func (LatestMeasurement) AuditExempt() bool { return true }
+
+// ScopedBy implements rdb.ScopedModel: a latest reading is visible when its device's live
+// state is (deviceOwners).
+func (LatestMeasurement) ScopedBy() rdb.ScopeRule { return deviceOwners }
 
 // LatestMeasurementInput is one (name, value, occurredAt) reading to upsert into
 // the latest-value projection.
@@ -199,6 +232,11 @@ type LatestLocation struct {
 // AuditExempt: a high-volume derived position projection, not a control-plane
 // mutation (ADR-019) — same rationale as DeviceState.
 func (LatestLocation) AuditExempt() bool { return true }
+
+// ScopedBy implements rdb.ScopedModel: a last-known position is visible when its device's
+// live state is (deviceOwners). The position doors also require location:read, which is
+// outside the read-only baseline for scoped members as for everyone else.
+func (LatestLocation) ScopedBy() rdb.ScopeRule { return deviceOwners }
 
 // LatestLocationInput is one positional fix to upsert into the last-known-position
 // projection. Every coordinate is a nullable float because a fix reports only what

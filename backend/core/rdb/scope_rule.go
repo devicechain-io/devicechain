@@ -45,7 +45,7 @@ const (
 )
 
 // ScopeRule is the visibility rule of a model for scoped callers. Build one with
-// AnchorColumn, AnchorTable, DeviceEdge, OwnAnchor, NamedAnchor or Catalogue.
+// AnchorColumn, AnchorTable, HeldAnchors, DeviceEdge, OwnAnchor, NamedAnchor or Catalogue.
 type ScopeRule interface {
 	rule() *scopeRule
 }
@@ -58,6 +58,7 @@ const (
 	ruleAnchorTable
 	ruleDeviceEdge
 	ruleOwnAnchor
+	ruleHeldAnchors
 )
 
 // scopeRule is the one concrete rule type; kind says which of its fields apply.
@@ -65,6 +66,7 @@ type scopeRule struct {
 	kind   ruleKind
 	column string         // ruleAnchorColumn; ruleOwnAnchor (the token column)
 	set    AnchorSet      // ruleAnchorTable
+	holder AnchorHolder   // ruleHeldAnchors
 	edges  OwnershipEdges // ruleDeviceEdge
 	// ruleOwnAnchor: the row's anchor kind is either a column (kindColumn) or one
 	// constant every row of the model shares (kindConst). Exactly one is set.
@@ -142,6 +144,41 @@ type KeyPair struct {
 // Scoped writes are refused.
 func AnchorTable(set AnchorSet) ScopeRule {
 	return &scopeRule{kind: ruleAnchorTable, set: set}
+}
+
+// AnchorHolder describes the row that holds ANOTHER row's anchors, in an AnchorColumn of
+// its own: device-state's live view of a device stamps its owners once, on the device's
+// state row, and the device's latest readings and position — rows of other tables, keyed
+// by the same device — are visible exactly when that row is.
+type AnchorHolder struct {
+	// Model is the holder's model. Its table name and its tenant column come from its own
+	// schema, so the subquery carries the tenant predicate on the holder too: a holder row
+	// of another tenant can never make a row visible. It must be tenant-scoped.
+	Model any
+	// Keys join the holder row to the row being read: each pair is a holder column (Set)
+	// and the row's column it must equal (Row). At least one. They must identify ONE holder
+	// row per row read, or a row is visible through whichever holder row matches.
+	Keys []KeyPair
+	// Column is the holder's text[] anchor column ("scope_anchors").
+	Column string
+}
+
+// HeldAnchors is the rule of a model whose anchors are held by another row (see
+// AnchorHolder). A scoped caller sees a row when its holder, in the same tenant and not
+// soft-deleted, carries an anchor in its scope:
+//
+//	EXISTS (SELECT 1 FROM <holder> AS dc_scope_holder
+//	        WHERE dc_scope_holder.<tenant> = $tenant
+//	          AND dc_scope_holder.<holder key> = "<table>".<row key> ...
+//	          [AND dc_scope_holder.deleted_at IS NULL]
+//	          AND dc_scope_holder.<column> && ARRAY[$1, $2, ...]::text[])
+//
+// A row with no holder, or whose holder's column is NULL or empty, matches no scope: it is
+// invisible to scoped callers rather than visible to all of them. It is one stamp read
+// through, never a copy kept in step: restamping the holder moves every row it holds at
+// once. Scoped writes are refused.
+func HeldAnchors(holder AnchorHolder) ScopeRule {
+	return &scopeRule{kind: ruleHeldAnchors, holder: holder}
 }
 
 // OwnershipEdges describes a relationship graph for DeviceEdge: an EDGE table whose rows

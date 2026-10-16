@@ -38,6 +38,12 @@ var (
 	InboundEventsWriter  messaging.MessageWriter
 	StateProcessor       *processor.StateProcessor
 
+	// OwnershipProcessor restamps a device's live view with its owners from
+	// device-management's ownership-changed facts (ADR-081), so a device that is sold and
+	// then says nothing still leaves its old owner's view.
+	OwnershipReader    messaging.MessageReader
+	OwnershipProcessor *processor.OwnershipProcessor
+
 	// StateMetrics is built ONCE, in the initialize phase, and shared by every
 	// StateProcessor the NATS manager's oncreate callback builds. See buildMetrics.
 	StateMetrics *processor.StateMetrics
@@ -136,7 +142,17 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	if err != nil {
 		return err
 	}
-	return nil
+
+	// The device ownership-changed facts: a second, much quieter stream, consumed on its own
+	// so a backlog of events never delays a device leaving its old owner's view. How a fact
+	// and the device's events are ordered against each other is model/ownership.go's.
+	owners, err := nmgr.NewReader(streams.DeviceOwnership)
+	if err != nil {
+		return err
+	}
+	OwnershipReader = owners
+	OwnershipProcessor = processor.NewOwnershipProcessor(Microservice, OwnershipReader, Api, core.NewNoOpLifecycleCallbacks())
+	return OwnershipProcessor.Initialize(context.Background())
 }
 
 // Called after microservice has been initialized.
@@ -213,15 +229,18 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	return nil
+	return OwnershipProcessor.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
-	// Stop device state processor.
+	// Stop both consumers before the managers: each reads from the broker and writes to the
+	// database.
 	err := StateProcessor.Stop(ctx)
 	if err != nil {
+		return err
+	}
+	if err := OwnershipProcessor.Stop(ctx); err != nil {
 		return err
 	}
 
@@ -240,9 +259,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
-	// Terminate device state processor.
+	// Terminate both consumers.
 	err := StateProcessor.Terminate(ctx)
 	if err != nil {
+		return err
+	}
+	if err := OwnershipProcessor.Terminate(ctx); err != nil {
 		return err
 	}
 

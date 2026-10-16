@@ -919,7 +919,7 @@ var All = []Stream{
 	// which carries the same anchors.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceOwnership, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
+	{Suffix: DeviceOwnership, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "device-state"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
