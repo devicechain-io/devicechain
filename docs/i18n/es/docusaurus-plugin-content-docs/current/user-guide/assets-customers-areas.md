@@ -81,6 +81,7 @@ se puede editar.
 
 Todos los activos, clientes y áreas tienen además una pestaña **Facetas**, que se describe
 [más abajo](#facets). Los activos tienen tres pestañas más: Jerarquía, Propiedades y Dispositivos.
+Los clientes tienen dos: Dispositivos y Usuarios.
 
 ### Jerarquía (activos)
 
@@ -111,6 +112,19 @@ asignación de un dispositivo. Haz clic en un token para abrir el dispositivo. P
 dispositivo a un activo, consulta [gestión de asignaciones](../guides/managing-assignments.md).
 
 <GuideShot id="asset-detail-devices" alt="La pestaña Dispositivos de HVAC Unit 1, con un único dispositivo, bp-therm-001." />
+
+### Dispositivos y Usuarios (clientes) {#customer-devices-and-users}
+
+La pestaña **Dispositivos** de un cliente lista los dispositivos asignados a él, igual que la de un
+activo. Son los dispositivos que ven los propios usuarios del cliente.
+
+La pestaña **Usuarios** lista los miembros cuyo acceso está limitado a este cliente: los accesos
+propios del cliente. **Invitar usuario** invita a alguien con su acceso ya limitado a este cliente.
+La pestaña solo se muestra si puedes leer los miembros del inquilino. Los usuarios de cliente se
+describen en
+[Miembros, roles y usuarios de cliente](/user-guide/members-roles-and-customer-users#customer-users).
+
+{/* TODO(screenshot): customer-detail-users, a customer's Users tab. */}
 
 ### Facetas {#facets}
 
@@ -201,3 +215,4 @@ con ese token los heredaría. Elige otro token para el grupo nuevo.
   áreas y clientes.
 - [Grupos, facetas y Explorar](./groups-facets-browse.md)
 - [Geocercas](./geofences.md)
+- [Miembros, roles y usuarios de cliente](/user-guide/members-roles-and-customer-users)

@@ -211,3 +211,38 @@ export const PUBLISHED_DASHBOARD = `
     }
   }
 ` as unknown as TypedDocument<PublishedDashboardResult, PublishedDashboardVariables>;
+
+// ── dashboard-management: the dashboards this viewer may open ────────────────
+// One page of the tenant's dashboards, metadata only. For a member limited to part of the
+// tenant (a customer user) the server answers only the PUBLISHED dashboards shared with
+// their customers; for anyone else, every dashboard, and the viewer keeps the published
+// ones, since a never-published dashboard has nothing it can show.
+
+export interface DashboardListItem {
+  token: string;
+  name: string | null;
+  description: string | null;
+  publishedVersion: number | null;
+}
+export interface DashboardsResult {
+  dashboards: { results: DashboardListItem[]; pagination: { totalRecords: number | null } };
+}
+export interface DashboardsVariables {
+  criteria: { pageNumber: number; pageSize: number };
+}
+
+export const DASHBOARDS = `
+  query Dashboards($criteria: DashboardSearchCriteria!) {
+    dashboards(criteria: $criteria) {
+      results {
+        token
+        name
+        description
+        publishedVersion
+      }
+      pagination {
+        totalRecords
+      }
+    }
+  }
+` as unknown as TypedDocument<DashboardsResult, DashboardsVariables>;

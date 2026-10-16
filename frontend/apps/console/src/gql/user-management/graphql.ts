@@ -4,6 +4,50 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** Paging for listing this tenant's invitations. */
+export type InvitationSearchCriteria = {
+  /** Page to return, starting at 1. */
+  pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
+  pageSize: number;
+};
+
+/** Where an invitation is in its life. */
+export type InvitationState =
+  /** Accepted: the member has joined. */
+  | 'ACCEPTED'
+  /** Not accepted before it expired. Reissue it to send a new one. */
+  | 'EXPIRED'
+  /** Issued and still usable. */
+  | 'PENDING'
+  /** Revoked by an administrator. */
+  | 'REVOKED';
+
+/** A person to invite into this tenant. */
+export type InviteMemberRequest = {
+  /** The person's email address. */
+  email: string;
+  /** Tokens of the roles to give them. Each must be assignable in this tenant. */
+  roleTokens: Array<string>;
+  /**
+   * The customers to limit them to. Omit it, or send an empty list, for the whole tenant. At
+   * most 16 anchors.
+   */
+  scope?: Array<ScopeAnchorInput> | null | undefined;
+};
+
+/** Filters and paging for listing this tenant's members. Filters are combined with AND. */
+export type MemberSearchCriteria = {
+  /** Only members whose email starts with this text, ignoring case. */
+  emailPrefix?: string | null | undefined;
+  /** True for enabled memberships only, false for disabled ones only. Omit it for both. */
+  enabled?: boolean | null | undefined;
+  /** Page to return, starting at 1. */
+  pageNumber: number;
+  /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
+  pageSize: number;
+};
+
 /**
  * Changes to the signed-in user's own display name. The user is identified by the request's
  * access token, so only your own profile can be edited. For each field, leaving it out keeps
@@ -15,6 +59,31 @@ export type ProfileUpdateRequest = {
   /** New last name. Omit to keep it, send null or an empty string to clear it. */
   lastName?: string | null | undefined;
 };
+
+/** Who defined a role. */
+export type RoleOwner =
+  /** A role the instance operator defined. It can be assigned here but not changed here. */
+  | 'INSTANCE'
+  /** A role this tenant defined for itself. It exists only in this tenant. */
+  | 'TENANT';
+
+/** One entry of a scope to set on a member. */
+export type ScopeAnchorInput = {
+  /** What the anchor names. Only CUSTOMER is accepted for now. */
+  kind: ScopeAnchorKind;
+  /** Token of the customer the anchor names. */
+  token: string;
+};
+
+/** The kind of thing a scope anchor names. */
+export type ScopeAnchorKind =
+  /** A customer: the anchor covers the devices assigned to that customer. */
+  | 'CUSTOMER'
+  /**
+   * An entity group. Not available yet: a scope naming a group is refused with the error code
+   * INVALID_VALUE.
+   */
+  | 'GROUP';
 
 /**
  * A basemap for setTenantBasemap. Every field is optional and the input replaces the
@@ -61,6 +130,147 @@ export type TenantBrandingInput = {
   /** Product name shown in the browser tab and the console, at most 64 characters. */
   title?: string | null | undefined;
 };
+
+/** A role to define for this tenant. */
+export type TenantRoleCreateRequest = {
+  /**
+   * The authorities the role grants. Each must be a tenant authority that you hold yourself;
+   * `*` only if you hold `*`.
+   */
+  authorities: Array<string>;
+  /** Free-text description of the role. */
+  description?: string | null | undefined;
+  /** Human-readable name of the role. */
+  name?: string | null | undefined;
+  /**
+   * Unique identifier for the role: letters, digits, hyphens and underscores, starting with a
+   * letter or digit, at most 128 characters. It may not be the token of an instance role.
+   */
+  token: string;
+};
+
+/**
+ * Changes to a role this tenant defined. For each field, leaving it out keeps the stored value,
+ * a value sets it, and null clears it.
+ */
+export type TenantRoleUpdateRequest = {
+  /**
+   * New authorities, replacing the current set. Omit to keep them; null or an empty list
+   * removes them all. Each must be a tenant authority that you hold yourself.
+   */
+  authorities?: Array<string> | null | undefined;
+  /** New description. Omit to keep it, send null to clear it. */
+  description?: string | null | undefined;
+  /** New name. Omit to keep it, send null to clear it. */
+  name?: string | null | undefined;
+};
+
+export type MembersQueryVariables = Exact<{
+  criteria: MemberSearchCriteria;
+}>;
+
+
+export type MembersQuery = { members: { results: Array<{ email: string, firstName: string | null, lastName: string | null, enabled: boolean, managedByIdentityProvider: boolean, invitationPending: boolean, roles: Array<{ token: string, name: string | null, owner: RoleOwner }>, scope: Array<{ kind: ScopeAnchorKind, token: string }> }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type InvitationsQueryVariables = Exact<{
+  criteria: InvitationSearchCriteria;
+}>;
+
+
+export type InvitationsQuery = { invitations: { results: Array<{ email: string, state: InvitationState, createdAt: string, expiresAt: string, acceptedAt: string | null, revokedAt: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
+export type TenantRolesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TenantRolesQuery = { tenantRoles: Array<{ token: string, name: string | null, description: string | null, authorities: Array<string>, owner: RoleOwner }> };
+
+export type TenantAuthoritiesQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type TenantAuthoritiesQuery = { tenantAuthorities: Array<string> };
+
+export type InviteMemberMutationVariables = Exact<{
+  request: InviteMemberRequest;
+}>;
+
+
+export type InviteMemberMutation = { inviteMember: { invitationCode: string, member: { email: string } } };
+
+export type SetMemberRolesMutationVariables = Exact<{
+  email: string;
+  roleTokens: Array<string> | string;
+}>;
+
+
+export type SetMemberRolesMutation = { setMemberRoles: { email: string } };
+
+export type SetMemberScopeMutationVariables = Exact<{
+  email: string;
+  scope: Array<ScopeAnchorInput> | ScopeAnchorInput;
+}>;
+
+
+export type SetMemberScopeMutation = { setMemberScope: { email: string } };
+
+export type SetMemberEnabledMutationVariables = Exact<{
+  email: string;
+  enabled: boolean;
+}>;
+
+
+export type SetMemberEnabledMutation = { setMemberEnabled: { email: string } };
+
+export type RemoveMemberMutationVariables = Exact<{
+  email: string;
+}>;
+
+
+export type RemoveMemberMutation = { removeMember: boolean };
+
+export type RevokeInvitationMutationVariables = Exact<{
+  email: string;
+}>;
+
+
+export type RevokeInvitationMutation = { revokeInvitation: { email: string } };
+
+export type ReissueInvitationMutationVariables = Exact<{
+  email: string;
+}>;
+
+
+export type ReissueInvitationMutation = { reissueInvitation: { invitationCode: string, member: { email: string } } };
+
+export type CreateTenantRoleMutationVariables = Exact<{
+  request: TenantRoleCreateRequest;
+}>;
+
+
+export type CreateTenantRoleMutation = { createTenantRole: { token: string } };
+
+export type UpdateTenantRoleMutationVariables = Exact<{
+  token: string;
+  request: TenantRoleUpdateRequest;
+}>;
+
+
+export type UpdateTenantRoleMutation = { updateTenantRole: { token: string } };
+
+export type DeleteTenantRoleMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type DeleteTenantRoleMutation = { deleteTenantRole: boolean };
+
+export type AcceptInvitationMutationVariables = Exact<{
+  code: string;
+  password?: string | null | undefined;
+  identityToken?: string | null | undefined;
+}>;
+
+
+export type AcceptInvitationMutation = { acceptInvitation: { identityToken: string, expiresAt: string, superuser: boolean, memberships: Array<{ tenant: string, roles: Array<string>, ssoRequired: boolean }> } };
 
 export type LoginMutationVariables = Exact<{
   email: string;
@@ -243,6 +453,159 @@ export const TenantFieldsFragmentDoc = new TypedDocumentString(`
   localeOverride
 }
     `, {"fragmentName":"TenantFields"}) as unknown as TypedDocumentString<TenantFieldsFragment, unknown>;
+export const MembersDocument = new TypedDocumentString(`
+    query Members($criteria: MemberSearchCriteria!) {
+  members(criteria: $criteria) {
+    results {
+      email
+      firstName
+      lastName
+      enabled
+      roles {
+        token
+        name
+        owner
+      }
+      scope {
+        kind
+        token
+      }
+      managedByIdentityProvider
+      invitationPending
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<MembersQuery, MembersQueryVariables>;
+export const InvitationsDocument = new TypedDocumentString(`
+    query Invitations($criteria: InvitationSearchCriteria!) {
+  invitations(criteria: $criteria) {
+    results {
+      email
+      state
+      createdAt
+      expiresAt
+      acceptedAt
+      revokedAt
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<InvitationsQuery, InvitationsQueryVariables>;
+export const TenantRolesDocument = new TypedDocumentString(`
+    query TenantRoles {
+  tenantRoles {
+    token
+    name
+    description
+    authorities
+    owner
+  }
+}
+    `) as unknown as TypedDocumentString<TenantRolesQuery, TenantRolesQueryVariables>;
+export const TenantAuthoritiesDocument = new TypedDocumentString(`
+    query TenantAuthorities {
+  tenantAuthorities
+}
+    `) as unknown as TypedDocumentString<TenantAuthoritiesQuery, TenantAuthoritiesQueryVariables>;
+export const InviteMemberDocument = new TypedDocumentString(`
+    mutation InviteMember($request: InviteMemberRequest!) {
+  inviteMember(request: $request) {
+    member {
+      email
+    }
+    invitationCode
+  }
+}
+    `) as unknown as TypedDocumentString<InviteMemberMutation, InviteMemberMutationVariables>;
+export const SetMemberRolesDocument = new TypedDocumentString(`
+    mutation SetMemberRoles($email: String!, $roleTokens: [String!]!) {
+  setMemberRoles(email: $email, roleTokens: $roleTokens) {
+    email
+  }
+}
+    `) as unknown as TypedDocumentString<SetMemberRolesMutation, SetMemberRolesMutationVariables>;
+export const SetMemberScopeDocument = new TypedDocumentString(`
+    mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {
+  setMemberScope(email: $email, scope: $scope) {
+    email
+  }
+}
+    `) as unknown as TypedDocumentString<SetMemberScopeMutation, SetMemberScopeMutationVariables>;
+export const SetMemberEnabledDocument = new TypedDocumentString(`
+    mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {
+  setMemberEnabled(email: $email, enabled: $enabled) {
+    email
+  }
+}
+    `) as unknown as TypedDocumentString<SetMemberEnabledMutation, SetMemberEnabledMutationVariables>;
+export const RemoveMemberDocument = new TypedDocumentString(`
+    mutation RemoveMember($email: String!) {
+  removeMember(email: $email)
+}
+    `) as unknown as TypedDocumentString<RemoveMemberMutation, RemoveMemberMutationVariables>;
+export const RevokeInvitationDocument = new TypedDocumentString(`
+    mutation RevokeInvitation($email: String!) {
+  revokeInvitation(email: $email) {
+    email
+  }
+}
+    `) as unknown as TypedDocumentString<RevokeInvitationMutation, RevokeInvitationMutationVariables>;
+export const ReissueInvitationDocument = new TypedDocumentString(`
+    mutation ReissueInvitation($email: String!) {
+  reissueInvitation(email: $email) {
+    member {
+      email
+    }
+    invitationCode
+  }
+}
+    `) as unknown as TypedDocumentString<ReissueInvitationMutation, ReissueInvitationMutationVariables>;
+export const CreateTenantRoleDocument = new TypedDocumentString(`
+    mutation CreateTenantRole($request: TenantRoleCreateRequest!) {
+  createTenantRole(request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<CreateTenantRoleMutation, CreateTenantRoleMutationVariables>;
+export const UpdateTenantRoleDocument = new TypedDocumentString(`
+    mutation UpdateTenantRole($token: String!, $request: TenantRoleUpdateRequest!) {
+  updateTenantRole(token: $token, request: $request) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<UpdateTenantRoleMutation, UpdateTenantRoleMutationVariables>;
+export const DeleteTenantRoleDocument = new TypedDocumentString(`
+    mutation DeleteTenantRole($token: String!) {
+  deleteTenantRole(token: $token)
+}
+    `) as unknown as TypedDocumentString<DeleteTenantRoleMutation, DeleteTenantRoleMutationVariables>;
+export const AcceptInvitationDocument = new TypedDocumentString(`
+    mutation AcceptInvitation($code: String!, $password: String, $identityToken: String) {
+  acceptInvitation(
+    code: $code
+    password: $password
+    identityToken: $identityToken
+  ) {
+    identityToken
+    expiresAt
+    superuser
+    memberships {
+      tenant
+      roles
+      ssoRequired
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AcceptInvitationMutation, AcceptInvitationMutationVariables>;
 export const LoginDocument = new TypedDocumentString(`
     mutation Login($email: String!, $password: String!) {
   login(email: $email, password: $password) {

@@ -15,7 +15,7 @@ import * as types from './graphql';
  * Learn more about it here: https://the-guild.dev/graphql/codegen/plugins/presets/preset-client#reducing-bundle-size
  */
 type Documents = {
-    "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DashboardsDocument,
+    "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n        publishedVersion\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DashboardsDocument,
     "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n      updatedAt\n      publishedVersion\n    }\n  }\n": typeof types.DashboardDocument,
     "\n  query DashboardPublishedVersion($token: String!) {\n    dashboard(token: $token) {\n      publishedVersion\n    }\n  }\n": typeof types.DashboardPublishedVersionDocument,
     "\n  query PublishedDashboard($token: String!) {\n    publishedDashboard(token: $token) {\n      token\n      name\n      description\n      version\n      publishedAt\n      definition\n    }\n  }\n": typeof types.PublishedDashboardDocument,
@@ -27,9 +27,11 @@ type Documents = {
     "\n  mutation ActivateDashboardVersion($token: String!, $version: Int!) {\n    activateDashboardVersion(token: $token, version: $version) {\n      publishedVersion\n    }\n  }\n": typeof types.ActivateDashboardVersionDocument,
     "\n  mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {\n    rollbackDashboard(token: $token, version: $version, expectedUpdatedAt: $expectedUpdatedAt) {\n      definition\n      updatedAt\n    }\n  }\n": typeof types.RollbackDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": typeof types.DeleteDashboardDocument,
+    "\n  query DashboardSharing($token: String!) {\n    dashboard(token: $token) {\n      token\n      sharedWith {\n        kind\n        token\n      }\n    }\n  }\n": typeof types.DashboardSharingDocument,
+    "\n  mutation ShareDashboard($token: String!, $anchors: [ScopeAnchorInput!]!) {\n    shareDashboard(token: $token, anchors: $anchors) {\n      token\n      sharedWith {\n        kind\n        token\n      }\n    }\n  }\n": typeof types.ShareDashboardDocument,
 };
 const documents: Documents = {
-    "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DashboardsDocument,
+    "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n        publishedVersion\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DashboardsDocument,
     "\n  query Dashboard($token: String!) {\n    dashboard(token: $token) {\n      token\n      name\n      description\n      definition\n      updatedAt\n      publishedVersion\n    }\n  }\n": types.DashboardDocument,
     "\n  query DashboardPublishedVersion($token: String!) {\n    dashboard(token: $token) {\n      publishedVersion\n    }\n  }\n": types.DashboardPublishedVersionDocument,
     "\n  query PublishedDashboard($token: String!) {\n    publishedDashboard(token: $token) {\n      token\n      name\n      description\n      version\n      publishedAt\n      definition\n    }\n  }\n": types.PublishedDashboardDocument,
@@ -41,12 +43,14 @@ const documents: Documents = {
     "\n  mutation ActivateDashboardVersion($token: String!, $version: Int!) {\n    activateDashboardVersion(token: $token, version: $version) {\n      publishedVersion\n    }\n  }\n": types.ActivateDashboardVersionDocument,
     "\n  mutation RollbackDashboard($token: String!, $version: Int!, $expectedUpdatedAt: String) {\n    rollbackDashboard(token: $token, version: $version, expectedUpdatedAt: $expectedUpdatedAt) {\n      definition\n      updatedAt\n    }\n  }\n": types.RollbackDashboardDocument,
     "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n": types.DeleteDashboardDocument,
+    "\n  query DashboardSharing($token: String!) {\n    dashboard(token: $token) {\n      token\n      sharedWith {\n        kind\n        token\n      }\n    }\n  }\n": types.DashboardSharingDocument,
+    "\n  mutation ShareDashboard($token: String!, $anchors: [ScopeAnchorInput!]!) {\n    shareDashboard(token: $token, anchors: $anchors) {\n      token\n      sharedWith {\n        kind\n        token\n      }\n    }\n  }\n": types.ShareDashboardDocument,
 };
 
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
-export function graphql(source: "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DashboardsDocument;
+export function graphql(source: "\n  query Dashboards($criteria: DashboardSearchCriteria!) {\n    dashboards(criteria: $criteria) {\n      results {\n        token\n        name\n        description\n        createdAt\n        updatedAt\n        publishedVersion\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n"): typeof import('./graphql').DashboardsDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
@@ -91,6 +95,14 @@ export function graphql(source: "\n  mutation RollbackDashboard($token: String!,
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteDashboard($token: String!) {\n    deleteDashboard(token: $token)\n  }\n"): typeof import('./graphql').DeleteDashboardDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query DashboardSharing($token: String!) {\n    dashboard(token: $token) {\n      token\n      sharedWith {\n        kind\n        token\n      }\n    }\n  }\n"): typeof import('./graphql').DashboardSharingDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation ShareDashboard($token: String!, $anchors: [ScopeAnchorInput!]!) {\n    shareDashboard(token: $token, anchors: $anchors) {\n      token\n      sharedWith {\n        kind\n        token\n      }\n    }\n  }\n"): typeof import('./graphql').ShareDashboardDocument;
 
 
 export function graphql(source: string) {

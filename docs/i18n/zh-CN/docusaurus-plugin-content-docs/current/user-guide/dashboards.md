@@ -201,7 +201,13 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 与客户共享 {#sharing-with-customers}
 
-访问仅限部分客户的成员，只有在仪表盘共享给其中某个客户之后才能看到它。使用需要 `dashboard:write` 的 `shareDashboard` 变更共享仪表盘：
+访问仅限部分客户的成员，只有在仪表板共享给其中某个客户并且已发布之后才能看到它。在仪表板列表中，对某个仪表板选择 **Share**（共享），选择客户，然后选择 **Save sharing**（保存共享）。你保存的列表会替换之前的列表，空列表表示不与任何人共享该仪表板。你可以在仪表板发布之前共享它；发布后，其客户即可看到。
+
+{/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
+
+请把共享的仪表板的组件绑定到设备。绑定到客户、资产或区域的组件需要通过关系查找其设备，而访问受限的成员无法读取关系，因此该组件不会向他们显示任何内容。
+
+程序可以通过需要 `dashboard:write` 的 `shareDashboard` 变更完成同样的操作：
 
 ```graphql
 mutation {

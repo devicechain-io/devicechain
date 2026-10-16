@@ -127,20 +127,21 @@ func TestAScopedCallerIsRefusedTenantAdministration(t *testing.T) {
 	scoped := bossClaims()
 	scoped.ScopeAnchors = []string{"customer:acme-corp"}
 	for name, doc := range map[string]string{
-		"members":          `{ members(criteria: {pageNumber: 1, pageSize: 10}) { results { email } } }`,
-		"member":           `{ member(email: "boss@acme.example") { email } }`,
-		"tenantRoles":      `{ tenantRoles { token } }`,
-		"invitations":      `{ invitations(criteria: {pageNumber: 1, pageSize: 10}) { results { email } } }`,
-		"inviteMember":     `mutation { inviteMember(request: {email: "x@y.example", roleTokens: []}) { invitationCode } }`,
-		"setMemberRoles":   `mutation { setMemberRoles(email: "boss@acme.example", roleTokens: []) { email } }`,
-		"setMemberScope":   `mutation { setMemberScope(email: "boss@acme.example", scope: []) { email } }`,
-		"setMemberEnabled": `mutation { setMemberEnabled(email: "boss@acme.example", enabled: false) { email } }`,
-		"removeMember":     `mutation { removeMember(email: "boss@acme.example") }`,
-		"revokeInvitation": `mutation { revokeInvitation(email: "boss@acme.example") { email } }`,
-		"reissue":          `mutation { reissueInvitation(email: "boss@acme.example") { invitationCode } }`,
-		"createTenantRole": `mutation { createTenantRole(request: {token: "x", authorities: []}) { token } }`,
-		"updateTenantRole": `mutation { updateTenantRole(token: "x", request: {}) { token } }`,
-		"deleteTenantRole": `mutation { deleteTenantRole(token: "x") }`,
+		"members":           `{ members(criteria: {pageNumber: 1, pageSize: 10}) { results { email } } }`,
+		"member":            `{ member(email: "boss@acme.example") { email } }`,
+		"tenantRoles":       `{ tenantRoles { token } }`,
+		"tenantAuthorities": `{ tenantAuthorities }`,
+		"invitations":       `{ invitations(criteria: {pageNumber: 1, pageSize: 10}) { results { email } } }`,
+		"inviteMember":      `mutation { inviteMember(request: {email: "x@y.example", roleTokens: []}) { invitationCode } }`,
+		"setMemberRoles":    `mutation { setMemberRoles(email: "boss@acme.example", roleTokens: []) { email } }`,
+		"setMemberScope":    `mutation { setMemberScope(email: "boss@acme.example", scope: []) { email } }`,
+		"setMemberEnabled":  `mutation { setMemberEnabled(email: "boss@acme.example", enabled: false) { email } }`,
+		"removeMember":      `mutation { removeMember(email: "boss@acme.example") }`,
+		"revokeInvitation":  `mutation { revokeInvitation(email: "boss@acme.example") { email } }`,
+		"reissue":           `mutation { reissueInvitation(email: "boss@acme.example") { invitationCode } }`,
+		"createTenantRole":  `mutation { createTenantRole(request: {token: "x", authorities: []}) { token } }`,
+		"updateTenantRole":  `mutation { updateTenantRole(token: "x", request: {}) { token } }`,
+		"deleteTenantRole":  `mutation { deleteTenantRole(token: "x") }`,
 	} {
 		_, ext := w.exec(t, scoped, doc, nil)
 		require.NotNilf(t, ext, "%s answered a scoped caller", name)
@@ -188,4 +189,33 @@ func TestMeReportsTheCallersScope(t *testing.T) {
 	data, ext = w.exec(t, bossClaims(), `{ me { scope { kind } } }`, nil)
 	require.Nil(t, ext)
 	require.Equal(t, []any{}, data["me"].(map[string]any)["scope"], "an unscoped member reported a scope")
+}
+
+// tenantAuthorities offers a tenant-owned role exactly the tenant-tier vocabulary and "*":
+// never an instance authority, which a tenant role could not carry and the write path
+// would refuse. The judge is core/auth's own tier table, so the test cannot agree with a
+// hand list that drifted with it.
+func TestTenantAuthoritiesAreTheTenantTierVocabulary(t *testing.T) {
+	w := newWireEnv(t)
+	data, ext := w.exec(t, bossClaims(), `{ tenantAuthorities }`, nil)
+	require.Nil(t, ext)
+	var got []string
+	for _, a := range data["tenantAuthorities"].([]any) {
+		got = append(got, a.(string))
+	}
+	require.Equal(t, auth.AuthoritiesForScope(auth.TierTenant), got)
+	require.Contains(t, got, "*")
+	require.Contains(t, got, string(auth.MemberWrite))
+	require.NotContains(t, got, string(auth.TenantRead), "an instance authority was offered to a tenant role")
+}
+
+// tenantAuthorities needs role:read in particular: a member who may read members but not
+// roles is refused. Without this, any tenant authority the fixture happens to hold would do.
+func TestTenantAuthoritiesNeedRoleRead(t *testing.T) {
+	w := newWireEnv(t)
+	reader := bossClaims()
+	reader.Authorities = append(identity.ViewerAuthorities(), string(auth.MemberRead))
+	_, ext := w.exec(t, reader, `{ tenantAuthorities }`, nil)
+	require.NotNil(t, ext, "tenantAuthorities answered a caller without role:read")
+	require.Equal(t, "FORBIDDEN", ext["code"])
 }

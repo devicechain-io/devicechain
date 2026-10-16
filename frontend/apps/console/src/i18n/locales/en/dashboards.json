@@ -446,5 +446,21 @@
   "widgetLabelGroupBy": "One bar per",
   "widgetHintGroupBy": "What a bar stands for: each measurement of one device, or each device of the group for the one measurement chosen below.",
   "widgetGroupByMeasurement": "Measurement",
-  "widgetGroupByDevice": "Device"
+  "widgetGroupByDevice": "Device",
+  "descriptionShared": "The dashboards shared with you.",
+  "emptyShared": "No dashboards have been shared with you yet.",
+  "share": "Share",
+  "shareTitle": "Share {{name}}",
+  "shareDescription": "Users limited to the chosen customers can list this dashboard and open its published version, here and in the dashboard app. They never see the draft.",
+  "shareLoading": "Loading who the dashboard is shared with…",
+  "shareNotPublished": "This dashboard has not been published yet. Customers it is shared with see it once it is.",
+  "shareCustomersLabel": "Customers",
+  "shareCustomersDescription": "Replaces the current list. Leave it empty to share with nobody.",
+  "shareCustomersPlaceholder": "Choose customers",
+  "shareCustomersSearchPlaceholder": "Filter customers…",
+  "shareCustomersEmpty": "No customers match.",
+  "shareSave": "Save sharing",
+  "sharedToast_one": "{{name}} is shared with {{count}} customer.",
+  "sharedToast_other": "{{name}} is shared with {{count}} customers.",
+  "sharedWithNobody": "{{name}} is no longer shared with any customer."
 }

@@ -35,7 +35,7 @@ import {
 import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
 import { preloadWidgets } from '@devicechain/widgets';
 
-import { PUBLISHED_DASHBOARD } from './queries';
+import { DASHBOARDS, PUBLISHED_DASHBOARD, type DashboardListItem } from './queries';
 
 // A loaded, parsed dashboard ready to render: the definition plus the binding manifest
 // (the host's override map) it renders against.
@@ -190,4 +190,31 @@ function fetchError(err: unknown): LoadError {
   // is recognised by the SDK's own classifier rather than by a code of ours.
   if (isForbiddenError(err)) return { code: 'dashboardForbidden' };
   return { code: 'dashboardFetchFailed', detail: errorDetail(err) };
+}
+
+// The most dashboards the list offers. Past it the list says how many more there are, and
+// the token field below still opens any of them.
+export const DASHBOARD_LIST_LIMIT = 200;
+
+/**
+ * The published dashboards this viewer may open, by name, and whether the tenant holds
+ * more than one page of dashboards (so the list may be missing some). A refusal or an
+ * outage is answered as an error rather than as an empty list, so "nothing is shared with
+ * you" is never shown for "the request failed".
+ */
+export async function listOpenableDashboards(): Promise<
+  { dashboards: DashboardListItem[]; more: boolean } | { error: LoadError }
+> {
+  try {
+    const data = await gql('dashboard-management', DASHBOARDS, {
+      criteria: { pageNumber: 1, pageSize: DASHBOARD_LIST_LIMIT },
+    });
+    const published = data.dashboards.results
+      .filter((d) => d.publishedVersion != null)
+      .sort((a, b) => (a.name || a.token).localeCompare(b.name || b.token));
+    const total = data.dashboards.pagination.totalRecords ?? data.dashboards.results.length;
+    return { dashboards: published, more: total > data.dashboards.results.length };
+  } catch (err) {
+    return { error: fetchError(err) };
+  }
 }

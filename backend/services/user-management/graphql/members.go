@@ -236,6 +236,20 @@ func (r *SchemaResolver) TenantRoles(ctx context.Context) ([]*TenantRoleResolver
 	return tenantRoles(roles), nil
 }
 
+// TenantAuthorities lists the authorities a tenant-owned role may grant: the tenant-tier
+// vocabulary and "*" (requires role:read, refused to a scoped member like every other
+// read here). It is the tenant plane's view of the admin plane's authorities(scope:
+// "tenant"), which a tenant admin cannot reach — that one needs the system-tier role:read
+// on an identity token — and it backs the console's role checklist. What the CALLER may
+// grant is narrower (their own authorities); that bound is the write path's, not this
+// list's.
+func (r *SchemaResolver) TenantAuthorities(ctx context.Context) ([]string, error) {
+	if err := auth.Authorize(ctx, auth.RoleRead); err != nil {
+		return nil, err
+	}
+	return auth.AuthoritiesForScope(auth.TierTenant), nil
+}
+
 // ---- invitations ------------------------------------------------------------------------
 
 // InvitationResolver resolves the Invitation type.

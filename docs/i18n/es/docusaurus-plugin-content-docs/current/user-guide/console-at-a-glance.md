@@ -50,12 +50,16 @@ se te lleva a su primera página. Solo hay un submenú abierto a la vez.
 | **Explorar** | Un generador de consultas para encontrar entidades por sus facetas. |
 | **Auditoría** | El registro del inquilino de quién cambió qué. |
 | **Actualizaciones** | **Artefactos** y **Firmantes** para las actualizaciones remotas (OTA). |
-| **Configuración** | **Marca**, **Mapa** e **Idioma**. |
+| **Configuración** | **Miembros**, **Roles**, **Marca**, **Mapa** e **Idioma**. |
 
 Solo ves las entradas que tu rol permite. Si tu rol no puede leer alarmas, por ejemplo,
 **Alarmas** no aparece en tu barra lateral. **Actualizaciones** solo aparece cuando tu instalación
 ejecuta el servicio de actualizaciones. Las entradas de **Configuración** son para los
 administradores del inquilino.
+
+Si tu acceso está limitado a algunos de los clientes del inquilino, la barra lateral contiene solo
+**Panel**, **Paneles**, **Alarmas** y **Dispositivos**. Consulta
+[Qué ve un usuario de cliente](/user-guide/members-roles-and-customer-users#what-a-customer-user-sees).
 
 Tu nombre y tu correo aparecen al pie de la barra lateral. Abren el menú de usuario, que se
 describe en [Iniciar sesión](./signing-in.md#the-user-menu).
@@ -75,7 +79,11 @@ el nombre del inquilino y, debajo, su token.
 <GuideShot id="console-tenant-chip" alt="El distintivo de inquilino: una pequeña tarjeta con un icono de edificio, el nombre del inquilino 'acme (sim)' y, debajo, el token 'sim-acme' en letra monoespaciada." />
 
 Si tu inquilino ha subido un logotipo, el distintivo muestra el logotipo en lugar del icono de
-edificio. Todo lo que ves y cambias en la consola pertenece a este inquilino. Para trabajar en
+edificio.
+Si tu acceso está limitado a algunos de los clientes del inquilino, la segunda línea nombra esos
+clientes y tu rol en lugar del token: por ejemplo **Acme · viewer**, el nombre del cliente y después
+el token de tu rol.
+Todo lo que ves y cambias en la consola pertenece a este inquilino. Para trabajar en
 otro inquilino, cierra sesión y elígelo al volver a iniciarla.
 
 ## Cuando un área no está disponible

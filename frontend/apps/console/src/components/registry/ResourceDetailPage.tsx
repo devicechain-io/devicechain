@@ -18,6 +18,8 @@ import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import type { RegistryResource } from '@/components/registry/types';
+import { useAuth } from '@/auth/AuthProvider';
+import { hasAuthority } from '@devicechain/client';
 
 // Generic detail page: loads the entity by token, frames it with a header toolbar
 // (Back + Delete), renders the resource's form, and appends any extra panels
@@ -25,6 +27,7 @@ import type { RegistryResource } from '@/components/registry/types';
 // referential-integrity refusal) and only navigates away on success.
 export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource<T> }) {
   const { t } = useTranslation(['entities', 'common']);
+  const { claims } = useAuth();
   // Resolve one of this family's noun-bearing strings by its fixed suffix.
   const e = (suffix: string, opts?: Record<string, unknown>) =>
     t(`entities:${resource.i18nKey}${suffix}`, opts);
@@ -95,7 +98,7 @@ export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource
   // Detail tabs beside "Basic": the N-tab list wins (device profiles), else the
   // legacy single labelled extra (a group's Members, a type's Appearance).
   const extraTabs: { value: string; label: string; content: ReactNode }[] = resource.detailTabs
-    ? resource.detailTabs.map((tab) => ({
+    ? resource.detailTabs.filter((tab) => !tab.requires || hasAuthority(claims, tab.requires)).map((tab) => ({
         value: tab.value,
         label: t(tab.label),
         content: tab.render(item, reload),

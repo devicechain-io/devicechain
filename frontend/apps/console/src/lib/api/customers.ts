@@ -113,6 +113,28 @@ export async function getCustomer(token: string): Promise<Customer | null> {
   return data.customersByToken[0] ?? null;
 }
 
+const CUSTOMER_NAMES = graphql(`
+  query CustomerNames($tokens: [String!]!) {
+    customersByToken(tokens: $tokens) {
+      token
+      name
+    }
+  }
+`);
+
+/**
+ * Display names for the given customer tokens, as a token → name map. A token that names
+ * no customer (or one hidden from the caller) is absent from the map, so the caller falls
+ * back to showing the token. A member limited to customers can read their own here.
+ */
+export async function getCustomerNames(tokens: string[]): Promise<Record<string, string>> {
+  if (tokens.length === 0) return {};
+  const data = await gql('device-management', CUSTOMER_NAMES, { tokens });
+  const out: Record<string, string> = {};
+  for (const c of data.customersByToken) if (c.name) out[c.token] = c.name;
+  return out;
+}
+
 const CREATE_CUSTOMER = graphql(`
   mutation CreateCustomer($request: CustomerCreateRequest) {
     createCustomer(request: $request) {

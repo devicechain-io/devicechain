@@ -217,6 +217,11 @@ Open a role to change its name, description and **Authorities**, then choose **S
 scope and token are fixed once the role exists. **New role** creates one; **Delete** removes a role
 from everyone who holds it.
 
+A tenant's own administrators assign these tenant roles to their members, and can also define roles
+of their own, which exist only in that tenant and carry only tenant authorities. They manage their
+members, invitations and roles themselves, without the admin console; see
+[Members, roles and customer users](/user-guide/members-roles-and-customer-users).
+
 <GuideShot id="admin-role-detail" alt="The facilities-viewer tenant role. Scope shows tenant selected and system unavailable. Token facilities-viewer (greyed out), Name Facilities viewer, Description Reads devices, live state, telemetry and alarms, and acknowledges alarms. Changes nothing else. Authorities lists device:read, state:read, event:read, alarm:read, alarm:write, dashboard:read and location:read. A Save changes button and a Delete button." />
 
 ## Identity providers

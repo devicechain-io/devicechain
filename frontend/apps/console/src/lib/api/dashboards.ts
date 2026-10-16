@@ -23,6 +23,7 @@ import type {
   DashboardVersionsQuery,
   PublishedDashboardQuery,
   DashboardUpdateRequest,
+  ScopeAnchorKind,
 } from '@/gql/dashboard-management/graphql';
 
 // Public types are derived from the generated operation results so they always
@@ -46,6 +47,7 @@ const DASHBOARDS = graphql(`
         description
         createdAt
         updatedAt
+        publishedVersion
       }
       pagination {
         pageStart
@@ -482,4 +484,54 @@ const DELETE_DASHBOARD = graphql(`
 export async function deleteDashboard(token: string): Promise<boolean> {
   const data = await gql('dashboard-management', DELETE_DASHBOARD, { token });
   return data.deleteDashboard;
+}
+
+// ── Sharing with customers ───────────────────────────────────────────────
+//
+// Kept OUT of the list and detail selections above on purpose: `sharedWith` is refused to a
+// member whose access is limited to part of the tenant, and the list query is exactly the
+// one such a member uses to see what is shared with them. Selecting it there would turn
+// their whole list into an error.
+
+const DASHBOARD_SHARING = graphql(`
+  query DashboardSharing($token: String!) {
+    dashboard(token: $token) {
+      token
+      sharedWith {
+        kind
+        token
+      }
+    }
+  }
+`);
+
+/** The customer tokens the dashboard is shared with, or null when there is no such dashboard. */
+export async function getDashboardSharing(token: string): Promise<string[] | null> {
+  const data = await gql('dashboard-management', DASHBOARD_SHARING, { token });
+  if (!data.dashboard) return null;
+  return data.dashboard.sharedWith.filter((a) => a.kind === 'CUSTOMER').map((a) => a.token);
+}
+
+const SHARE_DASHBOARD = graphql(`
+  mutation ShareDashboard($token: String!, $anchors: [ScopeAnchorInput!]!) {
+    shareDashboard(token: $token, anchors: $anchors) {
+      token
+      sharedWith {
+        kind
+        token
+      }
+    }
+  }
+`);
+
+/**
+ * Replace the customers the dashboard is shared with. Members limited to one of them can
+ * then list it and open its PUBLISHED version; an empty list shares it with nobody.
+ */
+export async function shareDashboard(token: string, customerTokens: string[]): Promise<string[]> {
+  const data = await gql('dashboard-management', SHARE_DASHBOARD, {
+    token,
+    anchors: customerTokens.map((t) => ({ kind: 'CUSTOMER' as ScopeAnchorKind, token: t })),
+  });
+  return data.shareDashboard.sharedWith.map((a) => a.token);
 }

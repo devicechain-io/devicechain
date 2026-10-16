@@ -3,9 +3,11 @@
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Copy, Plus, Trash2, Upload } from 'lucide-react';
+import { Copy, Plus, Share2, Trash2, Upload } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { hasAuthority } from '@devicechain/client';
+import { isScoped } from '@devicechain/client';
+import { mayWrite } from '@/lib/scope';
+import { ShareDashboardDrawer } from './ShareDashboardDrawer';
 import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
 import {
@@ -54,7 +56,13 @@ export default function DashboardsPage() {
   // dashboard:write -- the check the editor's own Clone item uses. A read-only member is
   // not offered a button that can only fail.
   const { claims } = useAuth();
-  const canWrite = hasAuthority(claims, 'dashboard:write');
+  //
+  // A member limited to part of the tenant (a customer user) is served only the published
+  // dashboards shared with their customers, and may change none of them, so they are
+  // offered no authoring at all — whatever their role says.
+  const canWrite = mayWrite(claims, 'dashboard:write');
+  const scoped = isScoped(claims);
+  const [sharing, setSharing] = useState<{ token: string; name: string; published: boolean } | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
   const [creating, setCreating] = useState(false);
   // The import drawer's input: pasted/uploaded JSON (no text), a template, or a clone.
@@ -117,19 +125,33 @@ export default function DashboardsPage() {
   return (
     <PageShell
       title={t('title')}
-      description={t('description')}
+      description={scoped ? t('descriptionShared') : t('description')}
       banner="dashboard"
       action={
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={() => setImporting({})} data-shot="dashboard-import-button">
-            <Upload size={16} /> {t('importDashboard')}
-          </Button>
-          <Button onClick={() => setCreating(true)} data-shot="new-button">
-            <Plus size={16} /> {t('newDashboard')}
-          </Button>
-        </div>
+        scoped ? undefined : (
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => setImporting({})} data-shot="dashboard-import-button">
+              <Upload size={16} /> {t('importDashboard')}
+            </Button>
+            <Button onClick={() => setCreating(true)} data-shot="new-button">
+              <Plus size={16} /> {t('newDashboard')}
+            </Button>
+          </div>
+        )
       }
     >
+      {sharing && (
+        <ShareDashboardDrawer
+          token={sharing.token}
+          name={sharing.name}
+          published={sharing.published}
+          onClose={() => setSharing(null)}
+          onShared={(count) => {
+            toast(count === 0 ? t('sharedWithNobody', { name: sharing.name }) : t('sharedToast', { name: sharing.name, count }));
+            setSharing(null);
+          }}
+        />
+      )}
       <DashboardImportDrawer
         // Remounts per source so a template/clone starts clean.
         key={importing?.text ?? 'paste'}
@@ -178,7 +200,7 @@ export default function DashboardsPage() {
       ) : error ? (
         <ErrorState description={error} />
       ) : results.length === 0 ? (
-        <EmptyState description={t('empty')} />
+        <EmptyState description={scoped ? t('emptyShared') : t('empty')} />
       ) : (
         <>
           <DataTable>
@@ -212,6 +234,24 @@ export default function DashboardsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        data-shot="dashboard-share-button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSharing({
+                            token: dashboard.token,
+                            name: dashboard.name || dashboard.token,
+                            published: dashboard.publishedVersion != null,
+                          });
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <Share2 size={14} /> {t('share')}
+                      </Button>
+                    )}
+                    {canWrite && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
                         onClick={(e) => {
                           e.stopPropagation();
                           void clone(dashboard.token);
@@ -221,17 +261,19 @@ export default function DashboardsPage() {
                         <Copy size={14} /> {t('clone')}
                       </Button>
                     )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        void remove(dashboard.token);
-                      }}
-                      onKeyDown={(e) => e.stopPropagation()}
-                    >
-                      <Trash2 size={14} /> {t('delete')}
-                    </Button>
+                    {!scoped && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void remove(dashboard.token);
+                        }}
+                        onKeyDown={(e) => e.stopPropagation()}
+                      >
+                        <Trash2 size={14} /> {t('delete')}
+                      </Button>
+                    )}
                   </DataTableCell>
                 </DataTableRow>
               ))}
