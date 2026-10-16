@@ -197,6 +197,9 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	// model is migrated fails with ErrNoTenant. DDL inside the migrations is
 	// unaffected (the callbacks act on row operations, not schema changes).
 	migrateDB := rdb.Database.WithContext(core.WithSystemContext(ctx))
+	if err := CheckMigrationIDs(rdb.Migrations); err != nil {
+		return fmt.Errorf("%s migration chain: %w", rdb.Microservice.FunctionalArea, err)
+	}
 	m := gormigrate.New(migrateDB, options, rdb.Migrations)
 
 	// Serialize this area's schema DDL across concurrently-rolling pods with a
