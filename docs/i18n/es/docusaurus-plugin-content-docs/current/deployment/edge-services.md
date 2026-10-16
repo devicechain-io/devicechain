@@ -608,8 +608,12 @@ segundos) a que se almacene lo que está en vuelo antes de liberar el arrendamie
 aplica en esta vía dividiendo el mensaje, no rechazándolo. Un DDATA que lleve miles de métricas se
 convierte en varios eventos, y sigue siendo una lectura almacenada por métrica: cada una, su propia
 fila, actualización de estado y evaluación de reglas en el motor de detección que comparten todos los
-inquilinos. La división acota cada evento, y el techo acota las lecturas por segundo, pero nada acota
-el total de un mensaje. Acota el número de métricas por publicación en el nodo de borde.
+inquilinos. La división acota cada evento, y el techo acota las lecturas por segundo. Un mensaje
+también está acotado, a 16.384 métricas: de un mensaje que lleve más no se almacena ninguna lectura,
+sus métricas se cuentan en `samples_skipped_total{reason="oversize"}` y el servicio registra una
+advertencia que nombra el tema. El mensaje sigue contando para la sesión, así que un birth por encima
+del límite sigue conectando el nodo y declarando sus alias, y los DATA posteriores del nodo se leen
+como siempre. Acota el número de métricas por publicación en el nodo de borde.
 
 La [puerta del ciclo de vida del inquilino](./tenant-deletion.md) sigue aplicándose. El tráfico de un
 inquilino en eliminación se rechaza en esta vía como en cualquier otra, y se cuenta en
