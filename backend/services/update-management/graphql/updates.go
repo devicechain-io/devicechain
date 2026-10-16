@@ -138,11 +138,19 @@ func (r *UpdateAssignmentResolver) Component() string { return r.M.Assignment.Co
 func (r *UpdateAssignmentResolver) Artifact() *ArtifactResolver {
 	return newArtifactResolver(r.api, r.M.Artifact)
 }
-func (r *UpdateAssignmentResolver) Actor() *string {
-	if r.M.Assignment.Actor == "" {
-		return nil
+
+// Actor names the operator who made the assignment — a username, which for a person is their
+// email. A member limited to part of the tenant (ADR-081) reads the assignments of its own
+// devices, but the tenant's staff are not its business: the field refuses it, rather than
+// answering null, which would read as "nobody".
+func (r *UpdateAssignmentResolver) Actor(ctx context.Context) (*string, error) {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return nil, auth.ErrScopeUnsupported
 	}
-	return &r.M.Assignment.Actor
+	if r.M.Assignment.Actor == "" {
+		return nil, nil
+	}
+	return &r.M.Assignment.Actor, nil
 }
 func (r *UpdateAssignmentResolver) SupersededAt() *string {
 	if !r.M.Assignment.SupersededAt.Valid {

@@ -215,7 +215,18 @@ func (r *ArtifactResolver) CompatibleProfiles() ([]string, error) {
 }
 
 // Provenance is the stored provenance document, or null when none was recorded.
-func (r *ArtifactResolver) Provenance() *string {
+// Provenance records who uploaded the artifact (a username, which for a person is their
+// email) and the uploader's own source and notes. A member limited to part of the tenant
+// (ADR-081) reaches an artifact only as the one its device's assignment names, and the
+// tenant's staff and their notes are not its business: the field refuses it.
+func (r *ArtifactResolver) Provenance(ctx context.Context) (*string, error) {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return nil, auth.ErrScopeUnsupported
+	}
+	return r.provenance(), nil
+}
+
+func (r *ArtifactResolver) provenance() *string {
 	if len(r.M.Provenance) == 0 {
 		return nil
 	}

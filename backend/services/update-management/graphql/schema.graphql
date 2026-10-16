@@ -171,7 +171,10 @@ type Artifact {
     The signature bytes are not exposed.
     """
     signatures: [ArtifactSignature!]!
-    """Who declared the artifact and any source or notes they recorded, as a JSON object; null when none."""
+    """
+    Who declared the artifact and any source or notes they recorded, as a JSON object; null when
+    none. Not available to a member whose access is limited to part of the tenant.
+    """
     provenance: String
     """Where the artifact is in its lifecycle."""
     state: ArtifactState!
@@ -330,7 +333,7 @@ type UpdateAssignment {
     component: String!
     """The artifact being installed."""
     artifact: Artifact!
-    """Who assigned it."""
+    """Who assigned it. Not available to a member whose access is limited to part of the tenant."""
     actor: String
     """When a newer assignment replaced this one; null while it is the device's current assignment."""
     supersededAt: String

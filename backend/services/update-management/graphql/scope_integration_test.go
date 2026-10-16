@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -175,4 +176,27 @@ func TestScopedMembersCannotAssignOrCancel(t *testing.T) {
 	member := p.member("customer:acme")
 	require.Equal(t, auth.ErrScopeUnsupported.Error(), code(p.exec(member, assignMutation, map[string]any{"d": "dev-acme", "a": "fw-1"})))
 	require.Equal(t, auth.ErrScopeUnsupported.Error(), code(p.exec(member, `mutation { cancelUpdate(assignmentToken:"x"){ token } }`, nil)))
+}
+
+// 🔴 The member reads its devices' assignments, but not who among the tenant's staff made them:
+// the assigning actor and the artifact's provenance (which records the uploader) refuse it. The
+// operator still reads both.
+func TestScopedMembersDoNotSeeTheTenantsStaff(t *testing.T) {
+	p := pgPlane(t)
+	p.available("fw-1", []byte("image"))
+	op := p.ctx("acme", auth.ArtifactRead, auth.ArtifactWrite)
+	resp := p.exec(op, assignMutation, map[string]any{"d": "dev-acme", "a": "fw-1"})
+	require.Empty(t, resp.Errors)
+	var got struct{ AssignArtifact struct{ Token string } }
+	require.NoError(t, json.Unmarshal(resp.Data, &got))
+	vars := map[string]any{"t": got.AssignArtifact.Token}
+
+	for _, field := range []string{"actor", "artifact { provenance }"} {
+		q := `query($t: String!) { updateAssignment(token: $t) { token ` + field + ` } }`
+		resp = p.exec(p.member("customer:acme"), q, vars)
+		require.NotEmpty(t, resp.Errors, field)
+		require.True(t, errors.Is(resp.Errors[0].ResolverError, auth.ErrScopeUnsupported), "%s: %v", field, resp.Errors[0])
+		resp = p.exec(op, q, vars)
+		require.Empty(t, resp.Errors, "control: the operator reads %s", field)
+	}
 }
