@@ -79,3 +79,39 @@ func TestSourceDedupIDIsLossless(t *testing.T) {
 		}
 	}
 }
+
+// TestSourceDedupIDNeverMatchesAPreviousBuildsID is the rolling upgrade: both builds publish
+// into resolved-events (and failed-events) while it runs, and the broker holds every id for
+// the duplicate window. The previous build wrote "resolved:<tenant>:<seq>:<index>" and
+// "failed:…" in DECIMAL, and every decimal string is also a base-36 one, so an id of this
+// build that EQUALS one of those for a different source would be answered as a duplicate and
+// the event discarded. The one-letter kinds are what keep the two shapes disjoint: a kind
+// spelled out again would make this build's id for sequence 36 the old id for sequence 10.
+func TestSourceDedupIDNeverMatchesAPreviousBuildsID(t *testing.T) {
+	previous := func(kind, tenant string, seq uint64, index int) string {
+		return kind + ":" + tenant + ":" + strconv.FormatUint(seq, 10) + ":" + strconv.Itoa(index)
+	}
+	for _, kind := range []string{dedupKindResolved, dedupKindFailed} {
+		for seq := uint64(1); seq <= 50_000; seq++ {
+			for _, index := range []int{0, 1, 36} {
+				id := sourceDedupID(kind, "acme", messaging.Message{StreamSeq: seq}, index)
+				parts := strings.Split(id, ":")
+				if len(parts) != 4 {
+					continue
+				}
+				oldSeq, err1 := strconv.ParseUint(parts[2], 10, 64)
+				oldIndex, err2 := strconv.Atoi(parts[3])
+				if err1 != nil || err2 != nil {
+					continue
+				}
+				for _, oldKind := range []string{"resolved", "failed"} {
+					if previous(oldKind, parts[1], oldSeq, oldIndex) == id {
+						t.Fatalf("sourceDedupID(%q, seq %d, index %d) = %q, the previous build's id for %s "+
+							"seq %d index %d: during an upgrade one of the two is discarded as a duplicate",
+							kind, seq, index, id, oldKind, oldSeq, oldIndex)
+					}
+				}
+			}
+		}
+	}
+}

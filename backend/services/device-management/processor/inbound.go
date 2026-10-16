@@ -617,6 +617,11 @@ func resolvedDedupID(tenant string, coord *ackCoord, index int) string {
 // source is acked before the connection drains), so what is exposed is a publish whose
 // acknowledgement was lost in the rollout itself, redelivered to a pod of the other build:
 // stored twice, which event-management's event key absorbs and DETECT applies twice.
+// And a new shape must be DISJOINT from the old one, not merely different: an id of one
+// build that equals an id the other wrote for a DIFFERENT source is answered as a duplicate
+// and that event is discarded. Every decimal string is also a base-36 one, so it is the
+// one-letter kinds ("r", not the previous build's "resolved") that keep them apart;
+// TestSourceDedupIDNeverMatchesAPreviousBuildsID.
 //
 // A source with no stream sequence (broker metadata unavailable) gets NO id, never a
 // shared one: every such source would carry the same sequence, 0, and the second would

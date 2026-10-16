@@ -64,7 +64,7 @@ func TestDedupIDReturnsEmptyWhenNoStableIdentityExists(t *testing.T) {
 func TestDedupIDContainsNothingDeviceControlled(t *testing.T) {
 	const tenant = "acme"
 	id := DedupID(tenant, 12345)
-	if want := "acme:9ix"; id != want {
+	if want := "acme.9ix"; id != want {
 		t.Errorf("DedupID = %q, want %q — the id is the tenant and the capture sequence (base 36), "+
 			"and nothing else", id, want)
 	}
@@ -86,9 +86,9 @@ func TestDedupIDIsTheCaptureSequenceLosslessly(t *testing.T) {
 		if again := DedupID("acme", seq); again != id {
 			t.Fatalf("DedupID(%d) is not deterministic: %q then %q", seq, id, again)
 		}
-		tenant, enc, ok := strings.Cut(id, ":")
+		tenant, enc, ok := strings.Cut(id, ".")
 		if !ok || tenant != "acme" {
-			t.Fatalf("DedupID(%d) = %q: want the tenant before the first ':'", seq, id)
+			t.Fatalf("DedupID(%d) = %q: want the tenant before the first '.'", seq, id)
 		}
 		got, err := strconv.ParseUint(enc, 36, 64)
 		if err != nil || got != seq {
@@ -99,7 +99,55 @@ func TestDedupIDIsTheCaptureSequenceLosslessly(t *testing.T) {
 		}
 		seen[id] = seq
 	}
-	if got, want := DedupID("acme", 123456789), "acme:21i3v9"; got != want {
+	if got, want := DedupID("acme", 123456789), "acme.21i3v9"; got != want {
 		t.Errorf("DedupID = %q, want %q", got, want)
+	}
+}
+
+// previousBuildDedupID is the id the build before base 36 published for a capture message:
+// the tenant, ':' and the sequence in DECIMAL. It is frozen here, not shared with DedupID,
+// because it is what a broker may still be holding from a pod of that build.
+func previousBuildDedupID(tenant string, captureSeq uint64) string {
+	return tenant + ":" + strconv.FormatUint(captureSeq, 10)
+}
+
+// TestDedupIDNeverMatchesAPreviousBuildsID is the rolling upgrade. Both builds publish into
+// the same inbound-events stream while the upgrade runs, and the broker holds every id for
+// the duplicate window, so an id this build publishes that EQUALS one the previous build
+// published for a different capture message is not a missed dedup: the broker answers it
+// as a duplicate and the event is silently discarded.
+//
+// Every decimal string is also a base-36 one, so with the same "<tenant>:" in front the two
+// shapes would overlap: the previous build's "acme:1000" (sequence 1,000) would be this
+// build's id for sequence 46,656. On a young stream — a fresh install upgraded within
+// minutes — both sequences fall inside one window. So the shapes must be DISJOINT, not
+// merely different, which is what the '.' separator buys.
+func TestDedupIDNeverMatchesAPreviousBuildsID(t *testing.T) {
+	const tenant = "acme"
+	check := func(seq uint64) {
+		id := DedupID(tenant, seq)
+		// Read the id as the previous build would have written it, for ANY tenant.
+		i := strings.LastIndexByte(id, ':')
+		if i < 0 {
+			return // the previous build's ids all contain ':'
+		}
+		owner, rest := id[:i], id[i+1:]
+		old, err := strconv.ParseUint(rest, 10, 64)
+		if err != nil || previousBuildDedupID(owner, old) != id {
+			return
+		}
+		// The SAME message under both builds' ids is a correct dedup, not a collision.
+		if owner == tenant && old == seq {
+			return
+		}
+		t.Fatalf("DedupID(%q, %d) = %q, the id the previous build published for tenant %q's capture "+
+			"sequence %d: during an upgrade one of the two events is discarded as a duplicate",
+			tenant, seq, id, owner, old)
+	}
+	for seq := uint64(1); seq <= 200_000; seq++ {
+		check(seq)
+	}
+	for _, seq := range []uint64{1_679_616, 60_466_176, 1 << 40, ^uint64(0)} {
+		check(seq)
 	}
 }
