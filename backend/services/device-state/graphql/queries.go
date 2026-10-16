@@ -41,11 +41,22 @@ func cursorFrom(afterId *gql.ID) (uint64, error) {
 	return parsed, nil
 }
 
-// Find device states by originating device token.
+// scopedState is the gate of every live-view read a member limited to some customers may
+// make (ADR-081): the authority as Authorize checks it, admitting a scoped caller. The
+// scope itself is applied by the store — DeviceState stamps its owners and the readings and
+// positions hold theirs through it (model.DeviceState.ScopedBy) — so a device outside the
+// scope is simply not found: omitted from a list, null for a single position, an empty
+// list of readings, exactly as a device with no state is.
+func scopedState(ctx context.Context, required auth.Authority) error {
+	_, err := auth.AuthorizeScoped(ctx, required)
+	return err
+}
+
+// Find device states by originating device token. Open to scoped members.
 func (r *SchemaResolver) DeviceStatesByDeviceToken(ctx context.Context, args struct {
 	DeviceTokens []string
 }) ([]*DeviceStateResolver, error) {
-	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+	if err := scopedState(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
@@ -66,11 +77,11 @@ func (r *SchemaResolver) DeviceStatesByDeviceToken(ctx context.Context, args str
 	return result, nil
 }
 
-// Find device states by the device's (denormalized) external id.
+// Find device states by the device's (denormalized) external id. Open to scoped members.
 func (r *SchemaResolver) DeviceStatesByExternalId(ctx context.Context, args struct {
 	ExternalIds []string
 }) ([]*DeviceStateResolver, error) {
-	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+	if err := scopedState(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
@@ -95,6 +106,9 @@ func (r *SchemaResolver) DeviceStatesByExternalId(ctx context.Context, args stru
 //
 // pageSize is REFUSED when out of range rather than clamped; the reason is the caller's
 // termination rule, and it is recorded once on model.MaxAssertedPageSize.
+//
+// 🔴 It is REFUSED to scoped members (Authorize, not AuthorizeScoped): it is a transport
+// adapter's reconciliation read over a whole event source, not a view of anybody's devices.
 func (r *SchemaResolver) AssertedDeviceStates(ctx context.Context, args struct {
 	Source     string
 	ActiveOnly bool
@@ -128,11 +142,12 @@ func (r *SchemaResolver) AssertedDeviceStates(ctx context.Context, args struct {
 	return result, nil
 }
 
-// List all device states that match the given criteria.
+// List all device states that match the given criteria. Open to scoped members: the page
+// and its total count only the devices the scope's customers own.
 func (r *SchemaResolver) DeviceStates(ctx context.Context, args struct {
 	Criteria model.DeviceStateSearchCriteria
 }) (*DeviceStateSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+	if err := scopedState(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
@@ -151,11 +166,11 @@ func (r *SchemaResolver) DeviceStates(ctx context.Context, args struct {
 }
 
 // LatestMeasurements returns the current value of every measurement name for a
-// device (the live-readings projection).
+// device (the live-readings projection). Open to scoped members.
 func (r *SchemaResolver) LatestMeasurements(ctx context.Context, args struct {
 	DeviceToken string
 }) ([]*LatestMeasurementResolver, error) {
-	if err := auth.Authorize(ctx, auth.StateRead); err != nil {
+	if err := scopedState(ctx, auth.StateRead); err != nil {
 		return nil, err
 	}
 
@@ -183,10 +198,14 @@ func (r *SchemaResolver) LatestMeasurements(ctx context.Context, args struct {
 // from user-management's read-only viewer baseline, so a caller holding the full viewer
 // set (device:read, event:read, state:read, command:read, alarm:read) is refused here
 // until someone deliberately grants position access.
+//
+// Open to scoped members holding location:read — and ONLY to those: admitting a scoped
+// caller changes which devices it may ask about, never which authority it needs, so a
+// customer's member with the read-only baseline is refused a position here as anyone is.
 func (r *SchemaResolver) LatestLocation(ctx context.Context, args struct {
 	DeviceToken string
 }) (*LatestLocationResolver, error) {
-	if err := auth.Authorize(ctx, auth.LocationRead); err != nil {
+	if err := scopedState(ctx, auth.LocationRead); err != nil {
 		return nil, err
 	}
 
@@ -207,11 +226,12 @@ func (r *SchemaResolver) LatestLocation(ctx context.Context, args struct {
 // located" and a row always carries a real fix.
 //
 // Gated on location:read for the reason spelled out on LatestLocation: the batch door
-// onto the same material must carry the same gate, or the split is decorative.
+// onto the same material must carry the same gate, or the split is decorative. Open to
+// scoped members holding location:read, as LatestLocation is.
 func (r *SchemaResolver) LatestLocations(ctx context.Context, args struct {
 	DeviceTokens []string
 }) ([]*LatestLocationResolver, error) {
-	if err := auth.Authorize(ctx, auth.LocationRead); err != nil {
+	if err := scopedState(ctx, auth.LocationRead); err != nil {
 		return nil, err
 	}
 

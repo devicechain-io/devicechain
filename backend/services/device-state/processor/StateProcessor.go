@@ -431,7 +431,8 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 		DeviceToken: event.SourceDeviceToken,
 		OccurredAt:  event.OccurredTime,
 		Presence:    pt,
-		Identity:    model.DeviceIdentity{ExternalId: event.ExternalId, Source: event.Source},
+		Identity: model.DeviceIdentity{ExternalId: event.ExternalId, Source: event.Source,
+			Owners: ownersOf(event)},
 	}
 	// A measurement event also advances the per-key latest-value projection, and a location
 	// event the last-known position — IN ADDITION TO the device state, not instead of it: a
@@ -608,6 +609,24 @@ func (sp *StateProcessor) dispose(p pendingMerge, err error, detail string) {
 		log.Error().Err(err).Str("correlation", msg.CorrelationID()).Msg(detail)
 		p.done(core.ResultRetry)
 	}
+}
+
+// ownersOf is the owners stamp a resolved event carries (ADR-081): its anchors, as
+// device-management read the device's tracked relationships when it resolved the event, in
+// the "<type>:<token>" form a scope names, with the event's receipt time as the stamp's
+// precedence (model.Owners; the ordering rule is in model/ownership.go). An event with no
+// anchors is a stamp too — the device was owned by nobody — so an empty set is never
+// skipped. An anchor missing either half cannot be one and is dropped, as device-management
+// drops it from the ownership fact.
+func ownersOf(event *dmmodel.ResolvedEvent) model.Owners {
+	anchors := make([]string, 0, len(event.Anchors))
+	for _, a := range event.Anchors {
+		if a.AnchorType == "" || a.AnchorToken == "" {
+			continue
+		}
+		anchors = append(anchors, a.AnchorType+":"+a.AnchorToken)
+	}
+	return model.Owners{Anchors: anchors, At: event.ProcessedTime}
 }
 
 // measurementInputs extracts the numeric measurements from a resolved measurement event,

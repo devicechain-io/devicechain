@@ -81,7 +81,9 @@ CREATE TABLE "device-state".device_states (
  session_id bigint DEFAULT 0 NOT NULL,
  presence_time timestamp with time zone,
  external_id text,
- source text
+ source text,
+ scope_anchors text[],
+ scope_anchors_at timestamp with time zone
 );
 CREATE TABLE "device-state".latest_locations (
  id bigint NOT NULL,

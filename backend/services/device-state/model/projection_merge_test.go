@@ -231,7 +231,8 @@ func TestABatchKeepsColumnsItDoesNotFold(t *testing.T) {
 // heartbeat upsert's fallback for a swept device.
 func TestTheLockReadSelectsOnlyTheColumnsTheFoldTouches(t *testing.T) {
 	want := []string{"active", "external_id", "id", "device_token", "inactivity_alarm_time", "last_activity_time",
-		"last_connect_time", "last_disconnect_time", "presence_source", "presence_time", "session_id", "source"}
+		"last_connect_time", "last_disconnect_time", "presence_source", "presence_time", "session_id", "source",
+		"scope_anchors", "scope_anchors_at"} // the owners stamp is folded too (applyOwners)
 	sort.Strings(want)
 	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {

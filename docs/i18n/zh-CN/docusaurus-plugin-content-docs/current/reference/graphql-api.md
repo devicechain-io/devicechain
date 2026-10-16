@@ -626,11 +626,12 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 | `alarms`、`alarmsById`、`alarmsByToken`、`alarmStream` | 设备属于其中某个客户期间产生的告警。 |
 | `acknowledgeAlarm`、`acknowledgeAlarms`、`clearAlarm` | 同样的这些告警。 |
 | `events`、`measurementEvents`、`locationEvents`、`alertEvents`、`bucketedMeasurements`、`measurementStream` | 设备属于其中某个客户期间记录的事件。客户保留其拥有设备期间的历史，看不到此前的历史。 |
+| `deviceStates`、`deviceStatesByDeviceToken`、`deviceStatesByExternalId`、`latestMeasurements`、`latestLocation`、`latestLocations` | 这些客户当前拥有的设备的实时状态、最新读数和最后已知位置。设备转给其他客户后，其实时状态随之转移，无需等待设备再次上报。`latestLocation` 和 `latestLocations` 还需要 `location:read`，只读基线权限不包含该权限。 |
 | 设备类型、设备配置文件及其版本、指标和命令定义、客户类型 | 全部可见，因为这些是配置。只能读取，不能修改。 |
 
 成员看不到的记录，其响应与不存在的记录完全相同：要么不出现在列表中，要么操作返回 `NOT_FOUND`。针对不属于这些客户的设备发起的 `measurementStream` 订阅会被接受，但不会推送任何内容。其他所有操作都返回 `FORBIDDEN`，且 `extensions.reason` 为 `SCOPE_UNSUPPORTED`。
 
-设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。
+设备不属于任何客户期间记录的事件，访问权限受限的成员看不到。在此版本之前产生的告警同样看不到：告警从此版本开始才记录其所属客户。设备在此版本之前的实时状态，要等设备再次上报或更换所有者后才可见。告警保留其产生时的所属客户，因此客户出售设备后，仍能看到其拥有该设备期间产生的告警，包括仍处于活动状态的告警。
 
 由于这些记录通过令牌指向客户，已删除客户的令牌会被停用：租户中的其他客户都不能再使用它，否则新客户的成员会把已删除客户的告警、命令、更新分配、共享仪表板和事件历史当作自己的。用已停用的令牌调用 `createCustomer` 会返回 `INVALID_VALUE`，消息会说明该令牌已停用。请换一个令牌。只有删除整个租户时，令牌才会被释放。如果该令牌上的客户仍然存在，则与以前一样返回 `CONFLICT`。
 

@@ -44,6 +44,7 @@ type DeviceStateApi interface {
 	AssertedStatesForDemotion(ctx context.Context, source string, tokens *[]string, afterId uint64, limit int) ([]*DeviceState, error)
 	DemoteAssertedPresence(ctx context.Context, source string, tokens *[]string, afterId uint64, limit int, actor, reason string) (*PresenceDemotionResult, error)
 	DeviceStates(ctx context.Context, criteria DeviceStateSearchCriteria) (*DeviceStateSearchResults, error)
+	ApplyDeviceOwnership(ctx context.Context, deviceToken string, anchors []string, changedAt time.Time) (bool, error)
 	SweepInactive(ctx context.Context, now time.Time) (int64, error)
 	MergeLatestMeasurements(ctx context.Context, deviceToken string, inputs []LatestMeasurementInput) error
 	LatestMeasurementsByDeviceToken(ctx context.Context, deviceToken string) ([]*LatestMeasurement, error)
@@ -82,9 +83,15 @@ type PresenceTransition struct {
 // the reconciliation to its own adapter. Empty fields are never written over a
 // non-empty stored value (they are stable per device; a rare source-less event must not
 // blank them).
+//
+// Owners rides here too: like the identity fields it is denormalized from the resolved
+// event and folded into the row by the same rule on every path, but it is NOT stable per
+// device and is not overwritten by the last non-empty value — it is ordered, by
+// applyOwners.
 type DeviceIdentity struct {
 	ExternalId string
 	Source     string
+	Owners     Owners
 }
 
 // blankDeviceState is the row of a device no event has touched: INFERRED, no identity, no
@@ -123,6 +130,7 @@ func newDeviceState(deviceToken string, occurredAt time.Time, pt *PresenceTransi
 	ds := blankDeviceState(deviceToken)
 	ds.ExternalId = id.ExternalId
 	ds.Source = id.Source
+	applyOwners(ds, id.Owners)
 	if pt != nil {
 		// 🔴 THE GUARD IS POSITIVE, AND IT HAS TO BE. Row creation is the ONE presence path
 		// that never consults presence.Decide, so nothing here refuses a claim on its own
@@ -241,6 +249,7 @@ func applyEvent(found *DeviceState, occurredAt time.Time, pt *PresenceTransition
 	if id.Source != "" && found.Source != id.Source {
 		found.Source = id.Source
 	}
+	applyOwners(found, id.Owners)
 
 	if pt != nil {
 		// Authoritative presence transition: promote to ASSERTED (first-sight) and apply
