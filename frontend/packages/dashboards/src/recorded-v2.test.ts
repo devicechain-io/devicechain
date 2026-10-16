@@ -3,7 +3,7 @@
 
 // Format version 2 (positions), re-timing, and aggregates computed from the recording.
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AlarmSnapshot, LocationSnapshot } from './hub';
 import type { HistoryWindow } from './history';
@@ -22,6 +22,14 @@ import {
 } from './testing/recording-fixture';
 import { installNetworkTrap, type NetworkTrap } from './testing/network-trap';
 import type { DatasourceSelector, MeasurementSample } from './types';
+
+// The recorded source fetches its positions and aggregate code (./recorded-extra) on first use,
+// and the cases here wait for it with settle() -- a few timer ticks, plenty once the module is
+// loaded, but not for its first import on a busy machine. Load it once, before any case runs.
+// (Nothing here tests that loading: that the code is a separate chunk is board-replay's bundle check.)
+beforeAll(async () => {
+  await import('./recorded-extra');
+}, 30_000);
 
 type Json = Record<string, any>;
 

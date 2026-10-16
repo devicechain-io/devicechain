@@ -735,6 +735,11 @@ describe('the config panel shows nothing for an option the widget does not carry
   });
 });
 
+// The two sweeps below render the panel once per control of every built-in widget: a couple of
+// seconds alone, all CPU, so on a busy machine they outlast the 5 s default. They get a budget
+// sized to the sweep; the per-widget cases above keep the default.
+const SWEEP_TIMEOUT_MS = 30_000;
+
 describe('the gate itself', () => {
   beforeEach(() => shapesDriven.clear());
 
@@ -752,7 +757,7 @@ describe('the gate itself', () => {
       for (const id of ids) await optionsWrittenBy(type, id);
     }
     expect([...shapesDriven].sort()).toEqual(['checkbox', 'choice', 'number', 'text']);
-  });
+  }, SWEEP_TIMEOUT_MS);
 
   // 🔴 THE SECOND INSTRUMENT CHECK, AND THE ONE THIS FILE'S REWRITE TURNS ON. Every value
   // assertion above — written and displayed — only distinguishes a right key from a wrong
@@ -863,5 +868,5 @@ describe('the gate itself', () => {
         cleanup();
       }
     }
-  });
+  }, SWEEP_TIMEOUT_MS);
 });
