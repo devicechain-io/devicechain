@@ -171,20 +171,23 @@ func (rdb *RdbManager) Initialize(ctx context.Context) error {
 
 // Lifecycle callback that runs initialization logic.
 func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
-	// Make sure database exists before interacting with it.
+	// The datastore type is checked first: an unsupported one is refused before anything
+	// else, which is how a caller learns it named the wrong store.
 	dbtype := rdb.InstanceConfig.Type
-	if strings.HasPrefix(dbtype, "postgres") {
-		err := rdb.initializePostgres(ctx)
-		if err != nil {
-			return err
-		}
-	} else if strings.HasPrefix(dbtype, "timescaledb") {
-		err := rdb.initializePostgres(ctx)
-		if err != nil {
-			return err
-		}
-	} else {
+	if !strings.HasPrefix(dbtype, "postgres") && !strings.HasPrefix(dbtype, "timescaledb") {
 		return fmt.Errorf("relational database %s not currently supported", dbtype)
+	}
+
+	// Refuse a chain gormigrate would refuse BEFORE touching the database: the verdict
+	// depends on nothing but the IDs, so connecting first would only delay it, and checking
+	// first is what lets a unit test (no Postgres) prove the startup path runs the check.
+	if err := CheckMigrationIDs(rdb.Migrations); err != nil {
+		return fmt.Errorf("%s migration chain: %w", rdb.Microservice.FunctionalArea, err)
+	}
+
+	// Make sure database exists before interacting with it.
+	if err := rdb.initializePostgres(ctx); err != nil {
+		return err
 	}
 
 	// Run migrations in a database independent manner.
@@ -197,9 +200,6 @@ func (rdb *RdbManager) ExecuteInitialize(ctx context.Context) error {
 	// model is migrated fails with ErrNoTenant. DDL inside the migrations is
 	// unaffected (the callbacks act on row operations, not schema changes).
 	migrateDB := rdb.Database.WithContext(core.WithSystemContext(ctx))
-	if err := CheckMigrationIDs(rdb.Migrations); err != nil {
-		return fmt.Errorf("%s migration chain: %w", rdb.Microservice.FunctionalArea, err)
-	}
 	m := gormigrate.New(migrateDB, options, rdb.Migrations)
 
 	// Serialize this area's schema DDL across concurrently-rolling pods with a
