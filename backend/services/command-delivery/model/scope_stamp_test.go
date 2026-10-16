@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // anchorBook is a canned device-management: who owns which device.
@@ -112,4 +114,21 @@ func TestABatchFailsClosedWhenItsStampsCannotBeRead(t *testing.T) {
 	_, err := api.CreateCommandBatch(ctx, &CommandBatchCreateRequest{Token: "b1", Name: "reboot", DeviceTokens: &devices})
 	require.Error(t, err)
 	require.Empty(t, commandsOf(t, api, ctx, "b1"))
+}
+
+// A scoped member whose ownership cannot be asked — device-management unreachable — is
+// refused with the sanitized words every other unreachable gate uses, never with svcclient's
+// own error, which names the in-cluster endpoint. The answer is neither the scope refusal
+// (the lookup exists, it failed) nor NOT_FOUND (nothing was decided).
+func TestAFailedOwnershipLookupIsSanitizedForAScopedMember(t *testing.T) {
+	ctx := core.WithTenant(context.Background(), "A")
+	ctx = auth.WithClaims(ctx, &auth.Claims{TokenType: auth.TokenTypeAccess,
+		Authorities: []string{string(auth.CommandRead)}, ScopeAnchors: []string{"customer:acme"}})
+	api := newTestApi(t)
+	api.DeviceAnchors = &anchorBook{fail: true}
+	_, _, err := api.DeviceCommandHold(ctx, "d1")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), "unreachable", "svcclient's error reached the member")
+	require.False(t, errors.Is(err, auth.ErrScopeUnsupported))
+	require.False(t, errors.Is(err, gorm.ErrRecordNotFound))
 }

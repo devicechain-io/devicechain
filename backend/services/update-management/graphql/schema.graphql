@@ -168,7 +168,8 @@ type Artifact {
     trustStatus: ArtifactTrustStatus!
     """
     The signatures on record for the artifact, oldest first, including those by revoked signers.
-    The signature bytes are not exposed.
+    The signature bytes are not exposed. Not available to a member whose access is limited to
+    part of the tenant.
     """
     signatures: [ArtifactSignature!]!
     """

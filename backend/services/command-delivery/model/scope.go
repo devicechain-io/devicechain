@@ -39,6 +39,11 @@ type DeviceAnchorLookup interface {
 // the caller is unscoped or owns it, gorm.ErrRecordNotFound (NOT_FOUND) when the device is
 // outside the scope or does not exist — the two are one answer, so a member cannot learn
 // which tokens name someone else's equipment — and the scope refusal when nothing can say.
+//
+// A lookup that FAILS is an availability failure, answered with the same sanitized words
+// as every other unreachable gate on this service: the detail is logged, not returned,
+// because svcclient's error names the in-cluster endpoint it could not reach, and a
+// member's hold query is no place to learn the tenant's topology.
 func (api *Api) requireOwnedDevice(ctx context.Context, deviceToken string) error {
 	scope, scoped := auth.ScopeFromContext(ctx)
 	if !scoped {
@@ -49,7 +54,8 @@ func (api *Api) requireOwnedDevice(ctx context.Context, deviceToken string) erro
 	}
 	found, err := api.DeviceAnchors.DeviceScopeAnchors(ctx, []string{deviceToken})
 	if err != nil {
-		return err
+		log.Error().Err(err).Str("deviceToken", deviceToken).Msg("Device anchor lookup failed; refusing scoped read.")
+		return fmt.Errorf("cannot decide the device's ownership: validation is unavailable")
 	}
 	if anchors, ok := found[deviceToken]; !ok || !inScope(scope, anchors) {
 		return gorm.ErrRecordNotFound

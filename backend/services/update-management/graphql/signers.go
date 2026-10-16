@@ -186,7 +186,18 @@ func (l *signatureLoader) of(ctx context.Context, id uint) ([]model.SignatureVie
 }
 
 // Signatures lists the artifact's signatures. It is loaded only when selected.
+//
+// Each signature names who added it (createdBy: a username, which for a person is their
+// email). A member limited to part of the tenant (ADR-081) reaches an artifact only as the
+// one its device's assignment names; the signer it may see is the assignment's pinned one
+// (UpdateAssignment.signedBy), and the tenant's staff are not its business. The field
+// refuses it here, at the resolver, rather than leaving the refusal to core/rdb — which
+// today refuses the read only because ArtifactSignature declares no scope rule, a cover
+// that would vanish the day the model opted in for another reason.
 func (r *ArtifactResolver) Signatures(ctx context.Context) ([]*artifactSignatureResolver, error) {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return nil, auth.ErrScopeUnsupported
+	}
 	if r.sigs == nil {
 		return nil, fmt.Errorf("artifact %q was resolved without a signature loader", r.M.Token)
 	}

@@ -179,8 +179,13 @@ func TestScopedMembersCannotAssignOrCancel(t *testing.T) {
 }
 
 // 🔴 The member reads its devices' assignments, but not who among the tenant's staff made them:
-// the assigning actor and the artifact's provenance (which records the uploader) refuse it. The
-// operator still reads both.
+// the assigning actor, the artifact's provenance (which records the uploader) and the artifact's
+// signatures (each records who added it) refuse it. The operator still reads all three.
+//
+// The refusal must be the RESOLVER's own, word for word: core/rdb would also refuse the
+// signature read today, but only because ArtifactSignature declares no scope rule, and its
+// refusal names the table. A field that merely inherits that cover would lose it the day the
+// model opts in for another reason.
 func TestScopedMembersDoNotSeeTheTenantsStaff(t *testing.T) {
 	p := pgPlane(t)
 	p.available("fw-1", []byte("image"))
@@ -191,11 +196,13 @@ func TestScopedMembersDoNotSeeTheTenantsStaff(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Data, &got))
 	vars := map[string]any{"t": got.AssignArtifact.Token}
 
-	for _, field := range []string{"actor", "artifact { provenance }"} {
+	for _, field := range []string{"actor", "artifact { provenance }", "artifact { signatures { createdBy } }"} {
 		q := `query($t: String!) { updateAssignment(token: $t) { token ` + field + ` } }`
 		resp = p.exec(p.member("customer:acme"), q, vars)
 		require.NotEmpty(t, resp.Errors, field)
 		require.True(t, errors.Is(resp.Errors[0].ResolverError, auth.ErrScopeUnsupported), "%s: %v", field, resp.Errors[0])
+		require.Equal(t, auth.ErrScopeUnsupported.Error(), resp.Errors[0].Message,
+			"%s: the refusal must be the resolver's own, not storage's", field)
 		resp = p.exec(op, q, vars)
 		require.Empty(t, resp.Errors, "control: the operator reads %s", field)
 	}
