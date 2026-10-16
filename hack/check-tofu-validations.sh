@@ -407,6 +407,13 @@ run_assertions() {
   for v in 2Gi 1536Mi; do accepts nats_memory_limit "$v"; done
   for v in 2G 2gi 1.5Gi "" 0Gi; do rejects nats_memory_limit "$v"; done
 
+  # --- route compression between broker servers --------------------------------
+  # The five modes this module offers, written one way each. nats-server itself
+  # also takes "on", "accept", short aliases and any casing; those are refused here
+  # so a typo cannot pass for a mode.
+  for v in off s2_fast s2_better s2_best s2_auto; do accepts nats_route_compression "$v"; done
+  for v in "" on accept fast S2_FAST s2 gzip; do rejects nats_route_compression "$v"; done
+
   # evaluates <expected> <expr> [-var k=v ...] — the expression must evaluate to
   # exactly <expected> under those variables.
   evaluates() {
@@ -517,6 +524,12 @@ run_assertions() {
   evaluates false module.nats.ha_topology.route_tls_verified -var ha=true -var nats_enable_tls=false
   evaluates true module.nats.ha_topology.clustered -var ha=true
   evaluates false module.nats.ha_topology.clustered -var ha=false
+  # Route compression reaches the values only when asked for, and off by default.
+  # Read back out of the cluster merge, so a mode that drifts to the wrong parent
+  # reads "off" here and fails the s2_fast line.
+  evaluates '"off"' module.nats.ha_topology.route_compression -var ha=true
+  evaluates '"s2_fast"' module.nats.ha_topology.route_compression -var ha=true -var nats_route_compression=s2_fast
+  evaluates '"s2_auto"' module.nats.ha_topology.route_compression -var ha=true -var nats_route_compression=s2_auto
 
   # ROUTE TLS BEING ON AND ROUTE TLS WORKING ARE DIFFERENT FACTS, and the gap
   # between them cost a working cluster. The assertion above passed — the

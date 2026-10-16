@@ -1614,6 +1614,40 @@ un nodo se quedaba sin memoria.
   aplicación, lo que prevalece sobre el archivo, así que allí solo `nats_memory_limit` se puede
   cambiar de esta forma.
 
+#### Compresión entre los servidores del bróker {#route-compression}
+
+Los servidores de un bróker en clúster (`--ha`) se copian entre sí cada evento almacenado por sus
+propias conexiones, llamadas rutas. `nats_route_compression` comprime ese tráfico. **Está
+desactivada por defecto.**
+
+- **Los valores son `off`, `s2_fast`, `s2_better`, `s2_best` y `s2_auto`.** Cualquier otro valor,
+  incluida otra forma de escribir uno de estos, se rechaza al aplicar la instancia. `off` no añade
+  nada a la configuración del bróker, y ninguna ruta se comprime.
+- **`s2_fast` es el que conviene probar.** `s2_better` y `s2_best` gastan más CPU a cambio de
+  mensajes más pequeños. `s2_auto` elige un nivel según el tiempo de ida y vuelta de cada ruta y no
+  comprime por debajo de 10 ms, lo que abarca todas las rutas dentro de una zona, así que en un
+  clúster de una sola zona no cambia nada.
+- **Solo afecta al tráfico entre servidores del bróker.** Las conexiones de dispositivos y servicios
+  no se comprimen, ni tampoco lo que el bróker escribe en disco.
+- **El balance aún no se ha medido en un clúster.** En una prueba de tres servidores en un mismo
+  proceso y sin TLS, `s2_fast` redujo el tráfico entre servidores entre un 57 y un 66% para un
+  evento con una lectura, y la CPU añadida quedó dentro del ruido de la medición. El balance medido
+  en un clúster, con TLS activado y desactivado, se publicará aquí. Hasta entonces el valor por
+  defecto sigue siendo `off`.
+- **Para activarla**, establece `nats_route_compression = "s2_fast"` en el `terraform.tfvars` junto
+  al estado de OpenTofu de la instancia (`~/.devicechain/instances/<instancia>/infra/instance/`) y
+  ejecuta `dcctl upgrade`. Los servidores del bróker se reinician de uno en uno para tomarla.
+  Mientras tanto, los servidores con el ajuste antiguo y el nuevo se ponen de acuerdo en cada
+  conexión: un servidor que aún no se ha reiniciado sigue a un par que pide compresión. Para
+  desactivarla, establece `off` o elimina la línea, y actualiza de nuevo; los servidores vuelven a
+  reiniciarse.
+- **Un bróker sin `--ha` la rechaza.** Un único servidor no tiene rutas, así que el ajuste no haría
+  nada.
+- **Para comprobarla**, consulta `/routez` del bróker en el puerto de monitorización 8222: el campo
+  `compression` de cada ruta muestra el modo en uso. Los contadores de bytes de ahí cuentan los
+  mensajes antes de comprimirlos, así que no muestran el ahorro. Los bytes de red de los pods del
+  bróker sí.
+
 #### Rendimiento medido {#measured-throughput}
 
 | Versión | Clúster | Configuración | Ritmo sostenido | Resultado |

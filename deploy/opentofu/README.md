@@ -304,6 +304,14 @@ broker and the event store are not in.
   the volume and the ceiling are **per node**: an HA cluster provisions the volume
   on every server, each holding one replica of the same ~9.9Gi reservation, so
   neither value scales with `nats_cluster_replicas`.
+- **Route compression is off.** `nats_route_compression` compresses the traffic between
+  clustered NATS servers (port 6222) with S2: `off` (default), `s2_fast`, `s2_better`,
+  `s2_best`, `s2_auto`. `off` renders nothing, leaving nats-server's own `accept`, so no
+  route compresses and the values are byte-identical to before the variable existed. Pick
+  `s2_fast`: `s2_auto` is uncompressed on any route under 10 ms RTT, i.e. inside one zone.
+  Changing it rolls the broker one server at a time; mixed modes during the roll are
+  negotiated per route and safe. Refused on a single server. JetStream *stream*
+  compression is not offered: it rewrites every sealed block on every replica.
 - **Broker metrics.** `nats_prom_exporter` (default on) runs the
   prometheus-nats-exporter sidecar for broker-side cluster health. The PodMonitor
   that scrapes it is rendered by the DeviceChain Helm chart, not here — it is an

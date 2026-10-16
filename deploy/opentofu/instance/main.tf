@@ -24,6 +24,7 @@ module "nats" {
   cpu_request              = var.nats_cpu_request
   memory_request           = var.nats_memory_request
   memory_limit             = var.nats_memory_limit
+  route_compression        = var.nats_route_compression
 
   # 🔑 NO depends_on ON THE NAMESPACE, BECAUSE THIS ROOT NO LONGER OWNS IT. The
   # namespace is a cluster prerequisite now — created by the cluster root, and by

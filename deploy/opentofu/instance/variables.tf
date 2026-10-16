@@ -289,6 +289,17 @@ variable "nats_memory_limit" {
   }
 }
 
+variable "nats_route_compression" {
+  description = "S2 compression of the traffic between the servers of a clustered broker (routes, port 6222): off (the default), s2_fast, s2_better, s2_best or s2_auto. off renders nothing and leaves nats-server's default, under which no route compresses. s2_fast is the mode to choose; s2_auto is uncompressed on any route under 10 ms, which is every route in one zone. Changing it restarts the broker's servers one at a time. Refused on a single server, which has no routes. See modules/nats var.route_compression."
+  type        = string
+  default     = "off"
+
+  validation {
+    condition     = contains(["off", "s2_fast", "s2_better", "s2_best", "s2_auto"], var.nats_route_compression)
+    error_message = "nats_route_compression must be one of off, s2_fast, s2_better, s2_best, s2_auto (lowercase, as written)."
+  }
+}
+
 variable "enable_database_backups" {
   description = <<-EOT
     WAL archiving, scheduled base backups and PITR for both database stores
