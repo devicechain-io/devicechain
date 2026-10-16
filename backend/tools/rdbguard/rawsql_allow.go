@@ -28,6 +28,16 @@ var rawSQLAllowList = []siteEntry{
 		Why: "the GraphQL executor's own Exec, not a database call: its first argument is a context " +
 			"wrapped by execContext, which the context-first heuristic cannot see through",
 	},
+	{
+		Path: "backend/core/test/isolationsweep/sweep.go", Func: "Run", Count: 1,
+		Why: "cfg.Schema is a *graphql.Schema: this Exec runs a GraphQL document through the service's own " +
+			"resolvers (the isolation sweep's negative control), not SQL",
+	},
+	{
+		Path: "backend/core/test/isolationsweep/sweep.go", Func: "judge", Count: 2,
+		Why: "cfg.Schema is a *graphql.Schema: these Execs run the probe and its missing twin as GraphQL " +
+			"documents through the service's resolvers, not SQL",
+	},
 
 	// --- ddl-catalog ---
 	{
