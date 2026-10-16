@@ -39,6 +39,7 @@ import enFacets from './locales/en/facets.json';
 import enAudit from './locales/en/audit.json';
 import enIdentities from './locales/en/identities.json';
 import enRoles from './locales/en/roles.json';
+import enMembers from './locales/en/members.json';
 import enAiProviders from './locales/en/aiProviders.json';
 import enIdentityProviders from './locales/en/identityProviders.json';
 import enAiPackaging from './locales/en/aiPackaging.json';
@@ -70,6 +71,7 @@ import esFacets from './locales/es/facets.json';
 import esAudit from './locales/es/audit.json';
 import esIdentities from './locales/es/identities.json';
 import esRoles from './locales/es/roles.json';
+import esMembers from './locales/es/members.json';
 import esAiProviders from './locales/es/aiProviders.json';
 import esIdentityProviders from './locales/es/identityProviders.json';
 import esAiPackaging from './locales/es/aiPackaging.json';
@@ -160,6 +162,9 @@ export const NAMESPACES = [
   'entities',
   'versions',
   'updates',
+  // The tenant's own team: members, invitations, the tenant's roles, and the customer
+  // users seen from a customer's page.
+  'members',
 ] as const;
 
 // Catalogs are bundled statically: the corpus is still small enough that a
@@ -198,6 +203,7 @@ const resources = {
     entities: enEntities,
     versions: enVersions,
     updates: enUpdates,
+    members: enMembers,
   },
   es: {
     common: esCommon,
@@ -230,6 +236,7 @@ const resources = {
     entities: esEntities,
     versions: esVersions,
     updates: esUpdates,
+    members: esMembers,
   },
 } as const;
 

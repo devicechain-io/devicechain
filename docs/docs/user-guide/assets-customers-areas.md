@@ -78,7 +78,7 @@ name and description, then click **Save changes**. The token is shown but cannot
 <GuideShot id="asset-detail-basic" alt="The detail page of HVAC Unit 1, on the Basic tab: Asset type HVAC Unit, a read-only Token with the note that the asset id cannot change, Name, Description and a Save changes button. Tabs for Facets, Hierarchy, Properties and Devices sit beside Basic." />
 
 Every asset, customer and area also has a **Facets** tab, described [below](#facets). Assets have
-three more tabs: Hierarchy, Properties and Devices.
+three more tabs: Hierarchy, Properties and Devices. Customers have two: Devices and Users.
 
 ### Hierarchy (assets)
 
@@ -108,6 +108,18 @@ assignment. Click a token to open the device. To assign a device to an asset, se
 [managing assignments](/guides/managing-assignments).
 
 <GuideShot id="asset-detail-devices" alt="The Devices tab of HVAC Unit 1, with a single device, bp-therm-001." />
+
+### Devices and Users (customers) {#customer-devices-and-users}
+
+A customer's **Devices** tab lists the devices assigned to it, in the same way as an asset's. These
+are the devices the customer's own users see.
+
+The **Users** tab lists the members whose access is limited to this customer: the customer's own
+logins. **Invite user** invites someone with their access already limited to this customer. The tab
+is shown only if you can read the tenant's members. Customer users are described in
+[Members, roles and customer users](/user-guide/members-roles-and-customer-users#customer-users).
+
+{/* TODO(screenshot): customer-detail-users, a customer's Users tab. */}
 
 ### Facets {#facets}
 
@@ -187,3 +199,4 @@ whose members are worked out each time it is read. You create those on the Brows
   customers.
 - [Groups, facets and Browse](/user-guide/groups-facets-browse)
 - [Geofences](/user-guide/geofences)
+- [Members, roles and customer users](/user-guide/members-roles-and-customer-users)

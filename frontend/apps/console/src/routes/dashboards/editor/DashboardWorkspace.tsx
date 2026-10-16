@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ClipboardPaste, Download, FlaskConical, History, Redo2, Trash2, Undo2 } from 'lucide-react';
-import { hasAuthority } from '@devicechain/client';
+import { mayWrite } from '@/lib/scope';
 import {
   addWidget,
   bindWidgetSlot,
@@ -396,7 +396,9 @@ export function DashboardWorkspace({
   const { toast } = useToast();
   const confirm = useConfirm();
   const { claims } = useAuth();
-  const canEdit = hasAuthority(claims, 'dashboard:write');
+  // A member limited to part of the tenant is served only the published version, so they
+  // view even when their role names dashboard:write.
+  const canEdit = mayWrite(claims, 'dashboard:write');
 
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   // The working copy, as an undo/redo history (see useEditHistory for when it resets).

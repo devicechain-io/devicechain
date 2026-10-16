@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { isForbiddenError } from './errors';
+import { errorCode, isForbiddenError } from './errors';
 import { GraphQLRequestError } from './transport';
 
 describe('isForbiddenError', () => {
@@ -40,5 +40,37 @@ describe('isForbiddenError', () => {
     expect(isForbiddenError(new Error('forbidden'))).toBe(false);
     expect(isForbiddenError('forbidden')).toBe(false);
     expect(isForbiddenError(null)).toBe(false);
+  });
+});
+
+describe('isForbiddenError by code', () => {
+  it('recognizes the FORBIDDEN code whatever the message says', () => {
+    const err = new GraphQLRequestError('GraphQL error', 200, [
+      { message: 'not available to a member limited to part of the tenant', extensions: { code: 'FORBIDDEN', reason: 'SCOPE_UNSUPPORTED' } },
+    ]);
+    expect(isForbiddenError(err)).toBe(true);
+  });
+
+  it('does not treat another code as a refusal of authority', () => {
+    const err = new GraphQLRequestError('GraphQL error', 200, [
+      { message: 'no such member', extensions: { code: 'NOT_FOUND' } },
+    ]);
+    expect(isForbiddenError(err)).toBe(false);
+  });
+});
+
+describe('errorCode', () => {
+  it('reads the first code the server set', () => {
+    const err = new GraphQLRequestError('GraphQL error', 200, [
+      { message: 'plain' },
+      { message: 'would leave nobody able to manage members', extensions: { code: 'LAST_ADMIN' } },
+    ]);
+    expect(errorCode(err)).toBe('LAST_ADMIN');
+  });
+
+  it('is null for an error with no code, and for a non-GraphQL throwable', () => {
+    expect(errorCode(new GraphQLRequestError('boom', 500, [{ message: 'internal' }]))).toBeNull();
+    expect(errorCode(new Error('LAST_ADMIN'))).toBeNull();
+    expect(errorCode(null)).toBeNull();
   });
 });

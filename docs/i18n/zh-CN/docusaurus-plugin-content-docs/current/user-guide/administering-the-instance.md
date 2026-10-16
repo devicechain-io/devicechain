@@ -141,6 +141,8 @@ import GuideShot from '@site/src/components/GuideShot';
 
 打开某个角色可修改其名称、描述和 **Authorities**（权限项），然后选择 **Save changes**。角色一旦创建，其范围和令牌即固定。**New role**（新建角色）创建角色；**Delete** 会从所有持有者身上移除该角色。
 
+租户自己的管理员会把这些租户角色分配给其成员，也可以定义自己的角色；这些角色只存在于该租户中，并且只携带租户权限项。他们无需管理控制台即可自行管理成员、邀请和角色；参见[成员、角色与客户用户](/user-guide/members-roles-and-customer-users)。
+
 <GuideShot id="admin-role-detail" alt="facilities-viewer 租户角色。Scope 显示 tenant 已选中，system 不可用。Token facilities-viewer（灰色）、Name Facilities viewer、描述“读取设备、实时状态、遥测和告警，并确认告警。不改动其他任何内容。”Authorities 列出 device:read、state:read、event:read、alarm:read、alarm:write、dashboard:read 和 location:read。有“Save changes”按钮和 Delete 按钮。" />
 
 ## 身份提供商 {#identity-providers}

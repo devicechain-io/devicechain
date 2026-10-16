@@ -1230,6 +1230,13 @@ export type CustomerByTokenQueryVariables = Exact<{
 
 export type CustomerByTokenQuery = { customersByToken: Array<{ id: string, token: string, name: string | null, description: string | null, metadata: string | null, createdAt: string | null, customerType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
+export type CustomerNamesQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type CustomerNamesQuery = { customersByToken: Array<{ token: string, name: string | null }> };
+
 export type CreateCustomerMutationVariables = Exact<{
   request?: CustomerCreateRequest | null | undefined;
 }>;
@@ -2581,6 +2588,14 @@ export const CustomerByTokenDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CustomerByTokenQuery, CustomerByTokenQueryVariables>;
+export const CustomerNamesDocument = new TypedDocumentString(`
+    query CustomerNames($tokens: [String!]!) {
+  customersByToken(tokens: $tokens) {
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<CustomerNamesQuery, CustomerNamesQueryVariables>;
 export const CreateCustomerDocument = new TypedDocumentString(`
     mutation CreateCustomer($request: CustomerCreateRequest) {
   createCustomer(request: $request) {

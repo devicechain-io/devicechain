@@ -22,14 +22,16 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { authorities, area } = vi.hoisted(() => ({
+const { authorities, scope, area } = vi.hoisted(() => ({
   authorities: { value: [] as string[] },
+  // The membership's scope anchors (the `scp` claim); empty means the whole tenant.
+  scope: { value: [] as string[] },
   // What area discovery answered for update-management; the Updates group reads it.
   area: { status: 'unknown' as 'available' | 'absent' | 'unknown' },
 }));
 
 vi.mock('@/auth/AuthProvider', () => ({
-  useAuth: () => ({ claims: { authorities: authorities.value } }),
+  useAuth: () => ({ claims: { authorities: authorities.value, scopeAnchors: scope.value } }),
 }));
 vi.mock('@/auth/TenantProvider', () => ({
   useCurrentTenant: () => ({ token: 'acme', branding: null }),
@@ -47,6 +49,7 @@ import { AppSidebar } from './AppSidebar';
 afterEach(cleanup);
 beforeEach(() => {
   authorities.value = [];
+  scope.value = [];
   area.status = 'unknown';
 });
 
@@ -195,5 +198,72 @@ describe('the Notification Policies entry', () => {
     cleanup();
     renderWith(['alarm:read', 'device:read']);
     expect(entry('Notification Policies')).toBeNull();
+  });
+});
+
+// A member limited to part of the tenant (a customer user) is offered only the pages the
+// server serves them: the home page, devices, alarms and dashboards. Everything else is
+// refused to them by the server whatever their role names, so a nav that offered it would
+// be a list of errors.
+describe('a scoped member', () => {
+  const EVERYTHING = ['*'];
+
+  it('sees only Dashboard, Dashboards, Alarms and Devices, even holding every authority', () => {
+    scope.value = ['customer:acme'];
+    renderWith(EVERYTHING, '/devices');
+
+    expect(entry('Dashboard')).toBeTruthy();
+    expect(entry('Dashboards')).toBeTruthy();
+    expect(entry('Alarms')).toBeTruthy();
+    // The Devices group, and inside it only the Devices leaf.
+    expect(screen.getAllByText('Devices', { exact: true }).length).toBeGreaterThan(0);
+    for (const hidden of [
+      'Device Types',
+      'Device Profiles',
+      'Device Groups',
+      'Maintenance Windows',
+      'Command Batches',
+      'Assets',
+      'Customers',
+      'Areas',
+      'Facets',
+      'Browse',
+      'Audit',
+      'Connectors',
+      'Notification Policies',
+      'Settings',
+      'Updates',
+    ]) {
+      expect(entry(hidden), hidden).toBeNull();
+    }
+  });
+
+  // The negative control: the same authorities WITHOUT a scope see the tenant's whole
+  // navigation, so the cut above is the scope's doing and not the fixture's.
+  it('is the scope, not the authorities: the same token unscoped sees everything', () => {
+    renderWith(EVERYTHING, '/devices');
+    for (const shown of ['Device Types', 'Customers', 'Audit', 'Settings', 'Connectors']) {
+      expect(entry(shown), shown).toBeTruthy();
+    }
+  });
+
+  it('still needs the authority for a leaf it may see', () => {
+    scope.value = ['customer:acme'];
+    renderWith(['device:read'], '/');
+    expect(entry('Alarms')).toBeNull();
+    expect(entry('Dashboards')).toBeNull();
+    expect(entry('Devices')).toBeTruthy();
+  });
+});
+
+describe('Members and Roles', () => {
+  it('sit in Settings, each behind its own authority', () => {
+    renderWith(['member:read'], '/members');
+    expect(entry('Members')).toBeTruthy();
+    expect(entry('Roles')).toBeNull();
+    cleanup();
+    renderWith(['role:read'], '/roles');
+    expect(entry('Roles')).toBeTruthy();
+    expect(entry('Members')).toBeNull();
   });
 });

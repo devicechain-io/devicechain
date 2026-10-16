@@ -816,6 +816,13 @@ type Query {
     roles this tenant defined (owner TENANT). Requires role:read.
     """
     tenantRoles: [TenantRole!]!
+    """
+    The authorities a role defined in this tenant may grant, sorted, including `*` (every
+    tenant authority). A role may grant only those of them that the person defining it holds.
+    Requires role:read. Refused (error code FORBIDDEN) for a member whose access is limited
+    to part of the tenant.
+    """
+    tenantAuthorities: [String!]!
     """One page of this tenant's invitations, newest first. Requires member:read."""
     invitations(
         """Paging."""

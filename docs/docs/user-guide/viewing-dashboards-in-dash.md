@@ -28,10 +28,17 @@ alone. Reloading the page, or opening `/dash/` in another tab, asks you to sign 
 
 ## Loading a dashboard
 
-After you sign in, **Load a dashboard** asks for a **Dashboard token**. Type the token of a
-dashboard, which you can copy from its page in the console, and choose **Load published**. The viewer
-fetches the version that was last published. A dashboard that has never been published cannot be
-opened here; the viewer asks you to have an author publish it.
+After you sign in, **Load a dashboard** lists **Your dashboards**: the published dashboards you may
+open. Choose one to open it. If your access is limited to some of the tenant's customers, the list
+holds the published dashboards shared with those customers; otherwise it holds every published
+dashboard in the tenant. The list shows the first 200, and says so when there are more.
+
+{/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}
+
+Below the list, you can also open a dashboard by its **Dashboard token**, which you can copy from its
+page in the console: type it and choose **Load published**. The viewer fetches the version that was
+last published. A dashboard that has never been published cannot be opened here; the viewer asks
+you to have an author publish it.
 
 <GuideShot id="dash-load" alt="The Load a dashboard page. The Dashboard token field holds wl-gallery, with the hint Fetches the version of this dashboard that was last published, and a Load published button. Below, under Or paste an exported definition, are a Definition (JSON) box, a Binding manifest (JSON, optional) box with a sample of its shape, and a Render button. The header has the language buttons and Sign out." />
 

@@ -22,6 +22,23 @@ export interface DecodedClaims {
   exp?: number;
   /** Issue time, epoch seconds (from the standard `iat` claim). */
   iat?: number;
+  /**
+   * The membership's scope, from the `scp` claim: anchors such as `customer:acme` that
+   * limit the subject to part of the tenant. Empty when the subject sees the whole tenant.
+   *
+   * Deliberately NOT named `scope`: an OAuth access token carries its own `scope` claim (a
+   * space-separated grant string), and the two mean unrelated things. Optional so a
+   * hand-built claims object (a test fixture, an older caller) still type-checks; an
+   * absent value means the same as an empty one.
+   */
+  scopeAnchors?: string[];
+}
+
+/** One anchor of a scope, split into its kind and token. */
+export interface ScopeAnchorRef {
+  /** `customer` or `group`. */
+  kind: string;
+  token: string;
 }
 
 function base64UrlDecode(segment: string): string {
@@ -49,6 +66,7 @@ export function decodeToken(token: string): DecodedClaims | null {
       typ: payload.typ ?? '',
       exp: payload.exp,
       iat: payload.iat,
+      scopeAnchors: Array.isArray(payload.scp) ? payload.scp.filter((a: unknown) => typeof a === 'string') : [],
     };
   } catch {
     return null;
@@ -67,4 +85,24 @@ export function isExpired(token: string, skewSeconds = 30): boolean {
 export function hasAuthority(claims: DecodedClaims | null, required: string): boolean {
   if (!claims) return false;
   return claims.authorities.some((a) => a === '*' || a === required);
+}
+
+/**
+ * True when the claims limit the subject to part of the tenant (a non-empty `scp`). The
+ * server enforces the scope on every request; this only lets a client stop offering what
+ * the server would refuse.
+ */
+export function isScoped(claims: DecodedClaims | null): boolean {
+  return (claims?.scopeAnchors?.length ?? 0) > 0;
+}
+
+/**
+ * The claims' scope anchors split into kind and token (`customer:acme` → customer/acme).
+ * An anchor with no `:` is dropped rather than guessed at.
+ */
+export function scopeAnchorRefs(claims: DecodedClaims | null): ScopeAnchorRef[] {
+  return (claims?.scopeAnchors ?? []).flatMap((a) => {
+    const i = a.indexOf(':');
+    return i > 0 ? [{ kind: a.slice(0, i), token: a.slice(i + 1) }] : [];
+  });
 }

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { ReactNode } from 'react';
-import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
-import type { Area } from '@devicechain/client';
+import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { isScoped, type Area } from '@devicechain/client';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -56,11 +56,17 @@ import AdminSettingsPage from '@/routes/admin/settings/SettingsPage';
 import AdminIdentityProvidersPage from '@/routes/admin/identity-providers/IdentityProvidersPage';
 import AdminIdentityProviderDetailPage from '@/routes/admin/identity-providers/IdentityProviderDetailPage';
 import { REGISTRY_RESOURCES } from '@/routes/resources';
+import { scopedRouteAllowed } from '@/lib/scope';
+import MembersPage from '@/routes/members/MembersPage';
+import RolesPage from '@/routes/roles/RolesPage';
+import RoleDetailPage from '@/routes/roles/RoleDetailPage';
+import AcceptInvitationPage from '@/routes/AcceptInvitation';
 
 
 function ProtectedRoute() {
   const { t } = useTranslation('common');
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, claims } = useAuth();
+  const { pathname } = useLocation();
 
   if (isLoading) {
     return (
@@ -71,6 +77,12 @@ function ProtectedRoute() {
   }
   if (!isAuthenticated) {
     return <Navigate to="/login" replace />;
+  }
+  // A member limited to part of the tenant is sent home from any page the server would
+  // refuse them (lib/scope.ts lists the ones it serves). The nav hides the same pages; this
+  // covers the deep link and the bookmark, which the nav never sees.
+  if (isScoped(claims) && !scopedRouteAllowed(pathname)) {
+    return <Navigate to="/" replace />;
   }
   return <Outlet />;
 }
@@ -88,6 +100,9 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       {/* Where the identity provider's callback sends the browser back with a one-time code. */}
       <Route path="/login/sso/complete" element={<LoginSsoCompletePage />} />
+      {/* Where an invitation link lands. Public: the person has no session yet, and the
+          one-time code rides the URL fragment, which a browser never sends to a server. */}
+      <Route path="/invitation" element={<AcceptInvitationPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route path="/" element={<AppLayout />}>
@@ -117,6 +132,10 @@ export default function App() {
           <Route path="branding" element={<BrandingPage />} />
           <Route path="basemap" element={<BasemapPage />} />
           <Route path="locale" element={<LocalePage />} />
+          <Route path="members" element={<MembersPage />} />
+          <Route path="roles" element={<RolesPage />} />
+          <Route path="roles/new" element={<RoleDetailPage />} />
+          <Route path="roles/:token" element={<RoleDetailPage />} />
           {/* Every registry list/detail renders through the one generic page
               component, so React reuses the instance across routes. Key each
               element by its resource's base path to force a fresh mount on

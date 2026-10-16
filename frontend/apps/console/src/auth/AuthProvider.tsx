@@ -29,6 +29,7 @@ import {
   isExpired,
   type DecodedClaims,
 } from '@devicechain/client';
+import { acceptInvitation as apiAcceptInvitation } from '@/lib/api/members';
 import { useToast } from '@/components/ui/toast';
 import { serverErrorCode } from '@/i18n/signInError';
 
@@ -78,6 +79,12 @@ interface AuthContextValue {
    * (selectTenant, refresh, logout) is the same for both ways of signing in.
    */
   completeSso: (code: string, verifier: string) => Promise<IdentityAuth>;
+  /**
+   * Accept an invitation with a new account's password or the identity token of the
+   * account it was issued to. Answers what login answers and starts the identity session
+   * the same way, so the next step is selectTenant as after any sign-in.
+   */
+  acceptInvitation: (code: string, proof: { password: string } | { identityToken: string }) => Promise<IdentityAuth>;
   /** Exchange an identity token for a tenant-scoped session. */
   selectTenant: (identityToken: string, tenant: string) => Promise<void>;
   /**
@@ -370,6 +377,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyIdentity],
   );
 
+  // An accepted invitation answers exactly what login answers. With a password it is a
+  // password sign-in; with an identity token it continues the session that token came
+  // from, single sign-on included, so the way that session started is kept.
+  const acceptInvitation = useCallback(
+    async (code: string, proof: { password: string } | { identityToken: string }) => {
+      const auth = await apiAcceptInvitation(code, proof);
+      applyIdentity({
+        identityToken: auth.identityToken,
+        method: 'password' in proof ? 'password' : (identityRef.current?.method ?? 'password'),
+        superuser: auth.superuser,
+        memberships: auth.memberships,
+      });
+      return auth;
+    },
+    [applyIdentity],
+  );
+
   // Step 2: exchange the identity token for a tenant-scoped session pair.
   const selectTenant = useCallback(
     async (identityToken: string, tenant: string) => {
@@ -414,6 +438,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       completeSso,
+      acceptInvitation,
       selectTenant,
       refreshMemberships,
       logout,
@@ -430,6 +455,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       isLoading,
       login,
       completeSso,
+      acceptInvitation,
       selectTenant,
       refreshMemberships,
       logout,

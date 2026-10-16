@@ -21,7 +21,11 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 加载仪表板 {#loading-a-dashboard}
 
-登录后，**Load a dashboard**（加载仪表板）会要求输入 **Dashboard token**（仪表板令牌）。输入仪表板的令牌（可在控制台中其页面上复制），然后选择 **Load published**（加载已发布版本）。查看器会获取最近一次发布的版本。从未发布过的仪表板无法在这里打开；查看器会提示你请作者发布它。
+登录后，**Load a dashboard**（加载仪表板）会列出 **Your dashboards**（你的仪表板）：你可以打开的已发布仪表板。选择其中一个即可打开。如果你的访问权限仅限于租户的部分客户，列表中是共享给这些客户的已发布仪表板；否则是租户中的所有已发布仪表板。列表显示前 200 个，超出时会注明。
+
+{/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}
+
+在列表下方，你也可以通过 **Dashboard token**（仪表板令牌）打开仪表板，令牌可在控制台中其页面上复制：输入令牌，然后选择 **Load published**（加载已发布版本）。查看器会获取最近一次发布的版本。从未发布过的仪表板无法在这里打开；查看器会提示你请作者发布它。
 
 <GuideShot id="dash-load" alt="Load a dashboard 页面。Dashboard token 字段为 wl-gallery，提示为 Fetches the version of this dashboard that was last published，并有“Load published”按钮。下方的 Or paste an exported definition 下有 Definition (JSON) 框、带有结构示例的 Binding manifest (JSON, optional) 框，以及 Render 按钮。页眉有语言按钮和 Sign out。" />
 

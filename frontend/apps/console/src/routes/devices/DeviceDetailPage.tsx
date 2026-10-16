@@ -26,7 +26,7 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useQuery } from '@/lib/hooks/use-query';
 import { useAuth } from '@/auth/AuthProvider';
-import { hasAuthority } from '@devicechain/client';
+import { hasAuthority, isScoped } from '@devicechain/client';
 import { getDevice, deleteDevice } from '@/lib/api/device-management';
 import { getDeviceState, getLatestMeasurements } from '@/lib/api/device-state';
 import { listEvents } from '@/lib/api/event-management';
@@ -60,7 +60,12 @@ export default function DeviceDetailPage() {
   // one confers device impersonation. The panel only ever managed credentials and
   // its list content is privileged, so a caller without the authority gets no tab
   // at all rather than an empty one or a 403.
-  const canManageCredentials = hasAuthority(claims, 'device:write');
+  const canManageCredentials = hasAuthority(claims, 'device:write') && !isScoped(claims);
+  // A member limited to part of the tenant (a customer user) is served the device, its live
+  // state, its events, its commands and its updates — not its assignment, its facet values
+  // or its stored configuration, and no change to the device itself. Those tabs and actions
+  // are left out for them rather than shown to fail.
+  const scoped = isScoped(claims);
   // The Updates tab belongs to an opt-in area: shown only once the area is KNOWN to be deployed
   // and the caller may read it (fail closed while discovery is pending), so it never appears
   // on an instance without update-management or 403s a caller without artifact:read.
@@ -128,12 +133,14 @@ export default function DeviceDetailPage() {
         </div>
       }
       action={
-        <div className="flex flex-wrap items-center gap-2">
-          <DeviceEnabledAction device={device} onChanged={reload} />
-          <Button variant="destructive" size="sm" onClick={remove}>
-            <Trash2 size={14} /> {t('delete')}
-          </Button>
-        </div>
+        scoped ? undefined : (
+          <div className="flex flex-wrap items-center gap-2">
+            <DeviceEnabledAction device={device} onChanged={reload} />
+            <Button variant="destructive" size="sm" onClick={remove}>
+              <Trash2 size={14} /> {t('delete')}
+            </Button>
+          </div>
+        )
       }
     >
       {/* Connectivity + events sit in their own tabs, so they load only when
@@ -141,14 +148,14 @@ export default function DeviceDetailPage() {
       <Tabs defaultValue="basic">
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
-          <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>
+          {!scoped && <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>}
           {/* The device's share of the facet-value authoring surface the other three
               member families get through the registry kit's detailTabs. */}
-          <TabsTrigger value="facets">{t('facets:panelTab')}</TabsTrigger>
+          {!scoped && <TabsTrigger value="facets">{t('facets:panelTab')}</TabsTrigger>}
           <TabsTrigger value="connectivity">{t('tabConnectivity')}</TabsTrigger>
           <TabsTrigger value="events">{t('tabEvents')}</TabsTrigger>
           <TabsTrigger value="commands">{t('tabCommands')}</TabsTrigger>
-          <TabsTrigger value="configuration">{t('tabConfiguration')}</TabsTrigger>
+          {!scoped && <TabsTrigger value="configuration">{t('tabConfiguration')}</TabsTrigger>}
           {updates.present && updates.canRead && (
             <TabsTrigger value="updates">{t('tabUpdates')}</TabsTrigger>
           )}
@@ -233,7 +240,7 @@ export default function DeviceDetailPage() {
                 key={device.token}
                 deviceToken={device.token}
                 deviceEnabled={device.enabled}
-                canWrite={updates.canWrite}
+                canWrite={updates.canWrite && !scoped}
               />
             </SectionPanel>
           </TabsContent>

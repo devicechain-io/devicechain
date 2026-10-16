@@ -241,6 +241,11 @@ Abre un rol para cambiar su nombre, su descripción y sus **Permisos**, y despu�
 El ámbito y el token quedan fijados una vez que el rol existe. **Nuevo rol** crea uno; **Eliminar**
 quita un rol a todas las personas que lo tienen.
 
+Los administradores de cada inquilino asignan estos roles de inquilino a sus miembros, y también
+pueden definir roles propios, que solo existen en ese inquilino y solo llevan permisos del inquilino.
+Gestionan sus miembros, invitaciones y roles por sí mismos, sin la consola de administración;
+consulta [Miembros, roles y usuarios de cliente](/user-guide/members-roles-and-customer-users).
+
 <GuideShot id="admin-role-detail" alt="El rol de inquilino facilities-viewer. El ámbito muestra inquilino seleccionado y sistema no disponible. El token facilities-viewer en gris, el nombre Facilities viewer y una descripción que dice que lee dispositivos, estado en vivo, telemetría y alarmas, y reconoce alarmas. Los permisos son device:read, state:read, event:read, alarm:read, alarm:write, dashboard:read y location:read. Un botón para guardar los cambios y otro Eliminar." />
 
 Los nombres y descripciones de los roles son datos que escribió quien los creó, así que aparecen tal

@@ -55,7 +55,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="asset-detail-basic" alt="HVAC Unit 1 的详情页，位于 Basic 选项卡：Asset type 为 HVAC Unit，只读的 Token 并附说明资产 ID 不可更改，以及 Name、Description 和“Save changes”按钮。Basic 旁边是 Facets、Hierarchy、Properties 和 Devices 选项卡。" />
 
-每个资产、客户和区域还有一个 **Facets**（分面）选项卡，见[下文](#facets)。资产另有三个选项卡：Hierarchy、Properties 和 Devices。
+每个资产、客户和区域还有一个 **Facets**（分面）选项卡，见[下文](#facets)。资产另有三个选项卡：Hierarchy、Properties 和 Devices。客户另有两个：Devices 和 Users。
 
 ### 层次结构（资产） {#hierarchy-assets}
 
@@ -77,6 +77,14 @@ import GuideShot from '@site/src/components/GuideShot';
 **Devices**（设备）选项卡列出分配给该资产的设备，这是设备分配关系的反向视图。点击令牌即可打开设备。要将设备分配给资产，请参阅[管理分配](/guides/managing-assignments)。
 
 <GuideShot id="asset-detail-devices" alt="HVAC Unit 1 的 Devices 选项卡，只有一台设备 bp-therm-001。" />
+
+### 设备与用户（客户） {#customer-devices-and-users}
+
+客户的 **Devices**（设备）选项卡以与资产相同的方式列出分配给它的设备。这些就是该客户自己的用户能看到的设备。
+
+**Users**（用户）选项卡列出访问权限仅限于该客户的成员，即该客户自己的登录账号。**Invite user**（邀请用户）邀请某人，并且其访问权限已限定于该客户。只有当你能读取租户的成员时，才会显示此选项卡。客户用户的介绍参见[成员、角色与客户用户](/user-guide/members-roles-and-customer-users#customer-users)。
+
+{/* TODO(screenshot): customer-detail-users, a customer's Users tab. */}
 
 ### 分面 {#facets}
 
@@ -132,3 +140,4 @@ import GuideShot from '@site/src/components/GuideShot';
 - [管理分配](/guides/managing-assignments)：将设备关联到资产、区域和客户。
 - [分组、分面与浏览](/user-guide/groups-facets-browse)
 - [地理围栏](/user-guide/geofences)
+- [成员、角色与客户用户](/user-guide/members-roles-and-customer-users)

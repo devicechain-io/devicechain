@@ -30,9 +30,17 @@ recargas la página, o abres `/dash/` en otra pestaña, tendrás que iniciar ses
 
 ## Cargar un panel
 
-Después de iniciar sesión, **Cargar un panel** pide un **Token del panel**. Escribe el token de un
-panel, que puedes copiar de su página en la consola, y elige **Cargar publicado**. El visor obtiene la
-versión que se publicó por última vez. Un panel que nunca se ha publicado no se puede abrir aquí; el
+Después de iniciar sesión, **Cargar un panel** lista **Tus paneles**: los paneles publicados que
+puedes abrir. Elige uno para abrirlo. Si tu acceso está limitado a algunos de los clientes del
+inquilino, la lista contiene los paneles publicados compartidos con esos clientes; si no, contiene
+todos los paneles publicados del inquilino. La lista muestra los 200 primeros, y lo indica cuando
+hay más.
+
+{/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}
+
+Debajo de la lista, también puedes abrir un panel por su **Token del panel**, que puedes copiar de su
+página en la consola: escríbelo y elige **Cargar publicado**. El visor obtiene la versión que se
+publicó por última vez. Un panel que nunca se ha publicado no se puede abrir aquí; el
 visor te pide que un autor lo publique.
 
 <GuideShot id="dash-load" alt="La página Cargar un panel. El campo del token del panel contiene wl-gallery, con la pista de que obtiene la versión publicada por última vez, y un botón Cargar publicado. Debajo, bajo la opción de pegar una definición exportada, hay un cuadro para la definición en JSON, otro opcional para el manifiesto de vinculación con un ejemplo de su forma, y un botón Renderizar. La cabecera tiene los botones de idioma y el de cerrar sesión." />

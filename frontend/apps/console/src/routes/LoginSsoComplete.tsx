@@ -16,6 +16,7 @@ import {
   runSsoCompletion,
 } from '@/lib/sso';
 import type { IdentityAuth } from '@/lib/api/user-management';
+import { heldInvitation, INVITATION_PATH } from '@/lib/invitation';
 
 // Where the identity provider sends the browser back to. The address carries a one-time
 // code, so this page is careful before it is anything else:
@@ -113,6 +114,13 @@ export default function LoginSsoCompletePage() {
       }
       const { auth } = out;
       setReturnTo(out.returnTo);
+      // A sign-in started from an invitation goes back to the invitation page, holding
+      // the identity session it needs to accept — before anything below, because the
+      // person may have no tenant yet (the invitation is how they get one).
+      if (heldInvitation()) {
+        leave(INVITATION_PATH);
+        return;
+      }
       try {
         if (auth.superuser) {
           leave('/admin');
