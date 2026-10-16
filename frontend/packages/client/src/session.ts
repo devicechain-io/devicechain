@@ -76,7 +76,8 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
 // fleet of displays that lost the network together does not come back in lockstep.
 const RETRY_BASE_MS = 1_000;
 const RETRY_CAP_MS = 30_000;
-// The last retry is aimed this far ahead of the access token's expiry, not at it.
+// The last retry is aimed this far ahead of the access token's expiry, not at it. No retry is
+// armed within RETRY_BASE_MS before that aim: one that would be is moved onto it instead.
 const RETRY_EXPIRY_MARGIN_MS = 1_000;
 // The shortest gap between two scheduled refreshes. A backstop: if the held token still
 // looks due right after a refresh (the device clock runs well ahead of the server's), the
@@ -216,7 +217,11 @@ export function createSessionTokens(opts: SessionTokensOptions): SessionTokens {
       }
       const backoff = Math.min(RETRY_CAP_MS, RETRY_BASE_MS * 2 ** failures) * (0.5 + Math.random() / 2);
       failures++;
-      arm(Math.min(backoff, left));
+      // A retry that would land within RETRY_BASE_MS of the final retry's aim (or past it) is
+      // moved onto that aim. Otherwise a backoff that happens to land just short of the aim leaves
+      // the aimed retry following it moments later: two requests back to back, against a
+      // server that may have just answered 429.
+      arm(left - backoff < RETRY_BASE_MS ? left : backoff);
     };
 
     schedule();
