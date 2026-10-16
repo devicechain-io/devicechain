@@ -38,6 +38,14 @@ Chart helpers live on a separate entry, `@devicechain/widget-sdk/echarts`: the `
 wrapper, `buildLineOption` / `buildGaugeOption` and the chart colour theme. `echarts` is an
 **optional peer dependency**, needed only by a widget that imports that entry.
 
+The chart engine itself is not part of that entry's static imports. `EChart` loads it on demand,
+as one chunk, the first time a chart mounts, so a host bundler keeps ECharts out of the first
+download. Until the engine arrives, the chart's box is empty. If the engine cannot be fetched,
+`EChart` throws the error to the nearest error boundary, and the next mount fetches it again. A host that
+wants charts drawn on its first frame awaits `loadChartEngine()` before rendering. A widget that
+draws a chart can set `MyWidget.preload = loadChartEngine` on its component, and then
+`preloadWidgets` from `@devicechain/widgets` fetches the engine for any board that contains it.
+
 ## Declare a widget
 
 ```tsx

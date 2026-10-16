@@ -38,7 +38,12 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
 
   // `P` is the data a given component takes when it differs from the family's default `D` (a chunk
   // that holds widgets of two channels). `Props` is for a component that is not a widget at all.
-  function component<P = D, Props extends object = WidgetProps<P>>(name: keyof M & string) {
+  // `alsoPreload` is code the component needs beyond the chunk that is itself loaded on demand (the
+  // chart engine, for a chart in the chunk): preloadWidgets fetches both, in parallel.
+  function component<P = D, Props extends object = WidgetProps<P>>(
+    name: keyof M & string,
+    alsoPreload?: () => Promise<unknown>,
+  ) {
     function LazyChunkWidget(props: Props) {
       const [mod, setMod] = useState(loaded);
       const [error, setError] = useState<unknown>();
@@ -52,7 +57,7 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
     }
     LazyChunkWidget.displayName = `Lazy(${name})`;
     // What preloadWidgets calls, so a host that awaits it renders this widget on its first frame.
-    LazyChunkWidget.preload = load;
+    LazyChunkWidget.preload = alsoPreload ? () => Promise.all([load(), alsoPreload()]).then(([m]) => m) : load;
     return LazyChunkWidget;
   }
 

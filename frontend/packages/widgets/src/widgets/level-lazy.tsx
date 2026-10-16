@@ -11,6 +11,7 @@
 // like a reading is the outcome this must never produce.
 
 import { defineWidget } from '@devicechain/widget-sdk';
+import { loadChartEngine } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { lazyChunk } from './lazy-chunk';
@@ -48,7 +49,7 @@ export const signalBarsWidget = defineWidget({
 
 export const compassWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['compass'],
-  implementation: { kind: 'trusted-react', component: lazyComponent('Compass') },
+  implementation: { kind: 'trusted-react', component: lazyComponent('Compass', loadChartEngine) },
 });
 
 export const progressRingWidget = defineWidget({

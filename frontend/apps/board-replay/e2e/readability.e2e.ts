@@ -57,6 +57,11 @@ async function measure(page: Page, board: string, width: number, theme: string) 
   await page.waitForFunction(() => document.documentElement.dataset.gate !== undefined);
   const state = await page.evaluate(() => ({ ...document.documentElement.dataset }));
   expect(state.gate, `the gate page could not draw ${board}: ${state.gateError}`).toBe('ready');
+  // No empty first frame: the chart engine loads on demand, so a board whose charts mounted
+  // before it arrived would show empty chart boxes that fill in later. Every sim board (and the
+  // negative control) holds a chart, so the count is also the reach control.
+  expect(Number(state.gateCharts), `${board}: no chart was on the first frame, so the check below saw nothing`).toBeGreaterThan(0);
+  expect(state.gateChartsEmpty, `${board}: charts on the first frame that had not drawn`).toBe('0');
 
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await page.waitForLoadState('networkidle');
@@ -278,6 +283,8 @@ async function embedAt(page: Page, size: readonly [number, number], theme: strin
   await page.waitForFunction(() => document.documentElement.dataset.gate !== undefined);
   const state = await page.evaluate(() => ({ ...document.documentElement.dataset }));
   expect(state.gate, `the gate page could not draw the embed: ${state.gateError}`).toBe('ready');
+  expect(Number(state.gateCharts), 'the embed: no chart was on the first frame').toBeGreaterThan(0);
+  expect(state.gateChartsEmpty, 'the embed: charts on the first frame that had not drawn').toBe('0');
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await page.waitForLoadState('networkidle');
   await page.addScriptTag({ content: `window.__gateSignature = ${layoutSignature.toString()};` });

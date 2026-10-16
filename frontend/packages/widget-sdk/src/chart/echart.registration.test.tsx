@@ -3,7 +3,7 @@
 
 // The option builders emit components (legend, markLine, markArea); ECharts silently ignores
 // a key whose component was never registered. These tests render the builders' output through
-// a REAL ECharts instance after importing the wrapper (whose module body is what registers
+// a REAL ECharts instance after importing the chart engine (whose module body is what registers
 // the components), and read back what the instance actually built -- so removing a component
 // from the registration, or a builder dropping the key, fails here.
 
@@ -14,9 +14,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildCompassOption, buildGaugeOption, buildLineOption } from './chart-options';
 import type { ChartTheme } from './chart-theme';
-// Importing the wrapper registers the eager chart types and components; the threshold
-// markers are registered by loadThresholdMarkers, exactly as EChart does on demand.
+// Importing the engine registers its chart types and components (EChart loads this same module
+// on demand); the threshold markers are registered by loadThresholdMarkers, exactly as EChart does.
 import { loadThresholdMarkers, optionUsesMarkers } from './echart';
+import './echart-engine';
 
 echarts.use([SVGRenderer]); // test-only: jsdom has no canvas, SSR+SVG is the real engine without one
 

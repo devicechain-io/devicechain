@@ -55,6 +55,38 @@ async function graphOf(entry: string): Promise<{ imports: string[]; inputs: stri
   };
 }
 
+// The built files themselves, read as text: what a host bundler sees.
+const distFiles = (): string[] => [
+  ...readdirSync(distDir).filter((f) => f.endsWith('.js')).map((f) => path.join(distDir, f)),
+  ...readdirSync(path.join(distDir, 'chunks')).filter((f) => f.endsWith('.js')).map((f) => path.join(distDir, 'chunks', f)),
+];
+const isEcharts = (s: string) => s === 'echarts' || s.startsWith('echarts/');
+// `from "x"` and `import "x"`; a dynamic `import("x")` has a parenthesis and does not match.
+const STATIC = /(?:\bfrom|\bimport)\s*["']([^"']+)["']/g;
+const bareImports = (code: string) => [...code.matchAll(STATIC)].map((m) => m[1]).filter((s) => !s.startsWith('.'));
+const dynamicImports = (code: string) => [...code.matchAll(/\bimport\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
+// An entry plus every built file it imports STATICALLY: what a host loads with it.
+function staticGraph(entry: string): string[] {
+  const seen = new Set<string>();
+  const queue = [path.join(distDir, entry)];
+  while (queue.length > 0) {
+    const file = queue.pop()!;
+    if (seen.has(file)) continue;
+    seen.add(file);
+    for (const m of readFileSync(file, 'utf8').matchAll(STATIC)) {
+      if (m[1].startsWith('.')) queue.push(path.resolve(path.dirname(file), m[1]));
+    }
+  }
+  return [...seen];
+}
+function chunkNamed(stem: string): string {
+  const found = readdirSync(path.join(distDir, 'chunks')).filter((f) => f.startsWith(`${stem}-`) && f.endsWith('.js'));
+  expect(found, `exactly one ${stem} chunk`).toHaveLength(1);
+  return path.join(distDir, 'chunks', found[0]);
+}
+const engineChunk = () => chunkNamed('echart-engine');
+const markersChunk = () => chunkNamed('echart-markers');
+
 beforeAll(async () => {
   const root = await graphOf('index.js');
   imports = root.imports;
@@ -140,7 +172,7 @@ describe('the built SDK /echarts entry', () => {
   // second lazily loaded ECharts module makes the app bundler split the whole engine out of the
   // entry chunk (measured: about +8 KB on the initial download), so this is a budget line.
   it('registers only the line and gauge chart types, with no bar or pie module in the build', () => {
-    const chartTypes = [...readFileSync(path.join(distDir, 'echarts.js'), 'utf8').matchAll(/import\s*\{([^}]*)\}\s*from\s*"echarts\/charts"/g)]
+    const chartTypes = [...readFileSync(engineChunk(), 'utf8').matchAll(/import\s*\{([^}]*)\}\s*from\s*"echarts\/charts"/g)]
       .flatMap((m) => m[1].split(','))
       .map((n) => n.trim())
       .filter(Boolean)
@@ -152,6 +184,38 @@ describe('the built SDK /echarts entry', () => {
     for (const f of chunks) {
       expect(readFileSync(path.join(distDir, 'chunks', f), 'utf8'), `${f} imports a bar or pie chart type`).not.toMatch(/\b(BarChart|PieChart)\b/);
     }
+  });
+
+  // 🔴 The chart engine is NOT in the entry's static graph: a host's first download that imports
+  // this entry carries no ECharts, and the engine (ECharts + zrender, ~170 KB gzip) arrives as ONE
+  // chunk when the first chart mounts or loadChartEngine asks. One chunk because a second module
+  // importing ECharts independently makes a host bundler split the engine's shared core into a
+  // chunk of its own (measured +2.4 to +4.5 KB), so every echarts import lives in the engine
+  // module, and the threshold markers are reached FROM it.
+  it('loads ECharts on demand, from one chunk, never from the entry static graph', () => {
+    const files = staticGraph('echarts.js');
+    expect(files.length, 'reach control: the static graph was read').toBeGreaterThan(0);
+    for (const f of files) {
+      expect(bareImports(readFileSync(f, 'utf8')).filter(isEcharts), `${path.relative(distDir, f)} imports ECharts statically`).toEqual([]);
+    }
+    const engine = engineChunk();
+    const echartsImporters = distFiles().filter((f) => bareImports(readFileSync(f, 'utf8')).some(isEcharts));
+    expect(echartsImporters.map((f) => path.basename(f)).sort()).toEqual(
+      [path.basename(engine), path.basename(markersChunk())].sort(),
+    );
+    // The engine's chart types, components and renderer: the whole engine is in that one chunk.
+    expect(bareImports(readFileSync(engine, 'utf8')).filter(isEcharts).sort()).toEqual([
+      'echarts/charts',
+      'echarts/components',
+      'echarts/core',
+      'echarts/renderers',
+    ]);
+    // Reached by a dynamic import from the entry's graph, and the markers only from the engine.
+    expect(files.some((f) => dynamicImports(readFileSync(f, 'utf8')).some((s) => s.includes(path.basename(engine))))).toBe(true);
+    const markersImporters = distFiles().filter((f) =>
+      dynamicImports(readFileSync(f, 'utf8')).some((s) => s.includes(path.basename(markersChunk()))),
+    );
+    expect(markersImporters).toEqual([engine]);
   });
 
   it('imports no map library and nothing from the built-in catalog', () => {
