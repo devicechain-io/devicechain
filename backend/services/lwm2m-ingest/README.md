@@ -136,8 +136,10 @@ silently receive and drop half of them. So GA runs a **single serving replica** 
 A restart loses every in-memory registration **and every observation**. Failover
 reconstruction restores **presence only** — observations cannot be rebuilt without a
 conn, so telemetry recovery waits on device re-Register behaviour (device-controlled, up
-to the 86400s default lifetime). The one lever is clamping `maxLifetimeSeconds` down,
-trading presence-write volume for a bounded telemetry blackout.
+to the lifetime the device requested, 86400s by default). Clamping `maxLifetimeSeconds`
+down does NOT shorten that blackout: the 2.01 Created reply carries no lifetime, so the
+device keeps updating on its own schedule and the clamp only bounds how long a dead
+device reads online. The lever today is the lifetime the devices request.
 
 ## Configuration
 

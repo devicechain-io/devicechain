@@ -100,9 +100,12 @@ su tiempo de vida de registro. Con el valor predeterminado de `86400` segundos, 
 de silencio de un dispositivo perfectamente sano**, con el dispositivo en línea en la consola todo ese
 tiempo.
 
-Si no puedes tolerarlo, baja `maxLifetimeSeconds` (consulta [Ajustes de LwM2M](#lwm2m-settings)).
-Nunca lo bajes por debajo del mayor tiempo de vida que pidan realmente tus dispositivos, o quedarán
-expirados como muertos en cada relevo.
+Si no puedes tolerarlo, acorta el tiempo de vida de registro que solicitan tus dispositivos, a costa
+de actualizaciones de registro más frecuentes. Bajar `maxLifetimeSeconds` **no** acorta este apagón:
+al dispositivo nunca se le comunica el recorte y sigue actualizando según su propio calendario. Ese
+ajuste acota cuánto tiempo figura en línea un dispositivo muerto (consulta
+[Ajustes de LwM2M](#lwm2m-settings)), y debe quedar por encima del mayor tiempo de vida que pidan
+realmente tus dispositivos, o quedarán expirados como muertos en cada relevo.
 
 ## Qué garantiza la presencia
 
