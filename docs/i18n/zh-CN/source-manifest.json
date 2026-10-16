@@ -19,8 +19,8 @@
       "translationSha256": "775eb2a889aba61fa22c472b7d7525d1ece229efa641a9d7ae5e7a67463b3e7f"
     },
     "concepts/dashboards.md": {
-      "sourceSha256": "846290aec65046408e9c8920d6fd2654aa275782f5b60a024bb2e6539ab9eb23",
-      "translationSha256": "b240e1c3a7eded33cc593b32ea7d5148796b749599529d945c09134fbda6f193"
+      "sourceSha256": "2c4da833756776eab3eb3d94df6287a788a5142c96d53f3c77de42567eb2500c",
+      "translationSha256": "727a9b8e53206313ef24516a5e02e845f6bc96cd667256654d705dac517dfd4f"
     },
     "concepts/device-presence.md": {
       "sourceSha256": "05cb13a49027b81bf9305b522e29d99b6ffeb3410afeaa85efea239e4823233e",
@@ -163,7 +163,7 @@
       "translationSha256": "931b6976af0690e3a6e7696c28f4b59ae59f75626a0edbe5f34c09180f4a066a"
     },
     "guides/signing-updates.md": {
-      "sourceSha256": "486c86223bd0548394a940d8437f668568ab74b47e76ab58321852dffdc69551",
+      "sourceSha256": "3bb500cbdb112260366ff34cc95af8b0093db047ee2f482f5d36aed2d89a9909",
       "translationSha256": "49bae8d9a1e11da9af88e90d64ea59d4621dbe78f58f05c389bdc7060de4815c"
     },
     "guides/sql-and-bi-access.md": {
