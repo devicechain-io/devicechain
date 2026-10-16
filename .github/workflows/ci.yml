@@ -1147,6 +1147,14 @@ jobs:
           MDIFF_CONTAINER: dc-mdiff-next
         run: hack/migration-diff.sh verify
 
+      # NOT run here yet: the services' integration suites (hack/integration-tests.sh).
+      # On 2.30 two of event-management's plan-shape tests fail. 2.30 plans a device
+      # read through a new DeferredChunkAppend node, whose EXPLAIN JSON repeats a
+      # "Plan" key per chunk instead of using a "Plans" array, and in that plan the
+      # chunks are walked by the primary key rather than the tenant-led device index.
+      # That is a finding for the pin bump, not a catalog read. Add the step once it
+      # is settled.
+
   # ---------------------------------------------------------------------------
   # License header check (backend only, per CLAUDE.md).
   # ---------------------------------------------------------------------------

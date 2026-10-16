@@ -63,7 +63,7 @@ func TestIntegrationCompressedRelationsFindWhatCompressionCreated(t *testing.T) 
 
 	got, err := compressedRelations(sys, "events")
 	require.NoError(t, err)
-	assert.Equal(t, created, got, "the compressed relation of the one compressed chunk")
+	require.Equal(t, created, got, "the compressed relation of the one compressed chunk")
 	var rows int64
 	require.NoError(t, sys.Raw(`SELECT count(*) FROM `+got[0]).Scan(&rows).Error)
 	assert.Positive(t, rows, "%s holds the chunk's compressed batches", got[0])
