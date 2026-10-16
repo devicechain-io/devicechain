@@ -51,10 +51,15 @@ type DeviceClaimInitiateRequest struct {
 // claim secret (proof of possession), and the customer the device should be
 // assigned to via a relationship of the given type.
 type DeviceClaimRequest struct {
-	DeviceToken      string
-	ClaimSecret      string
-	CustomerToken    string
-	RelationshipType string
+	DeviceToken   string
+	ClaimSecret   string
+	CustomerToken string
+	// RelationshipType names the type of the ownership edge the claim writes. Absent (nil or
+	// empty) it is the built-in tracked "assigned" type (ADR-081): a claim is how a device
+	// comes to belong to a customer, and only a TRACKED edge is ownership — a claim
+	// redeemed with an untracked type would hand the customer a device none of its members
+	// can see.
+	RelationshipType *string
 }
 
 // DeviceClaim is a possession claim on a device (ADR-012): a one-time, optionally

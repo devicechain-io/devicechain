@@ -4,8 +4,10 @@
 package model
 
 import (
+	"context"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -40,7 +42,21 @@ func TestUseMeasurementRollup(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, useMeasurementRollup(tc.criteria))
+			assert.Equal(t, tc.want, useMeasurementRollup(context.Background(), tc.criteria))
 		})
 	}
+}
+
+// A scoped caller is never served from the rollup, at any interval: the aggregate has no
+// anchor dimension, so it cannot hold a member to the readings recorded while the device
+// belonged to a customer in its scope. The unscoped control is the same interval, which
+// the rollup does serve.
+func TestAScopedCallerNeverUsesTheRollup(t *testing.T) {
+	criteria := MeasurementAggregationCriteria{IntervalSeconds: 300}
+	unscoped := auth.WithClaims(context.Background(), &auth.Claims{TokenType: auth.TokenTypeAccess})
+	assert.True(t, useMeasurementRollup(unscoped, criteria), "control: an unscoped caller uses the rollup")
+
+	scoped := auth.WithClaims(context.Background(), &auth.Claims{
+		TokenType: auth.TokenTypeAccess, ScopeAnchors: []string{"customer:acme"}})
+	assert.False(t, useMeasurementRollup(scoped, criteria), "a scoped caller must take the raw path")
 }

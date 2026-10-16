@@ -2507,7 +2507,13 @@ input DeviceClaimRequest {
     deviceToken: String!
     claimSecret: String!
     customerToken: String!
-    relationshipType: String!
+    """
+    The relationship type of the edge the claim writes. Omit it to use the built-in
+    tracked "assigned" type, which is what makes the device belong to the customer: only a
+    tracked relationship counts as ownership, so a device claimed with an untracked type is
+    not visible to members limited to that customer.
+    """
+    relationshipType: String
 }
 
 # Represents a type or class of assets

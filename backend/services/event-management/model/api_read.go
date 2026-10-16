@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"gorm.io/gorm"
@@ -195,7 +196,17 @@ const rollupBucketSeconds = 60
 //     buckets and re-bucketing is loss-free).
 //
 // Sub-minute or anchor-filtered reads fall back to the raw path.
-func useMeasurementRollup(criteria MeasurementAggregationCriteria) bool {
+//
+// 🔴 A SCOPED caller (ADR-081) always takes the raw path too, for the same reason as an
+// anchor filter: a member limited to some customers sees only the readings recorded
+// while the device belonged to one of them, and the rollup cannot tell those apart from
+// the rest — a device reassigned mid-bucket has both customers' readings in one row. The
+// raw path is filtered by the measurement table's scope rule; the rollup declares none,
+// so a scoped read that reached it would be refused rather than served.
+func useMeasurementRollup(ctx context.Context, criteria MeasurementAggregationCriteria) bool {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return false
+	}
 	if criteria.AnchorType != nil && criteria.AnchorToken != nil {
 		return false
 	}
@@ -301,7 +312,7 @@ func (api *Api) BucketedMeasurements(ctx context.Context, criteria MeasurementAg
 	if err != nil {
 		return nil, err
 	}
-	rollup := !api.RollupReadsDisabled && useMeasurementRollup(criteria)
+	rollup := !api.RollupReadsDisabled && useMeasurementRollup(ctx, criteria)
 	names := int64(1)
 	if criteria.Name == nil {
 		// One name more than the cap allows at this bucket count is enough to decide, so

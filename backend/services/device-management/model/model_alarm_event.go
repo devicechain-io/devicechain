@@ -93,6 +93,11 @@ type AlarmStateChangeEvent struct {
 	// occurred time for a rule-driven (integrator) transition, or the operation time for an
 	// operator ack/clear — so the emitted timeline matches the alarm's own timestamps.
 	OccurredTime time.Time
+
+	// ScopeAnchors is the alarm's scope stamp (Alarm.ScopeAnchors): what the live alarm
+	// stream matches a member whose access is limited to some customers against, so the
+	// stream and the alarms query agree on what such a member sees (ADR-081).
+	ScopeAnchors []string
 }
 
 // AlarmEventPublisher publishes alarm state-change events (ADR-041). Emission is
@@ -147,6 +152,7 @@ func newAlarmStateChangeEvent(a *Alarm, etype AlarmEventType, prevSeverity strin
 		PreviousSeverity: prevSeverity,
 		RaisedTime:       a.RaisedTime,
 		OccurredTime:     occurredTime,
+		ScopeAnchors:     append([]string(nil), a.ScopeAnchors...),
 	}
 	if a.AcknowledgedBy.Valid {
 		by := a.AcknowledgedBy.String

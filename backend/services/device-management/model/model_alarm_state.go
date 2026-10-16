@@ -91,6 +91,15 @@ type Alarm struct {
 	// a transient skew — so it needs a real CAS. Untouched by the operator ack/clear paths (a state
 	// change there is caught by the co-predicated `state`).
 	ContributorVersion uint `gorm:"not null;default:0"`
+
+	// ScopeAnchors are the device's anchors ("customer:acme", one per tracked relationship)
+	// when the alarm was raised — stamped at its first raise and again whenever it is
+	// re-raised after clearing, so each alarm cycle carries the owner the device had when
+	// that cycle began (ADR-081). It is what a member whose access is limited to some
+	// customers is matched against (Alarm.ScopedBy): NULL or empty matches no scope, so an
+	// alarm raised before the stamp existed is invisible to them. Only the raise path writes
+	// it; a scoped caller's acknowledge or clear may never touch it.
+	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
 }
 
 // DefaultOrder implements rdb.Sortable. An alarm does not follow the registry default:

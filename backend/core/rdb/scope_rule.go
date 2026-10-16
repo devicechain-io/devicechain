@@ -45,7 +45,7 @@ const (
 )
 
 // ScopeRule is the visibility rule of a model for scoped callers. Build one with
-// AnchorColumn, AnchorTable or Catalogue.
+// AnchorColumn, AnchorTable, DeviceEdge, OwnAnchor, NamedAnchor or Catalogue.
 type ScopeRule interface {
 	rule() *scopeRule
 }
@@ -56,14 +56,20 @@ const (
 	ruleCatalogue ruleKind = iota + 1
 	ruleAnchorColumn
 	ruleAnchorTable
+	ruleDeviceEdge
+	ruleOwnAnchor
 )
 
 // scopeRule is the one concrete rule type; kind says which of its fields apply.
 type scopeRule struct {
 	kind   ruleKind
-	column string    // ruleAnchorColumn
-	set    AnchorSet // ruleAnchorTable
-	writes ScopedWrite
+	column string         // ruleAnchorColumn; ruleOwnAnchor (the token column)
+	set    AnchorSet      // ruleAnchorTable
+	edges  OwnershipEdges // ruleDeviceEdge
+	// ruleOwnAnchor: the row's anchor kind is either a column (kindColumn) or one
+	// constant every row of the model shares (kindConst). Exactly one is set.
+	kindColumn, kindConst string
+	writes                ScopedWrite
 }
 
 func (r *scopeRule) rule() *scopeRule { return r }
@@ -136,4 +142,62 @@ type KeyPair struct {
 // Scoped writes are refused.
 func AnchorTable(set AnchorSet) ScopeRule {
 	return &scopeRule{kind: ruleAnchorTable, set: set}
+}
+
+// OwnershipEdges describes a relationship graph for DeviceEdge: an EDGE table whose rows
+// point from a source entity to a target entity, and a TYPE table that says, per
+// relationship type, whether an edge of that type is TRACKED. Every name is a field or
+// column of the model it belongs to; every value compared against is bound.
+type OwnershipEdges struct {
+	// Edge and Type are the edge and relationship-type models. Both must be
+	// tenant-scoped: the predicate carries the tenant on BOTH tables, so neither an edge
+	// row nor a type row of another tenant can make a row visible.
+	Edge, Type any
+	// SourceType and SourceID are the edge columns naming the source entity's type and
+	// row id; SourceKind is the type value that names a row of the model being read
+	// ("device"), and Row is that model's id column the source id must equal.
+	SourceType, SourceID, SourceKind, Row string
+	// TargetType and TargetToken are the edge columns naming the target's type and its
+	// token. They are compared with a scope anchor's kind and token.
+	TargetType, TargetToken string
+	// EdgeType is the edge column holding its type's id; TypeID is that id column on the
+	// type table; Tracked is the type table's boolean column.
+	EdgeType, TypeID, Tracked string
+}
+
+// DeviceEdge is the rule of the DEVICE row itself (ADR-081): a scoped caller sees a device
+// it currently OWNS, which is an edge of a TRACKED relationship type from the device to an
+// entity its scope names. The rule keys on the tracked flag, never on a type token —
+// "assigned" is only the default, and any tracked type to a customer is ownership — and an
+// untracked edge (group membership, containment) is not ownership.
+//
+//	EXISTS (SELECT 1 FROM <edge> AS dc_scope_edge
+//	        JOIN <type> AS dc_scope_type ON dc_scope_type.<id> = dc_scope_edge.<edge type>
+//	        WHERE dc_scope_edge.<tenant> = $tenant AND dc_scope_type.<tenant> = $tenant
+//	          [AND dc_scope_edge.deleted_at IS NULL] [AND dc_scope_type.deleted_at IS NULL]
+//	          AND dc_scope_type.<tracked> = $true
+//	          AND dc_scope_edge.<source type> = $kind AND dc_scope_edge.<source id> = "<table>".<row>
+//	          AND ((dc_scope_edge.<target type> = $1 AND dc_scope_edge.<target token> = $2) OR ...))
+//
+// It is CURRENT ownership: an edge removed is a device no longer visible, at once. History
+// (events, alarms) is stamped when written and keeps the owner it had then. Scoped writes
+// are refused.
+func DeviceEdge(edges OwnershipEdges) ScopeRule {
+	return &scopeRule{kind: ruleDeviceEdge, edges: edges}
+}
+
+// OwnAnchor is the rule of a model whose row IS an anchor, in a kind column and a token
+// column (event-management's event_anchors). A scoped caller sees the rows naming an
+// anchor in its scope and no other, so reading an event's anchors never discloses that a
+// co-owner exists. Scoped writes are refused.
+func OwnAnchor(kindColumn, tokenColumn string) ScopeRule {
+	return &scopeRule{kind: ruleOwnAnchor, kindColumn: kindColumn, column: tokenColumn}
+}
+
+// NamedAnchor is the rule of the entity an anchor NAMES: every row of the model is the
+// anchor "<kind>:<row's token>", so a scoped caller sees exactly the rows its scope names
+// (a customer member reads its own customer record, and no other). Scoped writes are
+// refused.
+func NamedAnchor(kind, tokenColumn string) ScopeRule {
+	return &scopeRule{kind: ruleOwnAnchor, kindConst: kind, column: tokenColumn}
 }

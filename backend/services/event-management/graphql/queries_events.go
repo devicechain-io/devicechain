@@ -146,11 +146,19 @@ func toMeasurementAggregationCriteria(in MeasurementAggregationCriteriaInput) (m
 	return criteria, nil
 }
 
+// The five event reads ADMIT scoped callers (ADR-081): a member whose access is limited
+// to some customers sees only the events recorded while the device belonged to one of
+// them. The resolvers do no filtering of their own and need none — every read is a gorm
+// read of an event model under THIS request context, whose claims carry the scope, and
+// core/rdb's scope callback adds each model's rule (model/scope_rules.go) to it. That is
+// why the request ctx, not a derived tenant-only one, is what reaches the Api: a context
+// with a tenant and no claims is unscoped.
+
 // List base events that match the given criteria.
 func (r *SchemaResolver) Events(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*EventSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.EventRead); err != nil {
 		return nil, err
 	}
 
@@ -181,7 +189,7 @@ func (r *SchemaResolver) Events(ctx context.Context, args struct {
 func (r *SchemaResolver) LocationEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*LocationEventSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.LocationRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.LocationRead); err != nil {
 		return nil, err
 	}
 
@@ -201,7 +209,7 @@ func (r *SchemaResolver) LocationEvents(ctx context.Context, args struct {
 func (r *SchemaResolver) MeasurementEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*MeasurementEventSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.EventRead); err != nil {
 		return nil, err
 	}
 
@@ -222,7 +230,7 @@ func (r *SchemaResolver) MeasurementEvents(ctx context.Context, args struct {
 func (r *SchemaResolver) BucketedMeasurements(ctx context.Context, args struct {
 	Criteria MeasurementAggregationCriteriaInput
 }) ([]*MeasurementBucketResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.EventRead); err != nil {
 		return nil, err
 	}
 
@@ -244,7 +252,7 @@ func (r *SchemaResolver) BucketedMeasurements(ctx context.Context, args struct {
 func (r *SchemaResolver) AlertEvents(ctx context.Context, args struct {
 	Criteria EventSearchCriteriaInput
 }) (*AlertEventSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.EventRead); err != nil {
 		return nil, err
 	}
 

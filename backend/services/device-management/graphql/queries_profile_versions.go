@@ -17,7 +17,7 @@ func (r *SchemaResolver) DeviceProfileVersions(ctx context.Context, args struct 
 	Limit  *int32
 	Offset *int32
 }) ([]*DeviceProfileVersionResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

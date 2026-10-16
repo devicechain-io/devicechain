@@ -18,7 +18,7 @@ import (
 func (r *SchemaResolver) AcknowledgeAlarm(ctx context.Context, args struct {
 	Token string
 }) (*AlarmResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmWrite); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite); err != nil {
 		return nil, err
 	}
 
@@ -80,7 +80,7 @@ func (r *BulkAcknowledgeAlarmsResultResolver) Refusals() []*AlarmAckRefusalResol
 func (r *SchemaResolver) AcknowledgeAlarms(ctx context.Context, args struct {
 	Tokens []string
 }) (*BulkAcknowledgeAlarmsResultResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmWrite); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +101,7 @@ func (r *SchemaResolver) AcknowledgeAlarms(ctx context.Context, args struct {
 func (r *SchemaResolver) ClearAlarm(ctx context.Context, args struct {
 	Token string
 }) (*AlarmResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmWrite); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmWrite); err != nil {
 		return nil, err
 	}
 

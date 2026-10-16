@@ -158,13 +158,11 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	if err != nil {
 		return nil, fmt.Errorf("customer: %w", err)
 	}
-	rtMatches, err := api.EntityRelationshipTypesByToken(ctx, []string{request.RelationshipType})
+	relType, err := api.claimRelationshipType(ctx, request.RelationshipType)
 	if err != nil {
 		return nil, err
 	}
-	if len(rtMatches) == 0 {
-		return nil, gorm.ErrRecordNotFound
-	}
+	rtMatches := []*EntityRelationshipType{relType}
 
 	rel := &EntityRelationship{
 		TokenReference: rdb.TokenReference{Token: uuid.New().String()},
@@ -201,7 +199,7 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		// the same reason CreateEntityRelationship refuses it: a gate with a third
 		// door around it is not a gate. A no-op for every other type, which is every
 		// type a claim is legitimately redeemed with.
-		if err := api.admitContainmentEdge(tx, request.RelationshipType,
+		if err := api.admitContainmentEdge(tx, relType.Token,
 			rel.SourceType, rel.SourceId, rel.TargetType, rel.TargetId); err != nil {
 			return err
 		}
@@ -220,6 +218,25 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	// The new owner's edge is on the device: its cached tracked set does not list it yet.
 	api.evictRelationshipSources(ctx, []uint{rel.SourceId})
 	return rel, nil
+}
+
+// claimRelationshipType resolves the type of the edge a claim writes. No type named is
+// the built-in tracked "assigned" type, provisioned for the tenant on first use (ADR-081
+// decision 5): ownership is a TRACKED edge, so the default must be one. A type the caller
+// names is used as given — a caller-defined tracked type is ownership too — and an
+// unknown one answers NOT_FOUND as before.
+func (api *Api) claimRelationshipType(ctx context.Context, requested *string) (*EntityRelationshipType, error) {
+	if requested == nil || *requested == "" {
+		return api.EnsureAssignmentType(ctx)
+	}
+	matches, err := api.EntityRelationshipTypesByToken(ctx, []string{*requested})
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return matches[0], nil
 }
 
 // CancelDeviceClaim closes an open claim without assigning the device. It returns

@@ -16,7 +16,7 @@ import (
 func (r *SchemaResolver) DeviceTypesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*DeviceTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -47,7 +47,7 @@ func (r *SchemaResolver) DeviceTypesById(ctx context.Context, args struct {
 func (r *SchemaResolver) DeviceTypesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*DeviceTypeResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -73,7 +73,7 @@ func (r *SchemaResolver) DeviceTypesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) DeviceTypes(ctx context.Context, args struct {
 	Criteria model.DeviceTypeSearchCriteria
 }) (*DeviceTypeSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if err := auth.AuthorizeCatalogue(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -95,7 +95,7 @@ func (r *SchemaResolver) DeviceTypes(ctx context.Context, args struct {
 func (r *SchemaResolver) DevicesById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*DeviceResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -125,7 +125,7 @@ func (r *SchemaResolver) DevicesById(ctx context.Context, args struct {
 func (r *SchemaResolver) DevicesByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*DeviceResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -151,7 +151,7 @@ func (r *SchemaResolver) DevicesByToken(ctx context.Context, args struct {
 func (r *SchemaResolver) DevicesByExternalId(ctx context.Context, args struct {
 	ExternalIds []string
 }) ([]*DeviceResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 
@@ -177,7 +177,7 @@ func (r *SchemaResolver) DevicesByExternalId(ctx context.Context, args struct {
 func (r *SchemaResolver) Devices(ctx context.Context, args struct {
 	Criteria model.DeviceSearchCriteria
 }) (*DeviceSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
 

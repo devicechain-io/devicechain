@@ -465,9 +465,15 @@ const (
 	// and it needs no feature flag and no upgrade ordering to do it.
 	GeoFenceSetManifest = "geofence-set-manifest"
 	EntityDeleted       = "entity-deleted"
-	AlarmEvents         = "alarm-events"
-	RaiseAlarm          = "raise-alarm"
-	FailedDecode        = "failed-decode"
+
+	// DeviceOwnership carries the device ownership-changed fact (ADR-081): a device's
+	// complete current anchor set, published by device-management after every write that
+	// may have changed which tracked relationships it has, so a projection keyed by device
+	// (device-state's live view) can keep a customer-scoped stamp current between events.
+	DeviceOwnership = "device-ownership"
+	AlarmEvents     = "alarm-events"
+	RaiseAlarm      = "raise-alarm"
+	FailedDecode    = "failed-decode"
 
 	// FailedEvents carries an event the resolve/persist pipeline could not process:
 	// device-management publishes one when resolution fails, event-management when
@@ -903,6 +909,17 @@ var All = []Stream{
 	// Window: device-management publishes it with no Nats-Msg-Id; its consumers are idempotent.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: EntityDeleted, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"dashboard-management", "device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+
+	// ADR-081. Emitted post-commit by device-management whenever a device's tracked
+	// relationships may have changed (an edge created or removed, a claim redeemed or
+	// reopened, a relationship type's tracked flag flipped, the target of a tracked edge
+	// deleted), carrying the device's complete current anchor set. A statement of state,
+	// not a delta, so a consumer overwrites what it holds and a duplicate or reorder is
+	// harmless. At-most-once: a lost fact is repaired by the device's next resolved event,
+	// which carries the same anchors.
+	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
+	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
+	{Suffix: DeviceOwnership, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).

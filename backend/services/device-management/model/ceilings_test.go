@@ -357,7 +357,7 @@ func TestTrackedRelationshipCeilingClaimIsRefused(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = api.ClaimDevice(ctx, &DeviceClaimRequest{DeviceToken: "src", ClaimSecret: "s3cret",
-		CustomerToken: "cust", RelationshipType: assignment.Token}, time.Now())
+		CustomerToken: "cust", RelationshipType: &assignment.Token}, time.Now())
 	requireLimitRefusal(t, err, MaxTrackedRelationshipsPerDevice)
 }
 

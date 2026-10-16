@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -31,6 +32,11 @@ type alarmEventFilter struct {
 	state          *string
 	severity       *string
 	alarmKey       *string
+	// scope is the subscriber's scope (ADR-081). For a scoped subscriber an event passes
+	// only when the alarm's scope stamp shares an anchor with it: the same rule the alarms
+	// query applies in the database (Alarm.ScopedBy), applied here to the live feed, which
+	// never touches the database. An unstamped alarm matches no scope.
+	scope auth.Scope
 }
 
 // matches reports whether an alarm event passes every set predicate.
@@ -50,7 +56,20 @@ func (f alarmEventFilter) matches(ev *model.AlarmStateChangeEvent) bool {
 	if f.alarmKey != nil && ev.AlarmKey != *f.alarmKey {
 		return false
 	}
+	if f.scope.IsScoped() && !sharesAnchor(f.scope.Anchors(), ev.ScopeAnchors) {
+		return false
+	}
 	return true
+}
+
+// sharesAnchor reports whether the two anchor lists have one in common.
+func sharesAnchor(scope, stamp []string) bool {
+	for _, a := range scope {
+		if slices.Contains(stamp, a) {
+			return true
+		}
+	}
+	return false
 }
 
 // AlarmStream streams alarm state-change events to the subscriber as transitions
@@ -67,7 +86,12 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
 	Severity       *string
 	AlarmKey       *string
 }) (<-chan *AlarmEventResolver, error) {
-	if err := auth.Authorize(ctx, auth.AlarmRead); err != nil {
+	// Open to a scoped subscriber (ADR-081): every event is matched against the scope
+	// below, and an originator outside the scope is not found at subscribe time — the
+	// device lookup runs under the subscriber's own context, so the scope callback hides
+	// it exactly as the alarms query would.
+	scope, err := auth.AuthorizeScoped(ctx, auth.AlarmRead)
+	if err != nil {
 		return nil, err
 	}
 	tenant, ok := core.TenantFromContext(ctx)
@@ -90,6 +114,7 @@ func (r *SchemaResolver) AlarmStream(ctx context.Context, args struct {
 		state:          args.State,
 		severity:       args.Severity,
 		alarmKey:       args.AlarmKey,
+		scope:          scope,
 	}
 	// Resolve an originator token to its id once, at subscribe time, so per-event
 	// filtering is a cheap int compare (mirrors the Alarms query criteria). An

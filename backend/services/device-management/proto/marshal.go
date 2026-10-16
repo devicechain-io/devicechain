@@ -5,6 +5,7 @@ package proto
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -365,6 +366,7 @@ func MarshalAlarmStateChangeEvent(event *model.AlarmStateChangeEvent) ([]byte, e
 		LastValue:      event.LastValue,
 		OccurredTime:   event.OccurredTime.Format(time.RFC3339Nano),
 		RaisedTime:     event.RaisedTime.Format(time.RFC3339Nano),
+		ScopeAnchors:   event.ScopeAnchors,
 	}
 	if event.PreviousSeverity != "" {
 		ps := event.PreviousSeverity
@@ -408,6 +410,7 @@ func UnmarshalAlarmStateChangeEvent(encoded []byte) (*model.AlarmStateChangeEven
 		LastValue:      pbevent.LastValue,
 		RaisedTime:     raised,
 		OccurredTime:   occurred,
+		ScopeAnchors:   pbevent.ScopeAnchors,
 	}
 	if pbevent.PreviousSeverity != nil {
 		event.PreviousSeverity = *pbevent.PreviousSeverity
@@ -638,4 +641,44 @@ func UnmarshalResolvedEvent(encoded []byte) (*model.ResolvedEvent, error) {
 	}
 
 	return event, nil
+}
+
+// MarshalDeviceOwnershipChangedEvent encodes a device ownership-changed fact (ADR-081).
+func MarshalDeviceOwnershipChangedEvent(event *model.DeviceOwnershipChangedEvent) ([]byte, error) {
+	return proto.Marshal(&PDeviceOwnershipChangedEvent{
+		DeviceToken: event.DeviceToken,
+		Anchors:     event.Anchors,
+		ChangedTime: event.ChangedTime.UTC().Format(time.RFC3339Nano),
+	})
+}
+
+// UnmarshalDeviceOwnershipChangedEvent decodes a device ownership-changed fact. A fact
+// with no device token, or with an anchor that is not "<kind>:<token>", is refused: a
+// consumer overwrites its projection with what this returns, so a malformed fact must
+// not be read as "owned by nobody".
+func UnmarshalDeviceOwnershipChangedEvent(encoded []byte) (*model.DeviceOwnershipChangedEvent, error) {
+	pbevent := &PDeviceOwnershipChangedEvent{}
+	if err := proto.Unmarshal(encoded, pbevent); err != nil {
+		return nil, err
+	}
+	if pbevent.DeviceToken == "" {
+		return nil, fmt.Errorf("device ownership-changed fact names no device")
+	}
+	changed, err := time.Parse(time.RFC3339Nano, pbevent.ChangedTime)
+	if err != nil {
+		return nil, err
+	}
+	anchors := make([]string, 0, len(pbevent.Anchors))
+	for _, a := range pbevent.Anchors {
+		kind, token, ok := strings.Cut(a, ":")
+		if !ok || kind == "" || token == "" {
+			return nil, fmt.Errorf("device ownership-changed fact carries a malformed anchor %q", a)
+		}
+		anchors = append(anchors, a)
+	}
+	return &model.DeviceOwnershipChangedEvent{
+		DeviceToken: pbevent.DeviceToken,
+		Anchors:     anchors,
+		ChangedTime: changed,
+	}, nil
 }
