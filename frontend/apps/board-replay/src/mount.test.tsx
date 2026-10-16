@@ -9,6 +9,7 @@
 import { act, cleanup, screen } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import type { Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { setReplayLocale } from './i18n/config';
@@ -21,6 +22,24 @@ const HOST_TOKENS = '--muted: 11 22% 33%; --border: 44 55% 66%; --foreground: 77
 
 let hostStyle: HTMLStyleElement;
 let mount: HTMLElement;
+
+// Every root a test mounts, so the teardown can unmount it. Testing Library's cleanup() unmounts
+// only the roots ITS render() created; a root from mountBoardReplay is the test's to unmount, and
+// one left mounted keeps rendering -- an embed's clock autoplays on requestAnimationFrame -- after
+// the test, and after the file, when React's scheduled work then runs with no window to run in.
+const roots: Root[] = [];
+
+async function mountReplay(el: HTMLElement): Promise<void> {
+  await act(async () => {
+    roots.push(await mountBoardReplay(el));
+  });
+}
+
+function unmountReplays(): void {
+  act(() => {
+    for (const root of roots.splice(0)) root.unmount();
+  });
+}
 
 beforeEach(async () => {
   document.documentElement.lang = 'es';
@@ -37,6 +56,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  unmountReplays();
+  // Unmounting empties the mount element, so anything left in it is a root no one unmounted: a
+  // test that called mountBoardReplay itself rather than through mountReplay.
+  expect(mount.childElementCount, 'a replay root is still mounted after the test').toBe(0);
   cleanup();
   mount.remove();
   hostStyle.remove();
@@ -59,9 +82,7 @@ describe('mounting into a host page', () => {
     mount.dataset.recording = '/a/run.json';
     mount.dataset.locale = 'zh-CN';
 
-    await act(async () => {
-      await mountBoardReplay(mount);
-    });
+    await mountReplay(mount);
     await screen.findByTestId('transport-bar');
 
     // The host's page-level state is exactly what it was.
@@ -124,9 +145,7 @@ describe('the host options', () => {
     });
     vi.stubGlobal('fetch', files.fetchFn);
     Object.assign(mount.dataset, { recording: '/a/run.json', ...data });
-    await act(async () => {
-      await mountBoardReplay(mount);
-    });
+    await mountReplay(mount);
   }
 
   it('installs the light tokens only for a light page, on its own root', async () => {
@@ -153,15 +172,35 @@ describe('the host options', () => {
     });
     vi.stubGlobal('fetch', ((...a: Parameters<typeof fetch>) => gate.then(() => files.fetchFn(...a))) as typeof fetch);
     Object.assign(mount.dataset, { recording: '/a/run.json', embed: '1' });
-    await act(async () => {
-      await mountBoardReplay(mount);
-    });
+    await mountReplay(mount);
     expect(screen.getByTestId('replay-root').hasAttribute('data-embed')).toBe(true);
     // In the page's language (<html lang="es">), from the embed's own catalog.
     expect(screen.getByTestId('replay-label').textContent).toBe('Reproducción de una ejecución grabada · horas trasladadas al momento actual');
     expect(screen.getByTestId('replay-body').getAttribute('data-state')).toBe('loading');
     release();
     await screen.findByTestId('embed-canvas');
+  });
+
+  it('leaves nothing running once the test has unmounted it', async () => {
+    const files = stubFetch({
+      [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
+      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+    });
+    vi.stubGlobal('fetch', files.fetchFn);
+    // The embed autoplays, so its clock is asking for animation frames from the first frame on.
+    Object.assign(mount.dataset, { recording: '/a/run.json', embed: '1' });
+    await mountReplay(mount);
+    await screen.findByTestId('embed-canvas');
+    expect(typeof requestAnimationFrame, 'the clock ticks on animation frames here').toBe('function');
+    const frames = vi.spyOn(globalThis, 'requestAnimationFrame');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(frames.mock.calls.length, 'the embed is playing before the teardown').toBeGreaterThan(0);
+
+    unmountReplays();
+    frames.mockClear();
+    await new Promise((r) => setTimeout(r, 100));
+    expect(frames.mock.calls.length, 'frames requested after the teardown').toBe(0);
+    frames.mockRestore();
   });
 
   it('draws the full replay page when the host names the embed and turns it off', async () => {

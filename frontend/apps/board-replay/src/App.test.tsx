@@ -74,6 +74,8 @@ afterEach(() => {
 
 const BADGE = 'Replay of a recorded run';
 
+const SWEEP_TIMEOUT_MS = 30_000;
+
 async function mountApp(recordingText: string, opts: { locale?: string } = {}) {
   if (opts.locale) await setReplayLocale(opts.locale);
   const stub = stubFetch({ [RECORDING_URL]: recordingText, [BOARD_URL]: boardBytes() });
@@ -168,7 +170,10 @@ describe('the replay label is on screen in every state', () => {
     expect(label()).not.toContain('2031');
   });
 
-  it('in every language', async () => {
+  // The sweeps below mount the whole replay once per language (and per state): a second or two
+  // alone, all rendering, so on a busy machine they outlast the 5 s default. Their budget is
+  // sized to the sweep; the single-mount cases keep the default.
+  it('in every language', { timeout: SWEEP_TIMEOUT_MS }, async () => {
     const text = await fixtureRecordingText();
     for (const locale of SUPPORTED_LOCALES) {
       await mountApp(text, { locale });
@@ -187,7 +192,7 @@ describe('the replay label is on screen in every state', () => {
 });
 
 describe('the word "live" is not on the page', () => {
-  it('in any state of the page, in any of the three languages', async () => {
+  it('in any state of the page, in any of the three languages', { timeout: SWEEP_TIMEOUT_MS }, async () => {
     const text = await fixtureRecordingText();
     for (const locale of SUPPORTED_LOCALES) {
       await setReplayLocale(locale);

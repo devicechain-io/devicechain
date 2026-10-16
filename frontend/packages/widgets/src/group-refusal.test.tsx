@@ -77,7 +77,8 @@ describe('a widget that shows one device, bound to a group', () => {
     render(<ConnectedWidget widget={widget(type, ONE)} hub={f.hub} />);
     await vi.waitFor(() => expect(f.reads.subscribeWidget.mock.calls.length + f.reads.bucketMeasurements.mock.calls.length).toBeGreaterThan(0), { timeout: 20_000 });
     expect(document.body.textContent).not.toContain('bound to a group of devices');
-  });
+    // The test's own budget has to outlast the wait inside it, or the 20 s above is a 5 s.
+  }, 30_000);
 
   it('points a bar chart at its own per-device mode, and lets that mode read the group', async () => {
     const f = hub();

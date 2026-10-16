@@ -103,10 +103,11 @@ const walkDist = (dir: string): string[] =>
 let main: Awaited<ReturnType<typeof graphOf>>;
 let viteEntry: Awaited<ReturnType<typeof graphOf>>;
 
+// Two esbuild passes over the built package: well under a second alone, but CPU-bound, so on a
+// busy machine they outlast the 10 s default hook budget. They get their own.
 beforeAll(async () => {
-  main = await graphOf('index.js');
-  viteEntry = await graphOf('vite.js');
-});
+  [main, viteEntry] = await Promise.all([graphOf('index.js'), graphOf('vite.js')]);
+}, 60_000);
 
 describe('the built package', () => {
   // 🔴 The reach control, first, because most of what follows is an absence claim over

@@ -48,6 +48,28 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   globalThis.ResizeObserver = NoopResizeObserver as unknown as typeof ResizeObserver;
 }
 
+// loadReplay awaits the code of the board's lazily loaded widgets (the map, the level family)
+// before the first render, so a test's first `findBy` also waits out their first import into
+// this file's fresh module graph. On a busy machine that alone outlasts findBy's 1 s. Loading
+// the pinned board's widgets here pays it once per file, before any test's clock starts; the
+// lazy path itself is tested where it lives (@devicechain/widgets' preload and level-lazy tests).
+//
+// 🔴 Import nothing of this app's own here -- not load.ts, not the test harness (which imports
+// it): a module this file loads is loaded before a test file's vi.mock is registered, so a test
+// that mocks @devicechain/widgets' preload or the shared registry would get a loadReplay wired
+// to the real ones. The board is read from disk for the same reason.
+{
+  const [{ hostWidgetRegistry }, { preloadWidgets }, { readFileSync }, path] = await Promise.all([
+    import('@devicechain/host-widgets'),
+    import('@devicechain/widgets'),
+    import('node:fs'),
+    import('node:path'),
+  ]);
+  const boardFile = path.resolve(import.meta.dirname, '../../testdata/sim-dashboards/sp-dashboard.json');
+  const board = JSON.parse(readFileSync(boardFile, 'utf8')) as { widgets: Array<{ type: string }> };
+  await preloadWidgets(hostWidgetRegistry(), board.widgets.map((w) => w.type));
+}
+
 // jsdom has no canvas, and the chart widgets (ECharts/zrender) draw on one. A context whose
 // every method is a no-op lets them mount and dispose. The one thing it keeps is the TEXT
 // drawn (fillText/strokeText), because a gauge's reading lives only on the canvas and a test

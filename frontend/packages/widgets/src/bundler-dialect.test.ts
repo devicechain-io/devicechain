@@ -66,7 +66,21 @@ type Graph = { specifiers: string[]; inputs: string[] };
  * package is left unresolved, which is exactly the condition under which a dialect
  * specifier passes through untouched and unreported.
  */
-async function graphFrom(entry: string): Promise<Graph> {
+// Each entry is built once and shared: the reach control below walks the same graphs the
+// per-package tests do, and an esbuild pass over a whole package is the slow part of this file.
+const graphs = new Map<string, Promise<Graph>>();
+function graphFrom(entry: string): Promise<Graph> {
+  let graph = graphs.get(entry);
+  if (!graph) graphs.set(entry, (graph = buildGraph(entry)));
+  return graph;
+}
+
+// A test here runs a real build. Alone each takes well under a second, but it is CPU-bound, so
+// on a busy machine (every workspace's suite at once) it outlasts the 5 s default. This is the
+// budget for a test that builds, not a blanket raise: the other files keep the default.
+const BUILD_TIMEOUT_MS = 30_000;
+
+async function buildGraph(entry: string): Promise<Graph> {
   let result;
   try {
     result = await esbuild.build({
@@ -102,7 +116,7 @@ const PORTABLE_ENTRIES = [
 
 const VITE_ENTRY = join(PACKAGES, 'widgets', 'src', 'vite.ts');
 
-describe('the portable entry of every published package is bundler-agnostic', () => {
+describe('the portable entry of every published package is bundler-agnostic', { timeout: BUILD_TIMEOUT_MS }, () => {
   for (const [name, entry] of PORTABLE_ENTRIES) {
     it(`@devicechain/${name} reaches no bundler-dialect specifier`, async () => {
       const { specifiers } = await graphFrom(entry);
@@ -126,13 +140,13 @@ describe('the portable entry of every published package is bundler-agnostic', ()
 
     // And specifically that the widget graph reaches the library whose worker started all
     // of this — through a dynamic import, still, so the lazy boundary is intact.
-    const widgets = await graphFrom(PACKAGES + '/widgets/src/index.ts');
+    const widgets = await graphFrom(join(PACKAGES, 'widgets', 'src', 'index.ts'));
     expect(widgets.specifiers).toContain('maplibre-gl');
     expect(widgets.inputs.some((i) => i.endsWith('src/widgets/map.tsx'))).toBe(true);
   });
 });
 
-describe('the Vite entry is the single, bounded exception', () => {
+describe('the Vite entry is the single, bounded exception', { timeout: BUILD_TIMEOUT_MS }, () => {
   // 🔴 THE CARVE-OUT, ASSERTED RATHER THAN PROMISED. `@devicechain/widgets/vite` exists so a
   // Vite host writes one import instead of learning MapLibre's worker problem. It is allowed
   // the dialect — but by an exact list, so "one convenience entry" cannot drift into "the
@@ -161,7 +175,7 @@ describe('the Vite entry is the single, bounded exception', () => {
 //
 // It plants the specifiers in a synthetic entry rather than in the tree, so the control
 // exercises the real pipeline without a file anyone could forget to delete.
-describe('the gate reports a dialect specifier when one is present', () => {
+describe('the gate reports a dialect specifier when one is present', { timeout: BUILD_TIMEOUT_MS }, () => {
   async function specifiersOf(contents: string): Promise<string[]> {
     const result = await esbuild.build({
       stdin: { contents, resolveDir: PACKAGES, loader: 'ts', sourcefile: 'control.ts' },

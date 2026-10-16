@@ -9,7 +9,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import ReplayApp from './App';
+import ReplayApp, { loadEmbed } from './App';
 import { DEFAULT_CANVAS, fitCanvas, parseEmbedOptions } from './embed';
 import { parseTheme } from './host-options';
 import { setReplayLocale } from './i18n/config';
@@ -78,6 +78,8 @@ describe('fitting the canvas', () => {
 async function mountEmbed(options = { canvas: DEFAULT_CANVAS, autoplay: true, retime: true }) {
   const stub = stubFetch({ [RECORDING_URL]: await fixtureRecordingText(), [BOARD_URL]: boardBytes() });
   const ticker = manualTicker();
+  // As mountBoardReplay does: the embed's code is fetched before the first render.
+  await loadEmbed();
   render(<ReplayApp recordingUrl={RECORDING_URL} boardUrl={BOARD_URL} fetchFn={stub.fetchFn} origin={ORIGIN} ticker={ticker} embed={options} />);
   await screen.findByTestId('embed-canvas');
   await act(async () => {
@@ -86,7 +88,12 @@ async function mountEmbed(options = { canvas: DEFAULT_CANVAS, autoplay: true, re
   return ticker;
 }
 
-describe('the embed', () => {
+// Each case mounts and draws the whole board. With the widget code already loaded (the setup
+// file) and the embed's code fetched first (mountEmbed), what is left is rendering, and the
+// first full-board render in a file measured 2.4 s on a loaded machine (every workspace's suite
+// at once) and went past 5 s on another run. Nothing is left to load ahead, so the budget is
+// sized to the render, for these cases only.
+describe('the embed', { timeout: 15_000 }, () => {
   it('draws the board on the fixed canvas with the replay label and no control chrome', async () => {
     await mountEmbed();
     const canvas = screen.getByTestId('embed-canvas');
@@ -120,6 +127,7 @@ describe('the embed', () => {
   it('starts over from the first chapter at the end, with a fresh view, and keeps playing', async () => {
     const ticker = await mountEmbed();
     const views = built.sources.length;
+    const looped = Date.now();
     await act(async () => {
       ticker.frame(60_000); // past the fixture's 60 s end
       await new Promise((r) => setTimeout(r, 20));
@@ -127,7 +135,9 @@ describe('the embed', () => {
     expect(built.sources.length).toBeGreaterThan(views);
     expect(screen.getByTestId('replay-body').getAttribute('data-state')).toBe('playing');
     const latest = built.sources[built.sources.length - 1];
-    // Built at the loop: its cursor (the first chapter again) reads as the moment it was built.
-    expect(Math.abs(latest.now() - Date.now())).toBeLessThan(1_000);
+    // Built at the loop: its cursor (the first chapter again) reads as the moment it was built,
+    // which is between the frame that ended the run and now (however slow the machine is).
+    expect(latest.now()).toBeGreaterThanOrEqual(looped - 5);
+    expect(latest.now()).toBeLessThanOrEqual(Date.now() + 5);
   });
 });

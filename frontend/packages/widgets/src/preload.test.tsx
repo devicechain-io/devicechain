@@ -9,7 +9,16 @@ import type { WidgetInstance } from '@devicechain/dashboards';
 import { createWidgetRegistry } from '@devicechain/widget-sdk';
 import { cleanup, render, screen } from '@testing-library/react';
 import { Component, type ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// The first import of the built-in registry and the level chunk into this file takes seconds on
+// a busy machine (it transforms every built-in widget), and it would otherwise land inside the
+// first test's 5 s. Pay it here, once, under its own budget. Each test still starts from fresh()
+// -- a reset module registry -- so what this warms is the transform, not a loaded chunk.
+beforeAll(async () => {
+  await Promise.all([import('./builtin-registry'), import('./preload')]);
+  await (await import('./widgets/level-lazy')).loadLevelWidgets();
+}, 30_000);
 
 afterEach(() => {
   cleanup();

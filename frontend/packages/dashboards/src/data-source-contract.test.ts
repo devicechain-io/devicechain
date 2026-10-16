@@ -4,7 +4,7 @@
 // Runs the shared WidgetDataSource contract against all three implementations: the live
 // hub (over a fake wire), the synthetic preview source, and the recorded source.
 
-import { vi } from 'vitest';
+import { beforeAll, vi } from 'vitest';
 
 import { DashboardHub } from './hub';
 import { ALARMS_QUERY } from './internal/alarm-doc';
@@ -22,6 +22,14 @@ import {
 } from './testing/data-source-contract';
 import { FIXTURE_DURATION_MS, SITE, fixtureRecording } from './testing/recording-fixture';
 import type { AlarmRow, LocationSample } from './types';
+
+// The recorded source fetches its positions and aggregate code (./recorded-extra) on first use,
+// and the cases here wait for it with settle() -- a few timer ticks, plenty once the module is
+// loaded, but not for its first import on a busy machine. Load it once, before any case runs.
+// (Nothing here tests that loading: that the code is a separate chunk is board-replay's bundle check.)
+beforeAll(async () => {
+  await import('./recorded-extra');
+}, 30_000);
 
 // The SDK's WIRE only: gql() is answered by a stand-in for the services, and subscribe()
 // is recorded so the test can push samples down it. Everything else is the real module.

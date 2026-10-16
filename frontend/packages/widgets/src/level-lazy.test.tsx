@@ -8,7 +8,16 @@
 import type { WidgetInstance } from '@devicechain/dashboards';
 import { cleanup, render, screen } from '@testing-library/react';
 import { Component, type ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// The chunk's first import into this file -- transforming level-widgets and everything it
+// reaches -- takes seconds on a busy machine, and it would otherwise land inside the first test's
+// 5 s. Pay it here, once, under its own budget. Every test still resets the module registry and
+// imports afresh, so a "fresh" module below is still one that has not been evaluated: what this
+// warms is the transform, not the chunk's loaded state.
+beforeAll(async () => {
+  await (await import('./widgets/level-lazy')).loadLevelWidgets();
+}, 30_000);
 
 afterEach(() => {
   cleanup();

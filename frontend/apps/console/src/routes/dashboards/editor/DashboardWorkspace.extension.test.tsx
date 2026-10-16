@@ -139,7 +139,9 @@ async function pick(labelText: string, choiceText: string) {
 }
 
 describe('an external widget package through the console authoring flow', () => {
-  it('is added from the menu, configured with package text, saved, published, exported and previewed', async () => {
+  // The whole authoring flow, end to end, in one test: two to three seconds alone, all of it
+  // rendering, so on a busy machine it outlasts the 5 s default. Its budget is sized to the flow.
+  it('is added from the menu, configured with package text, saved, published, exported and previewed', { timeout: 30_000 }, async () => {
     mount(emptyBoard);
 
     // ---- added from the Add menu, which lists it by the package's own title/category -----

@@ -155,7 +155,9 @@ describe('editing the outbound actions in the form', () => {
 
   // Every test above edits an action that was ALREADY outbound. This one authors them from
   // scratch, which is the feature: the picker must offer both kinds and each must save.
-  it('authors a new publish action and a new webhook action from the action picker', async () => {
+  // It authors two actions end to end: about two seconds alone, all rendering, so on a busy
+  // machine it outlasts the 5 s default. Its budget is sized to the flow.
+  it('authors a new publish action and a new webhook action from the action picker', { timeout: 30_000 }, async () => {
     const cmd = { type: 'sendCommand', sendCommand: { command: 'reset' } };
     render(<DetectionRuleForm profileToken="p" entity={rule(withActions([cmd, cmd]))} onDone={() => {}} />);
 
