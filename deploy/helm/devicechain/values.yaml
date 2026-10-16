@@ -1991,6 +1991,15 @@ functionalAreas:
       #                                # stops suddenly loses up to this many messages per connection (plus, while
       #                                # publishes are failing, those awaiting a retry); a clean stop or a handover
       #                                # waits for them (8 s).
+      # presence:                      # How often a connected Host re-checks its asserted devices for liveness.
+      #   probeSeconds: 300            # Every tick, each device the platform holds connected that produced no traffic
+      #                                # within the last interval has its node asked to rebirth; one still silent after
+      #                                # the 10 s probe window is marked DISCONNECTED. A device heard from inside the
+      #                                # interval is never touched, so only a node with a silent device is asked, at
+      #                                # most once per interval. This is what catches a death certificate the broker
+      #                                # never delivered on a Host that stays connected. Unset or 0 means 300; below
+      #                                # 60 stops the service. There is no off switch: a fleet for which a periodic
+      #                                # rebirth is expensive sets it long.
     # Project each broker password Secret into the env var its source names:
     # extraEnv:
     #   - name: SPARKPLUG_ACME_PW

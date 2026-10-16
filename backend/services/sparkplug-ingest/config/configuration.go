@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -51,6 +52,59 @@ const (
 // as much as the throughput above the old ceiling needs. The window is a ceiling, not an
 // occupancy: a connection that receives a message every 50 ms keeps about one in flight.
 const DefaultIngestPublishWindow = 32
+
+const (
+	// DefaultPresenceProbeSeconds is how often a connected Host re-checks its asserted
+	// devices for liveness when none is configured. It matches event-sources'
+	// brokerPresence.reconcileSeconds, the same question asked of the platform broker: a
+	// device the platform believes connected is asked to speak, and one that does not is
+	// declared dead. At this interval a Sparkplug device that dies without a death
+	// certificate is noticed within about ten minutes (two intervals plus the probe window)
+	// — the same order as the inactivity sweep's timeout for an inferred device — on
+	// evidence (asked, no answer) rather than on silence.
+	DefaultPresenceProbeSeconds = 300
+	// MinPresenceProbeSeconds is the floor a WRITTEN probe interval must clear. The probe
+	// waits ten seconds for a rebirthed node to answer before declaring it dead, so the
+	// interval must dominate that window comfortably; below it, probes overlap their own
+	// verdicts. A value under the floor is refused at load rather than clamped — an interval
+	// silently raised is a cadence nobody chose.
+	MinPresenceProbeSeconds = 60
+)
+
+// Presence configures how the host keeps its asserted devices honest between the
+// transport's own signals (ADR-067).
+type Presence struct {
+	// ProbeSeconds is how often a connected Host re-checks its asserted-active devices for
+	// liveness. On every tick, each device the projection holds connected that has produced
+	// NO traffic on this session within the last interval has its node asked to rebirth; a
+	// device still silent after the probe window is declared DISCONNECTED. A device heard
+	// from inside the interval is never touched, so a chatty fleet costs nothing per tick
+	// and only a node with a silent asserted device is asked to re-announce, at most once
+	// per interval.
+	//
+	// 🔴 THIS IS NOT A TIMEOUT. Silence alone never marks an asserted device offline — on a
+	// transport whose job is to report death explicitly, silence is not evidence of death
+	// (ADR-067 decision 3, the inactivity sweep skips asserted devices). What IS evidence is
+	// a node that was asked to speak and did not. The probe asks.
+	//
+	// Unset or 0 falls back to DefaultPresenceProbeSeconds, never to "never", the same
+	// fail-safe defaulting as the ingest ceiling: a steadily connected Host that never
+	// re-checks is exactly the hole this closes. A written value below
+	// MinPresenceProbeSeconds is refused at load. There is no off switch; a fleet for which
+	// a periodic rebirth is expensive sets the interval long. A fixed setting, read once at
+	// startup, the same for every source.
+	ProbeSeconds int
+}
+
+// ProbeInterval renders the configured seconds as a duration, applying the fail-safe
+// default: a non-positive value is the platform default, never zero (a zero ticker
+// panics) and never "off".
+func (p Presence) ProbeInterval() time.Duration {
+	if p.ProbeSeconds <= 0 {
+		return DefaultPresenceProbeSeconds * time.Second
+	}
+	return time.Duration(p.ProbeSeconds) * time.Second
+}
 
 // Ingest configures how the host publishes what it ingests.
 type Ingest struct {
@@ -113,6 +167,10 @@ type SparkplugConfiguration struct {
 
 	// Ingest carries how the host publishes what it ingests. See Ingest.
 	Ingest Ingest
+
+	// Presence carries how often a connected Host re-checks its asserted devices for
+	// liveness. See Presence.
+	Presence Presence
 }
 
 // IngestRateLimit is the platform-default, per-tenant ingest ceiling, counted in readings.
@@ -224,6 +282,11 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 		w := DefaultIngestPublishWindow
 		c.Ingest.PublishWindow = &w
 	}
+	// Unset only. A negative value is left for Validate to refuse; rewriting it here
+	// would turn a written mistake into the default without a word.
+	if c.Presence.ProbeSeconds == 0 {
+		c.Presence.ProbeSeconds = DefaultPresenceProbeSeconds
+	}
 }
 
 // Validate fails the load closed on a configuration that would connect with no
@@ -235,6 +298,11 @@ func (c *SparkplugConfiguration) ApplyDefaults() {
 func (c *SparkplugConfiguration) Validate() error {
 	if w := c.Ingest.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("ingest.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
+	// 0 is "unset" (ApplyDefaults fills it); anything else written must clear the floor.
+	// A negative value is a written value, and it is refused rather than defaulted.
+	if s := c.Presence.ProbeSeconds; s != 0 && s < MinPresenceProbeSeconds {
+		return fmt.Errorf("presence.probeSeconds must be at least %d (got %d): the probe waits ten seconds for a rebirthed node to answer, and the interval must dominate that window", MinPresenceProbeSeconds, s)
 	}
 	// endpointTenant enforces the M7 invariant that a broker connection is the
 	// tenant trust boundary: a normalized broker endpoint may serve exactly one

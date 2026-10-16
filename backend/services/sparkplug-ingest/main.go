@@ -242,7 +242,23 @@ func buildMetrics() host.Metrics {
 			"Accepted messages whose samples or presence transitions were dropped, plus presence-reconciliation disconnect batches that could not be stored: samples at once when inbound-events refused them under backpressure; "+
 				"either after the retry budget was exhausted (device-management or NATS unreachable, whether resolving the device failed or the stream did not acknowledge the publish) or on connection shutdown. "+
 				"A clean-session Host gets no redelivery, so each one is lost."),
+		PresenceProbes: probePrecreated(Microservice.NewCounterVec("presence_probes_total",
+			"Liveness probes that reached a verdict, by trigger: connect (the failover reconciliation run once per broker session) or periodic (the re-check run every presence.probeSeconds on a steady session). "+
+				"A probe asks every asserted device that has gone quiet to rebirth and declares the ones that do not answer DISCONNECTED. A flat periodic series on a connected Host means the probe is not running.",
+			[]string{"trigger"})),
+		PresenceProbeDisconnects: probePrecreated(Microservice.NewCounterVec("presence_probe_disconnects_total",
+			"Asserted devices a liveness probe declared DISCONNECTED for not answering a rebirth inside the probe window, by trigger (connect or periodic). Near zero in a healthy fleet; a standing periodic rate means death certificates are being lost.",
+			[]string{"trigger"})),
 	}
+}
+
+// probePrecreated creates both trigger children at 0, so the periodic series exists — and
+// reads as flat rather than absent — on a Host whose probe has not yet reached a verdict.
+func probePrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
+	for _, tr := range []string{host.ProbeTriggerConnect, host.ProbeTriggerPeriodic} {
+		v.WithLabelValues(tr)
+	}
+	return v
 }
 
 // skippedPrecreated creates every skip reason's child at 0, so a rate over the series has
@@ -307,6 +323,9 @@ func resolveSources(cfg *config.SparkplugConfiguration, instanceId string, inges
 		if reconciler != nil {
 			client.SetReconciler(reconciler)
 		}
+		// The periodic liveness probe's cadence, the same for every source. Set before
+		// Connect so the first session's loop runs at the configured interval.
+		client.SetPresenceProbeInterval(cfg.Presence.ProbeInterval())
 		clients = append(clients, client)
 	}
 	return clients, nil

@@ -31,12 +31,12 @@ Hoy tres transportes afirman presencia:
 
 ### Un dispositivo afirmado no tiene red de seguridad por inactividad {#no-inactivity-backstop}
 
-Omitir el barrido de inactividad es deliberado, y tiene una consecuencia que debes tener prevista: **un dispositivo afirmado no tiene red de seguridad por inactividad.** Su señal de desconexión solo puede venir del transporte. Si esa señal nunca llega, el dispositivo sigue apareciendo en línea sin nada que lo corrija. Dos ejemplos:
+Omitir el barrido de inactividad es deliberado, y tiene una consecuencia que debes tener prevista: **un dispositivo afirmado no tiene red de seguridad por inactividad.** Su señal de desconexión solo puede venir del transporte, así que cada transporte que afirma presencia tiene su propia manera de notar una muerte de la que nunca le hablaron, y cada una tiene una cota:
 
-- Un certificado de muerte (death) de Sparkplug perdido junto con la conexión.
-- Un dispositivo LwM2M cuyo tiempo de vida de registro aún no ha vencido. El tiempo de vida predeterminado del propio LwM2M es de 86400 segundos, un día completo.
+- Un certificado de muerte (death) de Sparkplug perdido junto con la conexión. El host pide periódicamente al nodo de cada dispositivo afirmado que se ha quedado callado que se vuelva a anunciar, y marca fuera de línea al dispositivo que no contesta. El intervalo predeterminado es de cinco minutos, así que una muerte silenciosa se nota en unos diez.
+- Un dispositivo LwM2M cuyo tiempo de vida de registro aún no ha vencido. El tiempo de vida es la cota: cuando vence sin renovación, el dispositivo se marca fuera de línea. El tiempo de vida predeterminado del propio LwM2M es de 86400 segundos, un día completo.
 
-Qué vigilar, y cómo acotar esa ventana, se explica en [Cómo operar los servicios de borde](../deployment/edge-services.md). Si el transporte que habría reportado la desconexión ha desaparecido para siempre y no solo está en silencio, [devuelve el dispositivo a presencia inferida](../deployment/edge-services.md#demoting-a-device) para que vuelva a ser posible corregirlo.
+Qué vigilar, y cómo acotar cada ventana, se explica en [Cómo operar los servicios de borde](../deployment/edge-services.md#a-device-that-reads-online-and-is-not). Si el transporte que habría reportado la desconexión ha desaparecido para siempre y no solo está en silencio, [devuelve el dispositivo a presencia inferida](../deployment/edge-services.md#demoting-a-device) para que vuelva a ser posible corregirlo.
 
 ### MQTT en el broker de la plataforma {#mqtt-on-the-platform-broker}
 

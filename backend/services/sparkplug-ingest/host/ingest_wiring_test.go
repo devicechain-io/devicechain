@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -209,7 +210,7 @@ func TestOnMessageDoesNotMarkSeenForEchoedRebirth(t *testing.T) {
 	require.NoError(t, err)
 	c.onMessage(nil, fakeMessage{topic: "spBv1.0/g/NCMD/n", payload: payload})
 
-	assert.False(t, c.sawExternalId("g/n"),
+	assert.False(t, c.seenSince("g/n", time.Time{}),
 		"the host's own echoed rebirth NCMD must not mark a node seen (it would defeat the reconcile probe)")
 }
 

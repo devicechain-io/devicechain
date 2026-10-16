@@ -137,45 +137,54 @@ is most of the point of demoting one.
 
 Understand this failure mode before you rely on presence for anything that pages a human.
 
-**An asserted device that dies without saying so can read online indefinitely.** The inactivity sweep
+**An asserted device that dies without saying so is not caught by a timeout.** The inactivity sweep
 deliberately skips asserted devices, because on an asserting transport silence is not evidence of
-death. On these two transports **nothing else has a timeout, a watchdog or a sweeper.** Two things
-clear it, and neither is a timeout:
+death. What catches such a device instead differs by transport, and each has a bound you can set:
 
-1. **A new signal from the device's own transport.** Devices asserted by DeviceChain's own MQTT
-   broker get one without the device doing anything: a repair pass there periodically compares the
-   broker's live connection list with what the platform believes, and corrects the difference. See
-   [Device Presence](../concepts/device-presence.md). Sparkplug and LwM2M have no such pass, so the
-   signal has to come from the device.
+1. **A new signal from the device's own transport, or a question it fails to answer.** Devices
+   asserted by DeviceChain's own MQTT broker get one without the device doing anything: a repair pass
+   periodically compares the broker's live connection list with what the platform believes, and
+   corrects the difference. See [Device Presence](../concepts/device-presence.md). Sparkplug devices
+   get one too: a connected host periodically asks every node with an asserted device that has gone
+   quiet to re-announce itself, and marks a device that does not answer offline. LwM2M devices are
+   marked offline when their registration lifetime lapses without a refresh.
 2. **A [demotion](#demoting-a-device).** This is the answer when the first will never arrive, because
    the source that would have to produce it is gone. It works on all three asserting transports.
 
-The concrete ways a device gets stuck online:
+How each transport bounds a death it was never told about:
 
 - **A lost Sparkplug death certificate.** If the broker never delivers the node's DEATH, the device
-  stays online until the next reconciliation. Reconciliation runs **only when the host reconnects to
-  the broker**. A host that stays steadily connected and never hears from that node again never
-  re-runs it.
+  stays online until the next liveness probe. A probe runs when the host connects to the broker, and
+  then every `presence.probeSeconds` (five minutes by default) for as long as the session lasts. Each
+  periodic probe asks the node of every asserted device that has produced nothing within the last
+  interval to rebirth, waits ten seconds, and marks a device that still produced nothing offline. A
+  device heard from inside the interval is never asked and never judged, so a healthy fleet pays
+  nothing per probe; only a node with a quiet device is asked, at most once per interval. A silent
+  death is therefore noticed within about two intervals, the same order as the inactivity sweep's
+  ten-minute timeout, but on evidence (asked, no answer) rather than on silence. Watch
+  `presence_probes_total{trigger="periodic"}`: on a connected host it must rise; flat means the probe
+  is not running.
 - **A node re-announcing itself.** When an edge node births a new session, its previous session's
   child devices are replaced along with it. A child device that does not re-announce under the new
-  session keeps showing connected, with nothing to correct it until the next reconciliation.
+  session keeps showing connected until the next periodic probe, which asks its node to rebirth and
+  marks it offline when it still does not appear.
 - **A long LwM2M registration.** A device that vanishes is marked offline when its registration
-  lifetime lapses. With the default, that is **86400 seconds**, one full day.
+  lifetime lapses. With the default, that is **86400 seconds**, one full day. `maxLifetimeSeconds`
+  clamps every registration's lifetime down to at most that value, so it directly bounds how long a
+  dead LwM2M device can read online; setting it to, say, 3600 caps that at an hour. It must stay above
+  the longest lifetime your fleet actually asks for.
 - **A removed asserting transport.** Decommission the Sparkplug source or the LwM2M credential a
-  device arrived on, and nothing will ever produce another signal for it. It is stranded at its last
-  asserted state until someone [releases it](#demoting-a-device). That is what the operation is for,
-  since a source that is gone will not tell the platform anything more.
+  device arrived on, and nothing will ever produce another signal for it, and no probe runs for a
+  source that is no longer configured. It is stranded at its last asserted state until someone
+  [releases it](#demoting-a-device). That is what the operation is for, since a source that is gone
+  will not tell the platform anything more.
 
-**The one lever on these two transports is `maxLifetimeSeconds`, and it applies to LwM2M only.** Every
-registration's lifetime is clamped down to at most that value, so it directly bounds how long a dead
-LwM2M device can read online. Setting it to, say, 3600 caps that at an hour. It must stay above the
-longest lifetime your fleet actually asks for. The MQTT path has its own bound: the repair pass's
-interval, `brokerPresence.reconcileSeconds`, five minutes by default.
-
-The Sparkplug path has no equivalent lever. If a Sparkplug device reading online is operationally
-load-bearing for you, pair the connectivity signal with a timeout-based
-[absence rule](../concepts/event-processing.md), which fires on silence regardless of what presence
-says.
+The three bounds, side by side: `brokerPresence.reconcileSeconds` for the platform broker,
+`presence.probeSeconds` for Sparkplug, and `maxLifetimeSeconds` for LwM2M. The first two default to
+five minutes; the third to a day, because it is the device's own registration lifetime, not a
+platform setting. If a device reading online is operationally load-bearing for you, you can still pair
+the connectivity signal with a timeout-based [absence rule](../concepts/event-processing.md), which
+fires on silence regardless of what presence says.
 
 ### Returning a device to inferred presence {#demoting-a-device}
 
@@ -534,6 +543,7 @@ before the lease is released.
 | Setting | Default | What it does |
 |---|---|---|
 | `ingest.publishWindow` | `32` | How many messages one Sparkplug connection keeps waiting for the platform broker's acknowledgement at once, from 1 to 1024. A value outside that range, or an explicit 0, stops the service at startup; it is never adjusted. Publishing can go no faster than this number divided by how long an acknowledgement takes (about 2,800 messages a second per connection at 32). A fixed setting, read at startup, the same for every source. **It is also how much more a pod can lose.** The Host is a clean-session client that acknowledges each message to your broker as soon as it has taken it, and a broker does not redeliver to a host that restarted, so a pod that stops suddenly loses what it had taken and not yet stored: up to this many messages per connection, where it used to be one, plus, only while publishes are failing, those waiting to be tried again (about one more window at most). A new leader restores each node's presence and current metric values through rebirths, not the readings lost in between. An edge node's store-and-forward covers the time the Host is offline, not messages already delivered to a Host that then died. Watch `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events", writer="sparkplug"}`: a rate near 1 means the window is what limits publishing. |
+| `presence.probeSeconds` | `300` | How often a connected Host re-checks its asserted devices for liveness. On every tick, the node of each device the platform holds connected that has produced nothing within the last interval is asked to rebirth; a device still silent after the ten-second probe window is marked offline. A device heard from inside the interval is never asked and never judged, so only a node with a quiet device is asked, at most once per interval. This is what catches a death certificate the broker never delivered on a Host that stays connected; see [devices stuck online](#a-device-that-reads-online-and-is-not). Unset or 0 means 300. A written value below 60 stops the service at startup; it is never adjusted. There is no off switch: a fleet for which a periodic rebirth is expensive sets it long. A fixed setting, read at startup, the same for every source. |
 
 **The reading limit is applied by splitting.** The
 [per-event reading limit](../guides/connecting-a-device.md#how-much-one-message-may-carry) is applied
@@ -686,7 +696,9 @@ Prefix: `devicechain_sparkplugingest_`.
 | `subscribe_failures_total` | The broker accepted the connection but refused (or never acknowledged) a group subscription, most likely because the source's credential may not read that group. The source stays offline, ingests none of its groups, and retries. `SparkplugIngestSubscriptionRefused` fires on an increase. |
 | `messages_total` | Inbound Sparkplug traffic. A flat line on a live fleet is the symptom of a lost subscription or a dead source. |
 | `presence_emitted_total` | Connect/disconnect signals produced. |
-| `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. |
+| `rebirth_requests_total` | Nodes being asked to re-announce. Steadily rising means a node is failing to resynchronise. The liveness probe's rebirths count here too, so on a fleet with quiet devices expect a step every `presence.probeSeconds`. |
+| `presence_probes_total` | Liveness probes that reached a verdict, by `trigger`: `connect` (the reconciliation run once per broker session) or `periodic` (every `presence.probeSeconds` on a steady session). A probe asks every asserted device that has gone quiet to rebirth and marks the ones that do not answer offline; a tick that finds nothing quiet still counts. **On a connected Host the periodic series must rise.** Flat means the probe is not running, and a quiet fleet and a probe that never runs are otherwise indistinguishable. |
+| `presence_probe_disconnects_total` | Asserted devices a liveness probe marked offline for not answering a rebirth inside the window, by the same `trigger`. Near zero in a healthy fleet. A standing `periodic` rate means death certificates are being lost between the nodes and the Host. |
 | `rebirth_enqueued_total` / `rebirth_dropped_total` | Rebirths the session machine asked for, and the ones its publish queue was too full to take. A drop is a latency signal rather than a failure — the request is re-made on the node's next window — but a standing drop rate means rebirths are going out slower than they are being asked for. Read it against `rebirth_requests_total`, which counts only what reached the wire and is therefore capped by the publisher rather than by demand: **drops while `rebirth_requests_total` climbs to a steady ceiling** is fan-out outrunning a publisher that is otherwise healthy; **drops while it is flat** is the publishes themselves stalling, which points at the broker connection. |
 | `unknown_device_dropped_total` | Traffic from identities with no device, with auto-registration off. |
 | `decode_errors_total` | Malformed payloads. |
