@@ -260,15 +260,6 @@ func (s *Store) TenantMemberships(ctx context.Context, tenant string) ([]Members
 	return ms, err
 }
 
-// RotateSessionEpochByID gives the identity with this id a fresh session epoch (see
-// RotateSessionEpoch).
-func (s *Store) RotateSessionEpochByID(ctx context.Context, identityID uint) error {
-	// The model carries the key, so the audit journal records WHICH identity's sessions
-	// were ended, not merely that some were.
-	return s.sys(ctx).Model(&Identity{Model: gorm.Model{ID: identityID}}).
-		Update("session_epoch", NewSessionEpoch()).Error
-}
-
 // ---- invitations ------------------------------------------------------------------------
 
 // CreateInvitation inserts an invitation.

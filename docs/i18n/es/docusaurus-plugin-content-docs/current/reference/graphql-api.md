@@ -831,11 +831,13 @@ Un miembro cuyo acceso está limitado a algunos de los clientes del tenant recib
 motivo `SCOPE_UNSUPPORTED` en todas estas operaciones. Preguntar por un miembro de otro tenant
 responde `NOT_FOUND`, exactamente como para una dirección sin cuenta.
 
-Quitarle algo a un miembro (reducir su alcance, retirarle una autoridad, deshabilitarlo o eliminarlo)
-cierra su sesión: su token de actualización y su token de identidad dejan de funcionar en su
-siguiente uso, en todos los tenants a los que pertenece. Un token de acceso ya emitido sigue
-funcionando hasta que caduca: como máximo 15 minutos, o 5 minutos para un miembro limitado a algunos
-clientes.
+Un cambio en un miembro, incluido quitarle algo (reducir su alcance, retirarle una autoridad,
+deshabilitarlo o eliminarlo), surte efecto en la siguiente actualización de su token: en un plazo de
+15 minutos, o de 5 minutos para un acceso limitado a algunos clientes. Cada actualización lee la
+membresía tal como está en ese momento, así que el siguiente token de acceso lleva la concesión más
+reducida, y la actualización de un miembro deshabilitado o eliminado se rechaza para tu tenant. Un
+token de acceso ya emitido sigue funcionando hasta que caduca. Las sesiones del miembro en otros
+tenants no se ven afectadas.
 
 ## Límites de las solicitudes {#request-limits}
 

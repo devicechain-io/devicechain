@@ -415,54 +415,66 @@ func TestScopeIsValidatedNotTruncated(t *testing.T) {
 	require.Nil(t, got)
 }
 
-// ---- revocation (ADR-081 decision 8) --------------------------------------------------------
+// ---- revocation (ADR-081 decision 8, as amended 2026-10-16) ----------------------------------
 
-// Narrowing rotates the person's session epoch; widening does not. Pinned for every
-// narrowing route of the tenant plane, and for the counterweight.
-func TestNarrowingRotatesTheEpochAndWideningDoesNot(t *testing.T) {
+// No membership change rotates the person's session epoch, narrowing included. A narrowing
+// takes effect at the person's next token exchange, which re-reads the membership (pinned
+// by value in identity's TestANarrowedMembersNextRefreshCarriesTheNarrowedScope); the epoch
+// is per IDENTITY, so rotating it would sign the person out of every OTHER tenant too.
+// Pinned for every route of the tenant plane, narrowing and widening alike.
+func TestNoMembershipChangeRotatesTheEpoch(t *testing.T) {
 	e := newPlaneEnv(t)
 	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
 	e.member(t, "pat@acme.example", "acme", []string{iam.ViewerRoleToken, "operator"})
 	me := as("boss@acme.example", "acme", "*")
 
 	steps := []struct {
-		name    string
-		op      func() error
-		rotates bool
+		name string
+		op   func() error
 	}{
-		{"scope set from whole tenant", func() error { _, err := e.s.SetMemberScope(me, "pat@acme.example", customers("a", "b")); return err }, true},
+		{"scope set from whole tenant", func() error { _, err := e.s.SetMemberScope(me, "pat@acme.example", customers("a", "b")); return err }},
 		{"scope widened", func() error {
 			_, err := e.s.SetMemberScope(me, "pat@acme.example", customers("a", "b", "c"))
 			return err
-		}, false},
-		{"scope narrowed", func() error { _, err := e.s.SetMemberScope(me, "pat@acme.example", customers("a")); return err }, true},
-		{"scope cleared (whole tenant)", func() error { _, err := e.s.SetMemberScope(me, "pat@acme.example", nil); return err }, false},
+		}},
+		{"scope narrowed", func() error { _, err := e.s.SetMemberScope(me, "pat@acme.example", customers("a")); return err }},
+		{"scope cleared (whole tenant)", func() error { _, err := e.s.SetMemberScope(me, "pat@acme.example", nil); return err }},
 		{"role added", func() error {
 			_, err := e.s.SetMemberRoles(me, "pat@acme.example", []string{iam.ViewerRoleToken, "operator", "member-admin"})
 			return err
-		}, false},
+		}},
 		{"role removed", func() error {
 			_, err := e.s.SetMemberRoles(me, "pat@acme.example", []string{iam.ViewerRoleToken, "member-admin"})
 			return err
-		}, true},
-		{"disabled", func() error { _, err := e.s.SetMemberEnabled(me, "pat@acme.example", false); return err }, true},
-		{"enabled", func() error { _, err := e.s.SetMemberEnabled(me, "pat@acme.example", true); return err }, false},
-		{"removed", func() error { _, err := e.s.RemoveMember(me, "pat@acme.example"); return err }, true},
+		}},
+		{"disabled", func() error { _, err := e.s.SetMemberEnabled(me, "pat@acme.example", false); return err }},
+		{"enabled", func() error { _, err := e.s.SetMemberEnabled(me, "pat@acme.example", true); return err }},
+		{"removed", func() error { _, err := e.s.RemoveMember(me, "pat@acme.example"); return err }},
 	}
 	for _, st := range steps {
 		before := e.epoch(t, "pat@acme.example")
 		require.NoErrorf(t, st.op(), st.name)
-		after := e.epoch(t, "pat@acme.example")
-		if st.rotates {
-			require.NotEqualf(t, before, after, "%s took something away and did not rotate the session epoch", st.name)
-		} else {
-			require.Equalf(t, before, after, "%s took nothing away and still signed the person out", st.name)
-		}
+		require.Equalf(t, before, e.epoch(t, "pat@acme.example"),
+			"%s rotated the session epoch, signing the person out of every tenant they belong to", st.name)
 	}
+
+	// The admin plane applies the same rule.
+	e.member(t, "pat@acme.example", "acme", []string{iam.ViewerRoleToken, "operator"})
+	before := e.epoch(t, "pat@acme.example")
+	_, err := e.s.SetMembershipScope(context.Background(), "pat@acme.example", "acme", customers("a"))
+	require.NoError(t, err)
+	_, err = e.s.SetMembershipRoles(context.Background(), "pat@acme.example", "acme", []string{iam.ViewerRoleToken})
+	require.NoError(t, err)
+	_, err = e.s.SetMembershipEnabled(context.Background(), "pat@acme.example", "acme", false)
+	require.NoError(t, err)
+	_, err = e.s.RemoveMembership(context.Background(), "pat@acme.example", "acme")
+	require.NoError(t, err)
+	require.Equal(t, before, e.epoch(t, "pat@acme.example"), "an admin-plane narrowing rotated the session epoch")
 }
 
-// Removing an authority from a tenant role rotates the epoch of every member holding it.
-func TestNarrowingATenantRoleRotatesItsHolders(t *testing.T) {
+// Removing an authority from a tenant role does not rotate the epoch of its holders: they
+// pick the narrower role up at their next token exchange.
+func TestNarrowingATenantRoleLeavesItsHoldersSignedIn(t *testing.T) {
 	e := newPlaneEnv(t)
 	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
 	me := as("boss@acme.example", "acme", "*")
@@ -478,8 +490,11 @@ func TestNarrowingATenantRoleRotatesItsHolders(t *testing.T) {
 
 	_, err = e.s.UpdateTenantRole(me, "tech", &RoleUpdateRequest{Authorities: dcgraphql.OptionalStringListOf([]string{"command:write"})})
 	require.NoError(t, err)
-	require.NotEqual(t, pat, e.epoch(t, "pat@acme.example"), "removing an authority did not end its holder's sessions")
+	require.Equal(t, pat, e.epoch(t, "pat@acme.example"), "removing an authority from a role signed its holder out of every tenant")
 	require.Equal(t, sam, e.epoch(t, "sam@acme.example"), "a member NOT holding the role was signed out")
+	r, err := e.s.iam.TenantOwnedRole(context.Background(), "acme", "tech")
+	require.NoError(t, err)
+	require.Equal(t, []string{"command:write"}, r.Authorities, "the narrowing itself was not applied")
 }
 
 // ---- roles in use ------------------------------------------------------------------------
@@ -656,13 +671,13 @@ func TestATenantCannotReachAnotherTenantsRole(t *testing.T) {
 	require.False(t, acme.Name.Valid, "acme's role was changed from globex")
 }
 
-// 🔴 A MEMBERSHIP THAT GRANTS NOTHING HAS NOTHING TO TAKE AWAY. A disabled membership — a
-// pending invitation is one — admits no session in this tenant, so narrowing, stripping or
-// removing it must not rotate the person's session epoch: that epoch is per IDENTITY, and
-// rotating it signs the person out of EVERY tenant they belong to. Without this rule an
-// administrator of one tenant could sign any identity on the instance out of all its
-// tenants, repeatedly, by inviting the address and removing the pending member — no
-// acceptance needed, no membership of the victim's ever enabled.
+// 🔴 ONE TENANT'S ADMINISTRATOR CANNOT SIGN A PERSON OUT OF ANOTHER TENANT. The session
+// epoch is per IDENTITY, so a change in one tenant that rotated it would sign the person out
+// of EVERY tenant they belong to. The sharpest form of that was a pending invitation: an
+// administrator of one tenant could invite any address on the instance and narrow or remove
+// the pending member, repeatedly, with no acceptance needed. No membership change rotates
+// the epoch now (ADR-081 decision 8, as amended 2026-10-16), so this holds trivially; it is
+// kept as the regression guard for the route that made the rule matter.
 func TestAPendingMemberIsNotSignedOutOfTheirOtherTenants(t *testing.T) {
 	e := newPlaneEnv(t)
 	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
