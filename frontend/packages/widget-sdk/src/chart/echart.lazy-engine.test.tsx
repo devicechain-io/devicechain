@@ -8,6 +8,12 @@
 //   - a failed fetch is THROWN to the error boundary, and a Reset fetches it again.
 // echarts/core's init is stubbed (jsdom has no canvas); each test gets fresh modules, so the
 // engine one test loaded does not make the next test's first frame full.
+//
+// A fresh module graph re-imports the real ECharts, which takes over a second on a busy machine,
+// so every wait for the engine to ARRIVE carries ARRIVAL's timeout, not the 1 s default (that
+// default failed this file under a full-workspace run). A wait for something that must NOT
+// happen stays a fixed sleep.
+const ARRIVAL = { timeout: 15_000 };
 
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { Component, type ReactNode } from 'react';
@@ -56,6 +62,7 @@ afterEach(() => {
   setOption.mockClear();
   vi.doUnmock('echarts/core');
   vi.doUnmock('./echart-engine');
+  vi.doUnmock('./echart-markers');
   vi.resetModules();
 });
 
@@ -79,7 +86,7 @@ class Boundary extends Component<{ children: ReactNode }, { error?: unknown; key
   }
 }
 
-describe('EChart and the on-demand chart engine', () => {
+describe('EChart and the on-demand chart engine', { timeout: 30_000 }, () => {
   it('importing the wrapper does not load the engine', async () => {
     const asked = mockEcharts();
     await fresh();
@@ -97,7 +104,7 @@ describe('EChart and the on-demand chart engine', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0));
     });
-    await vi.waitFor(() => expect(init).toHaveBeenCalledWith(box));
+    await vi.waitFor(() => expect(init).toHaveBeenCalledWith(box), ARRIVAL);
     expect(setOption).toHaveBeenLastCalledWith(option, { notMerge: true });
     expect(box.hasAttribute('_echarts_instance_')).toBe(true);
   });
@@ -121,14 +128,14 @@ describe('EChart and the on-demand chart engine', () => {
         <EChart option={option} />
       </Boundary>,
     );
-    expect(await screen.findByText(/^boundary: .*Error/)).toBeTruthy();
+    expect(await screen.findByText(/^boundary: .*Error/, {}, ARRIVAL)).toBeTruthy();
     expect(init).not.toHaveBeenCalled();
     // Not retried on its own.
     await act(async () => void (await new Promise((r) => setTimeout(r, 50))));
     expect(asked()).toBe(1);
 
     await act(async () => void fireEvent.click(screen.getByText('Reset')));
-    await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1), ARRIVAL);
     expect(screen.queryByText(/^boundary:/)).toBeNull();
     expect(asked()).toBe(2);
   });
@@ -139,5 +146,21 @@ describe('EChart and the on-demand chart engine', () => {
     await expect(loadChartEngine()).rejects.toThrow();
     await expect(loadChartEngine()).resolves.toBeUndefined();
     expect(asked()).toBe(2);
+  });
+
+  // The threshold markers are memoized at two levels now (the wrapper's loadThresholdMarkers and
+  // the engine's registerThresholdMarkers), so a failure remembered at EITHER one would leave every
+  // later threshold chart of the page without its lines, with nothing retrying.
+  it('a failed threshold-markers load is not remembered: the next call fetches again', async () => {
+    mockEcharts();
+    let markersAsked = 0;
+    vi.doMock('./echart-markers', async (importOriginal) => {
+      if (markersAsked++ < 1) throw new Error('Failed to fetch dynamically imported module');
+      return importOriginal();
+    });
+    const { loadThresholdMarkers } = await fresh();
+    await expect(loadThresholdMarkers()).rejects.toThrow();
+    await expect(loadThresholdMarkers()).resolves.toBeUndefined();
+    expect(markersAsked).toBe(2);
   });
 });

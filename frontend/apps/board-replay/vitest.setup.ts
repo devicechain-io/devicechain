@@ -77,3 +77,17 @@ export const canvasText: string[] = [];
     HTMLCanvasElement.prototype.getContext = (() => noop2d) as unknown as HTMLCanvasElement['getContext'];
   }
 }
+
+// The chart engine (ECharts + zrender) is fetched on demand, and loadReplay awaits it before the
+// board's first render. Its first import in a test file's fresh module graph takes over a second
+// on a busy machine, which a test's first `findBy` (1 s by default) does not wait out. Fetching it
+// here, through a gauge's preload as loadReplay does, pays that once per file before any test's
+// clock starts -- where it was paid when ECharts was a static import. The on-demand path itself
+// is tested in the widget SDK.
+{
+  const [{ hostWidgetRegistry }, { preloadWidgets }] = await Promise.all([
+    import('@devicechain/host-widgets'),
+    import('@devicechain/widgets'),
+  ]);
+  await preloadWidgets(hostWidgetRegistry(), ['gauge']); // a gauge's preload is the chart engine
+}
