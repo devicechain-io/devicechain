@@ -70,6 +70,12 @@ export interface ConnectedWidgetProps {
   // under the live tail so a chart isn't blank until the first live sample. Ignored by
   // every channel but measurement (the others reconcile from a query, not a history seed).
   initialSamples?: MeasurementSample[];
+  // When `initialSamples` was read up to (epoch ms). A seed read after the live feed resumed from an
+  // interruption replaces what the widget held from before it (useMeasurementStream).
+  initialSamplesAsOf?: number;
+  // Called when the widget's live feed resumes after an interruption: the host reads its history
+  // again. Omitted: the outage stays drawn as a gap.
+  onReconnect?: () => void;
 }
 
 export function ConnectedWidget(props: ConnectedWidgetProps) {
@@ -91,7 +97,7 @@ type BodyProps = ConnectedWidgetProps & { registry: WidgetRegistry };
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyWidgetComponent = ComponentType<any>;
 
-function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples }: BodyProps) {
+function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, initialSamplesAsOf, onReconnect }: BodyProps) {
   const unresolved = widget.type === UNKNOWN_WIDGET_TYPE;
   const descriptor = unresolved ? undefined : registry.descriptor(widget.type);
   const implementation = unresolved ? undefined : registry.implementation(widget.type);
@@ -131,6 +137,8 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples }:
           Component={implementation.component}
           actions={hostActions}
           initialSamples={initialSamples}
+          initialSamplesAsOf={initialSamplesAsOf}
+          onReconnect={onReconnect}
         />
       )}
     </HostScope>
@@ -172,6 +180,8 @@ interface ChannelProps {
   Component: AnyWidgetComponent;
   actions: WidgetActions | undefined;
   initialSamples?: MeasurementSample[];
+  initialSamplesAsOf?: number;
+  onReconnect?: () => void;
 }
 
 // The channel is the only thing the runtime branches on — never the widget id.
@@ -222,7 +232,7 @@ function MeasurementConnectedWidget(props: ChannelProps) {
   return <StreamConnectedWidget {...props} />;
 }
 
-function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples }: ChannelProps) {
+function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, initialSamples, initialSamplesAsOf, onReconnect }: ChannelProps) {
   // The board's time range (D-1). A widget that declares `binding.windowSeconds` draws a SPAN: its
   // own pinned one, else the board's. Every measurement widget honors the pause, because a frozen
   // board must freeze its cards and gauges too -- a number that kept moving under a "Paused"
@@ -236,6 +246,8 @@ function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, in
     pausedAt: range?.paused ? range.pausedAt : undefined,
     now,
     initialSamples,
+    initialSamplesAsOf,
+    onReconnect,
   });
 
   // Opt-in through the descriptor. The age is of the newest sample among the measurements this

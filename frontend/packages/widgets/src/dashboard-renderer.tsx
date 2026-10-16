@@ -152,7 +152,7 @@ export function DashboardRenderer({
     () => timeRange ?? initialTimeRange(defaultSeconds),
     [timeRange, defaultSeconds],
   );
-  const histories = useWidgetHistories(widgets, seedHistory, registry, range);
+  const { histories, reseed } = useWidgetHistories(widgets, seedHistory, registry, range);
 
   const { grid, background: bg, frame: canvasFrame } = definition.canvas;
   const effectiveSizing = sizing ?? definition.canvas.sizing;
@@ -219,7 +219,9 @@ export function DashboardRenderer({
                         hub={hub}
                         registry={registry}
                         actions={actions}
-                        initialSamples={histories[widget.id]}
+                        initialSamples={histories[widget.id]?.samples}
+                        initialSamplesAsOf={histories[widget.id]?.asOf}
+                        onReconnect={() => reseed(widget.id)}
                       />
                     </WidgetSubjectProvider>
                   </WidgetFrameStyleProvider>
@@ -453,11 +455,22 @@ function useContainerWidth<T extends HTMLElement>(keyOf: (width: number) => stri
   return [ref, width];
 }
 
-// A widget's seed, tagged with the concrete selector it was fetched for.
+// A widget's seed, tagged with the concrete selector it was fetched for, and when it was read up to.
 interface Seed {
   key: string;
   samples: MeasurementSample[];
+  asOf: number;
 }
+
+// What a measurement widget is handed: its seed and the instant the seed was read up to.
+interface WidgetHistory {
+  samples: MeasurementSample[];
+  asOf: number;
+}
+
+// How long a failed re-read after an interruption waits before it is tried again. Until one lands
+// the widget draws the outage as a gap, so a failure never shows as a quiet stretch of line.
+export const RESEED_RETRY_MS = 30_000;
 
 // seedKey is the identity of what a measurement widget's history is OF: its concrete
 // selector, by value. Undefined for a widget that takes no seed.
@@ -471,7 +484,7 @@ function seedKey(widget: WidgetInstance, registry: WidgetRegistry): string | und
 }
 
 // useWidgetHistories backfills each measurement widget from bucketedMeasurements and
-// returns an id→samples map. Each seed is keyed by the widget's OWN concrete selector,
+// returns an id→seed map. Each seed is keyed by the widget's OWN concrete selector,
 // not by the board's bindings as a whole, so:
 //
 //   - a selection that re-points one slot re-fetches only the widgets bound to it;
@@ -480,6 +493,14 @@ function seedKey(widget: WidgetInstance, registry: WidgetRegistry): string | und
 //     device while the new fetch is pending;
 //   - a slow answer for a superseded selector is discarded when it lands.
 //
+// `reseed(id)` reads a widget's history again after its live feed resumed from an interruption.
+// It supersedes any read of that widget still in flight (one asked for before the outage cannot
+// cover it), and the answer is handed over with the instant it was read up to, which is how the
+// widget knows it covers the outage. A failed re-read keeps the seed on screen (the widget then
+// draws the outage as a gap) and is tried again after RESEED_RETRY_MS. While the board is paused
+// the re-read waits: a frozen board shows the moment it froze, and history up to that moment
+// cannot cover an outage after it. Resuming reads it.
+//
 // A widget's samples array is the one stored for its seed, so an unchanged seed keeps
 // its identity across renders and does not churn the stream's merge.
 function useWidgetHistories(
@@ -487,17 +508,28 @@ function useWidgetHistories(
   enabled: boolean,
   registry: WidgetRegistry,
   range: TimeRangeState,
-): Record<string, MeasurementSample[] | undefined> {
+): { histories: Record<string, WidgetHistory | undefined>; reseed: (id: string) => void } {
   const [seeds, setSeeds] = useState<Record<string, Seed>>({});
-  // widget id → the selector key most recently REQUESTED for it. A fetch whose key is no
-  // longer the requested one is stale when it lands.
+  // widget id → the (selector, span, re-read) ask most recently REQUESTED for it. A fetch whose
+  // ask is no longer the requested one is stale when it lands.
   const requested = useRef<Record<string, string>>({});
+  // widget id → how many re-reads its live feed has asked for (part of the ask). A read asked for
+  // before the latest interruption that lands before the effect below has run is still taken, but
+  // it cannot close the gap: it is handed over with the instant it was read up to, which is before
+  // the interruption (useMeasurementStream).
+  const reseeds = useRef<Record<string, number>>({});
+  const [reseedTick, bumpReseeds] = useState(0);
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
     };
+  }, []);
+
+  const reseed = useCallback((id: string) => {
+    reseeds.current[id] = (reseeds.current[id] ?? 0) + 1;
+    bumpReseeds((n) => n + 1);
   }, []);
 
   // The (id, key, span) triples that want a seed; value-compared so an equal render is a no-op.
@@ -525,36 +557,57 @@ function useWidgetHistories(
     const byId = new Map(widgets.map((w) => [w.id, w]));
     const next: Record<string, string> = {};
     for (const [id, key, span] of wanted) {
-      // What was asked for: the selector AND the span. Equal = fetched, or in flight.
-      const asked = `${key}|${span ?? ''}`;
+      // What was asked for: the selector, the span and the re-reads. Equal = fetched, or in flight.
+      const base = `${key}|${span ?? ''}|`;
+      const n = reseeds.current[id] ?? 0;
+      // A read made while frozen ends at the freeze instant, so it answers no re-read: it is asked
+      // as `p`, and resuming reads the outage back.
+      const asked = `${base}${range.paused && n ? 'p' : n}`;
+      const previous = requested.current[id];
+      // Already asked; or only the re-read is new and the board is frozen, so it waits for resume.
+      if (previous === asked || (range.paused && previous?.startsWith(base))) {
+        next[id] = previous!;
+        continue;
+      }
       next[id] = asked;
-      if (requested.current[id] === asked) continue;
       const widget = byId.get(id);
-      if (!widget) continue;
+      // Only a single device has stored history to read (fetchWidgetHistory answers any other
+      // selector with nothing, at once). That empty answer is not history across an outage, and
+      // taken as one it would wipe what the chart drew before it: such a widget gets no seed.
+      if (widget?.datasource?.kind !== 'device') continue;
       // A frozen board reads up to the freeze instant, so a range change while paused re-fetches
       // the same moment at the new span instead of sliding forward.
-      const historyWindow =
-        span === null
-          ? defaultHistoryWindow()
-          : historyWindowFor(span, range.paused && range.pausedAt !== undefined ? range.pausedAt : now);
-      void fetchWidgetHistory(widget, historyWindow).then((samples) => {
-        if (!mounted.current || requested.current[id] !== asked) return; // superseded or unmounted
-        setSeeds((prev) => ({ ...prev, [id]: { key, samples } }));
-      });
+      const end = range.paused && range.pausedAt !== undefined ? range.pausedAt : now;
+      const historyWindow = span === null ? defaultHistoryWindow() : historyWindowFor(span, end);
+      const current = () => mounted.current && requested.current[id] === asked;
+      void fetchWidgetHistory(widget, historyWindow, { rethrow: n > 0 }).then(
+        (samples) => {
+          if (!current()) return; // superseded or unmounted
+          // `asOf`: what the read covers up to (the fixed hour reads to now, a moment after `now`).
+          setSeeds((prev) => ({ ...prev, [id]: { key, samples, asOf: end } }));
+        },
+        () => {
+          // Only a re-read rejects. The seed on screen stays, the outage stays a gap, and it is
+          // read again later -- unless something newer has been asked for meanwhile, or the board
+          // has gone (current() says both).
+          setTimeout(() => current() && reseed(id), RESEED_RETRY_MS);
+        },
+      );
     }
     requested.current = next;
     // `widgets`/`wanted` are read via wantedKey (value identity), not reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wantedKey, enabled]);
+  }, [wantedKey, enabled, reseedTick, range.paused]);
 
   // Hand each widget its seed ONLY if it was fetched for the selector the widget has now.
-  return useMemo(() => {
-    const out: Record<string, MeasurementSample[] | undefined> = {};
+  const histories = useMemo(() => {
+    const out: Record<string, WidgetHistory | undefined> = {};
     if (!enabled) return out;
     for (const w of widgets) {
       const seed = seeds[w.id];
-      out[w.id] = seed && seed.key === seedKey(w, registry) ? seed.samples : undefined;
+      out[w.id] = seed && seed.key === seedKey(w, registry) ? seed : undefined;
     }
     return out;
   }, [widgets, seeds, enabled, registry]);
+  return { histories, reseed };
 }

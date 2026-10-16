@@ -410,3 +410,53 @@ describe('buildCompassOption', () => {
     expect(compass(10).pointer.itemStyle.color).toBe('#c1');
   });
 });
+
+describe('buildLineOption across an interruption of the live feed', () => {
+  const t = (minute: number) => `2026-07-02T10:${String(minute).padStart(2, '0')}:00.000Z`;
+
+  it('breaks every series at a gap that falls between two of its points, and only there', () => {
+    const option = buildLineOption(
+      [
+        sample('temperature', 20, t(0)),
+        sample('humidity', 50, t(1)),
+        sample('temperature', 21, t(2)),
+        sample('temperature', 30, t(9)),
+        sample('humidity', 60, t(9)),
+      ],
+      theme,
+      // One before every point, one in the outage, one after every point.
+      { gaps: ['2026-07-02T09:59:00.000Z', t(2), t(10)] },
+    );
+    const [temperature, humidity] = seriesOf(option);
+    expect(temperature.data).toEqual([
+      [t(0), 20],
+      [t(2), 21],
+      [t(2), null],
+      [t(9), 30],
+    ]);
+    expect(humidity.data).toEqual([
+      [t(1), 50],
+      [t(2), null],
+      [t(9), 60],
+    ]);
+  });
+
+  it('puts one break between two points however many gaps fall there, and ignores an unreadable one', () => {
+    const option = buildLineOption([sample('temperature', 1, t(0)), sample('temperature', 2, t(9))], theme, {
+      gaps: [t(3), 'not a time', t(5)],
+    });
+    expect(seriesOf(option)[0].data).toEqual([
+      [t(0), 1],
+      [t(5), null],
+      [t(9), 2],
+    ]);
+  });
+
+  it('draws as before with no gaps', () => {
+    const option = buildLineOption([sample('temperature', 1, t(0)), sample('temperature', 2, t(9))], theme, { gaps: [] });
+    expect(seriesOf(option)[0].data).toEqual([
+      [t(0), 1],
+      [t(9), 2],
+    ]);
+  });
+});

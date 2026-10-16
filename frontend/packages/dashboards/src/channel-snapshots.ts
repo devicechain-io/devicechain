@@ -18,6 +18,13 @@ export interface MeasurementStreamState {
   // were still inside it: the window then covers from this instant (the oldest sample kept), not
   // the whole span. A chart must say so rather than draw a short window under a long span's label.
   truncatedBefore?: string;
+  // Set only when the live feed was interrupted and the readings it missed have not been read back
+  // from stored history yet (or could not be). Each entry is the time of the newest sample known
+  // when the feed resumed: nothing is known between it and the next sample, so a chart breaks its
+  // line there instead of joining the readings on either side as if the device had reported a
+  // straight line. Once a history read made after the interruption lands, the entry goes away and
+  // the window holds that history across the outage. Oldest first.
+  gaps?: string[];
   // Present only on a widget that reads a whole fleet (its descriptor declares `binding.members`
   // and the mode is on): every member of the anchor with its OWN latest reading per measurement.
   // `latest` above stays keyed by measurement name alone, so two devices reporting the same name

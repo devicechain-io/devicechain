@@ -17,6 +17,9 @@
 //     the board reads at the same moment and the hub serves identical reads once; paused, it ends
 //     at the freeze instant and is read once, so the number on screen does not move;
 //   - a hidden tab does not read; it reads once when it is shown again;
+//   - a live feed that resumes after an interruption reads again at once, so the figures take in
+//     the readings sent during the outage (and a read that failed during it stops saying so) without
+//     waiting for the next refresh, which on a week's span is 42 minutes away;
 //   - a read for a different selector, span or freeze instant is not shown under the new one: a
 //     result is tagged with the key it was read for, and a mismatch reads as loading.
 
@@ -30,7 +33,7 @@ import {
   type WidgetInstance,
 } from '@devicechain/dashboards';
 import { useMeasurementStream, useWidgetTimeRange } from '@devicechain/widget-sdk';
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useReducer, useState, type ComponentType } from 'react';
 
 import { aggregateBuckets, aggregateRefreshMs, aggregateWindow } from './aggregate-fold';
 import { measurementSpan } from './binding-policy';
@@ -57,7 +60,8 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
 
   // The newest live reading per measurement. It holds one sample: only `latest` is read, and the
   // pause keeps it from moving.
-  const stream = useMeasurementStream(hub, ds, { window: 1, pausedAt, now });
+  const [resumes, resumed] = useReducer((n: number) => n + 1, 0);
+  const stream = useMeasurementStream(hub, ds, { window: 1, pausedAt, now, onReconnect: resumed });
 
   const key = JSON.stringify([ds ?? null, spanSeconds, pausedAt ?? null]);
   const supported = hub.bucketMeasurements !== undefined;
@@ -109,7 +113,7 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
     };
     // `ds` is read through `key` (value identity), not by reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hub, supported, key]);
+  }, [hub, supported, key, resumes]);
 
   let aggregates: AggregateResult;
   if (!supported) aggregates = { status: 'unavailable', reason: 'unsupported' };
