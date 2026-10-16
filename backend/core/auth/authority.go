@@ -53,8 +53,8 @@ const (
 // plane, and an operator reads the instance journal on user-management's admin
 // plane. That is one capability with two scopes, not two capabilities.
 //
-// Dual-tier is deliberately rare, and a test names the ones that are, so adding
-// another is a decision rather than a slip. It is also the weakest entry in the
+// Dual-tier is deliberately rare, and a test names the ones that are (audit:read,
+// role:read and role:write), so adding another is a decision rather than a slip. It is also the weakest entry in the
 // model: an authority listing both tiers is satisfiable from a tenant access token,
 // so it must never gate something instance-global. When in doubt, single-tier.
 type Tiers []Tier
@@ -87,11 +87,23 @@ const (
 
 	// Identity + role directory (user-management). UserRead/UserWrite gate the
 	// admin identity and membership operations; RoleRead/RoleWrite gate the role
-	// catalog (ADR-033).
+	// catalog (ADR-033) on the admin plane and, since ADR-081, the roles a tenant
+	// owns on its own data plane (see the vocabulary entry for why that is one
+	// capability with two scopes rather than two capabilities).
 	UserRead  Authority = "user:read"
 	UserWrite Authority = "user:write"
 	RoleRead  Authority = "role:read"
 	RoleWrite Authority = "role:write"
+
+	// MemberRead / MemberWrite gate a tenant administering its OWN members on its own
+	// data plane (ADR-081): listing members and invitations, and inviting, assigning
+	// roles, setting a member's scope, enabling, disabling and removing. Tenant-tier
+	// only. They are deliberately NOT user:read/user:write re-tiered: on the admin
+	// plane user:write creates identities and resets passwords, and on a tenant role
+	// it would be the strongest-looking string on a role that cannot touch an
+	// identity. Neither is in the viewer baseline.
+	MemberRead  Authority = "member:read"
+	MemberWrite Authority = "member:write"
 
 	// Tenant control plane (user-management admin API, ADR-033).
 	TenantRead  Authority = "tenant:read"
@@ -394,10 +406,29 @@ var vocabulary = map[Authority]Tiers{
 	// tenant acting in its own tenant.
 	UserRead:    system,
 	UserWrite:   system,
-	RoleRead:    system,
-	RoleWrite:   system,
 	TenantRead:  system,
 	TenantWrite: system,
+	// role:read and role:write are DUAL-tier (ADR-081), on exactly the audit:read
+	// argument: one capability with two scopes, told apart by the plane and by the
+	// row's tenant, not two capabilities. On the admin plane (an identity token)
+	// they reach the operator's role catalogue; on a tenant's data plane (an access
+	// token) they reach only the roles that tenant OWNS, plus a read of the
+	// catalogue roles assignable there.
+	//
+	// 🔴 WHAT MAKES THIS SAFE IS THE PLANE, NOT THE TIER. A tenant access token now
+	// SATISFIES role:write at the check, so the operator's catalogue stays out of a
+	// tenant's reach only because every resolver that writes it is served on the
+	// admin plane, whose handler refuses an access token before any resolver runs
+	// (TestAnAccessTokenHoldingRoleWriteCannotReachTheAdminPlane pins that), and
+	// because the tenant-plane resolvers stamp and filter by the caller's tenant.
+	// A role:write resolver added to a DATA plane that forgets the tenant is a
+	// catalogue write from a tenant token.
+	RoleRead:  {TierSystem, TierTenant},
+	RoleWrite: {TierSystem, TierTenant},
+	// A tenant's own members (ADR-081). Tenant-only: the admin plane manages
+	// memberships under user:write.
+	MemberRead:  tenant,
+	MemberWrite: tenant,
 	// Claiming a command for direct dispatch is a machine operation, never a
 	// human one — system-tier on a data-plane resolver is what makes it
 	// reachable only by a service token (satisfies() bounds a tenant access
@@ -447,7 +478,7 @@ var vocabulary = map[Authority]Tiers{
 	BrandingWrite:     tenant,
 	BasemapWrite:      tenant,
 	LocaleWrite:       tenant,
-	// audit:read is the one DUAL-tier authority, and it has to be: two different
+	// audit:read was the first DUAL-tier authority, and it has to be: two different
 	// resolvers on two different planes gate on it. A tenant reads its own journal on
 	// device-management's data plane (tenant-tier), and an operator reads the instance
 	// journal on user-management's admin plane (system-tier, since an identity token

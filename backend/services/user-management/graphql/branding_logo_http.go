@@ -88,7 +88,10 @@ func (h *BrandingLogoHandler) serveUpload(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	if !claims.HasAuthority(auth.BrandingWrite) {
+	// Through Authorize, never claims.HasAuthority: HasAuthority checks only that the
+	// token names the authority, so it skips the tier rule and admits a scoped member
+	// (ADR-081), whom every other branding write refuses.
+	if err := auth.Authorize(auth.WithClaims(r.Context(), claims), auth.BrandingWrite); err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}

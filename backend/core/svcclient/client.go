@@ -65,6 +65,20 @@ const (
 // read this as the target's answer — a slow mint is not a slow peer.
 var ErrServiceToken = errors.New("svcclient: could not obtain a service token")
 
+// scopedCallerKey marks a context whose scoped caller a call site has deliberately
+// decided may fan out under this service's identity (see OnBehalfOfScopedCaller).
+type scopedCallerKey struct{}
+
+// OnBehalfOfScopedCaller returns ctx marked so that Query proceeds even though the
+// request it serves is a SCOPED member's (ADR-081). Query refuses that case by default
+// (see Query); a call site uses this only where it has decided, in writing, why the
+// answer it is about to receive under the service's own — unscoped — identity cannot
+// reach the member beyond their scope: for example, a lookup whose result is compared
+// against the member's scope before anything is returned or written.
+func OnBehalfOfScopedCaller(ctx context.Context) context.Context {
+	return context.WithValue(ctx, scopedCallerKey{}, true)
+}
+
 // ErrResponseTooLarge reports that a peer's response exceeded MaxResponseBytes.
 //
 // 🔴 IT EXISTS BECAUSE THE ALTERNATIVE IS A LIE ABOUT WHOSE FAULT IT IS. io.LimitReader
@@ -193,9 +207,21 @@ func WithQueryTimeout(d time.Duration) Option {
 // It obtains a service token (from cache or a fresh mint), sets it as the bearer,
 // and passes the tenant in the ServiceTenantHeader. A non-empty GraphQL "errors"
 // array is returned as an error.
+//
+// 🔴 IT REFUSES TO ACT FOR A SCOPED CALLER (ADR-081) unless the call site said it may
+// (OnBehalfOfScopedCaller). The service token it presents carries no scope — service
+// tokens never do — so a call made while serving a scoped member's request reads the
+// WHOLE tenant on that member's behalf: the confused deputy the scope exists to prevent.
+// Refusing by default turns a call site that has not thought about scoped callers into
+// a FORBIDDEN (auth.ErrScopeUnsupported) rather than a leak.
 func (c *Client) Query(ctx context.Context, baseURL, tenant, query string, variables map[string]any, out any) error {
 	if strings.TrimSpace(tenant) == "" {
 		return fmt.Errorf("svcclient: tenant is required")
+	}
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		if allowed, _ := ctx.Value(scopedCallerKey{}).(bool); !allowed {
+			return fmt.Errorf("svcclient: %w (a service call on a scoped member's behalf)", auth.ErrScopeUnsupported)
+		}
 	}
 	token, err := c.serviceToken(ctx)
 	if err != nil {

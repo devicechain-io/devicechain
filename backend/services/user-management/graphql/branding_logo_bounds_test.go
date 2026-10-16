@@ -29,6 +29,16 @@ import (
 // "acme", and returns it with a token for that tenant holding branding:write.
 func logoServer(t *testing.T) (*httptest.Server, string) {
 	t.Helper()
+	ts, iss := logoServerAndIssuer(t)
+	tok, err := iss.IssueTenantAccess("acme", "a@b.c", nil, []string{string(auth.BrandingWrite)}, false, "j-logo")
+	require.NoError(t, err)
+	return ts, tok.Token
+}
+
+// logoServerAndIssuer is logoServer returning the issuer its validator trusts, so a test
+// can mint a token of its own shape.
+func logoServerAndIssuer(t *testing.T) (*httptest.Server, *auth.Issuer) {
+	t.Helper()
 	db := putest.NewSQLiteDB(t, &iam.Role{}, &iam.TenantTier{}, &iam.Tenant{},
 		&iam.OAuthClient{}, &iam.Identity{}, &iam.Membership{})
 	rdbm := &rdb.RdbManager{Database: db}
@@ -45,15 +55,12 @@ func logoServer(t *testing.T) (*httptest.Server, string) {
 
 	key, err := auth.GenerateKeyPair()
 	require.NoError(t, err)
-	tok, err := auth.NewIssuer(key, "https://as.example.com", 0, 0).
-		IssueTenantAccess("acme", "a@b.c", nil, []string{string(auth.BrandingWrite)}, false, "j-logo")
-	require.NoError(t, err)
 
 	mux := http.NewServeMux()
 	RegisterBrandingLogoHandler(mux, blobs, mgr, auth.NewValidator(&key.PublicKey))
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
-	return ts, tok.Token
+	return ts, auth.NewIssuer(key, "https://as.example.com", 0, 0)
 }
 
 // A legitimate upload of a few hundred KiB — a real logo, well under the ceiling but far

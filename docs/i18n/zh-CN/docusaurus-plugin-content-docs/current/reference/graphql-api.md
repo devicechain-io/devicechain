@@ -594,6 +594,26 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 请根据代码而非消息进行判断，服务可能会在消息前加上它当时正在执行的操作。
 少数操作会用自己的代码说明缺少的是什么（例如 `ARTIFACT_NOT_FOUND`），这些操作保留自己的代码。
 
+### 无权执行的操作 {#forbidden}
+
+因你无权执行而被拒绝的操作，会将 `extensions.code` 设为 `FORBIDDEN`。你的令牌有效，但不具备该操作所需的权限：
+
+```json
+{
+  "errors": [{
+    "message": "forbidden: missing required authority",
+    "path": ["deleteDevice"],
+    "extensions": { "code": "FORBIDDEN" }
+  }]
+}
+```
+
+没有有效令牌的请求不会得到这种响应。无效或已过期的令牌会在任何操作执行之前以 HTTP 401 被拒绝。
+完全没有令牌时，需要令牌的操作会失败，消息以 `unauthenticated` 开头，且不带代码。
+
+对同一操作而言，拒绝优先于其他任何响应。如果你无权执行某个操作，即使它指定的记录不存在，你得到的也是 `FORBIDDEN`，因此响应不会透露该记录是否存在。
+部分拒绝会附带 `extensions.reason` 说明原因。请根据 `code` 进行判断，并把 `reason` 视为补充信息：没有原因的 `FORBIDDEN` 同样是拒绝。
+
 ## 请求限制 {#request-limits}
 
 每个 GraphQL 端点都会在执行前拒绝过大或工作量过多的请求。

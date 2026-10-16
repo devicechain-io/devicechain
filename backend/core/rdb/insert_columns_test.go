@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/glebarez/sqlite"
@@ -485,6 +486,7 @@ func TestColumnarInsertAccountsForEveryCreateCallback(t *testing.T) {
 		"gorm:commit_or_rollback_transaction": "Insert opens a transaction when not in one",
 		"dc:tenant_create":                    "context tenant required, mismatch refused, rows stamped",
 		"dc:tenant_upsert_check":              "DO UPDATE only, which the insert does not offer",
+		"dc:scope_create":                     "a scoped caller is refused outright",
 		"dc:token_grammar_create":             "models with a Token field are refused",
 		"dc:audit_create":                     "audited models are refused",
 		fenceCreateCallback:                   "readFence, when the handle has this callback",
@@ -582,5 +584,22 @@ func TestColumnarInsertRefusesARefusedModelEveryTime(t *testing.T) {
 	}
 	if got := storedReadings(t, db); len(got) != 0 {
 		t.Errorf("a refused model stored %d row(s)", len(got))
+	}
+}
+
+// The column-array insert bypasses the create chain, dc:scope_create included, so it
+// refuses a scoped caller (ADR-081) itself — before reading or writing anything.
+func TestColumnarInsertRefusesAScopedCaller(t *testing.T) {
+	db, _ := newColumnsDB(t, true)
+	_, err := colReadings.Insert(db.WithContext(scopedCtx("acme", "customer:acme-corp")), colRows("a"))
+	if !errors.Is(err, auth.ErrScopeUnsupported) {
+		t.Fatalf("a scoped caller wrote through the column-array insert: %v", err)
+	}
+	if got := storedReadings(t, db); len(got) != 0 {
+		t.Fatalf("the refused insert stored %v", got)
+	}
+	// Negative control: the same insert for an unscoped caller of the same tenant lands.
+	if n, err := colReadings.Insert(db.WithContext(unscopedCtx("acme")), colRows("a")); err != nil || n != 1 {
+		t.Fatalf("the unscoped control: n=%d err=%v", n, err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"gorm.io/gorm"
 )
@@ -272,6 +273,13 @@ func (t *ColumnTable[R]) Insert(db *gorm.DB, rows []*R) (int64, error) {
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok {
 		return 0, core.ErrNoTenant
+	}
+	// The scope create callback (dc:scope_create) is bypassed here like every other, and
+	// what it would do cannot be done row by row from a column array, so a scoped caller
+	// is refused outright. Nothing a scoped member may call writes through this path:
+	// it is the event store's ingest write, and it runs under a service's own context.
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return 0, fmt.Errorf("%w (the column-array insert)", auth.ErrScopeUnsupported)
 	}
 	plan, err := t.plan(db)
 	if err != nil {
