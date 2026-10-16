@@ -13,8 +13,13 @@
 // an accidental dependency does not. Once the headroom is spent, a raise is DELIBERATE: the
 // measured need (of every change landing together, when several are in flight) plus a small stated
 // margin, with the measurement and the reason in the commit that raises it -- never `--measure`
-// pasted in to make a red build green. `hardInitial` and `hardTotal` are the product targets
+// pasted in to make a red build green. The margin is 0.5 % (measured x 1.005, rounded up). A
+// change that SHRINKS the initial load lowers `maxInitial` by the same rule in the same commit:
+// headroom left in the budget is spent silently by the next change, and only a budget that
+// tightens with the saving keeps it. `hardInitial` and `hardTotal` are the product targets
 // (400 KB before the map loads, 1.2 MB all-in); the budget can never be set above them.
+//
+// The build also checks WHERE the bytes are, not only how many: see "The lazy boundaries" below.
 //
 //   node scripts/check-bundle-size.mjs            check dist/ against the budget
 //   node scripts/check-bundle-size.mjs --measure  print the measurements and a budget
@@ -101,6 +106,54 @@ export function check(measured, budget) {
   return problems;
 }
 
+// ---- The lazy boundaries, read off the artifact ----------------------------
+//
+// What the budget above cannot say is WHERE the bytes are: code folded back into the entry and an
+// equal saving elsewhere measure the same. So each boundary that keeps code out of the first
+// download is checked by name here, on every build, against the files the visitor actually gets:
+// a marker string from the moved code must appear in NO initial file, and (the reach control, so
+// the absence claim is not over a string the minifier rewrote) it must appear in a lazily loaded
+// chunk of the expected name.
+//
+// Markers are string literals, because minification renames everything else. The catalogs'
+// markers are read from the catalogs themselves, so a retranslation cannot break the check.
+const catalogBadge = (locale) =>
+  JSON.parse(readFileSync(path.resolve(here, `../src/i18n/locales/${locale}/chrome.json`), 'utf8')).replayBadge;
+
+export function lazyBoundaries() {
+  return [
+    // The Spanish and Chinese chrome catalogs: fetched by setReplayLocale, English stays eager.
+    { what: 'the Spanish catalog', chunk: 'chrome', markers: [catalogBadge('es')] },
+    { what: 'the Chinese catalog', chunk: 'chrome', markers: [catalogBadge('zh-CN')] },
+    // Widget components the sitepulse board may not need on its first frame.
+    { what: 'the alarm table and alarm count', chunk: 'alarm-widgets', markers: ['Action failed', 'worst severity'] },
+    { what: 'the entity selector', chunk: 'entity-selector', markers: ['No target slot configured.'] },
+    { what: 'the measurement table', chunk: 'table', markers: ['No data yet'] },
+    { what: 'the command button', chunk: 'control-widgets', markers: ['Couldn’t load command history.'] },
+  ];
+}
+
+// checkShape returns a list of problems (empty = pass).
+export function checkShape(dist, boundaries) {
+  const problems = [];
+  const initial = new Set(initialFiles(dist));
+  const js = walk(dist).filter((f) => f.endsWith('.js'));
+  const text = new Map(js.map((f) => [f, readFileSync(f, 'utf8')]));
+  for (const { what, chunk, markers } of boundaries) {
+    for (const marker of markers) {
+      const eager = [...initial].filter((f) => text.has(f) && text.get(f).includes(marker));
+      if (eager.length > 0) {
+        problems.push(`${what}: in the first download (${eager.map((f) => path.basename(f)).join(', ')} holds ${JSON.stringify(marker)})`);
+      }
+      const lazy = js.filter((f) => !initial.has(f) && path.basename(f).startsWith(`${chunk}-`) && text.get(f).includes(marker));
+      if (lazy.length === 0) {
+        problems.push(`${what}: no lazily loaded ${chunk}-*.js chunk holds ${JSON.stringify(marker)}, so its absence above proves nothing`);
+      }
+    }
+  }
+  return problems;
+}
+
 function main() {
   const dist = path.resolve(here, '../dist');
   const budgetFile = path.resolve(here, '../size-budget.json');
@@ -115,7 +168,7 @@ function main() {
     console.log(JSON.stringify({ ...budget, maxInitial: up(measured.initial), maxTotal: up(measured.total) }, null, 2));
     return;
   }
-  const problems = check(measured, budget);
+  const problems = [...check(measured, budget), ...checkShape(dist, lazyBoundaries())];
   if (problems.length > 0) {
     for (const p of problems) console.error(`bundle size gate: ${p}`);
     process.exit(1);

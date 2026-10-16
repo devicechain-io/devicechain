@@ -23,7 +23,6 @@ import {
   type CommandStreamState,
   css,
   fontVar,
-  defineWidget,
   formatDateTime,
   optString,
   useWidgetTimeZone,
@@ -31,7 +30,6 @@ import {
   type WidgetProps,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { commandStatusColor, commandStatusLabel } from './command-status';
 import {
   buildPayload,
@@ -402,10 +400,3 @@ const sendButton: CSSProperties = {
   color: css('background'),
   marginTop: 2,
 };
-
-// The registration: this widget's portable descriptor paired with its component, declared
-// through the same public `defineWidget` a third-party package uses.
-export const commandButtonWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['command-button'],
-  implementation: { kind: 'trusted-react', component: CommandButton },
-});

@@ -8,7 +8,6 @@ import type { CSSProperties } from 'react';
 
 import {
   css,
-  defineWidget,
   fontVar,
   spaceVar,
   FlashValue,
@@ -21,7 +20,6 @@ import {
   type WidgetProps,
 } from '@devicechain/widget-sdk';
 
-import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
 const cell: CSSProperties = { padding: `${spaceVar(1)} ${spaceVar(3)}`, textAlign: 'left' };
 const headCell: CSSProperties = {
@@ -87,10 +85,3 @@ export function Table({ widget, data }: WidgetProps) {
     </WidgetFrame>
   );
 }
-
-// The registration: this widget's portable descriptor paired with its component, declared
-// through the same public `defineWidget` a third-party package uses.
-export const tableWidget = defineWidget({
-  descriptor: builtinWidgetDescriptors['table'],
-  implementation: { kind: 'trusted-react', component: Table },
-});

@@ -27,12 +27,14 @@ beforeEach(async () => {
 afterEach(cleanup);
 
 describe('/dash with a board from a newer version', () => {
-  it('shows the refusal for a pasted definition and renders nothing', () => {
+  // The paste door awaits the board's lazily loaded widget code before it shows anything, so both
+  // outcomes below are awaited rather than read synchronously after the click.
+  it('shows the refusal for a pasted definition and renders nothing', async () => {
     const onRender = vi.fn();
     render(<Load onRender={onRender} onSignOut={() => {}} />);
     fireEvent.change(screen.getByLabelText(i18n.t('load:definitionLabel')), { target: { value: newer } });
     fireEvent.click(screen.getByText(i18n.t('load:render')));
-    expect(screen.getByText(i18n.t('load:errorDefinitionTooNew'))).toBeTruthy();
+    expect(await screen.findByText(i18n.t('load:errorDefinitionTooNew'))).toBeTruthy();
     expect(i18n.t('load:errorDefinitionTooNew')).toMatch(/newer version of DeviceChain.*Upgrade this viewer/);
     expect(onRender).not.toHaveBeenCalled();
   });
@@ -48,11 +50,11 @@ describe('/dash with a board from a newer version', () => {
     expect(onRender).not.toHaveBeenCalled();
   });
 
-  it('still renders a board at the current version', () => {
+  it('still renders a board at the current version', async () => {
     const onRender = vi.fn();
     render(<Load onRender={onRender} onSignOut={() => {}} />);
     fireEvent.change(screen.getByLabelText(i18n.t('load:definitionLabel')), { target: { value: current } });
     fireEvent.click(screen.getByText(i18n.t('load:render')));
-    expect(onRender).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onRender).toHaveBeenCalledTimes(1));
   });
 });

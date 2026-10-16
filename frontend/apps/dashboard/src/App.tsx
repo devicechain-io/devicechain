@@ -54,7 +54,7 @@ import { ConnectionStatus } from './ConnectionStatus';
 import { SUPPORTED_LOCALES, setUserLocale } from './i18n/config';
 import { loadErrorMessage } from './i18n/loadError';
 import { signInErrorKey } from './i18n/signInError';
-import { loadDashboard, loadPublishedDashboard, type Loaded } from './load';
+import { loadDashboard, loadPublishedDashboard, withWidgetCode, type Loaded } from './load';
 import { MAP_RUNTIME } from './map-runtime';
 import { type DashDensity, type DashTheme, parseDashParams } from './params';
 import { LOGIN, type Membership, REFRESH, SELECT_TENANT, TENANT_BASEMAP } from './queries';
@@ -587,8 +587,9 @@ export function Load({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The paste door: synchronous, offline, no server involved.
-  const render = () => show(loadDashboard(definitionText, manifestText));
+  // The paste door: offline, no server involved. The parse is synchronous; the wait is only for
+  // the code of the board's lazily loaded widgets, so the first frame is the whole board.
+  const render = async () => show(await withWidgetCode(loadDashboard(definitionText, manifestText)));
 
   // The default door: the dashboard's published snapshot, by token.
   const loadPublished = async () => {

@@ -293,6 +293,78 @@ describe('the built package', () => {
     expect(definitions.FleetFeed.test(chunkOf('aggregate-widgets'))).toBe(false);
   });
 
+  // The alarm table and count, the entity selector, the measurement table and the command button
+  // are the seventh boundary, and the first whose components are ALSO public exports
+  // (`AlarmTable`, `AlarmCount`, `EntitySelector`, `Table`, `CommandButton`). A public export
+  // keeps a component in the static graph of THIS package's entry, so "absent from the entry
+  // graph" cannot be asserted here the way it is above. What makes the boundary real is two facts
+  // a host bundler (Vite 8 / rolldown) acts on, and they are what this asserts:
+  //
+  //   1. each component is a module of its own, OUTSIDE index.js, and the registry reaches it only
+  //      through its family's dynamic import -- so a host that never touches the public export
+  //      can leave the module out of its first download;
+  //   2. the package declares its modules free of side effects (the test after this one), without
+  //      which rolldown keeps every module the entry imports -- measured: without the field the
+  //      replay app's first download did not shrink at all.
+  //
+  // The outcome itself -- none of them in a real host's first download -- is asserted on a real
+  // host build by apps/board-replay/scripts/check-bundle-size.mjs, which runs on every build.
+  // (esbuild cannot stand in for that host: its splitting does not drop a shared chunk an entry
+  // imports but does not use, so an esbuild "host" would keep them all.)
+  it('keeps the alarm, selection, table and button components out of the entry module, behind dynamic imports', () => {
+    // Not preceded by an identifier character, so `Table` does not match `function FleetTable(`.
+    const defines = (name: string) => new RegExp(`(?:^|[^\\w$])function\\s+${name}\\s*\\(`);
+    const entry = read('index.js');
+    const specs = [...entry.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
+    const families: Record<string, string[]> = {
+      'alarm-widgets': ['AlarmTable', 'AlarmCount'],
+      'entity-selector': ['EntitySelector'],
+      table: ['Table'],
+      'control-widgets': ['CommandButton'],
+    };
+    for (const [chunk, names] of Object.entries(families)) {
+      const spec = specs.find((s) => path.basename(s).startsWith(`${chunk}-`));
+      expect(spec, `no dynamic import of the ${chunk} chunk in dist/index.js (saw ${specs.join(', ')})`).toBeTruthy();
+      const chunkPath = path.resolve(distDir, spec!);
+      expect(existsSync(chunkPath), `${spec} is imported but was not emitted`).toBe(true);
+      // What the dynamic chunk loads: itself and every chunk it imports statically.
+      const reached = staticGraph(chunkPath).map((f) => readFileSync(f, 'utf8'));
+      for (const name of names) {
+        expect(defines(name).test(entry), `${name} is defined in dist/index.js itself, where no host can leave it out`).toBe(false);
+        expect(reached.some((code) => defines(name).test(code)), `${name} is not reached from the ${chunk} chunk`).toBe(true);
+      }
+    }
+    // Reach control for the pattern: it does find an eager widget defined in the entry.
+    expect(defines('LatestCard').test(entry), 'the definition pattern cannot see the eager card').toBe(true);
+  });
+
+  // Audited, not assumed: no module this package builds does anything at import time that a host
+  // needs -- no stylesheet import, no registration with a global, no listener, no polyfill (the
+  // map stylesheet is a DYNAMIC import, called by the renderer). The /vite entry is listed anyway,
+  // conservatively: it is the one module whose import a bundler transforms (`?worker&url`), and it
+  // costs a host nothing it did not ask for. A module that gains an import-time effect must be
+  // added here. See the test above for why the field exists at all.
+  it('declares its modules free of side effects, except the /vite entry', () => {
+    const pkg = JSON.parse(readFileSync(path.join(distDir, '../package.json'), 'utf8')) as { sideEffects?: unknown };
+    expect(pkg.sideEffects).toEqual(['./dist/vite.js']);
+  });
+
+  // The part of that audit a regex can hold: a bare `import "x"` -- an import kept ONLY for what
+  // it does on load -- is the shape a new import-time effect most often takes (a stylesheet, a
+  // polyfill, a module that registers itself), and under the field above a host bundler drops it.
+  // Between this package's own chunks a bare import is the bundler's wiring, so only a bare import
+  // of ANOTHER package is refused.
+  it('imports no other package for its side effects alone', () => {
+    const BARE = /(?:^|[;\n])\s*import\s*["']([^"'.][^"']*)["']/g;
+    // Reach control: the pattern sees a bare package import, and passes over a chunk's own wiring.
+    expect([...'x;import "polyfill";\nimport"./chunks/a.js"'.matchAll(BARE)].map((m) => m[1])).toEqual(['polyfill']);
+    const files = [path.join(distDir, 'index.js'), path.join(distDir, 'vite.js'), ...walkDist(path.join(distDir, 'chunks'))];
+    const found = files
+      .filter((f) => f.endsWith('.js'))
+      .flatMap((f) => [...readFileSync(f, 'utf8').matchAll(BARE)].map((m) => `${path.basename(f)}: ${m[1]}`));
+    expect(found).toEqual([]);
+  });
+
   it('draws the bar and pie without ECharts: no chart type of either kind is imported anywhere in the build', () => {
     const files = [...staticGraph(path.join(distDir, 'index.js')), ...walkDist(path.join(distDir, 'chunks'))];
     for (const file of new Set(files)) {

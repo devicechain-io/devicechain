@@ -33,6 +33,7 @@ import {
   type SlotBinding,
 } from '@devicechain/dashboards';
 import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
+import { preloadWidgets } from '@devicechain/widgets';
 
 import { PUBLISHED_DASHBOARD } from './queries';
 
@@ -163,7 +164,19 @@ export async function loadPublishedDashboard(
   } catch (err) {
     return { error: fetchError(err) };
   }
-  return loadDashboard(definition, manifestText, registry);
+  return withWidgetCode(loadDashboard(definition, manifestText, registry));
+}
+
+// withWidgetCode waits for the code of a loaded board's lazily loaded widgets, so the board's
+// first frame is the whole board rather than empty boxes still filling in. BOTH doors go through
+// it -- the published snapshot above and the paste in App -- so neither can show the other's
+// half-drawn frame. Never rejects: a chunk that fails still fails in its widget, where the
+// widget's error boundary shows it.
+export async function withWidgetCode<R extends { loaded: Loaded } | { error: LoadError }>(result: R): Promise<R> {
+  if ('loaded' in result) {
+    await preloadWidgets(result.loaded.registry, result.loaded.definition.widgets.map((w) => w.type));
+  }
+  return result;
 }
 
 // Classify a failed fetch by the server's machine-readable code where there is one, and

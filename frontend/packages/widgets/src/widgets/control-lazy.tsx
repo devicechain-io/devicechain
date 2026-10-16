@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The command-control registrations: descriptor eager, component lazy, from a chunk of their own
-// (control-widgets.ts) so a board without a slider or toggle never downloads the sending code.
+// (control-widgets.ts) so a board without a command button, slider or toggle never downloads the
+// sending code.
 
 import { defineWidget, type CommandStreamState } from '@devicechain/widget-sdk';
 
@@ -21,4 +22,9 @@ export const commandSliderWidget = defineWidget({
 export const commandToggleWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['command-toggle'],
   implementation: { kind: 'trusted-react', component: chunk.component('CommandToggle') },
+});
+
+export const commandButtonWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['command-button'],
+  implementation: { kind: 'trusted-react', component: chunk.component('CommandButton') },
 });

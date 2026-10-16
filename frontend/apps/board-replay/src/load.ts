@@ -28,6 +28,7 @@ import {
   type DashboardDefinition,
 } from '@devicechain/dashboards';
 import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
+import { preloadWidgets } from '@devicechain/widgets';
 
 export type ReplayErrorCode =
   | 'missingUrl'
@@ -155,6 +156,10 @@ export async function loadReplay(options: LoadOptions): Promise<LoadedReplay> {
     }
     throw new ReplayLoadError('boardInvalid', detailOf(err));
   }
+
+  // The code of the board's lazily loaded widgets arrives before the board is shown, so the
+  // first frame is the whole board rather than a board with empty boxes still filling in.
+  await preloadWidgets(registry, definition.widgets.map((w) => w.type));
 
   return { recording, definition, registry, siteAnchors: anchorsOf(definition) };
 }

@@ -5,12 +5,13 @@
 // descriptors stay eager (the catalog, the editor and the validators read them), and each
 // registration's component loads the family's chunk on first mount, together, from one fetch.
 //
-// Until the chunk arrives the widget renders nothing inside its box. A chunk that fails to load is
-// THROWN, so the widget's error boundary shows the failure: an empty box that looks like a widget
-// with nothing to say is the outcome this must never produce. The failure is NOT remembered: the
-// next mount (the boundary's "Reset widget") fetches the chunk again, so a blip on a wall display's
-// network is not a widget that stays broken until the page is reloaded. React.lazy remembers it,
-// which is why the feeds load through here too.
+// Until the chunk arrives the widget renders nothing inside its box, unless the host awaited
+// preloadWidgets (preload.ts) for the board first: then the chunk is already here and the first
+// frame is complete. A chunk that fails to load is THROWN, so the widget's error boundary shows
+// the failure: an empty box that looks like a widget with nothing to say is the outcome this must
+// never produce. The failure is NOT remembered: the next mount (the boundary's "Reset widget")
+// fetches the chunk again, so a blip on a wall display's network is not a widget that stays broken
+// until the page is reloaded. React.lazy remembers it, which is why the feeds load through here too.
 //
 // The `import()` itself stays in each family's own module, as a literal: that is what makes the
 // bundler split the chunk, and it is what the dist-shape guard looks for.
@@ -50,6 +51,8 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
       return <Component {...props} />;
     }
     LazyChunkWidget.displayName = `Lazy(${name})`;
+    // What preloadWidgets calls, so a host that awaits it renders this widget on its first frame.
+    LazyChunkWidget.preload = load;
     return LazyChunkWidget;
   }
 

@@ -15,3 +15,10 @@ export interface Budget {
 export function initialFiles(dist: string): string[];
 export function measure(dist: string): Measured;
 export function check(measured: Measured, budget: Budget): string[];
+export interface LazyBoundary {
+  what: string;
+  chunk: string;
+  markers: string[];
+}
+export function lazyBoundaries(): LazyBoundary[];
+export function checkShape(dist: string, boundaries: LazyBoundary[]): string[];

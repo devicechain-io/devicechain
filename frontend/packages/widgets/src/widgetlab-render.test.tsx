@@ -43,16 +43,29 @@ import { LEVEL_STRINGS } from './level-strings';
 import { MapRuntimeProvider } from './map-runtime-context';
 import { AGGREGATE_STRINGS } from './aggregate-strings';
 import { loadAggregateWidgets } from './widgets/aggregate-lazy';
+import { loadAlarmWidgets } from './widgets/alarm-lazy';
 import { loadControlWidgets } from './widgets/control-lazy';
 import { loadLevelWidgets } from './widgets/level-lazy';
+import { loadSelectionWidgets } from './widgets/selection-lazy';
+import { loadTableWidget } from './widgets/table-lazy';
 
 afterEach(cleanup);
 
-// 🔴 The level-and-indicator components load from a lazy chunk, and until it arrives their
-// registration renders NOTHING -- which every absence assertion below would read as clean.
-// Loading it once here makes every later mount render synchronously; the positive
+// 🔴 The lazily loaded components (level and indicator, controls, aggregates, alarms, the
+// selector and the table) load from lazy chunks, and until one arrives its registration renders
+// NOTHING -- which every absence assertion below would read as clean. Loading them once here
+// makes every later mount render synchronously; the positive
 // level-family assertion further down is what fails if this ever stops being true.
-beforeAll(() => Promise.all([loadLevelWidgets(), loadControlWidgets(), loadAggregateWidgets()]));
+beforeAll(() =>
+  Promise.all([
+    loadLevelWidgets(),
+    loadControlWidgets(),
+    loadAggregateWidgets(),
+    loadAlarmWidgets(),
+    loadSelectionWidgets(),
+    loadTableWidget(),
+  ]),
+);
 
 // ---- The render gate -----------------------------------------------------------
 //

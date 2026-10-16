@@ -8,7 +8,7 @@
 // published board. The assertions are about WHICH operation is called, because that is
 // the whole of the decision; the workspace is replaced by a recorder.
 
-import '@/i18n/config';
+import i18n from '@/i18n/config';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +16,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   authorities: [] as string[],
   workspace: [] as Array<{ updatedAt: string | null; name: string | null }>,
+  preload: vi.fn(),
+}));
+
+vi.mock('@devicechain/widgets', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  preloadWidgets: (...a: unknown[]) => h.preload(...a),
 }));
 
 vi.mock('@/auth/AuthProvider', () => ({
@@ -50,6 +56,8 @@ function renderPage() {
 
 beforeEach(() => {
   h.workspace.length = 0;
+  h.preload.mockReset();
+  h.preload.mockResolvedValue(undefined);
   vi.mocked(getDashboard).mockReset();
   vi.mocked(getPublishedDashboard).mockReset();
 });
@@ -98,4 +106,30 @@ describe('DashboardDetailPage', () => {
     await waitFor(() => expect(screen.getByText(/has not been published yet/)).toBeTruthy());
     expect(screen.queryByTestId('workspace')).toBeNull();
   });
+
+  // The board's lazily loaded widget code arrives before the workspace mounts, so its first frame
+  // is the whole board rather than empty boxes filling in. Both doors: the draft and the snapshot.
+  for (const door of ['draft', 'published'] as const) {
+    it(`holds the ${door} board on its loading state until the widget code has arrived`, async () => {
+      h.authorities = door === 'draft' ? ['dashboard:read', 'dashboard:write'] : ['dashboard:read'];
+      const withWidgets = JSON.stringify({
+        schemaVersion: 1,
+        title: 'T',
+        widgets: [{ type: 'alarm-table' }, { type: 'battery' }, { nope: 1 }],
+      });
+      const row = { token: 'ops', name: 'Ops', description: null, definition: withWidgets };
+      vi.mocked(getDashboard).mockResolvedValue({ ...row, updatedAt: null, publishedVersion: 1 });
+      vi.mocked(getPublishedDashboard).mockResolvedValue({ ...row, version: 2, publishedAt: '2026-10-10T00:00:00Z' });
+      let release!: () => void;
+      h.preload.mockImplementation(() => new Promise<void>((r) => (release = r)));
+      renderPage();
+      await waitFor(() => expect(h.preload).toHaveBeenCalledTimes(1));
+      expect(h.preload.mock.calls[0][1]).toEqual(['alarm-table', 'battery']);
+      // Still loading: the definition below is only fit for reading types, so what replaces the
+      // loading state afterwards (a parse error) is beside the point -- that it waits is the point.
+      expect(screen.getByText(i18n.t('dashboards:detailLoading'))).toBeTruthy();
+      release();
+      await waitFor(() => expect(screen.queryByText(i18n.t('dashboards:detailLoading'))).toBeNull());
+    });
+  }
 });
