@@ -489,11 +489,15 @@ function VersionHistoryBody({
             <DataTableBody>
               {data.map((v) => (
                 <DataTableRow key={v.version} className="@max-lg:flex @max-lg:flex-wrap @max-lg:gap-x-3 @max-lg:px-4 @max-lg:py-3">
+                  {/* The cell breaks anywhere for the author's label, which can be one long word.
+                      The live badge opts out: a short word broken inside itself ("Activ" over
+                      "a") reads as two, and with no label in any row to widen the column, a
+                      table short of room squeezed it until the badge broke. */}
                   <DataTableCell className="font-medium text-foreground [overflow-wrap:anywhere] @max-lg:basis-full @max-lg:p-0">
                     <span className="font-mono">{v.version}</span>
                     {v.label ? <span className="ml-2 text-muted-foreground">{v.label}</span> : null}
                     {v.version === liveVersion ? (
-                      <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                      <span className="ml-2 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
                         <Radio size={11} /> {t('versionLive')}
                       </span>
                     ) : null}

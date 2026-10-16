@@ -9,6 +9,7 @@
 //                                          offers both Make live and Roll back
 //   layout.html?surface=canvas&selected=ID the editor canvas with widget ID selected, so its
 //                                          toolbar (Grid, Relative, Duplicate, ...) is shown
+//   &labels=none                           (versions) a history in which no version has a label
 //   &lang=es                               the locale (default en)
 //   &theme=light                           light; anything else is dark, the console default
 //
@@ -36,12 +37,17 @@ import { VersionHistorySheet } from '@/routes/dashboards/editor/VersionHistorySh
 
 const LIVE_VERSION = 3;
 
+// &labels=none drops every label: the first column then holds only a number and, on the live
+// row, the badge, so it is the column a table short of room squeezes hardest. That is the
+// history in which the badge once broke inside its word.
+const UNLABELLED = new URLSearchParams(window.location.search).get('labels') === 'none';
+
 const VERSIONS = [
   { version: 4, label: 'Night shift tuning', publishedBy: 'operations.engineering.lead@plant-north.example.com' },
   { version: 3, label: 'Quarterly review layout', publishedBy: 'operations.engineering.lead@plant-north.example.com' },
   { version: 2, label: null, publishedBy: 'a@example.com' },
   { version: 1, label: 'Initial', publishedBy: null },
-].map((v) => ({ ...v, description: null, publishedAt: '2026-12-28T22:58:58Z' }));
+].map((v) => ({ ...v, label: UNLABELLED ? null : v.label, description: null, publishedAt: '2026-12-28T22:58:58Z' }));
 
 // The canned answers, by GraphQL operation name. An operation not listed is an error, so a new
 // request the drawer starts making shows up here rather than rendering as an empty state.
