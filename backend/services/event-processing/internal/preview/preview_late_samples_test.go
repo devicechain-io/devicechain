@@ -68,9 +68,10 @@ func TestPreviewDoesNotReportInOrderReadingsAsLate(t *testing.T) {
 	}
 }
 
-// A threshold reading older than the device's newest one is stale: the live engine neither raises
-// nor clears on it, and the preview must agree and say it set the reading aside. Here a reading
-// above the line published after a newer reading below it would, in arrival order, have raised.
+// A threshold match behind the frontier, on a device not in alarm, is stale: the live engine does
+// not raise on it, and the preview must agree and say it set the reading aside. Here a reading
+// above the line published a minute after a newer reading below it would, in arrival order, have
+// raised.
 func TestPreviewThresholdSetsAsideAReadingOlderThanTheNewest(t *testing.T) {
 	op := &fakeOpener{msgs: []messaging.Message{
 		msg(t, 1, "acme", "d1", "p@1", "temperature", "20", base),

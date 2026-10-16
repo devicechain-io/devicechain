@@ -235,13 +235,21 @@ type Engine struct {
 	// newest is the per-series newest event time, matching or not, for the kinds that read a
 	// series as of its newest reading. For the trailing-window kinds (Repeating, SlidingAgg,
 	// Correlation) it is the evaluation instant: a sample older than it is folded into the window
-	// open AT it and any edge it causes is stamped there (window.go, trailingWindow). For Threshold
-	// it is the cursor: a reading older than it is stale and changes nothing (threshold.go). It
-	// outlives any window — a non-matching reading opens none yet still moves the instant — so it is
-	// kept while it can still change an outcome: the series is raised, or its instant is inside its
-	// span of the frontier (the rule's window; Threshold's cursor horizon). pruneNewest drops the
+	// open AT it and any edge it causes is stamped there (window.go, trailingWindow). For a RAISED
+	// Threshold series it is the cursor: a reading older than it is stale and changes nothing
+	// (threshold.go); an unraised Threshold series holds none. It outlives any window — a
+	// non-matching reading opens none yet still moves the instant — so it is kept while it can
+	// still change an outcome: the series is raised, or (sliding kinds) its instant is inside its
+	// window of the frontier. pruneNewest drops the
 	// rest, and a snapshot omits any instant the restore re-derives (snapshotNewest).
 	newest map[SeriesKey]time.Time
+	// msgFloor is the frontier as it stood BEFORE the message being applied advanced it. An unraised
+	// Threshold series refuses a match behind it (applyThreshold): measured against the frontier
+	// after the advance, a batch's own envelope would make its older samples late, and a device that
+	// sends ten one-second readings per message could not raise from the first five. Transient: set
+	// at the top of every ProcessResolved/ProcessEvent and read only inside it, so it is not
+	// snapshotted.
+	msgFloor time.Time
 	// pending holds the samples of the sample-pairing kinds (DeltaRate, CountWindow) the frontier
 	// is not yet past, per series, in event-time order; pendHeap orders those runs by their
 	// earliest sample so advance flushes them deterministically (reorder.go).
@@ -265,8 +273,9 @@ type Engine struct {
 	// after their own trailing window had passed the frontier (foldsIn), and samples a Duration
 	// rule refused as more than its hold behind the frontier or as a break older than a raise
 	// already decided (applyDuration), and matching samples a sample-pairing kind refused as
-	// behind the frontier (hold, reorder.go), and Threshold readings refused as older than their
-	// series' newest (applyThreshold). It is TELEMETRY, not
+	// behind the frontier (hold, reorder.go), and Threshold readings refused as older than a raised
+	// series' newest or, on an unraised series, as a match behind the frontier (applyThreshold). It
+	// is TELEMETRY, not
 	// state: nothing reads it to decide anything, it is deliberately absent from the snapshot,
 	// and a replay legitimately re-counts the samples it re-processes. It exists so a
 	// store-and-forward fleet whose windowed rules quietly stop firing has something to look at.
@@ -602,7 +611,7 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
-	countSeriesKeys(counts, e.newest)        // newest-reading instant: one per series active within its span of the frontier, or raised
+	countSeriesKeys(counts, e.newest)        // newest-reading instant: one per sliding-kind series active within its window of the frontier, or raised
 	countSeriesKeys(counts, e.pending)       // a sample-pairing kind's open reorder run (reorder.go)
 	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
 	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
@@ -844,6 +853,7 @@ func (e *Engine) ProcessEvent(ev Event) {
 	if ev.Seq <= e.lastSeq {
 		return // already applied (idempotent re-feed guard)
 	}
+	e.msgFloor = e.wm.now
 	e.advance(ev.Time)
 	e.apply(ev)
 	e.lastSeq = ev.Seq
@@ -897,6 +907,7 @@ func (e *Engine) ProcessResolved(seq uint64, t time.Time, evs []Event) {
 	if seq <= e.lastSeq {
 		return // already applied (idempotent re-feed guard, at the message level)
 	}
+	e.msgFloor = e.wm.now
 	e.advance(t)
 	for i := range evs {
 		e.apply(evs[i])
@@ -1288,10 +1299,11 @@ type snapshot struct {
 	// before it existed restores with none, which is exact: that model held nothing back.
 	Pending []snapPending `json:"pending"`
 	// Newest is the per-series newest-reading instant: the trailing-window kinds' evaluation
-	// instant (window.go) and Threshold's cursor (threshold.go). A checkpoint written before it
-	// existed restores a lower bound from the retained window and the rising edge instead
-	// (restoreNewest). A binary that predates the Threshold cursor loads those entries and never
-	// reads them.
+	// instant (window.go) and a raised Threshold series' cursor when it is past the raise
+	// (threshold.go). A checkpoint written before it existed restores a lower bound from the
+	// retained window and the rising edge instead (restoreNewest); a Threshold series with no
+	// entry reads its raise as the cursor. A binary that predates the Threshold cursor loads those
+	// entries and never reads them.
 	Newest []snapNewest `json:"newest"`
 }
 

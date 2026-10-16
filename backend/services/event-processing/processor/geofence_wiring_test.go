@@ -368,7 +368,10 @@ func locatedMsg(t *testing.T, seq uint64, tenant, device, profileVersion string,
 		EventType:           esmodel.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
-			{Latitude: &latS, Longitude: &lonS},
+			// A resolved entry always carries its own time (resolution fills it from the envelope when
+			// the device sent none), and detection reads it: left zero, a threshold rule would see a
+			// reading two thousand years behind the frontier.
+			{OccurredTime: occurred, Latitude: &latS, Longitude: &lonS},
 		}},
 	}
 	b, err := dmproto.MarshalResolvedEvent(ev)
@@ -865,7 +868,7 @@ func locatedEvent(t *testing.T, device, profileVersion string, fenceSetVersion i
 		EventType:           esmodel.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
-			{Latitude: &latS, Longitude: &lonS},
+			{OccurredTime: testBase, Latitude: &latS, Longitude: &lonS}, // see locatedMsg
 		}},
 	}
 }
