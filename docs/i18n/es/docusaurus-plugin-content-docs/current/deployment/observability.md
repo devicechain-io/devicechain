@@ -555,6 +555,42 @@ de alarmas y los conectores salientes) ignoran estos ajustes. Cuando un servicio
 lote que había pedido por adelantado no se confirma, de modo que el broker se lo entrega al
 siguiente lector cuando se cierra su ventana.
 
+## Mantener el tráfico en un solo servidor del broker {#leader-affinity}
+
+En un broker en clúster, cada stream, y cada consumidor que lo lee, tiene como líder a uno de
+los servidores NATS. Un servicio conectado a otro servidor paga un salto adicional entre
+servidores por todo lo que hace con ellos: cada publicación se reenvía al líder del stream y su
+confirmación se reenvía de vuelta, y cada entrega y cada confirmación cruzan entre el líder del
+consumidor y el servidor del lector. En un clúster de tres servidores bajo carga, estos mensajes
+reenviados eran alrededor de una cuarta parte de todo lo que manejaba el broker, y el trabajo del
+broker crece con el número de mensajes, no con su tamaño. Los dos ajustes de
+`infrastructure.nats.affinity` los eliminan. Ambos están desactivados por defecto y se leen al
+arrancar el servicio. Ninguno cambia qué se guarda, en qué orden ni qué se confirma.
+
+| Ajuste | Por defecto | Qué hace |
+| --- | --- | --- |
+| `consumerLeaders` | desactivado | Cuando el líder de un consumidor ha estado en un servidor distinto al de su lector durante tres muestras seguidas (alrededor de un minuto y medio), el servicio pide al broker que lo mueva al servidor del lector. No lo pide mientras el broker no está sano: mientras un stream o un consumidor no tiene líder o tiene una réplica atrasada, ni en los dos minutos siguientes a una reconexión del servicio. Mueve un mismo consumidor como mucho una vez por minuto, y deja el líder donde está cuando las réplicas del servicio están repartidas entre servidores sin mayoría en ninguno. Lo pide una réplica, y las demás no. |
+| `publishToLeader` | desactivado | Los servicios que mantienen muchas publicaciones en curso (los eventos resueltos que publica `device-management` y los eventos de dispositivo que reenvía `event-sources`) abren una segunda conexión al servidor que lidera el stream. Cuando el broker elige un nuevo líder se pasan a él, después de que se confirmen las publicaciones que ya estaban en curso. Si esa conexión no se puede abrir, o se pierde, publican por su conexión habitual, como con el ajuste desactivado. |
+
+Ponga cualquiera de los dos en `true` para activarlo. Mover el líder de un consumidor detiene
+brevemente sus entregas, y por eso ninguno se activa hasta haberse medido en un clúster bajo
+carga. En un broker de un solo servidor ninguno tiene nada que hacer.
+
+- **`devicechain_<area>_jetstream_consumer_leader_local{stream, durable}`**: 1 mientras el líder
+  del consumidor es el servidor al que está conectado este servicio, 0 mientras es otro. Ausente
+  mientras no se puede leer el consumidor. Cuando varias réplicas leen un consumidor desde
+  servidores distintos, las que están en minoría marcan 0, y es lo esperado.
+- **`devicechain_<area>_jetstream_publish_leader_local{suffix, writer}`**: 1 mientras todos esos
+  escritores de ese nombre en el stream publican por una conexión a su líder, 0 mientras alguno
+  publica a través de otro servidor. `writer` es el mismo nombre que llevan las métricas de la
+  ventana de publicación.
+- **`devicechain_<area>_jetstream_consumer_leader_moves_total{stream, durable, result}`**:
+  movimientos que este servicio pidió al broker. `result="moved"` es un movimiento hecho;
+  `result="failed"` es uno que el broker rechazó o no respondió, y que no cambió nada.
+
+Los dos indicadores se exportan también con los ajustes desactivados, de modo que desactivar un
+ajuste muestra lo que estaba haciendo.
+
 ## Mensajes que agotaron sus intentos de entrega {#max-delivery-records}
 
 Tras cinco entregas sin confirmar, el broker deja de entregar un mensaje. Publica un aviso la

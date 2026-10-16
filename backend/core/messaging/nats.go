@@ -302,6 +302,11 @@ type NatsManager struct {
 	// backpressure() under bpOnce, so a manager assembled as a struct literal gates too.
 	bpOnce sync.Once
 	bp     *backpressureGates
+
+	// affState is this manager's leader affinity (affinity.go), built on first use by aff()
+	// under affOnce, for the same reason as bp.
+	affOnce  sync.Once
+	affState *affinity
 }
 
 // SetAckWaitForTesting sets the AckWait this manager configures on the durables it
@@ -1045,10 +1050,15 @@ func (nmgr *NatsManager) runStreamMetrics(ctx context.Context) {
 // sampleNow is one pass of the sampler: the replica-clamp report, then every tracked
 // stream, bucket and reader durable. It is the loop body above, named once so the seed and the tick
 // cannot drift apart, and so a test can drive exactly the pass production runs.
+//
+// The pass ends with leader affinity (affinity.go), which reads what the pass just fetched
+// rather than asking the broker again.
 func (nmgr *NatsManager) sampleNow(ctx context.Context) {
 	nmgr.reportReplicaClamp()
+	seen := newSampleSeen()
 	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedSinks(), nmgr.trackedBuckets(),
-		nmgr.trackedDurables(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered())
+		nmgr.trackedDurables(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered(), seen)
+	nmgr.aff().afterSample(ctx, seen)
 }
 
 // ----------------
@@ -2876,6 +2886,7 @@ func (nmgr *NatsManager) connectionEventHandlers(requested *atomic.Bool) []nats.
 		nats.ReconnectHandler(func(nc *nats.Conn) {
 			nmgr.writeStalled.Store(false) // see writeStalled
 			nmgr.connectedServer.Store(nc.ConnectedUrl())
+			nmgr.aff().noteReconnect()
 			nmgr.runReconnectHooks()
 			log.Info().Str("area", area).Str("server", nc.ConnectedUrl()).
 				Str("cluster", nc.ConnectedClusterName()).
@@ -3150,6 +3161,9 @@ func (nmgr *NatsManager) ExecuteStart(ctx context.Context) error {
 		nmgr.samplerWg.Add(1)
 		go nmgr.runStreamMetrics(sctx)
 	}
+	// Leader affinity starts with the sampler, after oncreate: its census answers name the
+	// durables the readers just built, and its loop dials for the writers just built.
+	nmgr.aff().start(ctx)
 	log.Info().Msg("NATS component creation completed successfully.")
 	return nil
 }
@@ -3197,6 +3211,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 		}
 		nmgr.samplerCancel = nil
 	}
+	// The affinity loop is joined the same bounded way; its leader connections stay open
+	// until the manager's own connection has drained (closeConns below).
+	nmgr.aff().stop(ctx)
 	// The recorder is joined the same bounded way, and before the reader unsubscribes: it
 	// may be mid-letter, and the letter is worth more than the few seconds.
 	nmgr.stopRecorder(ctx)
@@ -3227,6 +3244,7 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 	if nmgr.nc != nil {
 		nmgr.drainAndWait(ctx)
 	}
+	nmgr.aff().closeConns(ctx)
 	return nil
 }
 

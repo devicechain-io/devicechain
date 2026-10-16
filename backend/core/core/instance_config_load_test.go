@@ -284,3 +284,40 @@ func TestLoadInstanceConfigurationAppliesTheFetchSettings(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "infrastructure.nats.fetch.batch")
 }
+
+// The leader-affinity switches arrive through the same strict loader: absent, both halves
+// are OFF (a default that steps down broker leaders waits for a cluster measurement); an
+// explicit true turns one on and leaves the other off; a misspelt key is refused by name
+// rather than ignored (an ignored `affinity: {consumerLeader: true}` would leave the
+// reconciler off on an instance whose operator believes it is on).
+func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
+	bare := `{"infrastructure":{"nats":{"hostname":"h","port":4222},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	bareMs := &Microservice{}
+	require.NoError(t, bareMs.LoadInstanceConfigurationFrom(instanceDoc(t, bare)))
+	aff := bareMs.InstanceConfiguration.Infrastructure.Nats.Affinity
+	assert.False(t, aff.ConsumerLeadersEnabled(), "a document that omits affinity must not run the consumer-leader reconciler")
+	assert.False(t, aff.PublishToLeaderEnabled(), "a document that omits affinity must not publish to the stream leader")
+
+	onDoc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"consumerLeaders":true}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	onMs := &Microservice{}
+	require.NoError(t, onMs.LoadInstanceConfigurationFrom(instanceDoc(t, onDoc)))
+	on := onMs.InstanceConfiguration.Infrastructure.Nats.Affinity
+	assert.True(t, on.ConsumerLeadersEnabled(), "an explicit consumerLeaders:true must be on")
+	assert.False(t, on.PublishToLeaderEnabled(), "turning one half on must leave the other off")
+
+	pubDoc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"publishToLeader":true}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	pubMs := &Microservice{}
+	require.NoError(t, pubMs.LoadInstanceConfigurationFrom(instanceDoc(t, pubDoc)))
+	pub := pubMs.InstanceConfiguration.Infrastructure.Nats.Affinity
+	assert.True(t, pub.PublishToLeaderEnabled(), "an explicit publishToLeader:true must be on")
+	assert.False(t, pub.ConsumerLeadersEnabled(), "turning one half on must leave the other off")
+
+	typo := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"consumerLeader":true}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	err := (&Microservice{}).LoadInstanceConfigurationFrom(instanceDoc(t, typo))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "consumerLeader")
+}
