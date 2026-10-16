@@ -580,7 +580,7 @@ tests:
               fact: device_roster
             exp_annotations:
               summary: "Rule, device or attribute changes are not being announced to the detection engine"
-              description: "device-management could not publish a detection-rule, device-roster or device-attribute notification (the fact label says which) — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine picks it up at its next comparison with device-management, within a few minutes, instead of at once. Sustained means every such change is taking minutes to take effect: look at the broker."
+              description: "device-management could not publish a detection-rule, device-roster, device-attribute or device-ownership notification (the fact label says which) — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine picks it up at its next comparison with device-management, within a few minutes, instead of at once (a device-ownership miss is repaired by the device's next event instead). Sustained means every such change is taking minutes to take effect: look at the broker."
 
   # ------------------------------------------------------------------
   # One repair fires DetectFactsRepaired at once (there is no `for:` — each repair is a change
