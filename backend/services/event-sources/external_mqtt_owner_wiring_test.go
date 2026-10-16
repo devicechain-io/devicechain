@@ -5,9 +5,9 @@ package main
 
 import (
 	"context"
+	"net"
 	"net/url"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -22,20 +22,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// mqttClientsOf lists the MQTT client ids connected to srv that start with prefix.
-func mqttClientsOf(t *testing.T, srv *natsserver.Server, prefix string) []string {
-	t.Helper()
-	connz, err := srv.Connz(&natsserver.ConnzOptions{})
-	require.NoError(t, err)
-	var ids []string
-	for _, c := range connz.Conns {
-		if strings.HasPrefix(c.MQTTClient, prefix) {
-			ids = append(ids, c.MQTTClient)
-		}
-	}
-	return ids
-}
 
 // 🔴 THE OTHER HALF OF THE FIX, THROUGH MAIN'S OWN WIRING. A client id per pod alone would
 // give every pod's session every message, and this path publishes no dedup id, so every
@@ -71,6 +57,11 @@ func TestOnlyOnePodConnectsToAnExternalBroker(t *testing.T) {
 	require.NoError(t, err)
 	natsPort, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
+	// Every MQTT client connects through the front, and the connection table is read only
+	// through it: the broker stores a client's id unlocked while it parses the CONNECT and
+	// Connz reads it locked, so a read that overlaps a pod's connect is a data race inside
+	// nats-server (see dctest.MQTTFront).
+	front := dctest.StartMQTTFront(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(mqttPort)))
 
 	microservice := func() *core.Microservice {
 		ms := &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
@@ -97,7 +88,7 @@ func TestOnlyOnePodConnectsToAnExternalBroker(t *testing.T) {
 			Type: processor.TYPE_MQTT,
 			// A device's events only: a "+/#" filter would also match the broker's own
 			// traffic, the lease bucket's among it.
-			Configuration: map[string]string{"host": "localhost", "port": strconv.Itoa(mqttPort),
+			Configuration: map[string]string{"host": "localhost", "port": strconv.Itoa(front.Port()),
 				"topic": "inst-1/+/devices/+/events"},
 			Decoder: config.EventDecoder{Type: processor.DECODER_TYPE_JSON},
 		}}}
@@ -131,13 +122,13 @@ func TestOnlyOnePodConnectsToAnExternalBroker(t *testing.T) {
 
 	// Several standby retries' worth, so a second reader would have had time to connect.
 	time.Sleep(3 * time.Second)
-	connected := mqttClientsOf(t, srv, prefix)
+	connected := front.MQTTClients(t, srv, prefix)
 	require.Equal(t, []string{prefix + "pod-a"}, connected, "exactly one pod may read the source, the one that took it")
 
 	require.NoError(t, podA.Stop(ctx))
 	stopped[podA] = true
 	require.Eventually(t, func() bool {
-		ids := mqttClientsOf(t, srv, prefix)
+		ids := front.MQTTClients(t, srv, prefix)
 		return len(ids) == 1 && ids[0] == prefix+"pod-b"
 	}, 15*time.Second, 50*time.Millisecond, "the standby never took the source over")
 	require.Eventually(t, func() bool { return ownerGauge() == 1 }, 5*time.Second, 20*time.Millisecond,
