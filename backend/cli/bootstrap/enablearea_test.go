@@ -232,6 +232,9 @@ func TestNothingToDoOnlyWhenTheAreaIsDeclaredAndTheLastRunEndedReady(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if st.AreaChange == nil {
+		t.Fatal("an enable-area request left no AreaChange on the State")
+	}
 	if st.AreaChange.Settled {
 		t.Error("an instance whose first bootstrap never finished was read as having nothing to do")
 	}
