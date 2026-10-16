@@ -7,7 +7,7 @@ title: Paneles
 DeviceChain incluye un sistema de paneles (dashboards) embebible y con control de versiones para visualizar datos de dispositivos en vivo. Un panel es un **recurso con alcance de inquilino** que creas en la consola. Se renderiza a partir de una definición JSON portable, y esa misma definición se renderiza en la consola, en el visor de referencia independiente o en cualquier aplicación React que instale los paquetes de runtime desde npm.
 
 :::note Estado
-Disponible: el editor de lienzo (canvas), el conjunto de widgets integrado (widgets de telemetría, alarma y comando/control), las suscripciones en vivo, las acciones de widget (reconocer/limpiar alarma, enviar comando — autorizadas por el servidor), el versionado (publicar / revertir), la vista previa sintética, los slots con nombre y los manifiestos de vinculación (binding manifests), la exportación, la importación, la clonación y las plantillas iniciales, el visor de referencia independiente `/dash` y los paquetes de runtime publicados en npm.
+Disponible: el editor de lienzo (canvas), con deshacer y rehacer, duplicar, y copiar y pegar entre paneles; el conjunto de widgets integrado (widgets de telemetría, alarma y comando/control), un intervalo de tiempo del panel con pausa, las suscripciones en vivo que se recuperan tras una interrupción, las acciones de widget (reconocer/limpiar alarma, enviar comando — autorizadas por el servidor), el versionado (publicar / revertir), la vista previa sintética, los slots con nombre y los manifiestos de vinculación (binding manifests), la exportación, la importación, la clonación y las plantillas iniciales, el visor de referencia independiente `/dash` y los paquetes de runtime publicados en npm.
 
 Planeado: selectores de fuente de datos más completos (recorrido del grafo de relaciones, drill-down), edición del diseño por punto de quiebre (breakpoint) y widgets adicionales.
 :::
@@ -21,7 +21,11 @@ Un panel distribuye los widgets en una cuadrícula de **celdas cuadradas**. La c
 - widgets colocados en **relación** con otro, anclados a un punto de este y que se mueven con él, como una insignia sobre un mapa o un pie bajo un gráfico. Son los únicos widgets que quedan encima de otros;
 - una imagen o un color de fondo opcional.
 
+Un panel que no define su propia cuadrícula obtiene 12 columnas, un tamaño mínimo de celda de 56 px y un espaciado (gutter) de 8 px.
+
 El panel mide el contenedor en el que lo montas (un panel lateral, un marco de ancho fijo o una página completa), no la pantalla. Mientras las columnas diseñadas caben con el tamaño mínimo de celda del lienzo, el diseño se dibuja tal como se creó y las celdas se estiran para llenar el ancho, de modo que una pantalla mural obtiene celdas más grandes y no más celdas. En un contenedor más estrecho, el panel usa tantas columnas como quepan y coloca los widgets en ellas en orden de lectura, cada uno dentro de los tamaños que admite. Por debajo de 600 px de ancho, como en un teléfono, cada widget ocupa su propia fila, de modo que el panel se lee como una sola columna. Un control de dimensionamiento en el momento del montaje (`fill`, ancho fijo o alto fijo) permite que el host elija.
+
+Un panel también tiene una **densidad**: `compact`, `comfortable` (la predeterminada) o `wall`. Escala todos los tamaños de texto y de espaciado, los espaciados entre celdas y la celda más pequeña a la que puede encogerse una columna (por 0,9, 1 y 1,5), de modo que `wall` dibuja un panel pensado para leerse desde el otro lado de una sala. El autor la fija en el editor y un espectador puede anularla (consulta el [parámetro `density`](#session-refresh-and-kiosk-mode) de `/dash`).
 
 El formato de definición y el renderizador incluyen una colocación por punto de quiebre (breakpoint) para cada widget, elegida según el ancho del contenedor del panel, y un diseño de punto de quiebre definido así se dibuja en lugar de la reorganización automática. Sin embargo, el editor de lienzo solo escribe el punto de quiebre base, así que hoy un panel creado en la consola tiene un solo diseño, que se reorganiza automáticamente en contenedores más estrechos.
 
@@ -37,7 +41,7 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 
 | Widget | Canal | Muestra |
 |---|---|---|
-| **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo de una ventana de tiempo |
+| **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo del intervalo de tiempo del panel, o de un intervalo propio |
 | **Medidor (gauge)** | telemetría | un único valor más reciente frente a un rango / umbrales |
 | **Tarjeta de último valor** | telemetría | una sola lectura actual con su marca de tiempo |
 | **Tabla** | telemetría | la última lectura de cada medición de un dispositivo |
@@ -62,7 +66,19 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 | **Selector de entidad** | selección | un selector que reapunta un slot con nombre, de modo que quien lo ve elige qué entidad muestra el panel — o un widget dentro de él |
 | **Mapa** | ubicación | la última posición conocida de los dispositivos vinculados |
 
+La mayoría de los widgets de telemetría admiten **umbrales**, una **unidad** y una **precisión**. Un umbral nombra una severidad (`normal`, `warning`, `minor`, `major` o `critical`), nunca un color, de modo que el tema decide cómo se ve cada banda en modo claro y oscuro; solo las bandas anómalas tienen color. Sin precisión, un valor se redondea a 3 decimales, o a 4 dígitos significativos por debajo de 1.
+
+Un widget que muestra lecturas indica la antigüedad de su valor (por ejemplo, "hace 12 s"). Si se rellena su ajuste **Obsoleto tras (segundos)**, un valor más antiguo que eso se atenúa y se marca como obsoleto; no se supone ningún valor predeterminado, porque cualquier número fijo marcaría como obsoletos dispositivos sanos que informan con poca frecuencia. Un widget sin nada que mostrar explica por qué (ningún dispositivo elegido, ningún dato en el intervalo, un grupo que no puede mostrar) en lugar de dibujar un marco vacío.
+
 Los widgets se tematizan con propiedades personalizadas de CSS, de modo que una aplicación embebedora controla su apariencia sin modificar el código de los widgets.
+
+## Intervalo de tiempo y pausa {#time-range-and-pause}
+
+Un panel tiene un **intervalo de tiempo**: el lapso, hacia atrás desde ahora, que dibujan sus gráficos y sobre el que calculan sus tarjetas de estadística. El espectador elige 15 minutos, 1 hora, 6 horas, 24 horas o 7 días en la cabecera del panel. El autor puede guardar otro valor predeterminado en el editor; un panel que no guarda ninguno usa una hora. Un widget puede fijar un lapso propio, de un minuto a una semana, que la elección del espectador no cambia; un gráfico de series temporales fijado en cinco minutos sigue siendo una franja de cinco minutos.
+
+**Pausa** congela lo que el panel muestra en ese instante: los gráficos, las tarjetas, los medidores, las tablas, los widgets de alarma y el mapa conservan los valores en pantalla, y al reanudar vuelven los valores en vivo. Una pausa solo congela la visualización. Los comandos, y el reconocimiento y la limpieza de alarmas, se siguen enviando al momento y su estado se sigue actualizando, como indica el aviso de pausa ("los comandos se siguen enviando").
+
+Un gráfico lee su historial en intervalos (buckets) que limitan una lectura a 240 puntos como máximo: un minuto para 15 minutos y una hora, 2 minutos para 6 horas, 6 minutos para 24 horas y 42 minutos para 7 días. Un gráfico conserva como máximo 2.000 muestras en vivo; cuando un lapso largo a una frecuencia alta lo supera, las más antiguas se descartan primero y el gráfico indica desde cuándo cubre.
 
 ### Teselas del mapa y acceso a la ubicación
 
@@ -113,11 +129,31 @@ La conexión de una suscripción se cierra cuando caduca el token de acceso con 
 [Suscripciones por WebSocket](../reference/graphql-api.md#subscriptions-over-websocket)). El visor
 independiente `/dash` renueva su token de acceso poco antes de que caduque, así que un panel que se deja en una pantalla sigue recibiendo datos en vivo. Si la renovación es rechazada, el visor lo indica (consulta [Renovación de sesión](#session-refresh-and-kiosk-mode)) en lugar de quedarse congelado.
 
-## Creación, versionado y vista previa
+### Estado de la conexión y recuperación {#connection-state-and-recovery}
+
+La cabecera del panel muestra si sus datos en vivo están llegando: **en vivo**, **reconectando**
+mientras se reintenta una conexión caída, y **sin conexión** cuando lleva 20 segundos caída o el
+propio navegador se ha quedado sin conexión. Un dispositivo silencioso con una conexión sana sigue
+mostrándose en vivo; la antigüedad de un valor la indica el indicador de frescura, no esta insignia.
+
+Los widgets en vivo se recuperan de una interrupción de cualquier duración sin recargar la página.
+Una conexión caída se reintenta mientras el panel esté abierto, y un flujo que el servidor termina
+se vuelve a abrir tras una espera que se duplica hasta 30 segundos. Un widget cuyo código no se pudo
+descargar muestra el fallo en su propio marco, y **Reset widget** lo vuelve a descargar.
+
+:::note Limitación conocida
+Cuando un panel se reconecta, el historial que se perdió no se vuelve a leer. Un gráfico de líneas
+dibuja una línea recta a través de la interrupción, y las cifras de flota y de agregados omiten las
+lecturas enviadas durante ella.
+:::
+
+## Creación, versionado y vista previa {#authoring-versioning-and-preview}
 
 Creas los paneles en la **consola**:
 
-- **Editor de lienzo** — arrastrar y redimensionar, con selectores reales de dispositivo / ancla.
+- **Editor de lienzo** — arrastrar y redimensionar, con selectores reales de dispositivo / ancla. Los widgets se ajustan a las celdas, y mover o redimensionar uno desplaza a sus vecinos hacia abajo. Un widget con el foco se mueve una celda con las teclas de flecha y se redimensiona una celda con Mayús y las teclas de flecha. La **Colocación** de un widget es **Cuadrícula** o **Relativo a…** otro widget, anclado a uno de sus nueve puntos. El editor también fija la densidad del panel y su intervalo de tiempo predeterminado.
+- **Comprobaciones de diseño** — cada widget muestra sobre sí mismo un problema de diseño: un tamaño fuera de lo que admite el widget, un widget que sobrepasa el borde derecho de la cuadrícula, un widget relativo que queda fuera del lienzo, un widget que no declara límites de tamaño o un título que repite su línea de asunto. Los tres primeros son errores y bloquean la publicación; **Ajustar a los límites** ajusta cada widget a los tamaños que admite y devuelve cada widget al lienzo. Los demás son consejos.
+- **Deshacer, rehacer, duplicar, copiar y pegar** — deshacer con Ctrl+Z (Cmd+Z en un Mac) y rehacer con Ctrl+Mayús+Z o Ctrl+Y (Cmd+Mayús+Z), hasta 100 pasos; escribir en un mismo campo cuenta como un paso. El historial sobrevive a un guardado y a una publicación, así que puedes deshacer una edición que acabas de guardar, y una reversión lo borra. Ctrl+D (Cmd+D) duplica el widget seleccionado. Copiar y pegar usan el copiar y pegar del propio navegador, y un botón **Pegar** pega el último widget copiado en la pestaña, también en otro panel. Un widget pegado o duplicado se coloca en el primer espacio libre con su propio tamaño, y un widget relativo se pega en la cuadrícula. Conserva su fuente de datos solo cuando el panel de destino tiene el mismo slot vinculado de la misma forma; si no, se pega sin ella y el editor explica por qué. Un widget copiado en otro inquilino nunca lleva consigo un dispositivo ni una entidad. Ninguno de estos atajos actúa mientras escribes en un campo o mientras hay un diálogo o un menú abierto.
 - **Versionado** — la definición de trabajo es un **borrador** mutable. **Publicar** la captura como una versión inmutable y hace que esa versión esté **activa**: es la que ven los espectadores. Puedes volver a activar una versión anterior sin tocar el borrador (**activar**), o **revertir** a una versión anterior, lo que sobrescribe el borrador con ella. El historial es una lista de instantáneas publicadas, no un diff.
 - **Vista previa sintética** — sustituye los datos en vivo por un generador del lado del cliente (seno / rampa / paseo aleatorio) para validar el diseño, las escalas y los umbrales antes de que ningún dispositivo haya reportado.
 - **Exportación** — descarga o copia una definición para compartirla o embeberla en otro lugar.
@@ -131,7 +167,7 @@ El borrador es para los autores. Leer la definición de un borrador, o la de una
 
 Publicar o activar una versión no cambia el `updatedAt` del borrador, de modo que guardar el borrador con la referencia que ya tienes sigue funcionando. La lista de versiones solo lleva el número de cada versión, su etiqueta y descripción opcionales, y quién la publicó y cuándo.
 
-Un panel registra el formato con el que se guardó. Un visor o una consola más antiguos que ese formato se niegan a abrir el panel e indican que hay que actualizar, en lugar de dibujarlo mal; una aplicación que llama a `parseDashboardDefinition` recibe un `DashboardDefinitionError` cuyo `code` es `'schemaTooNew'` (compruebe `code` en lugar de `instanceof`, que falla cuando una aplicación empaqueta dos copias del paquete). Los paneles guardados en un formato anterior siguen abriéndose y se convierten al cargarse.
+Un panel registra el formato con el que se guardó. Un visor o una consola más antiguos que ese formato se niegan a abrir el panel e indican que hay que actualizar, en lugar de dibujarlo mal; una aplicación que llama a `parseDashboardDefinition` recibe un `DashboardDefinitionError` cuyo `code` es `'schemaTooNew'` (compruebe `code` en lugar de `instanceof`, que falla cuando una aplicación empaqueta dos copias del paquete). Los paneles guardados en un formato anterior siguen abriéndose y se convierten al cargarse, de forma aproximada en cuanto al diseño. En el editor, un panel convertido muestra un aviso que pide revisar el diseño y guardar; al guardar se escribe el formato nuevo. Un gráfico de series temporales que conservaba un número de muestras de una versión anterior ahora sigue el intervalo de tiempo del panel, y el aviso lo nombra para que puedas fijar un lapso donde deba ser distinto.
 
 ## Incrustación: definiciones, slots y manifiestos de vinculación {#embedding-definitions-slots-and-binding-manifests}
 
@@ -166,7 +202,8 @@ La dirección puede llevar parámetros, de modo que un marcador o una pantalla d
 | Parámetro | Valores | Efecto |
 | --- | --- | --- |
 | `dashboard` | un token de panel | Carga la versión activa de ese panel justo después de iniciar sesión. El parámetro se conserva al iniciar sesión, también con inicio de sesión único. |
-| `kiosk` | `1` (o `true`) | Oculta la cabecera y sus controles y ofrece un botón de pantalla completa. En este modo no hay control para cerrar sesión. |
+| `kiosk` | `1` (o `true`) | Oculta la cabecera y sus controles. En su lugar, una insignia de conexión y un botón de pantalla completa flotan sobre las esquinas del panel. En este modo no hay control para cerrar sesión. |
+| `chrome` | `0` (o `false`) | Con `kiosk`, oculta también los controles flotantes, para una captura de pantalla o una página que enmarca el panel por sí misma. La insignia de conexión sigue apareciendo mientras el panel se reconecta o está sin conexión, de modo que un panel que dejó de recibir datos nunca parece estar en vivo. |
 | `theme` | `dark`, `light` | Fija el tema de color. Fuera del modo quiosco, un interruptor en la cabecera lo cambia y recuerda la elección; el parámetro `theme` nunca se recuerda. |
 | `density` | `compact`, `comfortable`, `wall` | Sustituye la densidad con la que se diseñó el panel. Escala todos los tamaños de texto y de espaciado, los márgenes entre celdas y la celda más pequeña a la que puede reducirse una columna, así que `wall` dibuja más grande y, en una pantalla estrecha, con menos columnas, y `compact` dibuja más pequeño. Sin el parámetro se aplica la densidad del propio panel, y el parámetro nunca se guarda en el panel ni se recuerda. |
 | `range` | `15m`, `1h`, `6h`, `24h`, `7d` | Abre el panel con ese intervalo de tiempo en lugar del predeterminado del panel. El visor puede seguir cambiándolo. |

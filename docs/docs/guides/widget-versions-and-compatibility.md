@@ -81,6 +81,11 @@ onto a new `optionsVersion`, an author replaces it, edits its settings and publi
 dashboard version. A published version authored with `1.2.0` that is now rendered by `1.2.1` is not
 an exact replay; exact replay needs the same `version`. A host installs one version of each id.
 
+The built-in time-series chart is the one widget whose stored options are converted for you. Its
+`optionsVersion` moved from 1 to 2 when its sample-count `window` became a span of time, and the
+dashboard format conversion moves a stored chart to 2 as the board loads, so it renders rather than
+becoming a placeholder. See [Dashboards](../concepts/dashboards.md#authoring-versioning-and-preview).
+
 ## Missing packages in a published dashboard
 
 Because the implementation is not part of the dashboard, a viewer application that lacks a package

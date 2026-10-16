@@ -32,7 +32,8 @@ creó. Por eso el anfitrión y cada paquete de widgets deben resolver una sola c
 La entrada raíz del SDK no contiene código de gráficos ni de mapas. Un widget que solo dibuja DOM
 importa desde la raíz y no añade al empaquetado del anfitrión ni Apache ECharts, ni MapLibre, ni
 los widgets integrados. Las utilidades de gráficos (`EChart`, `buildLineOption`,
-`buildGaugeOption`, `useChartTheme`) están en `@devicechain/widget-sdk/echarts`, y `echarts` es una
+`buildGaugeOption`, `buildCompassOption`, `useChartTheme`, `resolveChartTheme` y `severityFill`)
+están en `@devicechain/widget-sdk/echarts`, y `echarts` es una
 dependencia peer opcional que solo necesita un paquete que importe esa entrada.
 
 ## Declara un widget {#declare-a-widget}
@@ -101,7 +102,8 @@ Un widget declara un canal:
 
 | Canal | El componente recibe | Política de enlace |
 | --- | --- | --- |
-| `measurement` | `latest` por nombre de medición, una ventana móvil `samples` y un `error` | `window`: cuántas muestras conservar |
+| `measurement` | `latest` por nombre de medición, una ventana móvil `samples` y un `error`; `members` en un widget de flota | `window`: cuántas muestras conservar. `windowSeconds`: hace que el widget dibuje en su lugar un lapso de tiempo (consulta [el intervalo de tiempo del panel](#the-boards-time-range)). `members`: lo convierte en un widget de flota (ver más abajo) |
+| `aggregate` | `aggregates` (el recuento, el mínimo, el máximo, la suma y la media de cada medición en el lapso, o por qué no se pudieron calcular) y la lectura en vivo más reciente de cada medición | `windowSeconds`: el lapso que cubren las cifras |
 | `alarm` | Las filas de alarma actuales, un recuento total e indicadores de carga y error | `pageSize` y, opcionalmente, los filtros `state`, `severity` y `acknowledged` |
 | `control` | El historial de comandos de un dispositivo destino | `pageSize` |
 | `location` | Muestras de ubicación de la entidad enlazada | ninguna |
@@ -113,6 +115,15 @@ Un valor de enlace es una constante, `{ const: 25 }`, o una referencia a una cla
 compilar. No puedes aportar una cadena GraphQL ni una función de suscripción: el transporte es del
 anfitrión. Los canales `selection` y `none` no abren ningún canal de datos y deben declarar
 `datasource: { mode: 'none' }`.
+
+Un widget `measurement` que declara `members` lee su fuente de datos dispositivo a dispositivo:
+enlazado a un grupo, `data.members` lista cada dispositivo con su propia lectura más reciente por
+medición, de modo que dos dispositivos que informan del mismo nombre se mantienen separados.
+`{ const: true }` activa el modo siempre, y una referencia a una opción con `equals` lo activa para un
+valor de una opción enum, como hace el modo *una barra por dispositivo* del gráfico de barras. Un
+widget `measurement` o `aggregate` sin ese modo muestra un solo dispositivo: ofrece solo `device` y
+`slot` como selectores, porque el anfitrión rechaza un grupo que le llegue, con una frase que remite
+a la tabla de flota, en lugar de mostrar el dispositivo que informó en último lugar.
 
 Cuando un slot no tiene dispositivo, o un dispositivo enlazado se elimina, el anfitrión muestra su
 estado estándar de sin enlazar o no disponible y no entrega a tu componente los datos de la entidad
@@ -131,11 +142,14 @@ Una opción `list` almacena un arreglo de objetos pequeños, como los umbrales d
 objeto `item` cuyos campos son especificaciones `string`, `number`, `boolean` o `enum` (un campo puede
 ser `required`, y una lista no se puede anidar) y un `maxItems` opcional. Se rechaza una entrada
 almacenada con un campo que `item` no declara, y el formulario de ajustes muestra una fila por entrada
-con un control por campo. La opción integrada `thresholds` del medidor, la tarjeta de último valor y el
-gráfico de serie temporal es una de ellas: cada entrada nombra una severidad (`normal`, `warning`,
+con un control por campo. La opción integrada `thresholds`, que llevan la mayoría de los widgets de
+telemetría integrados, es una de ellas: cada entrada nombra una severidad (`normal`, `warning`,
 `minor`, `major` o `critical`), nunca un color, de modo que el tema decide su aspecto en claro y en
 oscuro. Solo los niveles anómalos tienen color: un valor en una banda `normal` se ve exactamente igual
 que sin umbrales, de modo que una lectura sana nunca se colorea.
+
+`optThresholds`, `bandAt` y `thresholdBands` leen esa misma opción en tu propio widget, y
+`useSeverityColors` da el color del tema para cada nivel anómalo.
 
 Lee las opciones de forma defensiva con los ayudantes del SDK `optString`, `optNumber` y
 `optBoolean`. Ante un valor editado a mano del tipo equivocado no lanzan
@@ -299,6 +313,26 @@ marco una función como hijo) para obtener `sizeClass` (`compact`, `regular` o `
 contenido en píxeles y `px('font-md')` con el valor en píxeles de un token. El marco oculta el subtítulo y
 después el título cuando el widget se vuelve bajo; el título sigue disponible para las tecnologías de
 asistencia.
+
+## El intervalo de tiempo del panel {#the-boards-time-range}
+
+Un panel tiene un intervalo de tiempo que el espectador puede cambiar y pausar (consulta
+[Paneles](../concepts/dashboards.md#time-range-and-pause)). Un widget `measurement` que declara
+`binding.windowSeconds` dibuja un lapso de tiempo en lugar de un número de muestras: el lapso que fija
+la opción referenciada, o el intervalo del panel cuando la opción no está definida. El anfitrión
+precarga el historial del lapso y conserva como máximo `MAX_SPAN_SAMPLES` (2.000) muestras en vivo;
+cuando tuvo que descartar muestras antiguas que seguían dentro del lapso, `data.truncatedBefore`
+indica desde cuándo cubre realmente la ventana, y tu widget debería decirlo en lugar de etiquetar una
+ventana corta con el lapso largo.
+
+`useWidgetTimeRange()` devuelve el intervalo: `spanSeconds`, `paused` y, mientras está en pausa,
+`pausedAt`. Es `undefined` cuando el widget se renderiza fuera de un panel, así que trata ese caso en
+lugar de suponer una hora. `withinSpan(samples, spanSeconds, end)` descarta las muestras más antiguas
+que el lapso. Mientras el panel está en pausa, el anfitrión mantiene todos los canales de datos salvo
+`control` en la instantánea que hay en pantalla, así que tu widget no necesita lógica de pausa propia.
+
+`formatValue(value)` sin precisión muestra como máximo 3 decimales, o 4 dígitos significativos por
+debajo de 1; pasa una precisión para fijar el número de decimales.
 
 ## Interacciones y modelo de confianza {#interactions-and-the-trust-model}
 

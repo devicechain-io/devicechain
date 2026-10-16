@@ -110,6 +110,8 @@ mutation {
 
 A signature that does not verify is refused, and so is one from a revoked signer. Signing again with the same signer changes nothing. An artifact may carry signatures from several signers. When it is assigned, the platform pins the **oldest** signature by an active signer, and the device is sent that signature with its `keyId` and algorithm (`ECDSA_P256_SHA256` or `ED25519`).
 
+An artifact lists the signatures on record in its `signatures` field, oldest first. Each entry names the `signer`, `createdAt`, `createdBy` and `countsTowardTrust`, which is true while the signer is active and false once it is revoked. Signatures by revoked signers stay listed. The signature bytes are never returned. The console's artifact page shows the same list under **Signatures and trust**.
+
 ## 6. Put the key on your devices
 
 The platform does not manage device-side trust. Every device that should accept your updates must hold the public key (or at least its `keyId` and key) before it receives a signed assignment. It fails the update with `UNKNOWN_SIGNER` for a `keyId` it does not hold and `SIGNATURE_INVALID` for a signature that does not verify. Provision keys in the factory image or through a configuration update you have already verified.
