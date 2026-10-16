@@ -13,6 +13,8 @@
     "typecheck": "tsc --noEmit",
     "pretest": "node ../../scripts/build-packages.mjs",
     "test": "vitest run",
+    "pretest:layout": "node ../../scripts/build-packages.mjs",
+    "test:layout": "playwright test",
     "codegen": "graphql-codegen --config codegen.ts",
     "i18n:extract": "i18next -c i18next-parser.config.js",
     "lint": "eslint \"src/**/*.{ts,tsx}\""
@@ -63,6 +65,7 @@
     "@babel/preset-typescript": "^8.0.7",
     "@graphql-codegen/cli": "^7.4.6",
     "@graphql-codegen/client-preset": "^6.1.3",
+    "@playwright/test": "1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/react": "^16.3.3",
     "@types/react": "^19.3.0",
