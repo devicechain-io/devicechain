@@ -210,10 +210,16 @@ func (ms *Microservice) requireMetricName(caller string, name string) (string, s
 //
 // It panics if name cannot appear in a Prometheus metric name; see
 // requireMetricNamePart for why that is a refusal rather than a correction.
+//
+// 🔴 EVERY RESULT IS EXPORTED AT ZERO FROM THE START, not created on first use. An alert
+// over one result is written as increase(...) > 0, and increase() needs two samples: a
+// series that first APPEARS at 1 has increased by nothing, so the first message a pod
+// ever drops, fails or refuses would never fire anything. Seeding them here means a new
+// alert on any result needs nothing from the loop that reports it.
 func (ms *Microservice) NewProcessorMetrics(name string) *ProcessorMetrics {
 	sub, name := ms.requireMetricName("NewProcessorMetrics", name)
 	auto := promauto.With(ms.MetricsRegisterer())
-	return &ProcessorMetrics{
+	pm := &ProcessorMetrics{
 		processed: auto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: METRICS_NAMESPACE, Subsystem: sub,
 			Name: name + "_messages_total", Help: "Messages handled by the " + name + " loop, by result.",
@@ -228,6 +234,10 @@ func (ms *Microservice) NewProcessorMetrics(name string) *ProcessorMetrics {
 			Name: name + "_inflight", Help: "Messages currently being handled by the " + name + " loop.",
 		}),
 	}
+	for _, result := range processorResults {
+		pm.processed.WithLabelValues(result)
+	}
+	return pm
 }
 
 // Start marks a message as in-flight and returns a completion function to call
@@ -271,3 +281,7 @@ const (
 	// is the thing the erasure removes. See messaging.Dispose.
 	ResultErased = "erased"
 )
+
+// processorResults is every result a ProcessorMetrics reports, in the order above. Each
+// is exported at zero from construction; see NewProcessorMetrics.
+var processorResults = []string{ResultOK, ResultInvalid, ResultFailed, ResultDropped, ResultRetry, ResultErased}

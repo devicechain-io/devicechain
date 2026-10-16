@@ -130,8 +130,9 @@ func TestEveryProcessorLoopNameStillRegisters(t *testing.T) {
 		if pm == nil {
 			t.Fatalf("NewProcessorMetrics(%q) returned nil", loop)
 		}
-		// Exercise it: the CounterVec exports no sample until a label value is used,
-		// which is why the hyphenated name looked like two series rather than three.
+		// Exercise it. (The hyphenated name once looked like two series rather than three
+		// because the CounterVec exported nothing until a label value was used; every result
+		// is now seeded at construction, see TestEveryProcessorResultIsExportedAtZero.)
 		done := pm.Start()
 		done(ResultOK)
 	}
