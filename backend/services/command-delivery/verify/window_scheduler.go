@@ -45,6 +45,13 @@ const commandDispatchSchedule = `query($deviceTokens: [String!]!, $commandKey: S
 // nil slices and read as unanimous permission to dispatch immediately, which for a
 // disruptive command is the fail-open the whole gate exists to prevent. An absent field is
 // an error, not an empty verdict.
+//
+// 🔑 IT MAY RUN WHILE SERVING A MEMBER LIMITED TO PART OF THE TENANT (ADR-081) — a single
+// enqueue — and it tells svcclient so on this one call, derived here and never left on a
+// shared context. That is safe because of where it is called: CreateCommand asks only
+// after it has decided the member owns the device, and the batch path that also calls it
+// refuses scoped members at its resolver. A new caller that could run for a scoped member
+// must decide the member's right to every device it names BEFORE asking.
 func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []string, commandKey string,
 	expiresAt sql.NullTime) ([]model.DispatchHold, []model.BatchDeviceRefusal, error) {
 	tenant, ok := core.TenantFromContext(ctx)
@@ -70,7 +77,7 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 	if expiresAt.Valid {
 		vars["expiresAt"] = expiresAt.Time.UTC().Format(time.RFC3339)
 	}
-	if err := s.client.Query(ctx, s.url, tenant, commandDispatchSchedule, vars, &out); err != nil {
+	if err := s.client.Query(svcclient.OnBehalfOfScopedCaller(ctx), s.url, tenant, commandDispatchSchedule, vars, &out); err != nil {
 		return nil, nil, err
 	}
 	if out.CommandDispatchSchedule == nil || out.CommandDispatchSchedule.Holds == nil ||

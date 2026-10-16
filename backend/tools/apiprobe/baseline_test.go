@@ -826,3 +826,60 @@ func TestAReleaseWithoutMaintenanceWindowsSkipsExactlyTheWindowGroup(t *testing.
 		t.Fatalf("found %d of the %d window rows in the entity table", seen, len(wantSkipped))
 	}
 }
+
+// A release that predates dashboard sharing cannot express the dashboard-share row, and must skip
+// it — and only it — rather than send shareDashboard to a server that refuses it. The row is a
+// leaf, so the skip strands nothing; the dashboard it writes onto is still seeded. This is what lets
+// the coverage tenant on the new release fill dashboard_shares while the drill still seeds a
+// baseline from before sharing existed.
+func TestAReleaseWithoutDashboardSharingSkipsExactlyTheShareRow(t *testing.T) {
+	b, err := loadBaseline(filepath.Join("..", "..", "services"))
+	if err != nil {
+		t.Fatalf("load the current tree: %v", err)
+	}
+	dash := b.schemas["dashboard-management"]
+	if dash == nil {
+		t.Fatal("the current tree serves no dashboard-management schema")
+	}
+	var dropped int
+	for _, nt := range dash.Types {
+		if typ, ok := nt.(*ast.ObjectTypeDefinition); ok {
+			kept := typ.Fields[:0]
+			for _, f := range typ.Fields {
+				if f.Name == "shareDashboard" {
+					dropped++
+					continue
+				}
+				kept = append(kept, f)
+			}
+			typ.Fields = kept
+		}
+	}
+	if dropped != 1 {
+		t.Fatalf("the stand-in removed %d shareDashboard declaration(s), want 1; it no longer stands in for a release without sharing", dropped)
+	}
+
+	seen := 0
+	for _, e := range allEntities() {
+		write, reason, err := plan(e, b)
+		if e.Name == "dashboard-share" {
+			seen++
+			if err != nil {
+				t.Errorf("%q could not be skipped: %v", e.Name, err)
+			}
+			if write || reason == "" {
+				t.Errorf("%q: write=%v reason=%q; want skipped with a reason", e.Name, write, reason)
+			}
+			if e.Record != nil {
+				t.Errorf("%q feeds the shared state, so a baseline cannot skip it", e.Name)
+			}
+			continue
+		}
+		if err != nil || !write {
+			t.Errorf("%q is not written by a release that only lacks dashboard sharing: write=%v err=%v", e.Name, write, err)
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("saw %d dashboard-share rows, want 1: nothing seeds dashboard_shares", seen)
+	}
+}

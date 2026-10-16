@@ -35,6 +35,7 @@ CREATE INDEX idx_commands_batch_token ON "command-delivery".commands USING btree
 CREATE INDEX idx_commands_dispatchable_status ON "command-delivery".commands USING btree (status, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying])::text[])));
 CREATE INDEX idx_commands_drainable ON "command-delivery".commands USING btree (tenant_id, device_token, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['HELD'::character varying, 'PARKED'::character varying])::text[])));
 CREATE INDEX idx_commands_queued_device ON "command-delivery".commands USING btree (tenant_id, device_token, id) WHERE ((deleted_at IS NULL) AND ((status)::text = 'QUEUED'::text));
+CREATE INDEX idx_commands_scope_anchors ON "command-delivery".commands USING gin (scope_anchors);
 CREATE INDEX idx_commands_stranded_sent ON "command-delivery".commands USING btree (sent_time, id) WHERE ((deleted_at IS NULL) AND ((status)::text = 'SENT'::text));
 CREATE INDEX idx_commands_tenant_status ON "command-delivery".commands USING btree (tenant_id, status) WHERE (deleted_at IS NULL);
 CREATE INDEX idx_commands_window_waiting ON "command-delivery".commands USING btree (tenant_id, window_token) WHERE ((deleted_at IS NULL) AND (window_token IS NOT NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying, 'PARKED'::character varying])::text[])));
@@ -133,7 +134,8 @@ CREATE TABLE "command-delivery".commands (
  outcome character varying(16),
  dispatch_after timestamp with time zone,
  dispatch_until timestamp with time zone,
- window_token character varying(128)
+ window_token character varying(128),
+ scope_anchors text[]
 );
 CREATE TABLE "command-delivery".device_gate_syncs (
  id bigint NOT NULL,

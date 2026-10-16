@@ -64,6 +64,9 @@ type DeviceFacts struct {
 	Profile string
 	// Disabled is true while an operator has the device disabled (quarantined).
 	Disabled bool
+	// Anchors are the device's scope anchors (ADR-081): one "type:token" per tracked
+	// relationship, empty for a device nothing owns. An assignment is stamped with them.
+	Anchors []string
 }
 
 // DeviceLookup resolves a device in device-management. found is false for a device the tenant does
@@ -301,7 +304,12 @@ func (api *Api) artifactByID(ctx context.Context, id uint) (*Artifact, error) {
 }
 
 // viewsOf joins assignments to their attempts and artifacts with two reads, however many rows.
+//
+// The joins run under joinedReadContext: asg was read through the scope predicate, so for a
+// member limited to part of the tenant these are the attempts and artifacts of assignments it
+// may already see, and nothing else.
 func (api *Api) viewsOf(ctx context.Context, asg []UpdateAssignment) ([]UpdateAssignmentView, error) {
+	ctx = joinedReadContext(ctx)
 	ids := make([]uint, 0, len(asg))
 	artIDs := make([]uint, 0, len(asg))
 	for _, a := range asg {
@@ -501,7 +509,7 @@ func (api *Api) AssignArtifact(ctx context.Context, deviceToken, artifactToken s
 
 	var view *UpdateAssignmentView
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		v, err := api.assignInTx(ctx, tx, deviceToken, artifact)
+		v, err := api.assignInTx(ctx, tx, deviceToken, artifact, facts.Anchors)
 		view = v
 		return err
 	})
@@ -512,7 +520,8 @@ func (api *Api) AssignArtifact(ctx context.Context, deviceToken, artifactToken s
 	return view, nil
 }
 
-func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string, artifact *Artifact) (*UpdateAssignmentView, error) {
+func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string, artifact *Artifact,
+	anchors []string) (*UpdateAssignmentView, error) {
 	now := api.now()
 	var current []UpdateAssignment
 	if err := tx.Where("device_token = ? AND component = ? AND superseded_at IS NULL", deviceToken, artifact.Component).
@@ -581,7 +590,7 @@ func (api *Api) assignInTx(ctx context.Context, tx *gorm.DB, deviceToken string,
 				"(updates.allowUnverifiedArtifacts)", artifact.Token)
 	}
 	asg := UpdateAssignment{Token: asgTok, DeviceToken: deviceToken, Component: artifact.Component,
-		ArtifactId: artifact.ID, Actor: actorOf(ctx)}
+		ArtifactId: artifact.ID, Actor: actorOf(ctx), ScopeAnchors: rdb.Anchors(anchors)}
 	if pin != nil {
 		asg.SignatureId = sql.NullInt64{Int64: int64(pin.Signature.ID), Valid: true}
 	}

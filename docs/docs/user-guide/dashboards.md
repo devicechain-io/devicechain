@@ -356,6 +356,32 @@ frozen copy of the draft that viewers are shown.
 History only grows. Publishing, making a version live and rolling back each leave the earlier
 versions in place.
 
+## Sharing with customers {#sharing-with-customers}
+
+A member whose access is limited to some of your customers sees a dashboard only once it is shared
+with one of those customers. Share a dashboard with the `shareDashboard` mutation, which needs
+`dashboard:write`:
+
+```graphql
+mutation {
+  shareDashboard(token: "plant-overview", anchors: [{ kind: CUSTOMER, token: "acme" }]) {
+    token
+    sharedWith { kind token }
+  }
+}
+```
+
+- The list you send replaces the one before it. An empty list shares the dashboard with nobody.
+- Every customer must exist. If one does not, the request fails with `NOT_FOUND` and nothing
+  changes.
+- Such a member lists only the **published** dashboards shared with its customers, and opens their
+  published version. It never sees a draft or the version history. Any other dashboard is answered
+  as if it did not exist.
+- Sharing a dashboard does not share data. Each widget still shows only what the member may see.
+- A member whose access is limited cannot share a dashboard, and cannot see who a dashboard is
+  shared with.
+- Deleting the dashboard removes its shares. Deleting a customer removes the shares that name it.
+
 ## Related
 
 - [Dashboards](/concepts/dashboards): widgets, data sources, versioning and embedding

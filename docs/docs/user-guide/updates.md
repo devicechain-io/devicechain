@@ -235,6 +235,14 @@ queued update is cancelled at once. One the device has already picked up stays *
 while the device is disabled, because its reports are refused: the cancel completes when the device
 is enabled again and confirms, or the update ends as timed out at its stage deadline.
 
+## Members limited to some customers {#members-limited-to-some-customers}
+
+A member whose access is limited to some of your customers, and who holds `artifact:read`, can read
+the update assignments of the devices that were assigned to one of those customers when the update
+was assigned to them. It cannot assign, cancel or abandon an update, and it cannot list artifacts or
+signers. Assignments made before your instance recorded who a device was assigned to are not shown
+to such a member.
+
 ## Related
 
 - [Over-the-air updates](/concepts/over-the-air-updates): artifacts, assignments, update states,

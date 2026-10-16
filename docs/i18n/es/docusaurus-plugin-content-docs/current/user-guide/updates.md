@@ -251,6 +251,14 @@ recogido queda en **Cancelación pendiente** mientras el dispositivo esté desha
 rechazan sus informes: la cancelación se completa cuando el dispositivo se vuelve a habilitar y la
 confirma, o la actualización termina por tiempo agotado al vencer el plazo de su etapa.
 
+## Miembros limitados a algunos clientes {#members-limited-to-some-customers}
+
+Un miembro cuyo acceso está limitado a algunos de tus clientes, y que tiene `artifact:read`, puede leer
+las asignaciones de actualización de los dispositivos que estaban asignados a uno de esos clientes
+cuando se les asignó la actualización. No puede asignar, cancelar ni abandonar una actualización, ni
+listar artefactos o firmantes. Las asignaciones hechas antes de que tu instancia registrara a quién
+estaba asignado un dispositivo no se muestran a ese miembro.
+
 ## Relacionado
 
 - [Actualizaciones por aire](../concepts/over-the-air-updates.md): artefactos, asignaciones, estados

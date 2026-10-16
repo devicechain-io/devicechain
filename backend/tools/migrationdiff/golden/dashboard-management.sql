@@ -6,6 +6,10 @@ ALTER TABLE ONLY "dashboard-management".audit_events
 ALTER TABLE ONLY "dashboard-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"dashboard-management".audit_events_id_seq'::regclass);
 ALTER TABLE ONLY "dashboard-management".dashboard_management_migrations
  ADD CONSTRAINT dashboard_management_migrations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "dashboard-management".dashboard_shares
+ ADD CONSTRAINT dashboard_shares_dashboard_id_fkey FOREIGN KEY (dashboard_id) REFERENCES "dashboard-management".dashboards(id) ON DELETE CASCADE;
+ALTER TABLE ONLY "dashboard-management".dashboard_shares
+ ADD CONSTRAINT dashboard_shares_pkey PRIMARY KEY (tenant_id, dashboard_id, anchor_kind, anchor_token);
 ALTER TABLE ONLY "dashboard-management".dashboard_versions
  ADD CONSTRAINT dashboard_versions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "dashboard-management".dashboard_versions ALTER COLUMN id SET DEFAULT nextval('"dashboard-management".dashboard_versions_id_seq'::regclass);
@@ -20,6 +24,7 @@ CREATE INDEX "idx_dashboard-management_dashboards_deleted_at" ON "dashboard-mana
 CREATE INDEX "idx_dashboard-management_dashboards_tenant_id" ON "dashboard-management".dashboards USING btree (tenant_id);
 CREATE INDEX "idx_dashboard-management_dashboards_token" ON "dashboard-management".dashboards USING btree (token);
 CREATE INDEX idx_audit_tenant_time ON "dashboard-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_dashboard_shares_anchor ON "dashboard-management".dashboard_shares USING btree (tenant_id, anchor_kind, anchor_token);
 CREATE SCHEMA "dashboard-management";
 CREATE SEQUENCE "dashboard-management".audit_events_id_seq
  START WITH 1
@@ -53,6 +58,14 @@ CREATE TABLE "dashboard-management".audit_events (
 );
 CREATE TABLE "dashboard-management".dashboard_management_migrations (
  id character varying(255) NOT NULL
+);
+CREATE TABLE "dashboard-management".dashboard_shares (
+ tenant_id character varying(128) NOT NULL,
+ dashboard_id bigint NOT NULL,
+ anchor_kind character varying(16) NOT NULL,
+ anchor_token character varying(128) NOT NULL,
+ created_at timestamp with time zone DEFAULT now() NOT NULL,
+ CONSTRAINT dashboard_shares_anchor_kind_check CHECK (((anchor_kind)::text = ANY ((ARRAY['customer'::character varying, 'group'::character varying])::text[])))
 );
 CREATE TABLE "dashboard-management".dashboard_versions (
  id bigint NOT NULL,

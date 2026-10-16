@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -226,7 +227,19 @@ func (api *Api) ReconcileDisabled(ctx context.Context, disabled []string, readSt
 // commands the platform is holding for it: every command it still has that has not been sent
 // (QUEUED, HELD or PARKED), which is exactly the set CancelDeviceCommands would cancel. An
 // enabled device reports zero, because nothing is being held on its account.
+//
+// A member limited to part of the tenant (ADR-081) is answered only about a device it owns
+// now; any other device — another customer's, or none at all — is NOT_FOUND. Once that is
+// decided the hold is read for the whole device, not filtered to the member's own commands:
+// it describes the device, which the member owns, and a count of only their own commands
+// would under-report what is waiting on it.
 func (api *Api) DeviceCommandHold(ctx context.Context, deviceToken string) (bool, int64, error) {
+	if err := api.requireOwnedDevice(ctx, deviceToken); err != nil {
+		return false, 0, err
+	}
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		ctx = tenantWideReadContext(ctx)
+	}
 	disabled, err := api.DisabledAmong(ctx, []string{deviceToken})
 	if err != nil {
 		return false, 0, err

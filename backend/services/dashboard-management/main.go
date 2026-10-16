@@ -5,16 +5,25 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/config"
+	"github.com/devicechain-io/dc-dashboard-management/customercheck"
 	"github.com/devicechain-io/dc-dashboard-management/graphql"
 	"github.com/devicechain-io/dc-dashboard-management/model"
+	"github.com/devicechain-io/dc-dashboard-management/processor"
+	"github.com/devicechain-io/dc-microservice/auth"
+	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
+	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/devicechain-io/dc-microservice/svcclient"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 )
 
 var (
@@ -27,6 +36,10 @@ var (
 	RdbManager *rdb.RdbManager
 
 	Api *model.Api
+
+	// ShareReconciler removes the dashboard shares that name a deleted customer. It is built
+	// in the broker manager's start (createNatsComponents), so it is nil until then.
+	ShareReconciler *processor.ShareReconciler
 )
 
 func main() {
@@ -71,9 +84,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 		return err
 	}
 
-	// Dashboard-management is CRUD-only: a relational database and a GraphQL plane, no
-	// NATS, no subscriptions. core/service builds both and owns the order of all four
-	// lifecycle phases.
+	// A relational database, a GraphQL plane, and one broker reader: the entity-deleted
+	// stream, so a dashboard shared with a customer stops being shared when the customer is
+	// deleted (ADR-081). No subscriptions. core/service builds all three and owns the order
+	// of all four lifecycle phases.
 	Svc = service.New(Microservice, service.Spec{
 		Rdb: &service.RdbSpec{
 			Migrations: model.Migrations,
@@ -81,6 +95,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			Config:     Configuration.RdbConfiguration,
 		},
 		AfterRdb: afterRdb,
+		Nats:     &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
 			Schema:   graphql.SchemaContent,
 			Resolver: func() interface{} { return &graphql.SchemaResolver{} },
@@ -111,6 +126,7 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management", governance.NewSafetyGates(Microservice))
+	wireCustomerChecker(infra.ServiceAuth.Secret, infra)
 
 	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
 	// grows, and so does the audit journal the collector adds for every schema. Nothing
@@ -127,13 +143,48 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	return nil
 }
 
+// wireCustomerChecker lets shareDashboard confirm the customers it names, against
+// device-management under a device:read service token. Without the shared secret or the
+// endpoint there is nobody to ask, and every share naming a customer is refused rather than
+// written unchecked — said once, here, at startup.
+func wireCustomerChecker(secret string, infra mscfg.InfrastructureConfiguration) {
+	if secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("Service secret or device-management endpoint not configured — dashboards cannot be shared with customers.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, secret, "dashboard-management", []string{string(auth.DeviceRead)})
+	Api.Customers = customercheck.New(client,
+		fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+}
+
+// createNatsComponents builds the entity-deleted reader and the share reconciler on it. It
+// runs in the broker manager's start, before the GraphQL server accepts traffic.
+func createNatsComponents(nmgr *messaging.NatsManager) error {
+	reader, err := nmgr.NewReader(streams.EntityDeleted)
+	if err != nil {
+		return err
+	}
+	ShareReconciler = processor.NewShareReconciler(Microservice, reader, Api, core.NewNoOpLifecycleCallbacks())
+	return ShareReconciler.Initialize(context.Background())
+}
+
 // Called after microservice has been started.
 func afterMicroserviceStarted(ctx context.Context) error {
-	return Svc.Start(ctx)
+	if err := Svc.Start(ctx); err != nil {
+		return err
+	}
+	return ShareReconciler.Start(ctx)
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// The reconciler reads from the broker and writes to the database, so it stops before
+	// either does.
+	if ShareReconciler != nil {
+		if err := ShareReconciler.Stop(ctx); err != nil {
+			return err
+		}
+	}
 	return Svc.Stop(ctx)
 }
 

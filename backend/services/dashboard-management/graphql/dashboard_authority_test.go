@@ -41,7 +41,7 @@ func dashboardTestCtx(t *testing.T) context.Context {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Dashboard{}, &model.DashboardVersion{}); err != nil {
+	if err := db.AutoMigrate(&model.Dashboard{}, &model.DashboardVersion{}, &model.DashboardShare{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	ctx := core.WithTenant(context.Background(), "acme")

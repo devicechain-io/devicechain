@@ -41,5 +41,6 @@ var (
 		NewDeviceGatesSchema(),
 		NewCommandOutcomeSchema(),
 		NewDispatchAfterSchema(),
+		NewCommandScopeAnchorsSchema(),
 	}
 )

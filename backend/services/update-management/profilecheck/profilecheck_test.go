@@ -56,7 +56,7 @@ func TestAnEmptyAnswerMeansEverythingIsMissing(t *testing.T) {
 func TestDeviceOfReadsTheProfileThroughTheDeviceType(t *testing.T) {
 	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
 		require.Equal(t, []string{"dev-1"}, v["tokens"])
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, found, err := New(q, "http://dm/graphql").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -69,7 +69,7 @@ func TestDeviceOfReadsTheProfileThroughTheDeviceType(t *testing.T) {
 func TestDeviceOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
 	// A device on a type with no profile exists, and has an empty profile.
 	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}]}`, nil
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -77,14 +77,14 @@ func TestDeviceOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
 	require.Empty(t, facts.Profile)
 
 	// A device the tenant does not have is absent, not an error.
-	q = &fakeQuerier{respond: func(map[string]any) (string, error) { return `{"devicesByToken":[]}`, nil }}
+	q = &fakeQuerier{respond: func(map[string]any) (string, error) { return `{"devicesByToken":[],"deviceScopeAnchors":[]}`, nil }}
 	_, found, err = New(q, "u").DeviceOf(context.Background(), "acme", "ghost")
 	require.NoError(t, err)
 	require.False(t, found)
 
 	// An answer naming some other device is not this device.
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"other","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+		return `{"devicesByToken":[{"token":"other","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	_, found, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ func TestDeviceOfDistinguishesNoDeviceNoProfileAndNoAnswer(t *testing.T) {
 // out of the update plane.
 func TestDeviceOfReadsTheDisabledFlagAndRefusesAnAnswerWithoutIt(t *testing.T) {
 	q := &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","enabled":false,"deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+		return `{"devicesByToken":[{"token":"dev-1","enabled":false,"deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
 	}}
 	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.NoError(t, err)
@@ -111,7 +111,35 @@ func TestDeviceOfReadsTheDisabledFlagAndRefusesAnAnswerWithoutIt(t *testing.T) {
 	require.Equal(t, "gateway", facts.Profile)
 
 	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
-		return `{"devicesByToken":[{"token":"dev-1","deviceType":{"profile":{"token":"gateway"}}}]}`, nil
+		return `{"devicesByToken":[{"token":"dev-1","deviceType":{"profile":{"token":"gateway"}}}],"deviceScopeAnchors":[]}`, nil
+	}}
+	_, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+	require.Error(t, err)
+}
+
+// The device's scope anchors (ADR-081) are read in the same request and returned with the
+// facts: the stamp an assignment is written with. Only this device's are taken; a device
+// nothing owns has none; an answer without the list is an error, never "nothing owns it".
+func TestDeviceOfReadsTheScopeAnchors(t *testing.T) {
+	q := &fakeQuerier{respond: func(v map[string]any) (string, error) {
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":{"token":"gateway"}}}],
+		  "deviceScopeAnchors":[{"deviceToken":"other","anchors":["customer:globex"]},
+		                        {"deviceToken":"dev-1","anchors":["customer:acme","area:north"]}]}`, nil
+	}}
+	facts, found, err := New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, []string{"customer:acme", "area:north"}, facts.Anchors)
+
+	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}],"deviceScopeAnchors":[]}`, nil
+	}}
+	facts, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
+	require.NoError(t, err)
+	require.Equal(t, []string{}, facts.Anchors)
+
+	q = &fakeQuerier{respond: func(map[string]any) (string, error) {
+		return `{"devicesByToken":[{"token":"dev-1","enabled":true,"deviceType":{"profile":null}}]}`, nil
 	}}
 	_, _, err = New(q, "u").DeviceOf(context.Background(), "acme", "dev-1")
 	require.Error(t, err)

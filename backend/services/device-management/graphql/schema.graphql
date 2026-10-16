@@ -535,6 +535,24 @@ type MetricDefinitionSearchResults {
     pagination: SearchResultsPagination!
 }
 
+# ADR-081: the stamp a command, an update assignment or another device-derived record is
+# written with, so a member limited to part of the tenant sees it exactly when one of these
+# anchors is in its scope. Its own query, not a field on Device: a device may belong to
+# several customers, and a field would show one customer another's token.
+"""
+The anchors of one device: what decides which members limited to part of the tenant can see
+records about it.
+"""
+type DeviceScopeAnchors {
+    """The device's token, as it was named in the request."""
+    deviceToken: String!
+    """
+    One entry per tracked relationship from the device, written as type:token (for example
+    customer:acme). Empty when the device has no tracked relationship.
+    """
+    anchors: [String!]!
+}
+
 # The ADR-043 decision 3 enqueue gate, evaluated here because this service owns the
 # command vocabulary. A rejection is a verdict, not a GraphQL error, so a caller can tell
 # an invalid command (relayable to its client) from an unavailable check (fail closed).
@@ -3191,6 +3209,18 @@ type Query {
         """Maximum number of devices on the page, from 1 to 1000."""
         limit: Int!
     ): DeviceGroupTargetPage!
+    """
+    Returns the anchors of each named device: one type:token entry per tracked relationship
+    from the device, such as customer:acme for a device assigned to that customer. Other
+    services stamp a record about a device with these when they write it, which decides
+    which members limited to part of the tenant can see the record. Devices that do not
+    exist are omitted, and more than 1000 tokens are refused with LIMIT_EXCEEDED. Not
+    available to a member limited to part of the tenant. Requires device:read.
+    """
+    deviceScopeAnchors(
+        """Tokens of the devices, at most 1000."""
+        deviceTokens: [String!]!
+    ): [DeviceScopeAnchors!]!
     """
     Lists the commands a device currently accepts, from the active published version of
     its profile. It reads the same data validateCommandEnqueue checks against. Returns null
