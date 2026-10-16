@@ -39,6 +39,7 @@ to its first page. Only one sub-menu is open at a time.
 | **Dashboard** | The home page. |
 | **Dashboards** | Dashboards built by your team. |
 | **Alarms** | The alarms your rules have raised. |
+| **Notification Policies** | Who is told about alarms, and the quiet hours that hold their pages. |
 | **Connectors** | Outbound connections to other systems. |
 | **Devices** | **Devices**, **Device Types**, **Device Profiles**, **Device Groups**, **Maintenance Windows** and **Command Batches**. |
 | **Assets** | **Assets**, **Asset Types** and **Asset Groups**. |

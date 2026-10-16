@@ -129,6 +129,93 @@ mutation {
 
 两人同时编辑同一策略可能相互覆盖：双方修改的字段只保留最后保存值，而 `rules` 替换整体集合，第二次保存会丢弃第一次所有规则。要防止，请将读取时的 `updatedAt`（或上次更新返回的值）作为 `expectedUpdatedAt` 发送。此后策略已改变时，更新拒绝，提示“notification policy was modified by another writer; reload and try again”，不写入任何内容。重新加载、重新应用更改，再次发送。
 
+### 静默时段 {#quiet-hours}
+
+**静默时段**用来避免策略在不合适的时间（例如深夜）打扰人员。策略处于静默时段内时，会**暂存**通知而不是发送，并在静默时段结束时发出。每条策略都有自己的静默时段，因此夜班策略和日班团队的策略可以遵循不同的时间表。
+
+静默时段不是[维护窗口](./maintenance-windows.md)。维护窗口属于设备类型，规定破坏性命令何时可以*开始*；静默时段属于通知策略，规定该策略何时*暂存通知*。两者使用相同的时段格式，以及相同的时区和夏令时规则，除此之外互不相关，也不会相互影响。
+
+策略通过三个字段获得静默时段。没有静默时段的策略，这三个字段均为 `null`。
+
+| 字段 | 含义 |
+| --- | --- |
+| `quietHoursTimezone` | 解释时段所用的 IANA 时区，例如 `Europe/Berlin`。`Local` 和未知名称会被拒绝。始终使用策略自己的时区，而不是服务器的时区。 |
+| `quietHoursSlots` | 一个 JSON **字符串**，包含 1 到 56 个每周时段，文档格式与维护窗口相同。每个时段包含 `day`（`MONDAY` 到 `SUNDAY`）、`start`（24 小时制 `HH:MM`，为该时区的挂钟时间）和 `durationMinutes`（1 到 10080，按实际经过的时间计算）。 |
+| `quietHoursBypassSeverity` | `CRITICAL`、`MAJOR`、`MINOR`、`WARNING` 或 `INDETERMINATE`，或 `null`。严重程度达到或高于该值的告警，即使在静默时段内也会发送。`null` 表示所有严重程度都会被暂存。在没有静默时段的策略上允许设置，但不起作用。 |
+
+请同时设置 `quietHoursTimezone` 和 `quietHoursSlots`，或者让两者都为 `null`。
+
+```graphql
+mutation {
+  createNotificationPolicy(request: {
+    token: "night-shift",
+    name: "Night shift pages",
+    enabled: true,
+    quietHoursTimezone: "Europe/Berlin",
+    quietHoursSlots: "[{\"day\":\"MONDAY\",\"start\":\"22:00\",\"durationMinutes\":480},{\"day\":\"TUESDAY\",\"start\":\"22:00\",\"durationMinutes\":480}]",
+    quietHoursBypassSeverity: "CRITICAL",
+    rules: [
+      { severity: "*", channelToken: "ops-email", recipients: "[\"ops@example.com\"]" }
+    ]
+  }) { token quietHoursTimezone quietHoursSlots quietHoursBypassSeverity }
+}
+```
+
+这条策略在柏林时间每周一、周二的 22:00 到次日 06:00 处于静默。该时段内的 `CRITICAL` 告警仍会立即发送，其他告警则等到 06:00。
+
+`updateNotificationPolicy` 是部分更新，三个静默时段字段各有三种状态：省略表示保持不变，发送 `null` 表示清除，发送具体值表示设置。服务器在应用更新之后再对这些字段一并校验，因此要**移除**静默时段，请在同一个请求中清除 `quietHoursTimezone` 和 `quietHoursSlots`（如果也想去掉 `quietHoursBypassSeverity`，一并清除）。
+
+```graphql
+mutation {
+  updateNotificationPolicy(
+    token: "night-shift",
+    request: { quietHoursTimezone: null, quietHoursSlots: null }
+  ) { token quietHoursTimezone quietHoursSlots }
+}
+```
+
+#### 静默时段内会发生什么 {#quiet-hours-behavior}
+
+- **先暂存，再发送。** 当一条已触发或已升级的告警匹配到一条处于静默时段内的策略，并且告警的严重程度低于放行严重程度（或未设置放行严重程度）时，通知会被**暂存**，而不是丢弃。静默时段结束时，策略按其规则发送这条通知。升级调度器在每一轮处理中释放暂存的通知，该轮默认每分钟运行一次，因此发送最多可能晚一轮。
+- **确认或清除会使其被丢弃。** 如果告警在被暂存的那个事件之后被确认或清除，暂存的通知会被丢弃，而不是发送。
+- **每个告警在每条策略下只暂存一条通知。** 如果同一条策略又暂存了同一告警之后的触发或升级事件，后者会取代前者。早晨收到的通知描述的是告警最后的状态，一个在夜间反复抖动的告警只产生一次通知，而不是每次抖动一次。
+- **放行严重程度立即发送。** 严重程度达到或高于放行严重程度的告警会立即发送，即使在静默时段内也是如此。严重程度不属于已知等级的告警始终会发送。
+- **先做节流。** 被策略节流抑制的通知是被抑制，而不是被暂存。
+- **升级会等待。** 策略处于静默时段内时，对于严重程度低于放行严重程度的告警，其升级再通知会等待，并在静默时段结束后恢复：仍未确认、未清除的告警会在静默时段结束后的第一轮处理中再次通知。静默时段不会消耗升级层级。
+- **各策略相互独立。** 没有静默时段、或此刻不处于静默时段的策略，仍会针对同一告警立即发出通知。即使另一条策略已经通知了某人，暂存的通知仍会在静默时段结束时发送，因为两者的接收人可能不同。
+- **编辑会重新评估已暂存的内容。** 修改策略的静默时段或放行严重程度，或者启用、停用策略，会在下一轮处理中生效。如果策略不再暂存某条通知，该通知会被发送；如果仍然暂存，则继续暂存到新的结束时间。被停用或删除的策略会丢弃它所暂存的通知。
+- **失败的发送会重试。** 如果一次发送没有送达任何渠道（所有投递均失败），会在之后的处理轮次中重试，最多 5 次，之后丢弃并计数。
+
+#### 时区与夏令时 {#quiet-hours-time-zones}
+
+时段是策略 `quietHoursTimezone` 所在时区的挂钟时间，因此静默时段会随该时区一起遵循夏令时。起始时间落在春季向前跳变的空档（不存在的时间）内的时段，会在空档结束时开始。起始时间落在秋季回拨重叠（出现两次的时间）内的时段，会在第一次出现时开始。时段时长按实际经过的时间计算，因此跨越时钟调整的长时段，在挂钟上会提前或推后一小时结束。
+
+时段可以跨越午夜。跨过周日结束的时段会延续到周一。
+
+#### 服务器拒绝的情形 {#quiet-hours-validation}
+
+每一种违规都会以 `extensions.code` 为 `INVALID_VALUE` 的错误响应，且不会写入任何内容。
+
+- `quietHoursTimezone` 和 `quietHoursSlots` 没有同时设置。
+- 时区为 `Local` 或未知名称。
+- 某个时段的 `day` 未知、`start` 不是 24 小时制 `HH:MM`、`durationMinutes` 不在 1 到 10080 之间，或者列表中的时段数不在 1 到 56 之间。
+- 两个时段按书写的一周来看**重叠**。仅首尾相接的时段是允许的；跨过午夜的周日时段会与周一的时段做检查。
+- 所有时段合计**覆盖了整周**（10080 分钟）。若要让策略完全静默，请改为停用该策略。
+
+#### 观测 {#quiet-hours-metric}
+
+计数器 `devicechain_notificationmanagement_quiet_hours_total` 统计静默时段的处理结果，带有标签 `outcome`：
+
+| `outcome` | 计数时机 |
+| --- | --- |
+| `held` | 一条通知被暂存而没有发送。 |
+| `released` | 一条暂存的通知在静默时段结束时被发送。 |
+| `dropped_resolved` | 一条暂存的通知因告警已被确认或清除而被丢弃。 |
+| `dropped_policy` | 一条暂存的通知因其策略被停用或删除而被丢弃。 |
+| `dropped_exhausted` | 一条暂存的通知在 5 次发送都没有送达任何渠道后被丢弃。 |
+
+在控制台中，静默时段在 **Notification Policies** 页面编辑；参见[通知策略](../user-guide/notification-policies.md)。
+
 ## 端到端验证 {#verify-the-path-end-to-end}
 
 1. **创建渠道**（如上）。确认结果 `enabled: true`；有用户名的 SMTP 或声明 `bearer`/`header` 的 webhook，应为 `hasSecret: true`；声明 `none` 的 webhook 应为 `false`。

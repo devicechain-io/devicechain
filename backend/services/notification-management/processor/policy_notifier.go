@@ -137,6 +137,28 @@ type PolicyNotifier struct {
 	// refusal is what every webhook channel saved without `auth` hits on its first alarm.
 	// MAY BE NIL (struct-literal test fixtures); read it through countRefusal.
 	refused *prometheus.CounterVec
+
+	// quiet counts quiet-hours outcomes. MAY BE NIL; read it through countQuiet.
+	quiet *prometheus.CounterVec
+
+	// now is the clock quiet hours are evaluated against. Nil means time.Now; read it
+	// through clock. A field so a test can stand at a chosen instant of a chosen week.
+	now func() time.Time
+}
+
+// clock is the notifier's current time.
+func (n *PolicyNotifier) clock() time.Time {
+	if n.now != nil {
+		return n.now()
+	}
+	return time.Now()
+}
+
+// countQuiet records one quiet-hours outcome, tolerating a notifier built without metrics.
+func (n *PolicyNotifier) countQuiet(outcome string, by int) {
+	if n.quiet != nil && by > 0 {
+		n.quiet.WithLabelValues(outcome).Add(float64(by))
+	}
 }
 
 // The reasons devicechain_notificationmanagement_deliveries_refused_total is labelled with. A closed set: the
@@ -185,6 +207,7 @@ func NewPolicyNotifier(api *model.Api, store secrets.SecretStore, attempts int, 
 		budget:        dispatchBudget,
 		TenantDeleted: tenantDeleted,
 		refused:       metrics.deliveriesRefused,
+		quiet:         metrics.quietHours,
 	}
 }
 
@@ -354,7 +377,22 @@ func (n *PolicyNotifier) dispatch(ctx context.Context, event *dmmodel.AlarmState
 		state = states[0]
 	}
 
-	deliveries := n.plan(event, policies, state)
+	// Quiet hours come BEFORE the plan: a policy that holds this notification is taken out
+	// of the policies the plan sends through, and what it holds is written FIRST — before
+	// anything is sent. The write is an idempotent upsert, so a failure here returns an
+	// error with nothing delivered, and the redelivery that follows is double-send-safe for
+	// exactly the reason the all-failed case below is.
+	sendNow, held := n.holdQuiet(event, policies, state, n.clock())
+	if len(held) > 0 {
+		if err := n.api.DeferNotifications(dctx, held); err != nil {
+			return fmt.Errorf("holding notification for quiet hours: %w", err)
+		}
+		n.countQuiet(quietHeld, len(held))
+		log.Debug().Str("tenant", tenant).Str("alarm", event.AlarmToken).Int("policies", len(held)).
+			Msg("Holding the notification for quiet hours; it is sent when the quiet stretch ends")
+	}
+
+	deliveries := n.plan(event, sendNow, state)
 	if len(deliveries) == 0 {
 		return nil
 	}
@@ -647,6 +685,12 @@ func (n *PolicyNotifier) planEscalation(state *model.NotificationState,
 			continue
 		}
 		if !escalationDue(state, p, now, defaultMax) {
+			continue
+		}
+		// A policy in quiet hours does not re-page an alarm it would hold. Nothing is
+		// written: the tier is not claimed, so when the stretch ends the window has long
+		// elapsed and the first pass after it re-pages — escalation resumes, it is not lost.
+		if held, _ := quietHold(p, state.Severity, now); held {
 			continue
 		}
 		out = n.appendRuleDeliveries(p.Token, state.Severity, p.Rules, seen, out)

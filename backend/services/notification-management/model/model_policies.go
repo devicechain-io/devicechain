@@ -56,6 +56,15 @@ type NotificationPolicy struct {
 	EscalateAfterSeconds sql.NullInt64
 	MaxEscalations       sql.NullInt64
 
+	// Quiet hours (see quiet_hours.go). QuietHoursTimezone and QuietHoursSlots are both set
+	// or both NULL; NULL is "this policy has no quiet hours". QuietHoursSlots is the same
+	// weekly slot document a maintenance window uses ({day, start, durationMinutes}),
+	// stored in canonical form. QuietHoursBypassSeverity is the alarm tier at or above which
+	// quiet hours do not apply (NULL = nothing bypasses). Read them through QuietHours().
+	QuietHoursTimezone       sql.NullString
+	QuietHoursSlots          *datatypes.JSON
+	QuietHoursBypassSeverity sql.NullString
+
 	// Rules are the policy's owned routing rules; loaded with the policy and
 	// replaced wholesale on update. The FK is the shortened PolicyId (not the GORM
 	// default NotificationPolicyID), so it is named explicitly.
@@ -113,6 +122,11 @@ type NotificationPolicyCreateRequest struct {
 	Enabled              bool
 	Rules                []*NotificationRuleCreateRequest
 	Metadata             *string
+
+	// Quiet hours: timezone and slots together, or neither. See quiet_hours.go.
+	QuietHoursTimezone       *string
+	QuietHoursSlots          *string
+	QuietHoursBypassSeverity *string
 }
 
 // NotificationPolicyUpdateRequest is the three-state update input: an OMITTED field
@@ -165,6 +179,13 @@ type NotificationPolicyUpdateRequest struct {
 	Enabled              dcgraphql.OptionalBool
 	Rules                OptionalNotificationRuleList
 	Metadata             dcgraphql.OptionalString
+
+	// Quiet hours, each three-state like the rest. The three are validated together AFTER
+	// folding over the stored values, so clearing quiet hours means clearing timezone and
+	// slots (and the bypass, if one is set) in the same request.
+	QuietHoursTimezone       dcgraphql.OptionalString
+	QuietHoursSlots          dcgraphql.OptionalString
+	QuietHoursBypassSeverity dcgraphql.OptionalString
 }
 
 // NotificationPolicySearchCriteria locates policies by optional filters.

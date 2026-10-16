@@ -40,6 +40,7 @@ se te lleva a su primera página. Solo hay un submenú abierto a la vez.
 | **Panel** | La página de inicio. |
 | **Paneles** | Los paneles que crea tu equipo. |
 | **Alarmas** | Las alarmas que han generado tus reglas. |
+| **Políticas de notificación** | A quién se avisa de las alarmas y las horas de silencio que retienen esos avisos. |
 | **Conectores** | Conexiones salientes con otros sistemas. |
 | **Dispositivos** | **Dispositivos**, **Tipos de dispositivo**, **Perfiles de dispositivo**, **Grupos de dispositivos**, **Ventanas de mantenimiento** y **Lotes de comandos**. |
 | **Activos** | **Activos**, **Tipos de activo** y **Grupos de activos**. |

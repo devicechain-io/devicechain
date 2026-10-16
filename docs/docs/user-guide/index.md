@@ -42,3 +42,4 @@ Chapters are published as they are completed.
 | 15 | [Administering the instance](./administering-the-instance.md) | Tenants, deletions, tiers, identities, roles, identity providers, AI providers, instance audit and settings. |
 | 16 | [Updates (over the air)](./updates.md) | Artifacts: uploading an update image, its trust and signatures, and retiring it; registering and revoking signers; and the device Updates tab: assigning, cancelling and abandoning an update, and what a disabled device means for updates. |
 | 17 | [Viewing dashboards in /dash](./viewing-dashboards-in-dash.md) | The standalone dashboard viewer: signing in, loading a dashboard by token, kiosk mode for wall displays, and staying signed in. |
+| 18 | [Notification policies](./notification-policies.md) | The policy list, and giving a policy quiet hours: time zone, weekly slots and a bypass severity. |

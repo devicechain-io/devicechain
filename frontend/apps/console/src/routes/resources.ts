@@ -24,6 +24,7 @@ import { areaTypeResource } from '@/routes/area-types/resource';
 import { areaGroupResource } from '@/routes/area-groups/resource';
 import { geofenceResource } from '@/routes/geofences/resource';
 import { maintenanceWindowResource } from '@/routes/maintenance-windows/resource';
+import { notificationPolicyResource } from '@/routes/notification-policies/resource';
 
 // `any` because the array mixes RegistryResource<DeviceType | Asset | Customer | …>
 // and the element T is invariant; each is consumed by a generic page that re-narrows it.
@@ -42,4 +43,5 @@ export const REGISTRY_RESOURCES: RegistryResource<any>[] = [
   areaGroupResource,
   geofenceResource,
   maintenanceWindowResource,
+  notificationPolicyResource,
 ];

@@ -132,6 +132,93 @@ On update, the request's `rules` **replaces** the policy's existing rule set. Om
 
 Two people editing the same policy can overwrite each other: a field both of them change keeps only the last save, and because a `rules` list replaces the whole set, the second save drops every rule the first one wrote. To prevent that, pass `expectedUpdatedAt` with the policy's `updatedAt` as you read it (or as your previous update returned it). If the policy has changed since, the update is refused with "notification policy was modified by another writer; reload and try again" and nothing is written. Reload, reapply your change, and send it again.
 
+### Quiet hours {#quiet-hours}
+
+**Quiet hours** keep a policy from paging people at the wrong time, such as overnight. While a policy is inside its quiet hours it **holds** its notifications instead of sending them, and it sends them when the quiet stretch ends. Each policy has its own quiet hours, so a night-shift policy and a day-team policy can follow different schedules.
+
+Quiet hours are not [maintenance windows](./maintenance-windows.md). A maintenance window belongs to a device type and says when disruptive commands may *start*. Quiet hours belong to a notification policy and say when that policy *holds its pages*. They use the same slot format and the same time-zone and daylight-saving rules, but they are otherwise unrelated, and neither affects the other.
+
+A policy gets quiet hours from three fields. They are `null` on a policy without quiet hours.
+
+| Field | Meaning |
+| --- | --- |
+| `quietHoursTimezone` | The IANA time zone the slots are read in, such as `Europe/Berlin`. `Local` and unknown names are refused. The policy's own zone is always used, never the server's. |
+| `quietHoursSlots` | A JSON **string** holding 1 to 56 weekly slots, in the same document as a maintenance window. Each slot has a `day` (`MONDAY` to `SUNDAY`), a `start` (24-hour `HH:MM`, wall-clock time in the zone) and a `durationMinutes` (1 to 10080, elapsed time). |
+| `quietHoursBypassSeverity` | `CRITICAL`, `MAJOR`, `MINOR`, `WARNING` or `INDETERMINATE`, or `null`. Alarms at or above this severity are sent even during quiet hours. `null` holds every severity. It is allowed, and has no effect, on a policy with no quiet hours. |
+
+Set `quietHoursTimezone` and `quietHoursSlots` together, or leave both `null`.
+
+```graphql
+mutation {
+  createNotificationPolicy(request: {
+    token: "night-shift",
+    name: "Night shift pages",
+    enabled: true,
+    quietHoursTimezone: "Europe/Berlin",
+    quietHoursSlots: "[{\"day\":\"MONDAY\",\"start\":\"22:00\",\"durationMinutes\":480},{\"day\":\"TUESDAY\",\"start\":\"22:00\",\"durationMinutes\":480}]",
+    quietHoursBypassSeverity: "CRITICAL",
+    rules: [
+      { severity: "*", channelToken: "ops-email", recipients: "[\"ops@example.com\"]" }
+    ]
+  }) { token quietHoursTimezone quietHoursSlots quietHoursBypassSeverity }
+}
+```
+
+This policy is quiet from 22:00 to 06:00 on Monday and Tuesday nights, in Berlin time. A `CRITICAL` alarm in that stretch is still sent at once. Any other alarm waits until 06:00.
+
+`updateNotificationPolicy` is a partial update, and the three quiet-hours fields carry three states: omit one to keep it, send `null` to clear it, send a value to set it. The server checks the fields together after applying the update, so to **remove** quiet hours, clear `quietHoursTimezone` and `quietHoursSlots` in the same request (and `quietHoursBypassSeverity` too, if you want it gone).
+
+```graphql
+mutation {
+  updateNotificationPolicy(
+    token: "night-shift",
+    request: { quietHoursTimezone: null, quietHoursSlots: null }
+  ) { token quietHoursTimezone quietHoursSlots }
+}
+```
+
+#### What happens during quiet hours {#quiet-hours-behavior}
+
+- **Held, then sent.** When a raised or escalated alarm matches a policy that is inside its quiet hours, and the alarm's severity is below the bypass severity (or no bypass is set), the notification is **held**, not dropped. The policy sends it through its rules when the quiet stretch ends. The escalation scheduler releases held notifications on its pass, which runs once a minute by default, so a release can be up to a pass late.
+- **Acknowledged or cleared drops it.** A held notification is dropped instead of sent if the alarm was acknowledged or cleared after the event that was held.
+- **One held notification per alarm per policy.** If the same policy holds a later raised or escalated event for the same alarm, the later one replaces the earlier. The page in the morning describes the alarm as it last was, and an alarm that flaps overnight costs one page, not one per flap.
+- **The bypass severity sends at once.** An alarm at or above the bypass severity is sent immediately, even inside quiet hours. An alarm whose severity is not one of the known tiers is always sent.
+- **Throttling comes first.** A notification the policy's throttle suppresses is suppressed, not held.
+- **Escalation waits.** While a policy is in quiet hours, its escalation re-notifications wait for alarms below the bypass severity. They resume after the stretch ends: an alarm still unacknowledged and uncleared is re-notified on the first pass after it. Quiet hours do not use up escalation tiers.
+- **Each policy is independent.** A policy without quiet hours, or one that is not quiet right now, still pages immediately for the same alarm. A held notification is still sent at the end of the stretch even if another policy has already paged someone, because the recipients can differ.
+- **Edits re-evaluate what is held.** Changing a policy's quiet hours or bypass severity, or enabling or disabling it, is applied on the next pass. A held notification is sent if the policy no longer holds it, or held until the new end if it still does. A disabled or deleted policy drops what it was holding.
+- **A failed release is retried.** A release that reaches no channel, because every delivery failed, is retried on later passes, up to 5 times. It is then dropped and counted.
+
+#### Time zones and daylight saving {#quiet-hours-time-zones}
+
+Slots are wall-clock times in the policy's `quietHoursTimezone`, so quiet hours follow daylight saving time with the zone. A slot whose start falls in a spring-forward gap, a time that does not exist, opens at the end of the gap. A slot whose start falls in a fall-back overlap, a time that happens twice, opens at the first occurrence. A slot's duration is elapsed time, so a long slot across a clock change ends an hour earlier or later on the wall clock.
+
+A slot may run past midnight. A slot that runs past the end of Sunday wraps into Monday.
+
+#### What the server refuses {#quiet-hours-validation}
+
+Every violation is answered with `extensions.code` `INVALID_VALUE`, and nothing is written.
+
+- `quietHoursTimezone` and `quietHoursSlots` are not set together.
+- The zone is `Local` or an unknown name.
+- A slot has an unknown `day`, a `start` that is not 24-hour `HH:MM`, or a `durationMinutes` outside 1 to 10080, or the list does not hold 1 to 56 slots.
+- Two slots **overlap** in the week as written. Slots that only touch are fine, and a Sunday slot that runs past midnight is checked against Monday.
+- The slots together **cover the whole week** (10080 minutes). To silence a policy entirely, disable it instead.
+
+#### Watching it {#quiet-hours-metric}
+
+The counter `devicechain_notificationmanagement_quiet_hours_total` counts what quiet hours did, with the label `outcome`:
+
+| `outcome` | Counted when |
+| --- | --- |
+| `held` | A notification was held rather than sent. |
+| `released` | A held notification was sent when its stretch ended. |
+| `dropped_resolved` | A held notification was dropped because the alarm was acknowledged or cleared. |
+| `dropped_policy` | A held notification was dropped because its policy was disabled or deleted. |
+| `dropped_exhausted` | A held notification was dropped after 5 releases reached no channel. |
+
+In the console, quiet hours are edited on the **Notification Policies** page; see [Notification policies](../user-guide/notification-policies.md).
+
 ## Verify the path end to end
 
 1. **Create a channel** (as above). Confirm `enabled: true` on the result, and that `hasSecret` is `true` for an SMTP channel with a username or a webhook declaring `bearer` or `header`, and `false` for a webhook declaring `none`.

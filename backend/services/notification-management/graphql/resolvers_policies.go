@@ -60,6 +60,18 @@ func (r *NotificationPolicyResolver) Enabled() bool { return r.M.Enabled }
 
 func (r *NotificationPolicyResolver) Metadata() *string { return util.MetadataStr(r.M.Metadata) }
 
+func (r *NotificationPolicyResolver) QuietHoursTimezone() *string {
+	return util.NullStr(r.M.QuietHoursTimezone)
+}
+
+func (r *NotificationPolicyResolver) QuietHoursSlots() *string {
+	return util.MetadataStr(r.M.QuietHoursSlots)
+}
+
+func (r *NotificationPolicyResolver) QuietHoursBypassSeverity() *string {
+	return util.NullStr(r.M.QuietHoursBypassSeverity)
+}
+
 func (r *NotificationPolicyResolver) Rules() []*NotificationRuleResolver {
 	resolvers := make([]*NotificationRuleResolver, 0, len(r.M.Rules))
 	for _, rule := range r.M.Rules {

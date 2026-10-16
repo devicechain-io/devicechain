@@ -6,6 +6,7 @@ import {
   MAX_SLOTS,
   parseSlots,
   serializeSlots,
+  slotCoverageProblem,
   slotProblems,
   slotsEqual,
   splitDuration,
@@ -92,5 +93,49 @@ describe('helpers', () => {
     const zones = timeZoneChoices('Mars/Olympus_Mons');
     expect(zones).toContain('Mars/Olympus_Mons');
     expect(zones).toContain('UTC');
+  });
+});
+
+describe('slotCoverageProblem', () => {
+  it('accepts disjoint and merely touching slots', () => {
+    expect(slotCoverageProblem([row()])).toBeNull();
+    // Monday 22:00 for 2 h touches Tuesday 00:00.
+    expect(
+      slotCoverageProblem([
+        row({ day: 'MONDAY', start: '22:00', duration: '120' }),
+        row({ day: 'TUESDAY', start: '00:00', duration: '60' }),
+      ]),
+    ).toBeNull();
+  });
+
+  it('flags two slots that overlap', () => {
+    expect(
+      slotCoverageProblem([
+        row({ day: 'MONDAY', start: '22:00', duration: '180' }),
+        row({ day: 'TUESDAY', start: '00:00', duration: '60' }),
+      ]),
+    ).toBe('overlap');
+  });
+
+  it('wraps a Sunday slot into Monday', () => {
+    const sundayNight = row({ day: 'SUNDAY', start: '23:00', duration: '180' }); // to Monday 02:00
+    expect(slotCoverageProblem([sundayNight, row({ day: 'MONDAY', start: '02:00', duration: '60' })])).toBeNull();
+    expect(slotCoverageProblem([sundayNight, row({ day: 'MONDAY', start: '01:00', duration: '60' })])).toBe(
+      'overlap',
+    );
+  });
+
+  it('flags a schedule covering the whole week', () => {
+    expect(slotCoverageProblem([row({ day: 'WEDNESDAY', start: '09:00', duration: '10080' })])).toBe('wholeWeek');
+    expect(
+      slotCoverageProblem([
+        row({ day: 'MONDAY', start: '00:00', duration: '5040' }),
+        row({ day: 'THURSDAY', start: '12:00', duration: '5040' }),
+      ]),
+    ).toBe('wholeWeek');
+  });
+
+  it('ignores a half-typed row instead of guessing', () => {
+    expect(slotCoverageProblem([row({ duration: '' }), row({ start: '2:0' })])).toBeNull();
   });
 });

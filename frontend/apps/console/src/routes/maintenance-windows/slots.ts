@@ -127,6 +127,44 @@ export function slotProblems(drafts: readonly SlotDraft[]): SlotHints {
   return { count, rows, ok: count === null && rows.size === 0 };
 }
 
+export type CoverageProblem = 'overlap' | 'wholeWeek';
+
+const MINUTES_PER_DAY = 1440;
+const MINUTES_PER_WEEK = 7 * MINUTES_PER_DAY;
+
+/**
+ * A HINT for the one rule a notification policy's quiet hours add to the slot document:
+ * slots may not overlap in the week AS WRITTEN (touching is fine; a slot running past the end
+ * of Sunday wraps into Monday), and together they may not cover the whole week. The server
+ * decides; this only saves a round trip. Rows that fail `slotProblems` are skipped, so the
+ * hint never fires on a half-typed row.
+ */
+export function slotCoverageProblem(drafts: readonly SlotDraft[]): CoverageProblem | null {
+  const pieces: Array<[number, number]> = [];
+  let total = 0;
+  for (const s of drafts) {
+    const minutes = parseDuration(s.duration);
+    const m = HH_MM.exec(s.start);
+    if (minutes === null || m === null || minutes < MIN_DURATION_MINUTES || minutes > MAX_DURATION_MINUTES) {
+      continue;
+    }
+    const start =
+      DAYS.indexOf(s.day) * MINUTES_PER_DAY + Number(s.start.slice(0, 2)) * 60 + Number(s.start.slice(3));
+    const end = start + minutes;
+    total += minutes;
+    if (end <= MINUTES_PER_WEEK) {
+      pieces.push([start, end]);
+    } else {
+      pieces.push([start, MINUTES_PER_WEEK], [0, end - MINUTES_PER_WEEK]);
+    }
+  }
+  pieces.sort((a, b) => a[0] - b[0]);
+  for (let i = 1; i < pieces.length; i++) {
+    if (pieces[i][0] < pieces[i - 1][1]) return 'overlap';
+  }
+  return total >= MINUTES_PER_WEEK ? 'wholeWeek' : null;
+}
+
 /** Split elapsed minutes into whole hours and the remainder, for "2 h 30 min". */
 export function splitDuration(minutes: number): { hours: number; minutes: number } {
   return { hours: Math.floor(minutes / 60), minutes: minutes % 60 };

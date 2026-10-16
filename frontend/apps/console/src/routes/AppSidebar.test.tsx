@@ -187,3 +187,13 @@ describe('the Updates group', () => {
     expect(entry('Updates')).toBeNull();
   });
 });
+
+describe('the Notification Policies entry', () => {
+  it('shows to a notification:read holder and to nobody else', () => {
+    renderWith(['notification:read']);
+    expect(entry('Notification Policies')).toBeTruthy();
+    cleanup();
+    renderWith(['alarm:read', 'device:read']);
+    expect(entry('Notification Policies')).toBeNull();
+  });
+});

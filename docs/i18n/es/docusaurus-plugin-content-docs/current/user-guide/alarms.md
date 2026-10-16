@@ -84,3 +84,4 @@ y las horas en que se generó y se despejó.
 - [Reglas de detección](./detection-rules.md), que generan estas alarmas
 - [Procesamiento de eventos y alarmas](../concepts/event-processing.md#the-alarm-lifecycle): el ciclo de vida de las alarmas y la escalada
 - [Configuración de canales de notificación](../guides/notification-channels.md), para recibir alarmas por correo o en un webhook
+- [Políticas de notificación](./notification-policies.md), para retener los avisos de una política durante las horas de silencio

@@ -207,8 +207,8 @@
       "translationSha256": "d239b6ba06ee3d685df8f120ad95cce468c37299e0c6e9311e0762c6ca8d8442"
     },
     "user-guide/alarms.md": {
-      "sourceSha256": "d2c456a84b8c38ff05f7c2edba13d837e642dda1d078b58594722c0b0bf2f21c",
-      "translationSha256": "8e62c88e67e22d9b751641bfc2c3bbc92372649b32e52396161c107019ace7de"
+      "sourceSha256": "dcb305f33f8f6dab0d27730014864c7b05da7afd0bffe4e7439d4ed0ff154227",
+      "translationSha256": "5a33bcb9f6d60de54ffda0e2807a300f6b593215bb3f55928ce4beda300858c0"
     },
     "user-guide/assets-customers-areas.md": {
       "sourceSha256": "f975674da4c197b30b67fe1da155e475679c1c502694b5c5f707a25f3c475c11",
@@ -227,8 +227,8 @@
       "translationSha256": "6dbc86c3539c1103ea3fd3a4751561ced59722461dd3a3d81f358ee75d09cb16"
     },
     "user-guide/console-at-a-glance.md": {
-      "sourceSha256": "647ad8941c7ffb319267c7f48a040b5247b51e7694203f18388cfae8ba5400ce",
-      "translationSha256": "35cec1d62b7614e7e7b95bcd4d210943096d544427abfe410cc61a6abbf6093e"
+      "sourceSha256": "ff77e4f4333a26e3c8c65fbc89b780f5d710dc935769eb6729fccaf0eda0278c",
+      "translationSha256": "6181c35124506bd8ed5c7f709669dd57c4a8b1ba99968356b3bae70aeb602f06"
     },
     "user-guide/dashboards.md": {
       "sourceSha256": "85db28ccf6ce28b3e54a948a355fe9373683eb3987230bfaf7a2dbeea90d3c2d",
@@ -255,8 +255,12 @@
       "translationSha256": "1fad2752a4f06c1bb1358c2183655418b4682af986e109a2b107ef40408c2b45"
     },
     "user-guide/index.md": {
-      "sourceSha256": "6228389ad42ca2a9be97a220115893900697e1185141752c9ecc39f149ab5488",
-      "translationSha256": "84d543d6bd2761e5da3fd67feb4b5cbdf57a70161cd5e0aff3e04371c73379dd"
+      "sourceSha256": "f35018f5ab1a3602bb908bd9b1867058df79f7d32935efdb8ec6bc313fde6527",
+      "translationSha256": "0616aa10151f400aa6610ff26b6abef4c6300d8449eb4dee23bcb764771104a7"
+    },
+    "user-guide/notification-policies.md": {
+      "sourceSha256": "7e9bfe7e60b1ccda79e98a060d4dc9ebd1790214ea6be0a1c02ce54b3e3cdbb6",
+      "translationSha256": "11855037255dc8af8b028549d6a4cb6739ca5d8f51ded0fa1460421d1fcc19f4"
     },
     "user-guide/signing-in.md": {
       "sourceSha256": "e8305918933769a1b71827e6ce1bf93333ab2aa889fd9bec721fb1af30436679",

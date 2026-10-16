@@ -132,6 +132,93 @@ En una actualización, las `rules` de la solicitud **reemplazan** el conjunto de
 
 Dos personas que editan la misma política pueden pisarse: un campo que cambian ambas conserva solo el último guardado y, como una lista `rules` reemplaza el conjunto entero, el segundo guardado descarta todas las reglas que escribió el primero. Para evitarlo, pasa `expectedUpdatedAt` con el `updatedAt` de la política tal como la leíste (o tal como lo devolvió tu actualización anterior). Si la política ha cambiado desde entonces, la actualización se rechaza con «notification policy was modified by another writer; reload and try again» y no se escribe nada. Vuelve a cargarla, aplica tu cambio de nuevo y envíala otra vez.
 
+### Horas de silencio {#quiet-hours}
+
+Las **horas de silencio** evitan que una política avise a las personas a deshoras, por ejemplo por la noche. Mientras una política está dentro de sus horas de silencio **retiene** sus notificaciones en lugar de enviarlas, y las envía cuando termina el periodo de silencio. Cada política tiene sus propias horas de silencio, de modo que una política del turno de noche y otra del equipo de día pueden seguir horarios distintos.
+
+Las horas de silencio no son [ventanas de mantenimiento](./maintenance-windows.md). Una ventana de mantenimiento pertenece a un tipo de dispositivo e indica cuándo pueden *empezar* los comandos disruptivos. Las horas de silencio pertenecen a una política de notificación e indican cuándo esa política *retiene sus avisos*. Usan el mismo formato de franjas y las mismas reglas de zona horaria y horario de verano, pero por lo demás no guardan relación, y ninguna afecta a la otra.
+
+Una política obtiene sus horas de silencio de tres campos. Valen `null` en una política sin horas de silencio.
+
+| Campo | Significado |
+| --- | --- |
+| `quietHoursTimezone` | La zona horaria IANA en la que se leen las franjas, como `Europe/Berlin`. `Local` y los nombres desconocidos se rechazan. Siempre se usa la zona de la propia política, nunca la del servidor. |
+| `quietHoursSlots` | Una **cadena** JSON con de 1 a 56 franjas semanales, en el mismo documento que una ventana de mantenimiento. Cada franja tiene un `day` (`MONDAY` a `SUNDAY`), un `start` (`HH:MM` de 24 horas, hora de reloj en la zona) y una `durationMinutes` (de 1 a 10080, tiempo transcurrido). |
+| `quietHoursBypassSeverity` | `CRITICAL`, `MAJOR`, `MINOR`, `WARNING` o `INDETERMINATE`, o `null`. Las alarmas con esta severidad o superior se envían incluso durante las horas de silencio. `null` retiene todas las severidades. Se permite, sin efecto, en una política sin horas de silencio. |
+
+Define `quietHoursTimezone` y `quietHoursSlots` juntos, o deja ambos en `null`.
+
+```graphql
+mutation {
+  createNotificationPolicy(request: {
+    token: "night-shift",
+    name: "Night shift pages",
+    enabled: true,
+    quietHoursTimezone: "Europe/Berlin",
+    quietHoursSlots: "[{\"day\":\"MONDAY\",\"start\":\"22:00\",\"durationMinutes\":480},{\"day\":\"TUESDAY\",\"start\":\"22:00\",\"durationMinutes\":480}]",
+    quietHoursBypassSeverity: "CRITICAL",
+    rules: [
+      { severity: "*", channelToken: "ops-email", recipients: "[\"ops@example.com\"]" }
+    ]
+  }) { token quietHoursTimezone quietHoursSlots quietHoursBypassSeverity }
+}
+```
+
+Esta política está en silencio de 22:00 a 06:00 las noches del lunes y del martes, en hora de Berlín. Una alarma `CRITICAL` en ese periodo se envía igualmente de inmediato. Cualquier otra alarma espera hasta las 06:00.
+
+`updateNotificationPolicy` es una actualización parcial, y los tres campos de horas de silencio admiten tres estados: omítelo para conservarlo, envía `null` para borrarlo, envía un valor para establecerlo. El servidor comprueba los campos en conjunto tras aplicar la actualización, así que para **quitar** las horas de silencio, borra `quietHoursTimezone` y `quietHoursSlots` en la misma solicitud (y también `quietHoursBypassSeverity`, si quieres eliminarla).
+
+```graphql
+mutation {
+  updateNotificationPolicy(
+    token: "night-shift",
+    request: { quietHoursTimezone: null, quietHoursSlots: null }
+  ) { token quietHoursTimezone quietHoursSlots }
+}
+```
+
+#### Qué ocurre durante las horas de silencio {#quiet-hours-behavior}
+
+- **Retenida y luego enviada.** Cuando una alarma generada o escalada coincide con una política que está dentro de sus horas de silencio, y la severidad de la alarma es inferior a la severidad de excepción (o no hay excepción), la notificación se **retiene**, no se descarta. La política la envía por sus reglas cuando termina el periodo de silencio. El planificador de escaladas libera las notificaciones retenidas en su pasada, que se ejecuta una vez por minuto por defecto, así que un envío puede retrasarse hasta una pasada.
+- **Reconocer o cerrar la descarta.** Una notificación retenida se descarta en lugar de enviarse si la alarma fue reconocida o cerrada después del evento retenido.
+- **Una notificación retenida por alarma y política.** Si la misma política retiene un evento posterior, generado o escalado, de la misma alarma, el posterior sustituye al anterior. El aviso de la mañana describe la alarma tal como quedó por última vez, y una alarma que oscila durante la noche cuesta un aviso, no uno por oscilación.
+- **La severidad de excepción se envía de inmediato.** Una alarma con la severidad de excepción o superior se envía al instante, incluso dentro de las horas de silencio. Una alarma cuya severidad no es uno de los niveles conocidos se envía siempre.
+- **Primero la limitación.** Una notificación que la limitación de la política suprime se suprime, no se retiene.
+- **La escalada espera.** Mientras una política está en horas de silencio, sus renotificaciones por escalada esperan para las alarmas por debajo de la severidad de excepción. Se reanudan cuando termina el periodo: una alarma que sigue sin reconocer y sin cerrar se vuelve a notificar en la primera pasada posterior. Las horas de silencio no consumen niveles de escalada.
+- **Cada política es independiente.** Una política sin horas de silencio, o que no está en silencio en ese momento, sigue avisando de inmediato por la misma alarma. Una notificación retenida se envía igualmente al final del periodo aunque otra política ya haya avisado a alguien, porque los destinatarios pueden ser distintos.
+- **Las ediciones reevalúan lo retenido.** Cambiar las horas de silencio o la severidad de excepción de una política, o habilitarla o deshabilitarla, se aplica en la siguiente pasada. Una notificación retenida se envía si la política ya no la retiene, o sigue retenida hasta el nuevo final si todavía la retiene. Una política deshabilitada o eliminada descarta lo que retenía.
+- **Un envío fallido se reintenta.** Un envío que no llega a ningún canal, porque todas las entregas fallaron, se reintenta en pasadas posteriores, hasta 5 veces. Después se descarta y se cuenta.
+
+#### Zonas horarias y horario de verano {#quiet-hours-time-zones}
+
+Los franjas son horas de reloj en la `quietHoursTimezone` de la política, así que las horas de silencio siguen el horario de verano con la zona. Una franja cuyo inicio cae en un salto hacia delante, una hora que no existe, empieza al final del salto. Una franja cuyo inicio cae en un solapamiento de retroceso, una hora que ocurre dos veces, empieza en la primera aparición. La duración de una franja es tiempo transcurrido, por lo que una franja larga que atraviesa un cambio de hora termina una hora antes o después en el reloj.
+
+Una franja puede pasar de medianoche. Una franja que pasa del final del domingo continúa en lunes.
+
+#### Qué rechaza el servidor {#quiet-hours-validation}
+
+Cada infracción se responde con `extensions.code` `INVALID_VALUE`, y no se escribe nada.
+
+- `quietHoursTimezone` y `quietHoursSlots` no se definen juntos.
+- La zona es `Local` o un nombre desconocido.
+- Una franja tiene un `day` desconocido, un `start` que no es `HH:MM` de 24 horas o una `durationMinutes` fuera de 1 a 10080, o la lista no tiene de 1 a 56 franjas.
+- Dos franjas se **solapan** en la semana tal como está escrita. Las franjas que solo se tocan son válidas, y una franja de domingo que pasa de medianoche se comprueba contra el lunes.
+- Las franjas en conjunto **cubren la semana completa** (10080 minutos). Para silenciar una política por completo, deshabilítala.
+
+#### Cómo observarlo {#quiet-hours-metric}
+
+El contador `devicechain_notificationmanagement_quiet_hours_total` cuenta lo que hicieron las horas de silencio, con la etiqueta `outcome`:
+
+| `outcome` | Se cuenta cuando |
+| --- | --- |
+| `held` | Una notificación se retuvo en lugar de enviarse. |
+| `released` | Una notificación retenida se envió al terminar su periodo. |
+| `dropped_resolved` | Una notificación retenida se descartó porque la alarma fue reconocida o cerrada. |
+| `dropped_policy` | Una notificación retenida se descartó porque su política se deshabilitó o se eliminó. |
+| `dropped_exhausted` | Una notificación retenida se descartó tras 5 envíos que no llegaron a ningún canal. |
+
+En la consola, las horas de silencio se editan en la página **Políticas de notificación**; consulta [Políticas de notificación](../user-guide/notification-policies.md).
+
 ## Verificar la ruta de extremo a extremo
 
 1. **Crea un canal** (como arriba). Confirma `enabled: true` en el resultado, y que `hasSecret` es `true` para un canal SMTP con usuario o un webhook que declara `bearer` o `header`, y `false` para un webhook que declara `none`.

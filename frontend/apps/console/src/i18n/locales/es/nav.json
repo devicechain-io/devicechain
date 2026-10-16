@@ -1,6 +1,7 @@
 {
   "dashboard": "Panel",
   "dashboards": "Paneles",
+  "notificationPolicies": "Políticas de notificación",
   "alarms": "Alarmas",
   "connectors": "Conectores",
   "devices": "Dispositivos",

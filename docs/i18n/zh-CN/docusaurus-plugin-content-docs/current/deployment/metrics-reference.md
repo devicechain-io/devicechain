@@ -218,6 +218,7 @@ title: 指标参考
 | 指标 | 含义 |
 | --- | --- |
 | `notifications_dead_lettered_total` | 每次投递尝试都失败后写入死信流的告警，使运维人员可以看到哪些通知从未被发出。 |
+| `quiet_hours_total{outcome}` | 静默时段对一条通知的处理结果，按 outcome 分类：held（被暂存而未发送）、released（在静默时段结束时发送）、dropped_resolved（因告警已被确认或清除而丢弃）、dropped_policy（因策略被停用或删除而丢弃）或 dropped_exhausted（在 5 次发送都未送达任何渠道后丢弃）。 |
 
 ## 用户管理 {#user-management}
 

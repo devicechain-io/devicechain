@@ -5,7 +5,9 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"time"
 
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -22,6 +24,11 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 		return nil, err
 	}
 	if err := validateDeviceTypeScoping(request.DeviceTypeToken); err != nil {
+		return nil, err
+	}
+	quiet, err := validateQuietHours(request.QuietHoursTimezone, request.QuietHoursSlots,
+		request.QuietHoursBypassSeverity)
+	if err != nil {
 		return nil, err
 	}
 
@@ -48,6 +55,10 @@ func (api *Api) CreateNotificationPolicy(ctx context.Context,
 			EscalateAfterSeconds: sqlnull.Int64FromInt32(request.EscalateAfterSeconds),
 			MaxEscalations:       sqlnull.Int64FromInt32(request.MaxEscalations),
 			Enabled:              request.Enabled,
+
+			QuietHoursTimezone:       rdb.NullStrOf(quiet.timezone),
+			QuietHoursSlots:          quiet.slots,
+			QuietHoursBypassSeverity: rdb.NullStrOf(quiet.bypass),
 		}
 		if err := tx.Create(policy).Error; err != nil {
 			return err
@@ -134,6 +145,19 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		return nil, err
 	}
 
+	// Quiet hours are validated as they will be STORED: each field folded over the stored
+	// value first, so a request that clears the zone but leaves the slots is refused as the
+	// half-configured policy it would produce.
+	quiet, err := validateQuietHours(
+		request.QuietHoursTimezone.ApplyTo(nullStrPtr(policy.QuietHoursTimezone)),
+		request.QuietHoursSlots.ApplyTo(dcgraphql.MetadataStr(policy.QuietHoursSlots)),
+		request.QuietHoursBypassSeverity.ApplyTo(nullStrPtr(policy.QuietHoursBypassSeverity)))
+	if err != nil {
+		return nil, err
+	}
+	quietChanged := request.QuietHoursTimezone.Set || request.QuietHoursSlots.Set ||
+		request.QuietHoursBypassSeverity.Set || request.Enabled.Set
+
 	requestedRules, replaceRules := request.Rules.Requested()
 
 	// The rule checks that need nothing but the request, run before the precondition so a
@@ -169,6 +193,9 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 		policy.EscalateAfterSeconds = request.EscalateAfterSeconds.ApplyToNullInt64(policy.EscalateAfterSeconds)
 		policy.MaxEscalations = request.MaxEscalations.ApplyToNullInt64(policy.MaxEscalations)
 		policy.Enabled = enabled
+		policy.QuietHoursTimezone = rdb.NullStrOf(quiet.timezone)
+		policy.QuietHoursSlots = quiet.slots
+		policy.QuietHoursBypassSeverity = rdb.NullStrOf(quiet.bypass)
 		if expectedUpdatedAt == nil {
 			// No precondition: the unconditional write, last write wins.
 			if err := rdb.AdvancingFrom(tx, readAt).Omit("Rules").Save(policy).Error; err != nil {
@@ -190,7 +217,22 @@ func (api *Api) UpdateNotificationPolicy(ctx context.Context, token string,
 				"escalate_after_seconds": policy.EscalateAfterSeconds,
 				"max_escalations":        policy.MaxEscalations,
 				"enabled":                policy.Enabled,
+
+				"quiet_hours_timezone":        policy.QuietHoursTimezone,
+				"quiet_hours_slots":           policy.QuietHoursSlots,
+				"quiet_hours_bypass_severity": policy.QuietHoursBypassSeverity,
 			}, ErrConflict); err != nil {
+				return err
+			}
+		}
+		if quietChanged {
+			// What this policy is holding was held under the OLD quiet hours. Bring every
+			// such deferral due now, so the scheduler's next pass re-evaluates it against
+			// the new ones: released if the policy is no longer quiet for it, held again
+			// (to the new end) if it still is. Without this, shortening tonight's quiet
+			// hours would still wait for the end of the stretch that held the page.
+			if err := tx.Model(&NotificationDeferral{}).Where("policy_id = ?", policy.ID).
+				Update("release_at", time.Now()).Error; err != nil {
 				return err
 			}
 		}
@@ -336,6 +378,10 @@ func (api *Api) DeleteNotificationPolicy(ctx context.Context, token string) (boo
 		if err := tx.Unscoped().Where("policy_id = ?", matches[0].ID).Delete(&NotificationRule{}).Error; err != nil {
 			return err
 		}
+		// A deleted policy pages nobody, including about what its quiet hours were holding.
+		if err := tx.Where("policy_id = ?", matches[0].ID).Delete(&NotificationDeferral{}).Error; err != nil {
+			return err
+		}
 		return tx.Unscoped().Where("token = ?", token).Delete(&NotificationPolicy{}).Error
 	})
 	if err != nil {
@@ -360,4 +406,13 @@ func derefRules(rules []*NotificationRule) []NotificationRule {
 		out = append(out, *r)
 	}
 	return out
+}
+
+// nullStrPtr is the inverse of rdb.NullStrOf: nil for NULL, otherwise the value.
+func nullStrPtr(v sql.NullString) *string {
+	if !v.Valid {
+		return nil
+	}
+	s := v.String
+	return &s
 }
