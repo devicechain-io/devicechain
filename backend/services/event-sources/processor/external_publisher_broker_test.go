@@ -6,10 +6,10 @@ package processor
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -71,13 +71,15 @@ func (h *extHolder) answerAll() {
 // extRig is one embedded broker playing both the operator's MQTT broker and the platform's
 // JetStream broker, with the external source's real writer built against it.
 type extRig struct {
-	t        *testing.T
-	srv      *natsserver.Server
-	nc       *nats.Conn
-	nmgr     *messaging.NatsManager
-	mqttPort int
-	pub      *AsyncEventPublisher
-	holder   *extHolder
+	t    *testing.T
+	srv  *natsserver.Server
+	nc   *nats.Conn
+	nmgr *messaging.NatsManager
+	// front is where every MQTT client in the rig connects, so that a read of the broker's
+	// connection table never overlaps a CONNECT (see mqttClients).
+	front  *dctest.MQTTFront
+	pub    *AsyncEventPublisher
+	holder *extHolder
 	// writers counts the AsyncWriters built, which must be one per publisher however many
 	// terms it serves.
 	writers atomic.Int32
@@ -103,7 +105,7 @@ func newExtRig(t *testing.T, window int, hold bool) *extRig {
 	port, err := strconv.Atoi(u.Port())
 	require.NoError(t, err)
 
-	r := &extRig{t: t, srv: srv, mqttPort: mqttPort}
+	r := &extRig{t: t, srv: srv, front: dctest.StartMQTTFront(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(mqttPort)))}
 	pub, err := NewAsyncEventPublisher("ext", benchInboundMessage, PublishHooks{
 		Backpressured: func(string) { r.pressed.Add(1) },
 		Failed:        func(string, error) { r.failed.Add(1) },
@@ -160,7 +162,7 @@ func (r *extRig) hold() {
 func (r *extRig) source(pub EventPublisher, clientID string, owns func() bool) *MqttEventSource {
 	r.t.Helper()
 	es, err := NewMqttEventSource("ext", clientID, map[string]string{
-		"host": "127.0.0.1", "port": strconv.Itoa(r.mqttPort), "topic": GatewayTopic(testInstance),
+		"host": "127.0.0.1", "port": strconv.Itoa(r.front.Port()), "topic": GatewayTopic(testInstance),
 	}, nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {}, pub,
 		func(_ string, _ string, _ []byte, err error) error {
@@ -378,7 +380,7 @@ func TestExternalMqttTermsShareOneWriterAndSettleBeforeRelease(t *testing.T) {
 
 	partition := OwnershipPartition("ext")
 	reading := func(want int) bool {
-		return len(extMqttClients(t, rig.srv, "devicechain:inst-1:ext:")) == want
+		return len(rig.mqttClients("devicechain:inst-1:ext:")) == want
 	}
 	waitFor(t, "the first term never began reading", 15*time.Second, func() bool { return reading(1) })
 
@@ -459,18 +461,13 @@ func settledCounts(srv *natsserver.Server) (uint32, int) {
 	return subs, goroutines
 }
 
-// extMqttClients lists the MQTT client ids connected to srv that start with prefix.
-func extMqttClients(t *testing.T, srv *natsserver.Server, prefix string) []string {
-	t.Helper()
-	connz, err := srv.Connz(&natsserver.ConnzOptions{})
-	require.NoError(t, err)
-	var ids []string
-	for _, c := range connz.Conns {
-		if strings.HasPrefix(c.MQTTClient, prefix) {
-			ids = append(ids, c.MQTTClient)
-		}
-	}
-	return ids
+// mqttClients lists the MQTT client ids connected to the broker that start with prefix,
+// read through the front: the broker stores a client's id unlocked while it parses the
+// CONNECT and Connz reads it locked, so a read that overlaps a term's connect is a data
+// race inside nats-server (see dctest.MQTTFront).
+func (r *extRig) mqttClients(prefix string) []string {
+	r.t.Helper()
+	return r.front.MQTTClients(r.t, r.srv, prefix)
 }
 
 // gatedPublisher holds every Publish until gate closes, so a decode worker can be inside its
@@ -556,7 +553,7 @@ func TestExternalMqttSettleTimeoutStillReleasesTheLease(t *testing.T) {
 	require.NoError(t, owned.Start(context.Background()))
 	partition := OwnershipPartition("ext")
 	waitFor(t, "the term never began reading", 15*time.Second, func() bool {
-		return len(extMqttClients(t, rig.srv, "devicechain:inst-1:ext:")) == 1
+		return len(rig.mqttClients("devicechain:inst-1:ext:")) == 1
 	})
 
 	const inFlight = 5
