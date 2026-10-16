@@ -94,8 +94,11 @@ Presence comes back. Telemetry does not. A device starts reporting again only wh
 its registration lifetime. With the shipped default of `86400` seconds, that is **up to a day of
 silence from a perfectly healthy device**, with the device online in the console the whole time.
 
-If you cannot tolerate that, lower `maxLifetimeSeconds` (see [LwM2M settings](#lwm2m-settings)). Never
-lower it below the longest lifetime your devices actually request, or they are expired as dead on
+If you cannot tolerate that, shorten the registration lifetime your devices request, at the cost of
+more frequent registration updates. Lowering `maxLifetimeSeconds` does **not** shorten this
+blackout: the device is never told about the clamp and keeps updating on its own schedule. That
+setting bounds how long a dead device reads online (see [LwM2M settings](#lwm2m-settings)), and it
+must stay above the longest lifetime your devices actually request, or they are expired as dead on
 every handover.
 
 ## What presence guarantees
