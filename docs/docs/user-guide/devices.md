@@ -154,8 +154,8 @@ Select a device in the list to open its page. The header shows the device's name
 (with a copy button), its type and, when it is disabled, a **Disabled** badge. On the right are
 **Disable** (or **Enable**) and **Delete**. Deleting a device cannot be undone.
 
-The page is organized in tabs. You may not see all of them: **Credentials** and **Replacement**
-need permission to change devices, and **Updates** appears only when your installation runs the
+The page is organized in tabs. You may not see all of them: **Credentials**, **Send data** and
+**Replacement** need permission to change devices, and **Updates** appears only when your installation runs the
 update service and you are allowed to see updates.
 
 ### Basic
@@ -329,6 +329,47 @@ Copy the password and give it to the device, then choose **Done**. When you set 
 the old one stops working as soon as you save.
 
 See [Device credentials](/guides/device-credentials).
+
+### Send data {#send-data}
+
+**Send data** builds a ready-to-run command that sends the device its first measurement: a
+`mosquitto_pub` for MQTT, or a `curl` for HTTP. Choose the transport, and the credential if the
+device has more than one, then copy the command with the copy button.
+
+The command uses the device's token and credential, and the metrics in the **published** version
+of its profile, with example values the profile accepts. A metric that exists only in the draft is
+not used, because the platform checks readings against the published version. When the published
+version has no metric the example can use, the command sends an undeclared reading instead, which
+is stored as long as its value is a number. At most eight metrics are included.
+
+The commands are written for a POSIX shell such as bash or zsh. On Windows, run them in WSL or
+Git Bash: PowerShell and `cmd.exe` read the quoting and the line breaks differently, so the
+command would not send what it shows.
+
+The console cannot know some values, so the command leaves a placeholder for each:
+
+| Placeholder | Replace it with |
+| --- | --- |
+| `<instance-id>` | The instance id chosen when the instance was installed. It is the instance's Kubernetes namespace without the `dci-` prefix. |
+| `<mqtt-host>` | The host the MQTT listener is exposed on. The listener uses TLS, so save the instance CA certificate as `instance-ca.crt`. |
+| `<ingest-host>` | The host of the HTTP ingest listener, port 8081. A default install does not expose it outside the cluster; see [Your First Device](/quickstart/first-device#5-open-a-path-to-the-ingest-endpoint). |
+| `<password>` | The password of an `MQTT_BASIC` credential. It is shown only once, when it is set. If it is lost, set a new one on the **Credentials** tab. |
+
+The tab offers no command when the command could not work, and says what to fix instead:
+
+- The device is **disabled**. A disabled device's events are discarded when they arrive.
+- The device has no enabled, unexpired credential. By default the platform requires a credential
+  on every connection and every event. Add one on the **Credentials** tab first.
+
+A device that is not assigned to anything can send data; its events are stored.
+
+Like **Credentials**, the tab needs permission to change devices, because an access token is
+written into the command.
+
+A `202` from HTTP, or an MQTT acknowledgement, means the event was received, not that it was
+stored. Look for it on the **Events** tab.
+
+See [Connecting a Device](/guides/connecting-a-device).
 
 ### Replacement
 

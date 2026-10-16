@@ -29,6 +29,7 @@ import type {
   CommandDefinitionsQuery,
   DeviceCommandVocabularyQuery,
   DeviceLocationDeclarationQuery,
+  DeviceMetricVocabularyQuery,
   CommandDefinitionCreateRequest,
   CommandDefinitionUpdateRequest,
   DetectionRulesQuery,
@@ -1155,6 +1156,34 @@ export async function getDeviceLocationDeclaration(
 ): Promise<DeviceLocationCapability> {
   const data = await gql('device-management', DEVICE_LOCATION_DECLARATION, { deviceToken });
   return data.deviceLocationDeclaration ?? null;
+}
+
+const DEVICE_METRIC_VOCABULARY = graphql(`
+  query DeviceMetricVocabulary($deviceToken: String!) {
+    deviceMetricVocabulary(deviceToken: $deviceToken) {
+      metrics {
+        metricKey
+        dataType
+        unit
+        minValue
+        maxValue
+        allowedValues
+      }
+    }
+  }
+`);
+
+export type PublishedMetric = NonNullable<
+  DeviceMetricVocabularyQuery['deviceMetricVocabulary']
+>['metrics'][number];
+
+// getDeviceMetricVocabulary lists the metrics a device's measurements are validated
+// against: its profile's ACTIVE PUBLISHED version, the same reading ingest uses. Not the
+// draft (listMetricDefinitions), whose unpublished edits ingest does not know. null when
+// no device has the token.
+export async function getDeviceMetricVocabulary(deviceToken: string): Promise<PublishedMetric[] | null> {
+  const data = await gql('device-management', DEVICE_METRIC_VOCABULARY, { deviceToken });
+  return data.deviceMetricVocabulary?.metrics ?? null;
 }
 
 // listCommandDefinitionsForDevice resolves a device to the command definitions AUTHORED

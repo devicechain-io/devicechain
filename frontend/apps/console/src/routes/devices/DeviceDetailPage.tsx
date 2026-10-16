@@ -37,6 +37,7 @@ import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceEnabledAction } from '@/routes/devices/DeviceEnabledAction';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
+import { DeviceConnectPanel } from '@/routes/devices/DeviceConnectPanel';
 import { DeviceReplacementPanel } from '@/routes/devices/DeviceReplacementPanel';
 import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
@@ -154,6 +155,11 @@ export default function DeviceDetailPage() {
           {canManageCredentials && (
             <TabsTrigger value="credentials">{t('tabCredentials')}</TabsTrigger>
           )}
+          {/* Send data writes the credential into its command, and for an ACCESS_TOKEN
+              the credential id IS the bearer, so it rides the credentials gate. */}
+          {canManageCredentials && (
+            <TabsTrigger value="connect">{t('tabConnect')}</TabsTrigger>
+          )}
           {/* Replacement rides the same gate as credentials, and for the same
               reason rather than by association: the mutation returns the credential
               minted for the incoming unit, whose id is the bearer for an
@@ -236,6 +242,13 @@ export default function DeviceDetailPage() {
           <TabsContent value="credentials">
             <SectionPanel>
               <DeviceCredentialsPanel deviceToken={device.token} />
+            </SectionPanel>
+          </TabsContent>
+        )}
+        {canManageCredentials && (
+          <TabsContent value="connect">
+            <SectionPanel title={t('tabConnect')}>
+              <DeviceConnectPanel key={device.token} deviceToken={device.token} deviceEnabled={device.enabled} />
             </SectionPanel>
           </TabsContent>
         )}

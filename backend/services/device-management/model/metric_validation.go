@@ -59,6 +59,30 @@ func (r *ResolvedMetric) Unit() (string, bool) {
 	return *r.m.Unit, true
 }
 
+// MinValue is the declared lower bound, and whether one is declared.
+func (r *ResolvedMetric) MinValue() (float64, bool) {
+	if r.m.MinValue == nil {
+		return 0, false
+	}
+	return *r.m.MinValue, true
+}
+
+// MaxValue is the declared upper bound, and whether one is declared.
+func (r *ResolvedMetric) MaxValue() (float64, bool) {
+	if r.m.MaxValue == nil {
+		return 0, false
+	}
+	return *r.m.MaxValue, true
+}
+
+// AllowedValueCount is the length of the allow-list ingest checks a value against: 0 when
+// there is none.
+func (r *ResolvedMetric) AllowedValueCount() int { return len(r.m.Enum) }
+
+// AllowedValue is the i-th member of the allow-list (0 <= i < AllowedValueCount). Indexed
+// rather than handed out as a slice, because the resolution holding this metric is shared.
+func (r *ResolvedMetric) AllowedValue(i int) string { return r.m.Enum[i] }
+
 // Resolved projects a metric definition onto what event resolution reads. It is the one
 // place the projection is defined.
 func (def *MetricDefinition) Resolved() ResolvedMetric {
