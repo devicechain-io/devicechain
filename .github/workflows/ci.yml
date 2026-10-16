@@ -80,6 +80,14 @@ jobs:
       - name: release-notes header self-test
         run: hack/build-release-notes-header.sh --self-test
 
+      # The website's download manifest (devicechain.io/releases.json) is built in the
+      # release workflow's last job, after the Release is already public — so a break here is
+      # learned as "release shipped, website not updated". Stubbed gh, no network: both
+      # products' tables carry their own checksum file's digests, and a missing archive or
+      # checksum file is refused rather than published as a shorter menu.
+      - name: release-manifest self-test
+        run: hack/build-release-manifest.sh --self-test
+
       # The govulncheck wrapper decides which findings are allowed to pass. Its
       # allowlist is the one place in CI where a known vulnerability is waved
       # through on purpose, so proving the checker can still fail — on an

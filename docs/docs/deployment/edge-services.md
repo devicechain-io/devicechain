@@ -596,6 +596,12 @@ cannot be enabled the way a service is. It ships as static binaries and a contai
 deploy it yourself: a systemd unit on a site gateway, a container, or a hand-written Kubernetes
 manifest at the edge.
 
+**The binaries are attached to every [GitHub release](https://github.com/devicechain-io/devicechain/releases)**
+as `dc-edge-agent_<version>_<os>_<arch>.tar.gz`, for Linux and macOS on `amd64` and `arm64`. Their
+SHA-256 digests are in `dc-edge-agent_checksums.txt` on the same release, so on Linux
+`sha256sum --ignore-missing -c dc-edge-agent_checksums.txt` checks what you downloaded. Linux is the
+edge target; the macOS builds are for trying the agent on a workstation. There is no Windows build.
+
 ### The spool {#the-spool}
 
 **The spool is a drop-oldest ring.** The local store is a durable on-disk buffer, `1 GiB` by default.
