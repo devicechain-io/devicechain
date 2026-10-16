@@ -67,3 +67,23 @@ func TestPreviewDoesNotReportInOrderReadingsAsLate(t *testing.T) {
 		t.Fatalf("nothing here is degraded, got %q", res.Degraded)
 	}
 }
+
+// A threshold reading older than the device's newest one is stale: the live engine neither raises
+// nor clears on it, and the preview must agree and say it set the reading aside. Here a reading
+// above the line published after a newer reading below it would, in arrival order, have raised.
+func TestPreviewThresholdSetsAsideAReadingOlderThanTheNewest(t *testing.T) {
+	op := &fakeOpener{msgs: []messaging.Message{
+		msg(t, 1, "acme", "d1", "p@1", "temperature", "20", base),
+		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base.Add(-time.Minute)),
+	}}
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(res.Firings) != 0 {
+		t.Fatalf("a reading older than the newest raised: %+v", res.Firings)
+	}
+	if !strings.Contains(res.Degraded, "1 reading") {
+		t.Fatalf("degraded = %q, want it to report the 1 reading set aside", res.Degraded)
+	}
+}

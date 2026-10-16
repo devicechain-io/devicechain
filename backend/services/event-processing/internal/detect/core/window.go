@@ -560,20 +560,33 @@ func (e *Engine) snapshotNewest() []snapNewest {
 // its own time either way. So dropping the instant changes no cutoff, no fold and no edge — only the
 // stored instant itself, which stays inert on both sides until a newer sample replaces it. A raised
 // series keeps its instant: its resolve, and a held one (holdLateResolve), are stamped there.
+//
+// A Threshold cursor is inert by construction rather than by argument: one at or behind the horizon
+// of the frontier, on a series that is not raised, is treated by applyThreshold exactly as an absent
+// one (thresholdCursorInForce), so dropping it changes nothing either.
 func (e *Engine) pruneNewest() {
 	for k, t := range e.newest {
 		if _, raised := e.raised[k]; raised {
 			continue
 		}
 		r, ok := e.rules[k.Rule]
-		if !ok || !t.After(e.wm.now.Add(-r.Window)) {
+		if !ok || !t.After(e.wm.now.Add(-newestSpan(r))) {
 			delete(e.newest, k)
 		}
 	}
 }
 
+// newestSpan is how far behind the frontier a series' newest instant still bears on an outcome:
+// the trailing window for the sliding kinds, the cursor horizon for Threshold.
+func newestSpan(r Rule) time.Duration {
+	if r.Kind == Threshold {
+		return thresholdCursorHorizon
+	}
+	return r.Window
+}
+
 // newestFloor is the instant restoreNewest seeds for key from the rest of the state: its newest
-// retained sample (each kind's own window) and, for a sliding kind, its rising edge. ok is false
+// retained sample (each kind's own window) and, for a newest-reading kind, its rising edge. ok is false
 // when the state holds nothing to seed from. It must agree with restoreNewest exactly, because
 // snapshotNewest omits an instant on the strength of it.
 func (e *Engine) newestFloor(k SeriesKey) (floor time.Time, ok bool) {
@@ -597,15 +610,19 @@ func (e *Engine) newestFloor(k SeriesKey) (floor time.Time, ok bool) {
 		take(time.Unix(0, ns).UTC())
 	}
 	if at, raised := e.raised[k]; raised {
-		if r, known := e.rules[k.Rule]; known && slidingKind(r.Kind) {
+		if r, known := e.rules[k.Rule]; known && newestKind(r.Kind) {
 			take(at)
 		}
 	}
 	return floor, ok
 }
 
-// slidingKind reports whether a kind reads its window at the series' newest instant (trailingWindow).
-func slidingKind(k RuleKind) bool { return k == Repeating || k == SlidingAgg || k == Correlation }
+// newestKind reports whether a kind reads a series as of its newest instant: the sliding kinds
+// read their window there (trailingWindow) and Threshold refuses anything older (applyThreshold).
+// Each stamps its rising edge at or before that instant, which is what lets a restore seed from it.
+func newestKind(k RuleKind) bool {
+	return k == Repeating || k == SlidingAgg || k == Correlation || k == Threshold
+}
 
 // restoreNewest reloads the evaluation instants, then seeds one for every series the snapshot
 // holds trailing-window state or a raise for but no instant — a checkpoint written before the
@@ -613,6 +630,9 @@ func slidingKind(k RuleKind) bool { return k == Repeating || k == SlidingAgg || 
 // retained sample, and its rising edge (which was stamped at or before the newest event). It is a
 // lower bound, which is the safe direction: a late sample is read at it or later than it would
 // have been, never before an edge already emitted, so a falling edge is never refused as stale.
+// For Threshold a lower bound refuses fewer readings than the true cursor would — the ones between
+// the raise and the newest reading are applied as they were before the cursor existed — and still
+// refuses every one older than the raise, which resolve refused anyway.
 // A series that held no state carries no instant either way, and its next sample starts one.
 func (e *Engine) restoreNewest(in []snapNewest) {
 	for _, x := range in {
@@ -642,7 +662,7 @@ func (e *Engine) restoreNewest(in []snapNewest) {
 		}
 	}
 	for k, at := range e.raised {
-		if r, ok := e.rules[k.Rule]; ok && slidingKind(r.Kind) {
+		if r, ok := e.rules[k.Rule]; ok && newestKind(r.Kind) {
 			seed(k, at)
 		}
 	}

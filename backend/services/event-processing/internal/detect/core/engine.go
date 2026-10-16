@@ -232,12 +232,14 @@ type Engine struct {
 	slides   map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
 	corr     map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
 	expected map[SeriesKey]expectedState    // Absence: dead-man arming for never-seen devices (ADR-051 slice 4c-2b)
-	// newest is the trailing-window kinds' (Repeating, SlidingAgg, Correlation) evaluation instant
-	// per series: the newest event time the series has presented, matching or not. A sample older
-	// than it is folded into the window open AT it and any edge it causes is stamped there
-	// (window.go, trailingWindow). It outlives the window itself — a non-matching reading opens no
-	// window yet still moves the instant — so it is kept while it can still change an outcome: the
-	// series is raised, or its instant is inside its window of the frontier. pruneNewest drops the
+	// newest is the per-series newest event time, matching or not, for the kinds that read a
+	// series as of its newest reading. For the trailing-window kinds (Repeating, SlidingAgg,
+	// Correlation) it is the evaluation instant: a sample older than it is folded into the window
+	// open AT it and any edge it causes is stamped there (window.go, trailingWindow). For Threshold
+	// it is the cursor: a reading older than it is stale and changes nothing (threshold.go). It
+	// outlives any window — a non-matching reading opens none yet still moves the instant — so it is
+	// kept while it can still change an outcome: the series is raised, or its instant is inside its
+	// span of the frontier (the rule's window; Threshold's cursor horizon). pruneNewest drops the
 	// rest, and a snapshot omits any instant the restore re-derives (snapshotNewest).
 	newest map[SeriesKey]time.Time
 	// pending holds the samples of the sample-pairing kinds (DeltaRate, CountWindow) the frontier
@@ -263,7 +265,8 @@ type Engine struct {
 	// after their own trailing window had passed the frontier (foldsIn), and samples a Duration
 	// rule refused as more than its hold behind the frontier or as a break older than a raise
 	// already decided (applyDuration), and matching samples a sample-pairing kind refused as
-	// behind the frontier (hold, reorder.go). It is TELEMETRY, not
+	// behind the frontier (hold, reorder.go), and Threshold readings refused as older than their
+	// series' newest (applyThreshold). It is TELEMETRY, not
 	// state: nothing reads it to decide anything, it is deliberately absent from the snapshot,
 	// and a replay legitimately re-counts the samples it re-processes. It exists so a
 	// store-and-forward fleet whose windowed rules quietly stop firing has something to look at.
@@ -599,7 +602,7 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
-	countSeriesKeys(counts, e.newest)        // trailing-window evaluation instant: one per series active within its window of the frontier, or raised
+	countSeriesKeys(counts, e.newest)        // newest-reading instant: one per series active within its span of the frontier, or raised
 	countSeriesKeys(counts, e.pending)       // a sample-pairing kind's open reorder run (reorder.go)
 	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
 	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
@@ -945,16 +948,7 @@ func (e *Engine) apply(ev Event) {
 	}
 	switch r.Kind {
 	case Threshold:
-		// Level over time (ADR-057): raise on the rising edge (first matching event) and resolve
-		// on the falling edge (first non-matching event). The metric-scoped feed contract (slice 3)
-		// delivers BOTH matching and metric-present-non-matching events to a Threshold rule, so the
-		// falling edge is observable; a series that goes fully silent stays raised (see the package
-		// note on silence — Absence covers the went-dark case).
-		if ev.Match {
-			e.emitSample(r, ev)
-		} else {
-			e.resolve(r, ev.Key, ev.Time)
-		}
+		e.applyThreshold(ev, r) // the level of the series' newest reading (threshold.go)
 	case Absence:
 		// Any event is a heartbeat: it both (re)arms the dead-man timer — only ever FORWARD, so a
 		// late out-of-order heartbeat cannot shrink a deadline a newer one already set — AND, if an
@@ -1293,9 +1287,11 @@ type snapshot struct {
 	// Pending is the sample-pairing kinds' held samples (reorder.go). A checkpoint written
 	// before it existed restores with none, which is exact: that model held nothing back.
 	Pending []snapPending `json:"pending"`
-	// Newest is the trailing-window kinds' per-series evaluation instant (window.go). A checkpoint
-	// written before it existed restores a lower bound from the retained window and the rising
-	// edge instead (seedNewest).
+	// Newest is the per-series newest-reading instant: the trailing-window kinds' evaluation
+	// instant (window.go) and Threshold's cursor (threshold.go). A checkpoint written before it
+	// existed restores a lower bound from the retained window and the rising edge instead
+	// (restoreNewest). A binary that predates the Threshold cursor loads those entries and never
+	// reads them.
 	Newest []snapNewest `json:"newest"`
 }
 
