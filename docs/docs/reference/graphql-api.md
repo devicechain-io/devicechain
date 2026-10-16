@@ -788,10 +788,12 @@ A member whose access is limited to some of the tenant's customers is refused al
 `FORBIDDEN` and the reason `SCOPE_UNSUPPORTED`. Asking about a member of another tenant answers
 `NOT_FOUND`, exactly as for an address with no account.
 
-Taking something away from a member (narrowing their scope, removing an authority, disabling or
-removing them) signs them out: their refresh token and identity token stop working at their next
-use, in every tenant they belong to. An access token already issued keeps working until it expires:
-at most 15 minutes, or 5 minutes for a member limited to some customers.
+A change to a member, including taking something away (narrowing their scope, removing an
+authority, disabling or removing them), takes effect at the member's next token refresh: within 15
+minutes, or 5 minutes for customer-scoped access. Every refresh reads the membership as it is now,
+so the next access token carries the narrower grant, and a disabled or removed member's refresh for
+your tenant is refused. An access token already issued keeps working until it expires. The member's
+sessions in other tenants are not affected.
 
 ## Request limits {#request-limits}
 

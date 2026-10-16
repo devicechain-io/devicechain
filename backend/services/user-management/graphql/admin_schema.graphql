@@ -1880,10 +1880,9 @@ type Mutation {
     ): AdminIdentity!
     """
     Replaces the customers a membership is limited to and returns the identity. An empty list
-    gives the whole tenant. Narrowing the scope signs the identity out: its refresh and
-    identity tokens stop working at their next use, in every tenant it belongs to, while an
-    access token already issued keeps working until it expires (at most 15 minutes, or 5 for
-    a membership limited to part of the tenant). Fails if the identity has no membership in
+    gives the whole tenant. The change takes effect at the identity's next token refresh
+    (within 15 minutes; 5 for customer-scoped access): an access token already issued keeps
+    its old scope until it expires, and its sessions in other tenants are not affected. Fails if the identity has no membership in
     the tenant, for more than 16 anchors (LIMIT_EXCEEDED) or a group anchor (INVALID_VALUE).
     Requires user:write.
     """
@@ -1898,10 +1897,9 @@ type Mutation {
     """
     Replaces the tenant roles an identity holds in a tenant with exactly those given and
     returns the identity. Fails if the identity has no membership in the tenant or a role is
-    not assignable in the tenant. Already-issued access tokens keep their old authorities
-    until they expire. Adding authorities takes effect at the next refresh; taking one away
-    also signs the identity out, so its refresh and identity tokens stop working at their next
-    use, in every tenant it belongs to. Requires user:write.
+    not assignable in the tenant. Adding or taking away authorities takes effect at the
+    identity's next token refresh (within 15 minutes; 5 for customer-scoped access): an access
+    token already issued keeps its old authorities until it expires. Requires user:write.
     """
     # Replace a membership's tenant-role assignments (role tokens, tenant scope).
     setMembershipRoles(
@@ -1914,10 +1912,10 @@ type Mutation {
     ): AdminIdentity!
     """
     Enables or disables an identity's membership in a tenant and returns the identity. A
-    disabled membership cannot be used to enter the tenant, and disabling one signs the
-    identity out: its refresh and identity tokens stop working at their next use, in every
-    tenant it belongs to, while an access token already issued keeps working until it expires.
-    Fails if the identity has no membership in the tenant. Requires user:write.
+    disabled membership cannot be used to enter the tenant: disabling one takes effect at the
+    identity's next token refresh (within 15 minutes; 5 for customer-scoped access), which is
+    refused for this tenant, while an access token already issued keeps working until it
+    expires. Its sessions in other tenants are not affected. Fails if the identity has no membership in the tenant. Requires user:write.
     """
     # Enable or disable a membership (a disabled membership cannot be selected).
     setMembershipEnabled(
@@ -1929,8 +1927,8 @@ type Mutation {
         enabled: Boolean!
     ): AdminIdentity!
     """
-    Removes an identity's membership in a tenant and returns the identity. This signs the
-    identity out as disabling the membership does. Fails if the identity has no membership in
+    Removes an identity's membership in a tenant and returns the identity. This takes effect
+    as disabling the membership does, at the identity's next token refresh. Fails if the identity has no membership in
     the tenant. Requires user:write.
     """
     # Remove an identity's membership in a tenant.

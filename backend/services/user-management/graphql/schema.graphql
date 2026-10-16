@@ -1097,11 +1097,11 @@ type Mutation {
         request: InviteMemberRequest!
     ): MemberInvitation!
     """
-    Replaces a member's roles with exactly those given and returns the member. Taking an
-    authority away signs the member out: their refresh and identity tokens stop working at
-    their next use, in every tenant they belong to, while an access token already issued keeps
-    working until it expires (at most 15 minutes, or 5 for a member limited to part of the
-    tenant). Fails with ESCALATION (a role grants, or the member holds, an authority you do not
+    Replaces a member's roles with exactly those given and returns the member. The change,
+    adding or taking away authorities, takes effect at the member's next token refresh (within
+    15 minutes; 5 for customer-scoped access): an access token already issued keeps its old
+    authorities until it expires, and the member's sessions in other tenants are not affected.
+    Fails with ESCALATION (a role grants, or the member holds, an authority you do not
     hold), SELF_MODIFICATION (your own membership), LAST_ADMIN (it would leave nobody able to
     manage members), MANAGED_BY_IDP (the identity provider manages it) or NOT_FOUND. Requires
     member:write.
@@ -1114,8 +1114,8 @@ type Mutation {
     ): Member!
     """
     Replaces the customers a member is limited to and returns the member. An empty list gives
-    them the whole tenant. Narrowing the scope signs the member out exactly as setMemberRoles
-    does when it takes an authority away. Fails with the same error codes as setMemberRoles,
+    them the whole tenant. The change takes effect at the member's next token refresh, as
+    setMemberRoles does. Fails with the same error codes as setMemberRoles,
     plus LIMIT_EXCEEDED for more than 16 anchors and INVALID_VALUE for a group anchor. Requires
     member:write.
     """
@@ -1126,8 +1126,9 @@ type Mutation {
         scope: [ScopeAnchorInput!]!
     ): Member!
     """
-    Enables or disables a member and returns the member. Disabling signs them out exactly as
-    setMemberRoles does when it takes an authority away. A member whose invitation is still
+    Enables or disables a member and returns the member. Disabling takes effect at the
+    member's next token refresh, which is refused for this tenant (within 15 minutes; 5 for
+    customer-scoped access); their sessions in other tenants are not affected. A member whose invitation is still
     pending cannot be enabled (error code INVALID_VALUE): reissue or revoke the invitation.
     Fails with the same error codes as setMemberRoles. Requires member:write.
     """
@@ -1139,7 +1140,7 @@ type Mutation {
     ): Member!
     """
     Removes a member from this tenant, and their open invitation with them; their account is
-    kept. Signs them out exactly as setMemberRoles does when it takes an authority away. Returns
+    kept. Takes effect at the member's next token refresh, as disabling them does. Returns
     true. Fails with the same error codes as setMemberRoles. Requires member:write.
     """
     removeMember(
@@ -1174,7 +1175,7 @@ type Mutation {
     ): TenantRole!
     """
     Changes a role this tenant defined and returns it. Members holding it receive the change at
-    their next refresh; removing an authority also signs them out, as setMemberRoles does.
+    their next token refresh, removing an authority included, as setMemberRoles describes.
     Fails with READ_ONLY for an instance role, NOT_FOUND for an unknown token, ESCALATION if
     the resulting set grants an authority you do not hold, and LAST_ADMIN if it would leave
     nobody able to manage members. Requires role:write.

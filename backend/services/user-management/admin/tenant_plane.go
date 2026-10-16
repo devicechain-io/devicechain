@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -282,24 +281,6 @@ func roleAuthorities(roles []iam.Role) []string {
 	return out
 }
 
-// scopeNarrows reports whether moving a membership from scope from to scope to takes
-// anything away. No scope is the whole tenant, so moving to it never narrows and moving
-// off it always does; between two scopes, dropping any anchor narrows.
-func scopeNarrows(from, to []string) bool {
-	if len(to) == 0 {
-		return false
-	}
-	if len(from) == 0 {
-		return true
-	}
-	for _, a := range from {
-		if !slices.Contains(to, a) {
-			return true
-		}
-	}
-	return false
-}
-
 // ---- the caller ---------------------------------------------------------------------------
 
 // actor is the caller resolved against the store: what it holds now, and which membership
@@ -538,15 +519,14 @@ type InvitationView struct {
 // nothing the caller does not. fn returns the membership's state after the change (nil
 // when it removes it); the last-administrator rule is then decided over the whole tenant.
 //
-// fn also reports whether the change NARROWED the membership, which rotates the person's
-// session epoch — but only for a membership that was ENABLED before the change. 🔴 A
-// disabled membership (a pending invitation is one) admits no session in this tenant, so
-// there is nothing of it to end, and the epoch is per IDENTITY: rotating it signs the
-// person out of every other tenant they belong to. Without the gate, inviting any address
-// on the instance and removing the pending member would sign that identity out
-// everywhere, as often as the inviter liked.
+// 🔴 No change here touches the person's session epoch, narrowing included (ADR-081
+// decision 8, as amended 2026-10-16). Every token exchange re-reads the membership and
+// mints from it, so a narrowing takes effect at the person's next refresh. Rotating the
+// epoch would add no revocation on top of that, and because the epoch is per IDENTITY it
+// would sign the person out of every OTHER tenant they belong to, letting this tenant's
+// administrator do that to them at will.
 func (s *Service) memberChange(ctx context.Context, caller TenantCaller, email string,
-	fn func(tx *iam.Store, a actor, id *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error)) error {
+	fn func(tx *iam.Store, a actor, id *iam.Identity, mem *iam.Membership) (*iam.Membership, error)) error {
 	return s.iam.InTransaction(ctx, func(tx *iam.Store) error {
 		if err := lockLiveTenant(ctx, tx, caller.Tenant); err != nil {
 			return err
@@ -572,22 +552,11 @@ func (s *Service) memberChange(ctx context.Context, caller TenantCaller, email s
 		if err != nil {
 			return err
 		}
-		wasEnabled := mem.Enabled
-		after, narrowed, err := fn(tx, a, id, mem)
+		after, err := fn(tx, a, id, mem)
 		if err != nil {
 			return err
 		}
-		if err := requireAnAdminRemains(before, map[uint]*iam.Membership{mem.ID: after}); err != nil {
-			return err
-		}
-		if narrowed && wasEnabled {
-			// ADR-081 decision 8: a change that takes something away rotates the person's
-			// session epoch. Already-issued access tokens run to their expiry (the scoped
-			// lifetime bounds a scoped one); every refresh token, identity token and
-			// authorization code minted before this is refused at its next exchange.
-			return tx.RotateSessionEpochByID(ctx, id.ID)
-		}
-		return nil
+		return requireAnAdminRemains(before, map[uint]*iam.Membership{mem.ID: after})
 	})
 }
 
@@ -612,21 +581,20 @@ func (s *Service) SetMemberRoles(ctx context.Context, email string, roleTokens [
 	if err != nil {
 		return nil, err
 	}
-	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, a actor, id *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error) {
+	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, a actor, id *iam.Identity, mem *iam.Membership) (*iam.Membership, error) {
 		roles, err := tx.AssignableRolesByTokens(ctx, caller.Tenant, roleTokens)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		if err := requireAssignable(a, roles); err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		narrowed := narrows(newAuthSet(mem.TenantAuthorities()), newAuthSet(roleAuthorities(roles)))
 		if err := tx.ReplaceMembershipRoles(ctx, mem, roles); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		next := *mem
 		next.TenantRoles = roles
-		return &next, narrowed, nil
+		return &next, nil
 	})
 	if err != nil {
 		return nil, err
@@ -645,12 +613,11 @@ func (s *Service) SetMemberScope(ctx context.Context, email string, anchors []Sc
 	if err != nil {
 		return nil, err
 	}
-	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error) {
-		narrowed := scopeNarrows(mem.Scope, scope)
+	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, error) {
 		if err := tx.SetMembershipScope(ctx, mem, scope); err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		return mem, narrowed, nil
+		return mem, nil
 	})
 	if err != nil {
 		return nil, err
@@ -664,23 +631,22 @@ func (s *Service) SetMemberEnabled(ctx context.Context, email string, enabled bo
 	if err != nil {
 		return nil, err
 	}
-	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error) {
+	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, error) {
 		if enabled && !mem.Enabled {
 			invs, err := tx.InvitationsForMemberships(ctx, []uint{mem.ID})
 			if err != nil {
-				return nil, false, err
+				return nil, err
 			}
 			if hasOpenInvitation(invs[mem.ID]) {
-				return nil, false, ErrInvitationPending
+				return nil, ErrInvitationPending
 			}
 		}
-		narrowed := mem.Enabled && !enabled
 		if err := tx.SetMembershipEnabled(ctx, mem, enabled); err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		next := *mem
 		next.Enabled = enabled
-		return &next, narrowed, nil
+		return &next, nil
 	})
 	if err != nil {
 		return nil, err
@@ -695,11 +661,11 @@ func (s *Service) RemoveMember(ctx context.Context, email string) (bool, error) 
 	if err != nil {
 		return false, err
 	}
-	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error) {
+	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, error) {
 		if err := tx.RemoveMembership(ctx, mem); err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		return nil, true, nil
+		return nil, nil
 	})
 	if err != nil {
 		return false, err
@@ -817,10 +783,10 @@ func (s *Service) InviteMember(ctx context.Context, in InviteInput) (*MemberView
 // that has not been accepted yet, so acting on it is acting on that member.
 func (s *Service) invitationChange(ctx context.Context, caller TenantCaller, email string,
 	fn func(tx *iam.Store, mem *iam.Membership, invs []iam.Invitation) error) error {
-	return s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, bool, error) {
+	return s.memberChange(ctx, caller, email, func(tx *iam.Store, _ actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, error) {
 		invs, err := tx.InvitationsForMemberships(ctx, []uint{mem.ID})
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		accepted := false
 		for _, i := range invs[mem.ID] {
@@ -829,9 +795,9 @@ func (s *Service) invitationChange(ctx context.Context, caller TenantCaller, ema
 			}
 		}
 		if len(invs[mem.ID]) == 0 || accepted {
-			return nil, false, rdb.NewNotFound("no invitation for this member is waiting to be accepted")
+			return nil, rdb.NewNotFound("no invitation for this member is waiting to be accepted")
 		}
-		return mem, false, fn(tx, mem, invs[mem.ID])
+		return mem, fn(tx, mem, invs[mem.ID])
 	})
 }
 
@@ -997,9 +963,9 @@ func loadOwnedRole(ctx context.Context, tx *iam.Store, tenant, token string) (*i
 }
 
 // UpdateTenantRole applies a partial update to a role the caller's tenant owns. Removing
-// an authority rotates the session epoch of every ENABLED member holding the role (ADR-081
-// decision 8; a disabled holder has no session here to end — see memberChange), and may
-// not leave the tenant without an administrator.
+// an authority may not leave the tenant without an administrator, and takes effect for the
+// role's holders at their next token exchange (ADR-081 decision 8 as amended; see
+// memberChange).
 func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *RoleUpdateRequest) (*iam.Role, error) {
 	caller, err := tenantCaller(ctx)
 	if err != nil {
@@ -1022,13 +988,11 @@ func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *R
 		if err := requireDefinable(a, authorities); err != nil {
 			return err
 		}
-		narrowed := narrows(newAuthSet(r.Authorities), newAuthSet(authorities))
-
-		holders, err := tx.MembershipsHoldingRole(ctx, r.ID)
-		if err != nil {
-			return err
-		}
-		if narrowed {
+		if narrows(newAuthSet(r.Authorities), newAuthSet(authorities)) {
+			holders, err := tx.MembershipsHoldingRole(ctx, r.ID)
+			if err != nil {
+				return err
+			}
 			before, err := tx.TenantMemberships(ctx, caller.Tenant)
 			if err != nil {
 				return err
@@ -1049,16 +1013,6 @@ func (s *Service) UpdateTenantRole(ctx context.Context, token string, request *R
 		r.Authorities = authorities
 		if err := tx.UpdateRole(ctx, r); err != nil {
 			return err
-		}
-		if narrowed {
-			for _, h := range holders {
-				if !h.Enabled {
-					continue
-				}
-				if err := tx.RotateSessionEpochByID(ctx, h.IdentityID); err != nil {
-					return err
-				}
-			}
 		}
 		updated, err = tx.TenantOwnedRole(ctx, caller.Tenant, token)
 		return err

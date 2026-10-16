@@ -10,6 +10,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-user-management/admin"
+	"github.com/devicechain-io/dc-user-management/iam"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,11 +117,13 @@ func TestScopedTokenCarriesScpOnTheOAuthGrant(t *testing.T) {
 	require.InDelta(t, auth.DefaultAccessTTL.Seconds(), float64(samToks.ExpiresIn), 2)
 }
 
-// ADR-081 decision 8, pinned as written: after a narrowing, the access token already
-// issued still authenticates until it expires — nothing reads the epoch on the data plane
-// — and the refresh token issued before it is refused. A fresh sign-in carries the new,
-// narrower scope.
-func TestOldAccessTokenSurvivesNarrowingUntilExpiry(t *testing.T) {
+// A narrowing takes effect at the member's NEXT token exchange, and does not end the
+// session (ADR-081 decision 8, as amended 2026-10-16). Every exchange re-reads the
+// membership and mints from it, so the refresh token issued before the narrowing still
+// refreshes — and what it mints is the NARROWED grant, never a copy of the old token. The
+// access token already issued is the old token until it expires: nothing on the data plane
+// re-reads the membership.
+func TestANarrowedMembersNextRefreshCarriesTheNarrowedScope(t *testing.T) {
 	e := scopedEnv(t)
 	e.createMember(t, "pat@example.com", "pw-1")
 	_, before := e.login(t, "pat@example.com", "pw-1")
@@ -129,16 +132,133 @@ func TestOldAccessTokenSurvivesNarrowingUntilExpiry(t *testing.T) {
 
 	old, err := e.validator.Validate(before.AccessToken)
 	require.NoError(t, err, "the already-issued access token stopped authenticating — the documented window is "+
-		"its lifetime, and nothing on the data plane reads the epoch")
+		"its lifetime, and nothing on the data plane re-reads the membership")
 	require.Nil(t, old.ScopeAnchors, "the old token is the old token: unscoped until it expires")
 
-	_, err = e.m.Refresh(context.Background(), before.RefreshToken)
-	require.ErrorIs(t, err, ErrInvalidToken, "the refresh token minted before the narrowing still refreshes")
-
-	_, after := e.login(t, "pat@example.com", "pw-1")
-	fresh, err := e.validator.Validate(after.AccessToken)
+	next, err := e.m.Refresh(context.Background(), before.RefreshToken)
+	require.NoError(t, err, "narrowing a scope signed the member out instead of narrowing their next token")
+	access, err := e.validator.Validate(next.AccessToken)
 	require.NoError(t, err)
-	require.Equal(t, []string{"customer:acme-corp"}, fresh.ScopeAnchors)
+	require.Equal(t, []string{"customer:acme-corp"}, access.ScopeAnchors,
+		"the refresh after a narrowing minted a grant wider than the membership now holds")
+	require.WithinDuration(t, time.Now().Add(auth.DefaultScopedAccessTTL), access.ExpiresAt.Time, 5*time.Second,
+		"the narrowed token must carry the scoped lifetime")
+
+	// Narrowing an already-scoped membership further is the same: the next token is the
+	// narrower one.
+	e.scopeMember(t, "pat@example.com", "acme-corp", "initech")
+	wide, err := e.m.Refresh(context.Background(), next.RefreshToken)
+	require.NoError(t, err)
+	e.scopeMember(t, "pat@example.com", "initech")
+	narrow, err := e.m.Refresh(context.Background(), wide.RefreshToken)
+	require.NoError(t, err)
+	access, err = e.validator.Validate(narrow.AccessToken)
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer:initech"}, access.ScopeAnchors)
+}
+
+// The OAuth refresh (an MCP client's session) re-reads the membership the same way.
+func TestANarrowedMembersNextOAuthRefreshCarriesTheNarrowedScope(t *testing.T) {
+	e := scopedEnv(t)
+	e.createMember(t, "pat@example.com", "pw-1")
+	idTok, _ := e.login(t, "pat@example.com", "pw-1")
+	toks := e.oauthSession(t, idTok)
+
+	e.scopeMember(t, "pat@example.com", "acme-corp")
+
+	refreshed, err := e.refreshOAuth(toks.RefreshToken)
+	require.NoError(t, err, "narrowing a scope ended the member's OAuth session")
+	access, err := e.validator.Validate(refreshed.AccessToken)
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer:acme-corp"}, access.ScopeAnchors,
+		"the OAuth refresh after a narrowing minted a grant wider than the membership now holds")
+	require.InDelta(t, auth.DefaultScopedAccessTTL.Seconds(), float64(refreshed.ExpiresIn), 2)
+}
+
+// Taking an authority away is the same rule for the authorities: the next refresh no longer
+// carries it.
+func TestARemovedAuthorityIsGoneFromTheNextRefresh(t *testing.T) {
+	e := scopedEnv(t)
+	ctx := context.Background()
+	_, err := e.admin.CreateRole(ctx, admin.RoleInput{Scope: "tenant", Token: "operator", Authorities: []string{"command:write"}})
+	require.NoError(t, err)
+	e.createMember(t, "pat@example.com", "pw-1")
+	_, err = e.admin.SetMembershipRoles(ctx, "pat@example.com", "acme", []string{"operator"})
+	require.NoError(t, err)
+	_, before := e.login(t, "pat@example.com", "pw-1")
+	held, err := e.validator.Validate(before.AccessToken)
+	require.NoError(t, err)
+	require.Contains(t, held.Authorities, "command:write", "the fixture never granted the authority it removes")
+
+	_, err = e.admin.SetMembershipRoles(ctx, "pat@example.com", "acme", nil)
+	require.NoError(t, err)
+
+	next, err := e.m.Refresh(ctx, before.RefreshToken)
+	require.NoError(t, err, "removing an authority signed the member out instead of narrowing their next token")
+	access, err := e.validator.Validate(next.AccessToken)
+	require.NoError(t, err)
+	require.NotContains(t, access.Authorities, "command:write",
+		"the refresh after an authority was removed still carries it")
+	require.NotContains(t, access.Roles, "operator")
+}
+
+// 🔴 A NARROWING IN ONE TENANT DOES NOT TOUCH THE PERSON'S SESSIONS IN ANOTHER. Disabling or
+// removing a membership ends access to THAT tenant at the next exchange — the refresh token
+// for it is refused — while the same person's session in a tenant the change does not
+// concern keeps refreshing. Rotating the per-identity session epoch did the opposite: it
+// signed the person out of every tenant, so one tenant's administrator could repeatedly
+// sign a multi-tenant user out of tenants they do not administer.
+func TestNarrowingInOneTenantLeavesTheOtherTenantsSessionAlone(t *testing.T) {
+	for _, change := range []struct {
+		name string
+		do   func(e *sessionEnv) error
+	}{
+		{"disabled", func(e *sessionEnv) error {
+			_, err := e.admin.SetMembershipEnabled(context.Background(), "pat@example.com", "acme", false)
+			return err
+		}},
+		{"removed", func(e *sessionEnv) error {
+			_, err := e.admin.RemoveMembership(context.Background(), "pat@example.com", "acme")
+			return err
+		}},
+		{"scoped", func(e *sessionEnv) error {
+			_, err := e.admin.SetMembershipScope(context.Background(), "pat@example.com", "acme",
+				[]admin.ScopeAnchorInput{{Kind: auth.AnchorKindCustomer, Token: "acme-corp"}})
+			return err
+		}},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			e := scopedEnv(t)
+			ctx := context.Background()
+			tier := &iam.TenantTier{Token: "gold"}
+			require.NoError(t, e.store.CreateTenantTier(ctx, tier))
+			require.NoError(t, e.store.CreateTenant(ctx, &iam.Tenant{Token: "globex", Enabled: true, TierID: tier.ID, PurgeState: iam.PurgeActive}))
+			e.createMember(t, "pat@example.com", "pw-1")
+			_, err := e.admin.AddMembership(ctx, "pat@example.com", "globex", nil)
+			require.NoError(t, err)
+			idTok, acme := e.login(t, "pat@example.com", "pw-1")
+			globex, err := e.m.SelectTenant(ctx, idTok, "globex")
+			require.NoError(t, err)
+
+			require.NoError(t, change.do(e))
+
+			next, err := e.m.Refresh(ctx, globex.RefreshToken)
+			require.NoErrorf(t, err, "%s in acme signed the person out of globex", change.name)
+			access, err := e.validator.Validate(next.AccessToken)
+			require.NoError(t, err)
+			require.Equal(t, "globex", access.Tenant)
+			require.Nil(t, access.ScopeAnchors, "a change in acme reached the globex grant")
+			_, err = e.m.SelectTenant(ctx, idTok, "globex")
+			require.NoErrorf(t, err, "%s in acme ended the person's identity token", change.name)
+
+			_, err = e.m.Refresh(ctx, acme.RefreshToken)
+			if change.name == "scoped" {
+				require.NoError(t, err, "a narrowed — not ended — membership must keep refreshing")
+			} else {
+				require.ErrorIsf(t, err, ErrInvalidToken, "a %s membership still refreshes into acme", change.name)
+			}
+		})
+	}
 }
 
 // Widening is not a revocation: the refresh token survives, and the next one it mints

@@ -23,13 +23,13 @@ const (
 	// refresh skew so a caller isn't forced to mint on every call.
 	ServiceTokenTTL = 15 * time.Minute
 	// DefaultScopedAccessTTL is the lifetime of a SCOPED tenant access token (ADR-081
-	// decision 8). Revoking a scoped member's access — narrowing the scope, removing a
-	// role, disabling the membership — ends their refresh token at its next exchange,
-	// but cannot refuse a request on an access token already issued: access tokens do
-	// not carry the session epoch, and the data-plane validator does not read it. The
-	// access lifetime IS the revocation window, so it is shorter for the members whose
-	// access is the one most likely to be narrowed. It never exceeds the issuer's
-	// unscoped access TTL (see NewIssuer).
+	// decision 8). Narrowing a scoped member's access — narrowing the scope, removing a
+	// role, disabling the membership — takes effect at their next refresh, which re-reads
+	// the membership and mints the narrower grant (or refuses a disabled one), but cannot
+	// refuse a request on an access token already issued: the data-plane validator does
+	// not re-read the membership. The access lifetime IS the revocation window, so it is
+	// shorter for the members whose access is the one most likely to be narrowed. It never
+	// exceeds the issuer's unscoped access TTL (see NewIssuer).
 	//
 	// Five minutes is the value, not a placeholder. It is a third of the unscoped default,
 	// so the window in which a narrowed customer user keeps their old reach is bounded at

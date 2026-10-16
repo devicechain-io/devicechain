@@ -194,35 +194,17 @@ func (s *Service) AddScopedMembership(ctx context.Context, email, tenant string,
 	return s.loadIdentity(ctx, email)
 }
 
-// narrowMembership applies a change to a membership and, when the change takes anything
-// away from a membership that was ENABLED, rotates the identity's session epoch in the
-// same transaction (ADR-081 decision 8). It is the admin plane's half of the rule the
-// tenant plane applies in memberChange: a narrowing is the same event whichever plane
-// makes it, so it has the same consequence — and the same gate: a disabled membership
-// admits no session, so narrowing or removing one ends nothing and must not sign the
-// person out of their other tenants.
-//
-// What the rotation does and does not reach: every refresh token, identity token and
-// authorization code minted before it is refused at its next exchange, in EVERY tenant the
-// person belongs to (the epoch is per identity). An access token already issued runs to its
-// expiry, because access tokens do not carry the epoch.
-func (s *Service) narrowMembership(ctx context.Context, mem *iam.Membership,
-	change func(tx *iam.Store) (narrowed bool, err error)) error {
-	wasEnabled := mem.Enabled
-	return s.iam.InTransaction(ctx, func(tx *iam.Store) error {
-		narrowed, err := change(tx)
-		if err != nil {
-			return err
-		}
-		if narrowed && wasEnabled {
-			return tx.RotateSessionEpochByID(ctx, mem.IdentityID)
-		}
-		return nil
-	})
-}
-
 // SetMembershipScope replaces a membership's scope (ADR-081). An empty scope is the whole
-// tenant. Narrowing it rotates the identity's session epoch.
+// tenant.
+//
+// A change here (narrowing included, and the same holds for the role, enable and remove
+// operations below) takes effect at the person's next token exchange, not by ending their
+// session (ADR-081 decision 8, as amended 2026-10-16). Every exchange (refresh,
+// selectTenant, the OAuth code and refresh grants) re-reads the membership and mints from
+// it, so the next access token carries the new grant; one already issued runs to its expiry
+// (at most the access lifetime, shorter for a scoped member). The session epoch is per
+// IDENTITY, so rotating it here would sign the person out of every tenant they belong to,
+// and would let one tenant's administrator do that to them at will.
 func (s *Service) SetMembershipScope(ctx context.Context, email, tenant string, anchors []ScopeAnchorInput) (*iam.Identity, error) {
 	scope, err := NormalizeScope(anchors)
 	if err != nil {
@@ -232,17 +214,14 @@ func (s *Service) SetMembershipScope(ctx context.Context, email, tenant string, 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.narrowMembership(ctx, mem, func(tx *iam.Store) (bool, error) {
-		narrowed := scopeNarrows(mem.Scope, scope)
-		return narrowed, tx.SetMembershipScope(ctx, mem, scope)
-	}); err != nil {
+	if err := s.iam.SetMembershipScope(ctx, mem, scope); err != nil {
 		return nil, err
 	}
 	return s.loadIdentity(ctx, id.Email)
 }
 
-// SetMembershipRoles replaces a membership's tenant-role assignments. Taking an authority
-// away rotates the identity's session epoch (see narrowMembership).
+// SetMembershipRoles replaces a membership's tenant-role assignments. It takes effect at
+// the next token exchange (see SetMembershipScope).
 func (s *Service) SetMembershipRoles(ctx context.Context, email, tenant string, roleTokens []string) (*iam.Identity, error) {
 	id, mem, err := s.loadMembership(ctx, email, tenant)
 	if err != nil {
@@ -252,10 +231,7 @@ func (s *Service) SetMembershipRoles(ctx context.Context, email, tenant string, 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.narrowMembership(ctx, mem, func(tx *iam.Store) (bool, error) {
-		narrowed := narrows(newAuthSet(mem.TenantAuthorities()), newAuthSet(roleAuthorities(roles)))
-		return narrowed, tx.ReplaceMembershipRoles(ctx, mem, roles)
-	}); err != nil {
+	if err := s.iam.ReplaceMembershipRoles(ctx, mem, roles); err != nil {
 		return nil, err
 	}
 	return s.loadIdentity(ctx, id.Email)
@@ -284,24 +260,21 @@ func (s *Service) SetMembershipEnabled(ctx context.Context, email, tenant string
 			return nil, ErrMembershipOrphaned
 		}
 	}
-	if err := s.narrowMembership(ctx, mem, func(tx *iam.Store) (bool, error) {
-		return mem.Enabled && !enabled, tx.SetMembershipEnabled(ctx, mem, enabled)
-	}); err != nil {
+	if err := s.iam.SetMembershipEnabled(ctx, mem, enabled); err != nil {
 		return nil, err
 	}
 	return s.loadIdentity(ctx, id.Email)
 }
 
-// RemoveMembership deletes an identity's membership in a tenant, and rotates the
-// identity's session epoch (see narrowMembership).
+// RemoveMembership deletes an identity's membership in a tenant. The person's next token
+// exchange for the tenant is refused (see SetMembershipScope); their sessions in other
+// tenants are untouched.
 func (s *Service) RemoveMembership(ctx context.Context, email, tenant string) (*iam.Identity, error) {
 	id, mem, err := s.loadMembership(ctx, email, tenant)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.narrowMembership(ctx, mem, func(tx *iam.Store) (bool, error) {
-		return true, tx.RemoveMembership(ctx, mem)
-	}); err != nil {
+	if err := s.iam.RemoveMembership(ctx, mem); err != nil {
 		return nil, err
 	}
 	return s.loadIdentity(ctx, id.Email)
