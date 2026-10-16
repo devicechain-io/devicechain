@@ -18,7 +18,7 @@ func TestRecordNotificationUpsert(t *testing.T) {
 	ctx := tenantCtx("A")
 
 	t0 := time.Now().Add(-time.Minute).UTC()
-	if err := api.RecordNotification(ctx, "alarm-1", "temperature.high", "CRITICAL", t0); err != nil {
+	if err := api.RecordNotification(ctx, "alarm-1", "temperature.high", "CRITICAL", testCycle, t0); err != nil {
 		t.Fatalf("first record: %v", err)
 	}
 	states, err := api.NotificationStatesByAlarmToken(ctx, []string{"alarm-1"})
@@ -34,7 +34,7 @@ func TestRecordNotificationUpsert(t *testing.T) {
 	}
 
 	t1 := t0.Add(30 * time.Second)
-	if err := api.RecordNotification(ctx, "alarm-1", "temperature.high", "MAJOR", t1); err != nil {
+	if err := api.RecordNotification(ctx, "alarm-1", "temperature.high", "MAJOR", testCycle, t1); err != nil {
 		t.Fatalf("second record: %v", err)
 	}
 	states, _ = api.NotificationStatesByAlarmToken(ctx, []string{"alarm-1"})
@@ -60,15 +60,15 @@ func TestMarkAcknowledgedAndClearedIdempotent(t *testing.T) {
 	ctx := tenantCtx("A")
 
 	now := time.Now().UTC()
-	if err := api.RecordNotification(ctx, "alarm-2", "k", "CRITICAL", now); err != nil {
+	if err := api.RecordNotification(ctx, "alarm-2", "k", "CRITICAL", testCycle, now); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	ackAt := now.Add(time.Minute)
-	if err := api.MarkAcknowledged(ctx, "alarm-2", "k", "CRITICAL", ackAt); err != nil {
+	if err := api.MarkAcknowledged(ctx, "alarm-2", "k", "CRITICAL", testCycle, ackAt); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
 	// A second ack must not overwrite the first stamp.
-	if err := api.MarkAcknowledged(ctx, "alarm-2", "k", "CRITICAL", ackAt.Add(time.Hour)); err != nil {
+	if err := api.MarkAcknowledged(ctx, "alarm-2", "k", "CRITICAL", testCycle, ackAt.Add(time.Hour)); err != nil {
 		t.Fatalf("re-ack: %v", err)
 	}
 	states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"alarm-2"})
@@ -77,7 +77,7 @@ func TestMarkAcknowledgedAndClearedIdempotent(t *testing.T) {
 	}
 
 	clearAt := now.Add(2 * time.Minute)
-	if err := api.MarkCleared(ctx, "alarm-2", "k", "CRITICAL", clearAt); err != nil {
+	if err := api.MarkCleared(ctx, "alarm-2", "k", "CRITICAL", testCycle, clearAt); err != nil {
 		t.Fatalf("clear: %v", err)
 	}
 	states, _ = api.NotificationStatesByAlarmToken(ctx, []string{"alarm-2"})
@@ -96,7 +96,7 @@ func TestMarkTerminalUpsertsTombstone(t *testing.T) {
 	now := time.Now().UTC()
 
 	// Clear arrives with no prior row: a cleared tombstone is created.
-	if err := api.MarkCleared(ctx, "raced", "temp.high", "CRITICAL", now); err != nil {
+	if err := api.MarkCleared(ctx, "raced", "temp.high", "CRITICAL", testCycle, now); err != nil {
 		t.Fatalf("clear tombstone: %v", err)
 	}
 	states, _ := api.NotificationStatesByAlarmToken(ctx, []string{"raced"})
@@ -108,7 +108,7 @@ func TestMarkTerminalUpsertsTombstone(t *testing.T) {
 	}
 
 	// A later RAISED bumps NotifyCount but must preserve the cleared stamp (stays resolved).
-	if err := api.RecordNotification(ctx, "raced", "temp.high", "CRITICAL", now.Add(time.Second)); err != nil {
+	if err := api.RecordNotification(ctx, "raced", "temp.high", "CRITICAL", testCycle, now.Add(time.Second)); err != nil {
 		t.Fatalf("late raise: %v", err)
 	}
 	states, _ = api.NotificationStatesByAlarmToken(ctx, []string{"raced"})
@@ -125,7 +125,7 @@ func TestMarkTerminalUpsertsTombstone(t *testing.T) {
 	}
 
 	// Ack tombstone on a separate alarm.
-	if err := api.MarkAcknowledged(ctx, "raced-ack", "k", "MAJOR", now); err != nil {
+	if err := api.MarkAcknowledged(ctx, "raced-ack", "k", "MAJOR", testCycle, now); err != nil {
 		t.Fatalf("ack tombstone: %v", err)
 	}
 	states, _ = api.NotificationStatesByAlarmToken(ctx, []string{"raced-ack"})
@@ -146,7 +146,7 @@ func TestOpenStatesAndClaimEscalation(t *testing.T) {
 	mustRecord(t, api, ctx, "open-1", now.Add(-time.Hour))
 	// Acknowledged → not a candidate.
 	mustRecord(t, api, ctx, "acked", now.Add(-time.Hour))
-	if err := api.MarkAcknowledged(ctx, "acked", "k", "CRITICAL", now); err != nil {
+	if err := api.MarkAcknowledged(ctx, "acked", "k", "CRITICAL", testCycle, now); err != nil {
 		t.Fatalf("ack: %v", err)
 	}
 	// Cleared → not a candidate.
@@ -163,7 +163,7 @@ func TestOpenStatesAndClaimEscalation(t *testing.T) {
 
 	// Claim the first tier: wins, advances level to 1 and re-arms the notify window.
 	escAt := now.Add(time.Minute)
-	claimed, err := api.ClaimEscalation(ctx, "open-1", 0, escAt)
+	claimed, err := api.ClaimEscalation(ctx, "open-1", 0, testCycleKey, escAt)
 	if err != nil || !claimed {
 		t.Fatalf("first claim: claimed=%v err=%v", claimed, err)
 	}
@@ -177,7 +177,7 @@ func TestOpenStatesAndClaimEscalation(t *testing.T) {
 	}
 
 	// A stale re-claim at the same expected level LOSES (the CAS token moved) → no change.
-	claimed, err = api.ClaimEscalation(ctx, "open-1", 0, escAt.Add(time.Minute))
+	claimed, err = api.ClaimEscalation(ctx, "open-1", 0, testCycleKey, escAt.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("stale claim err: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestOpenStatesAndClaimEscalation(t *testing.T) {
 	}
 
 	// Claiming a resolved alarm never wins (the CAS predicate excludes acked/cleared).
-	claimed, err = api.ClaimEscalation(ctx, "acked", 0, escAt)
+	claimed, err = api.ClaimEscalation(ctx, "acked", 0, testCycleKey, escAt)
 	if err != nil {
 		t.Fatalf("claim acked err: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestDistinctStateTenants(t *testing.T) {
 // mustRecord records a notification or fails the test.
 func mustRecord(t *testing.T, api *Api, ctx context.Context, token string, at time.Time) {
 	t.Helper()
-	if err := api.RecordNotification(ctx, token, "k", "CRITICAL", at); err != nil {
+	if err := api.RecordNotification(ctx, token, "k", "CRITICAL", testCycle, at); err != nil {
 		t.Fatalf("record %s: %v", token, err)
 	}
 }
@@ -328,7 +328,7 @@ func mustRecord(t *testing.T, api *Api, ctx context.Context, token string, at ti
 // mustClear stamps a clear or fails the test.
 func mustClear(t *testing.T, api *Api, ctx context.Context, token string, at time.Time) {
 	t.Helper()
-	if err := api.MarkCleared(ctx, token, "k", "CRITICAL", at); err != nil {
+	if err := api.MarkCleared(ctx, token, "k", "CRITICAL", testCycle, at); err != nil {
 		t.Fatalf("clear %s: %v", token, err)
 	}
 }
@@ -336,7 +336,7 @@ func mustClear(t *testing.T, api *Api, ctx context.Context, token string, at tim
 // mustAck stamps an acknowledgement or fails the test.
 func mustAck(t *testing.T, api *Api, ctx context.Context, token string, at time.Time) {
 	t.Helper()
-	if err := api.MarkAcknowledged(ctx, token, "k", "CRITICAL", at); err != nil {
+	if err := api.MarkAcknowledged(ctx, token, "k", "CRITICAL", testCycle, at); err != nil {
 		t.Fatalf("ack %s: %v", token, err)
 	}
 }

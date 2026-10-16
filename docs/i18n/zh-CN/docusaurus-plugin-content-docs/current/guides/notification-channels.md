@@ -225,4 +225,4 @@ mutation {
 3. **触发真实告警。** 在测试设备触发检测规则（参见[事件处理与告警](../concepts/event-processing.md)），确认邮件或 webhook 到达。
 4. **检查投递状态。** 服务为每个告警保存已执行操作的只读记录。查询 `notificationStatesByAlarmToken(alarmTokens: [...])`，或通过 `notificationStates` 搜索。检查 `firstNotifiedAt` 和 `notifyCount`；告警未确认超过升级窗口后，检查 `escalationLevel`。
 
-确认或解除告警会停止后续升级。状态行在通知历史旁记录 `acknowledgedAt`/`clearedAt`。
+确认或解除告警会停止后续升级。状态行在通知历史旁记录 `acknowledgedAt`/`clearedAt`。如果告警解除后其条件再次出现，平台会重新打开同一个告警，其状态行也会为新周期重新开始：在该周期被确认或解除之前，升级会再次进行。

@@ -481,6 +481,10 @@ type NotificationPolicySearchResults {
 What the service has done about one raised alarm: when it was notified, how many times,
 and how far escalation has gone. There is one record per alarm. It records notification
 activity, not the alarm itself; read the alarm from the alarms API.
+
+An alarm that clears and is raised again keeps its token, and so its record. The record
+then starts over for the new cycle: the acknowledgement, clear, escalation level, first
+notification time and notification count all describe the current cycle.
 """
 # The per-alarm notification/escalation state: one row per raised alarm, tracking
 # what the service has done about it. Read-only in this slice — the notified

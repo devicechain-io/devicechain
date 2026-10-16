@@ -230,13 +230,13 @@ func TestReleaseSendsAtTheEndOfQuietHours(t *testing.T) {
 func TestReleaseDropsWhatWasResolvedWhileHeld(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		resolve func(api *model.Api, ctx context.Context, at time.Time) error
+		resolve func(api *model.Api, ctx context.Context, raised, at time.Time) error
 	}{
-		{"cleared", func(api *model.Api, ctx context.Context, at time.Time) error {
-			return api.MarkCleared(ctx, "a1", "k", "MAJOR", at)
+		{"cleared", func(api *model.Api, ctx context.Context, raised, at time.Time) error {
+			return api.MarkCleared(ctx, "a1", "k", "MAJOR", raised, at)
 		}},
-		{"acknowledged", func(api *model.Api, ctx context.Context, at time.Time) error {
-			return api.MarkAcknowledged(ctx, "a1", "k", "MAJOR", at)
+		{"acknowledged", func(api *model.Api, ctx context.Context, raised, at time.Time) error {
+			return api.MarkAcknowledged(ctx, "a1", "k", "MAJOR", raised, at)
 		}},
 	} {
 		t.Run(tc.name+" while held", func(t *testing.T) {
@@ -245,7 +245,8 @@ func TestReleaseDropsWhatWasResolvedWhileHeld(t *testing.T) {
 			if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {
 				t.Fatal(err)
 			}
-			if err := tc.resolve(api, ctx, clock.Add(10*time.Minute)); err != nil {
+			// The held raise's own cycle (eventAt raises at clock).
+			if err := tc.resolve(api, ctx, clock, clock.Add(10*time.Minute)); err != nil {
 				t.Fatal(err)
 			}
 			if err := n.ReleaseHeld(ctx, enabledPolicies(t, api, ctx), quietEnds); err != nil {
@@ -264,7 +265,7 @@ func TestReleaseDropsWhatWasResolvedWhileHeld(t *testing.T) {
 		t.Run(tc.name+" in an earlier cycle", func(t *testing.T) {
 			clock := insideQuiet
 			n, api, fa, ctx := quietFixture(t, "Europe/Berlin", quietSlots, "", &clock)
-			if err := tc.resolve(api, ctx, clock.Add(-time.Hour)); err != nil {
+			if err := tc.resolve(api, ctx, clock.Add(-2*time.Hour), clock.Add(-time.Hour)); err != nil {
 				t.Fatal(err)
 			}
 			if err := n.dispatch(ctx, eventAt(dmmodel.AlarmEventRaised, "MAJOR", clock)); err != nil {

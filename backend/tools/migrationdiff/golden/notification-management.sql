@@ -184,7 +184,8 @@ CREATE TABLE "notification-management".notification_states (
  acknowledged_at timestamp with time zone,
  cleared_at timestamp with time zone,
  escalation_level bigint DEFAULT 0 NOT NULL,
- last_escalated_at timestamp with time zone
+ last_escalated_at timestamp with time zone,
+ cycle_raised_at timestamp with time zone
 );
 CREATE TABLE "notification-management".purged_tenants (
  token character varying(128) NOT NULL,

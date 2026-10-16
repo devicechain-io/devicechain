@@ -228,4 +228,4 @@ In the console, quiet hours are edited on the **Notification Policies** page; se
 3. **Raise a real alarm.** Trip a detection rule on a test device (see [Event Processing & Alarms](../concepts/event-processing.md)) and confirm the email or webhook call arrives.
 4. **Inspect delivery state.** The service keeps a read-only per-alarm record of what it has done. Query `notificationStatesByAlarmToken(alarmTokens: [...])`, or search with `notificationStates`. Check `firstNotifiedAt` and `notifyCount`, and, once the alarm has sat unacknowledged past the escalation window, `escalationLevel`.
 
-Acknowledging or clearing the alarm stops further escalation. The state row records `acknowledgedAt`/`clearedAt` alongside the notification history.
+Acknowledging or clearing the alarm stops further escalation. The state row records `acknowledgedAt`/`clearedAt` alongside the notification history. If the alarm clears and its condition returns, the platform re-opens the same alarm, and its state row starts over for the new cycle: escalation runs again until that cycle is acknowledged or cleared.

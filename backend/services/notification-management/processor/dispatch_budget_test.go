@@ -407,7 +407,7 @@ func TestEscalateSpendsTheWholeDispatchBudget(t *testing.T) {
 	ctx := tenantScoped()
 	state, policies, now := escalationFixture()
 	if err := api.RecordNotification(ctx, state.AlarmToken, state.AlarmKey, state.Severity,
-		now.Add(-10*time.Minute)); err != nil {
+		time.Time{}, now.Add(-10*time.Minute)); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 
