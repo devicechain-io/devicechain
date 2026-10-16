@@ -240,7 +240,10 @@ instance:
         #   batch: 256
         #   ahead: true
         #   aheadHoldBudgetMillis: 1000
-        # Leader affinity (both OFF when omitted, until a cluster measurement earns a default).
+        # Leader affinity. Omitted: publishToLeader is ON (measured on a three-server
+        # cluster under load: ~2 fewer broker messages per event, ~6% more resolved per
+        # device-management replica); consumerLeaders is OFF (it moves broker leaders and
+        # measured no gain). Set publishToLeader: false to turn the writer half off.
         # A fixed setting, read at startup; neither half changes what is stored, in what
         # order, or what is acked.
         #   consumerLeaders  move a reader's consumer leader to the server the reader is
@@ -252,7 +255,7 @@ instance:
         # whether or not they are on. Nothing to do on a single-server broker.
         # affinity:
         #   consumerLeaders: false
-        #   publishToLeader: false
+        #   publishToLeader: true
         # Client-side TLS to the broker (ADR-025). MUST match the broker: the
         # OpenTofu nats module terminates TLS on the 4222 + 1883 listeners and
         # emits its CA as the `nats_ca` output, which the bring-up threads in here

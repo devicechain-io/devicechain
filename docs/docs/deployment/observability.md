@@ -549,17 +549,22 @@ acknowledgement is forwarded back, and each delivery and acknowledgement crosses
 consumer's leader and the reader's server. On a three-server cluster under load these forwarded
 messages were about a quarter of everything the broker handled, and the broker's work grows with
 the number of messages, not their size. The two `infrastructure.nats.affinity` settings remove
-them. Both are off by default and are read when a service starts. Neither changes what is stored,
-in what order, or what is acknowledged.
+them. `publishToLeader` is on by default and `consumerLeaders` is off; both are read when a
+service starts. Neither changes what is stored, in what order, or what is acknowledged.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `consumerLeaders` | off | When a consumer's leader has been on a different server from its reader for three samples in a row (about a minute and a half), the service asks the broker to move the leader to the reader's server. It does not ask while the broker is unhealthy: while a stream or consumer has no leader or a replica that is behind, or within two minutes of the service reconnecting. It moves one consumer at most once a minute, and it leaves the leader where it is when the service's replicas are spread across servers with no majority on one. One replica asks, and the others do not. |
-| `publishToLeader` | off | Services that keep many publishes in flight (the resolved events `device-management` publishes, and the device events `event-sources` forwards) open a second connection to the server that leads the stream. When the broker elects a new leader they move to it, after the publishes already in flight have been acknowledged. If that connection cannot be opened, or is lost, they publish through their usual connection, as they do with this off. |
+| `publishToLeader` | on | Services that keep many publishes in flight (the resolved events `device-management` publishes, and the device events `event-sources` forwards) open a second connection to the server that leads the stream. When the broker elects a new leader they move to it, after the publishes already in flight have been acknowledged. If that connection cannot be opened, or is lost, they publish through their usual connection, as they do with this off. |
 
-Set either one to `true` to turn it on. Moving a consumer's leader briefly pauses that consumer's
-deliveries, which is why neither is on until it has been measured on a cluster under load. On a
-single-server broker neither has anything to do.
+Set `publishToLeader: false` to turn the publishing half off, or `consumerLeaders: true` to turn
+the other half on. On a three-server cluster under load, publishing to the leader cut the broker
+messages handled per event from about 11 to 9 or 10, cut the median time `device-management`
+waits for the broker to acknowledge a resolved event by a third to nearly a half, and raised
+the most one `device-management` replica resolved by about 6%. Through a forced leader election, a rolling restart and a scale-up it kept
+publishing and followed the new leader. Moving a consumer's leader briefly pauses that consumer's
+deliveries, and on the same cluster it worked as described but resolved no more events, so
+`consumerLeaders` stays off. On a single-server broker neither has anything to do.
 
 - **`devicechain_<area>_jetstream_consumer_leader_local{stream, durable}`**: 1 while the
   consumer's leader is the server this service is connected to, 0 while it is another server.

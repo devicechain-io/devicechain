@@ -569,17 +569,25 @@ confirmación se reenvía de vuelta, y cada entrega y cada confirmación cruzan 
 consumidor y el servidor del lector. En un clúster de tres servidores bajo carga, estos mensajes
 reenviados eran alrededor de una cuarta parte de todo lo que manejaba el broker, y el trabajo del
 broker crece con el número de mensajes, no con su tamaño. Los dos ajustes de
-`infrastructure.nats.affinity` los eliminan. Ambos están desactivados por defecto y se leen al
-arrancar el servicio. Ninguno cambia qué se guarda, en qué orden ni qué se confirma.
+`infrastructure.nats.affinity` los eliminan. `publishToLeader` está activado por defecto y
+`consumerLeaders` desactivado; ambos se leen al arrancar el servicio. Ninguno cambia qué se
+guarda, en qué orden ni qué se confirma.
 
 | Ajuste | Por defecto | Qué hace |
 | --- | --- | --- |
 | `consumerLeaders` | desactivado | Cuando el líder de un consumidor ha estado en un servidor distinto al de su lector durante tres muestras seguidas (alrededor de un minuto y medio), el servicio pide al broker que lo mueva al servidor del lector. No lo pide mientras el broker no está sano: mientras un stream o un consumidor no tiene líder o tiene una réplica atrasada, ni en los dos minutos siguientes a una reconexión del servicio. Mueve un mismo consumidor como mucho una vez por minuto, y deja el líder donde está cuando las réplicas del servicio están repartidas entre servidores sin mayoría en ninguno. Lo pide una réplica, y las demás no. |
-| `publishToLeader` | desactivado | Los servicios que mantienen muchas publicaciones en curso (los eventos resueltos que publica `device-management` y los eventos de dispositivo que reenvía `event-sources`) abren una segunda conexión al servidor que lidera el stream. Cuando el broker elige un nuevo líder se pasan a él, después de que se confirmen las publicaciones que ya estaban en curso. Si esa conexión no se puede abrir, o se pierde, publican por su conexión habitual, como con el ajuste desactivado. |
+| `publishToLeader` | activado | Los servicios que mantienen muchas publicaciones en curso (los eventos resueltos que publica `device-management` y los eventos de dispositivo que reenvía `event-sources`) abren una segunda conexión al servidor que lidera el stream. Cuando el broker elige un nuevo líder se pasan a él, después de que se confirmen las publicaciones que ya estaban en curso. Si esa conexión no se puede abrir, o se pierde, publican por su conexión habitual, como con el ajuste desactivado. |
 
-Ponga cualquiera de los dos en `true` para activarlo. Mover el líder de un consumidor detiene
-brevemente sus entregas, y por eso ninguno se activa hasta haberse medido en un clúster bajo
-carga. En un broker de un solo servidor ninguno tiene nada que hacer.
+Ponga `publishToLeader: false` para desactivar la mitad que publica, o `consumerLeaders: true`
+para activar la otra. En un clúster de tres servidores bajo carga, publicar al líder redujo los
+mensajes que el broker maneja por evento de unos 11 a 9 o 10, redujo entre un tercio y casi la
+mitad la mediana de lo que `device-management` espera a que el broker confirme un evento
+resuelto, y elevó en torno a un 6%
+lo máximo que resolvía una réplica de `device-management`. Durante una elección forzada de líder,
+un reinicio escalonado y un escalado siguió publicando y se pasó al nuevo líder. Mover el líder de
+un consumidor detiene brevemente sus entregas, y en el mismo clúster funcionó como se describe pero
+no resolvió más eventos, así que `consumerLeaders` sigue desactivado. En un broker de un solo
+servidor ninguno tiene nada que hacer.
 
 - **`devicechain_<area>_jetstream_consumer_leader_local{stream, durable}`**: 1 mientras el líder
   del consumidor es el servidor al que está conectado este servicio, 0 mientras es otro. Ausente

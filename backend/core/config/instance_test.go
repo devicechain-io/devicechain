@@ -663,6 +663,36 @@ func TestFetchAheadIsOnByDefaultAndAnExplicitFalseTurnsItOff(t *testing.T) {
 	}
 }
 
+// 🔑 PUBLISH-TO-LEADER IS ON BY DEFAULT; THE CONSUMER-LEADER RECONCILER IS NOT. On the GKE
+// round-11 shape the writer half raised the single-DM ceiling 6% (12,729 to 13,512 resolves a
+// second at 14,000 offered), cut broker messages per event by 1.3 to 2.0 and halved
+// device-management's resolved-publish acknowledgement p50; the reconciler half was correct but
+// bought nothing, so it stays off. Only ABSENCE is defaulted: an explicit false is honoured.
+func TestPublishToLeaderIsOnByDefaultAndAnExplicitFalseTurnsItOff(t *testing.T) {
+	cfg := &InstanceConfiguration{}
+	cfg.ApplyDefaults()
+	aff := cfg.Infrastructure.Nats.Affinity
+	if !aff.PublishToLeaderEnabled() {
+		t.Error("an absent `publishToLeader` key left it off; the default is on")
+	}
+	if aff.ConsumerLeadersEnabled() {
+		t.Error("an absent `consumerLeaders` key turned the reconciler on; the default is off")
+	}
+
+	off := &InstanceConfiguration{}
+	off.Infrastructure.Nats.Affinity.PublishToLeader = BoolFlag(false)
+	off.ApplyDefaults()
+	if off.Infrastructure.Nats.Affinity.PublishToLeaderEnabled() {
+		t.Error("an explicit `publishToLeader: false` was overwritten by the default")
+	}
+
+	// A configuration nothing defaulted (a manager built by hand) reads as off: the default
+	// is applied once, where configuration is loaded.
+	if (NatsAffinityConfiguration{}).PublishToLeaderEnabled() {
+		t.Error("an undefaulted configuration reads as on")
+	}
+}
+
 // TestDefaultFetchBatchIsTheMeasuredBest pins the default pull size at the widest the platform
 // allows. GKE round 10 measured fetch batch 256 against 128 on the same build: single-DM resolve
 // 10.36k to 11.62k events/s at 12.4k offered (+12%), read-loop fetch wait about 90% to 70%. The
