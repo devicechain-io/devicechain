@@ -224,8 +224,9 @@ size the setting:
   it is inside the tolerance or far past it, such as a retried publish a minute late, so an older
   reading cannot clear an alarm that a newer reading keeps raised. While no alarm is raised, a
   matching reading is discarded and counted only if it is further behind than the tolerance and
-  also reached the detection engine more than 30 seconds after the platform received it, as a
-  retried publish does, so a retried publish cannot raise an alarm that newer readings had
+  also was queued for detection more than 30 seconds after the platform received it, as a
+  retried publish is (time the detection engine itself takes to read the queue, during a restart
+  for example, does not count), so a retried publish cannot raise an alarm that newer readings had
   cleared. Any other matching reading is evaluated, so a device whose readings are dated more than
   the tolerance behind the rest, such as one whose clock runs slow or one uploading readings it
   stored during an outage, raises a threshold alarm from them as they arrive. Readings that arrive
@@ -233,8 +234,8 @@ size the setting:
   follow. A matching reading that arrives out of order still raises, even if a newer reading had
   already cleared the alarm, when it is within the tolerance or reaches the platform afresh, such as
   a reading the device sends a second time; the device's next reading clears it again. And a
-  reading the platform held for more than 30 seconds before passing it on, during a backlog for
-  example, is treated like a retried publish: if it is a matching reading further behind than the
+  reading the platform held for more than 30 seconds before queuing it for detection, during a
+  backlog in ingest or resolution for example, is treated like a retried publish: if it is a matching reading further behind than the
   tolerance, it is discarded and counted. The device's newest reading is remembered only while its
   alarm is raised, and only a reading up to ten minutes older than it is discarded: an older one is
   evaluated as it arrives, so a device whose clock is set back by more than ten minutes, by a

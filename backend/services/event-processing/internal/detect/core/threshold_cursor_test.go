@@ -388,17 +388,26 @@ func TestThresholdReadingsBehindTheFrontierCanRaise(t *testing.T) {
 		{"no receipt time", Receipt{Stored: wall}, "Raised@0=1 Resolved@120 Raised@3600=4", 1},
 		{"no store time", Receipt{Received: wall}, "Raised@0=1 Resolved@120 Raised@3600=4", 1},
 	} {
-		for _, k := range []int{1, 3} {
-			det := newDet(k, 5*time.Second)
+		// The plain engine (what the live loop runs at one shard), the one-shard wrapper, which
+		// hands its single engine the receipt on a path of its own, and three shards.
+		for _, d := range []struct {
+			name string
+			det  detector
+		}{
+			{"engine", newDet(1, 5*time.Second)},
+			{"K=1", NewSharded(1, []Rule{thresholdRule}, 5*time.Second)},
+			{"K=3", newDet(3, 5*time.Second)},
+		} {
+			det := d.det
 			rs := make([]Receipt, len(order))
 			for i := range rs {
 				rs[i] = c.receipt
 			}
 			if got := edges(feedReceived(det, evs, order, rs, 0)); got != c.want {
-				t.Fatalf("%s K=%d: want %s, got %s", c.name, k, c.want, got)
+				t.Fatalf("%s %s: want %s, got %s", c.name, d.name, c.want, got)
 			}
 			if late := det.DrainLateSamples(); late != c.late {
-				t.Fatalf("%s K=%d: late = %d, want %d", c.name, k, late, c.late)
+				t.Fatalf("%s %s: late = %d, want %d", c.name, d.name, late, c.late)
 			}
 		}
 	}

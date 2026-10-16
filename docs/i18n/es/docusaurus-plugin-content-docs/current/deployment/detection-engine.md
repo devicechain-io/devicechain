@@ -246,8 +246,9 @@ dimensionar el ajuste:
   publicación reintentada un minuto tarde, así que una lectura más antigua no puede retirar una
   alarma que una lectura más reciente mantiene elevada. Mientras no hay alarma, una lectura que
   cumple la condición solo se descarta y se cuenta si queda más atrás que la tolerancia y además
-  llegó al motor de detección más de 30 segundos después de que la plataforma la recibiera, como
-  ocurre con una publicación reintentada, así que una publicación reintentada no puede elevar una
+  quedó en cola para la detección más de 30 segundos después de que la plataforma la recibiera,
+  como ocurre con una publicación reintentada (no cuenta el tiempo que el propio motor de detección
+  tarda en leer la cola, por ejemplo durante un reinicio), así que una publicación reintentada no puede elevar una
   alarma que lecturas más recientes habían retirado. Cualquier otra lectura que cumple la condición
   se evalúa, así que un dispositivo cuyas lecturas tienen una fecha más atrasada que la tolerancia
   respecto al resto, como uno cuyo reloj va retrasado o uno que sube lecturas guardadas durante un
@@ -257,7 +258,8 @@ dimensionar el ajuste:
   alarma, aunque una lectura más reciente ya la hubiera retirado, cuando está dentro de la tolerancia
   o llega a la plataforma de nuevo, como una lectura que el dispositivo envía por segunda vez; la
   siguiente lectura del dispositivo la vuelve a retirar. Y una lectura que la plataforma retuvo más
-  de 30 segundos antes de pasarla, durante una acumulación por ejemplo, se trata como una
+  de 30 segundos antes de ponerla en cola para la detección, durante una acumulación en la ingesta o
+  en la resolución por ejemplo, se trata como una
   publicación reintentada: si cumple la condición y queda más atrás que la tolerancia, se descarta y
   se cuenta. La lectura más reciente del dispositivo solo se
   recuerda mientras su alarma está elevada, y solo se descarta una lectura hasta diez minutos más
