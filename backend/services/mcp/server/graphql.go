@@ -23,8 +23,13 @@ const maxGraphQLResponseBytes = 8 << 20 // 8 MiB
 // GraphQLClient calls the per-area DeviceChain GraphQL endpoints on behalf of the
 // MCP caller (ADR-047). It forwards the CALLER'S validated access token as the
 // bearer credential — never a service token — so every downstream read inherits
-// the user's tenant scope, role checks, and audit trail, and the MCP server
-// structurally cannot exceed the calling user (the anti-confused-deputy design).
+// the user's tenant scope and role checks, and the MCP server structurally cannot
+// exceed the calling user (the anti-confused-deputy design).
+//
+// 🔴 IT DOES NOT INHERIT AN AUDIT TRAIL, AND THIS COMMENT USED TO SAY IT DID. The
+// platform's audit journal records mutations and sign-ins, never a query, so a read
+// made here leaves no row in any area's journal. The record of a tool call is the
+// audit line this server writes itself — see audit.go.
 type GraphQLClient struct {
 	http    *http.Client
 	baseURL func(area string) string

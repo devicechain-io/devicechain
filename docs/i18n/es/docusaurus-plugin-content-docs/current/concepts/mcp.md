@@ -60,6 +60,34 @@ MCP se está convirtiendo en una forma estándar de dar a los asistentes de IA c
 
 Conecta un asistente y podrá *leer dispositivos, estado, mediciones y alarmas* de tu inquilino. No puede alcanzar otro inquilino, cambiar nada ni ejecutar una consulta arbitraria.
 
+## Qué se registra {#audit}
+
+Cada llamada a una herramienta escribe una línea en el registro del servicio `mcp`, sea cual sea su resultado. Las lecturas no son entradas del diario de auditoría, que registra cambios e inicios de sesión, así que estas líneas son el único registro de lo que leyó un asistente. Una línea tiene este aspecto:
+
+```json
+{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":1,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
+```
+
+| Campo | Significado |
+| --- | --- |
+| `audit` | Siempre `mcp_tool_call`. Selecciona los registros por este campo: no llevan `level`. |
+| `schema` | La versión de este formato, `1`. Un cambio en los campos se anuncia en las notas de la versión con un número nuevo. |
+| `tenant`, `actor` | El inquilino y el usuario que nombra el token de acceso. El actor es el correo electrónico del usuario. |
+| `client_id` | El cliente OAuth registrado al que se emitió el token, que indica qué aplicación hizo la llamada. |
+| `sudo` | `true` cuando el usuario es superusuario. |
+| `tool` | La herramienta llamada. Una llamada a una herramienta que el servidor no tiene se registra como `(unregistered)`, y el nombre que envió el cliente no se copia. |
+| `args_sha256` | El SHA-256 de los argumentos de la llamada, con las claves ordenadas y sin espacios, de modo que solicitudes idénticas comparten valor. Los argumentos nunca se escriben. |
+| `outcome` | `ok`, `error` (la herramienta rechazó la llamada o falló, incluidos argumentos que no acepta y un rechazo porque el usuario no tiene el permiso) o `rejected` (una llamada a una herramienta que el servidor no tiene). Una solicitud tan mal formada que ni siquiera nombra una herramienta la rechaza la capa de protocolo antes de que llegue a ninguna herramienta, y no escribe ninguna línea. |
+| `duration_ms` | Cuánto tardó la llamada. |
+
+Algunas propiedades de estas líneas importan cuando dependes de ellas:
+
+- **Se escriben en todos los niveles de registro.** Poner `infrastructure.logging.level` en `warn` o `error` no las detiene.
+- **Están en los registros del operador, no en la página de Auditoría de la consola.** Un administrador del inquilino no puede verlas. Consérvalas recogiendo la salida de registro del servicio; cuánto tiempo se guardan depende de tu canal de registros.
+- **Nombran a personas.** `actor` es una dirección de correo electrónico. Eliminar un inquilino no alcanza las líneas ya recogidas, así que elimina las líneas de un inquilino eliminado en tu almacén de registros si tus reglas de retención lo exigen.
+- **El resumen sirve para relacionar llamadas, no para ocultarlas.** Los argumentos son tokens de dispositivo, filtros y rangos de tiempo. Quien conozca los dispositivos de un inquilino puede recalcular el resumen de una solicitud que adivine. Ningún argumento de herramienta lleva una credencial.
+- **Una línea por llamada.** Una línea ocupa unos cientos de bytes, así que el volumen sigue al ritmo de llamadas. Listar las herramientas y abrir una sesión no escriben nada.
+
 ## Cómo se conecta un cliente
 
 El servidor MCP es un **servidor de recursos OAuth 2.1**, y `user-management` es su **servidor de autorización**. Conectar un cliente es un flujo OAuth estándar, no un intercambio de claves a medida:

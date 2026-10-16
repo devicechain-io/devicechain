@@ -124,6 +124,10 @@ confirmations, and similar diagnostics are no longer there at the default level.
 was lost: set `debug` to see them again.
 :::
 
+### Lines written at every level {#audit-lines}
+
+One kind of line ignores the level: the record the `mcp` service writes for every AI tool call. It carries no `level` field and is written under `warn` and `error` too, because turning verbosity down is not a decision to stop auditing. Select it by its `audit` field; its layout is described in [What is recorded](../concepts/mcp.md#audit).
+
 ### What is never logged
 
 A service's own configuration document is never written to the log, at any level. The

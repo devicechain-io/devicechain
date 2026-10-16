@@ -60,6 +60,34 @@ MCP is becoming a standard way to give AI assistants real capabilities. The risk
 
 Connect an assistant, and it can *read devices, state, measurements, and alarms* for your tenant. It cannot reach another tenant, change anything, or run an arbitrary query.
 
+## What is recorded {#audit}
+
+Every tool call writes one line to the `mcp` service's log, whatever the call's outcome. Reads are not entries in the audit journal, which records changes and sign-ins, so these lines are the only record of what an assistant read. A line looks like this:
+
+```json
+{"instance":"prod","area":"mcp","audit":"mcp_tool_call","schema":1,"tenant":"acme","actor":"ana@example.com","client_id":"claude-desktop","sudo":false,"tool":"query_measurements","args_sha256":"5f1c…","outcome":"ok","duration_ms":42,"time":"2026-10-16T09:12:03Z","message":"MCP tool call"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `audit` | Always `mcp_tool_call`. Select the records on this field: they carry no `level`. |
+| `schema` | The version of this layout, `1`. A change to the fields is announced in the release notes with a new number. |
+| `tenant`, `actor` | The tenant and user the access token names. The actor is the user's email. |
+| `client_id` | The registered OAuth client the token was issued to, which tells you which application made the call. |
+| `sudo` | `true` when the user is a superuser. |
+| `tool` | The tool called. A call to a tool the server does not have is recorded as `(unregistered)`, and the name the client sent is not copied. |
+| `args_sha256` | The SHA-256 of the call's arguments, with keys sorted and whitespace removed, so identical requests share a value. The arguments themselves are never written. |
+| `outcome` | `ok`, `error` (the tool refused or failed the call, including arguments it does not accept and a refusal because the user lacks the permission) or `rejected` (a call to a tool the server does not have). A request too malformed to name a tool at all is refused by the protocol layer before it reaches any tool, and writes no line. |
+| `duration_ms` | How long the call took. |
+
+Some properties of these lines matter when you rely on them:
+
+- **They are written at every log level.** Setting `infrastructure.logging.level` to `warn` or `error` does not stop them.
+- **They are in the operator's logs, not on the console's Audit page.** A tenant administrator cannot see them. Keep them by collecting the service's log output; how long they are kept is up to your log pipeline.
+- **They name people.** `actor` is an email address. Deleting a tenant does not reach log lines already collected, so remove a deleted tenant's lines in your log store if your retention rules require it.
+- **The digest is a way to match calls, not a way to hide them.** Arguments are device tokens, filters and time ranges. Anyone who knows a tenant's devices can recompute the digest of a guessed request. No tool argument carries a credential.
+- **One line per call.** A line is a few hundred bytes, so the volume follows the call rate. Listing the tools and opening a session write nothing.
+
 ## How a client connects
 
 The MCP server is an **OAuth 2.1 resource server**, and `user-management` is its **authorization server**. Connecting a client is a standard OAuth flow, not a bespoke key exchange:
