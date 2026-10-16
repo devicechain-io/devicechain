@@ -65,6 +65,11 @@ func askCustomerDevices(t *testing.T, ctx context.Context, customer, relType str
 		if s.data != nil && s.data["customerDevices"] != nil {
 			t.Fatalf("customerDevices answered data beside an error: %v", s.data)
 		}
+		// An error that carries no code is still an error: left as "", it would read as the
+		// empty-page answer a case expecting no error compares against.
+		if code == "" {
+			code = "UNCODED: " + s.errs[0].Message
+		}
 		return customerDevicesAnswer{code: code, msg: s.errs[0].Message}
 	}
 	page := s.data["customerDevices"].(map[string]any)
