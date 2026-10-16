@@ -285,11 +285,12 @@ func TestLoadInstanceConfigurationAppliesTheFetchSettings(t *testing.T) {
 	assert.Contains(t, err.Error(), "infrastructure.nats.fetch.batch")
 }
 
-// The leader-affinity switches arrive through the same strict loader: absent, both halves
-// are OFF (a default that steps down broker leaders waits for a cluster measurement); an
-// explicit true turns one on and leaves the other off; a misspelt key is refused by name
-// rather than ignored (an ignored `affinity: {consumerLeader: true}` would leave the
-// reconciler off on an instance whose operator believes it is on).
+// The leader-affinity switches arrive through the same strict loader. Absent, the writer
+// half (publishToLeader) is ON, earned on the GKE round-11 cluster, and the reconciler half
+// (consumerLeaders) is OFF: it steps down broker leaders and measured no gain. An explicit
+// value overrides either default and leaves the other half at its own; a misspelt key is
+// refused by name rather than ignored (an ignored `affinity: {consumerLeader: true}` would
+// leave the reconciler off on an instance whose operator believes it is on).
 func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 	bare := `{"infrastructure":{"nats":{"hostname":"h","port":4222},
 	         "userManagement":{"hostname":"u","port":8080}}}`
@@ -297,7 +298,7 @@ func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 	require.NoError(t, bareMs.LoadInstanceConfigurationFrom(instanceDoc(t, bare)))
 	aff := bareMs.InstanceConfiguration.Infrastructure.Nats.Affinity
 	assert.False(t, aff.ConsumerLeadersEnabled(), "a document that omits affinity must not run the consumer-leader reconciler")
-	assert.False(t, aff.PublishToLeaderEnabled(), "a document that omits affinity must not publish to the stream leader")
+	assert.True(t, aff.PublishToLeaderEnabled(), "a document that omits affinity must publish to the stream leader (the default is on)")
 
 	onDoc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"consumerLeaders":true}},
 	         "userManagement":{"hostname":"u","port":8080}}}`
@@ -305,7 +306,7 @@ func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 	require.NoError(t, onMs.LoadInstanceConfigurationFrom(instanceDoc(t, onDoc)))
 	on := onMs.InstanceConfiguration.Infrastructure.Nats.Affinity
 	assert.True(t, on.ConsumerLeadersEnabled(), "an explicit consumerLeaders:true must be on")
-	assert.False(t, on.PublishToLeaderEnabled(), "turning one half on must leave the other off")
+	assert.True(t, on.PublishToLeaderEnabled(), "turning the reconciler on must leave publishToLeader at its default (on)")
 
 	pubDoc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"publishToLeader":true}},
 	         "userManagement":{"hostname":"u","port":8080}}}`
@@ -314,6 +315,15 @@ func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 	pub := pubMs.InstanceConfiguration.Infrastructure.Nats.Affinity
 	assert.True(t, pub.PublishToLeaderEnabled(), "an explicit publishToLeader:true must be on")
 	assert.False(t, pub.ConsumerLeadersEnabled(), "turning one half on must leave the other off")
+
+	// The off switch: an operator's explicit false survives the default.
+	offDoc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"publishToLeader":false}},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	offMs := &Microservice{}
+	require.NoError(t, offMs.LoadInstanceConfigurationFrom(instanceDoc(t, offDoc)))
+	off := offMs.InstanceConfiguration.Infrastructure.Nats.Affinity
+	assert.False(t, off.PublishToLeaderEnabled(), "an explicit publishToLeader:false must be off")
+	assert.False(t, off.ConsumerLeadersEnabled(), "turning publishToLeader off must leave consumerLeaders off")
 
 	typo := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"affinity":{"consumerLeader":true}},
 	         "userManagement":{"hostname":"u","port":8080}}}`

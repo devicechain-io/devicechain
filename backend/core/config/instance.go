@@ -132,20 +132,26 @@ type NatsConfiguration struct {
 // (jetstream_consumer_leader_local, jetstream_publish_leader_local) are exported whatever
 // these say: the watcher is never switched off with the thing it watches.
 //
-// ABSENT MEANS OFF; `true` turns a half on. Pointers, so an absent key can be told from an
-// explicit false, and so the default can be flipped in ApplyDefaults without a schema change.
+// Pointers, so an absent key can be told from an explicit false. ApplyDefaults fills only an
+// ABSENT key: PublishToLeader defaults ON, ConsumerLeaders stays OFF; an explicit value of
+// either is honoured.
 //
-// 🔴 OFF BY DEFAULT UNTIL A CLUSTER MEASUREMENT EARNS IT. The case for both halves is a
-// count, not a run: on the GKE round-10 shape three of the ~11.9 broker messages per event
-// were frames forwarded between servers only because a client was not connected to the
-// server leading its stream or consumer, and a run whose one consumer leader sat away from
-// its reader measured 13.7-13.9 against 11.9. Neither half changes what is stored, in what
-// order, or what is acknowledged. But the consumer-leader half STEPS DOWN broker leaders on
-// a production cluster on its own initiative, and each step-down pauses that consumer's
-// deliveries; how often that happens across rolling deploys and scaling, and what the
-// publish half buys under real load, are what GKE round 11 measures, with each half on in
-// its own arm. A default that moves broker leadership is flipped on that evidence, not
-// ahead of it. On an unclustered broker both halves find nothing to do.
+// 🔑 EACH DEFAULT IS A CLUSTER MEASUREMENT (GKE round 11, each half on in its own arm).
+// Neither half changes what is stored, in what order, or what is acknowledged.
+//   - PublishToLeader earned ON. Broker messages per event fell 11.2 -> 9.2-9.9, the
+//     single-device-management ceiling rose 6% (12,729 -> 13,512 resolves/s at 14,000
+//     offered, drain 18.7 s -> 7.8 s), and the resolved-publish PubAck p50 roughly halved
+//     (17.3 -> 9.6 ms at 12,400). Through a forced stream-leader election its p99 peaked
+//     lower than with it off (87 vs 130 ms), and it followed the leader through a rolling
+//     restart and a scale-up, with event identity intact in every run.
+//   - ConsumerLeaders stays OFF. It behaved exactly as specified (hysteresis held, one move
+//     per durable, none oscillating), but it STEPS DOWN broker leaders on its own initiative,
+//     each step-down pauses that consumer's deliveries, and on this shape it bought no
+//     throughput: moving event-processing's consumer onto the resolved stream's leader
+//     loaded the busiest broker (-5.5% at 12,400 offered, one rung). A default that moves
+//     broker leadership needs a gain to pay for that, and none was measured.
+//
+// On an unclustered broker both halves find nothing to do.
 type NatsAffinityConfiguration struct {
 	// ConsumerLeaders moves a reader's consumer leader to the server the reader is
 	// connected to when it has been elsewhere for several samples in a row and the
@@ -164,8 +170,10 @@ func (c NatsAffinityConfiguration) ConsumerLeadersEnabled() bool {
 	return c.ConsumerLeaders != nil && *c.ConsumerLeaders
 }
 
-// PublishToLeaderEnabled reports whether pipelined writers follow their stream's leader,
-// read the same way as ConsumerLeadersEnabled.
+// PublishToLeaderEnabled reports whether pipelined writers follow their stream's leader:
+// only on an explicit true. ApplyDefaults sets an absent key to true where configuration is
+// loaded, so a configuration nothing defaulted (a manager assembled by hand in a test) reads
+// as off.
 func (c NatsAffinityConfiguration) PublishToLeaderEnabled() bool {
 	return c.PublishToLeader != nil && *c.PublishToLeader
 }
@@ -1091,7 +1099,12 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	if nats.Fetch.Ahead == nil {
 		nats.Fetch.Ahead = AheadFlag(true)
 	}
-	// Leader affinity is NOT defaulted on: absent reads as off (NatsAffinityConfiguration).
+	// Leader affinity: the writer half defaults on, the reconciler half stays off (see
+	// NatsAffinityConfiguration for the measurement). Only ABSENCE is defaulted: an
+	// operator's explicit `publishToLeader: false` is honoured.
+	if nats.Affinity.PublishToLeader == nil {
+		nats.Affinity.PublishToLeader = BoolFlag(true)
+	}
 	// Default the secret-store selection so an instance document that omits it means
 	// "the zero-infra default" (envelope-in-Postgres, instance KEK), not an invalid
 	// empty selection. RootKey is deliberately NOT defaulted — key material is
