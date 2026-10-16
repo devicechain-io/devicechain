@@ -39,14 +39,20 @@ import (
 // An unscoped caller — every caller before ADR-081, every service token, every identity
 // token — is untouched: no predicate, no refusal, no cost beyond reading the claims.
 //
-// 🔴 WHAT IT DOES NOT COVER is exactly what the tenant callback does not cover, for the
-// same reason (see RegisterTenantScoping): applicability is a property of the
-// destination type. Raw SQL (Exec, Raw) runs with no callbacks at all; a projection
+// 🔴 WHAT IT DOES NOT COVER is what the tenant callback does not cover, for the same
+// reason (see RegisterTenantScoping): applicability is a property of the destination
+// type. Exec runs on gorm's Raw processor, which has no callbacks at all; a projection
 // struct whose schema carries no tenant field is indistinguishable from an honest read
-// of an unscoped table; a JOINed table is not the statement's model; and a system
-// context (core.WithSystemContext) runs with neither predicate. A resolver that opts a
-// scoped caller in and then reaches rows through any of those applies the scope itself,
-// and carries a cross-customer test that proves it.
+// of an unscoped table; a JOINed table is not the statement's model; a context that
+// carries a tenant but no claims (a processor's, a consumer's) is unscoped; and a
+// system context (core.WithSystemContext) runs with neither predicate. A resolver that
+// opts a scoped caller in and then reaches rows through any of those applies the scope
+// itself, and carries a cross-customer test that proves it.
+//
+// One departure from the tenant callback, in the fail-closed direction: a READ whose SQL
+// is already written (Raw(...).Scan/Find/Rows) DOES run these callbacks, and is refused
+// for a scoped caller rather than waved through — see scopedStatement for why the
+// tenant callback's tolerance of that shape would here be a silent no-op.
 
 // registerScopeCallbacks installs the scope callbacks, each immediately after the tenant
 // callback for the same operation. It is called by RegisterTenantScoping and nowhere
@@ -96,6 +102,22 @@ func scopedStatement(db *gorm.DB) (rule *scopeRule, tenant string, scope auth.Sc
 	}
 	scope, scoped := auth.ScopeFromContext(ctx)
 	if !scoped {
+		return nil, "", auth.Scope{}, false
+	}
+	// 🔴 SQL ALREADY WRITTEN (Raw) IS REFUSED, AND THIS IS WHERE THE SCOPE CALLBACK
+	// DEPARTS FROM THE TENANT ONE. Only Exec runs on gorm's callback-less Raw processor;
+	// Raw(...).Scan/Find/Rows run the query and row callbacks with Statement.SQL already
+	// built, and a predicate added to such a statement is DISCARDED — BuildQuerySQL
+	// builds only when the SQL is empty. Without this check the callback would find the
+	// model, find its rule, add the predicate and record no error, and the resolver
+	// would have every reason to believe the read was scoped. The tenant callback
+	// tolerates that shape because unscoped raw reads are legitimate (and it says so);
+	// a scoped caller has no legitimate raw read, so the fail-closed answer costs
+	// nothing. It is tested BEFORE classification because a Raw().Rows() has no
+	// destination, hence no schema and no tenant field to classify by.
+	if db.Statement.SQL.Len() > 0 {
+		_ = db.AddError(fmt.Errorf("%w (a statement whose SQL was already written, so no scope predicate can be added)",
+			auth.ErrScopeUnsupported))
 		return nil, "", auth.Scope{}, false
 	}
 	if tenantField(db) == nil {
