@@ -31,7 +31,7 @@ func newTestApi(t *testing.T) *Api {
 	// exactly as production does (ADR-042 P2): a non-conforming token fixture would
 	// fail here as it would live.
 	require.NoError(t, rdb.RegisterTokenGrammar(db))
-	require.NoError(t, db.AutoMigrate(&Dashboard{}, &DashboardVersion{}))
+	require.NoError(t, db.AutoMigrate(&Dashboard{}, &DashboardVersion{}, &DashboardShare{}))
 	// Mirror the migration's per-tenant partial unique index (ADR-042 P1) so the
 	// token-uniqueness tests run against the real constraint, not a bare table.
 	require.NoError(t, rdb.CreateTenantTokenIndex(db, &Dashboard{}))

@@ -125,3 +125,15 @@ func TestAnInitializeFailureIsReturnedFromTheCallback(t *testing.T) {
 	require.ErrorContains(t, err, "not currently supported",
 		"a relational manager that refused to initialize did not fail the initialize callback")
 }
+
+// The share reconciler (ADR-081) is the one thing this service reads from the broker, and
+// nothing else exercises its wiring: a dropped Start leaves shares naming deleted customers
+// in place forever, and every other test stays green. It is built on the entity-deleted
+// reader, started after the managers and stopped before them.
+func TestTheShareReconcilerIsWired(t *testing.T) {
+	require.True(t, callsIn(t, "createNatsComponents")["nmgr.NewReader"])
+	require.True(t, callsIn(t, "createNatsComponents")["processor.NewShareReconciler"])
+	require.True(t, callsIn(t, "afterMicroserviceStarted")["ShareReconciler.Start"])
+	require.True(t, callsIn(t, "beforeMicroserviceStopped")["ShareReconciler.Stop"])
+	require.True(t, callsIn(t, "afterRdb")["wireCustomerChecker"])
+}

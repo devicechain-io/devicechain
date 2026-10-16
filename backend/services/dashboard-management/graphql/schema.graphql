@@ -62,6 +62,39 @@ type Dashboard {
     publishedVersion: Int
     """When the served version was published, as an RFC 3339 timestamp; null if never published."""
     publishedAt: String
+    """
+    The customers the dashboard is shared with, sorted. Members whose access is limited to
+    one of these customers can list the dashboard and open its published version. Empty
+    when it is shared with nobody. Not available to a member whose access is limited to
+    part of the tenant.
+    """
+    sharedWith: [ScopeAnchor!]!
+}
+
+"""What a scope anchor names."""
+enum ScopeAnchorKind {
+    """A customer, named by its token."""
+    CUSTOMER
+    """An entity group, named by its token. Not accepted yet."""
+    GROUP
+}
+
+# ADR-081: the anchors a dashboard is shared with, and that bound a member's scope. The
+# same shape is served by user-management for a membership's scope.
+"""A customer or group that a member's access can be limited to."""
+type ScopeAnchor {
+    """What the anchor names."""
+    kind: ScopeAnchorKind!
+    """Token of the customer or group."""
+    token: String!
+}
+
+"""A customer or group to share with."""
+input ScopeAnchorInput {
+    """What the anchor names. Only CUSTOMER is accepted."""
+    kind: ScopeAnchorKind!
+    """Token of the customer or group."""
+    token: String!
 }
 
 """
@@ -219,7 +252,9 @@ type Query {
     ): Dashboard
     """
     Searches the tenant's dashboards, one page at a time. Results carry metadata only;
-    read a definition with the dashboard query. Requires dashboard:read.
+    read a definition with the dashboard query. A member whose access is limited to part of
+    the tenant sees only published dashboards shared with a customer in its scope. Requires
+    dashboard:read.
     """
     dashboards(
         """Filter and page to return."""
@@ -243,7 +278,9 @@ type Query {
     """
     Returns the version of the dashboard that viewers are served, with its definition, or
     null if there is no dashboard with the token. Fails with code NOT_PUBLISHED if the
-    dashboard exists but has never been published. Requires dashboard:read.
+    dashboard exists but has never been published. For a member whose access is limited to
+    part of the tenant, a dashboard not shared with a customer in its scope is null, as if
+    it did not exist. Requires dashboard:read.
     """
     publishedDashboard(
         """Token of the dashboard."""
@@ -332,6 +369,20 @@ type Mutation {
         """Version number to serve."""
         version: Int!
     ): DashboardSummary!
+    """
+    Replaces the customers a dashboard is shared with, and returns the dashboard. Members
+    whose access is limited to one of these customers can then list the dashboard and open
+    its published version; an empty list shares it with nobody. Every customer must exist,
+    or the request fails with NOT_FOUND and nothing changes. GROUP is refused with
+    INVALID_VALUE, and more than 1000 customers with LIMIT_EXCEEDED. Not available to a
+    member whose access is limited to part of the tenant. Requires dashboard:write.
+    """
+    shareDashboard(
+        """Token of the dashboard to share."""
+        token: String!
+        """The customers to share it with, replacing the current list."""
+        anchors: [ScopeAnchorInput!]!
+    ): Dashboard!
     """
     Permanently deletes a dashboard and all of its published versions. Returns false if
     no dashboard has the token. The token can be reused immediately. Requires

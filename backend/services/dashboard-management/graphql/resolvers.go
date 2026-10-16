@@ -6,6 +6,7 @@ package graphql
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -70,6 +71,36 @@ func (r *DashboardResolver) PublishedAt() (*string, error) {
 	}
 	return util.FormatTime(at), nil
 }
+
+// SharedWith lists the customers the dashboard is shared with. It is the author's view of
+// that list and refuses a member limited to part of the tenant: a dashboard shared with
+// Acme and Globex would otherwise name Globex to Acme's users.
+func (r *DashboardResolver) SharedWith() ([]*ScopeAnchorResolver, error) {
+	if err := auth.Authorize(r.C, auth.DashboardRead); err != nil {
+		return nil, err
+	}
+	shares, err := r.S.GetApi(r.C).SharesOf(r.C, r.M.ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*ScopeAnchorResolver, 0, len(shares[r.M.ID]))
+	for _, a := range shares[r.M.ID] {
+		kind, token, ok := strings.Cut(a, ":")
+		if !ok {
+			continue
+		}
+		out = append(out, &ScopeAnchorResolver{kind: strings.ToUpper(kind), token: token})
+	}
+	return out, nil
+}
+
+// ScopeAnchorResolver resolves one anchor a dashboard is shared with.
+type ScopeAnchorResolver struct {
+	kind, token string
+}
+
+func (r *ScopeAnchorResolver) Kind() string  { return r.kind }
+func (r *ScopeAnchorResolver) Token() string { return r.token }
 
 // DashboardSummaryResolver resolves a dashboard as listed by a search. The list is read
 // without the definition column, and the type has no definition field to resolve, so a

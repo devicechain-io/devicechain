@@ -85,7 +85,7 @@ func newWireFixture(t *testing.T) (*model.Api, context.Context) {
 	if err := rdb.RegisterTokenGrammar(db); err != nil {
 		t.Fatalf("register token grammar: %v", err)
 	}
-	if err := db.AutoMigrate(&model.Dashboard{}, &model.DashboardVersion{}); err != nil {
+	if err := db.AutoMigrate(&model.Dashboard{}, &model.DashboardVersion{}, &model.DashboardShare{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db})

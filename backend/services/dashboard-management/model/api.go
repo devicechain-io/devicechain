@@ -10,6 +10,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/datatypes"
@@ -62,6 +63,9 @@ type Api struct {
 	// tenant's rows is what erasure needs. Nil disables the gate, which is how main.go
 	// leaves it when user-management is not configured, and how unit tests run.
 	TenantDeleted func(tenant string) bool
+	// Customers confirms the customers a dashboard is shared with. Nil refuses every share
+	// that names one (ErrCustomersUnverifiable); it changes nothing else.
+	Customers CustomerChecker
 }
 
 // refuseDeletedTenant is the lifecycle gate every dashboard write passes through.
@@ -573,6 +577,12 @@ func (api *Api) Dashboards(ctx context.Context, criteria DashboardSearchCriteria
 		if criteria.Name != nil {
 			result = result.Where(`name LIKE ? ESCAPE '\'`, rdb.ContainsPattern(*criteria.Name))
 		}
+		// A member limited to part of the tenant (ADR-081) lists only dashboards it can open:
+		// the shares are its scope predicate (Dashboard.ScopedBy), and a draft nobody has
+		// published is not something a viewer can open, shared or not.
+		if _, scoped := auth.ScopeFromContext(ctx); scoped {
+			result = result.Where("published_version IS NOT NULL")
+		}
 		return result
 	}, criteria.Pagination)
 	// The list is metadata only: a definition is up to 1 MiB, and a page of them is the
@@ -619,6 +629,12 @@ func (api *Api) DeleteDashboard(ctx context.Context, token string) (bool, error)
 	// tenant-scope callback still confines both statements to the caller's tenant.
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Unscoped().Where("dashboard_id = ?", dashboardID).Delete(&DashboardVersion{}).Error; err != nil {
+			return err
+		}
+		// Its shares go with it. The foreign key cascades them as well; deleting them here
+		// keeps the statement that removes a dashboard the one that says what it removes,
+		// and holds on a database that enforces no foreign keys.
+		if err := tx.Where("dashboard_id = ?", dashboardID).Delete(&DashboardShare{}).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Where("token = ?", token).Delete(&Dashboard{}).Error

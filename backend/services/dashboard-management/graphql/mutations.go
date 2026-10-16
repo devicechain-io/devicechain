@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"strings"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -115,6 +116,31 @@ func publisher(ctx context.Context) string {
 		return claims.Username
 	}
 	return claims.Email
+}
+
+// ShareDashboard replaces the customers the dashboard is shared with (ADR-081). It is an
+// author's decision about who may see a dashboard, so it is dashboard:write and refused to a
+// member limited to part of the tenant: a customer's user does not decide what other
+// customers see.
+func (r *SchemaResolver) ShareDashboard(ctx context.Context, args struct {
+	Token   string
+	Anchors []struct {
+		Kind  string
+		Token string
+	}
+}) (*DashboardResolver, error) {
+	if err := auth.Authorize(ctx, auth.DashboardWrite); err != nil {
+		return nil, err
+	}
+	anchors := make([]string, 0, len(args.Anchors))
+	for _, a := range args.Anchors {
+		anchors = append(anchors, strings.ToLower(a.Kind)+":"+a.Token)
+	}
+	dash, err := r.GetApi(ctx).ShareDashboard(ctx, args.Token, anchors)
+	if err != nil {
+		return nil, err
+	}
+	return &DashboardResolver{M: *dash, S: r, C: ctx}, nil
 }
 
 // DeleteDashboard deletes the dashboard with the given token.

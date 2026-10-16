@@ -15,10 +15,15 @@ import (
 // PublishedDashboard returns the snapshot viewers are served. Null when the dashboard
 // does not exist (as Dashboard); the typed NOT_PUBLISHED error when it exists but was
 // never published, so a viewer never gets a plausible blank board.
+//
+// It admits members limited to part of the tenant (ADR-081). Both reads behind it — the
+// dashboard and the version — go through gorm on models whose scope rule is the share table
+// (Dashboard.ScopedBy, DashboardVersion.ScopedBy), so a dashboard not shared with the
+// member's scope is not found, and answers null exactly as a token naming nothing does.
 func (r *SchemaResolver) PublishedDashboard(ctx context.Context, args struct {
 	Token string
 }) (*PublishedDashboardResolver, error) {
-	if err := auth.Authorize(ctx, auth.DashboardRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DashboardRead); err != nil {
 		return nil, err
 	}
 
@@ -68,11 +73,13 @@ func (r *SchemaResolver) Dashboard(ctx context.Context, args struct {
 	return &DashboardResolver{M: *matches[0], S: r, C: ctx}, nil
 }
 
-// Dashboards searches dashboards by criteria.
+// Dashboards searches dashboards by criteria. A member limited to part of the tenant
+// (ADR-081) is listed the published dashboards shared with its scope, by the same share rule
+// publishedDashboard reads through.
 func (r *SchemaResolver) Dashboards(ctx context.Context, args struct {
 	Criteria model.DashboardSearchCriteria
 }) (*DashboardSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.DashboardRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DashboardRead); err != nil {
 		return nil, err
 	}
 
