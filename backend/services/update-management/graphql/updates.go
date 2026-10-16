@@ -16,8 +16,13 @@ import (
 )
 
 // UpdateAssignment looks an update assignment up by token.
+//
+// It and UpdateAssignments admit members limited to part of the tenant (ADR-081), read-only:
+// the assignment read goes through gorm on UpdateAssignment, whose scope rule core/rdb adds
+// beside the tenant predicate, so a member sees the assignments made to its devices while it
+// owned them, and a token naming any other answers null, as a token naming nothing does.
 func (r *SchemaResolver) UpdateAssignment(ctx context.Context, args struct{ Token string }) (*UpdateAssignmentResolver, error) {
-	if err := auth.Authorize(ctx, auth.ArtifactRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.ArtifactRead); err != nil {
 		return nil, err
 	}
 	api, err := r.GetApi(ctx)
@@ -41,7 +46,7 @@ func (r *SchemaResolver) UpdateAssignments(ctx context.Context, args struct {
 		CurrentOnly *bool
 	}
 }) (*UpdateAssignmentSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.ArtifactRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.ArtifactRead); err != nil {
 		return nil, err
 	}
 	api, err := r.GetApi(ctx)

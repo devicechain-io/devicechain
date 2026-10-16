@@ -58,12 +58,20 @@ func (c *Checker) Missing(ctx context.Context, tenant string, tokens []string) (
 	return missing, nil
 }
 
-const deviceFacts = `query($tokens: [String!]!) { devicesByToken(tokens: $tokens) { token enabled deviceType { profile { token } } } }`
+// deviceFacts reads the device and, in the same request, its scope anchors (ADR-081) — the
+// stamp an assignment is written with. One request, so the two describe the device as one
+// read saw it.
+const deviceFacts = `query($tokens: [String!]!) {
+  devicesByToken(tokens: $tokens) { token enabled deviceType { profile { token } } }
+  deviceScopeAnchors(deviceTokens: $tokens) { deviceToken anchors }
+}`
 
 // DeviceOf implements model.DeviceLookup: the token of the device-profile a device resolves
 // through (empty for a device whose type has none), whether an operator has disabled it, and
-// found=false for a device the tenant does not have. An error means the answer could not be
-// obtained; it is never reported as a device that does not exist or one that is enabled.
+// found=false for a device the tenant does not have, and its scope anchors. An error means the
+// answer could not be obtained; it is never reported as a device that does not exist or one
+// that is enabled — nor as a device nobody owns, which an answer missing the anchors would be
+// read as.
 func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (facts model.DeviceFacts, found bool, err error) {
 	var out struct {
 		DevicesByToken []struct {
@@ -75,6 +83,10 @@ func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (fac
 				} `json:"profile"`
 			} `json:"deviceType"`
 		} `json:"devicesByToken"`
+		DeviceScopeAnchors *[]struct {
+			DeviceToken string   `json:"deviceToken"`
+			Anchors     []string `json:"anchors"`
+		} `json:"deviceScopeAnchors"`
 	}
 	if err := c.client.Query(ctx, c.url, tenant, deviceFacts, map[string]any{"tokens": []string{deviceToken}}, &out); err != nil {
 		return model.DeviceFacts{}, false, fmt.Errorf("device-management device lookup: %w", err)
@@ -90,6 +102,15 @@ func (c *Checker) DeviceOf(ctx context.Context, tenant, deviceToken string) (fac
 		facts.Disabled = !*d.Enabled
 		if d.DeviceType.Profile != nil {
 			facts.Profile = d.DeviceType.Profile.Token
+		}
+		if out.DeviceScopeAnchors == nil {
+			return model.DeviceFacts{}, false, errors.New("device-management device lookup: the answer carries no anchors")
+		}
+		facts.Anchors = []string{}
+		for _, a := range *out.DeviceScopeAnchors {
+			if a.DeviceToken == deviceToken {
+				facts.Anchors = append(facts.Anchors, a.Anchors...)
+			}
 		}
 		return facts, true, nil
 	}

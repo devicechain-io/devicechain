@@ -39,7 +39,21 @@ type UpdateAssignment struct {
 	// (only possible under updates.allowUnverifiedArtifacts); such an assignment stays UNVERIFIED
 	// on the wire for its whole life. The column is appended by a later migration, so it is last.
 	SignatureId sql.NullInt64
+
+	// ScopeAnchors are the device's anchors when the assignment was made — one "type:token"
+	// per tracked relationship, as device-management reports them (ADR-081). A member limited
+	// to part of the tenant sees the assignment when one of them is in its scope (ScopedBy).
+	// Written once with the row and never rewritten, like every other column here but
+	// SupersededAt: an assignment records who owned the device when it was told. NULL — a row
+	// from before the column — is invisible to every scoped member. Appended by a later
+	// migration, so it is last.
+	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
 }
+
+// ScopedBy admits members limited to part of the tenant (ADR-081) to READ the assignments
+// stamped with an anchor in their scope. They write none: assigning and cancelling stay
+// refused to them, at the resolver and here.
+func (UpdateAssignment) ScopedBy() rdb.ScopeRule { return rdb.AnchorColumn("scope_anchors") }
 
 // AuditLabel names the row in the audit journal.
 func (a UpdateAssignment) AuditLabel() string { return a.Token }

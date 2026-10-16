@@ -160,7 +160,7 @@ func TestTheTransactionRefusesWhenTheOnlySignerWasRevokedAfterTheGate(t *testing
 	require.NoError(t, err)
 
 	err = e.api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := e.api.assignInTx(ctx, tx, "dev-1", stale)
+		_, err := e.api.assignInTx(ctx, tx, "dev-1", stale, nil)
 		return err
 	})
 	requireRefusal(t, err, CodeUnverifiedRefused)
