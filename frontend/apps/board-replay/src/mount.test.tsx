@@ -15,6 +15,7 @@ import { setReplayLocale } from './i18n/config';
 import { mountBoardReplay } from './mount';
 import { boardBytes, fixtureRecordingText, stubFetch } from './testing/harness';
 import themeCss from './theme.css?inline';
+import lightCss from './theme-light.css?inline';
 
 const HOST_TOKENS = '--muted: 11 22% 33%; --border: 44 55% 66%; --foreground: 77 88% 99%;';
 
@@ -40,6 +41,7 @@ afterEach(() => {
   mount.remove();
   hostStyle.remove();
   document.getElementById('board-replay-theme')?.remove();
+  document.getElementById('board-replay-theme-light')?.remove();
   document.documentElement.lang = '';
   vi.unstubAllGlobals();
 });
@@ -81,7 +83,7 @@ describe('mounting into a host page', () => {
   });
 
   it('declares only rules under its own root: no :root, html, body or bare * selector', () => {
-    const css = themeCss.replace(/\/\*[\s\S]*?\*\//g, '');
+    const css = (themeCss + lightCss).replace(/\/\*[\s\S]*?\*\//g, '');
     const selectors = [...css.matchAll(/([^{}]+)\{[^{}]*\}/g)].flatMap((m) =>
       m[1].split(',').map((s) => s.trim()).filter(Boolean),
     );
@@ -93,7 +95,6 @@ describe('mounting into a host page', () => {
     const brand = readFileSync(path.resolve(import.meta.dirname, '../../../packages/brand/css/shadcn.css'), 'utf8');
     const dark = brand.slice(brand.indexOf('.dark {'));
     const light = brand.slice(brand.indexOf(':root {'), brand.indexOf('.dark {'));
-    const lightCss = themeCss.slice(themeCss.indexOf("[data-theme='light'] {"));
     for (const token of ['--primary', '--primary-foreground', '--ring']) {
       const re = new RegExp(`${token}:\\s*([^;]+);`);
       const want = dark.match(re)?.[1];
@@ -106,12 +107,66 @@ describe('mounting into a host page', () => {
   it('takes its light tokens from the viewer, so a light replay reads the colours /dash ships', () => {
     const dash = readFileSync(path.resolve(import.meta.dirname, '../../dashboard/src/theme.css'), 'utf8');
     const dashLight = dash.slice(dash.indexOf(':root {'), dash.indexOf('.dark {'));
-    const lightCss = themeCss.slice(themeCss.indexOf("[data-theme='light'] {"));
     const tokens = ['--background', '--foreground', '--card', '--card-foreground', '--muted', '--muted-foreground', '--destructive', '--border', '--input'];
     for (const token of tokens) {
       const re = new RegExp(`${token}:\\s*([^;]+);`);
       expect(dashLight.match(re)?.[1], `${token} in /dash's light block`).toBeTruthy();
       expect(lightCss.match(re)?.[1], token).toBe(dashLight.match(re)?.[1]);
     }
+  });
+});
+
+describe('the host options', () => {
+  async function mountWith(data: Record<string, string>) {
+    const files = stubFetch({
+      [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
+      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+    });
+    vi.stubGlobal('fetch', files.fetchFn);
+    Object.assign(mount.dataset, { recording: '/a/run.json', ...data });
+    await act(async () => {
+      await mountBoardReplay(mount);
+    });
+  }
+
+  it('installs the light tokens only for a light page, on its own root', async () => {
+    await mountWith({ theme: 'light' });
+    expect(document.getElementById('board-replay-theme-light')?.textContent).toBe(lightCss);
+    const root = screen.getByTestId('replay-root');
+    expect(root.getAttribute('data-theme')).toBe('light');
+    expect(getComputedStyle(root).getPropertyValue('--muted').trim()).toBe('240 4.8% 95.9%');
+    expect(rootToken('--muted')).toBe('11 22% 33%');
+  });
+
+  it('leaves the light tokens out of a dark page', async () => {
+    await mountWith({});
+    expect(document.getElementById('board-replay-theme-light')).toBeNull();
+    expect(getComputedStyle(screen.getByTestId('replay-root')).getPropertyValue('--muted').trim()).toBe('210 20% 16%');
+  });
+
+  it('draws an embed with its label on the first frame, before the recording has loaded', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const files = stubFetch({
+      [`${location.origin}/a/run.json`]: await fixtureRecordingText(),
+      [`${location.origin}/a/sp-dashboard.json`]: boardBytes(),
+    });
+    vi.stubGlobal('fetch', ((...a: Parameters<typeof fetch>) => gate.then(() => files.fetchFn(...a))) as typeof fetch);
+    Object.assign(mount.dataset, { recording: '/a/run.json', embed: '1' });
+    await act(async () => {
+      await mountBoardReplay(mount);
+    });
+    expect(screen.getByTestId('replay-root').hasAttribute('data-embed')).toBe(true);
+    // In the page's language (<html lang="es">), from the embed's own catalog.
+    expect(screen.getByTestId('replay-label').textContent).toBe('Reproducción de una ejecución grabada · horas trasladadas al momento actual');
+    expect(screen.getByTestId('replay-body').getAttribute('data-state')).toBe('loading');
+    release();
+    await screen.findByTestId('embed-canvas');
+  });
+
+  it('draws the full replay page when the host names the embed and turns it off', async () => {
+    await mountWith({ embed: '0' });
+    await screen.findByTestId('transport-bar');
+    expect(screen.getByTestId('replay-root').hasAttribute('data-embed')).toBe(false);
   });
 });

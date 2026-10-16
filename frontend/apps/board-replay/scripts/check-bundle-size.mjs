@@ -120,6 +120,9 @@ export function check(measured, budget) {
 const catalogBadge = (locale) =>
   JSON.parse(readFileSync(path.resolve(here, `../src/i18n/locales/${locale}/chrome.json`), 'utf8')).replayBadge;
 
+const embedLabel = (locale) =>
+  JSON.parse(readFileSync(path.resolve(here, `../src/i18n/locales/${locale}/embed.json`), 'utf8')).embedLabelRetimed;
+
 export function lazyBoundaries() {
   return [
     // The Spanish and Chinese chrome catalogs: fetched by setReplayLocale, English stays eager.
@@ -130,6 +133,16 @@ export function lazyBoundaries() {
     { what: 'the entity selector', chunk: 'entity-selector', markers: ['No target slot configured.'] },
     { what: 'the measurement table', chunk: 'table', markers: ['No data yet'] },
     { what: 'the command button', chunk: 'control-widgets', markers: ['Couldn’t load command history.'] },
+    // The embed: its option parser, its player and its own words, fetched only for an embed.
+    {
+      what: 'the embed',
+      chunk: 'EmbedPlayer',
+      markers: ['board-replay: ignoring canvas=', ...['en', 'es', 'zh-CN'].map(embedLabel)],
+    },
+    // The light theme's tokens, fetched only for a light page.
+    { what: 'the light theme', chunk: 'theme-light', markers: ['240 4.8% 95.9%'] },
+    // The recording's positions and aggregates, fetched by the first map or stat that asks.
+    { what: 'the recorded positions and aggregates', chunk: 'recorded-extra', markers: ['bucketMeasurements: not a window: '] },
   ];
 }
 

@@ -5,6 +5,7 @@
 // imports this module dynamically): a board with no map and no stat widget never downloads
 // them. Pure functions over the recording's columns; the source owns the cursor and the shift.
 
+import type { HistoryWindow } from './history';
 import type { MeasurementBucket } from './queries';
 import type { BoardRecording } from './recording';
 import type { LocationSample } from './types';
@@ -40,18 +41,33 @@ export interface SeriesRows {
   times: number[];
 }
 
-// foldBuckets groups each series' rows with times in [fromMs, toMs] (recording offsets) into
-// buckets `widthMs` wide, aligned on the epoch at `originMs + t` (the source's own clock),
-// each with its exact count, minimum, maximum and sum. A bucket that holds no row is not
-// returned. Ordered by bucket start and then name, as the event store orders them.
+// foldBuckets is RecordedDataSource.bucketMeasurements past its channel check: the rows of
+// the selected (device, measurement) series whose times fall in the window AND at or before
+// `cursor`, grouped into buckets `intervalSeconds` wide aligned on the epoch at `originMs + t`
+// (the source's own, possibly shifted, clock), each with its exact count, minimum, maximum and
+// sum. A bucket that holds no row is not returned. Ordered by bucket start and then name, as
+// the event store orders them. The window is in the source's clock and is moved back to
+// recording offsets by `originMs` before the rows are read.
 export function foldBuckets(
   rec: BoardRecording,
-  series: readonly SeriesRows[],
-  fromMs: number,
-  toMs: number,
+  groups: ReadonlyArray<{ deviceToken: string; names: ReadonlySet<string> }>,
+  byDevice: ReadonlyMap<string, readonly SeriesRows[]>,
+  window: HistoryWindow,
   originMs: number,
-  widthMs: number,
+  cursor: number,
 ): MeasurementBucket[] {
+  const series: SeriesRows[] = [];
+  for (const g of groups) {
+    for (const s of byDevice.get(g.deviceToken) ?? []) {
+      if (g.names.size === 0 || g.names.has(s.name)) series.push(s);
+    }
+  }
+  const widthMs = window.intervalSeconds * 1000;
+  const fromMs = Date.parse(window.startTime) - originMs;
+  const toMs = Math.min(Date.parse(window.endTime) - originMs, cursor);
+  if (!(widthMs > 0) || !Number.isFinite(fromMs) || !Number.isFinite(toMs)) {
+    throw new RangeError(`bucketMeasurements: not a window: ${JSON.stringify(window)}`);
+  }
   const { t, v } = rec.measurements;
   const out: MeasurementBucket[] = [];
   for (const s of series) {
@@ -77,16 +93,36 @@ export function foldBuckets(
   return out;
 }
 
+// Each device's position rows (indices into the location columns) and their times, built once
+// per parsed recording (a view is rebuilt after every seek).
+const positionsCache = new WeakMap<BoardRecording, Map<string, { rows: number[]; times: number[] }>>();
+
+function positionsOf(rec: BoardRecording): Map<string, { rows: number[]; times: number[] }> {
+  let positions = positionsCache.get(rec);
+  if (positions) return positions;
+  positions = new Map();
+  const loc = rec.locations;
+  for (let i = 0; i < loc.t.length; i++) {
+    const token = rec.devices[loc.d[i]].token;
+    let p = positions.get(token);
+    if (!p) positions.set(token, (p = { rows: [], times: [] }));
+    p.rows.push(i);
+    p.times.push(loc.t[i]);
+  }
+  positionsCache.set(rec, positions);
+  return positions;
+}
+
 // lastPositions is each device's last position at `cursor` (absent for a device not yet
 // located), and a signature that changes exactly when one of them moves on to a new fix.
 export function lastPositions(
   rec: BoardRecording,
-  positions: ReadonlyMap<string, { rows: number[]; times: number[] }>,
   tokens: readonly string[],
   cursor: number,
   iso: (offsetMs: number) => string,
 ): { signature: string; locations: LocationSample[] } {
   const loc = rec.locations;
+  const positions = positionsOf(rec);
   const rows: Array<[string, number]> = [];
   for (const token of tokens) {
     const p = positions.get(token);

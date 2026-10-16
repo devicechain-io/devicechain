@@ -22,6 +22,18 @@ describe('chrome catalogs', () => {
     expect(chrome.sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/chrome.json`).sort());
     const refusal = Object.keys(files).filter((f) => f.endsWith('/refusal.json'));
     expect(refusal.sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/refusal.json`).sort());
+    // embed.json is the embed's own words, in the embed's chunk (see ../EmbedLabel.tsx).
+    const embed = Object.keys(files).filter((f) => f.endsWith('/embed.json'));
+    expect(embed.sort()).toEqual(SUPPORTED_LOCALES.map((l) => `./locales/${l}/embed.json`).sort());
+  });
+
+  it.each(SUPPORTED_LOCALES)('%s carries exactly the separately loaded words English does', (locale) => {
+    for (const name of ['refusal', 'embed']) {
+      const en = files[`./locales/en/${name}.json`].default;
+      const other = files[`./locales/${locale}/${name}.json`].default;
+      expect(Object.keys(other).sort(), `${locale}/${name}`).toEqual(Object.keys(en).sort());
+      for (const [key, value] of Object.entries(other)) expect(value.trim(), `${locale}/${name}:${key} is empty`).not.toBe('');
+    }
   });
 
   // Plural forms differ by language (Chinese has only "other"), so keys are compared by
@@ -52,10 +64,11 @@ describe('chrome catalogs', () => {
     await setReplayLocale(DEFAULT_LOCALE);
   });
 
-  it('never uses the word "live", in any locale', () => {
-    for (const locale of SUPPORTED_LOCALES) {
-      for (const [key, value] of Object.entries(files[`./locales/${locale}/chrome.json`].default)) {
-        expect(liveMatches(value), `${locale}:${key} = ${value}`).toEqual([]);
+  it('never uses the word "live", in any locale or catalog', () => {
+    expect(Object.keys(files).length).toBe(SUPPORTED_LOCALES.length * 3);
+    for (const [file, { default: catalog }] of Object.entries(files)) {
+      for (const [key, value] of Object.entries(catalog)) {
+        expect(liveMatches(value), `${file}:${key} = ${value}`).toEqual([]);
       }
     }
   });

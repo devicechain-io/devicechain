@@ -21,6 +21,12 @@
 //
 // As everywhere in this app, a value that is present but invalid is ignored with a console
 // warning, so a typo in a host page still brings the board up with the default.
+//
+// This module is fetched only for an embed: mount.tsx asks host-options.ts whether the host
+// asked for one at all, and loads it (with the embed's player) only then. The page's other
+// option, the theme, applies to both modes and lives in host-options.ts.
+
+import { hostReader, type Read } from './host-options';
 
 export interface CanvasSize {
   width: number;
@@ -33,19 +39,10 @@ export interface EmbedOptions {
   retime: boolean;
 }
 
-export type ReplayTheme = 'dark' | 'light';
-
 export const DEFAULT_CANVAS: CanvasSize = { width: 960, height: 1080 };
 // The canvas sizes accepted: from a phone column to a 4K wall, either way up.
 export const CANVAS_MIN = 320;
 export const CANVAS_MAX = 3840;
-
-type Read = (name: string) => string | null;
-
-function reader(dataset: DOMStringMap, search: string): Read {
-  const q = new URLSearchParams(search);
-  return (name) => dataset[name] ?? q.get(name);
-}
 
 function flag(read: Read, name: string, fallback: boolean, warn: (m: string) => void): boolean {
   const v = read(name);
@@ -70,7 +67,7 @@ export function parseEmbedOptions(
   search: string,
   warn: (message: string) => void = (m) => console.warn(m),
 ): EmbedOptions | null {
-  const read = reader(dataset, search);
+  const read = hostReader(dataset, search);
   if (!flag(read, 'embed', false, warn)) return null;
   let canvas = DEFAULT_CANVAS;
   const c = read('canvas');
@@ -80,14 +77,6 @@ export function parseEmbedOptions(
     else warn(`board-replay: ignoring canvas=${JSON.stringify(c)} (expected WxH, each ${CANVAS_MIN} to ${CANVAS_MAX})`);
   }
   return { canvas, autoplay: flag(read, 'autoplay', true, warn), retime: flag(read, 'retime', true, warn) };
-}
-
-export function parseTheme(dataset: DOMStringMap, search: string, warn: (message: string) => void = (m) => console.warn(m)): ReplayTheme {
-  const v = reader(dataset, search)('theme');
-  if (v === null || v === 'dark') return 'dark';
-  if (v === 'light') return 'light';
-  warn(`board-replay: ignoring theme=${JSON.stringify(v)} (expected dark or light)`);
-  return 'dark';
 }
 
 // fitCanvas places a canvas in a container: the largest scale at which the WHOLE canvas

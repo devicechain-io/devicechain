@@ -410,13 +410,18 @@ export function parseBoardRecording(input: unknown): BoardRecording {
   });
 
   const m = strict(root.measurements, '$.measurements', ['d', 'n', 't', 'v', 's']);
-  const t = column(m.t, '$.measurements.t', num);
-  let prev = lo;
-  t.forEach((x, i) => {
-    if (x < lo || x > hi) throw new RecordingFormatError(`$.measurements.t[${i}]`, `${x} is outside [${lo}, ${hi}]`);
-    if (x < prev) throw new RecordingFormatError(`$.measurements.t[${i}]`, 'time column must not decrease');
-    prev = x;
-  });
+  // A time column (measurements and positions alike): offsets inside [lo, hi], never decreasing.
+  const times = (v: unknown, path: string): number[] => {
+    const col = column(v, path, num);
+    let prev = lo;
+    col.forEach((x, i) => {
+      if (x < lo || x > hi) throw new RecordingFormatError(`${path}[${i}]`, `${x} is outside [${lo}, ${hi}]`);
+      if (x < prev) throw new RecordingFormatError(`${path}[${i}]`, 'time column must not decrease');
+      prev = x;
+    });
+    return col;
+  };
+  const t = times(m.t, '$.measurements.t');
   const index = (name: string, limit: number) => (x: unknown, p: string): number => {
     const n = num(x, p);
     if (!Number.isInteger(n) || n < 0 || n >= limit) throw new RecordingFormatError(p, `${name} index out of range`);
@@ -521,13 +526,7 @@ export function parseBoardRecording(input: unknown): BoardRecording {
     locations = { d: [], t: [], lat: [], lon: [], hdg: [], spd: [] };
   } else {
     const lc = strict(root.locations, '$.locations', ['d', 't', 'lat', 'lon', 'hdg', 'spd']);
-    const lt = column(lc.t, '$.locations.t', num);
-    let last = lo;
-    lt.forEach((x, i) => {
-      if (x < lo || x > hi) throw new RecordingFormatError(`$.locations.t[${i}]`, `${x} is outside [${lo}, ${hi}]`);
-      if (x < last) throw new RecordingFormatError(`$.locations.t[${i}]`, 'time column must not decrease');
-      last = x;
-    });
+    const lt = times(lc.t, '$.locations.t');
     const within = (min: number, max: number, what: string) => (x: unknown, p: string): number => {
       const n = num(x, p);
       if (n < min || n > max) throw new RecordingFormatError(p, `${what} ${n} is outside [${min}, ${max}]`);

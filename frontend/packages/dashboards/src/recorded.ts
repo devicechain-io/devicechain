@@ -403,9 +403,12 @@ interface Indexed {
   byDevice: Map<string, Series[]>;
   timeline: TimelineEntry[];
   timelineTimes: number[];
-  // Each device's position rows (indices into the location columns) and their times.
-  positions: Map<string, { rows: number[]; times: number[] }>;
 }
+
+// The parts only some boards use (positions, aggregates), fetched on first use: one import
+// site, so the bundle carries one loader for them.
+type RecordedExtra = typeof import('./recorded-extra');
+const loadExtra = (): Promise<RecordedExtra> => import('./recorded-extra');
 
 // A view is rebuilt after every seek, so the index is built once per parsed recording.
 const indexCache = new WeakMap<BoardRecording, Indexed>();
@@ -438,17 +441,7 @@ function indexOf(rec: BoardRecording): Indexed {
   // Array.prototype.sort is stable: snapshots were listed first, so they stay first at ties.
   timeline.sort((a, b) => a.tMs - b.tMs);
 
-  const positions = new Map<string, { rows: number[]; times: number[] }>();
-  const loc = rec.locations;
-  for (let i = 0; i < loc.t.length; i++) {
-    const token = rec.devices[loc.d[i]].token;
-    let p = positions.get(token);
-    if (!p) positions.set(token, (p = { rows: [], times: [] }));
-    p.rows.push(i);
-    p.times.push(loc.t[i]);
-  }
-
-  const indexed: Indexed = { byDevice, timeline, timelineTimes: timeline.map((e) => e.tMs), positions };
+  const indexed: Indexed = { byDevice, timeline, timelineTimes: timeline.map((e) => e.tMs) };
   indexCache.set(rec, indexed);
   return indexed;
 }
@@ -868,26 +861,23 @@ export class RecordedDataSource implements WidgetDataSource {
         return this.failLater(new NotInRecordingError('locations', 'no positions were recorded'), sink);
       }
     }
-    if (tokens.length === 0) {
-      return this.open({
-        start: (_cursor, isDisposed) => {
-          if (!isDisposed()) sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
-        },
-        advance: () => {},
-      });
-    }
-    let extra: typeof import('./recorded-extra') | null = null;
+    let extra: RecordedExtra | null = null;
     let lastSignature: string | null = null;
     const emit = (cursor: number, isDisposed: () => boolean): void => {
       if (!extra) return;
-      const { signature, locations } = extra.lastPositions(this.rec, this.index.positions, tokens, cursor, (t) => this.iso(t));
+      const { signature, locations } = extra.lastPositions(this.rec, tokens, cursor, (t) => this.iso(t));
       if (signature === lastSignature || isDisposed()) return;
       lastSignature = signature;
       sink.next({ kind: 'positions', deviceTokens: tokens, locations });
     };
     return this.open({
       start: (_cursor, isDisposed) => {
-        import('./recorded-extra').then(
+        // Nothing to place: the empty snapshot, as from the hub, and nothing more to fetch.
+        if (tokens.length === 0) {
+          if (!isDisposed()) sink.next({ kind: 'positions', deviceTokens: [], locations: [] });
+          return;
+        }
+        loadExtra().then(
           (m) => {
             extra = m;
             if (!this.stale) emit(this.cursor, isDisposed);
@@ -912,26 +902,15 @@ export class RecordedDataSource implements WidgetDataSource {
   // shift before the rows are read, so a re-timed board aggregates the same rows.
   async bucketMeasurements(datasource: DatasourceSelector, window: HistoryWindow): Promise<MeasurementBucket[]> {
     const groups = this.resolve(datasource);
-    const series: Series[] = [];
     for (const g of groups) {
       for (const name of g.names) {
         if (!this.rec.channels.measurements.includes(name)) {
           throw new NotInRecordingError('measurements', `no '${name}' series was recorded`);
         }
       }
-      for (const s of this.index.byDevice.get(g.deviceToken) ?? []) {
-        if (g.names.size === 0 || g.names.has(s.name)) series.push(s);
-      }
     }
-    const widthMs = window.intervalSeconds * 1000;
-    const origin = this.startMs + this.shiftMs;
-    const from = Date.parse(window.startTime) - origin;
-    const to = Math.min(Date.parse(window.endTime) - origin, this.cursor);
-    if (!(widthMs > 0) || !Number.isFinite(from) || !Number.isFinite(to)) {
-      throw new RangeError(`bucketMeasurements: not a window: ${JSON.stringify(window)}`);
-    }
-    const { foldBuckets } = await import('./recorded-extra');
-    return foldBuckets(this.rec, series, from, to, origin, widthMs);
+    const { foldBuckets } = await loadExtra();
+    return foldBuckets(this.rec, groups, this.index.byDevice, window, this.startMs + this.shiftMs, this.cursor);
   }
 
   // ── availability ──────────────────────────────────────────────────────────

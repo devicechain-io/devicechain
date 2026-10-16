@@ -10,7 +10,8 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import ReplayApp from './App';
-import { DEFAULT_CANVAS, fitCanvas, parseEmbedOptions, parseTheme } from './embed';
+import { DEFAULT_CANVAS, fitCanvas, parseEmbedOptions } from './embed';
+import { parseTheme } from './host-options';
 import { setReplayLocale } from './i18n/config';
 import { BOARD_URL, ORIGIN, RECORDING_URL, boardBytes, fixtureRecordingText, manualTicker, stubFetch } from './testing/harness';
 

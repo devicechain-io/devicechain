@@ -21,8 +21,8 @@ import { useTranslation } from 'react-i18next';
 
 import type { WidgetRegistry } from '@devicechain/host-widgets';
 import { Board } from './Board';
-import type { EmbedOptions, ReplayTheme } from './embed';
-import { EmbedLabel } from './EmbedLabel';
+import type { EmbedOptions } from './embed';
+import type { ReplayTheme } from './host-options';
 import { loadReplay, ReplayLoadError, type LoadedReplay } from './load';
 import { ProvenancePanel, ReplayHeader } from './ReplayHeader';
 import { TransportBar, replayState, useClockView } from './TransportBar';
@@ -46,8 +46,10 @@ export interface ReplayAppProps {
   theme?: ReplayTheme;
 }
 
-// The embed's canvas and player are loaded only in embed mode.
-const EmbedPlayer = lazy(() => import('./EmbedPlayer'));
+// The embed is loaded only in embed mode. mount.tsx fetches it (loadEmbed) before it renders an
+// embed, so by the first render this resolves at once and the label is on the first frame.
+export const loadEmbed = () => import('./EmbedPlayer');
+const EmbedView = lazy(loadEmbed);
 
 export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, ticker, registry, embed, theme = 'dark' }: ReplayAppProps) {
   const [load, setLoad] = useState<Load>({ status: 'loading' });
@@ -73,50 +75,40 @@ export default function ReplayApp({ recordingUrl, boardUrl, fetchFn, origin, tic
   }, [recordingUrl, boardUrl]);
 
   const recording = load.status === 'ready' ? load.replay.recording : null;
-  if (embed) {
-    // The embed: a fixed canvas holding the replay label and the board, and nothing else.
-    return (
-      <div
-        ref={setRootEl}
-        className="board-replay-root"
-        lang={i18n.language}
-        data-theme={theme}
-        data-embed=""
-        style={{ minHeight: 0 }}
-        data-testid="replay-root"
-      >
-        {load.status === 'ready' ? (
-          <Suspense fallback={<EmbedLabel retimed={embed.retime} />}>
-            <EmbedPlayer replay={load.replay} options={embed} ticker={ticker} themeRoot={rootEl ?? undefined} />
-          </Suspense>
-        ) : (
-          // Before the canvas: the label, then loading or the error, filling the host box.
-          <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-            <EmbedLabel retimed={embed.retime} />
-            {load.status === 'loading' ? <StatusBody /> : <ErrorBody error={load.error} />}
-          </div>
-        )}
-      </div>
-    );
-  }
   return (
     <div
       ref={setRootEl}
       className="board-replay-root"
       lang={i18n.language}
       data-theme={theme}
-      style={{ display: 'flex', flexDirection: 'column' }}
+      data-embed={embed ? '' : undefined}
+      style={embed ? { minHeight: 0 } : { display: 'flex', flexDirection: 'column' }}
       data-testid="replay-root"
     >
-      <ReplayHeader
-        recording={recording}
-        provenanceOpen={provenanceOpen}
-        onToggleProvenance={() => setProvenanceOpen((v) => !v)}
-      />
-      {recording && provenanceOpen && <ProvenancePanel recording={recording} />}
-      {load.status === 'loading' && <StatusBody />}
-      {load.status === 'error' && <ErrorBody error={load.error} />}
-      {load.status === 'ready' && <Player replay={load.replay} ticker={ticker} themeRoot={rootEl ?? undefined} />}
+      {embed ? (
+        // The embed: the replay label and the board on a fixed canvas, and nothing else.
+        <Suspense fallback={null}>
+          <EmbedView
+            replay={load.status === 'ready' ? load.replay : null}
+            options={embed}
+            ticker={ticker}
+            themeRoot={rootEl ?? undefined}
+            pending={load.status === 'loading' ? <StatusBody /> : load.status === 'error' && <ErrorBody error={load.error} />}
+          />
+        </Suspense>
+      ) : (
+        <>
+          <ReplayHeader
+            recording={recording}
+            provenanceOpen={provenanceOpen}
+            onToggleProvenance={() => setProvenanceOpen((v) => !v)}
+          />
+          {recording && provenanceOpen && <ProvenancePanel recording={recording} />}
+          {load.status === 'loading' && <StatusBody />}
+          {load.status === 'error' && <ErrorBody error={load.error} />}
+          {load.status === 'ready' && <Player replay={load.replay} ticker={ticker} themeRoot={rootEl ?? undefined} />}
+        </>
+      )}
     </div>
   );
 }
