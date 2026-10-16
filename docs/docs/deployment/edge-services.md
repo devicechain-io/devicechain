@@ -295,7 +295,7 @@ removed them, not because a flag changed, so an operator releases them.
 
 `dcctl presence demote` walks one source's asserted devices in a tenant and releases each:
 
-```
+```bash
 dcctl presence demote --tenant acme --source sparkplug:plant-a \
   --email ops@acme.example --password "$DC_PASSWORD" \
   --reason "plant-a gateway decommissioned"
