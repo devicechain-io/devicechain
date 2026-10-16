@@ -172,19 +172,43 @@ const IDP_DETAIL = 'routes/admin/identity-providers/IdentityProviderDetailPage.t
 // Chapter 17's board: the widgetlab gallery, as published by its simulator.
 const DASH_BOARD = 'wl-gallery';
 
+// The gallery's first screen in EDIT mode: the two Temperature cards, the chart and the table
+// each draw a freshness footer once their first reading lands. Right after the switch to edit
+// mode they can still be waiting, and the shot shows dashes and "No data yet": wait for the
+// footers instead of sleeping. Counted over the widgets that START inside the viewport (a
+// footer itself can sit below the fold), since only those are in the shot.
+const EDIT_LIVE_WIDGETS = 4;
+async function waitForEditReadings(page: Page) {
+  await page.waitForFunction(
+    (want) =>
+      [...document.querySelectorAll('[data-shot="dashboard-widget"]')].filter((w) => {
+        const r = w.getBoundingClientRect();
+        return r.height > 0 && r.top >= 0 && r.top < window.innerHeight && w.querySelector('[data-widget-freshness]');
+      }).length >= want,
+    EDIT_LIVE_WIDGETS,
+    { timeout: 20_000 },
+  );
+}
+
 // A band of the widgetlab gallery in view mode, scrolled so the widget titled `title` sits at
 // the top of the frame. The one text selector in this file, and deliberately so: a widget
 // title is text the dashboard's AUTHOR wrote (the simulator's gallery spec), which the console
 // never translates, so it reads the same in every locale. The widgets carry no data-shot
-// anchor of their own in view mode.
-function galleryBand(id: string, title: string): Recipe {
+// anchor of their own in view mode. The title must be unique on the board: a second widget
+// with the same title fails the recipe (strict locator) rather than shooting whichever came first.
+//
+// `ready`, when given, is a selector the band must show before the shot: the content a reader
+// is meant to see, waited for rather than slept for, so a card still waiting on its first
+// reading fails the recipe instead of being published as "No data".
+function galleryBand(id: string, title: string, ready?: string): Recipe {
   return {
     id,
     session: 'widgets',
     route: '/dashboards/wl-gallery',
     setup: async (page) => {
-      const heading = page.getByText(title, { exact: true }).first();
+      const heading = page.getByText(title, { exact: true });
       await heading.waitFor({ timeout: 30_000 });
+      if (ready) await page.locator(ready).waitFor({ state: 'visible', timeout: 20_000 });
       await heading.evaluate((el) => {
         el.scrollIntoView({ block: 'start' });
         // Leave a little room above the widget's frame: walk up to the scrolling ancestor.
@@ -192,7 +216,7 @@ function galleryBand(id: string, title: string): Recipe {
         while (p && p.scrollHeight <= p.clientHeight) p = p.parentElement;
         (p ?? document.scrollingElement)?.scrollBy(0, -12);
       });
-      await page.waitForTimeout(4000); // live widgets: first values and chart layout
+      await page.waitForTimeout(4000); // chart layout: ECharts gives no settled signal
     },
     anchor: '[data-shot="dashboard-edit"]',
     sources: ['routes/dashboards/editor/DashboardWorkspace.tsx'],
@@ -614,7 +638,9 @@ export const recipes: Recipe[] = [
   // The gallery further down, one shot per band: the gauge and indicator widgets, the stat
   // cards over the board's time range, the bar and pie charts, and the fleet table.
   galleryBand('dashboard-gauges', 'Thermometer'),
-  galleryBand('dashboard-stat-cards', 'Average temperature'),
+  // The one card on the latest reading rather than an aggregate: it needs the live reading,
+  // which can land after the aggregates do.
+  galleryBand('dashboard-stat-cards', 'Average temperature', '[data-stat="last"]'),
   galleryBand('dashboard-bar-pie', 'Latest readings'),
   galleryBand('dashboard-fleet-table', 'Sensors in the zone'),
   {
@@ -624,6 +650,7 @@ export const recipes: Recipe[] = [
     setup: async (page) => {
       await page.locator('[data-shot="dashboard-edit"]').click();
       await page.locator('[data-shot="dashboard-widget"]').first().waitFor({ timeout: 30_000 });
+      await waitForEditReadings(page);
     },
     anchor: '[data-shot="dashboard-add-widget"]',
     sources: ['routes/dashboards/editor/DashboardWorkspace.tsx', 'routes/dashboards/editor/AddWidgetMenu.tsx', 'routes/dashboards/editor/DashboardCanvas.tsx'],
@@ -634,6 +661,7 @@ export const recipes: Recipe[] = [
     route: '/dashboards/wl-gallery',
     setup: async (page) => {
       await page.locator('[data-shot="dashboard-edit"]').click();
+      await waitForEditReadings(page);
       await page.locator('[data-shot="dashboard-add-widget"]').click();
     },
     anchor: '[data-testid="add-widget-group"]',
@@ -648,6 +676,7 @@ export const recipes: Recipe[] = [
       // The widget body is inert while editing (the frame beneath it owns the pointer), so the
       // click lands on the frame at the body's coordinates.
       await page.locator('[data-shot="dashboard-widget"]').nth(1).click({ force: true });
+      await waitForEditReadings(page);
     },
     anchor: '[data-shot="widget-config"]',
     sources: ['routes/dashboards/editor/DashboardWorkspace.tsx', 'routes/dashboards/editor/DashboardCanvas.tsx', 'routes/dashboards/editor/WidgetConfigPanel.tsx'],
@@ -1063,7 +1092,7 @@ export const recipes: Recipe[] = [
       await page.locator('[data-shot="dash-token"]').fill(DASH_BOARD);
       await page.locator('[data-shot="dash-load-published"]').click();
       await page.locator('[data-shot="dash-view"]').waitFor({ timeout: 30_000 });
-      await page.waitForTimeout(4000); // live widgets: first values and chart layout
+      await page.waitForTimeout(4000); // chart layout: ECharts gives no settled signal
     },
     anchor: '[data-shot="dash-theme-toggle"]',
     sources: ['App.tsx'],
