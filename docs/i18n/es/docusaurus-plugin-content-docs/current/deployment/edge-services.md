@@ -175,12 +175,22 @@ Cómo acota cada transporte una muerte de la que nunca le hablaron:
   mientras dure la sesión. Cada sondeo periódico pide un rebirth al nodo de cada dispositivo afirmado
   que no ha producido nada en el último intervalo, espera diez segundos y marca fuera de línea al
   dispositivo que sigue sin producir nada. A un dispositivo del que se ha sabido dentro del intervalo
-  nunca se le pregunta ni se le juzga, así que una flota sana no paga nada por sondeo; solo se le
-  pregunta a un nodo con un dispositivo callado, como mucho una vez por intervalo. Una muerte
-  silenciosa se nota, por tanto, en unos dos intervalos, el mismo orden que el tiempo de espera de
-  diez minutos del barrido de inactividad, pero con pruebas (preguntado, sin respuesta) y no por
-  silencio. Vigila `presence_probes_total{trigger="periodic"}`: en un host conectado tiene que subir;
-  plano significa que el sondeo no se está ejecutando.
+  nunca se le pregunta ni se le juzga, y cualquier mensaje de un dispositivo cuenta también para su
+  nodo, así que los dispositivos que informan con más frecuencia que el intervalo no cuestan nada.
+  Una muerte silenciosa se nota, por tanto, en unos dos intervalos, el mismo orden que el tiempo de
+  espera de diez minutos del barrido de inactividad, pero con pruebas (preguntado, sin respuesta) y no
+  por silencio. Vigila `presence_probes_total{trigger="periodic"}`: en un host conectado tiene que
+  subir; plano significa que el sondeo no se está ejecutando.
+
+  **El sondeo tiene un coste en una flota callada.** Sparkplug informa por excepción, así que un
+  dispositivo sano puede no decir nada durante horas con toda legitimidad. Entonces a su nodo se le
+  pide un rebirth cada dos intervalos: el nodo vuelve a enviar todos los valores de métricas que tiene,
+  los suyos y los de todos sus dispositivos, que se almacenan como lecturas (los births no cuentan
+  contra el límite de ingesta del tenant), y cada dispositivo registra una conexión nueva. A todos los
+  nodos callados se les pregunta en el mismo tic. Si es demasiado para tu flota, sube
+  `presence.probeSeconds`; la cota de detección crece con él. Un nodo que tarda más que la ventana de
+  diez segundos en volver a anunciar un dispositivo hace que ese dispositivo se marque fuera de línea
+  hasta que llegue su birth, y vuelve a estar en línea por sí solo cuando llega.
 - **Un nodo que se vuelve a anunciar.** Cuando un nodo de borde inicia una sesión nueva, los
   dispositivos hijos de su sesión anterior se reemplazan junto con ella. Un dispositivo hijo que no se
   vuelva a anunciar bajo la nueva sesión sigue mostrándose conectado hasta el siguiente sondeo
@@ -582,7 +592,7 @@ segundos) a que se almacene lo que está en vuelo antes de liberar el arrendamie
 | Ajuste | Valor por defecto | Qué hace |
 |---|---|---|
 | `ingest.publishWindow` | `32` | Cuántos mensajes mantiene una conexión de Sparkplug esperando a la vez la confirmación del broker de la plataforma, de 1 a 1024. Un valor fuera de ese rango, o un 0 explícito, detiene el servicio al arrancar; nunca se ajusta. La publicación no puede ir más rápido que este número dividido por lo que tarda una confirmación (unos 2.800 mensajes por segundo por conexión con 32). Es un ajuste fijo, leído al arrancar, igual para todas las fuentes. **También es cuánto más puede perder un pod.** El Host es un cliente de sesión limpia que confirma cada mensaje a tu broker en cuanto lo ha tomado, y un broker no reentrega a un host que se reinició, así que un pod que se detiene de golpe pierde lo que había tomado y aún no almacenó: hasta este número de mensajes por conexión, donde antes era uno, más, solo mientras las publicaciones fallan, las que esperan un nuevo intento (como mucho, más o menos otra ventana). Un nuevo líder recupera la presencia y los valores actuales de las métricas de cada nodo mediante rebirths, no las lecturas perdidas entre medias. El almacenamiento y reenvío del nodo de borde cubre el tiempo en que el Host está desconectado, no los mensajes ya entregados a un Host que luego murió. Vigila `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events", writer="sparkplug"}`: una tasa cercana a 1 significa que la ventana es lo que limita la publicación. |
-| `presence.probeSeconds` | `300` | Cada cuánto un Host conectado vuelve a comprobar la vida de sus dispositivos afirmados. En cada tic, al nodo de cada dispositivo que la plataforma tiene por conectado y que no ha producido nada en el último intervalo se le pide un rebirth; un dispositivo que sigue callado tras la ventana de sondeo de diez segundos se marca fuera de línea. A un dispositivo del que se ha sabido dentro del intervalo nunca se le pregunta ni se le juzga, así que solo se le pregunta a un nodo con un dispositivo callado, como mucho una vez por intervalo. Esto es lo que atrapa un certificado de muerte que el broker nunca entregó en un Host que permanece conectado; consulta [dispositivos atascados en línea](#a-device-that-reads-online-and-is-not). Sin valor o 0 significa 300. Un valor escrito por debajo de 60 detiene el servicio al arrancar; nunca se ajusta. No hay interruptor de apagado: una flota para la que un rebirth periódico resulta caro lo fija largo. Es un ajuste fijo, leído al arrancar, igual para todas las fuentes. |
+| `presence.probeSeconds` | `300` | Cada cuánto un Host conectado vuelve a comprobar la vida de sus dispositivos afirmados. En cada tic, al nodo de cada dispositivo que la plataforma tiene por conectado y que no ha producido nada en el último intervalo se le pide un rebirth; un dispositivo que sigue callado tras la ventana de sondeo de diez segundos se marca fuera de línea. A un dispositivo del que se ha sabido dentro del intervalo nunca se le pregunta ni se le juzga, y los mensajes de un dispositivo cuentan también para su nodo, así que solo se le pregunta a un nodo con un dispositivo callado, como mucho cada dos intervalos. Cada pregunta hace que ese nodo vuelva a enviar todos los valores de métricas que tiene y registra una conexión nueva para cada uno de sus dispositivos; consulta la nota sobre el coste en [dispositivos atascados en línea](#a-device-that-reads-online-and-is-not). Esto es lo que atrapa un certificado de muerte que el broker nunca entregó en un Host que permanece conectado; consulta [dispositivos atascados en línea](#a-device-that-reads-online-and-is-not). Sin valor o 0 significa 300. Un valor escrito por debajo de 60 detiene el servicio al arrancar; nunca se ajusta. No hay interruptor de apagado: una flota para la que un rebirth periódico resulta caro lo fija largo. Es un ajuste fijo, leído al arrancar, igual para todas las fuentes. |
 
 **El límite de lecturas se aplica dividiendo.** El
 [límite de lecturas por evento](../guides/connecting-a-device.md#how-much-one-message-may-carry) se

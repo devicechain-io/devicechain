@@ -56,10 +56,37 @@ func TestProbeMetricsPrecreateBothTriggers(t *testing.T) {
 	m := buildMetrics()
 	require.NotNil(t, m.PresenceProbes)
 	require.NotNil(t, m.PresenceProbeDisconnects)
+	// Counted BEFORE anything reads a child: WithLabelValues creates the child it names, so
+	// a count taken after the reads below would find both children whether or not the
+	// service created them.
+	assert.Equal(t, 2, testutil.CollectAndCount(m.PresenceProbes), "both trigger children exist at 0 before any probe ran")
+	assert.Equal(t, 2, testutil.CollectAndCount(m.PresenceProbeDisconnects), "both trigger children exist at 0 before any probe ran")
 	for _, tr := range []string{host.ProbeTriggerConnect, host.ProbeTriggerPeriodic} {
 		assert.Equal(t, float64(0), testutil.ToFloat64(m.PresenceProbes.WithLabelValues(tr)))
 		assert.Equal(t, float64(0), testutil.ToFloat64(m.PresenceProbeDisconnects.WithLabelValues(tr)))
 	}
-	assert.Equal(t, 2, testutil.CollectAndCount(m.PresenceProbes), "both trigger children exist at 0")
-	assert.Equal(t, 2, testutil.CollectAndCount(m.PresenceProbeDisconnects), "both trigger children exist at 0")
+}
+
+// The two probe counters are exported under their own names: swapping the fields in
+// buildMetrics would publish probe verdicts as disconnects, and the precreate test above,
+// which reads only zeros, could not tell.
+func TestProbeCountersAreExportedUnderTheirOwnNames(t *testing.T) {
+	registry := newTestMicroservice(t)
+	m := buildMetrics()
+	m.PresenceProbes.WithLabelValues(host.ProbeTriggerPeriodic).Add(2)
+	m.PresenceProbeDisconnects.WithLabelValues(host.ProbeTriggerPeriodic).Add(5)
+	got := map[string]float64{}
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		for _, mm := range f.GetMetric() {
+			for _, l := range mm.GetLabel() {
+				if l.GetName() == "trigger" && l.GetValue() == host.ProbeTriggerPeriodic {
+					got[f.GetName()] = mm.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	assert.Equal(t, float64(2), got["devicechain_sparkplugingest_presence_probes_total"])
+	assert.Equal(t, float64(5), got["devicechain_sparkplugingest_presence_probe_disconnects_total"])
 }

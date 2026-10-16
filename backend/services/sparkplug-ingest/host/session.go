@@ -100,6 +100,12 @@ type nodeSession struct {
 	// birth is a QoS-1 redelivery that must be skipped so it can't reset a baseline the
 	// live DATA stream has already advanced.
 	rebirthPending bool
+	// probeAsked is set alongside rebirthPending when the rebirth was asked by a liveness
+	// probe (MarkRebirthPending) rather than by the session machine's own gap detection.
+	// The probe may declare this node DISCONNECTED before the answer arrives (a slow link
+	// can take longer than its window), and an asserted device takes Active only from a
+	// StateChange, so the answer must re-assert the node; see onNBirth.
+	probeAsked bool
 }
 
 // SessionTracker validates the Sparkplug session for every edge node it observes
@@ -316,6 +322,28 @@ func (tr *SessionTracker) onNBirth(key nodeKey, p *sppb.Payload) ([]Sample, []Pr
 		prev.rebirthPending = false
 		prev.lastSeq = uint8(p.GetSeq())
 		addAliases(prev.aliases, p)
+		// 🔴 AN ANSWER TO A LIVENESS PROBE RE-ASSERTS THE NODE. The probe declares a node
+		// that has not answered within its window DISCONNECTED at an epoch minted before
+		// it asked, and a node whose answer is merely late is still alive. Its devices heal
+		// on their own (each DBIRTH mints a fresh epoch), but the node's commanded birth
+		// keeps the session and emitted nothing, so the node read offline while publishing
+		// until its next genuine session: a disconnected device is not in the
+		// asserted-active set the next probe reads, and data never flips an asserted one.
+		// So the answer carries a CONNECTED at a fresh epoch, above any the probe minted.
+		// Every probe answer does, late or not: whether the verdict has already gone out
+		// cannot be decided here without racing it, and an extra same-state CONNECTED moves
+		// no connectivity edge (it refreshes the node's last-connect time, as each of its
+		// devices' DBIRTHs already does on every rebirth), where a missing one is a node
+		// stuck offline. A gap-commanded rebirth (probeAsked false) is unchanged.
+		if prev.probeAsked {
+			prev.probeAsked = false
+			epoch := tr.nextEpoch()
+			prev.sessionEpoch = epoch
+			return tr.extract(p, prev.aliases), []PresenceEvent{{
+				ExternalId: nodeExternalId(key), Connected: true, Reason: "nbirth-probe-answer",
+				SessionId: epoch, OccurredAt: tr.now(),
+			}}
+		}
 		return tr.extract(p, prev.aliases), nil
 	}
 	replaced := tr.sessions[key]
@@ -534,13 +562,16 @@ func (tr *SessionTracker) wantRebirth(s *nodeSession) bool {
 // MarkRebirthPending records that the Host has commanded a node to rebirth OUTSIDE the
 // session machine's own gap detection — the failover reconcile publishes rebirths
 // directly (ADR-067 SP4b) — so the NBIRTH answering it is treated as a commanded
-// rebirth (seq-baseline re-adopted), not skipped as a redelivery. A node with no live
-// session yet is a no-op: its next NBIRTH takes the normal full-rebuild path.
+// rebirth (seq-baseline re-adopted), not skipped as a redelivery, and so that answer
+// re-asserts the node CONNECTED (see onNBirth: the probe may already have declared it
+// dead). A node with no live session yet is a no-op: its next NBIRTH takes the normal
+// full-rebuild path, which asserts CONNECTED anyway.
 func (tr *SessionTracker) MarkRebirthPending(group, node string) {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	if s := tr.sessions[nodeKey{group, node}]; s != nil {
 		s.rebirthPending = true
+		s.probeAsked = true
 	}
 }
 

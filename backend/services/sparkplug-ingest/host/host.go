@@ -770,15 +770,14 @@ func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, ses
 
 	// Phase 2 (after ONLINE): probe the asserted set for liveness, under THIS session's
 	// context so a broker drop mid-probe aborts it before it can declare a mass death.
-	// Tracked in probeWG so Stop drains it. onConnected only runs while runLoop is alive,
-	// so this Add never races Stop's post-runLoop probeWG.Wait. The zero `since` counts
+	// Tracked in probeWG so Stop drains it; goWhileLive is what keeps that Add from racing
+	// Stop's probeWG.Wait (onConnected runs on paho's goroutine and can outlive runLoop).
+	// The zero `since` counts
 	// anything heard on this session (the seen set was reset above) as alive.
 	if len(asserted) > 0 {
-		c.probeWG.Add(1)
-		go func() {
-			defer c.probeWG.Done()
+		c.goWhileLive(sessionCtx, &c.probeWG, func() {
 			c.reconcileProbe(sessionCtx, asserted, time.Time{}, ProbeTriggerConnect)
-		}()
+		})
 	}
 
 	// And for the rest of the session: the periodic liveness probe, under the same context
@@ -787,12 +786,33 @@ func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, ses
 	// asserted the first time it births, which can be minutes after this connect — and
 	// only when there is a projection to read.
 	if c.reconciler != nil {
-		c.loopWG.Add(1)
-		go func() {
-			defer c.loopWG.Done()
-			c.presenceProbeLoop(sessionCtx)
-		}()
+		c.goWhileLive(sessionCtx, &c.loopWG, func() { c.presenceProbeLoop(sessionCtx) })
 	}
+}
+
+// goWhileLive starts fn on its own goroutine, tracked in wg, unless the session has
+// already ended, and reports whether it did.
+//
+// 🔴 onConnected RUNS ON PAHO'S GOROUTINE, NOT runLoop's, so it can still be finishing
+// after Stop has cancelled the term and runLoop has returned — and then Stop is in, or
+// about to be in, wg.Wait. A WaitGroup Add from zero racing a Wait is a misuse the
+// runtime may panic on, and an Add after the Wait returned is a goroutine Stop never
+// drained. The check and the Add happen under mu, and Stop cancels the term (which
+// cancels every session context synchronously) under the same mu, so either the Add
+// lands before the cancel — and therefore before Stop's Wait — or the session is seen
+// ended and nothing starts.
+func (c *Client) goWhileLive(sessionCtx context.Context, wg *sync.WaitGroup, fn func()) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sessionCtx.Err() != nil {
+		return false
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fn()
+	}()
+	return true
 }
 
 // presenceProbeLoop closes the half of the missed-death hole the connect probe cannot
@@ -813,7 +833,7 @@ func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, ses
 // session" would never declare it. The probe records `since` BEFORE it sends its rebirths,
 // so only an answer to this probe (or any traffic after it began) counts.
 //
-// It reads the projection through establishEpochFloor, which also raises the epoch floor.
+// It reads the projection through readAssertedAndFloor, which also raises the epoch floor.
 // That is harmless — the floor only ever moves up — and it keeps the two readers of the
 // asserted set the same code. A tick that lands while the CONNECT probe is still in its
 // window is skipped, before it reads anything: rebirthing the same nodes twice inside one
@@ -836,9 +856,9 @@ func (c *Client) presenceProbeLoop(ctx context.Context) {
 			log.Debug().Str("tenant", c.tenant).Msg("Skipping a periodic presence probe: another probe is still in its window.")
 			continue
 		}
-		asserted := c.establishEpochFloor(ctx)
-		if len(asserted) == 0 {
-			continue
+		asserted, read := c.readAssertedAndFloor(ctx)
+		if !read {
+			continue // decided nothing, so counts nothing: a flat series is the right alarm
 		}
 		now := c.now()
 		silent := c.silentDevices(asserted, now.Add(-c.probeInterval))
@@ -878,21 +898,30 @@ func (c *Client) silentDevices(asserted []AssertedDevice, cutoff time.Time) []As
 // (re)connect, never a connection blocker. The read is bounded so a slow/absent
 // device-state cannot stall connection setup.
 func (c *Client) establishEpochFloor(ctx context.Context) []AssertedDevice {
+	devices, _ := c.readAssertedAndFloor(ctx)
+	return devices
+}
+
+// readAssertedAndFloor is establishEpochFloor that also reports whether the projection
+// was READ: false when there is no reconciler or the read failed, true for a successful
+// read, empty or not. The periodic probe needs the difference — a tick that read an empty
+// set reached a verdict (nothing to ask), while one that could not read decided nothing.
+func (c *Client) readAssertedAndFloor(ctx context.Context) ([]AssertedDevice, bool) {
 	if c.reconciler == nil {
-		return nil
+		return nil, false
 	}
 	qctx, cancel := context.WithTimeout(ctx, reconcileQueryTimeout)
 	devices, maxSession, err := c.reconciler.AssertedActive(qctx, c.tenant, c.policy.Source)
 	cancel()
 	if err != nil {
-		log.Warn().Err(err).Str("tenant", c.tenant).Msg("Presence reconciliation could not read device-state; skipping the floor + probe this cycle (retries on the next reconnect).")
-		return nil
+		log.Warn().Err(err).Str("tenant", c.tenant).Msg("Presence reconciliation could not read device-state; skipping the floor + probe this cycle (the periodic probe retries on its next tick, the connect probe on the next reconnect).")
+		return nil, false
 	}
 	if len(devices) == 0 {
-		return nil
+		return nil, true
 	}
 	c.sessions.SetEpochFloor(maxSession + 1)
-	return devices
+	return devices, true
 }
 
 // onMessage decodes and logs one received Sparkplug message. A parse/decode
@@ -921,8 +950,17 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	// probe (ADR-067 SP4b) knows the node/device is alive and does not force it
 	// DISCONNECTED. Any node/device message counts — a DEATH included, since the node
 	// answered and its own signal already drove the projection.
+	//
+	// A device's message also proves its NODE alive: in Sparkplug a device has no
+	// connection of its own, and everything it says is published over its edge node's
+	// MQTT session. Without this a node whose devices report constantly but which
+	// publishes no NDATA of its own — the common shape — reads as silent to every
+	// periodic probe and is rebirthed every other interval for nothing.
 	if !rec.Topic.IsState {
 		c.markSeen(SparkplugExternalId(rec.Topic))
+		if rec.Topic.IsDevice() {
+			c.markSeen(nodeExternalId(nodeKey{rec.Topic.GroupID, rec.Topic.EdgeNodeID}))
+		}
 	}
 	// Advance the SP2 session machine; it may command the node to rebirth (fired
 	// via enqueueRebirth, outside its lock) and returns the numeric samples the
@@ -938,7 +976,9 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		// leader handover, the reconcile probe) re-sends every node's whole metric set at
 		// once — shedding a birth's tail would lose those values until they next change,
 		// with no redelivery to bring them back. A birth is bounded by the session machine
-		// instead: once per bdSeq, and a requested rebirth is backoff-gated.
+		// instead: once per bdSeq, and a requested rebirth is backoff-gated — except the
+		// liveness probe's, which is bounded by the probe interval (a quiet node at most
+		// every other presence.probeSeconds).
 		if len(samples) > 0 && isData(rec.Topic.MessageType) {
 			samples = c.admitSamples(samples)
 		}
