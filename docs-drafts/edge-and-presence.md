@@ -240,9 +240,13 @@ forever.
 profile, and `--enable-area` cannot name it. It ships as static binaries and a ko-built image, and
 is deployed by container, systemd unit, or a hand-written Kubernetes manifest.
 
-🔴 **Its release tarballs never reach the download manifest.** `hack/build-release-manifest.sh:59`
-filters checksums to `dcctl_` and builds a dcctl-only artifact table, so the website's download menu
-offers dcctl alone even though the publish job depends on the edge-agent job for ordering.
+**Its release tarballs are in the download manifest.** `hack/build-release-manifest.sh` builds an
+`edgeAgent` table beside `dcctl` (same row shape, still `schemaVersion: 1`), each from its own
+product's checksum file — dcctl's `checksums.txt`, the agent's `dc-edge-agent_checksums.txt` — and
+refuses to publish when either file or any of the four linux/darwin x amd64/arm64 archives is
+missing. The website's download menu still reads `dcctl` only: it is the installer a visitor runs on
+the machine in front of them, and its platform highlight would be wrong for a binary bound for a
+gateway. Its `--self-test` runs in CI's `discover` job.
 
 ## 6. Running one of anything
 

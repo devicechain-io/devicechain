@@ -316,6 +316,8 @@ Sparkplug 按租户接入上限计量 DATA 消息中的读数，并丢弃超出�
 
 **它不是 chart 功能领域。** 不出现在领域列表或部署配置中，不能像服务一样启用。它作为静态二进制和容器镜像发布，由你自行部署，例如现场网关 systemd 单元、容器或边缘手写 Kubernetes 清单。
 
+**每个 [GitHub 发布版本](https://github.com/devicechain-io/devicechain/releases)都附带这些二进制文件**，文件名为 `dc-edge-agent_<version>_<os>_<arch>.tar.gz`，提供 Linux 和 macOS 的 `amd64` 与 `arm64` 版本。其 SHA-256 摘要位于同一发布版本的 `dc-edge-agent_checksums.txt` 中，在 Linux 上可用 `sha256sum --ignore-missing -c dc-edge-agent_checksums.txt` 校验下载的文件。Linux 是边缘部署目标；macOS 版本用于在工作站上试用代理。不提供 Windows 版本。
+
 ### 缓冲存储 {#the-spool}
 
 **缓冲采用丢弃最旧内容的环形存储。** 本地存储是持久磁盘缓冲，默认 `1 GiB`。满时丢弃**最旧**的尚未转发事件，以接收新事件，不丢弃最新事件。

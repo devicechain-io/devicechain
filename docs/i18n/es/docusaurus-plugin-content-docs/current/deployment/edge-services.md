@@ -639,6 +639,13 @@ despliegue, y no se puede habilitar como se habilita un servicio. Se distribuye 
 estáticos y una imagen de contenedor, y lo despliegas tú: una unidad de systemd en una pasarela de
 planta, un contenedor o un manifiesto de Kubernetes escrito a mano en el borde.
 
+**Los binarios se adjuntan a cada [versión de GitHub](https://github.com/devicechain-io/devicechain/releases)**
+como `dc-edge-agent_<version>_<os>_<arch>.tar.gz`, para Linux y macOS en `amd64` y `arm64`. Sus
+resúmenes SHA-256 están en `dc-edge-agent_checksums.txt`, en la misma versión, así que en Linux
+`sha256sum --ignore-missing -c dc-edge-agent_checksums.txt` comprueba lo que descargaste. Linux es el
+destino en el borde; las compilaciones de macOS sirven para probar el agente en una estación de
+trabajo. No hay compilación para Windows.
+
 ### El almacén local {#the-spool}
 
 **El almacén local es un anillo que descarta lo más antiguo.** Es un búfer durable en disco, de
