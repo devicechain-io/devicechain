@@ -5,7 +5,7 @@ title: npm 包
 
 # npm 包 {#npm-packages}
 
-仪表盘运行时已发布到 npm。本仓库之外的 React 应用也可以安装它，展示实时 DeviceChain 仪表盘。
+仪表板运行时已发布到 npm。本仓库之外的 React 应用也可以安装它，展示实时 DeviceChain 仪表板。
 
 :::note 状态
 这些包处于 **1.0 之前**：类型、属性和导出项可能在版本之间变化，升级前请阅读发布说明。
@@ -18,7 +18,7 @@ title: npm 包
 |---|---|
 | [`@devicechain/client`](https://www.npmjs.com/package/@devicechain/client) | TypeScript SDK：处理认证令牌、通过 fetch 调用 GraphQL、解码 JWT，以及实时订阅。不依赖特定框架，也不依赖 React。 |
 | [`@devicechain/dashboards`](https://www.npmjs.com/package/@devicechain/dashboards) | 提供管理连接、解析选择器和复用遥测订阅的 `DashboardHub`，以及定义、选择器、槽位和绑定清单的类型。 |
-| [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | React 组件和负责仪表盘布局的渲染器。 |
+| [`@devicechain/widgets`](https://www.npmjs.com/package/@devicechain/widgets) | React 组件和负责仪表板布局的渲染器。 |
 | [`@devicechain/widget-sdk`](https://www.npmjs.com/package/@devicechain/widget-sdk) | 以 React 组件形式编写仪表板组件的契约：`defineWidget`、`createWidgetRegistry`（宿主用内置组件和自己的组件包构建的密封注册表）以及选项辅助函数。其 peer 依赖为 `@devicechain/dashboards`、`echarts` 和 `react`。参见[编写自定义组件](../guides/writing-a-custom-widget.md)。 |
 | [`@devicechain/brand`](https://www.npmjs.com/package/@devicechain/brand) | 品牌设计变量和生成的样式表。此包可选：组件完全通过 CSS 自定义属性设置主题，不要求使用它。 |
 
@@ -50,7 +50,7 @@ npm 7 及更高版本会自动安装这些依赖，因此只需运行上面的�
 
 例外是用于初始化发布的 `0.14.0-0` 版本。它们通过手动发布来首次创建这些包，早于提供签名的工作流。
 
-## 渲染仪表盘 {#render-a-board}
+## 渲染仪表板 {#render-a-board}
 
 ```tsx
 import { DashboardRenderer } from '@devicechain/widgets';
@@ -79,10 +79,10 @@ const connection = useHubConnectionState(hub);
 - 命令组件仍显示参数表单和发送按钮，但会禁用它们，并提示查看者没有发送命令的权限。
 
 这就是启用操作能力的全部设置，也是服务器检查之外的第二层控制。
-没有收到 `actions` 的查看器，无论仪表盘包含什么，都无法通过仪表盘写入；
+没有收到 `actions` 的查看器，无论仪表板包含什么，都无法通过仪表板写入；
 服务器始终独立强制检查 `alarm:write` 和 `command:write`。
 
-参见[仪表盘](../concepts/dashboards.md)，了解定义的含义、槽位和绑定清单如何让一个定义服务于多个设备，
+参见[仪表板](../concepts/dashboards.md)，了解定义的含义、槽位和绑定清单如何让一个定义服务于多个设备，
 以及独立 `/dash` 查看器如何使用它们。
 
 ## 渲染地图 {#map-host-wiring}
