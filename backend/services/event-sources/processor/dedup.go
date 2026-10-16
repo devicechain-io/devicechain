@@ -70,5 +70,10 @@ func DedupID(tenant string, captureSeq uint64) string {
 	if tenant == "" || captureSeq == 0 {
 		return ""
 	}
-	return tenant + ":" + strconv.FormatUint(captureSeq, 10)
+	// The sequence in base 36: a bijection, so the id stays exactly as unique and as
+	// stable across a redelivery as the decimal form, in fewer bytes. The id rides every
+	// captured event, stored on every replica and held in each broker's duplicate table for
+	// the window. Changing this shape is an upgrade event: a capture message published by
+	// one build and redelivered to a pod of another carries two ids, and both are stored.
+	return tenant + ":" + strconv.FormatUint(captureSeq, 36)
 }

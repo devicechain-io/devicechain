@@ -123,7 +123,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 	}
 	want := map[string]bool{}
 	for seq := first; seq < first+events; seq++ {
-		want[fmt.Sprintf("acme:%d", seq)] = true
+		want["acme:"+strconv.FormatUint(uint64(seq), 36)] = true
 	}
 	require.Equal(t, want, ids,
 		"every stored event must carry the dedup id of its own capture message, or a redelivery is stored twice")

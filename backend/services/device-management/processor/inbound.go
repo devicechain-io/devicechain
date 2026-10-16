@@ -347,7 +347,7 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 		Key:   []byte(strconv.FormatInt(int64(item.event.Reason), 10)),
 		Value: bytes,
 		// A source produces one record, so its fan-out position is always 0.
-		DedupID: sourceDedupID("failed", item.tenant, item.src, 0),
+		DedupID: sourceDedupID(dedupKindFailed, item.tenant, item.src, 0),
 	}.WithCorrelationID(item.correlation)
 	src := item.src
 	iproc.FailedEventsWriter.Publish(core.WithTenant(ctx, item.tenant), msg, func(err error) {
@@ -584,7 +584,7 @@ func resolvedDedupID(tenant string, coord *ackCoord, index int) string {
 	if coord == nil {
 		return ""
 	}
-	return sourceDedupID("resolved", tenant, coord.src, index)
+	return sourceDedupID(dedupKindResolved, tenant, coord.src, index)
 }
 
 // sourceDedupID names one publish made on behalf of inbound message src — the index-th
@@ -602,6 +602,22 @@ func resolvedDedupID(tenant string, coord *ackCoord, index int) string {
 // stream-scoped and every id on a shared stream is kept tenant-scoped (see
 // messaging.Message.DedupID). kind keeps the two streams' ids apart for a reader of either.
 //
+// The id is COMPACT because it is paid for many times over: it rides every resolved event,
+// which is stored on every replica and delivered to every consumer, and every broker server
+// holds it in memory for the whole window. So the kind is one letter and the sequence and
+// index are in base 36 — "r:acme:21i3v9:0", not "resolved:acme:123456789:0". Base 36 is a
+// bijection, and no field can contain the ':' between them (the tenant is a token), so the
+// id still names exactly one (kind, tenant, sequence, index): compactness costs neither the
+// determinism a redelivery relies on nor the uniqueness that keeps a real event from being
+// discarded as a duplicate. TestSourceDedupIDIsLossless decodes it back to prove both.
+//
+// 🔴 CHANGING THIS SHAPE IS AN UPGRADE EVENT. A source published by one build and
+// redelivered to a pod running another carries two different ids, and the window lets both
+// through. A rolling upgrade drains each pod before it stops (every publish settles and its
+// source is acked before the connection drains), so what is exposed is a publish whose
+// acknowledgement was lost in the rollout itself, redelivered to a pod of the other build:
+// stored twice, which event-management's event key absorbs and DETECT applies twice.
+//
 // A source with no stream sequence (broker metadata unavailable) gets NO id, never a
 // shared one: every such source would carry the same sequence, 0, and the second would
 // be discarded as a duplicate of the first.
@@ -610,8 +626,14 @@ func sourceDedupID(kind, tenant string, src messaging.Message, index int) string
 		return ""
 	}
 	// Concatenated rather than formatted: one is built for every resolved event published.
-	return kind + ":" + tenant + ":" + strconv.FormatUint(src.StreamSeq, 10) + ":" + strconv.Itoa(index)
+	return kind + ":" + tenant + ":" + strconv.FormatUint(src.StreamSeq, 36) + ":" + strconv.FormatUint(uint64(index), 36)
 }
+
+// The kinds sourceDedupID is called with: one letter each, since the id rides every event.
+const (
+	dedupKindResolved = "r"
+	dedupKindFailed   = "f"
+)
 
 // settleResolved records the outcome of publishing one resolved event against
 // its source's ack coordinator: a publish failure latches failure so the source

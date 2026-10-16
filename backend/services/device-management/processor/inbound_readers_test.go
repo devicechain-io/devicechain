@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -240,7 +241,7 @@ func TestSeveralInboundReadersLoseAndDuplicateNothingAcrossACrash(t *testing.T) 
 	require.EqualValues(t, events, info.State.Msgs, "resolved events stored for %d inbound events", events)
 	var missing, twice []string
 	for seq := 1; seq <= events; seq++ {
-		id := fmt.Sprintf("resolved:acme:%d:0", seq)
+		id := "r:acme:" + strconv.FormatInt(int64(seq), 36) + ":0"
 		switch seen[id] {
 		case 1:
 		case 0:

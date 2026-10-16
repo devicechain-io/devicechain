@@ -328,7 +328,17 @@ func (m Message) Release() {
 
 // HeaderCorrelationID is the message-header key for the correlation id that ties
 // together every message derived from one originating event (E15).
-const HeaderCorrelationID = "Dc-Correlation-Id"
+//
+// It is short because it rides EVERY message the platform publishes: on the device path it
+// is stored on every replica and delivered to every consumer of both the inbound and the
+// resolved event, so each byte of the key is paid about six times per event. It was
+// "Dc-Correlation-Id"; the 11 bytes saved are TestCorrelationHeaderIsCompact.
+//
+// Nothing reads the old key. A message published under it and consumed by a later build
+// reads as carrying no correlation id, and gets a fresh one at its next hop: the cost is a
+// broken log trail for the messages in flight across one upgrade, and the id is used for
+// nothing but that trail.
+const HeaderCorrelationID = "Dc-Cid"
 
 // CorrelationID returns the message's correlation id, or "" when none is set.
 func (m Message) CorrelationID() string {

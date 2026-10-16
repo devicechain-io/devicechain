@@ -3,7 +3,11 @@
 
 package processor
 
-import "testing"
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
 
 // The cross-tenant property, pinned on its own because its failure mode is silent
 // DATA LOSS rather than a missed dedup: JetStream's dedup is stream-scoped, so two
@@ -60,8 +64,8 @@ func TestDedupIDReturnsEmptyWhenNoStableIdentityExists(t *testing.T) {
 func TestDedupIDContainsNothingDeviceControlled(t *testing.T) {
 	const tenant = "acme"
 	id := DedupID(tenant, 12345)
-	if want := "acme:12345"; id != want {
-		t.Errorf("DedupID = %q, want %q — the id is the tenant and the capture sequence, "+
+	if want := "acme:9ix"; id != want {
+		t.Errorf("DedupID = %q, want %q — the id is the tenant and the capture sequence (base 36), "+
 			"and nothing else", id, want)
 	}
 	// Bounded length follows from that exact shape, and bounded length is what stops
@@ -69,4 +73,33 @@ func TestDedupIDContainsNothingDeviceControlled(t *testing.T) {
 	// is deliberately no separate length assertion: with the id pinned exactly above,
 	// a `len(id) < N` check could never fire, and a check that cannot fail reads as
 	// coverage without being any.
+}
+
+// The compact id is still the capture sequence, losslessly: base 36 is a bijection on the
+// sequence, so two captured messages can never share an id (no silent suppression) and a
+// redelivery of one always reproduces its id exactly (the duplicate window recognizes it).
+// Decoding it back is the proof of both; a hash or a truncation would fail it.
+func TestDedupIDIsTheCaptureSequenceLosslessly(t *testing.T) {
+	seen := map[string]uint64{}
+	for _, seq := range []uint64{1, 9, 10, 35, 36, 1295, 1296, 123456789, 1 << 32, 1<<63 - 1, 1 << 63, ^uint64(0)} {
+		id := DedupID("acme", seq)
+		if again := DedupID("acme", seq); again != id {
+			t.Fatalf("DedupID(%d) is not deterministic: %q then %q", seq, id, again)
+		}
+		tenant, enc, ok := strings.Cut(id, ":")
+		if !ok || tenant != "acme" {
+			t.Fatalf("DedupID(%d) = %q: want the tenant before the first ':'", seq, id)
+		}
+		got, err := strconv.ParseUint(enc, 36, 64)
+		if err != nil || got != seq {
+			t.Fatalf("DedupID(%d) = %q decodes to %d (%v), want the sequence back", seq, id, got, err)
+		}
+		if prev, dup := seen[id]; dup {
+			t.Fatalf("sequences %d and %d share the id %q", prev, seq, id)
+		}
+		seen[id] = seq
+	}
+	if got, want := DedupID("acme", 123456789), "acme:21i3v9"; got != want {
+		t.Errorf("DedupID = %q, want %q", got, want)
+	}
 }
