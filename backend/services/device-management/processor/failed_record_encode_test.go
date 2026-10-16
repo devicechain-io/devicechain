@@ -117,7 +117,8 @@ func TestAnEncodableFailureRecordIsPublishedAndDecodes(t *testing.T) {
 	require.Equal(t, "boom", got.Error)
 	require.Equal(t, uint(proto.FailureReason_Invalid), got.Reason)
 	require.Equal(t, strconv.Itoa(int(proto.FailureReason_Invalid)), string(msg.Key))
-	require.NotEmpty(t, msg.DedupID)
+	// The failed kind, the tenant, and the source's stream sequence (42) and fan-out position in base 36.
+	require.Equal(t, "f:tenant1:16:0", msg.DedupID)
 	require.Equal(t, "corr-1", msg.CorrelationID())
 	require.Equal(t, 1, ack.n)
 	require.Equal(t, 0.0, gatheredCounter(t, reg, deviceManagementLost))
