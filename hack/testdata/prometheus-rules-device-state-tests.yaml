@@ -1,0 +1,120 @@
+# Copyright The DeviceChain Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# promtool UNIT TESTS for the device-state alerting rules.
+#
+# WHAT THESE ARE FOR, over and above the parse check
+#
+# DeviceStateDroppingEvents fires on ANY increase of the dropped result, with no `for`: a
+# drop is already the end of an event's last delivery attempt. The quiet cases carry as
+# much weight as the firing ones:
+#
+#   - a busy, healthy projection (ok and retry rising, dropped flat at zero) must not page;
+#   - another result rising (invalid, erased) must not page: only dropped is a discard;
+#   - the alert clears once the drops stop and the 15m window has passed them;
+#   - an install exporting no series must not page.
+#
+# THE SERIES:
+#
+#   - devicechain_devicestate_state_messages_total{result} -- a CounterVec; core seeds
+#     every result at 0 when the loop is built, so a drop is an increase from 0.
+#
+# Run via hack/check-prometheus-rules.sh, which renders the chart first and copies the
+# rendered group in beside this file as rendered-rules.yaml.
+rule_files:
+  - rendered-rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------
+  # Healthy and busy: ok and retry climb, dropped stays at 0. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="ok"}'
+        values: '0+500x40'
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="retry"}'
+        values: '0+5x40'
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="dropped"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # invalid and erased climb; dropped stays at 0. Quiet: neither is a discard of
+  # work the projection should have applied.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="invalid"}'
+        values: '0+3x40'
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="erased"}'
+        values: '0+3x40'
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="dropped"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # One pod drops a single event at 10m, from a series seeded at 0. Fires at once
+  # (no `for`), is still firing 12 minutes on, and clears once the 15m window has passed it.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-aaaaa", result="dropped"}'
+        values: '0x9 1x50'
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-devicechain", pod="dc-device-state-bbbbb", result="dropped"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "device-state is discarding events it could not apply to live device state"
+              description: "In the last 15 minutes, device-state gave up on events after their last delivery attempt and discarded them. Each one was not applied to its device's live state, so that device's connectivity, latest readings or last position can be out of date until a newer event for it arrives. The event history is unaffected. The usual cause is device-state's database refusing or failing its writes for longer than the redelivery window: check its database, and the device-state log for 'Giving up on', which names the write and the device."
+      - eval_time: 22m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "device-state is discarding events it could not apply to live device state"
+              description: "In the last 15 minutes, device-state gave up on events after their last delivery attempt and discarded them. Each one was not applied to its device's live state, so that device's connectivity, latest readings or last position can be out of date until a newer event for it arrives. The event history is unaffected. The usual cause is device-state's database refusing or failing its writes for longer than the redelivery window: check its database, and the device-state log for 'Giving up on', which names the write and the device."
+      - eval_time: 40m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Another instance's namespace drops. Quiet: each rule object alerts on its own
+  # instance only.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicestate_state_messages_total{namespace="dci-other", pod="dc-device-state-aaaaa", result="dropped"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # No series at all. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: DeviceStateDroppingEvents
+        exp_alerts: []

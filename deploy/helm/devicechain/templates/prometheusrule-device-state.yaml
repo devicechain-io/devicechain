@@ -1,0 +1,46 @@
+{{/*
+Alerting rules for device-state's live-state projection.
+
+WHY THIS GROUP EXISTS. device-state keeps each device's live state (connectivity, activity,
+latest readings and last position) from the resolved event stream. A write it cannot make
+is retried until the stream's delivery cap, and then the event is ACKNOWLEDGED AND
+DISCARDED: the projection is rebuildable from the event history, so it has no dead-letter
+path and deliberately records nothing. It is counted, as result="dropped" on
+devicechain_devicestate_state_messages_total, and until this group nothing read that
+count. A dropped event leaves the device's live state stale (its connectivity, a reading,
+a position) until a newer event for it arrives, which for a quiet device may be never.
+
+ANY DROP FIRES, with no `for`. A drop is not a blip: it is the end of an event's last
+delivery attempt, so the failure behind it already lasted for every redelivery before it.
+The increase window is what clears the alert, 15 minutes after the last drop.
+
+THE SERIES IS EXPORTED AT ZERO FROM START (core seeds every result of every processing
+loop), so the first drop after a restart is an increase and not a series appearing at 1,
+which increase() would read as nothing.
+
+NO absent() ARM. A device-state that exports nothing is a pod failing loudly in its own
+right, which the container-restart alerts already catch.
+*/}}
+{{- if and .Values.metrics.enabled .Values.metrics.alerts }}
+{{- $ns := include "devicechain.instanceNamespace" . }}
+{{- $id := .Values.instance.id }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: device-state
+  namespace: {{ $ns }}
+  labels:
+    {{- include "devicechain.instanceLabels" . | nindent 4 }}
+spec:
+  groups:
+    - name: devicechain.device-state
+      rules:
+        - alert: DeviceStateDroppingEvents
+          expr: sum(increase(devicechain_devicestate_state_messages_total{result="dropped",namespace="{{ $ns }}"}[15m])) > 0
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "device-state is discarding events it could not apply to live device state"
+            description: "In the last 15 minutes, device-state gave up on events after their last delivery attempt and discarded them. Each one was not applied to its device's live state, so that device's connectivity, latest readings or last position can be out of date until a newer event for it arrives. The event history is unaffected. The usual cause is device-state's database refusing or failing its writes for longer than the redelivery window: check its database, and the device-state log for 'Giving up on', which names the write and the device."
+{{- end }}

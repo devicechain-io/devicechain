@@ -58,6 +58,9 @@ message:
 | `retry` | Handling it failed for a reason that may clear, so it was left to be delivered again. |
 | `erased` | Its tenant has been deleted and the service's database refused the write. It was settled on the delivery it arrived on and recorded nowhere. See [Tenant deletion](./tenant-deletion.md#database-writes). |
 
+Every result is exported at zero from the moment the service starts, so an alert on the increase of
+one of them sees the first message counted, not only the second.
+
 Each service can also serve Go runtime profiles on a listener of its own. This is off
 by default; see [Profiling a service](#profiling).
 
@@ -819,6 +822,16 @@ writer count is 10, half the default connection pool, and the default `projectio
 32: batches in that run averaged about 15, so 32 did not bind on average. Raise it further only when the batches are full and the database has room to spare. The
 service logs the values it is using when it starts. If the live state still falls behind, `JetStreamDurableFallingBehind` fires for the
 `device-state` consumer (see [A consumer that stays behind](#consumer-backlog)).
+
+An event `device-state` cannot apply by its last delivery attempt is acknowledged and discarded
+rather than recorded anywhere, because the live state can be rebuilt from the event history. It is
+counted as `dropped` in the [message results](#message-results).
+`DeviceStateDroppingEvents` (warning) fires as soon as one is counted, and clears 15 minutes after
+the last. Each dropped event left its device's connectivity, a reading or its last position out of
+date until a newer event for that device arrives; the stored event history is unaffected. The usual
+cause is the service's database refusing or failing writes for longer than the redelivery window.
+Check the database, and the `device-state` log for `Giving up on`, which names the write and the
+device.
 
 ## Replication {#replication}
 

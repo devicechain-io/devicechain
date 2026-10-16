@@ -58,6 +58,9 @@ mensaje:
 | `retry` | Su tratamiento falló por una causa que puede desaparecer, así que se dejó para que se entregue de nuevo. |
 | `erased` | Su inquilino se ha eliminado y la base de datos del servicio rechazó la escritura. Se liquidó en la misma entrega en que llegó y no se registró en ningún sitio. Consulte [Eliminación de inquilinos](./tenant-deletion.md#database-writes). |
 
+Todos los resultados se exportan a cero desde que arranca el servicio, así que una alerta sobre el
+aumento de uno de ellos ve el primer mensaje contado, no solo el segundo.
+
 Cada servicio puede servir además perfiles del runtime de Go en un listener propio. Está
 desactivado por defecto; consulta [Perfilar un servicio](#profiling).
 
@@ -860,6 +863,18 @@ que 32 no limitó en promedio. Auméntelo más solo si los lotes van llenos y la
 datos tiene margen. El servicio registra los valores que usa al arrancar. Si el
 estado en vivo sigue quedándose atrás, `JetStreamDurableFallingBehind` salta para el consumidor de
 `device-state` (consulte [Un consumidor que se queda atrás](#consumer-backlog)).
+
+Un evento que `device-state` no logra aplicar en su último intento de entrega se confirma y se
+descarta en lugar de registrarse en ningún sitio, porque el estado en vivo se puede reconstruir a
+partir del historial de eventos. Se cuenta como `dropped` en los
+[resultados de los mensajes](#message-results).
+`DeviceStateDroppingEvents` (warning) salta en cuanto se cuenta uno, y se desactiva 15 minutos
+después del último. Cada evento descartado dejó desactualizada la conectividad, una lectura o la
+última posición de su dispositivo hasta que llegue un evento más reciente de ese dispositivo; el
+historial de eventos almacenado no se ve afectado. La causa habitual es que la base de datos del
+servicio rechaza o falla las escrituras durante más tiempo que la ventana de reentrega. Revise la
+base de datos y, en el registro de `device-state`, `Giving up on`, que indica la escritura y el
+dispositivo.
 
 ## Replicación {#replication}
 
