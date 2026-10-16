@@ -50,8 +50,10 @@ returns to the load form, and **Sign out**.
 <GuideShot id="dash-view" alt="The Widget Lab board in the /dash viewer, light theme. The header shows Widget Lab, the time ranges 15m, 1h (selected), 6h, 24h and 7d, a Pause button, a Live indicator, and the buttons English, Español, Dark theme, Change and Sign out. Below: a title card, a temperature readout, a temperature gauge, an Active alarms count, an image, a line chart of temperature and humidity marked 15m, and a Latest values table." />
 
 The widgets are live: values, charts and alarms update as data arrives. The connection indicator
-reads **Live** while they do. If the connection drops it reads **Reconnecting**, then **Offline**
-once it has been down for 20 seconds, and the widgets pick up again on their own when it returns. The viewer cannot change the
+reads **Live** while the board's live connection is up; a device that is merely quiet does not change
+it. If the connection drops it reads **Reconnecting**, then **Offline** once it has been down for 20
+seconds, or straight away if the browser itself goes offline, and the widgets pick up again on their
+own when it returns. The viewer cannot change the
 dashboard, but widget actions still work for those allowed to use them. Someone whose role grants
 `alarm:write` can acknowledge and clear alarms from the board, and someone with `command:write` can
 send commands to real devices. The server checks those rights for every action. See

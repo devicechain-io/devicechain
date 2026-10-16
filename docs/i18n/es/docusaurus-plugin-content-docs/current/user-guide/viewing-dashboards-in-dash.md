@@ -52,9 +52,10 @@ y un indicador de conexión, y ofrece el selector de idioma, **Tema oscuro** (o 
 <GuideShot id="dash-view" alt="El panel Widget Lab en el visor /dash, con tema claro. La cabecera muestra Widget Lab, los intervalos 15m, 1h (seleccionado), 6h, 24h y 7d, un botón Pausar, un indicador En vivo y los botones de idioma, Tema oscuro, Cambiar y Cerrar sesión. Debajo: una tarjeta de título, una lectura de temperatura, un indicador de temperatura, un recuento de alarmas activas, una imagen, un gráfico de líneas de temperatura y humedad marcado 15m y una tabla de últimos valores." />
 
 Los widgets están en vivo: los valores, los gráficos y las alarmas se actualizan a medida que llegan
-datos. Mientras tanto, el indicador de conexión muestra **En vivo**. Si se corta la conexión muestra
-**Reconectando**, y **Sin conexión** cuando lleva 20 segundos caída; los widgets se reanudan solos
-cuando vuelve. El visor no puede cambiar el panel, pero las acciones de los widgets siguen funcionando para
+datos. El indicador de conexión muestra **En vivo** mientras la conexión en vivo del panel está
+activa; un dispositivo que simplemente no envía datos no lo cambia. Si se corta la conexión muestra
+**Reconectando**, y **Sin conexión** cuando lleva 20 segundos caída, o de inmediato si el propio
+navegador se queda sin conexión; los widgets se reanudan solos cuando vuelve. El visor no puede cambiar el panel, pero las acciones de los widgets siguen funcionando para
 quien tiene permiso para usarlas. Quien tenga un rol con `alarm:write` puede reconocer y borrar
 alarmas desde el panel, y quien tenga `command:write` puede enviar comandos a dispositivos reales. El
 servidor comprueba esos permisos en cada acción. Consulta

@@ -33,7 +33,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="dash-view" alt="/dash 查看器中的 Widget Lab 看板，浅色主题。页眉显示 Widget Lab、时间范围 15m、1h（已选中）、6h、24h 和 7d、一个 Pause 按钮、一个 Live 指示器，以及 English、Español、Dark theme、Change 和 Sign out 按钮。下方有：标题卡片、温度读数、温度仪表、Active alarms 计数、一张图片、标有 15m 的温度和湿度折线图，以及 Latest values 表格。" />
 
-组件是实时的：数值、图表和告警随数据到达而更新，此时连接指示器显示 **Live**。连接中断时它显示 **Reconnecting**，中断 20 秒后显示 **Offline**；连接恢复后，组件会自行继续更新。查看器无法修改仪表板，但组件的操作对有权使用它们的人仍然有效。角色被授予 `alarm:write` 的人可以在看板上确认和清除告警，拥有 `command:write` 的人可以向真实设备发送命令。服务器会对每个操作检查这些权限。参见[操作与权限](/concepts/dashboards#actions-and-permissions)。
+组件是实时的：数值、图表和告警随数据到达而更新，看板的实时连接正常时，连接指示器显示 **Live**；设备只是暂时没有上报数据并不会改变它。连接中断时它显示 **Reconnecting**，中断 20 秒后显示 **Offline**，如果浏览器本身断网则立即显示 **Offline**；连接恢复后，组件会自行继续更新。查看器无法修改仪表板，但组件的操作对有权使用它们的人仍然有效。角色被授予 `alarm:write` 的人可以在看板上确认和清除告警，拥有 `command:write` 的人可以向真实设备发送命令。服务器会对每个操作检查这些权限。参见[操作与权限](/concepts/dashboards#actions-and-permissions)。
 
 仪表板和组件的标题是仪表板作者写下的文本，因此无论查看器设置为何种语言，都保持原样。
 

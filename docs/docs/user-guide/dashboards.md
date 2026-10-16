@@ -85,9 +85,10 @@ Along the top:
 - **15m**, **1h**, **6h**, **24h** and **7d** set the time range the charts draw, and **Pause**
   freezes the dashboard. They work as they do in the /dash viewer; see
   [Time range and pause](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
-- **Live** shows that the dashboard is receiving data as it arrives. If the connection drops it
-  reads **Reconnecting**, then **Offline** once it has been down for 20 seconds. The widgets pick up
-  again on their own when the connection returns.
+- **Live** shows that the dashboard's live connection is up; a device that is merely quiet does not
+  change it. If the connection drops it reads **Reconnecting**, then **Offline** once it has been
+  down for 20 seconds, or straight away if the browser itself goes offline. The widgets pick up again
+  on their own when the connection returns.
 - **Preview** swaps live data for generated data (see [Previewing with synthetic data](#previewing-with-synthetic-data)).
 - **Export** copies or downloads the dashboard (see [Exporting](#exporting)).
 - **History** opens the version history (see [Versions](#versions)).
@@ -101,13 +102,13 @@ platform checks each action against your own permissions.
 
 The test tenant's *Widget Lab* dashboard holds one of every built-in widget. Further down the page:
 
-<GuideShot id="dashboard-gauges" alt="Indicator widgets on wl-sensor-01: a linear gauge and a thermometer for temperature, both red in their hot band, a Tank level gauge filled to its humidity percentage, a Battery icon with its charge, a Status light reading Hot, Signal bars, a Powered light reading Off, and below them a compass and two progress rings." />
+<GuideShot id="dashboard-gauges" alt="Indicator widgets on wl-sensor-01: a linear gauge and a thermometer for temperature, with their threshold bands marked along the scale, a Tank level gauge filled to its humidity percentage, a Battery icon with its charge, a Status light reading Normal, Signal bars, a Powered light reading Off, and below them a compass and two progress rings." />
 
 The linear and level gauges, battery, status light, signal bars, compass and progress ring each show
-one measurement of one device. Thresholds color the reading by band, as on the linear gauge and the
-thermometer above.
+one measurement of one device. Thresholds mark their bands along the scale, as on the linear gauge
+and the thermometer above, and a reading in any band but the normal one takes that band's color.
 
-<GuideShot id="dashboard-stat-cards" alt="Eight stat cards for wl-sensor-01: Average temperature, Peak temperature (in red), Lowest temperature and Readings, each labeled with its statistic and 1h; then Humidity total, Latest temperature, Average, last 5 min labeled Average · 5m, and Peak (smallest)." />
+<GuideShot id="dashboard-stat-cards" alt="Eight stat cards for wl-sensor-01: Average temperature, Peak temperature (in red), Lowest temperature and Readings, each labeled with its statistic and 1h; then Humidity total, Latest temperature showing No data, Average, last 5 min labeled Average · 5m, and Peak (smallest)." />
 
 A stat card shows one figure over the dashboard's time range, labeled with the statistic and the
 span it covers, such as *Maximum · 1h*. A card with its own **Time span** keeps it, like *Average,
@@ -115,8 +116,9 @@ last 5 min* above.
 
 <GuideShot id="dashboard-bar-pie" alt="Two bar charts of wl-sensor-01's latest temperature, humidity and battery: Latest readings with vertical bars in the data source's order, and Largest first with horizontal bars sorted largest first. Below them, two pie charts of the same readings." />
 
-Bar and pie charts compare a device's latest readings. A bar chart draws columns in a wide widget
-and rows in a tall one.
+Bar and pie charts compare a device's latest readings. A bar chart can instead compare one
+measurement across the devices of a group (see **One bar per** below). It draws columns in a wide
+widget and rows in a tall one.
 
 <GuideShot id="dashboard-fleet-table" alt="The Sensors in the zone fleet table for wl-zone-01: one row per device (wl-sensor-01 and wl-sensor-03) with Temperature (C), sorted by that column, Humidity (%) and Battery (%), each value with its age. Below it, a smaller fleet table and a Temperature by sensor bar chart." />
 
@@ -340,7 +342,7 @@ Generated data stays in your browser and is never saved.
 **History** opens the version history. A dashboard's draft is what you edit; a **version** is a
 frozen copy of the draft that viewers are shown.
 
-<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 2, marked Live, and version 1, both published by sam.rivera@widgetlab.example. Version 1 has a Make live button, and each version has a Roll back button at the right edge of the panel." />
+<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 2, marked Live, and version 1, both published by sam.rivera@widgetlab.example. Version 1 has a Make live button, and each version has a Roll back button, cut off at the right edge of the panel." />
 
 - **Publish current draft.** Add an optional label, such as a release name, and a description, then
   choose **Publish version**. The new version goes live straight away. Save your changes first: the

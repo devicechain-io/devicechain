@@ -59,7 +59,7 @@ import GuideShot from '@site/src/components/GuideShot';
 顶部：
 
 - **15m**、**1h**、**6h**、**24h** 和 **7d** 设置图表绘制的时间范围，**Pause**（暂停）冻结仪表板。它们与 /dash 查看器中的用法相同，参见[时间范围与暂停](/user-guide/viewing-dashboards-in-dash#time-range-and-pause)。
-- **Live**（实时）表示仪表板正在随数据到达而接收数据。连接中断时它显示 **Reconnecting**（正在重新连接），中断 20 秒后显示 **Offline**（离线）。连接恢复后，组件会自行继续更新。
+- **Live**（实时）表示仪表板的实时连接正常；设备只是暂时没有上报数据并不会改变它。连接中断时它显示 **Reconnecting**（正在重新连接），中断 20 秒后显示 **Offline**（离线），如果浏览器本身断网则立即显示 **Offline**。连接恢复后，组件会自行继续更新。
 - **Preview**（预览）用生成的数据替换实时数据（参见[用合成数据预览](#previewing-with-synthetic-data)）。
 - **Export**（导出）复制或下载仪表板（参见[导出](#exporting)）。
 - **History**（历史）打开版本历史（参见[版本](#versions)）。
@@ -72,17 +72,17 @@ import GuideShot from '@site/src/components/GuideShot';
 
 测试租户的 *Widget Lab* 仪表板包含每种内置组件各一个。页面再往下：
 
-<GuideShot id="dashboard-gauges" alt="wl-sensor-01 上的指示类组件：温度的线性仪表和温度计，都处于红色的高温区间；按湿度百分比填充的 Tank level 液位仪表；显示电量的 Battery 图标；显示 Hot 的状态灯；信号格；显示 Off 的 Powered 灯；下方还有一个罗盘和两个进度环。" />
+<GuideShot id="dashboard-gauges" alt="wl-sensor-01 上的指示类组件：温度的线性仪表和温度计，刻度上标出了各自的阈值区间；按湿度百分比填充的 Tank level 液位仪表；显示电量的 Battery 图标；显示 Normal 的状态灯；信号格；显示 Off 的 Powered 灯；下方还有一个罗盘和两个进度环。" />
 
-线性仪表、液位仪表、电池、状态灯、信号格、罗盘和进度环各显示一台设备的一个测量值。阈值按区间为读数着色，如上图中的线性仪表和温度计。
+线性仪表、液位仪表、电池、状态灯、信号格、罗盘和进度环各显示一台设备的一个测量值。阈值会在刻度上标出各自的区间，如上图中的线性仪表和温度计；读数落在正常区间以外的任何区间时，会显示该区间的颜色。
 
-<GuideShot id="dashboard-stat-cards" alt="wl-sensor-01 的八张统计卡片：Average temperature、Peak temperature（红色）、Lowest temperature 和 Readings，各自标有统计量和 1h；然后是 Humidity total、Latest temperature、标有 Average · 5m 的 Average, last 5 min，以及 Peak (smallest)。" />
+<GuideShot id="dashboard-stat-cards" alt="wl-sensor-01 的八张统计卡片：Average temperature、Peak temperature（红色）、Lowest temperature 和 Readings，各自标有统计量和 1h；然后是 Humidity total、显示 No data 的 Latest temperature、标有 Average · 5m 的 Average, last 5 min，以及 Peak (smallest)。" />
 
 统计卡片显示仪表板时间范围内的一个数值，并标出统计量及其覆盖的跨度，例如 *Maximum · 1h*。设置了自己 **Time span** 的卡片会保留该跨度，如上图中的 *Average, last 5 min*。
 
 <GuideShot id="dashboard-bar-pie" alt="两个柱状图，显示 wl-sensor-01 最新的温度、湿度和电量读数：Latest readings 按数据源顺序绘制竖向柱，Largest first 按从大到小绘制横向柱。下方是同样读数的两个饼图。" />
 
-柱状图和饼图用于比较一台设备的最新读数。柱状图在较宽的组件中绘制竖向柱，在较高的组件中绘制横向条。
+柱状图和饼图用于比较一台设备的最新读数。柱状图也可以改为比较一个设备组中各设备的同一测量值（参见下文的 **One bar per**）。柱状图在较宽的组件中绘制竖向柱，在较高的组件中绘制横向条。
 
 <GuideShot id="dashboard-fleet-table" alt="wl-zone-01 的 Sensors in the zone 车队表格：每台设备一行（wl-sensor-01 和 wl-sensor-03），列为按其排序的 Temperature (C)、Humidity (%) 和 Battery (%)，每个值都带有其时长。下方是一个较小的车队表格和一个 Temperature by sensor 柱状图。" />
 
@@ -190,7 +190,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **History** 会打开版本历史。仪表板的草稿是你编辑的内容；**版本**是草稿的冻结副本，展示给查看者。
 
-<GuideShot id="dashboard-history" alt="Version history 面板。Publish current draft 部分有可选的 Label 输入框、Description 输入框、说明发布会使新版本成为查看者所见版本的提示，以及 Publish version 按钮。下方的 Published versions 列出标记为 Live 的版本 2 和版本 1，均由 sam.rivera@widgetlab.example 发布。版本 1 带有 Make live 按钮，每个版本在面板右边缘都有 Roll back 按钮。" />
+<GuideShot id="dashboard-history" alt="Version history 面板。Publish current draft 部分有可选的 Label 输入框、Description 输入框、说明发布会使新版本成为查看者所见版本的提示，以及 Publish version 按钮。下方的 Published versions 列出标记为 Live 的版本 2 和版本 1，均由 sam.rivera@widgetlab.example 发布。版本 1 带有 Make live 按钮，每个版本都有 Roll back 按钮，在面板右边缘被截断。" />
 
 - **Publish current draft**（发布当前草稿）。可以添加可选的标签（例如发布名称）和描述，然后选择 **Publish version**（发布版本）。新版本立即生效。请先保存更改：控制台发布的是已保存的草稿。
 - **Published versions**（已发布版本）列出每个版本以及发布的时间和发布者。生效的版本标有 **Live**（生效中）。

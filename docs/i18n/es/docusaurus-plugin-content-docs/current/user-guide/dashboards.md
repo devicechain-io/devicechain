@@ -84,9 +84,10 @@ En la parte superior:
 - **15m**, **1h**, **6h**, **24h** y **7d** fijan el intervalo de tiempo que dibujan los gráficos, y
   **Pausar** congela el panel. Funcionan igual que en el visor /dash; consulta
   [Intervalo de tiempo y pausa](./viewing-dashboards-in-dash.md#time-range-and-pause).
-- **En vivo** indica que el panel recibe los datos a medida que llegan. Si se corta la conexión
-  muestra **Reconectando**, y **Sin conexión** cuando lleva 20 segundos caída. Los widgets se
-  reanudan solos cuando vuelve la conexión.
+- **En vivo** indica que la conexión en vivo del panel está activa; un dispositivo que simplemente
+  no envía datos no lo cambia. Si se corta la conexión muestra **Reconectando**, y **Sin conexión**
+  cuando lleva 20 segundos caída, o de inmediato si el propio navegador se queda sin conexión. Los
+  widgets se reanudan solos cuando vuelve la conexión.
 - **Vista previa** sustituye los datos en vivo por datos generados (consulta
   [Vista previa con datos sintéticos](#previewing-with-synthetic-data)).
 - **Exportar** copia o descarga el panel (consulta [Exportar](#exporting)).
@@ -102,11 +103,12 @@ plataforma comprueba cada acción contra tus propios permisos.
 El panel *Widget Lab* del inquilino de prueba contiene un widget de cada tipo integrado. Más abajo en
 la página:
 
-<GuideShot id="dashboard-gauges" alt="Widgets indicadores de wl-sensor-01: un indicador lineal y un termómetro de temperatura, ambos en rojo en su banda caliente, un indicador de nivel Tank level lleno hasta su porcentaje de humedad, un icono Battery con su carga, una luz de estado que indica Hot, barras de señal, una luz Powered que indica Off y, debajo, una brújula y dos anillos de progreso." />
+<GuideShot id="dashboard-gauges" alt="Widgets indicadores de wl-sensor-01: un indicador lineal y un termómetro de temperatura, con sus bandas de umbral marcadas a lo largo de la escala, un indicador de nivel Tank level lleno hasta su porcentaje de humedad, un icono Battery con su carga, una luz de estado que indica Normal, barras de señal, una luz Powered que indica Apagado y, debajo, una brújula y dos anillos de progreso." />
 
 El indicador lineal, el indicador de nivel, la batería, la luz de estado, las barras de señal, la
 brújula y el anillo de progreso muestran cada uno una medición de un dispositivo. Los umbrales
-colorean la lectura según su banda, como en el indicador lineal y el termómetro de arriba.
+marcan sus bandas a lo largo de la escala, como en el indicador lineal y el termómetro de arriba, y
+una lectura en cualquier banda que no sea la normal toma el color de esa banda.
 
 <GuideShot id="dashboard-stat-cards" alt="Ocho tarjetas de estadística de wl-sensor-01: Average temperature, Peak temperature (en rojo), Lowest temperature y Readings, cada una con su estadística y 1h; después Humidity total, Latest temperature, Average, last 5 min con Promedio · 5m, y Peak (smallest)." />
 
@@ -117,7 +119,8 @@ de tiempo** lo conserva, como *Average, last 5 min* arriba.
 <GuideShot id="dashboard-bar-pie" alt="Dos gráficos de barras con las últimas lecturas de temperatura, humedad y batería de wl-sensor-01: Latest readings, con barras verticales en el orden de la fuente de datos, y Largest first, con barras horizontales de mayor a menor. Debajo, dos gráficos circulares de las mismas lecturas." />
 
 Los gráficos de barras y circulares comparan las últimas lecturas de un dispositivo. Un gráfico de
-barras dibuja columnas en un widget ancho y filas en uno alto.
+barras puede, en cambio, comparar una medición entre los dispositivos de un grupo (consulta **Una
+barra por** más abajo). Dibuja columnas en un widget ancho y filas en uno alto.
 
 <GuideShot id="dashboard-fleet-table" alt="La tabla de flota Sensors in the zone de wl-zone-01: una fila por dispositivo (wl-sensor-01 y wl-sensor-03) con Temperature (C), ordenada por esa columna, Humidity (%) y Battery (%), cada valor con su antigüedad. Debajo, una tabla de flota más pequeña y un gráfico de barras Temperature by sensor." />
 
@@ -336,7 +339,7 @@ Los datos generados se quedan en tu navegador y nunca se guardan.
 **Historial** abre el historial de versiones. El borrador de un panel es lo que editas; una
 **versión** es una copia congelada del borrador que se muestra a los espectadores.
 
-<GuideShot id="dashboard-history" alt="El panel Historial de versiones. Una sección Publicar borrador actual tiene un campo Etiqueta opcional, un campo de descripción, la nota de que al publicar la versión nueva pasa a ser la que ven los espectadores y un botón Publicar versión. Debajo, Versiones publicadas muestra la versión 2, marcada como Activa, y la versión 1, ambas publicadas por sam.rivera@widgetlab.example. La versión 1 tiene un botón Activar, y cada versión tiene un botón Revertir en el borde derecho del panel." />
+<GuideShot id="dashboard-history" alt="El panel Historial de versiones. Una sección Publicar borrador actual tiene un campo Etiqueta opcional, un campo de descripción, la nota de que al publicar la versión nueva pasa a ser la que ven los espectadores y un botón Publicar versión. Debajo, Versiones publicadas muestra la versión 2, marcada como Activa, y la versión 1, ambas publicadas por sam.rivera@widgetlab.example. La versión 1 tiene un botón Activar, y cada versión tiene un botón Revertir, cortado en el borde derecho del panel." />
 
 - **Publicar borrador actual.** Añade una etiqueta opcional, como el nombre de una entrega, y una
   descripción, y elige **Publicar versión**. La versión nueva queda activa de inmediato. Guarda antes
