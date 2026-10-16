@@ -29,11 +29,11 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 看板 {#the-board}
 
-加载后的看板占满窄页眉下方的整个页面。页眉显示仪表板的标题，并提供语言切换、**Dark theme**（深色主题；或 **Light theme**，浅色主题）、返回加载表单的 **Change**（更换），以及 **Sign out**（退出登录）。
+加载后的看板占满窄页眉下方的整个页面。页眉显示仪表板的标题、时间范围和 **Pause**（参见[时间范围与暂停](#time-range-and-pause)）以及连接指示器，并提供语言切换、**Dark theme**（深色主题；或 **Light theme**，浅色主题）、返回加载表单的 **Change**（更换），以及 **Sign out**（退出登录）。
 
-<GuideShot id="dash-view" alt="/dash 查看器中的 Widget Lab 看板，浅色主题。页眉显示 Widget Lab 以及 English、Español、Dark theme、Change 和 Sign out 按钮。下方有：标题卡片、35.0 C 的温度读数、温度仪表、Active alarms 计数 2（最高严重度 Major）、一张图片、温度和湿度折线图、Latest values 表格、含两条 Major 活动告警并带 Ack 和 Clear 按钮的 Alarms 表格，以及带有“Send Set Setpoint”按钮的 Setpoint 命令表单。" />
+<GuideShot id="dash-view" alt="/dash 查看器中的 Widget Lab 看板，浅色主题。页眉显示 Widget Lab、时间范围 15m、1h（已选中）、6h、24h 和 7d、一个 Pause 按钮、一个 Live 指示器，以及 English、Español、Dark theme、Change 和 Sign out 按钮。下方有：标题卡片、温度读数、温度仪表、Active alarms 计数、一张图片、标有 15m 的温度和湿度折线图，以及 Latest values 表格。" />
 
-组件是实时的：数值、图表和告警随数据到达而更新。查看器无法修改仪表板，但组件的操作对有权使用它们的人仍然有效。角色被授予 `alarm:write` 的人可以在看板上确认和清除告警，拥有 `command:write` 的人可以向真实设备发送命令。服务器会对每个操作检查这些权限。参见[操作与权限](/concepts/dashboards#actions-and-permissions)。
+组件是实时的：数值、图表和告警随数据到达而更新，看板的实时连接正常时，连接指示器显示 **Live**；设备只是暂时没有上报数据并不会改变它。连接中断时它显示 **Reconnecting**，中断 20 秒后显示 **Offline**，如果浏览器本身断网则立即显示 **Offline**；连接恢复后，组件会自行继续更新。查看器无法修改仪表板，但组件的操作对有权使用它们的人仍然有效。角色被授予 `alarm:write` 的人可以在看板上确认和清除告警，拥有 `command:write` 的人可以向真实设备发送命令。服务器会对每个操作检查这些权限。参见[操作与权限](/concepts/dashboards#actions-and-permissions)。
 
 仪表板和组件的标题是仪表板作者写下的文本，因此无论查看器设置为何种语言，都保持原样。
 
@@ -41,7 +41,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 主题按钮在浅色和深色之间切换看板，此浏览器会记住你的选择供下次使用。
 
-<GuideShot id="dash-dark" alt="同一块 Widget Lab 看板的深色主题：深色背景、浅色文字，页眉按钮现在显示 Light theme，图表、仪表、告警表格和命令表单都针对深色背景重新设计了样式。" />
+<GuideShot id="dash-dark" alt="同一块 Widget Lab 看板的深色主题：深色背景、浅色文字，页眉按钮现在显示 Light theme，读数、仪表、告警计数、图表和表格都针对深色背景重新设计了样式。" />
 
 ## 时间范围与暂停 {#time-range-and-pause}
 
@@ -65,6 +65,7 @@ import GuideShot from '@site/src/components/GuideShot';
 | --- | --- | --- |
 | `dashboard` | 仪表板令牌 | 登录后（包括单点登录后）直接加载该仪表板。 |
 | `kiosk` | `1` 或 `true` | 展示模式：隐藏页眉及其控件，改为显示 **Fullscreen**（全屏）按钮。 |
+| `chrome` | `0` 或 `false` | 与 `kiosk` 一起使用时，同时隐藏连接指示器和 **Fullscreen** 按钮，适用于自行为看板加框的页面。只要看板不处于实时状态，指示器仍会出现。 |
 | `theme` | `dark` 或 `light` | 设置主题。与主题按钮不同，该参数不会被记住。 |
 | `density` | `compact`、`comfortable` 或 `wall` | 缩放看板的文字和间距：`compact` 更小，`wall` 更大，适合从房间另一端观看的显示器。会覆盖看板保存时的密度。 |
 | `range` | `15m`、`1h`、`6h`、`24h` 或 `7d` | 以该时间范围打开看板，而不是看板自带的范围。 |
@@ -72,9 +73,9 @@ import GuideShot from '@site/src/components/GuideShot';
 
 取值不被查看器识别的参数会被忽略，其他参数仍然生效。
 
-在展示模式下，看板占满整个页面。唯一的控件是右上角的 **Fullscreen**，它会变成 **Exit fullscreen**（退出全屏）；如果浏览器无法进入全屏，则会隐藏。展示模式下没有退出登录控件，因此墙面显示器会一直停留在其看板上。展示模式同样没有时间范围和暂停控件，但以 `paused=1` 打开的看板仍会在连接指示器旁显示 **Paused** 徽标，所以冻结的墙面显示器会如实说明。
+在展示模式下，看板占满整个页面。连接指示器位于左上角。唯一的控件是右上角的 **Fullscreen**，它会变成 **Exit fullscreen**（退出全屏）；如果浏览器无法进入全屏，则会隐藏。展示模式下没有退出登录控件，因此墙面显示器会一直停留在其看板上。展示模式同样没有时间范围和暂停控件，但以 `paused=1` 打开的看板仍会在连接指示器旁显示 **Paused** 徽标，所以冻结的墙面显示器会如实说明。
 
-<GuideShot id="dash-kiosk" alt="展示模式下的 Widget Lab 看板：没有页眉，顶部是标题卡片，其右上角有 Fullscreen 按钮，下方是同样的实时组件，包括带 Ack 和 Clear 的告警表格以及 Setpoint 命令表单。" />
+<GuideShot id="dash-kiosk" alt="展示模式下的 Widget Lab 看板：没有页眉，左上角有 Live 指示器，右上角有 Fullscreen 按钮，下方是标题卡片和同样的实时组件。" />
 
 ## 保持登录状态 {#staying-signed-in}
 

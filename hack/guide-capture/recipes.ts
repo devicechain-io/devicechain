@@ -172,6 +172,33 @@ const IDP_DETAIL = 'routes/admin/identity-providers/IdentityProviderDetailPage.t
 // Chapter 17's board: the widgetlab gallery, as published by its simulator.
 const DASH_BOARD = 'wl-gallery';
 
+// A band of the widgetlab gallery in view mode, scrolled so the widget titled `title` sits at
+// the top of the frame. The one text selector in this file, and deliberately so: a widget
+// title is text the dashboard's AUTHOR wrote (the simulator's gallery spec), which the console
+// never translates, so it reads the same in every locale. The widgets carry no data-shot
+// anchor of their own in view mode.
+function galleryBand(id: string, title: string): Recipe {
+  return {
+    id,
+    session: 'widgets',
+    route: '/dashboards/wl-gallery',
+    setup: async (page) => {
+      const heading = page.getByText(title, { exact: true }).first();
+      await heading.waitFor({ timeout: 30_000 });
+      await heading.evaluate((el) => {
+        el.scrollIntoView({ block: 'start' });
+        // Leave a little room above the widget's frame: walk up to the scrolling ancestor.
+        let p: HTMLElement | null = el.parentElement;
+        while (p && p.scrollHeight <= p.clientHeight) p = p.parentElement;
+        (p ?? document.scrollingElement)?.scrollBy(0, -12);
+      });
+      await page.waitForTimeout(4000); // live widgets: first values and chart layout
+    },
+    anchor: '[data-shot="dashboard-edit"]',
+    sources: ['routes/dashboards/editor/DashboardWorkspace.tsx'],
+  };
+}
+
 const PROFILE = 'routes/device-profiles/resource.tsx';
 const PROFILE_ROUTE = '/device-profiles/bp-thermostat-profile';
 
@@ -584,6 +611,12 @@ export const recipes: Recipe[] = [
     anchor: '[data-shot="dashboard-edit"]',
     sources: ['routes/dashboards/editor/DashboardWorkspace.tsx'],
   },
+  // The gallery further down, one shot per band: the gauge and indicator widgets, the stat
+  // cards over the board's time range, the bar and pie charts, and the fleet table.
+  galleryBand('dashboard-gauges', 'Thermometer'),
+  galleryBand('dashboard-stat-cards', 'Average temperature'),
+  galleryBand('dashboard-bar-pie', 'Latest readings'),
+  galleryBand('dashboard-fleet-table', 'Sensors in the zone'),
   {
     id: 'dashboard-edit',
     session: 'widgets',

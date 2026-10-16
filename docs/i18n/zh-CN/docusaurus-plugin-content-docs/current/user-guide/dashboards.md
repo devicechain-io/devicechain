@@ -54,10 +54,12 @@ import GuideShot from '@site/src/components/GuideShot';
 
 打开仪表板会以实时数据显示它。
 
-<GuideShot id="dashboard-view" alt="查看模式下的 Widget Lab 仪表板，带有 Preview、Export、History、Edit 和 Delete 按钮。组件包括标题标签、wl-sensor-01 温度的最新值卡片和仪表、wl-zone-01 的 Active alarms 计数、一张图片、Temperature and humidity 图表，以及列出 battery、humidity、pressure 和 temperature 的 Latest values 表。" />
+<GuideShot id="dashboard-view" alt="查看模式下的 Widget Lab 仪表板。页眉有时间范围 15m、1h（已选中）、6h、24h 和 7d，一个 Pause 按钮，一个 Live 指示器，以及 Preview、Export、History、Edit 和 Delete 按钮。组件包括标题标签、wl-sensor-01 温度的最新值卡片和仪表、wl-zone-01 的 Active alarms 计数、一张图片、标有 15m 的 Temperature and humidity 图表，以及列出 battery、humidity、pressure 和 temperature 的 Latest values 表。" />
 
-顶部的按钮：
+顶部：
 
+- **15m**、**1h**、**6h**、**24h** 和 **7d** 设置图表绘制的时间范围，**Pause**（暂停）冻结仪表板。它们与 /dash 查看器中的用法相同，参见[时间范围与暂停](/user-guide/viewing-dashboards-in-dash#time-range-and-pause)。
+- **Live**（实时）表示仪表板的实时连接正常；设备只是暂时没有上报数据并不会改变它。连接中断时它显示 **Reconnecting**（正在重新连接），中断 20 秒后显示 **Offline**（离线），如果浏览器本身断网则立即显示 **Offline**。连接恢复后，组件会自行继续更新。
 - **Preview**（预览）用生成的数据替换实时数据（参见[用合成数据预览](#previewing-with-synthetic-data)）。
 - **Export**（导出）复制或下载仪表板（参见[导出](#exporting)）。
 - **History**（历史）打开版本历史（参见[版本](#versions)）。
@@ -66,16 +68,37 @@ import GuideShot from '@site/src/components/GuideShot';
 
 带有操作的组件（例如确认告警或发送命令）在这里同样可用。平台会根据你自己的权限检查每个操作。
 
+### 组件的样子 {#what-the-widgets-look-like}
+
+测试租户的 *Widget Lab* 仪表板包含每种内置组件各一个。页面再往下：
+
+<GuideShot id="dashboard-gauges" alt="wl-sensor-01 上的指示类组件：温度的线性仪表和温度计，刻度上标出了各自的阈值区间；按湿度百分比填充的 Tank level 液位仪表；显示电量的 Battery 图标；显示 Normal 的状态灯；信号格；显示 Off 的 Powered 灯；下方还有一个罗盘和两个进度环。" />
+
+线性仪表、液位仪表、电池、状态灯、信号格、罗盘和进度环各显示一台设备的一个测量值。阈值会在刻度上标出各自的区间，如上图中的线性仪表和温度计；读数落在正常区间以外的任何区间时，会显示该区间的颜色。
+
+<GuideShot id="dashboard-stat-cards" alt="wl-sensor-01 的八张统计卡片：Average temperature、Peak temperature（红色）、Lowest temperature 和 Readings，各自标有统计量和 1h；然后是 Humidity total、显示 No data 的 Latest temperature、标有 Average · 5m 的 Average, last 5 min，以及 Peak (smallest)。" />
+
+统计卡片显示仪表板时间范围内的一个数值，并标出统计量及其覆盖的跨度，例如 *Maximum · 1h*。设置了自己 **Time span** 的卡片会保留该跨度，如上图中的 *Average, last 5 min*。
+
+<GuideShot id="dashboard-bar-pie" alt="两个柱状图，显示 wl-sensor-01 最新的温度、湿度和电量读数：Latest readings 按数据源顺序绘制竖向柱，Largest first 按从大到小绘制横向柱。下方是同样读数的两个饼图。" />
+
+柱状图和饼图用于比较一台设备的最新读数。柱状图也可以改为比较一个设备组中各设备的同一测量值（参见下文的 **One bar per**）。柱状图在较宽的组件中绘制竖向柱，在较高的组件中绘制横向条。
+
+<GuideShot id="dashboard-fleet-table" alt="wl-zone-01 的 Sensors in the zone 车队表格：每台设备一行（wl-sensor-01 和 wl-sensor-03），列为按其排序的 Temperature (C)、Humidity (%) 和 Battery (%)，每个值都带有其时长。下方是一个较小的车队表格和一个 Temperature by sensor 柱状图。" />
+
+车队表格为设备组中的每台设备显示一行，为每个测量显示一列。点击列标题即可按该列排序。其设置见[配置组件](#configuring-a-widget)。
+
 ## 在画布上编辑 {#editing-on-the-canvas}
 
 **Edit** 会把仪表板变成画布。按钮变为 **Undo**（撤销）、**Redo**（重做）、**Add widget**（添加组件）、**Paste**（粘贴）、**Preview**、**Export**、**History**、**Save**（保存）和 **Done**（完成），同时出现一个布局设置栏。
 
-<GuideShot id="dashboard-edit" alt="编辑模式下的 Widget Lab 仪表板。页眉显示 Add widget、Preview、Export、History、不可用的 Save 和 Done。设置栏显示 Title Widget Lab、Columns 12、Min cell 56、Gutter 8、Padding 0 和 Size Fill area。组件在画布上带有轮廓，有些显示短横线或 No data yet。" />
+<GuideShot id="dashboard-edit" alt="编辑模式下的 Widget Lab 仪表板。页眉显示 Live 指示器、Undo 和 Redo、Add widget、Paste、Preview、Export、History、不可用的 Save 和 Done。设置栏显示 Title Widget Lab、Columns 12、Min cell 56、Gutter 8、Padding 0、Size Fill area、Time range 1h 和 Density Comfortable。组件在画布上带有轮廓，有些显示短横线或 No data yet。" />
 
 - **Title**（标题）是仪表板的名称。
 - **Columns**（列数）、**Min cell**（最小单元格）、**Gutter**（间隔）和 **Padding**（边距）设置组件吸附的网格。单元格是正方形，会拉伸以填满宽度；**Min cell** 是单元格允许的最小尺寸（像素）。**Gutter** 是单元格之间的间距，**Padding** 是仪表板四周的边距。
 - **Size**（尺寸）决定仪表板如何填充页面：**Fill area**（填充区域）、**Fixed width**（固定宽度）或 **Fixed height**（固定高度）。
 - **Time range**（时间范围）是仪表板打开时其图表绘制的跨度：15m、1h、6h、24h 或 7d，默认一小时。查看者可以在页眉中选择其他范围并暂停看板，参见[在 /dash 中查看仪表板](/user-guide/viewing-dashboards-in-dash#time-range-and-pause)。
+- **Density**（密度）缩放所有组件的文字和间距：**Compact**（紧凑）、**Comfortable**（舒适，默认）或 **Wall display**（墙面显示，适合从房间另一端观看的屏幕）。/dash 查看器可以为某一块屏幕覆盖此设置。
 
 拖动组件可移动。虚线轮廓会显示松开后它将占据的单元格，组件会正好落在那里。挡路的组件会移到上方或下方最近的空位，因此把一个组件拖到另一个组件上会交换两者的位置。其他组件都不会移动：你特意留出的空位会保留。网格上的组件从不重叠，新组件放在能容纳它的第一个空位。选中组件后，拖动其边缘或角上的手柄可调整大小。拖动时尺寸以“列×行”显示，例如 *2×3*，组件会停在它允许的最小和最大尺寸。只能朝一个方向调整大小的组件，只在该侧显示手柄。拖动时按 **Esc** 可取消。组件获得焦点后，方向键可将其移动一格，**Shift** 加方向键可调整其大小。超出所支持尺寸或越过右边缘的组件，会带有相应的提示。尚未收到数据的组件会显示短横线或 *No data yet*。
 
@@ -91,7 +114,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **Add widget** 会打开组件菜单，按各组件的用途分组。
 
-<GuideShot id="dashboard-add-widget" alt="编辑模式下打开的 Add widget 菜单，分为 Telemetry（Timeseries chart、Latest card、Gauge、Table）、Static（Label、Image）、Alarms（Alarm table、Alarm count）、Control（Command button）、Navigation（Entity selector）和 Location（Map）。每个条目显示其 ID 和版本，例如 timeseries-chart · v1.0.0。" />
+<GuideShot id="dashboard-add-widget" alt="编辑模式下打开的 Add widget 菜单，显示其 Telemetry 分组：Timeseries chart 6×4、Latest card 3×2、Gauge 3×3、Table 6×3、Linear gauge 4×3、Level gauge 3×4、Battery 3×2、Status light 2×2、Signal bars 2×2、Compass 4×4、Progress ring 3×3、Stat card 3×3、Bar chart 6×4、Pie chart 4×4 和 Fleet table 12×6。每个条目显示其 ID 和版本（例如 timeseries-chart · v1.0.0）以及以单元格计的尺寸。" />
 
 | 分组 | 组件 |
 |---|---|
@@ -102,13 +125,13 @@ import GuideShot from '@site/src/components/GuideShot';
 | Navigation（导航） | Entity selector（实体选择器），让查看者选择仪表板显示哪台设备或哪个实体 |
 | Location（位置） | Map（地图），绘制在租户的地图上（参见[租户设置](/user-guide/tenant-settings)） |
 
-每一项都会显示该组件添加时的尺寸（以单元格计），例如 *4×3*。选择一个即可将其添加到画布上的第一个空位，然后进行配置。
+每一项都会显示该组件添加时的尺寸（以单元格计），例如 *4×3*。滚动菜单可看到 **Telemetry** 之后的分组。选择一个组件即可将其添加到画布上的第一个空位，然后进行配置。
 
 ### 配置组件 {#configuring-a-widget}
 
-在画布上选择一个组件，其设置会在右侧打开。**Grid**、**Relative to…** 和 **Delete** 显示在组件本身上。
+在画布上选择一个组件，其设置会在右侧打开。**Grid**、**Relative to…**、**Duplicate**（复制一份）、**Copy**（复制）和 **Delete** 显示在组件本身上，其边缘和角上的手柄用于调整大小。
 
-<GuideShot id="dashboard-widget-config" alt="编辑模式下选中了 Temperature latest card，组件上显示 Front 和 Delete 按钮。右侧标题为 Latest card 的设置面板显示 Title Temperature、Context 部分（Binds to 设为 Scoped to a parent，Parent slot 为 zone，Strategy 为 Manual pick）、Data source 部分（说明它派生自父级上下文，槽位为 sensor）以及 Measurement 输入框。" />
+<GuideShot id="dashboard-widget-config" alt="编辑模式下选中了 Temperature latest card，组件上显示 Grid、Relative to…、Duplicate、Copy 和 Delete 按钮以及调整大小的手柄。右侧标题为 Latest card 的设置面板显示 Title Temperature、Context 部分（Binds to 设为 Scoped to a parent，Parent slot 为 zone，Strategy 为 Manual pick），以及 Data source 部分的开头。" />
 
 设置因组件而异。常见的有：
 
@@ -148,7 +171,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **Preview** 会用生成的值替换实时数据，让你在任何设备上报之前就能检查刻度、阈值和布局。按钮旁的选择器用于选择数据的形状：**Sine wave**（正弦波）、**Ramp**（斜坡）或 **Random walk**（随机游走）。预览在查看模式和编辑模式下都可用。再次选择 **Preview** 即可回到实时数据。
 
-<GuideShot id="dashboard-preview" alt="预览模式下的 Widget Lab 仪表板，生成器选择器设为 Sine wave，Preview 按钮高亮。图表显示平滑的正弦曲线，告警计数显示 1 alarm, worst Major，卡片和仪表显示生成的值。" />
+<GuideShot id="dashboard-preview" alt="预览模式下的 Widget Lab 仪表板，生成器选择器设为 Sine wave，Preview 按钮高亮。图表显示平滑的正弦曲线，告警计数显示 1 alarm, worst Major，卡片和仪表显示生成的值，表格只列出一个生成的值。" />
 
 生成的数据只保留在你的浏览器中，永远不会被保存。
 
@@ -167,7 +190,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **History** 会打开版本历史。仪表板的草稿是你编辑的内容；**版本**是草稿的冻结副本，展示给查看者。
 
-<GuideShot id="dashboard-history" alt="Version history 面板。Publish current draft 部分有可选的 Label 输入框、Description 输入框、说明发布会使新版本成为查看者所见版本的提示，以及 Publish version 按钮。下方的 Published versions 列出版本 1，标记为 Live，由 dana.okafor@acme-properties.example 发布，带有 Roll back 按钮。" />
+<GuideShot id="dashboard-history" alt="Version history 面板。Publish current draft 部分有可选的 Label 输入框、Description 输入框、说明发布会使新版本成为查看者所见版本的提示，以及 Publish version 按钮。下方的 Published versions 列出标记为 Live 的版本 2 和版本 1，均由 sam.rivera@widgetlab.example 发布。版本 1 带有 Make live 按钮，每个版本都有 Roll back 按钮，在面板右边缘被截断。" />
 
 - **Publish current draft**（发布当前草稿）。可以添加可选的标签（例如发布名称）和描述，然后选择 **Publish version**（发布版本）。新版本立即生效。请先保存更改：控制台发布的是已保存的草稿。
 - **Published versions**（已发布版本）列出每个版本以及发布的时间和发布者。生效的版本标有 **Live**（生效中）。

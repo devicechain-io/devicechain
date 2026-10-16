@@ -78,10 +78,17 @@ the templates use the same review.
 
 Opening a dashboard shows it with live data.
 
-<GuideShot id="dashboard-view" alt="The Widget Lab dashboard in view mode, with Preview, Export, History, Edit and Delete buttons. Widgets include a title label, a latest-value card and a gauge for temperature on wl-sensor-01, an Active alarms count for wl-zone-01, an image, a Temperature and humidity chart, and a Latest values table listing battery, humidity, pressure and temperature." />
+<GuideShot id="dashboard-view" alt="The Widget Lab dashboard in view mode. The header has the time ranges 15m, 1h (selected), 6h, 24h and 7d, a Pause button, a Live indicator, and Preview, Export, History, Edit and Delete buttons. Widgets include a title label, a latest-value card and a gauge for temperature on wl-sensor-01, an Active alarms count for wl-zone-01, an image, a Temperature and humidity chart marked 15m, and a Latest values table listing battery, humidity, pressure and temperature." />
 
-The buttons along the top:
+Along the top:
 
+- **15m**, **1h**, **6h**, **24h** and **7d** set the time range the charts draw, and **Pause**
+  freezes the dashboard. They work as they do in the /dash viewer; see
+  [Time range and pause](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
+- **Live** shows that the dashboard's live connection is up; a device that is merely quiet does not
+  change it. If the connection drops it reads **Reconnecting**, then **Offline** once it has been
+  down for 20 seconds, or straight away if the browser itself goes offline. The widgets pick up again
+  on their own when the connection returns.
 - **Preview** swaps live data for generated data (see [Previewing with synthetic data](#previewing-with-synthetic-data)).
 - **Export** copies or downloads the dashboard (see [Exporting](#exporting)).
 - **History** opens the version history (see [Versions](#versions)).
@@ -91,13 +98,40 @@ The buttons along the top:
 Widgets that carry actions, such as acknowledging an alarm or sending a command, work here too. The
 platform checks each action against your own permissions.
 
+### What the widgets look like
+
+The test tenant's *Widget Lab* dashboard holds one of every built-in widget. Further down the page:
+
+<GuideShot id="dashboard-gauges" alt="Indicator widgets on wl-sensor-01: a linear gauge and a thermometer for temperature, with their threshold bands marked along the scale, a Tank level gauge filled to its humidity percentage, a Battery icon with its charge, a Status light reading Normal, Signal bars, a Powered light reading Off, and below them a compass and two progress rings." />
+
+The linear and level gauges, battery, status light, signal bars, compass and progress ring each show
+one measurement of one device. Thresholds mark their bands along the scale, as on the linear gauge
+and the thermometer above, and a reading in any band but the normal one takes that band's color.
+
+<GuideShot id="dashboard-stat-cards" alt="Eight stat cards for wl-sensor-01: Average temperature, Peak temperature (in red), Lowest temperature and Readings, each labeled with its statistic and 1h; then Humidity total, Latest temperature showing No data, Average, last 5 min labeled Average · 5m, and Peak (smallest)." />
+
+A stat card shows one figure over the dashboard's time range, labeled with the statistic and the
+span it covers, such as *Maximum · 1h*. A card with its own **Time span** keeps it, like *Average,
+last 5 min* above.
+
+<GuideShot id="dashboard-bar-pie" alt="Two bar charts of wl-sensor-01's latest temperature, humidity and battery: Latest readings with vertical bars in the data source's order, and Largest first with horizontal bars sorted largest first. Below them, two pie charts of the same readings." />
+
+Bar and pie charts compare a device's latest readings. A bar chart can instead compare one
+measurement across the devices of a group (see **One bar per** below). It draws columns in a wide
+widget and rows in a tall one.
+
+<GuideShot id="dashboard-fleet-table" alt="The Sensors in the zone fleet table for wl-zone-01: one row per device (wl-sensor-01 and wl-sensor-03) with Temperature (C), sorted by that column, Humidity (%) and Battery (%), each value with its age. Below it, a smaller fleet table and a Temperature by sensor bar chart." />
+
+The fleet table shows one row per device of a group and one column per measurement. Click a column
+heading to sort by it. Its settings are described under [Configuring a widget](#configuring-a-widget).
+
 ## Editing on the canvas
 
 **Edit** turns the dashboard into a canvas. The buttons change to **Undo**, **Redo**, **Add
 widget**, **Paste**, **Preview**, **Export**, **History**, **Save** and **Done**, and a bar of
 layout settings appears.
 
-<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows Add widget, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 12, Min cell 56, Gutter 8, Padding 0 and Size Fill area. Widgets are outlined on the canvas; some show a dash or No data yet." />
+<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows a Live indicator, Undo and Redo, Add widget, Paste, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 12, Min cell 56, Gutter 8, Padding 0, Size Fill area, Time range 1h and Density Comfortable. Widgets are outlined on the canvas; some show a dash or No data yet." />
 
 - **Title** is the dashboard's name.
 - **Columns**, **Min cell**, **Gutter** and **Padding** set the grid widgets snap to. The cells
@@ -108,6 +142,9 @@ layout settings appears.
 - **Time range** is the span the dashboard's charts draw when it opens: 15m, 1h, 6h, 24h or 7d.
   One hour is the default. Viewers can pick another from the header and pause the board; see
   [Viewing dashboards in /dash](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
+- **Density** scales the text and spacing of every widget: **Compact**, **Comfortable** (the
+  default) or **Wall display**, for a screen read from across a room. The /dash viewer can override
+  it for one display.
 
 Drag a widget to move it. A dashed outline shows the cells it will take when you let go, and it
 lands exactly there. A widget in its way moves to the nearest free space above or below, so
@@ -147,7 +184,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 **Add widget** opens the widget menu, grouped by what each widget does.
 
-<GuideShot id="dashboard-add-widget" alt="The Add widget menu open in edit mode, grouped into Telemetry (Timeseries chart, Latest card, Gauge, Table), Static (Label, Image), Alarms (Alarm table, Alarm count), Control (Command button), Navigation (Entity selector) and Location (Map). Each entry shows its id and version, for example timeseries-chart · v1.0.0." />
+<GuideShot id="dashboard-add-widget" alt="The Add widget menu open in edit mode, showing its Telemetry group: Timeseries chart 6×4, Latest card 3×2, Gauge 3×3, Table 6×3, Linear gauge 4×3, Level gauge 3×4, Battery 3×2, Status light 2×2, Signal bars 2×2, Compass 4×4, Progress ring 3×3, Stat card 3×3, Bar chart 6×4, Pie chart 4×4 and Fleet table 12×6. Each entry shows its id and version, for example timeseries-chart · v1.0.0, and its size in cells." />
 
 | Group | Widgets |
 |---|---|
@@ -158,15 +195,17 @@ draft only. Viewers see nothing new until you publish a version.
 | Navigation | Entity selector, which lets a viewer choose which device or entity the dashboard shows |
 | Location | Map, which draws on the tenant's map (see [Tenant settings](/user-guide/tenant-settings)) |
 
-Each entry shows the size, in cells, the widget is added at, such as *4×3*. Choose one to add it to
-the first free space on the canvas, then configure it.
+Each entry shows the size, in cells, the widget is added at, such as *4×3*. Scroll the menu for the
+groups after **Telemetry**. Choose a widget to add it to the first free space on the canvas, then
+configure it.
 
 ### Configuring a widget
 
-Select a widget on the canvas to open its settings on the right. **Grid**, **Relative to…** and
-**Delete** appear on the widget itself.
+Select a widget on the canvas to open its settings on the right. **Grid**, **Relative to…**,
+**Duplicate**, **Copy** and **Delete** appear on the widget itself, with handles on its edges and
+corners for resizing.
 
-<GuideShot id="dashboard-widget-config" alt="Edit mode with the Temperature latest card selected, showing Front and Delete buttons on the widget. The settings panel on the right, titled Latest card, shows Title Temperature, a Context section with Binds to set to Scoped to a parent, Parent slot zone and Strategy Manual pick, a Data source section explaining it is derived from the parent context, slot sensor, and a Measurement field." />
+<GuideShot id="dashboard-widget-config" alt="Edit mode with the Temperature latest card selected, showing Grid, Relative to…, Duplicate, Copy and Delete buttons and resize handles on the widget. The settings panel on the right, titled Latest card, shows Title Temperature, a Context section with Binds to set to Scoped to a parent, Parent slot zone and Strategy Manual pick, and the start of a Data source section." />
 
 The settings depend on the widget. Common ones:
 
@@ -200,8 +239,8 @@ The settings depend on the widget. Common ones:
 - **Fleet table**: one row per device of the group the widget is bound to and one column per
   measurement the data source selects. Set the group on the widget's data source and pick the
   measurements to show. **Columns** gives a heading, unit and precision per measurement;
-  **Thresholds** colour the cells of one measurement's column (the normal band keeps the table's
-  colour); **Stale after** marks a reading older than that many seconds as stale, and without it
+  **Thresholds** color the cells of one measurement's column (the normal band keeps the table's
+  color); **Stale after** marks a reading older than that many seconds as stale, and without it
   the table only shows each reading's age. **Show age when behind** prints a reading's age only
   once it is that many seconds older than the newest reading in the table (or stale), so a fleet
   that reports every few seconds keeps one line a row and the device that went quiet stands out;
@@ -232,7 +271,7 @@ moves down; the rest stay where they are. Review the result, then save.
 A widget normally sits on the grid. A widget can instead be placed **Relative to…** another, for a
 badge on a map or a caption under a chart. Select the widget, choose **Relative to…** and click the
 widget it should hang from, or move the focus to it and press **Enter**. A picker with nine anchor points appears; choose the corner, edge or
-centre of the host that it attaches to.
+center of the host that it attaches to.
 
 A relative widget keeps its size, moves whenever its host moves, may overlap it, and is drawn above
 the grid. A dashed line joins it to its host. Drag it to shift it away from the anchor in whole
@@ -281,7 +320,7 @@ before any device reports. A picker beside the button chooses the shape of the d
 **Ramp** or **Random walk**. Preview works in both view and edit mode. Choose **Preview** again to go
 back to live data.
 
-<GuideShot id="dashboard-preview" alt="The Widget Lab dashboard in preview mode, with the generator picker set to Sine wave and the Preview button highlighted. The chart shows smooth sine curves, the alarm count shows 1 alarm, worst Major, and the cards and gauge show generated values." />
+<GuideShot id="dashboard-preview" alt="The Widget Lab dashboard in preview mode, with the generator picker set to Sine wave and the Preview button highlighted. The chart shows smooth sine curves, the alarm count shows 1 alarm, worst Major, the cards and gauge show generated values, and the table lists a single generated value." />
 
 Generated data stays in your browser and is never saved.
 
@@ -303,7 +342,7 @@ Generated data stays in your browser and is never saved.
 **History** opens the version history. A dashboard's draft is what you edit; a **version** is a
 frozen copy of the draft that viewers are shown.
 
-<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 1, marked Live, published by dana.okafor@acme-properties.example, with a Roll back button." />
+<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 2, marked Live, and version 1, both published by sam.rivera@widgetlab.example. Version 1 has a Make live button, and each version has a Roll back button, cut off at the right edge of the panel." />
 
 - **Publish current draft.** Add an optional label, such as a release name, and a description, then
   choose **Publish version**. The new version goes live straight away. Save your changes first: the
