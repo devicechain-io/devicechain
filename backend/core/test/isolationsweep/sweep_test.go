@@ -18,18 +18,18 @@ const sweepSDL = `
 	schema { query: Query mutation: Mutation subscription: Subscription }
 	type Query {
 		devices: [Device!]!
-		device(token: String!): Device
+		device(token: String!, verbose: Boolean): Device
 		echo(token: String!): String
 		customers: [String!]!
 	}
 	type Mutation { rename(token: String!): Boolean! }
-	type Subscription { stream: String! }
+	type Subscription { stream: String! watch(token: String!): String! }
 	type Device { token: String! owner: String! }
 `
 
 // sweepRoot serves two customers' devices. leaky=true makes `devices` ignore the scope —
 // the defect the sweep exists to catch.
-type sweepRoot struct{ leaky, oracle, leakyCustomers bool }
+type sweepRoot struct{ leaky, oracle, leakyCustomers, oracleStream, oracleMessage bool }
 
 type device struct{ token, owner string }
 
@@ -66,7 +66,10 @@ func (r *sweepRoot) Devices(ctx context.Context) ([]deviceResolver, error) {
 	return out, nil
 }
 
-func (r *sweepRoot) Device(ctx context.Context, args struct{ Token string }) (*deviceResolver, error) {
+func (r *sweepRoot) Device(ctx context.Context, args struct {
+	Token   string
+	Verbose *bool
+}) (*deviceResolver, error) {
 	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
 		return nil, err
 	}
@@ -76,6 +79,10 @@ func (r *sweepRoot) Device(ctx context.Context, args struct{ Token string }) (*d
 		}
 		if d.token == args.Token && r.oracle {
 			return nil, auth.ErrForbidden // confirms the row exists
+		}
+		if d.token == args.Token && r.oracleMessage {
+			// The same code as a miss, but the wording confirms the row exists.
+			return nil, fmt.Errorf("device %q: not found (it belongs to another customer)", args.Token)
 		}
 	}
 	// Echoes the caller's own argument: not a leak.
@@ -107,6 +114,27 @@ func (r *sweepRoot) Stream(ctx context.Context) (<-chan string, error) {
 	ch <- "globex"
 	close(ch)
 	return ch, nil
+}
+
+// Watch streams one device's readings. oracleStream makes it refuse a hidden device
+// FORBIDDEN where a missing one is not found — the same existence oracle as Device's,
+// answered at subscribe time rather than in a response.
+func (r *sweepRoot) Watch(ctx context.Context, args struct{ Token string }) (<-chan string, error) {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	for _, d := range sweepDevices {
+		if d.token == args.Token && visible(ctx, d) {
+			ch := make(chan string, 1)
+			ch <- "reading"
+			close(ch)
+			return ch, nil
+		}
+		if d.token == args.Token && r.oracleStream {
+			return nil, auth.ErrForbidden // confirms the device exists
+		}
+	}
+	return nil, fmt.Errorf("device %q: not found", args.Token)
 }
 
 func memberCtx(anchors ...string) context.Context {
@@ -158,7 +186,8 @@ func TestACorrectServiceSweepsClean(t *testing.T) {
 	if len(rec.errors)+len(rec.fatals) > 0 {
 		t.Fatalf("a correct service failed the sweep: %v %v", rec.errors, rec.fatals)
 	}
-	for _, name := range []string{"query devices", "query device", "query echo", "mutation rename", "subscription stream"} {
+	for _, name := range []string{"query devices", "query device", "query echo", "mutation rename", "subscription stream", "subscription watch",
+		"query device (all arguments)"} {
 		if _, ok := Find(out, name); !ok {
 			t.Errorf("the sweep never reached %s", name)
 		}
@@ -203,5 +232,26 @@ func TestTheSweepCatchesALeakThatNeverNamesTheProbe(t *testing.T) {
 	rec, _ := runRecorded(config(&sweepRoot{leakyCustomers: true}))
 	if len(rec.errors) == 0 || !strings.Contains(strings.Join(rec.errors, "|"), "query customers") {
 		t.Fatalf("a read that listed globex for acme's member passed the sweep: %v", rec.errors)
+	}
+}
+
+// 🔴 The sweep catches an existence oracle answered at subscribe time: a stream that
+// refuses a hidden device FORBIDDEN where a missing one is not found. A subscription is
+// judged against its missing twin exactly as a query is, so the refusal's text is read,
+// not just whether a response arrived.
+func TestTheSweepCatchesASubscriptionExistenceOracle(t *testing.T) {
+	rec, _ := runRecorded(config(&sweepRoot{oracleStream: true}))
+	if len(rec.errors) == 0 || !strings.Contains(strings.Join(rec.errors, "|"), "subscription watch") {
+		t.Fatalf("a stream that refused a hidden device differently from a missing one passed: %v", rec.errors)
+	}
+}
+
+// 🔴 The sweep catches an oracle that differs in WORDING only: the same code and the same
+// shape as a miss, with a message that says the row exists. Codes are not the answer;
+// everything the caller can read is, and the two transcripts must be byte-identical.
+func TestTheSweepCatchesAMessageOnlyOracle(t *testing.T) {
+	rec, _ := runRecorded(config(&sweepRoot{oracleMessage: true}))
+	if len(rec.errors) == 0 || !strings.Contains(strings.Join(rec.errors, "|"), "query device ") {
+		t.Fatalf("a resolver whose refusal differed from a miss only in wording passed: %v", rec.errors)
 	}
 }

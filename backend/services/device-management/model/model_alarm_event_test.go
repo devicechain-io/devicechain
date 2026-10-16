@@ -76,8 +76,19 @@ func TestNewAlarmStateChangeEvent(t *testing.T) {
 		RaisedTime:     raised,
 		AcknowledgedBy: sql.NullString{String: "op@example.com", Valid: true},
 		LastValue:      sql.NullFloat64{Float64: 123.5, Valid: true},
+		ScopeAnchors:   rdb.Anchors{"customer:acme", "customer:globex"},
 	}
 	ev := newAlarmStateChangeEvent(a, AlarmEventEscalated, string(AlarmSeverityMajor), a.RaisedTime)
+	// The scope stamp rides the wire event: it is what the live alarm stream matches a
+	// member limited to some customers against, so an event without it is one that
+	// member never receives — silently, for every alarm, with the query still answering.
+	if len(ev.ScopeAnchors) != 2 || ev.ScopeAnchors[0] != "customer:acme" || ev.ScopeAnchors[1] != "customer:globex" {
+		t.Fatalf("scopeAnchors = %v, want the alarm's stamp", ev.ScopeAnchors)
+	}
+	a.ScopeAnchors[0] = "customer:changed"
+	if ev.ScopeAnchors[0] != "customer:acme" {
+		t.Fatal("the event shares the alarm's anchor slice instead of copying it")
+	}
 	if ev.EventType != AlarmEventEscalated || ev.AlarmToken != "alarm-tok" ||
 		ev.OriginatorType != "device" || ev.OriginatorId != 7 ||
 		ev.AlarmKey != "over-temp" || ev.MetricKey != "temp" ||

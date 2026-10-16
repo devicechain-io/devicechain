@@ -26,9 +26,13 @@
 // identical once the probe is substituted: a row the caller may not see has to be
 // indistinguishable from one that does not exist (the NOT_FOUND contract), and comparing
 // the two answers is what lets the probe's echo in an answer pass while the hidden row's
-// own data does not. An optional argument
-// is left out. That reaches every operation, though not every path through one; the
-// per-service tests of each opted-in read cover the arguments that matter to it.
+// own data does not. A subscription is judged the same way, on everything it answers
+// within a short wait — its subscribe-time error included. Every operation that has an
+// optional argument is called a second time with EVERY argument and input field filled
+// (its "(all arguments)" document), so a path that only an optional filter reaches — a
+// stream's originator, a search's by-device filter — is aimed at the hidden row too.
+// That reaches every operation, though not every path through one; the per-service
+// tests of each opted-in read cover the arguments that matter to it.
 package isolationsweep
 
 import (
@@ -67,6 +71,12 @@ type Config struct {
 	// SubscriptionWait is how long a subscription is read for its first answer (default
 	// 300ms). A stream that answers nothing in that time leaked nothing in it.
 	SubscriptionWait time.Duration
+	// Literals names an argument or input field, by name, whose value the sweep cannot
+	// guess and the all-arguments document needs to get past a discriminator — an entity
+	// type beside a token (originatorType: "device"). The value is a GraphQL literal.
+	// With no entry the probe is used; the operation is reached either way, but the path
+	// behind the discriminator is not.
+	Literals map[string]string
 }
 
 // Reporter is the slice of testing.TB the sweep reports through (*testing.T satisfies it).
@@ -97,7 +107,7 @@ func Run(t Reporter, cfg Config) []Outcome {
 		cfg.SubscriptionWait = 300 * time.Millisecond
 	}
 	schema := cfg.Schema.Inspect()
-	ops := operations(schema, placeholder)
+	ops := operations(schema, placeholder, cfg.Literals)
 	if len(ops) == 0 {
 		t.Fatalf("isolationsweep: the schema declares no operations, so the sweep reached nothing")
 	}
@@ -181,8 +191,10 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// operations builds one document per root field of every operation type.
-func operations(s *introspection.Schema, probe string) []operation {
+// operations builds one document per root field of every operation type with its required
+// arguments, and a second, "(all arguments)", for every field whose arguments or input
+// fields include an optional one.
+func operations(s *introspection.Schema, probe string, lits map[string]string) []operation {
 	var out []operation
 	for _, root := range []struct {
 		kind string
@@ -195,19 +207,25 @@ func operations(s *introspection.Schema, probe string) []operation {
 			if f.Name() == "__typename" {
 				continue
 			}
-			var args []string
-			for _, a := range f.Args(&struct{ IncludeDeprecated bool }{true}) {
-				if a.Type().Kind() != "NON_NULL" {
-					continue
+			document := func(all bool) string {
+				var args []string
+				for _, a := range f.Args(&struct{ IncludeDeprecated bool }{true}) {
+					if a.Type().Kind() != "NON_NULL" && !all {
+						continue
+					}
+					args = append(args, a.Name()+": "+literal(a.Name(), a.Type(), probe, 0, all, lits))
 				}
-				args = append(args, a.Name()+": "+literal(a.Name(), a.Type(), probe, 0))
+				doc := root.kind + " { " + f.Name()
+				if len(args) > 0 {
+					doc += "(" + strings.Join(args, ", ") + ")"
+				}
+				return doc + selection(f.Type(), 0) + " }"
 			}
-			doc := root.kind + " { " + f.Name()
-			if len(args) > 0 {
-				doc += "(" + strings.Join(args, ", ") + ")"
+			required, all := document(false), document(true)
+			out = append(out, operation{kind: root.kind, name: root.kind + " " + f.Name(), document: required})
+			if all != required {
+				out = append(out, operation{kind: root.kind, name: root.kind + " " + f.Name() + " (all arguments)", document: all})
 			}
-			doc += selection(f.Type(), 0) + " }"
-			out = append(out, operation{kind: root.kind, name: root.kind + " " + f.Name(), document: doc})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].name < out[j].name })
@@ -230,13 +248,14 @@ func named(t *introspection.Type) *introspection.Type {
 }
 
 // literal renders a value of t, for the argument or input field called name, as a GraphQL
-// literal.
-func literal(name string, t *introspection.Type, probe string, depth int) string {
+// literal. With all set, an input object's optional fields are filled as well as its
+// required ones; a name in lits takes the literal given for it.
+func literal(name string, t *introspection.Type, probe string, depth int, all bool, lits map[string]string) string {
 	switch t.Kind() {
 	case "NON_NULL":
-		return literal(name, t.OfType(), probe, depth)
+		return literal(name, t.OfType(), probe, depth, all, lits)
 	case "LIST":
-		return "[" + literal(name, t.OfType(), probe, depth) + "]"
+		return "[" + literal(name, t.OfType(), probe, depth, all, lits) + "]"
 	case "ENUM":
 		vals := t.EnumValues(&struct{ IncludeDeprecated bool }{true})
 		if vals == nil || len(*vals) == 0 {
@@ -250,12 +269,15 @@ func literal(name string, t *introspection.Type, probe string, depth int) string
 		var parts []string
 		if fs := t.InputFields(&struct{ IncludeDeprecated bool }{true}); fs != nil {
 			for _, f := range *fs {
-				if f.Type().Kind() == "NON_NULL" {
-					parts = append(parts, f.Name()+": "+literal(f.Name(), f.Type(), probe, depth+1))
+				if f.Type().Kind() == "NON_NULL" || all {
+					parts = append(parts, f.Name()+": "+literal(f.Name(), f.Type(), probe, depth+1, all, lits))
 				}
 			}
 		}
 		return "{" + strings.Join(parts, ", ") + "}"
+	}
+	if lit, ok := lits[name]; ok {
+		return lit
 	}
 	switch *t.Name() {
 	case "Int":
@@ -373,35 +395,65 @@ func judge(op operation, cfg Config) Outcome {
 	return o
 }
 
-// subscribeOnce subscribes as the scoped caller and judges whatever the stream answers
-// within the wait.
+// subscribeOnce judges a subscription exactly as judge judges a query: it subscribes as
+// the scoped caller with the probe and again with the missing token, and the two
+// transcripts — a subscribe-time error, or whatever each stream answered within the
+// wait — must be identical once the probe is substituted, and must name no hidden
+// marker. A stream that refuses a hidden device differently from a missing one is an
+// existence oracle just as a query is, and its subscribe-time error is as much of its
+// answer as a response: a subscription judged on the probe alone, with its error text
+// never read, would pass a resolver that answers FORBIDDEN for the hidden device and
+// NOT_FOUND for a missing one.
 func subscribeOnce(cfg Config, op operation) Outcome {
+	hidden := subscribeTranscript(cfg, op.with(cfg.Probe))
+	absent := subscribeTranscript(cfg, op.with(missing))
+	o := Outcome{Operation: op.name, Codes: hidden.codes, Data: hidden.data}
+	seen := strings.ReplaceAll(hidden.text, cfg.Probe, missing)
+	if seen != absent.text {
+		o.Leak = "a stream answer for the hidden row that differs from the answer for a missing one: " + seen
+		return o
+	}
+	o.Leak = markerIn(seen, cfg.Hidden)
+	return o
+}
+
+// transcript is what one subscription answered within the wait.
+type transcript struct {
+	codes []string
+	data  bool
+	text  string
+}
+
+// subscribeTranscript subscribes with doc as the scoped caller and records everything
+// the stream answers within the wait, the subscribe-time error included.
+func subscribeTranscript(cfg Config, doc string) transcript {
 	ctx, cancel := context.WithCancel(cfg.Scoped)
 	defer cancel()
-	ch, err := cfg.Schema.Subscribe(ctx, op.with(cfg.Probe), "", nil)
+	ch, err := cfg.Schema.Subscribe(ctx, doc, "", nil)
 	if err != nil {
-		return Outcome{Operation: op.name, Codes: []string{fmt.Sprintf("subscribe: %v", err)}}
+		msg := fmt.Sprintf("subscribe: %v", err)
+		return transcript{codes: []string{msg}, text: msg}
 	}
-	o := Outcome{Operation: op.name}
+	var tr transcript
+	var text strings.Builder
 	timer := time.NewTimer(cfg.SubscriptionWait)
 	defer timer.Stop()
 	for {
 		select {
 		case v, ok := <-ch:
 			if !ok {
-				return o
+				tr.text = text.String()
+				return tr
 			}
 			if r, isResp := v.(*graphql.Response); isResp {
-				o.Codes = append(o.Codes, codesOf(r)...)
-				o.Data = o.Data || (len(r.Errors) == 0 && len(r.Data) > 0)
-				seen := strings.ReplaceAll(answerText(r), cfg.Probe, missing)
-				if m := markerIn(seen, cfg.Hidden); m != "" {
-					o.Leak = m
-					return o
-				}
+				tr.codes = append(tr.codes, codesOf(r)...)
+				tr.data = tr.data || (len(r.Errors) == 0 && len(r.Data) > 0)
+				text.WriteString(answerText(r))
+				text.WriteByte('\n')
 			}
 		case <-timer.C:
-			return o
+			tr.text = text.String()
+			return tr
 		}
 	}
 }

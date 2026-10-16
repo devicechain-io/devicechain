@@ -76,13 +76,18 @@ func startStreamFixture(t *testing.T) *streamFixture {
 // anchor ("customer:acme"), carrying a single reading named name with value value.
 func (f *streamFixture) publishReading(t *testing.T, device, anchor, name, value string) {
 	t.Helper()
-	kind, token, ok := strings.Cut(anchor, ":")
-	require.True(t, ok)
+	// An empty anchor is an UNASSIGNED device: the event carries no anchors at all.
+	var anchors []dmmodel.ResolvedAnchor
+	if anchor != "" {
+		kind, token, ok := strings.Cut(anchor, ":")
+		require.True(t, ok)
+		anchors = []dmmodel.ResolvedAnchor{{AnchorType: kind, AnchorToken: token, RelationshipId: 1}}
+	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
 		Source:            "mqtt",
 		SourceDeviceToken: device,
-		Anchors:           []dmmodel.ResolvedAnchor{{AnchorType: kind, AnchorToken: token, RelationshipId: 1}},
+		Anchors:           anchors,
 		OccurredTime:      now,
 		ProcessedTime:     now,
 		EventType:         esmodel.Measurement,
@@ -148,12 +153,17 @@ func TestAScopedSubscriberReceivesOnlyItsCustomersReadings(t *testing.T) {
 	// A GROUP that happens to share the customer's token is a different anchor: the kind
 	// is part of what is compared, not decoration.
 	f.publishReading(t, "shared-device", "group:acme", "group-reading", "3")
+	// An UNASSIGNED device's reading carries no anchors and belongs to no customer: it
+	// matches no scope, as its stored rows match none. A filter that read "no anchors" as
+	// "nobody to hide it from" would hand every unassigned device to every customer.
+	f.publishReading(t, "unassigned-device", "", "unanchored-reading", "4")
 	f.publishReading(t, "shared-device", "customer:acme", "acme-reading", "1")
 
 	assert.Equal(t, "acme-reading", nextName(t, scoped),
-		"Acme's subscriber must receive Acme's reading and must not have received Globex's or group:acme's first")
+		"Acme's subscriber must receive Acme's reading and must not have received Globex's, group:acme's or the unanchored one first")
 	assert.Equal(t, "globex-reading", nextName(t, unscoped), "control: the unscoped subscriber sees Globex's reading")
 	assert.Equal(t, "group-reading", nextName(t, unscoped), "control: ...then the group's")
+	assert.Equal(t, "unanchored-reading", nextName(t, unscoped), "control: ...then the unassigned device's")
 	assert.Equal(t, "acme-reading", nextName(t, unscoped), "control: ...and then Acme's")
 }
 

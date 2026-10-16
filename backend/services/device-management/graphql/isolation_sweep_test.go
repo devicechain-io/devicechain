@@ -22,6 +22,11 @@ func TestIsolationSweep(t *testing.T) {
 		Unscoped: f.operator(),
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},
+		// The alarm reads and the alarm stream name their originator as a (type, token)
+		// pair, and validate the state and severity filters before resolving it; with these
+		// filled, the all-arguments documents aim the token at globex's device rather than
+		// stopping at an unknown entity type or an invalid filter.
+		Literals: map[string]string{"originatorType": `"device"`, "state": `"ACTIVE"`, "severity": `"WARNING"`},
 	})
 	counts := map[string]int{}
 	for _, o := range out {
