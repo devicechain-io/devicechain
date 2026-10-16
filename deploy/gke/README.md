@@ -60,9 +60,13 @@ was not measured. See
 for how to check, and how to move one.
 
 On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and three 4-vCPU,
-8 GB service nodes, a default HA install accepted 6,000 events a second for 10
-minutes, twice, and stored every accepted event exactly once, checked event by event: none
-missing, none stored twice, none unexpected. Those nodes are this configuration's defaults, on its standard boot disks.
+8 GB service nodes, an HA install at its defaults sustained 10,000 events a second for 10
+minutes, on each of two development builds that went into v0.22.0, and stored every accepted
+event exactly once, checked event by event: none missing, none stored twice, none unexpected.
+In those runs the event-path services and the broker's stream leaders were held to one
+balanced placement across the three service nodes. With placement left to the scheduler, the
+v0.19.0 release candidate was measured the same way at 6,000 events a second. Those nodes are
+this configuration's defaults, on its standard boot disks.
 See [Measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput).
 
 The defaults use 24 vCPUs, and 28 with a load-generator node. The extra node GKE
@@ -131,8 +135,8 @@ after it, needs 1.9, and `dcctl` does not check the version before it starts.
    [upgrades it](https://cloud.google.com/kubernetes-engine/docs/concepts/node-pool-upgrade-strategies#surge)
    add 100 GB each, and a regional cluster (`location` set to a region) triples
    the boot disks, so check `DISKS_TOTAL_GB` too. A standard disk's speed grows
-   with its size, which is why the boot disks are not smaller. The measurement of
-   6,000 events a second above was taken on these standard boot disks. How long a
+   with its size, which is why the boot disks are not smaller. The measurements of
+   10,000 and 6,000 events a second above were taken on these standard boot disks. How long a
    new node takes to pull its images from one has not been measured.
 
    A second instance needs more SSD: each further instance claims 144 GB more,

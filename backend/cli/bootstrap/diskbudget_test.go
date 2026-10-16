@@ -510,12 +510,18 @@ func TestN2Shape(t *testing.T) {
 // README and the GKE guide quote it in. It records what was measured, on the cluster
 // it was measured on, so it does not follow the defaults: a default that moves makes
 // the GKE guide's "Those nodes are this configuration's defaults" false, and that is
-// the sentence to drop. It changes only when a new measurement replaces it, and a
-// rate above 6,000 is not one this sentence may claim.
+// the sentence to drop. It changes only when a new measurement replaces it. The
+// conditions are part of the quotation on purpose: the 10,000 runs held placement,
+// and a surface that quotes the rate without that sentence, or without the 6,000
+// measured with placement left to the scheduler, overstates what a default install
+// was shown to do. A rate above 10,000 is not one this sentence may claim.
 const measuredThroughput = "On Google Kubernetes Engine, on three 4-vCPU, 16 GB database nodes and " +
-	"three 4-vCPU, 8 GB service nodes, a default HA install accepted 6,000 events a second for 10 " +
-	"minutes, twice, and stored every accepted event exactly once, checked event by event: none " +
-	"missing, none stored twice, none unexpected."
+	"three 4-vCPU, 8 GB service nodes, an HA install at its defaults sustained 10,000 events a second " +
+	"for 10 minutes, on each of two development builds that went into v0.22.0, and stored every " +
+	"accepted event exactly once, checked event by event: none missing, none stored twice, none " +
+	"unexpected. In those runs the event-path services and the broker's stream leaders were held to " +
+	"one balanced placement across the three service nodes. With placement left to the scheduler, " +
+	"the v0.19.0 release candidate was measured the same way at 6,000 events a second."
 
 // The GKE guide describes the cluster its configuration creates: each pool's
 // machine type, size and node count, the vCPUs that adds up to against the quota,
