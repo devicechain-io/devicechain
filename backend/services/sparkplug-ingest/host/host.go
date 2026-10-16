@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -81,12 +82,6 @@ const (
 	// At the default window of 32 the queue normally holds at most 32. It is a channel of
 	// pointers, so the headroom costs 16 KiB per connection.
 	publishRetryDepth = 2 * messaging.MaxOrderedWindow
-	// reconcileProbeWindow is how long the failover reconciliation waits after
-	// rebirthing a tenant's asserted-active nodes before it declares the still-silent
-	// ones dead (ADR-067 SP4b). It must comfortably exceed a healthy node's
-	// rebirth→NBIRTH round-trip so a live-but-slow node is not falsely disconnected
-	// (and if one is, its later NBIRTH — a higher epoch — supersedes the timeout).
-	reconcileProbeWindow = 10 * time.Second
 	// reconcileQueryTimeout bounds the device-state read the reconciliation runs BEFORE
 	// subscribing (to floor the epoch generator). It caps how long a slow/absent
 	// device-state can stall connection setup — on timeout the floor+probe are skipped
@@ -183,7 +178,28 @@ type Metrics struct {
 	// by reason (SkipNonNumeric, SkipNull, SkipUnnamed). Without it a node publishing booleans
 	// or strings looks identical to one publishing nothing. May be nil (decode-only tests).
 	SamplesSkipped *prometheus.CounterVec
+	// PresenceProbes counts liveness probes that reached a verdict, labelled by what
+	// triggered them (ProbeTriggerConnect, ProbeTriggerPeriodic). A probe that aborted
+	// because its session ended is not counted: it decided nothing.
+	//
+	// 🔑 THE PERIODIC SERIES IS THE POINT. Without it, a Host whose periodic probe never
+	// runs — a loop that was never started, a reconciler that is nil — is indistinguishable
+	// from a healthy fleet in which every device answers: both emit no disconnects. The same
+	// reason presence_tap_off exists for the platform broker's tap.
+	PresenceProbes *prometheus.CounterVec
+	// PresenceProbeDisconnects counts devices a probe declared DISCONNECTED for not
+	// answering a rebirth, by the same trigger label. In a healthy fleet it is near zero; a
+	// standing periodic rate means death certificates are being lost.
+	PresenceProbeDisconnects *prometheus.CounterVec
 }
+
+// Probe trigger labels for Metrics.PresenceProbes and Metrics.PresenceProbeDisconnects.
+const (
+	// ProbeTriggerConnect is the failover reconciliation probe run once per session.
+	ProbeTriggerConnect = "connect"
+	// ProbeTriggerPeriodic is the liveness probe run every probeInterval on a steady session.
+	ProbeTriggerPeriodic = "periodic"
+)
 
 // SampleIngester turns an accepted message's samples into durable telemetry
 // (resolve/register the device, then emit) and its presence transitions into durable
@@ -250,17 +266,30 @@ type Client struct {
 	limiter SampleLimiter
 
 	// reconciler reads the device-state presence projection to repopulate presence on
-	// (re)connect (ADR-067 SP4b failover reconciliation). Nil disables reconciliation
-	// (decode-only tests, or a build without the device-state coordinate); shared across
-	// connections. reconciling guards against overlapping reconcile goroutines when the
-	// connection flaps. seen (guarded by seenMu) records the external ids observed since
-	// the current reconcile began, so the probe can tell a live node from a dead one.
+	// (re)connect (ADR-067 SP4b failover reconciliation) and on every periodic liveness
+	// probe. Nil disables both (decode-only tests, or a build without the device-state
+	// coordinate); shared across connections. seen (guarded by seenMu) records when each
+	// external id last produced traffic on the current session, so a probe can tell a live
+	// node from a dead one and the periodic probe can pick out the devices that have gone
+	// quiet. It is reset at connect, so an id's presence in the map means "heard from on
+	// THIS session".
 	reconciler reconcileSource
 	seenMu     sync.Mutex
-	seen       map[string]struct{}
+	seen       map[string]time.Time
 	// probeWindow is how long the reconcile probe waits before declaring silent nodes
-	// dead; defaulted to reconcileProbeWindow, overridable in tests.
+	// dead (config.Presence.ProbeWindowSeconds, ADR-067 SP4b). It must comfortably exceed
+	// a healthy node's rebirth→births round trip so a live-but-slow node is not falsely
+	// disconnected (and if one is, its later births — higher epochs — supersede the
+	// timeout). Defaulted by NewClient, set by the service before Connect.
 	probeWindow time.Duration
+	// probeInterval is how often the periodic liveness probe re-checks the asserted set on
+	// a steadily connected session (config.Presence.ProbeSeconds). Defaulted to the
+	// platform default by NewClient; the service sets the configured one before Connect.
+	probeInterval time.Duration
+	// probing is set while a probe (connect or periodic) is between its rebirths and its
+	// verdict, so a periodic tick that lands inside another probe's window is skipped
+	// rather than rebirthing the same nodes a second time.
+	probing atomic.Bool
 	// rebirthPub publishes a rebirth NCMD directly and reports whether it reached the
 	// wire; defaulted to publishRebirth, overridable in tests so the probe is drivable
 	// without a live broker. The reconcile probe uses it (off the receive goroutine, so
@@ -300,7 +329,13 @@ type Client struct {
 	wg        sync.WaitGroup
 	// probeWG tracks in-flight reconcile probes so Stop drains them (they abort promptly
 	// on the session context, so this just closes the goroutine-leak-on-shutdown gap).
+	// Only ONE-SHOT probes: a test waits on it to know the connect probe has delivered its
+	// verdict, which is why the session-long periodic loop is tracked separately.
 	probeWG sync.WaitGroup
+	// loopWG tracks each session's periodic liveness probe loop (presenceProbeLoop), which
+	// lives as long as its session context and runs its probes inline. Stop drains it after
+	// probeWG; a session's end cancels it.
+	loopWG sync.WaitGroup
 
 	// publisher takes the publications the receive path prepares. It is built once for the
 	// life of the process and kept across leadership terms (a Stop drains it with Settle and
@@ -398,7 +433,8 @@ func NewClient(source config.SparkplugSource, broker Broker, ingester SampleInge
 		subscribe:     messaging.SubscribeMqttConfirmed,
 		backoffSleep:  sleep,
 		rebirthCh:     make(chan nodeKey, rebirthQueueDepth),
-		probeWindow:   reconcileProbeWindow,
+		probeWindow:   config.DefaultPresenceProbeWindowSeconds * time.Second,
+		probeInterval: config.DefaultPresenceProbeSeconds * time.Second,
 		settleTimeout: publishSettleTimeout,
 	}
 	c.sessions = NewSessionTracker(now, defaultRebirthBackoff, c.enqueueRebirth)
@@ -432,6 +468,41 @@ func (c *Client) SampleLimiter() SampleLimiter {
 // time before Connect; a nil reconciler (the default) disables reconciliation.
 func (c *Client) SetReconciler(r reconcileSource) {
 	c.reconciler = r
+}
+
+// SetPresenceProbeInterval sets how often the periodic liveness probe re-checks the
+// asserted set on a steady session (config.Presence.ProbeInterval). Set at wiring time
+// before Connect; a non-positive value is refused by panic rather than read as "off",
+// because the configuration layer has already defaulted and floored it and a zero here can
+// only be a wiring slip — the one that would reopen the hole the probe closes.
+func (c *Client) SetPresenceProbeInterval(d time.Duration) {
+	if d <= 0 {
+		panic("host.SetPresenceProbeInterval: the interval must be positive (config.Presence.ProbeInterval never yields otherwise)")
+	}
+	c.probeInterval = d
+}
+
+// PresenceProbeInterval returns the periodic probe's interval, so the SERVICE's wiring of
+// the setting can be gated, for the same reason as Metrics.
+func (c *Client) PresenceProbeInterval() time.Duration {
+	return c.probeInterval
+}
+
+// SetPresenceProbeWindow sets how long a probe (connect or periodic) waits for a node it
+// asked to rebirth to answer (config.Presence.ProbeWindow). Set at wiring time before
+// Connect; a non-positive value panics for the same reason as SetPresenceProbeInterval —
+// a zero window declares every asked node dead before it can answer.
+func (c *Client) SetPresenceProbeWindow(d time.Duration) {
+	if d <= 0 {
+		panic("host.SetPresenceProbeWindow: the window must be positive (config.Presence.ProbeWindow never yields otherwise)")
+	}
+	c.probeWindow = d
+}
+
+// PresenceProbeWindow returns the probe's answer window, so the service's wiring of the
+// setting can be gated.
+func (c *Client) PresenceProbeWindow() time.Duration {
+	return c.probeWindow
 }
 
 // SetPublisher binds the publisher the receive path submits its prepared publications to. It
@@ -714,15 +785,188 @@ func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, ses
 
 	// Phase 2 (after ONLINE): probe the asserted set for liveness, under THIS session's
 	// context so a broker drop mid-probe aborts it before it can declare a mass death.
-	// Tracked in probeWG so Stop drains it. onConnected only runs while runLoop is alive,
-	// so this Add never races Stop's post-runLoop probeWG.Wait.
+	// Tracked in probeWG so Stop drains it; goWhileLive is what keeps that Add from racing
+	// Stop's probeWG.Wait (onConnected runs on paho's goroutine and can outlive runLoop).
+	// The zero `since` counts
+	// anything heard on this session (the seen set was reset above) as alive.
 	if len(asserted) > 0 {
-		c.probeWG.Add(1)
-		go func() {
-			defer c.probeWG.Done()
-			c.reconcileProbe(sessionCtx, asserted)
-		}()
+		c.goWhileLive(sessionCtx, &c.probeWG, func() {
+			c.reconcileProbe(sessionCtx, asserted, time.Time{}, ProbeTriggerConnect)
+		})
 	}
+
+	// And for the rest of the session: the periodic liveness probe, under the same context
+	// but its own WaitGroup (it lives as long as the session, where probeWG holds one-shot
+	// work). It is launched whether or not anything is asserted NOW — a device becomes
+	// asserted the first time it births, which can be minutes after this connect — and
+	// only when there is a projection to read.
+	if c.reconciler != nil {
+		c.goWhileLive(sessionCtx, &c.loopWG, func() { c.presenceProbeLoop(sessionCtx) })
+	}
+}
+
+// goWhileLive starts fn on its own goroutine, tracked in wg, unless the session has
+// already ended, and reports whether it did.
+//
+// 🔴 onConnected RUNS ON PAHO'S GOROUTINE, NOT runLoop's, so it can still be finishing
+// after Stop has cancelled the term and runLoop has returned — and then Stop is in, or
+// about to be in, wg.Wait. A WaitGroup Add from zero racing a Wait is a misuse the
+// runtime may panic on, and an Add after the Wait returned is a goroutine Stop never
+// drained. The check and the Add happen under mu, and Stop cancels the term (which
+// cancels every session context synchronously) under the same mu, so either the Add
+// lands before the cancel — and therefore before Stop's Wait — or the session is seen
+// ended and nothing starts.
+func (c *Client) goWhileLive(sessionCtx context.Context, wg *sync.WaitGroup, fn func()) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if sessionCtx.Err() != nil {
+		return false
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		fn()
+	}()
+	return true
+}
+
+// presenceProbeLoop closes the half of the missed-death hole the connect probe cannot
+// reach: a death certificate lost while the Host stays steadily connected. The connect
+// probe runs once per session, so a Host that never reconnects never re-checks, and a
+// device whose NDEATH the broker never delivered reads online for as long as the session
+// lasts (ADR-067 SP4b closed the no-host window; this closes the steady one).
+//
+// Every probeInterval each node with an asserted-active device on this source gets one
+// look, and only the devices that have produced NO traffic on this session within the
+// last interval are asked about. That selection is what keeps the cost bounded: a device
+// heard from inside the interval is alive by its own evidence and is neither rebirthed nor
+// judged. The interval is cut into slots (probeSlots) and each node is asked in its own
+// slot (slotOf), so the rebirths of a quiet fleet are spread across the interval instead
+// of arriving on one tick; see probeTick.
+//
+// 🔴 IT JUDGES AGAINST ITS OWN START, NOT THE SESSION'S. A device that was heard from an
+// hour ago and not since is exactly the one being asked about, so "seen at any time this
+// session" would never declare it. The probe records `since` BEFORE it sends its rebirths,
+// so only an answer to this probe (or any traffic after it began) counts.
+//
+// It reads the projection through readAssertedAndFloor, which also raises the epoch floor.
+// That is harmless — the floor only ever moves up — and it keeps the two readers of the
+// asserted set the same code. A tick that lands while the CONNECT probe is still in its
+// window stands down before it reads anything, and its slot runs on the next tick instead:
+// rebirthing the same nodes twice inside one window buys nothing, and the in-flight probe
+// will deliver the verdict. The connect probe
+// is the only probe a tick can overlap — this loop runs its own probes inline, so a tick
+// cannot arrive while one of them is in its window.
+//
+// It runs under the session context, so it ends with the session, and a tick's probe
+// aborts without emitting if the session ends mid-window, like the connect probe.
+func (c *Client) presenceProbeLoop(ctx context.Context) {
+	round := &probeRound{slots: probeSlots(c.probeInterval, c.probeWindow)}
+	ticker := time.NewTicker(c.probeInterval / time.Duration(round.slots))
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if c.probing.Load() {
+			// The slot is not consumed: it runs on the next tick, late rather than skipped.
+			log.Debug().Str("tenant", c.tenant).Msg("Deferring a periodic presence probe slot: another probe is still in its window.")
+			continue
+		}
+		c.probeTick(ctx, round)
+	}
+}
+
+// probeRound is the periodic probe's position in its rotation: which slot runs next, how
+// many there are, and the asserted set read at the start of the current round.
+type probeRound struct {
+	slot     int
+	slots    int
+	asserted []AssertedDevice
+}
+
+// probeSlots is how many slots one interval is divided into: as many as fit with each
+// slot at least twice the answer window, so a slot's probe (its rebirths, then its window)
+// is over before the next slot is due. One slot when the window is too long for more.
+func probeSlots(interval, window time.Duration) int {
+	if window <= 0 {
+		return 1
+	}
+	if n := int(interval / (2 * window)); n > 1 {
+		return n
+	}
+	return 1
+}
+
+// slotOf is a node's slot in the rotation: a hash of its group/node identity, so a node
+// is always asked at the same point of every round and the fleet's rebirths are spread
+// evenly across the interval rather than all landing on one tick.
+func slotOf(key nodeKey, slots int) int {
+	if slots <= 1 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(nodeExternalId(key)))
+	return int(h.Sum32() % uint32(slots))
+}
+
+// probeTick runs one slot of the periodic probe.
+//
+// 🔑 THE ROTATION SPREADS THE COST, NOT THE RULE. Every node is still judged once per
+// interval, against the same silence cutoff (no traffic within the last interval) and
+// with its own full answer window: a slot asks only its own nodes, waits the window, and
+// delivers their verdict before the next slot starts. What changes is that a fleet's
+// rebirths arrive a slot at a time instead of all at once.
+//
+// The asserted set is read at the start of each round (slot 0) and reused for the round's
+// slots, so device-state is queried once per interval, as before. A device asserted
+// mid-round waits for the next round. A failed read consumes nothing — the round retries
+// on the next tick — and counts nothing; every slot that runs counts as a verdict, even one
+// with nothing to ask.
+func (c *Client) probeTick(ctx context.Context, r *probeRound) {
+	if r.slot == 0 {
+		asserted, read := c.readAssertedAndFloor(ctx)
+		if !read {
+			return // decided nothing, so counts nothing: a flat series is the right alarm
+		}
+		r.asserted = asserted
+	}
+	slot := r.slot
+	r.slot = (r.slot + 1) % r.slots
+
+	now := c.now()
+	mine := make([]AssertedDevice, 0)
+	for _, d := range r.asserted {
+		if key, ok := parseReconcileNodeKey(d.ExternalId); ok && slotOf(key, r.slots) == slot {
+			mine = append(mine, d)
+		}
+	}
+	silent := c.silentDevices(mine, now.Add(-c.probeInterval))
+	if len(silent) == 0 {
+		if c.metrics.PresenceProbes != nil {
+			c.metrics.PresenceProbes.WithLabelValues(ProbeTriggerPeriodic).Inc()
+		}
+		return
+	}
+	c.reconcileProbe(ctx, silent, now, ProbeTriggerPeriodic)
+}
+
+// silentDevices returns the devices among asserted that have NOT produced traffic on this
+// session at or after cutoff: never heard from on this session, or last heard from before
+// it. These are the ones a periodic probe asks about.
+func (c *Client) silentDevices(asserted []AssertedDevice, cutoff time.Time) []AssertedDevice {
+	c.seenMu.Lock()
+	defer c.seenMu.Unlock()
+	silent := make([]AssertedDevice, 0)
+	for _, d := range asserted {
+		if last, ok := c.seen[d.ExternalId]; ok && !last.Before(cutoff) {
+			continue
+		}
+		silent = append(silent, d)
+	}
+	return silent
 }
 
 // establishEpochFloor reads the device-state projection for this source's asserted-active
@@ -733,21 +977,30 @@ func (c *Client) onConnected(sessionCtx context.Context, client mqtt.Client, ses
 // (re)connect, never a connection blocker. The read is bounded so a slow/absent
 // device-state cannot stall connection setup.
 func (c *Client) establishEpochFloor(ctx context.Context) []AssertedDevice {
+	devices, _ := c.readAssertedAndFloor(ctx)
+	return devices
+}
+
+// readAssertedAndFloor is establishEpochFloor that also reports whether the projection
+// was READ: false when there is no reconciler or the read failed, true for a successful
+// read, empty or not. The periodic probe needs the difference — a tick that read an empty
+// set reached a verdict (nothing to ask), while one that could not read decided nothing.
+func (c *Client) readAssertedAndFloor(ctx context.Context) ([]AssertedDevice, bool) {
 	if c.reconciler == nil {
-		return nil
+		return nil, false
 	}
 	qctx, cancel := context.WithTimeout(ctx, reconcileQueryTimeout)
 	devices, maxSession, err := c.reconciler.AssertedActive(qctx, c.tenant, c.policy.Source)
 	cancel()
 	if err != nil {
-		log.Warn().Err(err).Str("tenant", c.tenant).Msg("Presence reconciliation could not read device-state; skipping the floor + probe this cycle (retries on the next reconnect).")
-		return nil
+		log.Warn().Err(err).Str("tenant", c.tenant).Msg("Presence reconciliation could not read device-state; skipping the floor + probe this cycle (the periodic probe retries on its next tick, the connect probe on the next reconnect).")
+		return nil, false
 	}
 	if len(devices) == 0 {
-		return nil
+		return nil, true
 	}
 	c.sessions.SetEpochFloor(maxSession + 1)
-	return devices
+	return devices, true
 }
 
 // onMessage decodes and logs one received Sparkplug message. A parse/decode
@@ -776,8 +1029,17 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 	// probe (ADR-067 SP4b) knows the node/device is alive and does not force it
 	// DISCONNECTED. Any node/device message counts — a DEATH included, since the node
 	// answered and its own signal already drove the projection.
+	//
+	// A device's message also proves its NODE alive: in Sparkplug a device has no
+	// connection of its own, and everything it says is published over its edge node's
+	// MQTT session. Without this a node whose devices report constantly but which
+	// publishes no NDATA of its own — the common shape — reads as silent to every
+	// periodic probe and is rebirthed every other interval for nothing.
 	if !rec.Topic.IsState {
 		c.markSeen(SparkplugExternalId(rec.Topic))
+		if rec.Topic.IsDevice() {
+			c.markSeen(nodeExternalId(nodeKey{rec.Topic.GroupID, rec.Topic.EdgeNodeID}))
+		}
 	}
 	// Advance the SP2 session machine; it may command the node to rebirth (fired
 	// via enqueueRebirth, outside its lock) and returns the numeric samples the
@@ -793,7 +1055,9 @@ func (c *Client) onMessage(_ mqtt.Client, msg mqtt.Message) {
 		// leader handover, the reconcile probe) re-sends every node's whole metric set at
 		// once — shedding a birth's tail would lose those values until they next change,
 		// with no redelivery to bring them back. A birth is bounded by the session machine
-		// instead: once per bdSeq, and a requested rebirth is backoff-gated.
+		// instead: once per bdSeq, and a requested rebirth is backoff-gated — except the
+		// liveness probe's, which is bounded by the probe interval (a quiet node at most
+		// every other presence.probeSeconds).
 		if len(samples) > 0 && isData(rec.Topic.MessageType) {
 			samples = c.admitSamples(samples)
 		}
@@ -1060,9 +1324,19 @@ func (c *Client) drainPublishes() {
 // It fails safe: it runs under this session's context, so a broker drop mid-window aborts
 // it WITHOUT emitting (a probe gone deaf must never declare a mass death); and it only
 // force-disconnects a node it actually asked to speak, so a dropped rebirth never reads
-// as a death. The seen set was reset in onConnected, so it already holds any pre-probe
-// re-birth.
-func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice) {
+// as a death.
+//
+// `since` is the instant from which traffic counts as an answer. The connect probe passes
+// the zero time: the seen set was reset in onConnected, so anything heard on this session
+// — including a re-birth that arrived before the probe — proves the device alive. The
+// periodic probe passes its own start, because the device it is asking about may well
+// have been heard from earlier in the session; see presenceProbeLoop. `trigger` labels the
+// probe's metrics.
+func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice, since time.Time, trigger string) {
+	// One probe at a time: a periodic tick checks this before reading the projection.
+	c.probing.Store(true)
+	defer c.probing.Store(false)
+
 	// Mint the one epoch the timeout-DISCONNECTs will carry (ordering guarantee above).
 	staleEpoch := c.sessions.MintEpoch()
 
@@ -1106,7 +1380,7 @@ func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice) {
 		if !ok || !rebirthed[key] {
 			continue // not a Sparkplug identity, or its node was never rebirthed on this session
 		}
-		if c.sawExternalId(d.ExternalId) {
+		if c.seenSince(d.ExternalId, since) {
 			continue // produced traffic → alive (or drove its own DEATH); leave it
 		}
 		stale = append(stale, PresenceEvent{
@@ -1117,38 +1391,46 @@ func (c *Client) reconcileProbe(ctx context.Context, devices []AssertedDevice) {
 			OccurredAt: now,
 		})
 	}
+	// The verdict is in: count the probe, and what it declared.
+	if c.metrics.PresenceProbes != nil {
+		c.metrics.PresenceProbes.WithLabelValues(trigger).Inc()
+	}
 	if len(stale) > 0 {
-		log.Warn().Str("tenant", c.tenant).Int("disconnected", len(stale)).
-			Msg("Presence reconciliation declaring unresponsive asserted devices DISCONNECTED (missed death during a no-host window).")
+		if c.metrics.PresenceProbeDisconnects != nil {
+			c.metrics.PresenceProbeDisconnects.WithLabelValues(trigger).Add(float64(len(stale)))
+		}
+		log.Warn().Str("tenant", c.tenant).Str("trigger", trigger).Int("disconnected", len(stale)).
+			Msg("Presence probe declaring unresponsive asserted devices DISCONNECTED (asked to rebirth, no answer inside the window).")
 		c.ingestPresence(stale)
 	}
 }
 
-// resetSeen begins a fresh reconciliation window: it clears the observed-id set so
-// only traffic from here on counts toward liveness.
+// resetSeen begins a fresh session's record: it clears the last-heard map so only
+// traffic from here on counts toward liveness.
 func (c *Client) resetSeen() {
 	c.seenMu.Lock()
-	c.seen = make(map[string]struct{})
+	c.seen = make(map[string]time.Time)
 	c.seenMu.Unlock()
 }
 
-// markSeen records that an external id produced traffic during the current
-// reconciliation window (no-op when no reconcile has begun — seen is nil).
+// markSeen records that an external id produced traffic now, on the current session
+// (no-op before the first session has begun — seen is nil).
 func (c *Client) markSeen(externalId string) {
+	now := c.now()
 	c.seenMu.Lock()
 	if c.seen != nil {
-		c.seen[externalId] = struct{}{}
+		c.seen[externalId] = now
 	}
 	c.seenMu.Unlock()
 }
 
-// sawExternalId reports whether an external id has produced traffic since the current
-// reconciliation window began.
-func (c *Client) sawExternalId(externalId string) bool {
+// seenSince reports whether an external id has produced traffic on this session at or
+// after since. The zero since asks "at any time this session".
+func (c *Client) seenSince(externalId string, since time.Time) bool {
 	c.seenMu.Lock()
 	defer c.seenMu.Unlock()
-	_, ok := c.seen[externalId]
-	return ok
+	last, ok := c.seen[externalId]
+	return ok && !last.Before(since)
 }
 
 // parseReconcileNodeKey extracts the edge node ({group}, {node}) from a device's
@@ -1321,6 +1603,9 @@ func (c *Client) Stop() {
 	// Drain any in-flight reconcile probe. runLoop's exit cancelled the session context,
 	// so a probe in its window aborts promptly; this just makes shutdown wait for it.
 	c.probeWG.Wait()
+	// And the periodic loop, which the same cancellation ended (a probe it was running
+	// aborted with it).
+	c.loopWG.Wait()
 	// Last, and bounded: wait for the publications this term submitted to be stored. Stop
 	// is what a leadership term ends with before it releases the lease, and "nothing of
 	// this term is published after the next leader has begun" holds only once the writer has

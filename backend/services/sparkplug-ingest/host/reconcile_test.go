@@ -108,7 +108,7 @@ func TestReconcileProbeDisconnectsOnlyRebirthedUnseen(t *testing.T) {
 	}
 	c.resetSeen()
 	c.markSeen("plant-a/alive")
-	c.reconcileProbe(context.Background(), devices)
+	c.reconcileProbe(context.Background(), devices, time.Time{}, ProbeTriggerConnect)
 
 	assert.ElementsMatch(t, []nodeKey{{group: "plant-a", node: "alive"}, {group: "plant-a", node: "dead"}}, *rebirthed,
 		"both nodes are rebirthed before the probe")
@@ -131,7 +131,7 @@ func TestReconcileProbeSkipsUnrebirthedNodes(t *testing.T) {
 	c.rebirthPub = func(_, _ string) bool { return false }
 
 	c.resetSeen()
-	c.reconcileProbe(context.Background(), []AssertedDevice{{ExternalId: "plant-a/n1", SessionId: 10}})
+	c.reconcileProbe(context.Background(), []AssertedDevice{{ExternalId: "plant-a/n1", SessionId: 10}}, time.Time{}, ProbeTriggerConnect)
 	assert.Equal(t, 0, fake.presenceCount(), "a node whose rebirth never went out must not be declared dead")
 }
 
@@ -150,7 +150,7 @@ func TestReconcileProbeAbortsOnConnectionLoss(t *testing.T) {
 	c.rebirthPub = func(_, _ string) bool { cancel(); return true } // connection drops mid-reconcile
 
 	c.resetSeen()
-	c.reconcileProbe(ctx, []AssertedDevice{{ExternalId: "plant-a/dead", SessionId: 10}})
+	c.reconcileProbe(ctx, []AssertedDevice{{ExternalId: "plant-a/dead", SessionId: 10}}, time.Time{}, ProbeTriggerConnect)
 	assert.Equal(t, 0, fake.presenceCount(), "a probe whose connection dropped must declare nobody dead")
 }
 
@@ -158,6 +158,6 @@ func TestReconcileProbeEmptyIsNoOp(t *testing.T) {
 	fake := &fakeIngester{}
 	c, _ := reconcileClient(fake, &fakeReconciler{})
 	c.resetSeen()
-	c.reconcileProbe(context.Background(), nil)
+	c.reconcileProbe(context.Background(), nil, time.Time{}, ProbeTriggerConnect)
 	assert.Equal(t, 0, fake.presenceCount())
 }
