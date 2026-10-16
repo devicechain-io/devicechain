@@ -340,6 +340,7 @@ func wireDeviceManagementGates() {
 	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "command-delivery", []string{string(auth.DeviceRead)})
 	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
 	Api.EnqueueValidator = verify.NewEnqueueValidator(client, url)
+	Api.DeviceAnchors = verify.NewDeviceAnchorLookup(client, url)
 	Api.BatchValidator = verify.NewBatchValidator(client, url)
 	Api.GroupTargetResolver = verify.NewGroupResolver(client, url)
 	// The maintenance-window gate shares the validator's coordinates and its fate: with no

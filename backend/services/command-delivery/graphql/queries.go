@@ -13,10 +13,16 @@ import (
 )
 
 // CommandsById finds commands by unique id.
+//
+// The command reads below admit members limited to part of the tenant (ADR-081). Nothing in
+// them applies the scope by hand: every row comes through gorm on Command, whose scope rule
+// (Command.ScopedBy) core/rdb adds beside the tenant predicate. A member therefore sees the
+// commands stamped with an anchor in its scope — the commands sent to its devices while it
+// owned them — and an id or token naming any other command is simply not returned.
 func (r *SchemaResolver) CommandsById(ctx context.Context, args struct {
 	Ids []string
 }) ([]*CommandResolver, error) {
-	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.CommandRead); err != nil {
 		return nil, err
 	}
 
@@ -45,7 +51,7 @@ func (r *SchemaResolver) CommandsById(ctx context.Context, args struct {
 func (r *SchemaResolver) CommandsByToken(ctx context.Context, args struct {
 	Tokens []string
 }) ([]*CommandResolver, error) {
-	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.CommandRead); err != nil {
 		return nil, err
 	}
 
@@ -121,7 +127,7 @@ func (r *SchemaResolver) DrainableCommands(ctx context.Context, args struct {
 func (r *SchemaResolver) Commands(ctx context.Context, args struct {
 	Criteria model.CommandSearchCriteria
 }) (*CommandSearchResultsResolver, error) {
-	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.CommandRead); err != nil {
 		return nil, err
 	}
 
@@ -139,11 +145,12 @@ func (r *SchemaResolver) Commands(ctx context.Context, args struct {
 }
 
 // DeviceCommandHold reports whether a device is disabled and how many commands the platform is
-// holding for it on that account.
+// holding for it on that account. A member limited to part of the tenant is answered only
+// for a device it owns now; any other answers NOT_FOUND (see model.Api.DeviceCommandHold).
 func (r *SchemaResolver) DeviceCommandHold(ctx context.Context, args struct {
 	DeviceToken string
 }) (*DeviceCommandHoldResolver, error) {
-	if err := auth.Authorize(ctx, auth.CommandRead); err != nil {
+	if _, err := auth.AuthorizeScoped(ctx, auth.CommandRead); err != nil {
 		return nil, err
 	}
 

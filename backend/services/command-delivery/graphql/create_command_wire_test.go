@@ -27,10 +27,13 @@ import (
 // caller uses.
 
 // stubEnqueueValidator answers the enqueue gate with a canned verdict or failure.
-type stubEnqueueValidator struct{ err error }
+type stubEnqueueValidator struct {
+	err     error
+	anchors []string
+}
 
-func (s stubEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) error {
-	return s.err
+func (s stubEnqueueValidator) ValidateEnqueue(context.Context, string, string, []byte) ([]string, error) {
+	return s.anchors, s.err
 }
 
 const createCommandMutation = `mutation($request: CommandCreateRequest!) {

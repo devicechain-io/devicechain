@@ -251,6 +251,18 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			"%d of %d devices cannot receive this command; re-issue with allowPartial to "+
 				"command the rest", len(refusals), len(targets.deviceTokens))
 	}
+	// The stamp every admitted command is written with (ADR-081): each device's anchors as
+	// device-management reports them now, so a member limited to part of the tenant sees the
+	// commands this batch sent to the devices it owns. Read after the vocabulary and window
+	// gates so a refused device costs nothing, and before the transaction so the advisory
+	// lock is not held across a network call. A batch whose stamps cannot be read fails
+	// closed like one whose devices cannot be validated: written unstamped, its commands
+	// would be invisible to every customer who owns one of its devices.
+	stamps, err := api.batchStamps(ctx, admissible)
+	if err != nil {
+		return nil, err
+	}
+
 	// Past the whole-batch check, every refusal here belongs to a batch that is going
 	// ahead without those devices, so each one is a device that will not get the command
 	// and is counted as such. Deliberately after the return above: a batch refused whole
@@ -398,7 +410,7 @@ func (api *Api) decideCommandBatch(ctx context.Context, request *CommandBatchCre
 			conflicted = true
 			return nil
 		}
-		return insertBatchCommands(tx, created, admitted, payload, expiresAt, holds)
+		return insertBatchCommands(tx, created, admitted, payload, expiresAt, holds, stamps)
 	})
 	if verdict != nil {
 		return nil, verdict
@@ -687,7 +699,7 @@ func lockTenantForBatch(ctx context.Context, tx *gorm.DB) error {
 // different pairs can collide onto one string) and two full-length tokens exceed the
 // 128-character bound.
 func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string,
-	payload []byte, expiresAt sql.NullTime, holds map[string]DispatchHold) error {
+	payload []byte, expiresAt sql.NullTime, holds map[string]DispatchHold, stamps map[string][]string) error {
 	if len(deviceTokens) == 0 {
 		return nil
 	}
@@ -730,6 +742,9 @@ func insertBatchCommands(tx *gorm.DB, batch *CommandBatch, deviceTokens []string
 		cmd.Token = batchCommandToken(batch.ID, i)
 		if hold, held := holds[deviceToken]; held {
 			stampHold(cmd, hold)
+		}
+		if anchors, stamped := stamps[deviceToken]; stamped {
+			cmd.ScopeAnchors = rdb.Anchors(anchors)
 		}
 		if len(payload) > 0 {
 			raw := datatypes.JSON(payload)

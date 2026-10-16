@@ -58,7 +58,11 @@ func (r *CreateCommandResultResolver) Rejection() *CommandEnqueueRejectionResolv
 func (r *SchemaResolver) CreateCommand(ctx context.Context, args struct {
 	Request model.CommandCreateRequest
 }) (*CreateCommandResultResolver, error) {
-	if err := auth.Authorize(ctx, auth.CommandWrite); err != nil {
+	// A member limited to part of the tenant (ADR-081) may enqueue to a device it owns now.
+	// The model decides that from device-management's answer before relaying any verdict,
+	// answers any other device as one that does not exist (DEVICE_NOT_FOUND), and stamps the
+	// row so core/rdb's create check holds it to the member's scope a second time.
+	if _, err := auth.AuthorizeScoped(ctx, auth.CommandWrite); err != nil {
 		return nil, err
 	}
 

@@ -145,8 +145,13 @@ func payloadBytes(payload *string) []byte {
 //
 // Returns *EnqueueRejected when the command is invalid, a plain error when the
 // check could not be performed (which the caller must fail closed on).
+//
+// It also returns the device's scope anchors (ADR-081), the stamp the command is written
+// with: nil when the device does not exist, empty when nothing owns it. They are returned
+// beside a rejection as well, because CreateCommand decides a scoped member's right to
+// the device before it relays anything the gate said about it.
 type CommandEnqueueValidator interface {
-	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) error
+	ValidateEnqueue(ctx context.Context, deviceToken string, commandKey string, payload []byte) (anchors []string, err error)
 }
 
 // HeldCommandCeilingResolver reads a tenant's RESOLVED ceiling on withheld (HELD)
@@ -179,6 +184,10 @@ type Api struct {
 	// EnqueueValidator, when set, gates CreateCommand on the target device existing
 	// and on the command matching the device profile's published vocabulary.
 	EnqueueValidator CommandEnqueueValidator
+	// DeviceAnchors, when set, answers which devices a member limited to part of the tenant
+	// owns (ADR-081). Nil refuses every scoped read that needs it — there is no other way to
+	// tell — and changes nothing for an unscoped caller.
+	DeviceAnchors DeviceAnchorLookup
 	// BatchValidator is EnqueueValidator's fleet counterpart, gating CreateCommandBatch.
 	// It is a separate interface rather than a method on the same one because the two
 	// answer differently shaped questions — one verdict versus a refusal list — and
@@ -409,11 +418,26 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// so the tenant API client learns neither the in-cluster topology nor a verdict
 	// nobody actually reached. Were these collapsed, an outage would read to the
 	// client as "your command is invalid" and send them chasing a correct payload.
+	//
+	// 🔴 FOR A MEMBER LIMITED TO PART OF THE TENANT (ADR-081) THE DEVICE'S OWNERSHIP IS
+	// DECIDED FIRST, BEFORE ANY VERDICT IS RELAYED. A device outside the member's scope is
+	// answered exactly as a device that does not exist — same code, same words — whatever
+	// the gate said about it: relaying "not in vocabulary" or "disabled" for another
+	// customer's device would confirm it exists and describe it. Ownership is CURRENT
+	// ownership, read from device-management on this request, not whatever was true when
+	// some earlier command was stamped.
+	scope, _ := auth.ScopeFromContext(ctx)
+	var anchors []string
 	if api.EnqueueValidator != nil {
-		err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
+		owned, err := api.EnqueueValidator.ValidateEnqueue(ctx, request.DeviceToken, request.Name, payloadBytes(request.Payload))
+		anchors = owned
 		var verdict *EnqueueRejected
+		isVerdict := errors.As(err, &verdict)
+		if (err == nil || isVerdict) && !inScope(scope, owned) {
+			return nil, rejected(RejectDeviceNotFound, "cannot enqueue command: device %q does not exist", request.DeviceToken)
+		}
 		switch {
-		case errors.As(err, &verdict):
+		case isVerdict:
 			// Relay the OWNER's code rather than re-deriving one here: this service
 			// does not know why the vocabulary said no, and a second classification
 			// built from the reason string would be a parse of prose. An uncoded
@@ -429,6 +453,11 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 				Msg("Command enqueue validation failed; refusing enqueue.")
 			return nil, fmt.Errorf("cannot enqueue command: validation is unavailable")
 		}
+	} else if scope.IsScoped() {
+		// No gate means no anchors: nothing can say whether the member owns the device, and
+		// the row could carry no stamp the member could see. Refused rather than written
+		// invisible.
+		return nil, fmt.Errorf("cannot enqueue command: %w", auth.ErrScopeUnsupported)
 	}
 
 	// The maintenance-window gate: a DISRUPTIVE or DESTRUCTIVE command on a device type with
@@ -469,6 +498,10 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 		Status:      CommandQueued.String(),
 		QueuedTime:  time.Now(),
 		ExpiresAt:   expiresAt,
+		// The stamp is the gate's answer as given: nil (no gate, or a device the answer did
+		// not name) stays NULL, and an owner-less device is stamped empty — both invisible to
+		// every scoped member, and told apart by whoever reads the row.
+		ScopeAnchors: rdb.Anchors(anchors),
 	}
 	if hold != nil {
 		stampHold(created, *hold)
@@ -485,19 +518,35 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 	// idempotency-key operation: a client — or the REACT dispatcher's at-least-once redelivery
 	// (ADR-051 slice 5b), which derives a deterministic token per (detection, action) — can retry
 	// with the same token without ever enqueuing a second physical command.
+	//
+	// 🔴 A SCOPED MEMBER'S INSERT CARRIES NO ON CONFLICT, because core/rdb refuses every
+	// scoped upsert: its update arm would reach a row the scope predicate never saw. The
+	// replay it would have absorbed is decided instead by a failed insert followed by the
+	// same re-probe below — the member's own command is a replay, anyone else's token is
+	// TOKEN_IN_USE.
 	var conflicted bool
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := api.checkUndeliveredCeiling(ctx, tx); err != nil {
 			return err
 		}
-		result := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(created)
+		insert := tx
+		if !scope.IsScoped() {
+			insert = tx.Clauses(clause.OnConflict{DoNothing: true})
+		}
+		result := insert.Create(created)
 		if result.Error != nil {
 			return result.Error
 		}
 		conflicted = result.RowsAffected == 0
 		return nil
 	})
-	if err != nil {
+	if err != nil && scope.IsScoped() && !isCodedRefusal(err) {
+		taken, probeErr := api.tokenTaken(ctx, request.Token)
+		if probeErr != nil || !taken {
+			return nil, err
+		}
+		conflicted = true
+	} else if err != nil {
 		return nil, err
 	}
 	if conflicted {
@@ -587,7 +636,11 @@ func (api *Api) CreateCommand(ctx context.Context, request *CommandCreateRequest
 func (api *Api) checkUndeliveredCeiling(ctx context.Context, tx *gorm.DB) error {
 	limit, ceiling := api.effectiveUndeliveredLimit(ctx)
 	var undelivered int64
-	if err := tx.Model(&Command{}).
+	// 🔴 THE COUNT IS THE TENANT'S, WHOEVER IS ASKING. The ceiling bounds the tenant's
+	// undelivered work; counted under a scoped member's own context it would see only that
+	// member's commands, and a customer could enqueue past a ceiling the tenant has already
+	// reached. The count never reaches the caller, only the refusal does.
+	if err := tx.WithContext(tenantWideReadContext(ctx)).Model(&Command{}).
 		Where("status IN ?", undeliveredStatusStrings()).Count(&undelivered).Error; err != nil {
 		// A failure to COUNT is a failure to decide, not a rejection: it stays a plain
 		// error so the caller fails closed without telling the client its command is

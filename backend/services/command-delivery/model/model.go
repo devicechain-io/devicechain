@@ -272,6 +272,24 @@ type Command struct {
 	// WindowToken names the maintenance window DispatchAfter came from, so an edit of that
 	// window can move the rows still waiting on it. NULL for a command that was never held.
 	WindowToken sql.NullString
+
+	// ScopeAnchors are the target device's anchors when the command was enqueued — one
+	// "type:token" per tracked relationship, as device-management reports them (ADR-081). A
+	// member limited to part of the tenant sees the command when one of them is in its
+	// scope; see ScopedBy. Written once, at enqueue, and never rewritten: a command records
+	// who owned the device when it was SENT, so a later reassignment does not move it to the
+	// new owner. NULL (a row that predates the column, or an enqueue with no validator to
+	// ask) is invisible to every scoped member.
+	ScopeAnchors rdb.Anchors `gorm:"type:text[]"`
+}
+
+// ScopedBy admits members limited to part of the tenant (ADR-081): they read the commands
+// whose ScopeAnchors share an anchor with their scope, and they may CREATE a command — the
+// enqueue — only stamped with an anchor in that scope, which core/rdb checks row by row.
+// They may not update or delete one: cancel, claim, park and every lifecycle write stay
+// refused to them.
+func (Command) ScopedBy() rdb.ScopeRule {
+	return rdb.AnchorColumn("scope_anchors", rdb.AllowScopedCreate)
 }
 
 // DefaultOrder implements rdb.Sortable. Newest-first is the PRODUCT requirement here,
