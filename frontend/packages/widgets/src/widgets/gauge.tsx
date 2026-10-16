@@ -20,7 +20,7 @@ import {
   WidgetFrame,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
-import { buildGaugeOption, EChart, gaugeReadoutBox, useChartTheme } from '@devicechain/widget-sdk/echarts';
+import { buildGaugeOption, EChart, gaugeReadoutBox, loadChartEngine, useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 import { LevelReadout } from '../level-readout';
@@ -109,6 +109,10 @@ function GaugeBody({ widget, data }: WidgetProps) {
     </div>
   );
 }
+
+// What preloadWidgets calls: the chart engine loads on demand, as its own chunk, so a host that
+// awaits this for a board holding this widget draws the chart on the board's first frame.
+Gauge.preload = loadChartEngine;
 
 // The registration: this widget's portable descriptor paired with its component, declared
 // through the same public `defineWidget` a third-party package uses.

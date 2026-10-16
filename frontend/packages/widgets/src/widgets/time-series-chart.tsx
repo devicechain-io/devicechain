@@ -26,7 +26,7 @@ import {
   type MeasurementStreamState,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
-import { buildLineOption, EChart, useChartTheme } from '@devicechain/widget-sdk/echarts';
+import { buildLineOption, EChart, loadChartEngine, useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
 
@@ -127,6 +127,10 @@ function SpanBadge({ widget, data }: { widget: WidgetProps['widget']; data: Meas
     </span>
   );
 }
+
+// What preloadWidgets calls: the chart engine loads on demand, as its own chunk, so a host that
+// awaits this for a board holding this widget draws the chart on the board's first frame.
+TimeSeriesChart.preload = loadChartEngine;
 
 // The registration: this widget's portable descriptor paired with its component, declared
 // through the same public `defineWidget` a third-party package uses.

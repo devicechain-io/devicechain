@@ -35,8 +35,9 @@
 // laptop and on a Linux runner.
 //
 // The page reports through attributes on <html>, never text: data-gate="ready" with
-// data-gate-widgets (how many widgets the definition holds), or data-gate="error" with
-// data-gate-error.
+// data-gate-widgets (how many widgets the definition holds) and data-gate-charts /
+// data-gate-charts-empty (the first frame's charts, and those of them not yet drawn), or
+// data-gate="error" with data-gate-error.
 
 import '@fontsource-variable/inter';
 import '../../../dashboard/src/theme.css';
@@ -57,6 +58,7 @@ import {
   type WidgetDataSource,
 } from '@devicechain/dashboards';
 import { hostWidgetRegistry, type WidgetRegistry } from '@devicechain/host-widgets';
+import { preloadWidgets } from '@devicechain/widgets';
 import { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 
@@ -120,6 +122,9 @@ async function prepare(boardParam: string | null, recordingParam: string | null)
   const load = loaderFor(boardParam);
   const registry = hostWidgetRegistry();
   const definition = migrateToSlots(parseDashboardDefinition(JSON.parse(await load()), { catalog: registry.catalog }));
+  // As the replay's loadReplay does: the board's lazily loaded code (widget chunks, the chart
+  // engine) arrives before the first render, which is what makes the first frame whole.
+  await preloadWidgets(registry, definition.widgets.map((w) => w.type));
   const recordingKey = recordingParam ? `${boardParam}|${recordingParam}` : (boardParam ?? '');
   const recordingLoader = RECORDINGS.get(recordingKey);
   if (recordingParam && !recordingLoader) throw new Error(`no recording '${recordingParam}' for ${boardParam}`);
@@ -160,6 +165,11 @@ function Ready({ prepared, embed }: { prepared: Prepared; embed: EmbedCase | nul
   useEffect(() => {
     const root = document.documentElement;
     root.dataset.gateWidgets = String(prepared.definition.widgets.length);
+    // The FIRST commit's charts, read in its last passive effect (a parent's runs after its
+    // children's, so every chart's own init has run): how many there are, and how many have not
+    // drawn because the chart engine was not here when they mounted -- an empty first frame.
+    root.dataset.gateCharts = String(document.querySelectorAll('[data-echart]').length);
+    root.dataset.gateChartsEmpty = String(document.querySelectorAll('[data-echart]:not([_echarts_instance_])').length);
     root.dataset.gate = 'ready';
   }, [prepared]);
   const board = (

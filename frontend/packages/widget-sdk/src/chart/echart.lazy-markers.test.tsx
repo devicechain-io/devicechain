@@ -5,7 +5,8 @@
 // is applied at once (without it), and applied AGAIN once the markers have registered -- the
 // second setOption is what makes the thresholds appear. Without it the first threshold chart
 // of a page would never draw its lines. echarts/core's init is stubbed (jsdom has no canvas);
-// `use` stays real so the registration itself is the real one.
+// `use` stays real so the registration itself is the real one. The chart engine is loaded first,
+// as preloadWidgets does for a board: what is under test here is the markers, not the engine.
 
 import { act, render } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -25,7 +26,8 @@ globalThis.ResizeObserver ??= class {
   unobserve() {}
 } as unknown as typeof ResizeObserver;
 
-const { EChart, loadThresholdMarkers } = await import('./echart');
+const { EChart, loadChartEngine, loadThresholdMarkers } = await import('./echart');
+await loadChartEngine();
 
 describe('EChart with threshold markers', () => {
   it('applies the option once without the markers, then again after they register', async () => {

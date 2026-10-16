@@ -133,6 +133,9 @@ export function lazyBoundaries() {
     { what: 'the entity selector', chunk: 'entity-selector', markers: ['No target slot configured.'] },
     { what: 'the measurement table', chunk: 'table', markers: ['No data yet'] },
     { what: 'the command button', chunk: 'control-widgets', markers: ['Couldn’t load command history.'] },
+    // The chart engine: ECharts (its instance attribute) and zrender (its DOM id attribute), in ONE
+    // chunk, fetched by preloadWidgets for a board holding a chart, or by the first chart to mount.
+    { what: 'the chart engine (ECharts + zrender)', chunk: 'echart-engine', markers: ['_echarts_instance_', 'data-zr-dom-id'] },
     // The embed: its option parser, its player and its own words, fetched only for an embed.
     {
       what: 'the embed',
