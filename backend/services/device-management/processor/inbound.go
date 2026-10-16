@@ -78,8 +78,14 @@ type failedItem struct {
 }
 
 type InboundEventsProcessor struct {
-	Microservice         *core.Microservice
-	InboundEventsReader  messaging.MessageReader
+	Microservice *core.Microservice
+	// InboundEventsReaders are the pull readers on the inbound-events durable, one read loop
+	// each (resolution.inboundReaders). They read ONE consumer, so the broker hands each
+	// message to exactly one of them, and everything after the read is shared: the resolver
+	// pool, its caches, and the single submitter feeding each publish writer. Start refuses an
+	// empty list or a nil entry: a processor with no reader resolves nothing while reporting
+	// started.
+	InboundEventsReaders []messaging.MessageReader
 	ResolvedEventsWriter messaging.OrderedWriter
 	FailedEventsWriter   messaging.OrderedWriter
 	Api                  dmodel.DeviceManagementApi
@@ -131,21 +137,30 @@ type InboundEventsProcessor struct {
 	workerWG   sync.WaitGroup
 	outboundWG sync.WaitGroup
 
-	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
-	// the errors stop clearing. Built on first use by pacer(), because this struct is also
-	// assembled by literal in tests that never run the constructor.
-	readPacer *core.ReadPacer
+	// readPacers space out the retries after a non-EOF read error and end a loop once its
+	// errors stop clearing: ONE PER READER, because a pacer belongs to one read goroutine (its
+	// own contract) and one reader's errors are no evidence about another's. ExecuteStart
+	// builds every one before it starts a loop; pacer() builds a missing one for a test that
+	// drives readLoop itself.
+	readPacers []*core.ReadPacer
 
 	lifecycle core.LifecycleManager
 }
 
-// pacer returns the read loop's error pacer, building it on first use. It is touched only
-// by the single read goroutine, which is the pacer's own contract.
-func (iproc *InboundEventsProcessor) pacer() *core.ReadPacer {
-	if iproc.readPacer == nil {
-		iproc.readPacer = core.NewReadPacer(iproc.Microservice, "inbound events")
+// pacer returns reader i's error pacer, building it when it is missing. ExecuteStart calls
+// it for every reader before any loop starts, so a loop only ever reads its own.
+func (iproc *InboundEventsProcessor) pacer(i int) *core.ReadPacer {
+	for len(iproc.readPacers) <= i {
+		iproc.readPacers = append(iproc.readPacers, nil)
 	}
-	return iproc.readPacer
+	if iproc.readPacers[i] == nil {
+		what := "inbound events"
+		if i > 0 {
+			what = fmt.Sprintf("inbound events (reader %d)", i+1)
+		}
+		iproc.readPacers[i] = core.NewReadPacer(iproc.Microservice, what)
+	}
+	return iproc.readPacers[i]
 }
 
 // ResolveMetrics is every Prometheus instrument the inbound resolve loop exports.
@@ -253,19 +268,20 @@ func (iproc *InboundEventsProcessor) tenantDeleted(tenant string) bool {
 	return iproc.deadLetters != nil && iproc.deadLetters.TenantDeleted(tenant)
 }
 
-// Create a new inbound events processor. authMode is the device authentication
-// policy applied while resolving inbound events (transport security, ADR-014);
-// maxFutureSkew bounds a device-reported event time against the server's own clock.
+// Create a new inbound events processor over inbound, the pull readers of the inbound-events
+// durable (one read loop each). authMode is the device authentication policy applied while
+// resolving inbound events (transport security, ADR-014); maxFutureSkew bounds a
+// device-reported event time against the server's own clock.
 //
 // metrics is built once in the initialize phase (see NewResolveMetrics) and shared by
 // every processor this service constructs, because this constructor runs again on every
 // start.
-func NewInboundEventsProcessor(ms *core.Microservice, inbound messaging.MessageReader, resolved messaging.OrderedWriter,
+func NewInboundEventsProcessor(ms *core.Microservice, inbound []messaging.MessageReader, resolved messaging.OrderedWriter,
 	failed messaging.OrderedWriter, callbacks core.LifecycleCallbacks, api dmodel.DeviceManagementApi, authMode string,
 	maxFutureSkew time.Duration, metrics ResolveMetrics, opts ...InboundOption) *InboundEventsProcessor {
 	iproc := &InboundEventsProcessor{
 		Microservice:         ms,
-		InboundEventsReader:  inbound,
+		InboundEventsReaders: inbound,
 		ResolvedEventsWriter: resolved,
 		FailedEventsWriter:   failed,
 		Api:                  api,
@@ -728,16 +744,20 @@ func (iproc *InboundEventsProcessor) Start(ctx context.Context) error {
 	return iproc.lifecycle.Start(ctx)
 }
 
-// readLoop drains the inbound-events stream into the resolvers until the context is
-// cancelled, the reader reports EOF, or a run of non-EOF read errors outlasts the pacer's
-// budget — at which point the pacer has already ended the process, because a service that
-// cannot read its own inbound stream is doing nothing while reporting healthy, and a
+// readLoop drains the inbound-events stream through reader i into the resolvers until the
+// context is cancelled, the reader reports EOF, or a run of non-EOF read errors outlasts the
+// pacer's budget — at which point the pacer has already ended the process, because a service
+// that cannot read its own inbound stream is doing nothing while reporting healthy, and a
 // restart is the remedy for most of what causes it.
+//
+// Every reader runs this loop on its own goroutine, and all of them hand off into the one
+// messages channel. A reader is never read by two loops (a natsReader refuses an overlapping
+// read with ErrConcurrentRead), so each keeps its own pull in flight and N readers keep N.
 //
 // It is a named method rather than the body of the goroutine in ExecuteStart so the pacing
 // tests can drive the SAME line production runs.
-func (iproc *InboundEventsProcessor) readLoop(ctx context.Context) {
-	messaging.RunConsumer(ctx, iproc.InboundEventsReader, iproc.pacer(), func(msg messaging.Message) bool {
+func (iproc *InboundEventsProcessor) readLoop(ctx context.Context, i int) {
+	messaging.RunConsumer(ctx, iproc.InboundEventsReaders[i], iproc.pacer(i), func(msg messaging.Message) bool {
 		return iproc.handOff(ctx, msg)
 	})
 }
@@ -756,6 +776,17 @@ func (iproc *InboundEventsProcessor) handOff(ctx context.Context, msg messaging.
 
 // Lifecycle callback that runs startup logic.
 func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
+	// Refused before anything starts, so a refusal leaves no goroutine behind to drain.
+	if len(iproc.InboundEventsReaders) == 0 {
+		return fmt.Errorf("the inbound events processor has no reader: it would resolve nothing")
+	}
+	for i, r := range iproc.InboundEventsReaders {
+		if r == nil {
+			return fmt.Errorf("inbound reader %d of %d is nil", i+1, len(iproc.InboundEventsReaders))
+		}
+		// Built here, before any loop runs, so no two goroutines build pacers at once.
+		iproc.pacer(i)
+	}
 	// Processing loop for failed events (drains until the failed channel closes).
 	iproc.outboundWG.Add(1)
 	go func() {
@@ -778,13 +809,19 @@ func (iproc *InboundEventsProcessor) ExecuteStart(ctx context.Context) error {
 			}
 		}
 	}()
-	// Processing loop for inbound messages (runs under the cancelable context so
-	// ExecuteStop can stop it before the channels are closed).
-	iproc.readerWG.Add(1)
-	go func() {
-		defer iproc.readerWG.Done()
-		iproc.readLoop(iproc.procCtx)
-	}()
+	// One read loop per inbound reader, each under the cancelable context so ExecuteStop can
+	// stop every one of them before the channels are closed. They are counted on readerWG
+	// together, so the stop waits for the LAST reader: a reader whose pull is still in flight
+	// when the context ends returns within the fetch timeout, and handing off what it brings
+	// back after messages closed would be a send on a closed channel.
+	log.Info().Int("resolution.inboundReaders", len(iproc.InboundEventsReaders)).Msg("Reading inbound events")
+	iproc.readerWG.Add(len(iproc.InboundEventsReaders))
+	for i := range iproc.InboundEventsReaders {
+		go func(i int) {
+			defer iproc.readerWG.Done()
+			iproc.readLoop(iproc.procCtx, i)
+		}(i)
+	}
 	return nil
 }
 
@@ -801,7 +838,7 @@ func (iproc *InboundEventsProcessor) ExecuteStop(context.Context) error {
 	if iproc.procCancel != nil {
 		iproc.procCancel()
 	}
-	iproc.readerWG.Wait() // reader stopped: no more sends to messages
+	iproc.readerWG.Wait() // every reader stopped: no more sends to messages
 	// Nothing more is fetched from here on, so a failing stream no longer needs its
 	// consumption slowed: what is left is only what this pod already holds, and every
 	// source a failure leaves unacked is redelivered either way.

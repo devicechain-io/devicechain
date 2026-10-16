@@ -1120,7 +1120,9 @@ functionalAreas:
     #                             # rather than something being lost, which is not.
   # device-management scales horizontally: replicas is a throughput lever for event
   # resolution. Every replica consumes the inbound stream and publishes resolved events,
-  # so one device's events can reach the resolved stream slightly out of order.
+  # so one device's events can reach the resolved stream slightly out of order. Before
+  # adding a replica, consider resolution.inboundReaders (below): it adds the pull a
+  # second replica would, without a second copy of the caches. The same reorder applies.
   # Detection applies events in stream order and tolerates that small reorder within its
   # allowed lateness (event-processing watermarkLatenessSeconds); an event whose publish
   # failed is republished only after the inbound AckWait (60 s), beyond that lateness.
@@ -1254,6 +1256,12 @@ functionalAreas:
       #                     # broker's acknowledgement, 1 to 1024 (out of range stops
       #                     # the service). Publishing cannot exceed this divided by
       #                     # the acknowledgement time, ~8-11 ms on a replicated broker.
+      #     inboundReaders: 1  # pulls a pod keeps in flight on the inbound events
+      #                     # consumer, 1 to 4 (out of range stops the service). One
+      #                     # pull per broker round trip bound a single pod near
+      #                     # 10,000 events/s on a replicated broker; a second reader
+      #                     # adds a pull without a second copy of the caches. Raise it
+      #                     # only when resolvers sit idle while the consumer lags.
       #
       # What each replica keeps in its own memory of each of the three lookup caches
       # kept per device (a device by its token, its tracked relationships, its group

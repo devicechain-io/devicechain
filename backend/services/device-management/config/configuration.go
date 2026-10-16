@@ -105,6 +105,58 @@ const DefaultResolutionWorkers = 10
 // of 512 lifts this ceiling and leaves the next one, the inbound pull, to bind.
 const DefaultPublishWindow = 512
 
+// DefaultInboundReaders is how many pulls one pod keeps outstanding at once against the
+// inbound-events consumer when resolution.inboundReaders is not set. Every reader is a pull
+// reader on the SAME durable, so the broker hands each message to exactly one of them, as it
+// does across replicas; they feed one resolver pool, one set of caches and one publish writer.
+//
+// 🔑 A READER IS A THROUGHPUT CEILING OF ITS OWN: it keeps one pull in flight (fetch-ahead), so
+// one reader delivers at most a batch per broker round trip. Measured on a three-node cluster
+// with one reader, the read loop was waiting on its in-flight pull in 87-93% of samples while
+// the resolvers sat 69-82% idle and the publish window was full only 3-4% of the time: the
+// pull, not resolution and not publishing, set the pod's ceiling (about 10,300 events a second).
+// Two arms then lifted it by the same amount: a second pull (a second replica, 11,400 at
+// 12,400 offered, +10%) and a deeper one (a 256-message batch, 11,600, +12%). A pull that is
+// twice as wide and a second pull in flight both buy depth, so the consume end is bound by the
+// round trip, not by what one pull carries.
+//
+// A second reader is the second replica's depth without the second replica's cost: a replica
+// holds its own copy of every cache (640-768 MiB each for 60,000 devices) and reads the
+// database again for every cold lookup, while a reader holds only the messages it has
+// fetched. More than two was not measured: in the same arms the node holding the inbound
+// stream's leader ran at 96-97% CPU and the resolved-events PubAck doubled (9.5 to 17.7 ms at
+// the median).
+//
+// 🔑 WHY THE DEFAULT IS STILL ONE. The gain was measured only on a pod already resolving about
+// 10,000 events a second against a replicated broker: at 10,800 offered the second pull
+// changed nothing, and below that the pull is not what binds. It was also measured at a
+// 128-message batch; the 256 default took the same +12% from the same pull, and what a second
+// reader adds on top of that is unmeasured. Every pod would pay for a second reader anyway:
+//   - up to two more batches held unacknowledged (one handed out, one fetched ahead: 512
+//     messages at the default batch of 256), which a crash or a rollout leaves for the broker
+//     to redeliver after AckWait, under the same dedup ids, and so LATE to detection;
+//   - a wider reorder whenever the consumer is behind (a burst, a catch-up after a restart
+//     or an outage). Each reader then holds full batches of adjacent sequences and they hand
+//     out at once, so events up to a batch and a half apart swap; one reader with the
+//     resolver pool swaps events only about a pool's width apart. Measured on an embedded
+//     broker, 3,000 messages backlogged: one reader handed them out with no inversion, two
+//     with 88,401 inversions spanning up to 410 sequences (405 ms of publishing). On a quiet
+//     stream two readers did not reorder at all. It is the reorder a second replica causes
+//     (see ProcessResolvedEvent), but its width is a batch of the FLEET's events, so on a
+//     slow fleet catching up (256 events at 50 a second is five seconds) it reaches past
+//     detection's default lateness, and the kinds that read arrival order rather than event
+//     time (DeltaRate drops the older sample, CountWindow groups events by arrival) see it.
+//
+// So the setting is raised where its symptom is: the resolvers mostly idle while the inbound
+// consumer falls behind.
+const DefaultInboundReaders = 1
+
+// MaxInboundReaders bounds resolution.inboundReaders. Four readers hold up to 2,048 inbound
+// messages unacknowledged at the default batch: twenty times the 100-slot queue in front of the
+// resolvers, which is as far ahead of them as reading can usefully get. A deployment that
+// needs more read depth than that needs more resolvers or more CPU, which is a replica.
+const MaxInboundReaders = 4
+
 // DefaultPerDeviceCacheEntries and DefaultPerDeviceCacheMiB bound what one replica keeps
 // in memory of EACH of the three caches keyed by device: a device by its token, a device's
 // tracked relationships, and an entity's group memberships (keyed by device, and by each
@@ -354,6 +406,23 @@ type ResolutionConfiguration struct {
 	// It is a pointer so that "not written" and "written as 0" are different things; after
 	// ApplyDefaults it is never nil.
 	PublishWindow *int
+
+	// InboundReaders is how many pull readers this pod runs on the inbound-events consumer,
+	// from 1 to MaxInboundReaders. Unset (absent) defaults to DefaultInboundReaders; an
+	// explicit 0 is refused, not defaulted, and so is anything outside the range. A fixed
+	// setting, read once at startup.
+	//
+	// A pointer for the same reason as PublishWindow; after ApplyDefaults it is never nil.
+	InboundReaders *int
+}
+
+// InboundReaderCount is the number of inbound readers in effect: the configured one, or the
+// default when the setting was never written.
+func (r ResolutionConfiguration) InboundReaderCount() int {
+	if r.InboundReaders == nil {
+		return DefaultInboundReaders
+	}
+	return *r.InboundReaders
 }
 
 // PublishWindowSize is the publish window in effect: the configured one, or the default
@@ -365,9 +434,9 @@ func (r ResolutionConfiguration) PublishWindowSize() int {
 	return *r.PublishWindow
 }
 
-// ApplyDefaults fills the worker count when it is unset. It is the ONE definition of that
-// default: the configuration load calls it, and so does the processor for a pool built in
-// code.
+// ApplyDefaults fills the worker count, the publish window and the inbound readers when they
+// are unset. It is the ONE definition of those defaults: the configuration load calls it, and
+// so does the processor for a pool built in code.
 func (r *ResolutionConfiguration) ApplyDefaults() {
 	if r.Workers == 0 {
 		r.Workers = DefaultResolutionWorkers
@@ -376,12 +445,20 @@ func (r *ResolutionConfiguration) ApplyDefaults() {
 		w := DefaultPublishWindow
 		r.PublishWindow = &w
 	}
+	if r.InboundReaders == nil {
+		n := DefaultInboundReaders
+		r.InboundReaders = &n
+	}
 }
 
-// Validate bounds the worker count against the pool the resolvers draw from.
+// Validate bounds the publish window and the inbound readers, and the worker count against
+// the pool the resolvers draw from.
 func (r ResolutionConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration) error {
 	if w := r.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("resolution.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
+	if n := r.InboundReaderCount(); n < 1 || n > MaxInboundReaders {
+		return fmt.Errorf("resolution.inboundReaders must be between 1 and %d (got %d)", MaxInboundReaders, n)
 	}
 	return rdb.CheckWriterCount("resolution.workers", r.Workers, pool)
 }

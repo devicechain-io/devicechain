@@ -62,12 +62,12 @@ func TestTheRaiseAlarmLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.
 func TestTheInboundEventsLoopStopsInsteadOfSpinningOnAnUnclearableError(t *testing.T) {
 	reader := &msgtest.FailingReader{EOFAfter: readCap}
 	iproc := &InboundEventsProcessor{
-		InboundEventsReader: reader,
-		messages:            make(chan messaging.Message, readCap),
-		readPacer:           core.NewReadPacer(nil, "inbound events").UseClock(core.VirtualClock()),
+		InboundEventsReaders: []messaging.MessageReader{reader},
+		messages:             make(chan messaging.Message, readCap),
+		readPacers:           []*core.ReadPacer{core.NewReadPacer(nil, "inbound events").UseClock(core.VirtualClock())},
 	}
 
-	iproc.readLoop(context.Background())
+	iproc.readLoop(context.Background(), 0)
 
 	if reader.Reads >= readCap {
 		t.Fatalf("the inbound events loop read %d times against an error that never clears and "+
@@ -124,4 +124,33 @@ func (r *intermittentReader) ReadMessage(ctx context.Context) (messaging.Message
 	// Counted, so Reads means "calls" at every caller.
 	r.Reads++
 	return messaging.Message{}, nil
+}
+
+// Each inbound reader paces ITS OWN errors (resolution.inboundReaders). A pacer belongs to one
+// read goroutine, and one reader's run of failures is no evidence about another's: a second
+// reader that shared the first one's pacer would inherit a budget the first had already spent
+// and stop on its first error, leaving the pod reading through fewer readers than it was
+// configured with while it reports ready. Here two readers fail without end, one after the
+// other, each on the pacer ExecuteStart would hand it, and the second must get exactly as many
+// paced retries as the first.
+func TestEachInboundReaderPacesItsOwnErrors(t *testing.T) {
+	first := &msgtest.FailingReader{EOFAfter: readCap}
+	second := &msgtest.FailingReader{EOFAfter: readCap}
+	iproc := &InboundEventsProcessor{
+		InboundEventsReaders: []messaging.MessageReader{first, second},
+		messages:             make(chan messaging.Message, readCap),
+		readPacers: []*core.ReadPacer{
+			core.NewReadPacer(nil, "inbound events").UseClock(core.VirtualClock()),
+			core.NewReadPacer(nil, "inbound events (reader 2)").UseClock(core.VirtualClock()),
+		},
+	}
+	iproc.readLoop(context.Background(), 0)
+	iproc.readLoop(context.Background(), 1)
+	if first.Reads < 2 || first.Reads >= readCap {
+		t.Fatalf("precondition: the first reader's loop should stop after a paced run, read %d times", first.Reads)
+	}
+	if second.Reads != first.Reads {
+		t.Fatalf("the second inbound reader read %d times against an error that never clears, the first %d: "+
+			"a reader that does not get a retry budget of its own stops early", second.Reads, first.Reads)
+	}
 }

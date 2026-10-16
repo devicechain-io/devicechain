@@ -126,18 +126,25 @@ type pipelineSpec struct {
 	srv                         *natsserver.Server
 	instance                    string
 	replicas, resolvers, window int
-	events                      int
-	api                         dmodel.DeviceManagementApi
-	authMode                    string
-	event                       func(i int) *esmodel.UnresolvedEvent
-	registry                    *prometheus.Registry
-	wrapReader                  func(messaging.MessageReader) messaging.MessageReader
-	wrapResolved                func(messaging.OrderedWriter) messaging.OrderedWriter
+	// readers is how many inbound readers the processor runs on the one durable, as
+	// resolution.inboundReaders sets in the service; 0 means 1.
+	readers int
+	// ackWait, when set, is the inbound durable's AckWait (SetAckWaitForTesting), for a test
+	// that needs redelivery inside its own run time.
+	ackWait      time.Duration
+	events       int
+	api          dmodel.DeviceManagementApi
+	authMode     string
+	event        func(i int) *esmodel.UnresolvedEvent
+	registry     *prometheus.Registry
+	wrapReader   func(messaging.MessageReader) messaging.MessageReader
+	wrapResolved func(messaging.OrderedWriter) messaging.OrderedWriter
 }
 
 // resolvePipeline is a pipeline started by startResolvePipeline: its inbound events
 // published and its processor initialized, but not yet started.
 type resolvePipeline struct {
+	nmgr                          *messaging.NatsManager
 	iproc                         *InboundEventsProcessor
 	js                            nats.JetStreamContext
 	inboundStream, resolvedStream string
@@ -147,7 +154,7 @@ type resolvePipeline struct {
 // spec.events inbound events (event i is spec.event(i), stored at stream sequence i+1), and
 // returns the processor initialized, ready for Start. What it opens is closed by the
 // benchmark's cleanup.
-func startResolvePipeline(b *testing.B, spec pipelineSpec) *resolvePipeline {
+func startResolvePipeline(b testing.TB, spec pipelineSpec) *resolvePipeline {
 	b.Helper()
 	u, err := url.Parse(spec.srv.ClientURL())
 	if err != nil {
@@ -164,11 +171,16 @@ func startResolvePipeline(b *testing.B, spec pipelineSpec) *resolvePipeline {
 	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
 		Hostname: u.Hostname(), Port: uint32(port), StreamReplicas: uint32(spec.replicas)}
 	ms.Readiness.MarkReadyWithoutAuthSurface()
-	var reader messaging.MessageReader
+	var readers []messaging.MessageReader
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
-		r, err := n.NewReader(streams.InboundEvents)
-		reader = r
-		return err
+		for i := 0; i < max(spec.readers, 1); i++ {
+			r, err := n.NewReader(streams.InboundEvents)
+			if err != nil {
+				return err
+			}
+			readers = append(readers, r)
+		}
+		return nil
 	})
 	nmgr.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
 		return func(context.Context, messaging.MaxDelivery) (messaging.MaxDeliveryOutcome, error) {
@@ -177,6 +189,9 @@ func startResolvePipeline(b *testing.B, spec pipelineSpec) *resolvePipeline {
 	})
 	if err := nmgr.Initialize(context.Background()); err != nil {
 		b.Fatal(err)
+	}
+	if spec.ackWait > 0 {
+		nmgr.SetAckWaitForTesting(b, spec.ackWait)
 	}
 	if err := nmgr.Start(context.Background()); err != nil {
 		b.Fatal(err)
@@ -193,14 +208,17 @@ func startResolvePipeline(b *testing.B, spec pipelineSpec) *resolvePipeline {
 		b.Fatal(err)
 	}
 	if spec.wrapReader != nil {
-		reader = spec.wrapReader(reader)
+		for i := range readers {
+			readers[i] = spec.wrapReader(readers[i])
+		}
 	}
-	iproc := newBenchProcessor(b, nmgr, reader, spec.api, spec.window, spec.resolvers)
+	iproc := newBenchProcessor(b, nmgr, readers, spec.api, spec.window, spec.resolvers)
 	iproc.AuthMode = spec.authMode
 	if spec.wrapResolved != nil {
 		iproc.ResolvedEventsWriter = spec.wrapResolved(iproc.ResolvedEventsWriter)
 	}
 	p := &resolvePipeline{
+		nmgr:           nmgr,
 		iproc:          iproc,
 		js:             js,
 		inboundStream:  messaging.StreamName(spec.instance, streams.InboundEvents),
@@ -263,7 +281,7 @@ func benchNatsServer(b *testing.B) *natsserver.Server {
 }
 
 // benchSettled waits for a replicated stream to have a leader and two current replicas.
-func benchSettled(b *testing.B, js nats.JetStreamContext, stream string) {
+func benchSettled(b testing.TB, js nats.JetStreamContext, stream string) {
 	b.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for {

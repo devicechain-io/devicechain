@@ -19,7 +19,7 @@ import (
 //
 // Note the polarity flip. ProcessMessage reported "stop"; handOff reports "carry on".
 func readAndHandleOne(p *InboundEventsProcessor, ctx context.Context) bool {
-	msg, err := p.InboundEventsReader.ReadMessage(ctx)
+	msg, err := p.InboundEventsReaders[0].ReadMessage(ctx)
 	if err != nil {
 		return true
 	}

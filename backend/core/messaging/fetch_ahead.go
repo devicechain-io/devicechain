@@ -56,6 +56,13 @@ const _ = uint(rangeDirectMax-config.MaxFetchBatch) + uint(config.MaxFetchBatch-
 //     acknowledged, so the broker redelivers them. Only a term change (BindTerm), a
 //     re-bind and ReaderWithReleaseOnPark (which Naks them) act on it sooner.
 //
+// EVERY BOUND HERE IS PER READER. A service that wants more pulls in flight builds more
+// readers on the same suffix (device-management's resolution.inboundReaders): they are one
+// durable, so the broker hands each message to one of them, but each keeps its own future, so
+// N readers hold N requests and a dropped connection loses the deliveries of up to N pulls.
+// That is only safe where nothing downstream reads by sequence: a consumer whose live gap
+// fill reads a lost pull back keeps ONE reader, and the cheap-path width above assumes it.
+//
 // AN EOF DOES NOT DROP THE FUTURE. ReadMessage returns EOF when the CALLER's context ends,
 // and a plain reader keeps its fetch buffer across that, so it keeps the request in flight
 // too: a caller that reads again gets the batch instead of leaving it delivered and unacked
