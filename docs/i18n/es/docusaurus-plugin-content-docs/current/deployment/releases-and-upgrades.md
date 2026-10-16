@@ -323,7 +323,8 @@ El perfil, la topología y las áreas funcionales habilitadas provienen de la pr
 de la instancia —lo que `dcctl bootstrap` registró en el clúster—, no de flags escritos aquí.
 Cambiar lo que una instancia *es* es una pregunta distinta con respuestas distintas: subir el
 número de réplicas, por ejemplo, no vuelve a replicar los streams de mensajería que se crearon
-con el número anterior.
+con el número anterior. Para añadir un área funcional a una instancia en marcha, usa
+[`dcctl enable-area`](./bootstrap.md#enable-area), que la registra en esa declaración.
 
 Una cosa queda además deliberadamente fuera de este comando: no toca los datos de las bases de
 datos más allá de dejar que los servicios ejecuten sus propias migraciones, y nunca cambia el

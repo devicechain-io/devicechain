@@ -301,6 +301,7 @@ dcctl bootstrap local my-instance --build
 | `--cluster <name>` | `local` 提供方：创建实例的 kind 集群，默认 `devicechain`。必须已[安装](#install)，初始化不创建集群。 |
 | `--kube-context <name>` | 通过此 kube-context 选择已安装集群。 |
 | `--profile <profile>` | 功能领域配置档：默认 `default` 标准系统；`full` 包含全部，增加 AI 推理、出站连接器、MCP、Sparkplug B 和 LwM2M 摄取以及更新管理；还可选 `telemetry` 或 `ingest-only`。 |
+| `--enable-area <area>` | 在配置档之外额外部署一个功能领域，例如 `--enable-area update-management`。可重复使用。要为已在运行的实例添加，见[稍后添加功能领域](#enable-area)。 |
 | `--build` | 将源码镜像构建至本地仓库，开发路径需源码、Docker、ko。 |
 | `--registry` / `--version` | 覆盖镜像仓库或标签，默认已发布 `ghcr.io/devicechain-io`；`--build` 时为 `localhost:5000` 和 `dev`。 |
 | `--host <name>` | 暴露实例的 Ingress 主机名，默认 `devicechain.local`。本地使用 `localhost` 无需修改 `/etc/hosts`。 |
@@ -749,6 +750,25 @@ dcctl sim create demo --instance my-instance --server localhost
 ```
 
 模拟器通过真实硬件相同的设备协议发送遥测及告警，见[使用模拟数据体验](../intro.md#trying-it-with-simulated-data)。
+
+### 稍后添加功能领域 {#enable-area}
+
+实例运行其配置档所列的功能领域，以及初始化时通过 `--enable-area` 添加的领域。要为已在运行的实例添加领域（例如在 `default` 实例上添加空中升级、出站连接器、AI 推理或 MCP），使用 `dcctl enable-area`：
+
+```bash
+dcctl enable-area local my-instance update-management --dry-run
+dcctl enable-area local my-instance update-management
+```
+
+- 在接触集群之前，先按功能领域目录检查名称。在写入任何内容之前，检查实例新的领域集合是否缺少依赖：例如 `outbound-connectors` 需要 `event-processing`，而 `telemetry` 配置档不运行它，因此两者都要列出。
+- 该领域记录在实例上，因此之后的 `dcctl upgrade` 会保留它。
+- 实例的应用方式与 `dcctl upgrade` 相同（消息代理和事件存储、配置文档，然后是服务），使用实例当前运行的版本，命令会等待所有服务就绪。因此与升级一样，它需要在保存实例状态的机器上运行，需要 `tofu`，并且不生成任何凭据。
+- 它不改变版本。当你的 `dcctl` 与实例属于不同发布版本时会拒绝执行；请先[升级](./releases-and-upgrades.md)实例。
+- 列出实例已在运行的领域不会改变任何内容。如果实例上一次运行没有完成，命令会重新应用实例，从而完成中途停止的 `enable-area`。
+- 该领域在应用任何内容之前就已记录。如果命令中途停止，该领域仍保持记录：再次运行 `dcctl enable-area`，或下一次 `dcctl upgrade`，都会完成其部署。
+- 启用领域只会部署它，不会配置它。有些领域需要先设置才能发挥作用。`update-management` 将制品保存在[对象存储](#object-store)中，对象存储在初始化时选定，之后无法添加；没有对象存储时，服务会运行但拒绝所有制品，命令会对此给出提示。在并非由 `dcctl` 创建的集群上，访问模式为 `ReadWriteOnce` 的 `filesystem` 存储只能供一个 Pod 使用，因此在 `user-management` 之外添加 `update-management` 会在写入任何内容之前被拒绝。`lwm2m-ingest` 使用初始化时提供的预共享密钥（`--lwm2m-identities`）认证设备；之后再添加时，它会运行但拒绝所有握手。
+
+没有移除领域的命令。领域可能保存数据，将其从部署中移除会使这些数据无服务可用。
 
 ## 删除实例 {#destroy}
 

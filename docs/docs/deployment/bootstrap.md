@@ -675,6 +675,7 @@ chart and operator are identical.
 | `--cluster <name>` | `local` provider: the kind cluster to create the instance on (default `devicechain`). It must already have been [installed](#install); bootstrap never creates a cluster. |
 | `--kube-context <name>` | Target an installed cluster through this kube-context instead. |
 | `--profile <profile>` | Functional-area profile: `default` (the standard system, used when omitted), `full` (everything — adds AI inference, outbound connectors, MCP, Sparkplug B ingest, LwM2M ingest, and update management), `telemetry`, or `ingest-only`. |
+| `--enable-area <area>` | Deploy a functional area on top of the profile, such as `--enable-area update-management`. Repeatable. To add one to an instance that is already running, see [Adding a functional area later](#enable-area). |
 | `--build` | Build images from source into a local registry (developer path; needs the source tree + Docker + ko). |
 | `--registry` / `--version` | Override the image registry / tag (defaults: published `ghcr.io/devicechain-io`, or `localhost:5000` + `dev` with `--build`). |
 | `--host <name>` | Ingress host to expose the instance on (default `devicechain.local`). Use `localhost` on a local cluster to reach the console with no `/etc/hosts` edit. |
@@ -1645,6 +1646,46 @@ dcctl sim create demo --instance my-instance --server localhost
 
 The simulator then drives telemetry and alarms in over the same device wire real hardware
 uses — see [Trying it with simulated data](../intro.md#trying-it-with-simulated-data).
+
+### Adding a functional area later {#enable-area}
+
+An instance runs the areas its profile names, plus any added with `--enable-area` at bootstrap.
+To add one to an instance that is already running (for example over-the-air updates, outbound
+connectors, AI inference or MCP on a `default` instance), use `dcctl enable-area`:
+
+```bash
+dcctl enable-area local my-instance update-management --dry-run
+dcctl enable-area local my-instance update-management
+```
+
+- The names are checked against the area catalog before the cluster is touched. The instance's
+  new set of areas is checked for missing dependencies before anything is written: for example,
+  `outbound-connectors` needs `event-processing`, which the `telemetry` profile does not run, so
+  name both.
+- The area is recorded on the instance, so a later `dcctl upgrade` keeps it.
+- The instance is applied the way `dcctl upgrade` applies it (the message broker and event store,
+  the configuration document, then the services), at the version the instance already runs, and
+  the command waits for every service to be ready. So, like an upgrade, it runs on the machine that
+  holds the instance's state, needs `tofu`, and mints no credentials.
+- It does not change versions. It refuses when your `dcctl` is from a different release than the
+  instance; [upgrade](./releases-and-upgrades.md) the instance first.
+- Naming an area the instance already runs changes nothing. If the last run on the instance did
+  not finish, the command applies the instance again, which completes an `enable-area` that
+  stopped part of the way.
+- The area is recorded before anything is applied. If the command stops part of the way, the area
+  stays recorded: running `dcctl enable-area` again, or the next `dcctl upgrade`, finishes
+  deploying it.
+- Enabling an area deploys it; it does not configure it. Some areas need settings before they do
+  useful work. `update-management` keeps artifacts in the [object store](#object-store), which is
+  chosen at bootstrap and cannot be added later; without one, the service runs and refuses every
+  artifact, and the command says so. On a cluster `dcctl` did not create, a `filesystem` store
+  with the `ReadWriteOnce` access mode can back only one pod, so adding `update-management` beside
+  `user-management` is refused before anything is written. `lwm2m-ingest` authenticates devices
+  against the pre-shared keys given at bootstrap (`--lwm2m-identities`); added later, it runs and
+  refuses every handshake.
+
+There is no command that removes an area. An area may hold data, and taking it out of the
+deployment would leave that data with nothing serving it.
 
 ## Removing an instance {#destroy}
 

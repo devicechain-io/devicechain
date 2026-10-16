@@ -136,6 +136,10 @@ type State struct {
 	// ResolveEnabledAreas.
 	EnableAreas  []string
 	EnabledAreas []string
+	// AreaChange is set only by `dcctl enable-area`: the areas it was asked to add,
+	// which of them are new to the instance, and whether there is anything to do. Nil
+	// on every other run. See applyAreaChange.
+	AreaChange *AreaChange
 	// Lwm2mIdentities are the provisioned LwM2M DTLS-PSK credentials (--lwm2m-identities):
 	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
 	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.

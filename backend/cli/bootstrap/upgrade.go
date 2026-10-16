@@ -6,7 +6,9 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -46,6 +48,12 @@ type UpgradeOptions struct {
 	// event store are left on the configuration they were built with, and the run ends
 	// saying so. See Upgrade.
 	SkipInfrastructure bool
+
+	// EnableAreas, when set, makes this upgrade `dcctl enable-area`: the named areas
+	// are appended to the declaration's area delta, and the run renders, applies and
+	// records the instance with them, at the version it is already on. See
+	// applyAreaChange.
+	EnableAreas []string
 }
 
 // Upgrade moves a live instance onto a release: its message broker and event store
@@ -147,9 +155,30 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	st.Evolving = true
 
-	fmt.Println(GreenUnderline(fmt.Sprintf(
-		"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
-	fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
+	if st.AreaChange != nil {
+		fmt.Println(GreenUnderline(fmt.Sprintf(
+			"\nEnable %s on instance %q, provider %q", strings.Join(st.AreaChange.Requested, ", "),
+			opts.Instance, provider.Name())))
+		fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
+		sayAreaChange(st)
+		// 🔴 BEFORE THE FIRST WRITE, INCLUDING THE LOCK AND THE PHASE. A run with
+		// nothing to do must leave the declaration exactly as it found it: stamping
+		// Upgrading and then Ready over an instance nothing touched would bump the
+		// provenance annotations and make `last-applied-at` lie.
+		if st.AreaChange.Settled {
+			sayAreaChangeSettled(st.AreaChange, opts.Instance)
+			return nil
+		}
+		// Before the first write, like the budget and the plan below: see
+		// precheckAreaChange for why a refusal found at the Helm step is a permanent one.
+		if err := precheckAreaChange(ctx, st); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println(GreenUnderline(fmt.Sprintf(
+			"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
+		fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
+	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
@@ -330,7 +359,12 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
-	fmt.Println(color.HiGreenString("\nInstance upgraded."))
+	if st.AreaChange != nil {
+		fmt.Println(color.HiGreenString("\nAreas enabled."))
+		sayAreaChangeDone(st)
+	} else {
+		fmt.Println(color.HiGreenString("\nInstance upgraded."))
+	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
 	// 🔴 SAID BECAUSE THE OPERATOR IS THE ONE THING THIS COMMAND USED TO MOVE AND NO
@@ -388,6 +422,9 @@ func sayUpgradeInfrastructure(st *State, opts UpgradeOptions) {
 // Its own function so what it says can be tested: Upgrade itself needs a cluster.
 func sayUpgradeDryRun(st *State) {
 	fmt.Println()
+	if st.AreaChange != nil && len(st.AreaChange.Added) > 0 {
+		wouldDo("deploy " + strings.Join(st.AreaChange.Added, ", ") + " at the version the instance is on")
+	}
 	if !appliesInfrastructure(st) {
 		wouldDo("leave this instance's message broker and event store as they are (--skip-infrastructure)")
 	} else {
@@ -485,8 +522,9 @@ func resolveUpgradeImageSource(st *State) (ImageSource, error) {
 //     instance, and the flagless re-run rolls the moved half BACK. That is the defect
 //     this function exists to remove, merely narrowed.
 //
-// It writes only the image source. Everything else in the declaration is the
-// instance's SHAPE, which this verb does not change (see Upgrade), and
+// It writes only the image source and the area delta — the latter changes only under
+// `dcctl enable-area`, the one caller that adds to it. Everything else in the
+// declaration is the instance's SHAPE, which this verb does not change (see Upgrade), and
 // WriteInstanceCR refuses a move of the immutable fields anyway — so a spec rebuilt
 // from anything but the live one would turn a flag typo into a refusal about the
 // cluster binding.
@@ -499,6 +537,10 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 	if st.DryRun {
 		wouldDo(fmt.Sprintf("record %s:%s in the instance declaration",
 			st.ImageRegistry, st.ImageVersion))
+		if st.AreaChange != nil && len(st.AreaChange.Added) > 0 {
+			wouldDo(fmt.Sprintf("record %s as enabled in the instance declaration",
+				strings.Join(st.AreaChange.Added, ", ")))
+		}
 		return nil
 	}
 
@@ -516,7 +558,8 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 				"re-run to start from a clean read", instance)
 	}
 
-	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion {
+	areasMove := st.AreaChange != nil && !slices.Equal(inst.Spec.ExtraFunctionalAreas, st.EnableAreas)
+	if inst.Spec.ImageRegistry == st.ImageRegistry && inst.Spec.ImageVersion == st.ImageVersion && !areasMove {
 		// Already says what this run is about to do. Writing anyway would bump the
 		// provenance annotations on every no-op re-apply, which makes
 		// `last-applied-at` useless for the question it exists to answer.
@@ -525,6 +568,18 @@ func recordUpgradedVersion(ctx context.Context, dyn dynamic.Interface, instance 
 
 	spec := inst.Spec
 	spec.ImageRegistry, spec.ImageVersion = st.ImageRegistry, st.ImageVersion
+	// 🔴 THE AREA DELTA IS WRITTEN WITH THE VERSION, AND FOR THE SAME REASON. It is
+	// what the next run reads its area set from (applyUpgradeDeclaration), so an area
+	// `dcctl enable-area` deployed and did not record would be pruned by the next
+	// ordinary upgrade — Helm deletes what leaves the manifest. Written before the
+	// move, as the version is: a run that dies half-way leaves the area declared, and
+	// the re-run finishes it rather than forgetting it.
+	//
+	// 🔴 ONLY UNDER enable-area. A plain upgrade leaves the field as it read it, so no
+	// State that failed to carry the delta across can write an instance's areas away.
+	if areasMove {
+		spec.ExtraFunctionalAreas = append([]string(nil), st.EnableAreas...)
+	}
 	// 🔴 Upgrading, AND THE VALUE IS THE DEFECT THIS LINE FIXES. writeInstanceCR
 	// stamped Bootstrapping on every write, so every instance that had ever been
 	// upgraded declared a bootstrap in progress from then on — a phase that is not

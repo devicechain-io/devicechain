@@ -24,6 +24,7 @@ dcctl [command]
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
+* [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
 * [dcctl ha](#dcctl-ha)	 - Inspect an instance's high-availability posture
 * [dcctl install](#dcctl-install)	 - Prepare a cluster for DeviceChain instances
 * [dcctl instances](#dcctl-instances)	 - Inspect the DeviceChain instances on this machine
@@ -225,6 +226,71 @@ dcctl destroy <provider> <instance> [flags]
       --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --without-state         skip tofu destroy and remove the instance by its release, database, login and namespace (for an instance whose infrastructure state is lost)
   -y, --yes                   assume yes for prompts
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+
+## dcctl enable-area {#dcctl-enable-area}
+
+Turn on a functional area on a running instance
+
+### Synopsis
+
+Deploys one or more functional areas on an instance that is already running —
+for example update-management, outbound-connectors, ai-inference or mcp on an
+instance bootstrapped with the default profile. It is the day-2 form of
+'dcctl bootstrap --enable-area'.
+
+The area names are checked against the area catalog before anything touches the
+cluster, and the instance's resulting area set is checked for unmet dependencies
+before anything is written. An unknown name or a missing dependency changes
+nothing.
+
+It records the areas in the instance's declaration, then applies the instance the
+way 'dcctl upgrade' does — the instance's message broker and event store, the
+configuration document its services read, and its Helm release — at the version
+the instance is already on, and waits for every area to be ready. The next
+'dcctl upgrade' reads the same declaration, so it keeps the areas.
+
+It does not move the instance's version. It refuses when this dcctl belongs to a
+different release than the instance's services, because it would apply this
+release's chart and infrastructure configuration under the old images; upgrade
+the instance first. Like 'dcctl upgrade', it needs 'tofu' on PATH and this
+machine's state for the instance, and it mints no credentials.
+
+Asking for an area the instance already runs is not an error. When every area
+named is already declared and the instance's last run ended Ready, nothing is
+changed. When the last run did not end Ready, it applies the instance again,
+which finishes an earlier enable-area that stopped part of the way.
+
+Some areas need configuration before they do useful work — ai-inference needs a
+model provider registered by an administrator, for example. Enabling the area
+deploys it; it does not configure it.
+
+There is no command that disables an area. An enabled area may hold data, and
+taking it out of the deployment would leave that data with nothing serving it.
+
+```
+  # Add the over-the-air update area to an instance
+  dcctl enable-area local devicechain update-management
+
+  # Add two areas at once, and see what would happen first
+  dcctl enable-area local devicechain outbound-connectors mcp --dry-run
+```
+
+```
+dcctl enable-area <provider> <instance> <area> [<area>...] [flags]
+```
+
+### Options
+
+```
+      --dry-run               print what would happen without changing anything
+      --escrow-file string    where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The run checks it still protects the key the instance is running on
+  -h, --help                  help for enable-area
+      --kube-context string   kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
 ```
 
 ### SEE ALSO

@@ -218,6 +218,60 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 				"to read cannot be matched to it", opts.Instance)
 	}
 
+	// The image source. The declaration records what the instance is running; the
+	// flags say what it is moving to, and an absent flag means "stay".
+	//
+	// 🔴 SETTLED HERE, ONCE, FOR BOTH HALVES OF THE UPGRADE. The operator's image used
+	// to be resolved separately from the flags alone, so an instance built from a local
+	// registry could have its controller moved to a published image and its services
+	// left on the local one — two halves of what is defined as ONE version across the
+	// images, the chart, the operator and this CLI.
+	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
+	// 🔴 AN AREA CHANGE STAYS ON THE DECLARED IMAGES, AND THAT IS NOT LEFT TO THE CALLER.
+	// The release refusal in applyAreaChange compares this dcctl with the version the run
+	// is about to deploy; an image source supplied beside the areas would make that the
+	// supplied one, and the run a version move under a verb that promises none.
+	if len(opts.EnableAreas) > 0 && (opts.ImageRegistry != "" || opts.ImageVersion != "") {
+		return fmt.Errorf("enabling an area on instance %q keeps the images it runs (%s:%s); "+
+			"moving them is `dcctl upgrade`", opts.Instance, inst.Spec.ImageRegistry, inst.Spec.ImageVersion)
+	}
+	if opts.ImageRegistry != "" {
+		st.ImageRegistry = opts.ImageRegistry
+	}
+	if opts.ImageVersion != "" {
+		st.ImageVersion = opts.ImageVersion
+	}
+	img, err := resolveUpgradeImageSource(st)
+	if err != nil {
+		if len(opts.EnableAreas) > 0 {
+			// 🔴 NOT THE UPGRADE'S ADVICE. That one says to pass --registry/--version,
+			// which enable-area does not have, and an area on images built from source
+			// would need its own image built — which this verb does not do.
+			return fmt.Errorf("instance %q runs images tagged %q, which no registry publishes "+
+				"(an instance built with --build). Enabling an area deploys it at the version the "+
+				"instance runs and builds no image, so it cannot add one here: move the instance onto "+
+				"a published or pushed tag first (`dcctl upgrade %s %s --registry <registry> --version <tag>`)",
+				opts.Instance, st.ImageVersion, inst.Spec.Provider, opts.Instance)
+		}
+		return err
+	}
+	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
+
+	// `dcctl enable-area`: the requested areas join the declaration's delta here, so
+	// the resolution below — and everything downstream of it, the chart values, the
+	// login's connection limit, the event store's reserve, the declaration write — sees
+	// the instance as it will be. After the image source is resolved, because the
+	// refusal it can make is about the version the instance is on.
+	if len(opts.EnableAreas) > 0 {
+		requested, err := normalizeAreaRequest(opts.EnableAreas)
+		if err != nil {
+			return err
+		}
+		if err := applyAreaChange(st, inst, requested, inst.Spec.Provider); err != nil {
+			return err
+		}
+	}
+
 	// 🔴 RE-DERIVED, NOT COPIED. The declaration records the area DELTA — what
 	// --enable-area asked for on top of the profile — and applyDeclaration writes
 	// only that. A State carrying the extras with EnabledAreas empty makes helmValues
@@ -229,27 +283,6 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 			"cannot deploy: %w", opts.Instance, err)
 	}
 	st.EnabledAreas = areas
-
-	// The image source. The declaration records what the instance is running; the
-	// flags say what it is moving to, and an absent flag means "stay".
-	//
-	// 🔴 SETTLED HERE, ONCE, FOR BOTH HALVES OF THE UPGRADE. The operator's image used
-	// to be resolved separately from the flags alone, so an instance built from a local
-	// registry could have its controller moved to a published image and its services
-	// left on the local one — two halves of what is defined as ONE version across the
-	// images, the chart, the operator and this CLI.
-	st.ImageRegistry, st.ImageVersion = inst.Spec.ImageRegistry, inst.Spec.ImageVersion
-	if opts.ImageRegistry != "" {
-		st.ImageRegistry = opts.ImageRegistry
-	}
-	if opts.ImageVersion != "" {
-		st.ImageVersion = opts.ImageVersion
-	}
-	img, err := resolveUpgradeImageSource(st)
-	if err != nil {
-		return err
-	}
-	st.ImageRegistry, st.ImageVersion = img.Registry, img.Version
 
 	// The values the chart is rendered from that are DERIVED from the declaration
 	// rather than read out of it. See ingressHostFor: the chart's schema requires a
