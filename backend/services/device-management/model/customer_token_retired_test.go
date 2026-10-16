@@ -12,7 +12,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/glebarez/sqlite"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -30,9 +30,7 @@ import (
 // the customer type every create here names.
 func newRetiredTokenApi(t *testing.T) (*Api, context.Context) {
 	t.Helper()
-	dsn := "file:" + t.Name() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
-	require.NoError(t, err, "open sqlite")
+	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, db.AutoMigrate(
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &Device{}, &DeviceType{},
