@@ -20,6 +20,7 @@ const sweepSDL = `
 		devices: [Device!]!
 		device(token: String!): Device
 		echo(token: String!): String
+		customers: [String!]!
 	}
 	type Mutation { rename(token: String!): Boolean! }
 	type Subscription { stream: String! }
@@ -28,7 +29,7 @@ const sweepSDL = `
 
 // sweepRoot serves two customers' devices. leaky=true makes `devices` ignore the scope —
 // the defect the sweep exists to catch.
-type sweepRoot struct{ leaky, oracle bool }
+type sweepRoot struct{ leaky, oracle, leakyCustomers bool }
 
 type device struct{ token, owner string }
 
@@ -79,6 +80,17 @@ func (r *sweepRoot) Device(ctx context.Context, args struct{ Token string }) (*d
 	}
 	// Echoes the caller's own argument: not a leak.
 	return nil, fmt.Errorf("device %q: not found", args.Token)
+}
+
+// Customers names the caller's customers; leakyCustomers names every one.
+func (r *sweepRoot) Customers(ctx context.Context) []string {
+	if r.leakyCustomers {
+		return []string{"acme", "globex"}
+	}
+	if s, scoped := auth.ScopeFromContext(ctx); scoped && len(s.Anchors()) > 0 {
+		return []string{"acme"}
+	}
+	return []string{"acme", "globex"}
 }
 
 func (r *sweepRoot) Echo(args struct{ Token string }) *string { return &args.Token }
@@ -182,5 +194,14 @@ func TestTheSweepCatchesAnExistenceOracle(t *testing.T) {
 	rec, _ := runRecorded(config(&sweepRoot{oracle: true}))
 	if len(rec.errors) == 0 || !strings.Contains(strings.Join(rec.errors, "|"), "query device ") {
 		t.Fatalf("a resolver that refused a hidden row differently from a missing one passed: %v", rec.errors)
+	}
+}
+
+// 🔴 The sweep catches a leak that never mentions the probe: another customer's record
+// served by a read that takes no argument at all, identically on both calls.
+func TestTheSweepCatchesALeakThatNeverNamesTheProbe(t *testing.T) {
+	rec, _ := runRecorded(config(&sweepRoot{leakyCustomers: true}))
+	if len(rec.errors) == 0 || !strings.Contains(strings.Join(rec.errors, "|"), "query customers") {
+		t.Fatalf("a read that listed globex for acme's member passed the sweep: %v", rec.errors)
 	}
 }

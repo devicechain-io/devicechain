@@ -784,6 +784,32 @@ respuesta nunca te dice si el registro existe. Algunos rechazos añaden `extensi
 decir por qué. Decide según `code` y trata `reason` como un detalle: un `FORBIDDEN` sin motivo sigue
 siendo un rechazo.
 
+### Cuando tu acceso se limita a algunos clientes {#limited-access}
+
+El acceso de un miembro de un tenant puede limitarse a algunos de los clientes del tenant. Un
+dispositivo pertenece a un cliente mediante una relación rastreada con él, como la relación
+integrada `assigned` que escribe `claimDevice` cuando no indicas `relationshipType`. Un miembro con
+acceso limitado puede llamar a estas operaciones, y cada una responde solo con lo que pertenece a
+esos clientes:
+
+| Operación | Lo que ve un miembro con acceso limitado |
+| --- | --- |
+| `devices`, `devicesById`, `devicesByToken`, `devicesByExternalId` | Los dispositivos que los clientes poseen ahora. Un dispositivo que pasa a otro cliente sale de la lista de inmediato. |
+| `customers`, `customersById`, `customersByToken` | Solo los registros de sus propios clientes. |
+| `alarms`, `alarmsById`, `alarmsByToken`, `alarmStream` | Las alarmas generadas mientras el dispositivo pertenecía a uno de los clientes. |
+| `acknowledgeAlarm`, `acknowledgeAlarms`, `clearAlarm` | Las mismas alarmas. |
+| `events`, `measurementEvents`, `locationEvents`, `alertEvents`, `bucketedMeasurements`, `measurementStream` | Los eventos registrados mientras el dispositivo pertenecía a uno de los clientes. Un cliente conserva el historial del tiempo en que poseyó un dispositivo y no ve el historial anterior. |
+| Tipos de dispositivo, perfiles de dispositivo y sus versiones, definiciones de métricas y comandos, tipos de cliente | Todo, porque es configuración. Se puede leer pero no modificar. |
+
+Un registro que el miembro no puede ver se responde exactamente igual que uno que no existe: se
+omite de una lista, o la operación responde `NOT_FOUND`. Una suscripción `measurementStream` para un
+dispositivo ajeno a sus clientes se acepta y no entrega nada. Cualquier otra operación responde
+`FORBIDDEN` con `extensions.reason` igual a `SCOPE_UNSUPPORTED`.
+
+Un evento registrado mientras el dispositivo no pertenecía a ningún cliente no es visible para un
+miembro con acceso limitado. Tampoco lo es una alarma generada antes de esta versión: las alarmas
+registran sus clientes solo a partir de esta versión.
+
 ## Límites de las solicitudes {#request-limits}
 
 Todos los endpoints de GraphQL rechazan una solicitud demasiado grande o que hace demasiado trabajo,

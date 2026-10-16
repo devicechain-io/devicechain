@@ -153,6 +153,13 @@ func newOwnershipFixture(t *testing.T) ownFixture {
 		TargetType: "customer", TargetToken: "acme", RelationshipTypeId: bType}).Error; err != nil {
 		t.Fatal(err)
 	}
+	// An ASSET's tracked edge to acme whose source id happens to equal idle-pump's row id:
+	// ids are shared across entity families' tables, so only the source-type clause keeps
+	// an asset's ownership from being read as the device's.
+	if err := db.WithContext(ctxA).Create(&ownEdge{SourceType: "asset", SourceId: f.devices["idle-pump"],
+		TargetType: "customer", TargetToken: "acme", RelationshipTypeId: typeOf("A", "assigned", true)}).Error; err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 
