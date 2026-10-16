@@ -58,6 +58,12 @@
 # cheap can. Read a green run as "no page is missing", never as "the Spanish docs
 # are current".
 #
+# What IS cheap is the skeleton inside each page, and that is a separate guard:
+# docs/scripts/check-structure-parity.mjs requires every translated page to keep
+# English's explicit heading anchors, heading count per level, code fences and
+# admonitions. It skips a page that exists on one side only, because reporting the
+# file set is this script's job and two guards should not own one failure.
+#
 #   hack/check-docs-locale-parity.sh              # check
 #   hack/check-docs-locale-parity.sh --self-test  # prove the check can fail
 

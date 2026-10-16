@@ -12,6 +12,8 @@
     "translations:status": "node scripts/check-translation-freshness.mjs",
     "test:search": "node --test src/search/analytics.test.mjs src/search/analytics.hardening.test.mjs scripts/analytics-scrub.test.mjs scripts/check-search-selectors.test.mjs scripts/analytics-init.test.mjs",
     "test:translations": "node --test scripts/translation-freshness.test.mjs",
+    "translations:structure": "node scripts/check-structure-parity.mjs",
+    "test:structure": "node --test scripts/structure-parity.test.mjs",
     "guide-assets": "node scripts/fetch-guide-assets.mjs",
     "test:guide-assets": "node --test scripts/fetch-guide-assets.test.mjs",
     "prestart": "npm run guide-assets && npm run schema && npm run graphql-reference",
