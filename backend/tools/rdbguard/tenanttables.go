@@ -23,6 +23,15 @@ import (
 // red instead of silently shrinking the set of tables these guards know to protect.
 var tenantFieldNames = map[string]bool{"TenantId": true, "Tenant": true}
 
+// ownerFieldNames are tenant columns the tenant-scope callback deliberately does NOT
+// scope: a nullable owner that marks some rows as one tenant's and leaves the rest
+// instance-wide (iam_roles.tenant_id — catalogue roles have none, so the callback's
+// "every query names a tenant" rule cannot apply and the store names its side instead).
+// Rows a tenant owns still live there, so a raw statement over the table touches tenant
+// rows: the guards count it tenant-bearing. This is not core's list, so it is not part of
+// TestTenantFieldNamesMatchCore; over-flagging is the safe direction.
+var ownerFieldNames = map[string]bool{"TenantID": true}
+
 // tenantColumnNames are the database column names those spellings produce
 // (core/rdb.TenantColumnNames), used when reading a join's ON clause.
 var tenantColumnNames = []string{"tenant_id", "tenant"}
@@ -150,7 +159,37 @@ func (f *facts) derive() {
 				}
 			}
 		}
+		// The other side of a join: a many2many whose ELEMENT is tenant-bearing hangs off a
+		// tenant table even when its owner is not (Identity.SystemRoles → Role), so its
+		// join table has a foreign key into tenant rows.
+		for name, st := range p.structs {
+			for _, j := range many2manyOfTenantElements(st, f.tenantTypes) {
+				if _, seen := f.tables[j]; !seen {
+					f.tables[j] = d + "." + name + " (many2many of a tenant type)"
+				}
+			}
+		}
 	}
+}
+
+// many2manyOfTenantElements returns the join tables of a struct's many2many fields whose
+// element type is tenant-bearing.
+func many2manyOfTenantElements(st *ast.StructType, tenantTypes map[string]bool) []string {
+	var out []string
+	for _, fld := range st.Fields.List {
+		elem := fld.Type
+		if a, ok := elem.(*ast.ArrayType); ok {
+			elem = a.Elt
+		}
+		if s, ok := elem.(*ast.StarExpr); ok {
+			elem = s.X
+		}
+		if !tenantTypes[embeddedName(elem)] {
+			continue
+		}
+		out = append(out, many2manyTables(&ast.StructType{Fields: &ast.FieldList{List: []*ast.Field{fld}}})...)
+	}
+	return out
 }
 
 // many2manyTables returns the join-table names in a struct's `gorm:"many2many:<name>"` tags.
@@ -182,7 +221,7 @@ func (f *facts) bearsTenant(st *ast.StructType) bool {
 			continue
 		}
 		for _, n := range fld.Names {
-			if tenantFieldNames[n.Name] {
+			if tenantFieldNames[n.Name] || ownerFieldNames[n.Name] {
 				return true
 			}
 		}
