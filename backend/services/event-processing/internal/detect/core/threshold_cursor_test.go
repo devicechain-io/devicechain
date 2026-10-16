@@ -35,6 +35,27 @@ func feedArrivals(det detector, evs []Event, order []int, seq0 uint64) []Detecti
 	return out
 }
 
+// promptReceipt is the receipt of a message stored on the stream the moment its reading was
+// received; redeliveredReceipt is that of a message stored a full AckWait after the platform
+// received its reading, as a redelivery is.
+func promptReceipt(stored time.Time) Receipt { return Receipt{Received: stored, Stored: stored} }
+
+func redeliveredReceipt(stored time.Time) Receipt {
+	return Receipt{Received: stored.Add(-2 * thresholdRedeliveryBudget), Stored: stored}
+}
+
+// feedReceived is feedArrivals with a receipt per message: rs[i] goes with the i-th arrival.
+func feedReceived(det detector, evs []Event, order []int, rs []Receipt, seq0 uint64) []Detection {
+	var out []Detection
+	for i, idx := range order {
+		ev := evs[idx]
+		ev.Seq = seq0 + uint64(i) + 1
+		det.ProcessReceived(ev.Seq, ev.Time, rs[i], []Event{ev})
+		out = append(out, det.Drain()...)
+	}
+	return out
+}
+
 // newDet builds a single engine (k == 1) or a sharded one.
 func newDet(k int, lateness time.Duration) detector {
 	if k == 1 {
@@ -85,15 +106,18 @@ func raisedBy(evs []Event, s string, d Detection) bool {
 // time seen by the lateness. A RAISED series refuses a reading older than its newest one, by up to
 // the horizon; a reading older still is applied as it would be with no cursor and restarts the
 // cursor (at the raise, if that is newer). An UNRAISED series holds nothing and refuses a match
-// behind the frontier. It returns the edges and the number of readings refused.
-func refThreshold(evs []Event, lateness time.Duration) ([]Detection, uint64) {
+// behind the frontier whose message may be a redelivery (redelivered[i] for the i-th reading; nil
+// means every message may be). It returns the edges, the number of readings refused, and the number
+// of matches behind the frontier that raised because their message reached the stream promptly.
+func refThreshold(evs []Event, redelivered []bool, lateness time.Duration) ([]Detection, uint64, int) {
 	type st struct{ raisedAt, cursor time.Time }
 	state := map[string]*st{}
 	var frontier time.Time
 	first := true
 	var out []Detection
 	var late uint64
-	for _, e := range evs {
+	prompt := 0
+	for i, e := range evs {
 		if f := e.Time.Add(-lateness); first || f.After(frontier) {
 			frontier, first = f, false
 		}
@@ -104,8 +128,11 @@ func refThreshold(evs []Event, lateness time.Duration) ([]Detection, uint64) {
 				continue
 			}
 			if e.Time.Before(frontier) {
-				late++
-				continue
+				if redelivered == nil || redelivered[i] {
+					late++
+					continue
+				}
+				prompt++
 			}
 			state[s] = &st{raisedAt: e.Time, cursor: e.Time}
 			out = append(out, Detection{RuleID: "r", Series: s, Kind: Threshold, At: e.Time, Value: e.Value, HasValue: e.HasValue})
@@ -126,13 +153,14 @@ func refThreshold(evs []Event, lateness time.Duration) ([]Detection, uint64) {
 		}
 		x.cursor = cur
 	}
-	return out, late
+	return out, late, prompt
 }
 
 // TestThresholdUnderReorderMatchesItsSpecification drives several interleaved series through a
 // random arrival order — event time plus a jitter wider than the lateness budget, so in-budget
-// reorders and readings behind the frontier both occur — single and sharded, and checks the edges
-// and the late count against refThreshold exactly. On top of that it checks the properties the
+// reorders and readings behind the frontier both occur — with a random receipt per message (stored
+// promptly, stored as a redelivery is, or none), single and sharded, and checks the edges and the
+// late count against refThreshold exactly. On top of that it checks the properties the
 // specification exists for:
 //
 //   - edges alternate, a raise carries a matching reading of the series, and a resolve is never
@@ -144,9 +172,11 @@ func refThreshold(evs []Event, lateness time.Duration) ([]Detection, uint64) {
 //     it behaved before the cursor, which the next reading heals.
 func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 	series := []string{"a", "b", "c", "d"}
+	promptTotal := 0 // only the 3 s budget is narrower than the jitter, so only it puts readings behind the frontier
 	for _, lateness := range []time.Duration{3 * time.Second, 8 * time.Second} {
 		rng := rand.New(rand.NewSource(int64(4200 + lateness/time.Second)))
-		raisedChecked, clearChecked, staleReraise, refusedAny := 0, 0, 0, 0
+		rngR := rand.New(rand.NewSource(int64(4300 + lateness/time.Second))) // receipts, apart so the readings are unchanged
+		raisedChecked, clearChecked, staleReraise, refusedAny, promptAny := 0, 0, 0, 0, 0
 		for trial := 0; trial < 600; trial++ {
 			var evs []Event
 			for _, s := range series {
@@ -164,6 +194,19 @@ func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 				order[i] = i
 			}
 			sort.SliceStable(order, func(a, b int) bool { return jit[order[a]] < jit[order[b]] })
+			// Each message reaches the stream promptly, as a redelivery, or with no receipt.
+			rs := make([]Receipt, len(order))
+			redelivered := make([]bool, len(order))
+			for i, idx := range order {
+				switch rngR.Intn(5) {
+				case 0, 1:
+					rs[i] = promptReceipt(evs[idx].Time)
+				case 2, 3:
+					rs[i], redelivered[i] = redeliveredReceipt(evs[idx].Time), true
+				default:
+					redelivered[i] = true
+				}
+			}
 			var arrived []Event
 			inBudget := map[string]bool{}
 			for _, s := range series {
@@ -180,13 +223,16 @@ func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 				}
 				arrived = append(arrived, ev)
 			}
-			want, wantLate := refThreshold(arrived, lateness)
+			want, wantLate, prompt := refThreshold(arrived, redelivered, lateness)
 			if wantLate > 0 {
 				refusedAny++
 			}
+			if prompt > 0 {
+				promptAny++
+			}
 			for _, k := range []int{1, 3} {
 				det := newDet(k, lateness)
-				all := feedArrivals(det, evs, order, 0)
+				all := feedReceived(det, evs, order, rs, 0)
 				if late := det.DrainLateSamples(); fmtDets(all) != fmtDets(want) || late != wantLate {
 					t.Fatalf("lateness %v trial %d K=%d: differs from the specification\n arrival: %s\n want (late %d): %s\n got  (late %d): %s",
 						lateness, trial, k, describeSamples(arrived), wantLate, fmtDets(want), late, fmtDets(all))
@@ -228,12 +274,16 @@ func TestThresholdUnderReorderMatchesItsSpecification(t *testing.T) {
 				}
 			}
 		}
-		t.Logf("lateness %v: %d raised and %d clear series checked, %d stale re-raises, %d trials with a refusal",
-			lateness, raisedChecked, clearChecked, staleReraise, refusedAny)
+		t.Logf("lateness %v: %d raised and %d clear series checked, %d stale re-raises, %d trials with a refusal, %d with a prompt raise behind the frontier",
+			lateness, raisedChecked, clearChecked, staleReraise, refusedAny, promptAny)
 		if raisedChecked < 200 || clearChecked < 500 || refusedAny < 100 || staleReraise == 0 {
 			t.Fatalf("lateness %v: generator too weak: %d raised and %d clear series checked, %d stale re-raises, %d trials with a refusal",
 				lateness, raisedChecked, clearChecked, staleReraise, refusedAny)
 		}
+		promptTotal += promptAny
+	}
+	if promptTotal < 100 {
+		t.Fatalf("generator too weak: %d trials with a prompt raise behind the frontier", promptTotal)
 	}
 }
 
@@ -307,36 +357,86 @@ func TestThresholdInOrderReadingsAreUnchanged(t *testing.T) {
 	}
 }
 
-// TestThresholdReadingsBehindTheFrontierCannotRaise pins the cost the frontier bound accepts. A
-// device whose readings are dated more than the lateness budget behind the rest of the fleet — an
-// in-order store-and-forward upload here, an hour behind a live device — cannot RAISE from those
-// readings: each match is refused and counted late, as the windowed kinds refuse it. Before the
-// cursor it raised, stamped an hour in the past. A raised alarm is still cleared by such a reading,
-// and a match inside the budget still raises.
-func TestThresholdReadingsBehindTheFrontierCannotRaise(t *testing.T) {
-	for _, k := range []int{1, 3} {
-		det := newDet(k, 5*time.Second)
-		evs := []Event{
-			thrEv("up", 0, true, 1),       // raised before the outage
-			thrEv("live", 3600, false, 0), // a live device carries the frontier an hour on
-			thrEv("up", 60, true, 2),      // the backlog, in order: a match...
-			thrEv("low", 100, true, 3),    // ...another device's match, behind the frontier
-			thrEv("up", 120, false, 0),    // ...and the raised device's non-match: it clears
-			thrEv("low", 3600, true, 4),   // a match inside the budget raises
+// TestThresholdReadingsBehindTheFrontierCanRaise: a device whose readings are dated more than the
+// lateness budget behind the rest of the fleet — an in-order store-and-forward upload here, an hour
+// behind a live device — raises from them when they reach the stream promptly, stamped at the
+// reading, exactly as it did before the frontier bound. The same readings in messages that may be
+// redeliveries — stored a full AckWait after they were received, or with no receipt — are refused
+// and counted late, so the bound still holds against a redelivery. A raised alarm is cleared by
+// such a reading either way: a raised series answers to its cursor, not to the frontier.
+func TestThresholdReadingsBehindTheFrontierCanRaise(t *testing.T) {
+	evs := []Event{
+		thrEv("up", 0, true, 1),       // raised before the outage
+		thrEv("live", 3600, false, 0), // a live device carries the frontier an hour on
+		thrEv("up", 60, true, 2),      // the backlog, in order: a match...
+		thrEv("low", 100, true, 3),    // ...another device's match, behind the frontier
+		thrEv("up", 120, false, 0),    // ...and the raised device's non-match: it clears
+		thrEv("low", 3600, true, 4),   // a match inside the budget
+	}
+	order := []int{0, 1, 2, 3, 4, 5}
+	// Every message is stored at the wall time the backlog was uploaded, an hour on.
+	wall := at(3600)
+	for _, c := range []struct {
+		name    string
+		receipt Receipt
+		want    string
+		late    uint64
+	}{
+		{"stored promptly", promptReceipt(wall), "Raised@0=1 Raised@100=3 Resolved@120", 0},
+		{"stored as a redelivery", redeliveredReceipt(wall), "Raised@0=1 Resolved@120 Raised@3600=4", 1},
+		{"no receipt", Receipt{}, "Raised@0=1 Resolved@120 Raised@3600=4", 1},
+		{"no receipt time", Receipt{Stored: wall}, "Raised@0=1 Resolved@120 Raised@3600=4", 1},
+		{"no store time", Receipt{Received: wall}, "Raised@0=1 Resolved@120 Raised@3600=4", 1},
+	} {
+		for _, k := range []int{1, 3} {
+			det := newDet(k, 5*time.Second)
+			rs := make([]Receipt, len(order))
+			for i := range rs {
+				rs[i] = c.receipt
+			}
+			if got := edges(feedReceived(det, evs, order, rs, 0)); got != c.want {
+				t.Fatalf("%s K=%d: want %s, got %s", c.name, k, c.want, got)
+			}
+			if late := det.DrainLateSamples(); late != c.late {
+				t.Fatalf("%s K=%d: late = %d, want %d", c.name, k, late, c.late)
+			}
 		}
-		got := edges(feedArrivals(det, evs, []int{0, 1, 2, 3, 4, 5}, 0))
-		if got != "Raised@0=1 Resolved@120 Raised@3600=4" {
-			t.Fatalf("K=%d: want Raised@0=1 Resolved@120 Raised@3600=4, got %s", k, got)
-		}
-		if late := det.DrainLateSamples(); late != 1 {
-			t.Fatalf("K=%d: low's match behind the frontier must be counted late once, counted %d", k, late)
+	}
+}
+
+// TestThresholdRedeliveryBudgetBoundary: a message stored exactly thresholdRedeliveryBudget after
+// its reading was received is not a redelivery, and one stored a nanosecond later may be. The
+// budget is half the AckWait, the least any redelivery waits, so it cannot reach one; a clock
+// running behind on the ingest side (a receipt stamped after the store) is prompt.
+func TestThresholdRedeliveryBudgetBoundary(t *testing.T) {
+	if thresholdRedeliveryBudget != 30*time.Second {
+		t.Fatalf("budget = %v, want half of a 60 s AckWait", thresholdRedeliveryBudget)
+	}
+	for _, c := range []struct {
+		delay time.Duration
+		raise bool
+	}{
+		{-time.Second, true},
+		{0, true},
+		{thresholdRedeliveryBudget, true},
+		{thresholdRedeliveryBudget + time.Nanosecond, false},
+		{2 * thresholdRedeliveryBudget, false},
+	} {
+		det := newDet(1, 5*time.Second)
+		det.ProcessReceived(1, at(100), promptReceipt(at(100)), []Event{thrEv("live", 100, false, 0)})
+		r := Receipt{Received: at(200), Stored: at(200).Add(c.delay)}
+		det.ProcessReceived(2, at(10), r, []Event{thrEv("d", 10, true, 1)})
+		got := edges(det.Drain())
+		if raised := got == "Raised@10=1"; raised != c.raise || (!raised && got != "") {
+			t.Fatalf("delay %v: want raise=%v, got %q", c.delay, c.raise, got)
 		}
 	}
 }
 
 // TestThresholdRedeliveryBehindTheFrontierIsLate: a reading redelivered long after newer ones
-// (an AckWait redelivery, 70 s here against a 5 s budget) neither clears nor raises, in either
-// direction, and is counted late. On main it flipped the final level and was counted nowhere.
+// (an AckWait redelivery, 70 s here against a 5 s budget: received at 10, stored again at 80)
+// neither clears nor raises, in either direction, and is counted late. On main it flipped the
+// final level and was counted nowhere.
 func TestThresholdRedeliveryBehindTheFrontierIsLate(t *testing.T) {
 	for _, c := range []struct {
 		name      string
@@ -353,11 +453,12 @@ func TestThresholdRedeliveryBehindTheFrontierIsLate(t *testing.T) {
 				var out []Detection
 				for i, ev := range evs {
 					ev.Seq = uint64(i + 1)
-					arrival := ev.Time
+					arrival, r := ev.Time, promptReceipt(ev.Time)
 					if i == 3 {
-						arrival = at(80) // redelivered after the reading at 80 was applied
+						// redelivered after the reading at 80 was applied
+						arrival, r = at(80), Receipt{Received: at(10), Stored: at(80)}
 					}
-					det.ProcessResolved(ev.Seq, arrival, []Event{ev})
+					det.ProcessReceived(ev.Seq, arrival, r, []Event{ev})
 					out = append(out, det.Drain()...)
 				}
 				if level := len(out) > 0 && out[len(out)-1].Edge == EdgeRaised; level != c.wantLevel {
@@ -374,6 +475,43 @@ func TestThresholdRedeliveryBehindTheFrontierIsLate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestThresholdRedeliveredMatchCannotReraiseAfterAClear is the case the frontier bound exists for:
+// match@10 raises, non-match@80 clears, and then the message carrying match@10 is redelivered. It
+// carries the receipt of its first delivery and is stored again an AckWait later, so it is refused
+// and counted late rather than raising again stamped before the clear. The same reading reaching
+// the platform afresh — a device sending it again — is a new reading as far as the engine can
+// tell: it raises, stamped at 10, as every such reading did before the bound, and the device's next
+// reading heals it. Telling those apart needs the series' own newest time, which an unraised series
+// does not keep.
+func TestThresholdRedeliveredMatchCannotReraiseAfterAClear(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		receipt Receipt
+		want    string
+		late    uint64
+	}{
+		{"redelivered", Receipt{Received: at(10), Stored: at(80).Add(time.Minute)}, "Raised@10=1 Resolved@80", 1},
+		{"sent again by the device", promptReceipt(at(80).Add(time.Minute)), "Raised@10=1 Resolved@80 Raised@10=1", 0},
+	} {
+		for _, k := range []int{1, 3} {
+			det := newDet(k, 5*time.Second)
+			det.ProcessReceived(1, at(10), promptReceipt(at(10)), []Event{thrEv("d", 10, true, 1)})
+			det.ProcessReceived(2, at(80), promptReceipt(at(80)), []Event{thrEv("d", 80, false, 0)})
+			det.ProcessReceived(3, at(10), c.receipt, []Event{thrEv("d", 10, true, 1)})
+			if got := edges(det.Drain()); got != c.want {
+				t.Fatalf("%s K=%d: want %s, got %s", c.name, k, c.want, got)
+			}
+			if late := det.DrainLateSamples(); late != c.late {
+				t.Fatalf("%s K=%d: late = %d, want %d", c.name, k, late, c.late)
+			}
+			det.ProcessReceived(4, at(81), promptReceipt(at(81)), []Event{thrEv("d", 81, false, 0)})
+			if got := edges(det.Drain()); c.late == 0 && got != "Resolved@81" {
+				t.Fatalf("%s K=%d: the next reading must heal it, got %q", c.name, k, got)
+			}
+		}
 	}
 }
 
@@ -505,8 +643,10 @@ func TestThresholdRaisedCursorHasNoFrontierHorizon(t *testing.T) {
 
 // TestThresholdCursorReplayIsCheckpointIndependent: the output is the same whether the engine runs
 // straight through or is checkpointed and restored after every message — single and sharded — over
-// reordered readings that span several cursor horizons. A cursor dropped at a checkpoint must be
-// one whose absence changes nothing, or this differs.
+// reordered readings that span several cursor horizons, each message stored promptly, as a
+// redelivery, or with no receipt. A cursor dropped at a checkpoint must be one whose absence changes
+// nothing, and the receipt must be read from the message rather than from anything a checkpoint
+// carries, or this differs.
 func TestThresholdCursorReplayIsCheckpointIndependent(t *testing.T) {
 	h := int(thresholdCursorHorizon / time.Second)
 	rng := rand.New(rand.NewSource(99))
@@ -514,6 +654,7 @@ func TestThresholdCursorReplayIsCheckpointIndependent(t *testing.T) {
 	for trial := 0; trial < 150; trial++ {
 		var evs []Event
 		var arrivals []int
+		var receipts []Receipt
 		sec := 0
 		for i := 0; i < 60; i++ {
 			s := []string{"a", "b", "c"}[rng.Intn(3)]
@@ -528,6 +669,14 @@ func TestThresholdCursorReplayIsCheckpointIndependent(t *testing.T) {
 			}
 			evs = append(evs, thrEv(s, t0, rng.Intn(2) == 0, float64(i)))
 			arrivals = append(arrivals, sec)
+			switch rng.Intn(3) {
+			case 0:
+				receipts = append(receipts, promptReceipt(at(sec)))
+			case 1:
+				receipts = append(receipts, redeliveredReceipt(at(sec)))
+			default:
+				receipts = append(receipts, Receipt{})
+			}
 		}
 		run := func(k int, checkpoint bool) (string, uint64) {
 			det := newDet(k, 5*time.Second)
@@ -535,7 +684,7 @@ func TestThresholdCursorReplayIsCheckpointIndependent(t *testing.T) {
 			var late uint64
 			for i, ev := range evs {
 				ev.Seq = uint64(i + 1)
-				det.ProcessResolved(ev.Seq, at(arrivals[i]), []Event{ev})
+				det.ProcessReceived(ev.Seq, at(arrivals[i]), receipts[i], []Event{ev})
 				out = append(out, det.Drain()...)
 				late += det.DrainLateSamples()
 				if checkpoint {
@@ -709,7 +858,8 @@ func TestThresholdClockStepBackIsBoundedByTheHorizon(t *testing.T) {
 // moves the frontier to its envelope before its samples are applied. An unraised series measures a
 // match against the frontier as it stood BEFORE that message, so a device sending ten one-second
 // readings per message still raises from the oldest of them; a batch dated behind the frontier
-// that earlier messages set is still refused.
+// that earlier messages set is refused when its message may be a redelivery, and raises from its
+// oldest match when the message reached the stream promptly.
 func TestThresholdBatchSamplesAreNotLateAgainstTheirOwnEnvelope(t *testing.T) {
 	for _, k := range []int{1, 3} {
 		det := newDet(k, 5*time.Second)
@@ -725,6 +875,13 @@ func TestThresholdBatchSamplesAreNotLateAgainstTheirOwnEnvelope(t *testing.T) {
 		}
 		if late := det.DrainLateSamples(); late != 2 {
 			t.Fatalf("K=%d: late = %d, want 2", k, late)
+		}
+		det.ProcessReceived(4, at(100), promptReceipt(at(100)), []Event{thrEv("d", 52, false, 0), thrEv("d", 53, true, 4), thrEv("d", 54, true, 5)})
+		if got := edges(det.Drain()); got != "Raised@53=4" {
+			t.Fatalf("K=%d: a prompt batch behind the frontier must raise from its oldest match; got %s", k, got)
+		}
+		if late := det.DrainLateSamples(); late != 0 {
+			t.Fatalf("K=%d: late = %d, want 0", k, late)
 		}
 	}
 }

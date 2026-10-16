@@ -218,6 +218,15 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 	return res
 }
 
+// ReceiptOf is the engine's Receipt for a resolved event stored on the stream at stored (the
+// message's broker append time): when the platform received the reading, and when the message was
+// stored. The live loop and the replay preview both build it here, so the two read a message the
+// same way. Either time may be zero when it is unknown, which the engine reads as "possibly a
+// redelivery" (core.Receipt).
+func ReceiptOf(ev *dmmodel.ResolvedEvent, stored time.Time) core.Receipt {
+	return core.Receipt{Received: ev.ProcessedTime, Stored: stored}
+}
+
 // planConnectivity feeds a resolved presence StateChange to the in-scope Connectivity rules
 // (ADR-067 S3b) as a typed connect/disconnect edge — SessionId rides a uint64 PresenceEdge, never
 // Event.Value (a float64 loses a UnixNano-scale epoch). Non-Connectivity rules never see a

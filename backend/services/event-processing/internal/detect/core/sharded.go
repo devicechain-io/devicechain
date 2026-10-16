@@ -157,8 +157,14 @@ func (s *Sharded) ProcessEvent(ev Event) { s.ProcessResolved(ev.Seq, ev.Time, []
 // owns. The tick to a shard with no events is not an optimisation to skip: it is what keeps its
 // watermark and sequence equal to every other shard's.
 func (s *Sharded) ProcessResolved(seq uint64, t time.Time, evs []Event) {
+	s.ProcessReceived(seq, t, Receipt{}, evs)
+}
+
+// ProcessReceived is ProcessResolved with the message's Receipt, which every shard is handed
+// exactly as one engine would be.
+func (s *Sharded) ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event) {
 	if len(s.shards) == 1 {
-		s.shards[0].ProcessResolved(seq, t, evs)
+		s.shards[0].ProcessReceived(seq, t, r, evs)
 		return
 	}
 	for i := range s.scratch {
@@ -170,7 +176,7 @@ func (s *Sharded) ProcessResolved(seq uint64, t time.Time, evs []Event) {
 		s.scratch[o] = append(s.scratch[o], evs[i])
 	}
 	for i, e := range s.shards {
-		e.ProcessResolved(seq, t, s.scratch[i])
+		e.ProcessReceived(seq, t, r, s.scratch[i])
 	}
 }
 

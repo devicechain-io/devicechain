@@ -76,6 +76,17 @@ type Rule struct {
 	Thresh    float64       // Aggregate / CountWindow / Session / SlidingAgg / DeltaRate
 }
 
+// Receipt is when the platform took delivery of a resolved message: Received is when the platform
+// received the reading (the event's ProcessedTime, stamped once at ingest and carried unchanged
+// through every redelivery), and Stored is when the message was stored on the resolved stream (its
+// broker append time, which a redelivery stores afresh). Both are fixed properties of the stored
+// message, so a replay, a restore and a preview read the same values the live run read. A zero
+// field means the time is unknown. See Receipt.redelivered and applyThreshold.
+type Receipt struct {
+	Received time.Time
+	Stored   time.Time
+}
+
 // Event is one resolved measurement fed to the core. Match is the result of the rule's
 // CEL predicate (set by the predicate layer in the real service; set directly in tests).
 // For Absence, any event is a heartbeat and Match is ignored.
@@ -250,6 +261,10 @@ type Engine struct {
 	// at the top of every ProcessResolved/ProcessEvent and read only inside it, so it is not
 	// snapshotted.
 	msgFloor time.Time
+	// msgRedelivered reports whether the message being applied may be a platform redelivery
+	// (Receipt.redelivered): an unraised Threshold series refuses a match behind msgFloor only
+	// then. Transient and per message, exactly like msgFloor, so it is not snapshotted either.
+	msgRedelivered bool
 	// pending holds the samples of the sample-pairing kinds (DeltaRate, CountWindow) the frontier
 	// is not yet past, per series, in event-time order; pendHeap orders those runs by their
 	// earliest sample so advance flushes them deterministically (reorder.go).
@@ -274,7 +289,7 @@ type Engine struct {
 	// rule refused as more than its hold behind the frontier or as a break older than a raise
 	// already decided (applyDuration), and matching samples a sample-pairing kind refused as
 	// behind the frontier (hold, reorder.go), and Threshold readings refused as older than a raised
-	// series' newest or, on an unraised series, as a match behind the frontier (applyThreshold). It
+	// series' newest or, on an unraised series, as a redelivered match behind the frontier (applyThreshold). It
 	// is TELEMETRY, not
 	// state: nothing reads it to decide anything, it is deliberately absent from the snapshot,
 	// and a replay legitimately re-counts the samples it re-processes. It exists so a
@@ -854,6 +869,7 @@ func (e *Engine) ProcessEvent(ev Event) {
 		return // already applied (idempotent re-feed guard)
 	}
 	e.msgFloor = e.wm.now
+	e.msgRedelivered = Receipt{}.redelivered() // a bare event carries no receipt
 	e.advance(ev.Time)
 	e.apply(ev)
 	e.lastSeq = ev.Seq
@@ -903,11 +919,22 @@ func (e *Engine) Skip(seq uint64) bool {
 // the guard), and replay from lastSeq+1 re-derives the identical fan-out. evs may be empty
 // (a message that matches no rule, or carries no metric any rule gates on): the watermark
 // and sequence still advance so the checkpoint position tracks the live stream.
+//
+// ProcessResolved is ProcessReceived with an unknown Receipt, which an unraised Threshold series
+// treats as a possible redelivery. The live loop and the replay preview call ProcessReceived.
 func (e *Engine) ProcessResolved(seq uint64, t time.Time, evs []Event) {
+	e.ProcessReceived(seq, t, Receipt{}, evs)
+}
+
+// ProcessReceived is ProcessResolved for a message whose Receipt is known. The receipt is read
+// only by an unraised Threshold series (applyThreshold), to tell a reading that reached the stream
+// promptly from a possible redelivery.
+func (e *Engine) ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event) {
 	if seq <= e.lastSeq {
 		return // already applied (idempotent re-feed guard, at the message level)
 	}
 	e.msgFloor = e.wm.now
+	e.msgRedelivered = r.redelivered()
 	e.advance(t)
 	for i := range evs {
 		e.apply(evs[i])

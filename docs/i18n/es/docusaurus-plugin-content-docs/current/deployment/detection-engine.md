@@ -245,16 +245,21 @@ dimensionar el ajuste:
   descarta y se cuenta, tanto si está dentro de la tolerancia como si queda muy por detrás, como una
   publicación reintentada un minuto tarde, así que una lectura más antigua no puede retirar una
   alarma que una lectura más reciente mantiene elevada. Mientras no hay alarma, una lectura que
-  cumple la condición se evalúa si está dentro de la tolerancia y se descarta y se cuenta si queda
-  más atrás, así que una publicación reintentada no puede elevar una alarma que lecturas más
-  recientes habían retirado. Las lecturas que llegan en orden de marca de tiempo se evalúan en cuanto
-  llegan, así que esto no añade retraso. De ello se siguen dos contrapartidas. Una lectura que cumple
-  la condición y llega fuera de orden pero dentro de la tolerancia sigue elevando la alarma, aunque
-  una lectura más reciente ya la hubiera retirado; la siguiente lectura del dispositivo la vuelve a
-  retirar. Y como el tiempo del evento es común a todos los dispositivos, un dispositivo cuyas
-  lecturas tienen una fecha más atrasada que la tolerancia respecto al resto, como uno cuyo reloj va
-  retrasado o uno que sube lecturas guardadas durante un corte, no puede elevar una alarma de umbral
-  con esas lecturas, aunque sí puede retirarla. La lectura más reciente del dispositivo solo se
+  cumple la condición solo se descarta y se cuenta si queda más atrás que la tolerancia y además
+  llegó al motor de detección más de 30 segundos después de que la plataforma la recibiera, como
+  ocurre con una publicación reintentada, así que una publicación reintentada no puede elevar una
+  alarma que lecturas más recientes habían retirado. Cualquier otra lectura que cumple la condición
+  se evalúa, así que un dispositivo cuyas lecturas tienen una fecha más atrasada que la tolerancia
+  respecto al resto, como uno cuyo reloj va retrasado o uno que sube lecturas guardadas durante un
+  corte, eleva una alarma de umbral con ellas según llegan. Las lecturas que llegan en orden de marca
+  de tiempo se evalúan en cuanto llegan, así que esto no añade retraso. De ello se siguen dos
+  contrapartidas. Una lectura que cumple la condición y llega fuera de orden sigue elevando la
+  alarma, aunque una lectura más reciente ya la hubiera retirado, cuando está dentro de la tolerancia
+  o llega a la plataforma de nuevo, como una lectura que el dispositivo envía por segunda vez; la
+  siguiente lectura del dispositivo la vuelve a retirar. Y una lectura que la plataforma retuvo más
+  de 30 segundos antes de pasarla, durante una acumulación por ejemplo, se trata como una
+  publicación reintentada: si cumple la condición y queda más atrás que la tolerancia, se descarta y
+  se cuenta. La lectura más reciente del dispositivo solo se
   recuerda mientras su alarma está elevada, y solo se descarta una lectura hasta diez minutos más
   antigua que ella: una más antigua se evalúa según llega, así que un dispositivo cuyo reloj se
   atrasa más de diez minutos, por ejemplo al corregir su zona horaria, no mantiene su alarma elevada
@@ -297,7 +302,8 @@ ventana a la que pertenecía, cuando una regla de duración descarta una lectura
 condición y queda más atrás de la frontera que su tiempo de sostenimiento, cuando una regla de
 ventana de conteo o de tasa descarta una lectura más antigua que otra que ya ha asentado, cuando
 una regla de umbral descarta una lectura más antigua que la más reciente de un dispositivo en alarma,
-o una lectura que cumple la condición y queda demasiado atrás de un dispositivo sin alarma, y cuando
+o una lectura reintentada que cumple la condición y queda demasiado atrás de un dispositivo sin
+alarma, y cuando
 una lectura que no cumple la condición de una regla de duración llega después de que se elevara su
 alarma pero se tomó dentro de la racha que la elevó, antes de la elevación. Una lectura
 tardía anterior a toda la racha se ignora y no se cuenta: la racha empezó después de ella. Así, una
@@ -510,7 +516,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 
 | Ajuste | Predeterminado | Qué hace |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral en alarma descarta una lectura más antigua que la más reciente del dispositivo, mientras que una sin alarma descarta una lectura que cumple la condición y llega más tarde que este margen. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
+| `watermarkLatenessSeconds` | 5 | Cuánto esperar a los eventos fuera de orden antes de dar un instante por asentado. **Súbalo** si los eventos llegan por lotes o si un salto aguas arriba puede atascarse; es la principal defensa frente a una falsa alarma de ausencia. También tolera el pequeño desorden entre los eventos de un mismo dispositivo que introduce la resolución, y que crece con el número de réplicas de `device-management`: una regla con ventana sigue contando un evento que llega dentro de este margen, las reglas de duración, de ventana de conteo y de tasa lo colocan según su propia hora, y una regla de umbral en alarma descarta una lectura más antigua que la más reciente del dispositivo, mientras que una sin alarma descarta una lectura que cumple la condición y llega más tarde que este margen solo si se reintentó o se retuvo por el camino. No cubre un evento cuya publicación falló y se reintentó, que llega al menos 60 segundos tarde. |
 | `idleAdvanceGuardSeconds` | 5 | Cuánto tiempo debe estar el motor sin actividad antes de disparar una regla según el reloj de pared. Un valor negativo desactiva esa vía: las reglas de ausencia solo se disparan entonces cuando un *evento posterior* mueve el tiempo del evento más allá de su plazo, de modo que un dispositivo que se queda en silencio y sigue en silencio nunca levanta ninguna. Del mismo modo, las reglas de ventana de conteo y de tasa deciden la última lectura antes de un periodo de silencio solo cuando llega un evento posterior. |
 | `detectShards` | 1 | En cuántas partes se divide el estado del motor, según la serie de cada regla (un dispositivo, o el ancla en una regla de correlación), de 1 a 64 (cualquier otro valor se rechaza al arrancar). Las detecciones, el reloj del tiempo del evento y el punto de control guardado son idénticos con cualquier valor, así que puede cambiarse en cualquier reinicio, al alza o a la baja, sin nada que migrar. En esta versión las partes se procesan una tras otra, por lo que un valor superior a 1 todavía no acelera la detección: déjelo en 1 salvo que esté midiendo. El valor en vigor es la métrica `detect_shards`. |
 | `checkpointEvents` | 1000 | Máximo de eventos procesados entre puntos de control. |
