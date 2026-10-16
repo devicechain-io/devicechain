@@ -251,8 +251,11 @@ dimensionar el ajuste:
   un dispositivo informa por encima del límite, luego por debajo, y una lectura de entre ambas que
   también estaba por encima llega la última, no se eleva ninguna alarma por ese momento intermedio.
   La lectura más reciente del dispositivo se recuerda mientras su alarma está elevada y durante diez
-  minutos de tiempo de evento después de ella. En un dispositivo sin alarma que lleva más tiempo
-  callado, una lectura tardía se evalúa según llega.
+  minutos de tiempo de evento después de ella, y solo se descarta una lectura hasta diez minutos más
+  antigua que ella. Una lectura más antigua se evalúa según llega, igual que una lectura tardía de un
+  dispositivo sin alarma que lleva más tiempo callado, así que un dispositivo cuyo reloj se atrasa
+  más de diez minutos, por ejemplo al corregir su zona horaria, no queda ignorado hasta que su reloj
+  se pone al día.
 - **Las reglas de ventana de conteo y de tasa colocan la lectura según su propia hora**, como hacen
   las reglas de duración. Una tasa es el cambio entre lecturas consecutivas y una ventana de conteo
   es cada N lecturas consecutivas, así que una lectura que llega fuera de orden se coloca donde dice

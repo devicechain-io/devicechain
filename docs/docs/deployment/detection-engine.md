@@ -228,8 +228,11 @@ size the setting:
   than the span the readings were reordered over can go unreported. If a device reports above the
   line, then below it, and a reading from between the two that was also above the line arrives
   last, no alarm is raised for that in-between moment. The device's newest reading is remembered
-  while its alarm is raised and for ten minutes of event time after it. A device that is not in
-  alarm and has been quiet for longer than that has a late reading evaluated as it arrives.
+  while its alarm is raised and for ten minutes of event time after it, and only a reading up to ten
+  minutes older than it is discarded. An older reading is evaluated as it arrives, as is a late
+  reading from a device that is not in alarm and has been quiet for longer than that, so a device
+  whose clock is set back by more than ten minutes, by a time-zone correction for example, is not
+  ignored until its clock catches up.
 - **Count-window and rate rules place a reading by its own time**, the way duration rules do. A
   rate is the change between consecutive readings and a count window is every N consecutive
   readings, so a reading that arrives out of order is slotted where its timestamp says, and the

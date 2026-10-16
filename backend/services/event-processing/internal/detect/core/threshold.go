@@ -44,26 +44,57 @@ import "time"
 // cursor — and pruneNewest drops it. That equivalence is what makes dropping it at a checkpoint
 // outcome-free (the frontier only moves forward, and a series becomes raised only through a
 // reading that also moves its cursor), so a replay from any checkpoint is identical to the run that
-// wrote it. A raised series always keeps its cursor: its alarm can only be cleared by a reading at
-// least as new as the newest one seen, however long the device has been quiet.
+// wrote it. A raised series always keeps its cursor: however long the device has been quiet, its
+// alarm cannot be cleared by a reading older than the newest one seen (by up to the horizon — see
+// below for one older still).
 //
 // The horizon is measured from the frontier, which already trails the newest event time by the
 // lateness budget, so every in-budget reorder is inside it whatever the budget. What it bounds is
 // the reach BEYOND the budget — the redelivery case: a quiet, non-raised series whose old reading
 // arrives more than the horizon after the frontier passed its newest one gets the arrival-order
 // behaviour it had before the cursor. Ten minutes is ten AckWait (60 s) redeliveries.
+//
+// 🔴 THE SAME HORIZON BOUNDS THE CURSOR'S REACH BEHIND ITSELF. A device whose clock steps BACK —
+// an NTP correction, an RTC reset after a power loss, a timezone bug — presents every later reading
+// as older than its cursor, and nothing upstream stops it: event time is clamped only against
+// running AHEAD of receipt, and a reading up to a year old is accepted. Refusing those readings
+// until the clock caught up with the old newest one would stall the rule for the size of the step,
+// and the frontier horizon does not end that stall: a raised series keeps its cursor however old,
+// and on a quiet engine the stepped-back device cannot move the frontier itself. So a reading more
+// than the horizon older than the cursor is not treated as a reorder: it is applied exactly as it
+// would be with no cursor — as it was before the cursor existed, the resolve guard included — and
+// restarts the cursor at its own time (at the raise, for a raised series older readings cannot
+// clear), as an expired cursor would. A step back no longer than the
+// horizon is indistinguishable from a reorder and is refused until the clock passes the old newest
+// reading, a stall no longer than the step. The bound reads only the cursor and the reading, so it
+// is deterministic under replay and changes nothing about which cursors are inert. What it gives
+// up: a reorder WIDER than the horizon — a device that sends a live reading and only then uploads
+// a backlog more than ten minutes old — gets the arrival-order behaviour for the older readings,
+// exactly as before the cursor. A device that drains its backlog first (the edge agent does) is in
+// time order and unaffected.
 const thresholdCursorHorizon = 10 * time.Minute
 
 // applyThreshold is the Threshold rule (ADR-057 level): raise on a matching reading, resolve on a
 // non-matching one — the metric-scoped feed contract delivers both, so the falling edge is
 // observable; a series that goes fully silent stays raised (see the package note on silence —
-// Absence covers the went-dark case). A reading older than the series' newest is stale (see above).
+// Absence covers the went-dark case). A reading older than the series' newest, by no more than the
+// horizon, is stale (see above).
 func (e *Engine) applyThreshold(ev Event, r Rule) {
-	if n, ok := e.newest[ev.Key]; ok && ev.Time.Before(n) && e.thresholdCursorInForce(ev.Key, n) {
+	if n, ok := e.newest[ev.Key]; ok && ev.Time.Before(n) && !ev.Time.Before(n.Add(-thresholdCursorHorizon)) &&
+		e.thresholdCursorInForce(ev.Key, n) {
 		e.lateSamples++
 		return
 	}
-	e.newest[ev.Key] = ev.Time
+	// The cursor is never behind the series' rising edge: every edge a restore seeds from is at or
+	// before the newest instant (newestFloor), and a snapshot omits a cursor equal to it. Only a
+	// reading past the horizon behind the cursor can be older than a raise, and on a raised series
+	// it changes nothing — a match is absorbed by the latch, a non-match is older than the raise —
+	// so the cursor restarts at the raise instead, as it would be restored.
+	cur := ev.Time
+	if at, raised := e.raised[ev.Key]; raised && at.After(cur) {
+		cur = at
+	}
+	e.newest[ev.Key] = cur
 	if ev.Match {
 		e.emitSample(r, ev)
 	} else {

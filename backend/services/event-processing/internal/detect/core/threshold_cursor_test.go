@@ -328,7 +328,8 @@ func TestThresholdStaleReadingInsideTheBudget(t *testing.T) {
 // costs. A series that is not raised keeps its cursor while it is within the horizon of the
 // frontier; once the frontier is further past it than that, the cursor is dropped (no live key, no
 // checkpoint entry), and a reading older than it is applied as it was before the cursor existed. A
-// raised series keeps its cursor however far behind it is, so an old reading never clears it.
+// raised series keeps its cursor however far behind it is, so an old reading within the horizon of
+// that cursor never clears it.
 func TestThresholdCursorExpiresOncePastTheHorizon(t *testing.T) {
 	h := int(thresholdCursorHorizon / time.Second)
 	rules := []Rule{thresholdRule}
@@ -521,5 +522,90 @@ func TestThresholdCursorIsSweptWithTheSeries(t *testing.T) {
 	}
 	if n := e.newest[SeriesKey{Rule: "r", Series: "d"}]; !n.Equal(at(18)) {
 		t.Fatalf("cursor = %v, want the reading at 18", n)
+	}
+}
+
+// TestThresholdClockStepBackIsBoundedByTheHorizon: a device whose clock steps BACK (an NTP
+// correction, an RTC reset after power loss, a timezone bug) presents every later reading as older
+// than its cursor. The cursor must not turn that into a stall longer than the horizon.
+//
+//   - A step back by more than the horizon is not a reorder: the reading is applied as it would be
+//     with no cursor — as it was before the cursor existed — and restarts the cursor at its own time.
+//     Without the bound, a raised alarm that kept matching for hours refused every reading until the
+//     clock caught up with the old newest one — where the resolve guard alone refuses only readings
+//     older than the RAISE — and a series that was not raised refused raises and resolves alike for
+//     as long as the frontier did not move past the horizon, which on a quiet engine is the whole
+//     step: the stepped-back device cannot move the frontier itself.
+//   - A step back shorter than the horizon is indistinguishable from a reorder, and is refused until
+//     the clock passes the old newest reading: a stall no longer than the step.
+func TestThresholdClockStepBackIsBoundedByTheHorizon(t *testing.T) {
+	h := int(thresholdCursorHorizon / time.Second)
+	for _, k := range []int{1, 3} {
+		mk := func() detector {
+			if k == 1 {
+				return NewEngine([]Rule{thresholdRule}, 5*time.Second)
+			}
+			return NewSharded(k, []Rule{thresholdRule}, 5*time.Second)
+		}
+		feed := func(det detector, seq *uint64, sec int, match bool) []Detection {
+			*seq++
+			ev := thrEv("d", sec, match, float64(sec))
+			ev.Seq = *seq
+			det.ProcessResolved(ev.Seq, ev.Time, []Event{ev})
+			return det.Drain()
+		}
+
+		// Raised at 0 and matching every minute for five hours; the clock then steps back an hour.
+		det, seq := mk(), uint64(0)
+		var out []Detection
+		for sec := 0; sec <= 5*3600; sec += 60 {
+			out = append(out, feed(det, &seq, sec, true)...)
+		}
+		out = append(out, feed(det, &seq, 4*3600+60, false)...)
+		if got := edges(out); got != "Raised@0=0 Resolved@14460" {
+			t.Fatalf("K=%d raised, stepped back 1h: want Raised@0=0 Resolved@14460 (as before the cursor), got %s", k, got)
+		}
+
+		// Not raised; one device on an otherwise quiet engine; the clock steps back a day.
+		det, seq, out = mk(), 0, nil
+		for sec := 0; sec <= 3600; sec += 60 {
+			out = append(out, feed(det, &seq, sec, false)...)
+		}
+		out = append(out, feed(det, &seq, 3600-86400+60, true)...)
+		out = append(out, feed(det, &seq, 3600-86400+120, false)...)
+		if got := edges(out); got != "Raised@-82740=-82740 Resolved@-82680" {
+			t.Fatalf("K=%d low, stepped back 1d: want the stepped readings applied, got %s", k, got)
+		}
+		if late := det.DrainLateSamples(); late != 0 {
+			t.Fatalf("K=%d: a step past the horizon is not a late reading, counted %d", k, late)
+		}
+
+		// A step back shorter than the horizon: refused until the clock passes the old newest
+		// reading, then applied.
+		det, seq, out = mk(), 0, nil
+		out = append(out, feed(det, &seq, 1000, false)...)
+		step := h / 2
+		for sec := 1000 - step + 60; sec <= 1000; sec += 60 {
+			out = append(out, feed(det, &seq, sec, true)...)
+		}
+		if got := edges(out); got != "Raised@1000=1000" {
+			t.Fatalf("K=%d low, stepped back %ds: want the stall to end at the old newest reading, got %s", k, step, got)
+		}
+		if late, want := det.DrainLateSamples(), uint64(step/60-1); late != want {
+			t.Fatalf("K=%d: late = %d, want %d (every stepped reading before the old newest one)", k, late, want)
+		}
+
+		// The boundary: a reading exactly one horizon older than the cursor is still refused; one a
+		// second older is applied.
+		det, seq, out = mk(), 0, nil
+		out = append(out, feed(det, &seq, h+100, false)...)
+		out = append(out, feed(det, &seq, 100, true)...)
+		if got := edges(out); got != "" {
+			t.Fatalf("K=%d: a reading exactly one horizon behind the cursor must be refused; got %s", k, got)
+		}
+		out = append(out, feed(det, &seq, 99, true)...)
+		if got := edges(out); got != "Raised@99=99" {
+			t.Fatalf("K=%d: a reading more than one horizon behind the cursor must be applied; got %s", k, got)
+		}
 	}
 }
