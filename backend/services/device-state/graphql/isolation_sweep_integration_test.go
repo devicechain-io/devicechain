@@ -36,6 +36,11 @@ func sweepEnv(key, fallback string) string {
 // an Acme device and of a Globex device — state, a reading and a position each, every row
 // carrying the device's token — and, in tenant B, a device stamped with Acme's anchor. The
 // scope predicate is an array overlap sqlite cannot evaluate, hence PostgreSQL.
+//
+// Each device's external id IS its token: the sweep fills every string argument with the
+// one probe, so the by-external-id door reaches the hidden row only when the two agree —
+// with a distinct external id it would answer "nothing" to both the hidden and the missing
+// token, and pass without having read anything.
 func sweepFixture(t *testing.T) context.Context {
 	t.Helper()
 	port, err := strconv.Atoi(sweepEnv("DC_IT_PGPORT", "5432"))
@@ -64,7 +69,7 @@ func sweepFixture(t *testing.T) context.Context {
 	at := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
 	seed := func(tenant, device, owner string) {
 		ctx := core.WithTenant(context.Background(), tenant)
-		_, err := api.MergeDeviceState(ctx, device, at, nil, model.DeviceIdentity{ExternalId: device + "-ext",
+		_, err := api.MergeDeviceState(ctx, device, at, nil, model.DeviceIdentity{ExternalId: device,
 			Source: "mqtt1", Owners: model.Owners{Anchors: []string{owner}, At: at}})
 		require.NoError(t, err)
 		require.NoError(t, api.MergeLatestMeasurements(ctx, device, []model.LatestMeasurementInput{{
@@ -122,6 +127,7 @@ func TestIsolationSweep(t *testing.T) {
 	schema := gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{})
 	for _, q := range []string{
 		`query { deviceStatesByDeviceToken(deviceTokens: ["acme-1", "globex-1"]) { deviceToken } }`,
+		`query { deviceStatesByExternalId(externalIds: ["acme-1", "globex-1"]) { deviceToken externalId } }`,
 		`query { deviceStates(criteria: {pageNumber: 1, pageSize: 50}) { results { deviceToken } } }`,
 		`query { latestMeasurements(deviceToken: "acme-1") { name } }`,
 		`query { latestLocations(deviceTokens: ["acme-1", "globex-1"]) { deviceToken } }`,

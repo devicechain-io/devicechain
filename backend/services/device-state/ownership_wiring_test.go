@@ -17,6 +17,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
+	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -27,16 +28,23 @@ import (
 // builds and afterMicroserviceStarted starts: nothing else runs those two lines, and a service
 // that built the consumer on the wrong stream, or never started it, would leave every
 // processor test green while no device ever left its old owner's view.
+//
+// 🔴 It therefore drives the service's OWN start and stop hooks, not a copy of them: an
+// earlier shape of this test called OwnershipProcessor.Start itself, and stayed green with
+// the Start line deleted from afterMicroserviceStarted — a consumer built and never
+// started, which is precisely the wiring fault it exists to catch.
 func TestAnOwnershipFactOnTheBrokerRestampsTheLiveView(t *testing.T) {
 	host, port := startEmbeddedNats(t)
 
 	savedMs, savedCfg, savedApi := Microservice, Configuration, Api
 	savedState, savedSweep := StateMetrics, InactivitySweepMetrics
-	savedProc, savedOwners, savedNats := StateProcessor, OwnershipProcessor, NatsManager
+	savedProc, savedOwners, savedNats, savedSvc := StateProcessor, OwnershipProcessor, NatsManager, Svc
+	savedWriter := InboundEventsWriter
 	t.Cleanup(func() {
 		Microservice, Configuration, Api = savedMs, savedCfg, savedApi
 		StateMetrics, InactivitySweepMetrics = savedState, savedSweep
-		StateProcessor, OwnershipProcessor, NatsManager = savedProc, savedOwners, savedNats
+		StateProcessor, OwnershipProcessor, NatsManager, Svc = savedProc, savedOwners, savedNats, savedSvc
+		InboundEventsWriter = savedWriter
 	})
 
 	area := fmt.Sprintf("device-state-owners-%d", time.Now().UnixNano())
@@ -68,17 +76,22 @@ func TestAnOwnershipFactOnTheBrokerRestampsTheLiveView(t *testing.T) {
 		}, nil
 	})
 	require.NoError(t, NatsManager.Initialize(context.Background()))
-	require.NoError(t, NatsManager.Start(context.Background()))
+	// The NATS manager is started by afterMicroserviceStarted through core/service, as in
+	// production (no Rdb or GraphQL manager here: a nil entry is skipped, not refused), and
+	// stopped by beforeMicroserviceStopped, which stops both consumers first.
+	Svc = service.FromManagers(Microservice, service.Managers{Nats: NatsManager})
 	t.Cleanup(func() {
+		if err := beforeMicroserviceStopped(context.Background()); err != nil {
+			t.Logf("stopping the service: %v", err)
+		}
 		if c := NatsManager.Conn(); c != nil && !c.IsClosed() {
 			c.Close()
 		}
 	})
+	require.NoError(t, afterMicroserviceStarted(context.Background()))
 	require.NotNil(t, OwnershipProcessor, "createNatsComponents built no ownership consumer")
 	// Readers fetch only once the service is ready, as in production after the auth gate opens.
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
-	require.NoError(t, OwnershipProcessor.Start(context.Background()))
-	t.Cleanup(func() { _ = OwnershipProcessor.Stop(context.Background()) })
 
 	// Published exactly as device-management publishes it: its own writer, on the tenant's
 	// subject, carrying the device's whole current set.
