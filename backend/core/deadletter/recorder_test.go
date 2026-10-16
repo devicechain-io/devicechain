@@ -330,7 +330,12 @@ func TestCaptureGiveUpIsLetteredAndTheOriginalRemoved(t *testing.T) {
 	require.Contains(t, e.Detail, "was removed from its stream", "the letter must not point at an original that is gone")
 	require.NotContains(t, e.Detail, "until it ages out")
 	eventually(t, 5*time.Second, "the original to be removed", func() bool { return len(rig.held(streams.DeviceEventsCapture)) == 0 })
-	require.Equal(t, 1.0, rig.records(streams.DeviceEventsCapture, "lettered"))
+	// Waited for, not read: the handler counts the outcome only once the removal has
+	// succeeded (a failed removal is retried by redelivery, and counting first would count it
+	// twice), so the removal is visible to this test a moment before the count is.
+	eventually(t, 5*time.Second, "the lettered count", func() bool {
+		return rig.records(streams.DeviceEventsCapture, "lettered") == 1
+	})
 }
 
 // GUARD: the counterweight — a COLD stream's letter carries the original, so the work can be

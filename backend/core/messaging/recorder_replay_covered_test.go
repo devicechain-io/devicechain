@@ -50,7 +50,11 @@ func TestAReplayCoveredDurableIsCountedNotRecorded(t *testing.T) {
 		return len(lettered.all()) >= 1
 	})
 	require.Equal(t, DurableName("test", "event-management", streams.ResolvedEvents), lettered.all()[0].Consumer)
-	require.Equal(t, 1.0, testutil.ToFloat64(letteredMgr.metrics.maxDeliveryRecords.WithLabelValues(stream, "lettered")))
+	// Waited for, not read: the record func runs before the handler counts what it returned,
+	// so the func having been called says nothing yet about the count.
+	waitWithin(t, 3*time.Second, "event-management's exhaustion to be counted as lettered", func() bool {
+		return testutil.ToFloat64(letteredMgr.metrics.maxDeliveryRecords.WithLabelValues(stream, "lettered")) == 1
+	})
 	require.Zero(t, testutil.ToFloat64(letteredMgr.metrics.maxDeliveryRecords.WithLabelValues(stream, "replay-covered")),
 		"event-management's exhaustion was counted as replay-covered")
 }
