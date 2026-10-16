@@ -285,7 +285,7 @@ func TestRoleInUseByMappingCannotBeDeleted(t *testing.T) {
 	require.Equal(t, int64(1), n)
 
 	require.Error(t, s.DeleteRole(ctx, role), "the RESTRICT foreign key is the backstop under the admin layer's check")
-	_, err = s.RoleByScopeToken(ctx, ScopeTenant, "operator")
+	_, err = s.CatalogueRoleByScopeToken(ctx, ScopeTenant, "operator")
 	require.NoError(t, err, "the role must still exist")
 }
 

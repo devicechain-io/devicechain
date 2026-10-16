@@ -100,12 +100,35 @@ func (r *AdminResolver) AddMembership(ctx context.Context, args struct {
 	Email      string
 	Tenant     string
 	RoleTokens []string
+	Scope      *[]scopeAnchorInput
 }) (*AdminIdentityResolver, error) {
 	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
 		if err := checkList("role tokens", args.RoleTokens); err != nil {
 			return nil, err
 		}
-		return wrap(s.AddMembership(ctx, args.Email, args.Tenant, args.RoleTokens))
+		var scope []admin.ScopeAnchorInput
+		if args.Scope != nil {
+			var err error
+			if scope, err = toScopeInput(*args.Scope); err != nil {
+				return nil, err
+			}
+		}
+		return wrap(s.AddScopedMembership(ctx, args.Email, args.Tenant, args.RoleTokens, scope))
+	})
+}
+
+// SetMembershipScope replaces a membership's scope (requires user:write).
+func (r *AdminResolver) SetMembershipScope(ctx context.Context, args struct {
+	Email  string
+	Tenant string
+	Scope  []scopeAnchorInput
+}) (*AdminIdentityResolver, error) {
+	return r.identityMutation(ctx, func(s *admin.Service) (*identityResult, error) {
+		scope, err := toScopeInput(args.Scope)
+		if err != nil {
+			return nil, err
+		}
+		return wrap(s.SetMembershipScope(ctx, args.Email, args.Tenant, scope))
 	})
 }
 

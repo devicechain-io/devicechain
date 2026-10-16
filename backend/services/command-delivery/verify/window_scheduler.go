@@ -77,7 +77,7 @@ func (s *WindowScheduler) ScheduleDispatch(ctx context.Context, deviceTokens []s
 	if expiresAt.Valid {
 		vars["expiresAt"] = expiresAt.Time.UTC().Format(time.RFC3339)
 	}
-	if err := s.client.Query(svcclient.OnBehalfOfScopedCaller(ctx), s.url, tenant, commandDispatchSchedule, vars, &out); err != nil {
+	if err := s.client.QueryOnBehalfOfScopedCaller(ctx, s.url, tenant, commandDispatchSchedule, vars, &out); err != nil {
 		return nil, nil, err
 	}
 	if out.CommandDispatchSchedule == nil || out.CommandDispatchSchedule.Holds == nil ||

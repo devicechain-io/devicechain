@@ -50,7 +50,7 @@ func (e *ssoEnv) legacySession(t *testing.T, id *iam.Identity) (identityToken st
 	require.NoError(t, err)
 	tok, err := e.m.issuer.IssueIdentity(id.Email, auth.SessionEpoch(id.SessionEpoch), sid, nil, nil, uuid.NewString())
 	require.NoError(t, err)
-	pair, err = e.m.issueTenantTokens("acme", id.Email, auth.SessionEpoch(id.SessionEpoch), sid, nil, nil, false)
+	pair, err = e.m.issueTenantTokens("acme", id.Email, auth.SessionEpoch(id.SessionEpoch), sid, nil, nil, auth.Scope{}, false)
 	require.NoError(t, err)
 	return tok.Token, pair
 }

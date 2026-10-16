@@ -128,10 +128,13 @@ func TestSetIdentityEnabledRotatesOnDisableOnly(t *testing.T) {
 	require.True(t, enabled)
 }
 
-// Role and membership changes take effect at the next refresh because every refresh
-// re-resolves them; they are not credential events and must not sign anyone out. The
-// association writes here save the identity through an UPDATE, so BeforeCreate must
-// never fire on them — this pins that it does not.
+// The STORE's role and membership writes never rotate the epoch themselves. Every refresh
+// re-resolves them, so an addition takes effect at the next refresh. A change that takes
+// something away does sign the person out (ADR-081 decision 8), but that is decided one
+// layer up, where it is known whether the change narrows — see admin.narrowMembership and
+// the tenant plane's memberChange. A store write that rotated on its own would sign people
+// out for widenings too. The association writes here also save the identity through an
+// UPDATE, so BeforeCreate must never fire on them — this pins that it does not.
 func TestRoleAndMembershipChangesDoNotRotateTheEpoch(t *testing.T) {
 	s, db := newEpochTestStore(t)
 	ctx := context.Background()

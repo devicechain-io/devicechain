@@ -124,6 +124,15 @@ var partialUpdateMutations = []partialUpdateMutation{
 		probe:     map[string]any{"firstName": "Augusta"},
 		forbidden: []string{"email"},
 	},
+	{
+		mutation: "updateTenantRole", input: "TenantRoleUpdateRequest",
+		args:      []wireArg{{"token", "String!", "whatever"}},
+		selection: "token name",
+		// 🔴 A tenant role's tenant is the caller's, taken from its token. A `tenant` (or an
+		// `owner`) in the input is the one field that could move the update onto another
+		// tenant's role — or the catalogue's — so both are checked as forbidden.
+		forbidden: []string{"tenant", "owner", "scope"},
+	},
 }
 
 func (m partialUpdateMutation) probeOrDefault() map[string]any {
@@ -170,10 +179,16 @@ func (m partialUpdateMutation) ctxFor(t *testing.T) context.Context {
 	// microservice, lock, issuer or credential checker — UpdateProfile reads none of
 	// them, and building the rest would make this file need a live NATS KV to check a
 	// document's shape.
+	//
+	// updateTenantRole needs role:write and the members service; with no such identity in
+	// the store its service refuses at the caller, which is a RESOLVER error — exactly
+	// what the counterweight below needs to see.
 	ctx := auth.WithClaims(context.Background(), &auth.Claims{
-		TokenType: auth.TokenTypeAccess, Username: "nobody@example.invalid",
+		TokenType: auth.TokenTypeAccess, Tenant: "acme", Username: "nobody@example.invalid",
+		Authorities: []string{string(auth.RoleWrite)},
 	})
 	mgr := identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, nil)
+	ctx = context.WithValue(ctx, ContextMembersKey, admin.NewService(iam.NewStore(rdbm), 0, 0, nil))
 	return context.WithValue(ctx, ContextIdentityKey, mgr)
 }
 
@@ -306,6 +321,7 @@ func TestAListFieldAcceptsAnExplicitNull(t *testing.T) {
 	lists := map[string][]string{
 		"updateRole":        {"authorities"},
 		"updateOauthClient": {"redirectUris", "scopes"},
+		"updateTenantRole":  {"authorities"},
 	}
 	for _, m := range partialUpdateMutations {
 		fields, ok := lists[m.mutation]
@@ -325,7 +341,7 @@ func TestAListFieldAcceptsAnExplicitNull(t *testing.T) {
 			})
 		}
 	}
-	require.Len(t, lists, 2, "the list-field table names no mutations, so this test drives nothing")
+	require.Len(t, lists, 3, "the list-field table names no mutations, so this test drives nothing")
 }
 
 // 🔴 THE LIST ABOVE IS CHECKED AGAINST BOTH SCHEMAS, BECAUSE A LIST IS NOT A GUARD.

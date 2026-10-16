@@ -45,6 +45,9 @@ func (r *AdminMembershipResolver) Tenant() string  { return r.M.TenantId }
 func (r *AdminMembershipResolver) Enabled() bool   { return r.M.Enabled }
 func (r *AdminMembershipResolver) Roles() []string { return roleTokenList(r.M.TenantRoles) }
 
+// Scope lists the anchors the membership is limited to; empty for the whole tenant.
+func (r *AdminMembershipResolver) Scope() []*ScopeAnchorResolver { return scopeAnchors(r.M.Scope) }
+
 // AdminTenantResolver resolves the AdminTenant type from an iam.Tenant.
 type AdminTenantResolver struct {
 	M iam.Tenant

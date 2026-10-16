@@ -570,4 +570,17 @@ var sweepExemptions = map[string]string{
 	// to do with an upgrade — the cried wolf that teaches everyone to read past a red.
 	"command-delivery.drainableCommands": "requires the system-tier command:claim authority, which the " +
 		"tenant administrator this probe runs as deliberately does not hold; the refusal is correct behaviour",
+
+	// user-management joined the sweep when the table gained the tenant's own roles and
+	// invitations. Two of its doors are system-tier by their own documentation, and two
+	// take a value the sweep does not hold.
+	"user-management.tenantGovernance": "requires tenant:read, an instance-level authority its schema " +
+		"says tenant users do not hold; the refusal to the tenant administrator this probe runs as is " +
+		"correct behaviour. It is read by the enforcing services over a service token",
+	"user-management.tenantTokens": "requires the system-tier tenant:read, for the reason tenantGovernance " +
+		"is exempt: a tenant user, even one with every tenant authority, cannot list tenants",
+	"user-management.identityMemberships": "takes the IDENTITY token login returns — a credential, not a " +
+		"stored row's token — so the sweep has no value it can defend; me and members are swept",
+	"user-management.member": "addressed by email, and a missing one is a NOT_FOUND error by design; " +
+		"members is swept and the member-invitation entity reads the same rows back through it",
 }

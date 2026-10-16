@@ -540,7 +540,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, ErrInvalidCredentials
 	}
 
-	roles, authorities, err := m.resolveTenantGrant(ctx, claims.SessionID, id, tenant, mem, su)
+	roles, authorities, scope, err := m.resolveTenantGrant(ctx, claims.SessionID, id, tenant, mem, su)
 	if err != nil {
 		// Named only to a member (the non-member refusal above comes first): see
 		// SsoRequiredError for why that leaks nothing.
@@ -558,7 +558,7 @@ func (m *Manager) SelectTenant(ctx context.Context, identityToken, tenant string
 		return nil, err
 	}
 	m.recordAuth(ctx, rdb.AuditOpLogin, id.Email, tenant)
-	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, su)
+	return m.issueTenantTokens(tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su)
 }
 
 // Memberships re-reads the live memberships for the identity a valid identity
@@ -868,7 +868,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	if err := m.admitRefreshTenant(ctx, claims); err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
-	roles, authorities, err := m.resolveTenantGrant(ctx, claims.SessionID, id, claims.Tenant, mem, su)
+	roles, authorities, scope, err := m.resolveTenantGrant(ctx, claims.SessionID, id, claims.Tenant, mem, su)
 	if err != nil {
 		return nil, m.refuseRefresh(claims.ID, rev, err)
 	}
@@ -884,7 +884,7 @@ func (m *Manager) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, ErrRefreshUnavailable
 	}
 	m.recordAuth(ctx, rdb.AuditOpRefresh, id.Email, claims.Tenant)
-	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, su)
+	return m.issueTenantTokens(claims.Tenant, id.Email, auth.SessionEpoch(id.SessionEpoch), claims.SessionID, roles, authorities, scope, su)
 }
 
 // refuseRefresh turns a failed re-check of a refresh grant into the error Refresh returns.
@@ -985,12 +985,18 @@ var errTenantAccessDenied = errors.New("tenant access denied")
 // remediate (actingAsSuperuser is recorded for audit). A regular member is denied
 // if the tenant or its membership is disabled. mem is non-nil for a non-superuser
 // (callers reject non-members first).
-func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, err error) {
+//
+// It also returns the membership's SCOPE (ADR-081), read from the membership as stored
+// now — so a scope narrowed since the last mint is the scope the next token carries,
+// whichever of the three mints (select, refresh, OAuth) asks. A superuser is never
+// scoped. A stored scope that does not parse is a DENIAL, never the whole tenant: a
+// membership whose bound cannot be read must not be minted unbounded.
+func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id *iam.Identity, tenant string, mem *iam.Membership, su bool) (roles, authorities []string, scope auth.Scope, err error) {
 	// The sign-in's own terms come first: a session that may not enter this tenant gets no
 	// grant from the identity's memberships, superuser or not (admitTenant says which
 	// sessions a superuser's break-glass still applies to).
 	if err := m.admitTenant(ctx, sid, id, tenant, su); err != nil {
-		return nil, nil, err
+		return nil, nil, auth.Scope{}, err
 	}
 	if su {
 		if mem != nil {
@@ -1002,14 +1008,14 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id
 		// The cost is real and belongs with the sweep's design — a break-glass session
 		// can write rows into a tenant an area has already swept, which is why slice 2's
 		// fences are epoch-bounded rather than "swept once".
-		return roles, []string{string(auth.AuthorityAll)}, nil
+		return roles, []string{string(auth.AuthorityAll)}, auth.Scope{}, nil
 	}
 	t, err := m.iam.TenantByToken(ctx, tenant)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil, errTenantAccessDenied
+			return nil, nil, auth.Scope{}, errTenantAccessDenied
 		}
-		return nil, nil, err
+		return nil, nil, auth.Scope{}, err
 	}
 	// A deleted tenant admits nobody but a superuser, checked on the LIFECYCLE rather
 	// than on Enabled. Both are set at the cut, but only one of them is permanent:
@@ -1017,12 +1023,20 @@ func (m *Manager) resolveTenantGrant(ctx context.Context, sid auth.SessionID, id
 	// tenant mid-purge would otherwise readmit its members to data that is being erased
 	// underneath them.
 	if t.PurgeState.Deleted() {
-		return nil, nil, errTenantAccessDenied
+		return nil, nil, auth.Scope{}, errTenantAccessDenied
 	}
 	if !t.Enabled || !mem.Enabled {
-		return nil, nil, errTenantAccessDenied
+		return nil, nil, auth.Scope{}, errTenantAccessDenied
 	}
-	return roleTokens(mem.TenantRoles), mem.TenantAuthorities(), nil
+	if mem.IsScoped() {
+		scope, err = auth.NewScope(mem.Scope)
+		if err != nil {
+			log.Error().Err(err).Str("tenant", tenant).Uint("membership", mem.ID).
+				Msg("A membership's stored scope does not parse; it is refused rather than minted unscoped.")
+			return nil, nil, auth.Scope{}, errTenantAccessDenied
+		}
+	}
+	return roleTokens(mem.TenantRoles), mem.TenantAuthorities(), scope, nil
 }
 
 // viewerAuthorities is the read-only baseline every enabled tenant member
@@ -1094,7 +1108,12 @@ func unionStrings(a, b []string) []string {
 // and records the refresh jti in the server-side store. epoch is the identity's
 // current session epoch, embedded in the refresh token so the next Refresh can check
 // it; the access token does not carry it.
-func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, sudo bool) (*TokenPair, error) {
+//
+// A SCOPED membership's access token carries its scope as the "scp" claim and lives for
+// the scoped access lifetime (ADR-081). The refresh token never carries it: every refresh
+// re-reads the membership, so a scope on it would be one nothing reads (and the validator
+// refuses "scp" on a refresh token).
+func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoch, sid auth.SessionID, roles, authorities []string, scope auth.Scope, sudo bool) (*TokenPair, error) {
 	// Every enabled tenant member can view the domain objects by default (the
 	// `viewer` baseline); writes stay role-gated, as does reading a device
 	// credential (see viewerAuthorities). Superusers already hold `*`.
@@ -1106,7 +1125,13 @@ func (m *Manager) issueTenantTokens(tenant, email string, epoch auth.SessionEpoc
 	issuer := m.issuer
 	m.mu.RUnlock()
 
-	access, err := issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString())
+	var access auth.IssuedToken
+	var err error
+	if scope.IsScoped() && !sudo {
+		access, err = issuer.IssueScopedTenantAccess(tenant, email, roles, authorities, scope, uuid.NewString())
+	} else {
+		access, err = issuer.IssueTenantAccess(tenant, email, roles, authorities, sudo, uuid.NewString())
+	}
 	if err != nil {
 		return nil, err
 	}

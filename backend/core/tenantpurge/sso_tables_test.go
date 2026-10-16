@@ -23,6 +23,7 @@ func ssoCatalog() ([]column, []constraint) {
 	cols := []column{
 		col(s, "iam_identities", "id", "bigint"),
 		col(s, "iam_roles", "id", "bigint"),
+		col(s, "iam_roles", "tenant_id", "character varying"),
 		col(s, "iam_memberships", "id", "bigint"),
 		col(s, "iam_memberships", "tenant_id", "character varying"),
 		col(s, "iam_memberships", "managed_by", "bigint"),
@@ -89,7 +90,7 @@ func TestTenantPurgeRemovesSsoRows(t *testing.T) {
 
 	for _, ddl := range []string{
 		`CREATE TABLE iam_identities (id INTEGER PRIMARY KEY)`,
-		`CREATE TABLE iam_roles (id INTEGER PRIMARY KEY)`,
+		`CREATE TABLE iam_roles (id INTEGER PRIMARY KEY, tenant_id TEXT)`,
 		`CREATE TABLE iam_memberships (id INTEGER PRIMARY KEY, tenant_id TEXT, managed_by INTEGER)`,
 		`CREATE TABLE iam_idp_connections (id INTEGER PRIMARY KEY)`,
 		`CREATE TABLE iam_idp_connection_tenants (

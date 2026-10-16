@@ -77,11 +77,13 @@ var exemptions = []Exemption{
 		Reason: "joins an identity to an INSTANCE-level role (operator, superuser). Both ends are " +
 			"instance-global; no tenant is expressible in this table.",
 	},
-	{
-		Schema: "user-management", Name: "iam_roles", Class: ClassExempt,
-		Reason: "the role catalog is defined once per instance and referenced by every tenant's " +
-			"memberships. Roles outlive the tenants that used them.",
-	},
+	// iam_roles is NOT here, and was until tenants could own roles (ADR-081). It now carries
+	// a tenant column: a tenant's own roles (tenant_id = its token) are swept with it by the
+	// catalog like any direct table, and the operator's catalogue (tenant_id NULL) matches no
+	// tenant's predicate and is left alone — no exemption needed for either half. An entry
+	// here would have been inert (the catalog wins over a stale exemption) but would have
+	// told every reader that roles outlive their tenants, which for a tenant's own roles is
+	// the retention the purge exists to end.
 	{
 		Schema: "user-management", Name: "iam_tenant_tiers", Class: ClassExempt,
 		Reason: "operator-defined packaging (governance ceilings, AI model entitlement). A tier is " +

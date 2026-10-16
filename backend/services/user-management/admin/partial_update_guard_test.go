@@ -49,9 +49,11 @@ func TestEveryUpdateTakesADedicatedUpdateRequest(t *testing.T) {
 		NotAnEntityUpdate: map[string]string{},
 
 		// The anti-vacuity floor: the TOTAL number of Update* methods on this service,
-		// not the number converted. UpdateRole, UpdateTenant, UpdateTenantTier and
-		// UpdateOAuthClient — four, and every one of them is walked rather than skipped.
-		MinUpdateMethods: 4,
+		// not the number converted. UpdateRole, UpdateTenant, UpdateTenantTier,
+		// UpdateOAuthClient and the tenant plane's UpdateTenantRole (which takes the same
+		// RoleUpdateRequest as UpdateRole) — five, and every one of them is walked rather
+		// than skipped.
+		MinUpdateMethods: 5,
 	})
 }
 
@@ -149,12 +151,12 @@ func TestUpdateRoleCannotCrossScopes(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	sys, err := s.iam.RoleByScopeToken(ctx, iam.ScopeSystem, "ops")
+	sys, err := s.iam.CatalogueRoleByScopeToken(ctx, iam.ScopeSystem, "ops")
 	require.NoError(t, err)
 	require.Equal(t, string(iam.ScopeSystem), sys.Name.String,
 		"updating the TENANT-scoped role changed the SYSTEM-scoped one of the same token")
 
-	ten, err := s.iam.RoleByScopeToken(ctx, iam.ScopeTenant, "ops")
+	ten, err := s.iam.CatalogueRoleByScopeToken(ctx, iam.ScopeTenant, "ops")
 	require.NoError(t, err)
 	require.Equal(t, "renamed", ten.Name.String, "the update did not reach the role it named")
 }

@@ -175,6 +175,10 @@ func readRow(ctx context.Context, q querier, url string, e entity, token string,
 	if e.ReadInput != "" {
 		readVars = map[string]any{"c": e.ReadVars}
 	}
+	if e.ReadAll {
+		// No argument, so no variable: the document declares none.
+		readVars = map[string]any{}
+	}
 
 	var envelope map[string]json.RawMessage
 	if err := q.Query(ctx, url, e.readDoc(), readVars, &envelope); err != nil {
@@ -217,6 +221,24 @@ func readObject(e entity, envelope map[string]json.RawMessage, token string, wri
 				e.Name, token)
 		}
 		return pickMatch(e, results.Results, token, written)
+	}
+
+	// An argument-less read returns every row of its kind, so absence is "no row in the
+	// list has the written MatchBy value" — pickMatch's own definition — and never
+	// results[0], which would be some other row.
+	if e.ReadAll {
+		var all []json.RawMessage
+		if err := json.Unmarshal(raw, &all); err != nil {
+			return nil, failWith(exitShape, "read %s returned a non-list under %q: %w", e.Name, e.Read, err)
+		}
+		if e.MatchBy == "" {
+			return nil, failWith(exitSetup, "%s reads every row back and names no MatchBy, so it cannot pick its own", e.Name)
+		}
+		if len(all) == 0 {
+			return nil, failWith(exitMissing, "%s %q is GONE: the API created it, and %s now lists nothing",
+				e.Name, token, e.Read)
+		}
+		return pickMatch(e, all, token, written)
 	}
 
 	// A Publish read decodes as a LIST, like the default: xVersions returns

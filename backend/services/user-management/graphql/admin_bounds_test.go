@@ -74,6 +74,7 @@ func TestAdminListsOverTheBoundAreRefused(t *testing.T) {
 		Email      string
 		Tenant     string
 		RoleTokens []string
+		Scope      *[]scopeAnchorInput
 	}{Email: "a@b.c", Tenant: "t", RoleTokens: over})
 	requireLimit(t, err)
 
@@ -147,6 +148,7 @@ func TestAdminListsAtTheBoundAreAccepted(t *testing.T) {
 				Email      string
 				Tenant     string
 				RoleTokens []string
+				Scope      *[]scopeAnchorInput
 			}{Email: "a@b.c", Tenant: "t", RoleTokens: at})
 			return err
 		},
@@ -215,6 +217,7 @@ func TestEveryAdminBoundRunsAfterAuthorization(t *testing.T) {
 		Email      string
 		Tenant     string
 		RoleTokens []string
+		Scope      *[]scopeAnchorInput
 	}{Email: "a@b.c", Tenant: "t", RoleTokens: over})
 	_, errs["setMembershipRoles"] = r.SetMembershipRoles(ctx, struct {
 		Email      string

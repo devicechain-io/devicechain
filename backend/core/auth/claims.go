@@ -75,8 +75,8 @@ type Claims struct {
 	// 2.1 scope string, which caps AUTHORITIES (what the bearer may do); this caps ROWS
 	// (which of the tenant's records it may do it to). A token can carry both.
 	//
-	// It rides tenant access (and refresh) tokens only; Validator.Parse refuses it on an
-	// identity or service token, refuses it beside the superuser marker, and refuses a
+	// It rides tenant ACCESS tokens only; Validator.Parse refuses it on a refresh, identity
+	// or service token, refuses it beside the superuser marker, and refuses a
 	// present-but-malformed or empty list. Read it through ScopeFromContext, never
 	// directly: a non-nil list is scoped whatever it holds, and that reading lives in one
 	// place.

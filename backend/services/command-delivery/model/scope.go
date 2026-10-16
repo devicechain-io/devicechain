@@ -89,7 +89,7 @@ func inScope(scope auth.Scope, anchors []string) bool {
 // own. Under it the tenant predicate still applies and the scope predicate does not.
 //
 // 🔴 USE IT FOR A READ WHOSE ROWS NEVER REACH THE MEMBER, AND ONLY AFTER THE MEMBER'S RIGHT
-// TO THE ANSWER IS DECIDED. It is the storage half of what svcclient.OnBehalfOfScopedCaller
+// TO THE ANSWER IS DECIDED. It is the storage half of what svcclient.QueryOnBehalfOfScopedCaller
 // is for a service call: a deliberate, local decision that one answer may be computed above
 // the member's scope. It is never used for a write — a write under it would be recorded in
 // the audit journal with no actor — and never handed onward: derive it at the read.

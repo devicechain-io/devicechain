@@ -96,6 +96,13 @@ type entity struct {
 	// row it needs.
 	Requires []string
 
+	// ReadAll marks a read that takes NO argument and returns every row of its kind the
+	// tenant can see — tenantRoles lists the instance's roles and the tenant's own in one
+	// answer, and there is no by-token door to ask instead. MatchBy is then required: it
+	// is what picks THIS row out of the list, and the read renders as `read{…}` with no
+	// variables at all, because declaring a $token nothing uses is a validation error.
+	ReadAll bool
+
 	// ReadArg overrides the argument name of a Single read. Empty means "token";
 	// deviceClaim is keyed by `deviceToken`.
 	ReadArg string
@@ -241,6 +248,9 @@ func (e entity) readDoc() string {
 		// of the row, and selecting it would put a count into a comparison that exists
 		// to detect a changed row.
 		return "query($c:" + e.ReadInput + "){" + e.Read + "(criteria:$c){results{" + e.Fields + "}}}"
+	}
+	if e.ReadAll {
+		return "query{" + e.Read + "{" + e.Fields + "}}"
 	}
 	if e.Publish {
 		// Keyed by the PARENT token like a Single read, but returns a LIST like the
@@ -1280,7 +1290,95 @@ var entities = []entity{
 			}}
 		},
 	},
+
+	// ---- user-management: the tenant's own roles and members ----------------
+	{
+		// A role the TENANT defines for itself, so iam_roles holds a row owned by the probe
+		// tenant (tenant_id set) beside the operator's catalogue (tenant_id NULL). Losing
+		// it in an upgrade would not look like loss: every member holding it would simply
+		// stop being able to do what it granted.
+		//
+		// 🔴 READ BACK THROUGH tenantRoles, WHICH TAKES NO ARGUMENT: it answers the
+		// instance roles and the tenant's own in one list, so the row is picked out by its
+		// token (MatchBy) rather than by results[0], which would be the instance's
+		// tenant-admin role on a healthy instance. owner is selected, so a role that came
+		// back as the INSTANCE's — its tenant column lost — is a MISMATCH, not a pass.
+		//
+		// A leaf: nothing records its token. member-invitation names it with state.tok and
+		// carries the same Requires, so a release without tenant roles skips both together.
+		Name:     "tenant-role",
+		Area:     "user-management",
+		Mutation: "createTenantRole",
+		Input:    "TenantRoleCreateRequest!",
+		Read:     "tenantRoles",
+		ReadAll:  true,
+		MatchBy:  "token",
+		Requires: probeTenantRoleGroup,
+		Fields:   "token name description authorities owner",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"token":       s.tok("tenant-role"),
+				"name":        "apiprobe viewer",
+				"description": "A tenant-defined role; held by the probe's invited member.",
+				// Sorted, so the stored array reads back in the order it was sent.
+				"authorities": []any{"device:read", "event:read"},
+			}}
+		},
+	},
+	{
+		// Depends on: tenant-role, customer. An invited member who has not accepted, which
+		// is what writes iam_invitations (the open invitation), a membership LIMITED to the
+		// probe customer (the membership's scope), and that membership's grant of the
+		// tenant's own role — three things an upgrade could drop independently, and the
+		// selection below shows each: invitationPending is derived from the invitation row,
+		// scope from the membership, roles from the grant and the role it names.
+		//
+		// 🔴 THE INVITATION CODE IS NOT SELECTED, AND MUST NEVER BE. It is a bearer secret
+		// shown once; Wrap unwraps `member` and leaves invitationCode out of the document
+		// entirely, so it is neither recorded on the receipt nor printed. The row survives
+		// as a hash of it, which is all verify needs: an invitation row lost to an upgrade
+		// turns invitationPending false.
+		//
+		// 🔴 READ BACK THROUGH members(criteria:), NOT member(email:). member answers a
+		// missing email with a NOT_FOUND ERROR, which readRow would report as a schema that
+		// moved (exitShape) instead of a row that is gone (exitMissing). The criteria are
+		// a literal, so the email is too — the same address in every probe tenant, which an
+		// identity is allowed to be (one person, a membership per tenant).
+		Name:     "member-invitation",
+		Area:     "user-management",
+		Mutation: "inviteMember",
+		Input:    "InviteMemberRequest!",
+		// MemberInvitation carries no rejection: a refusal is a GraphQL error.
+		Wrap:      "member",
+		Read:      "members",
+		ReadInput: "MemberSearchCriteria!",
+		ReadVars:  map[string]any{"pageNumber": 1, "pageSize": 10, "emailPrefix": probeInviteeEmail},
+		Requires:  probeTenantRoleGroup,
+		Fields: "email enabled invitationPending managedByIdentityProvider " +
+			"roles{token name description authorities owner} scope{kind token}",
+		Vars: func(s *state) map[string]any {
+			return map[string]any{"req": map[string]any{
+				"email":      probeInviteeEmail,
+				"roleTokens": []any{s.tok("tenant-role")},
+				"scope":      []any{map[string]any{"kind": "CUSTOMER", "token": s.tok("customer")}},
+			}}
+		},
+		TokenFrom: func(s *state) string { return probeInviteeEmail },
+	},
 }
+
+// probeInviteeEmail is the person member-invitation invites. Not derived from the tenant:
+// the read-back criteria are a literal (verify holds only the receipt), and an identity
+// is instance-global anyway, so every probe tenant inviting the same person is the shape
+// the platform is built for. It is not a prefix of any probe tenant's own identity
+// (<tenant>@apiprobe.invalid), so the criteria cannot match the administrator.
+const probeInviteeEmail = "invitee@apiprobe.invalid"
+
+// probeTenantRoleGroup gates the two tenant-administration rows as ONE group, on the
+// mutation that makes the role the invitation hands out. Named as a Mutation field rather
+// than an input field because that is the exact dependency: a release that could invite
+// but not define a role would send the invitation a role token that does not exist.
+var probeTenantRoleGroup = []string{"Mutation.createTenantRole"}
 
 // probeAssetPropertySchema is the asset-type property contract the probe declares,
 // publishes, and then fills on an asset. One optional STRING and one bounded INT: an
@@ -1393,7 +1491,7 @@ func otherWrites() int {
 	return len(seen)
 }
 
-const tenantCreateMutations = 28
+const tenantCreateMutations = 29
 
 // tenantPublishMutations is the same claim for publishes, measured the same way by
 // TestThePublishDenominatorMatchesTheSchemas. Separate from the count above because

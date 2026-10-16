@@ -129,6 +129,7 @@ func TestAdminMutationsFailClosed(t *testing.T) {
 		Email      string
 		Tenant     string
 		RoleTokens []string
+		Scope      *[]scopeAnchorInput
 	}{Email: "a@b.c", Tenant: "t"})
 	assert.ErrorIs(t, err, auth.ErrUnauthenticated)
 

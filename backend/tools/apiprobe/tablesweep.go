@@ -246,6 +246,15 @@ var tableSweepExemptions = map[string]string{
 		"actually dispatched. It follows an ALARM, which follows a rule firing, which the drill does " +
 		"not do — so it is downstream of two things that are exempt above for their own reasons.",
 
+	// ---- instance-level role grants --------------------------------------------
+	"user-management.iam_identity_system_roles": "joins an identity to a SYSTEM role, and only the " +
+		"operator's catalogue can be one: every path that assigns system roles resolves them through " +
+		"CatalogueRolesByScopeTokens (scope system, tenant_id IS NULL), and a tenant can define only " +
+		"tenant-scope roles. The table reaches a tenant solely through role_id -> iam_roles.tenant_id, " +
+		"the edge tenant-owned roles added, and no system-role row can point at a tenant's role, so it " +
+		"is empty for every tenant by construction. The tenant-owned role itself is covered: " +
+		"tenant-role writes iam_roles through the real API.",
+
 	// ---- single sign-on is NOT here, and it used to be --------------------------
 	//
 	// iam_idp_connection_tenants and iam_idp_role_mappings were exempt while the drill had no

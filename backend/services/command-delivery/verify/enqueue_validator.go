@@ -110,7 +110,7 @@ func (v *EnqueueValidator) ValidateEnqueue(ctx context.Context, deviceToken stri
 	} else {
 		vars["payload"] = nil
 	}
-	if err := v.client.Query(svcclient.OnBehalfOfScopedCaller(ctx), v.url, tenant, validateCommandEnqueue, vars, &out); err != nil {
+	if err := v.client.QueryOnBehalfOfScopedCaller(ctx, v.url, tenant, validateCommandEnqueue, vars, &out); err != nil {
 		return nil, err
 	}
 	if out.ValidateCommandEnqueue.Allowed == nil {

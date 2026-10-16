@@ -532,7 +532,7 @@ func TestDerivedSetCoversGoldenSchemas(t *testing.T) {
 		}
 	}
 	// Tables known NOT to carry a tenant column must not be classified tenant-scoped.
-	for _, not := range []string{"iam_tenants", "iam_roles", "system_settings", "signing_keys"} {
+	for _, not := range []string{"iam_tenants", "system_settings", "signing_keys"} {
 		if _, ok := tables[not]; ok {
 			t.Errorf("%q has no tenant column but was classified tenant-scoped", not)
 		}

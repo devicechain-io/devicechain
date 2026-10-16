@@ -45,7 +45,9 @@ func TestTheArtifactEntityBelongsToAnAreaTheListCanExclude(t *testing.T) {
 // Declaring an area undeployed while the database holds its tables is a contradiction the
 // table sweep must surface, otherwise the flag is a way to measure less and call it the same.
 func TestAnUndeployedAreaWithTablesIsACoverageFinding(t *testing.T) {
-	d, err := parseDeployedAreas("device-management")
+	// user-management is a probe area too (the tenant's own roles and invitations), so it is
+	// declared deployed here; only update-management is the area left out.
+	d, err := parseDeployedAreas("device-management,user-management")
 	require.NoError(t, err)
 	tables := []string{"device-management.devices", "update-management.artifacts", "user-management.tenants"}
 	require.Equal(t, []string{"update-management.artifacts"}, tablesOfUndeployedAreas(tables, d))
@@ -53,7 +55,7 @@ func TestAnUndeployedAreaWithTablesIsACoverageFinding(t *testing.T) {
 	// Nothing declared undeployed: nothing to contradict.
 	require.Empty(t, tablesOfUndeployedAreas(tables, nil))
 	// The same table is fine when its area is deployed.
-	d, err = parseDeployedAreas("device-management,update-management")
+	d, err = parseDeployedAreas("device-management,update-management,user-management")
 	require.NoError(t, err)
 	require.Empty(t, tablesOfUndeployedAreas(tables, d))
 }

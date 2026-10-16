@@ -284,6 +284,15 @@ func (r *SchemaResolver) TenantTokens(ctx context.Context) ([]string, error) {
 // back to email).
 type CurrentIdentityResolver struct {
 	id *iam.Identity
+	// scope is the caller's scope in the current tenant (ADR-081), read from the token's
+	// verified claims — the scope the request is actually bounded by, not the membership's
+	// stored one, which may have changed since the token was minted.
+	scope auth.Scope
+}
+
+// Scope lists the anchors the signed-in member is limited to; empty for the whole tenant.
+func (r *CurrentIdentityResolver) Scope() []*ScopeAnchorResolver {
+	return scopeAnchors(r.scope.Anchors())
 }
 
 func (r *CurrentIdentityResolver) Email() string      { return r.id.Email }
@@ -302,7 +311,8 @@ func (r *SchemaResolver) Me(ctx context.Context) (*CurrentIdentityResolver, erro
 	if err != nil {
 		return nil, err
 	}
-	return &CurrentIdentityResolver{id: id}, nil
+	scope, _ := auth.ScopeFromContext(ctx)
+	return &CurrentIdentityResolver{id: id, scope: scope}, nil
 }
 
 // IdentityMemberships re-reads the live memberships for a valid identity token

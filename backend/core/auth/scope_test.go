@@ -161,8 +161,11 @@ func signClaims(t *testing.T, c *Claims) (*Validator, string) {
 func TestTheScopeClaimIsRefusedWhereItMayNotRide(t *testing.T) {
 	scp := []string{"customer:acme-corp"}
 	cases := map[string]*Claims{
-		"identity token":      {TokenType: TokenTypeIdentity, Username: "u", ScopeAnchors: scp},
-		"service token":       {TokenType: TokenTypeService, Username: "svc", ScopeAnchors: scp},
+		"identity token": {TokenType: TokenTypeIdentity, Username: "u", ScopeAnchors: scp},
+		"service token":  {TokenType: TokenTypeService, Username: "svc", ScopeAnchors: scp},
+		// Every refresh re-reads the membership, so nothing reads a scope from a refresh
+		// token: one carrying it is a stale second copy, refused rather than kept.
+		"refresh token":       {TokenType: TokenTypeRefresh, Tenant: "acme", Username: "u", ScopeAnchors: scp},
 		"unknown token type":  {TokenType: "session", Tenant: "acme", ScopeAnchors: scp},
 		"untyped token":       {Tenant: "acme", ScopeAnchors: scp},
 		"superuser marker":    {TokenType: TokenTypeAccess, Tenant: "acme", ActingAsSuperuser: true, ScopeAnchors: scp},
@@ -180,12 +183,10 @@ func TestTheScopeClaimIsRefusedWhereItMayNotRide(t *testing.T) {
 			}
 		})
 	}
-	// Negative controls: the two tiers a scope may ride, at the cap, are admitted.
-	for _, typ := range []string{TokenTypeAccess, TokenTypeRefresh} {
-		v, token := signClaims(t, &Claims{TokenType: typ, Tenant: "acme", ScopeAnchors: manyAnchors(MaxScopeAnchors)})
-		if _, err := v.Parse(token); err != nil {
-			t.Fatalf("a %s token with %d anchors was refused: %v", typ, MaxScopeAnchors, err)
-		}
+	// Negative control: the one tier a scope may ride, at the cap, is admitted.
+	v, token := signClaims(t, &Claims{TokenType: TokenTypeAccess, Tenant: "acme", ScopeAnchors: manyAnchors(MaxScopeAnchors)})
+	if _, err := v.Parse(token); err != nil {
+		t.Fatalf("an access token with %d anchors was refused: %v", MaxScopeAnchors, err)
 	}
 }
 

@@ -102,7 +102,7 @@ type RoleUpdateRequest struct {
 
 // ListRoles returns the role catalog, optionally filtered to a scope.
 func (s *Service) ListRoles(ctx context.Context, scope *iam.RoleScope) ([]iam.Role, error) {
-	return s.iam.ListRoles(ctx, scope)
+	return s.iam.ListCatalogueRoles(ctx, scope)
 }
 
 // CreateRole creates a role after validating its scope and authorities.
@@ -117,6 +117,18 @@ func (s *Service) CreateRole(ctx context.Context, in RoleInput) (*iam.Role, erro
 	if err := validateAuthorities(scope, in.Authorities); err != nil {
 		return nil, err
 	}
+	// A catalogue role at a token some tenant already uses for its own would make that
+	// token mean two roles in that tenant (ADR-081). Checked here, and the tenant plane
+	// checks the other direction.
+	if scope == iam.ScopeTenant {
+		taken, err := s.iam.OwnedRoleTokenTaken(ctx, in.Token)
+		if err != nil {
+			return nil, err
+		}
+		if taken {
+			return nil, ErrRoleTokenTaken
+		}
+	}
 	r := &iam.Role{
 		Scope: scope, Token: in.Token, Authorities: in.Authorities,
 		NamedEntity: rdb.NamedEntity{Name: rdb.NullStrOf(&in.Name), Description: rdb.NullStrOf(&in.Description)},
@@ -124,7 +136,7 @@ func (s *Service) CreateRole(ctx context.Context, in RoleInput) (*iam.Role, erro
 	if err := s.iam.CreateRole(ctx, r); err != nil {
 		return nil, err
 	}
-	return s.iam.RoleByScopeToken(ctx, scope, in.Token)
+	return s.iam.CatalogueRoleByScopeToken(ctx, scope, in.Token)
 }
 
 // UpdateRole applies a partial update to the role named by (scope, token).
@@ -159,7 +171,7 @@ func (s *Service) UpdateRole(ctx context.Context, scope, token string, request *
 	if err := s.iam.UpdateRole(ctx, r); err != nil {
 		return nil, err
 	}
-	return s.iam.RoleByScopeToken(ctx, rs, token)
+	return s.iam.CatalogueRoleByScopeToken(ctx, rs, token)
 }
 
 // DeleteRole removes a role and clears its assignments. Idempotent: a missing
@@ -173,7 +185,7 @@ func (s *Service) DeleteRole(ctx context.Context, scope, token string) (bool, er
 	if rs == iam.ScopeSystem && token == iam.SuperuserRoleToken {
 		return false, ErrProtectedRole
 	}
-	r, err := s.iam.RoleByScopeToken(ctx, rs, token)
+	r, err := s.iam.CatalogueRoleByScopeToken(ctx, rs, token)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return false, nil
 	}
@@ -894,7 +906,7 @@ func (s *Service) loadTier(ctx context.Context, token string) (*iam.TenantTier, 
 
 // loadRole resolves a role by (scope, token), mapping not-found to ErrRoleNotFound.
 func (s *Service) loadRole(ctx context.Context, scope iam.RoleScope, token string) (*iam.Role, error) {
-	r, err := s.iam.RoleByScopeToken(ctx, scope, token)
+	r, err := s.iam.CatalogueRoleByScopeToken(ctx, scope, token)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrRoleNotFound
 	}

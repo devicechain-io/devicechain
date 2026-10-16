@@ -87,7 +87,50 @@ func TestAJoinTableReachesTheTenantThroughItsForeignKey(t *testing.T) {
 	plan, err := classify([]column{
 		col("user-management", "iam_memberships", "id", "bigint"),
 		col("user-management", "iam_memberships", "tenant_id", "character varying"),
+		col("user-management", "iam_identities", "id", "bigint"),
+		col("user-management", "iam_identity_system_roles", "identity_id", "bigint"),
+		col("user-management", "iam_identity_system_roles", "role_id", "bigint"),
+		col("user-management", "iam_membership_tenant_roles", "membership_id", "bigint"),
+		col("user-management", "iam_membership_tenant_roles", "role_id", "bigint"),
+	}, []constraint{
+		fk("user-management", "iam_membership_tenant_roles", "membership_id",
+			"user-management", "iam_memberships", "id"),
+		fk("user-management", "iam_identity_system_roles", "identity_id",
+			"user-management", "iam_identities", "id"),
+	}, nil)
+	require.NoError(t, err)
+
+	join := classOf(t, plan, "user-management", "iam_membership_tenant_roles")
+	require.Equal(t, ClassTransitive, join.Class)
+	require.Len(t, join.Links, 1,
+		"only the edge into tenant-bearing data counts")
+	assert.Equal(t, "iam_memberships", join.Links[0].Parent.Name)
+
+	// A join whose every parent is instance-global reaches no tenant: it is exactly the
+	// case the exemption registry exists for, and it is registered.
+	sys := classOf(t, plan, "user-management", "iam_identity_system_roles")
+	assert.Equal(t, ClassExempt, sys.Class)
+	assert.NotEmpty(t, sys.Reason)
+}
+
+// TestTenantOwnedRolesAreSweptAndTheCatalogueIsNot pins iam_roles since tenants can own
+// roles (ADR-081): it carries a tenant column, so it is DIRECT — a tenant's own roles go
+// with it — and it is no longer in the exemption registry, which used to say roles outlive
+// their tenants. A membership's role join now reaches tenant-bearing data through BOTH of
+// its edges, so a join row is swept when either its membership or its role belongs to the
+// purged tenant. (Only that tenant's memberships can hold its roles, but the
+// classification does not rely on the writers keeping that true.)
+func TestTenantOwnedRolesAreSweptAndTheCatalogueIsNot(t *testing.T) {
+	for _, e := range exemptions {
+		require.NotEqualf(t, "iam_roles", e.Name,
+			"iam_roles is back in the exemption registry, which tells every reader that a "+
+				"tenant's own roles outlive it")
+	}
+	plan, err := classify([]column{
+		col("user-management", "iam_memberships", "id", "bigint"),
+		col("user-management", "iam_memberships", "tenant_id", "character varying"),
 		col("user-management", "iam_roles", "id", "bigint"),
+		col("user-management", "iam_roles", "tenant_id", "character varying"),
 		col("user-management", "iam_membership_tenant_roles", "membership_id", "bigint"),
 		col("user-management", "iam_membership_tenant_roles", "role_id", "bigint"),
 	}, []constraint{
@@ -98,18 +141,13 @@ func TestAJoinTableReachesTheTenantThroughItsForeignKey(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 
+	roles := classOf(t, plan, "user-management", "iam_roles")
+	assert.Equal(t, ClassDirect, roles.Class)
+	assert.Equal(t, "tenant_id", roles.Column)
+
 	join := classOf(t, plan, "user-management", "iam_membership_tenant_roles")
 	require.Equal(t, ClassTransitive, join.Class)
-	require.Len(t, join.Links, 1,
-		"only the edge into tenant-bearing data counts; the role edge points at an "+
-			"instance-global catalog and must not widen the delete")
-	assert.Equal(t, "iam_memberships", join.Links[0].Parent.Name)
-
-	// iam_roles has no tenant column and no tenant-bearing parent: it is exactly the
-	// case the exemption registry exists for, and it is registered.
-	roles := classOf(t, plan, "user-management", "iam_roles")
-	assert.Equal(t, ClassExempt, roles.Class)
-	assert.NotEmpty(t, roles.Reason)
+	assert.Len(t, join.Links, 2, "both the membership edge and the role edge reach tenant-bearing data")
 }
 
 // TestTransitivityResolvesToAFixpointRegardlessOfMapOrder is the test that catches a
