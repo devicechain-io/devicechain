@@ -323,7 +323,7 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 	// this entity out of a rule-scoped group, so the delete + the read-model recompute
 	// commit together (a recompute failure rolls the delete back). Only wrap in a
 	// transaction when the delete can affect membership; a CLIENT-scope delete runs bare.
-	membershipTouched := false
+	var recomputed membershipChange
 	var minted *DeviceConfigurationRevision
 	membership := membershipScopeEligible(entityType, scope)
 	if membership || configurationScopeEligible(entityType, scope) {
@@ -339,8 +339,8 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 				return nil
 			}
 			if membership {
-				t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
-				membershipTouched = t
+				c, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+				recomputed = c
 				if err != nil {
 					return err
 				}
@@ -356,10 +356,9 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 		}
 		api.publishMintedConfiguration(ctx, entityId, minted)
 		// Evict the entity's membership cache post-commit (ADR-062) — only if a
-		// rule-referenced group existed for the key.
-		if membershipTouched {
-			api.evictMemberships(ctx, entityType, []uint{entityId})
-		}
+		// rule-referenced group existed for the key — and announce a device that entered or
+		// left an access scope.
+		api.afterMembershipRecompute(ctx, entityType, entityId, recomputed)
 	} else {
 		result := api.RDB.DB(ctx).Where(
 			"entity_type = ? AND entity_id = ? AND scope = ? AND attr_key = ?",

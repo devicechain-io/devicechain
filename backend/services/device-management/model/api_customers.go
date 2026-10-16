@@ -197,9 +197,8 @@ func (api *Api) CreateCustomer(ctx context.Context, request *CustomerCreateReque
 // about the request itself — pick another token. Its wording stays clear of "already
 // exists", "duplicate" and "unique", which an older dcctl matched on.
 //
-// Group anchors ("group:<token>") are not scope anchors yet — user-management refuses them
-// when a membership's scope is written — so groups are not retired here. When group scopes
-// ship, a deleted group's token needs the same rule.
+// A deleted group's token is retired by the same rule, in its own ledger
+// (ErrGroupTokenRetired): "group:<token>" anchors outlive their group just as customer ones do.
 var ErrCustomerTokenRetired = integrity.NewRefusal(integrity.ClassInvalid,
 	"that customer token is retired: a deleted customer held it, and records stamped with it "+
 		"(commands, alarms, update assignments, dashboard shares and event history) still name "+

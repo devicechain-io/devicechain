@@ -103,11 +103,6 @@ var ErrMemberNotFound = rdb.NewNotFound("member not found")
 // ErrTenantRoleNotFound is the refusal for a role this tenant cannot see.
 var ErrTenantRoleNotFound = rdb.NewNotFound("role not found")
 
-// ErrGroupScopeUnsupported refuses a GROUP anchor: group scopes are part of the model but
-// not yet served, so a scope naming one would be stored and then silently match nothing.
-var ErrGroupScopeUnsupported = integrity.NewRefusal(integrity.ClassInvalid,
-	"group scopes are not available yet; scope a member to customers")
-
 // ErrRoleInUse refuses deleting a tenant role while a member still holds it. It is a
 // reference refusal — the same code as every other "other records still refer to it".
 var ErrRoleInUse = integrity.NewRefusal(integrity.ClassReference,
@@ -158,9 +153,9 @@ type ScopeAnchorInput struct {
 	Token string
 }
 
-// NormalizeScope turns anchors from the API into the stored form ("customer:acme"),
-// refusing what may not be stored: a GROUP anchor (not available yet, INVALID_VALUE), a
-// malformed token (INVALID_VALUE), or more than auth.MaxScopeAnchors distinct anchors
+// NormalizeScope turns anchors from the API into the stored form ("customer:acme",
+// "group:north"), refusing what may not be stored: an unknown kind or a malformed token
+// (INVALID_VALUE), or more than auth.MaxScopeAnchors distinct anchors
 // (LIMIT_EXCEEDED — refused, never truncated: a truncated scope would silently hide what
 // the member was granted). Duplicates collapse. An empty list is nil: the whole tenant.
 func NormalizeScope(anchors []ScopeAnchorInput) ([]string, error) {
@@ -168,9 +163,11 @@ func NormalizeScope(anchors []ScopeAnchorInput) ([]string, error) {
 	seen := map[string]struct{}{}
 	for _, a := range anchors {
 		switch a.Kind {
-		case auth.AnchorKindCustomer:
-		case auth.AnchorKindGroup:
-			return nil, ErrGroupScopeUnsupported
+		case auth.AnchorKindCustomer, auth.AnchorKindGroup:
+			// A GROUP anchor is stored unchecked, as a customer one is: neither is looked up
+			// in device-management. A group reaches devices only while it is an access scope
+			// there, and a deleted group's token is never handed to another group, so an
+			// anchor naming a group that is not (or no longer) one matches nothing.
 		default:
 			return nil, integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("unknown scope anchor kind %q", a.Kind))
 		}

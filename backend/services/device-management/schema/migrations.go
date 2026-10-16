@@ -45,5 +45,7 @@ var (
 		NewCommandImpactSchema(),
 		NewAlarmScopeAnchorsSchema(),
 		NewIssuedCustomerTokensSchema(),
+		NewGroupAccessScopeSchema(),
+		NewIssuedGroupTokensSchema(),
 	}
 )

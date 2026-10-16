@@ -151,6 +151,8 @@ ALTER TABLE ONLY "device-management".geo_fences
 ALTER TABLE ONLY "device-management".geo_fences ALTER COLUMN id SET DEFAULT nextval('"device-management".geo_fences_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".issued_customer_tokens
  ADD CONSTRAINT issued_customer_tokens_pkey PRIMARY KEY (tenant_id, token);
+ALTER TABLE ONLY "device-management".issued_group_tokens
+ ADD CONSTRAINT issued_group_tokens_pkey PRIMARY KEY (tenant_id, token);
 ALTER TABLE ONLY "device-management".maintenance_windows
  ADD CONSTRAINT maintenance_windows_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".maintenance_windows ALTER COLUMN id SET DEFAULT nextval('"device-management".maintenance_windows_id_seq'::regclass);
@@ -880,7 +882,8 @@ CREATE TABLE "device-management".entity_groups (
  membership_mode character varying(16) NOT NULL,
  selector text,
  selector_schema bigint DEFAULT 0 NOT NULL,
- active_version integer
+ active_version integer,
+ access_scope_at timestamp with time zone
 );
 CREATE TABLE "device-management".entity_relationship_types (
  id bigint NOT NULL,
@@ -954,6 +957,11 @@ CREATE TABLE "device-management".geo_fences (
  geometry jsonb NOT NULL
 );
 CREATE TABLE "device-management".issued_customer_tokens (
+ tenant_id character varying(128) NOT NULL,
+ token character varying(128) NOT NULL,
+ created_at timestamp with time zone
+);
+CREATE TABLE "device-management".issued_group_tokens (
  tenant_id character varying(128) NOT NULL,
  token character varying(128) NOT NULL,
  created_at timestamp with time zone

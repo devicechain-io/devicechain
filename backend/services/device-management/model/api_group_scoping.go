@@ -337,10 +337,12 @@ func (api *Api) deregisterGroupVersionOnTx(ctx context.Context, tx *gorm.DB, gro
 // exec-spec decision): a recompute failure rolls the attribute write back rather than
 // leaving the attribute changed but membership stale (which, absent a reconcile sweep,
 // would be a silently-dropped membership update — the at-most-once hole ADR-062 rejects).
-// The returned bool reports whether any rule-referenced group existed for the key
+// The returned change reports whether any rule-referenced group existed for the key
 // (i.e. real work happened) — the caller evicts the entity's membership cache post-commit
-// only then, preserving pay-nothing for tenants with no rule-scoped groups.
-func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, entityType string, entityId uint, attrKey string) (bool, error) {
+// only then, preserving pay-nothing for tenants with no rule-scoped groups — and whether a
+// device ENTERED OR LEFT an access scope (ADR-081), when the caller announces its new
+// anchors (afterMembershipRecompute).
+func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, entityType string, entityId uint, attrKey string) (membershipChange, error) {
 	// Serialize this family's membership maintenance BEFORE reading the reverse index (ADR-062
 	// S5): a concurrent write to a DIFFERENT facet of the same entity, a Register, or a
 	// Deregister must not write-skew the read-model. Reading refs FIRST (the prior shape) let
@@ -360,16 +362,24 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 	// tenant+family advisory lock even for a tenant with no scoped groups; attribute writes are
 	// low-volume metadata ops and the lock is uncontended in that case, so it is acceptable.
 	if err := api.lockMembershipFamily(ctx, db, entityType); err != nil {
-		return false, err
+		return membershipChange{}, err
 	}
 	refs := make([]EntityGroupFacetRef, 0)
 	if err := db.
 		Where("facet_key = ? AND member_type = ?", attrKey, entityType).
 		Find(&refs).Error; err != nil {
-		return false, err
+		return membershipChange{}, err
 	}
 	if len(refs) == 0 {
-		return false, nil
+		return membershipChange{}, nil
+	}
+	change := membershipChange{touched: true}
+	var access map[uint]accessGroup
+	if entityType == string(entity.TypeDevice) {
+		var err error
+		if access, err = accessGroupsOnDB(db); err != nil {
+			return membershipChange{}, err
+		}
 	}
 	for _, ref := range refs {
 		var frozen EntityGroupVersion
@@ -381,35 +391,42 @@ func (api *Api) recomputeMembershipForAttr(ctx context.Context, db *gorm.DB, ent
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				continue
 			}
-			return false, err
+			return membershipChange{}, err
 		}
 		isMember, err := api.isMemberBySelector(ctx, db, frozen.MemberType, frozen.Selector, entityId)
 		if err != nil {
-			return false, err
+			return membershipChange{}, err
 		}
+		var moved int64
 		if isMember {
-			if err := api.upsertMembership(db, entityType, entityId, ref.GroupId, ref.SelectorVersion, ref.GroupToken); err != nil {
-				return false, err
+			if moved, err = api.upsertMembership(db, entityType, entityId, ref.GroupId, ref.SelectorVersion, ref.GroupToken); err != nil {
+				return membershipChange{}, err
 			}
 		} else {
 			// Hard-delete: a soft-delete tombstone would block a later re-join's insert
 			// (the unique index excludes deleted_at).
-			if err := db.Unscoped().
+			res := db.Unscoped().
 				Where("entity_type = ? AND entity_id = ? AND group_id = ? AND selector_version = ?",
 					entityType, entityId, ref.GroupId, ref.SelectorVersion).
-				Delete(&EntityGroupMembership{}).Error; err != nil {
-				return false, err
+				Delete(&EntityGroupMembership{})
+			if res.Error != nil {
+				return membershipChange{}, res.Error
 			}
+			moved = res.RowsAffected
+		}
+		if g, ok := access[ref.GroupId]; ok && moved > 0 && g.Version == ref.SelectorVersion {
+			change.access = true
 		}
 	}
-	return true, nil
+	return change, nil
 }
 
 // upsertMembership inserts a positive membership row on the given db handle, treating a
 // duplicate as success via ON CONFLICT DO NOTHING (the entity was already a member —
 // recompute is idempotent, and the insert is race-safe on its own even independent of the
 // family lock). The group token is denormalized onto the row for the resolver's stamp.
-func (api *Api) upsertMembership(db *gorm.DB, entityType string, entityId, groupId uint, version int32, groupToken string) error {
+// It returns how many rows it inserted: 0 when the entity already was a member.
+func (api *Api) upsertMembership(db *gorm.DB, entityType string, entityId, groupId uint, version int32, groupToken string) (int64, error) {
 	row := &EntityGroupMembership{
 		EntityType:      entityType,
 		EntityId:        entityId,
@@ -417,7 +434,33 @@ func (api *Api) upsertMembership(db *gorm.DB, entityType string, entityId, group
 		SelectorVersion: version,
 		GroupToken:      groupToken,
 	}
-	return db.Clauses(clause.OnConflict{DoNothing: true}).Create(row).Error
+	res := db.Clauses(clause.OnConflict{DoNothing: true}).Create(row)
+	return res.RowsAffected, res.Error
+}
+
+// membershipChange is what one membership recompute did: touched when a rule- or
+// access-referenced group existed for the key (the entity's cached memberships are then
+// dropped), access when a device entered or left an access scope's published version (its
+// anchors changed, and it is announced).
+type membershipChange struct {
+	touched, access bool
+}
+
+// or folds another recompute's change into this one.
+func (c membershipChange) or(o membershipChange) membershipChange {
+	return membershipChange{touched: c.touched || o.touched, access: c.access || o.access}
+}
+
+// afterMembershipRecompute fires, post-commit, what a recompute's change calls for: the
+// entity's cached memberships dropped, and — when it entered or left an access scope — the
+// device announced with its new anchors, so device-state moves its live view at once.
+func (api *Api) afterMembershipRecompute(ctx context.Context, entityType string, entityId uint, change membershipChange) {
+	if change.touched {
+		api.evictMemberships(ctx, entityType, []uint{entityId})
+	}
+	if change.access && entityType == string(entity.TypeDevice) {
+		api.emitOwnershipChanged(ctx, []uint{entityId})
+	}
 }
 
 // AnyScopedGroups reports whether the tenant has ANY registered rule-scoped group@v (any
@@ -449,15 +492,15 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 	if !membership && !configuration {
 		return write(api.RDB.DB(ctx))
 	}
-	var touched bool
+	var change membershipChange
 	var minted *DeviceConfigurationRevision
 	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := write(tx); err != nil {
 			return err
 		}
 		if membership {
-			t, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
-			touched = t
+			c, err := api.recomputeMembershipForAttr(ctx, tx, entityType, entityId, attrKey)
+			change = c
 			if err != nil {
 				return err
 			}
@@ -473,10 +516,8 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 	api.publishMintedConfiguration(ctx, entityId, minted)
 	// Evict the entity's membership cache post-commit — only if a rule-referenced group
 	// existed for the key (otherwise no membership could have changed, and an unused tenant
-	// pays nothing).
-	if touched {
-		api.evictMemberships(ctx, entityType, []uint{entityId})
-	}
+	// pays nothing) — and announce a device that entered or left an access scope.
+	api.afterMembershipRecompute(ctx, entityType, entityId, change)
 	return nil
 }
 
@@ -498,8 +539,19 @@ func (api *Api) MembershipsForEntity(ctx context.Context, entityType string, ent
 		return nil, err
 	}
 	out := make([]GroupMembership, 0, len(rows))
+	if len(rows) == 0 {
+		return out, nil
+	}
+	// Which rows are an access scope's published version: one read of the tenant's access
+	// scopes (at most MaxAccessScopeGroups), and only for an entity in some group at all.
+	access, err := accessGroupsOnDB(api.RDB.DB(ctx))
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rows {
-		out = append(out, GroupMembership{GroupId: r.GroupId, GroupToken: r.GroupToken, SelectorVersion: r.SelectorVersion})
+		g, ok := access[r.GroupId]
+		out = append(out, GroupMembership{GroupId: r.GroupId, GroupToken: r.GroupToken, SelectorVersion: r.SelectorVersion,
+			AccessScope: ok && entityType == string(entity.TypeDevice) && g.Version == r.SelectorVersion})
 	}
 	return out, nil
 }

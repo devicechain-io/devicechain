@@ -138,7 +138,7 @@ func newPartialUpdateWireCtx(t *testing.T) context.Context {
 		&model.DetectionRule{}, &model.DetectionRuleScopeRef{},
 		&model.AssetType{}, &model.Asset{}, &model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{},
 		&model.AreaType{}, &model.Area{}, &model.GeoFence{}, &model.GeoFenceSetVersion{},
-		&model.EntityGroup{}, &model.DeviceCredential{}, &model.ProvisioningProfile{},
+		&model.EntityGroup{}, &model.IssuedGroupToken{}, &model.DeviceCredential{}, &model.ProvisioningProfile{},
 		&model.EntityRelationshipType{}, &model.MaintenanceWindow{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

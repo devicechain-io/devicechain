@@ -279,6 +279,53 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() 
 	}, results[0].Resolved.ScopeMemberships)
 }
 
+// A device in an ACCESS SCOPE (ADR-081) carries the group's anchor on its events, beside its
+// relationship anchors, so a member limited to the group sees what the device sent while it
+// was in it. Only the DEVICE's own access memberships count — an area the device is tracked
+// to being in an access-marked group does not put the device in it — and a rule-only
+// membership (AccessScope false) adds no anchor. A tracked edge to the same group is not
+// doubled.
+func (suite *EventResolverTestSuite) TestADeviceInAnAccessScopeCarriesTheGroupAnchor() {
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			{TargetType: "customer", TargetToken: "acme", TargetId: 7},
+			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
+			{TargetType: "group", TargetToken: "south", TargetId: 3},
+		}}, nil)
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		switch {
+		case entityType == "device" && entityId == 500:
+			return []dmodel.GroupMembership{
+				{GroupToken: "north", SelectorVersion: 2, AccessScope: true},
+				{GroupToken: "south", SelectorVersion: 1, AccessScope: true},
+				{GroupToken: "beta-fleet", SelectorVersion: 1},
+			}
+		case entityType == "area" && entityId == 900:
+			return []dmodel.GroupMembership{{GroupToken: "arid-areas", SelectorVersion: 1, AccessScope: true}}
+		}
+		return nil
+	}
+
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), device, measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	if assert.Len(suite.T(), results, 1) {
+		got := map[string]int{}
+		for _, a := range results[0].Resolved.Anchors {
+			got[a.AnchorType+":"+a.AnchorToken]++
+		}
+		assert.Equal(suite.T(), map[string]int{
+			"customer:acme": 1, "area:warehouse-3": 1, "group:south": 1, "group:north": 1,
+		}, got)
+	}
+}
+
 // A scope-resolution failure on a new-relationship event aborts BEFORE the
 // relationship is created — so a transient lookup blip cannot leave a committed
 // relationship that a redelivery would duplicate (a fresh token per attempt is not
@@ -407,6 +454,49 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 		{GroupToken: "beta-fleet", Version: 1},
 		{GroupToken: "arid-areas", Version: 2},
 	}, results[0].Resolved.ScopeMemberships)
+}
+
+// A new-relationship event carries the device's anchors as they are AFTER the write — the
+// tracked relationships it already had, the access scopes it is in, and the new one — as
+// its next telemetry event will. Stamping only the new relationship left the event visible
+// to the new target alone and, through device-state's live view, denied the device's other
+// owners until the ownership fact arrived (ADR-081).
+func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDeviceHas() {
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			trackedRel(7, "customer", "acme"),
+		}}, nil)
+	suite.API.Mock.On("CreateEntityRelationship").Return(
+		&dmodel.EntityRelationship{Model: gorm.Model{ID: 9}, TargetType: "gateway", TargetToken: "gw-1", TargetId: 42}, nil)
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		if entityType == "device" && entityId == 500 {
+			return []dmodel.GroupMembership{{GroupToken: "north", SelectorVersion: 1, AccessScope: true}}
+		}
+		return nil
+	}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.NewRelationship,
+		Payload: &esmodel.UnresolvedNewRelationshipPayload{
+			RelationshipType: "connected-to", TargetType: "gateway", Target: "gw-1",
+		},
+	}
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleNewRelationshipEvent(
+		context.Background(), device, event)
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	if assert.Len(suite.T(), results, 1) {
+		assert.ElementsMatch(suite.T(), []dmodel.ResolvedAnchor{
+			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 7},
+			{AnchorType: "group", AnchorToken: "north"},
+			{AnchorType: "gateway", AnchorToken: "gw-1", RelationshipId: 9},
+		}, results[0].Resolved.Anchors)
+	}
 }
 
 // A measurement violating a declared metric definition routes to the dead-letter

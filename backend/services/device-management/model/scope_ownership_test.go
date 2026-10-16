@@ -59,7 +59,7 @@ func ownershipFixture(t *testing.T) (*Api, context.Context, *captureOwnership) {
 	ctx := auth.WithClaims(tenantCtx, &auth.Claims{TokenType: auth.TokenTypeAccess, Tenant: "acme",
 		Authorities: []string{"*"}})
 	// The customer-delete cascade's tables, which the hierarchy store does not carry.
-	require.NoError(t, api.RDB.Database.AutoMigrate(&EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}))
+	require.NoError(t, api.RDB.Database.AutoMigrate(&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{}))
 	seedDeviceForHierarchy(t, api, ctx, "dozer-01")
 	ct := &CustomerType{}
 	ct.Token = "operator"

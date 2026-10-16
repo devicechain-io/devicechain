@@ -707,6 +707,8 @@ export type EntityGroupCreateRequest = {
 };
 
 export type EntityGroupSearchCriteria = {
+  /** Keep only the groups that are (true) or are not (false) access scopes. Omit it for both. */
+  accessScope?: boolean | null | undefined;
   memberType?: string | null | undefined;
   membershipMode?: string | null | undefined;
   pageNumber: number;

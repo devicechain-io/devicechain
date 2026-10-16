@@ -5,6 +5,7 @@ package model
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -75,6 +76,21 @@ type EntityGroup struct {
 	// only a rule scope needs the frozen version. Static groups are never versioned,
 	// so this stays null for them. Publish advances the pointer; rollback flips it.
 	ActiveVersion sql.NullInt32
+	// AccessScopeAt is when the group was made an ACCESS SCOPE, or NULL while it is not
+	// one (ADR-081). An access scope is a group a member's access can be limited to: its
+	// members at the PUBLISHED version (ActiveVersion) are materialized like a rule-scoped
+	// group's, a device in it is visible to a member whose scope names "group:<token>",
+	// and the records written about the device while it is in the group carry that anchor.
+	// Only a published dynamic group of devices can be one (SetEntityGroupAccessScope).
+	//
+	// A timestamp rather than a boolean for the reason devices.disabled_at gives: NULL is
+	// what every existing row holds, and it has to mean "not an access scope".
+	AccessScopeAt sql.NullTime
+}
+
+// IsAccessScope reports whether the group is an access scope.
+func (g *EntityGroup) IsAccessScope() bool {
+	return g != nil && g.AccessScopeAt.Valid
 }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token
@@ -148,10 +164,25 @@ type EntityGroupSearchCriteria struct {
 	rdb.Pagination
 	MemberType     *string
 	MembershipMode *string
+	// AccessScope, when set, keeps only the groups that are (true) or are not (false)
+	// access scopes — the list a scope picker offers.
+	AccessScope *bool
 }
 
 // Results for entity group search.
 type EntityGroupSearchResults struct {
 	Results    []EntityGroup
 	Pagination rdb.SearchResultsPagination
+}
+
+// IssuedGroupToken records that an entity-group token has been issued in a tenant. A row is
+// written when the group is created and is NEVER removed when the group is deleted: it is
+// what keeps a deleted group's token retired (see ErrGroupTokenRetired). Only a tenant purge
+// removes it. It is IssuedCustomerToken's twin, for the same reason and with the same shape:
+// a group that is an access scope is named by token, as "group:<token>", on records that
+// outlive it.
+type IssuedGroupToken struct {
+	TenantId  string `gorm:"primaryKey;not null;size:128"`
+	Token     string `gorm:"primaryKey;not null;size:128"`
+	CreatedAt time.Time
 }

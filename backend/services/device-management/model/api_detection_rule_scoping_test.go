@@ -37,7 +37,7 @@ func newRuleScopeTestApi(t *testing.T) (*Api, context.Context) {
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &Area{}, &AreaType{},
 		&DeviceProfile{}, &DeviceProfileVersion{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{}, &EntityAttribute{},
-		&EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
+		&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
 		&EntityRelationship{}, &Alarm{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

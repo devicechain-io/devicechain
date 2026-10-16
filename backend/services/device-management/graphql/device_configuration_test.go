@@ -25,7 +25,7 @@ func deviceConfigurationCtx(t *testing.T) context.Context {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceCredential{},
-		&model.DeviceReplacement{}, &model.EntityAttribute{}, &model.EntityGroup{},
+		&model.DeviceReplacement{}, &model.EntityAttribute{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.EntityGroupFacetRef{},
 		&model.EntityRelationship{}, &model.Alarm{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},

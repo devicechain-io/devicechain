@@ -30,7 +30,7 @@ func TestKeyLookupsAreBounded(t *testing.T) {
 		&Alarm{}, &AreaType{}, &Area{}, &AssetType{}, &Asset{}, &CommandDefinition{},
 		&DeviceProfile{}, &EntityRelationshipType{}, &EntityRelationship{}, &DeviceCredential{},
 		&Device{}, &DeviceType{}, &CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DetectionRule{}, &GeoFence{},
-		&EntityGroup{}, &MetricDefinition{}, &ProvisioningProfile{}, &EntityAttribute{})
+		&EntityGroup{}, &IssuedGroupToken{}, &MetricDefinition{}, &ProvisioningProfile{}, &EntityAttribute{})
 	ctx := core.WithTenant(context.Background(), "acme")
 
 	discard := func(_ any, err error) error { return err }
