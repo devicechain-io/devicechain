@@ -242,8 +242,7 @@ func TestIntegrationIndexTrimAppliesOverCompressedChunks(t *testing.T) {
 		// Preconditions, read from the rows rather than from is_compressed (see
 		// NewLocationFixFieldsSchema): the chunk is flagged compressed and holds no raw rows.
 		var status int
-		require.NoError(t, sys.Raw(`SELECT c.status FROM _timescaledb_catalog.chunk c
-			WHERE format('%I.%I', c.schema_name, c.table_name) = ?`, chunk).Scan(&status).Error)
+		require.NoError(t, sys.Raw(`SELECT _timescaledb_functions.chunk_status(?::regclass)`, chunk).Scan(&status).Error)
 		require.Equalf(t, 1, status&1, "%s must be compressed", chunk)
 		var raw int64
 		require.NoError(t, sys.Raw(`SELECT count(*) FROM ONLY `+chunk).Scan(&raw).Error)

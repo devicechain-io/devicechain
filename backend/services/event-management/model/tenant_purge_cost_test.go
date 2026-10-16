@@ -155,10 +155,9 @@ func uncompressedRows(t *testing.T, db *gorm.DB, table string) int64 {
 	t.Helper()
 	var chunks []string
 	require.NoError(t, db.Raw(`
-		SELECT format('%I.%I', c.schema_name, c.table_name)
-		FROM _timescaledb_catalog.chunk c
-		JOIN _timescaledb_catalog.hypertable h ON c.hypertable_id = h.id
-		WHERE h.table_name = ? AND h.schema_name = 'event-management'`, table).Scan(&chunks).Error)
+		SELECT format('%I.%I', chunk_schema, chunk_name)
+		FROM timescaledb_information.chunks
+		WHERE hypertable_name = ? AND hypertable_schema = 'event-management'`, table).Scan(&chunks).Error)
 	require.NotEmpty(t, chunks, "no chunks found — this guard would be vacuous")
 
 	var total int64
@@ -198,13 +197,8 @@ func countFor(t *testing.T, db *gorm.DB, tenant string) int64 {
 // not make wrongly. So look in the store itself.
 func residualInCompressedStore(t *testing.T, db *gorm.DB, table, tenant string) int64 {
 	t.Helper()
-	var chunks []string
-	require.NoError(t, db.Raw(`
-		SELECT format('%I.%I', cc.schema_name, cc.table_name)
-		FROM _timescaledb_catalog.chunk c
-		JOIN _timescaledb_catalog.chunk cc ON c.compressed_chunk_id = cc.id
-		JOIN _timescaledb_catalog.hypertable h ON c.hypertable_id = h.id
-		WHERE h.table_name = ? AND h.schema_name = 'event-management'`, table).Scan(&chunks).Error)
+	chunks, err := compressedRelations(db, table)
+	require.NoError(t, err)
 	require.NotEmpty(t, chunks, "found no compressed chunks to inspect — this check would be vacuous")
 
 	var total int64
