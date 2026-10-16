@@ -479,25 +479,10 @@ export function DashboardCanvas({
     }
   };
 
-  const toolbar = (widget: WidgetInstance) => {
+  const toolbar = (widget: WidgetInstance, rect: Rect) => {
     const placement = basePlacement(widget);
     return (
-      <div
-        data-no-drag
-        style={{
-          // Overlay the widget's top-right corner (inside its bounds) so
-          // it isn't clipped by the scroll area for widgets at y:0.
-          position: 'absolute',
-          top: 2,
-          right: 2,
-          display: 'flex',
-          flexWrap: 'wrap',
-          justifyContent: 'flex-end',
-          gap: 4,
-          pointerEvents: 'auto',
-          zIndex: 5,
-        }}
-      >
+      <FloatingToolbar rect={rect} canvasWidth={measuredWidth} roomAbove={rect.y + pad.top + TOOLBAR_ROOM}>
         <div role="group" aria-label={t('canvasPlacementLabel')} className="flex gap-px">
           <ToolbarButton
             data-testid="placement-grid"
@@ -543,7 +528,7 @@ export function DashboardCanvas({
         >
           {t('delete')}
         </ToolbarButton>
-      </div>
+      </FloatingToolbar>
     );
   };
 
@@ -641,7 +626,9 @@ export function DashboardCanvas({
         style={{
           width: '100%',
           maxWidth,
-          padding: `${pad.top}px ${pad.right}px ${pad.bottom}px ${pad.left}px`,
+          // The extra room on top is the editor's, not the board's: it is where the selected
+          // widget's toolbar sits for a widget in the first row (FloatingToolbar).
+          padding: `${pad.top + TOOLBAR_ROOM}px ${pad.right}px ${pad.bottom}px ${pad.left}px`,
           boxSizing: 'border-box',
           ...tokenStyle(scale),
         }}
@@ -728,7 +715,7 @@ export function DashboardCanvas({
                 >
                   {live(widget)}
                   {lintBadges(widget.id)}
-                  {selected && toolbar(widget)}
+                  {selected && toolbar(widget, rect)}
                   {handles.map((h) => (
                     <div
                       key={h}
@@ -777,6 +764,78 @@ export function DashboardCanvas({
           </WidgetDensityProvider>
         </div>
       </div>
+    </div>
+  );
+}
+
+// The gap between a widget and its toolbar, and the room the editor keeps above the first row so
+// a one-line toolbar fits there.
+const TOOLBAR_GAP = 6;
+const TOOLBAR_ROOM = 32;
+
+// The selected widget's toolbar, laid OUTSIDE the widget it edits: above it where there is room,
+// below it where there is not, never over it. Inside the widget it covered the widget's own
+// title (and, wrapped in a narrow widget, its content). It is right-aligned with the widget and
+// slid back inside the canvas when that would run past an edge, and it wraps only when the
+// canvas itself is narrower than it. It measures itself to choose, so a longer translation or a
+// wrapped second line moves it rather than clipping it.
+//
+// Rendered inside the widget's box (positioned against it) so it stays the widget's descendant:
+// a press on it is a press on the widget, which keeps it selected.
+function FloatingToolbar({
+  rect,
+  canvasWidth,
+  roomAbove,
+  children,
+}: {
+  rect: Rect;
+  canvasWidth: number;
+  // From the widget's top edge up to the top of what the canvas can scroll to.
+  roomAbove: number;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () =>
+      setSize((s) => (s && s.w === el.offsetWidth && s.h === el.offsetHeight ? s : { w: el.offsetWidth, h: el.offsetHeight }));
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const w = size?.w ?? 0;
+  const h = size?.h ?? 0;
+  // In canvas coordinates: right-aligned with the widget, then held inside [0, canvasWidth].
+  const x = Math.max(0, Math.min(rect.x + rect.w - w, canvasWidth - w));
+  const above = roomAbove >= h + TOOLBAR_GAP;
+  return (
+    <div
+      ref={ref}
+      data-no-drag
+      data-testid="widget-toolbar"
+      data-side={above ? 'above' : 'below'}
+      style={{
+        position: 'absolute',
+        left: x - rect.x,
+        top: above ? -(h + TOOLBAR_GAP) : rect.h + TOOLBAR_GAP,
+        width: 'max-content',
+        maxWidth: Math.max(0, canvasWidth),
+        display: 'flex',
+        flexWrap: 'wrap',
+        justifyContent: 'flex-end',
+        alignItems: 'center',
+        gap: 4,
+        pointerEvents: 'auto',
+        // Over its neighbours (and the resize handles), under the placement guides.
+        zIndex: 250,
+        // Until it has measured itself it has nowhere to be.
+        visibility: size ? undefined : 'hidden',
+      }}
+    >
+      {children}
     </div>
   );
 }

@@ -1696,6 +1696,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      # Console layout gate (apps/console/e2e): dashboard-editor controls drawn by the console's
+      # own components in Chromium at phone to desktop widths, in English and Spanish, fail when
+      # a control is cut off (the Version history drawer's Make live / Roll back) or sits on the
+      # widget it edits (the canvas toolbar). Same job and same browser as the readability gate.
+      - name: Console layout gate
+        run: npm run test:layout -w @devicechain/console
+
+      # ADVISORY: a screenshot of every case the layout gate measured.
+      - name: Upload the console layout screenshots (advisory)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: console-layout
+          path: frontend/apps/console/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # ---------------------------------------------------------------------------
   # C# SDK (sdks/csharp): restore, build both TFMs (netstandard2.1 + net8.0), test.
   # TreatWarningsAsErrors + IsAotCompatible keep the Unity/IL2CPP guarantee honest.

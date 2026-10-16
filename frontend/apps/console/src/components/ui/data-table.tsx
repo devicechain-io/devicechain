@@ -14,9 +14,9 @@ export function DataTable({ children, className }: { children: React.ReactNode; 
   );
 }
 
-export function DataTableHead({ children }: { children: React.ReactNode }) {
+export function DataTableHead({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <thead>
+    <thead className={className}>
       <tr className="border-b border-border">
         {children}
       </tr>

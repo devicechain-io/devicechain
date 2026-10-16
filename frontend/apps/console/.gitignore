@@ -1,0 +1,2 @@
+# The layout gate's output (playwright.config.ts outputDir): screenshots and traces.
+test-results/

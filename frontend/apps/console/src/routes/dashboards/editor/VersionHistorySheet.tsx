@@ -462,7 +462,9 @@ function VersionHistoryBody({
         </div>
       )}
 
-      <div>
+      {/* A size container: the history table below lays itself out by the room the drawer
+          gives it, not by the window (the drawer is the full width only on a phone). */}
+      <div className="@container">
         <div className="mb-2 text-sm font-semibold">{t('versionPublishedHeading')}</div>
         {loading ? (
           <LoadingState description={t('versionLoading')} />
@@ -471,8 +473,14 @@ function VersionHistoryBody({
         ) : !data || data.length === 0 ? (
           <EmptyState description={t('versionEmpty')} />
         ) : (
+          // Two layouts, one set of elements. With room (@lg and up) it is a four-column table
+          // whose actions wrap under each other when the row runs short. Without it — a phone,
+          // where four columns cannot fit the actions at any wrapping — each row reflows into
+          // lines: the version, then when and by whom, then the actions. The table clips (its
+          // rounded frame), so a row held wider than the drawer used to cut Roll back off at
+          // the right edge; now nothing in a row is wider than the drawer.
           <DataTable>
-            <DataTableHead>
+            <DataTableHead className="@max-lg:hidden">
               <DataTableHeaderCell>{t('versionColumnVersion')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('versionColumnPublished')}</DataTableHeaderCell>
               <DataTableHeaderCell>{t('versionColumnBy')}</DataTableHeaderCell>
@@ -480,8 +488,8 @@ function VersionHistoryBody({
             </DataTableHead>
             <DataTableBody>
               {data.map((v) => (
-                <DataTableRow key={v.version}>
-                  <DataTableCell className="font-medium text-foreground">
+                <DataTableRow key={v.version} className="@max-lg:flex @max-lg:flex-wrap @max-lg:gap-x-3 @max-lg:px-4 @max-lg:py-3">
+                  <DataTableCell className="font-medium text-foreground [overflow-wrap:anywhere] @max-lg:basis-full @max-lg:p-0">
                     <span className="font-mono">{v.version}</span>
                     {v.label ? <span className="ml-2 text-muted-foreground">{v.label}</span> : null}
                     {v.version === liveVersion ? (
@@ -490,13 +498,20 @@ function VersionHistoryBody({
                       </span>
                     ) : null}
                   </DataTableCell>
-                  <DataTableCell className="text-muted-foreground">
+                  <DataTableCell className="text-muted-foreground @max-lg:p-0 @max-lg:pt-1">
                     {formatTime(v.publishedAt)}
                   </DataTableCell>
-                  <DataTableCell className="text-muted-foreground" data-shot-pii>{v.publishedBy || '—'}</DataTableCell>
-                  <DataTableCell className="w-px whitespace-nowrap text-right">
+                  {/* An address is one unbroken word; let it break anywhere rather than hold the
+                      table wider than the drawer, which pushed the actions past its edge. */}
+                  <DataTableCell
+                    className="text-muted-foreground [overflow-wrap:anywhere] @max-lg:min-w-0 @max-lg:p-0 @max-lg:pt-1"
+                    data-shot-pii
+                  >
+                    {v.publishedBy || '—'}
+                  </DataTableCell>
+                  <DataTableCell className="text-right @max-lg:basis-full @max-lg:p-0 @max-lg:pt-2">
                     {canWrite && (
-                      <div className="flex justify-end gap-2 [&>button]:shrink-0">
+                      <div className="flex flex-wrap justify-end gap-2 @max-lg:justify-start [&>button]:shrink-0">
                         {v.version !== liveVersion && (
                           <Button
                             variant="outline"
