@@ -64,8 +64,11 @@ describe('accepting an invitation', () => {
     h.acceptInvitation.mockResolvedValue(auth(['oem']));
     renderAt();
 
-    // The fragment is gone from the address bar as soon as the page has read it.
+    // The fragment is gone from the address bar as soon as the page has read it, and the
+    // code is held in session storage instead: that is what lets it survive the round trip
+    // through an identity provider.
     expect(window.location.hash).toBe('');
+    expect(heldInvitation()).toBe('abc123');
     fireEvent.change(screen.getByLabelText('Choose a password'), { target: { value: 's3cret-pass' } });
     fireEvent.change(screen.getByLabelText('Repeat the password'), { target: { value: 's3cret-pass' } });
     fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));

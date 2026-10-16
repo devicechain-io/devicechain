@@ -208,3 +208,14 @@ func TestTenantAuthoritiesAreTheTenantTierVocabulary(t *testing.T) {
 	require.Contains(t, got, string(auth.MemberWrite))
 	require.NotContains(t, got, string(auth.TenantRead), "an instance authority was offered to a tenant role")
 }
+
+// tenantAuthorities needs role:read in particular: a member who may read members but not
+// roles is refused. Without this, any tenant authority the fixture happens to hold would do.
+func TestTenantAuthoritiesNeedRoleRead(t *testing.T) {
+	w := newWireEnv(t)
+	reader := bossClaims()
+	reader.Authorities = append(identity.ViewerAuthorities(), string(auth.MemberRead))
+	_, ext := w.exec(t, reader, `{ tenantAuthorities }`, nil)
+	require.NotNil(t, ext, "tenantAuthorities answered a caller without role:read")
+	require.Equal(t, "FORBIDDEN", ext["code"])
+}
