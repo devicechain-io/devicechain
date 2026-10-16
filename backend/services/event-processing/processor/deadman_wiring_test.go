@@ -161,11 +161,12 @@ func TestDropStaleAbsences(t *testing.T) {
 }
 
 // TestDropSupersededFrontierDetections is the ADR-057 D6 gate: a superseded profile version's retained
-// rule still fires its FRONTIER-triggered detections (Duration/Session/Aggregate timers + pane closes)
-// off the shared watermark even though the fan-out starves it of events, so those must be dropped at
-// publish lest they contribute a false edge to the alarm object under the stable contributor id. It
-// drops ONLY on a CONFIRMED version mismatch: the active version's detection, an unrostered device's,
-// and a superseded EVENT-driven kind all pass through.
+// rule still fires its FRONTIER-triggered detections (Duration/Session/Aggregate timers + pane closes,
+// and the DeltaRate/CountWindow flush of samples held until the frontier passes them) off the shared
+// watermark even though the fan-out starves it of events, so those must be dropped at publish lest
+// they contribute a false edge to the alarm object under the stable contributor id. It drops ONLY on
+// a CONFIRMED version mismatch: the active version's detection, an unrostered device's, and a
+// superseded EVENT-driven kind all pass through.
 func TestDropSupersededFrontierDetections(t *testing.T) {
 	v1 := runtime.ComposeRuleID("acme", "p1@v1/rDur")
 	v2 := runtime.ComposeRuleID("acme", "p1@v2/rDur")
@@ -187,6 +188,8 @@ func TestDropSupersededFrontierDetections(t *testing.T) {
 	)
 	rp.pendingDets = pending([]detectcore.Detection{
 		{RuleID: v1, Series: "dev", Kind: detectcore.Duration},        // superseded frontier → DROP
+		{RuleID: v1, Series: "dev", Kind: detectcore.DeltaRate},       // superseded held-sample flush → DROP
+		{RuleID: v1, Series: "dev", Kind: detectcore.CountWindow},     // superseded held-sample flush → DROP
 		{RuleID: v2, Series: "dev", Kind: detectcore.Duration},        // active version → keep
 		{RuleID: v1, Series: "dev", Kind: detectcore.Threshold},       // superseded but event-driven → keep
 		{RuleID: v1, Series: "unrostered", Kind: detectcore.Duration}, // unrostered → keep (fail toward not-dropping)
@@ -202,6 +205,11 @@ func TestDropSupersededFrontierDetections(t *testing.T) {
 	}
 	if kept[key(detectcore.Duration, v1, "dev")] {
 		t.Fatal("a superseded version's Duration (frontier) detection must be dropped")
+	}
+	for _, kind := range []detectcore.RuleKind{detectcore.DeltaRate, detectcore.CountWindow} {
+		if kept[key(kind, v1, "dev")] {
+			t.Fatalf("a superseded version's kind-%d detection comes off a frontier flush and must be dropped", kind)
+		}
 	}
 	for _, want := range []string{
 		key(detectcore.Duration, v2, "dev"),        // active version kept

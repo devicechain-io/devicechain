@@ -311,10 +311,22 @@ func (e *Engine) applyAggregate(ev Event, r Rule) {
 	}
 }
 
-// applyCountWindow handles a CountWindow rule: fold each matching value into an event-count
-// accumulator; when the Count-th event lands, evaluate Agg vs Thresh, emit on satisfaction,
-// and reset. It is a tumbling window measured in events rather than time — no watermark, no
-// timer — so replay just re-counts from the snapshotted partial accumulator.
+// applyCountWindow admits one matching sample of a CountWindow rule into its series' pending run
+// (reorder.go): the window is every Count CONSECUTIVE matching samples in event time, so which
+// window a sample falls in is known only once the frontier is past it. A sample older than the
+// series' last folded sample is refused there as late. A non-match is not held: the kind ignores it.
+func (e *Engine) applyCountWindow(ev Event, r Rule) {
+	if r.Count <= 0 {
+		return
+	}
+	e.hold(ev, r)
+}
+
+// finalizeCountWindow folds one now-final matching value into the series' event-count
+// accumulator; when the Count-th sample lands, evaluate Agg vs Thresh, emit on satisfaction, and
+// reset. It is a tumbling window measured in events rather than time — the watermark decides
+// only WHEN a sample is final, never where a window closes — so replay just re-counts from the
+// snapshotted partial accumulator.
 //
 // KNOWN RESIDUAL (ADR-057 review D2/D5, inherent — not the sliding-kind gap): the window is counted
 // in MATCHING events, and there is no time axis, so a filtering rule that stops matching never
@@ -323,27 +335,37 @@ func (e *Engine) applyAggregate(ev Event, r Rule) {
 // could observe the falling edge from non-matching traffic: "closed" is definitionally Count matches.
 // Operators pair such a rule with an Absence rule when "stopped producing matches" must also clear the
 // alarm — the same mitigation the package silence note gives for a fully-silent series.
-func (e *Engine) applyCountWindow(ev Event, r Rule) {
-	if !ev.Match || r.Count <= 0 {
+func (e *Engine) finalizeCountWindow(key SeriesKey, r Rule, s pendingSample) {
+	if !s.match || r.Count <= 0 {
 		return
 	}
-	pa := e.counts[ev.Key]
-	if pa == nil {
-		pa = &paneAgg{}
-		e.counts[ev.Key] = pa
+	st := e.counts[key]
+	if st == nil {
+		st = &countState{}
+		e.counts[key] = st
 	}
-	pa.add(ev.Value)
-	if pa.count >= r.Count {
+	st.add(s.v)
+	st.last = s.t
+	if st.count >= r.Count {
 		// The count-window closed: a satisfied close raises (latched across successive windows), an
 		// unsatisfied close resolves a prior raise (ADR-057 — the latest N-event window no longer
-		// breaches). Reset either way.
-		if cmp(r.Op, pa.value(r.Agg), r.Thresh) {
-			e.emitValue(r, ev.Key, ev.Time, pa.value(r.Agg))
+		// breaches). Reset the accumulator either way; the entry stays, because `last` is what tells
+		// hold that a sample older than this window is late.
+		if cmp(r.Op, st.value(r.Agg), r.Thresh) {
+			e.emitValue(r, key, s.t, st.value(r.Agg))
 		} else {
-			e.resolve(r, ev.Key, ev.Time)
+			e.resolve(r, key, s.t)
 		}
-		delete(e.counts, ev.Key)
+		st.paneAgg = paneAgg{}
 	}
+}
+
+// countState is one CountWindow series: the open accumulator and the time of the newest sample
+// folded into it or into a window already closed. The entry is permanent per series (like a
+// DeltaRate base), because `last` is the series' decided frontier (reorder.go, hold).
+type countState struct {
+	paneAgg
+	last time.Time
 }
 
 // closePanes fires every tumbling window whose end has been crossed by the watermark.
@@ -428,19 +450,23 @@ func (e *Engine) snapshotWindows() ([]snapSliding, []snapPane) {
 	return sliding, panes
 }
 
+// snapCount persists one CountWindow series. Last is the series' decided frontier; a checkpoint
+// written before it existed restores it as the zero time, which admits everything — exact, since
+// that model refused nothing.
 type snapCount struct {
-	Rule   string  `json:"rule"`
-	Series string  `json:"series"`
-	Count  int     `json:"count"`
-	Sum    float64 `json:"sum"`
-	Min    float64 `json:"min"`
-	Max    float64 `json:"max"`
+	Rule   string    `json:"rule"`
+	Series string    `json:"series"`
+	Count  int       `json:"count"`
+	Sum    float64   `json:"sum"`
+	Min    float64   `json:"min"`
+	Max    float64   `json:"max"`
+	Last   time.Time `json:"last"`
 }
 
 func (e *Engine) snapshotCounts() []snapCount {
 	out := make([]snapCount, 0, len(e.counts))
-	for k, pa := range e.counts {
-		out = append(out, snapCount{Rule: k.Rule, Series: k.Series, Count: pa.count, Sum: pa.sum, Min: pa.min, Max: pa.max})
+	for k, st := range e.counts {
+		out = append(out, snapCount{Rule: k.Rule, Series: k.Series, Count: st.count, Sum: st.sum, Min: st.min, Max: st.max, Last: st.last})
 	}
 	sortByRuleSeries(out, func(i int) (string, string) { return out[i].Rule, out[i].Series })
 	return out
@@ -448,7 +474,7 @@ func (e *Engine) snapshotCounts() []snapCount {
 
 func (e *Engine) restoreCounts(in []snapCount) {
 	for _, c := range in {
-		e.counts[SeriesKey{Rule: c.Rule, Series: c.Series}] = &paneAgg{count: c.Count, sum: c.Sum, min: c.Min, max: c.Max}
+		e.counts[SeriesKey{Rule: c.Rule, Series: c.Series}] = &countState{paneAgg: paneAgg{count: c.Count, sum: c.Sum, min: c.Min, max: c.Max}, last: c.Last}
 	}
 }
 

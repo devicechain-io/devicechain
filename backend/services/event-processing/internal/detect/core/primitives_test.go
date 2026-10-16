@@ -65,7 +65,9 @@ func assertAgg(t *testing.T, s *slidingState, min, max, sum, count float64) {
 }
 
 // TestDeltaRateMode exercises the per-second rate branch of DeltaRate (the scenario covers
-// raw delta): the same absolute change fires or not depending on the elapsed time.
+// raw delta): the same absolute change fires or not depending on the elapsed time. A sample is
+// evaluated once the frontier is past it (reorder.go), so each verdict is drained after the
+// advance that finalizes the sample, stamped at the sample's own time.
 func TestDeltaRateMode(t *testing.T) {
 	rules := []Rule{{ID: "r", Kind: DeltaRate, Rate: true, Op: GT, Thresh: 10}}
 	e := NewEngine(rules, 0)
@@ -77,12 +79,16 @@ func TestDeltaRateMode(t *testing.T) {
 	if d := feed(1, 0, 0); len(d) != 0 {
 		t.Fatalf("prime should not fire, got %+v", d)
 	}
-	if d := feed(2, 4, 100); len(d) != 1 || d[0].Edge != EdgeRaised || d[0].At != at(4) { // 100/4s = 25/s > 10
+	if d := feed(2, 4, 100); len(d) != 0 {
+		t.Fatalf("a sample at the frontier is not final yet, got %+v", d)
+	}
+	if d := feed(3, 14, 120); len(d) != 1 || d[0].Edge != EdgeRaised || d[0].At != at(4) { // 100/4s = 25/s > 10
 		t.Fatalf("fast rate should raise @4, got %+v", d)
 	}
 	// The rate falls back below the threshold: the two-edge model resolves the raised alarm
 	// (ADR-057) rather than emitting nothing.
-	if d := feed(3, 14, 120); len(d) != 1 || d[0].Edge != EdgeResolved || d[0].At != at(14) { // 20/10s = 2/s < 10
+	e.Advance(at(15))
+	if d := e.Drain(); len(d) != 1 || d[0].Edge != EdgeResolved || d[0].At != at(14) { // 20/10s = 2/s < 10
 		t.Fatalf("slow rate should resolve the prior raise @14, got %+v", d)
 	}
 }
@@ -166,8 +172,10 @@ func TestSlidingAggSumRestoreExact(t *testing.T) {
 	}
 }
 
-// TestDeltaRateOutOfOrderIgnored proves a stale (older-timestamp) sample neither fires nor
-// poisons the running last-value base for the next in-order sample.
+// TestDeltaRateOutOfOrderIgnored proves a stale sample — one older than the series' FINAL base,
+// whose pair is already decided — neither fires nor poisons the base for the next sample, and is
+// counted as late. (A sample older than one merely HELD is not stale: it is placed by its own time,
+// which TestDeltaRateIsArrivalOrderIndependent pins.)
 func TestDeltaRateOutOfOrderIgnored(t *testing.T) {
 	rules := []Rule{{ID: "r", Kind: DeltaRate, Op: GT, Thresh: 50}}
 	e := NewEngine(rules, 0)
@@ -176,16 +184,22 @@ func TestDeltaRateOutOfOrderIgnored(t *testing.T) {
 		e.ProcessEvent(Event{Seq: seq, Key: k, Time: at(sec), Value: v, Match: true})
 		return e.Drain()
 	}
-	feed(1, 10, 100) // prime, base=(100,10)
-	if d := feed(2, 20, 130); len(d) != 0 {
+	feed(1, 10, 100)                        // held
+	feed(2, 20, 130)                        // finalizes @10: prime, base=(100,10)
+	if d := feed(3, 30, 140); len(d) != 0 { // finalizes @20: +30 does not fire; base=(130,20)
 		t.Fatalf("+30 should not fire, got %+v", d)
 	}
-	if d := feed(3, 15, 1000); len(d) != 0 { // late sample: must be ignored, base stays (130,20)
+	if d := feed(4, 15, 1000); len(d) != 0 { // older than the base: refused, base stays (130,20)
 		t.Fatalf("stale sample must not fire, got %+v", d)
 	}
-	// vs the correct base (130) this is +70 → fire; a base poisoned to 1000 would miss it.
-	if d := feed(4, 25, 200); len(d) != 1 || d[0].At != at(25) {
-		t.Fatalf("in-order +70 vs correct base should fire @25, got %+v", d)
+	if n := e.DrainLateSamples(); n != 1 {
+		t.Fatalf("the stale sample must be counted as late once, got %d", n)
+	}
+	feed(5, 40, 210)  // finalizes @30: +10 vs 130, no fire; base=(140,30)
+	e.Advance(at(41)) // finalizes @40
+	// vs the correct base (140) this is +70 → fire; a base poisoned to 1000 would miss it.
+	if d := e.Drain(); len(d) != 1 || d[0].At != at(40) || d[0].Value != 70 {
+		t.Fatalf("in-order +70 vs correct base should fire @40, got %+v", d)
 	}
 }
 

@@ -227,11 +227,16 @@ type Engine struct {
 	panes    map[paneKey]*paneAgg           // Aggregate: open tumbling window panes
 	closes   closeHeap                      // Aggregate: pending pane closes, ordered by end
 	lastVal  map[SeriesKey]deltaState       // DeltaRate: last sample per series
-	counts   map[SeriesKey]*paneAgg         // CountWindow: open event-count accumulator per series
+	counts   map[SeriesKey]*countState      // CountWindow: event-count accumulator + decided frontier per series
 	session  map[SeriesKey]*paneAgg         // Session: open session accumulator per series
 	slides   map[SeriesKey]*slidingState    // SlidingAgg: trailing sliding-window state per series
 	corr     map[SeriesKey]map[string]int64 // Correlation: anchor → member → last unix-nanos seen
 	expected map[SeriesKey]expectedState    // Absence: dead-man arming for never-seen devices (ADR-051 slice 4c-2b)
+	// pending holds the samples of the sample-pairing kinds (DeltaRate, CountWindow) the frontier
+	// is not yet past, per series, in event-time order; pendHeap orders those runs by their
+	// earliest sample so advance flushes them deterministically (reorder.go).
+	pending  map[SeriesKey]*pendingRun
+	pendHeap pendHeap
 	// raised is the ADR-057 two-edge latch: a series currently in its satisfied (alarming) state,
 	// mapped to the EVENT TIME of its rising edge. The time is what makes a falling edge reject a
 	// STALE out-of-order event: a non-matching/dipping reading older than the raise cannot resolve
@@ -249,7 +254,8 @@ type Engine struct {
 	// lateSamples counts samples the sliding kinds declined to fold in because they arrived
 	// after their own trailing window had passed the frontier (foldsIn), and samples a Duration
 	// rule refused as more than its hold behind the frontier or as a break older than a raise
-	// already decided (applyDuration). It is TELEMETRY, not
+	// already decided (applyDuration), and matching samples a sample-pairing kind refused as
+	// behind the frontier (hold, reorder.go). It is TELEMETRY, not
 	// state: nothing reads it to decide anything, it is deliberately absent from the snapshot,
 	// and a replay legitimately re-counts the samples it re-processes. It exists so a
 	// store-and-forward fleet whose windowed rules quietly stop firing has something to look at.
@@ -304,11 +310,12 @@ func NewEngine(rules []Rule, allowedLateness time.Duration) *Engine {
 		sliding:       map[SeriesKey][]time.Time{},
 		panes:         map[paneKey]*paneAgg{},
 		lastVal:       map[SeriesKey]deltaState{},
-		counts:        map[SeriesKey]*paneAgg{},
+		counts:        map[SeriesKey]*countState{},
 		session:       map[SeriesKey]*paneAgg{},
 		slides:        map[SeriesKey]*slidingState{},
 		corr:          map[SeriesKey]map[string]int64{},
 		expected:      map[SeriesKey]expectedState{},
+		pending:       map[SeriesKey]*pendingRun{},
 		raised:        map[SeriesKey]time.Time{},
 		presenceState: map[SeriesKey]presence.Prior{},
 	}
@@ -392,6 +399,8 @@ func (e *Engine) RemoveMatching(match func(ruleID string) bool) int {
 	n += deleteSeriesKeysMatching(e.expected, match)
 	n += deleteSeriesKeysMatching(e.raised, match)
 	n += deleteSeriesKeysMatching(e.presenceState, match)
+	n += deleteSeriesKeysMatching(e.pending, match)
+	e.pendHeap.purgeMatching(match) // the heap entry and the map entry are one run; counted once
 	for pk := range e.panes {
 		if match(pk.Rule) {
 			delete(e.panes, pk)
@@ -500,6 +509,9 @@ func (e *Engine) dropSeriesKey(key SeriesKey, kind RuleKind) bool {
 	n += dropOneKey(e.corr, key)
 	n += dropOneKey(e.expected, key)
 	n += dropOneKey(e.presenceState, key)
+	if e.dropPendingRun(key) {
+		n++
+	}
 	if kind == Aggregate {
 		for pk := range e.panes {
 			if pk.Rule == key.Rule && pk.Series == key.Series {
@@ -575,6 +587,7 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 	countSeriesKeys(counts, e.session)
 	countSeriesKeys(counts, e.slides)
 	countSeriesKeys(counts, e.expected)
+	countSeriesKeys(counts, e.pending)       // a sample-pairing kind's open reorder run (reorder.go)
 	countSeriesKeys(counts, e.raised)        // ADR-057 two-edge latch: a raised series is a live entry
 	countSeriesKeys(counts, e.presenceState) // Connectivity cursor: one permanent entry per (rule, device-ever-seen)
 	countSeriesKeys(counts, e.wheel.live)    // heartbeat-armed absence timers live ONLY here
@@ -589,7 +602,7 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 }
 
 // RetainedSampleCounts returns, per rule id, the number of PER-SAMPLE RECORDS the rule currently
-// retains — the axis LiveKeyCounts is structurally blind to. Only three maps grow with the data
+// retains — the axis LiveKeyCounts is structurally blind to. Only four maps grow with the data
 // rather than with the key set, and this counts exactly those:
 //
 //   - sliding  (Repeating)   — one time.Time per matching event still inside the window
@@ -597,6 +610,9 @@ func (e *Engine) LiveKeyCounts() map[string]int {
 //     the window. NOT len(buf): the window is buf AND the late overlay, and a store-and-forward
 //     burst is precisely when the overlay is open and the number is being watched.
 //   - corr     (Correlation) — one entry per retained distinct member under an anchor
+//   - pending  (DeltaRate, CountWindow) — one sample per event the frontier is not yet past
+//     (reorder.go). Bounded by the lateness budget rather than by a rule's window, so it is
+//     small in steady state — and a batched upload is exactly when it is not.
 //
 // Every other MAP folds its events into a fixed-size accumulator or latch, so its retention is
 // already fully described by its key count and adding it here would double-count the same memory
@@ -634,6 +650,9 @@ func (e *Engine) RetainedSampleCounts() map[string]int {
 	}
 	for k, members := range e.corr {
 		counts[k.Rule] += len(members)
+	}
+	for k, run := range e.pending {
+		counts[k.Rule] += len(run.samples)
 	}
 	return counts
 }
@@ -759,18 +778,21 @@ func (e *Engine) HeartbeatAbsenceKeys() []SeriesKey {
 	return keys
 }
 
-// HasPendingWork reports whether any timer or pane close is scheduled — i.e. whether a
-// wall-clock advance could fire ANYTHING. A Duration kept break holds an expiry timer, so an
-// instance with a duration rule and any device reporting its metric has pending work while that
-// device keeps reporting, and idle advances then move (and checkpoint) the frontier. Every
-// frontier-triggered firing goes through the timer wheel (Absence/Duration/Session) or the pane close-heap (Aggregate); the other kinds
-// are event-triggered and never fire on a bare advance. So when this is false, an idle advance
-// would only move the watermark with nothing to fire — and with no timer/window state, a later
-// event re-derives the frontier itself, so leaving it at rest is replay-safe. Idle-advance
-// consults this to stay quiet on an engine with no pending work instead of checkpointing a
-// bare watermark move every interval forever (ADR-051 slice 4c).
+// HasPendingWork reports whether any timer, pane close or held sample is waiting on the frontier
+// — i.e. whether a wall-clock advance could fire ANYTHING. A Duration kept break holds an expiry
+// timer, so an instance with a duration rule and any device reporting its metric has pending work
+// while that device keeps reporting, and idle advances then move (and checkpoint) the frontier.
+// Every frontier-triggered firing goes through the timer wheel (Absence/Duration/Session), the
+// pane close-heap (Aggregate) or the reorder heap (DeltaRate/CountWindow, whose samples are
+// applied only once the frontier is past them — reorder.go); the other kinds are event-triggered
+// and never fire on a bare advance. So when this is false, an idle advance would only move the
+// watermark with nothing to fire — and with no timer/window state, a later event re-derives the
+// frontier itself, so leaving it at rest is replay-safe. Idle-advance consults this to stay quiet
+// on an engine with no pending work instead of checkpointing a bare watermark move every interval
+// forever (ADR-051 slice 4c). A held sample drains within one lateness budget of idle advance,
+// after which the engine is quiet again.
 func (e *Engine) HasPendingWork() bool {
-	return e.wheel.hasTimers() || e.closes.Len() > 0
+	return e.wheel.hasTimers() || e.closes.Len() > 0 || e.pendHeap.Len() > 0
 }
 
 // Drain returns and clears the detections emitted since the last Drain.
@@ -876,7 +898,10 @@ func (e *Engine) ProcessResolved(seq uint64, t time.Time, evs []Event) {
 func (e *Engine) Advance(w time.Time) bool { return e.advance(w) }
 
 // advance folds a timestamp into the watermark, fires every timer the new frontier made
-// due, and closes every pane it made due, reporting whether any of those mutated state.
+// due, closes every pane it made due, and applies every held sample it is now past,
+// reporting whether any of those mutated state. The flush runs only when the frontier moved —
+// finality is a function of the frontier alone, so an unmoved frontier can have made nothing
+// final — which is also what lets `moved` stand for it in the return value.
 func (e *Engine) advance(t time.Time) bool {
 	moved := e.wm.observe(t)
 	due := e.wheel.popDue(e.wm.now)
@@ -884,6 +909,9 @@ func (e *Engine) advance(t time.Time) bool {
 		e.fire(ft.key, ft.deadline)
 	}
 	closed := e.closePanes(e.wm.now)
+	if moved {
+		e.flushPending()
+	}
 	return moved || len(due) > 0 || closed
 }
 
@@ -1238,6 +1266,9 @@ type snapshot struct {
 	Expected  []snapExpected `json:"expected"`
 	Raised    []snapRaised   `json:"raised"`
 	Presence  []snapPresence `json:"presence"`
+	// Pending is the sample-pairing kinds' held samples (reorder.go). A checkpoint written
+	// before it existed restores with none, which is exact: that model held nothing back.
+	Pending []snapPending `json:"pending"`
 }
 
 // Snapshot serializes the full engine state. In the service this is committed to Postgres
@@ -1308,6 +1339,7 @@ func (e *Engine) snapshotState() snapshot {
 		Expected:  expected,
 		Raised:    raised,
 		Presence:  presenceCursors,
+		Pending:   e.snapshotPending(),
 	}
 }
 
@@ -1334,6 +1366,7 @@ func restoreState(rules []Rule, allowedLateness time.Duration, s snapshot) *Engi
 	e.restoreSessions(s.Sessions)
 	e.restoreSlides(s.Slides)
 	e.restoreCorr(s.Corr)
+	e.restorePending(s.Pending)
 	for _, x := range s.Expected {
 		e.expected[SeriesKey{Rule: x.Rule, Series: x.Series}] = expectedState{since: x.Since}
 	}

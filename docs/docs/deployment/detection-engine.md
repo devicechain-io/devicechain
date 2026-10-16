@@ -219,9 +219,16 @@ size the setting:
   does not meet the condition ends a raised duration alarm however late it arrives, unless it is
   older than the alarm: a late reading from before the alarm was raised, arriving after it, does
   not withdraw it.
-- **Rules without a window still evaluate it** — threshold, count-window and rate. Each compares a
-  reading against the one before it or against a fixed bound, so there is no span for a late
-  reading to fall outside of.
+- **Threshold rules still evaluate it.** A threshold compares a reading against a fixed bound, so
+  there is no span for a late reading to fall outside of.
+- **Count-window and rate rules place a reading by its own time**, the way duration rules do. A
+  rate is the change between consecutive readings and a count window is every N consecutive
+  readings, so a reading that arrives out of order is slotted where its timestamp says, and the
+  rule evaluates a reading only once the frontier has passed it — which is also why these two
+  kinds raise and clear their alarms one lateness tolerance behind the newest reading. A reading
+  older than the newest one the rule has already settled is discarded: the pair or window it
+  belonged to has already been decided. A reading that does not meet the condition still ends a
+  raised rate alarm however late it arrives, unless it is older than the alarm.
 
 In every case the reading is **stored and charted normally**; this is a detection-only effect.
 
@@ -229,11 +236,13 @@ Inside the tolerance nothing changes: an out-of-order reading that still falls w
 folded in as normal, which is what the tolerance is for. The window can stretch by up to the
 tolerance as a result — that is what tolerating out-of-order arrival means — but no further.
 
-The sliding kinds and duration rules **count what they discard**, once for each rule that
-discards a reading. `detect_late_samples_total` rises every time a reading arrives after the window
-it belonged to has passed, when a duration rule discards a matching reading further behind the
-frontier than its hold time, and when a reading that does not meet a duration rule's condition
-arrives after its alarm was raised but was taken inside the run that raised it, before the raise.
+The sliding kinds, duration rules and the count-window and rate rules **count what they
+discard**, once for each rule that discards a reading. `detect_late_samples_total` rises every time
+a reading arrives after the window it belonged to has passed, when a duration rule discards a
+matching reading further behind the frontier than its hold time, when a count-window or rate rule
+discards a reading older than one it has already settled, and when a reading that does not meet a
+duration rule's condition arrives after its alarm was raised but was taken inside the run that
+raised it, before the raise.
 A late reading older than the whole run is ignored and not counted: the run began after it. A
 fleet whose rules have gone quiet therefore has something to look at rather than silence; a store-and-forward upload is the usual cause. Tumbling-window and session rules discard
 silently and do not appear in it.
@@ -425,7 +434,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 
 | Setting | Default | What it does |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, a duration rule places it by its own time, and the other rules ignore a reading older than one they have already seen. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
+| `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, duration, count-window and rate rules place it by its own time, and a threshold rule evaluates each reading as it arrives. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. |
 | `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. In this release the shards are processed one after another, so a value above 1 does not make detection faster yet: leave it at 1 unless you are measuring. The value in force is the `detect_shards` metric. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |

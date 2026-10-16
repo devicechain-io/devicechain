@@ -150,6 +150,7 @@ func TestDeltaRate(t *testing.T) {
 	d.send(0, "dev1", "dev1", map[string]float64{"count": 100}) // prime
 	d.assertQuiet()
 	d.send(10, "dev1", "dev1", map[string]float64{"count": 130}) // +30 > 10
+	d.advance(11)                                                // a sample is evaluated once the frontier is past it, stamped at its own time
 	d.assertFires(core.DeltaRate, at(10))
 }
 
@@ -280,6 +281,7 @@ func TestAggregateCountWindow(t *testing.T) {
 	d.send(1, "dev1", "dev1", map[string]float64{"t": 3})
 	d.assertQuiet()
 	d.send(2, "dev1", "dev1", map[string]float64{"t": 4}) // sum 10 >= 9 on the 3rd event
+	d.advance(3)                                          // a sample is evaluated once the frontier is past it, stamped at its own time
 	d.assertFires(core.CountWindow, at(2))
 }
 

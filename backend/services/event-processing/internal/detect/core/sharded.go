@@ -331,6 +331,7 @@ func (s *Sharded) Snapshot() ([]byte, error) {
 		m.Expected = append(m.Expected, x.Expected...)
 		m.Raised = append(m.Raised, x.Raised...)
 		m.Presence = append(m.Presence, x.Presence...)
+		m.Pending = append(m.Pending, x.Pending...)
 	}
 	// Each shard's sections are sorted already; the concatenation of K of them is not, and the
 	// canonical order is a total order over (rule, series), so a sort restores it exactly.
@@ -346,6 +347,7 @@ func (s *Sharded) Snapshot() ([]byte, error) {
 	sortByRuleSeries(m.Expected, func(i int) (string, string) { return m.Expected[i].Rule, m.Expected[i].Series })
 	sortByRuleSeries(m.Raised, func(i int) (string, string) { return m.Raised[i].Rule, m.Raised[i].Series })
 	sortByRuleSeries(m.Presence, func(i int) (string, string) { return m.Presence[i].Rule, m.Presence[i].Series })
+	sortByRuleSeries(m.Pending, func(i int) (string, string) { return m.Pending[i].Rule, m.Pending[i].Series })
 	sort.Slice(m.Timers, func(i, j int) bool {
 		a, b := m.Timers[i], m.Timers[j]
 		if !a.Deadline.Equal(b.Deadline) {
@@ -403,6 +405,7 @@ func restoreSharded(k int, salt uint32, rules []Rule, allowedLateness time.Durat
 	splitBy(snap.Expected, k, salt, func(x snapExpected) (string, string) { return x.Rule, x.Series }, func(i int, x snapExpected) { parts[i].Expected = append(parts[i].Expected, x) })
 	splitBy(snap.Raised, k, salt, func(x snapRaised) (string, string) { return x.Rule, x.Series }, func(i int, x snapRaised) { parts[i].Raised = append(parts[i].Raised, x) })
 	splitBy(snap.Presence, k, salt, func(x snapPresence) (string, string) { return x.Rule, x.Series }, func(i int, x snapPresence) { parts[i].Presence = append(parts[i].Presence, x) })
+	splitBy(snap.Pending, k, salt, func(x snapPending) (string, string) { return x.Rule, x.Series }, func(i int, x snapPending) { parts[i].Pending = append(parts[i].Pending, x) })
 	s := &Sharded{salt: salt, lateness: allowedLateness, shards: make([]*Engine, k), scratch: make([][]Event, k)}
 	for i := range parts {
 		s.shards[i] = restoreState(rules, allowedLateness, parts[i])

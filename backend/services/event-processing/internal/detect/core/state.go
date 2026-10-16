@@ -15,49 +15,53 @@ type deltaState struct {
 	time  time.Time
 }
 
-// applyDeltaRate evaluates a DeltaRate rule against one sample: the change since the previous
-// MATCHING sample (Rate ⇒ divided by the elapsed seconds) compared to the threshold. Edge-triggered
-// (ADR-057): a qualifying delta/rate raises (latched), a subsequent qualifying sample back within
-// threshold resolves, and a NON-matching sample (a filtering `when` leaf gone false) also resolves a
-// raised alarm — so a filtering rule doesn't stay raised under active non-matching traffic. The first
-// matching sample for a series only primes the state; a non-advancing time gap suppresses a rate
-// (division by ≤0) but still updates the last-sample so the series recovers on the next in-order event.
+// applyDeltaRate admits one sample of a DeltaRate rule into its series' pending run (reorder.go):
+// the delta is a pair of CONSECUTIVE samples in event time, so a sample is evaluated only once
+// the frontier is past it and no earlier sample can still arrive. A sample older than the series'
+// base is refused there, or, as a non-match, handed to resolve as a late falling edge.
 func (e *Engine) applyDeltaRate(ev Event, r Rule) {
-	if !ev.Match {
+	e.hold(ev, r)
+}
+
+// finalizeDeltaRate evaluates one now-final sample: the change since the previous MATCHING sample
+// (Rate ⇒ divided by the elapsed seconds) compared to the threshold. Edge-triggered (ADR-057): a
+// qualifying delta/rate raises (latched), a subsequent qualifying sample back within threshold
+// resolves, and a NON-matching sample (a filtering `when` leaf gone false) also resolves a raised
+// alarm — so a filtering rule doesn't stay raised under active non-matching traffic. The first
+// matching sample for a series only primes the state; a non-advancing time gap suppresses a rate
+// (division by ≤0) but still updates the last-sample so the series recovers on the next sample.
+//
+// Samples reach here in (time, match, value) order, so the only way s can fail to be after the
+// base is an EQUAL timestamp. Rate mode skips it (dt=0 has no defined rate) without moving the
+// base; raw-delta mode accepts same-time readings.
+func (e *Engine) finalizeDeltaRate(key SeriesKey, r Rule, s pendingSample) {
+	if !s.match {
 		// Falling edge (ADR-057 review D2/D5): a rule with a filtering `when` leaf that stops matching
 		// resolves a raised alarm, instead of staying raised while the device actively reports
 		// non-qualifying samples. Do NOT touch lastVal — the delta chain pairs consecutive MATCHING
 		// samples, so a non-matching reading is not a base for the next delta. A no-op when never raised.
-		e.resolve(r, ev.Key, ev.Time)
+		e.resolve(r, key, s.t)
 		return
 	}
-	prev, ok := e.lastVal[ev.Key]
-	if ok {
-		// A strictly-earlier sample is stale — it must not become the comparison base and
-		// rewind the running last-value. Rate mode additionally rejects an equal timestamp
-		// (dt=0 has no defined rate); raw-delta mode accepts same-time readings.
-		if r.Rate && !ev.Time.After(prev.time) {
-			return
-		}
-		if !r.Rate && ev.Time.Before(prev.time) {
-			return
-		}
+	prev, ok := e.lastVal[key]
+	if ok && r.Rate && !s.t.After(prev.time) {
+		return
 	}
-	e.lastVal[ev.Key] = deltaState{value: ev.Value, time: ev.Time}
+	e.lastVal[key] = deltaState{value: s.v, time: s.t}
 	if !ok {
 		return // need two samples for a delta
 	}
-	q := ev.Value - prev.value
+	q := s.v - prev.value
 	if r.Rate {
-		q /= ev.Time.Sub(prev.time).Seconds() // dt > 0, guaranteed by the advance guard above
+		q /= s.t.Sub(prev.time).Seconds() // dt > 0, guaranteed by the equal-time guard above
 	}
 	// Level over time (ADR-057): the rising edge (a qualifying delta/rate) raises, a subsequent
 	// qualifying sample whose delta/rate is back within threshold resolves. Observed per sample —
 	// a series that stops reporting stays raised (Absence covers the went-dark case).
 	if cmp(r.Op, q, r.Thresh) {
-		e.emitValue(r, ev.Key, ev.Time, q) // q = the delta (raw) or rate the detection is about
+		e.emitValue(r, key, s.t, q) // q = the delta (raw) or rate the detection is about
 	} else {
-		e.resolve(r, ev.Key, ev.Time)
+		e.resolve(r, key, s.t)
 	}
 }
 
