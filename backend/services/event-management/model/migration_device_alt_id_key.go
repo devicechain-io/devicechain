@@ -285,13 +285,8 @@ func buildDeviceAltIdKey(db *gorm.DB, timing timeLeadingKeysTiming, deadline tim
 				return err
 			}
 		}
-		var compressed []string
-		if err := t.Raw(`SELECT format('%I.%I', cc.schema_name, cc.table_name)
-			FROM _timescaledb_catalog.chunk c
-			JOIN _timescaledb_catalog.chunk cc ON cc.id = c.compressed_chunk_id
-			JOIN _timescaledb_catalog.hypertable h ON h.id = c.hypertable_id
-			WHERE h.schema_name = 'event-management' AND h.table_name = ?`,
-			deviceAltIdKey.table).Scan(&compressed).Error; err != nil {
+		compressed, err := compressedRelations(t, deviceAltIdKey.table)
+		if err != nil {
 			return err
 		}
 		targets := append([]string{`"event-management".` + deviceAltIdKey.table}, compressed...)

@@ -406,13 +406,8 @@ func buildDeviceIndex(db *gorm.DB, timing timeLeadingKeysTiming, deadline time.T
 		}
 		// The compressed relations of the compressed chunks, locked in the SAME statement as
 		// the table so one lockAttempt bounds the whole wait (see rekeyTable).
-		var compressed []string
-		if err := t.Raw(`SELECT format('%I.%I', cc.schema_name, cc.table_name)
-			FROM _timescaledb_catalog.chunk c
-			JOIN _timescaledb_catalog.chunk cc ON cc.id = c.compressed_chunk_id
-			JOIN _timescaledb_catalog.hypertable h ON h.id = c.hypertable_id
-			WHERE h.schema_name = 'event-management' AND h.table_name = ?`,
-			tenantDeviceIndex.table).Scan(&compressed).Error; err != nil {
+		compressed, err := compressedRelations(t, tenantDeviceIndex.table)
+		if err != nil {
 			return err
 		}
 		targets := append([]string{`"event-management".` + tenantDeviceIndex.table}, compressed...)

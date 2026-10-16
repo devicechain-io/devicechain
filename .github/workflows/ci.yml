@@ -1109,6 +1109,45 @@ jobs:
         run: hack/migration-diff.sh verify
 
   # ---------------------------------------------------------------------------
+  # The SAME verify (goldens, coverage, replay, the integration suites it runs) on the
+  # NEXT TimescaleDB, so an upstream catalog change is a red check here instead of a
+  # failed start after the pin moves.
+  #
+  # Why it exists: TimescaleDB 2.29.0 removed _timescaledb_catalog.chunk's schema_name,
+  # table_name and compressed_chunk_id. Three event-management migrations read them
+  # to find compressed chunks to lock, so on 2.29+ the chain failed to plan (42703) on
+  # every start — a fresh install included — while every job above stayed green,
+  # because they all run the pinned 2.28.3. Nothing in the tree ran a newer server.
+  #
+  # Its own job, not a third step in `migrations`, so it adds runner minutes but no
+  # wall-clock. Pinned by DIGEST like the others (latest-pg16 as of 2026-10-16:
+  # TimescaleDB 2.30.2 / PostgreSQL 16.15), so it moves only when a PR moves it. When
+  # the main pin catches up with this one, point this at the next release — or delete
+  # it if there is none worth tracking yet; a forward-compat pass on the pinned image
+  # checks nothing the `migrations` job does not.
+  # ---------------------------------------------------------------------------
+  migrations-timescaledb-next:
+    name: migrations (TimescaleDB next)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.work
+          cache: true
+          cache-dependency-path: "**/go.sum"
+
+      - name: go mod download
+        run: hack/go-mod-download.sh --workspace
+
+      - name: migration-diff verify (TimescaleDB 2.30.2, PostgreSQL 16)
+        env:
+          MDIFF_IMAGE: timescale/timescaledb:latest-pg16@sha256:6f139d56042989bd35f50ba5986e492cd32e35cc6778c50be2659add298dc09f
+          MDIFF_CONTAINER: dc-mdiff-next
+        run: hack/migration-diff.sh verify
+
+  # ---------------------------------------------------------------------------
   # License header check (backend only, per CLAUDE.md).
   # ---------------------------------------------------------------------------
   # The integration-tagged suites, RUN rather than merely compiled.
@@ -2746,6 +2785,7 @@ jobs:
       - http-routing
       - data-access
       - migrations
+      - migrations-timescaledb-next
       - integration
       - license
       - actions

@@ -126,8 +126,7 @@ func compressOldest(t *testing.T, sys *gorm.DB) map[string]string {
 		oldChunk[table] = chunk
 		require.NoError(t, sys.Exec(`SELECT compress_chunk(?::regclass)`, chunk).Error, "compress %s", chunk)
 		var status int
-		require.NoError(t, sys.Raw(`SELECT c.status FROM _timescaledb_catalog.chunk c
-			WHERE format('%I.%I', c.schema_name, c.table_name) = ?`, chunk).Scan(&status).Error)
+		require.NoError(t, sys.Raw(`SELECT _timescaledb_functions.chunk_status(?::regclass)`, chunk).Scan(&status).Error)
 		require.Equalf(t, 1, status&1, "%s must be compressed", chunk)
 		var raw int64
 		require.NoError(t, sys.Raw(`SELECT count(*) FROM ONLY `+chunk).Scan(&raw).Error)
@@ -492,13 +491,10 @@ func TestIntegrationTimeLeadingKeysLockChunksAndCompressedRelationsFirst(t *test
 		}},
 		{"a compressed relation", func(t *testing.T, sys *gorm.DB) string {
 			compressOldest(t, sys)
-			var rel string
-			require.NoError(t, sys.Raw(`SELECT format('%I.%I', cc.schema_name, cc.table_name)
-				FROM _timescaledb_catalog.chunk c
-				JOIN _timescaledb_catalog.chunk cc ON cc.id = c.compressed_chunk_id
-				JOIN _timescaledb_catalog.hypertable h ON h.id = c.hypertable_id
-				WHERE h.schema_name = 'event-management' AND h.table_name = 'events'`).Scan(&rel).Error)
-			return rel
+			rels, err := compressedRelations(sys, "events")
+			require.NoError(t, err)
+			require.Len(t, rels, 1, "compressOldest compresses exactly one events chunk")
+			return rels[0]
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -570,12 +570,8 @@ func rekeyTable(db *gorm.DB, p rekeyPlan, timing timeLeadingKeysTiming, deadline
 		// lock and locked in the SAME statement as the table, so one lockAttempt bounds the
 		// whole wait. A chunk compressed between this read and the lock is not covered; the
 		// swap's own wait on it then ends at lock_timeout (55P03), which is retried.
-		var compressed []string
-		if err := t.Raw(`SELECT format('%I.%I', cc.schema_name, cc.table_name)
-			FROM _timescaledb_catalog.chunk c
-			JOIN _timescaledb_catalog.chunk cc ON cc.id = c.compressed_chunk_id
-			JOIN _timescaledb_catalog.hypertable h ON h.id = c.hypertable_id
-			WHERE h.schema_name = 'event-management' AND h.table_name = ?`, k.table).Scan(&compressed).Error; err != nil {
+		compressed, err := compressedRelations(t, k.table)
+		if err != nil {
 			return err
 		}
 		// Without ONLY, LOCK TABLE takes every inheritance child: every chunk.
