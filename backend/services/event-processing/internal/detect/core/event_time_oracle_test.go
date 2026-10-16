@@ -257,3 +257,54 @@ func oracleSeries(r Rule, evs []Event, s string) []string {
 	}
 	return out
 }
+
+// TestRemovingARuleKeepsTheFlushHeapOrdered: purging one rule's runs compacts the heap array in
+// place, and a compacted heap is not in general a heap — [A@1, B@9, B@2] is valid, [B@9, B@2] is
+// not. A flush stops at the first run that is not due, so a broken heap hides a due run behind a
+// later one and its verdict waits for an unrelated frontier move. The surviving rule's due sample
+// must be settled by the very advance that passes it.
+func TestRemovingARuleKeepsTheFlushHeapOrdered(t *testing.T) {
+	rules := []Rule{
+		{ID: "a", Kind: CountWindow, Count: 1, Agg: AggSum, Op: GT, Thresh: 0},
+		{ID: "b", Kind: CountWindow, Count: 1, Agg: AggSum, Op: GT, Thresh: 0},
+	}
+	e := NewEngine(rules, 100*time.Second)
+	// Pushed in this order the heap array is [a/x@1, b/y@9, b/z@2]: 2 is below 9's slot, not 1's.
+	for i, s := range []struct {
+		rule, series string
+		sec          int
+	}{{"a", "x", 1}, {"b", "y", 9}, {"b", "z", 2}} {
+		ev := Event{Seq: uint64(i + 1), Key: SeriesKey{Rule: s.rule, Series: s.series}, Time: at(s.sec), Value: 10, HasValue: true, Match: true}
+		e.ProcessResolved(ev.Seq, ev.Time, []Event{ev})
+	}
+	e.RemoveMatching(func(id string) bool { return id == "a" })
+	e.Advance(at(105)) // frontier 5: z@2 is due, y@9 is not
+	d := e.Drain()
+	if len(d) != 1 || d[0].RuleID != "b" || d[0].Series != "z" || !d[0].At.Equal(at(2)) {
+		t.Fatalf("the advance past b/z@2 must settle it even after rule a's runs were purged; got %+v", d)
+	}
+}
+
+// TestASampleAtTheFinalInstantIsStillPlaced pins the late boundary: late means OLDER than the
+// series' newest final sample, so one AT its instant still has a position — a raw delta accepts
+// same-time readings — and is applied, not refused and counted.
+func TestASampleAtTheFinalInstantIsStillPlaced(t *testing.T) {
+	rules := []Rule{{ID: "r", Kind: DeltaRate, Op: GT, Thresh: 50}}
+	e := NewEngine(rules, 0)
+	k := SeriesKey{Rule: "r", Series: "d"}
+	feed := func(seq uint64, sec int, v float64) {
+		e.ProcessResolved(seq, at(sec), []Event{{Seq: seq, Key: k, Time: at(sec), Value: v, HasValue: true, Match: true}})
+	}
+	feed(1, 10, 0)
+	feed(2, 20, 0)   // finalizes 0@10: the base
+	feed(3, 10, 100) // at the base's instant, behind the frontier: admitted, held
+	e.Advance(at(21))
+	d := e.Drain()
+	if late := e.DrainLateSamples(); late != 0 {
+		t.Fatalf("a sample at the final instant is not late; counted %d", late)
+	}
+	if len(d) != 2 || d[0].Edge != EdgeRaised || !d[0].At.Equal(at(10)) || d[0].Value != 100 ||
+		d[1].Edge != EdgeResolved || !d[1].At.Equal(at(20)) {
+		t.Fatalf("want Raised@10 (+100 against the same-instant base) then Resolved@20, got %+v", d)
+	}
+}
