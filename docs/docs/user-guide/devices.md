@@ -342,6 +342,10 @@ not used, because the platform checks readings against the published version. Wh
 version has no metric the example can use, the command sends an undeclared reading instead, which
 is stored as long as its value is a number. At most eight metrics are included.
 
+The commands are written for a POSIX shell such as bash or zsh. On Windows, run them in WSL or
+Git Bash: PowerShell and `cmd.exe` read the quoting and the line breaks differently, so the
+command would not send what it shows.
+
 The console cannot know some values, so the command leaves a placeholder for each:
 
 | Placeholder | Replace it with |

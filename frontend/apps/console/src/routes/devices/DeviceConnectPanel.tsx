@@ -143,6 +143,7 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
       </div>
 
       <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+        <li>{t('connectShell')}</li>
         <li>{t('connectPlaceholderInstance', { placeholder: PLACEHOLDER.instanceId })}</li>
         {transport === 'mqtt' ? (
           <>

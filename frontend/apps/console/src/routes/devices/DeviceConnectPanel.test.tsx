@@ -76,6 +76,8 @@ describe('DeviceConnectPanel', () => {
     expect(command()).toContain('"pressure":"100"');
     expect(command()).not.toContain(' -P ');
     expect(screen.getByText(/published version, with values it accepts\.$/)).toBeTruthy();
+    // The quoting is POSIX; pasted into PowerShell or cmd.exe it sends something else.
+    expect(screen.getByText(/written for a POSIX shell/)).toBeTruthy();
 
     fireEvent.click(screen.getByRole('radio', { name: 'HTTP' }));
     await waitFor(() => expect(command()).toContain(`curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/events'`));

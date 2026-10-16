@@ -458,6 +458,7 @@
   "updAssigned": "Actualización asignada.",
   "tabConnect": "Enviar datos",
   "connectIntro": "Ejecuta uno de estos comandos para enviar la primera medición de este dispositivo y búscala después en la pestaña Eventos. Se construyen a partir de la credencial del dispositivo y de las métricas publicadas de su perfil.",
+  "connectShell": "Los comandos están escritos para un shell POSIX como bash o zsh. En Windows, ejecútalos en WSL o Git Bash: PowerShell y cmd.exe interpretan de otra forma las comillas y los saltos de línea, y el comando no enviaría lo que muestra.",
   "connectLoading": "Cargando los datos de conexión…",
   "connectDisabledTitle": "Este dispositivo está deshabilitado",
   "connectDisabledBody": "Los eventos de un dispositivo deshabilitado se descartan al llegar y no se avisa al remitente. Habilita el dispositivo antes de enviarle datos.",

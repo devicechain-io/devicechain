@@ -362,6 +362,10 @@ publicada. Cuando la versión publicada no tiene ninguna métrica que el ejemplo
 comando envía en su lugar una lectura no declarada, que se almacena siempre que su valor sea un
 número. Se incluyen como máximo ocho métricas.
 
+Los comandos están escritos para un shell POSIX como bash o zsh. En Windows, ejecútalos en WSL o
+Git Bash: PowerShell y `cmd.exe` interpretan de otra forma las comillas y los saltos de línea, así
+que el comando no enviaría lo que muestra.
+
 La consola no puede conocer algunos valores, así que el comando deja un marcador para cada uno:
 
 | Marcador | Sustitúyelo por |

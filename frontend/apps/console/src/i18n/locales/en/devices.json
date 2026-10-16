@@ -458,6 +458,7 @@
   "updAssigned": "Update assigned.",
   "tabConnect": "Send data",
   "connectIntro": "Run one of these commands to send this device its first measurement, then look for it on the Events tab. They are built from this device's credential and its profile's published metrics.",
+  "connectShell": "The commands are written for a POSIX shell such as bash or zsh. On Windows, run them in WSL or Git Bash: PowerShell and cmd.exe read the quoting and the line breaks differently, and the command would not send what it shows.",
   "connectLoading": "Loading connection details…",
   "connectDisabledTitle": "This device is disabled",
   "connectDisabledBody": "Events from a disabled device are discarded when they arrive, and the sender is not told. Enable the device before you send it data.",
