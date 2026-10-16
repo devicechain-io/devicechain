@@ -53,7 +53,7 @@ func (l *DeviceAnchorLookup) DeviceScopeAnchors(ctx context.Context, deviceToken
 		} `json:"deviceScopeAnchors"`
 	}
 	vars := map[string]any{"deviceTokens": deviceTokens}
-	if err := l.client.Query(svcclient.OnBehalfOfScopedCaller(ctx), l.url, tenant, deviceScopeAnchorsQuery, vars, &out); err != nil {
+	if err := l.client.QueryOnBehalfOfScopedCaller(ctx, l.url, tenant, deviceScopeAnchorsQuery, vars, &out); err != nil {
 		return nil, err
 	}
 	if out.DeviceScopeAnchors == nil {
