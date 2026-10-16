@@ -11,9 +11,17 @@ import { graphql } from '@/gql/notification-management';
 import type {
   NotificationPoliciesQuery,
   NotificationChannelsQuery,
+  NotificationPolicyRegistryQuery,
+  NotificationPolicyCreateRequest,
+  NotificationPolicyUpdateRequest,
 } from '@/gql/notification-management/graphql';
 
 export type NotificationPolicy = NotificationPoliciesQuery['notificationPolicies']['results'][number];
+export type { NotificationPolicyCreateRequest, NotificationPolicyUpdateRequest };
+/** A policy as the registry reads it: the coverage fields plus everything the editor needs. */
+export type NotificationPolicyRecord =
+  NotificationPolicyRegistryQuery['notificationPolicies']['results'][number];
+export type NotificationPolicySearchResults = NotificationPolicyRegistryQuery['notificationPolicies'];
 export type NotificationChannel = NotificationChannelsQuery['notificationChannels']['results'][number];
 
 const NOTIFICATION_POLICIES = graphql(`
@@ -136,4 +144,148 @@ export async function createSeverityPolicy(input: {
       ],
     },
   });
+}
+
+// ── The policy registry (list / edit / create / delete) ──
+//
+// One selection shared by every read and write below so each result stays assignable to
+// NotificationPolicyRecord. `quietHoursSlots` is an opaque JSON STRING on the wire — the
+// console builds and reads it with the maintenance-window slot helpers.
+
+const NOTIFICATION_POLICY_REGISTRY = graphql(`
+  query NotificationPolicyRegistry($criteria: NotificationPolicySearchCriteria!) {
+    notificationPolicies(criteria: $criteria) {
+      results {
+        id
+        token
+        name
+        description
+        enabled
+        throttleSeconds
+        escalateAfterSeconds
+        maxEscalations
+        metadata
+        quietHoursTimezone
+        quietHoursSlots
+        quietHoursBypassSeverity
+        createdAt
+        updatedAt
+        rules {
+          id
+          severity
+          recipients
+          channel {
+            token
+            name
+          }
+        }
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
+export async function listNotificationPolicyRecords(opts: {
+  pageNumber: number;
+  pageSize: number;
+}): Promise<NotificationPolicySearchResults> {
+  const data = await gql('notification-management', NOTIFICATION_POLICY_REGISTRY, {
+    criteria: { pageNumber: opts.pageNumber, pageSize: opts.pageSize },
+  });
+  return data.notificationPolicies;
+}
+
+const NOTIFICATION_POLICY_BY_TOKEN = graphql(`
+  query NotificationPolicyByToken($tokens: [String!]!) {
+    notificationPoliciesByToken(tokens: $tokens) {
+      id
+      token
+      name
+      description
+      enabled
+      throttleSeconds
+      escalateAfterSeconds
+      maxEscalations
+      metadata
+      quietHoursTimezone
+      quietHoursSlots
+      quietHoursBypassSeverity
+      createdAt
+      updatedAt
+      rules {
+        id
+        severity
+        recipients
+        channel {
+          token
+          name
+        }
+      }
+    }
+  }
+`);
+
+export async function getNotificationPolicy(token: string): Promise<NotificationPolicyRecord | null> {
+  const data = await gql('notification-management', NOTIFICATION_POLICY_BY_TOKEN, { tokens: [token] });
+  return data.notificationPoliciesByToken[0] ?? null;
+}
+
+const CREATE_NOTIFICATION_POLICY_RECORD = graphql(`
+  mutation CreateNotificationPolicyRecord($request: NotificationPolicyCreateRequest!) {
+    createNotificationPolicy(request: $request) {
+      token
+      updatedAt
+    }
+  }
+`);
+
+export async function createNotificationPolicy(request: NotificationPolicyCreateRequest) {
+  const data = await gql('notification-management', CREATE_NOTIFICATION_POLICY_RECORD, { request });
+  return data.createNotificationPolicy;
+}
+
+const UPDATE_NOTIFICATION_POLICY = graphql(`
+  mutation UpdateNotificationPolicy(
+    $token: String!
+    $request: NotificationPolicyUpdateRequest!
+    $expectedUpdatedAt: String
+  ) {
+    updateNotificationPolicy(token: $token, request: $request, expectedUpdatedAt: $expectedUpdatedAt) {
+      token
+      updatedAt
+    }
+  }
+`);
+
+/**
+ * A PARTIAL update: pass only what changed (omit = keep, null = clear, value = set). Pass the
+ * `updatedAt` last read as `expectedUpdatedAt` so a concurrent edit is refused rather than
+ * silently overwritten. `rules` is never sent from the editor, which leaves the rules untouched.
+ */
+export async function updateNotificationPolicy(
+  token: string,
+  request: NotificationPolicyUpdateRequest,
+  expectedUpdatedAt?: string | null,
+) {
+  const data = await gql('notification-management', UPDATE_NOTIFICATION_POLICY, {
+    token,
+    request,
+    expectedUpdatedAt: expectedUpdatedAt ?? null,
+  });
+  return data.updateNotificationPolicy;
+}
+
+const DELETE_NOTIFICATION_POLICY = graphql(`
+  mutation DeleteNotificationPolicy($token: String!) {
+    deleteNotificationPolicy(token: $token)
+  }
+`);
+
+export async function deleteNotificationPolicy(token: string): Promise<boolean> {
+  const data = await gql('notification-management', DELETE_NOTIFICATION_POLICY, { token });
+  return data.deleteNotificationPolicy;
 }

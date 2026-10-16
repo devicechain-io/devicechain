@@ -60,3 +60,4 @@ import GuideShot from '@site/src/components/GuideShot';
 - [检测规则](/user-guide/detection-rules)，这些告警由它触发
 - [事件处理与告警](/concepts/event-processing#the-alarm-lifecycle)：告警生命周期与升级
 - [配置通知渠道](/guides/notification-channels)，让告警通过邮件发送或发布到 Webhook
+- [通知策略](/user-guide/notification-policies)，用于在静默时段内暂存策略的通知

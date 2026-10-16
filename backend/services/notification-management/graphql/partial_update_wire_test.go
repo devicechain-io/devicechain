@@ -87,7 +87,7 @@ func newWireCtx(t *testing.T) context.Context {
 		t.Fatalf("register token grammar: %v", err)
 	}
 	if err := db.AutoMigrate(&model.NotificationChannel{}, &model.NotificationPolicy{},
-		&model.NotificationRule{}, &model.NotificationState{}); err != nil {
+		&model.NotificationRule{}, &model.NotificationState{}, &model.NotificationDeferral{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := secrets.NewSecretStoreSchema().Migrate(db); err != nil {
@@ -423,7 +423,8 @@ func TestPartialUpdateInputsDeclareTheirFieldsAsOptional(t *testing.T) {
 		},
 		"NotificationPolicyUpdateRequest": {
 			"name", "description", "throttleSeconds", "escalateAfterSeconds", "maxEscalations",
-			"enabled", "rules", "metadata",
+			"enabled", "rules", "metadata", "quietHoursTimezone", "quietHoursSlots",
+			"quietHoursBypassSeverity",
 		},
 	} {
 		t.Run(input, func(t *testing.T) {

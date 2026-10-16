@@ -14,7 +14,9 @@ import (
 )
 
 // EscalationScheduler periodically re-notifies open alarms that stay unresolved
-// (ADR-017 N.D). The event-driven dispatcher (N.C) pages once on RAISED/ESCALATED; this
+// (ADR-017 N.D), and releases the notifications policies' quiet hours held once the quiet
+// stretch has ended (PolicyNotifier.ReleaseHeld) — the same timed, every-replica,
+// claim-before-send loop, because a release is driven by the passage of time too. The event-driven dispatcher (N.C) pages once on RAISED/ESCALATED; this
 // scheduler is the timed follow-up: on each tick it re-evaluates every tenant's
 // escalation-enabled policies against the per-alarm NotificationState the dispatcher
 // maintains, and re-pages any alarm whose escalation window has elapsed without an
@@ -66,11 +68,18 @@ func NewEscalationScheduler(ms *core.Microservice, api *model.Api, notifier *Pol
 // states — so a tenant that uses no escalation costs one policy query and no per-alarm
 // work.
 func (s *EscalationScheduler) runOnce(ctx context.Context) error {
-	now := time.Now()
+	now := s.Notifier.clock()
 	tenants, err := s.Api.DistinctStateTenants(core.WithSystemContext(ctx))
 	if err != nil {
 		return fmt.Errorf("listing tenants with notification state: %w", err)
 	}
+	// A tenant whose only alarm so far was held by quiet hours has no notification state
+	// yet — nothing was sent — so the state list alone would never visit it to release.
+	holding, err := s.Api.DistinctDeferralTenants(core.WithSystemContext(ctx))
+	if err != nil {
+		return fmt.Errorf("listing tenants holding notifications for quiet hours: %w", err)
+	}
+	tenants = unionSorted(tenants, holding)
 	var visited, failed int
 	var lastErr error
 	for _, tenant := range tenants {
@@ -88,7 +97,21 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 			lastErr = err
 			continue
 		}
+		// Held notifications first: a release stamps the alarm's notification state, which
+		// is what the escalation below measures its window from. A failed release does NOT
+		// skip the tenant's escalation: one channel that is down must not also stop every
+		// other alarm of the tenant from re-paging.
+		releaseFailed := false
+		if err := s.Notifier.ReleaseHeld(tctx, policies, now); err != nil {
+			log.Warn().Err(err).Str("tenant", tenant).
+				Msg("Escalation scheduler: releasing held notifications failed; will retry next tick")
+			releaseFailed = true
+			lastErr = err
+		}
 		if !anyEscalationEnabled(policies) {
+			if releaseFailed {
+				failed++
+			}
 			continue
 		}
 		states, err := s.Api.OpenNotificationStates(tctx)
@@ -103,7 +126,7 @@ func (s *EscalationScheduler) runOnce(ctx context.Context) error {
 		// every tenant and escalated nothing as complete — moving the last-success gauge
 		// while no operator was paged about anything. That is the false-healthy this whole
 		// change exists to remove, one layer further in.
-		escalationFailed := false
+		escalationFailed := releaseFailed
 		for _, state := range states {
 			select {
 			case <-ctx.Done():
@@ -133,4 +156,25 @@ func anyEscalationEnabled(policies []*model.NotificationPolicy) bool {
 		}
 	}
 	return false
+}
+
+// unionSorted merges two sorted, duplicate-free tenant lists.
+func unionSorted(a, b []string) []string {
+	out := make([]string, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) || j < len(b) {
+		switch {
+		case j >= len(b) || (i < len(a) && a[i] < b[j]):
+			out = append(out, a[i])
+			i++
+		case i >= len(a) || b[j] < a[i]:
+			out = append(out, b[j])
+			j++
+		default:
+			out = append(out, a[i])
+			i++
+			j++
+		}
+	}
+	return out
 }

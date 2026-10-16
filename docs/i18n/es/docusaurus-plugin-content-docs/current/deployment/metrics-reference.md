@@ -272,6 +272,7 @@ entregados, donde `dcctl dead-letters` las lista. Este contador te dice que nunc
 | Métrica | Significa |
 | --- | --- |
 | `notifications_dead_lettered_total` | Alarmas escritas en el flujo de mensajes no entregados tras fallar todos los intentos de entrega, para que un operador pueda ver qué avisos nunca se enviaron. |
+| `quiet_hours_total{outcome}` | Lo que hicieron las horas de silencio con una notificación, según el resultado: held (retenida en lugar de enviada), released (enviada al terminar el periodo de silencio), dropped_resolved (descartada porque la alarma fue reconocida o cerrada), dropped_policy (descartada porque la política se deshabilitó o se eliminó), dropped_exhausted (descartada y registrada como mensaje fallido tras 5 envíos que no llegaron a ningún canal) o superseded (descartada porque la política avisó de un evento más reciente de la misma alarma). |
 
 ## User management {#user-management}
 

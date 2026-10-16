@@ -30,10 +30,13 @@ export function SlotEditor({
   slots,
   onChange,
   disabled,
+  help,
 }: {
   slots: SlotDraft[];
   onChange: (next: SlotDraft[]) => void;
   disabled?: boolean;
+  /** Replaces the default helper text, for a caller whose slots mean something other than a window. */
+  help?: string;
 }) {
   const { t } = useTranslation('entities');
   const hints = slotProblems(slots);
@@ -140,7 +143,7 @@ export function SlotEditor({
           {t('maintenanceWindowHintTooMany', { max: MAX_SLOTS })}
         </p>
       )}
-      <HintText size="md">{t('maintenanceWindowSlotsHelp')}</HintText>
+      <HintText size="md">{help ?? t('maintenanceWindowSlotsHelp')}</HintText>
     </div>
   );
 }

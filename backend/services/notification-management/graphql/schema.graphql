@@ -292,6 +292,25 @@ type NotificationPolicy {
     rules: [NotificationRule!]!
     """Free-form caller-defined metadata as a JSON object serialized to a string, or null if none is set."""
     metadata: String
+    """
+    IANA time zone the quiet-hours slots are read in, such as Europe/Berlin. Null when the
+    policy has no quiet hours.
+    """
+    quietHoursTimezone: String
+    """
+    The policy's quiet hours, as a JSON array of weekly slots serialized to a string. Each
+    slot is {day, start, durationMinutes}: day MONDAY to SUNDAY, start a 24-hour HH:MM
+    wall-clock time in quietHoursTimezone, durationMinutes 1 to 10080. A notification this
+    policy would send inside quiet hours is held and sent when the quiet stretch ends,
+    unless the alarm was acknowledged or cleared in the meantime. Escalation re-notifications
+    wait the same way. Null when the policy has no quiet hours.
+    """
+    quietHoursSlots: String
+    """
+    Alarms at or above this severity are sent even during quiet hours: CRITICAL, MAJOR,
+    MINOR, WARNING or INDETERMINATE. Null means quiet hours hold every severity.
+    """
+    quietHoursBypassSeverity: String
 }
 
 """
@@ -350,6 +369,22 @@ input NotificationPolicyCreateRequest {
     rules: [NotificationRuleCreateRequest!]!
     """Free-form caller-defined metadata as a JSON object serialized to a string."""
     metadata: String
+    """
+    IANA time zone for the quiet-hours slots, such as Europe/Berlin. Set it together with
+    quietHoursSlots, or omit both for no quiet hours. Local and unknown zone names are rejected.
+    """
+    quietHoursTimezone: String
+    """
+    Quiet hours as a JSON array of weekly slots serialized to a string, each
+    {day, start, durationMinutes}. Set it together with quietHoursTimezone. Slots may not
+    overlap, and together they may not cover the whole week.
+    """
+    quietHoursSlots: String
+    """
+    The severity at or above which alarms are sent even during quiet hours. Omit it to hold
+    every severity. It has no effect while the policy has no quiet hours.
+    """
+    quietHoursBypassSeverity: String
 }
 
 """
@@ -406,6 +441,18 @@ input NotificationPolicyUpdateRequest {
     rules: [NotificationRuleCreateRequest!]
     """New metadata as a JSON object serialized to a string, or null to clear it."""
     metadata: String
+    """
+    New quiet-hours time zone, or null to clear it. The quiet-hours fields are checked
+    together after the update is applied, so to remove quiet hours clear quietHoursTimezone
+    and quietHoursSlots in the same request. A stored quietHoursBypassSeverity is kept, and
+    has no effect while the policy has no quiet hours. An update that names none of the
+    three leaves the stored quiet hours exactly as they are, without checking them.
+    """
+    quietHoursTimezone: String
+    """New quiet-hours slots (a JSON array serialized to a string), or null to clear them."""
+    quietHoursSlots: String
+    """New bypass severity, or null so that quiet hours hold every severity."""
+    quietHoursBypassSeverity: String
 }
 
 """Filters and paging for the notificationPolicies query."""

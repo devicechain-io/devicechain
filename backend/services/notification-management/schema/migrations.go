@@ -26,5 +26,6 @@ var (
 	Migrations = []*gormigrate.Migration{
 		secrets.NewSecretStoreSchema(),
 		NewBaselineSchema(),
+		NewQuietHoursSchema(),
 	}
 )

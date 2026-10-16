@@ -2,6 +2,7 @@
   "dashboard": "Dashboard",
   "dashboards": "Dashboards",
   "alarms": "Alarms",
+  "notificationPolicies": "Notification Policies",
   "connectors": "Connectors",
   "devices": "Devices",
   "deviceTypes": "Device Types",

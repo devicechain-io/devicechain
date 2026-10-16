@@ -46,6 +46,7 @@ export const ENTITY_TYPES = [
   'group',
   'maintenance-window',
   'metric-definition',
+  'notification-policy',
   'role',
   'tenant',
   'tenant-tier',

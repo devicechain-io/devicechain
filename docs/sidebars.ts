@@ -135,6 +135,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/administering-the-instance',
         'user-guide/updates',
         'user-guide/viewing-dashboards-in-dash',
+        'user-guide/notification-policies',
       ],
     },
     {

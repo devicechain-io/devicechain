@@ -65,7 +65,7 @@ vi.mock('@/routes/geofences/FenceMap', () => ({
 // respects the gate from one that ignores it.
 vi.mock('@/auth/AuthProvider', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/auth/AuthProvider')>();
-  return { ...actual, useAuth: () => ({ claims: { authorities: ['device:write'] } }) };
+  return { ...actual, useAuth: () => ({ claims: { authorities: ['device:write', 'notification:write'] } }) };
 });
 
 import { REGISTRY_RESOURCES } from './resources';
@@ -128,6 +128,16 @@ const ENTITY = {
   // A maintenance window's schedule — read by its editor, which refuses to open without one.
   timezone: 'Europe/Berlin',
   slots: JSON.stringify([{ day: 'SATURDAY', start: '02:00', durationMinutes: 120 }]),
+  // A notification policy: no quiet hours, no rules (the form shows them read-only and never sends them).
+  enabled: true,
+  throttleSeconds: null,
+  escalateAfterSeconds: null,
+  maxEscalations: null,
+  quietHoursTimezone: null,
+  quietHoursSlots: null,
+  quietHoursBypassSeverity: null,
+  rules: [],
+  updatedAt: '2026-08-01T00:00:00Z',
   deviceType: TYPE_ROW,
   assetType: TYPE_ROW,
   customerType: TYPE_ROW,
@@ -208,7 +218,7 @@ type Write = { doc: unknown; request: Record<string, unknown>; token: unknown };
 function writes(): Write[] {
   const out: Write[] = [];
   for (const call of gqlMock.mock.calls) {
-    if (call[0] !== 'device-management') continue;
+    if (call[0] !== 'device-management' && call[0] !== 'notification-management') continue;
     const vars = call[2] as { request?: Record<string, unknown>; token?: unknown } | undefined;
     if (vars?.request == null) continue;
     out.push({ doc: call[1], request: vars.request, token: vars.token });

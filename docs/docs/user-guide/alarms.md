@@ -80,3 +80,4 @@ cleared times.
 - [Detection rules](/user-guide/detection-rules), which raise these alarms
 - [Event processing and alarms](/concepts/event-processing#the-alarm-lifecycle): the alarm lifecycle and escalation
 - [Configuring notification channels](/guides/notification-channels), to have alarms emailed or posted to a webhook
+- [Notification policies](/user-guide/notification-policies), to hold a policy's pages during quiet hours

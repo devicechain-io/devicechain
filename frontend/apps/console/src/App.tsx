@@ -1,7 +1,9 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+import type { ReactNode } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import type { Area } from '@devicechain/client';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
@@ -73,6 +75,12 @@ function ProtectedRoute() {
   return <Outlet />;
 }
 
+// gated wraps a registry page in its area's gate when the resource names an area a profile
+// can leave out.
+function gated(area: Area | undefined, page: ReactNode): ReactNode {
+  return area ? <AreaGate area={area}>{page}</AreaGate> : page;
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -117,12 +125,12 @@ export default function App() {
             <Route
               key={`${r.basePath}-list`}
               path={r.basePath.slice(1)}
-              element={<ResourceListPage key={r.basePath} resource={r} />}
+              element={gated(r.area, <ResourceListPage key={r.basePath} resource={r} />)}
             />,
             <Route
               key={`${r.basePath}-detail`}
               path={`${r.basePath.slice(1)}/:token`}
-              element={<ResourceDetailPage key={r.basePath} resource={r} />}
+              element={gated(r.area, <ResourceDetailPage key={r.basePath} resource={r} />)}
             />,
           ])}
         </Route>

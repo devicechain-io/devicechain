@@ -32,6 +32,7 @@ import GuideShot from '@site/src/components/GuideShot';
 | **Dashboard** | 主页。 |
 | **Dashboards** | 团队创建的仪表板。 |
 | **Alarms**（告警） | 规则已触发的告警。 |
+| **Notification Policies**（通知策略） | 告警会通知谁，以及暂存这些通知的静默时段。 |
 | **Connectors**（连接器） | 通向其他系统的出站连接。 |
 | **Devices** | **Devices**、**Device Types**、**Device Profiles**（设备配置文件）、**Device Groups**（设备分组）、**Maintenance Windows**（维护窗口）和 **Command Batches**（命令批次）。 |
 | **Assets**（资产） | **Assets**、**Asset Types**（资产类型）和 **Asset Groups**（资产分组）。 |

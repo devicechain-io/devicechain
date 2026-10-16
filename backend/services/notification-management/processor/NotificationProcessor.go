@@ -113,6 +113,11 @@ type NotifyMetrics struct {
 	// is acked and never reaches the dead-letter path, so this is its only count.
 	deliveriesRefused *prometheus.CounterVec
 
+	// quietHours counts what quiet hours did, by outcome (see the quietOutcome constants):
+	// a notification held, a held one released, or a held one dropped and why. Read by the
+	// PolicyNotifier.
+	quietHours *prometheus.CounterVec
+
 	// RED metrics for the per-message dispatch path (E13).
 	metrics *core.ProcessorMetrics
 }
@@ -137,6 +142,14 @@ func NewNotifyMetrics(ms *core.Microservice) NotifyMetrics {
 				"(a declared credential is missing, or a secret is stored that the channel never presents) "+
 				"or no_adapter (the channel's type has no delivery adapter in this build, so the channel was skipped).",
 			[]string{"reason"}),
+		quietHours: ms.NewCounterVec("quiet_hours_total",
+			"Notifications affected by a policy's quiet hours, by outcome: held (deferred to the "+
+				"end of the quiet stretch), released (sent when it ended), dropped_resolved (the "+
+				"alarm was acknowledged or cleared while held), dropped_policy (the policy was "+
+				"disabled or deleted while holding it), dropped_exhausted (every release attempt "+
+				"reached no channel; the notification is dead-lettered) or superseded (a newer page "+
+				"about the alarm went out through the policy first).",
+			[]string{"outcome"}),
 	}
 }
 

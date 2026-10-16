@@ -72,7 +72,13 @@ var policySeed = struct {
 	Name, Description, Metadata                           string
 	ThrottleSeconds, EscalateAfterSeconds, MaxEscalations int32
 	Enabled                                               bool
+	QuietTimezone, QuietSlots, QuietBypass                string
 }{
+	QuietTimezone: "Europe/Berlin",
+	// Canonical form (the order json.Marshal writes), so the read-back matches byte for byte.
+	QuietSlots:  `[{"day":"SATURDAY","start":"22:00","durationMinutes":480}]`,
+	QuietBypass: "CRITICAL",
+
 	Name:                 "Original name",
 	Description:          "Original description",
 	Metadata:             `{"fleet":"north"}`,
@@ -198,13 +204,22 @@ func readChannelSecret(t *testing.T, api *Api, ctx context.Context, id uint) str
 // ─── the routing-policy family ─────────────────────────────────────────────
 
 func notificationPolicyFamily() putest.Family[*Api] {
+	// The zone and the slots are validated as a pair: one without the other is a
+	// half-configured policy and is refused, so the harness moves them together.
+	quietTimezone, quietSlots := putest.PairedWith(
+		putest.OptionalStringField("quietHoursTimezone", policySeed.QuietTimezone, "America/New_York",
+			func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalString { return &r.QuietHoursTimezone }),
+		putest.OptionalStringField("quietHoursSlots", policySeed.QuietSlots,
+			`[{"day":"MONDAY","start":"01:00","durationMinutes":300}]`,
+			func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalString { return &r.QuietHoursSlots }))
+
 	return putest.Family[*Api]{
 		Name:  "notificationPolicy",
 		Token: policyToken,
 		// The channel tables come with it: a policy's rules name channels by token and
 		// resolve them at write, so a policy family without channels could not seed a
 		// single rule.
-		Migrate:    []any{&NotificationPolicy{}, &NotificationRule{}, &NotificationChannel{}},
+		Migrate:    []any{&NotificationPolicy{}, &NotificationRule{}, &NotificationChannel{}, &NotificationDeferral{}},
 		NewRequest: func() any { return &NotificationPolicyUpdateRequest{} },
 		Update: func(api *Api, ctx context.Context, token string, req any) error {
 			_, err := api.UpdateNotificationPolicy(ctx, token, req.(*NotificationPolicyUpdateRequest), nil)
@@ -229,6 +244,10 @@ func notificationPolicyFamily() putest.Family[*Api] {
 				Enabled:              policySeed.Enabled,
 				Rules:                seededRules(),
 				Metadata:             strPtr(policySeed.Metadata),
+
+				QuietHoursTimezone:       strPtr(policySeed.QuietTimezone),
+				QuietHoursSlots:          strPtr(policySeed.QuietSlots),
+				QuietHoursBypassSeverity: strPtr(policySeed.QuietBypass),
 			}); err != nil {
 				t.Fatalf("seed policy: %v", err)
 			}
@@ -246,6 +265,10 @@ func notificationPolicyFamily() putest.Family[*Api] {
 				"enabled":              putest.BoolString(row.Enabled),
 				"rules":                renderStoredRules(t, row.Rules),
 				"metadata":             jsonStr(row.Metadata),
+
+				"quietHoursTimezone":       nullStr(row.QuietHoursTimezone),
+				"quietHoursSlots":          jsonStr(row.QuietHoursSlots),
+				"quietHoursBypassSeverity": nullStr(row.QuietHoursBypassSeverity),
 			}
 		},
 		Fields: []putest.Field{
@@ -264,6 +287,12 @@ func notificationPolicyFamily() putest.Family[*Api] {
 			rulesField(),
 			putest.OptionalStringField("metadata", policySeed.Metadata, `{"fleet":"south"}`,
 				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
+			quietTimezone,
+			quietSlots,
+			putest.OptionalStringField("quietHoursBypassSeverity", policySeed.QuietBypass, "MAJOR",
+				func(r *NotificationPolicyUpdateRequest) *dcgraphql.OptionalString {
+					return &r.QuietHoursBypassSeverity
+				}),
 		},
 	}
 }

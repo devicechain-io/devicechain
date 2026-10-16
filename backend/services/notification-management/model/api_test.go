@@ -52,7 +52,7 @@ func newTestApiConfigured(t *testing.T, configure func(t *testing.T, db *gorm.DB
 		t.Fatalf("register token grammar: %v", err)
 	}
 	if err := db.AutoMigrate(&NotificationChannel{}, &NotificationPolicy{},
-		&NotificationRule{}, &NotificationState{}); err != nil {
+		&NotificationRule{}, &NotificationState{}, &NotificationDeferral{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := secrets.NewSecretStoreSchema().Migrate(db); err != nil {

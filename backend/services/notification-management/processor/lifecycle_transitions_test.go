@@ -164,7 +164,7 @@ func fencedApi(t *testing.T, fenced ...string) *model.Api {
 		t.Fatalf("register the fence: %v", err)
 	}
 	if err := db.AutoMigrate(&model.NotificationChannel{}, &model.NotificationPolicy{},
-		&model.NotificationRule{}, &model.NotificationState{}, &rdb.PurgedTenant{}); err != nil {
+		&model.NotificationRule{}, &model.NotificationState{}, &model.NotificationDeferral{}, &rdb.PurgedTenant{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := model.NewApi(&rdb.RdbManager{Database: db}, nil)
