@@ -69,7 +69,7 @@ export type RoleOwner =
 
 /** One entry of a scope to set on a member. */
 export type ScopeAnchorInput = {
-  /** What the anchor names. Only CUSTOMER is accepted for now. */
+  /** What the anchor names. */
   kind: ScopeAnchorKind;
   /** Token of the customer the anchor names. */
   token: string;
@@ -80,8 +80,9 @@ export type ScopeAnchorKind =
   /** A customer: the anchor covers the devices assigned to that customer. */
   | 'CUSTOMER'
   /**
-   * An entity group. Not available yet: a scope naming a group is refused with the error code
-   * INVALID_VALUE.
+   * An entity group: the anchor covers the devices in the group while it is an access scope (at
+   * its active version), so a device moved into or out of the group is seen or not without the
+   * member being edited. A group that is not an access scope covers nothing.
    */
   | 'GROUP';
 
