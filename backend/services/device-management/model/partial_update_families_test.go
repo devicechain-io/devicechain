@@ -867,7 +867,7 @@ func detectionRuleFamily() putest.Family[*Api] {
 		Name:  "detectionRule",
 		Token: "dr-1",
 		Migrate: append(append([]any{}, deviceProfileTables...),
-			&EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
+			&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
 			&EntityAttribute{}),
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			twoProfiles(t, api, ctx)
@@ -1046,7 +1046,7 @@ func entityGroupFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "entityGroup",
 		Token:   "eg-1",
-		Migrate: []any{&EntityGroup{}},
+		Migrate: []any{&EntityGroup{}, &IssuedGroupToken{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			dynamic := string(MembershipDynamic)
 			selector := selectorSeed

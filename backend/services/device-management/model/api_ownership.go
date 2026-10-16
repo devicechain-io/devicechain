@@ -23,7 +23,8 @@ import (
 // other.
 
 // DeviceOwnershipChangedEvent is the device ownership-changed fact: a device's COMPLETE
-// current anchor set, read after the write that may have changed it. A consumer
+// current anchor set — its tracked relationships and the access scopes it is in — read after
+// the write that may have changed it. A consumer
 // overwrites what it holds with it; an empty Anchors means the device is owned by nobody.
 // The tenant travels on the per-tenant subject.
 type DeviceOwnershipChangedEvent struct {
@@ -64,12 +65,19 @@ func anchorSetOf(edges []EntityRelationship) rdb.Anchors {
 // deviceScopeAnchors returns the device's current anchors: one per tracked relationship.
 // It reads through the plain Api, never a cache, so a stamp is never older than the write
 // it follows.
+//
+// The access scopes the device is in are part of the set (ADR-081): "group:<token>" for
+// each, read from the group read-model in the same way.
 func (api *Api) deviceScopeAnchors(ctx context.Context, deviceId uint) (rdb.Anchors, error) {
 	found, err := api.TrackedRelationshipsForDevice(ctx, deviceId)
 	if err != nil {
 		return nil, err
 	}
-	return anchorSetOf(found.Results), nil
+	groups, err := accessGroupAnchors(api.RDB.DB(ctx), []uint{deviceId})
+	if err != nil {
+		return nil, err
+	}
+	return withGroupAnchors(anchorSetOf(found.Results), groups[deviceId]), nil
 }
 
 // ownershipReadContext is the context the ownership fact's reads run under: the tenant of
@@ -153,11 +161,15 @@ func (api *Api) ownershipFacts(ctx context.Context, ids []uint, now time.Time) (
 	for _, e := range edges {
 		bySource[e.SourceId] = append(bySource[e.SourceId], e)
 	}
+	groups, err := accessGroupAnchors(api.RDB.DB(ctx), ids)
+	if err != nil {
+		return nil, err
+	}
 	facts := make([]*DeviceOwnershipChangedEvent, 0, len(devices))
 	for _, d := range devices {
 		facts = append(facts, &DeviceOwnershipChangedEvent{
 			DeviceToken: d.Token,
-			Anchors:     []string(anchorSetOf(bySource[d.ID])),
+			Anchors:     []string(withGroupAnchors(anchorSetOf(bySource[d.ID]), groups[d.ID])),
 			ChangedTime: now,
 		})
 	}

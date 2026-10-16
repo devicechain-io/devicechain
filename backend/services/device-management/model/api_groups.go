@@ -10,10 +10,13 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/internal/selector"
+	"github.com/devicechain-io/dc-microservice/conflict"
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // resolvedMembership is the validated outcome of a create/update request's membership
@@ -102,11 +105,67 @@ func (api *Api) CreateEntityGroup(ctx context.Context, request *EntityGroupCreat
 		Selector:       selectorCol,
 		SelectorSchema: selectorSchema,
 	}
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
+	// The token is issued and the group written in ONE transaction, as for a customer
+	// (CreateCustomer): a token is in the ledger exactly when a group was created at it, and
+	// the ledger's primary key refuses a second issue whether the first group is live or gone.
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&IssuedGroupToken{Token: request.Token}).Error; err != nil {
+			return err
+		}
+		return tx.Create(created).Error
+	})
+	if err != nil {
+		if conflict.Is(err) {
+			if rerr := api.refuseRetiredGroupToken(ctx, request.Token); rerr != nil {
+				return nil, rerr
+			}
+		}
+		return nil, err
 	}
 	return created, nil
+}
+
+// ErrGroupTokenRetired refuses a create at the token of an entity group that has been
+// deleted in the same tenant. The refusal is permanent: a deleted group's token is never
+// handed to another group.
+//
+// 🔑 WHY A DELETED GROUP STILL HOLDS ITS TOKEN. A group that is an access scope is named
+// by token, as the anchor "group:<token>", on records that outlive it: the scope of every
+// member limited to it (user-management), and the stamps on the alarms, commands, update
+// assignments, live device states and event history written while a device was in it. A
+// new group at the same token would inherit all of it — every member scoped to the old
+// group would see the new one's devices, and the new group's members the old one's history.
+// It is the rule ErrCustomerTokenRetired states for customers, and it is applied to EVERY
+// group rather than only to access scopes, because a member's scope may name any group
+// token: a group that never was an access scope can still be the one a member was limited to.
+//
+// It is INVALID_VALUE and never CONFLICT, for the reason ErrCustomerTokenRetired gives.
+var ErrGroupTokenRetired = integrity.NewRefusal(integrity.ClassInvalid,
+	"that group token is retired: a deleted group held it, and member access and records "+
+		"stamped with it (alarms, commands, update assignments, device states and event history) "+
+		"still name that group, so it cannot be given to another one. Pick another token")
+
+// refuseRetiredGroupToken reads a unique violation on a group create, as
+// refuseRetiredCustomerToken does for a customer: with no live group at token, the ledger
+// refused it, and the token is retired.
+func (api *Api) refuseRetiredGroupToken(ctx context.Context, token string) error {
+	var live int64
+	if err := api.RDB.DB(ctx).Model(&EntityGroup{}).
+		Where("token = ?", token).Count(&live).Error; err != nil {
+		return err
+	}
+	if live == 0 {
+		return fmt.Errorf("create entity group %q: %w", token, ErrGroupTokenRetired)
+	}
+	return nil
+}
+
+// retireGroupToken records token as issued, inside a group delete's transaction — a no-op
+// for a group CreateEntityGroup recorded, and the record for one that reached the table any
+// other way.
+func retireGroupToken(tx *gorm.DB, token string) error {
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&IssuedGroupToken{Token: token}).Error
 }
 
 // UpdateEntityGroup applies a PARTIAL update to an entity group's mutable fields: a
@@ -200,6 +259,13 @@ func (api *Api) EntityGroups(ctx context.Context, criteria EntityGroupSearchCrit
 		if criteria.MembershipMode != nil {
 			db = db.Where("membership_mode = ?", *criteria.MembershipMode)
 		}
+		if criteria.AccessScope != nil {
+			if *criteria.AccessScope {
+				db = db.Where("access_scope_at IS NOT NULL")
+			} else {
+				db = db.Where("access_scope_at IS NULL")
+			}
+		}
 		return db
 	}, criteria.Pagination)
 	db.Find(&results)
@@ -253,6 +319,11 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	// group (loadGroupVersionForScoping → not-found → the whole publish rolls back). Without
 	// this lock+in-txn re-check, plain check-then-delete could drop a group a just-published
 	// rule pins.
+	//
+	// An access scope may be deleted: the devices in it lose the group's anchor, so each is
+	// announced with its new ownership (read inside the transaction, under the lock, so a
+	// concurrent enable cannot slip between), and the token is retired either way.
+	var accessMembers []uint
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
 		if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
 			return err
@@ -264,10 +335,16 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 		if inUse {
 			return fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
 		}
+		if accessMembers, err = api.accessMembersOnTx(tx, id); err != nil {
+			return err
+		}
 		if err := tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error; err != nil {
 			return err
 		}
-		return api.purgeGroupScopingRows(tx, id)
+		if err := api.purgeGroupScopingRows(tx, id); err != nil {
+			return err
+		}
+		return retireGroupToken(tx, token)
 	})
 	if err != nil {
 		return false, err
@@ -275,6 +352,7 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	if deleted {
 		api.evictMemberships(ctx, evictType, evictIds)
 		api.evictScopedGroupsExist(ctx)
+		api.emitOwnershipChanged(ctx, accessMembers)
 	}
 	return deleted, nil
 }

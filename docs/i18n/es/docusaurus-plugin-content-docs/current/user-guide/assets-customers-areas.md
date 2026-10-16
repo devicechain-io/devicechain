@@ -188,6 +188,11 @@ Los grupos también pueden ser **dinámicos**: en lugar de una lista que mantien
 un filtro guardado cuyos miembros se calculan cada vez que se lee. Se crean en la pantalla Explorar.
 Consulta [Grupos, facetas y Explorar](./groups-facets-browse.md).
 
+Eliminar un grupo retira su token, igual que eliminar un cliente: no puedes crear otro grupo con el
+mismo token en este tenant. El acceso de un miembro puede limitarse a un grupo, y los registros
+escritos mientras un dispositivo estaba en él nombran al grupo por su token, así que un grupo nuevo
+con ese token los heredaría. Elige otro token para el grupo nuevo.
+
 ## Relacionado
 
 - [Modelo de dominio](../concepts/domain-model.md): activos, la jerarquía de activos, grupos y

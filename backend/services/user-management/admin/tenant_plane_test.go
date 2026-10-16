@@ -390,9 +390,15 @@ func mustID(t *testing.T, e *planeEnv, email string) uint {
 // ---- scope ---------------------------------------------------------------------------------
 
 func TestScopeIsValidatedNotTruncated(t *testing.T) {
-	_, err := NormalizeScope([]ScopeAnchorInput{{Kind: auth.AnchorKindGroup, Token: "north"}})
+	// A group anchor is accepted, beside a customer one, in the stored form.
+	got, err := NormalizeScope([]ScopeAnchorInput{{Kind: auth.AnchorKindGroup, Token: "north"},
+		{Kind: auth.AnchorKindCustomer, Token: "acme"}, {Kind: auth.AnchorKindGroup, Token: "north"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"group:north", "customer:acme"}, got)
+
+	_, err = NormalizeScope([]ScopeAnchorInput{{Kind: "area", Token: "north"}})
 	cls, ok := integrity.Refused(err)
-	require.True(t, ok && cls == integrity.ClassInvalid, "a group anchor before group scopes exist: %v", err)
+	require.True(t, ok && cls == integrity.ClassInvalid, "an unknown anchor kind: %v", err)
 
 	many := make([]ScopeAnchorInput, 0, auth.MaxScopeAnchors+1)
 	for i := 0; i <= auth.MaxScopeAnchors; i++ {
@@ -402,7 +408,7 @@ func TestScopeIsValidatedNotTruncated(t *testing.T) {
 	_, isLimit := limit.As(err)
 	require.True(t, isLimit, "17 anchors must be refused with LIMIT_EXCEEDED, never truncated: %v", err)
 
-	got, err := NormalizeScope(many[:auth.MaxScopeAnchors])
+	got, err = NormalizeScope(many[:auth.MaxScopeAnchors])
 	require.NoError(t, err)
 	require.Len(t, got, auth.MaxScopeAnchors)
 

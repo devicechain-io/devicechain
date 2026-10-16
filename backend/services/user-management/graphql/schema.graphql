@@ -496,13 +496,14 @@ enum ScopeAnchorKind {
     """A customer: the anchor covers the devices assigned to that customer."""
     CUSTOMER
     """
-    An entity group. Not available yet: a scope naming a group is refused with the error code
-    INVALID_VALUE.
+    An entity group: the anchor covers the devices in the group while it is an access scope (at
+    its active version), so a device moved into or out of the group is seen or not without the
+    member being edited. A group that is not an access scope covers nothing.
     """
     GROUP
 }
 
-"""One entry of a member's scope: a customer (or, later, a group) whose devices the member can see."""
+"""One entry of a member's scope: a customer or group whose devices the member can see."""
 type ScopeAnchor {
     """What the anchor names."""
     kind: ScopeAnchorKind!
@@ -512,7 +513,7 @@ type ScopeAnchor {
 
 """One entry of a scope to set on a member."""
 input ScopeAnchorInput {
-    """What the anchor names. Only CUSTOMER is accepted for now."""
+    """What the anchor names."""
     kind: ScopeAnchorKind!
     """Token of the customer the anchor names."""
     token: String!
@@ -1088,9 +1089,8 @@ type Mutation {
     member with a one-time invitation code. The membership stays disabled until the code is
     accepted. The answer is the same whether or not the person already has an account. Fails
     with the error code CONFLICT if they are already a member, ESCALATION if a role grants an
-    authority you do not hold, NOT_FOUND if a role token is not assignable here,
-    LIMIT_EXCEEDED for more than 16 scope anchors, and INVALID_VALUE for a group anchor.
-    Requires member:write.
+    authority you do not hold, NOT_FOUND if a role token is not assignable here, and
+    LIMIT_EXCEEDED for more than 16 scope anchors. Requires member:write.
     """
     inviteMember(
         """The person to invite."""
@@ -1113,10 +1113,10 @@ type Mutation {
         roleTokens: [String!]!
     ): Member!
     """
-    Replaces the customers a member is limited to and returns the member. An empty list gives
+    Replaces the customers and groups a member is limited to and returns the member. An empty list gives
     them the whole tenant. The change takes effect at the member's next token refresh, as
     setMemberRoles does. Fails with the same error codes as setMemberRoles,
-    plus LIMIT_EXCEEDED for more than 16 anchors and INVALID_VALUE for a group anchor. Requires
+    plus LIMIT_EXCEEDED for more than 16 anchors. Requires
     member:write.
     """
     setMemberScope(

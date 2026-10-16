@@ -66,7 +66,7 @@ func newFacetAuthoringTestApi(t *testing.T) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{},
-		&FacetKey{}, &EntityGroup{}, &EntityGroupVersion{}, &EntityGroupMembership{},
+		&FacetKey{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &DetectionRuleScopeRef{},
 		&EntityRelationship{}, &EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)

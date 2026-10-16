@@ -180,6 +180,11 @@ Groups can also be **dynamic**: instead of a list you maintain by hand, the grou
 whose members are worked out each time it is read. You create those on the Browse screen. See
 [Groups, facets and Browse](/user-guide/groups-facets-browse).
 
+Deleting a group retires its token, as deleting a customer does: you cannot create another group
+with the same token in this tenant. A member's access can be limited to a group, and the records
+written while a device was in it name the group by its token, so a new group at that token would
+inherit them. Choose a different token for the new group.
+
 ## Related
 
 - [Domain model](/concepts/domain-model): assets, the asset hierarchy, groups and attributes.

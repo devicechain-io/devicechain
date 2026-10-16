@@ -138,7 +138,7 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 	shared := string(AttributeScopeShared)
 	writes := make([]configurationWrite, 0)
 	var minted *DeviceConfigurationRevision
-	var touched bool
+	var touched membershipChange
 
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		declared, _, err := activeConfigurationDeclaration(tx, deviceId)
@@ -224,8 +224,8 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 		// write takes them in (its row, then membership), which is a lock cycle.
 		if membershipScopeEligible(deviceType, shared) {
 			for _, key := range changed {
-				t, err := api.recomputeMembershipForAttr(ctx, tx, deviceType, deviceId, key)
-				touched = touched || t
+				c, err := api.recomputeMembershipForAttr(ctx, tx, deviceType, deviceId, key)
+				touched = touched.or(c)
 				if err != nil {
 					return err
 				}
@@ -267,9 +267,7 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 		return err
 	}
 	api.publishMintedConfiguration(ctx, deviceId, minted)
-	if touched {
-		api.evictMemberships(ctx, deviceType, []uint{deviceId})
-	}
+	api.afterMembershipRecompute(ctx, deviceType, deviceId, touched)
 	for _, w := range writes {
 		if w.removed {
 			api.emitDeviceAttribute(ctx, &DeviceAttributeEvent{DeviceToken: deviceToken, AttrKey: w.request.AttrKey,

@@ -19,6 +19,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -222,16 +223,22 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 // api is the event's own (model.ReadAheadForEvent). The membership caches of all the
 // targets are read at the same time once the gate below has opened; the database is still
 // read one target after another, in target order, for whatever they could not answer.
+//
+// It also returns the device's ACCESS-SCOPE anchors (ADR-081): "group:<token>" for each
+// access scope the device itself (targets[0]) is in at the group's published version. Only
+// the device's own memberships count — an access scope collects devices, and a device is
+// not in a region because an area it is tracked to is. Access scopes are enrolled through
+// the same read-model, so the same gate covers them: a tenant with neither pays nothing.
 func (rez *EventResolver) unionMemberships(ctx context.Context, api model.DeviceManagementApi,
-	targets []model.MembershipTarget) ([]model.GroupRef, error) {
+	targets []model.MembershipTarget) ([]model.GroupRef, []model.ResolvedAnchor, error) {
 	// Pay-nothing short-circuit (ADR-062 Decision 7): a tenant with no rule-scoped group
 	// does zero per-target reads — one cached EXISTS check gates the whole union.
 	any, err := api.AnyScopedGroups(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !any {
-		return nil, nil
+		return nil, nil, nil
 	}
 	model.ReadMembershipsAhead(ctx, api, targets)
 	type mkey struct {
@@ -240,12 +247,16 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 	}
 	seen := make(map[mkey]struct{})
 	out := make([]model.GroupRef, 0)
-	for _, t := range targets {
+	var access []model.ResolvedAnchor
+	for i, t := range targets {
 		ms, err := api.MembershipsForEntity(ctx, t.Type, t.Id)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, m := range ms {
+			if i == 0 && m.AccessScope && t.Type == string(entity.TypeDevice) {
+				access = append(access, model.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken})
+			}
 			k := mkey{m.GroupToken, m.SelectorVersion}
 			if _, dup := seen[k]; dup {
 				continue
@@ -254,7 +265,7 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 			out = append(out, model.GroupRef{GroupToken: m.GroupToken, Version: m.SelectorVersion})
 		}
 	}
-	return out, nil
+	return out, access, nil
 }
 
 // resolveProfile reads the device type's active published profile ONCE per event: the
@@ -824,9 +835,20 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceMan
 		})
 		targets = append(targets, model.MembershipTarget{Type: r.TargetType, Id: r.TargetId})
 	}
-	memberships, err := rez.unionMemberships(ctx, api, targets)
+	memberships, access, err := rez.unionMemberships(ctx, api, targets)
 	if err != nil {
 		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
+	}
+	// The access scopes the device is in are anchors too (ADR-081): an event written while
+	// the device is in "north" is visible to a member scoped to group:north, as one written
+	// while it is assigned to acme is to a member scoped to customer:acme. They carry no
+	// relationship. A tracked edge from the device to the same group already anchored it.
+	for _, a := range access {
+		if !slices.ContainsFunc(anchors, func(x model.ResolvedAnchor) bool {
+			return x.AnchorType == a.AnchorType && x.AnchorToken == a.AnchorToken
+		}) {
+			anchors = append(anchors, a)
+		}
 	}
 	return anchors, memberships, 0, nil
 }

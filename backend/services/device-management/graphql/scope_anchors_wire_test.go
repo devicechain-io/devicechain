@@ -30,7 +30,8 @@ func scopeAnchorsWireCtx(t *testing.T) context.Context {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&model.Device{}, &model.EntityRelationship{}, &model.EntityRelationshipType{}))
+	require.NoError(t, db.AutoMigrate(&model.Device{}, &model.EntityRelationship{}, &model.EntityRelationshipType{},
+		&model.EntityGroup{}, &model.EntityGroupMembership{}))
 	ctx := core.WithTenant(context.Background(), "acme")
 	api := model.NewApi(&rdb.RdbManager{Database: db})
 	for _, token := range []string{"d1", "d2"} {

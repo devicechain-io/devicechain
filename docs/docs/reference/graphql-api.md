@@ -779,6 +779,25 @@ alarms, commands, update assignments, shared dashboards and event history as the
 retired. Choose another token. A token is freed only when the whole tenant is deleted. A customer
 that still exists at the token answers `CONFLICT`, as before.
 
+### When your access is limited to a group {#limited-to-a-group}
+
+A member's access can also be limited to an entity group, or to groups and customers together. The
+group must be an access scope: a published dynamic group of devices that someone with
+`device:write` has made one with `setEntityGroupAccessScope`. A tenant can have at most 32. A group
+that is not an access scope gives a member limited to it nothing.
+
+A member limited to a group sees the devices in the group at its active version, and only while
+they are in it. Membership follows the devices' shared attributes, so a device whose attributes
+move it into the group appears without anyone editing the member, and a device moved out
+disappears. Publishing a new version of the group, or rolling it back, changes the set in the same
+way. The operations in the table above answer for a group as they do for a customer: events,
+alarms, commands and update assignments recorded while the device was in the group stay visible,
+and the live state follows the device. Dashboards can be shared only with customers, so a member
+limited only to groups sees no shared dashboard.
+
+A deleted group's token is retired as a customer's is, because a member's access and these records
+name the group by its token. `createEntityGroup` at a retired token answers `INVALID_VALUE`.
+
 ### Refusals when administering a tenant {#tenant-administration-refusals}
 
 A tenant's own administrators manage its members, invitations and roles through user-management's

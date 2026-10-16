@@ -279,6 +279,53 @@ func (suite *EventResolverTestSuite) TestResolvedEventCarriesScopeMemberships() 
 	}, results[0].Resolved.ScopeMemberships)
 }
 
+// A device in an ACCESS SCOPE (ADR-081) carries the group's anchor on its events, beside its
+// relationship anchors, so a member limited to the group sees what the device sent while it
+// was in it. Only the DEVICE's own access memberships count — an area the device is tracked
+// to being in an access-marked group does not put the device in it — and a rule-only
+// membership (AccessScope false) adds no anchor. A tracked edge to the same group is not
+// doubled.
+func (suite *EventResolverTestSuite) TestADeviceInAnAccessScopeCarriesTheGroupAnchor() {
+	suite.API.Mock.On("TrackedRelationshipsForDevice").Return(
+		&dmodel.EntityRelationshipSearchResults{Results: []dmodel.EntityRelationship{
+			{TargetType: "customer", TargetToken: "acme", TargetId: 7},
+			{TargetType: "area", TargetToken: "warehouse-3", TargetId: 900},
+			{TargetType: "group", TargetToken: "south", TargetId: 3},
+		}}, nil)
+	suite.API.ProfileScopeResult = &dmodel.ProfileScope{}
+
+	device := deviceWithToken("TEST-123")
+	device.ID = 500
+	suite.API.MembershipsFn = func(entityType string, entityId uint) []dmodel.GroupMembership {
+		switch {
+		case entityType == "device" && entityId == 500:
+			return []dmodel.GroupMembership{
+				{GroupToken: "north", SelectorVersion: 2, AccessScope: true},
+				{GroupToken: "south", SelectorVersion: 1, AccessScope: true},
+				{GroupToken: "beta-fleet", SelectorVersion: 1},
+			}
+		case entityType == "area" && entityId == 900:
+			return []dmodel.GroupMembership{{GroupToken: "arid-areas", SelectorVersion: 1, AccessScope: true}}
+		}
+		return nil
+	}
+
+	results, reason, err := suite.resolver(config.AuthModeOptional).HandleStandardEvent(
+		context.Background(), device, measurementEvent("temp", "42"))
+
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), uint(0), reason)
+	if assert.Len(suite.T(), results, 1) {
+		got := map[string]int{}
+		for _, a := range results[0].Resolved.Anchors {
+			got[a.AnchorType+":"+a.AnchorToken]++
+		}
+		assert.Equal(suite.T(), map[string]int{
+			"customer:acme": 1, "area:warehouse-3": 1, "group:south": 1, "group:north": 1,
+		}, got)
+	}
+}
+
 // A scope-resolution failure on a new-relationship event aborts BEFORE the
 // relationship is created — so a transient lookup blip cannot leave a committed
 // relationship that a redelivery would duplicate (a fresh token per attempt is not

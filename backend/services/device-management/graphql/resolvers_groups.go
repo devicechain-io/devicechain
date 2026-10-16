@@ -81,6 +81,11 @@ func (r *EntityGroupResolver) MemberType() string {
 	return r.M.MemberType
 }
 
+// AccessScope reports whether the group is an access scope (ADR-081).
+func (r *EntityGroupResolver) AccessScope() bool {
+	return r.M.IsAccessScope()
+}
+
 func (r *EntityGroupResolver) MembershipMode() string {
 	return r.M.MembershipMode
 }

@@ -64,7 +64,7 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
 		&EntityRelationshipType{}, &EntityRelationship{},
-		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &EntityGroupMembership{},
+		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
 	), "migrate")
 	require.NoError(t, db.Exec(
 		`CREATE UNIQUE INDEX idx_device_credential_lookup ON device_credentials `+

@@ -404,6 +404,7 @@ func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []stri
 		return clause.Expr{SQL: sql.String(), Vars: vars}, nil
 	}
 	sql.WriteString(" AND (")
+	var groupTokens []string
 	for i, a := range anchors {
 		kind, token, perr := auth.ParseAnchor(a)
 		if perr != nil {
@@ -414,8 +415,83 @@ func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []stri
 		}
 		sql.WriteString("(? = ? AND ? = ?)")
 		vars = append(vars, targetType, kind, targetToken, token)
+		if e.Groups != nil && kind == e.Groups.Kind {
+			groupTokens = append(groupTokens, token)
+		}
 	}
 	sql.WriteString("))")
+	if len(groupTokens) == 0 {
+		return clause.Expr{SQL: sql.String(), Vars: vars}, nil
+	}
+	members, err := groupMembersExpr(db, *e.Groups, row, tenant, groupTokens)
+	if err != nil {
+		return nil, err
+	}
+	return clause.Expr{SQL: "(" + sql.String() + " OR " + members.SQL + ")", Vars: append(vars, members.Vars...)}, nil
+}
+
+// Aliases of the member and group tables inside a DeviceEdge's group branch.
+const (
+	scopeMemberAlias = "dc_scope_member"
+	scopeGroupAlias  = "dc_scope_group"
+)
+
+// groupMembersExpr builds a DeviceEdge's group branch (see DeviceEdge) for the given group
+// tokens, which must be non-empty. Every name comes from a parsed schema and is quoted by
+// gorm; the tenant, the member kind and every token are bound parameters.
+func groupMembersExpr(db *gorm.DB, g GroupMembers, row *schema.Field, tenant string, tokens []string) (clause.Expr, error) {
+	if g.Kind == "" || g.MemberKind == "" {
+		return clause.Expr{}, fmt.Errorf("a device-edge group branch with no kind")
+	}
+	member, memberTenant, err := parseRuleModel(db, g.Member, "device-edge group member")
+	if err != nil {
+		return clause.Expr{}, err
+	}
+	group, groupTenant, err := parseRuleModel(db, g.Group, "device-edge group")
+	if err != nil {
+		return clause.Expr{}, err
+	}
+	col := func(s *schema.Schema, alias, name string) clause.Column {
+		c, cerr := aliasedColumn(s, alias, name)
+		if cerr != nil && err == nil {
+			err = cerr
+		}
+		return c
+	}
+	groupID := col(group, scopeGroupAlias, g.GroupID)
+	memberGroup := col(member, scopeMemberAlias, g.MemberGroup)
+	enabled := col(group, scopeGroupAlias, g.GroupEnabled)
+	memberVersion := col(member, scopeMemberAlias, g.MemberVersion)
+	groupVersion := col(group, scopeGroupAlias, g.GroupVersion)
+	memberType := col(member, scopeMemberAlias, g.MemberType)
+	memberID := col(member, scopeMemberAlias, g.MemberID)
+	groupToken := col(group, scopeGroupAlias, g.GroupToken)
+	if err != nil {
+		return clause.Expr{}, err
+	}
+	var sql strings.Builder
+	vars := []any{
+		clause.Table{Name: member.Table}, clause.Table{Name: scopeMemberAlias},
+		clause.Table{Name: group.Table}, clause.Table{Name: scopeGroupAlias},
+		groupID, memberGroup,
+		clause.Column{Table: scopeMemberAlias, Name: memberTenant.DBName}, tenant,
+		clause.Column{Table: scopeGroupAlias, Name: groupTenant.DBName}, tenant,
+	}
+	sql.WriteString("EXISTS (SELECT 1 FROM ? AS ? JOIN ? AS ? ON ? = ? WHERE ? = ? AND ? = ?")
+	if f := softDeleteColumn(member); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: scopeMemberAlias, Name: f.DBName})
+	}
+	if f := softDeleteColumn(group); f != nil {
+		sql.WriteString(" AND ? IS NULL")
+		vars = append(vars, clause.Column{Table: scopeGroupAlias, Name: f.DBName})
+	}
+	sql.WriteString(" AND ? IS NOT NULL AND ? = ? AND ? = ? AND ? = ? AND ? IN (?" + strings.Repeat(", ?", len(tokens)-1) + "))")
+	vars = append(vars, enabled, memberVersion, groupVersion, memberType, g.MemberKind,
+		memberID, clause.Column{Table: db.Statement.Table, Name: row.DBName}, groupToken)
+	for _, t := range tokens {
+		vars = append(vars, t)
+	}
 	return clause.Expr{SQL: sql.String(), Vars: vars}, nil
 }
 

@@ -46,3 +46,22 @@ func (r *SchemaResolver) RollbackEntityGroup(ctx context.Context, args struct {
 	}
 	return &EntityGroupResolver{M: *updated, S: r, C: ctx}, nil
 }
+
+// SetEntityGroupAccessScope makes a group an access scope, or stops it being one (ADR-081):
+// a group a member's access can be limited to. Gated on DeviceWrite, like every other write
+// that decides which devices are in a group — what the group selects is already authored
+// under it.
+func (r *SchemaResolver) SetEntityGroupAccessScope(ctx context.Context, args struct {
+	Token   string
+	Enabled bool
+}) (*EntityGroupResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	api := r.GetApi(ctx)
+	updated, err := api.SetEntityGroupAccessScope(ctx, args.Token, args.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	return &EntityGroupResolver{M: *updated, S: r, C: ctx}, nil
+}

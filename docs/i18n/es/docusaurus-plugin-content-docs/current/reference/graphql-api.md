@@ -823,6 +823,27 @@ y el historial de eventos del cliente eliminado. `createCustomer` con un token r
 libera cuando se elimina el tenant completo. Un cliente que todavía existe con ese token responde
 `CONFLICT`, como antes.
 
+### Cuando tu acceso se limita a un grupo {#limited-to-a-group}
+
+El acceso de un miembro también puede limitarse a un grupo de entidades, o a grupos y clientes a la
+vez. El grupo debe ser un ámbito de acceso: un grupo dinámico de dispositivos publicado que alguien
+con `device:write` ha convertido en uno con `setEntityGroupAccessScope`. Un tenant puede tener como
+máximo 32. Un grupo que no es un ámbito de acceso no le da nada a un miembro limitado a él.
+
+Un miembro limitado a un grupo ve los dispositivos del grupo en su versión activa, y solo mientras
+están en él. La pertenencia sigue a los atributos compartidos de los dispositivos, así que un
+dispositivo cuyos atributos lo llevan al grupo aparece sin que nadie edite al miembro, y uno que sale
+desaparece. Publicar una versión nueva del grupo, o volver a una anterior, cambia el conjunto de la
+misma manera. Las operaciones de la tabla anterior responden para un grupo como para un cliente: los
+eventos, las alarmas, los comandos y las asignaciones de actualización registrados mientras el
+dispositivo estaba en el grupo siguen visibles, y el estado en vivo sigue al dispositivo. Los paneles
+solo pueden compartirse con clientes, así que un miembro limitado solo a grupos no ve ningún panel
+compartido.
+
+El token de un grupo eliminado queda retirado igual que el de un cliente, porque el acceso de los
+miembros y estos registros nombran al grupo por su token. `createEntityGroup` con un token retirado
+responde `INVALID_VALUE`.
+
 ### Rechazos al administrar un tenant {#tenant-administration-refusals}
 
 Los administradores de un tenant gestionan sus miembros, invitaciones y roles a través de la API de
