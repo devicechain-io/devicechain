@@ -593,6 +593,19 @@ jobs:
         # reads as that test hanging rather than the package being long.
         run: go test -count=1 -timeout 20m ./...
 
+      # The docs-command gate (backend/cli/cmd/docs_commands_test.go) already ran in the
+      # step above: every `dcctl` invocation in a shell block of the published docs, in
+      # every locale, must name a real command with flags it accepts and the arguments it
+      # takes, and every hack/ path in one must exist. It runs again here with -v for one
+      # reason: to PRINT what it did not check. A passing test's log is hidden, and a gate
+      # whose silence reads as coverage is the failure this repo has shipped before — so
+      # the count of skipped templates and of the shell commands no rule covers (kubectl,
+      # curl, helm, ...) is on the page of every run, not implied by a green tick.
+      - name: docs commands exist (coverage report)
+        if: matrix.module == 'backend/cli'
+        working-directory: ${{ matrix.module }}
+        run: go test -count=1 -run '^TestPublishedDocsCommandsExist$' -v ./cmd/
+
       # event-processing's broker suites a second time, with fetch-ahead ON. A hand-built
       # test configuration fetches one batch at a time, so the step above runs them with
       # fetch-ahead OFF, while production loads its configuration through ApplyDefaults

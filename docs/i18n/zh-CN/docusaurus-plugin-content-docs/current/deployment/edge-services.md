@@ -144,7 +144,7 @@ Sparkplug 和 LwM2M 设备不会自动释放。这些来源消失是因为运营
 
 `dcctl presence demote` 遍历某租户中一个来源的 ASSERTED 设备，并逐一释放：
 
-```
+```bash
 dcctl presence demote --tenant acme --source sparkplug:plant-a \
   --email ops@acme.example --password "$DC_PASSWORD" \
   --reason "plant-a gateway decommissioned"

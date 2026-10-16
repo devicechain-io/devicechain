@@ -321,7 +321,7 @@ un operador las retiró, no porque cambiara una bandera, así que es un operador
 `dcctl presence demote` recorre los dispositivos afirmados de una fuente en un inquilino y libera cada
 uno:
 
-```
+```bash
 dcctl presence demote --tenant acme --source sparkplug:plant-a \
   --email ops@acme.example --password "$DC_PASSWORD" \
   --reason "plant-a gateway decommissioned"
