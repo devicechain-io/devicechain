@@ -136,7 +136,7 @@ func newSpRig(t *testing.T, window int, streamMaxMsgs int64) *spRig {
 	require.NoError(t, r.nmgr.Start(ctx))
 	t.Cleanup(func() { _ = r.nmgr.Stop(context.Background()) })
 
-	r.writer, err = r.nmgr.NewAsyncWriter(streams.InboundEvents, window, true)
+	r.writer, err = r.nmgr.NewAsyncWriter(streams.InboundEvents, messaging.WriterSparkplug, window, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { r.writer.Draining(); r.writer.Close() })
 

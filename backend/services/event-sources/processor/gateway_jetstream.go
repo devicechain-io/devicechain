@@ -73,7 +73,7 @@ type poisonRoutes struct {
 // silently running some other number. It lives here rather than in main.go so that the
 // writer the source actually runs with is the one a test in this package observes.
 func NewInboundWriter(nmgr *messaging.NatsManager, window int) (messaging.OrderedWriter, error) {
-	return nmgr.NewOrderedWriter(streams.InboundEvents, window)
+	return nmgr.NewOrderedWriter(streams.InboundEvents, messaging.WriterCapture, window)
 }
 
 // pendingPublish is one built message on its way from a decode worker to the submitter.

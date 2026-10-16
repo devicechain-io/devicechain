@@ -68,7 +68,7 @@ func TestAsyncWriterSurvivesALeaderStepDownWithoutLossOrDuplicates(t *testing.T)
 	const goroutines, perG = 4, 150
 	servers := dctest.StartJetStreamCluster(t, 3)
 	nmgr := clusterManagerOn(t, servers, uniqueArea("async-stepdown"))
-	w, err := nmgr.NewAsyncWriter(streams.ResolvedEvents, 64, false)
+	w, err := nmgr.NewAsyncWriter(streams.ResolvedEvents, WriterResolution, 64, false)
 	if err != nil {
 		t.Fatal(err)
 	}

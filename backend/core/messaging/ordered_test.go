@@ -39,7 +39,7 @@ func orderedManager(t *testing.T) (*natsserver.Server, *NatsManager) {
 
 func newOrdered(t *testing.T, nmgr *NatsManager, window int) OrderedWriter {
 	t.Helper()
-	w, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, window)
+	w, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, WriterResolution, window)
 	if err != nil {
 		t.Fatalf("new ordered writer: %v", err)
 	}
@@ -693,17 +693,22 @@ func TestOrderedWriterRefusesMisuse(t *testing.T) {
 	_, nmgr := orderedManager(t)
 	for _, tc := range []struct {
 		suffix string
+		writer PublishWriter
 		window int
 		want   string
 	}{
-		{streams.ResolvedEvents, 0, "outside [1, 1024]"},
-		{streams.ResolvedEvents, 1025, "outside [1, 1024]"},
-		{streams.DeviceCommands, 8, "per-device subject"},
-		{streams.DeviceEventsCapture, 8, "device-events capture"},
+		{streams.ResolvedEvents, WriterResolution, 0, "outside [1, 1024]"},
+		{streams.ResolvedEvents, WriterResolution, 1025, "outside [1, 1024]"},
+		{streams.DeviceCommands, WriterResolution, 8, "per-device subject"},
+		{streams.DeviceEventsCapture, WriterResolution, 8, "device-events capture"},
+		// The writer label is a fixed vocabulary: a blank or invented name would add an
+		// unlabelled or unbounded series, so it is a startup error.
+		{streams.ResolvedEvents, "", 8, "not a known publish writer"},
+		{streams.ResolvedEvents, "my-source-42", 8, "not a known publish writer"},
 	} {
-		_, err := nmgr.NewOrderedWriter(tc.suffix, tc.window)
+		_, err := nmgr.NewOrderedWriter(tc.suffix, tc.writer, tc.window)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("NewOrderedWriter(%q, %d): got %v, want an error containing %q", tc.suffix, tc.window, err, tc.want)
+			t.Errorf("NewOrderedWriter(%q, %q, %d): got %v, want an error containing %q", tc.suffix, tc.writer, tc.window, err, tc.want)
 		}
 	}
 

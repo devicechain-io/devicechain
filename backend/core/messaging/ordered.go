@@ -44,6 +44,9 @@ const (
 type orderedWriter struct {
 	nmgr   *NatsManager
 	suffix string
+	// writer is the producer this writer publishes for: the writer label on its window and
+	// duplicate counters.
+	writer PublishWriter
 	// gate is the stream's backpressure gate, nil for a stream that applies none. The writer
 	// never refuses on it (see NewOrderedWriter), but it counts what it publishes against it:
 	// a forwarding hop's volume spends the same margin as any other writer's, and brings the
@@ -104,11 +107,13 @@ type orderedPending struct {
 }
 
 // NewOrderedWriter builds an OrderedWriter for suffix with up to window publishes awaiting
-// their acknowledgement at once. The stream backing the suffix is created if needed.
+// their acknowledgement at once, counting its window and duplicates under writer (see
+// PublishWriter). The stream backing the suffix is created if needed.
 //
-// It refuses a window outside [1, 1024] and a suffix with no tenant-wide publish path (a
-// per-device suffix, a device-events or advisory capture) — at construction, where the
-// mistake is a startup error, rather than on every publish.
+// It refuses a window outside [1, 1024], a writer name outside the PublishWriter vocabulary
+// and a suffix with no tenant-wide publish path (a per-device suffix, a device-events or
+// advisory capture) — at construction, where the mistake is a startup error, rather than on
+// every publish.
 //
 // 🔴 IT NEVER REFUSES FOR BACKPRESSURE, even on a stream that applies it. Its callers are
 // forwarding hops (capture to inbound, inbound to resolved) whose source message is already
@@ -122,9 +127,12 @@ type orderedPending struct {
 // flight. It does not call the context's CleanupPublisher: that closes a channel nats.go's
 // status fan-out may be sending on, and the reply subscription and reconnect goroutine it
 // would release end anyway when the connection closes.
-func (nmgr *NatsManager) NewOrderedWriter(suffix string, window int) (OrderedWriter, error) {
+func (nmgr *NatsManager) NewOrderedWriter(suffix string, writer PublishWriter, window int) (OrderedWriter, error) {
 	if window < 1 || window > MaxOrderedWindow {
 		return nil, fmt.Errorf("messaging: ordered writer window %d is outside [1, %d]", window, MaxOrderedWindow)
+	}
+	if err := refuseUnknownWriter(writer); err != nil {
+		return nil, err
 	}
 	if err := refuseTenantWide(suffix); err != nil {
 		return nil, err
@@ -137,10 +145,12 @@ func (nmgr *NatsManager) NewOrderedWriter(suffix string, window int) (OrderedWri
 		return nil, err
 	}
 	nmgr.metrics.initPublish(suffix, publishModePipelined)
-	log.Info().Str("suffix", suffix).Int("window", window).Msg("Added new ordered NATS writer")
+	nmgr.metrics.initWindow(suffix, string(writer))
+	log.Info().Str("suffix", suffix).Str("writer", string(writer)).Int("window", window).Msg("Added new ordered NATS writer")
 	return &orderedWriter{
 		nmgr:   nmgr,
 		suffix: suffix,
+		writer: writer,
 		// Registering is idempotent, and a service that forwards into a gated stream has
 		// normally registered its gate already, through the reader that parks on it; here it
 		// is fetched so the writer can count its volume.
@@ -257,7 +267,7 @@ func (o *orderedWriter) acquire() {
 	}
 	start := time.Now()
 	o.slots <- struct{}{}
-	o.nmgr.metrics.addWindowFull(o.suffix, time.Since(start))
+	o.nmgr.metrics.addWindowFull(o.suffix, string(o.writer), time.Since(start))
 }
 
 // Window is how many publishes the writer keeps awaiting their acknowledgement at once.
@@ -293,7 +303,7 @@ func (o *orderedWriter) settleLoop() {
 			var ack *nats.PubAck
 			ack, err = awaitPubAckResult(p.fut, p.deadline, p.callerBound)
 			if err == nil && ack != nil && ack.Duplicate {
-				o.nmgr.metrics.countDuplicate(o.suffix)
+				o.nmgr.metrics.countDuplicate(o.suffix, string(o.writer))
 			}
 			o.nmgr.metrics.observePublish(o.suffix, publishModePipelined, time.Since(p.sent))
 			brokerFailed = err != nil

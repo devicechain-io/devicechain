@@ -154,15 +154,15 @@ func TestOrderedWriterReportsItsWindow(t *testing.T) {
 }
 
 func windowFullSeconds(nmgr *NatsManager) float64 {
-	return testutil.ToFloat64(nmgr.metrics.publishWindowFull.WithLabelValues(streams.ResolvedEvents))
+	return testutil.ToFloat64(nmgr.metrics.publishWindowFull.WithLabelValues(streams.ResolvedEvents, string(WriterResolution)))
 }
 
 func windowFullWaits(nmgr *NatsManager) float64 {
-	return testutil.ToFloat64(nmgr.metrics.publishWindowFullWaits.WithLabelValues(streams.ResolvedEvents))
+	return testutil.ToFloat64(nmgr.metrics.publishWindowFullWaits.WithLabelValues(streams.ResolvedEvents, string(WriterResolution)))
 }
 
 func duplicateCount(nmgr *NatsManager) float64 {
-	return testutil.ToFloat64(nmgr.metrics.publishDuplicates.WithLabelValues(streams.ResolvedEvents))
+	return testutil.ToFloat64(nmgr.metrics.publishDuplicates.WithLabelValues(streams.ResolvedEvents, string(WriterResolution)))
 }
 
 // Time blocked on a full window is counted, and time with room in it is not.
@@ -263,5 +263,39 @@ func TestDuplicatePubAcksAreCounted(t *testing.T) {
 	}
 	if info.State.Msgs != 2 {
 		t.Fatalf("stream holds %d messages, want 2 (the republishes are duplicates)", info.State.Msgs)
+	}
+}
+
+// Two writers on ONE suffix count under their own writer label, not into one series: the
+// republishes the second writer makes are its duplicates and not the first's. Before the
+// label existed both writers shared the suffix's series and this read 2 for each.
+//
+// GUARD: kills "the writer label is dropped" and "every writer counted under one name".
+func TestWritersOnOneSuffixCountUnderTheirOwnLabel(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	nmgr, _ := metricsManager(t, srv)
+	quiet := newOrdered(t, nmgr, 8)
+	busy, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, WriterCapture, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := newOutcomes()
+	for i := 0; i < 3; i++ {
+		busy.Publish(orderedCtx(), Message{Value: []byte("a"), DedupID: "id-1"}, out.done(i))
+	}
+	if out.waitCount(3, 10*time.Second) != 3 {
+		t.Fatal("publishes were not settled")
+	}
+	busy.Close()
+	quiet.Close()
+
+	dup := func(w PublishWriter) float64 {
+		return testutil.ToFloat64(nmgr.metrics.publishDuplicates.WithLabelValues(streams.ResolvedEvents, string(w)))
+	}
+	if got := dup(WriterCapture); got != 2 {
+		t.Fatalf("the capture writer's two republishes counted %v duplicates under its own label, want 2", got)
+	}
+	if got := dup(WriterResolution); got != 0 {
+		t.Fatalf("the resolution writer published nothing and was charged %v duplicates", got)
 	}
 }

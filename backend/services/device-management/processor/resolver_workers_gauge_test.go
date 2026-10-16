@@ -26,11 +26,11 @@ func TestTheResolverWorkersGaugeReportsThePoolItRuns(t *testing.T) {
 	ms.UseMetricsRegistry(reg)
 	metrics := NewResolveMetrics(ms)
 
-	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, config.DefaultPublishWindow)
+	resolved, err := nmgr.NewOrderedWriter(streams.ResolvedEvents, messaging.WriterResolution, config.DefaultPublishWindow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, config.DefaultPublishWindow)
+	failed, err := nmgr.NewOrderedWriter(streams.FailedEvents, messaging.WriterResolution, config.DefaultPublishWindow)
 	if err != nil {
 		t.Fatal(err)
 	}

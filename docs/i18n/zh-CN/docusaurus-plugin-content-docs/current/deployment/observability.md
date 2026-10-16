@@ -235,7 +235,7 @@ DETECT/REACT 引擎（参见[事件处理](../concepts/event-processing.md)）�
 
 | 设置（`event-sources` 配置） | 默认值 | 作用 |
 | --- | --- | --- |
-| `externalMqtt.publishWindow` | `128` | 一个外部 MQTT 来源同时等待平台代理确认的事件数，范围 1 到 1024。超出范围或显式写 0，服务启动时即停止，不会被调整。发布速度不会超过该数值除以一次确认耗时。固定设置，启动时读取。**它同时决定 Pod 最多还会多丢多少。**该传输为至多一次：平台把消息放入解码队列后，就告知你的代理消息已到达，突然停止的 Pod 会丢失已取走但尚未存储的内容，即最多 105 条排队或解码中的消息，加上最多该数值条等待确认的事件。正常停止或把来源交给其他 Pod 时，会先等待这些事件存储完成（最多 8 秒）。可观察 `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events"}`：速率接近 1 表示窗口是发布的瓶颈。 |
+| `externalMqtt.publishWindow` | `128` | 一个外部 MQTT 来源同时等待平台代理确认的事件数，范围 1 到 1024。超出范围或显式写 0，服务启动时即停止，不会被调整。发布速度不会超过该数值除以一次确认耗时。固定设置，启动时读取。**它同时决定 Pod 最多还会多丢多少。**该传输为至多一次：平台把消息放入解码队列后，就告知你的代理消息已到达，突然停止的 Pod 会丢失已取走但尚未存储的内容，即最多 105 条排队或解码中的消息，加上最多该数值条等待确认的事件。正常停止或把来源交给其他 Pod 时，会先等待这些事件存储完成（最多 8 秒）。可观察 `devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix="inbound-events", writer="external-mqtt"}`：速率接近 1 表示窗口是发布的瓶颈。 |
 
 总和两分钟不为 1 时，`ExternalMqttSourceNotReadByOnePod`（warning）触发。0 表示无人读取，期间外部代理投递内容丢失；最近接管 Pod 日志说明原因。没有外部来源的安装不导出此序列，告警安静。
 
@@ -341,8 +341,8 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 | 设置（`event-sources` 配置） | 默认值 | 作用 |
 | --- | --- | --- |
-| `capture.publishWindow` | `512` | 单个 Pod 同时等待代理确认的事件数，范围 1 到 1024。超出范围（包括 0）时服务启动即失败，不会自动调整。接入速度不会超过该数值除以一次确认所需时间；在复制的代理上一次确认约需 8 到 11 毫秒，所以 128 会把单个 Pod 限制在约每秒 11,000 个事件，而 512 不会。当 `devicechain_eventsources_jetstream_publish_window_full_seconds_total` 每秒增长接近一秒时应调高。窗口中的每个事件连同其来源的设备消息都保留在内存中，直到被确认，因此内存增长量为窗口大小乘以一个事件与一个源消息的大小：普通负载下 512 约为几 MiB。Pod 崩溃后，这些源消息会在消费者确认等待期后重新投递，并以相同消息 ID 再次发布，流会识别出重复（见 `jetstream_publish_duplicates_total`）。固定设置，启动时读取。 |
-| `brokerPresence.publishWindow` | `128` | 单个 Pod 同时等待代理确认的在线状态转换数，范围 1 到 1024。超出范围（包括 0）时服务启动即失败，不会自动调整。代理在线状态读取器过去会等待每次确认后才处理下一个连接或断开，因此每个主题每秒只能处理约 88 次转换（复制的代理上每次约 11 毫秒），一个副本重连 10,000 台设备约需两分钟；设为 128 后约为每秒 11,000 次。N 台设备重连约需 N 乘以一次确认耗时再除以该值，并分摊到各副本：设为 128 时，10,000 台设备约需一秒。`devicechain_eventsources_jetstream_publish_window_full_seconds_total{suffix="inbound-events"}` 与设备接入写入器共用，因此无法看出是哪个窗口满了。代理不会确认或重新投递连接通知，所以该值同时是丢失上限：Pod 崩溃时，已接收但尚未确认的转换最多丢失这么多，另加仍在等待读取的通知，由对账在下一轮恢复（见下文）。无法写入的转换不会被悄悄丢弃：会记录日志并计入 `devicechain_eventsources_presence_events_failed_total`，连接写入失败的设备不会唤醒其暂存的命令。固定设置，启动时读取。 |
+| `capture.publishWindow` | `512` | 单个 Pod 同时等待代理确认的事件数，范围 1 到 1024。超出范围（包括 0）时服务启动即失败，不会自动调整。接入速度不会超过该数值除以一次确认所需时间；在复制的代理上一次确认约需 8 到 11 毫秒，所以 128 会把单个 Pod 限制在约每秒 11,000 个事件，而 512 不会。当 `devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer="capture"}` 每秒增长接近一秒时应调高。窗口中的每个事件连同其来源的设备消息都保留在内存中，直到被确认，因此内存增长量为窗口大小乘以一个事件与一个源消息的大小：普通负载下 512 约为几 MiB。Pod 崩溃后，这些源消息会在消费者确认等待期后重新投递，并以相同消息 ID 再次发布，流会识别出重复（见 `jetstream_publish_duplicates_total`）。固定设置，启动时读取。 |
+| `brokerPresence.publishWindow` | `128` | 单个 Pod 同时等待代理确认的在线状态转换数，范围 1 到 1024。超出范围（包括 0）时服务启动即失败，不会自动调整。代理在线状态读取器过去会等待每次确认后才处理下一个连接或断开，因此每个主题每秒只能处理约 88 次转换（复制的代理上每次约 11 毫秒），一个副本重连 10,000 台设备约需两分钟；设为 128 后约为每秒 11,000 次。N 台设备重连约需 N 乘以一次确认耗时再除以该值，并分摊到各副本：设为 128 时，10,000 台设备约需一秒。可观察 `devicechain_eventsources_jetstream_publish_window_full_seconds_total{suffix="inbound-events", writer="presence"}`：速率接近 1 表示该窗口是在线状态读取的瓶颈。代理不会确认或重新投递连接通知，所以该值同时是丢失上限：Pod 崩溃时，已接收但尚未确认的转换最多丢失这么多，另加仍在等待读取的通知，由对账在下一轮恢复（见下文）。无法写入的转换不会被悄悄丢弃：会记录日志并计入 `devicechain_eventsources_presence_events_failed_total`，连接写入失败的设备不会唤醒其暂存的命令。固定设置，启动时读取。 |
 
 这样丢失的转换由下一轮对账修复：对账会比较代理上的实时连接与已存储的状态。每个副本每隔 `brokerPresence.reconcileSeconds`（默认 300）运行一轮，启动时也运行一次。因此最坏情况下，连接通知丢失的设备会在最多一个间隔（默认五分钟）加上一轮对账耗时内**显示离线而实际在线**；断开通知丢失的设备则在同样时长内显示在线。替换 Pod 启动后立即运行第一轮。默认值取 128 而不是接入写入器的 512，是因为在线状态以与设备规模相当的突发到达，而非稳定流：128 已能在约一秒内处理 10,000 台设备的重连，更大的窗口只会增加 Pod 在突发中途崩溃时留给对账的量，却不会让重连明显更快。
 
@@ -425,9 +425,9 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 以下没有告警，但发布缓慢时应查看：
 
 - **`devicechain_<area>_jetstream_publish_duration_seconds{suffix, mode}`**：从发送到服务处理代理确认或失败的发布时长，按目标流区分。`sync` 为单独等待发布；`pipelined` 为多条同时执行，例如设备管理发布解析事件、事件来源转发平台 MQTT 设备事件。流水线时长还包括等待所有更早发布完成、失败后暂停，因此两模式不能直接比较。无响应同步发布在五秒上限计数，`le="5"` 桶以外即触及上限；流水线发布可超过五秒而未触限。
-- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix}`**：流水线写入器因整个窗口都在等待确认而无法发送的秒数。速率接近 1 表示限制发布的是窗口而非代理，应调高 `resolution.publishWindow`（`device-management`）或 `capture.publishWindow`（`event-sources`）；接近 0 表示窗口有余量。
-- **`devicechain_<area>_jetstream_publish_window_full_total{suffix}`**：发现窗口已满而必须等待的发送次数。上一项的秒数除以该值即为平均等待时间。
-- **`devicechain_<area>_jetstream_publish_duplicates_total{suffix}`**：代理确认为已持有相同消息 ID 的重复消息的发布数。消息只存储一次。Pod 重启或确认丢失后该值上升，是流在吸收重新发布，并非故障。
+- **`devicechain_<area>_jetstream_publish_window_full_seconds_total{suffix, writer}`**：流水线写入器因整个窗口都在等待确认而无法发送的秒数。速率接近 1 表示限制发布的是窗口而非代理，应调高 `resolution.publishWindow`（`device-management`）或 `capture.publishWindow`（`event-sources`）；接近 0 表示窗口有余量。多个写入器可能共用同一后缀，`writer` 标明是哪一个：`resolution`（`device-management`）、`capture`、`external-mqtt` 和 `presence`（`event-sources`）以及 `sparkplug`（`sparkplug-ingest`）。所有外部 MQTT 来源都计入 `external-mqtt`。不指定 `writer` 的查询可用 `sum by (suffix)` 读取总量。
+- **`devicechain_<area>_jetstream_publish_window_full_total{suffix, writer}`**：发现窗口已满而必须等待的发送次数。上一项的秒数除以该值即为平均等待时间。
+- **`devicechain_<area>_jetstream_publish_duplicates_total{suffix, writer}`**：代理确认为已持有相同消息 ID 的重复消息的发布数。消息只存储一次。Pod 重启或确认丢失后该值上升，是流在吸收重新发布，并非故障。
 
 ## 停止响应的缓存 {#kv-caches}
 

@@ -60,8 +60,14 @@ func countCredentialStatements(t *testing.T, db *gorm.DB) *credentialStatements 
 // instance, with a metrics registry of its own.
 func startNatsManager(t *testing.T, host string, port uint32, instanceId string) *messaging.NatsManager {
 	t.Helper()
+	return startNatsManagerOn(t, host, port, instanceId, prometheus.NewRegistry())
+}
+
+// startNatsManagerOn is startNatsManager with its metrics on reg, for a test that gathers them.
+func startNatsManagerOn(t *testing.T, host string, port uint32, instanceId string, reg *prometheus.Registry) *messaging.NatsManager {
+	t.Helper()
 	ms := &core.Microservice{InstanceId: instanceId, FunctionalArea: "device-management"}
-	ms.UseMetricsRegistry(prometheus.NewRegistry())
+	ms.UseMetricsRegistry(reg)
 	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
 	nmgr := messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(),
 		func(*messaging.NatsManager) error { return nil })

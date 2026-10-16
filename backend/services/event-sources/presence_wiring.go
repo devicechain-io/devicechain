@@ -67,7 +67,7 @@ func requirePresenceWriter() error {
 // adapter.Emitter), so a refusal could only ever be a wrong one. It is a function of its own
 // so a wiring test can check the configured window reaches the writer.
 func newPresenceWriter(nmgr *messaging.NatsManager) (messaging.AsyncWriter, error) {
-	return nmgr.NewAsyncWriter(streams.InboundEvents, Configuration.BrokerPresence.PublishWindowSize(), false)
+	return nmgr.NewAsyncWriter(streams.InboundEvents, messaging.WriterPresence, Configuration.BrokerPresence.PublishWindowSize(), false)
 }
 
 // buildPresenceWriter builds PresenceWriter unless the tap is disabled by configuration, in
