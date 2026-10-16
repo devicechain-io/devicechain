@@ -108,7 +108,7 @@ The linear and level gauges, battery, status light, signal bars, compass and pro
 one measurement of one device. Thresholds mark their bands along the scale, as on the linear gauge
 and the thermometer above, and a reading in any band but the normal one takes that band's color.
 
-<GuideShot id="dashboard-stat-cards" alt="Eight stat cards for wl-sensor-01: Average temperature, Peak temperature (in red), Lowest temperature and Readings, each labeled with its statistic and 1h; then Humidity total, Latest temperature showing No data, Average, last 5 min labeled Average · 5m, and Peak (smallest)." />
+<GuideShot id="dashboard-stat-cards" alt="Eight stat cards for wl-sensor-01: Average temperature, Peak temperature (in red), Lowest temperature and Readings, each labeled with its statistic and 1h; then Humidity total, Latest temperature showing its reading labeled Latest with how long ago it arrived, Average, last 5 min labeled Average · 5m, and Peak (smallest)." />
 
 A stat card shows one figure over the dashboard's time range, labeled with the statistic and the
 span it covers, such as *Maximum · 1h*. A card with its own **Time span** keeps it, like *Average,
@@ -131,7 +131,7 @@ heading to sort by it. Its settings are described under [Configuring a widget](#
 widget**, **Paste**, **Preview**, **Export**, **History**, **Save** and **Done**, and a bar of
 layout settings appears.
 
-<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows a Live indicator, Undo and Redo, Add widget, Paste, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 12, Min cell 56, Gutter 8, Padding 0, Size Fill area, Time range 1h and Density Comfortable. Widgets are outlined on the canvas; some show a dash or No data yet." />
+<GuideShot id="dashboard-edit" alt="The Widget Lab dashboard in edit mode. The header shows a Live indicator, Undo and Redo, Add widget, Paste, Preview, Export, History, a disabled Save and Done. A settings bar shows Title Widget Lab, Columns 12, Min cell 56, Gutter 8, Padding 0, Size Fill area, Time range 1h and Density Comfortable. Widgets are outlined on the canvas, each showing its latest reading." />
 
 - **Title** is the dashboard's name.
 - **Columns**, **Min cell**, **Gutter** and **Padding** set the grid widgets snap to. The cells
@@ -202,10 +202,10 @@ configure it.
 ### Configuring a widget
 
 Select a widget on the canvas to open its settings on the right. **Grid**, **Relative to…**,
-**Duplicate**, **Copy** and **Delete** appear on the widget itself, with handles on its edges and
-corners for resizing.
+**Duplicate**, **Copy** and **Delete** appear in a toolbar just above the widget (below it when
+there is no room above), and handles on its edges and corners resize it.
 
-<GuideShot id="dashboard-widget-config" alt="Edit mode with the Temperature latest card selected, showing Grid, Relative to…, Duplicate, Copy and Delete buttons and resize handles on the widget. The settings panel on the right, titled Latest card, shows Title Temperature, a Context section with Binds to set to Scoped to a parent, Parent slot zone and Strategy Manual pick, and the start of a Data source section." />
+<GuideShot id="dashboard-widget-config" alt="Edit mode with the Temperature latest card selected: Grid, Relative to…, Duplicate, Copy and Delete buttons in a toolbar just above the widget, and resize handles on its edges and corners. The settings panel on the right, titled Latest card, shows Title Temperature, a Context section with Binds to set to Scoped to a parent, Parent slot zone and Strategy Manual pick, and the start of a Data source section." />
 
 The settings depend on the widget. Common ones:
 
@@ -342,7 +342,7 @@ Generated data stays in your browser and is never saved.
 **History** opens the version history. A dashboard's draft is what you edit; a **version** is a
 frozen copy of the draft that viewers are shown.
 
-<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 2, marked Live, and version 1, both published by sam.rivera@widgetlab.example. Version 1 has a Make live button, and each version has a Roll back button, cut off at the right edge of the panel." />
+<GuideShot id="dashboard-history" alt="The Version history panel. A Publish current draft section has an optional Label field, a Description field, the note that publishing makes the new version the one viewers are shown, and a Publish version button. Below, Published versions lists version 2, marked Live, and version 1, both published by sam.rivera@widgetlab.example. Version 1 has a Make live button, and each version has a Roll back button." />
 
 - **Publish current draft.** Add an optional label, such as a release name, and a description, then
   choose **Publish version**. The new version goes live straight away. Save your changes first: the

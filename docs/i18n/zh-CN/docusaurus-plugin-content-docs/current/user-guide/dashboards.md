@@ -76,7 +76,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 线性仪表、液位仪表、电池、状态灯、信号格、罗盘和进度环各显示一台设备的一个测量值。阈值会在刻度上标出各自的区间，如上图中的线性仪表和温度计；读数落在正常区间以外的任何区间时，会显示该区间的颜色。
 
-<GuideShot id="dashboard-stat-cards" alt="wl-sensor-01 的八张统计卡片：Average temperature、Peak temperature（红色）、Lowest temperature 和 Readings，各自标有统计量和 1h；然后是 Humidity total、显示 No data 的 Latest temperature、标有 Average · 5m 的 Average, last 5 min，以及 Peak (smallest)。" />
+<GuideShot id="dashboard-stat-cards" alt="wl-sensor-01 的八张统计卡片：Average temperature、Peak temperature（红色）、Lowest temperature 和 Readings，各自标有统计量和 1h；然后是 Humidity total、显示读数（标为 Latest）及其到达时间的 Latest temperature、标有 Average · 5m 的 Average, last 5 min，以及 Peak (smallest)。" />
 
 统计卡片显示仪表板时间范围内的一个数值，并标出统计量及其覆盖的跨度，例如 *Maximum · 1h*。设置了自己 **Time span** 的卡片会保留该跨度，如上图中的 *Average, last 5 min*。
 
@@ -92,7 +92,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **Edit** 会把仪表板变成画布。按钮变为 **Undo**（撤销）、**Redo**（重做）、**Add widget**（添加组件）、**Paste**（粘贴）、**Preview**、**Export**、**History**、**Save**（保存）和 **Done**（完成），同时出现一个布局设置栏。
 
-<GuideShot id="dashboard-edit" alt="编辑模式下的 Widget Lab 仪表板。页眉显示 Live 指示器、Undo 和 Redo、Add widget、Paste、Preview、Export、History、不可用的 Save 和 Done。设置栏显示 Title Widget Lab、Columns 12、Min cell 56、Gutter 8、Padding 0、Size Fill area、Time range 1h 和 Density Comfortable。组件在画布上带有轮廓，有些显示短横线或 No data yet。" />
+<GuideShot id="dashboard-edit" alt="编辑模式下的 Widget Lab 仪表板。页眉显示 Live 指示器、Undo 和 Redo、Add widget、Paste、Preview、Export、History、不可用的 Save 和 Done。设置栏显示 Title Widget Lab、Columns 12、Min cell 56、Gutter 8、Padding 0、Size Fill area、Time range 1h 和 Density Comfortable。组件在画布上带有轮廓，各自显示最新读数。" />
 
 - **Title**（标题）是仪表板的名称。
 - **Columns**（列数）、**Min cell**（最小单元格）、**Gutter**（间隔）和 **Padding**（边距）设置组件吸附的网格。单元格是正方形，会拉伸以填满宽度；**Min cell** 是单元格允许的最小尺寸（像素）。**Gutter** 是单元格之间的间距，**Padding** 是仪表板四周的边距。
@@ -129,9 +129,9 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ### 配置组件 {#configuring-a-widget}
 
-在画布上选择一个组件，其设置会在右侧打开。**Grid**、**Relative to…**、**Duplicate**（复制一份）、**Copy**（复制）和 **Delete** 显示在组件本身上，其边缘和角上的手柄用于调整大小。
+在画布上选择一个组件，其设置会在右侧打开。**Grid**、**Relative to…**、**Duplicate**（复制一份）、**Copy**（复制）和 **Delete** 显示在组件正上方的工具栏中（上方没有空间时显示在下方），其边缘和角上的手柄用于调整大小。
 
-<GuideShot id="dashboard-widget-config" alt="编辑模式下选中了 Temperature latest card，组件上显示 Grid、Relative to…、Duplicate、Copy 和 Delete 按钮以及调整大小的手柄。右侧标题为 Latest card 的设置面板显示 Title Temperature、Context 部分（Binds to 设为 Scoped to a parent，Parent slot 为 zone，Strategy 为 Manual pick），以及 Data source 部分的开头。" />
+<GuideShot id="dashboard-widget-config" alt="编辑模式下选中了 Temperature latest card，组件正上方的工具栏中显示 Grid、Relative to…、Duplicate、Copy 和 Delete 按钮，组件的边缘和角上有调整大小的手柄。右侧标题为 Latest card 的设置面板显示 Title Temperature、Context 部分（Binds to 设为 Scoped to a parent，Parent slot 为 zone，Strategy 为 Manual pick），以及 Data source 部分的开头。" />
 
 设置因组件而异。常见的有：
 
@@ -190,7 +190,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 **History** 会打开版本历史。仪表板的草稿是你编辑的内容；**版本**是草稿的冻结副本，展示给查看者。
 
-<GuideShot id="dashboard-history" alt="Version history 面板。Publish current draft 部分有可选的 Label 输入框、Description 输入框、说明发布会使新版本成为查看者所见版本的提示，以及 Publish version 按钮。下方的 Published versions 列出标记为 Live 的版本 2 和版本 1，均由 sam.rivera@widgetlab.example 发布。版本 1 带有 Make live 按钮，每个版本都有 Roll back 按钮，在面板右边缘被截断。" />
+<GuideShot id="dashboard-history" alt="Version history 面板。Publish current draft 部分有可选的 Label 输入框、Description 输入框、说明发布会使新版本成为查看者所见版本的提示，以及 Publish version 按钮。下方的 Published versions 列出标记为 Live 的版本 2 和版本 1，均由 sam.rivera@widgetlab.example 发布。版本 1 带有 Make live 按钮，每个版本都有 Roll back 按钮。" />
 
 - **Publish current draft**（发布当前草稿）。可以添加可选的标签（例如发布名称）和描述，然后选择 **Publish version**（发布版本）。新版本立即生效。请先保存更改：控制台发布的是已保存的草稿。
 - **Published versions**（已发布版本）列出每个版本以及发布的时间和发布者。生效的版本标有 **Live**（生效中）。

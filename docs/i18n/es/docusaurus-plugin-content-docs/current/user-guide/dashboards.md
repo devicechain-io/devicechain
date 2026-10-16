@@ -110,7 +110,7 @@ brújula y el anillo de progreso muestran cada uno una medición de un dispositi
 marcan sus bandas a lo largo de la escala, como en el indicador lineal y el termómetro de arriba, y
 una lectura en cualquier banda que no sea la normal toma el color de esa banda.
 
-<GuideShot id="dashboard-stat-cards" alt="Ocho tarjetas de estadística de wl-sensor-01: Average temperature, Peak temperature (en rojo), Lowest temperature y Readings, cada una con su estadística y 1h; después Humidity total, Latest temperature, Average, last 5 min con Promedio · 5m, y Peak (smallest)." />
+<GuideShot id="dashboard-stat-cards" alt="Ocho tarjetas de estadística de wl-sensor-01: Average temperature, Peak temperature (en rojo), Lowest temperature y Readings, cada una con su estadística y 1h; después Humidity total, Latest temperature con su lectura rotulada Último y el tiempo desde que llegó, Average, last 5 min con Promedio · 5m, y Peak (smallest)." />
 
 Una tarjeta de estadística muestra una cifra sobre el intervalo de tiempo del panel, con la
 estadística y el intervalo que abarca, por ejemplo «Máximo · 1h». Una tarjeta con su propio **Intervalo
@@ -134,7 +134,7 @@ el encabezado de una columna para ordenar por ella. Sus ajustes se describen en
 **Añadir widget**, **Pegar**, **Vista previa**, **Exportar**, **Historial**, **Guardar** y
 **Hecho**, y aparece una barra de ajustes de diseño.
 
-<GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra un indicador En vivo, Deshacer y Rehacer, Añadir widget, Pegar, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 12, Celda mínima 56, Separación 8, Margen 0, Tamaño Llenar área, Intervalo de tiempo 1h y Densidad Cómoda. Los widgets aparecen enmarcados en el lienzo; algunos muestran un guion o el texto de que aún no hay datos." />
+<GuideShot id="dashboard-edit" alt="El panel Widget Lab en modo de edición. La cabecera muestra un indicador En vivo, Deshacer y Rehacer, Añadir widget, Pegar, Vista previa, Exportar, Historial, Guardar desactivado y Hecho. Una barra de ajustes muestra Título Widget Lab, Columnas 12, Celda mínima 56, Separación 8, Margen 0, Tamaño Llenar área, Intervalo de tiempo 1h y Densidad Cómoda. Los widgets aparecen enmarcados en el lienzo, cada uno con su última lectura." />
 
 - **Título** es el nombre del panel.
 - **Columnas**, **Celda mínima**, **Separación** y **Margen** definen la cuadrícula a la que se
@@ -210,10 +210,10 @@ hueco libre del lienzo y después configúralo.
 ### Configurar un widget
 
 Selecciona un widget en el lienzo para abrir sus ajustes a la derecha. **Cuadrícula**, **Relativo
-a…**, **Duplicar**, **Copiar** y **Eliminar** aparecen sobre el propio widget, con tiradores en sus
-bordes y esquinas para cambiar su tamaño.
+a…**, **Duplicar**, **Copiar** y **Eliminar** aparecen en una barra justo encima del widget (debajo
+si no hay espacio encima), y los tiradores de sus bordes y esquinas cambian su tamaño.
 
-<GuideShot id="dashboard-widget-config" alt="Modo de edición con la tarjeta de último valor Temperature seleccionada, con los botones Cuadrícula, Relativo a…, Duplicar, Copiar y Eliminar y los tiradores de tamaño sobre el widget. El panel de ajustes de la derecha muestra el título Temperature, una sección Contexto con Se vincula a en Con ámbito a un principal, Slot principal zone y Estrategia Selección manual, y el comienzo de una sección Fuente de datos." />
+<GuideShot id="dashboard-widget-config" alt="Modo de edición con la tarjeta de último valor Temperature seleccionada: los botones Cuadrícula, Relativo a…, Duplicar, Copiar y Eliminar en una barra justo encima del widget, y los tiradores de tamaño en sus bordes y esquinas. El panel de ajustes de la derecha muestra el título Temperature, una sección Contexto con Se vincula a en Con ámbito a un principal, Slot principal zone y Estrategia Selección manual, y el comienzo de una sección Fuente de datos." />
 
 Los ajustes dependen del widget. Los más comunes:
 
@@ -339,7 +339,7 @@ Los datos generados se quedan en tu navegador y nunca se guardan.
 **Historial** abre el historial de versiones. El borrador de un panel es lo que editas; una
 **versión** es una copia congelada del borrador que se muestra a los espectadores.
 
-<GuideShot id="dashboard-history" alt="El panel Historial de versiones. Una sección Publicar borrador actual tiene un campo Etiqueta opcional, un campo de descripción, la nota de que al publicar la versión nueva pasa a ser la que ven los espectadores y un botón Publicar versión. Debajo, Versiones publicadas muestra la versión 2, marcada como Activa, y la versión 1, ambas publicadas por sam.rivera@widgetlab.example. La versión 1 tiene un botón Activar, y cada versión tiene un botón Revertir, cortado en el borde derecho del panel." />
+<GuideShot id="dashboard-history" alt="El panel Historial de versiones. Una sección Publicar borrador actual tiene un campo Etiqueta opcional, un campo de descripción, la nota de que al publicar la versión nueva pasa a ser la que ven los espectadores y un botón Publicar versión. Debajo, Versiones publicadas muestra la versión 2, marcada como Activa, y la versión 1, ambas publicadas por sam.rivera@widgetlab.example. La versión 1 tiene un botón Activar, y cada versión tiene un botón Revertir." />
 
 - **Publicar borrador actual.** Añade una etiqueta opcional, como el nombre de una entrega, y una
   descripción, y elige **Publicar versión**. La versión nueva queda activa de inmediato. Guarda antes
