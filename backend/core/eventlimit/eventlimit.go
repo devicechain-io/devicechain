@@ -26,7 +26,8 @@ package eventlimit
 //     could detect; refusing tells the device the count, the limit and the remedy.
 //   - a protocol gateway (Sparkplug, LwM2M) whose devices legitimately report more in one
 //     message SPLITS it into consecutive events of at most this many (Split below), and
-//     drops nothing.
+//     drops nothing — up to the gateway's own bound on one message, which is a separate
+//     limit (Sparkplug's host.MaxMetricsPerMessage refuses a message over it whole).
 //
 // It bounds ONE EVENT — its stored rows, the parameters of the statement that inserts them,
 // and the work one event costs downstream. It does not bound a message's total fan-out on

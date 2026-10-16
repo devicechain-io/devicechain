@@ -540,8 +540,11 @@ before the lease is released.
 on this path by splitting a message, not refusing it. A DDATA carrying thousands of metrics becomes
 several events, and still one stored reading per metric: each is its own row, state update and rule
 evaluation on the detection engine every tenant shares. Splitting bounds each event, and the ceiling
-bounds readings per second, but nothing bounds one message's total. Bound the metric count per
-publish at the edge node.
+bounds readings per second. One message is bounded too, at 16,384 metrics: a message carrying more
+has none of its readings stored, its metrics are counted in `samples_skipped_total{reason="oversize"}`,
+and the service logs a warning naming the topic. The message still counts for the session, so a
+birth over the limit still connects the node and declares its aliases, and the node's later DATA is
+read as usual. Bound the metric count per publish at the edge node.
 
 The [tenant lifecycle gate](./tenant-deletion.md) still applies. Traffic for a deleting tenant is
 refused on this path like any other, and counted in `tenant_deleted_dropped_total`.
