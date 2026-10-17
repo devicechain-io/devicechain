@@ -239,3 +239,48 @@ func deviceIdByToken(t *testing.T, api *Api, ctx context.Context, token string) 
 	require.NoError(t, api.RDB.DB(ctx).Where("token = ?", token).First(&d).Error)
 	return d.ID
 }
+
+// 🔴 A DEVICE THAT KEEPS CHANGING DOES NOT MOVE TO THE BACK OF THE QUEUE. The drain pages
+// oldest-first, so a re-queue that refreshed the row's age would let a churning device be
+// passed over, pass after pass, for as long as the backlog outran a page: the one device
+// whose owners keep moving would be the one whose fact never goes out.
+func TestAReQueuedDeviceKeepsItsPlaceInTheBacklog(t *testing.T) {
+	api, ctx, _ := ownershipFixture(t)
+	_, err := api.DrainOwnershipFacts(context.Background(), OwnershipDrainPageSize)
+	require.NoError(t, err)
+	require.Empty(t, queuedOwnership(t, api))
+
+	queue := func(id uint) {
+		require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			_, err := queueOwnershipOnTx(tx, []uint{id})
+			return err
+		}))
+	}
+	const hot, cold1, cold2, cold3 = 9001, 9002, 9003, 9004
+	for _, id := range []uint{hot, cold1, cold2, cold3} {
+		queue(id)
+		time.Sleep(5 * time.Millisecond)
+	}
+	for range 5 {
+		queue(hot)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	_, err = api.DrainOwnershipFacts(context.Background(), 2)
+	require.NoError(t, err)
+	left := queuedOwnership(t, api)
+	require.Len(t, left, 2)
+	require.Equal(t, []uint{cold2, cold3}, []uint{left[0].DeviceId, left[1].DeviceId},
+		"the device queued first was not in the first page: its re-queues moved it behind newer requests")
+}
+
+// A fact is dated by the clock the pass was given. On an engine with no clock of its own that
+// is the process clock, replaceable so a test can order two passes whose replicas disagree.
+func TestAFactIsDatedByTheInjectedClockWhereTheEngineHasNone(t *testing.T) {
+	api, ctx, pub := ownershipFixture(t)
+	at := time.Date(2031, 5, 6, 7, 8, 9, 0, time.UTC)
+	api.ownershipNow = func() time.Time { return at }
+	assignDozer(t, api, ctx, "acme-mining")
+	require.Equal(t, 1, pub.count())
+	require.True(t, pub.last().ChangedTime.Equal(at), "fact dated %v, want the injected %v", pub.last().ChangedTime, at)
+}

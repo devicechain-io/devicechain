@@ -119,8 +119,12 @@ func queueOwnershipOnTx(tx *gorm.DB, deviceIds []uint) (ownershipQueued, error) 
 		rows[i] = PendingOwnershipFact{DeviceId: id, Generation: rand.Int64(), RequestedAt: now}
 	}
 	err := rdb.CreateChunked(tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "device_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"generation", "requested_at"}),
+		Columns: []clause.Column{{Name: "tenant_id"}, {Name: "device_id"}},
+		// requested_at is deliberately NOT refreshed: the drain pages oldest-first, so a
+		// device re-queued over and over would keep moving to the back of a backlog larger
+		// than a page and a cold device behind it would be passed over for ever. The row
+		// keeps the time of the request that first queued it, which is the one waiting longest.
+		DoUpdates: clause.AssignmentColumns([]string{"generation"}),
 	}), &rows).Error
 	if err != nil {
 		return ownershipQueued{}, fmt.Errorf("queueing the ownership facts of %d device(s): %w", len(ids), err)
@@ -218,6 +222,13 @@ func (e *ownershipPublishError) Unwrap() error { return e.err }
 // keeps an event received before the change from overriding it (see device-state
 // model/ownership.go).
 //
+// 🔴 THE TIME IS THE DATABASE'S, NOT THIS REPLICA'S. The drain's advisory lock passes between
+// replicas, and device-state applies a fact only if it is strictly later than what it holds.
+// Stamped from each holder's own wall clock, a skew between two consecutive holders larger
+// than the gap between their passes would give the LATER fact the EARLIER time and have it
+// refused. Every replica reads the one clock the database keeps, so the facts are ordered in
+// the order they were read.
+//
 // A row is deleted only where its Generation is still what this pass read; a row re-queued
 // meanwhile stays, and is announced again with the newer state. A device that no longer
 // exists is deleted with no fact — the entity-deleted fact is its last word.
@@ -234,7 +245,11 @@ func (api *Api) drainTenantOwnership(ctx context.Context, pageSize int) (publish
 	for i, r := range rows {
 		ids[i] = r.DeviceId
 	}
-	facts, err := api.ownershipFacts(ctx, ids, time.Now().UTC())
+	changed, err := api.ownershipChangedTime(db)
+	if err != nil {
+		return 0, 0, fmt.Errorf("reading the database clock: %w", err)
+	}
+	facts, err := api.ownershipFacts(ctx, ids, changed)
 	if err != nil {
 		return 0, 0, fmt.Errorf("reading the anchors of %d queued device(s): %w", len(ids), err)
 	}
@@ -262,6 +277,24 @@ func (api *Api) drainTenantOwnership(ctx context.Context, pageSize int) (publish
 		return published, removed, fmt.Errorf("removing %d published ownership fact(s): %w", len(done), err)
 	}
 	return published, removed, pubErr
+}
+
+// ownershipChangedTime is the time a fact is stamped with: the database server's clock, read
+// before the anchors. On an engine with no such clock (the SQLite the unit tests run on, which
+// has a single process and so no skew to order) it is the process clock, which api.ownershipNow
+// lets a test replace.
+func (api *Api) ownershipChangedTime(db *gorm.DB) (time.Time, error) {
+	if db.Dialector.Name() != "postgres" {
+		if api.ownershipNow != nil {
+			return api.ownershipNow().UTC(), nil
+		}
+		return time.Now().UTC(), nil
+	}
+	var now time.Time
+	if err := db.Raw("SELECT clock_timestamp()").Scan(&now).Error; err != nil {
+		return time.Time{}, err
+	}
+	return now.UTC(), nil
 }
 
 // deletePublishedOwnership deletes the given rows where each still holds the Generation the

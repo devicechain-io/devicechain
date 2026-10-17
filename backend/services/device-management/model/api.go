@@ -134,6 +134,9 @@ type Api struct {
 	// owners queued it (ADR-081, ownership_outbox.go). Writes queue the fact whether or not
 	// it is set; the drain refuses to run without it rather than discard what is queued.
 	DeviceOwnershipPublisher DeviceOwnershipPublisher
+	// ownershipNow replaces the process clock where the engine keeps no clock of its own
+	// (ownershipChangedTime). Tests only.
+	ownershipNow func() time.Time
 
 	// DeviceAttributePublisher emits device-attribute events (ADR-051 slice 4c-3) when a
 	// numeric, platform-set attribute of a device is upserted or deleted, so
