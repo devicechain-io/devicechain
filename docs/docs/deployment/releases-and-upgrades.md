@@ -3516,7 +3516,9 @@ Nothing needs doing.
 ### v0.23.0 — customer users with scoped access, and an MQTT ingest that loses less {#v0230-upgrade}
 
 `v0.23.0` is an in-place upgrade from `v0.22.0`: `dcctl install` for the cluster, then
-`dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Unlike
+`dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install`
+the settings the cluster was installed with, such as `--ha` and `--database-node-selector`, as well as
+the new `--version`: it refuses to change a cluster's settings while an instance runs on it. Unlike
 [`v0.22.0`](#v0220-upgrade) it **does run migrations**: seven services add columns, indexes or
 tables, and `user-management` replaces the unique index on role tokens with two, one for the
 operator's catalogue and one for each tenant's own roles. None of them rewrites existing rows, the
@@ -3570,9 +3572,10 @@ changes for somebody:
    [Customer users, scoped roles and the permissions behind them](#v0230-customer-users).
 3. **If you rely on threshold rules**, read [Threshold alarms and late readings](#v0230-threshold)
    so an alarm that now raises is not a surprise.
-4. **Check every tier's `calculatedMetricsPerProfile`.** If any is above 0, set it to 0, or do not
-   publish a calculated metric, until the rollout is over. See
-   [Calculated metrics](#v0230-calculated-metrics).
+4. **Plan to leave every tier's `calculatedMetricsPerProfile` at 0 until the rollout is over.**
+   `v0.22.0` has no such setting, so every tier starts at 0, and nothing needs changing before the
+   upgrade. Do not raise it, or publish a calculated metric, until every `device-management` and
+   `event-management` replica runs this release. See [Calculated metrics](#v0230-calculated-metrics).
 
 #### During the upgrade {#v0230-during}
 
@@ -3766,6 +3769,11 @@ metrics are in use carries the same duplicate risk.
 ##### New alerts and metrics {#v0230-observability}
 
 - `JetStreamCaptureBacklogWillOverflow` (critical), described above;
+- `JetStreamCaptureBacklogGrowing` (warning), its early warning: the same backlog check over a
+  twenty-minute horizon;
+- `JetStreamCaptureLeaderChanged` (warning): the capture stream changed leader while events were
+  arriving, so MQTT events published during the change may have been acknowledged and lost (see
+  [Known limitations](#v0230-known-limitations));
 - `DeviceStateDroppingEvents` (warning): device-state discarded an event after its last delivery
   attempt, which leaves a device's connectivity, a reading or its position stale until a newer
   event arrives;
@@ -3779,7 +3787,8 @@ metrics are in use carries the same duplicate risk.
 - `devicechain_sparkplugingest_presence_probes_total` and
   `devicechain_sparkplugingest_presence_probe_disconnects_total` for the Host's liveness probes;
 - `jetstream_consumer_leader_local`, `jetstream_publish_leader_local` and
-  `jetstream_consumer_leader_moves_total` for leader placement.
+  `jetstream_consumer_leader_moves_total` for leader placement, and
+  `jetstream_stream_leader_changes_total` for a change of a stream's leader.
 
 Every result of the shared processor counters is now exported at zero, so the first discard after
 a pod's first scrape is visible to an alert. No metric was renamed or removed.
@@ -3798,8 +3807,9 @@ guarantee for yours.
 - **MQTT QoS 1 publishes can be acknowledged and then lost, uncounted, while the capture stream
   changes leader under heavy load.** At 12,000 events a second the stream's leader stepped down
   once, and the events published in the five seconds the stream had no leader were lost after the
-  devices had their acknowledgement. No counter or alert reported it. Work to remove this is in
-  progress.
+  devices had their acknowledgement. No counter records the lost events. `JetStreamCaptureLeaderChanged`
+  reports that a leader change happened while events were arriving, and its time bounds the window to
+  check in your devices' own records. Work to remove this is in progress.
 - **The sustained MQTT rate that cluster kept up with was about 6,000 events a second**, bound by
   the broker. At 12,000 a second the backlog grew; above the capture stream's ceiling the oldest
   events are discarded, and that loss is counted and alerted. HTTP ingest on the same cluster

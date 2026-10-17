@@ -2059,7 +2059,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 ### v0.23.0：带范围限制的客户用户，以及丢事件更少的 MQTT 接入 {#v0230-upgrade}
 
 `v0.23.0` 可从 `v0.22.0` 原地升级：先为集群执行 `dcctl install`，再为每个实例执行
-`dcctl upgrade`，如 [v0.17.0](#v0170-upgrade) 所述。与 [`v0.22.0`](#v0220-upgrade) 不同，本版本
+`dcctl upgrade`，如 [v0.17.0](#v0170-upgrade) 所述。除新的 `--version` 外，还要把集群安装时用的设置
+（例如 `--ha` 和 `--database-node-selector`）一并传给 `dcctl install`：只要集群上还有实例在运行，它就拒绝
+更改集群的设置。与 [`v0.22.0`](#v0220-upgrade) 不同，本版本
 **会执行迁移**：七个服务新增了列、索引或表，`user-management` 还把角色令牌上的唯一索引换成两个：一个用于
 运营方的角色目录，一个用于各租户自己的角色。迁移都不会改写已有的行，仅有的回填是记录已存在的客户和
 设备组的令牌，并且每项迁移被中断后都可以安全地重新运行。从 `v0.21.x` 或更早版本升级时，请先阅读
@@ -2100,8 +2102,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
    [客户用户、受限角色及其背后的权限](#v0230-customer-users)。
 3. **如果你依赖阈值规则**，请阅读[阈值告警与迟到读数](#v0230-threshold)，避免对现在会触发的告警
    感到意外。
-4. **检查每个层级的 `calculatedMetricsPerProfile`。** 如果有大于 0 的，请在滚动升级结束前把它设为 0，
-   或者不要发布计算指标。见[计算指标](#v0230-calculated-metrics)。
+4. **准备在滚动升级结束前让每个层级的 `calculatedMetricsPerProfile` 保持为 0。** `v0.22.0` 没有这项
+   设置，所以每个层级都从 0 开始，升级前无需改动任何东西。在每个 `device-management` 和
+   `event-management` 副本都运行本版本之前，不要调高它，也不要发布计算指标。见[计算指标](#v0230-calculated-metrics)。
 
 #### 升级期间 {#v0230-during}
 
@@ -2245,6 +2248,9 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 ##### 新增告警与指标 {#v0230-observability}
 
 - `JetStreamCaptureBacklogWillOverflow`（严重），见上文；
+- `JetStreamCaptureBacklogGrowing`（警告），它的早期预警：同样的积压检查，时间范围为二十分钟；
+- `JetStreamCaptureLeaderChanged`（警告）：捕获流在有事件到达时更换了领导者，因此在切换期间发布的 MQTT
+  事件可能已被确认却丢失（见[已知限制](#v0230-known-limitations)）；
 - `DeviceStateDroppingEvents`（警告）：device-state 在最后一次投递尝试后丢弃了一个事件，使设备的连接
   状态、某个读数或其位置一直过时，直到更新的事件到达；
 - `devicechain_notificationmanagement_quiet_hours_total{outcome}`，统计因静默时段被暂缓、释放或丢弃的
@@ -2257,7 +2263,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - `devicechain_sparkplugingest_presence_probes_total` 和
   `devicechain_sparkplugingest_presence_probe_disconnects_total`，用于 Host 的存活探测；
 - `jetstream_consumer_leader_local`、`jetstream_publish_leader_local` 和
-  `jetstream_consumer_leader_moves_total`，用于领导者的放置。
+  `jetstream_consumer_leader_moves_total`，用于领导者的放置；`jetstream_stream_leader_changes_total`，
+  统计流的领导者更换。
 
 共享处理器计数器的每种结果现在都以零导出，因此 pod 第一次被抓取之后的第一次丢弃也能被告警看到。没有任何
 指标被重命名或移除。`jetstream_publish_window_full_seconds_total`、`jetstream_publish_window_full_total`
@@ -2273,7 +2280,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 - **在高负载下捕获流更换领导者时，MQTT QoS 1 发布可能在被确认后丢失，且不被计数。** 在每秒 12,000 个
   事件时，该流的领导者让位了一次，在流没有领导者的五秒内发布的事件，在设备收到确认之后丢失了。没有任何
-  计数器或告警报告这一情况。消除该问题的工作正在进行中。
+  计数器记录丢失的事件。`JetStreamCaptureLeaderChanged` 会报告有事件到达时发生过领导者切换，其时间界定了
+  需要在你自己设备的记录中核对的时间窗口。消除该问题的工作正在进行中。
 - **那个集群能持续跟上的 MQTT 速率约为每秒 6,000 个事件**，瓶颈在代理。每秒 12,000 个时积压不断增长；
   超过捕获流的上限后，最旧的事件会被丢弃，这部分丢失会被计数并触发告警。同一集群上的 HTTP 接入达到
   约每秒 14,000 个。
