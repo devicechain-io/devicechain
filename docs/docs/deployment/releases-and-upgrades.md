@@ -3558,18 +3558,29 @@ broker is unavailable for about a minute. Devices reconnect on their own, and a 
 session keeps its subscriptions and the QoS 1 messages held for it while the device was away.
 
 - **Do not change the broker's replication in the same upgrade.** While the servers restart, some
-  run `2.14.4` and some `2.15.1`. NATS 2.15 changed how a stream changes its replica count, and a
-  change started while any server is still on 2.14 waits until every server is on 2.15. Streams
-  stay readable and writable throughout; only the change waits. Raise `streamReplicas` or
-  `nats_cluster_replicas` before or after this upgrade, not during it.
+  run `2.14.4` and some `2.15.1`. NATS 2.15 changed how a stream or consumer changes its replica
+  count or placement, and only NATS `2.14.7` and later understand the new mechanism. This upgrade
+  starts from `2.14.4`, so a replica or placement change started while any server still runs it
+  can be left stuck rather than merely delayed. Streams stay readable and writable throughout, and
+  creating or deleting them is unaffected. Raise `streamReplicas` or `nats_cluster_replicas` before
+  or after this upgrade, not during it.
+- **Do not restart a broker server by hand while the upgrade rolls.** The new configuration reaches
+  every server at once, but a server moves to `2.15.1` only when its turn comes. Until then it keeps
+  running on the configuration it started with, and if it restarts in that window (by hand, or
+  because its node fails) it cannot start on the new configuration and stays down until the
+  upgrade replaces it. Under `--ha` that leaves the cluster a server short for the rest of the
+  roll, and replicated streams stop taking writes while the next server takes its turn.
 - **A NATS chart older than `2.15.0` is refused.** The broker configuration is now written for
   NATS 2.15 and a 2.14 server refuses it at startup, so `nats_chart_version` below `2.15.0` fails
-  the plan rather than crash-looping the broker. Going back to the older broker means going back to
-  the previous release.
+  the plan rather than crash-looping the broker. If a `terraform.tfvars` beside the instance's
+  infrastructure state pins `nats_chart_version`, raise it to `2.15.1` or remove it before you
+  upgrade. Treat the move to 2.15 as one-way: NATS supports going back from 2.15 only to 2.14.7 or
+  later, and the previous release runs 2.14.4.
 - **The 1,000-consumer limit NATS 2.15 adds to every stream is lifted.** Each MQTT subscription at
   QoS 1 or 2 is a consumer on the broker's own message stream, so with the new default the
-  1,001st device to subscribe would have its subscription refused while it stayed connected, and
-  never receive a command. If you install the `nats` module yourself, keep
+  1,001st such subscription across the fleet would be refused while its device stayed connected,
+  and that device would never receive a command. The count is of subscriptions, not devices: a
+  device holding two QoS 1 subscriptions uses two. If you install the `nats` module yourself, keep
   `jetstream.limits.default_max_consumers` at `-1`.
 
 What gets better:
@@ -3584,6 +3595,11 @@ What gets better:
   included, until it reconnected. A certificate renewal could trigger one.
 - **Fixes to device sign-in and permissions**, among them how the broker decides which logins skip
   the device sign-in check, and a sign-in refusal now reported as an authentication error.
+- **The edge agent's local broker no longer refuses a site's 1,001st QoS 1 or 2 subscription.**
+  `dc-edge-agent` embeds NATS 2.15, and from `v0.20.0` through `v0.23.0` its local MQTT listener
+  had the same 1,000-consumer limit, answering a site's 1,001st QoS 1 or 2 subscription with a
+  refusal while the device stayed connected. The limit is lifted there too. Upgrade the agent on any
+  site whose devices hold more than 1,000 such subscriptions on its listener between them.
 
 ### v0.23.0 — customer users with scoped access, and an MQTT ingest that loses less {#v0230-upgrade}
 
