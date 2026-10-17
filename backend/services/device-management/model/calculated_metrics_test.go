@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -387,4 +388,64 @@ func TestTestMetricFormula(t *testing.T) {
 			DataType: "DOUBLE"})
 		assert.Error(t, err)
 	})
+}
+
+// TestThePublishGateRefusesAProfileOverTheSummedCostCeiling pins gate item 4's per-profile
+// half: formulas that each pass the per-formula ceiling are still refused together when
+// their summed estimate exceeds the profile ceiling.
+func TestThePublishGateRefusesAProfileOverTheSummedCostCeiling(t *testing.T) {
+	f := newCalcFixture(t)
+	f.api.CalculatedMetricsCeiling = &stubCeiling{n: governance.MaxCalculatedMetricsPerProfile}
+	for _, k := range []string{"a", "b", "c", "d"} {
+		f.metric(k, "DOUBLE", "")
+	}
+	const term = "math.max(a, b) * math.min(c, d) + math.abs(a - b) * math.abs(c - d) + (a > b ? c : d)"
+	const formula = term + " + " + term + " + " + term
+	res, err := f.api.TestMetricFormula(f.ctx, &MetricFormulaTestRequest{ProfileToken: "meter",
+		Expression: formula, DataType: "DOUBLE"})
+	require.NoError(t, err)
+	require.Nil(t, res.CompileError)
+	cost := *res.EstimatedCost
+	require.LessOrEqual(t, cost, int(calcfield.CostCeiling))
+	n := int(calcfield.ProfileCostCeiling)/cost + 1
+	require.LessOrEqualf(t, n, governance.MaxCalculatedMetricsPerProfile,
+		"formula cost %d too small to exceed the profile ceiling within the platform maximum", cost)
+	for i := 0; i < n; i++ {
+		f.metric(fmt.Sprintf("calc%02d", i), "DOUBLE", formula)
+	}
+	err = f.publish()
+	require.Error(t, err)
+	assert.Equal(t, "INVALID_VALUE", codeOf(err))
+	assert.Contains(t, err.Error(), fmt.Sprint(calcfield.ProfileCostCeiling))
+	assert.Contains(t, err.Error(), "1 calculated metric problem(s)")
+	assert.Zero(t, f.versions())
+
+	// Contrast: one fewer formula fits under the profile ceiling and reaches the
+	// not-computed refusal instead.
+	_, err = f.api.DeleteMetricDefinition(f.ctx, fmt.Sprintf("md-calc%02d", n-1))
+	require.NoError(t, err)
+	var nc *CalculatedMetricsNotComputedError
+	require.ErrorAs(t, f.publish(), &nc) // (n-1)*cost <= the ceiling by the choice of n
+}
+
+// TestTheStorageBoundWarningFollowsTheStoredMagnitude pins warning (b) of the test panel at
+// its walls: a range strictly inside ±1e12 is quiet, and either bound at the storage
+// magnitude, or missing, warns.
+func TestTheStorageBoundWarningFollowsTheStoredMagnitude(t *testing.T) {
+	f := newCalcFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	warns := func(lo, hi *float64) bool {
+		t.Helper()
+		res, err := f.api.TestMetricFormula(f.ctx, &MetricFormulaTestRequest{ProfileToken: "meter",
+			Expression: "voltage * 2.0", DataType: "DOUBLE", MinValue: lo, MaxValue: hi})
+		require.NoError(t, err)
+		require.Nil(t, res.CompileError)
+		return strings.Contains(strings.Join(res.Warnings, "\n"), "12 digits before the decimal point")
+	}
+	fp := func(v float64) *float64 { return &v }
+	assert.False(t, warns(fp(-999999999999), fp(999999999999)), "a range inside storage must not warn")
+	assert.True(t, warns(fp(-1), fp(1e12)), "a max at the storage magnitude must warn")
+	assert.True(t, warns(fp(-1e12), fp(1)), "a min at the storage magnitude must warn")
+	assert.True(t, warns(nil, fp(1)), "a missing min must warn")
+	assert.True(t, warns(fp(1), nil), "a missing max must warn")
 }

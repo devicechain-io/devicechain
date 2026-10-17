@@ -5,8 +5,11 @@ package graphql
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/auth"
+	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,4 +63,38 @@ func TestGraphQLAuthorsAndTestsACalculatedMetric(t *testing.T) {
 	require.Nil(t, tested.R.SkippedReason)
 	require.Equal(t, []string{"voltage"}, tested.R.Inputs)
 	require.NotNil(t, tested.R.EstimatedCost)
+}
+
+const testMetricFormulaQuery = `query {
+  testMetricFormula(profileToken: "meter", expression: "voltage * 2.0", dataType: "DOUBLE",
+    sample: [{key: "voltage", value: "1"}]) { value compileError }
+}`
+
+// testMetricFormula is an authoring tool: a member limited to part of the tenant is refused
+// by the resolver itself (Authorize, not AuthorizeCatalogue), and a caller without
+// device:read is refused outright.
+func TestTestMetricFormulaRefusesScopedAndUnauthorizedCallers(t *testing.T) {
+	base := profileLocationCtx(t)
+	execProfileGql(t, base, createProfileMutation, map[string]any{"request": map[string]any{"token": "meter"}})
+	execProfileGql(t, base, `mutation ($request: MetricDefinitionCreateRequest) {
+	  createMetricDefinition(request: $request) { token }
+	}`, map[string]any{"request": map[string]any{
+		"token": "md-v", "deviceProfileToken": "meter", "metricKey": "voltage", "dataType": "DOUBLE"}})
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+
+	scoped := auth.WithClaims(base, &auth.Claims{TokenType: auth.TokenTypeAccess,
+		Authorities: []string{string(auth.DeviceRead)}, ScopeAnchors: []string{"customer:acme-corp"}})
+	res := schema.Exec(scoped, testMetricFormulaQuery, "", nil)
+	require.Len(t, res.Errors, 1)
+	require.Equal(t, auth.ErrScopeUnsupported.Error(), res.Errors[0].Message,
+		"a scoped member was not refused by the resolver itself")
+
+	unauthorized := auth.WithClaims(base, &auth.Claims{TokenType: auth.TokenTypeAccess,
+		Authorities: []string{string(auth.DeviceWrite)}})
+	res = schema.Exec(unauthorized, testMetricFormulaQuery, "", nil)
+	require.Len(t, res.Errors, 1)
+	require.True(t, errors.Is(res.Errors[0].ResolverError, auth.ErrForbidden), "got %v", res.Errors[0])
+
+	// Contrast: the same query under the fixture's unscoped device:read answers.
+	execProfileGql(t, base, testMetricFormulaQuery, nil)
 }
