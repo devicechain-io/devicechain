@@ -130,13 +130,21 @@ func (nmgr *NatsManager) checkMqttStoreBounds(ctx context.Context, m *MqttStoreB
 			log.Warn().Err(err).Str("stream", s.Name).Msg("Could not check the MQTT gateway stream's ceiling; the next check tries again")
 			continue
 		}
-		if info.Config.MaxBytes == s.MaxBytes {
+		// A message store a fail-closed pass created and did not finish, with no mark on it:
+		// it refuses every QoS 1 publish until it has the gateway's subjects (see
+		// boundMqttStore).
+		marks := nmgr.marksOf(info)
+		pending := s.Name == MqttMessageStore && isAbandonedPendingMqttStore(info) && !marks.owned && !marks.released
+		if info.Config.MaxBytes == s.MaxBytes && !pending {
 			setUnbounded(m, s.Name, 0)
 			continue
 		}
 		cfg := info.Config
 		previous := cfg.MaxBytes
 		cfg.MaxBytes = s.MaxBytes
+		if pending {
+			cfg.Subjects = []string{mqttMsgsSubjectPrefix + ">"}
+		}
 		if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 			if previous <= 0 {
 				setUnbounded(m, s.Name, 1)

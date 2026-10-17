@@ -141,6 +141,12 @@ const (
 	// mqttFailClosedLockName is the instance lock every write to the store is made under.
 	mqttFailClosedLockName = "mqtt-fail-closed"
 
+	// mqttFailClosedPendingSubject is the only subject of a store this file creates, until the
+	// pass that created it has created its durables too. No device publishes to it (natsauth
+	// grants a device only subjects that begin with its instance id), so the store takes
+	// nothing in between. See assertMqttFailClosed.
+	mqttFailClosedPendingSubject = mqttMsgsSubjectPrefix + "_devicechain.pending"
+
 	// MqttFailClosedWatchInterval is how often MqttFailClosedWatch runs a pass.
 	MqttFailClosedWatchInterval = 30 * time.Second
 )
@@ -163,6 +169,26 @@ var (
 	// mqttFailClosedLockWait is how long a START waits for the lock; a watch pass does not
 	// wait (another pod is making the pass for it).
 	mqttFailClosedLockWait = mqttFailClosedLockTTL + 5*time.Second
+
+	// 🔑 HOW MUCH CLOCK SKEW BETWEEN PODS THE LEASE TAKES, AND WHAT MORE COSTS. The heartbeat
+	// and the release time are written by one pod's clock and read by another's, so a reader
+	// whose clock runs s ahead sees them s older than they are. A holder renews the heartbeat
+	// on every pass once it has aged half an interval, so a live holder's heartbeat is at most
+	// about one interval (30 s) old, two after one failed pass. The lease (90 s) therefore
+	// holds against up to 30 s of skew through a failed pass, and 60 s without one. The release
+	// grace (60 s, judged against a release time another pod may have written) holds against up
+	// to 45 s before it comes within mqttStoreViewTTL. The lock and the from-mark settle are
+	// timed by the broker, not by a pod, and take no skew.
+	//
+	// Beyond those bounds the pods hand the store back and forth: one with another wanted
+	// state reads a live holder's heartbeat as stale and takes the store over, and the holder
+	// takes it back on its next pass. That costs DUPLICATES and never loss, because nothing a
+	// take-over or a release does removes a durable or loosens the store: a release keeps the
+	// durables and discard new, a take-over writes from marks only after its settle, and the
+	// durables are removed only by a pass that finds the store released for the grace with
+	// every durable drained past its cut, which a holder taking the store back every pass
+	// prevents. Node clocks kept by NTP are within milliseconds, far inside these bounds.
+
 	// mqttFailClosedInsufficientRetry is how a pass retries a durable create the cluster
 	// refused for "insufficient resources": ordinary for a few seconds after the store's own
 	// replicas were raised, while the new peers catch up.
@@ -733,9 +759,18 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 		if err := mqttFenced(ctx); err != nil {
 			return rep, err
 		}
+		// 🔴 CREATED TAKING NOTHING, and given the gateway's subjects only once the durables
+		// exist, by the same update that writes the fail-closed config below. A store created
+		// with $MQTT.msgs.> would take the gateway's copies at once, with no durable interested
+		// in them, so it would skip each one and the gateway would PUBACK it; and a reader whose
+		// look predates the deletion (up to mqttStoreViewTTL old) still holds the old from
+		// marks and skips the direct copy too. That publish would be acknowledged and kept
+		// nowhere. With no stream on the gateway's subjects, its store write is not answered,
+		// it sends no PUBACK and closes the connection, and the device sends the message again
+		// (TestARecreatedStoreTakesNothingUntilItsDurablesExist).
 		created, err := nmgr.js.AddStream(&nats.StreamConfig{
 			Name:      MqttMessageStore,
-			Subjects:  []string{mqttMsgsSubjectPrefix + ">"},
+			Subjects:  []string{mqttFailClosedPendingSubject},
 			Storage:   nats.FileStorage,
 			Retention: nats.InterestPolicy,
 			// Discard OLD, as the gateway makes it: the store becomes discard-new only once its
@@ -751,6 +786,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 			if countRepairs {
 				rep.repaired = append(rep.repaired, "store")
 			}
+			if nmgr.mqttPassHook != nil {
+				nmgr.mqttPassHook("store-created")
+			}
 		case errors.Is(err, nats.ErrStreamNameAlreadyInUse):
 			// The gateway created it between the read and the create. Reconcile what is there.
 			if info, err = nmgr.js.StreamInfo(MqttMessageStore, opt); err != nil {
@@ -765,7 +803,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	if err != nil {
 		return rep, err
 	}
-	if countRepairs && !takeOver {
+	// A store this pass created is counted once, as "store": the subjects it was created with
+	// are this pass's own, not a change made out of band.
+	if countRepairs && !takeOver && !rep.createdStore {
 		rep.repaired = append(rep.repaired, repaired...)
 	}
 
@@ -1465,6 +1505,10 @@ type MqttFailClosedMetrics struct {
 	storeRepaired *prometheus.CounterVec
 	// foreignInstances is how many other instances the last pass saw on this broker.
 	foreignInstances prometheus.Gauge
+	// durablePending and durableAckPending are each platform durable's backlog: messages of
+	// its kind in the store it has not been handed yet, and messages handed to it and not yet
+	// acknowledged. See sampleMqttFailClosedDurables for why they are not the stream sampler's.
+	durablePending, durableAckPending *prometheus.GaugeVec
 }
 
 // mqttFailClosedSettings are the store settings a pass can repair, the label values of
@@ -1490,6 +1534,14 @@ func NewMqttFailClosedMetrics(ms *core.Microservice, instanceId string) *MqttFai
 		foreignInstances: ms.NewGauge("mqtt_failclosed_foreign_instances",
 			"Other DeviceChain instances the last check saw on this broker. Above 0, the instances share one "+
 				"MQTT message store and one bound."),
+		durablePending: ms.NewGaugeVec("mqtt_failclosed_durable_pending",
+			"Messages of this platform durable's kind in the MQTT gateway's message store that it has not been "+
+				"handed yet, as of the last 30 s check. Absent while the durable cannot be read.",
+			[]string{"durable"}),
+		durableAckPending: ms.NewGaugeVec("mqtt_failclosed_durable_ack_pending",
+			"Messages handed to this platform durable on the MQTT gateway's message store and not yet "+
+				"acknowledged, as of the last 30 s check. Absent while the durable cannot be read.",
+			[]string{"durable"}),
 	}
 	m.init(instanceId)
 	return m
@@ -1615,5 +1667,39 @@ func (nmgr *NatsManager) checkMqttFailClosed(ctx context.Context, m *MqttFailClo
 			Msg("A platform durable on the MQTT message store is missing and could not be created. QoS 1 " +
 				"publishes of its kind are being acknowledged to devices and not kept")
 	}
+	nmgr.sampleMqttFailClosedDurables(ctx, m)
 	return rep, err
+}
+
+// sampleMqttFailClosedDurables exports each platform durable's backlog, while the store carries
+// a mark of this instance (it has platform durables to have a backlog).
+//
+// 🔴 NOT THE STREAM SAMPLER'S PER-DURABLE SERIES. Those (trackedDurables) are built for a
+// durable that reads its stream alone, and on this store they would report the wrong thing:
+// the store holds every QoS 1 publish of every kind and the gateway's own session messages, so
+// a durable's cursor moves past sequences that were simply not its kind, which the unread-loss
+// counter reads as messages removed before it was handed them, and its unread ratio divides
+// one kind's backlog by the whole store's capacity. The store is discard NEW, so nothing is
+// removed unread while it is declared as it should be; a changed discard policy is what
+// mqtt_failclosed_store_repaired_total reports. What is left to see is where the store's fill
+// is: which kind's reader is behind, when the store fills and refuses.
+//
+// A durable that cannot be read has its series withdrawn, as the stream sampler does, so a
+// stale backlog is never read as a current one.
+func (nmgr *NatsManager) sampleMqttFailClosedDurables(ctx context.Context, m *MqttFailClosedMetrics) {
+	if m == nil || !nmgr.MqttMessageStoreMarked() {
+		return
+	}
+	for _, d := range MqttFailClosedDurables(nmgr.Microservice.InstanceId) {
+		rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
+		ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, nats.Context(rctx))
+		cancel()
+		if err != nil {
+			m.durablePending.DeleteLabelValues(d.Name)
+			m.durableAckPending.DeleteLabelValues(d.Name)
+			continue
+		}
+		m.durablePending.WithLabelValues(d.Name).Set(float64(ci.NumPending))
+		m.durableAckPending.WithLabelValues(d.Name).Set(float64(ci.NumAckPending))
+	}
 }

@@ -85,6 +85,15 @@ there is no separate broker to run.
   about five seconds of events. `JetStreamCaptureLeaderChanged` reports that a change happened
   while events were arriving; the lost events cannot be recovered, and the time of the change
   bounds the window to check in your devices' own records.
+
+  The instance setting `infrastructure.nats.mqttFailClosed` (off by default) closes the second
+  and third holes for QoS 1. With it on, a QoS 1 PUBACK means the platform holds the message: the
+  platform reads QoS 1 events, command responses and device reports from the broker's own message
+  store. A full store refuses the publish, and one whose leader is changing does not acknowledge
+  it, so the device gets no PUBACK and sends it again. QoS 0 publishes keep the behaviour above, and a message
+  over the tenant's ceiling is still dropped after its PUBACK. See
+  [quality of service](../guides/connecting-a-device.md#quality-of-service) and
+  [fail-closed MQTT](../deployment/observability.md#mqtt-fail-closed).
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
   publish reaches a device that is connected and subscribed at that instant. The broker does not
   hold it for a device that is not, and nothing tells the platform whether the device received

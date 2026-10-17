@@ -6,8 +6,6 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -54,48 +52,31 @@ func TestMqttFailClosedGivesTheMessageStoreTheCaptureCeilingAndBudgetsIt(t *test
 	if got := n.MqttStoreReservation(); got != want+2*n.MqttQoS2StoreMaxBytes {
 		t.Errorf("the reservation is %d B, want the message store's %d B plus both QoS 2 stores", got, want)
 	}
-	// Everything else in the document is valid with the setting on: lift the refusal (which
-	// only this package's tests can) and the rest validates.
-	shipMqttFailClosedForTest(t)
 	if err := c.Validate(); err != nil {
-		t.Fatalf("with the refusal lifted, a document with the setting on must validate: %v", err)
+		t.Fatalf("a document with the setting on must validate: %v", err)
 	}
 }
 
-// shipMqttFailClosedForTest lifts the refusal for one test, as the build that ships the
-// back-off will for good.
-func shipMqttFailClosedForTest(t *testing.T) {
-	t.Helper()
-	saved := mqttFailClosedShipped
-	mqttFailClosedShipped = true
-	t.Cleanup(func() { mqttFailClosedShipped = saved })
-}
-
-// 🔴 UNTIL ITS PREREQUISITES SHIP, THE SETTING IS REFUSED. The reader over the message store,
-// the back-off and the presence debounce have shipped, but the deployed broker is not the
-// version the gateway behaviour is pinned against, and the cutover and the overload
-// measurement are not done. A document that sets it must fail validation, saying what is
-// missing, and the same document with it off must not.
+// 🔑 THE SETTING IS ACCEPTED, AND ONLY AS A BOOLEAN THE DOCUMENT CHOSE. It was refused at
+// config load until the broker the platform deploys, the back-off, the presence debounce and the
+// cutover had all shipped. A document that turns it on validates as it is; the same document
+// with it off validates too, and nothing defaults it on.
 //
-// GUARD: kills a Validate that accepts the setting (the outage switch is live), and one that
-// refuses the document for any other reason (the control passes with only the key changed).
-func TestMqttFailClosedIsRefusedUntilTheBackOffShips(t *testing.T) {
+// GUARD: kills a Validate that still refuses the setting, and one that turns it on by default.
+func TestMqttFailClosedIsAcceptedWhenTheDocumentTurnsItOn(t *testing.T) {
 	c := NewDefaultInstanceConfiguration()
 	c.Infrastructure.Nats.MqttFailClosed = true
 	c.ApplyDefaults()
-	err := c.Validate()
-	if !errors.Is(err, ErrMqttFailClosedNotAvailable) {
-		t.Fatalf("Validate with mqttFailClosed on = %v, want ErrMqttFailClosedNotAvailable", err)
-	}
-	for _, want := range []string{"infrastructure.nats.mqttFailClosed", "not available in this build",
-		"nats-server 2.14.4", "verified only against 2.15.0", "capture stream", "measurement under overload"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("the refusal %q does not say %q", err, want)
-		}
-	}
-	c.Infrastructure.Nats.MqttFailClosed = false
 	if err := c.Validate(); err != nil {
-		t.Fatalf("control: the same document with the setting off must validate: %v", err)
+		t.Fatalf("Validate with mqttFailClosed on = %v, want it accepted", err)
+	}
+	if !c.Infrastructure.Nats.MqttFailClosed {
+		t.Fatal("ApplyDefaults turned the setting off")
+	}
+	c = NewDefaultInstanceConfiguration()
+	c.ApplyDefaults()
+	if c.Infrastructure.Nats.MqttFailClosed {
+		t.Fatal("control: the setting must stay off unless the document turns it on")
 	}
 }
 
@@ -122,7 +103,7 @@ func TestMqttFailClosedKeyDecodesStrictly(t *testing.T) {
 
 // 🔑 L5: THE DISK BUDGET WITH THE SETTING ON. Turning it on moves the message store from the
 // safety cap to the hot ceiling while the device-events capture stream keeps its own (both
-// exist until the capture path is retired), so the default install reserves more. It must
+// stays, as the path a QoS 0 publish takes), so the default install reserves more. It must
 // still fit the default volume with the same headroom floor as with it off: the unbounded
 // gateway stores and the consumers' state live in what is left.
 //

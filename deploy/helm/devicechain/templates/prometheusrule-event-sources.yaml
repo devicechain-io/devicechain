@@ -40,8 +40,6 @@ alert is critical and has no `for`: each count is loss already, and the gauge ar
 durable the check could not create. The series exist ONLY with the setting on, so an install
 with it off exports none and neither alert can fire there; no absent() arm, for the same reason
 as above. The counters are exported at 0 from start, so the first event is an increase.
-In this build the setting is refused at config load (nothing yet backs devices off before
-the store fills), so neither alert can fire yet; the rules ship with the plumbing they watch.
 Neither counts a planned change: a rolling update hands the store over without removing a
 durable (a pod with the setting off removes them only once no pod with it on holds the store
 and they are drained), and a bound or replica count changed in the configuration is a
