@@ -32,6 +32,7 @@ vi.mock('@/lib/sso', () => ({ startSso: vi.fn() }));
 
 import AcceptInvitationPage from './AcceptInvitation';
 import { heldInvitation } from '@/lib/invitation';
+import { startSso } from '@/lib/sso';
 
 function renderAt() {
   return render(
@@ -57,6 +58,7 @@ beforeEach(() => {
   h.login.mockReset();
   h.selectTenant.mockReset().mockResolvedValue(undefined);
   h.logout.mockReset().mockResolvedValue(undefined);
+  vi.mocked(startSso).mockReset();
   h.identityToken = null;
 });
 afterEach(cleanup);
@@ -124,7 +126,7 @@ describe('accepting an invitation', () => {
     expect(h.selectTenant).not.toHaveBeenCalled();
   });
 
-  it('keeps the held code when the signed-in account is refused, and offers a way out', async () => {
+  it('forgets the held code when the signed-in account is refused, and "Not you?" holds it again', async () => {
     window.sessionStorage.setItem('dc-pending-invitation', 'held-code');
     window.history.replaceState(null, '', '/invitation');
     h.identityToken = 'wrong-identity';
@@ -134,9 +136,39 @@ describe('accepting an invitation', () => {
     renderAt();
     fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
     expect(await screen.findByText(/This invitation cannot be used/)).toBeTruthy();
-    // The code outlives the refusal, so the person can try as someone else.
+    // A held code would send every later single sign-on in this tab back to this page,
+    // to be refused again, so the refusal drops it...
+    expect(heldInvitation()).toBeNull();
+    // ...and choosing to switch accounts is what holds it again.
+    fireEvent.click(screen.getByRole('button', { name: 'Not you? Use a different account' }));
+    await waitFor(() => expect(h.logout).toHaveBeenCalledTimes(1));
     expect(heldInvitation()).toBe('held-code');
-    expect(screen.getByRole('button', { name: 'Not you? Use a different account' })).toBeTruthy();
+  });
+
+  it('holds the code again when leaving for single sign-on after a refusal', async () => {
+    // Signing in with a password as the wrong account: the refusal drops the held copy,
+    // the page keeps the code, and single sign-on must take it along or the person comes
+    // back from the provider with nothing to accept.
+    window.history.replaceState(null, '', '/invitation#code=abc123');
+    h.login.mockResolvedValue(auth(['other']));
+    h.acceptInvitation.mockRejectedValue(
+      new GraphQLRequestError('GraphQL error', 200, [{ message: 'invalid invitation', extensions: { code: 'INVALID_INVITATION' } }]),
+    );
+    let heldWhenLeaving: string | null = 'never called';
+    vi.mocked(startSso).mockImplementation(async () => {
+      heldWhenLeaving = heldInvitation();
+      return null;
+    });
+    renderAt();
+    fireEvent.click(screen.getByRole('radio', { name: 'I have an account' }));
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'ann@acme.example' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'pw' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in and accept' }));
+    expect(await screen.findByText(/This invitation cannot be used/)).toBeTruthy();
+    expect(heldInvitation()).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in with SSO and accept' }));
+    await waitFor(() => expect(startSso).toHaveBeenCalledTimes(1));
+    expect(heldWhenLeaving).toBe('abc123');
   });
 
   it('"Not you?" signs the account out and keeps the code', async () => {
