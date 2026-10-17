@@ -46,6 +46,14 @@ Neither counts a planned change: a rolling update hands the store over without r
 durable (a pod with the setting off removes them only once no pod with it on holds the store
 and they are drained), and a bound or replica count changed in the configuration is a
 take-over or a raise, not a repair.
+
+MqttGatewayStreamUnbounded watches the broker's own MQTT gateway streams ($MQTT_msgs, $MQTT_out,
+$MQTT_qos2in). nats-server creates them when the first MQTT device connects, with no size limit, so
+event-sources puts a ceiling on them and re-checks every 30 seconds in every pod, which covers a stream
+created long after startup. The gauge is 1 only when a stream is found unbounded AND the ceiling could
+not be set (typically the broker has no storage left to reserve it), so the alert has a `for` that rides
+out a failed leader election and never fires while the platform is bounding streams normally. The
+series are exported by every pod at 0 from start, whatever mqttFailClosed says.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -119,4 +127,14 @@ spec:
           annotations:
             summary: "The MQTT message store is not as the platform declared it"
             description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."
+        # Per stream, `max` across pods: any pod that cannot bound it leaves it unbounded.
+        - alert: MqttGatewayStreamUnbounded
+          expr: max by (stream) (devicechain_eventsources_mqtt_gateway_stream_unbounded{namespace="{{ $ns }}"}) == 1
+          for: 10m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "An MQTT gateway stream has no size limit"
+            description: "For at least 10 minutes the broker's MQTT gateway stream {{ "{{ $labels.stream }}" }} has had no size limit and event-sources could not set one. The broker creates these streams without a limit when the first MQTT device connects, and an unbounded one can fill the broker's storage and take the whole instance down. Check that the broker has storage free to reserve the limit and look in the event-sources log for 'Could not bound the MQTT gateway'. It clears on its own once the limit is set."
 {{- end }}

@@ -436,3 +436,34 @@ tests:
             exp_annotations:
               summary: "The MQTT message store is not as the platform declared it"
               description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."
+
+  # ------------------------------------------------------------------
+  # MqttGatewayStreamUnbounded. $MQTT_msgs cannot be bounded from 5m on (the broker has no
+  # storage to reserve the limit); $MQTT_out is fine throughout. Fires for the one stream,
+  # only after 10 minutes, and clears when the pod bounds it.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_gateway_stream_unbounded{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", stream="$MQTT_msgs"}'
+        values: '0x4 1x20 0x20'
+      - series: 'devicechain_eventsources_mqtt_gateway_stream_unbounded{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", stream="$MQTT_msgs"}'
+        values: '0x45'
+      - series: 'devicechain_eventsources_mqtt_gateway_stream_unbounded{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", stream="$MQTT_out"}'
+        values: '0x45'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MqttGatewayStreamUnbounded
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: MqttGatewayStreamUnbounded
+        exp_alerts:
+          - exp_labels:
+              stream: "$MQTT_msgs"
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "An MQTT gateway stream has no size limit"
+              description: "For at least 10 minutes the broker's MQTT gateway stream $MQTT_msgs has had no size limit and event-sources could not set one. The broker creates these streams without a limit when the first MQTT device connects, and an unbounded one can fill the broker's storage and take the whole instance down. Check that the broker has storage free to reserve the limit and look in the event-sources log for 'Could not bound the MQTT gateway'. It clears on its own once the limit is set."
+      - eval_time: 40m
+        alertname: MqttGatewayStreamUnbounded
+        exp_alerts: []

@@ -223,8 +223,8 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 	}
 	// Nothing has used MQTT on this instance yet. Say so at info rather than warn:
 	// it is the normal state of an instance with no MQTT devices, and the next
-	// startup after one connects will apply the bound.
+	// periodic check (MqttStoreBoundWatch) applies the bound as soon as one connects.
 	log.Info().Str("stream", name).
-		Msg("MQTT gateway stream does not exist yet; nothing has connected over MQTT. Ceiling will be applied on a later startup.")
+		Msg("MQTT gateway stream does not exist yet; nothing has connected over MQTT. The ceiling is applied by the periodic check once it appears.")
 	return nil
 }
