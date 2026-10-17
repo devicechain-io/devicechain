@@ -105,6 +105,7 @@
   "acceptSignInButton": "Sign in and accept",
   "acceptSsoButton": "Sign in with SSO and accept",
   "acceptAsSignedIn": "You are signed in. Accept the invitation with this account.",
+  "acceptNotYou": "Not you? Use a different account",
   "acceptChooseTenant": "Invitation accepted. Choose the tenant to open.",
   "errorEscalation": "You cannot give an authority you do not hold yourself.",
   "errorSelfModification": "You cannot change your own membership. Ask another administrator.",

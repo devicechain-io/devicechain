@@ -43,6 +43,7 @@ import { DeviceAssignmentPanel } from '@/routes/devices/DeviceAssignmentPanel';
 import { DeviceLocationPanel } from '@/routes/devices/DeviceLocationPanel';
 import { DeviceConfigurationPanel } from '@/routes/devices/DeviceConfigurationPanel';
 import { DeviceUpdatesPanel } from '@/routes/devices/DeviceUpdatesPanel';
+import { mayWrite } from '@/lib/scope';
 import { useUpdateAccess } from '@/lib/updateAuthority';
 import { EntityAttributesPanel } from '@/components/EntityAttributesPanel';
 import { EventTypeLabel } from '@/components/EventTypeLabel';
@@ -60,6 +61,7 @@ export default function DeviceDetailPage() {
   // one confers device impersonation. The panel only ever managed credentials and
   // its list content is privileged, so a caller without the authority gets no tab
   // at all rather than an empty one or a 403.
+  const canWriteDevice = mayWrite(claims, 'device:write');
   const canManageCredentials = hasAuthority(claims, 'device:write') && !isScoped(claims);
   // A member limited to part of the tenant (a customer user) is served the device, its live
   // state, its events, its commands and its updates — not its assignment, its facet values
@@ -180,6 +182,9 @@ export default function DeviceDetailPage() {
           <SectionPanel>
             <DeviceForm
               device={device}
+              // Saves are refused for a member without device:write (and for any scoped
+              // member), so the form is shown but not offered.
+              readOnly={!canWriteDevice}
               onDone={(m) => {
                 toast(m);
                 reload();

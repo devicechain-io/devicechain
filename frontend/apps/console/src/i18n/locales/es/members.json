@@ -105,6 +105,7 @@
   "acceptSignInButton": "Iniciar sesión y aceptar",
   "acceptSsoButton": "Iniciar sesión con SSO y aceptar",
   "acceptAsSignedIn": "Has iniciado sesión. Acepta la invitación con esta cuenta.",
+  "acceptNotYou": "¿No eres tú? Usa otra cuenta",
   "acceptChooseTenant": "Invitación aceptada. Elige el inquilino que quieres abrir.",
   "errorEscalation": "No puedes dar una autoridad que no tienes.",
   "errorSelfModification": "No puedes cambiar tu propia membresía. Pídeselo a otro administrador.",

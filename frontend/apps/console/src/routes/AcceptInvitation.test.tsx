@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   login: vi.fn(),
   selectTenant: vi.fn(),
   identityToken: null as string | null,
+  logout: vi.fn(),
 }));
 
 vi.mock('@/auth/AuthProvider', () => ({
@@ -23,6 +24,7 @@ vi.mock('@/auth/AuthProvider', () => ({
     acceptInvitation: h.acceptInvitation,
     login: h.login,
     selectTenant: h.selectTenant,
+    logout: h.logout,
     identityToken: h.identityToken,
   }),
 }));
@@ -54,6 +56,7 @@ beforeEach(() => {
   h.acceptInvitation.mockReset();
   h.login.mockReset();
   h.selectTenant.mockReset().mockResolvedValue(undefined);
+  h.logout.mockReset().mockResolvedValue(undefined);
   h.identityToken = null;
 });
 afterEach(cleanup);
@@ -119,6 +122,46 @@ describe('accepting an invitation', () => {
     expect(await screen.findByText(/This invitation cannot be used/)).toBeTruthy();
     expect(heldInvitation()).toBeNull();
     expect(h.selectTenant).not.toHaveBeenCalled();
+  });
+
+  it('keeps the held code when the signed-in account is refused, and offers a way out', async () => {
+    window.sessionStorage.setItem('dc-pending-invitation', 'held-code');
+    window.history.replaceState(null, '', '/invitation');
+    h.identityToken = 'wrong-identity';
+    h.acceptInvitation.mockRejectedValue(
+      new GraphQLRequestError('GraphQL error', 200, [{ message: 'invalid invitation', extensions: { code: 'INVALID_INVITATION' } }]),
+    );
+    renderAt();
+    fireEvent.click(screen.getByRole('button', { name: 'Accept invitation' }));
+    expect(await screen.findByText(/This invitation cannot be used/)).toBeTruthy();
+    // The code outlives the refusal, so the person can try as someone else.
+    expect(heldInvitation()).toBe('held-code');
+    expect(screen.getByRole('button', { name: 'Not you? Use a different account' })).toBeTruthy();
+  });
+
+  it('"Not you?" signs the account out and keeps the code', async () => {
+    window.sessionStorage.setItem('dc-pending-invitation', 'held-code');
+    window.history.replaceState(null, '', '/invitation');
+    h.identityToken = 'wrong-identity';
+    // The real provider clears the identity; the fake re-renders the page signed out.
+    let view!: ReturnType<typeof renderAt>;
+    h.logout.mockImplementation(async () => {
+      h.identityToken = null;
+      view.rerender(
+        <MemoryRouter initialEntries={['/invitation']}>
+          <Routes>
+            <Route path="/invitation" element={<AcceptInvitationPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    view = renderAt();
+    fireEvent.click(screen.getByRole('button', { name: 'Not you? Use a different account' }));
+    await waitFor(() => expect(h.logout).toHaveBeenCalledTimes(1));
+    expect(heldInvitation()).toBe('held-code');
+    expect(await screen.findByRole('radio', { name: 'I have an account' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'New account' })).toBeTruthy();
+    expect(h.acceptInvitation).not.toHaveBeenCalled();
   });
 
   it('refuses two different passwords without asking the server', async () => {

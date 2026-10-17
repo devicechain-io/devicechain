@@ -162,3 +162,16 @@ describe('editing a device', () => {
     expect(Object.keys(request).sort()).toEqual([...EDITED].sort());
   });
 });
+
+describe('a device shown read-only (a member without device:write)', () => {
+  it('shows the values, disables every field and offers no save', async () => {
+    render(<DeviceForm device={device()} onDone={vi.fn()} readOnly />);
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    expect(name.disabled).toBe(true);
+    expect(name.value).not.toBe('');
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Token') as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+    expect(writes()).toHaveLength(0);
+  });
+});

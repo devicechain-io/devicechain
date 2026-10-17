@@ -42,7 +42,7 @@ type Way = 'new' | 'existing';
 export default function AcceptInvitationPage() {
   const { t } = useTranslation('members');
   const navigate = useNavigate();
-  const { acceptInvitation, login, selectTenant, identityToken } = useAuth();
+  const { acceptInvitation, login, selectTenant, logout, identityToken } = useAuth();
   const [code] = useState(takeCode);
   const [way, setWay] = useState<Way>('new');
   const [email, setEmail] = useState('');
@@ -72,7 +72,12 @@ export default function AcceptInvitationPage() {
   const fail = (err: unknown) => {
     const c = errorCode(err);
     if (c === 'INVALID_INVITATION') {
-      dropInvitation();
+      // The server gives ONE answer for an expired code and for one issued to another
+      // account, so it cannot be told which this is. Someone already signed in may simply
+      // be the wrong account: keep the code so "Not you?" can switch accounts and try
+      // again. With no identity session the code was offered on its own merits and is
+      // spent.
+      if (!identityToken) dropInvitation();
       setError(t('errorInvalidInvitation'));
     } else if (c === 'SSO_REQUIRED') {
       setSsoRequired(true);
@@ -133,6 +138,14 @@ export default function AcceptInvitationPage() {
     }
   };
 
+  // Sign the current identity out and keep the held code: the page then offers a new
+  // account or signing in with the right one. logout clears the tokens before it asks
+  // the server, so the identity is gone from here at once.
+  const switchAccount = () => {
+    setError(null);
+    void logout();
+  };
+
   const wayOptions = [
     { value: 'new' as const, label: t('acceptNewAccount') },
     { value: 'existing' as const, label: t('acceptExistingAccount') },
@@ -185,6 +198,9 @@ export default function AcceptInvitationPage() {
                 onClick={() => void run(() => acceptInvitation(code, { identityToken }))}
               >
                 {t('acceptButton')}
+              </Button>
+              <Button variant="ghost" className="w-full" disabled={busy} onClick={switchAccount}>
+                {t('acceptNotYou')}
               </Button>
             </>
           ) : (
