@@ -31,6 +31,13 @@ Hasta ahora, cuatro puntos de la historia pueden exigir recrear la instancia en 
 Si está en cualquiera de ellos, lea la sección correspondiente más abajo antes de hacer nada más.
 :::
 
+:::caution Actualice pasando por la v0.23.0
+Las versiones posteriores a `v0.23.0` escriben los eventos en una forma que `v0.22.0` y anteriores
+no pueden leer. Si viene de `v0.22.0` o anterior, actualice primero cada instancia a `v0.23.0`, y
+solo después a una versión posterior. Consulte
+[El formato de los eventos en el bróker](#event-wire-format).
+:::
+
 :::caution Cruzar la v0.12.0 requiere algunos cambios previos
 La `v0.12.0` se actualiza en el sitio, pero cambia el tema en el que un dispositivo responde
 a un comando, mueve un permiso y cambia varias cosas cuya forma se mantuvo igual. Un
@@ -536,24 +543,28 @@ esos mensajes:
 
 | Valor | Codificación |
 | --- | --- |
-| `compact` | **El valor por defecto.** Cada instante como un recuento de nanosegundos y el sello de cada credencial de dispositivo en binario. Alrededor de un tercio más pequeño por mensaje, lo que significa menos disco, red y retención del bróker por evento. |
-| `legacy` | Cada instante como texto y cada sello en su forma de texto, byte a byte lo que escribían `v0.22.0` y anteriores. |
+| `compact` | **El valor por defecto desde la versión posterior a `v0.23.0`.** Cada instante como un recuento de nanosegundos y el sello de cada credencial de dispositivo en binario. Alrededor de un tercio más pequeño por mensaje, lo que significa menos disco, red y retención del bróker por evento. |
+| `legacy` | Cada instante como texto y cada sello en su forma de texto, byte a byte lo que escribían `v0.22.0` y anteriores. `v0.23.0` lo escribe por defecto. |
 
 Cualquier otro valor, incluido `Compact`, se rechaza: el servicio no arranca y su registro nombra
 la clave. Forma parte de la configuración montada, como el
 [nivel de registro](./observability.md#el-nivel-de-registro), y se establece de la misma forma.
 
-- **Todos los servicios leen ambos.** Los mensajes escritos en la forma `legacy` antes de una
-  actualización siguen en los flujos retenidos y se leen como antes, incluida la vista previa de
-  repetición de una regla de detección sobre una ventana que empezó antes de la actualización.
-- **`v0.22.0` y anteriores solo leen `legacy`.** Un servicio en una de esas versiones descarta un
-  mensaje `compact`, o lo aparta como fallido, así que una actualización gradual desde una de
-  ellas directamente a una que escribe `compact` pierde los eventos escritos mientras los pods
-  antiguos y nuevos funcionan a la vez. Actualiza pasando por la primera versión que lee ambos
-  formatos, que escribe `legacy` por defecto, y después a esta. En una instalación con el chart
-  puedes, en su lugar, establecer `legacy` para la actualización y quitarlo cuando todos los pods
-  se hayan renovado. `dcctl` no tiene opción para establecerlo.
-- **Volver atrás** a `v0.22.0` o anterior requiere establecer `legacy` primero, y que los
+- **Todas las versiones desde `v0.23.0` leen ambos.** Los mensajes escritos en la forma `legacy`
+  antes de una actualización siguen en los flujos retenidos y se leen como antes, incluida la
+  vista previa de repetición de una regla de detección sobre una ventana que empezó antes de la
+  actualización.
+- **Actualice pasando por `v0.23.0`, no directamente desde `v0.22.0` o anteriores.** `v0.22.0` y
+  anteriores solo leen `legacy`: un servicio en una de ellas descarta un mensaje `compact`, o lo
+  aparta como fallido, así que una actualización gradual desde una de ellas directamente a una
+  versión que escribe `compact` pierde los eventos escritos mientras los pods antiguos y nuevos
+  funcionan a la vez. Actualice primero cada instancia a `v0.23.0`, espere a que todos los pods la
+  ejecuten y solo entonces actualice a la versión posterior. En una instalación con el chart puede,
+  en su lugar, establecer `legacy` para la actualización y quitarlo cuando todos los pods se hayan
+  renovado. `dcctl` no tiene opción para establecerlo.
+- **Volver atrás a `v0.23.0`** no requiere nada en cuanto al formato: lee los mensajes `compact`
+  que escribió una versión posterior.
+- **Volver atrás a `v0.22.0` o anterior** requiere establecer `legacy` primero, y que los
   consumidores hayan vaciado de los flujos todo mensaje `compact`.
 
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}

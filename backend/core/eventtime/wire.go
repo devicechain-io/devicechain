@@ -140,8 +140,8 @@ const (
 // infrastructure.messaging.wireFormat. It is the ONE definition of the default: the
 // instance configuration's ApplyDefaults and the process setting below both read it.
 //
-// It is WireCompact from the release AFTER the one that introduced the compact reader,
-// never in that release (see WireFormat).
+// It is WireCompact from the release AFTER the one that introduced the compact reader
+// (v0.23.0, which wrote WireLegacy by default), never in that release (see WireFormat).
 const DefaultWireFormat = WireCompact
 
 // ErrUnknownWireFormat is the refusal of a format that is neither WireLegacy nor
