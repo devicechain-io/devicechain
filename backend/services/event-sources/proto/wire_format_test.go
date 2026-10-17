@@ -90,16 +90,23 @@ func TestTheLegacyFormatIsByteForByteWhatTheReleaseBeforeWrote(t *testing.T) {
 	}
 }
 
-// The process default writes the legacy format: an instance that sets nothing upgrades to
-// this release without writing a byte an earlier consumer cannot read.
-func TestTheDefaultProducerFormatIsTheLegacyFormat(t *testing.T) {
-	require.Equal(t, eventtime.WireLegacy, eventtime.ProducerWireFormat())
+// The process default writes the compact format: an instance that sets nothing writes what
+// MarshalUnresolvedEventAs(compact) writes, and not the legacy bytes.
+func TestTheDefaultProducerFormatIsTheCompactFormat(t *testing.T) {
+	require.Equal(t, eventtime.WireCompact, eventtime.ProducerWireFormat())
+	differ := 0
 	for name, event := range goldenInboundEvents() {
-		want, _ := hex.DecodeString(mainInboundHex[name])
+		compact, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
+		require.NoError(t, err, name)
 		got, err := MarshalUnresolvedEvent(event)
 		require.NoError(t, err, name)
-		require.True(t, bytes.Equal(want, got), name)
+		require.True(t, bytes.Equal(compact, got), name)
+		// An event with no instant or seal to encode is the same in both formats.
+		if legacy, _ := hex.DecodeString(mainInboundHex[name]); !bytes.Equal(legacy, got) {
+			differ++
+		}
 	}
+	require.NotZero(t, differ, "every golden event's default bytes equal its legacy bytes")
 }
 
 // oldReleaseDecode is what a consumer on the release before reads off an inbound message:

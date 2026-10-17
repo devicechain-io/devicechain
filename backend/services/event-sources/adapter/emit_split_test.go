@@ -20,6 +20,7 @@ import (
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -104,8 +105,9 @@ func TestASplitBatchIsIdempotentUnderRetry(t *testing.T) {
 // what Emit passes the dedup hash, or to the bytes it writes, moves them — and a moved id
 // lets an in-flight duplicate from before an upgrade through the dedup window again.
 // Pinning measurementDedupID alone would not catch that: it is the pure function, not the
-// caller.
+// caller. The literals are legacy-format bytes, so the process is pinned to legacy here.
 func TestABatchAtOrUnderTheLimitIsPublishedExactlyAsBefore(t *testing.T) {
+	inProducerWireFormat(t, eventtime.WireLegacy)
 	for _, c := range []struct {
 		n      int
 		dedup  string
