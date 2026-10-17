@@ -3772,6 +3772,273 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### v0.23.0 — usuarios de cliente con acceso acotado, y una ingesta MQTT que pierde menos {#v0230-upgrade}
+
+`v0.23.0` es una actualización en su sitio desde `v0.22.0`: `dcctl install` para el clúster y después
+`dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). A diferencia
+de la [`v0.22.0`](#v0220-upgrade), **sí ejecuta migraciones**: siete servicios añaden columnas,
+índices o tablas. Ninguna reescribe filas existentes, los únicos rellenos registran los tokens de los
+clientes y grupos que ya existen, y cada una se puede volver a ejecutar sin riesgo si se interrumpe.
+Si vienes de la `v0.21.x` o anterior, lee primero las [notas de la `v0.22.0`](#v0220-upgrade); se
+aplican a cualquier actualización que cruce esa versión. Una instancia creada por la `v0.16.0` o
+anterior sigue teniendo que [destruirse y crearse de nuevo](#pre-declaration-recreate).
+
+Esta versión añade los **usuarios de cliente**: miembros de tu tenant limitados a algunos de tus
+clientes o a grupos de dispositivos, que ven solo ese equipo, con roles que define tu tenant e
+invitaciones que envías tú mismo. Casi todo lo demás trata de no perder eventos y de no activar la
+alarma equivocada: el stream que guarda los eventos de los dispositivos MQTT hasta que `event-sources`
+los reenvía se vacía con el doble de profundidad y tiene un espacio que puedes dimensionar, una alarma
+de umbral sigue la lectura más reciente del dispositivo, y un cambio de propietario de un dispositivo
+llega a device-state aunque un pod muera en el peor momento. Qué cambia para alguien:
+
+- **Crece el techo del stream de captura de MQTT.** Era fijo, de 256 MiB, y ahora toma el techo
+  completo de los streams calientes, de modo que un volumen de JetStream dimensionado con poco margen
+  según la cifra anterior puede dejar a `event-sources` sin poder arrancar. Consulta
+  [Crece el techo del stream de captura](#v0230-capture).
+- **Un bróker en clúster (`--ha`) reinicia sus servidores de uno en uno, una vez**, para activar la
+  compresión entre ellos. Consulta [Compresión de rutas del bróker](#v0230-route-compression).
+- **Las alarmas de umbral siguen la lectura más reciente del dispositivo**, no la última en llegar.
+  Consulta [Alarmas de umbral y lecturas tardías](#v0230-threshold).
+- **Dos permisos nuevos, y `role:read` y `role:write` ahora actúan también dentro de un tenant.**
+  Consulta [Usuarios de cliente, roles acotados y los permisos que los sustentan](#v0230-customer-users).
+- **El token de un cliente o de un grupo eliminado ya no se puede reutilizar**, y a un miembro limitado
+  a algunos clientes se le rechazan, en lugar de responderle, las operaciones que no se pueden limitar.
+  Consulta [Usuarios de cliente, roles acotados y los permisos que los sustentan](#v0230-customer-users).
+- **Dos identificadores de mensaje de la ruta de eventos cambiaron de formato**, lo que abre una
+  pequeña ventana para un duplicado durante el despliegue. Consulta
+  [Ids de evento y cabecera de correlación](#v0230-ids).
+- **La próxima versión cambia cómo se escriben los eventos en el cable**, y solo se puede alcanzar
+  pasando por esta. Consulta [Actualiza por esta versión antes de la siguiente](#v0230-next-wire).
+- **Se mueven algunos valores por defecto:** la consola no puede incrustarse en otros sitios, la
+  ventana de publicación del stream de captura es 1024 y los escritores publican en el líder de su
+  stream. Consulta [Valores por defecto que cambiaron](#v0230-defaults).
+
+#### Antes de actualizar {#v0230-before}
+
+1. **Si subiste `streamMaxBytes`, o dimensionaste o limitaste tú mismo el volumen de JetStream,
+   comprueba primero el margen.** La reserva del stream de captura crece en `streamMaxBytes` menos
+   256 MiB, es decir, 768 MiB con el valor por defecto. Consulta
+   [Crece el techo del stream de captura](#v0230-capture).
+2. **Si una aplicación o un script elimina un cliente o un grupo y vuelve a crear otro con el mismo
+   token**, planifica elegir un token nuevo. Consulta
+   [Usuarios de cliente, roles acotados y los permisos que los sustentan](#v0230-customer-users).
+3. **Si dependes de reglas de umbral**, lee [Alarmas de umbral y lecturas tardías](#v0230-threshold)
+   para que una alarma que ahora se activa no sea una sorpresa.
+
+#### Durante la actualización {#v0230-during}
+
+- **Las migraciones se ejecutan en el primer arranque** en `user-management` (un ámbito en cada
+  membresía, un tenant en cada rol, invitaciones), `device-management` (los clientes de cada alarma, el
+  ámbito de acceso de los grupos, los tokens retirados de clientes y grupos, una cola de cambios de
+  propietario, una fórmula en la definición de una métrica), `command-delivery`, `device-state`,
+  `update-management`, `dashboard-management` (paneles compartidos) y `notification-management` (horas
+  de silencio, el ciclo de una alarma). Las columnas nuevas están vacías en todas las filas existentes,
+  algo intencionado que se describe [más abajo](#v0230-customer-users). Los índices nuevos se crean sin
+  `CONCURRENTLY`, así que las escrituras en la tabla que se indexa esperan a que termine, un tiempo
+  breve salvo que la tabla sea muy grande.
+- **En un bróker en clúster, los servidores del bróker se reinician de uno en uno, una vez**, porque la
+  nueva compresión por defecto forma parte de la configuración del bróker.
+- **`event-sources` sube en su sitio el techo del stream de captura** en su primer arranque. No se
+  recrea ningún stream ni se pierde ningún mensaje.
+
+Volver a `v0.22.0` tras la actualización lee la misma base de datos, porque cada adición es una
+columna, un índice o una tabla nuevos. No lo hagas mientras algún miembro esté limitado a clientes o a
+grupos: `v0.22.0` no lee el ámbito de una membresía, así que ese miembro dejaría de estar limitado.
+Deshabilítalo o elimínalo antes.
+
+#### Después de actualizar {#v0230-after}
+
+- **No se requiere nada.** Todos los ajustes nuevos tienen valor por defecto, y ningún miembro tiene un
+  ámbito hasta que se lo das.
+- **Comprueba el margen del stream de captura** si no lo hiciste antes, y ten activada
+  `JetStreamCaptureBacklogWillOverflow` con `metrics.alerts`.
+- **Las alarmas, los comandos y las asignaciones de actualización anteriores a la actualización no son
+  visibles para un miembro limitado a clientes.** El servidor registra sus clientes a partir de esta
+  versión. El estado en vivo de un dispositivo se registra la próxima vez que informa o cambia de
+  propietario.
+
+##### Crece el techo del stream de captura {#v0230-capture}
+
+Los eventos de los dispositivos MQTT esperan en un stream de captura hasta que `event-sources` los
+reenvía. El bróker ya confirmó cada uno a su dispositivo, así que cuando el stream se llena descarta los
+eventos sin reenviar más antiguos y los dispositivos nunca se enteran. En una prueba de carga a 12.000
+eventos por segundo se perdió así el 7,2 % de los eventos confirmados: el stream tenía 256 MiB y
+`event-sources` reenviaba unos 7.100 por segundo.
+
+- **El vaciado tiene el doble de profundidad.** `capture.publishWindow` es 1024, antes 512. En una prueba
+  comparativa que retrasa solo las confirmaciones, la tasa de reenvío para un retraso dado se duplicó.
+  Es un ajuste fijo de `event-sources`, de 1 a 1024; un valor fuera de ese rango detiene el servicio.
+- **El stream toma el techo caliente completo.** Estaba limitado a 256 MiB y ningún ajuste podía subir
+  ese límite. Ahora sigue a `streamMaxBytes` como los demás streams calientes: 1 GiB por defecto y
+  64 MiB en una instancia `--compact`, donde no cambia nada. Con los valores por defecto la reserva de
+  disco de JetStream pasa de 10.824 MiB a 11.592 MiB, de los 14 GiB que permite el volumen por defecto.
+- **Si subiste `streamMaxBytes` y dimensionaste el volumen con poco margen, la reserva crece en ese
+  valor menos 256 MiB.** JetStream reserva el techo de un stream al crearlo o subirlo. Una reserva por
+  encima del límite del bróker hace que `event-sources` se detenga al arrancar con `insufficient
+  storage resources available`, y sigue deteniéndose hasta que añadas espacio (consulta
+  [Arrancar una instancia](./bootstrap.md)) o bajes el techo.
+- **Un stream editado para descartar los mensajes nuevos se restaura.** Un stream de captura lleno que
+  rechaza mensajes nuevos no llega a ningún dispositivo, porque el bróker confirma la publicación antes,
+  de modo que se perderían los eventos más recientes y nada los contaría. Cada stream declarado vuelve a
+  descartar los más antiguos, y el servicio lo registra en el log.
+- **Una alerta crítica nueva, `JetStreamCaptureBacklogWillOverflow`,** salta cuando el atraso de la
+  captura llenará el stream en diez minutos al ritmo al que creció en los últimos tres. Consulta
+  [Observabilidad](./observability.md).
+
+##### Compresión de rutas del bróker {#v0230-route-compression}
+
+Los servidores de un bróker en clúster se copian entre sí cada evento almacenado. `nats_route_compression`
+comprime ese tráfico, y ahora es `s2_fast` por defecto cuando instalas con `--ha`. Un bróker de un solo
+servidor no se ve afectado. En un clúster de tres nodos redujo el tráfico entre servidores un 60 % por
+evento a cambio de cerca del 3 % de la CPU de cada servidor. `dcctl upgrade` reinicia los servidores del
+bróker de uno en uno, una vez, para activarla. Un valor que hayas fijado tú, `off` incluido, se
+conserva. Consulta [Compresión entre los servidores del bróker](./bootstrap.md#route-compression).
+
+##### Alarmas de umbral y lecturas tardías {#v0230-threshold}
+
+Una alarma de umbral seguía la última lectura en llegar. Una lectura que la plataforma recibía tarde
+podía activar una alarma que lecturas más recientes ya habían despejado, o despejar una que esas
+lecturas mantenían activa. Ahora:
+
+- **Mientras una alarma está activa, una lectura más antigua que la más reciente del dispositivo se
+  descarta y se cuenta**, de modo que no puede despejar la alarma.
+- **Mientras no hay alarma activa, una lectura coincidente más atrasada que la tolerancia de retraso se
+  descarta solo si se puso en cola para detección más de 30 segundos después de que la plataforma la
+  recibiera**, como ocurre con una publicación reintentada. Cualquier otra lectura coincidente activa la
+  alarma, así que un dispositivo con el reloj lento, o que sube lecturas guardadas durante una caída,
+  ahora activa una alarma con ellas a medida que llegan.
+- **Las reglas de ventana de recuento y de tasa sitúan una lectura por su propia hora**, como las reglas
+  de duración. Activan y despejan con un margen de una tolerancia de retraso respecto a la lectura más
+  reciente, y la última lectura antes de un periodo de silencio se decide con el reloj de pared cuando el
+  motor lleva un rato inactivo.
+- **Las reglas de ventana deslizante leen su ventana según la lectura más reciente del dispositivo**, de
+  modo que una lectura tardía cuenta solo junto a las lecturas que estaban dentro de una misma ventana
+  con ella.
+
+`detect_late_samples_total` cuenta todos estos descartes. Consulta
+[la página del motor de detección](./detection-engine.md).
+
+##### Usuarios de cliente, roles acotados y los permisos que los sustentan {#v0230-customer-users}
+
+Ahora un miembro puede limitarse a algunos de tus clientes, a grupos dinámicos de dispositivos, o a
+ambos (hasta 16 en total), y ve solo los dispositivos, alarmas, eventos, comandos y paneles que les
+pertenecen. Los administradores del tenant invitan a miembros, definen roles y comparten paneles desde
+la consola; el capítulo completo es
+[Miembros, roles y usuarios de cliente](../user-guide/members-roles-and-customer-users.md). Lo que
+importa al actualizar:
+
+- **Hay dos permisos nuevos.** `member:read` lista miembros e invitaciones, y `member:write` invita,
+  asigna roles y ámbito, habilita, deshabilita y elimina. Son permisos de tenant y no están en la base de
+  solo lectura. El rol integrado de administrador del tenant tiene `*` y, por tanto, ambos.
+- **`role:read` y `role:write` ahora actúan en dos planos.** En el plano de administración de la
+  instancia siguen llegando al catálogo de roles del operador. En un rol de tenant, ahora permiten al
+  miembro listar y definir los roles que ese tenant posee.
+- **Un cambio en el acceso de un miembro surte efecto en su siguiente renovación**, en 15 minutos o 5
+  para un miembro limitado a clientes o grupos, y ya no cierra la sesión de la persona en todos los
+  tenants a los que pertenece.
+- **Las operaciones que no se pueden limitar se rechazan** a un miembro limitado, con `FORBIDDEN` y
+  `extensions.reason` con el valor `SCOPE_UNSUPPORTED`, diga lo que diga su rol. Las operaciones que sí
+  se pueden limitar responden solo con lo que el miembro posee, y un registro fuera de ese conjunto se
+  responde como `NOT_FOUND`. Consulta
+  [Cuando tu acceso se limita a algunos clientes](../reference/graphql-api.md#limited-access).
+- **El token de un cliente o de un grupo eliminado se retira en su tenant.** `createCustomer` o
+  `createEntityGroup` con ese token responde `INVALID_VALUE` con un mensaje que explica por qué, y solo
+  eliminar el tenant entero lo libera. Un cliente que sigue existiendo con ese token sigue respondiendo
+  `CONFLICT`. Los registros que nombran a un cliente solo por su token mostrarían, si no, el historial
+  del cliente anterior a uno nuevo. Los tokens de clientes y grupos eliminados antes de esta versión no
+  se retiran.
+- **Los cambios de propietario de un dispositivo siempre llegan a device-state.** El cambio se confirma
+  junto con un anuncio en cola que se reintenta hasta que el bróker lo confirma, mientras que antes se
+  publicaba después de la confirmación. Un pod que moría entre ambos pasos dejaba a los miembros del
+  propietario anterior viendo el estado en vivo del dispositivo hasta su siguiente evento, que para un
+  dispositivo en silencio nunca llegaba.
+- **Los paneles se pueden compartir con clientes y grupos.** Un usuario de cliente ve solo los paneles
+  publicados que se comparten con él. Un widget vinculado a un activo, un área o un grupo lee el grafo de
+  relaciones, al que no tienen acceso, y muestra **Not available for customer users**.
+
+##### Ids de evento y cabecera de correlación {#v0230-ids}
+
+El id que usa el bróker para descartar una publicación duplicada, y la cabecera que lleva un id de
+correlación entre servicios, son más cortos: la cabecera es `Dc-Cid` (antes `Dc-Correlation-Id`) y los ids
+usan base 36. Un id nuevo nunca puede coincidir con uno antiguo. Una actualización progresiva tiene a la
+vez pods de ambas versiones, así que un evento cuya confirmación de publicación se perdió, o cuyo pod se
+detuvo sin vaciarse, mientras duraba el despliegue puede entregarse dos veces. La telemetría almacenada
+no se duplica, porque la clave de un evento es un resumen de su contenido, pero una regla de recuento, de
+repetición o de agregado deslizante puede contar ese evento dos veces. La correlación en los logs no se
+conserva para los mensajes en vuelo durante la actualización. La exposición termina 10 minutos después de
+que desaparezca el último pod antiguo.
+
+##### Actualiza por esta versión antes de la siguiente {#v0230-next-wire}
+
+Los eventos cruzan dos streams retenidos como mensajes protobuf, y esta versión puede leer una forma más
+pequeña: los instantes como un recuento de nanosegundos y los sellos de las credenciales de dispositivo
+en binario, cerca de un tercio más pequeños por mensaje. **Sigue escribiendo la forma antigua por
+defecto**, de modo que un pod de la versión anterior puede leerlo todo. La próxima versión escribe la
+forma pequeña por defecto, y un pod anterior a esta versión descartaría esos mensajes o los enviaría a la
+cola de mensajes fallidos. Actualiza cada instancia a `v0.23.0` primero, y solo después a la siguiente
+versión. `infrastructure.messaging.wireFormat` (`legacy` o `compact`, exactamente así escritos) elige la
+forma. Fija `compact` solo cuando todos los pods ejecuten esta versión, y vuelve a fijar `legacy` antes
+de volver a una versión anterior.
+
+##### Valores por defecto que cambiaron {#v0230-defaults}
+
+- **La consola no puede incrustarse en otro sitio.** Sus páginas se sirven con
+  `Content-Security-Policy: frame-ancestors 'self'` y `X-Frame-Options: SAMEORIGIN`. El visor `/dash`
+  sigue pudiendo incrustarse, porque usarlo en una pantalla de pared es un uso admitido. Una página de otro
+  origen que incruste la propia consola deja de mostrarla.
+- **`capture.publishWindow` es 1024** (antes 512).
+- **Los escritores publican en el líder de su stream.** `infrastructure.nats.affinity.publishToLeader`
+  está activado por defecto: los escritores de `device-management` y `event-sources` abren una segunda
+  conexión con el servidor que lidera su stream. En un clúster de tres nodos, el techo de un solo pod de
+  `device-management` subió cerca de un 6 %. Ponlo en `false` para desactivarlo.
+
+##### Alertas y métricas nuevas {#v0230-observability}
+
+- `JetStreamCaptureBacklogWillOverflow` (crítica), descrita arriba;
+- `DeviceStateDroppingEvents` (aviso): device-state descartó un evento tras su último intento de entrega,
+  lo que deja obsoleta la conectividad de un dispositivo, una lectura o su posición hasta que llega un
+  evento más reciente;
+- `devicechain_notificationmanagement_quiet_hours_total{outcome}` para las notificaciones retenidas y
+  liberadas.
+
+Cada resultado que cuenta un procesador se exporta ahora a cero desde el principio, de modo que el primer
+descarte tras el arranque de un pod es visible para una alerta. Ninguna métrica cambió de nombre ni se
+eliminó.
+
+#### Qué más cambió {#v0230-what-changed}
+
+##### También en esta versión {#v0230-also}
+
+- **Horas de silencio en una política de notificación.** Franjas semanales en una zona horaria IANA
+  retienen las notificaciones por debajo de una gravedad que eliges y las envían cuando termina el
+  periodo de silencio. Consulta [Horas de silencio](../guides/notification-channels.md#quiet-hours).
+- **Una alarma que se vuelve a activar escala de nuevo.** Una alarma que se despejó y se volvió a activar
+  conservaba el acuse de recibo del primer ciclo, así que su segundo ciclo nunca escalaba.
+- **Los paneles recuperan lo que se perdió durante una caída de la transmisión en vivo.** Tras una caída de
+  la conexión, un gráfico de líneas, una tabla de flota y una tarjeta de estadística recuperan las
+  lecturas enviadas durante la caída, de modo que un gráfico ya no traza una línea recta sobre el hueco.
+  Esto elimina la limitación conocida de la `v0.22.0`.
+- **Una pestaña Enviar datos** en la página del dispositivo escribe un `mosquitto_pub` o un `curl` listo
+  para ejecutar con la primera lectura del dispositivo.
+- **`dcctl enable-area`** activa un área funcional en una instancia en marcha. No hay ningún comando para
+  desactivarla.
+- **Sparkplug.** Un Host conectado vuelve a sondear la actividad de sus dispositivos asertados cada
+  `presence.probeSeconds` (1800 por defecto), de modo que un dispositivo cuyo certificado de defunción
+  nunca llegó deja de figurar en línea. Se rechaza un mensaje con más de 16.384 métricas.
+- **MCP.** Cada llamada a una herramienta escribe una línea de log estructurada `mcp_tool_call` con el
+  tenant, el actor, el cliente y la herramienta.
+- **Comandos.** Un comando retenido por una ventana de mantenimiento sigue retenido cuando un cambio de
+  perfil lo vuelve ordinario, y un comando que su perfil ya no define falla con un motivo, sin enviarse
+  nunca.
+- **Las migraciones del almacén de eventos** encuentran los chunks comprimidos de una forma que
+  TimescaleDB 2.29 y posteriores pueden planificar.
+- **Varios lectores de entrada por pod de `device-management`:** `resolution.inboundReaders`, de 1 a 4,
+  vale 1 por defecto.
+- **Métricas calculadas, solo edición.** La definición de una métrica puede llevar una fórmula sobre las
+  demás métricas del perfil, y `testMetricFormula` previsualiza una. Todavía nada las calcula, y se
+  rechaza publicar un perfil con una métrica calculada. El ajuste del nivel que lo permitiría,
+  `calculatedMetricsPerProfile`, vale 0.
+
 ### v0.22.0 — paneles sobre una cuadrícula de celdas cuadradas, y una ruta de eventos que espera menos {#v0220-upgrade}
 
 `v0.22.0` es una actualización en su sitio desde `v0.21.0` o `v0.21.1`: `dcctl install` para el
