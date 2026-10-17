@@ -44,6 +44,10 @@ type ProfileResolution struct {
 	// byKey indexes metrics by key, pointing into metrics. Built once, by freeze; nil
 	// when no metric is declared.
 	byKey map[string]*ResolvedMetric
+	// calc is the version's calculated metrics, compiled (ADR-082). Built once, by freeze,
+	// from the expressions in metrics — so a decoded resolution compiles its own and the
+	// cache never carries a program; nil when the version declares none.
+	calc *calcPlan
 }
 
 // NewProfileResolution builds a resolution from a scope and the definitions of the
@@ -60,6 +64,8 @@ func NewProfileResolution(scope ProfileScope, defs []*MetricDefinition) ProfileR
 // may hold the slice afterwards.
 func freeze(scope ProfileScope, metrics []ResolvedMetric) *ProfileResolution {
 	r := &ProfileResolution{scope: scope, metrics: metrics}
+	// Before the index: it marks the metrics formulas read, and the index points at them.
+	r.calc = buildCalcPlan(scope, metrics)
 	if len(metrics) > 0 {
 		r.byKey = make(map[string]*ResolvedMetric, len(metrics))
 		// A key declared twice resolves to its last declaration.
@@ -105,9 +111,14 @@ func (r ProfileResolution) MetricCount() int {
 // the value against it. Lenient by design (ADR-016): a measurement whose key is not
 // declared on the profile passes through unvalidated, so the metric model is an additive
 // typing layer rather than a strict allow-list.
+//
+// A value a device sends under a CALCULATED metric's key is not validated either: the
+// resolver drops it (the computed value is authoritative and a device cannot forge one), so
+// a device that still sends the key after it became calculated loses that one value, never
+// the whole reading.
 func (r ProfileResolution) ValidateMeasurement(name string, value string) error {
 	def, declared := r.Metric(name)
-	if !declared {
+	if !declared || def.Calculated() {
 		return nil
 	}
 	return ValidateMetricValue(&def, value)

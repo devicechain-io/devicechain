@@ -251,6 +251,7 @@ func UnmarshalPayloadForMeasurementsEvent(encoded []byte, envelope time.Time) (*
 				Classifier: pmx.Classifier,
 				Unit:       pmx.Unit,
 				DataType:   pmx.DataType,
+				Derived:    pmx.Derived,
 			}
 			mxs = append(mxs, mx)
 		}

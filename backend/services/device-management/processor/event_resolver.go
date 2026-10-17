@@ -79,6 +79,11 @@ type EventResolver struct {
 	// for the pool (initializeEventResolvers sets it), label-free; nil in tests that do not
 	// look at it.
 	deviceDisabled prometheus.Counter
+	// calcObs reports calculated-metric outcomes (ADR-082). Its metrics are the pool's
+	// (initializeEventResolvers sets them; nil in tests, which counts nothing); the rest is
+	// pointed at each event as it is resolved, which is safe because a resolver resolves one
+	// event at a time.
+	calcObs calcObserver
 }
 
 // EventTimePolicy is the resolution-time event-time policy: the tolerance a
@@ -414,6 +419,11 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 // DECLARED numeric metric carrying a non-numeric value relies on validation having
 // already rejected it upstream. profile is the event's one profile read, the same one
 // validation read.
+//
+// A version with calculated metrics (ADR-082) also has each sample entry's formulas
+// evaluated against that entry's own values and appended as Derived entries, and a value a
+// device sent under a calculated key dropped in favour of the computed one. See
+// model/profile_calculation.go; a version with none pays one compare per event.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
 	profile model.ProfileResolution, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	mpayload, ok := event.Payload.(*esmodel.UnresolvedMeasurementsPayload)
@@ -422,11 +432,31 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 	}
 	rmpayload := &model.ResolvedMeasurementsPayload{}
 	rmsentries := make([]model.ResolvedMeasurementsEntry, 0)
+	// Calculated metrics (ADR-082). A version with none — every profile without formulas —
+	// pays this one compare per event and nothing else: no sample is taken, no value parsed.
+	calculated := profile.CalculatedCount() > 0
+	if calculated {
+		rez.calcObs.ctx, rez.calcObs.device, rez.calcObs.version = ctx, device.Token, profile.Scope().ProfileVersionToken
+	}
 	for _, umsentry := range mpayload.Entries {
 		rmentries := make([]model.ResolvedMeasurementEntry, 0)
+		var calc model.Calculation
+		if calculated {
+			// Sized for the calculated values too, so appending them does not regrow it.
+			rmentries = make([]model.ResolvedMeasurementEntry, 0, len(umsentry.Measurements)+profile.CalculatedCount())
+			calc = profile.BeginCalculation()
+		}
 		for mxkey, mxvalue := range umsentry.Measurements {
 			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
 			if def, declared := profile.Metric(mxkey); declared {
+				if def.Calculated() {
+					// A device-sent value under a calculated key: the computed value is
+					// authoritative and a device cannot forge one, so this one is dropped
+					// (and counted) and the formula's value, if it produces one, is stored
+					// under the key instead. Validation skipped it for the same reason.
+					rez.calcObs.deviceKeyDropped(mxkey, mxvalue)
+					continue
+				}
 				if !model.MetricDataType(def.DataType()).StorableAsMetric() {
 					// Declared but non-storable (STRING is device state, not a
 					// time-series metric — ADR-016). Creating such a definition is
@@ -454,6 +484,10 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				if model.MetricDataType(dataType) == model.MetricBoolean {
 					rmentry.Value = normalizeBool(mxvalue)
 				}
+				if calculated {
+					// The value as the device sent it, parsed once as its declared type.
+					calc.Set(&def, mxvalue)
+				}
 			} else if _, err := strconv.ParseFloat(mxvalue, 64); err != nil {
 				// Undeclared and non-numeric: a measurement stores in the numeric
 				// column, so this value cannot be persisted. Undeclared keys are
@@ -464,6 +498,15 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				continue
 			}
 			rmentries = append(rmentries, rmentry)
+		}
+		if calculated {
+			// Computed from THIS sample entry only, under the event's own profile version,
+			// and appended before the sort so a calculated value takes its place in the
+			// canonical order like any other entry. Event identity does not see it
+			// (ResolvedMeasurementsPayload.IdentityView), so the event id stays a function of
+			// what the device sent alone.
+			rmentries = calc.Append(rmentries, &rez.calcObs)
+			calc.Release()
 		}
 		// 🔴 SORT BY NAME, AND IT IS LOAD-BEARING — not a tidiness pass.
 		//

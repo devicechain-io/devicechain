@@ -559,7 +559,8 @@ type MetricFormulaTest {
     value: String
     """
     Why the formula produces no value for the sample: missing_input, invalid_input,
-    non_finite, div_zero, overflow, range or eval_error. No value is ever substituted.
+    non_finite, div_zero, overflow, range, unstorable (a magnitude of 1e12 or more, which
+    measurements cannot be stored with) or eval_error. No value is ever substituted.
     """
     skippedReason: String
     """The measured metrics the formula reads."""
@@ -3208,9 +3209,8 @@ type Query {
     ): MetricDefinitionSearchResults!
     """
     Checks a calculated-metric formula against a profile's draft measured metrics and
-    evaluates it for a sample you type. Nothing is stored. Calculated metrics are not yet
-    computed from readings in this release, so a profile carrying one cannot be published;
-    this lets you write and check formulas ahead of that. A sample of more than 256 values
+    evaluates it for a sample you type, with the same evaluator that computes a published
+    calculated metric from each reading. Nothing is stored. A sample of more than 256 values
     is refused with LIMIT_EXCEEDED, and naming a key twice with INVALID_VALUE. Requires
     device:read.
     """

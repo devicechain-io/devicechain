@@ -188,6 +188,9 @@ type ResolveMetrics struct {
 	// workers is the resolver pool width this pod runs. Beside red's resolve_inflight it
 	// says whether the pool is saturated. Nil in a zero ResolveMetrics.
 	workers prometheus.Gauge
+
+	// calc counts calculated-metric outcomes (ADR-082), shared by the pool.
+	calc *CalcMetrics
 }
 
 // NewResolveMetrics builds the inbound resolve loop's instruments.
@@ -199,8 +202,10 @@ type ResolveMetrics struct {
 // callback is entered again — which any start retried after a failed one does — and
 // MustRegister panics on the duplicate.
 func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
+	calc := newCalcMetrics(ms)
 	return ResolveMetrics{
-		red: ms.NewProcessorMetrics("resolve"),
+		calc: &calc,
+		red:  ms.NewProcessorMetrics("resolve"),
 		eventTimeBounded: ms.NewCounter(
 			"resolve_event_time_bounded_total",
 			"Reported event times refused for leading the server clock by more than the configured tolerance, and replaced with the ceiling"),
@@ -727,6 +732,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.SecretTransit = iproc.secretTransit
 		resolver.tenantDeleted = iproc.tenantDeleted
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
+		resolver.calcObs.metrics = iproc.metrics.calc
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)
 		// so that on shutdown they drain the remaining buffered messages to

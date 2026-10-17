@@ -190,6 +190,7 @@ func measurementFromResolved(tenant string, e *dmmodel.ResolvedEvent,
 		Classifier:        me.Classifier,
 		Unit:              mx.Unit,
 		DataType:          mx.DataType,
+		Derived:           mx.Derived,
 	}
 	// The value goes into the preimage as the same *float64 the persist path builds. The
 	// one input where the two paths differ is a NON-NUMERIC value: persistence rejects it
