@@ -36,6 +36,20 @@ dcctl install local
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
 
+:::note 在脚本或 CI 任务中
+`dcctl bootstrap` 会要求输入口令，用来封存根密钥托管（escrow）制品。没有终端可供询问时，它会报错 `no escrow passphrase and no terminal to ask at` 并停止。可以不经交互提供口令，用文件或环境变量均可：
+
+```bash
+dcctl bootstrap local devicechain --host localhost --no-tls --escrow-passphrase-file ./escrow.pass
+# 或
+DCCTL_ESCROW_PASSPHRASE='<passphrase>' dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+对于一次性实例，可以用 `--no-escrow` 跳过托管（`--dev` 隐含该选项）。代价是：实例的密钥库根密钥只存在于集群内部，集群一旦丢失，实例存储的所有密钥都将永久无法读取，即使有数据库备份也无济于事。参见[根密钥托管](../deployment/bootstrap.md#escrow)。
+:::
+
+在本地 kind 集群上，本机的 **1883** 端口连到你首个引导的实例的 MQTT 代理。它使用 TLS；连接方法参见[发布事件](../guides/connecting-a-device.md#publishing-an-event)。
+
 `dcctl install` 创建 kind 集群，并安装集群中所有实例共享的组件：DeviceChain Operator 及其自定义资源定义、关系数据库、CloudNativePG Operator、cert-manager、监控和入口。每个集群只需运行一次；如果集群尚未完成这一步，`dcctl bootstrap` 就会拒绝执行。参见[安装集群](../deployment/bootstrap.md#install)。
 
 实例 ID（这里是 `devicechain`）用于两个地方：
@@ -62,6 +76,9 @@ kubectl -n dci-devicechain get secret dci-devicechain-superuser -o jsonpath='{.d
 ```bash
 dcctl sim create demo
 ```
+
+`dcctl sim create` 默认访问 `localhost` 上的实例。如果控制台在其他端口提供服务，请在 `--server` 中给出主机和端口，同时也要给出设备平面的接入端点，因为后者由主机推导而来，并不知道该端口：
+`dcctl sim create demo --server localhost:8080 --ingress http://localhost:8081`。
 
 这个命令会：
 

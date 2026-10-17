@@ -210,6 +210,22 @@ mosquitto_pub \
 
 凭据会认证连接（消息代理）和事件（流水线）。TLS 主机、CA 来源及端口暴露方式取决于实例部署；参见[部署](../deployment/kubernetes-operator.md)。
 
+代理使用 TLS，因此 `--cafile` 需要实例的 CA 证书。在本地 kind 安装中，它位于实例命名空间的 `dc-nats-tls` Secret 里，键为 `ca.crt`。用一条命令将其保存为 `instance-ca.crt`（把 `dci-` 前缀后的实例 ID 换成你自己的）：
+
+```bash
+kubectl -n dci-devicechain get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > instance-ca.crt
+```
+
+在本地 kind 集群上，代理位于 `localhost:1883`，但其证书并非为 `localhost` 或 `host.docker.internal` 签发，因此主机名校验会失败。仅在本地测试时，可给 `mosquitto_pub` 加上 `--insecure` 跳过主机名检查：
+
+```bash
+mosquitto_pub --cafile instance-ca.crt --insecure -h localhost -p 1883 ...
+```
+
+:::warning 仅限本地测试
+`--insecure` 会关闭主机名校验，连接不再能证明连到的是你的代理。切勿在生产环境使用；请改为连接证书所覆盖的主机名。
+:::
+
 ### 服务质量 {#quality-of-service}
 
 除非有明确理由，否则请以 **QoS 0** 发布遥测。上面的示例使用 QoS 0，因为它是 `mosquitto_pub` 的默认值。
