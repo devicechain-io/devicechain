@@ -80,7 +80,8 @@ one.
 
 From a row's menu:
 
-- **Edit access** changes the member's **Roles** and what they **Can see**.
+- **Edit access** changes the member's **Roles** and what they **Can see**. When you change both
+  in one save, they are saved together: if either is refused, neither changes.
 - **Disable** keeps the member out of this tenant without removing them, and **Enable** lets them
   back in.
 - **Remove** takes the member out of the tenant. Their account is kept, and they can be invited
@@ -195,7 +196,9 @@ has to be an **access scope** first, which you set on the group itself:
 2. Open the group under **Device Groups** and choose its **Access scope** tab.
 3. A dynamic group that has never been published shows **Publish filter**. Choose it to publish
    the group's filter as its first version. An access scope follows the group's published version,
-   so the filter has to be published before the group can be one.
+   so the filter has to be published before the group can be one. If someone else publishes the
+   group while you have the tab open, **Publish filter** does not publish a second version on top
+   of theirs: the tab says the group changed and shows its current state.
 4. Tick **Use as access scope**. This needs `device:write`.
 
 {/* TODO(screenshot): group-access-scope, a device group's Access scope tab with the box ticked. */}

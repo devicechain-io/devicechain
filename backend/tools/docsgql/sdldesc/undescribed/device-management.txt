@@ -763,10 +763,6 @@ Mutation.publishAssetType
 Mutation.publishAssetType(description:)
 Mutation.publishAssetType(label:)
 Mutation.publishAssetType(token:)
-Mutation.publishEntityGroup
-Mutation.publishEntityGroup(description:)
-Mutation.publishEntityGroup(label:)
-Mutation.publishEntityGroup(token:)
 Mutation.removeEntityRelationship
 Mutation.removeEntityRelationship(token:)
 Mutation.removeEntityRelationships

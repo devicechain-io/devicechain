@@ -3915,10 +3915,26 @@ type Mutation {
     # Delete an entity group, its relationship edges, and its frozen versions.
     # Refused (ErrEntityInUse) while a detection rule scopes to the group (ADR-062).
     deleteEntityGroup(token: String!): Boolean!
-    # Publish a DYNAMIC entity group's current draft selector as a new immutable
-    # version and make it the active version a rule-scoped resolve reads (ADR-062 S1).
-    # label/description are optional. Rejected for a static group.
-    publishEntityGroup(token: String!, label: String, description: String): EntityGroupVersion!
+    """
+    Publishes a dynamic entity group's current draft selector as a new immutable version and makes
+    it the active version a rule-scoped resolve reads. Rejected for a static group. Requires
+    device:write.
+    """
+    publishEntityGroup(
+        """Token of the group to publish."""
+        token: String!
+        """Optional short label for the new version."""
+        label: String
+        """Optional longer description of what the new version changes."""
+        description: String
+        """
+        The active version the caller saw: 0 for a group never published. When the group's active
+        version has since moved, because someone else published or rolled back, nothing is
+        published and the request fails as modified by another writer. Omit to publish
+        unconditionally.
+        """
+        expectedActiveVersion: Int
+    ): EntityGroupVersion!
     # Re-point a dynamic group's active version at an existing version — a
     # non-destructive rollback; the draft is untouched. Returns the updated group.
     rollbackEntityGroup(token: String!, version: Int!): EntityGroup!

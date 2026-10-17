@@ -80,7 +80,8 @@ Un enlace que no se puede usar (caducó, se revocó, ya se usó o se envió a ot
 
 Desde el menú de una fila:
 
-- **Editar acceso** cambia los **Roles** del miembro y lo que **Puede ver**.
+- **Editar acceso** cambia los **Roles** del miembro y lo que **Puede ver**. Si cambias ambos en un
+  mismo guardado, se guardan juntos: si se rechaza uno, no cambia ninguno.
 - **Deshabilitar** deja al miembro fuera de este inquilino sin quitarlo, y **Habilitar** le vuelve a
   dar entrada.
 - **Quitar** saca al miembro del inquilino. Su cuenta se conserva y se le puede volver a invitar.
@@ -199,7 +200,9 @@ Antes, el grupo tiene que ser un **ámbito de acceso**, lo que se fija en el pro
 2. Abre el grupo en **Grupos de dispositivos** y elige su pestaña **Ámbito de acceso**.
 3. Un grupo dinámico que nunca se ha publicado muestra **Publicar filtro**. Elígelo para publicar el
    filtro del grupo como su primera versión. Un ámbito de acceso sigue la versión publicada del
-   grupo, así que el filtro tiene que publicarse antes de que el grupo pueda serlo.
+   grupo, así que el filtro tiene que publicarse antes de que el grupo pueda serlo. Si otra persona
+   publica el grupo mientras tienes la pestaña abierta, **Publicar filtro** no publica una segunda
+   versión encima de la suya: la pestaña indica que el grupo cambió y muestra su estado actual.
 4. Marca **Usar como ámbito de acceso**. Hace falta `device:write`.
 
 {/* TODO(screenshot): group-access-scope, a device group's Access scope tab with the box ticked. */}

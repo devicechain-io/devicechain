@@ -53,7 +53,7 @@ sidebar_position: 19
 
 在某一行的菜单中：
 
-- **Edit access**（编辑访问权限）修改成员的 **Roles** 及其 **Can see**。
+- **Edit access**（编辑访问权限）修改成员的 **Roles** 及其 **Can see**。如果在一次保存中同时修改两者，它们会一起保存：任何一项被拒绝，两者都不会改变。
 - **Disable**（禁用）让成员无法进入本租户，但不将其移除；**Enable**（启用）让其重新进入。
 - **Remove**（移除）将成员移出本租户。其账号会保留，之后可以再次邀请。
 - 对于仍标记为 **Invited** 的成员，**Reissue invitation**（重新签发邀请）会显示新链接并使旧链接失效，**Revoke invitation**（撤销邀请）则使链接失效而不签发新链接。
@@ -122,7 +122,7 @@ sidebar_position: 19
 
 1. 该组必须是**动态**设备组：其成员由针对设备属性的筛选条件选出。可以在 **Browse**（浏览）界面中保存一个，见[分组、分面与浏览](/user-guide/groups-facets-browse)。
 2. 在 **Device Groups**（设备分组）下打开该组，选择其 **Access scope**（访问范围）选项卡。
-3. 从未发布过的动态组会显示 **Publish filter**（发布筛选条件）。选择它，把该组的筛选条件发布为第一个版本。访问范围跟随组的已发布版本，因此必须先发布筛选条件，组才能成为访问范围。
+3. 从未发布过的动态组会显示 **Publish filter**（发布筛选条件）。选择它，把该组的筛选条件发布为第一个版本。访问范围跟随组的已发布版本，因此必须先发布筛选条件，组才能成为访问范围。如果在您打开该标签页期间有其他人发布了该组，**Publish filter** 不会在其版本之上再发布第二个版本：标签页会提示该组已更改，并显示其当前状态。
 4. 勾选 **Use as access scope**（用作访问范围）。这需要 `device:write`。
 
 {/* TODO(screenshot): group-access-scope, a device group's Access scope tab with the box ticked. */}

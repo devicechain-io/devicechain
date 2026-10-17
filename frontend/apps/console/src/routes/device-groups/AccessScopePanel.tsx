@@ -19,6 +19,7 @@ import { errMessage, useReload } from '@/routes/common';
 import {
   MAX_ACCESS_SCOPE_GROUPS,
   accessScopeEligibility,
+  GROUP_MOVED_MARKER,
   getGroupAccess,
   publishEntityGroup,
   setGroupAccessScope,
@@ -77,11 +78,18 @@ export function AccessScopePanel({ token }: { token: string }) {
     setFormError(null);
     setBusy(true);
     try {
-      const published = await publishEntityGroup(token);
+      // The version this view was drawn from: a publish by someone else since then is refused
+      // by the server instead of stacking a second version on top of theirs.
+      const published = await publishEntityGroup(token, group.activeVersion ?? 0);
       toast(t('groupAccessPublishedToast', { token, version: published }));
       reload();
     } catch (err) {
-      setFormError(errMessage(err));
+      if (errMessage(err).includes(GROUP_MOVED_MARKER)) {
+        setFormError(t('groupAccessPublishStale'));
+        reload();
+      } else {
+        setFormError(errMessage(err));
+      }
     } finally {
       setBusy(false);
     }

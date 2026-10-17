@@ -35,18 +35,23 @@ const member = (email: string, scope: string[]) => ({
 });
 vi.mock('@/lib/api/members', async (orig) => ({
   ...(await orig<typeof import('@/lib/api/members')>()),
-  listAllMembers: vi.fn(async () => [
-    member('staff@oem.example', []),
-    member('ann@acme.example', ['acme']),
-    member('both@example.com', ['globex', 'acme']),
-    member('gus@globex.example', ['globex']),
-  ]),
+  // The server makes the cut by scope anchor; the fake does the same so the panel is shown
+  // only what a real answer would hold.
+  listAllMembers: vi.fn(async (filter?: { scopeAnchor?: { kind: string; token: string } }) =>
+    [
+      member('staff@oem.example', []),
+      member('ann@acme.example', ['acme']),
+      member('both@example.com', ['globex', 'acme']),
+      member('gus@globex.example', ['globex']),
+    ].filter((m) => m.scope.some((a) => a.kind === filter?.scopeAnchor?.kind && a.token === filter?.scopeAnchor?.token)),
+  ),
   listTenantRoles: vi.fn(async () => [
     { token: 'viewer', name: 'Viewer', description: null, authorities: ['device:read'], owner: 'INSTANCE' },
   ]),
   inviteMember: h.invite,
 }));
 
+import * as members from '@/lib/api/members';
 import { CustomerUsersPanel } from './CustomerUsersPanel';
 
 afterEach(cleanup);
@@ -62,6 +67,7 @@ describe("a customer's Users tab", () => {
     expect(screen.getByText('both@example.com')).toBeTruthy();
     expect(screen.queryByText('staff@oem.example')).toBeNull();
     expect(screen.queryByText('gus@globex.example')).toBeNull();
+    expect(members.listAllMembers).toHaveBeenCalledWith({ scopeAnchor: { kind: 'CUSTOMER', token: 'acme' } });
   });
 
   it('invites with the scope already set to this customer', async () => {

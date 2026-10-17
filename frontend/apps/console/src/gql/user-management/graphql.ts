@@ -42,10 +42,22 @@ export type MemberSearchCriteria = {
   emailPrefix?: string | null | undefined;
   /** True for enabled memberships only, false for disabled ones only. Omit it for both. */
   enabled?: boolean | null | undefined;
+  /**
+   * True for memberships the tenant's identity provider manages only, false for manual ones
+   * only. Omit it for both.
+   */
+  managedByIdentityProvider?: boolean | null | undefined;
   /** Page to return, starting at 1. */
   pageNumber: number;
   /** Results per page. Below 1 means the default of 100; above 1000 is capped at 1000. */
   pageSize: number;
+  /** Only members who hold the role with this token, whether the instance's or the tenant's own. */
+  roleToken?: string | null | undefined;
+  /**
+   * Only members whose scope names this customer or group. A member with the whole tenant has
+   * no scope and is not matched.
+   */
+  scopeAnchor?: ScopeAnchorInput | null | undefined;
 };
 
 /**
@@ -212,6 +224,15 @@ export type SetMemberScopeMutationVariables = Exact<{
 
 
 export type SetMemberScopeMutation = { setMemberScope: { email: string } };
+
+export type SetMemberAccessMutationVariables = Exact<{
+  email: string;
+  roleTokens: Array<string> | string;
+  scope: Array<ScopeAnchorInput> | ScopeAnchorInput;
+}>;
+
+
+export type SetMemberAccessMutation = { setMemberAccess: { email: string } };
 
 export type SetMemberEnabledMutationVariables = Exact<{
   email: string;
@@ -541,6 +562,13 @@ export const SetMemberScopeDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<SetMemberScopeMutation, SetMemberScopeMutationVariables>;
+export const SetMemberAccessDocument = new TypedDocumentString(`
+    mutation SetMemberAccess($email: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {
+  setMemberAccess(email: $email, roleTokens: $roleTokens, scope: $scope) {
+    email
+  }
+}
+    `) as unknown as TypedDocumentString<SetMemberAccessMutation, SetMemberAccessMutationVariables>;
 export const SetMemberEnabledDocument = new TypedDocumentString(`
     mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {
   setMemberEnabled(email: $email, enabled: $enabled) {

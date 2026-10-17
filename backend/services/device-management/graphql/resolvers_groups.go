@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -73,8 +74,25 @@ func (r *EntityGroupResolver) BorderColor() *string {
 	return util.NullStr(r.M.BorderColor)
 }
 
-func (r *EntityGroupResolver) Metadata() *string {
-	return util.MetadataStr(r.M.Metadata)
+// refuseScopedDefinition refuses a scoped caller (ADR-081) the group fields that carry its
+// definition. It checks the scope only, not an authority: these fields ride on whatever
+// produced the group, including the DeviceWrite-only create and update mutations, so an
+// authority check here would change what an unscoped writer gets back.
+func refuseScopedDefinition(ctx context.Context) error {
+	if _, scoped := auth.ScopeFromContext(ctx); scoped {
+		return auth.ErrScopeUnsupported
+	}
+	return nil
+}
+
+// Metadata is the operator's free-form record on the group, which can name anything — other
+// customers included. It is refused to a scoped caller, which reads a group by token to learn
+// what it is limited to and needs only the token and name (ADR-081).
+func (r *EntityGroupResolver) Metadata(ctx context.Context) (*string, error) {
+	if err := refuseScopedDefinition(ctx); err != nil {
+		return nil, err
+	}
+	return util.MetadataStr(r.M.Metadata), nil
 }
 
 func (r *EntityGroupResolver) MemberType() string {
@@ -90,8 +108,14 @@ func (r *EntityGroupResolver) MembershipMode() string {
 	return r.M.MembershipMode
 }
 
-func (r *EntityGroupResolver) Selector() *string {
-	return util.NullStr(r.M.Selector)
+// Selector is the group's membership definition: it names attribute keys and values that can
+// refer to other customers' devices. A scoped caller reads the group's token and name only, so
+// the definition is refused to it the way members and versions are (ADR-081).
+func (r *EntityGroupResolver) Selector(ctx context.Context) (*string, error) {
+	if err := refuseScopedDefinition(ctx); err != nil {
+		return nil, err
+	}
+	return util.NullStr(r.M.Selector), nil
 }
 
 // ------------------------------------

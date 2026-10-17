@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   invite: vi.fn(),
   setScope: vi.fn(),
   setRoles: vi.fn(),
+  setAccess: vi.fn(),
   toast: vi.fn(),
 }));
 
@@ -57,6 +58,7 @@ vi.mock('@/lib/api/members', async (orig) => ({
   inviteMember: h.invite,
   setMemberScope: h.setScope,
   setMemberRoles: h.setRoles,
+  setMemberAccess: h.setAccess,
 }));
 
 import MembersPage from './MembersPage';
@@ -86,6 +88,7 @@ beforeEach(() => {
   h.invite.mockReset();
   h.setScope.mockReset();
   h.setRoles.mockReset();
+  h.setAccess.mockReset();
   h.toast.mockReset();
 });
 afterEach(cleanup);
@@ -222,6 +225,33 @@ describe('inviting a member', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(h.setRoles).toHaveBeenCalled());
     // Only the roles changed: the scope, naming the group, is not rewritten.
+    expect(h.setScope).not.toHaveBeenCalled();
+  });
+
+  // Roles and scope changed together are one write: if the server refuses it, neither half is
+  // saved, so the banner's "not saved" is true. Two calls would have saved the roles first.
+  it('saves roles and scope changed together in one call', async () => {
+    h.members = [member({ email: 'ann@acme.example', scope: [{ kind: 'CUSTOMER', token: 'acme' }] })];
+    h.setAccess.mockResolvedValue(undefined);
+    renderPage();
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Actions for ann@acme.example' }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByText('Edit access'));
+    fireEvent.click(await screen.findByLabelText('Roles'));
+    fireEvent.click(await screen.findByText('Acme operator'));
+    fireEvent.click(await screen.findByLabelText('Groups of devices'));
+    fireEvent.click(await screen.findByText('North wing'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() =>
+      expect(h.setAccess).toHaveBeenCalledWith('ann@acme.example', ['viewer', 'acme-operator'], [
+        { kind: 'CUSTOMER', token: 'acme' },
+        { kind: 'GROUP', token: 'north' },
+      ]),
+    );
+    expect(h.setRoles).not.toHaveBeenCalled();
     expect(h.setScope).not.toHaveBeenCalled();
   });
 

@@ -596,6 +596,18 @@ input MemberSearchCriteria {
     emailPrefix: String
     """True for enabled memberships only, false for disabled ones only. Omit it for both."""
     enabled: Boolean
+    """Only members who hold the role with this token, whether the instance's or the tenant's own."""
+    roleToken: String
+    """
+    Only members whose scope names this customer or group. A member with the whole tenant has
+    no scope and is not matched.
+    """
+    scopeAnchor: ScopeAnchorInput
+    """
+    True for memberships the tenant's identity provider manages only, false for manual ones
+    only. Omit it for both.
+    """
+    managedByIdentityProvider: Boolean
 }
 
 """One page of this tenant's members, ordered by email."""
@@ -1130,6 +1142,22 @@ type Mutation {
         """Email of the member."""
         email: String!
         """The customers to limit the member to; empty for the whole tenant."""
+        scope: [ScopeAnchorInput!]!
+    ): Member!
+    """
+    Replaces a member's roles and the customers and groups they are limited to in one step, and
+    returns the member: both change or neither does. Use it instead of calling setMemberRoles
+    and setMemberScope in turn, which can leave the roles changed when the scope is refused.
+    The change takes effect at the member's next token refresh, as setMemberRoles describes.
+    Fails with the error codes of setMemberRoles, plus LIMIT_EXCEEDED for more than 16 anchors.
+    Requires member:write.
+    """
+    setMemberAccess(
+        """Email of the member."""
+        email: String!
+        """Tokens of the roles the member should hold."""
+        roleTokens: [String!]!
+        """The customers and groups to limit the member to; empty for the whole tenant."""
         scope: [ScopeAnchorInput!]!
     ): Member!
     """

@@ -13,7 +13,7 @@ import { useAuth } from '@/auth/AuthProvider';
 import { useQuery } from '@/lib/hooks/use-query';
 import { mayWrite } from '@/lib/scope';
 import { useReload } from '@/routes/common';
-import { listAllMembers } from '@/lib/api/members';
+import { customerAnchor, listAllMembers } from '@/lib/api/members';
 import { MemberAccessSheet, editMode, inviteMode, type MemberAccessMode } from '@/routes/members/MemberAccessSheet';
 import { MemberTable } from '@/routes/members/MembersPage';
 import { scopeRefs, useScopeNames } from '@/routes/members/ScopeBadges';
@@ -21,9 +21,9 @@ import { scopeRefs, useScopeNames } from '@/routes/members/ScopeBadges';
 // CustomerUsersPanel shows the people whose access is limited to this customer — the
 // customer's own users — and invites a new one with the scope already set to it.
 //
-// The members query filters by email and status only, so this reads every member and keeps
-// those whose scope names this customer. A member limited to several customers appears on
-// each of their pages.
+// The server filters the member list by scope anchor, so this reads only the members whose
+// scope names this customer. A member limited to several customers appears on each of their
+// pages.
 export function CustomerUsersPanel({ customerToken }: { customerToken: string }) {
   const { t } = useTranslation('members');
   const { claims } = useAuth();
@@ -31,10 +31,11 @@ export function CustomerUsersPanel({ customerToken }: { customerToken: string })
   const { toast } = useToast();
   const [version, reload] = useReload();
   const [sheet, setSheet] = useState<MemberAccessMode | null>(null);
-  const { data, loading, error } = useQuery(listAllMembers, [version]);
-  const members = (data ?? []).filter((m) =>
-    m.scope.some((a) => a.kind === 'CUSTOMER' && a.token === customerToken),
+  const { data, loading, error } = useQuery(
+    () => listAllMembers({ scopeAnchor: customerAnchor(customerToken) }),
+    [version, customerToken],
   );
+  const members = data ?? [];
   const names = useScopeNames(members.flatMap((m) => scopeRefs(m.scope)));
 
   return (

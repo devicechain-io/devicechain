@@ -808,7 +808,7 @@ name the group by its token. `createEntityGroup` at a retired token answers `INV
 ### Refusals when administering a tenant {#tenant-administration-refusals}
 
 A tenant's own administrators manage its members, invitations and roles through user-management's
-tenant API (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberEnabled`, `removeMember`,
+tenant API (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberAccess`, `setMemberEnabled`, `removeMember`,
 `createTenantRole`, `updateTenantRole`, `deleteTenantRole` and the rest). Those operations refuse
 with codes of their own, so a client can tell the reason without reading the message:
 

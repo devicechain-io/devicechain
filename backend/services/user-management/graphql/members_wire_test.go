@@ -135,6 +135,7 @@ func TestAScopedCallerIsRefusedTenantAdministration(t *testing.T) {
 		"inviteMember":      `mutation { inviteMember(request: {email: "x@y.example", roleTokens: []}) { invitationCode } }`,
 		"setMemberRoles":    `mutation { setMemberRoles(email: "boss@acme.example", roleTokens: []) { email } }`,
 		"setMemberScope":    `mutation { setMemberScope(email: "boss@acme.example", scope: []) { email } }`,
+		"setMemberAccess":   `mutation { setMemberAccess(email: "boss@acme.example", roleTokens: [], scope: []) { email } }`,
 		"setMemberEnabled":  `mutation { setMemberEnabled(email: "boss@acme.example", enabled: false) { email } }`,
 		"removeMember":      `mutation { removeMember(email: "boss@acme.example") }`,
 		"revokeInvitation":  `mutation { revokeInvitation(email: "boss@acme.example") { email } }`,

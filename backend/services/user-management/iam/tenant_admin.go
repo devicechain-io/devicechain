@@ -5,6 +5,7 @@ package iam
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -190,6 +191,15 @@ type MemberSearchCriteria struct {
 	EmailPrefix string
 	// Enabled keeps only enabled (true) or disabled (false) memberships when set.
 	Enabled *bool
+	// RoleToken keeps members holding a role with this token, whether the operator's or the
+	// tenant's own, when set.
+	RoleToken string
+	// ScopeAnchor keeps members whose scope names this anchor ("customer:<token>" or
+	// "group:<token>"), when set. A member with no scope names none, so it is never kept.
+	ScopeAnchor string
+	// ManagedByIdp keeps only memberships an identity provider manages (true) or manual ones
+	// (false) when set.
+	ManagedByIdp *bool
 }
 
 // TenantMembers returns one page of a tenant's memberships, ordered by email, each with
@@ -205,6 +215,31 @@ func (s *Store) TenantMembers(ctx context.Context, tenant string, criteria Membe
 	}
 	if criteria.Enabled != nil {
 		q = q.Where("iam_memberships.enabled = ?", *criteria.Enabled)
+	}
+	if criteria.RoleToken != "" {
+		q = q.Where(`iam_memberships.id IN (SELECT mtr.membership_id FROM iam_membership_tenant_roles mtr `+
+			`JOIN iam_roles r ON r.id = mtr.role_id WHERE r.token = ? AND r.deleted_at IS NULL `+
+			`AND (r.tenant_id IS NULL OR r.tenant_id = ?))`, criteria.RoleToken, tenant)
+	}
+	if criteria.ScopeAnchor != "" {
+		// The scope is a JSON array of anchor strings; each dialect has its own way to ask
+		// whether one is an element, and both answer for exactly that element.
+		if q.Dialector.Name() == "postgres" {
+			encoded, err := json.Marshal([]string{criteria.ScopeAnchor})
+			if err != nil {
+				return nil, rdb.SearchResultsPagination{}, err
+			}
+			q = q.Where("iam_memberships.scope @> ?::jsonb", string(encoded))
+		} else {
+			q = q.Where("EXISTS (SELECT 1 FROM json_each(iam_memberships.scope) WHERE json_each.value = ?)", criteria.ScopeAnchor)
+		}
+	}
+	if criteria.ManagedByIdp != nil {
+		if *criteria.ManagedByIdp {
+			q = q.Where("iam_memberships.managed_by IS NOT NULL")
+		} else {
+			q = q.Where("iam_memberships.managed_by IS NULL")
+		}
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

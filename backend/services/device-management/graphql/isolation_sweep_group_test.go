@@ -89,7 +89,8 @@ func TestIsolationSweepForAGroupMember(t *testing.T) {
 // A member limited to a group reads that group's own record by token — its console names what
 // it is limited to with it — and no other group's: not one its scope does not name, and none at
 // all for a member limited to a customer. Nothing the record leads to opens with it: its members
-// and versions stay refused. The operator is the control.
+// and versions stay refused, and so do the definition fields (selector, metadata) that can name
+// other customers' attributes; token and name stay readable. The operator is the control.
 func TestAGroupMemberReadsOnlyItsOwnGroupRecord(t *testing.T) {
 	f := newGroupScopeFixture(t)
 	dynamic, selector := "dynamic", `attr["region"] == "south"`
@@ -116,10 +117,21 @@ func TestAGroupMemberReadsOnlyItsOwnGroupRecord(t *testing.T) {
 	if got := tokens(serve(t, f.member("customer:acme"), q, nil)); len(got) != 0 {
 		t.Fatalf("acme's member read %v, want no group", got)
 	}
-	for _, sub := range []string{`members(pagination: {pageNumber: 1, pageSize: 10}) { results { token } }`, `versions { version }`} {
+	for _, sub := range []string{`members(pagination: {pageNumber: 1, pageSize: 10}) { results { token } }`, `versions { version }`,
+		`selector`, `metadata`} {
 		s := serve(t, f.member("group:north"), `{ entityGroupsByToken(tokens: ["north"]) { token `+sub+` } }`, nil)
 		if len(s.errs) == 0 || s.errs[0].Extensions["code"] != "FORBIDDEN" {
 			t.Fatalf("group:north's member was served %s: %v %v", sub, s.data, s.errs)
 		}
+	}
+	// The refusal is of the definition, not of the record: the token and name still read for
+	// the member, and the operator still reads the selector.
+	if s := serve(t, f.member("group:north"), `{ entityGroupsByToken(tokens: ["north"]) { token name } }`, nil); len(s.errs) > 0 {
+		t.Fatalf("group:north's member was refused token and name: %v", s.errs)
+	}
+	op := serve(t, f.operator(), `{ entityGroupsByToken(tokens: ["north"]) { selector } }`, nil)
+	requireServed(t, op, "entityGroupsByToken")
+	if got := op.data["entityGroupsByToken"].([]any)[0].(map[string]any)["selector"]; got != `attr["region"] == "north"` {
+		t.Fatalf("control: the operator read selector %v", got)
 	}
 }

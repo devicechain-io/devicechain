@@ -622,6 +622,45 @@ func (s *Service) SetMemberScope(ctx context.Context, email string, anchors []Sc
 	return s.memberIn(ctx, s.iam, caller.Tenant, email)
 }
 
+// SetMemberAccess replaces a member's roles and scope together in the caller's tenant, in
+// one transaction: both land or neither does. The two single-purpose changes above are each
+// atomic but not together, so a console that saved roles and then scope could leave the roles
+// changed when the scope was refused. Every check either change makes is made here, once
+// over the combined result, and the last-administrator rule is decided on the membership as
+// it will stand with both applied.
+func (s *Service) SetMemberAccess(ctx context.Context, email string, roleTokens []string, anchors []ScopeAnchorInput) (*MemberView, error) {
+	caller, err := tenantCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scope, err := NormalizeScope(anchors)
+	if err != nil {
+		return nil, err
+	}
+	err = s.memberChange(ctx, caller, email, func(tx *iam.Store, a actor, _ *iam.Identity, mem *iam.Membership) (*iam.Membership, error) {
+		roles, err := tx.AssignableRolesByTokens(ctx, caller.Tenant, roleTokens)
+		if err != nil {
+			return nil, err
+		}
+		if err := requireAssignable(a, roles); err != nil {
+			return nil, err
+		}
+		if err := tx.ReplaceMembershipRoles(ctx, mem, roles); err != nil {
+			return nil, err
+		}
+		if err := tx.SetMembershipScope(ctx, mem, scope); err != nil {
+			return nil, err
+		}
+		next := *mem
+		next.TenantRoles = roles
+		return &next, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.memberIn(ctx, s.iam, caller.Tenant, email)
+}
+
 // SetMemberEnabled enables or disables a member of the caller's tenant.
 func (s *Service) SetMemberEnabled(ctx context.Context, email string, enabled bool) (*MemberView, error) {
 	caller, err := tenantCaller(ctx)

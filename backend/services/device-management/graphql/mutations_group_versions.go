@@ -18,12 +18,16 @@ func (r *SchemaResolver) PublishEntityGroup(ctx context.Context, args struct {
 	Token       string
 	Label       *string
 	Description *string
+	// ExpectedActiveVersion, when set, is the active version the caller saw (0: never
+	// published); a group that has moved on since is refused rather than published again.
+	ExpectedActiveVersion *int32
 }) (*EntityGroupVersionResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
 		return nil, err
 	}
 	api := r.GetApi(ctx)
-	version, err := api.PublishEntityGroup(ctx, args.Token, args.Label, args.Description, publisher(ctx))
+	version, err := api.PublishEntityGroupIf(ctx, args.Token, args.Label, args.Description, publisher(ctx),
+		args.ExpectedActiveVersion)
 	if err != nil {
 		return nil, err
 	}

@@ -644,6 +644,50 @@ func TestTheMemberFilterMatchesThePrefixLiterally(t *testing.T) {
 	require.Equal(t, int32(1), pag.TotalRecords)
 }
 
+// The member list filters by role, by scope anchor and by who manages the membership, in the
+// store and combined with AND, and never reaches into another tenant: the same person's
+// membership elsewhere, with the same role and scope, is not matched.
+func TestTheMemberFiltersByRoleScopeAndManager(t *testing.T) {
+	e := newPlaneEnv(t)
+	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
+	e.member(t, "ann@acme.example", "acme", []string{iam.ViewerRoleToken}, "c1")
+	e.member(t, "bob@acme.example", "acme", []string{"operator"}, "c2")
+	e.member(t, "cy@acme.example", "acme", []string{iam.ViewerRoleToken})
+	e.member(t, "ann@acme.example", "globex", []string{"operator"}, "c1")
+	ctx := context.Background()
+	ann, err := e.s.iam.IdentityByEmail(ctx, "ann@acme.example")
+	require.NoError(t, err)
+	require.NoError(t, e.s.iam.MarkMembershipsManagedBy(ctx, ann.ID, []string{"acme"}, 1))
+
+	caller := as("boss@acme.example", "acme", "*")
+	emails := func(c iam.MemberSearchCriteria) []string {
+		t.Helper()
+		c.PageNumber, c.PageSize = 1, 50
+		page, pag, err := e.s.Members(caller, c)
+		require.NoError(t, err)
+		out := []string{}
+		for _, m := range page {
+			out = append(out, m.Identity.Email)
+		}
+		require.Equal(t, int32(len(out)), pag.TotalRecords, "the total counts the filtered set")
+		return out
+	}
+	yes, no := true, false
+
+	require.Equal(t, []string{"ann@acme.example", "cy@acme.example"}, emails(iam.MemberSearchCriteria{RoleToken: iam.ViewerRoleToken}))
+	require.Equal(t, []string{"bob@acme.example"}, emails(iam.MemberSearchCriteria{RoleToken: "operator"}),
+		"ann's operator role in globex matched in acme")
+	require.Equal(t, []string{"ann@acme.example"}, emails(iam.MemberSearchCriteria{ScopeAnchor: "customer:c1"}))
+	require.Empty(t, emails(iam.MemberSearchCriteria{ScopeAnchor: "group:c1"}), "a customer anchor matched as a group")
+	require.Empty(t, emails(iam.MemberSearchCriteria{ScopeAnchor: "customer:c"}), "an anchor matched as a prefix")
+	require.Equal(t, []string{"ann@acme.example"}, emails(iam.MemberSearchCriteria{ManagedByIdp: &yes}))
+	require.Equal(t, []string{"bob@acme.example", "boss@acme.example", "cy@acme.example"},
+		emails(iam.MemberSearchCriteria{ManagedByIdp: &no}))
+	require.Equal(t, []string{"ann@acme.example"},
+		emails(iam.MemberSearchCriteria{RoleToken: iam.ViewerRoleToken, ScopeAnchor: "customer:c1"}), "filters combine with AND")
+	require.Empty(t, emails(iam.MemberSearchCriteria{RoleToken: "operator", ScopeAnchor: "customer:c1"}))
+}
+
 // A member whose membership the operator has scoped holds nothing on this plane even while
 // a token minted before the scoping still says otherwise.
 func TestAMembershipScopedSinceTheTokenWasMintedHoldsNothing(t *testing.T) {
@@ -729,4 +773,58 @@ func TestAPendingMemberIsNotSignedOutOfTheirOtherTenants(t *testing.T) {
 	_, err = e.s.RemoveMembership(context.Background(), "victim@globex.example", "acme")
 	require.NoError(t, err)
 	require.Equal(t, before, e.epoch(t, "victim@globex.example"), "the admin plane signed out a person whose membership was disabled")
+}
+
+// ---- roles and scope together --------------------------------------------------------------
+
+// SetMemberAccess changes roles and scope as one: a refusal of either half leaves the other
+// untouched, which two separate calls cannot promise — the roles would already be saved.
+func TestSetMemberAccessIsAllOrNothing(t *testing.T) {
+	e := newPlaneEnv(t)
+	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
+	e.member(t, "deputy@acme.example", "acme", []string{"member-admin"})
+	e.member(t, "pat@acme.example", "acme", []string{iam.ViewerRoleToken})
+	deputy := as("deputy@acme.example", "acme", "member:read", "member:write", "role:read")
+	root := as("boss@acme.example", "acme", "*")
+	pat := func() ([]string, []string) {
+		t.Helper()
+		v, err := e.s.Member(root, "pat@acme.example")
+		require.NoError(t, err)
+		roles := []string{}
+		for _, r := range v.Membership.TenantRoles {
+			roles = append(roles, r.Token)
+		}
+		return roles, v.Membership.Scope
+	}
+
+	// A role the deputy may not grant: the scope half does not land either.
+	_, err := e.s.SetMemberAccess(deputy, "pat@acme.example", []string{"operator"}, customers("c1"))
+	require.Equal(t, CodeEscalation, refusalCode(err), "got %v", err)
+	roles, scope := pat()
+	require.Equal(t, []string{iam.ViewerRoleToken}, roles)
+	require.Empty(t, scope)
+
+	// A scope that is refused: the role half does not land either.
+	tooMany := make([]ScopeAnchorInput, 0, auth.MaxScopeAnchors+1)
+	for i := 0; i <= auth.MaxScopeAnchors; i++ {
+		tooMany = append(tooMany, ScopeAnchorInput{Kind: auth.AnchorKindCustomer, Token: fmt.Sprintf("c%d", i)})
+	}
+	_, err = e.s.SetMemberAccess(deputy, "pat@acme.example", []string{iam.ViewerRoleToken, "member-admin"}, tooMany)
+	require.Error(t, err)
+	roles, scope = pat()
+	require.Equal(t, []string{iam.ViewerRoleToken}, roles)
+	require.Empty(t, scope)
+
+	// The counterweight: an allowed change lands both halves.
+	_, err = e.s.SetMemberAccess(deputy, "pat@acme.example", []string{iam.ViewerRoleToken, "member-admin"}, customers("c1"))
+	require.NoError(t, err)
+	roles, scope = pat()
+	require.ElementsMatch(t, []string{iam.ViewerRoleToken, "member-admin"}, roles)
+	require.Equal(t, []string{"customer:c1"}, scope)
+
+	// The shared checks apply: nobody changes their own membership, or a member above them.
+	_, err = e.s.SetMemberAccess(deputy, "deputy@acme.example", nil, nil)
+	require.Equal(t, CodeSelfModification, refusalCode(err), "got %v", err)
+	_, err = e.s.SetMemberAccess(deputy, "boss@acme.example", nil, nil)
+	require.Equal(t, CodeEscalation, refusalCode(err), "got %v", err)
 }

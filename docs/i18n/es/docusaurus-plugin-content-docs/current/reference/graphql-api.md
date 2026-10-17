@@ -855,7 +855,7 @@ responde `INVALID_VALUE`.
 ### Rechazos al administrar un tenant {#tenant-administration-refusals}
 
 Los administradores de un tenant gestionan sus miembros, invitaciones y roles a través de la API de
-tenant de user-management (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberEnabled`,
+tenant de user-management (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberAccess`, `setMemberEnabled`,
 `removeMember`, `createTenantRole`, `updateTenantRole`, `deleteTenantRole` y las demás). Esas
 operaciones rechazan con códigos propios, para que un cliente conozca el motivo sin leer el mensaje:
 
