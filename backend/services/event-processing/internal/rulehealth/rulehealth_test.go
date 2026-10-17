@@ -471,6 +471,46 @@ func TestPurgeRemovesQueuedAndSettlesInFlight(t *testing.T) {
 	}
 }
 
+// A tenant still waiting in the DETACHED generation, behind another tenant's write in flight, is
+// removed by a purge and never reaches the store, and the worker goes on to finish the flush.
+func TestPurgeRemovesADetachedTenantNotYetTaken(t *testing.T) {
+	s := &fakeStore{block: make(chan struct{}), entered: make(chan string, 8)}
+	cfg := testConfig()
+	cfg.MaxBatchRows = 2
+	m := newFakeMetrics()
+	a := newAcc(t, s, cfg, m)
+	fire(a, "acme", "a", t0, "raised")
+	fire(a, "beta", "a", t0, "raised") // two keys: the worker detaches both tenants together
+	first := <-s.entered
+	other := map[string]string{"acme": "beta", "beta": "acme"}[first]
+	a.mu.Lock()
+	queued := a.queued.keys
+	a.mu.Unlock()
+	if queued != 1 {
+		t.Fatalf("%d keys detached behind the write in flight, want 1", queued)
+	}
+	n, err := a.Purge(context.Background(), other)
+	if err != nil || n != 1 {
+		t.Fatalf("Purge(%s) = %d, %v; want 1 entry removed", other, n, err)
+	}
+	if keys, _, _ := a.Pending(); keys != 1 {
+		t.Fatalf("%d keys pending after the purge, want only the one in flight", keys)
+	}
+	close(s.block)
+	a.Stop(context.Background(), true)
+	for _, c := range s.snapshot() {
+		if c.tenant == other {
+			t.Fatalf("the purged tenant %s was written: %+v", other, c)
+		}
+	}
+	if w := s.written(); len(w) != 1 || w[first+"/p@1/a"].Count != 1 {
+		t.Fatalf("written %+v; want only %s's row", w, first)
+	}
+	if m.discarded[DropPurged] != 1 {
+		t.Fatalf("purged %d fires, want 1", m.discarded[DropPurged])
+	}
+}
+
 // A write that ignores cancellation and does not settle within the purge's deadline makes
 // Purge FAIL: the caller must not report the tenant clean while a write may still land.
 func TestPurgeFailsWhenTheInFlightWriteDoesNotSettle(t *testing.T) {
@@ -480,12 +520,14 @@ func TestPurgeFailsWhenTheInFlightWriteDoesNotSettle(t *testing.T) {
 	a := newAcc(t, s, cfg, nil)
 	fire(a, "acme", "a", t0, "raised")
 	<-s.entered
+	// Released however the test ends: the cleanup's Stop joins the worker, which is inside this
+	// uninterruptible write, so a failure that skipped the release would hang the package.
+	defer close(s.block)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	if _, err := a.Purge(ctx, "acme"); err == nil {
 		t.Fatal("Purge reported success while the in-flight write was still running")
 	}
-	close(s.block)
 }
 
 // Leadership loss: Stop without a flush discards what is pending at once, cancels the

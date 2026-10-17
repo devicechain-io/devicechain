@@ -326,3 +326,38 @@ func TestEndTermFlushesOnAStopAndDiscardsOnALoss(t *testing.T) {
 		})
 	}
 }
+
+// 🔴 THE FINAL FLUSH RUNS AFTER THE LEASE IS RELEASED. A graceful stop whose final rule-health
+// write is held inside the store has already handed the partition over: a successor reads a
+// clean release and acquires while that write is still in flight. A health projection must
+// never hold the partition from the next leader.
+func TestTheFinalFlushDoesNotHoldTheLease(t *testing.T) {
+	b := startOutageBroker(t)
+	rp := b.liveTerm(t)
+	store := newBlockingStatStore(true)
+	rp.ruleStats = store
+	cfg := healthConfig()
+	cfg.MaxBatchRows = 64 // nothing is written before the stop
+	cfg.WriteTimeout = rulehealth.MaxWriteTimeout
+	rp.cfg.RuleHealth = cfg
+	require.NoError(t, rp.startRuleHealth())
+	admit(rp, "acme", "a")
+
+	stopped := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		stopped <- rp.ExecuteStop(ctx)
+	}()
+	select {
+	case <-store.entered: // the final flush is inside the store, and held there
+	case <-time.After(15 * time.Second):
+		t.Fatal("the graceful stop never made its final flush")
+	}
+	clean, err := b.successor(t, rp.cfg.PartitionId)
+	close(store.release)
+	require.NoError(t, <-stopped)
+	require.NoError(t, err, "the successor could not acquire while the final flush was in flight")
+	require.True(t, clean, "the lease was not released cleanly before the final flush")
+	require.Equal(t, map[string]int64{"acme/prof@1/a": 1}, store.committed())
+}

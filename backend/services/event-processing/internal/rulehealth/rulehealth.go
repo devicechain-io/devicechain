@@ -222,6 +222,10 @@ type tenantSet struct {
 	rules   map[string]entry
 	updates int64
 	bytes   int64
+	// gone is set, under the lock, when a DETACHED set leaves the detached generation: taken
+	// into flight, or removed by a purge. The detached generation's map is never written once
+	// it is detached (see flushOnce), so a set that has left it is marked rather than deleted.
+	gone bool
 }
 
 // generation is a set of entries admitted together, with the time of its first admission.
@@ -423,13 +427,19 @@ func (a *Accumulator) Purge(ctx context.Context, tenant string) (int64, error) {
 	a.mu.Lock()
 	var n, updates int64
 	for _, g := range []*generation{&a.active, &a.queued} {
-		if ts := g.tenants[tenant]; ts != nil {
+		if ts := g.tenants[tenant]; ts != nil && !ts.gone {
 			n += int64(len(ts.rules))
 			updates += ts.updates
 			g.keys -= len(ts.rules)
 			g.bytes -= ts.bytes
 			g.updates -= ts.updates
-			delete(g.tenants, tenant)
+			if g == &a.active {
+				delete(g.tenants, tenant)
+			} else {
+				// The worker may be ranging over the detached map without the lock: mark it,
+				// never write the map (see flushOnce).
+				ts.gone = true
+			}
 			if g.keys == 0 {
 				g.since = time.Time{}
 			}
@@ -560,14 +570,20 @@ func (a *Accumulator) flushOnce(ctx context.Context) {
 	if a.queued.keys == 0 { // constant time: the maps are swapped, not copied
 		a.queued, a.active = a.active, newGeneration()
 	}
+	// From here no one writes this map: admissions go to the new active generation, Purge marks
+	// a detached set gone instead of deleting it, and take only marks too. So the worker ranges
+	// over it WITHOUT the lock. Ranging under the lock, deleting as it went, would cost a scan
+	// of the map's slots per tenant taken, and an almost-drained map of many tenants is almost
+	// all empty slots: a lock hold that grows with the tenants pending, not a constant one.
+	tenants := a.queued.tenants
 	a.mu.Unlock()
 
 	var failed int
 	var firstErr error
-	for {
-		f := a.take(ctx)
+	for tenant, ts := range tenants { // any order: tenants never share a row
+		f := a.take(ctx, tenant, ts)
 		if f == nil {
-			break
+			continue
 		}
 		if err := a.writeTenant(f); err != nil {
 			failed++
@@ -576,6 +592,9 @@ func (a *Accumulator) flushOnce(ctx context.Context) {
 			}
 		}
 	}
+	a.mu.Lock()
+	a.queued = newGeneration() // every set in the spent map has gone, taken or purged
+	a.mu.Unlock()
 	if failed > 0 {
 		// One line per flush, not per batch: a store outage would otherwise log once per tenant
 		// per interval. The counts are in detect_rule_stat_updates_discarded_total.
@@ -585,25 +604,26 @@ func (a *Accumulator) flushOnce(ctx context.Context) {
 	}
 }
 
-// take moves the next detached tenant set into flight, or returns nil when none is left.
-func (a *Accumulator) take(ctx context.Context) *inflight {
+// take moves one detached tenant set into flight, or returns nil when a purge has already
+// removed it. Constant time under the lock: it marks the set, it does not touch the map.
+func (a *Accumulator) take(ctx context.Context, tenant string, ts *tenantSet) *inflight {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for tenant, ts := range a.queued.tenants { // any order: tenants never share a row
-		delete(a.queued.tenants, tenant)
-		a.queued.keys -= len(ts.rules)
-		a.queued.bytes -= ts.bytes
-		a.queued.updates -= ts.updates
-		since := a.queued.since
-		if a.queued.keys == 0 {
-			a.queued.since = time.Time{}
-		}
-		fctx, cancel := context.WithCancel(ctx)
-		f := &inflight{tenant: tenant, set: ts, ctx: fctx, cancel: cancel, done: make(chan struct{}), since: since}
-		a.inflight = f
-		return f
+	if ts.gone {
+		return nil
 	}
-	return nil
+	ts.gone = true
+	a.queued.keys -= len(ts.rules)
+	a.queued.bytes -= ts.bytes
+	a.queued.updates -= ts.updates
+	since := a.queued.since
+	if a.queued.keys == 0 {
+		a.queued.since = time.Time{}
+	}
+	fctx, cancel := context.WithCancel(ctx)
+	f := &inflight{tenant: tenant, set: ts, ctx: fctx, cancel: cancel, done: make(chan struct{}), since: since}
+	a.inflight = f
+	return f
 }
 
 // writeTenant writes one in-flight tenant set in chunks of MaxBatchRows, in rule-id order, each
