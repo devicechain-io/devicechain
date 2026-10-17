@@ -79,6 +79,9 @@ func TestCalculatedValuesAreOutsideTheEventId(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, raw, v1, "adding a calculated value must not move the event id")
 	assert.Equal(t, raw, v2, "a different formula's value must not move it either")
+	byValue, err := DeriveEventIdForPayload("acme", meterEvent(), *meterPayload(powerEntry("2.823625")))
+	require.NoError(t, err)
+	assert.Equal(t, raw, byValue, "a payload passed by value is filtered as one passed by pointer")
 
 	// The negative control: the same payload hashed WITHOUT the identity view — what the
 	// id would be had the filter been missed — differs between the two formulas. Without
