@@ -1795,6 +1795,18 @@ functionalAreas:
     # shedLetterBurst: 60             # per-tenant letters at once
     # shedLetterGlobalPerSecond: 10   # letters per second across all tenants
     # shedLetterGlobalBurst: 100      # letters at once across all tenants
+    # Rule-health fire counters (the console's per-rule fire count and last fired): coalesced in
+    # memory and written in the background, one transaction per tenant, so the database never
+    # slows detection. The counts are approximate: they lag by about the flush interval, a write
+    # that fails is dropped (never retried), and every dropped fire is counted in
+    # detect_rule_stat_updates_discarded_total. Each key is optional; a key that is set must be
+    # inside its range (zero included) or startup fails.
+    # ruleHealth:
+    #   flushIntervalMillis: 1000     # 50 to 60000
+    #   maxPendingKeys: 4096          # rules with fires waiting to be written, 1 to 1048576
+    #   maxPendingBytes: 4194304      # their accounted memory, 65536 to 268435456
+    #   maxBatchRows: 256             # rules per tenant transaction, 1 to 4096
+    #   writeTimeoutMillis: 2000      # one tenant transaction, 100 to 60000
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area
     # GraphQL over the Model Context Protocol. Held back from the `default` profile

@@ -265,6 +265,15 @@ func (rp *ResolvedEventsProcessor) applyTenantPurge(tenant string) tenantPurgeRe
 		n += int64(rp.publisher.RemoveTenant(tenant))
 	}
 	n += rp.dropTenantBuffers(victim, tenant)
+	// The rule-health counters hold the tenant's rule ids, and a write of them may be in flight.
+	// The store's erasure fence refuses any write that STARTS after the purge planted it; this
+	// removes what has not started and waits out what has, so the answer below is not sent while
+	// a write for the tenant is still on its way to the table.
+	statsRemoved, err := rp.purgeRuleHealth(tenant)
+	n += statsRemoved
+	if err != nil {
+		return tenantPurgeResult{evicted: n, err: err}
+	}
 
 	// 🔴 A CLEAN ANSWER REQUIRES A CLEAN CHECKPOINT, NOT A CLEAN ENGINE — including when this
 	// pass evicted nothing at all.

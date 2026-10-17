@@ -144,23 +144,24 @@ func TestRuleStatUpsertQualifiesEveryColumn(t *testing.T) {
 	}
 	qualifiers := map[string]bool{sch.Table: true, "excluded": true}
 
-	up := ruleStatUpsert()
-	if len(up.DoUpdates) == 0 {
-		t.Fatal("ruleStatUpsert has no DO UPDATE assignments; nothing to check")
-	}
 	checked := 0
-	for _, a := range up.DoUpdates {
-		expr, ok := a.Value.(clause.Expr)
-		if !ok {
-			continue // a plain value reads no column
+	for _, up := range []clause.OnConflict{ruleStatUpsert(), ruleStatBatchUpsert()} {
+		if len(up.DoUpdates) == 0 {
+			t.Fatal("an upsert clause has no DO UPDATE assignments; nothing to check")
 		}
-		for _, col := range sch.DBNames {
-			re := regexp.MustCompile(`(?:([A-Za-z_][A-Za-z0-9_]*)\.)?\b` + regexp.QuoteMeta(col) + `\b`)
-			for _, m := range re.FindAllStringSubmatch(expr.SQL, -1) {
-				checked++
-				if !qualifiers[m[1]] {
-					t.Errorf("SET %s: column %q is referenced as %q; qualify it as %s.%s or excluded.%s "+
-						"(Postgres rejects a bare reference as ambiguous)", a.Column.Name, col, m[0], sch.Table, col, col)
+		for _, a := range up.DoUpdates {
+			expr, ok := a.Value.(clause.Expr)
+			if !ok {
+				continue // a plain value reads no column
+			}
+			for _, col := range sch.DBNames {
+				re := regexp.MustCompile(`(?:([A-Za-z_][A-Za-z0-9_]*)\.)?\b` + regexp.QuoteMeta(col) + `\b`)
+				for _, m := range re.FindAllStringSubmatch(expr.SQL, -1) {
+					checked++
+					if !qualifiers[m[1]] {
+						t.Errorf("SET %s: column %q is referenced as %q; qualify it as %s.%s or excluded.%s "+
+							"(Postgres rejects a bare reference as ambiguous)", a.Column.Name, col, m[0], sch.Table, col, col)
+					}
 				}
 			}
 		}
