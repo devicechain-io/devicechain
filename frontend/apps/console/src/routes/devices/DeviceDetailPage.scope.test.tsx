@@ -61,8 +61,8 @@ beforeEach(() => {
   );
 });
 
-function renderPage(scope: string[]) {
-  claims.value = { ...claims.value, scopeAnchors: scope };
+function renderPage(scope: string[], authorities: string[] = ['*']) {
+  claims.value = { ...claims.value, scopeAnchors: scope, authorities };
   render(
     <MemoryRouter>
       <ConfirmProvider>
@@ -90,5 +90,32 @@ describe('the device page for a customer user', () => {
     renderPage([]);
     for (const name of [...SERVED, ...REFUSED]) expect(await screen.findByRole('tab', { name }), name).toBeTruthy();
     expect(screen.getByRole('button', { name: /Delete/ })).toBeTruthy();
+  });
+});
+
+// The device form on the first tab: shown to everyone who may read the device, offered
+// only to a member whose save the server would accept.
+describe('the device form on the device page', () => {
+  async function nameField() {
+    return (await screen.findByLabelText('Name')) as HTMLInputElement;
+  }
+
+  it('is read-only for a customer user, even holding device:write', async () => {
+    renderPage(['customer:acme']);
+    expect((await nameField()).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+  });
+
+  it('is read-only for an unscoped member without device:write', async () => {
+    renderPage([], ['device:read']);
+    expect((await nameField()).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+  });
+
+  // The negative control: the same page for a member who may write offers the save.
+  it('is editable for an unscoped member with device:write', async () => {
+    renderPage([], ['device:write']);
+    expect((await nameField()).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeTruthy();
   });
 });
