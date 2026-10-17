@@ -211,6 +211,12 @@ describe('inviting a member', () => {
       pointerType: 'mouse',
     });
     fireEvent.click(await screen.findByText('Edit access'));
+    // The sheet opens LIMITED with the group still picked, though no access scope offers it:
+    // dropping it here would narrow the member's scope on the next save, or show the member
+    // as seeing the whole tenant.
+    const groupsField = await screen.findByLabelText('Groups of devices');
+    expect(within(groupsField).getByText('retired')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove retired' })).toBeTruthy();
     fireEvent.click(await screen.findByLabelText('Roles'));
     fireEvent.click(await screen.findByText('Acme operator'));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));

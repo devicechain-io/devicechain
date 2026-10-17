@@ -101,6 +101,17 @@ describe('the access-scope switch', () => {
     await waitFor(() => expect(h.publish).toHaveBeenCalledWith('north'));
   });
 
+  // Publishing is a device write like the switch: someone who cannot write devices is told the
+  // group is unpublished and offered nothing the server would refuse.
+  it('offers no first publish to someone who cannot write devices', async () => {
+    h.authorities = ['device:read'];
+    h.group = group({ activeVersion: null });
+    render(<AccessScopePanel token="north" />);
+    expect(await screen.findByText(/has not been published yet/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Publish filter' })).toBeNull();
+    expect(h.publish).not.toHaveBeenCalled();
+  });
+
   it('shows the state but no working switch to someone who cannot write devices', async () => {
     h.authorities = ['device:read'];
     h.group = group({ accessScope: true });
