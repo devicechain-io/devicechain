@@ -3518,8 +3518,10 @@ Nothing needs doing.
 `v0.23.0` is an in-place upgrade from `v0.22.0`: `dcctl install` for the cluster, then
 `dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Unlike
 [`v0.22.0`](#v0220-upgrade) it **does run migrations**: seven services add columns, indexes or
-tables. None of them rewrites existing rows, the only backfills record the tokens of customers and
-groups that already exist, and each is safe to run again if it is interrupted. Coming from
+tables, and `user-management` replaces the unique index on role tokens with two, one for the
+operator's catalogue and one for each tenant's own roles. None of them rewrites existing rows, the
+only backfills record the tokens of customers and groups that already exist, and each is safe to
+run again if it is interrupted. Coming from
 `v0.21.x` or earlier, read the [`v0.22.0` notes](#v0220-upgrade) first; they apply to any upgrade
 that crosses that release. An instance built by `v0.16.0` or earlier still has to be
 [destroyed and built again](#pre-declaration-recreate).
@@ -3532,11 +3534,14 @@ twice as deep and has room you can size, a threshold alarm follows the device's 
 a change of a device's owner reaches device-state even if a pod dies at the wrong moment. What
 changes for somebody:
 
-- **The MQTT capture stream's ceiling grows.** It was a fixed 256 MiB and now takes the full hot
+- **The MQTT capture stream's ceiling grows.** It was capped at 256 MiB and now takes the full hot
   stream ceiling, so a JetStream volume sized tightly around the old figure can leave
   `event-sources` unable to start. See [The capture stream's ceiling grows](#v0230-capture).
 - **A clustered broker (`--ha`) restarts its servers one at a time, once**, to turn on compression
   between them. See [Broker route compression](#v0230-route-compression).
+- **Calculated metrics are computed**, but stay off until you raise a tier's
+  `calculatedMetricsPerProfile` above 0. Do not do that during the rollout. See
+  [Calculated metrics](#v0230-calculated-metrics).
 - **Threshold alarms follow the device's newest reading**, not the last reading to arrive. See
   [Threshold alarms and late readings](#v0230-threshold).
 - **Two new permissions, and `role:read` and `role:write` now also act inside a tenant.** See
@@ -3551,17 +3556,23 @@ changes for somebody:
 - **A few defaults move:** the console cannot be framed by other sites, the capture stream's
   publish window is 1024, and writers publish to their stream's leader. See
   [Defaults that changed](#v0230-defaults).
+- **Some limits measured on a test cluster** apply to MQTT-heavy installs. See
+  [Known limitations](#v0230-known-limitations).
 
 #### Before you upgrade {#v0230-before}
 
 1. **If you raised `streamMaxBytes`, or you sized or capped the JetStream volume yourself, check
    the headroom first.** The capture stream's reservation grows by `streamMaxBytes` minus 256 MiB,
-   which is 768 MiB at the default. See [The capture stream's ceiling grows](#v0230-capture).
+   which is 768 MiB at the default, and a new `device-ownership` stream reserves 128 MiB. See
+   [The capture stream's ceiling grows](#v0230-capture).
 2. **If an application or script deletes a customer or a group and creates one at the same token
    again**, plan to choose a new token. See
    [Customer users, scoped roles and the permissions behind them](#v0230-customer-users).
 3. **If you rely on threshold rules**, read [Threshold alarms and late readings](#v0230-threshold)
    so an alarm that now raises is not a surprise.
+4. **Check every tier's `calculatedMetricsPerProfile`.** If any is above 0, set it to 0, or do not
+   publish a calculated metric, until the rollout is over. See
+   [Calculated metrics](#v0230-calculated-metrics).
 
 #### During the upgrade {#v0230-during}
 
@@ -3578,19 +3589,23 @@ changes for somebody:
 - **`event-sources` raises the capture stream's ceiling in place** on its first start. No stream
   is recreated and no message is lost.
 
-Going back to `v0.22.0` after the upgrade reads the same database, because every addition is a new
-column, index or table. Do not do it while any member is limited to customers or groups: `v0.22.0`
-does not read a membership's scope, so such a member would no longer be held to it. Disable or
-remove them first.
+Going back to `v0.22.0` after the upgrade reads the same database: the changes are new columns,
+indexes and tables, and the split of the role-token index. Do not do it while any member is limited
+to customers or groups, or while a tenant has defined roles of its own. `v0.22.0` reads neither a
+membership's scope nor a role's tenant, so such a member would no longer be held to their scope,
+and a tenant's own roles would look to it like roles of the operator's catalogue. Disable or remove
+those members, and delete the roles your tenants defined, first. Rolling `event-management` back
+after calculated metrics are in use can store a redelivered message twice (see
+[Calculated metrics](#v0230-calculated-metrics)).
 
 #### After the upgrade {#v0230-after}
 
 - **Nothing is required.** Every new setting has a default, and no member has a scope until you
   give them one.
-- **Check the capture stream's headroom** if you did not before, and have
-  `JetStreamCaptureBacklogWillOverflow` enabled with `metrics.alerts`.
+- **Check the capture stream's headroom** if you did not before, and keep `metrics.enabled` and
+  `metrics.alerts` on (both are by default) so `JetStreamCaptureBacklogWillOverflow` is installed.
 - **Alarms, commands and update assignments from before the upgrade are not visible to a member
-  limited to customers.** The server records their customers from this release on. A device's live
+  limited to customers or groups.** The server records their customers from this release on. A device's live
   state is recorded the next time it reports or changes owner.
 
 ##### The capture stream's ceiling grows {#v0230-capture}
@@ -3598,16 +3613,18 @@ remove them first.
 Events from MQTT devices wait in a capture stream until `event-sources` forwards them. The broker
 has already acknowledged each of them to its device, so when the stream is full it discards the
 oldest unforwarded events and the devices are never told. In a load test at 12,000 events a
-second, 7.2% of the acknowledged events were lost this way: the stream held 256 MiB and
-`event-sources` forwarded about 7,100 a second.
+second, 7.2% of the acknowledged events were lost this way: the stream held 256 MiB and the
+platform kept up with about 7,100 a second.
 
 - **The drain is twice as deep.** `capture.publishWindow` is 1024, up from 512. In a benchmark that
   delays only the acknowledgements, the forwarding rate at a given delay doubled. It is a fixed
   setting of `event-sources`, from 1 to 1024; a value outside that range stops the service.
-- **The stream takes the full hot ceiling.** It was capped at 256 MiB, and no setting could raise
-  the cap. It now follows `streamMaxBytes` like the other hot streams: 1 GiB by default, and
-  64 MiB on a `--compact` instance, where nothing changes. At the defaults the JetStream disk
-  reservation goes from 10,824 MiB to 11,592 MiB, of the 14 GiB the default volume allows.
+- **The stream takes the full hot ceiling.** It was capped at 256 MiB, or the hot ceiling if that
+  was lower, and no setting could raise the cap. It now follows `streamMaxBytes` like the other hot
+  streams: 1 GiB by default, and 64 MiB on a `--compact` instance, where nothing changes. At the
+  defaults the JetStream disk reservation goes from 10,696 MiB to 11,592 MiB, of the 14 GiB the
+  default volume allows: 768 MiB for the capture stream and 128 MiB for the new `device-ownership`
+  stream.
 - **If you raised `streamMaxBytes` and sized the volume tightly, the reservation grows by that
   value minus 256 MiB.** JetStream reserves a stream's ceiling when it is created or raised. A
   reservation over the broker's limit makes `event-sources` stop at startup with `insufficient
@@ -3618,16 +3635,19 @@ second, 7.2% of the acknowledged events were lost this way: the stream held 256 
   events would be lost and nothing would count them. Every declared stream is returned to
   discarding the oldest, and the service logs it.
 - **A new critical alert, `JetStreamCaptureBacklogWillOverflow`,** fires when the capture backlog
-  will fill the stream within ten minutes at the rate it grew over the last three. See
-  [Observability](./observability.md).
+  holds at least a tenth of the stream and will fill it within ten minutes at the rate it grew over
+  the last three, for one minute. It is installed with the other alerts when `metrics.enabled` and
+  `metrics.alerts` are on. See [Observability](./observability.md).
 
 ##### Broker route compression {#v0230-route-compression}
 
 The servers of a clustered broker copy every stored event to each other. `nats_route_compression`
-compresses that traffic, and it is now `s2_fast` by default when you install with `--ha`. A
-single-server broker is unaffected. On a three-node cluster it cut the traffic between servers by
-60% per event for about 3% of each server's CPU. `dcctl upgrade` restarts the broker's servers one
-at a time, once, to turn it on. A value you set yourself, `off` included, is kept. See
+compresses that traffic, and it is now `s2_fast` by default on a clustered broker (`--ha`, or
+`nats_cluster_replicas` above 1). A single-server broker is unaffected. On a three-node cluster it
+cut the traffic between servers by 60% per event; compressing cost each server 2.6–2.9% of its
+CPU, and the broker's total CPU per event still fell about 4%. `dcctl upgrade` restarts the
+broker's servers one at a time, once, to turn it on. A value you set yourself, `off` included, is
+kept. See
 [Compression between broker servers](./bootstrap.md#route-compression).
 
 ##### Threshold alarms and late readings {#v0230-threshold}
@@ -3635,20 +3655,22 @@ at a time, once, to turn it on. A value you set yourself, `off` included, is kep
 A threshold alarm used to follow the last reading to arrive. A reading the platform received late
 could raise an alarm that newer readings had already cleared, or clear one they kept raised. Now:
 
-- **While an alarm is raised, a reading older than the device's newest one is discarded and
-  counted**, so it cannot clear the alarm.
+- **While an alarm is raised, a reading up to ten minutes older than the device's newest one is
+  discarded and counted**, so it cannot clear the alarm. A reading older than that is evaluated, so
+  a device clock set back cannot hold an alarm raised.
 - **While no alarm is raised, a matching reading further behind than the lateness tolerance is
   discarded only if it was queued for detection more than 30 seconds after the platform received
-  it**, as a retried publish is. Any other matching reading raises, so a device whose clock runs
+  it**, as a retried publish is, or if either time is unknown. The tolerance is measured from the
+  newest reading the engine has seen. Any other matching reading raises, so a device whose clock runs
   slow, or one uploading readings it stored during an outage, now raises an alarm from them as they
   arrive.
 - **Count-window and rate rules place a reading by its own time**, the way duration rules do. They
-  raise and clear one lateness tolerance behind the newest reading, and the last reading before a
+  raise and clear one lateness tolerance behind the newest reading the engine has seen, and the last reading before a
   quiet spell is decided on wall-clock time once the engine has been idle.
 - **Sliding-window rules read their window as of the device's newest reading**, so a late reading
   counts only alongside the readings that were inside one window with it.
 
-`detect_late_samples_total` counts all of these discards. See
+`devicechain_eventprocessing_detect_late_samples_total` counts these discards. See
 [the detection engine page](./detection-engine.md).
 
 ##### Customer users, scoped roles and the permissions behind them {#v0230-customer-users}
@@ -3666,9 +3688,9 @@ matters when you upgrade:
 - **`role:read` and `role:write` now act on two planes.** On the instance admin plane they still
   reach the operator's role catalogue. Held on a tenant role, they now let the member list and
   define the roles that tenant owns.
-- **A change to a member's access takes effect at their next refresh**, within 15 minutes or 5 for
-  a member limited to customers or groups, and it no longer signs the person out of every tenant
-  they belong to.
+- **A change to a member's access takes effect at their next refresh**, within the access-token
+  lifetime (15 minutes by default) or 5 minutes for a member limited to customers or groups. It
+  does not sign the person out of their other tenants.
 - **Operations that cannot be limited are refused** to a limited member, with `FORBIDDEN` and
   `extensions.reason` set to `SCOPE_UNSUPPORTED`, whatever their role says. The operations that can
   be limited answer only with what the member owns, and a record outside it is answered as
@@ -3684,8 +3706,8 @@ matters when you upgrade:
   published after the commit. A pod that died in between used to leave the old owner's members
   seeing the device's live state until its next event, which for a silent device never came.
 - **Dashboards can be shared with customers and groups.** A customer user sees only published
-  dashboards shared with them. A widget bound to an asset, an area or a group reads the
-  relationship graph, which they are not given, and shows **Not available for customer users**.
+  dashboards shared with them. A widget bound to an area or an asset reads the relationship graph,
+  which they are not given, and shows **Not available for customer users**.
 
 ##### Event ids and the correlation header {#v0230-ids}
 
@@ -3717,9 +3739,29 @@ exactly as written) selects the form. Set `compact` only after every pod runs th
   another origin that embeds the console itself stops rendering it.
 - **`capture.publishWindow` is 1024** (was 512).
 - **Writers publish to their stream's leader.** `infrastructure.nats.affinity.publishToLeader` is on
-  by default: the writers in `device-management` and `event-sources` open a second connection to
-  the server that leads their stream. On a three-node cluster a single `device-management` pod's
+  by default: the pipelined writers in `device-management`, `event-sources` and `sparkplug-ingest`
+  open a second connection to the server that leads their stream, and fall back to the usual one
+  if it fails. On a three-node cluster a single `device-management` pod's
   ceiling rose about 6%. Set it to `false` to turn it off.
+
+##### Calculated metrics {#v0230-calculated-metrics}
+
+A metric definition can carry a formula over the profile's other metrics, and `testMetricFormula`
+previews one. A published formula is now computed when each reading is resolved and stored as an
+ordinary measurement, so history, the hourly rollup, latest state, detection and the live stream all
+receive it. A value a device sends under a calculated metric's key is dropped in favour of the
+computed one, and a formula that cannot produce a value skips only that metric for that reading.
+
+**Calculated metrics stay off while every tier's `calculatedMetricsPerProfile` is 0**, which is
+the default; `v0.22.0` had no such setting. Publishing a profile with a calculated metric is
+refused with `LIMIT_EXCEEDED` until its tenant's tier allows it, so the upgrade has no effect until
+then. Before upgrading, check your tiers. If any is above 0, set it to 0, or do not publish a
+calculated metric, until every `device-management` and `event-management` replica runs this release,
+and then wait at least `metricDefCacheTtlSeconds` (300 seconds by default) after the last old
+`device-management` pod stops. Publishing during a mixed rollout can store a device-sent value
+under a calculated metric's key permanently, and messages redelivered across old and new
+`event-management` replicas can be stored twice. Rolling `event-management` back after calculated
+metrics are in use carries the same duplicate risk.
 
 ##### New alerts and metrics {#v0230-observability}
 
@@ -3727,13 +3769,45 @@ exactly as written) selects the form. Set `compact` only after every pod runs th
 - `DeviceStateDroppingEvents` (warning): device-state discarded an event after its last delivery
   attempt, which leaves a device's connectivity, a reading or its position stale until a newer
   event arrives;
-- `devicechain_notificationmanagement_quiet_hours_total{outcome}` for held and released
-  notifications.
+- `devicechain_notificationmanagement_quiet_hours_total{outcome}` for notifications held, released
+  or dropped by quiet hours;
+- `devicechain_devicemanagement_calcmetric_evaluations_total`,
+  `devicechain_devicemanagement_calcmetric_skipped_total{reason}` and
+  `devicechain_devicemanagement_calcmetric_device_key_dropped_total` for calculated metrics;
+- `devicechain_commanddelivery_command_delivery_window_commands_undefined_total` for commands
+  failed because their profile no longer defines them;
+- `devicechain_sparkplugingest_presence_probes_total` and
+  `devicechain_sparkplugingest_presence_probe_disconnects_total` for the Host's liveness probes;
+- `jetstream_consumer_leader_local`, `jetstream_publish_leader_local` and
+  `jetstream_consumer_leader_moves_total` for leader placement.
 
-Every result a processor counts is now exported at zero from the start, so the first discard after
-a pod starts is visible to an alert. No metric was renamed or removed.
+Every result of the shared processor counters is now exported at zero, so the first discard after
+a pod's first scrape is visible to an alert. No metric was renamed or removed.
+`jetstream_publish_window_full_seconds_total`, `jetstream_publish_window_full_total` and
+`jetstream_publish_duplicates_total` gained a `writer` label, which splits their series; a query
+that sums over it reads as before.
 
 #### What else changed {#v0230-what-changed}
+
+##### Known limitations {#v0230-known-limitations}
+
+These were measured on one test cluster: three service nodes of 4 vCPUs and 8 GiB each, broker TLS
+on, the default wire format, in runs of 300 to 600 seconds. They describe that cluster, not a
+guarantee for yours.
+
+- **MQTT QoS 1 publishes can be acknowledged and then lost, uncounted, while the capture stream
+  changes leader under heavy load.** At 12,000 events a second the stream's leader stepped down
+  once, and the events published in the five seconds the stream had no leader were lost after the
+  devices had their acknowledgement. No counter or alert reported it. Work to remove this is in
+  progress.
+- **The sustained MQTT rate that cluster kept up with was about 6,000 events a second**, bound by
+  the broker. At 12,000 a second the backlog grew; above the capture stream's ceiling the oldest
+  events are discarded, and that loss is counted and alerted. HTTP ingest on the same cluster
+  reached about 14,000 a second.
+- **The broker's memory can approach its limit under MQTT-heavy load.** Each server used 3.0–3.2 GB
+  of its 3,276 MiB `GOMEMLIMIT`. For an MQTT-heavy install, raise `nats_memory_limit` (4Gi by
+  default, set in the instance's `terraform.tfvars` and applied with `dcctl upgrade`; `GOMEMLIMIT`
+  follows at 80% of it). See [The message broker](./bootstrap.md#broker-sizing).
 
 ##### Also in this release {#v0230-also}
 
@@ -3742,27 +3816,36 @@ a pod starts is visible to an alert. No metric was renamed or removed.
   [Quiet hours](../guides/notification-channels.md#quiet-hours).
 - **A re-raised alarm escalates again.** An alarm that cleared and was raised again used to keep the
   first cycle's acknowledgement, so its second cycle was never escalated.
-- **Boards read back what a live feed missed.** After a connection outage, a line chart, a fleet
-  table and a stat card read back the readings sent during the outage, so a chart no longer draws a
-  straight line across the gap. This lifts the known limitation of `v0.22.0`.
-- **A Send data tab** on the device page writes a ready-to-run `mosquitto_pub` or `curl` for the
-  device's first reading.
+- **Boards read back what a live feed missed.** After a connection outage, a line chart bound to
+  one device, a fleet table, a bar chart with one bar per device and a stat card read back the
+  readings sent during the outage, so a chart no longer draws a straight line across the gap. A
+  chart of several devices shows a break instead. This lifts most of the known limitation of
+  `v0.22.0`.
+- **A Send data tab** on the device page writes a `mosquitto_pub` or `curl` command for the
+  device's first reading, with placeholders for what the console cannot know, such as the
+  instance id, the hosts and a password.
 - **`dcctl enable-area`** turns on a functional area on a running instance. There is no command to
   turn one off.
 - **Sparkplug.** A connected Host re-probes its asserted devices for liveness every
   `presence.probeSeconds` (1800 by default), so a device whose death certificate never arrived stops
-  reading online. A message with more than 16,384 metrics is refused.
-- **MCP.** Every tool call writes one structured `mcp_tool_call` log line with the tenant, actor,
-  client and tool.
+  reading online. A message with more than 16,384 metrics has none of its readings stored.
+- **MCP.** Every tool call writes one structured log line, `audit=mcp_tool_call`, with the tenant,
+  actor, `client_id`, tool and outcome.
 - **Commands.** A command held for a maintenance window stays held when a profile change makes it
-  ordinary, and a command its profile no longer defines is failed with a reason, never sent.
+  ordinary, and a command waiting for a window that its profile no longer defines is failed with a
+  reason, never sent.
 - **Event-store migrations** find compressed chunks in a way TimescaleDB 2.29 and later can plan.
 - **Several inbound readers per `device-management` pod:** `resolution.inboundReaders`, from 1 to 4,
   defaults to 1.
-- **Calculated metrics, authoring only.** A metric definition can carry a formula over the
-  profile's other metrics, and `testMetricFormula` previews one. Nothing computes them yet, and
-  publishing a profile with a calculated metric is refused. The tier setting that would allow it,
-  `calculatedMetricsPerProfile`, is 0.
+- **Calculated metrics**, off by default; see [Calculated metrics](#v0230-calculated-metrics).
+- **Clustered brokers** can also move consumer leaders beside their readers:
+  `infrastructure.nats.affinity.consumerLeaders`, off by default.
+- **A re-publish that races its own original** is retried, and no longer counted as a failed
+  publish or a lost event.
+- **Dashboards load faster.** The chart engine, widget descriptors and catalogs load when first
+  needed, so the first download is about 173 kB (gzip) smaller.
+- **The console** no longer refreshes its token twice just before it expires, and a member without
+  `device:write` sees a device's Basic tab read-only.
 
 ### v0.22.0 — dashboards on a square grid, and an event path that waits less {#v0220-upgrade}
 
