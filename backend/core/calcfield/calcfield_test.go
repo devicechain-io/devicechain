@@ -70,8 +70,8 @@ func TestEvalValues(t *testing.T) {
 			map[string]string{"temp": "0.2"}, "0.30000000000000004"},
 		{"an integral double has no trailing zero", "voltage * 2.0", Double,
 			map[string]string{"voltage": "1.5"}, "3"},
-		{"a large double uses an exponent", "voltage * 1e20", Double,
-			map[string]string{"voltage": "12.5"}, "1.25e+21"},
+		{"a large double uses an exponent", "voltage * 1e9", Double,
+			map[string]string{"voltage": "12.5"}, "1.25e+10"},
 		{"negative zero is stored as 0", "temp * -1.0", Double,
 			map[string]string{"temp": "0"}, "0"},
 		{"int promoted in subtraction", "fan - 0.5", Double,
@@ -303,6 +303,43 @@ func TestRange(t *testing.T) {
 	assert.Equal(t, Result{Value: "0"}, compile("fan + 1", Integer).Eval(s), "min is inclusive")
 	// Bounds do not apply to a boolean.
 	assert.Equal(t, Result{Value: "1"}, compile("temp > 50", Boolean).Eval(s))
+}
+
+// TestUnstorable: a result the measurement store cannot hold (decimal(20,8): magnitude
+// 1e12 or more) is skipped whatever the definition's bounds, at the exact wall, for DOUBLE and
+// INT alike; a boolean is never affected. FormatDouble would happily render 1.25e+21, and the
+// row it became would fail the whole reading at storage.
+func TestUnstorable(t *testing.T) {
+	env := fixtureEnv(t)
+	compile := func(expr string, ty Type, bounds ...float64) *Formula {
+		def := Definition{Key: "out", Expression: expr, Type: ty}
+		if len(bounds) == 2 {
+			def.Min, def.Max = &bounds[0], &bounds[1]
+		}
+		f, err := env.Compile(def)
+		require.NoError(t, err)
+		return f
+	}
+	s := env.Sample()
+	defer s.Release()
+	_, _ = s.Set("voltage", "1e12")
+	_, _ = s.Set("current", "1.25e21")
+	_, _ = s.Set("fan", "1000000000000")
+	_, _ = s.Set("temp", "999999999999.9998")
+
+	assert.Equal(t, SkipUnstorable, compile("voltage", Double).Eval(s).Skip, "1e12 is at the wall")
+	assert.Equal(t, SkipUnstorable, compile("-voltage", Double).Eval(s).Skip, "and so is -1e12")
+	assert.Equal(t, SkipUnstorable, compile("current * 1.0", Double).Eval(s).Skip,
+		"1.25e+21 formats fine and stores nowhere")
+	assert.Equal(t, SkipUnstorable, compile("current * 1.0", Double, -1e30, 1e30).Eval(s).Skip,
+		"a declared range wider than storage does not admit it")
+	assert.Equal(t, SkipRange, compile("current * 1.0", Double, 0, 100).Eval(s).Skip,
+		"a declared range that refuses it says range, which is the author's own bound")
+	assert.Equal(t, Result{Value: "9.999999999999998e+11"}, compile("temp", Double).Eval(s), "just inside the wall")
+	assert.Equal(t, SkipUnstorable, compile("fan", Integer).Eval(s).Skip, "an INT at the wall")
+	assert.Equal(t, SkipUnstorable, compile("-fan", Integer).Eval(s).Skip, "and below it")
+	assert.Equal(t, Result{Value: "999999999999"}, compile("fan - 1", Integer).Eval(s), "an INT just inside")
+	assert.Equal(t, Result{Value: "1"}, compile("current > 1.0", Boolean).Eval(s), "a boolean is never unstorable")
 }
 
 // TestCompileRefusals pins every class of formula the gate refuses, with the author-facing
@@ -655,5 +692,5 @@ func TestParseType(t *testing.T) {
 	_, ok = ParseType("double")
 	assert.False(t, ok)
 	assert.Equal(t, "Type(0)", Type(0).String())
-	assert.Equal(t, []SkipReason{"missing_input", "invalid_input", "non_finite", "div_zero", "overflow", "range", "eval_error"}, SkipReasons)
+	assert.Equal(t, []SkipReason{"missing_input", "invalid_input", "non_finite", "div_zero", "overflow", "range", "unstorable", "eval_error"}, SkipReasons)
 }

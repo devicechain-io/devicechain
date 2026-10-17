@@ -27,6 +27,10 @@ import (
 // new accessor must not hand out the Enum slice or a pointer into the definition.
 type ResolvedMetric struct {
 	m resolvedMetricWire
+	// inputSlot is one more than this metric's position among the resolution's formula
+	// inputs (calcPlan), or 0 when no formula of the version reads it — every metric of a
+	// version with no formulas, and the zero value. Set once, by freeze; never cached.
+	inputSlot int
 }
 
 // resolvedMetricWire is a resolved metric's fields, in the form the cache stores them.
@@ -40,7 +44,15 @@ type resolvedMetricWire struct {
 	// Enum is the allow-list, already parsed; nil when there is none, and also when the
 	// stored one is malformed or empty (see checkEnum).
 	Enum []string `json:"enum,omitempty"`
+	// Expression is a calculated metric's formula source (ADR-082), nil for a measured one.
+	// Only the source is cached: the compiled program is rebuilt by freeze on every decode,
+	// so a cache entry never carries anything but text.
+	Expression *string `json:"expr,omitempty"`
 }
+
+// Calculated reports whether the metric is computed from a formula (ADR-082) rather than
+// reported by devices. A device-sent value under its key is dropped at resolve.
+func (r *ResolvedMetric) Calculated() bool { return r.m.Expression != nil }
 
 // ID is the definition's id, stamped onto a measurement as its classifier.
 func (r *ResolvedMetric) ID() uint { return r.m.ID }
@@ -107,6 +119,10 @@ func (def *MetricDefinition) Resolved() ResolvedMetric {
 		if err := json.Unmarshal(*def.Enum, &allowed); err == nil && len(allowed) > 0 {
 			r.Enum = allowed
 		}
+	}
+	if def.Calculated() {
+		expr := def.Expression.String
+		r.Expression = &expr
 	}
 	return ResolvedMetric{m: r}
 }

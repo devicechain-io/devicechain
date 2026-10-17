@@ -254,6 +254,7 @@ func measurementRequests(event model.Event, payload dmmodel.ResolvedMeasurements
 				Classifier:        classifier,
 				Unit:              mx.Unit,
 				DataType:          mx.DataType,
+				Derived:           mx.Derived,
 			})
 		}
 	}

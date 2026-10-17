@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 )
 
 // The canonical preimage of each payload table's row identity, and of the base event's,
@@ -65,7 +67,27 @@ func DeriveLocationPayloadId(request *LocationEventCreateRequest) ([]byte, error
 // This is the one with two callers — the persist path in model/api.go, and the live
 // subscription, which builds a request for a reading it is about to stream rather than
 // store — so it is the reason the other two moved here with it.
+//
+// A CALCULATED value (request.Derived, ADR-082) has a value-free preimage instead: the
+// literal "derived", its name and the sample's instant, under the parent event — no Value,
+// Classifier, Unit or DataType. A calculated value is a function of the sample and of the
+// formula that computed it, and the formula can change between two copies of one reading (a
+// profile published between a device's resend and its original). Keyed on its value, the
+// second copy would store a second row; keyed on (event, name, instant), the first value
+// written for a reading is the one kept and nothing can add another. The raw branch below is
+// untouched, and a raw row's id is exactly what it always was.
 func DeriveMeasurementPayloadId(request *MeasurementEventCreateRequest) ([]byte, error) {
+	if request.Derived {
+		entry, err := canonicalPayloadEntry(struct {
+			Kind     string
+			Name     string
+			Occurred time.Time
+		}{"derived", request.Name, request.EntryOccurredTime})
+		if err != nil {
+			return nil, fmt.Errorf("canonicalizing a derived MeasurementEvent for its payload identity: %w", err)
+		}
+		return DerivePayloadId(request.EventId, entry), nil
+	}
 	entry, err := canonicalPayloadEntry(struct {
 		Name           string
 		Value          *float64
@@ -106,7 +128,20 @@ func DeriveAlertPayloadId(request *AlertEventCreateRequest) ([]byte, error) {
 // payload becomes bytes. DeriveEventId's stated precondition still applies and is still
 // the PRODUCER's: the payload must already be canonical, because json.Marshal of a slice
 // preserves slice order and nothing here can know which slices carry meaning in theirs.
+//
+// A measurements payload is hashed through its IdentityView: its calculated (Derived)
+// values are left out (ADR-082), so the id is a function of what the device sent and one
+// reading keeps one id across a formula change. A payload with no calculated value is
+// hashed as is — byte for byte the document it was hashed as before calculated metrics
+// existed, which is what every stored event's id was derived from. Both callers come
+// through here, so neither can forget the filter.
 func DeriveEventIdForPayload(tenantId string, event *Event, payload any) ([]byte, error) {
+	switch p := payload.(type) {
+	case *dmmodel.ResolvedMeasurementsPayload:
+		payload = p.IdentityView()
+	case dmmodel.ResolvedMeasurementsPayload:
+		payload = p.IdentityView()
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalizing payload for the event identity: %w", err)

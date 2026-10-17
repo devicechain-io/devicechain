@@ -29,14 +29,12 @@ import (
 // core/calcfield code the resolver will use, so what the gate admits and what the test
 // panel shows are what would run.
 //
-// 🔴 NOTHING HERE, OR ANYWHERE ON THE EVENT PATH, EVALUATES A FORMULA AGAINST A READING YET.
-// The resolver does not compute calculated metrics in this release. A published calculated
-// metric would therefore be a key that never receives a value — indistinguishable, on a
-// chart, from one whose inputs never arrive — and a device sending that key would have its
-// value stored as if it were the computed one. So the publish gate runs every check and
-// then refuses with CalculatedMetricsNotComputedError: the vocabulary is recognized, the
-// formula is valid, and this build cannot execute it. That refusal is removed by the change
-// that computes the values, and by nothing else.
+// What runs a published formula against a reading is the resolution (profile_calculation.go,
+// compiled once per cached ProfileResolution) and the resolver that appends its values. It
+// compiles with the same environment rule as newProfileFormulas below, so a formula this
+// gate admits is one the resolver can run. Whether a tenant may publish any at all is its
+// tier's calculatedMetricsPerProfile ceiling, zero on default tiers until the feature's
+// cost has been measured.
 
 // CalculatedMetricsCeilingResolver reads how many calculated metrics one of the tenant's
 // profiles may publish: its tier's setting, else the platform default (zero). A narrow
@@ -59,24 +57,6 @@ func (api *Api) calculatedMetricsCeiling(ctx context.Context) (int, error) {
 		return 0, errors.New("no tenant in context")
 	}
 	return api.CalculatedMetricsCeiling.Resolve(ctx, tenant)
-}
-
-// CalculatedMetricsNotComputedError is the refusal of a publish whose calculated metrics
-// passed every check, because this build does not compute calculated metrics. It carries
-// extensions.code UNSUPPORTED: recognized and valid, not executable here.
-type CalculatedMetricsNotComputedError struct {
-	Keys []string
-}
-
-func (e *CalculatedMetricsNotComputedError) Error() string {
-	return fmt.Sprintf("cannot publish device profile: calculated metric(s) %s passed every check, but this "+
-		"release does not compute calculated metrics yet, so they would never receive a value; remove them "+
-		"from the draft to publish the rest", strings.Join(e.Keys, ", "))
-}
-
-// Extensions gives the refusal its wire code.
-func (e *CalculatedMetricsNotComputedError) Extensions() map[string]any {
-	return map[string]any{"code": "UNSUPPORTED"}
 }
 
 // CalculatedMetricsCeilingError is the refusal of a profile carrying more calculated
@@ -307,11 +287,7 @@ func (api *Api) checkCalculatedMetrics(ctx context.Context, snapshot datatypes.J
 	if n := len(p.calculated); n > ceiling {
 		return &CalculatedMetricsCeilingError{Count: n, Ceiling: ceiling}
 	}
-	keys := make([]string, len(p.calculated))
-	for i, m := range p.calculated {
-		keys[i] = m.MetricKey
-	}
-	return &CalculatedMetricsNotComputedError{Keys: keys}
+	return nil
 }
 
 // MetricValueInput is one input value of a hand-typed sample.
@@ -348,8 +324,9 @@ type MetricFormulaTestResult struct {
 }
 
 // storedMeasurementMagnitude is the bound on a stored measurement value: event storage
-// keeps a measurement as decimal(20,8), 12 digits before the point.
-const storedMeasurementMagnitude = 1e12
+// keeps a measurement as decimal(20,8), 12 digits before the point. A result at or beyond
+// it is skipped as unstorable by the evaluator itself, whatever minValue/maxValue say.
+const storedMeasurementMagnitude = calcfield.StoredMagnitude
 
 // TestMetricFormula compiles a formula against a profile's draft measured metrics and
 // evaluates it against a hand-typed sample. Nothing is stored. It is the authoring loop's
@@ -458,8 +435,9 @@ func (api *Api) formulaWarnings(ctx context.Context, profileId uint, key string,
 		bounded := min != nil && max != nil && *min > -storedMeasurementMagnitude && *max < storedMeasurementMagnitude
 		if !bounded {
 			out = append(out, "measurements are stored with at most 12 digits before the decimal point and 8 "+
-				"after it; set minValue and maxValue inside ±999999999999 so that a larger result is skipped as "+
-				"out of range rather than refused by storage")
+				"after it: a result of magnitude 1e12 or more is skipped as unstorable, and a stored value is "+
+				"rounded to 8 decimal places; set minValue and maxValue inside ±999999999999 to say what range "+
+				"the metric really has")
 		}
 	}
 	var withUnits []string

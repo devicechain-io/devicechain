@@ -93,6 +93,10 @@ const (
 	SkipOverflow SkipReason = "overflow"
 	// SkipRange: the result is outside the definition's Min/Max.
 	SkipRange SkipReason = "range"
+	// SkipUnstorable: a DOUBLE or INT result whose magnitude is StoredMagnitude or more, which
+	// the measurement store cannot hold whatever the definition's Min/Max allow. Storage
+	// would refuse the row, and with it the whole reading the value was computed from.
+	SkipUnstorable SkipReason = "unstorable"
 	// SkipEvalError: any other evaluation failure (for example clamp with its bounds
 	// reversed). Counted, never a value.
 	SkipEvalError SkipReason = "eval_error"
@@ -101,7 +105,7 @@ const (
 // SkipReasons is every non-empty SkipReason, in a fixed order, for registering counters.
 var SkipReasons = []SkipReason{
 	SkipMissingInput, SkipInvalidInput, SkipNonFinite, SkipDivZero, SkipOverflow,
-	SkipRange, SkipEvalError,
+	SkipRange, SkipUnstorable, SkipEvalError,
 }
 
 // Result is the outcome of evaluating one formula against one sample. Exactly one of Value

@@ -234,6 +234,11 @@ type MeasurementEventCreateRequest struct {
 	Classifier        *uint
 	Unit              *string
 	DataType          *string
+	// Derived marks a calculated metric's value (ADR-082), computed by device-management
+	// from the other readings of the same sample. It is not stored as a column — the
+	// classifier names a calculated definition, which is fixed as calculated at creation —
+	// but it changes the row's identity: see DeriveMeasurementPayloadId.
+	Derived bool
 }
 
 // MeasurementRollup is one row of the measurement_rollups continuous aggregate
