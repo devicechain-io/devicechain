@@ -1489,29 +1489,36 @@ first in line for eviction when a node ran short of memory.
 #### Compression between broker servers {#route-compression}
 
 The servers of a clustered broker (`--ha`) copy every stored event to each other over their own
-connections, called routes. `nats_route_compression` compresses that traffic. **It is off by
-default.**
+connections, called routes. `nats_route_compression` compresses that traffic. **On a clustered
+broker it is `s2_fast` by default.** A single server has no routes, so there is nothing to
+compress.
 
 - **The values are `off`, `s2_fast`, `s2_better`, `s2_best` and `s2_auto`.** Any other value,
-  including another spelling of one of these, is refused when the instance is applied. `off` adds
-  nothing to the broker's configuration, and no route compresses.
-- **`s2_fast` is the one to try.** `s2_better` and `s2_best` spend more CPU for smaller messages.
+  including another spelling of one of these, is refused when the instance is applied. Leaving the
+  variable unset gives `s2_fast` with `--ha` and `off` without it. A value you set always wins over
+  that default, `off` included. `off` adds nothing to the broker's configuration, and no route
+  compresses.
+- **`s2_fast` is the one to use.** `s2_better` and `s2_best` spend more CPU for smaller messages.
   `s2_auto` picks a level from each route's round-trip time and does not compress below 10 ms,
   which covers every route inside one zone, so on a single-zone cluster it changes nothing.
 - **It covers traffic between broker servers only.** Connections from devices and services are
   not compressed, and neither is what the broker writes to disk.
-- **The trade has not been measured on a cluster yet.** In a test of three servers in one
-  process without TLS, `s2_fast` cut the traffic between servers by 57 to 66% for an event with one
-  reading, and its added CPU was within the noise of the measurement. The measured trade on a cluster,
-  with TLS on and off, will be published here. Until then the default stays off.
-- **To turn it on**, set `nats_route_compression = "s2_fast"` in the `terraform.tfvars` beside the
+- **What it was measured to do.** On a three-node Google Kubernetes Engine cluster with broker TLS
+  on, at 18,000 events a second offered, `s2_fast` cut the traffic between broker servers by 60%
+  per event and the broker pods' network traffic by 37%. Compressing costs each broker server 2.6
+  to 2.9% of its CPU, and writing less through TLS saves more than that: the broker used about 4%
+  less CPU per event in total. Throughput rose by about 5%, within the run-to-run variation of
+  that measurement, so count on the bytes and the CPU, not on the throughput.
+- **Upgrading an instance that has `--ha`** to the release with this default restarts the broker's
+  servers one at a time, once, to turn compression on, unless the variable is already set. While
+  they restart, servers on the old and new settings agree per connection: a server that has not
+  restarted yet follows a peer that asks for compression.
+- **To turn it off**, set `nats_route_compression = "off"` in the `terraform.tfvars` beside the
   instance's OpenTofu state (`~/.devicechain/instances/<instance>/infra/instance/`) and run
-  `dcctl upgrade`. The broker's servers restart one at a time to take it. While they do, servers on
-  the old and new settings agree per connection: a server that has not restarted yet follows a
-  peer that asks for compression. To turn it off, set `off` or remove the line, and upgrade again;
-  the servers restart again.
-- **A broker without `--ha` refuses it.** A single server has no routes, so the setting would do
-  nothing.
+  `dcctl upgrade`. Removing the line does not turn it off: it goes back to the default. The same
+  file takes any other mode. Each change restarts the broker's servers one at a time.
+- **A broker without `--ha` refuses a mode other than `off`.** A single server has no routes, so
+  the setting would do nothing.
 - **To check it**, read the broker's `/routez` on monitoring port 8222: each route's `compression`
   field shows the mode in use. The byte counters there count messages before compression, so they
   do not show the saving. The network bytes of the broker's pods do.
