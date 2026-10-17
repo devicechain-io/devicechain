@@ -140,7 +140,24 @@ type DetectMetrics struct {
 	// checkpointDuration is the distribution behind the last-value checkpointSeconds gauge.
 	loopSeconds        [numLoopPhases]prometheus.Counter
 	checkpointDuration prometheus.Observer
+	// checkpointSerialize and checkpointSave split each committed checkpoint's
+	// checkpointDuration into the engine serialization and the store's commit, the two costs
+	// a slow save phase can come from. The combined distribution is kept as it was.
+	checkpointSerialize prometheus.Observer
+	checkpointSave      prometheus.Observer
+
+	// The two waits a checkpoint's publish phase is made of, per detection: the broker's
+	// acknowledgement of the derived event (derivedPublishAck, positive outcomes only) and the
+	// synchronous rule-health write that follows it (ruleStatWrite, the erasure-fence read and
+	// the upsert, whatever their outcome). detect_loop_seconds_total{phase="publish"} is their
+	// sum plus the loop's own work; these say which of the two it is. No labels.
+	derivedPublishAck prometheus.Observer
+	ruleStatWrite     prometheus.Observer
 }
+
+// waitBuckets are the bucket bounds of the per-detection wait distributions: from a loopback
+// broker or database (tens of microseconds) to a stalled one at a checkpoint's deadline.
+var waitBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 10}
 
 // NewDetectMetrics registers the checkpoint-loop metrics under the service's
 // Prometheus namespace/subsystem.
@@ -224,7 +241,19 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	}
 	m.checkpointDuration = ms.NewHistogramVec("detect_checkpoint_duration_seconds",
 		"Wall-clock cost of each committed snapshot (serialize plus store), as a distribution. detect_checkpoint_seconds keeps only the last one.",
-		nil, []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}).WithLabelValues()
+		nil, checkpointBuckets).WithLabelValues()
+	m.checkpointSerialize = ms.NewHistogramVec("detect_checkpoint_serialize_seconds",
+		"Time each committed snapshot spent serializing the engine's state: the first part of detect_checkpoint_duration_seconds.",
+		nil, checkpointBuckets).WithLabelValues()
+	m.checkpointSave = ms.NewHistogramVec("detect_checkpoint_save_seconds",
+		"Time each committed snapshot spent being written to the database: the second part of detect_checkpoint_duration_seconds.",
+		nil, checkpointBuckets).WithLabelValues()
+	m.derivedPublishAck = ms.NewHistogramVec("detect_derived_publish_ack_seconds",
+		"Time each published derived event waited for the broker to acknowledge it, from the write to the acknowledgement. Positive outcomes only. It is not detection latency: a detection waits for its checkpoint before it is written.",
+		nil, waitBuckets).WithLabelValues()
+	m.ruleStatWrite = ms.NewHistogramVec("detect_rule_stat_write_seconds",
+		"Time each rule-health fire counter write held the detection loop after a derived event was published, including the tenant-deletion check it makes first. Failed writes are included; they are also counted in detect_rule_stat_write_failures_total.",
+		nil, waitBuckets).WithLabelValues()
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
 	for _, p := range repairProjections {
@@ -244,6 +273,9 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	}
 	return m
 }
+
+// checkpointBuckets are the bucket bounds of the checkpoint distributions.
+var checkpointBuckets = []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
 
 // The checkpoint stages a failure is counted against. Fixed, so the label set is bounded.
 const (
@@ -552,6 +584,22 @@ func (m *DetectMetrics) RecordDerivedPublished() {
 	m.derivedPublished.Inc()
 }
 
+// RecordDerivedPublishAck observes one derived event's broker acknowledgement wait (runtime.Metrics).
+func (m *DetectMetrics) RecordDerivedPublishAck(wait time.Duration) {
+	if m == nil {
+		return
+	}
+	m.derivedPublishAck.Observe(wait.Seconds())
+}
+
+// recordRuleStatWrite observes how long one rule-health fire write held the loop.
+func (m *DetectMetrics) recordRuleStatWrite(d time.Duration) {
+	if m == nil {
+		return
+	}
+	m.ruleStatWrite.Observe(d.Seconds())
+}
+
 // RecordDerivedRejected records one detection dropped before publish, by reason (runtime.Metrics).
 func (m *DetectMetrics) RecordDerivedRejected(reason runtime.RejectReason) {
 	if m == nil {
@@ -604,8 +652,9 @@ func (m *DetectMetrics) recordConsumerLag(pending, ackPending uint64) {
 	m.consumerAckPending.Set(float64(ackPending))
 }
 
-// recordCheckpoint records a committed snapshot's cost, size, position, and lag.
-func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, bytes int, lagSeconds float64) {
+// recordCheckpoint records a committed snapshot's cost, size, position, and lag. serialize and
+// save are the two parts of seconds: the engine's serialization and the store's commit.
+func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, serialize, save time.Duration, bytes int, lagSeconds float64) {
 	if m == nil {
 		return
 	}
@@ -613,6 +662,8 @@ func (m *DetectMetrics) recordCheckpoint(appliedSeq uint64, seconds float64, byt
 	m.appliedStreamSeq.Set(float64(appliedSeq))
 	m.checkpointSeconds.Set(seconds)
 	m.checkpointDuration.Observe(seconds)
+	m.checkpointSerialize.Observe(serialize.Seconds())
+	m.checkpointSave.Observe(save.Seconds())
 	m.snapshotBytes.Set(float64(bytes))
 	m.watermarkLagSeconds.Set(lagSeconds)
 }

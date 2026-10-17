@@ -685,7 +685,14 @@ mensajes, y más capacidad del motor no ayudará. El tiempo en `parked` o `probe
 espera: a un reintento o al broker, no al motor. Si la mayor parte está en `plan` y `apply`, el límite es el propio
 motor. Si está en `publish`, `save` y `ack`, el coste son los puntos de control, y
 `devicechain_eventprocessing_detect_checkpoint_duration_seconds` muestra cuánto tarda cada uno.
-(`devicechain_eventprocessing_detect_checkpoint_seconds` conserva solo el último.)
+(`devicechain_eventprocessing_detect_checkpoint_seconds` conserva solo el último.) Dos pares de
+distribuciones dicen qué parte del punto de control es. El tiempo en `publish` se compone de dos
+esperas por detección: la confirmación del evento derivado por el broker
+(`devicechain_eventprocessing_detect_derived_publish_ack_seconds`) y la escritura del contador de
+salud de reglas que la sigue (`devicechain_eventprocessing_detect_rule_stat_write_seconds`). El tiempo
+en `save` es la serialización del estado del motor
+(`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`) y después su escritura en la base
+de datos (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).
 
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))

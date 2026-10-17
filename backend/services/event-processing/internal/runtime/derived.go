@@ -148,6 +148,12 @@ type Metrics interface {
 	RecordFanout(events, evalErrors int)
 	RecordDerivedPublished()
 	RecordDerivedRejected(reason RejectReason)
+	// RecordDerivedPublishAck observes how long one derived publish waited for the broker's
+	// positive acknowledgement: the write's own round trip, nothing before it (the detection
+	// may have sat in the pending buffer until the checkpoint) and nothing after it (the
+	// rule-health write the publish then makes). It is called only for a positive outcome; a
+	// failed or timed-out write is counted as a failed checkpoint instead.
+	RecordDerivedPublishAck(wait time.Duration)
 }
 
 // FireRecorder is the durable per-rule firing sink (ADR-051 slice 7b), implemented by the
@@ -296,9 +302,11 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection, triggeredAt
 	// The writer derives the subject from the tenant in context (fail-closed on none), so the
 	// sink is exactly "{instance}.{sr.Tenant}.derived-events" — the backstop-validated tenant.
 	tctx := dccore.WithTenant(ctx, sr.Tenant)
+	submitted := time.Now()
 	if err := p.writer.WriteMessages(tctx, messaging.Message{Value: payload, DedupID: de.DedupID()}); err != nil {
 		return fmt.Errorf("publish derived event for rule %q: %w", det.RuleID, err)
 	}
+	p.metrics.RecordDerivedPublishAck(time.Since(submitted))
 	p.metrics.RecordDerivedPublished()
 	// Record the fire for the rule-health projection AFTER a durable publish, so a stat only
 	// ever counts a detection that actually reached the feed. It is off the correctness path

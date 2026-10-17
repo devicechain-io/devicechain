@@ -113,9 +113,12 @@ está bloqueado dentro de una llamada.
 | --- | --- |
 | `detect_applied_stream_seq` | Mayor secuencia de flujo de JetStream capturada en la instantánea confirmada. |
 | `detect_checkpoint_failures_total{stage}` | Puntos de control programados de DETECT que no se confirmaron, por etapa (publish, serialize, save). Una llamada de punto de control que supera su plazo cuenta contra la etapa en la que se quedó atascada. Un rechazo por escritor obsoleto no se cuenta aquí: eso termina el proceso. |
+| `detect_checkpoint_save_seconds` | Tiempo que cada instantánea confirmada tardó en escribirse en la base de datos, como distribución: la segunda parte del coste de un punto de control, tras la serialización. |
+| `detect_checkpoint_serialize_seconds` | Tiempo que cada instantánea confirmada tardó en serializar el estado del motor, como distribución: la primera parte del coste de un punto de control. |
 | `detect_checkpoints_total` | Puntos de control de instantánea de DETECT confirmados. |
 | `detect_consumer_ack_pending` | Mensajes entregados pero sin confirmar en el consumidor durable de eventos resueltos (trabajo en curso). |
 | `detect_consumer_pending` | Mensajes sin entregar a la espera en el consumidor durable de eventos resueltos (la señal principal de retraso de DETECT). |
+| `detect_derived_publish_ack_seconds` | Tiempo que cada evento derivado publicado esperó a que el broker lo confirmara, como distribución. Solo publicaciones correctas. No es la latencia de detección: una detección espera a su punto de control antes de publicarse. |
 | `detect_derived_events_published_total` | Eventos de señal derivados publicados. |
 | `detect_derived_events_rejected_total{reason}` | Detecciones descartadas antes de publicarse, por motivo (enumeración acotada). |
 | `detect_events_applied_total` | Eventos resueltos alimentados al motor DETECT. |
@@ -137,6 +140,7 @@ está bloqueado dentro de una llamada.
 | `detect_loop_heartbeat_timestamp_seconds` | Hora Unix de la última pasada del bucle de escritor único de DETECT, refrescada al menos una vez por ciclo mientras hay un turno activo. Obsoleta mientras detect_is_leader y detect_live marcan 1 significa que el bucle está bloqueado dentro de una llamada. |
 | `detect_restore_seconds` | Tiempo para restaurar el estado del motor desde el almacén de instantáneas al arrancar. |
 | `detect_rule_stat_write_failures_total` | Escrituras del contador de disparos de salud de reglas que fallaron y se descartaron. La detección no se ve afectada (la escritura es de mejor esfuerzo y queda fuera de la ruta de corrección), pero los recuentos de salud de reglas de la consola dejan de avanzar mientras esto sube; la causa está en el registro del servicio. |
+| `detect_rule_stat_write_seconds` | Tiempo que cada escritura del contador de disparos de salud de reglas retuvo el bucle de detección tras publicarse un evento derivado, como distribución, incluida la comprobación de eliminación de inquilino que hace primero. Incluye las escrituras fallidas. |
 | `detect_rules_active` | Reglas cargadas en el motor DETECT. |
 | `detect_stale_absence_dropped_total` | **Activaciones** de ausencia descartadas al publicar porque el dispositivo salió del alcance de la regla: se eliminó, se deshabilitó, se cambió de tipo, o la versión de la regla fue reemplazada. También cuenta el cierre emparejado de una activación cuando esa activación se descartó en la misma pasada, y el cierre que una republicación retiene porque la nueva versión conserva la regla. El cierre de un dispositivo que salió del alcance no se descarta, así que la alarma que levantó se cierra. |
 | `detect_superseded_frontier_dropped_total` | Detecciones de los tipos duración, sesión y agregado, que se disparan por el paso del tiempo, descartadas al publicar porque su versión de perfil ha sido reemplazada. |

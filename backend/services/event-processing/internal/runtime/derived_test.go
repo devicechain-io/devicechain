@@ -53,13 +53,16 @@ func (w *fakeWriter) HandleResponse(error) {}
 type fakeMetrics struct {
 	published int
 	rejected  map[RejectReason]int
+	// ackWaits is every positive publish outcome's timed broker wait, in order.
+	ackWaits []time.Duration
 }
 
 func newFakeMetrics() *fakeMetrics { return &fakeMetrics{rejected: map[RejectReason]int{}} }
 
-func (m *fakeMetrics) RecordFanout(int, int)                {}
-func (m *fakeMetrics) RecordDerivedPublished()              { m.published++ }
-func (m *fakeMetrics) RecordDerivedRejected(r RejectReason) { m.rejected[r]++ }
+func (m *fakeMetrics) RecordFanout(int, int)                   {}
+func (m *fakeMetrics) RecordDerivedPublished()                 { m.published++ }
+func (m *fakeMetrics) RecordDerivedRejected(r RejectReason)    { m.rejected[r]++ }
+func (m *fakeMetrics) RecordDerivedPublishAck(d time.Duration) { m.ackWaits = append(m.ackWaits, d) }
 
 func thresholdRule(id string) *rules.CompiledRule {
 	return &rules.CompiledRule{ID: id, Type: rules.TypeThreshold}
@@ -299,5 +302,48 @@ func TestPublishBrokerErrorIsRetryable(t *testing.T) {
 	}
 	if m.published != 0 {
 		t.Fatalf("a failed publish must not count as published")
+	}
+}
+
+// slowWriter is a broker whose acknowledgement takes wait.
+type slowWriter struct {
+	fakeWriter
+	wait time.Duration
+}
+
+func (w *slowWriter) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
+	time.Sleep(w.wait)
+	return w.fakeWriter.WriteMessages(ctx, msgs...)
+}
+
+// The publish-acknowledgement timing is the broker's wait, observed once per POSITIVE outcome
+// and never for a failed write or a terminal drop: a failed publish is a deferred checkpoint,
+// and a drop never reached the broker, so neither is an acknowledgement latency.
+func TestPublishTimesOnlyAPositiveAcknowledgement(t *testing.T) {
+	reg := NewRuleRegistry([]ScopedRule{{Tenant: "acme", ProfileVersionToken: "p@1", Compiled: thresholdRule("acme/r1")}})
+	const wait = 5 * time.Millisecond
+	w := &slowWriter{wait: wait}
+	m := newFakeMetrics()
+	p := NewPublisher(w, reg, m)
+	at := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: at}, time.Time{}); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	if len(m.ackWaits) != 1 || m.ackWaits[0] < wait {
+		t.Fatalf("a positive outcome timed %v; want one wait of at least %v", m.ackWaits, wait)
+	}
+
+	// A terminal drop (an orphan rule) never reached the broker.
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/ghost", Series: "d1", Kind: core.Threshold, At: at}, time.Time{}); err != nil {
+		t.Fatalf("orphan drop: %v", err)
+	}
+	// A failed write is not an acknowledgement.
+	w.err = errors.New("broker down")
+	if err := p.Publish(context.Background(), core.Detection{RuleID: "acme/r1", Series: "d1", Kind: core.Threshold, At: at.Add(time.Second)}, time.Time{}); err == nil {
+		t.Fatal("a broker failure must return a retryable error")
+	}
+	if len(m.ackWaits) != 1 {
+		t.Fatalf("a drop or a failed write was timed as an acknowledgement: %v", m.ackWaits)
 	}
 }
