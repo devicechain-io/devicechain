@@ -99,18 +99,21 @@ type NatsConfiguration struct {
 	// responses and device reports. A full store then refuses rather than evicts, and the
 	// device keeps the message.
 	//
-	// 🔴 REFUSED IN THIS BUILD (ErrMqttFailClosedNotAvailable). The store, its durables and
-	// their watch are built, but nothing reads the durables yet, so with this on QoS 1
-	// device publishes would accumulate in the store until it was full and the gateway
-	// would then refuse every one: a fleet-wide outage behind one key. Validate therefore
-	// refuses a document that sets it, and every service fails its config load on it,
-	// until the reader ships and removes the refusal. The plumbing is exercised in tests,
-	// which set the field on a configuration they never validate.
+	// 🔴 REFUSED IN THIS BUILD (ErrMqttFailClosedNotAvailable). The store, its durables,
+	// their watch and the readers that forward from them are built, but nothing yet backs
+	// devices off before the store fills: once it is full the gateway refuses publishes by
+	// closing connections, and the fleet's reconnects (each one TLS and an auth callout) land
+	// on a platform that is already behind, while every refusal reads as the device going
+	// offline. Validate therefore refuses a document that sets it, and every service fails
+	// its config load on it, until the back-off ahead of overflow and the presence debounce
+	// ship and remove the refusal. The plumbing is exercised in tests, which set the field on
+	// a configuration they never validate.
 	//
 	// It is refused at startup on a broker that also serves another instance: the store is
 	// per broker account, so one instance's backlog would refuse the other's devices, and
-	// each instance would rewrite the other's bound. Turning it off again removes the
-	// platform durables and restores the gateway's default discard policy.
+	// each instance would rewrite the other's bound. Turning it off again hands the store
+	// back to the gateway's default discard policy once no pod with it on holds it, and
+	// removes the platform durables once they are drained.
 	MqttFailClosed bool
 	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
 	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in
@@ -1240,15 +1243,17 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 }
 
 // ErrMqttFailClosedNotAvailable is Validate's refusal of infrastructure.nats.mqttFailClosed
-// on. The fail-closed MQTT acknowledgement needs a reader over the broker's message store
-// that has not shipped; without it the setting fills the store and then refuses every QoS 1
-// device publish, so it is refused rather than accepted as a setting that does harm.
+// on. The fail-closed MQTT acknowledgement forwards from the broker's message store, but
+// nothing yet backs devices off before that store fills or tells a refusal from a device
+// going offline, so a store that fills would disconnect the fleet into a reconnect storm. It
+// is refused rather than accepted as a setting that does harm.
 var ErrMqttFailClosedNotAvailable = errors.New("infrastructure.nats.mqttFailClosed is not available in " +
-	"this build: the reader over the broker's message store has not shipped")
+	"this build: devices are not yet backed off before the broker's message store fills, so a full " +
+	"store would disconnect them all at once")
 
 // mqttFailClosedShipped lifts that refusal. It is a package variable, not a key, so no
 // document can lift it: only this package's tests set it, to validate the rest of a
-// document with the setting on. The change that ships the reader deletes it and the check.
+// document with the setting on. The change that ships the back-off deletes it and the check.
 var mqttFailClosedShipped = false
 
 // Validate fails closed on an instance configuration missing the infrastructure
@@ -1258,9 +1263,9 @@ var mqttFailClosedShipped = false
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
 	if c.Infrastructure.Nats.MqttFailClosed && !mqttFailClosedShipped {
-		return fmt.Errorf("%w. With it on, QoS 1 device publishes would fill the broker's MQTT message store "+
-			"and the broker would then refuse every one. Remove infrastructure.nats.mqttFailClosed from the "+
-			"instance configuration or set it to false", ErrMqttFailClosedNotAvailable)
+		return fmt.Errorf("%w, and every refusal would read as the device going offline. Remove "+
+			"infrastructure.nats.mqttFailClosed from the instance configuration or set it to false",
+			ErrMqttFailClosedNotAvailable)
 	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")
