@@ -21,7 +21,7 @@ import (
 func NewMetricExpressionSchema() *gormigrate.Migration {
 	const table = `"device-management"."metric_definitions"`
 	return &gormigrate.Migration{
-		ID: "20261016200000",
+		ID: "20261016210000",
 		Migrate: func(tx *gorm.DB) error {
 			return tx.Exec(`ALTER TABLE ` + table + ` ADD COLUMN IF NOT EXISTS expression text;`).Error
 		},
