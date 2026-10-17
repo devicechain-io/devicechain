@@ -88,10 +88,14 @@ func (api *Api) countReferencing(ctx context.Context, refModel interface{}, colu
 // which it is the source or target so no dangling edge is left behind, and every
 // EntityAttribute owned by it (ADR-012/044) so no attribute outlives its entity.
 // An optional cascade removes further owned child rows (e.g. a device's
-// credentials) in the same transaction. Returns false (no error) when the token
-// names no entity.
+// credentials) in the same transaction, and names any further devices whose owners it
+// moved (an access scope's members, for a group): their ownership facts are queued with
+// those of the devices that tracked the entity, in ONE statement, as the transaction's
+// last — never by the cascade itself, which would take outbox rows and then go on to
+// take more (queueOwnershipOnTx). Returns false (no error) when the token names no
+// entity.
 func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model interface{},
-	token string, cascade func(tx *gorm.DB, id uint) error) (bool, error) {
+	token string, cascade func(tx *gorm.DB, id uint) ([]uint, error)) (bool, error) {
 	id, err := api.ResolveEntityToken(ctx, string(etype), token)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -135,9 +139,11 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 			return err
 		}
 		if cascade != nil {
-			if err := cascade(tx, id); err != nil {
+			moved, err := cascade(tx, id)
+			if err != nil {
 				return err
 			}
+			sources = append(sources, moved...)
 		}
 		if err := tx.Unscoped().Where("token = ?", token).Delete(model).Error; err != nil {
 			return err
@@ -301,17 +307,17 @@ func (api *Api) DeleteDeviceProfile(ctx context.Context, token string) (bool, er
 func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 	var credentials []DeviceCredential
 	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeDevice, &Device{}, token,
-		func(tx *gorm.DB, id uint) error {
+		func(tx *gorm.DB, id uint) ([]uint, error) {
 			credentials = credentials[:0]
 			if err := deleteCredentialsReturningOwners(tx.Unscoped().Where("device_id = ?", id), &credentials); err != nil {
-				return err
+				return nil, err
 			}
 			if err := tx.Unscoped().Where("device_id = ?", id).Delete(&DeviceReplacement{}).Error; err != nil {
-				return err
+				return nil, err
 			}
 			// The configuration revisions and reported state are records ABOUT this
 			// device; they go with it.
-			return deleteDeviceConfigurationOnTx(tx, id)
+			return nil, deleteDeviceConfigurationOnTx(tx, id)
 		})
 	if err == nil && deleted {
 		api.evictCredentialOwners(ctx, credentials)
@@ -420,7 +426,7 @@ func (api *Api) DeleteCustomerType(ctx context.Context, token string) (bool, err
 // other customer in the tenant may take it (see ErrCustomerTokenRetired).
 func (api *Api) DeleteCustomer(ctx context.Context, token string) (bool, error) {
 	return api.deleteEdgeEntity(ctx, entity.TypeCustomer, &Customer{}, token,
-		func(tx *gorm.DB, _ uint) error { return retireCustomerToken(tx, token) })
+		func(tx *gorm.DB, _ uint) ([]uint, error) { return nil, retireCustomerToken(tx, token) })
 }
 
 // --- Relationships (ADR-013) ---------------------------------------------------

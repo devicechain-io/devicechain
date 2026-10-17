@@ -323,36 +323,38 @@ func (api *Api) DeleteEntityGroup(ctx context.Context, token string) (bool, erro
 	// An access scope may be deleted: the devices in it lose the group's anchor, so each one's
 	// ownership fact is queued (the members read inside the transaction, under the lock, so a
 	// concurrent enable cannot slip between), and the token is retired either way.
-	var accessMembers []uint
-	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) error {
+	//
+	// 🔴 THE MEMBERS ARE RETURNED TO deleteEdgeEntity, NOT QUEUED HERE. It queues them with the
+	// devices that have an edge to the group, in one statement, after the group row's delete.
+	// Queued here they were a second set of outbox rows, taken before that statement: a bulk
+	// writer taking both sets in ascending id — holding an edge device, waiting on a member
+	// this cascade held — closed a cycle the deadlock detector resolved by failing a request
+	// (ownership_outbox_lockorder_integration_test.go).
+	deleted, err := api.deleteEdgeEntity(ctx, entity.TypeGroup, &EntityGroup{}, token, func(tx *gorm.DB, id uint) ([]uint, error) {
 		if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
-			return err
+			return nil, err
 		}
 		inUse, err := api.entityGroupReferencedByRule(ctx, tx, id)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if inUse {
-			return fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
+			return nil, fmt.Errorf("%w: entity group %q is referenced by a detection rule", ErrEntityInUse, token)
 		}
-		if accessMembers, err = api.accessMembersOnTx(tx, id); err != nil {
-			return err
+		accessMembers, err := api.accessMembersOnTx(tx, id)
+		if err != nil {
+			return nil, err
 		}
 		if err := tx.Unscoped().Where("entity_group_id = ?", id).Delete(&EntityGroupVersion{}).Error; err != nil {
-			return err
+			return nil, err
 		}
 		if err := api.purgeGroupScopingRows(tx, id); err != nil {
-			return err
+			return nil, err
 		}
 		if err := retireGroupToken(tx, token); err != nil {
-			return err
+			return nil, err
 		}
-		// The members lose the group's anchor: their ownership facts are queued here, at the
-		// end of the cascade. The one statement deleteEdgeEntity runs after it is the group
-		// row's own delete, and every other writer of that row takes the family lock this
-		// transaction already holds, so nothing that queues can be waiting on it.
-		_, err = queueOwnershipOnTx(tx, accessMembers)
-		return err
+		return accessMembers, nil
 	})
 	if err != nil {
 		return false, err

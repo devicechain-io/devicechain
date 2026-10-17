@@ -23,13 +23,24 @@ import (
 	"gorm.io/gorm"
 )
 
-// countingOwnership counts the facts published through it.
+// countingOwnership counts the facts published through it for ONE tenant, the rig's.
+//
+// 🔴 THE DRAIN IS CROSS-TENANT BY DESIGN AND THE DATABASE IS SHARED. Every rig on the real
+// engine is a tenant of its own in one database that nothing truncates, and every edge a
+// rig writes queues a row that stays until something drains it — so a drain here publishes
+// the facts of every earlier rig, and of any test running beside this one, through this
+// publisher. Counted without the tenant filter, those made "both facts were published" read
+// as three or thirty (the integration job failed on exactly that).
 type countingOwnership struct {
-	mu    sync.Mutex
-	facts []DeviceOwnershipChangedEvent
+	tenant string
+	mu     sync.Mutex
+	facts  []DeviceOwnershipChangedEvent
 }
 
-func (c *countingOwnership) PublishDeviceOwnershipChanged(_ context.Context, e *DeviceOwnershipChangedEvent) error {
+func (c *countingOwnership) PublishDeviceOwnershipChanged(ctx context.Context, e *DeviceOwnershipChangedEvent) error {
+	if tenant, _ := core.TenantFromContext(ctx); tenant != c.tenant {
+		return nil
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.facts = append(c.facts, *e)
@@ -64,6 +75,12 @@ func ownershipPgRig(t *testing.T, n int) (*Api, context.Context, []uint) {
 	return api, ctx, ids
 }
 
+// tenantOf is the tenant ctx names.
+func tenantOf(ctx context.Context) string {
+	tenant, _ := core.TenantFromContext(ctx)
+	return tenant
+}
+
 func queueCommitted(t *testing.T, api *Api, ctx context.Context, ids []uint) {
 	t.Helper()
 	require.NoError(t, api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
@@ -86,7 +103,7 @@ func queuedFor(t *testing.T, api *Api, ctx context.Context) []PendingOwnershipFa
 // The skipped row survives, carrying the writer's generation, and the next pass announces it.
 func TestTheOwnershipDrainSkipsARowAWriterHolds(t *testing.T) {
 	api, ctx, ids := ownershipPgRig(t, 2)
-	pub := &countingOwnership{}
+	pub := &countingOwnership{tenant: tenantOf(ctx)}
 	api.DeviceOwnershipPublisher = pub
 	queueCommitted(t, api, ctx, ids)
 	before := queuedFor(t, api, ctx)
@@ -144,7 +161,7 @@ func TestTheOwnershipDrainSkipsARowAWriterHolds(t *testing.T) {
 func TestOwnershipOutboxCost(t *testing.T) {
 	const members = 10_000
 	api, ctx, ids := ownershipPgRig(t, members)
-	pub := &countingOwnership{}
+	pub := &countingOwnership{tenant: tenantOf(ctx)}
 	api.DeviceOwnershipPublisher = pub
 
 	counter := rdbtest.NewStatementCounter("pending_ownership_facts")
@@ -195,4 +212,53 @@ func TestOwnershipOutboxCost(t *testing.T) {
 	t.Logf("drain %d queued facts: %d passes of up to %d, %v (%.0f facts/s, publisher excluded)",
 		members, passes, OwnershipDrainPageSize, elapsed, float64(members)/elapsed.Seconds())
 	require.GreaterOrEqual(t, pub.count(), members)
+}
+
+// A device named twice in one write is one row on the real engine, whose upsert refuses a
+// statement naming the same key twice ("cannot affect row a second time"): the duplicates
+// are folded before the statement, not by it.
+func TestADeviceQueuedTwiceInOneWriteIsOneRowOnTheRealEngine(t *testing.T) {
+	api, ctx, ids := ownershipPgRig(t, 1)
+	queueCommitted(t, api, ctx, []uint{ids[0], ids[0]})
+	require.Len(t, queuedFor(t, api, ctx), 1)
+}
+
+// blockingOwnership holds its FIRST publish until released, so a pass can be caught in
+// flight; every later publish returns at once, so a second pass that wrongly runs beside
+// the first completes and is seen to, rather than hanging the test on the same gate.
+type blockingOwnership struct {
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingOwnership) PublishDeviceOwnershipChanged(context.Context, *DeviceOwnershipChangedEvent) error {
+	first := false
+	b.once.Do(func() { first = true; close(b.entered) })
+	if first {
+		<-b.release
+	}
+	return nil
+}
+
+// One replica drains at a time: a pass that finds another replica's pass in flight is
+// skipped — its own outcome, neither a success that moves the last-success gauge nor a
+// failure that pages — and the facts are published once.
+func TestOneReplicaDrainsAtATime(t *testing.T) {
+	api, ctx, ids := ownershipPgRig(t, 1)
+	queueCommitted(t, api, ctx, ids)
+	pub := &blockingOwnership{entered: make(chan struct{}), release: make(chan struct{})}
+	api.DeviceOwnershipPublisher = pub
+	first := make(chan error, 1)
+	go func() { first <- api.DrainOwnershipFactsLocked(context.Background()) }()
+	select {
+	case <-pub.entered:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the first pass never reached a publish")
+	}
+	err := api.DrainOwnershipFactsLocked(context.Background())
+	require.ErrorIs(t, err, core.ErrPassSkipped, "a second pass ran beside one in flight")
+	close(pub.release)
+	require.NoError(t, <-first)
+	require.Empty(t, queuedFor(t, api, ctx))
 }

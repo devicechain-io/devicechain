@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -42,6 +43,7 @@ func TestALeaveWhoseFactCouldNotBePublishedIsPublishedLater(t *testing.T) {
 	require.Equal(t, 1, pub.count())
 
 	pub.fail = errors.New("broker unavailable")
+	before := time.Now().UTC()
 	removed, err := api.RemoveEntityRelationship(ctx, "e-acme-mining")
 	require.NoError(t, err, "the write failed because the broker did: the fact is the drain's, never the write's")
 	require.True(t, removed)
@@ -56,6 +58,9 @@ func TestALeaveWhoseFactCouldNotBePublishedIsPublishedLater(t *testing.T) {
 	require.Equal(t, 2, pub.count(), "the queued fact was not published once the broker came back")
 	require.Equal(t, "dozer-01", pub.last().DeviceToken)
 	require.Empty(t, pub.last().Anchors, "the published fact still names the owner the device left")
+	// The fact's precedence in device-state is its ChangedTime plus a settle window: a time
+	// before the change would let an event received before the removal override it.
+	require.False(t, pub.last().ChangedTime.Before(before), "the fact is dated before the change it announces")
 	require.Empty(t, queuedOwnership(t, api), "a published fact stayed queued")
 }
 

@@ -28,6 +28,8 @@ type captureOwnership struct {
 	claims int // facts published under a context that carried the caller's claims
 	tenant []string
 	fail   error
+	// attempts counts every publish asked of it, refused or not.
+	attempts int
 
 	api *Api
 	t   *testing.T
@@ -36,6 +38,7 @@ type captureOwnership struct {
 func (c *captureOwnership) PublishDeviceOwnershipChanged(ctx context.Context, e *DeviceOwnershipChangedEvent) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.attempts++
 	if c.fail != nil {
 		return c.fail
 	}
