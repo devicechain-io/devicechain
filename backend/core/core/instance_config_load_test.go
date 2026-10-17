@@ -332,20 +332,25 @@ func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 	assert.Contains(t, err.Error(), "consumerLeader")
 }
 
-// 🔴 infrastructure.nats.mqttFailClosed is refused at the load every service makes, until the
-// deployed broker is the version its gateway behaviour is pinned against and the cutover and
-// overload measurement are done. The key is spelled correctly here, so this is the value
-// refusal and not the strict decode's.
-func TestLoadInstanceConfigurationRefusesMqttFailClosedOn(t *testing.T) {
+// infrastructure.nats.mqttFailClosed loads, at the load every service makes, as the document
+// wrote it: on when it says true, off when it says false or nothing. It was refused here until
+// what it depends on had shipped.
+func TestLoadInstanceConfigurationAcceptsMqttFailClosed(t *testing.T) {
 	doc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"mqttFailClosed":true},
 	         "userManagement":{"hostname":"u","port":8080}}}`
 	ms := &Microservice{}
-	err := ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc))
-	require.ErrorIs(t, err, config.ErrMqttFailClosedNotAvailable)
-	assert.Contains(t, err.Error(), "not available in this build")
+	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc)))
+	assert.True(t, ms.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed)
 
 	off := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"mqttFailClosed":false},
 	         "userManagement":{"hostname":"u","port":8080}}}`
-	require.NoError(t, (&Microservice{}).LoadInstanceConfigurationFrom(instanceDoc(t, off)),
-		"control: the key written as false loads")
+	offMs := &Microservice{}
+	require.NoError(t, offMs.LoadInstanceConfigurationFrom(instanceDoc(t, off)))
+	assert.False(t, offMs.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed)
+
+	unset := `{"infrastructure":{"nats":{"hostname":"h","port":4222},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	unsetMs := &Microservice{}
+	require.NoError(t, unsetMs.LoadInstanceConfigurationFrom(instanceDoc(t, unset)))
+	assert.False(t, unsetMs.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed, "it must default to off")
 }

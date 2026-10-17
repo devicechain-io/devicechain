@@ -90,6 +90,16 @@ hay ningún bróker aparte que operar.
   `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio mientras llegaban eventos; los
   eventos perdidos no se pueden recuperar, y la hora del cambio acota la ventana que revisar en los
   registros de sus propios dispositivos.
+
+  El ajuste de instancia `infrastructure.nats.mqttFailClosed` (desactivado por defecto) cierra el
+  segundo y el tercer agujero para QoS 1. Con él activado, un PUBACK de QoS 1 significa que la
+  plataforma guarda el mensaje: la plataforma lee los eventos, las respuestas a comandos y los
+  informes de dispositivo QoS 1 del propio almacén de mensajes del bróker. Un almacén lleno rechaza
+  la publicación, y uno cuyo líder está cambiando no la confirma, así que el dispositivo no recibe
+  PUBACK y la vuelve a enviar. Las publicaciones QoS 0 mantienen el comportamiento anterior, y un
+  mensaje por encima del techo del inquilino se sigue descartando después de su PUBACK. Consulte
+  [calidad de servicio](../guides/connecting-a-device.md#quality-of-service) y
+  [MQTT a prueba de fallos](../deployment/observability.md#mqtt-fail-closed).
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si

@@ -72,6 +72,13 @@ title: 传输能力矩阵
   在每秒 12,000 个事件的测试中，一次这样的切换丢失了约五秒的事件。
   `JetStreamCaptureLeaderChanged` 会报告有事件到达时发生过切换；丢失的事件无法恢复，
   切换发生的时间界定了需要在设备自身记录中核对的范围。
+
+  实例设置 `infrastructure.nats.mqttFailClosed`（默认关闭）可为 QoS 1 堵上第二和第三个漏洞。
+  开启后，QoS 1 PUBACK 意味着平台已保存该消息：平台从代理自身的消息存储中读取 QoS 1 事件、命令响应和设备报告。
+  存储写满时会拒绝发布，主节点切换中的存储则不会确认发布，因此设备收不到 PUBACK，会重新发送。
+  QoS 0 发布保持上述行为，超出租户上限的消息仍会在 PUBACK 之后被丢弃。参见
+  [服务质量](../guides/connecting-a-device.md#quality-of-service)和
+  [MQTT 故障关闭](../deployment/observability.md#mqtt-fail-closed)。
 - **写入 ◐**：命令可以送出，但投递**仅面向当前在线连接，且没有确认**。
   发布只会到达那一刻已连接并订阅的设备。代理不会为未连接或未订阅的设备保留消息，
   平台也不会获知设备是否收到。系统有意不设 `DELIVERED` 状态：独立于响应确认投递需要这种传输并不提供的确认机制。

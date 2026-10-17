@@ -7,7 +7,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -99,17 +98,15 @@ type NatsConfiguration struct {
 	// responses and device reports. A full store then refuses rather than evicts, and the
 	// device keeps the message.
 	//
-	// 🔴 REFUSED IN THIS BUILD (ErrMqttFailClosedNotAvailable). The store, its durables,
-	// their watch, the readers that forward from them, the back-off ahead of overflow (the
-	// auth callout refuses device connects while the store is above its high-water mark) and
-	// the presence debounce (a refusal-close does not read as the device going offline) are
-	// built. What is not yet: the deployed broker runs nats-server 2.14.4, while the gateway
-	// behaviour all of this rests on is pinned against 2.15.0 in the guard tests; the cutover
-	// that retires the device-events capture stream; the edge agent's embedded broker; and
-	// the benchmark round that measures loss, duplicates and the reconnect storm under
-	// overload. Validate therefore refuses a document that sets it, and every service fails
-	// its config load on it, until those land and remove the refusal. The plumbing is
-	// exercised in tests, which set the field on a configuration they never validate.
+	// It covers QoS 1 only. A QoS 0 publish is never stored, and reaches the platform through
+	// the device-events capture stream as it always has (best effort); QoS 2 is refused by
+	// default. The capture stream therefore stays: the QoS 1 copies that also land in it are
+	// skipped by its reader once the store's durables are known to hold them. Above 80% of
+	// the store's bound, device-management's auth callout refuses new device connections
+	// until it is below 60%, and a refusal-close is not reported as the device going offline
+	// unless it stays away for the debounce. The guarantee is stated for a replicated broker
+	// (three replicas): on one replica, a node crash can lose what the file store had not yet
+	// synced. The edge agent's own embedded broker is not covered.
 	//
 	// It is refused at startup on a broker that also serves another instance: the store is
 	// per broker account, so one instance's backlog would refuse the other's devices, and
@@ -1244,31 +1241,12 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 }
 
-// ErrMqttFailClosedNotAvailable is Validate's refusal of infrastructure.nats.mqttFailClosed
-// on. The fail-closed MQTT acknowledgement, its back-off and its presence debounce are built,
-// but the broker the platform deploys is not yet the version their behaviour is pinned
-// against, and the cutover off the capture stream and the measurement under overload have not
-// been done. It is refused rather than accepted as a setting whose guarantee is unproven.
-var ErrMqttFailClosedNotAvailable = errors.New("infrastructure.nats.mqttFailClosed is not available in " +
-	"this build: the deployed broker is nats-server 2.14.4, and the MQTT gateway behaviour the setting " +
-	"depends on is verified only against 2.15.0; the move off the device-events capture stream and the " +
-	"measurement under overload are not done yet")
-
-// mqttFailClosedShipped lifts that refusal. It is a package variable, not a key, so no
-// document can lift it: only this package's tests set it, to validate the rest of a
-// document with the setting on. The change that ships the setting deletes it and the check.
-var mqttFailClosedShipped = false
-
 // Validate fails closed on an instance configuration missing the infrastructure
 // a service cannot run without (ADR-022 decision 1 / review E3): the NATS
 // backbone and the user-management endpoint every service validates tokens
 // against. A misrendered config Secret then surfaces at startup rather than as a
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
-	if c.Infrastructure.Nats.MqttFailClosed && !mqttFailClosedShipped {
-		return fmt.Errorf("%w. Remove infrastructure.nats.mqttFailClosed from the instance configuration "+
-			"or set it to false", ErrMqttFailClosedNotAvailable)
-	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")
 	}

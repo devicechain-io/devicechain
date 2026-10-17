@@ -83,10 +83,12 @@ func TestWithTheSettingOnTheReservationIsWhatTheReconcileApplies(t *testing.T) {
 // fcMetrics is the watch's series, unregistered, for a test to read.
 func fcMetrics(instance string) *MqttFailClosedMetrics {
 	m := &MqttFailClosedMetrics{
-		durablePresent:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "p"}, []string{"durable"}),
-		durableMissing:   prometheus.NewCounterVec(prometheus.CounterOpts{Name: "m"}, []string{"durable"}),
-		storeRepaired:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "r"}, []string{"setting"}),
-		foreignInstances: prometheus.NewGauge(prometheus.GaugeOpts{Name: "f"}),
+		durablePresent:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "p"}, []string{"durable"}),
+		durableMissing:    prometheus.NewCounterVec(prometheus.CounterOpts{Name: "m"}, []string{"durable"}),
+		storeRepaired:     prometheus.NewCounterVec(prometheus.CounterOpts{Name: "r"}, []string{"setting"}),
+		foreignInstances:  prometheus.NewGauge(prometheus.GaugeOpts{Name: "f"}),
+		durablePending:    prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "pend"}, []string{"durable"}),
+		durableAckPending: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "ackpend"}, []string{"durable"}),
 	}
 	m.init(instance)
 	return m
