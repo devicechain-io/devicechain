@@ -135,6 +135,16 @@ type streamMetrics struct {
 	// rather than every sample. Accessed only from the single sampler goroutine.
 	warned map[string]bool
 
+	// streamLeaderChanges counts the times a stream's RAFT leader was seen to change between
+	// two samples, by stream: the leader's name differs from the last sample's, or the stream
+	// was seen leaderless in between. It exists for the capture stream (JetStreamCaptureLeaderChanged):
+	// the broker's MQTT gateway publishes into it with no reply, so a publish that arrives while
+	// it has no leader is acknowledged to the device and stored nowhere, and no counter sees it.
+	// The series is created at zero when the stream is first read, so increase() sees the
+	// first change. leaders is the sampler's memory, touched only by the single sampler goroutine.
+	streamLeaderChanges *prometheus.CounterVec
+	leaders             map[string]leaderMemory
+
 	// Unread loss, per durable. A full stream discards its OLDEST message (DiscardOld),
 	// and the fill gauges above say only that the stream is full — not whether any
 	// reader was still behind the message that went. A reader that had not reached it
@@ -435,6 +445,11 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"suffix and writer (the same names as jetstream_publish_window_full_seconds_total). Absent "+
 				"while the stream cannot be read.",
 			[]string{"suffix", "writer"}),
+		streamLeaderChanges: ms.NewCounterVec("jetstream_stream_leader_changes_total",
+			"Times this service saw a stream's RAFT leader change between two 30 s samples, by stream: a "+
+				"different server leading, or the stream seen with no leader in between. A change shorter than "+
+				"one sample that returns to the same server is not seen.",
+			[]string{"stream"}),
 		leaderMoves: ms.NewCounterVec("jetstream_consumer_leader_moves_total",
 			"Times this service asked the broker to move a durable's consumer leader to the server its "+
 				"readers are connected to, by result: moved, or failed (refused or unanswered; nothing changed).",
@@ -498,6 +513,7 @@ func newStreamMetrics(ms *core.Microservice) *streamMetrics {
 				"(result=received, or malformed: dropped unread).",
 			[]string{"cache", "result"}),
 		warned:   map[string]bool{},
+		leaders:  map[string]leaderMemory{},
 		durables: map[durableRef]durableSample{},
 	}
 	// Created at 0 with the metrics, before any connection, for the reason initDurable gives.
@@ -822,6 +838,35 @@ func (m *streamMetrics) countMaxDelivery(stream string, outcome MaxDeliveryOutco
 
 // sampleReplication records the replication triple for one stream or KV bucket.
 // Split out because KV buckets get ONLY this, not the fill gauges — see sample.
+// leaderMemory is the sampler's memory of one stream's leader: who led it at the last sample
+// that saw a leader, and whether a sample since then saw none.
+type leaderMemory struct {
+	name string
+	lost bool
+}
+
+// sampleLeader counts a change of the stream's leader since the last sample. A stream read
+// with no leader (an unclustered broker reports none, and so does a stream mid-election) is
+// remembered as lost only if it had one before, so the unclustered case never counts; when a
+// leader returns, it counts whether or not it is the same server.
+func (m *streamMetrics) sampleLeader(name string, info *nats.StreamInfo) {
+	changes := m.streamLeaderChanges.WithLabelValues(name)
+	changes.Add(0)
+	leader := leaderOfStream(info)
+	prev, known := m.leaders[name]
+	if leader == "" {
+		if known {
+			prev.lost = true
+			m.leaders[name] = prev
+		}
+		return
+	}
+	if known && (prev.lost || prev.name != leader) {
+		changes.Inc()
+	}
+	m.leaders[name] = leaderMemory{name: leader}
+}
+
 func (m *streamMetrics) sampleReplication(name string, info *nats.StreamInfo, desired int) {
 	actual := info.Config.Replicas
 	if actual < 1 {
@@ -960,6 +1005,7 @@ func (m *streamMetrics) sample(ctx context.Context, js nats.JetStreamContext, na
 		}
 		m.sampleReplication(name, info, desired)
 		seen.stream(name, info)
+		m.sampleLeader(name, info)
 		m.usedBytes.WithLabelValues(name).Set(float64(info.State.Bytes))
 		m.usedMsgs.WithLabelValues(name).Set(float64(info.State.Msgs))
 		m.limitBytes.WithLabelValues(name).Set(float64(info.Config.MaxBytes))

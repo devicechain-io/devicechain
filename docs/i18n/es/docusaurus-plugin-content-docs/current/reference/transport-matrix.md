@@ -56,7 +56,7 @@ Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vu
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
 
-### MQTT — el bróker de la plataforma
+### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
 
 La vía por defecto, y la más completa. El bróker es el servidor MQTT integrado en NATS, así que no
 hay ningún bróker aparte que operar.
@@ -81,6 +81,15 @@ hay ningún bróker aparte que operar.
   para llenar el stream de captura, se descartan sus mensajes más antiguos.
   `JetStreamDurableStalledBehindStream` lo informa mientras la canalización no lee el stream de
   captura, y `JetStreamDurableLostUnread` cuando vuelve a leerlo.
+
+  Un tercer agujero es la propia elección de líder del stream de captura. El broker entrega cada
+  publicación QoS 1 al stream de captura sin respuesta, después de que el dispositivo ya tiene su
+  PUBACK. Si el stream cambia de líder bajo carga, las publicaciones que llegan mientras no tiene
+  ninguno, varios segundos, no se guardan en ningún sitio y ningún contador las registra. En una
+  prueba de 12 000 eventos por segundo, un cambio así perdió unos cinco segundos de eventos.
+  `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio mientras llegaban eventos; los
+  eventos perdidos no se pueden recuperar, y la hora del cambio acota la ventana que revisar en los
+  registros de sus propios dispositivos.
 - **Escritura ◐**: los comandos se entregan, pero la entrega es **solo en vivo y sin
   confirmación**. Una publicación alcanza a un dispositivo que esté conectado y suscrito en ese
   instante. El bróker no la retiene para uno que no lo esté, y nada informa a la plataforma de si

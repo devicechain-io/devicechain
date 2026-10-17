@@ -608,6 +608,166 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
+  # THE EARLY TIER. A capture backlog growing 2 points a minute from empty needs
+  # 0.9 / 0.02 = 45 minutes to fill from 10%, so it is outside the twenty-minute horizon
+  # and the warning stays quiet throughout, as does the critical rule.
+  # ------------------------------------------------------------------
+  - name: a slow capture backlog is outside the twenty minute horizon
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0+0.02x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Growing 4 points a minute: the time left, (1 - ratio) / 0.04 per minute, is under
+  # twenty once the ratio passes 20% (minute 5), so the early tier is pending from
+  # minute 6 and warns at minute 8 (32%), after its two minutes of `for`. The critical
+  # tier, whose horizon is ten minutes, is still quiet then (0.68 / 0.04 = 17 minutes
+  # left); it takes over at minute 15 (60%), where both are firing.
+  # ------------------------------------------------------------------
+  - name: a capture backlog that will fill within twenty minutes warns before the critical tier
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0+0.04x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture
+            exp_annotations:
+              summary: "MQTT events waiting to be forwarded are piling up faster than they leave"
+              description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 32% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last five minutes the stream will be full within twenty. This is the early warning for JetStreamCaptureBacklogWillOverflow, which fires when ten minutes remain. Every event in the backlog was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. Add event-sources replicas now, each of which brings its own publish window, and look at event-sources CPU and at devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"}; if JetStreamIngestBackpressureEngaged is firing, the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume."
+      - eval_time: 8m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Quiet, each case carrying its series: a draining backlog, one under the 10% floor
+  # that grows fast, another durable growing just as fast, and another instance's capture
+  # durable growing fast.
+  # ------------------------------------------------------------------
+  - name: a draining, small, other-durable and other-instance backlog do not warn early
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0.6-0.02x15'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ddddd", job="devicechain/event-sources", stream="burst_device-events-capture", durable="burst_event-sources_device-events-capture"}'
+        values: '0 0.09x14'
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0+0.04x15'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-other", pod="dc-event-sources-7c9f-zzzzz", job="other/event-sources", stream="other_device-events-capture", durable="other_event-sources_device-events-capture"}'
+        values: '0+0.04x15'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: JetStreamCaptureBacklogGrowing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # THE LEADER CHANGE. The counter of each of two pods sits at 0 (it is created at 0 when
+  # the stream is first read, so the first change is an increase from 0) while 100
+  # messages a minute arrive, then steps to 1 at minute 10, as the capture stream's leader
+  # did in the run that lost 59,964 acknowledged events. It warns at once (once, although
+  # two pods count it), still warns at minute 20, and clears when the change ages out of
+  # the 15-minute window.
+  # ------------------------------------------------------------------
+  - name: a capture stream leader change while events arrive warns, then ages out
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture"}'
+        values: '0x9 1x40'
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-bbbbb", job="devicechain/event-sources", stream="devicechain_device-events-capture"}'
+        values: '0x9 1x40'
+      - series: 'devicechain_eventsources_total_inbound_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", source="gateway"}'
+        values: '0+100x49'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+            exp_annotations:
+              summary: "The MQTT capture stream changed leader while devices were publishing"
+              description: "Stream devicechain_device-events-capture changed leader within the last 15 minutes while events were arriving. While a stream has no leader, which lasts several seconds, the broker's MQTT gateway still acknowledges device QoS 1 publishes into it and stores them nowhere, and nothing counts them: JetStreamDurableLostUnread does not fire for this loss, so MQTT events published during the change may have been acknowledged to their devices and lost. In a 12,000 events per second test one such step-down lost about five seconds of events. Look in the broker logs for 'Leader falling behind, stepping down': that is a leader whose node is overloaded, so check the broker's node CPU and whether the capture leader shares a node with the inbound-events leader. A planned broker restart moves leaders too and may lose events the same way, so schedule one at low traffic. This is a known limitation of MQTT ingest, described with the MQTT transport in the documentation."
+      - eval_time: 20m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+            exp_annotations:
+              summary: "The MQTT capture stream changed leader while devices were publishing"
+              description: "Stream devicechain_device-events-capture changed leader within the last 15 minutes while events were arriving. While a stream has no leader, which lasts several seconds, the broker's MQTT gateway still acknowledges device QoS 1 publishes into it and stores them nowhere, and nothing counts them: JetStreamDurableLostUnread does not fire for this loss, so MQTT events published during the change may have been acknowledged to their devices and lost. In a 12,000 events per second test one such step-down lost about five seconds of events. Look in the broker logs for 'Leader falling behind, stepping down': that is a leader whose node is overloaded, so check the broker's node CPU and whether the capture leader shares a node with the inbound-events leader. A planned broker restart moves leaders too and may lose events the same way, so schedule one at low traffic. This is a known limitation of MQTT ingest, described with the MQTT transport in the documentation."
+      - eval_time: 40m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # Quiet, each case carrying its series:
+  #   - a stable leader (the counter flat at 0) with events arriving;
+  #   - a pod restart: a series that appears at 3 and stays flat is a reset, not a change;
+  #   - another stream's leader change (resolved-events) with events arriving;
+  #   - another instance's capture leader change.
+  # ------------------------------------------------------------------
+  - name: a stable leader, a restart, another stream and another instance are quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture"}'
+        values: '0x30'
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ddddd", job="devicechain/event-sources", stream="devicechain_device-events-capture"}'
+        values: '_x9 3x20'
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_resolved-events"}'
+        values: '0x9 1x20'
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-other", pod="dc-event-sources-7c9f-zzzzz", job="other/event-sources", stream="other_device-events-capture"}'
+        values: '0x9 1x20'
+      - series: 'devicechain_eventsources_total_inbound_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", source="gateway"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts: []
+
+  # A leader change on an instance with NO INGEST (the inbound counter is flat) loses
+  # nothing and stays quiet.
+  - name: a capture leader change on an instance with no ingest is quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_stream_leader_changes_total{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture"}'
+        values: '0x9 1x20'
+      - series: 'devicechain_eventsources_total_inbound_messages{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", source="gateway"}'
+        values: '500x30'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: JetStreamCaptureLeaderChanged
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
   # A send ran past the acknowledgement window: one worker-stage count on
   # the notification service's reader.
   # ------------------------------------------------------------------

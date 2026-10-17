@@ -77,6 +77,14 @@ there is no separate broker to run.
   the capture stream, its oldest messages are discarded. `JetStreamDurableStalledBehindStream` reports
   that while the pipeline is not reading the capture stream, and `JetStreamDurableLostUnread` once it
   reads again.
+
+  A third hole is the capture stream's own leader election. The broker hands each QoS 1 publish
+  to the capture stream with no reply, after the device has its PUBACK. If the stream changes
+  leader under load, the publishes that arrive while it has none, several seconds, are stored
+  nowhere, and no counter records them. In a 12,000 events per second test one such change lost
+  about five seconds of events. `JetStreamCaptureLeaderChanged` reports that a change happened
+  while events were arriving; the lost events cannot be recovered, and the time of the change
+  bounds the window to check in your devices' own records.
 - **Write ◐** — commands are delivered, but delivery is **live-only and unacknowledged**. A
   publish reaches a device that is connected and subscribed at that instant. The broker does not
   hold it for a device that is not, and nothing tells the platform whether the device received

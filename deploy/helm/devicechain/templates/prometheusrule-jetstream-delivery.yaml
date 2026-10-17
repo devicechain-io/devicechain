@@ -259,6 +259,64 @@ spec:
           annotations:
             summary: "MQTT events the broker has already acknowledged are about to be lost"
             description: "Durable {{ "{{ $labels.durable }}" }} has not yet forwarded {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+        # The early tier of the rule above: the same capture backlog on course to fill within
+        # TWENTY minutes. The critical rule fired 2 min 15 s before loss in the overload run
+        # that added it, which is enough to look but not to add replicas and have them take
+        # load. This one is a warning, so it can afford a longer horizon: it reads the slope
+        # over five minutes rather than three (a slower, steadier line to extrapolate from),
+        # needs the same 10% floor, and holds for two minutes. It stays a sibling rather than
+        # a second threshold on one rule so the page and the heads-up route independently.
+        - alert: JetStreamCaptureBacklogGrowing
+          expr: |
+            (
+              max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}) > 0.1
+            )
+            and on (stream, durable)
+            (
+              (1 - max by (stream, durable) ({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}))
+              / (max by (stream, durable) (deriv({__name__=~"devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio", durable=~".+_event-sources_device-events-capture", namespace="{{ $ns }}"}[5m])) > 0)
+              < 1200
+            )
+          for: 2m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "MQTT events waiting to be forwarded are piling up faster than they leave"
+            description: "Durable {{ "{{ $labels.durable }}" }} has not yet forwarded {{ "{{ $value | humanizePercentage }}" }} of what stream {{ "{{ $labels.stream }}" }} can hold, and at the rate that backlog grew over the last five minutes the stream will be full within twenty. This is the early warning for JetStreamCaptureBacklogWillOverflow, which fires when ten minutes remain. Every event in the backlog was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. Add event-sources replicas now, each of which brings its own publish window, and look at event-sources CPU and at devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"}; if JetStreamIngestBackpressureEngaged is firing, the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume."
+        # The capture stream changed LEADER while events were arriving. Unlike every other
+        # stream, nothing can refuse a publish into it: the broker's MQTT gateway writes each
+        # device publish to it with no reply, after the device has had its acknowledgement. A
+        # publish that arrives while the stream has no leader (an election takes seconds) is
+        # stored nowhere, and no counter sees it: it never got a sequence, so
+        # unread_skipped stays at zero and JetStreamDurableLostUnread cannot fire. A leader
+        # change is therefore the only trace of that loss, which is why this alert exists.
+        #
+        # Exported by every service that reads the stream's info, from its 30 s sample: a
+        # change of leader between two samples, or a sample that found the stream leaderless.
+        # The series is created at zero when the stream is first read, so increase() sees the
+        # first change. `max by (stream)`: every pod counts the same change. A change shorter
+        # than one sample that comes back to the same server is not seen.
+        #
+        # "While ingest is active" is read from event-sources' inbound message counter having
+        # moved in the same 15 minutes (any source: the gateway's name is operator-chosen), so
+        # a leader change on an idle instance, which loses nothing, stays quiet. A warning, not
+        # a page: a rolling restart of the broker moves leaders on purpose.
+        - alert: JetStreamCaptureLeaderChanged
+          expr: |
+            (
+              max by (stream) (increase({__name__=~"devicechain_[a-z0-9]+_jetstream_stream_leader_changes_total", stream=~".*device-events-capture", namespace="{{ $ns }}"}[15m])) > 0
+            )
+            and on ()
+            (
+              sum(increase(devicechain_eventsources_total_inbound_messages{namespace="{{ $ns }}"}[15m])) > 0
+            )
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The MQTT capture stream changed leader while devices were publishing"
+            description: "Stream {{ "{{ $labels.stream }}" }} changed leader within the last 15 minutes while events were arriving. While a stream has no leader, which lasts several seconds, the broker's MQTT gateway still acknowledges device QoS 1 publishes into it and stores them nowhere, and nothing counts them: JetStreamDurableLostUnread does not fire for this loss, so MQTT events published during the change may have been acknowledged to their devices and lost. In a 12,000 events per second test one such step-down lost about five seconds of events. Look in the broker logs for 'Leader falling behind, stepping down': that is a leader whose node is overloaded, so check the broker's node CPU and whether the capture leader shares a node with the inbound-events leader. A planned broker restart moves leaders too and may lose events the same way, so schedule one at low traffic. This is a known limitation of MQTT ingest, described with the MQTT transport in the documentation."
         # A gating consumer's UNREAD backlog is over 80% of what its stream can hold. At
         # 90% the stream's writers refuse new events (JetStreamIngestBackpressureEngaged).
         # Exported by every service that WRITES the stream, for the consumers that gate it

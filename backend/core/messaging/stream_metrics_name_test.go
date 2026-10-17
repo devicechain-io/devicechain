@@ -40,6 +40,8 @@ func TestExportedMetricNamesMatchTheAlertSelectors(t *testing.T) {
 		// ...and JetStreamDurableUnreadNearFull / JetStreamStreamNearFull.
 		"jetstream_consumer_unread_ratio": regexp.MustCompile(`^devicechain_[a-z0-9]+_jetstream_consumer_unread_ratio$`),
 		"jetstream_stream_sink":           regexp.MustCompile(`^devicechain_[a-z0-9]+_jetstream_stream_sink$`),
+		// ...and JetStreamCaptureLeaderChanged.
+		"jetstream_stream_leader_changes_total": regexp.MustCompile(`^devicechain_[a-z0-9]+_jetstream_stream_leader_changes_total$`),
 	}
 
 	// Every area name the platform ships, including the ones whose names compose
@@ -65,6 +67,7 @@ func TestExportedMetricNamesMatchTheAlertSelectors(t *testing.T) {
 		m.consumerPending.WithLabelValues("s", "d").Set(1)
 		m.consumerUnreadRatio.WithLabelValues("s", "d").Set(1)
 		m.streamSink.WithLabelValues("s").Set(1)
+		m.streamLeaderChanges.WithLabelValues("s").Inc()
 
 		families, err := reg.Gather()
 		if err != nil {
