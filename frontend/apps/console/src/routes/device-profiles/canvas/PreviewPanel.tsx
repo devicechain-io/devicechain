@@ -6,6 +6,11 @@
 // publishing anything. The server builds a throwaway in-memory DETECT core over an ephemeral replay
 // consumer (zero perturbation of the live engine); this panel just picks a window, calls previewRule
 // with the current graph, and renders the firing timeline + coverage stats + any degraded note.
+//
+// It also sends the profile's DRAFT metric list, so the replay recomputes every reading's
+// calculated metrics with the draft's formulas rather than reading the values stored when the
+// reading arrived: a draft rule over a calculated metric the draft adds or edits is previewed
+// against the values that metric would have once the draft is published.
 
 import { useEffect, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
@@ -14,6 +19,7 @@ import { SegmentedControl } from '@/components/ui/segmented-control';
 import { ToggleButton } from '@/components/ui/toggle-button';
 import { errMessage } from '@/routes/common';
 import { previewRule, type PreviewResult, type PreviewFiring, type NodeTraceStep } from '@/lib/api/event-processing';
+import { listMetricDefinitions } from '@/lib/api/device-management';
 
 // The window presets (hours back from now). A preview is capped server-side to 24h. The label is
 // composed from `previewWindowLabel` + hours at render (not stored here) — model-ish tables like
@@ -94,9 +100,17 @@ export function PreviewPanel({
     try {
       const end = new Date();
       const start = new Date(end.getTime() - ranHours * 3_600_000);
+      const metrics = await listMetricDefinitions(profileToken);
       const result = await previewRule({
         ...(graph != null ? { graph, trace: true } : { ruleDefinition }),
         profileToken,
+        draftMetrics: metrics.map((m) => ({
+          metricKey: m.metricKey,
+          dataType: m.dataType,
+          expression: m.calculated ? m.expression : null,
+          minValue: m.minValue ?? null,
+          maxValue: m.maxValue ?? null,
+        })),
         start: start.toISOString(),
         end: end.toISOString(),
       });
@@ -212,6 +226,12 @@ function PreviewOutcome({
         </span>
         {stats.evalErrors > 0 && <span className="text-destructive">{t('previewEvalErrors', { count: stats.evalErrors })}</span>}
       </div>
+      {stats.recalculatedSamples > 0 && (
+        <p className="text-xs text-muted-foreground" data-testid="preview-recalculated">
+          {t('previewRecalculated', { count: stats.recalculatedSamples })}
+          {stats.calculatedSkips > 0 && ` ${t('previewCalculatedSkips', { count: stats.calculatedSkips })}`}
+        </p>
+      )}
 
       {degraded && (
         <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-400">{degraded}</p>

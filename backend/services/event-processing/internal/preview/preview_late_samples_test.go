@@ -38,7 +38,7 @@ func TestPreviewReportsReadingsTheEngineRefusedAsLate(t *testing.T) {
 		msg(t, 1, "acme", "d2", "p@1", "temperature", "20", base),
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base.Add(-10*time.Minute)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", durationReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", durationReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestPreviewDoesNotReportInOrderReadingsAsLate(t *testing.T) {
 		msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base),
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base.Add(20*time.Second)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", durationReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", durationReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestPreviewThresholdSetsAsideAReadingOlderThanTheNewest(t *testing.T) {
 		msg(t, 1, "acme", "d1", "p@1", "temperature", "20", base),
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", base.Add(-time.Minute)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

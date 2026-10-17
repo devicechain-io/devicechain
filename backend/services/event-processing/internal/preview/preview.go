@@ -20,6 +20,19 @@
 // The harness therefore takes no Store, no live engine, and no MessageWriter — the isolation is
 // structural, not a runtime check.
 //
+// DRAFT CALCULATED METRICS (ADR-082, preview parity). A replayed event carries the calculated
+// values the version that resolved it computed, so a preview of the published profile reads them
+// as stored and re-evaluates nothing. A preview of a DRAFT profile passes the draft's resolution
+// as `draft`, and each replayed measurement event is handed to the engine with its calculated
+// values re-derived under the draft's formulas by dmmodel.ProfileResolution.Recalculate, which
+// runs the resolver's own Calculation: every stored calculated value is replaced, a formula the
+// draft deleted produces nothing, and one it added or edited produces what it computes from the
+// event's stored raw values — which are the device's own strings, so the value is the one the
+// resolver would store under the draft, not an approximation of it. The re-derived event is a
+// COPY built for the engine and dropped with it: the replayed message, its decoded event and the
+// stream are never written, and the draft reaches no live engine, store or subject — it lives in
+// this call's arguments and nowhere else (TestDraftCalculationLeaksNowhere).
+//
 // A preview is an APPROXIMATION by design, in honest ways it documents rather than hides: it starts
 // COLD at the window (no state carried from before the window, so a mid-window duration hold that
 // began earlier is not seen, and an aggregate pane straddling the window End never closes); it
@@ -44,6 +57,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -89,6 +103,12 @@ type Firing struct {
 type Stats struct {
 	EventsScanned int
 	FiringCount   int
+	// RecalculatedSamples counts the sample entries whose calculated values were re-derived
+	// under the draft (zero when no draft was given), and CalculatedSkips the draft formula
+	// results that produced no value for a sample (a missing input, a range skip, ...), so a
+	// draft formula that never produces anything is visible rather than read as a quiet rule.
+	RecalculatedSamples int
+	CalculatedSkips     int
 	// EvalErrors counts in-scope samples a rule's leaf could not evaluate (a raw-CEL leaf tripping the
 	// runtime cost ceiling, or an unguarded metric read). A rule that errors on every event would
 	// otherwise preview as a genuinely-quiet zero-firing rule; the count drives a degraded note so the
@@ -122,9 +142,13 @@ type ReplayOpener interface {
 // fences is the seam onto the FROZEN geofence snapshots (ADR-078) and may be nil when no source
 // is wired. It is what makes a geofence preview CORRECT rather than vacuous — see the fenceSets
 // resolution below, and note that it is deliberately NOT modelled on the nil-attr degradation.
+//
+// draft, when non-nil, is a draft profile's resolution whose calculated metrics replace the
+// stored ones on every replayed measurement event (see the package doc); nil previews the
+// values as stored.
 func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.RuleRegistry,
 	tenant, profileVersion string, tr TimeRange, lateness time.Duration, maxScan, maxRead int,
-	fences runtime.FenceSetSource) (Result, error) {
+	fences runtime.FenceSetSource, draft *dmmodel.ProfileResolution) (Result, error) {
 	if maxScan <= 0 {
 		maxScan = DefaultMaxScan
 	}
@@ -249,6 +273,9 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 			break
 		}
 		res.Stats.EventsScanned++
+		if draft != nil {
+			event = recalculated(event, *draft, &res.Stats)
+		}
 		// nil attr: a preview resolves no device attributes, so every device previews as having none.
 		// A structured dynamic threshold therefore does not fire (its positive presence guard reads
 		// absent state as a non-match), while a raw-CEL leaf written with a fallback for a missing
@@ -360,6 +387,53 @@ func occurredSpan(event *dmmodel.ResolvedEvent) (time.Time, time.Time) {
 	}
 	return first, last
 }
+
+// recalculated returns event with its calculated values re-derived under draft, as a new event
+// value sharing nothing writable with the one decoded off the stream: the payload and every
+// sample's entry slice are new. A non-measurement event is returned as it is — no formula
+// reads a location or an alert.
+func recalculated(event *dmmodel.ResolvedEvent, draft dmmodel.ProfileResolution, stats *Stats) *dmmodel.ResolvedEvent {
+	payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+	if !ok {
+		return event
+	}
+	// A draft with no formulas changes only an event that carries a stored calculated value
+	// (it removes it); any other event is handed on as it is, and not counted.
+	if draft.CalculatedCount() == 0 && !carriesDerived(payload) {
+		return event
+	}
+	obs := skipCounter{stats: stats}
+	samples := make([]dmmodel.ResolvedMeasurementsEntry, len(payload.Entries))
+	for i, sample := range payload.Entries {
+		samples[i] = dmmodel.ResolvedMeasurementsEntry{
+			Entries:      draft.Recalculate(sample.Entries, obs),
+			OccurredTime: sample.OccurredTime,
+		}
+	}
+	stats.RecalculatedSamples += len(samples)
+	cp := *event
+	cp.Payload = &dmmodel.ResolvedMeasurementsPayload{Entries: samples}
+	return &cp
+}
+
+// carriesDerived reports whether any sample of payload holds a calculated value.
+func carriesDerived(payload *dmmodel.ResolvedMeasurementsPayload) bool {
+	for _, sample := range payload.Entries {
+		for _, e := range sample.Entries {
+			if e.Derived {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// skipCounter counts the draft formula results that produced no value.
+type skipCounter struct{ stats *Stats }
+
+func (skipCounter) Computed(string) {}
+
+func (c skipCounter) Skipped(string, calcfield.SkipReason, error) { c.stats.CalculatedSkips++ }
 
 // addDegraded appends a reason to the degraded string, joining multiple reasons with "; " so a
 // preview that is partial for more than one cause (aged out AND read-capped) reports all of them.

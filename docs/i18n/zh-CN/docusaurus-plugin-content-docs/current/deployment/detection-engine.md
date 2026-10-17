@@ -230,12 +230,14 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | `ruleHealth.maxPendingBytes` | 4194304 | 这些待写入触发的内存预算，范围 65536 到 268435456（256 MiB）。 |
 | `ruleHealth.maxBatchRows` | 256 | 一个租户的一次写入最多包含的规则数，范围 1 到 4096；待写入更多的租户分多个事务写入。 |
 | `ruleHealth.writeTimeoutMillis` | 2000 | 一个租户的一次写入最长允许的时间，范围 100 到 60000。失败或超时的写入会被丢弃，不会重试。 |
+| `derivedPublishing.maxInFlight` | 1 | 一个检查点同时可以有多少个检测在等待消息总线确认，范围 1 到 1024。为 1 时，每个检测确认后才发送下一个。大于 1 时，不同设备的检测并行发布，但每个设备同一时刻最多一个。见下文。 |
+| `derivedPublishing.maxBufferedBytes` | 4194304 | 这些等待中的检测合计可占用的字节数，范围 65536 到 268435456（256 MiB）。单个更大的检测会单独发布。 |
 
-每个 `ruleHealth` 设置都是可选的；一旦设置，就必须在其范围内（包括零），否则服务拒绝启动。
+每个 `ruleHealth` 和 `derivedPublishing` 设置都是可选的；一旦设置，就必须在其范围内（包括零），否则服务拒绝启动。
 
 ### 规则健康度计数是近似值
 
-控制台的规则健康度视图显示每条规则的触发次数和最近一次触发的时间。这些计数器不是在每个检测发布时写入的：引擎把每个已发布的检测累加到内存中按规则的总数里，并在后台每隔 `flushIntervalMillis` 写入这些总数，每个租户一个事务。因此一条繁忙的规则每个间隔只需写一行，而不是每个检测写一行，较慢或不可用的数据库也绝不会拖慢检测。
+控制台的规则健康度视图显示每条规则的触发次数和最近一次触发的时间。这些计数器不是在每个检测发布时写入的：引擎把每个已发布的检测累加到内存中按规则的总数里，并在后台每隔 `flushIntervalMillis` 写入这些总数，每个租户一个事务。因此一条繁忙的规则每个间隔只需写一行，而不是每个检测写一行，较慢或不可用的数据库也绝不会拖慢检测。唯一会等待写入的情形是清除租户：清除操作会等待该租户已在进行中的写入完成，最长为 `writeTimeoutMillis` 再加一秒。
 
 这对数字意味着：
 
@@ -247,6 +249,19 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 最近触发的边沿是计数器看到的最新一个，而不是规则当前的告警状态。要了解当前状态，请查看告警本身或检测流。
 
 两项预算的计算方式：一个待写入条目是一条尚有未写入触发的规则，无论它处于何处（仍在累加触发、已为下一次写入取出，或位于正在进行的写入中），其大小按 160 字节加规则 ID 的长度计算，一个租户的第一个条目另加 320 字节和租户令牌的长度。这会高估其实际占用，因此字节预算是一个硬性上限。
+
+### 同时发布多个检测 {#publishing-several-detections-at-once}
+
+检查点会把它覆盖的每个检测发布到消息总线，并且只有在所有检测都得到确认之后，才保存引擎状态并确认产生这些检测的事件。`derivedPublishing.maxInFlight` 为默认值 1 时，一次只发布一个检测，因此覆盖大量检测的检查点要依次等待同样多次确认。在确认较慢的环境中（例如服务器相距较远的复制流），这种等待就是检测交付速度的上限。
+
+调高 `maxInFlight` 后，检查点可以同时等待多个确认。以下几点不变：
+
+- **每个设备的检测按顺序到达。** 设备的下一个检测（来自其任意规则）只在前一个得到确认后才发送，因此每个设备同一时刻最多只有一个在等待。关联规则的检测按其锚点计算。不同设备的检测到达顺序可能与以前不同；下游没有任何东西依赖这一顺序，因为每个告警只属于一个设备。
+- **不会先于检测提交任何内容。** 检查点只在它覆盖的所有检测都得到确认后才保存，与值为 1 时完全相同。
+- **失败会重试且不产生重复。** 某次发布失败或超时后，不再发送新的检测，检查点不保存，下一次尝试以相同的标识发送同一个检测。消息总线能识别已存储的副本，因此超时但实际已到达的发布只存储一次。已确认的检测不会重新发送。
+- **规则健康度计数按相同顺序记录**，无论确认以何种顺序返回。
+
+只有当 `publish` 阶段在循环时间中占比很大（参见[检测循环的时间花在哪里](#loop-phases)），并且检测分布在许多设备上时，它才有帮助。单个繁忙设备没有收益，因为它的检测仍然逐个发送。`devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total` 是检查点在另有检测可发送时仍在等待的时间；如果它接近 `publish` 中的时间，更宽的窗口可能有帮助。除非正在测量，否则请保留默认值。
 
 ### 规则时长上限强制执行 {#the-rule-duration-ceiling-is-enforced}
 
@@ -340,7 +355,7 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | `parked` | 关闭实时消息后的等待：要么卡在无法提交的挂钟推进之后，要么卡在无法读取的事件流缺口之后。这是引擎在重试成功前拒绝工作。 |
 | `probe` | 等待消息总线返回积压数量；引擎用它判断自己是否已追上进度并上报滞后。 |
 
-积压时大部分时间处于 `fetch_wait`，说明瓶颈不在引擎：它在等待消息到达，增加引擎容量没有帮助。`parked` 或 `probe` 中的时间属于同类等待：等重试或等消息总线，而不是等引擎。大部分时间在 `plan` 和 `apply`，说明引擎本身就是上限。大部分时间在 `publish`、`save` 和 `ack`，说明代价在检查点，`devicechain_eventprocessing_detect_checkpoint_duration_seconds` 显示每次检查点的耗时。（`devicechain_eventprocessing_detect_checkpoint_seconds` 只保留最近一次。）另有两组分布说明是检查点的哪一部分：`publish` 中的时间主要是每个检测的一次等待，即消息总线确认派生事件（`devicechain_eventprocessing_detect_derived_publish_ack_seconds`）。规则健康度计数器由单独的后台写入程序写入，其数据库时间不在上述任何阶段中，而是 `devicechain_eventprocessing_detect_rule_stat_write_seconds`，每个租户的每次写入记录一次；`save` 中的时间是序列化引擎状态（`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`），然后将其写入数据库（`devicechain_eventprocessing_detect_checkpoint_save_seconds`）。
+积压时大部分时间处于 `fetch_wait`，说明瓶颈不在引擎：它在等待消息到达，增加引擎容量没有帮助。`parked` 或 `probe` 中的时间属于同类等待：等重试或等消息总线，而不是等引擎。大部分时间在 `plan` 和 `apply`，说明引擎本身就是上限。大部分时间在 `publish`、`save` 和 `ack`，说明代价在检查点，`devicechain_eventprocessing_detect_checkpoint_duration_seconds` 显示每次检查点的耗时。（`devicechain_eventprocessing_detect_checkpoint_seconds` 只保留最近一次。）另有两组分布说明是检查点的哪一部分：`publish` 中的时间主要是每个检测的一次等待，即消息总线确认派生事件（`devicechain_eventprocessing_detect_derived_publish_ack_seconds`）。规则健康度计数器由单独的后台写入程序写入，其数据库时间不在上述任何阶段中，而是 `devicechain_eventprocessing_detect_rule_stat_write_seconds`，每个租户的每次写入记录一次。`derivedPublishing.maxInFlight` 大于 1 时，确认等待相互重叠，因此 `publish` 小于它们的总和；`devicechain_eventprocessing_detect_derived_publish_pass_seconds` 是每个检查点完整的发布时间。`save` 中的时间是序列化引擎状态（`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`），然后将其写入数据库（`devicechain_eventprocessing_detect_checkpoint_save_seconds`）。
 
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))

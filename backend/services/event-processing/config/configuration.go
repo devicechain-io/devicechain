@@ -10,6 +10,7 @@ import (
 
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -224,6 +225,57 @@ type EventProcessingConfiguration struct {
 	// fire count), which are coalesced in memory and written in the background rather than on
 	// the detection loop. See RuleHealthConfiguration.
 	RuleHealth RuleHealthConfiguration
+
+	// DerivedPublishing bounds how many detections a checkpoint has waiting for the broker at
+	// once. See DerivedPublishingConfiguration.
+	DerivedPublishing DerivedPublishingConfiguration
+}
+
+// DerivedPublishingConfiguration is functionalAreas.event-processing.config.derivedPublishing.
+// Every field is optional, and an absent one takes its default; a field that IS given must be
+// inside its bounds, zero included, or the service refuses to start.
+//
+// A checkpoint publishes the detections it covers before it saves the snapshot. MaxInFlight 1,
+// the default, sends one and waits for its acknowledgement before the next. Above 1, detections
+// of different devices (or correlation anchors) wait for their acknowledgements at the same
+// time, never more than one per device at once, so each device's detections still reach the
+// broker in order.
+type DerivedPublishingConfiguration struct {
+	// MaxInFlight is the most publishes waiting for an acknowledgement at once: 1 to 1024,
+	// default 1.
+	MaxInFlight *int
+	// MaxBufferedBytes bounds their payload bytes together: 65536 to 268435456, default
+	// 4194304. A single event larger than this is sent alone rather than never.
+	MaxBufferedBytes *int64
+}
+
+// applyDefaults fills every absent field.
+func (d *DerivedPublishingConfiguration) applyDefaults() {
+	def := runtime.DefaultOutputConfig()
+	if d.MaxInFlight == nil {
+		d.MaxInFlight = intPtr(def.MaxInFlight)
+	}
+	if d.MaxBufferedBytes == nil {
+		d.MaxBufferedBytes = int64Ptr(def.MaxBufferedBytes)
+	}
+}
+
+// validate refuses a field outside its bounds, naming the key as an operator writes it.
+func (d DerivedPublishingConfiguration) validate() error {
+	if v := d.MaxInFlight; v != nil && (*v < 1 || *v > runtime.MaxMaxInFlight) {
+		return fmt.Errorf("derivedPublishing.maxInFlight must be between 1 and %d, got %d", runtime.MaxMaxInFlight, *v)
+	}
+	if b := d.MaxBufferedBytes; b != nil && (*b < runtime.MinMaxBufferedBytes || *b > runtime.MaxMaxBufferedBytes) {
+		return fmt.Errorf("derivedPublishing.maxBufferedBytes must be between %d and %d, got %d",
+			runtime.MinMaxBufferedBytes, runtime.MaxMaxBufferedBytes, *b)
+	}
+	return nil
+}
+
+// Config is the configuration as the processor takes it, an absent field as its default.
+func (d DerivedPublishingConfiguration) Config() runtime.OutputConfig {
+	d.applyDefaults() // d is a copy: the caller's absent fields stay absent
+	return runtime.OutputConfig{MaxInFlight: *d.MaxInFlight, MaxBufferedBytes: *d.MaxBufferedBytes}
 }
 
 // RuleHealthConfiguration is functionalAreas.event-processing.config.ruleHealth. Every field is
@@ -388,6 +440,7 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 		c.ShedLetterGlobalBurst = DefaultShedLetterGlobalBurst
 	}
 	c.RuleHealth.applyDefaults()
+	c.DerivedPublishing.applyDefaults()
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -530,6 +583,12 @@ func (c *EventProcessingConfiguration) Validate() error {
 		return err
 	}
 	if err := c.RuleHealth.Config().Validate(); err != nil {
+		return err
+	}
+	if err := c.DerivedPublishing.validate(); err != nil {
+		return err
+	}
+	if err := c.DerivedPublishing.Config().Validate(); err != nil {
 		return err
 	}
 	return nil

@@ -113,6 +113,13 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | `detect_consumer_ack_pending` | Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work). |
 | `detect_consumer_pending` | Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal). |
 | `detect_derived_publish_ack_seconds` | Time each published derived event waited for the broker to acknowledge it, as a distribution. Successful publishes only. It is not detection latency: a detection waits for its checkpoint before it is published. |
+| `detect_derived_publish_pass_seconds` | Time each checkpoint spent publishing its detections, from the first send to the last acknowledgement, as a distribution. It does not include the time detections waited for their checkpoint. |
+| `detect_derived_publish_outstanding` | Derived events sent and waiting for the broker's acknowledgement right now (bounded by `derivedPublishing.maxInFlight`). Zero between checkpoints. |
+| `detect_derived_publish_outstanding_bytes` | Payload bytes of those events (bounded by `derivedPublishing.maxBufferedBytes`, except that a single larger event is sent on its own). |
+| `detect_derived_publish_window_full_seconds_total` | Seconds checkpoints spent waiting for an acknowledgement while another detection was ready to send but the in-flight limit or byte budget had no room. |
+| `detect_derived_publish_lane_waits_total` | Detections that waited for an earlier detection of the same device (or correlation anchor) to be acknowledged before they could be sent, with `derivedPublishing.maxInFlight` above 1. |
+| `detect_derived_publish_failures_total{outcome}` | Derived-event publishes without a positive acknowledgement, by `outcome`: `unknown` (a timeout: the event may have been stored) or `failed` (the broker refused it). Each defers its checkpoint and is retried with the same event and identity, so a stored one is not stored twice. |
+| `detect_derived_publish_stale_outcomes_total` | Publish outcomes refused because they did not belong to a publish the current checkpoint was waiting for. Always zero unless something is wrong. |
 | `detect_derived_events_published_total` | Derived signal events published. |
 | `detect_derived_events_rejected_total{reason}` | Detections dropped before publish, by reason (bounded enum). |
 | `detect_events_applied_total` | Resolved events fed into the DETECT engine. |

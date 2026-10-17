@@ -92,7 +92,7 @@ func replayAcrossTheFormatChange(t *testing.T, writeCurrent func(*dmmodel.Resolv
 
 	op := &fakeOpener{msgs: []messaging.Message{at(1, legacy), at(2, current)}}
 	window := TimeRange{Start: sampleAt.Add(-time.Hour), End: sampleAt.Add(time.Hour)}
-	res, err := Run(context.Background(), op, "resolved-events", reg, "acme", "pulse@3", window, 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", reg, "acme", "pulse@3", window, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

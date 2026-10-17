@@ -288,6 +288,35 @@ input PreviewRuleInput {
     # did for that firing — for the console's canvas overlay. Off by default (the trace is only useful
     # to the graph editor); ignored for a ruleDefinition draft, which has no canvas node map.
     trace: Boolean
+    """
+    The draft profile's metric definitions, measured and calculated. When given, every replayed
+    reading has its calculated metrics recomputed from its stored measured values with these
+    formulas, replacing the values stored when it was recorded, so the draft rule is previewed
+    against the values the draft profile would compute once published; a calculated metric the
+    list does not declare has no value. Omit to preview the values as stored. The formulas are
+    checked as a publish checks them, and a problem is returned in diagnostics. At most 1000
+    entries. Nothing computed here is stored or streamed.
+    """
+    # Preview parity for calculated metrics (ADR-082): the console sends the profile's draft
+    # metric list; the preview recomputes calculated values per replayed sample under it.
+    draftMetrics: [PreviewMetricInput!]
+}
+
+"""
+One metric definition of a draft device profile, as the preview reads it: a measured metric
+when expression is omitted, a calculated one when it is given.
+"""
+input PreviewMetricInput {
+    """The metric's key, as readings and formulas name it."""
+    metricKey: String!
+    """The metric's data type: DOUBLE, INT, BOOLEAN or STRING."""
+    dataType: String!
+    """The formula of a calculated metric. Omit for a measured metric."""
+    expression: String
+    """Smallest value a calculated metric may take; a result below it produces no value."""
+    minValue: Float
+    """Largest value a calculated metric may take; a result above it produces no value."""
+    maxValue: Float
 }
 
 """The outcome of a replay preview."""
@@ -396,6 +425,16 @@ type PreviewStats {
     """Server-side wall-clock time the replay took, in milliseconds."""
     # Wall-clock milliseconds the replay took (server-side).
     wallMs: Int!
+    """
+    How many readings had their calculated metrics recomputed with the draft's formulas. Zero
+    when the request carried no draftMetrics.
+    """
+    recalculatedSamples: Int!
+    """
+    How many times a draft formula produced no value for a reading, for example because an input
+    was missing or the result was out of range.
+    """
+    calculatedSkips: Int!
 }
 
 """The status of a live detection rule."""

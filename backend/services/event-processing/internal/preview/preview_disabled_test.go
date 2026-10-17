@@ -41,7 +41,7 @@ func TestPreviewSkipsADisabledDevicesTransition(t *testing.T) {
 		want     int
 	}{{false, 1}, {true, 0}} {
 		op := &fakeOpener{msgs: []messaging.Message{presenceMsg(t, 1, "d1", base, tc.disabled)}}
-		res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+		res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}

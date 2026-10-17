@@ -108,6 +108,13 @@ var detperfInstances atomic.Int32
 // stream replicas; its stream is deleted when the run ends.
 func detperfWriter(tb testing.TB, srv *natsserver.Server, replicas int) messaging.MessageWriter {
 	tb.Helper()
+	w, _ := detperfWriterNamed(tb, srv, replicas)
+	return w
+}
+
+// detperfWriterNamed is detperfWriter, also naming the instance so the stream can be read back.
+func detperfWriterNamed(tb testing.TB, srv *natsserver.Server, replicas int) (messaging.MessageWriter, string) {
+	tb.Helper()
 	u, err := url.Parse(srv.ClientURL())
 	require.NoError(tb, err)
 	port, err := strconv.Atoi(u.Port())
@@ -133,7 +140,7 @@ func detperfWriter(tb testing.TB, srv *natsserver.Server, replicas int) messagin
 		}
 		_ = nmgr.Stop(context.Background())
 	})
-	return w
+	return w, instance
 }
 
 // detperfServer is one embedded JetStream server for a whole benchmark.

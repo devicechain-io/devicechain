@@ -5,11 +5,13 @@ package graphql
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/preview"
 	tracepkg "github.com/devicechain-io/dc-event-processing/internal/preview/trace"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
@@ -63,6 +65,67 @@ type previewRuleInput struct {
 	Start          string // RFC3339 occurred-time window lower bound
 	End            string // RFC3339 occurred-time window upper bound
 	Trace          *bool  // when true (and a graph draft), attach a per-firing node trace (slice 9e)
+	// DraftMetrics is the draft profile's metric list (ADR-082 preview parity): when set, the
+	// replay recomputes every reading's calculated metrics under it. nil previews the values as
+	// stored; an empty list is a draft with no metrics, so no calculated value at all.
+	DraftMetrics *[]previewMetricInput
+}
+
+// previewMetricInput is one metric definition of the draft profile (PreviewMetricInput).
+type previewMetricInput struct {
+	MetricKey  string
+	DataType   string
+	Expression *string
+	MinValue   *float64
+	MaxValue   *float64
+}
+
+// maxDraftMetrics bounds the draftMetrics list one preview accepts.
+const maxDraftMetrics = 1000
+
+// draftResolution checks the draft's metric list with the publish gate's own checks and builds
+// the resolution the replay recalculates under. It returns nil, nil when the request carried no
+// draft. A problem is the author's to fix, so it comes back as diagnostics, not an error.
+//
+// 🔑 THE DRAFT TRAVELS IN THE REQUEST, under the caller's own token: event-processing holds no
+// profiles and reads device-management only with its service token, which on a user's request
+// would be a confused deputy. A caller who sends a formula other than their profile's only
+// changes their own preview — nothing computed here is stored, streamed or fed to live
+// detection — and every replayed event is already confined to the caller's tenant.
+func draftResolution(in *[]previewMetricInput) (*dmmodel.ProfileResolution, []graph.Diagnostic) {
+	if in == nil {
+		return nil, nil
+	}
+	if len(*in) > maxDraftMetrics {
+		return nil, []graph.Diagnostic{{Severity: "error",
+			Message: fmt.Sprintf("draftMetrics has %d entries, above the maximum of %d", len(*in), maxDraftMetrics)}}
+	}
+	defs := make([]*dmmodel.MetricDefinition, 0, len(*in))
+	for i, m := range *in {
+		def := &dmmodel.MetricDefinition{MetricKey: m.MetricKey, DataType: m.DataType}
+		// A definition id is the classifier stamped on a stored value; a draft value is never
+		// stored, so its position is enough to keep the stamps distinct.
+		def.ID = uint(i + 1)
+		if m.Expression != nil {
+			def.Expression = sql.NullString{String: *m.Expression, Valid: true}
+		}
+		if m.MinValue != nil {
+			def.MinValue = sql.NullFloat64{Float64: *m.MinValue, Valid: true}
+		}
+		if m.MaxValue != nil {
+			def.MaxValue = sql.NullFloat64{Float64: *m.MaxValue, Valid: true}
+		}
+		defs = append(defs, def)
+	}
+	if problems := dmmodel.CheckDraftCalculatedMetrics(defs); len(problems) > 0 {
+		diags := make([]graph.Diagnostic, 0, len(problems))
+		for _, p := range problems {
+			diags = append(diags, graph.Diagnostic{Severity: "error", Message: "draft profile: " + p})
+		}
+		return nil, diags
+	}
+	r := dmmodel.NewProfileResolution(dmmodel.ProfileScope{}, defs)
+	return &r, nil
 }
 
 // PreviewRule runs a DRAFT detection rule against replayed history and reports the RAISE/RESOLVE edges
@@ -95,6 +158,10 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	compiled, definition, tracePlan, cerr := r.compileDraft(in)
 	if cerr != nil {
 		return failedPreview(cerr...), nil
+	}
+	draft, derr := draftResolution(in.DraftMetrics)
+	if derr != nil {
+		return failedPreview(derr...), nil
 	}
 	// The draft's advisory warnings ride along on EVERY non-failed outcome — a degraded preview
 	// (unpublished profile, concurrency gate, no fence archive) as well as a completed one — so the
@@ -218,7 +285,7 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	runCtx, cancel := context.WithTimeout(ctx, previewBudget(ctx))
 	defer cancel()
 	res, err := preview.Run(runCtx, opener, streams.ResolvedEvents, reg,
-		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets)
+		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets, draft)
 	if err != nil {
 		return nil, err
 	}
@@ -293,14 +360,16 @@ func (r *SchemaResolver) compileDraft(in previewRuleInput) (*rules.CompiledRule,
 
 // PreviewResultResolver resolves a preview outcome.
 type PreviewResultResolver struct {
-	ok         bool
-	firings    []*PreviewFiringResolver
-	scanned    int32
-	fireCnt    int32
-	evalErrors int32
-	wallMs     int32
-	degraded   *string
-	diags      []*CanvasDiagnosticResolver
+	ok           bool
+	firings      []*PreviewFiringResolver
+	scanned      int32
+	fireCnt      int32
+	evalErrors   int32
+	wallMs       int32
+	recalculated int32
+	calcSkips    int32
+	degraded     *string
+	diags        []*CanvasDiagnosticResolver
 }
 
 // newPreviewResult maps a completed preview to its resolver. When tb is non-nil (the request asked
@@ -325,13 +394,15 @@ func newPreviewResult(res preview.Result, degraded string, wallMs int32, tb *tra
 		firings = append(firings, fr)
 	}
 	out := &PreviewResultResolver{
-		ok:         true,
-		firings:    firings,
-		scanned:    int32(res.Stats.EventsScanned),
-		fireCnt:    int32(res.Stats.FiringCount),
-		evalErrors: int32(res.Stats.EvalErrors),
-		wallMs:     wallMs,
-		diags:      []*CanvasDiagnosticResolver{},
+		ok:           true,
+		firings:      firings,
+		scanned:      int32(res.Stats.EventsScanned),
+		fireCnt:      int32(res.Stats.FiringCount),
+		evalErrors:   int32(res.Stats.EvalErrors),
+		wallMs:       wallMs,
+		recalculated: int32(res.Stats.RecalculatedSamples),
+		calcSkips:    int32(res.Stats.CalculatedSkips),
+		diags:        []*CanvasDiagnosticResolver{},
 	}
 	if degraded != "" {
 		out.degraded = &degraded
@@ -357,7 +428,8 @@ func failedPreview(diags ...graph.Diagnostic) *PreviewResultResolver {
 func (r *PreviewResultResolver) Ok() bool                          { return r.ok }
 func (r *PreviewResultResolver) Firings() []*PreviewFiringResolver { return r.firings }
 func (r *PreviewResultResolver) Stats() *PreviewStatsResolver {
-	return &PreviewStatsResolver{scanned: r.scanned, fireCnt: r.fireCnt, evalErrors: r.evalErrors, wallMs: r.wallMs}
+	return &PreviewStatsResolver{scanned: r.scanned, fireCnt: r.fireCnt, evalErrors: r.evalErrors, wallMs: r.wallMs,
+		recalculated: r.recalculated, calcSkips: r.calcSkips}
 }
 func (r *PreviewResultResolver) Degraded() *string                        { return r.degraded }
 func (r *PreviewResultResolver) Diagnostics() []*CanvasDiagnosticResolver { return r.diags }
@@ -399,16 +471,24 @@ func (r *NodeTraceStepResolver) Detail() *string     { return r.detail }
 
 // PreviewStatsResolver resolves the coverage counters.
 type PreviewStatsResolver struct {
-	scanned    int32
-	fireCnt    int32
-	evalErrors int32
-	wallMs     int32
+	scanned      int32
+	fireCnt      int32
+	evalErrors   int32
+	wallMs       int32
+	recalculated int32
+	calcSkips    int32
 }
 
 func (r *PreviewStatsResolver) EventsScanned() int32 { return r.scanned }
 func (r *PreviewStatsResolver) FiringCount() int32   { return r.fireCnt }
 func (r *PreviewStatsResolver) EvalErrors() int32    { return r.evalErrors }
 func (r *PreviewStatsResolver) WallMs() int32        { return r.wallMs }
+
+// RecalculatedSamples is how many readings had their calculated metrics recomputed under the draft.
+func (r *PreviewStatsResolver) RecalculatedSamples() int32 { return r.recalculated }
+
+// CalculatedSkips is how many draft formula results produced no value.
+func (r *PreviewStatsResolver) CalculatedSkips() int32 { return r.calcSkips }
 
 // previewTimeBudget is the most time one preview replay is given.
 const previewTimeBudget = 45 * time.Second

@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -48,6 +49,11 @@ func TestIsolationSweep(t *testing.T) {
 		require.NoError(t, db.WithContext(write).Create(&model.EventAnchor{EventId: event.EventId,
 			DeviceToken: device, EventType: esmodel.Measurement, OccurredTime: at,
 			AnchorType: "customer", AnchorToken: owner}).Error)
+		// A reading, so the draft-formula preview (calculatedEvents) has a sample to evaluate:
+		// globex's must be as invisible to acme's member as a missing device's.
+		require.NoError(t, db.WithContext(write).Create(&model.MeasurementEvent{EventId: event.EventId,
+			PayloadId: []byte(owner + "-temp"), DeviceToken: device, EventType: esmodel.Measurement,
+			OccurredTime: at, Name: "temp", Value: sql.NullFloat64{Float64: 21.5, Valid: true}}).Error)
 	}
 
 	authorities := []string{string(auth.EventRead), string(auth.LocationRead)}
@@ -57,7 +63,15 @@ func TestIsolationSweep(t *testing.T) {
 		Unscoped: scopedCtx(api, tenant, nil, authorities...),
 		Probe:    "globex-pump",
 		Hidden:   []string{"globex"},
+		// calculatedEvents' formula, input and range cannot be guessed from their types; with
+		// these the sweep reaches its read rather than stopping at the compile.
+		Literals: map[string]string{
+			"expression": `"temp * 2.0"`, "dataType": `"DOUBLE"`, "key": `"temp"`,
+			"from": `"2026-09-01T00:00:00Z"`, "to": `"2026-09-02T00:00:00Z"`,
+		},
 	})
 	o, ok := isolationsweep.OutcomeOf(out, "query events")
 	require.True(t, ok && o.Data, "the opted-in events read answered acme's member %+v", o)
+	o, ok = isolationsweep.OutcomeOf(out, "query calculatedEvents")
+	require.True(t, ok && o.Data, "calculatedEvents did not answer acme's member with data, so the sweep never reached its read: %+v", o)
 }

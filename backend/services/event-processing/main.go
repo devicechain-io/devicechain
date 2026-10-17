@@ -832,5 +832,6 @@ func detectProcessorConfig(c *config.EventProcessingConfiguration) processor.Con
 		MaxLiveKeysPerTenant:        c.MaxLiveKeysPerTenant,
 		MaxRetainedSamplesPerTenant: c.MaxRetainedSamplesPerTenant,
 		RuleHealth:                  c.RuleHealth.Config(),
+		Output:                      c.DerivedPublishing.Config(),
 	}
 }

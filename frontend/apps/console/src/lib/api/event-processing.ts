@@ -16,6 +16,7 @@ import type {
   PreviewRuleQuery,
   DraftDetectionRuleFromTextMutation,
   MetricHintInput,
+  PreviewMetricInput,
 } from '@/gql/event-processing/graphql';
 
 const VALIDATE_DETECTION_RULES = graphql(`
@@ -190,6 +191,8 @@ const PREVIEW_RULE = graphql(`
         firingCount
         evalErrors
         wallMs
+        recalculatedSamples
+        calculatedSkips
       }
       degraded
       diagnostics {
@@ -211,6 +214,9 @@ export type NodeTraceStep = PreviewFiring['trace'][number];
 // RFC3339 window. It throws only on transport/auth failure; a compile rejection or a degraded run
 // comes back in the result. Exactly one of graph/ruleDefinition should be set. Set trace to attach a
 // per-firing node trace (canvas graph only — a ruleDefinition draft has no canvas node map).
+// draftMetrics is the profile's DRAFT metric list: when given, every replayed reading has its
+// calculated metrics recomputed with the draft's formulas instead of the values stored when it
+// was recorded, so the draft rule is previewed against what the draft profile would compute.
 export async function previewRule(input: {
   graph?: string;
   ruleDefinition?: string;
@@ -218,6 +224,7 @@ export async function previewRule(input: {
   start: string;
   end: string;
   trace?: boolean;
+  draftMetrics?: PreviewMetricInput[];
 }): Promise<PreviewResult> {
   const data = await gql('event-processing', PREVIEW_RULE, { input });
   return data.previewRule;

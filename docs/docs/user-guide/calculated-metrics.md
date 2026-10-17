@@ -66,6 +66,27 @@ Once the formula compiles, a **sample** panel lists the measured metrics the for
 value for each, and the panel shows the **value** the formula would produce or the **reason** it
 would produce none. The sample is hand-typed, and nothing is stored.
 
+### Trying a formula on recent history
+
+Below the sample, **Try it on recent history** runs the formula over one device's stored readings.
+Enter a **Device token**, choose a window (the last 1, 24 or 168 hours) and choose
+**Run on history**. The panel shows how many samples it evaluated, how many produced a value, how
+many were skipped and why, and the newest 50 samples with the inputs the formula read and what it
+gave. A sample is the readings one message carried for one instant, which is exactly what a formula
+sees when readings arrive. Nothing is stored.
+
+- The inputs are the **stored** values, which keep 8 decimal places (see
+  [Storage and precision](#storage-and-precision)). The value computed when a reading arrives uses
+  the device's full-precision value, so the two can differ for an input with more decimal places
+  than that: a current of `0.000000015` A is stored as `0.00000002`. The panel says so on every
+  result, and what it shows is a preview, not the value that will be stored.
+- Only the metrics the formula reads are shown, and a message that carried none of them is not a
+  sample.
+- A window is at most 7 days. One holding more than 50,000 samples, or more than 250,000 input
+  values, is refused rather than cut short. Choose a shorter window.
+- It needs permission to read the device's events. A member limited to some customers sees only
+  the readings recorded while the device belonged to one of them.
+
 ### What the publish check refuses
 
 Publishing a profile checks every calculated metric and reports all the problems at once. It
@@ -81,6 +102,23 @@ refuses a profile when:
   Double, Integer or Boolean;
 - a key is declared twice;
 - the profile has more calculated metrics than your tenant's tier allows.
+
+## Calculated metrics in a rule preview
+
+When you preview a detection rule (**Preview against history**, on a rule form or on the automation
+canvas), the preview uses the profile's **draft** calculated metrics. Each replayed reading has its
+calculated metrics recomputed from its measured values with the draft's formulas, replacing the
+values stored when it arrived. A rule over a calculated metric you have just added or edited is
+therefore previewed against the values that metric will have once you publish, and a calculated
+metric the draft no longer has gives the preview no value. The preview says how many readings were
+recomputed and how many formula results produced no value.
+
+The recomputation reads each reading's values as the device sent them, at full precision, so it
+gives the same value the published formula would compute for that reading. Two things it cannot
+reconstruct: a value that was dropped when the reading arrived (for example one a device sent under
+a key that was a calculated metric at the time), and changes to the definitions of measured
+metrics. Only calculated values are recomputed. Nothing a preview computes is stored, and none of
+it reaches the live rules.
 
 ## The formula language
 

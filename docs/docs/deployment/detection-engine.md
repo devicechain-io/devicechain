@@ -489,9 +489,11 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `ruleHealth.maxPendingBytes` | 4194304 | Memory budget for those waiting fires, from 65536 to 268435456 (256 MiB). |
 | `ruleHealth.maxBatchRows` | 256 | Most rules one tenant's write carries, from 1 to 4096; a tenant with more waiting is written in several transactions. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | How long one tenant's write may take, from 100 to 60000. A write that fails or times out is dropped, not retried. |
+| `derivedPublishing.maxInFlight` | 1 | How many detections a checkpoint may have waiting for the message bus to acknowledge them at once, from 1 to 1024. At 1, each is acknowledged before the next is sent. Above 1, detections of different devices are published side by side, never more than one per device at a time. See below. |
+| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes those waiting detections may hold together, from 65536 to 268435456 (256 MiB). A single detection larger than this is published on its own. |
 
-Each `ruleHealth` setting is optional; one that is given must be inside its range (zero included) or
-the service refuses to start.
+Each `ruleHealth` and `derivedPublishing` setting is optional; one that is given must be inside its
+range (zero included) or the service refuses to start.
 
 ### Rule-health counts are approximate
 
@@ -499,7 +501,9 @@ The console's rule-health view shows each rule's fire count and when it last fir
 are not written as each detection is published: the engine adds each published detection to an
 in-memory total per rule and writes the totals in the background, one transaction per tenant, every
 `flushIntervalMillis`. A busy rule therefore costs one row write per interval rather than one per
-detection, and a slow or unavailable database never slows detection down.
+detection, and a slow or unavailable database never slows detection down. The one place a write is
+waited on is erasing a tenant: the purge waits for that tenant's write already in flight to settle,
+for at most `writeTimeoutMillis` plus one second.
 
 What that means for the numbers:
 
@@ -523,6 +527,39 @@ Accounting for the two budgets: a waiting entry is one rule with fires not yet w
 is (still collecting fires, set aside for the next write, or inside a write in progress), and its
 size is reckoned as 160 bytes plus the length of its rule id, plus 320 bytes and the tenant's token
 for a tenant's first entry. That overstates what it really holds, so the byte budget is a hard bound.
+
+### Publishing several detections at once
+
+A checkpoint publishes every detection it covers to the message bus, and saves the engine's state
+and acknowledges the events behind those detections only once every one of them has been
+acknowledged. With `derivedPublishing.maxInFlight` at 1, the default, that is one detection at a
+time, so a checkpoint covering many detections waits for as many acknowledgements one after another.
+Where an acknowledgement is slow, for example on a replicated stream whose servers are far apart,
+that wait is what limits how fast detections are delivered.
+
+Raising `maxInFlight` lets a checkpoint wait for several acknowledgements at once. What stays the
+same:
+
+- **Each device's detections arrive in order.** A device's next detection, from any of its rules, is
+  sent only after the one before it has been acknowledged, so at most one per device is ever
+  waiting. A correlation rule's detections count as its anchor's. Detections of different devices
+  may arrive in a different order than before; nothing downstream depends on that order, because
+  every alarm belongs to one device.
+- **Nothing is committed ahead of its detections.** The checkpoint is saved only after every
+  detection it covers has been acknowledged, exactly as at 1.
+- **A failure is retried without duplicates.** When a publish fails or times out, no more are sent,
+  the checkpoint is not saved, and the next attempt sends the same detection with the same identity.
+  The message bus recognises a copy it already stored, so a timed-out publish that did arrive is
+  stored once. Detections that were acknowledged are not sent again.
+- **Rule-health counts are recorded in the same order**, whatever order the acknowledgements come
+  back in.
+
+It helps only when the `publish` phase is a large share of the loop's time (see
+[where the loop's time goes](#loop-phases)) and the detections are spread over many devices. A
+single busy device gains nothing, because its detections are still sent one at a time.
+`devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total` is the time
+checkpoints spent waiting with another detection ready to send; if it is close to the time spent in
+`publish`, a wider window can help. Leave the default unless you are measuring.
 
 ### The rule-duration ceiling is enforced
 
@@ -670,7 +707,10 @@ distributions say which part of a checkpoint it is. Time in `publish` is mostly 
 detection: the broker acknowledging the derived event
 (`devicechain_eventprocessing_detect_derived_publish_ack_seconds`). The rule-health counters are
 written by a separate background writer, so their database time is not in any of these phases; it
-is `devicechain_eventprocessing_detect_rule_stat_write_seconds`, one observation per tenant write. Time in `save` is
+is `devicechain_eventprocessing_detect_rule_stat_write_seconds`, one observation per tenant write. With
+`derivedPublishing.maxInFlight` above 1 the acknowledgement waits overlap, so `publish` is less than
+their sum; `devicechain_eventprocessing_detect_derived_publish_pass_seconds` is each checkpoint's
+whole publish. Time in `save` is
 serializing the engine's state (`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`)
 and then writing it to the database (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).
 
