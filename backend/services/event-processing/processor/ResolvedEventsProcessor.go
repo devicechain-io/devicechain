@@ -127,6 +127,10 @@ type Config struct {
 	// RuleHealth bounds the rule-health fire counters' accumulator (internal/rulehealth). The
 	// zero value is rulehealth.DefaultConfig; the service always supplies a validated one.
 	RuleHealth rulehealth.Config
+	// Output bounds how many derived events a checkpoint has waiting for the broker at once
+	// (derived_publish.go). The zero value is runtime.DefaultOutputConfig, the serial path; the
+	// service always supplies a validated one.
+	Output runtime.OutputConfig
 }
 
 // ResolvedEventsProcessor is event-processing's single-writer tap on the
@@ -464,9 +468,11 @@ type ResolvedEventsProcessor struct {
 	// engine and the checkpoint bookkeeping below are owned exclusively by the
 	// startup goroutine (restore/replay) and then the live loop goroutine; nothing
 	// else reads or writes them.
-	engine         detectcore.Detector
-	pendingAcks    []messaging.Message
-	pendingDets    []pendingDetection
+	engine      detectcore.Detector
+	pendingAcks []messaging.Message
+	pendingDets []pendingDetection
+	// publishPasses numbers publishPending's passes, so an outcome can name the pass it belongs to.
+	publishPasses  uint64
 	lastCheckpoint time.Time
 	// lastBudgetSample is the wall-clock time of the most recent per-tenant state-budget
 	// measurement (slice 6c). The budget is sampled from the ticker on its OWN cadence, decoupled
@@ -1961,6 +1967,11 @@ func (rp *ResolvedEventsProcessor) skipPoison(seq uint64) bool {
 type pendingDetection struct {
 	detectcore.Detection
 	triggeredAt time.Time
+	// out and state are the publisher's (derived_publish.go): the prepared output once one has
+	// been built, and whether it is still to be sent or already acknowledged. A detection that is
+	// buffered and never published has neither.
+	out   runtime.PreparedOutput
+	state outputState
 }
 
 // triggerTime is the platform time of the resolved event msg carries: the lesser of the event's
@@ -2883,6 +2894,13 @@ func (rp *ResolvedEventsProcessor) dropSupersededDetections() {
 	kept := rp.pendingDets[:0]
 	var droppedRaise map[detectcore.SeriesKey]struct{} // absence raises dropped in THIS pass
 	for _, d := range rp.pendingDets {
+		if d.state == outputAcked {
+			// Already positively acknowledged and waiting only for the items before it to settle.
+			// A known-positive outcome is never turned into a drop afterwards, and its latch is
+			// not cleared: downstream has seen it.
+			kept = append(kept, d)
+			continue
+		}
 		key := detectcore.SeriesKey{Rule: d.RuleID, Series: d.Series}
 		var drop bool
 		switch {
@@ -2957,29 +2975,6 @@ func frontierTriggeredKind(k detectcore.RuleKind) bool {
 	default:
 		return false
 	}
-}
-
-// publishPending durably delivers every buffered detection, in order, on its owning tenant's
-// derived-event subject. It returns true when the buffer is fully flushed (empty on entry
-// counts). A Publish that returns an error is a retryable broker failure: the successfully-
-// published prefix is dropped so a retry does not re-emit it, the unpublished tail is
-// retained, and false is returned so the caller defers the checkpoint. Terminal drops
-// (tenant-backstop rejects, orphan rules) return nil from Publish and advance past the
-// detection — they must never wedge the loop.
-func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
-	rp.dropSupersededDetections()
-	i := 0
-	for i < len(rp.pendingDets) {
-		if err := rp.publisher.Publish(ctx, rp.pendingDets[i].Detection, rp.pendingDets[i].triggeredAt); err != nil {
-			log.Error().Err(err).Msg("Failed to publish a derived event; deferring checkpoint (will retry).")
-			rp.metrics.recordCheckpointFailure(checkpointStagePublish)
-			rp.pendingDets = rp.pendingDets[i:]
-			return false
-		}
-		i++
-	}
-	rp.pendingDets = rp.pendingDets[:0]
-	return true
 }
 
 // defaultCheckpointTimeout bounds one scheduled checkpoint. A healthy one is a handful of

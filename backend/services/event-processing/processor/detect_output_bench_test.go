@@ -5,12 +5,14 @@ package processor
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/rs/zerolog"
 )
 
@@ -102,6 +104,57 @@ func BenchmarkDetectOutputStats(b *testing.B) {
 	})
 }
 
+// BenchmarkDetectOutputPipeline is the four-way comparison for the publish path: A (inline stats,
+// serial publishes, the baseline), B (batched stats, serial publishes), C (the pipelined publisher
+// at window 1) and D (the same at windows 8, 32 and 128), all with batched stats from B on. Every
+// case runs every variant inside the same parent, so -count N interleaves them. Rules, keys and
+// state are identical across variants, so evaluation and snapshot cost cannot masquerade as an
+// output gain.
+//
+// The broker is a stand-in with a fixed (or deterministically jittered) acknowledgement latency
+// whose writes genuinely overlap, and the rule-health store is sqlite with the production callback
+// chain: a SIMULATION of the loop's waits, not a capacity figure. The JetStream and PostgreSQL
+// runs are BenchmarkDetectOutputPipelineReal (-tags integration).
+//
+//	go test ./processor -run '^$' -bench BenchmarkDetectOutputPipeline -benchtime 2000x -count 7 -benchmem | tee abcd.txt
+//	benchstat -col /variant abcd.txt
+func BenchmarkDetectOutputPipeline(b *testing.B) {
+	for _, c := range []outputBenchCase{
+		{name: "broker=0ms/fire=100%/lanes=32", fx: benchFixture(16, 1)},
+		{name: "broker=0ms/fire=0%/lanes=32", fx: benchFixture(16, 0)},
+		{name: "broker=1ms/fire=100%/lanes=32", fx: benchFixture(16, 1), brokerAck: time.Millisecond},
+		{name: "broker=8ms/fire=10%/lanes=32", fx: benchFixture(16, 10), brokerAck: 8 * time.Millisecond},
+		{name: "broker=8ms+jitter8ms/fire=10%/lanes=32", fx: benchFixture(16, 10), brokerAck: 8 * time.Millisecond, brokerJitter: 8 * time.Millisecond},
+		{name: "broker=8ms/fire=10%/lanes=1", fx: outputFixture{tenants: []string{"acme"}, devices: 1, rulesPerTenant: 1, firePeriod: 10}, brokerAck: 8 * time.Millisecond},
+		{name: "broker=1ms/fire=100%/lanes=1024", fx: benchFixture(512, 1), brokerAck: time.Millisecond},
+	} {
+		for _, v := range pipelineBenchVariants() {
+			c := c
+			c.variant, c.batched = v.variant, v.batched
+			b.Run("variant="+v.name+"/"+c.name, func(b *testing.B) { benchOutput(b, c) })
+		}
+	}
+}
+
+type pipelineBenchVariant struct {
+	name    string
+	variant outputVariant
+	batched bool
+}
+
+// pipelineBenchVariants is A, B, C and D at three windows, in that order.
+func pipelineBenchVariants() []pipelineBenchVariant {
+	out := []pipelineBenchVariant{
+		{name: "A", variant: variantA},
+		{name: "B", variant: variantB, batched: true},
+		{name: "C", variant: variantPipelined(1), batched: true},
+	}
+	for _, w := range []int{8, 32, 128} {
+		out = append(out, pipelineBenchVariant{name: fmt.Sprintf("D%d", w), variant: variantPipelined(w), batched: true})
+	}
+	return out
+}
+
 // benchFixture is the benchmarks' source: two tenants, devicesPerTenant devices each, one rule
 // per tenant, crossing every firePeriod samples (0: never).
 func benchFixture(devicesPerTenant, firePeriod int) outputFixture {
@@ -112,8 +165,9 @@ func benchFixture(devicesPerTenant, firePeriod int) outputFixture {
 type outputBenchCase struct {
 	name string
 	fx   outputFixture
-	// brokerAck is the stand-in broker's acknowledgement latency (ignored when broker is set).
-	brokerAck time.Duration
+	// brokerAck is the stand-in broker's acknowledgement latency (ignored when broker is set),
+	// and brokerJitter a deterministic extra of up to that much per message.
+	brokerAck, brokerJitter time.Duration
 	// broker, when set, is a real derived-event writer, built per run.
 	broker func(b *testing.B) messaging.MessageWriter
 	// statRTT is a fixed delay in front of the sqlite rule-health store; noStats wires none.
@@ -149,7 +203,7 @@ func benchOutput(b *testing.B, c outputBenchCase) {
 	if c.broker != nil {
 		spec.broker = c.broker(b)
 	} else {
-		spec.broker = latencyWriter{ack: c.brokerAck}
+		spec.broker = latencyWriter{ack: c.brokerAck, jitter: c.brokerJitter}
 	}
 	if c.snapshots != nil {
 		spec.snapshots = c.snapshots(b)
@@ -217,6 +271,17 @@ func reportOutputSplit(b *testing.B, r *outputRig, v outputVerdict, timer *state
 	ns := func(seconds float64) float64 { return seconds * 1e9 }
 
 	b.ReportMetric(events/elapsed.Seconds(), "events/s")
+	// The detection's whole output latency: from its input being handled to its derived event's
+	// acknowledgement, which INCLUDES the wait in the buffer for the checkpoint that publishes it
+	// (every 1000 inputs here). It is not a broker round trip.
+	if lat := r.log.outputLatencies(r.handled); len(lat) > 0 {
+		slices.Sort(lat)
+		b.ReportMetric(float64(lat[len(lat)/2].Microseconds())/1000, "out-p50-ms")
+		b.ReportMetric(float64(lat[len(lat)*99/100].Microseconds())/1000, "out-p99-ms")
+	}
+	if r.variant.window > 0 && dets > 0 {
+		b.ReportMetric(testutil.ToFloat64(r.metrics.publishWindowFull)*1e9/dets, "windowfull-ns/det")
+	}
 	b.ReportMetric(dets/elapsed.Seconds(), "dets/s")
 	b.ReportMetric(dets/events, "dets/event")
 	b.ReportMetric(float64(r.handleTime.Nanoseconds())/events, "handle-ns/event")

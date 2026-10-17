@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -57,6 +58,7 @@ var reorderVariant = outputVariant{name: "planted-reorder", checkpoint: func(ctx
 // released: submission mistaken for a positive outcome.
 type heldWriter struct {
 	inner messaging.MessageWriter
+	mu    sync.Mutex // the pipelined publisher writes from several goroutines
 	held  []heldWrite
 }
 
@@ -67,7 +69,9 @@ type heldWrite struct {
 
 func (w *heldWriter) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
 	tenant, _ := dccore.TenantFromContext(ctx)
+	w.mu.Lock()
 	w.held = append(w.held, heldWrite{tenant: tenant, msgs: append([]messaging.Message(nil), msgs...)})
+	w.mu.Unlock()
 	return nil
 }
 
@@ -212,8 +216,11 @@ func TestTheDurabilityOracleRefusesAnAckAheadOfItsSnapshot(t *testing.T) {
 // produce the identical log: the same derived events in the same order, the same snapshots and
 // the same input acknowledgements, interleaved the same way.
 //
-// When a later change to the output path makes production differ from the serial baseline ON
-// PURPOSE (overlapped publishes interleave differently), retire this test, not the copy.
+// Production now publishes through the pipelined publisher, and at its default window of 1 that
+// is still the serial path exactly, which is what this test holds it to (C against A; see
+// TestWindowOneIsTheSerialPathWithBatchedStats for C against B). Wider windows interleave
+// differently on purpose and are judged by the oracle instead. If the default window ever moves
+// above 1, run this at window 1 explicitly rather than retiring it.
 func TestTheBaselineAdapterIsTheProductionPath(t *testing.T) {
 	a, va := runOracleFixture(t, variantA, nil)
 	p, vp := runOracleFixture(t, variantProduction, nil)
@@ -252,6 +259,8 @@ func TestTheOutputOracleOnARealBroker(t *testing.T) {
 		wantOrdering, wantEarl bool
 	}{
 		{"baseline", func(testing.TB) outputVariant { return variantA }, false, false},
+		{"pipelined-window-1", func(testing.TB) outputVariant { return variantPipelined(1) }, false, false},
+		{"pipelined-window-32", func(testing.TB) outputVariant { return variantPipelined(32) }, false, false},
 		{"planted-reorder", func(testing.TB) outputVariant { return reorderVariant }, true, false},
 		{"planted-early-ack", earlyAckVariant, false, true},
 	} {

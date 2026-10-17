@@ -220,48 +220,66 @@ func (p *Publisher) SetFireRecorder(r FireRecorder) { p.recorder = r }
 // wall-derived value, so the processor, which knows which message caused the drain, supplies it.
 // The event is written with its DedupID, so a re-publish within the stream's duplicate window
 // is stored once.
+//
+// It is Prepare, Send, Published and RecordFire in sequence: the serial path, one detection at a
+// time. The processor's publisher calls the four itself, so that it can overlap the broker waits
+// of independent series while keeping everything except Send on its own loop.
 func (p *Publisher) Publish(ctx context.Context, det core.Detection, triggeredAt time.Time) error {
+	po, ok := p.Prepare(det, triggeredAt)
+	if !ok {
+		return nil
+	}
+	wait, err := p.Send(ctx, po)
+	if err != nil {
+		return err
+	}
+	p.Published(wait)
+	// Record the fire for the rule-health projection AFTER a durable publish, so a stat only
+	// ever counts a detection that actually reached the feed. It is off the correctness path
+	// (the recorder swallows its own errors), so it can never turn a published detection into a
+	// retryable failure or a wedged checkpoint.
+	p.RecordFire(ctx, po)
+	return nil
+}
+
+// PreparedOutput is one detection made ready to publish: the derived event's bytes and broker
+// dedup id, the backstop-validated tenant whose subject it goes to, and what a rule-health fire
+// needs once it is acknowledged. It is immutable once Prepare returns it, which is what lets a
+// publish of it run off the loop: nothing in it refers back to the registry or the engine.
+//
+// 🔴 A RETRY SENDS THIS VALUE AGAIN, NOT A NEW ONE. A publish whose outcome is unknown (a timeout,
+// a lost acknowledgement) may already be stored. Re-preparing it from the current registry could
+// stamp a different Kind, which is part of the dedup identity, so the broker would store the
+// retry as a second, different event. The same bytes under the same id are collapsed.
+type PreparedOutput struct {
+	// Tenant is the owning tenant, already checked against the rule id's prefix and the token
+	// grammar: the subject the event is written to.
+	Tenant string
+	// RuleID, Series, At and Edge are the detection's identity, for the rule-health fire.
+	RuleID string
+	Series string
+	At     time.Time
+	Edge   string
+	// Payload is the derived event as written; DedupID is its Nats-Msg-Id.
+	Payload []byte
+	DedupID string
+}
+
+// Prepare runs every publish-boundary check on det and builds its derived event. ok is false
+// when the detection is a TERMINAL drop (orphan rule, tenant backstop, invalid tenant token,
+// marshal failure); the drop has then already been counted and dead-lettered, and there is
+// nothing to publish or retry.
+//
+// It reads the registry, so it runs on the processor's loop, never in a publish callback.
+func (p *Publisher) Prepare(det core.Detection, triggeredAt time.Time) (PreparedOutput, bool) {
 	// ADR-057 two-edge model (6d-pre-2b): BOTH edges are now published — a Raised on the rising edge
 	// and a Resolved on the falling edge, discriminated by DerivedEvent.Edge and dedup-distinct even at
 	// a shared OccurredTime. The REACT dispatcher routes a Resolved to a clear (skipping send-command,
 	// which has no falling-edge twin), and the ADR-037 subscriber sees the full lifecycle. A Resolved
 	// carries no value (the condition ceased, not a reading).
-	sr, ok := p.reg.Lookup(det.RuleID)
+	sr, ok := p.eligible(det)
 	if !ok {
-		log.Warn().Str("rule", det.RuleID).Str("series", det.Series).
-			Msg("Dropping detection for a rule no longer in the registry (orphan).")
-		p.metrics.RecordDerivedRejected(RejectOrphan)
-		p.record(DeadLetter{RuleID: det.RuleID, Series: det.Series, At: det.At, Reason: RejectOrphan})
-		return nil
-	}
-
-	// THE TENANT BACKSTOP. The sink subject a detection is published to is scoped to the
-	// rule's tenant; that tenant must be exactly the one the rule's id declares. A divergence
-	// means a mis-minted/mis-filed rule — publishing it would write onto the wrong tenant's
-	// feed. Fail closed: dead-letter, count, drop.
-	idTenant, ok := RuleTenant(det.RuleID)
-	if !ok || idTenant != sr.Tenant {
-		log.Error().Str("rule", det.RuleID).Str("owningTenant", sr.Tenant).Str("claimedTenant", idTenant).
-			Msg("Tenant backstop: refusing to publish a detection whose rule-id tenant disagrees with its owning tenant.")
-		p.metrics.RecordDerivedRejected(RejectBackstop)
-		p.record(DeadLetter{RuleID: det.RuleID, OwningTenant: sr.Tenant, ClaimedTenant: idTenant,
-			Series: det.Series, At: det.At, Reason: RejectBackstop})
-		return nil
-	}
-
-	// A tenant token that violates the ADR-042 grammar can never be published: the writer
-	// fail-closes on it (core.ValidateToken, the same check WriteMessages runs before splicing
-	// a tenant into a subject). Reject it HERE as a TERMINAL backstop drop rather than let the
-	// writer's deterministic error surface as a retryable one — otherwise one mis-minted rule
-	// whose tenant is internally consistent but malformed would fail every publish attempt,
-	// wedge the checkpoint loop, and stall detection for EVERY tenant on the singleton.
-	if err := dccore.ValidateToken(sr.Tenant); err != nil {
-		log.Error().Err(err).Str("rule", det.RuleID).Str("owningTenant", sr.Tenant).
-			Msg("Tenant backstop: refusing to publish a detection for a rule whose tenant token is invalid (ADR-042).")
-		p.metrics.RecordDerivedRejected(RejectBackstop)
-		p.record(DeadLetter{RuleID: det.RuleID, OwningTenant: sr.Tenant, ClaimedTenant: idTenant,
-			Series: det.Series, At: det.At, Reason: RejectBackstop})
-		return nil
+		return PreparedOutput{}, false
 	}
 
 	// Kind is stamped from the CURRENT registry rule's Type, not re-derived from det.Kind (the
@@ -271,7 +289,8 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection, triggeredAt
 	// drops the engine's UNdrained e.out on a def change, so only detections already drained into the
 	// processor's buffer are exposed), and downstream dedups on (rule, series, kind, time, edge) —
 	// the full key documented on DerivedEvent, edge included — so the skew is a mis-typed straggler,
-	// not a correctness break. Accepted; noted for honesty.
+	// not a correctness break. Accepted; noted for honesty. A detection already PREPARED keeps the
+	// type it was prepared with on every retry (see PreparedOutput).
 	de := DerivedEvent{
 		RuleID:       det.RuleID,
 		Tenant:       sr.Tenant,
@@ -296,26 +315,118 @@ func (p *Publisher) Publish(ctx context.Context, det core.Detection, triggeredAt
 		log.Error().Err(err).Str("rule", det.RuleID).Msg("Dropping detection that failed to marshal.")
 		p.metrics.RecordDerivedRejected(RejectMarshal)
 		p.record(DeadLetter{RuleID: det.RuleID, OwningTenant: sr.Tenant, Series: det.Series, At: det.At, Reason: RejectMarshal})
-		return nil
+		return PreparedOutput{}, false
+	}
+	return PreparedOutput{
+		Tenant:  sr.Tenant,
+		RuleID:  det.RuleID,
+		Series:  det.Series,
+		At:      det.At,
+		Edge:    de.Edge,
+		Payload: payload,
+		DedupID: de.DedupID(),
+	}, true
+}
+
+// Recheck re-runs Prepare's eligibility checks for a detection prepared earlier whose publish
+// has not been acknowledged, against the registry as it is NOW: the rule may have been removed,
+// or its owning tenant may no longer be the one the output was prepared for. false is the same
+// terminal drop Prepare makes, already counted and dead-lettered; true means po may be sent
+// again exactly as it is. Loop only, like Prepare.
+func (p *Publisher) Recheck(det core.Detection, po PreparedOutput) bool {
+	sr, ok := p.eligible(det)
+	if !ok {
+		return false
+	}
+	if sr.Tenant != po.Tenant {
+		// The rule now belongs to a different tenant than the subject its output was built for.
+		// Sending the old bytes would write onto a feed the rule is no longer registered under.
+		log.Error().Str("rule", det.RuleID).Str("owningTenant", sr.Tenant).Str("preparedTenant", po.Tenant).
+			Msg("Tenant backstop: refusing to re-send a detection prepared for a tenant that no longer owns its rule.")
+		p.metrics.RecordDerivedRejected(RejectBackstop)
+		p.record(DeadLetter{RuleID: det.RuleID, OwningTenant: sr.Tenant, ClaimedTenant: po.Tenant,
+			Series: det.Series, At: det.At, Reason: RejectBackstop})
+		return false
+	}
+	return true
+}
+
+// eligible is the orphan check and the tenant backstop. A refusal is counted and dead-lettered
+// here.
+func (p *Publisher) eligible(det core.Detection) (*ScopedRule, bool) {
+	sr, ok := p.reg.Lookup(det.RuleID)
+	if !ok {
+		log.Warn().Str("rule", det.RuleID).Str("series", det.Series).
+			Msg("Dropping detection for a rule no longer in the registry (orphan).")
+		p.metrics.RecordDerivedRejected(RejectOrphan)
+		p.record(DeadLetter{RuleID: det.RuleID, Series: det.Series, At: det.At, Reason: RejectOrphan})
+		return nil, false
 	}
 
-	// The writer derives the subject from the tenant in context (fail-closed on none), so the
-	// sink is exactly "{instance}.{sr.Tenant}.derived-events" — the backstop-validated tenant.
-	tctx := dccore.WithTenant(ctx, sr.Tenant)
+	// THE TENANT BACKSTOP. The sink subject a detection is published to is scoped to the
+	// rule's tenant; that tenant must be exactly the one the rule's id declares. A divergence
+	// means a mis-minted/mis-filed rule — publishing it would write onto the wrong tenant's
+	// feed. Fail closed: dead-letter, count, drop.
+	idTenant, ok := RuleTenant(det.RuleID)
+	if !ok || idTenant != sr.Tenant {
+		log.Error().Str("rule", det.RuleID).Str("owningTenant", sr.Tenant).Str("claimedTenant", idTenant).
+			Msg("Tenant backstop: refusing to publish a detection whose rule-id tenant disagrees with its owning tenant.")
+		p.metrics.RecordDerivedRejected(RejectBackstop)
+		p.record(DeadLetter{RuleID: det.RuleID, OwningTenant: sr.Tenant, ClaimedTenant: idTenant,
+			Series: det.Series, At: det.At, Reason: RejectBackstop})
+		return nil, false
+	}
+
+	// A tenant token that violates the ADR-042 grammar can never be published: the writer
+	// fail-closes on it (core.ValidateToken, the same check WriteMessages runs before splicing
+	// a tenant into a subject). Reject it HERE as a TERMINAL backstop drop rather than let the
+	// writer's deterministic error surface as a retryable one — otherwise one mis-minted rule
+	// whose tenant is internally consistent but malformed would fail every publish attempt,
+	// wedge the checkpoint loop, and stall detection for EVERY tenant on the singleton.
+	if err := dccore.ValidateToken(sr.Tenant); err != nil {
+		log.Error().Err(err).Str("rule", det.RuleID).Str("owningTenant", sr.Tenant).
+			Msg("Tenant backstop: refusing to publish a detection for a rule whose tenant token is invalid (ADR-042).")
+		p.metrics.RecordDerivedRejected(RejectBackstop)
+		p.record(DeadLetter{RuleID: det.RuleID, OwningTenant: sr.Tenant, ClaimedTenant: idTenant,
+			Series: det.Series, At: det.At, Reason: RejectBackstop})
+		return nil, false
+	}
+	return sr, true
+}
+
+// Send writes one prepared output and waits for the broker's positive acknowledgement,
+// returning how long that took. A non-nil error is a failed or UNKNOWN outcome (a timeout may
+// have been stored): either way the caller keeps po and sends the same value again.
+//
+// It is the only part of a publish that may run off the processor's loop: it reads nothing but
+// po and the writer, records nothing and calls no recorder. Concurrent Sends need a writer that
+// is safe for concurrent use, which the production NATS writer is.
+//
+// The writer derives the subject from the tenant in context (fail-closed on none), so the sink
+// is exactly "{instance}.{po.Tenant}.derived-events" — the backstop-validated tenant.
+func (p *Publisher) Send(ctx context.Context, po PreparedOutput) (time.Duration, error) {
+	tctx := dccore.WithTenant(ctx, po.Tenant)
 	submitted := time.Now()
-	if err := p.writer.WriteMessages(tctx, messaging.Message{Value: payload, DedupID: de.DedupID()}); err != nil {
-		return fmt.Errorf("publish derived event for rule %q: %w", det.RuleID, err)
+	if err := p.writer.WriteMessages(tctx, messaging.Message{Value: po.Payload, DedupID: po.DedupID}); err != nil {
+		return 0, fmt.Errorf("publish derived event for rule %q: %w", po.RuleID, err)
 	}
-	p.metrics.RecordDerivedPublishAck(time.Since(submitted))
+	return time.Since(submitted), nil
+}
+
+// Published counts one positive outcome and its acknowledgement wait. Loop only.
+func (p *Publisher) Published(wait time.Duration) {
+	p.metrics.RecordDerivedPublishAck(wait)
 	p.metrics.RecordDerivedPublished()
-	// Record the fire for the rule-health projection AFTER a durable publish, so a stat only
-	// ever counts a detection that actually reached the feed. It is off the correctness path
-	// (the recorder swallows its own errors), so it can never turn a published detection into a
-	// retryable failure or a wedged checkpoint.
+}
+
+// RecordFire hands one acknowledged output to the rule-health recorder, when one is wired. Only a
+// positively acknowledged publish may be recorded. The processor records them in the order the
+// engine produced them, not the order acknowledgements came back in, so two fires of one rule at
+// one event time settle its last edge as the serial path does. Loop only.
+func (p *Publisher) RecordFire(ctx context.Context, po PreparedOutput) {
 	if p.recorder != nil {
-		p.recorder.RecordFire(ctx, det.RuleID, sr.Tenant, det.At, wireEdge(det.Edge))
+		p.recorder.RecordFire(ctx, po.RuleID, po.Tenant, po.At, po.Edge)
 	}
-	return nil
 }
 
 // record appends to the bounded dead-letter ring, evicting the oldest when full.

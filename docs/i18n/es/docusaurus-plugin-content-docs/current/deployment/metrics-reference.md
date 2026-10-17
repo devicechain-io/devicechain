@@ -119,6 +119,13 @@ está bloqueado dentro de una llamada.
 | `detect_consumer_ack_pending` | Mensajes entregados pero sin confirmar en el consumidor durable de eventos resueltos (trabajo en curso). |
 | `detect_consumer_pending` | Mensajes sin entregar a la espera en el consumidor durable de eventos resueltos (la señal principal de retraso de DETECT). |
 | `detect_derived_publish_ack_seconds` | Tiempo que cada evento derivado publicado esperó a que el broker lo confirmara, como distribución. Solo publicaciones correctas. No es la latencia de detección: una detección espera a su punto de control antes de publicarse. |
+| `detect_derived_publish_pass_seconds` | Tiempo que cada punto de control dedicó a publicar sus detecciones, desde el primer envío hasta la última confirmación, como distribución. No incluye el tiempo que las detecciones esperaron a su punto de control. |
+| `detect_derived_publish_outstanding` | Eventos derivados enviados que esperan ahora mismo la confirmación del broker (limitados por `derivedPublishing.maxInFlight`). Cero entre puntos de control. |
+| `detect_derived_publish_outstanding_bytes` | Bytes de contenido de esos eventos (limitados por `derivedPublishing.maxBufferedBytes`, salvo que un único evento mayor se envía solo). |
+| `detect_derived_publish_window_full_seconds_total` | Segundos que los puntos de control pasaron esperando una confirmación mientras otra detección estaba lista para enviarse pero el límite en vuelo o el presupuesto de bytes no tenían hueco. |
+| `detect_derived_publish_lane_waits_total` | Detecciones que esperaron a que se confirmara una detección anterior del mismo dispositivo (o ancla de correlación) antes de poder enviarse, con `derivedPublishing.maxInFlight` por encima de 1. |
+| `detect_derived_publish_failures_total{outcome}` | Publicaciones de eventos derivados sin confirmación positiva, por `outcome`: `unknown` (agotó el tiempo: el evento puede haberse guardado) o `failed` (el broker lo rechazó). Cada una aplaza su punto de control y se reintenta con el mismo evento e identidad, así que uno ya guardado no se guarda dos veces. |
+| `detect_derived_publish_stale_outcomes_total` | Resultados de publicación rechazados porque no correspondían a ninguna publicación que el punto de control actual estuviera esperando. Siempre cero salvo que algo vaya mal. |
 | `detect_derived_events_published_total` | Eventos de señal derivados publicados. |
 | `detect_derived_events_rejected_total{reason}` | Detecciones descartadas antes de publicarse, por motivo (enumeración acotada). |
 | `detect_events_applied_total` | Eventos resueltos alimentados al motor DETECT. |
