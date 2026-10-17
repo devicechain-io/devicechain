@@ -7,6 +7,7 @@ import (
 	"container/list"
 	"strconv"
 	"sync"
+	"sync/atomic"
 )
 
 // Default capacities for the two levels of the undeclared-location memo. Both are
@@ -132,6 +133,11 @@ type lruSet[V any] struct {
 	capacity int
 	entries  map[string]*list.Element
 	order    *list.List // front = most recently used
+	// inserts counts keys ever added (never decremented). An entry can only have been
+	// evicted once capacity inserts have happened since it was last used, so a caller that
+	// remembers this count can tell, without the lock, whether a key it last touched is
+	// still certainly held.
+	inserts atomic.Uint64
 }
 
 // lruEntry is what the list holds, carrying its own key so an eviction from the back
@@ -197,6 +203,7 @@ func (l *lruSet[V]) setLocked(key string, value V) {
 		return
 	}
 	l.entries[key] = l.order.PushFront(&lruEntry[V]{key: key, value: value})
+	l.inserts.Add(1)
 	for l.order.Len() > l.capacity {
 		oldest := l.order.Back()
 		if oldest == nil {
@@ -206,6 +213,9 @@ func (l *lruSet[V]) setLocked(key string, value V) {
 		delete(l.entries, oldest.Value.(*lruEntry[V]).key)
 	}
 }
+
+// insertCount reports how many keys have ever been added. It takes no lock.
+func (l *lruSet[V]) insertCount() uint64 { return l.inserts.Load() }
 
 // len reports how many entries are held. Used by tests to prove the bound holds.
 func (l *lruSet[V]) len() int {

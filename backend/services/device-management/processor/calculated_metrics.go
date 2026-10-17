@@ -73,7 +73,14 @@ type calcObserver struct {
 	// here without building a key string or touching the pool-wide mutex. It is a cache in
 	// front of the shared set, never a second authority: a miss still asks the shared set,
 	// which alone decides whether this process reports. Cleared when full, so it is bounded.
-	seen map[claimKey]struct{}
+	//
+	// Each entry holds the shared set's insert count when this observer last touched the key
+	// there. The shared set is an LRU, and the old path's touch on every repeat is what kept
+	// a hot outcome from ageing out of it; a cache that never touched it again would let a hot
+	// outcome be evicted under churn and reported a second time (by any observer, or by this
+	// one after a clear). So a hit older than half the shared capacity in inserts falls
+	// through and touches the shared set once more, which keeps it held while it stays hot.
+	seen map[claimKey]uint64
 }
 
 // claimKey is the identity of one reportable outcome: (tenant, profile version, metric,
@@ -134,15 +141,21 @@ func (o *calcObserver) claim(key, outcome string) bool {
 	}
 	tenant, _ := core.TenantFromContext(o.ctx)
 	k := claimKey{tenant: tenant, version: o.version, key: key, outcome: outcome}
-	if _, ok := o.seen[k]; ok {
+	now := o.metrics.warned.insertCount()
+	if at, ok := o.seen[k]; ok && now-at < calcWarnRefresh {
 		return false
 	}
 	if o.seen == nil || len(o.seen) >= calcWarnCapacity {
-		o.seen = make(map[claimKey]struct{}, 64)
+		o.seen = make(map[claimKey]uint64, 64)
 	}
-	o.seen[k] = struct{}{}
+	o.seen[k] = now
 	return o.metrics.warned.putIfAbsent(claimString(k), struct{}{})
 }
+
+// calcWarnRefresh is how many shared inserts a cached claim answers for before it touches
+// the shared set again: half its capacity, so a key used within that window cannot have
+// been evicted, and is moved back to the front well before it could be.
+const calcWarnRefresh = calcWarnCapacity / 2
 
 // claimString is the shared set's key for a claim.
 func claimString(k claimKey) string {

@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -53,6 +54,37 @@ func TestSkipCacheIsBoundedAndResetNeverReReports(t *testing.T) {
 		obs.claim(string(rune('a'+i%26))+string(rune(i)), "range")
 		assert.LessOrEqual(t, len(obs.seen), calcWarnCapacity)
 	}
+}
+
+// A hot outcome stays reported once while other outcomes churn through the shared set, as it
+// did when every repeat touched the shared LRU: the cache in front of it must not let a hot
+// key age out (and be reported again, by another observer or by this one after a clear).
+func TestHotSkipIsNotReReportedUnderChurn(t *testing.T) {
+	metrics := testCalcMetrics()
+	ctx := core.WithTenant(context.Background(), "acme")
+	hotObs := &calcObserver{metrics: metrics, ctx: ctx, version: "v"}
+	churn := &calcObserver{metrics: metrics, ctx: ctx, version: "v"}
+	reported := 0
+	for i := 0; i < 4*calcWarnCapacity; i++ {
+		if hotObs.claim("hot", "missing_input") {
+			reported++
+		}
+		hotObs.claim(fmt.Sprintf("own%d", i), "missing_input")
+		churn.claim(fmt.Sprintf("other%d", i), "missing_input")
+	}
+	assert.Equal(t, 1, reported, "a hot outcome is reported once")
+	assert.LessOrEqual(t, len(hotObs.seen), calcWarnCapacity)
+	assert.LessOrEqual(t, metrics.warned.len(), calcWarnCapacity)
+}
+
+// A repeated skip is answered by the observer's own cache: no key string is built and the
+// shared set is not asked, which is what the cache is for. (The shared path allocates its key.)
+func TestARepeatSkipAllocatesNothing(t *testing.T) {
+	metrics := testCalcMetrics()
+	obs := &calcObserver{metrics: metrics, ctx: core.WithTenant(context.Background(), "acme"), version: "meter@1"}
+	obs.claim("power_kw", "missing_input")
+	allocs := testing.AllocsPerRun(1000, func() { obs.claim("power_kw", "missing_input") })
+	assert.Zero(t, allocs)
 }
 
 // legacyClaim is the claim as it was before the per-observer cache: build the key string and
