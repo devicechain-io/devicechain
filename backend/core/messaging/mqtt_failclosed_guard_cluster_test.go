@@ -162,10 +162,17 @@ func (c *guardCollector) duplicates() int {
 // connection the broker closed is re-sent by the client library on reconnect (its session is
 // persistent), exactly as a device's would be, and the PUBACK it finally gets is the one
 // counted.
-func publishThrough(t *testing.T, url, device, topic, prefix string, n int) []string {
+//
+// It reports failure as an error and never asserts: it runs on per-device goroutines, where
+// FailNow is not allowed, and under leader moves a slow connect or a slow answer is an
+// expected cost the caller decides what to do about. The messages PUBACKed before an error
+// are still returned, because the device WAS told they were stored.
+func publishThrough(t *testing.T, url, device, topic, prefix string, n int) ([]string, error) {
 	t.Helper()
 	clientID, err := DeviceClientID(guardInstance, guardTenant, device)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 	// A CONNECT that lands on a leader move can be refused or dropped (the gateway looks its
 	// streams up at CONNECT, and "non-CONNACK first packet" is how that shows), so a device
 	// tries again. It does so for a bounded TIME, as a real device would, not a bounded count:
@@ -175,10 +182,15 @@ func publishThrough(t *testing.T, url, device, topic, prefix string, n int) []st
 	for g == nil {
 		var err error
 		if g, err = tryConnectGuardClient(t, url, clientID, mqtt.NewMemoryStore(), true); err != nil {
-			require.True(t, time.Now().Before(deadline), "connecting %q kept failing for 30s: %v", clientID, err)
+			if !time.Now().Before(deadline) {
+				return nil, fmt.Errorf("connecting %q kept failing for 30s: %w", clientID, err)
+			}
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
+	// One device, one live connection: a later round of the same device must not fight this
+	// one for the client ID.
+	defer g.c.Disconnect(100)
 	var acked []string
 	for i := 0; i < n; i++ {
 		p := fmt.Sprintf("%s-%03d", prefix, i)
@@ -189,11 +201,10 @@ func publishThrough(t *testing.T, url, device, topic, prefix string, n int) []st
 				acked = append(acked, p)
 			}
 		case <-time.After(45 * time.Second):
-			t.Errorf("publish %q was never answered", p)
-			return acked
+			return acked, fmt.Errorf("publish %q was never answered", p)
 		}
 	}
-	return acked
+	return acked, nil
 }
 
 // A leader move of $MQTT_msgs while devices publish never loses a message a device was told
@@ -228,6 +239,7 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 	var (
 		mu    sync.Mutex
 		acked []string
+		errs  []error
 		wg    sync.WaitGroup
 	)
 	for d := 0; d < devices; d++ {
@@ -235,9 +247,12 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 		go func(d int) {
 			defer wg.Done()
 			dev := fmt.Sprintf("load%d", d)
-			got := publishThrough(t, gc.mqttURL(d%3), dev, guardTopic(guardInstance, guardTenant, dev), dev, perDevice)
+			got, err := publishThrough(t, gc.mqttURL(d%3), dev, guardTopic(guardInstance, guardTenant, dev), dev, perDevice)
 			mu.Lock()
 			acked = append(acked, got...)
+			if err != nil {
+				errs = append(errs, err)
+			}
 			mu.Unlock()
 		}(d)
 	}
@@ -245,6 +260,7 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 	close(stopMoves)
 	moves.Wait()
 
+	require.Empty(t, errs, "a device could not finish its publishes")
 	require.NotEmpty(t, acked)
 	require.Greater(t, gc.moves.Load(), int64(2), "the leader was never moved, so nothing was tested")
 	require.Eventually(t, func() bool { return len(col.lostOf(acked)) == 0 }, 30*time.Second, 200*time.Millisecond,
@@ -278,7 +294,8 @@ func TestAMessageStoreLeaderMoveDuringDurableCreationNeverLosesAPubackedMessage(
 		col := startGuardCollector(t, gc.js, name, filter)
 
 		gc.stepDownAsync()
-		acked := publishThrough(t, gc.mqttURL(r%3), device, guardTopic(guardInstance, guardTenant, device), device, burst)
+		acked, err := publishThrough(t, gc.mqttURL(r%3), device, guardTopic(guardInstance, guardTenant, device), device, burst)
+		require.NoError(t, err, "round %d", r)
 		require.Len(t, acked, burst, "round %d: every publish was eventually PUBACKed", r)
 		require.Eventually(t, func() bool { return len(col.lostOf(acked)) == 0 }, 30*time.Second, 200*time.Millisecond,
 			"round %d: PUBACKed messages lost after the durable's creation: %v", r, col.lostOf(acked))
