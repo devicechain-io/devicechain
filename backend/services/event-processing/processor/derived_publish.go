@@ -29,6 +29,14 @@ package processor
 // under its device and folds its contributors' edges by event time), so nothing ordered spans two
 // lanes. With a window of 1 the publishes go in buffer order exactly, which is the serial path.
 //
+// MEMORY. maxBufferedBytes bounds the payload bytes of the publishes outstanding. Nothing else
+// holds a payload beyond it: preparation is lazy (one item is prepared at a time, only when the
+// window and budget have room, so at most one prepared-unsent payload sits beside the bound), and
+// an acknowledged payload is released at its acknowledgement, so a settled-but-not-retired item
+// holds its identity and no bytes. A failed or unknown item keeps its bytes for the retry; the
+// first failure stops sends, so those are what was outstanding at that moment. A retired entry is
+// zeroed out of the buffer's backing array, not merely sliced off.
+//
 // FAILURE. The first failed or unknown outcome (a timeout may have been stored) stops further
 // sends; what is already in flight settles under the same deadline. Items are judged by their
 // place in the buffer, not by when their outcome arrived: the settled prefix is retired, and
@@ -363,6 +371,10 @@ func (p *publishPass) apply(o publishOutcome) {
 	}
 	p.status[o.ord] = itemAcked
 	d.state = outputAcked
+	// A known positive is kept only so its fire is recorded in order once the items before it
+	// settle, and that needs the identity, not the bytes. Releasing them here is what keeps the
+	// byte budget a bound on everything held: an acknowledged-but-unretired payload holds nothing.
+	d.out.Payload = nil
 	p.pub.Published(o.wait)
 	p.advanceLane(o.ord)
 	p.retire()
@@ -394,7 +406,11 @@ func (p *publishPass) finish() bool {
 		log.Warn().Str("partition", rp.cfg.PartitionId).
 			Msg("DETECT lost the partition while publishing a checkpoint's detections; the rest are not sent and the messages stay unacked")
 	}
+	old := len(rp.pendingDets)
 	if p.cursor == len(p.status) {
+		// Zero the retired entries, not just the length: the backing array outlives this pass,
+		// and a slot past the length still reaches its prepared payload.
+		clear(rp.pendingDets[:old])
 		rp.pendingDets = rp.pendingDets[:0]
 		return !p.leaseLost
 	}
@@ -404,22 +420,33 @@ func (p *publishPass) finish() bool {
 		switch p.status[i] {
 		case itemDropped:
 			continue
-		case itemAcked:
-			// Known positive: kept only so its fire is recorded in order once the items before it
-			// settle. Its bytes are no longer needed.
-			d.out.Payload = nil
 		}
 		kept = append(kept, d)
 	}
+	// kept shares the backing array: zero what compaction left behind the new length (the retired
+	// prefix's tail and the dropped entries), so their payloads are collectable.
+	clear(rp.pendingDets[len(kept):old])
 	rp.pendingDets = kept
 	return false
 }
 
-// publishFailureOutcome tells a publish that may have been stored (a timeout or cancellation:
-// the outcome is unknown) from one the broker refused. Both are retried the same way, with the
-// same bytes and dedup id; the split is for the operator.
+// jsErrCodeDuplicateMsgIdInProcess is JetStream's answer when a publish's Nats-Msg-Id is still
+// being replicated: another publish under the same id is in progress and its fate is not known.
+// Seen here when the publisher's own re-send is still racing its original at the deadline.
+const jsErrCodeDuplicateMsgIdInProcess nats.ErrorCode = 10158
+
+// publishFailureOutcome tells a publish that may have been stored (the outcome is unknown: a
+// timeout or cancellation, a connection lost before the acknowledgement arrived, or an id the
+// broker says is still in process) from one the broker refused. Both are retried the same way,
+// with the same bytes and dedup id; the split is for the operator.
 func publishFailureOutcome(err error) string {
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || errors.Is(err, nats.ErrTimeout) {
+	var apiErr *nats.APIError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled),
+		errors.Is(err, nats.ErrTimeout),
+		errors.Is(err, nats.ErrConnectionClosed), errors.Is(err, nats.ErrDisconnected),
+		errors.Is(err, nats.ErrConnectionDraining),
+		errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrCodeDuplicateMsgIdInProcess:
 		return publishOutcomeUnknown
 	}
 	return publishOutcomeFailed

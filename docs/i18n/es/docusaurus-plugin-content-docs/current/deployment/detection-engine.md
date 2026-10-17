@@ -603,7 +603,11 @@ cambia:
 - **Un fallo se reintenta sin duplicados.** Cuando una publicación falla o agota el tiempo, no se
   envían más, el punto de control no se guarda, y el siguiente intento envía la misma detección con
   la misma identidad. El bus de mensajes reconoce una copia que ya guardó, así que una publicación que
-  agotó el tiempo pero sí llegó se guarda una vez. Las detecciones ya confirmadas no se reenvían.
+  agotó el tiempo pero sí llegó se guarda una vez, siempre que el reintento llegue dentro de la ventana de duplicados del flujo de
+  eventos derivados (30 minutos). Es una ventana de deduplicación acotada, no una garantía permanente
+  de entrega exactamente una vez: un reintento posterior, tras una interrupción larga, puede
+  guardarse por segunda vez y se colapsa aguas abajo por la identidad de la detección. Las
+  detecciones ya confirmadas no se reenvían.
 - **Los recuentos de salud de reglas se registran en el mismo orden**, sea cual sea el orden en que
   vuelvan las confirmaciones.
 

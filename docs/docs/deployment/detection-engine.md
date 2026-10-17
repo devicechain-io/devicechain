@@ -550,7 +550,11 @@ same:
 - **A failure is retried without duplicates.** When a publish fails or times out, no more are sent,
   the checkpoint is not saved, and the next attempt sends the same detection with the same identity.
   The message bus recognises a copy it already stored, so a timed-out publish that did arrive is
-  stored once. Detections that were acknowledged are not sent again.
+  stored once, provided the retry arrives within the derived-events stream's duplicate window
+  (30 minutes). That is a bounded dedup window, not a permanent exactly-once guarantee: a retry
+  that comes later than that, after a long outage, can be stored a second time and is collapsed
+  downstream by the detection's identity instead. Detections that were acknowledged are not sent
+  again.
 - **Rule-health counts are recorded in the same order**, whatever order the acknowledgements come
   back in.
 

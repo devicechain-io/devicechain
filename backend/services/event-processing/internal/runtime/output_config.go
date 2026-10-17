@@ -15,8 +15,10 @@ import "fmt"
 type OutputConfig struct {
 	// MaxInFlight is the most publishes awaiting the broker's acknowledgement at once.
 	MaxInFlight int
-	// MaxBufferedBytes bounds the payload bytes of those publishes together. A single derived
-	// event larger than the bound is sent on its own, with nothing beside it, rather than never.
+	// MaxBufferedBytes bounds the payload bytes of those publishes together: the bytes sent and
+	// not yet acknowledged. An acknowledged payload is released at once, so it holds none, and
+	// preparation is lazy, so at most one prepared-unsent payload sits beside the bound. A single
+	// derived event larger than the bound is sent on its own, with nothing beside it, rather than never.
 	MaxBufferedBytes int64
 }
 
