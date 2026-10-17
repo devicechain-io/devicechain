@@ -100,14 +100,16 @@ type NatsConfiguration struct {
 	// device keeps the message.
 	//
 	// 🔴 REFUSED IN THIS BUILD (ErrMqttFailClosedNotAvailable). The store, its durables,
-	// their watch and the readers that forward from them are built, but nothing yet backs
-	// devices off before the store fills: once it is full the gateway refuses publishes by
-	// closing connections, and the fleet's reconnects (each one TLS and an auth callout) land
-	// on a platform that is already behind, while every refusal reads as the device going
-	// offline. Validate therefore refuses a document that sets it, and every service fails
-	// its config load on it, until the back-off ahead of overflow and the presence debounce
-	// ship and remove the refusal. The plumbing is exercised in tests, which set the field on
-	// a configuration they never validate.
+	// their watch, the readers that forward from them, the back-off ahead of overflow (the
+	// auth callout refuses device connects while the store is above its high-water mark) and
+	// the presence debounce (a refusal-close does not read as the device going offline) are
+	// built. What is not yet: the deployed broker runs nats-server 2.14.4, while the gateway
+	// behaviour all of this rests on is pinned against 2.15.0 in the guard tests; the cutover
+	// that retires the device-events capture stream; the edge agent's embedded broker; and
+	// the benchmark round that measures loss, duplicates and the reconnect storm under
+	// overload. Validate therefore refuses a document that sets it, and every service fails
+	// its config load on it, until those land and remove the refusal. The plumbing is
+	// exercised in tests, which set the field on a configuration they never validate.
 	//
 	// It is refused at startup on a broker that also serves another instance: the store is
 	// per broker account, so one instance's backlog would refuse the other's devices, and
@@ -1243,17 +1245,18 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 }
 
 // ErrMqttFailClosedNotAvailable is Validate's refusal of infrastructure.nats.mqttFailClosed
-// on. The fail-closed MQTT acknowledgement forwards from the broker's message store, but
-// nothing yet backs devices off before that store fills or tells a refusal from a device
-// going offline, so a store that fills would disconnect the fleet into a reconnect storm. It
-// is refused rather than accepted as a setting that does harm.
+// on. The fail-closed MQTT acknowledgement, its back-off and its presence debounce are built,
+// but the broker the platform deploys is not yet the version their behaviour is pinned
+// against, and the cutover off the capture stream and the measurement under overload have not
+// been done. It is refused rather than accepted as a setting whose guarantee is unproven.
 var ErrMqttFailClosedNotAvailable = errors.New("infrastructure.nats.mqttFailClosed is not available in " +
-	"this build: devices are not yet backed off before the broker's message store fills, so a full " +
-	"store would disconnect them all at once")
+	"this build: the deployed broker is nats-server 2.14.4, and the MQTT gateway behaviour the setting " +
+	"depends on is verified only against 2.15.0; the move off the device-events capture stream and the " +
+	"measurement under overload are not done yet")
 
 // mqttFailClosedShipped lifts that refusal. It is a package variable, not a key, so no
 // document can lift it: only this package's tests set it, to validate the rest of a
-// document with the setting on. The change that ships the back-off deletes it and the check.
+// document with the setting on. The change that ships the setting deletes it and the check.
 var mqttFailClosedShipped = false
 
 // Validate fails closed on an instance configuration missing the infrastructure
@@ -1263,9 +1266,8 @@ var mqttFailClosedShipped = false
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
 	if c.Infrastructure.Nats.MqttFailClosed && !mqttFailClosedShipped {
-		return fmt.Errorf("%w, and every refusal would read as the device going offline. Remove "+
-			"infrastructure.nats.mqttFailClosed from the instance configuration or set it to false",
-			ErrMqttFailClosedNotAvailable)
+		return fmt.Errorf("%w. Remove infrastructure.nats.mqttFailClosed from the instance configuration "+
+			"or set it to false", ErrMqttFailClosedNotAvailable)
 	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")

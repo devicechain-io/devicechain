@@ -83,6 +83,14 @@ var (
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
 	CalloutResponder *processor.CalloutResponder
+	// MqttStoreBackoff samples the broker's MQTT message store and has the callout refuse
+	// device connects while it is above its high-water mark. Non-nil only when the callout
+	// runs and infrastructure.nats.mqttFailClosed is on.
+	MqttStoreBackoff *messaging.MqttStoreBackoff
+	// MqttStoreBackoffMetrics and CalloutRefusedStoreFull are the back-off's series, built
+	// once on the initialize path (buildMetrics) and only with the setting on.
+	MqttStoreBackoffMetrics *messaging.MqttStoreBackoffMetrics
+	CalloutRefusedStoreFull prometheus.Counter
 
 	// OwnershipDrain publishes the device ownership facts writes queue in their own
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
@@ -184,6 +192,7 @@ func buildMetrics() {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
 	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
+	MqttStoreBackoffMetrics, CalloutRefusedStoreFull = buildMqttStoreBackoffMetrics()
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
@@ -195,6 +204,40 @@ func buildMetrics() {
 	for _, fact := range factPublishLabels {
 		FactPublishFails.WithLabelValues(fact).Add(0)
 	}
+}
+
+// buildMqttStoreBackoffMetrics registers the back-off's series and the callout's count of the
+// connects it refused, with infrastructure.nats.mqttFailClosed on, and nothing with it off.
+//
+// 🔴 ON THE INITIALIZE PATH, NOT WHERE THE BACK-OFF STARTS. afterMicroserviceStarted runs on
+// every start, and a collector registered there a second time panics on the duplicate.
+func buildMqttStoreBackoffMetrics() (*messaging.MqttStoreBackoffMetrics, prometheus.Counter) {
+	if !Microservice.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed {
+		return nil, nil
+	}
+	return messaging.NewMqttStoreBackoffMetrics(Microservice),
+		Microservice.NewCounter("callout_refused_store_full_total",
+			"Device auth-callout requests refused with the generic denial because the broker's MQTT message store "+
+				"was above its high-water mark.")
+}
+
+// storeBackoffGate is the half of the auth-callout responder the back-off is wired into.
+type storeBackoffGate interface {
+	WithStoreBackoff(storeFull func() bool, refused prometheus.Counter) *processor.CalloutResponder
+}
+
+// wireMqttStoreBackoff starts the back-off ahead of overflow and gates the callout on it, with
+// the fail-closed MQTT acknowledgement on (on). Off, it starts nothing, gates nothing and returns
+// nil, so the callout path is the one the setting has never touched. Stop the back-off it
+// returns on the stop path; a nil one is a no-op.
+func wireMqttStoreBackoff(on bool, nmgr *messaging.NatsManager, metrics *messaging.MqttStoreBackoffMetrics,
+	refused prometheus.Counter, gate storeBackoffGate) *messaging.MqttStoreBackoff {
+	if !on {
+		return nil
+	}
+	b := nmgr.StartMqttStoreBackoff(context.Background(), metrics, messaging.MqttStoreBackoffInterval)
+	gate.WithStoreBackoff(b.Engaged, refused)
+	return b
 }
 
 // factPublishLabels are the fact label values of FactPublishFails, one per fact writer.
@@ -826,6 +869,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
+		// message store closes the connections it refuses, and their reconnects would land here.
+		// Above the store's high-water mark every device connect is refused at once instead, so
+		// the devices still connected drain it. Off, nothing is sampled or registered.
+		MqttStoreBackoff = wireMqttStoreBackoff(infra.Nats.MqttFailClosed, NatsManager, MqttStoreBackoffMetrics,
+			CalloutRefusedStoreFull, CalloutResponder)
 		if err = CalloutResponder.Start(); err != nil {
 			return err
 		}
@@ -843,6 +892,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	MqttStoreBackoff.Stop()
 
 	// Stop the ownership drain before the NATS connection drains. What it has not published
 	// stays queued for whichever replica drains next.

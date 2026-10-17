@@ -26,6 +26,17 @@ to raise. The other two are keyed by device type and by tenant, keep the library
 bound and have no knob; an alert on them would give advice that does not apply. A cache
 added to the per-device set is added to the matcher here.
 
+MqttStoreBackoffEngaged is the back-off ahead of overflow on the fail-closed MQTT
+acknowledgement (infrastructure.nats.mqttFailClosed). With it on, a full MQTT message store
+refuses a device's publish by closing its connection, and every refused device reconnects into
+the same full store. device-management samples the store's fill and, above 80% of its bound,
+has the auth callout refuse every new device connection until the fill is below 60%, so the
+devices already connected drain it. The series exists only with the setting on, so the alert
+has nothing to read anywhere else. It is a warning, not a page: nothing is lost while it
+fires (the store refuses what it cannot keep, and the device keeps it), but devices are being
+kept off the platform. The 2m hold skips a back-off a fill spike engages and the next samples
+lift.
+
 0/0 IS QUIET. Every series is created at zero, so an idle pod divides zero by zero; the
 result is NaN, NaN > 0.05 is false, and nothing fires. The promtool tests pin that case.
 */}}
@@ -69,4 +80,13 @@ spec:
           annotations:
             summary: "A device-management per-device cache is too small for the fleet"
             description: "On {{ "{{ $labels.pod }}" }}, more than 5% of lookups in the {{ "{{ $labels.cache }}" }} cache have pushed another entry out of a full cache for 15m (now {{ "{{ $value | humanizePercentage }}" }}). The cache is smaller than the set of devices reporting through it, so it is cycling and most lookups go to the key-value bucket. Raise inMemoryCache.perDeviceCacheMiB for device-management, and raise its memory limit with it."
+        - alert: MqttStoreBackoffEngaged
+          expr: max(devicechain_devicemanagement_mqtt_store_backoff_engaged{namespace="{{ $ns }}"}) == 1
+          for: 2m
+          labels:
+            severity: warning
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "New MQTT device connections are being refused: the broker's MQTT message store is nearly full"
+            description: "For 2m device-management has refused every new MQTT device connection, because the broker's MQTT message store is above 80% of its bound. Devices already connected keep publishing, and connections are accepted again once the store is below 60%. The platform is reading device publishes more slowly than devices send them: look at event-sources and at what reads inbound-events. Refused devices are told their connection is not authorized (MQTT CONNACK code 5) and must keep retrying."
 {{- end }}

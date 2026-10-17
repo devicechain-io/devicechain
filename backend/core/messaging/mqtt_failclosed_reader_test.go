@@ -256,6 +256,7 @@ func TestADirectCopyIsSkippedOnlyWhileTheStoreHoldsIt(t *testing.T) {
 	fcPublish(t, c, topic, 1, "before")
 	_, err := onMgr.ReconcileMqttFailClosed(context.Background())
 	require.NoError(t, err)
+	fcSettleFromMarks(t, onMgr)
 	fcPublish(t, c, topic, 1, "held")
 	fcPublish(t, c, topic, 0, "qos0")
 

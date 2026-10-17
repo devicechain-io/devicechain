@@ -123,6 +123,13 @@ type CalloutResponder struct {
 	inFlight    atomic.Int64
 	refusedBusy atomic.Int64
 	metrics     *CalloutMetrics
+
+	// storeFull reports whether the broker's MQTT message store is above its high-water mark
+	// (messaging.MqttStoreBackoff), in which case every device connect is refused at once; nil
+	// when the fail-closed MQTT acknowledgement is off. See WithStoreBackoff.
+	storeFull func() bool
+	// refusedStoreFull counts the connects storeFull refused. May be nil.
+	refusedStoreFull prometheus.Counter
 }
 
 // Defaults for the bounds above. The lookup timeout sits under the broker's 5 s
@@ -166,6 +173,27 @@ func (c *CalloutResponder) Configure(maxInFlight int, lookupTimeout, stopWait ti
 	if metrics != nil {
 		c.metrics = metrics
 	}
+}
+
+// WithStoreBackoff makes the responder refuse every device connect, at once and before any
+// credential work, while storeFull reports the broker's MQTT message store above its
+// high-water mark (messaging.MqttStoreBackoff.Engaged). refused counts those refusals and may
+// be nil. Call it before Start.
+//
+// It is the back-off ahead of overflow. With the fail-closed MQTT acknowledgement on, a full
+// store refuses a publish by closing the device's connection, and the device reconnects. While
+// the store is nearly full, letting it back in only has it publish into the same store and be
+// closed again, after a credential check that loads this service and its database during the
+// very overload that caused it. Refusing the connect instead leaves the devices already
+// connected to drain the store, and the refusal is lifted once it is read down.
+//
+// The answer is the generic denial every other refusal gets, so it says nothing about the
+// device. The broker turns it into MQTT CONNACK code 5 (not authorized): its MQTT gateway has
+// no path that sends code 3 (server unavailable) for an auth callout's refusal.
+func (c *CalloutResponder) WithStoreBackoff(storeFull func() bool, refused prometheus.Counter) *CalloutResponder {
+	c.storeFull = storeFull
+	c.refusedStoreFull = refused
+	return c
 }
 
 // InFlight is how many requests are being authorized right now.
@@ -298,6 +326,14 @@ func (c *CalloutResponder) dispatch(msg *nats.Msg) {
 		c.mu.Unlock()
 		return // the broker times the connect out; another replica's queue member answers
 	}
+	if c.storeFull != nil && c.storeFull() {
+		c.mu.Unlock()
+		if c.refusedStoreFull != nil {
+			c.refusedStoreFull.Inc()
+		}
+		c.refuseAtOnce(msg)
+		return
+	}
 	select {
 	case c.sem <- struct{}{}:
 		c.wg.Add(1)
@@ -331,6 +367,11 @@ func (c *CalloutResponder) refuseBusy(msg *nats.Msg) {
 	if c.metrics != nil {
 		c.metrics.RefusedBusy.Inc()
 	}
+	c.refuseAtOnce(msg)
+}
+
+// refuseAtOnce answers a request with the generic denial without authorizing it.
+func (c *CalloutResponder) refuseAtOnce(msg *nats.Msg) {
 	reqClaims, err := jwt.DecodeAuthorizationRequestClaims(string(msg.Data))
 	if err != nil || reqClaims.AuthorizationRequest.UserNkey == "" {
 		return

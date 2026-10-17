@@ -101,6 +101,7 @@ func e2eSource(t *testing.T, id string) *GatewayJetStreamSource {
 func startE2EPod(t *testing.T, serverURL, name string, on bool, clock func() time.Time,
 	wrap func(messaging.OrderedWriter) messaging.OrderedWriter) *e2ePod {
 	t.Helper()
+	messaging.SetMqttFailClosedFromSettleForTesting(t, 0)
 	u, err := url.Parse(serverURL)
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())
@@ -116,8 +117,13 @@ func startE2EPod(t *testing.T, serverURL, name string, on bool, clock func() tim
 	var writer messaging.OrderedWriter
 	p.nmgr = messaging.NewNatsManager(ms, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
 		if on {
-			if _, err := n.ReconcileMqttFailClosed(context.Background()); err != nil {
-				return err
+			// Twice: a take-over records the direct streams' from marks only on a pass after the
+			// one that created the durables (with the settle shortened to 0 above), and until then
+			// the capture reader would forward the direct copies the store holds too.
+			for i := 0; i < 2; i++ {
+				if _, err := n.ReconcileMqttFailClosed(context.Background()); err != nil {
+					return err
+				}
 			}
 		}
 		r, err := n.NewReader(streams.DeviceEventsCapture)
@@ -415,7 +421,7 @@ func TestEveryPubackedMessageReachesInboundEventsExactlyOnce(t *testing.T) {
 		si, err := js.StreamInfo(messaging.MqttMessageStore)
 		return err == nil && si.Created.After(before.Created) && si.Config.Discard == nats.DiscardNew
 	}, 10*time.Second, 50*time.Millisecond, "the watch never created the store again")
-	time.Sleep(500 * time.Millisecond) // the from marks are read; the capture reader's look refreshes
+	time.Sleep(500 * time.Millisecond) // the pass after the re-creation reads the from marks; the capture reader's look refreshes
 	recreated := e2eIds("recreated", 10)
 	dev.publishAcked(recreated...)
 	for _, id := range recreated {

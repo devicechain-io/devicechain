@@ -142,3 +142,49 @@ tests:
       - eval_time: 45m
         alertname: DeviceLookupCacheTooSmall
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MQTT store back-off: engaged on one pod for 10m fires after its 2m hold; a back-off that
+  # a spike engages for a minute and the next samples lift does not; an install with the
+  # setting off exports no series and is quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_mqtt_store_backoff_engaged{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0 0 1 1 1 1 1 1 1 1 1 1 0 0 0'
+      - series: 'devicechain_devicemanagement_mqtt_store_backoff_engaged{namespace="dci-devicechain", pod="dc-device-management-bbbbb"}'
+        values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: MqttStoreBackoffEngaged
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: MqttStoreBackoffEngaged
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "New MQTT device connections are being refused: the broker's MQTT message store is nearly full"
+              description: "For 2m device-management has refused every new MQTT device connection, because the broker's MQTT message store is above 80% of its bound. Devices already connected keep publishing, and connections are accepted again once the store is below 60%. The platform is reading device publishes more slowly than devices send them: look at event-sources and at what reads inbound-events. Refused devices are told their connection is not authorized (MQTT CONNACK code 5) and must keep retrying."
+      - eval_time: 14m
+        alertname: MqttStoreBackoffEngaged
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_mqtt_store_backoff_engaged{namespace="dci-devicechain", pod="dc-device-management-aaaaa"}'
+        values: '0 1 0 0 1 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MqttStoreBackoffEngaged
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_devicemanagement_credential_cache_lookups_total{namespace="dci-devicechain", pod="dc-device-management-aaaaa", result="hit"}'
+        values: '0+100x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MqttStoreBackoffEngaged
+        exp_alerts: []

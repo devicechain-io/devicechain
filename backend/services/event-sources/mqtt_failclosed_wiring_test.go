@@ -189,6 +189,12 @@ func TestTheServiceReadsTheMessageStoreWithTheSettingOn(t *testing.T) {
 	ctx := context.Background()
 	require.NoError(t, nmgr.Start(ctx))
 	t.Cleanup(func() { _ = nmgr.Stop(context.Background()) })
+	// The start's pass created the durables, so it left the direct streams without from marks
+	// (nothing is skipped until the durables have settled). A second pass, with the settle
+	// shortened, records them, as the watch's first pass after the settle does.
+	messaging.SetMqttFailClosedFromSettleForTesting(t, 0)
+	_, err := nmgr.ReconcileMqttFailClosed(ctx)
+	require.NoError(t, err)
 	require.NoError(t, GatewaySource.Initialize(ctx))
 	require.NoError(t, GatewaySource.Start(ctx))
 	t.Cleanup(func() { _ = GatewaySource.Stop(context.Background()) })
