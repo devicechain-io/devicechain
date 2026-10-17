@@ -43,6 +43,20 @@ describe('isForbiddenError', () => {
   });
 });
 
+describe('isForbiddenError for a subscription', () => {
+  // graphql-ws hands a subscription's refusal to the sink as the bare error list.
+  it('recognizes a refused subscription by code or by the message prefix', () => {
+    expect(isForbiddenError([{ message: 'nope', extensions: { code: 'FORBIDDEN' } }])).toBe(true);
+    expect(isForbiddenError([{ message: 'forbidden: missing required authority' }])).toBe(true);
+  });
+
+  it('does NOT fire on a subscription that failed for another reason', () => {
+    expect(isForbiddenError([{ message: 'device "forbidden-zone-01" not found', extensions: { code: 'NOT_FOUND' } }])).toBe(false);
+    expect(isForbiddenError([])).toBe(false);
+    expect(isForbiddenError(['forbidden'])).toBe(false);
+  });
+});
+
 describe('isForbiddenError by code', () => {
   it('recognizes the FORBIDDEN code whatever the message says', () => {
     const err = new GraphQLRequestError('GraphQL error', 200, [

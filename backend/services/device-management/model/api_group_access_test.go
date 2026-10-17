@@ -349,3 +349,22 @@ func TestEntityGroupsCanBeListedByAccessScope(t *testing.T) {
 	require.Equal(t, []string{"other"}, tokens(&no))
 	require.Equal(t, []string{"arid", "other"}, tokens(nil))
 }
+
+// 🔴 The tenant's access scopes are never read for a scoped caller: EntityGroup's scope rule
+// would answer only the groups its scope names, and an anchor set built from that would be
+// silently short. The read refuses instead, and an unscoped read of the same store is the
+// control.
+func TestAccessScopesAreNotReadForAScopedCaller(t *testing.T) {
+	api, ctx, _ := accessFixture(t)
+	_, err := api.SetEntityGroupAccessScope(ctx, "arid", true)
+	require.NoError(t, err)
+
+	groups, err := accessGroupsOnDB(api.RDB.DB(ctx))
+	require.NoError(t, err)
+	require.Len(t, groups, 1, "control: the unscoped read sees the access scope")
+
+	scoped := auth.WithClaims(ctx, &auth.Claims{TokenType: auth.TokenTypeAccess,
+		Authorities: []string{string(auth.DeviceRead)}, ScopeAnchors: []string{"customer:acme"}})
+	_, err = accessGroupsOnDB(api.RDB.DB(scoped))
+	require.ErrorIs(t, err, auth.ErrScopeUnsupported)
+}

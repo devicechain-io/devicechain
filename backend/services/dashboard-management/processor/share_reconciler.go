@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package processor holds dashboard-management's one consumer: the removal of dashboard
-// shares that name a deleted customer.
+// shares that name a deleted customer or group.
 package processor
 
 import (
@@ -23,9 +23,10 @@ type ShareRemover interface {
 }
 
 // ShareReconciler consumes entity-deletion events (ADR-044) and removes the dashboard shares
-// that named the deleted customer (ADR-081). A share naming a customer that no longer exists
-// grants nothing today, but a customer later created under the same token would inherit
-// every dashboard the old one was shared with — so the share goes with its customer.
+// that named the deleted customer or group (ADR-081). A share naming a customer that no
+// longer exists grants nothing today, but a customer later created under the same token would
+// inherit every dashboard the old one was shared with — so the share goes with its customer,
+// and a group's with its group.
 //
 // It is a durable, at-least-once consumer and cleanup is idempotent: deleting shares that
 // are already gone is a no-op, so a redelivery, or the first-enablement replay of the

@@ -199,19 +199,24 @@ import GuideShot from '@site/src/components/GuideShot';
 
 历史只增不减。发布、设为生效和回滚都会保留较早的版本。
 
-## 与客户共享 {#sharing-with-customers}
+## 与客户和组共享 {#sharing-with-customers}
 
-访问仅限部分客户的成员，只有在仪表板共享给其中某个客户并且已发布之后才能看到它。在仪表板列表中，对某个仪表板选择 **Share**（共享），选择客户，然后选择 **Save sharing**（保存共享）。你保存的列表会替换之前的列表，空列表表示不与任何人共享该仪表板。你可以在仪表板发布之前共享它；发布后，其客户即可看到。
+访问仅限部分客户或设备组的成员，只有在仪表板共享给其中某个客户或组并且已发布之后才能看到它。在仪表板列表中，对某个仪表板选择 **Share**（共享），选择 **Customers**（客户）和 **Groups of devices**（设备组），然后选择 **Save sharing**（保存共享）。你保存的列表会替换之前的列表，空列表表示不与任何人共享该仪表板。你可以在仪表板发布之前共享它；发布后，共享对象中的成员即可看到。
 
-{/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
+只会列出用作访问范围的组。如果缺少某个组，请在该组的页面上把它启用为访问范围，见[将成员限定于设备组](/user-guide/members-roles-and-customer-users#group-scopes)。不再是访问范围的组会保留已有的共享，但在它重新成为访问范围之前无法再次保存：保存时会被拒绝，并提示某个所选组已不再是访问范围。
 
-请把共享的仪表板的组件绑定到设备，或绑定到仪表板所共享的客户。绑定到客户并把 **Relationship**（关系）设为 `assigned`（设备的 **Assignment** 选项卡所创建的关系）的组件，会向每个客户用户显示该客户的设备，前提是该客户是他们自己的客户；绑定到其他任何客户时，组件会提示他们没有访问权限。绑定到资产或区域的组件需要通过关系查找其设备，而访问受限的成员无法读取关系，因此该组件会向他们显示 **Not available for customer users**（不对客户用户提供），而不是其数据。
+{/* TODO(screenshot): dashboard-share, the Share drawer with customers and groups picked. */}
+
+请把共享的仪表板的组件绑定到设备，或绑定到仪表板所共享的客户。绑定到客户并把 **Relationship**（关系）设为 `assigned`（设备的 **Assignment** 选项卡所创建的关系）的组件，会向每个客户用户显示该客户的设备，前提是该客户是他们自己的客户；绑定到其他任何客户时，组件会向他们显示 **You do not have access to this data**（你无权访问这些数据）。绑定到资产、区域或组的组件需要通过关系查找其设备，而访问受限的成员无法读取关系，因此该组件会向他们显示 **Not available for customer users**（不对客户用户提供），而不是其数据。在共享给某个组的仪表板上，请把组件绑定到该组的设备。
 
 程序可以通过需要 `dashboard:write` 的 `shareDashboard` 变更完成同样的操作：
 
 ```graphql
 mutation {
-  shareDashboard(token: "plant-overview", anchors: [{ kind: CUSTOMER, token: "acme" }]) {
+  shareDashboard(
+    token: "plant-overview"
+    anchors: [{ kind: CUSTOMER, token: "acme" }, { kind: GROUP, token: "north-wing" }]
+  ) {
     token
     sharedWith { kind token }
   }
@@ -219,11 +224,11 @@ mutation {
 ```
 
 - 你发送的列表会替换之前的列表。空列表表示不与任何人共享。
-- 每个客户都必须存在。若有一个不存在，请求以 `NOT_FOUND` 失败，且不做任何更改。
-- 这样的成员只能在列表中看到共享给其客户的**已发布**仪表盘，并打开其已发布版本。它永远看不到草稿或版本历史。其他任何仪表盘都按不存在作答。
+- 每个客户都必须存在，每个组都必须存在且是访问范围。若有一个不满足，请求以 `NOT_FOUND` 失败，且不做任何更改。存在但不是访问范围的组，与不存在的组得到完全相同的回答。
+- 这样的成员只能在列表中看到共享给其客户或组的**已发布**仪表盘，并打开其已发布版本。它永远看不到草稿或版本历史。其他任何仪表盘都按不存在作答。
 - 共享仪表盘并不共享数据。每个小部件仍只显示该成员可以查看的内容。
 - 访问受限的成员不能共享仪表盘，也不能查看仪表盘共享给了谁。
-- 删除仪表盘会删除其共享。删除客户会删除指向该客户的共享。
+- 删除仪表盘会删除其共享。删除客户或组会删除指向它的共享。
 
 ## 相关内容 {#related}
 

@@ -32,8 +32,8 @@ recargas la página, o abres `/dash/` en otra pestaña, tendrás que iniciar ses
 
 Después de iniciar sesión, **Cargar un panel** lista **Tus paneles**: los paneles publicados que
 puedes abrir. Elige uno para abrirlo. Si tu acceso está limitado a algunos de los clientes del
-inquilino, la lista contiene los paneles publicados compartidos con esos clientes; si no, contiene
-todos los paneles publicados del inquilino. La lista muestra los 200 primeros, y lo indica cuando
+inquilino o a grupos de dispositivos, la lista contiene los paneles publicados compartidos con esos
+clientes o grupos; si no, contiene todos los paneles publicados del inquilino. La lista muestra los 200 primeros, y lo indica cuando
 hay más.
 
 {/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}

@@ -208,8 +208,11 @@ describe('the Notification Policies entry', () => {
 describe('a scoped member', () => {
   const EVERYTHING = ['*'];
 
-  it('sees only Dashboard, Dashboards, Alarms and Devices, even holding every authority', () => {
-    scope.value = ['customer:acme'];
+  // Whatever the scope names — a customer, a group of devices, or both — the cut is the same.
+  const SCOPES: string[][][] = [[['customer:acme']], [['group:north']], [['customer:acme', 'group:north']]];
+
+  it.each(SCOPES)('sees only Dashboard, Dashboards, Alarms and Devices, even holding every authority (scope %j)', (anchors) => {
+    scope.value = anchors;
     renderWith(EVERYTHING, '/devices');
 
     expect(entry('Dashboard')).toBeTruthy();

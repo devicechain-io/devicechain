@@ -3425,7 +3425,8 @@ type Query {
     ): DeviceSearchResults!
     # Find entity groups by unique id.
     entityGroupsById(ids: [ID!]!): [EntityGroup!]!
-    # Find entity groups by unique token.
+    # Find entity groups by unique token. Answered to a member whose access is limited to part
+    # of the tenant too, with only the groups its scope names; their members and versions stay refused.
     entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
     # List entity groups that meet criteria (optionally by member family / mode).
     entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!

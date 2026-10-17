@@ -87,6 +87,22 @@ func TestADeletedCustomersSharesAreRemoved(t *testing.T) {
 	require.Len(t, remaining(t, db), 3)
 }
 
+// A group's deletion removes the shares naming the group, and only them: a customer with the
+// same token keeps its share.
+func TestADeletedGroupsSharesAreRemoved(t *testing.T) {
+	api, db := sharesApi(t)
+	deletedAt := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	before := deletedAt.Add(-time.Hour)
+	share(t, db, "acme-tenant", 1, "group", "north", before)
+	share(t, db, "acme-tenant", 2, "customer", "north", before)
+	r := &ShareReconciler{Shares: api}
+
+	ack := &stubAck{}
+	r.handle(context.Background(), deleted(t, "instance1.acme-tenant.entity-deleted", entity.TypeGroup, "north", deletedAt, 1, ack))
+	require.Equal(t, 1, ack.acked)
+	require.Equal(t, []string{"acme-tenant/customer:north"}, remaining(t, db))
+}
+
 type failingRemover struct{ calls int }
 
 func (f *failingRemover) DeleteSharesOfEntity(context.Context, string, string, time.Time) (int64, error) {

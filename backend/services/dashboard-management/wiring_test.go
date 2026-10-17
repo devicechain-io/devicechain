@@ -135,5 +135,5 @@ func TestTheShareReconcilerIsWired(t *testing.T) {
 	require.True(t, callsIn(t, "createNatsComponents")["processor.NewShareReconciler"])
 	require.True(t, callsIn(t, "afterMicroserviceStarted")["ShareReconciler.Start"])
 	require.True(t, callsIn(t, "beforeMicroserviceStopped")["ShareReconciler.Stop"])
-	require.True(t, callsIn(t, "afterRdb")["wireCustomerChecker"])
+	require.True(t, callsIn(t, "afterRdb")["wireShareChecker"])
 }

@@ -7,7 +7,8 @@ sidebar_position: 19
 
 This chapter is for **tenant administrators**. It covers the people who belong to your tenant,
 the roles they hold, and the logins you give your own customers so they can watch their
-equipment without seeing anyone else's.
+equipment without seeing anyone else's, whether you limit them to customers or to groups of
+devices.
 
 Two pages under **Settings** in the sidebar do this work: **Members** and **Roles**. Each needs
 its own permission. **Members** lists people with `member:read` and changes them with
@@ -22,7 +23,8 @@ it shows:
 
 - their name, when they have set one, and their email address,
 - the **Roles** they hold,
-- what they **Can see**: **Whole tenant**, or the customers they are limited to,
+- what they **Can see**: **Whole tenant**, or the customers and groups of devices they are limited
+  to,
 - their status: **Enabled**, **Disabled**, or **Invited** while an invitation waits to be
   accepted. A membership that comes from your tenant's identity provider is also marked
   **Identity provider**.
@@ -40,8 +42,11 @@ Choose **Invite member** and fill in:
 
 - **Email**, the address the person signs in with.
 - **Roles**, what they may do. You can give only roles whose authorities you hold yourself.
-- **Can see**: **Whole tenant**, or **Specific customers** and then up to 16 customers. A member
-  limited to customers is a *customer user*, described [below](#customer-users).
+- **Can see**: **Whole tenant**, or **Specific customers or groups**. Then pick **Customers**,
+  **Groups of devices**, or both: up to 16 in all. A member limited to customers or groups is a
+  *customer user*, described [below](#customer-users). Only groups used as an access scope are
+  offered; if a group is missing, enable it on the group's page, as described in
+  [Limiting a member to a group of devices](#group-scopes).
 
 Choose **Invite member** again to create the invitation. The console then shows an **Invitation
 link**. Copy it and send it to the person yourself: DeviceChain does not email it.
@@ -130,25 +135,29 @@ member still holds the role; take it away from them first.
 
 ## Customer users {#customer-users}
 
-A customer user is a member whose access is limited to one or more of your customers. Use it to
-give a customer of yours its own login: they see their own equipment, and nothing of anyone
-else's.
+A customer user is a member whose access is limited to one or more of your customers, to one or
+more groups of devices, or to both. Use it to give a customer of yours its own login: they see
+their own equipment, and nothing of anyone else's. Limit them to a customer when the devices are
+assigned to it, or to a group when the devices they should see are the ones whose attributes match
+a filter, such as every device in one region.
 
 ### What a customer user sees {#what-a-customer-user-sees}
 
 A customer user's sidebar holds only **Dashboard**, **Dashboards**, **Alarms** and **Devices**,
 and in those:
 
-- **Devices** lists the devices assigned to their customers now. A device moved to another customer
-  leaves their list at once, without anyone editing the user.
+- **Devices** lists the devices assigned to their customers now, and the devices in their groups
+  now. A device moved to another customer, or out of the group, leaves their list at once, without
+  anyone editing the user.
 - A device's page shows its live state, latest readings, events, commands and, where your
   installation runs it, its updates. Events and alarms are those recorded while the device belonged
-  to one of their customers: a customer that receives a device does not see its history from before,
-  and a customer that hands one on keeps the history from while it owned it.
-- **Alarms** lists the alarms raised on those devices while their customers owned them. A
-  customer user can acknowledge and clear them if their role allows.
-- **Dashboards** lists the published dashboards shared with their customers, and opens their
-  published version. They never see a draft.
+  to one of their customers, or was in one of their groups: a customer that receives a device does
+  not see its history from before, and a customer that hands one on keeps the history from while it
+  owned it.
+- **Alarms** lists the alarms raised on those devices while their customers owned them, or while
+  they were in their groups. A customer user can acknowledge and clear them if their role allows.
+- **Dashboards** lists the published dashboards shared with their customers or groups, and opens
+  their published version. They never see a draft.
 
 Everything else, from device profiles and rules to connectors, audit and settings, is not in
 their sidebar, and opening such a page by its address takes them back to the home page. The
@@ -157,10 +166,11 @@ change your configuration even with a role that would allow it for staff. They a
 see a device's assignment, facets or stored configuration.
 
 The tenant chip at the top right shows what they are limited to and their role, for example
-**Acme · viewer** (the customer's name, then the token of the role).
+**Acme · viewer** or **Acme, North wing · viewer** (the names of their customers and groups, then
+the token of the role).
 
 To let a customer user send commands, give them a role that includes `command:write`. They can
-then send a command to their own customers' devices and are refused for any other.
+then send a command to the devices they can see and are refused for any other.
 
 ### From a customer's page {#from-a-customers-page}
 
@@ -174,20 +184,56 @@ A customer's page in the console has two tabs for this:
 
 {/* TODO(screenshot): customer-users, a customer's Users tab. */}
 
-### Sharing dashboards with customers {#sharing-dashboards}
+### Limiting a member to a group of devices {#group-scopes}
 
-A customer user sees a dashboard only once it is shared with one of their customers and published.
-On the **Dashboards** list, choose **Share** on a dashboard and pick the customers. See
-[Sharing with customers](/user-guide/dashboards#sharing-with-customers).
+A member can be limited to a group of devices instead of, or as well as, to customers. The group
+has to be an **access scope** first, which you set on the group itself:
+
+1. The group must be a **dynamic** group of devices: one whose members are chosen by a filter on
+   their attributes. Save one from the **Browse** screen, as described in
+   [Groups, facets and Browse](/user-guide/groups-facets-browse).
+2. Open the group under **Device Groups** and choose its **Access scope** tab.
+3. A dynamic group that has never been published shows **Publish filter**. Choose it to publish
+   the group's filter as its first version. An access scope follows the group's published version,
+   so the filter has to be published before the group can be one.
+4. Tick **Use as access scope**. This needs `device:write`.
+
+{/* TODO(screenshot): group-access-scope, a device group's Access scope tab with the box ticked. */}
+
+The tab says why a group cannot be an access scope when it cannot: only a group of devices can, and
+only a dynamic one. A tenant can have at most 32 access-scope groups; ticking the box for one more
+is refused, and the tab says so.
+
+A member limited to the group then sees the devices in it, and only while they are in it. Membership
+follows the devices' attributes, so a device whose attributes move it into the group appears for
+them without anyone editing the member, and a device moved out disappears. What they see recorded
+about a device (its events, alarms, commands and updates) is what was recorded while it was in the
+group, the same rule that applies to a customer.
+
+Clearing **Use as access scope** asks you to confirm. Members limited to the group then see none of
+its devices, and the group is no longer offered on the **Members** page or for sharing a dashboard.
+Their memberships, and the dashboards shared with the group, are kept: such a member can still open
+those dashboards, but they show none of the group's devices. Ticking the box again gives them back
+what they saw.
+
+### Sharing dashboards with customers and groups {#sharing-dashboards}
+
+A customer user sees a dashboard only once it is shared with one of their customers or groups and
+published. On the **Dashboards** list, choose **Share** on a dashboard and pick the customers and
+groups. See [Sharing with customers and groups](/user-guide/dashboards#sharing-with-customers).
 
 A shared dashboard shows each customer user only their own data. Bind its widgets to devices, or to
 the customer with the `assigned` relationship: such a widget shows the customer's users the devices
-assigned to it. A widget bound to an asset or an area reads the relationship graph to find its
-devices, which customer users are not given, so it shows them **Not available for customer users**.
+assigned to it. A widget bound to an asset, an area or a group reads the relationship graph to find
+its devices, which customer users are not given, so it shows them **Not available for customer
+users**.
 
 ### What is not covered yet {#not-covered-yet}
 
-- Limiting a member to a group of devices, rather than to customers, is not available yet.
+- A dashboard widget cannot yet show the devices of a member's group as a whole. Bind widgets on a
+  dashboard shared with a group to its devices.
+- After a group's first version, publishing a new version, which changes what its members see, is
+  done through the API (`publishEntityGroup`), not from the console.
 - Assets and areas assigned to a customer are not shown to its users.
 - A customer cannot manage its own users. Your administrators invite and change them.
 

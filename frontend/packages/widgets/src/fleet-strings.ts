@@ -7,6 +7,7 @@
 // aggregate-strings.ts); option labels are translated in the console's catalogs, not here.
 
 import { viewerLocale } from '@devicechain/widget-sdk';
+import { ACCESS_STRINGS } from './access-strings';
 
 export interface FleetStrings {
   device: string;
@@ -46,7 +47,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     noData: 'no data in range',
     failed: 'could not be read',
     unbound: 'Choose a device group for this widget',
-    forbidden: 'You do not have access to this data',
+    forbidden: ACCESS_STRINGS.en.forbidden,
     unsupported: 'This data source cannot list a fleet',
     noMembers: 'No devices in this group',
     noMeasurement: 'Choose the measurement to compare',
@@ -69,7 +70,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     noData: 'sin datos en el rango',
     failed: 'no se pudo leer',
     unbound: 'Elija un grupo de dispositivos para este widget',
-    forbidden: 'No tiene acceso a estos datos',
+    forbidden: ACCESS_STRINGS.es.forbidden,
     unsupported: 'Esta fuente de datos no puede listar una flota',
     noMembers: 'No hay dispositivos en este grupo',
     noMeasurement: 'Elija la medición que comparar',

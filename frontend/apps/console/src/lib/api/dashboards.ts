@@ -486,7 +486,7 @@ export async function deleteDashboard(token: string): Promise<boolean> {
   return data.deleteDashboard;
 }
 
-// ── Sharing with customers ───────────────────────────────────────────────
+// ── Sharing with customers and groups ────────────────────────────────────
 //
 // Kept OUT of the list and detail selections above on purpose: `sharedWith` is refused to a
 // member whose access is limited to part of the tenant, and the list query is exactly the
@@ -505,11 +505,24 @@ const DASHBOARD_SHARING = graphql(`
   }
 `);
 
-/** The customer tokens the dashboard is shared with, or null when there is no such dashboard. */
-export async function getDashboardSharing(token: string): Promise<string[] | null> {
+/** Whom a dashboard is shared with: customer tokens and access-scope group tokens. */
+export interface DashboardShareTargets {
+  customers: string[];
+  groups: string[];
+}
+
+function shareTargetsOf(anchors: readonly { kind: ScopeAnchorKind; token: string }[]): DashboardShareTargets {
+  return {
+    customers: anchors.filter((a) => a.kind === 'CUSTOMER').map((a) => a.token),
+    groups: anchors.filter((a) => a.kind === 'GROUP').map((a) => a.token),
+  };
+}
+
+/** The customers and groups the dashboard is shared with, or null when there is no such dashboard. */
+export async function getDashboardSharing(token: string): Promise<DashboardShareTargets | null> {
   const data = await gql('dashboard-management', DASHBOARD_SHARING, { token });
   if (!data.dashboard) return null;
-  return data.dashboard.sharedWith.filter((a) => a.kind === 'CUSTOMER').map((a) => a.token);
+  return shareTargetsOf(data.dashboard.sharedWith);
 }
 
 const SHARE_DASHBOARD = graphql(`
@@ -525,13 +538,17 @@ const SHARE_DASHBOARD = graphql(`
 `);
 
 /**
- * Replace the customers the dashboard is shared with. Members limited to one of them can
- * then list it and open its PUBLISHED version; an empty list shares it with nobody.
+ * Replace the customers and groups the dashboard is shared with. Members limited to one of
+ * them can then list it and open its PUBLISHED version; empty lists share it with nobody. A
+ * group must be an access scope: one that is not is refused exactly as one that does not exist.
  */
-export async function shareDashboard(token: string, customerTokens: string[]): Promise<string[]> {
+export async function shareDashboard(token: string, targets: DashboardShareTargets): Promise<DashboardShareTargets> {
   const data = await gql('dashboard-management', SHARE_DASHBOARD, {
     token,
-    anchors: customerTokens.map((t) => ({ kind: 'CUSTOMER' as ScopeAnchorKind, token: t })),
+    anchors: [
+      ...targets.customers.map((t) => ({ kind: 'CUSTOMER' as ScopeAnchorKind, token: t })),
+      ...targets.groups.map((t) => ({ kind: 'GROUP' as ScopeAnchorKind, token: t })),
+    ],
   });
-  return data.shareDashboard.sharedWith.map((a) => a.token);
+  return shareTargetsOf(data.shareDashboard.sharedWith);
 }

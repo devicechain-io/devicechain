@@ -245,9 +245,23 @@ type accessGroup struct {
 	Version int32
 }
 
+// errAccessGroupsScoped refuses to read the tenant's access scopes for a member limited to part
+// of the tenant.
+var errAccessGroupsScoped = fmt.Errorf("%w: the tenant's access scopes are not read for a scoped caller", auth.ErrScopeUnsupported)
+
 // accessGroupsOnDB reads the tenant's access scopes, by group id. There are at most
 // MaxAccessScopeGroups.
+//
+// 🔴 It is the service's own statement of which groups are access scopes, so it is never read
+// under a scoped caller's context: EntityGroup's scope rule would answer such a caller only the
+// groups its scope names, and an anchor set built from that is silently short — a device's
+// stamp missing the access scopes the caller is not limited to — rather than refused.
 func accessGroupsOnDB(db *gorm.DB) (map[uint]accessGroup, error) {
+	if db.Statement != nil && db.Statement.Context != nil {
+		if _, scoped := auth.ScopeFromContext(db.Statement.Context); scoped {
+			return nil, errAccessGroupsScoped
+		}
+	}
 	groups := make([]EntityGroup, 0)
 	if err := db.Model(&EntityGroup{}).Select("id", "token", "active_version").
 		Where("access_scope_at IS NOT NULL AND active_version IS NOT NULL").

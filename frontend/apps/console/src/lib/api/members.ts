@@ -21,7 +21,7 @@ export type Invitation = InvitationsQuery['invitations']['results'][number];
 export type TenantRole = TenantRolesQuery['tenantRoles'][number];
 export type MemberInvitation = InviteMemberMutation['inviteMember'];
 
-/** One entry of a scope as the API takes it. Only customers are accepted for now. */
+/** One entry of a scope as the API takes it: a customer, or a group that is an access scope. */
 export interface ScopeAnchorInput {
   kind: ScopeAnchorKind;
   token: string;
@@ -30,6 +30,11 @@ export interface ScopeAnchorInput {
 /** A customer anchor for the given customer token. */
 export function customerAnchor(token: string): ScopeAnchorInput {
   return { kind: 'CUSTOMER' as ScopeAnchorKind, token };
+}
+
+/** A group anchor for the given group token. */
+export function groupAnchor(token: string): ScopeAnchorInput {
+  return { kind: 'GROUP' as ScopeAnchorKind, token };
 }
 
 // One selection for a member everywhere, so a list row, a detail read and a write's

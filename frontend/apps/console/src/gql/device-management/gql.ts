@@ -91,6 +91,11 @@ type Documents = {
     "\n  mutation CreateEntityGroup($request: EntityGroupCreateRequest) {\n    createEntityGroup(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n      memberType\n    }\n  }\n": typeof types.CreateEntityGroupDocument,
     "\n  mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {\n    updateEntityGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n      memberType\n    }\n  }\n": typeof types.UpdateEntityGroupDocument,
     "\n  mutation DeleteEntityGroup($token: String!) {\n    deleteEntityGroup(token: $token)\n  }\n": typeof types.DeleteEntityGroupDocument,
+    "\n  query GroupAccess($tokens: [String!]!) {\n    entityGroupsByToken(tokens: $tokens) {\n      token\n      memberType\n      membershipMode\n      activeVersion\n      accessScope\n    }\n  }\n": typeof types.GroupAccessDocument,
+    "\n  mutation SetEntityGroupAccessScope($token: String!, $enabled: Boolean!) {\n    setEntityGroupAccessScope(token: $token, enabled: $enabled) {\n      token\n      memberType\n      membershipMode\n      activeVersion\n      accessScope\n    }\n  }\n": typeof types.SetEntityGroupAccessScopeDocument,
+    "\n  mutation PublishEntityGroup($token: String!) {\n    publishEntityGroup(token: $token) {\n      version\n    }\n  }\n": typeof types.PublishEntityGroupDocument,
+    "\n  query AccessScopeGroups($criteria: EntityGroupSearchCriteria!) {\n    entityGroups(criteria: $criteria) {\n      results {\n        token\n        name\n      }\n    }\n  }\n": typeof types.AccessScopeGroupsDocument,
+    "\n  query GroupNames($tokens: [String!]!) {\n    entityGroupsByToken(tokens: $tokens) {\n      token\n      name\n    }\n  }\n": typeof types.GroupNamesDocument,
     "\n  query DeviceGroupTargets {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: \"device\" }) {\n      results {\n        token\n        name\n        membershipMode\n        activeVersion\n      }\n    }\n  }\n": typeof types.DeviceGroupTargetsDocument,
     "\n  query DeviceProfiles($criteria: DeviceProfileSearchCriteria!) {\n    deviceProfiles(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        category\n        activeVersion\n        deviceTypeCount\n        metadata\n        location {\n          expectedAccuracyMeters\n          expectedUpdateIntervalSeconds\n        }\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": typeof types.DeviceProfilesDocument,
     "\n  query DeviceProfileByToken($tokens: [String!]!) {\n    deviceProfilesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      category\n      activeVersion\n      deviceTypeCount\n      metadata\n      location {\n        expectedAccuracyMeters\n        expectedUpdateIntervalSeconds\n      }\n      createdAt\n    }\n  }\n": typeof types.DeviceProfileByTokenDocument,
@@ -222,6 +227,11 @@ const documents: Documents = {
     "\n  mutation CreateEntityGroup($request: EntityGroupCreateRequest) {\n    createEntityGroup(request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n      memberType\n    }\n  }\n": types.CreateEntityGroupDocument,
     "\n  mutation UpdateEntityGroup($token: String!, $request: EntityGroupUpdateRequest!) {\n    updateEntityGroup(token: $token, request: $request) {\n      id\n      token\n      name\n      description\n      icon\n      backgroundColor\n      foregroundColor\n      borderColor\n      imageUrl\n      metadata\n      createdAt\n      memberType\n    }\n  }\n": types.UpdateEntityGroupDocument,
     "\n  mutation DeleteEntityGroup($token: String!) {\n    deleteEntityGroup(token: $token)\n  }\n": types.DeleteEntityGroupDocument,
+    "\n  query GroupAccess($tokens: [String!]!) {\n    entityGroupsByToken(tokens: $tokens) {\n      token\n      memberType\n      membershipMode\n      activeVersion\n      accessScope\n    }\n  }\n": types.GroupAccessDocument,
+    "\n  mutation SetEntityGroupAccessScope($token: String!, $enabled: Boolean!) {\n    setEntityGroupAccessScope(token: $token, enabled: $enabled) {\n      token\n      memberType\n      membershipMode\n      activeVersion\n      accessScope\n    }\n  }\n": types.SetEntityGroupAccessScopeDocument,
+    "\n  mutation PublishEntityGroup($token: String!) {\n    publishEntityGroup(token: $token) {\n      version\n    }\n  }\n": types.PublishEntityGroupDocument,
+    "\n  query AccessScopeGroups($criteria: EntityGroupSearchCriteria!) {\n    entityGroups(criteria: $criteria) {\n      results {\n        token\n        name\n      }\n    }\n  }\n": types.AccessScopeGroupsDocument,
+    "\n  query GroupNames($tokens: [String!]!) {\n    entityGroupsByToken(tokens: $tokens) {\n      token\n      name\n    }\n  }\n": types.GroupNamesDocument,
     "\n  query DeviceGroupTargets {\n    entityGroups(criteria: { pageNumber: 1, pageSize: 500, memberType: \"device\" }) {\n      results {\n        token\n        name\n        membershipMode\n        activeVersion\n      }\n    }\n  }\n": types.DeviceGroupTargetsDocument,
     "\n  query DeviceProfiles($criteria: DeviceProfileSearchCriteria!) {\n    deviceProfiles(criteria: $criteria) {\n      results {\n        id\n        token\n        name\n        description\n        category\n        activeVersion\n        deviceTypeCount\n        metadata\n        location {\n          expectedAccuracyMeters\n          expectedUpdateIntervalSeconds\n        }\n        createdAt\n      }\n      pagination {\n        pageStart\n        pageEnd\n        totalRecords\n      }\n    }\n  }\n": types.DeviceProfilesDocument,
     "\n  query DeviceProfileByToken($tokens: [String!]!) {\n    deviceProfilesByToken(tokens: $tokens) {\n      id\n      token\n      name\n      description\n      category\n      activeVersion\n      deviceTypeCount\n      metadata\n      location {\n        expectedAccuracyMeters\n        expectedUpdateIntervalSeconds\n      }\n      createdAt\n    }\n  }\n": types.DeviceProfileByTokenDocument,
@@ -581,6 +591,26 @@ export function graphql(source: "\n  mutation UpdateEntityGroup($token: String!,
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation DeleteEntityGroup($token: String!) {\n    deleteEntityGroup(token: $token)\n  }\n"): typeof import('./graphql').DeleteEntityGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query GroupAccess($tokens: [String!]!) {\n    entityGroupsByToken(tokens: $tokens) {\n      token\n      memberType\n      membershipMode\n      activeVersion\n      accessScope\n    }\n  }\n"): typeof import('./graphql').GroupAccessDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetEntityGroupAccessScope($token: String!, $enabled: Boolean!) {\n    setEntityGroupAccessScope(token: $token, enabled: $enabled) {\n      token\n      memberType\n      membershipMode\n      activeVersion\n      accessScope\n    }\n  }\n"): typeof import('./graphql').SetEntityGroupAccessScopeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation PublishEntityGroup($token: String!) {\n    publishEntityGroup(token: $token) {\n      version\n    }\n  }\n"): typeof import('./graphql').PublishEntityGroupDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query AccessScopeGroups($criteria: EntityGroupSearchCriteria!) {\n    entityGroups(criteria: $criteria) {\n      results {\n        token\n        name\n      }\n    }\n  }\n"): typeof import('./graphql').AccessScopeGroupsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query GroupNames($tokens: [String!]!) {\n    entityGroupsByToken(tokens: $tokens) {\n      token\n      name\n    }\n  }\n"): typeof import('./graphql').GroupNamesDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

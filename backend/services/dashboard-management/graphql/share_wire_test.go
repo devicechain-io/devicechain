@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
@@ -24,13 +25,19 @@ import (
 	"gorm.io/gorm"
 )
 
-// knownCustomers is the fixture's device-management: the customers that exist.
-type knownCustomers map[string]bool
+// knownTargets is the fixture's device-management: the anchors a dashboard can be shared
+// with, as "kind:token" — the customers that exist, and the groups that are access scopes.
+// Its questions are recorded, so a test can see which kinds were asked about.
+type knownTargets struct {
+	shareable map[string]bool
+	asked     []string
+}
 
-func (k knownCustomers) Missing(_ context.Context, _ string, tokens []string) ([]string, error) {
+func (k *knownTargets) Missing(_ context.Context, _, kind string, tokens []string) ([]string, error) {
+	k.asked = append(k.asked, kind)
 	var missing []string
 	for _, t := range tokens {
-		if !k[t] {
+		if !k.shareable[kind+":"+t] {
 			missing = append(missing, t)
 		}
 	}
@@ -38,9 +45,10 @@ func (k knownCustomers) Missing(_ context.Context, _ string, tokens []string) ([
 }
 
 type shareFixture struct {
-	api  *model.Api
-	db   *gorm.DB
-	base context.Context
+	api     *model.Api
+	targets *knownTargets
+	db      *gorm.DB
+	base    context.Context
 }
 
 func newShareFixture(t *testing.T) *shareFixture {
@@ -50,9 +58,12 @@ func newShareFixture(t *testing.T) *shareFixture {
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Dashboard{}, &model.DashboardVersion{}, &model.DashboardShare{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})
-	api.Customers = knownCustomers{"acme": true, "globex": true}
+	// "south" is a group of the tenant that is NOT an access scope: device-management reports
+	// it missing exactly as it reports a group that does not exist.
+	targets := &knownTargets{shareable: map[string]bool{"customer:acme": true, "customer:globex": true, "group:north": true}}
+	api.ShareTargets = targets
 	base := context.WithValue(context.Background(), gqlcore.ContextApiKey, api)
-	return &shareFixture{api: api, db: db, base: base}
+	return &shareFixture{api: api, targets: targets, db: db, base: base}
 }
 
 func (f *shareFixture) as(tenant string, scope []string, authorities ...auth.Authority) context.Context {
@@ -72,7 +83,8 @@ func (f *shareFixture) member(anchors ...string) context.Context {
 	return f.as("acme-tenant", anchors, auth.DashboardRead, auth.DashboardWrite)
 }
 
-// dashboard creates a dashboard, publishes it unless told not to, and shares it.
+// dashboard creates a dashboard, publishes it unless told not to, and shares it with the
+// named customers — or, for a "group:<token>" entry, with that group.
 func (f *shareFixture) dashboard(t *testing.T, tenant, token string, publish bool, customers ...string) {
 	t.Helper()
 	ctx := f.author(tenant)
@@ -85,6 +97,10 @@ func (f *shareFixture) dashboard(t *testing.T, tenant, token string, publish boo
 	if len(customers) > 0 {
 		anchors := make([]any, 0, len(customers))
 		for _, c := range customers {
+			if group, ok := strings.CutPrefix(c, "group:"); ok {
+				anchors = append(anchors, map[string]any{"kind": "GROUP", "token": group})
+				continue
+			}
 			anchors = append(anchors, map[string]any{"kind": "CUSTOMER", "token": c})
 		}
 		res := exec(ctx, shareMutation, map[string]any{"t": token, "a": anchors})
@@ -180,8 +196,8 @@ func TestShareWithUnknownCustomerIsNotFound(t *testing.T) {
 	require.True(t, errors.Is(res.Errors[0].ResolverError, gorm.ErrRecordNotFound), "%v", res.Errors[0])
 }
 
-// Sharing replaces the list, collapses duplicates, unshares with an empty list, refuses a
-// group and an over-long list, and refuses to write anything it could not check.
+// Sharing replaces the list, collapses duplicates, unshares with an empty list, refuses an
+// over-long list, and refuses to write anything it could not check.
 func TestShareDashboardReplacesTheList(t *testing.T) {
 	f := newShareFixture(t)
 	f.dashboard(t, "acme-tenant", "d1", true, "acme")
@@ -193,10 +209,6 @@ func TestShareDashboardReplacesTheList(t *testing.T) {
 	require.Empty(t, res.Errors)
 	require.JSONEq(t, `{"shareDashboard":{"token":"d1","sharedWith":[{"kind":"CUSTOMER","token":"acme"},{"kind":"CUSTOMER","token":"globex"}]}}`, string(res.Data))
 
-	res = exec(author, shareMutation, map[string]any{"t": "d1", "a": []any{map[string]any{"kind": "GROUP", "token": "north"}}})
-	require.Len(t, res.Errors, 1)
-	require.True(t, errors.Is(res.Errors[0].ResolverError, model.ErrGroupShareUnsupported), "%v", res.Errors[0])
-
 	many := make([]any, 0, model.MaxDashboardShares+1)
 	for i := 0; i <= model.MaxDashboardShares; i++ {
 		many = append(many, map[string]any{"kind": "CUSTOMER", "token": fmt.Sprintf("c%d", i)})
@@ -206,16 +218,86 @@ func TestShareDashboardReplacesTheList(t *testing.T) {
 	var limited *limit.Error
 	require.True(t, errors.As(res.Errors[0].ResolverError, &limited), "%v", res.Errors[0])
 
-	f.api.Customers = nil
-	res = exec(author, shareMutation, map[string]any{"t": "d1", "a": []any{map[string]any{"kind": "CUSTOMER", "token": "acme"}}})
-	require.Len(t, res.Errors, 1)
-	require.True(t, errors.Is(res.Errors[0].ResolverError, model.ErrCustomersUnverifiable), "%v", res.Errors[0])
+	f.api.ShareTargets = nil
+	for _, kind := range []string{"CUSTOMER", "GROUP"} {
+		res = exec(author, shareMutation, map[string]any{"t": "d1", "a": []any{map[string]any{"kind": kind, "token": "north"}}})
+		require.Len(t, res.Errors, 1)
+		require.True(t, errors.Is(res.Errors[0].ResolverError, model.ErrSharesUnverifiable), "%s: %v", kind, res.Errors[0])
+	}
 
 	// Unsharing names nobody, so it needs nobody's answer.
 	res = exec(author, shareMutation, map[string]any{"t": "d1", "a": []any{}})
 	require.Empty(t, res.Errors)
 	require.JSONEq(t, `{"shareDashboard":{"token":"d1","sharedWith":[]}}`, string(res.Data))
 	require.Empty(t, listedTokens(t, f.member("customer:acme")))
+}
+
+// A dashboard can be shared with a group that is an access scope, beside customers, and the
+// list names each anchor by its kind: a customer and a group with the same token are two
+// shares, not one.
+func TestShareWithAnAccessScopeGroup(t *testing.T) {
+	f := newShareFixture(t)
+	f.dashboard(t, "acme-tenant", "d1", true)
+	f.targets.shareable["customer:north"] = true
+	res := exec(f.author("acme-tenant"), shareMutation, map[string]any{"t": "d1", "a": []any{
+		map[string]any{"kind": "GROUP", "token": "north"}, map[string]any{"kind": "CUSTOMER", "token": "north"},
+		map[string]any{"kind": "GROUP", "token": "north"}}})
+	require.Empty(t, res.Errors)
+	require.JSONEq(t, `{"shareDashboard":{"token":"d1","sharedWith":[{"kind":"CUSTOMER","token":"north"},{"kind":"GROUP","token":"north"}]}}`, string(res.Data))
+	require.Equal(t, []string{"customer", "group"}, f.targets.asked, "each kind is asked about once")
+}
+
+// 🔴 A group that does not exist, and one that exists but is not an access scope, fail the
+// whole request with the SAME NOT_FOUND and leave the shares as they were: no member's access
+// follows a group that is not an access scope, so a share with it would be a promise nobody
+// could see, and the answer must not tell the author which of the two it was.
+func TestShareWithAGroupThatIsNotAnAccessScopeIsNotFound(t *testing.T) {
+	f := newShareFixture(t)
+	f.dashboard(t, "acme-tenant", "d1", true, "acme")
+	messages := map[string]string{}
+	for _, group := range []string{"south", "ghost"} {
+		res := exec(f.author("acme-tenant"), shareMutation, map[string]any{"t": "d1",
+			"a": []any{map[string]any{"kind": "GROUP", "token": "north"}, map[string]any{"kind": "GROUP", "token": group}}})
+		require.Len(t, res.Errors, 1, group)
+		require.True(t, errors.Is(res.Errors[0].ResolverError, gorm.ErrRecordNotFound), "%s: %v", group, res.Errors[0])
+		messages[group] = strings.ReplaceAll(res.Errors[0].Message, group, "<group>")
+	}
+	require.Equal(t, messages["south"], messages["ghost"], "a group that is not an access scope answered unlike a missing one")
+
+	shares, err := f.api.SharesOf(f.author("acme-tenant"), 1)
+	require.NoError(t, err)
+	require.Equal(t, []string{"customer:acme"}, shares[1], "a refused share changed the shares")
+}
+
+// A member limited to a group lists and opens the published dashboards shared with that group
+// — and not one shared with a customer named like it, nor with another group, nor a draft.
+// Limited to a customer AND a group, it sees what is shared with either.
+func TestGroupMemberSeesDashboardsSharedWithItsGroup(t *testing.T) {
+	f := newShareFixture(t)
+	f.targets.shareable["group:east"] = true
+	f.targets.shareable["customer:north"] = true
+	f.dashboard(t, "acme-tenant", "d-north", true, "group:north")
+	f.dashboard(t, "acme-tenant", "d-north-draft", false, "group:north")
+	f.dashboard(t, "acme-tenant", "d-east", true, "group:east")
+	f.dashboard(t, "acme-tenant", "d-customer-north", true, "north")
+	f.dashboard(t, "acme-tenant", "d-acme", true, "acme")
+
+	require.Equal(t, []string{"d-north"}, listedTokens(t, f.member("group:north")))
+	require.Equal(t, []string{"d-acme", "d-north"}, listedTokens(t, f.member("customer:acme", "group:north")))
+	require.Equal(t, []string{"d-customer-north"}, listedTokens(t, f.member("customer:north")))
+
+	member := f.member("group:north")
+	require.JSONEq(t, `{"publishedDashboard":{"token":"d-north","version":1}}`, string(published(t, member, "d-north")))
+	for _, token := range []string{"d-north-draft", "d-east", "d-customer-north", "d-acme", "no-such-dashboard"} {
+		res := exec(member, `query($t: String!) { publishedDashboard(token: $t) { token version } }`, map[string]any{"t": token})
+		if token == "d-north-draft" {
+			// Shared with the group but never published: the same refusal the author gets.
+			require.NotEmpty(t, res.Errors, token)
+			continue
+		}
+		require.Empty(t, res.Errors, token)
+		require.JSONEq(t, `{"publishedDashboard":null}`, string(res.Data), token)
+	}
 }
 
 // 🔴 A member limited to part of the tenant may not share — holding dashboard:write or `*` —
