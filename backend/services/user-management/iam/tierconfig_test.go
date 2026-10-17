@@ -26,11 +26,12 @@ func TestTierConfigKeysCoverEveryDimension(t *testing.T) {
 			"burst key for dimension %q must be registered", d.Name)
 	}
 	// Two keys per dimension (rate + burst), plus the standalone non-dimension keys: the
-	// shed priority, the HELD-command ceiling, and the three geofence caps. This +5 is the
+	// shed priority, the HELD-command ceiling, the three geofence caps and the calculated-
+	// metrics ceiling. This +6 is the
 	// guard that a standalone key is neither dropped nor accidentally duplicated per
 	// dimension, and bumping it is meant to be a conscious act: a key that lands without it
 	// fails here.
-	require.Len(t, TierConfigKeys(), len(dims)*2+5)
+	require.Len(t, TierConfigKeys(), len(dims)*2+6)
 }
 
 // TestTierConfigKeysMatchTheKnownDimensions is the half the test above cannot do.
@@ -65,6 +66,10 @@ func TestTierConfigKeysMatchTheKnownDimensions(t *testing.T) {
 		"geoFencePositionCeiling",
 		"geoFenceCeiling",
 		"geoFencePositionBudget",
+		// The calculated-metrics ceiling — standalone, and the one ceiling where zero is a
+		// legal value (and the platform default): calculated metrics are off until a tier
+		// turns them on.
+		"calculatedMetricsPerProfile",
 	}, TierConfigKeys())
 }
 

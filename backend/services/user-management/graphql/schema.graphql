@@ -428,6 +428,14 @@ type TenantGovernance {
     # bounds a resource the tenant does not own.
     geoFencePositionBudget: Int
     """
+    The most calculated metrics (metrics computed from a formula over the other metrics of
+    a reading) that one of the tenant's device profiles may publish. Set on the tenant's
+    tier; there is no per-tenant override. When null, the platform default applies, which
+    is 0: calculated metrics are off unless the tier turns them on.
+    """
+    # Read by device-management when a profile carrying a calculated metric is published.
+    calculatedMetricsPerProfile: Int
+    """
     Where the tenant is in its deletion lifecycle: `active` for a normal tenant, or
     `purging` once the tenant has been deleted and its data is being erased. Never null.
     """

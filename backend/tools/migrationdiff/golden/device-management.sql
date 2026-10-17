@@ -998,7 +998,8 @@ CREATE TABLE "device-management".metric_definitions (
  max_value numeric,
  enum jsonb,
  descriptor text,
- device_profile_id bigint NOT NULL
+ device_profile_id bigint NOT NULL,
+ expression text
 );
 CREATE TABLE "device-management".pending_ownership_facts (
  tenant_id character varying(128) NOT NULL,

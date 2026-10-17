@@ -289,3 +289,14 @@ func (t *Tenant) EffectiveGeoFencePositionBudget() (*int, SettingSource) {
 	}
 	return nil, SourcePlatformDefault
 }
+
+// EffectiveCalculatedMetricsPerProfile resolves how many calculated metrics one of this
+// tenant's profiles may publish: the tier's setting, else nil (SourcePlatformDefault),
+// which device-management folds onto the platform default of zero. There is no
+// per-tenant override level for this setting; the count is packaging, set on the tier.
+func (t *Tenant) EffectiveCalculatedMetricsPerProfile() (*int, SettingSource) {
+	if v := t.Tier.CalculatedMetricsPerProfile(); v != nil {
+		return v, SourceTier
+	}
+	return nil, SourcePlatformDefault
+}

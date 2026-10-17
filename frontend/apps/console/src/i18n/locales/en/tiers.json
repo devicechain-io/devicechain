@@ -55,5 +55,7 @@
   "geoFencePositionCeilingDescription": "How many points a single geofence may have (up to {{max}}). Blank inherits the platform default.",
   "geoFencePositionBudgetLabel": "Geofence point budget",
   "geoFencePositionBudgetDescription": "How many points a tenant's geofences may add up to across the whole set (up to {{max}}). It draws on room shared between all tenants. Blank inherits the platform default.",
-  "scalarInvalid": "{{label}} must be a whole number from 1 to {{max}}, or blank to inherit the platform default."
+  "calculatedMetricsPerProfileLabel": "Calculated metrics per profile",
+  "calculatedMetricsPerProfileDescription": "How many calculated metrics (computed from a formula over a reading's other metrics) one device profile of a tenant at this tier may publish ({{min}}–{{max}}). Each one stores another measurement for every reading. 0 turns them off; blank inherits the platform default, which is also off.",
+  "scalarInvalid": "{{label}} must be a whole number from {{min}} to {{max}}, or blank to inherit the platform default."
 }

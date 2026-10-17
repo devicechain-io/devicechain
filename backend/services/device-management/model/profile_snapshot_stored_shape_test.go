@@ -58,9 +58,12 @@ func TestProfileSnapshotStoredKeysArePinned(t *testing.T) {
 	// a device resolving an old version reads Token and MetricKey out of these bytes.
 	wantMetric := []string{
 		"CreatedAt", "DataType", "DeletedAt", "Description", "DeviceProfile",
-		"DeviceProfileId", "Descriptor", "Enum", "ID", "MaxValue", "Metadata",
+		"DeviceProfileId", "Descriptor", "Enum", "Expression", "ID", "MaxValue", "Metadata",
 		"MetricKey", "MinValue", "Name", "TenantId", "Token", "Unit", "UpdatedAt",
 	}
+	// Expression (ADR-082): a snapshot published before it existed carries no such key and
+	// decodes to an invalid NullString — a MEASURED metric, which is exactly what every
+	// metric of such a version was.
 	wantCommand := []string{
 		"CommandKey", "CreatedAt", "DeletedAt", "Description", "DeviceProfile",
 		"DeviceProfileId", "ID", "Impact", "Metadata", "Name", "ParameterSchema", "TenantId",

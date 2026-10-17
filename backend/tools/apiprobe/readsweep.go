@@ -539,6 +539,9 @@ var sweepExemptions = map[string]string{
 		"door back by the token its receipt recorded, and artifactSigners is swept",
 	"device-management.previewSelector": "an authoring preview: it evaluates a selector expression " +
 		"the CALLER writes, so there is no stored row for the drill to reach through it",
+	"device-management.testMetricFormula": "an authoring preview: it evaluates a formula and a sample " +
+		"the CALLER writes against a profile's draft, and stores nothing, so there is no stored row for " +
+		"the drill to reach through it",
 	"device-management.validateCommandEnqueue": "a pre-flight gate over a command the CALLER is about " +
 		"to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a token",
 	"device-management.validateCommandEnqueueBatch": "the batch form of validateCommandEnqueue, and " +
