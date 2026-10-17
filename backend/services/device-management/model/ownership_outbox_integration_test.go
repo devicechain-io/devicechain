@@ -262,3 +262,38 @@ func TestOneReplicaDrainsAtATime(t *testing.T) {
 	require.NoError(t, <-first)
 	require.Empty(t, queuedFor(t, api, ctx))
 }
+
+// 🔴 TWO CONSECUTIVE DRAINS ON REPLICAS WHOSE CLOCKS DISAGREE STAMP NON-DECREASING TIMES. The
+// drain lock passes between replicas, and device-state refuses a fact that is not strictly
+// later than the one it holds, so a fact stamped from a replica running behind would be
+// refused though it is the newer statement. Replica B's process clock is an hour behind A's
+// here; both facts must carry the database's time instead, inside the bracket the test reads
+// from the database around each pass.
+func TestFactsFromReplicasWithSkewedClocksAreOrderedByTheDatabaseClock(t *testing.T) {
+	apiA, ctx, ids := ownershipPgRig(t, 1)
+	apiB := NewApi(apiA.RDB)
+	now := time.Now()
+	apiA.ownershipNow = func() time.Time { return now.Add(time.Hour) }
+	apiB.ownershipNow = func() time.Time { return now.Add(-time.Hour) }
+	pub := &countingOwnership{tenant: tenantOf(ctx)}
+	apiA.DeviceOwnershipPublisher, apiB.DeviceOwnershipPublisher = pub, pub
+
+	dbNow := func() time.Time {
+		var ts time.Time
+		require.NoError(t, apiA.RDB.DB(core.WithSystemContext(context.Background())).Raw("SELECT clock_timestamp()").Scan(&ts).Error)
+		return ts.UTC()
+	}
+	var last time.Time
+	for i, replica := range []*Api{apiA, apiB, apiA, apiB} {
+		queueCommitted(t, replica, ctx, ids)
+		lo := dbNow()
+		_, err := replica.DrainOwnershipFacts(context.Background(), OwnershipDrainPageSize)
+		require.NoError(t, err)
+		hi := dbNow()
+		require.Equal(t, i+1, pub.count())
+		got := pub.facts[i].ChangedTime
+		require.False(t, got.Before(lo) || got.After(hi), "pass %d: fact dated %v, outside the database's %v..%v", i, got, lo, hi)
+		require.False(t, got.Before(last), "pass %d: fact dated %v, before the previous pass's %v", i, got, last)
+		last = got
+	}
+}
