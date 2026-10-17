@@ -131,7 +131,7 @@ describe('FormulaEditor: recent history', () => {
     );
     renderEditor();
     await runOnHistory();
-    expect(await screen.findByText(/more than 50,000 samples\. Choose a shorter window/)).toBeTruthy();
+    expect(await screen.findByText(/too many readings to preview \(at most 50,000 samples\)\. Choose a shorter window/)).toBeTruthy();
     expect(screen.queryByTestId('formula-history-result')).toBeNull();
   });
 

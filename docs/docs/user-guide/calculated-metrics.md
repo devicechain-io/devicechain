@@ -80,8 +80,10 @@ sees when readings arrive. Nothing is stored.
   the device's full-precision value, so the two can differ for an input with more decimal places
   than that: a current of `0.000000015` A is stored as `0.00000002`. The panel says so on every
   result, and what it shows is a preview, not the value that will be stored.
-- A window holding more than 50,000 samples is refused rather than cut short. Choose a shorter
-  window.
+- Only the metrics the formula reads are shown, and a message that carried none of them is not a
+  sample.
+- A window is at most 7 days. One holding more than 50,000 samples, or more than 250,000 input
+  values, is refused rather than cut short. Choose a shorter window.
 - It needs permission to read the device's events. A member limited to some customers sees only
   the readings recorded while the device belonged to one of them.
 

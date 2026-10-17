@@ -10,14 +10,19 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"os"
 	"strconv"
 	"testing"
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -117,4 +122,69 @@ func TestIntegrationCalculatedEventsAgreesWithResolveOnStorableInputs(t *testing
 		assert.NotEqual(t, atResolve.Value, *got.Value,
 			"%v: expected the documented difference between the stored-input preview and the resolve-time value", b.reading)
 	}
+}
+
+// TestIntegrationCalculatedEventsSevenDayWindowAtScale: on a real hypertable holding a busy
+// device, a sparse one and a tenant's worth of other devices, a seven-day window answers or
+// refuses within a bounded time — the span cap is what bounds the database's work (the
+// planner may sort every row of the device in range before the first one streams), and this
+// measures it rather than asserting it in prose. DC_IT_CALC_NOISE_DEVICES scales the other
+// devices (each 30 days at 10 s with two metrics, about 518k rows); 20 gives an 11M-row
+// table.
+func TestIntegrationCalculatedEventsSevenDayWindowAtScale(t *testing.T) {
+	api := newPostgresApi(t, "dccalcevscale")
+	ctx := acme()
+	noise := 1
+	if v := os.Getenv("DC_IT_CALC_NOISE_DEVICES"); v != "" {
+		n, err := strconv.Atoi(v)
+		require.NoError(t, err)
+		noise = n
+	}
+	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	sys := api.RDB.Database.WithContext(core.WithSystemContext(context.Background()))
+	seed := func(device string, every time.Duration, samples int) {
+		require.NoError(t, sys.Exec(`INSERT INTO "event-management".measurement_events
+			(tenant_id, event_id, payload_id, device_token, event_type, occurred_time, name, value)
+			SELECT 'acme', decode(md5(?::text || g), 'hex'), decode(md5(?::text || g || n), 'hex'), ?, ?,
+				?::timestamptz + g * (? * interval '1 second'), n, (g % 1000) / 10.0
+			FROM generate_series(0, ? - 1) g, unnest(ARRAY['voltage', 'current']) n`,
+			device, device, device, esmodel.Measurement, start, every.Seconds(), samples).Error)
+	}
+	began := time.Now()
+	month := 30 * 24 * time.Hour
+	seed("busy", 10*time.Second, int(month/(10*time.Second)))
+	seed("sparse", time.Minute, int(month/time.Minute))
+	for i := 0; i < noise; i++ {
+		seed(fmt.Sprintf("other-%d", i), 10*time.Second, int(month/(10*time.Second)))
+	}
+	require.NoError(t, sys.Exec(`ANALYZE "event-management".measurement_events`).Error)
+	var rows int64
+	require.NoError(t, sys.Raw(`SELECT count(*) FROM "event-management".measurement_events`).Scan(&rows).Error)
+	t.Logf("seeded %d rows in %s", rows, time.Since(began).Round(time.Millisecond))
+
+	const budget = 30 * time.Second
+	window := func(device string) (*CalculatedEventsResult, time.Duration, error) {
+		req := powerRequest()
+		req.DeviceToken = device
+		req.From = start.Add(20 * 24 * time.Hour)
+		req.To = req.From.Add(MaxCalculatedSpan)
+		t0 := time.Now()
+		res, err := api.CalculatedEvents(ctx, req)
+		return res, time.Since(t0), err
+	}
+
+	// The busy device holds about 60k samples in seven days: refused, not truncated.
+	_, took, err := window("busy")
+	var le *limit.Error
+	require.True(t, errors.As(err, &le), "want LIMIT_EXCEEDED, got %v", err)
+	assert.Equal(t, "samples", le.What)
+	assert.Less(t, took, budget, "refusing the busy device's seven days took %s", took)
+	t.Logf("busy: refused in %s", took)
+
+	// The sparse device's seven days are about 10k samples: answered whole.
+	res, took, err := window("sparse")
+	require.NoError(t, err)
+	assert.Equal(t, int(MaxCalculatedSpan/time.Minute)+1, len(res.Samples))
+	assert.Less(t, took, budget, "the sparse device's seven days took %s", took)
+	t.Logf("sparse: %d samples in %s", len(res.Samples), took)
 }

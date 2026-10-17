@@ -89,8 +89,10 @@ se almacena nada.
   una entrada con más decimales: una corriente de `0.000000015` A se almacena como `0.00000002`. El
   panel lo indica en cada resultado, y lo que muestra es una vista previa, no el valor que se
   almacenará.
-- Una ventana con más de 50.000 muestras se rechaza en lugar de recortarse. Elige una ventana más
-  corta.
+- Solo se muestran las métricas que lee la fórmula, y un mensaje que no llevaba ninguna de ellas no
+  es una muestra.
+- Una ventana abarca como máximo 7 días. Una con más de 50.000 muestras, o más de 250.000 valores
+  de entrada, se rechaza en lugar de recortarse. Elige una ventana más corta.
 - Necesita permiso para leer los eventos del dispositivo. Un miembro limitado a algunos clientes ve
   solo las lecturas registradas mientras el dispositivo pertenecía a uno de ellos.
 

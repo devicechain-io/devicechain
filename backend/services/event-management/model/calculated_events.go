@@ -45,6 +45,20 @@ const MaxCalculatedSamples = 50_000
 // this package's tests to reach the refusal without writing fifty thousand rows.
 var calculatedSampleCap = MaxCalculatedSamples
 
+// MaxCalculatedSpan is the longest range one calculatedEvents read covers, the console's
+// longest window. It is checked before any query runs: the read's cost is the device's rows
+// in range, and without a span bound a request naming years would have the database read
+// and sort a device's whole history before the sample cap could refuse it.
+const MaxCalculatedSpan = 7 * 24 * time.Hour
+
+// MaxCalculatedInputValues is the most input values one read returns, across all samples. The
+// sample cap alone does not bound the response, which carries each sample's inputs.
+const MaxCalculatedInputValues = 250_000
+
+// calculatedInputValueCap is the cap CalculatedEvents applies: MaxCalculatedInputValues,
+// lowered only by this package's tests.
+var calculatedInputValueCap = MaxCalculatedInputValues
+
 // CalculatedInput is one input a draft formula reads: a measured metric's key and data type.
 type CalculatedInput struct {
 	Key      string
@@ -104,8 +118,12 @@ func compileDraftFormula(req CalculatedEventsRequest) (*calcfield.Formula, *calc
 	if req.DeviceToken == "" {
 		return nil, nil, nil, invalid("deviceToken is required")
 	}
-	if req.To.Before(req.From) {
-		return nil, nil, nil, invalid("to must not be before from")
+	if !req.To.After(req.From) {
+		return nil, nil, nil, invalid("to must be after from")
+	}
+	if span := req.To.Sub(req.From); span > MaxCalculatedSpan {
+		// Whole hours, rounded up, so a span just over the cap never reports as the cap.
+		return nil, nil, nil, limit.Exceeded("rangeHours", int((span+time.Hour-1)/time.Hour), int(MaxCalculatedSpan/time.Hour))
 	}
 	if len(req.Inputs) == 0 {
 		return nil, nil, nil, invalid("inputs must name at least one measured metric the formula reads")
@@ -147,7 +165,16 @@ func compileDraftFormula(req CalculatedEventsRequest) (*calcfield.Formula, *calc
 		}
 		return nil, nil, nil, invalid("%s", err.Error())
 	}
-	return f, env, types, nil
+	// Only the inputs the formula reads are fetched and returned: an input it declares but
+	// never reads costs rows and response size and changes no value.
+	read := make(map[string]calcfield.Type, len(types))
+	for _, k := range f.InputKeys() {
+		read[k] = types[k]
+	}
+	if len(read) == 0 {
+		return nil, nil, nil, invalid("the formula reads none of its inputs, so there are no stored readings to evaluate it over")
+	}
+	return f, env, read, nil
 }
 
 // storedInputRow is one stored reading of an input.
@@ -160,15 +187,22 @@ type storedInputRow struct {
 
 // CalculatedEvents evaluates a draft formula over every stored sample of one device in
 // [From, To] and returns each sample's inputs and outcome. A sample is the readings of the
-// formula's inputs that share one event and one instant — (event_id, occurred_time), the same
+// inputs the formula READS that share one event and one instant — (event_id, occurred_time), the same
 // sample the resolver evaluates — so a batch of readings taken at different times is several
-// samples, as it was at resolve.
+// samples, as it was at resolve. An event that carries none of the formula's inputs is no
+// sample at all, so missing_input counts a sample that holds some of them and lacks another,
+// never an event that holds only declared inputs the formula does not read.
 //
 // It reads through DB(ctx) and the MeasurementEvent model, so the tenant predicate and a scoped
 // caller's scope rule apply as they do to measurementEvents: a sample is wholly visible or
-// wholly invisible, since scope is per event. The read is bounded as it goes: the
-// cap+1'th sample stops it with LIMIT_EXCEEDED, so a refused range costs at
-// most the cap, where counting first would scan the whole range.
+// wholly invisible, since scope is per event.
+//
+// The read is bounded three ways, and refuses rather than truncates at each: the range is at
+// most MaxCalculatedSpan, checked before the query; the cap+1'th sample, and the input value
+// past MaxCalculatedInputValues, stop it with LIMIT_EXCEEDED as it streams. The span is the
+// bound on DATABASE cost: the input names lead the only index that fits, so the planner may
+// sort every row of the device in range before the first one streams, and stopping early
+// then saves only the evaluation and the response.
 func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsRequest) (*CalculatedEventsResult, error) {
 	formula, env, types, err := compileDraftFormula(req)
 	if err != nil {
@@ -212,6 +246,9 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 			cur = &row
 		}
 		ev.add(row.Name, row.Value)
+		if ev.values > calculatedInputValueCap {
+			return nil, limit.Exceeded("inputValues", ev.values, calculatedInputValueCap)
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -232,6 +269,7 @@ type sampleEvaluator struct {
 	skipped map[calcfield.SkipReason]int
 	result  CalculatedEventsResult
 	open    *CalculatedSample
+	values  int // input values recorded across every sample
 }
 
 func newSampleEvaluator(f *calcfield.Formula, env *calcfield.Env, types map[string]calcfield.Type) *sampleEvaluator {
@@ -260,6 +298,7 @@ func (e *sampleEvaluator) add(name string, v sql.NullFloat64) {
 	raw := calcfield.FormatStored(t, v.Float64)
 	_, _ = e.sample.Set(name, raw) // a value that does not parse is recorded on the sample
 	e.open.Inputs = append(e.open.Inputs, CalculatedInputValue{Key: name, Value: raw})
+	e.values++
 }
 
 func (e *sampleEvaluator) finish() {

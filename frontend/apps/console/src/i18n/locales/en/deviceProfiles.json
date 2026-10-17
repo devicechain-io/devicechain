@@ -555,7 +555,7 @@
   "formulaHistoryTally_one": "{{count}} sample, {{computed}} with a value",
   "formulaHistoryTally_other": "{{count}} samples, {{computed}} with a value",
   "formulaHistoryTitle": "Try it on recent history",
-  "formulaHistoryTooMany": "This window holds more than {{max}} samples. Choose a shorter window.",
+  "formulaHistoryTooMany": "This window holds too many readings to preview (at most {{max}} samples). Choose a shorter window.",
   "formulaHistoryWindow": "History window",
   "formulaLabel": "Formula",
   "formulaPlaceholder": "voltage * current / 1000",

@@ -157,6 +157,8 @@ func TestCalculatedEventsRefusesWhatCannotRun(t *testing.T) {
 	for name, mutate := range map[string]func(*CalculatedEventsRequest){
 		"no device":           func(r *CalculatedEventsRequest) { r.DeviceToken = "" },
 		"backwards range":     func(r *CalculatedEventsRequest) { r.From, r.To = r.To, r.From },
+		"empty range":         func(r *CalculatedEventsRequest) { r.To = r.From },
+		"reads no input":      func(r *CalculatedEventsRequest) { r.Expression = "1.0" },
 		"no inputs":           func(r *CalculatedEventsRequest) { r.Inputs = nil },
 		"not a formula type":  func(r *CalculatedEventsRequest) { r.DataType = "STRING" },
 		"input of no type":    func(r *CalculatedEventsRequest) { r.Inputs[0].DataType = "STRING" },
@@ -226,7 +228,8 @@ func TestCalculatedEventsWritesNothing(t *testing.T) {
 // with no value is left absent.
 func TestSampleEvaluatorOnLiteralRows(t *testing.T) {
 	f, env, types, err := compileDraftFormula(CalculatedEventsRequest{DeviceToken: "d", Expression: "a + b",
-		DataType: "INT", Inputs: []CalculatedInput{{"a", "INT"}, {"b", "INT"}}})
+		DataType: "INT", Inputs: []CalculatedInput{{"a", "INT"}, {"b", "INT"}},
+		From: calcAt, To: calcAt.Add(time.Second)})
 	require.NoError(t, err)
 	ev := newSampleEvaluator(f, env, types)
 	defer ev.release()
@@ -244,4 +247,78 @@ func TestSampleEvaluatorOnLiteralRows(t *testing.T) {
 	assert.Equal(t, "3", *res.Samples[0].Value)
 	assert.Equal(t, []CalculatedInputValue{{"a", "1"}, {"b", "2"}}, res.Samples[0].Inputs)
 	assert.Equal(t, string(calcfield.SkipMissingInput), *res.Samples[1].SkippedReason)
+}
+
+// The span is bounded before any query runs. The api has no measurement table, so a request
+// that reaches its read fails with the database's error: exactly MaxCalculatedSpan reaches
+// it, and one nanosecond more is refused with LIMIT_EXCEEDED without a query.
+func TestCalculatedEventsRefusesASpanAboveTheCapBeforeReading(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, rdb.RegisterTenantScoping(db))
+	api := NewApi(&rdb.RdbManager{Database: db})
+
+	req := powerRequest()
+	req.To = req.From.Add(MaxCalculatedSpan)
+	_, err = api.CalculatedEvents(acme(), req)
+	require.Error(t, err)
+	var le *limit.Error
+	require.False(t, errors.As(err, &le), "a span of exactly the cap was refused: %v", err)
+	assert.Contains(t, err.Error(), "no such table", "the control: a span at the cap reaches the read")
+
+	req.To = req.From.Add(MaxCalculatedSpan + time.Nanosecond)
+	_, err = api.CalculatedEvents(acme(), req)
+	require.True(t, errors.As(err, &le), "want LIMIT_EXCEEDED, got %v", err)
+	assert.Equal(t, "rangeHours", le.What)
+	assert.Equal(t, 168, le.Max)
+	assert.Equal(t, 169, le.Got)
+}
+
+// Only the inputs the formula READS are fetched and returned. temp is declared and never
+// read: an event holding only temp is no sample (so it is not a missing_input skip), a
+// sample's temp reading is not among its inputs, and an event holding one read input and
+// not the other is a missing_input skip.
+func TestCalculatedEventsReturnsOnlyTheInputsTheFormulaReads(t *testing.T) {
+	api := newCalculatedTestApi(t)
+	seedReading(t, api, "acme", "meter-1", "both", calcAt, "voltage", 200)
+	seedReading(t, api, "acme", "meter-1", "both", calcAt, "current", 5)
+	seedReading(t, api, "acme", "meter-1", "both", calcAt, "temp", 21)
+	seedReading(t, api, "acme", "meter-1", "tempOnly", calcAt.Add(time.Second), "temp", 22)
+	seedReading(t, api, "acme", "meter-1", "voltageOnly", calcAt.Add(2*time.Second), "voltage", 201)
+	req := powerRequest()
+	req.Inputs = append(req.Inputs, CalculatedInput{Key: "temp", DataType: "DOUBLE"})
+
+	res, err := api.CalculatedEvents(acme(), req)
+	require.NoError(t, err)
+	require.Len(t, res.Samples, 2, "an event with only an unread input became a sample")
+	assert.Equal(t, []CalculatedInputValue{{"current", "5"}, {"voltage", "200"}}, res.Samples[0].Inputs)
+	assert.Equal(t, "1", *res.Samples[0].Value)
+	assert.Equal(t, []byte("voltageOnly"), res.Samples[1].EventId)
+	assert.Equal(t, string(calcfield.SkipMissingInput), *res.Samples[1].SkippedReason)
+	assert.Equal(t, []CalculatedSkipCount{{Reason: string(calcfield.SkipMissingInput), Count: 1}}, res.Skipped)
+}
+
+// The input values returned across all samples are capped as the read streams: at the cap
+// the read answers, one value past it is refused, never truncated.
+func TestCalculatedEventsRefusesAboveTheInputValueCap(t *testing.T) {
+	old := calculatedInputValueCap
+	calculatedInputValueCap = 4
+	t.Cleanup(func() { calculatedInputValueCap = old })
+
+	api := newCalculatedTestApi(t)
+	for i, ev := range []string{"a", "b"} {
+		at := calcAt.Add(time.Duration(i) * time.Second)
+		seedReading(t, api, "acme", "meter-1", ev, at, "voltage", 1)
+		seedReading(t, api, "acme", "meter-1", ev, at, "current", 1)
+	}
+	res, err := api.CalculatedEvents(acme(), powerRequest())
+	require.NoError(t, err)
+	assert.Len(t, res.Samples, 2)
+
+	seedReading(t, api, "acme", "meter-1", "c", calcAt.Add(2*time.Second), "voltage", 1)
+	_, err = api.CalculatedEvents(acme(), powerRequest())
+	var le *limit.Error
+	require.True(t, errors.As(err, &le), "want LIMIT_EXCEEDED, got %v", err)
+	assert.Equal(t, "inputValues", le.What)
+	assert.Equal(t, 4, le.Max)
 }
