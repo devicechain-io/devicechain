@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -98,11 +99,13 @@ type NatsConfiguration struct {
 	// responses and device reports. A full store then refuses rather than evicts, and the
 	// device keeps the message.
 	//
-	// 🔴 NOT YET AN OPERATING MODE. This release builds the store and its durables and
-	// watches them; nothing reads the durables yet, so with this on, QoS 1 device
-	// publishes accumulate in the store until it is full and the gateway then refuses
-	// every one. Ingest itself still runs through the capture stream. Leave it off until
-	// the release notes say the reader has shipped.
+	// 🔴 REFUSED IN THIS BUILD (ErrMqttFailClosedNotAvailable). The store, its durables and
+	// their watch are built, but nothing reads the durables yet, so with this on QoS 1
+	// device publishes would accumulate in the store until it was full and the gateway
+	// would then refuse every one: a fleet-wide outage behind one key. Validate therefore
+	// refuses a document that sets it, and every service fails its config load on it,
+	// until the reader ships and removes the refusal. The plumbing is exercised in tests,
+	// which set the field on a configuration they never validate.
 	//
 	// It is refused at startup on a broker that also serves another instance: the store is
 	// per broker account, so one instance's backlog would refuse the other's devices, and
@@ -1236,12 +1239,29 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 }
 
+// ErrMqttFailClosedNotAvailable is Validate's refusal of infrastructure.nats.mqttFailClosed
+// on. The fail-closed MQTT acknowledgement needs a reader over the broker's message store
+// that has not shipped; without it the setting fills the store and then refuses every QoS 1
+// device publish, so it is refused rather than accepted as a setting that does harm.
+var ErrMqttFailClosedNotAvailable = errors.New("infrastructure.nats.mqttFailClosed is not available in " +
+	"this build: the reader over the broker's message store has not shipped")
+
+// mqttFailClosedShipped lifts that refusal. It is a package variable, not a key, so no
+// document can lift it: only this package's tests set it, to validate the rest of a
+// document with the setting on. The change that ships the reader deletes it and the check.
+var mqttFailClosedShipped = false
+
 // Validate fails closed on an instance configuration missing the infrastructure
 // a service cannot run without (ADR-022 decision 1 / review E3): the NATS
 // backbone and the user-management endpoint every service validates tokens
 // against. A misrendered config Secret then surfaces at startup rather than as a
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
+	if c.Infrastructure.Nats.MqttFailClosed && !mqttFailClosedShipped {
+		return fmt.Errorf("%w. With it on, QoS 1 device publishes would fill the broker's MQTT message store "+
+			"and the broker would then refuse every one. Remove infrastructure.nats.mqttFailClosed from the "+
+			"instance configuration or set it to false", ErrMqttFailClosedNotAvailable)
+	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")
 	}

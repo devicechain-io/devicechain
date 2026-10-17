@@ -6,6 +6,8 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -52,8 +54,47 @@ func TestMqttFailClosedGivesTheMessageStoreTheCaptureCeilingAndBudgetsIt(t *test
 	if got := n.MqttStoreReservation(); got != want+2*n.MqttQoS2StoreMaxBytes {
 		t.Errorf("the reservation is %d B, want the message store's %d B plus both QoS 2 stores", got, want)
 	}
+	// Everything else in the document is valid with the setting on: lift the refusal (which
+	// only this package's tests can) and the rest validates.
+	shipMqttFailClosedForTest(t)
 	if err := c.Validate(); err != nil {
-		t.Fatalf("a document with the setting on must validate: %v", err)
+		t.Fatalf("with the refusal lifted, a document with the setting on must validate: %v", err)
+	}
+}
+
+// shipMqttFailClosedForTest lifts the refusal for one test, as the build that ships the
+// reader will for good.
+func shipMqttFailClosedForTest(t *testing.T) {
+	t.Helper()
+	saved := mqttFailClosedShipped
+	mqttFailClosedShipped = true
+	t.Cleanup(func() { mqttFailClosedShipped = saved })
+}
+
+// 🔴 UNTIL THE READER SHIPS, THE SETTING IS REFUSED. With nothing reading the platform
+// durables, mqttFailClosed on fills the broker's message store and then refuses every QoS 1
+// device publish, so a document that sets it must fail validation, saying why, and the same
+// document with it off must not.
+//
+// GUARD: kills a Validate that accepts the setting (the outage switch is live), and one that
+// refuses the document for any other reason (the control passes with only the key changed).
+func TestMqttFailClosedIsRefusedUntilTheReaderShips(t *testing.T) {
+	c := NewDefaultInstanceConfiguration()
+	c.Infrastructure.Nats.MqttFailClosed = true
+	c.ApplyDefaults()
+	err := c.Validate()
+	if !errors.Is(err, ErrMqttFailClosedNotAvailable) {
+		t.Fatalf("Validate with mqttFailClosed on = %v, want ErrMqttFailClosedNotAvailable", err)
+	}
+	for _, want := range []string{"infrastructure.nats.mqttFailClosed", "not available in this build",
+		"reader over the broker's message store has not shipped"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal %q does not say %q", err, want)
+		}
+	}
+	c.Infrastructure.Nats.MqttFailClosed = false
+	if err := c.Validate(); err != nil {
+		t.Fatalf("control: the same document with the setting off must validate: %v", err)
 	}
 }
 
