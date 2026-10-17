@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"reflect"
 	goruntime "runtime"
 	"sync"
 	"sync/atomic"
@@ -726,4 +727,72 @@ func TestTheFirstFailureStopsNewSends(t *testing.T) {
 	sent := len(fw.snapshot())
 	require.Less(t, sent, victim+3*window, "sends went on after a failed outcome: %d of %d", sent, total)
 	require.True(t, r.rp.checkpoint(context.Background()))
+}
+
+// A retired detection does not keep its payload reachable: the buffer's backing array outlives the
+// checkpoint, so slicing it off is not enough. The entries past the new length are zeroed.
+func TestARetiredDetectionsPayloadIsNotRetained(t *testing.T) {
+	for _, window := range []int{1, 8} {
+		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
+			var fw *faultWriter
+			const victim = 5
+			r, _ := pipelineRig(t, window, &fw, func(_ attempt, index, earlier int) (bool, error) {
+				if index == victim && earlier == 0 {
+					return false, errors.New("refused")
+				}
+				return true, nil
+			})
+			ctx := context.Background()
+			before := r.rp.pendingDets
+			total := len(before)
+			require.Greater(t, total, victim+1)
+
+			// A failed pass compacts: the retired prefix and the dropped entries leave the buffer.
+			require.False(t, r.rp.checkpoint(ctx))
+			kept := r.rp.pendingDets
+			require.Less(t, len(kept), total, "nothing was retired; the test proves nothing")
+			for i, d := range before[len(kept):total] {
+				require.True(t, reflect.ValueOf(d).IsZero(), "slot %d past the buffer's length still holds a retired detection", len(kept)+i)
+			}
+			for i, d := range kept {
+				if d.state == outputAcked {
+					require.Nil(t, d.out.Payload, "an acknowledged detection %d still holds its payload", i)
+				}
+			}
+
+			// A fully retired buffer is zeroed as well.
+			before = r.rp.pendingDets
+			require.True(t, r.rp.checkpoint(ctx))
+			require.Empty(t, r.rp.pendingDets)
+			for i, d := range before[:len(before)] {
+				require.True(t, reflect.ValueOf(d).IsZero(), "slot %d still holds a retired detection", i)
+			}
+		})
+	}
+}
+
+// A publish whose outcome may have been stored is labelled unknown; one the broker refused is
+// failed. The retry treats both alike, so this is the operator's signal only.
+func TestPublishFailureOutcomeClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"deadline", context.DeadlineExceeded, publishOutcomeUnknown},
+		{"wrapped deadline", fmt.Errorf("publish: %w", context.DeadlineExceeded), publishOutcomeUnknown},
+		{"canceled", context.Canceled, publishOutcomeUnknown},
+		{"nats timeout", nats.ErrTimeout, publishOutcomeUnknown},
+		{"connection closed", fmt.Errorf("x: %w", nats.ErrConnectionClosed), publishOutcomeUnknown},
+		{"disconnected", nats.ErrDisconnected, publishOutcomeUnknown},
+		{"draining", nats.ErrConnectionDraining, publishOutcomeUnknown},
+		{"duplicate in process", fmt.Errorf("x: %w", &nats.APIError{Code: 409, ErrorCode: 10158, Description: "duplicate message id is in process"}), publishOutcomeUnknown},
+		{"other api error", &nats.APIError{Code: 400, ErrorCode: 10077, Description: "maximum messages exceeded"}, publishOutcomeFailed},
+		{"no responders", nats.ErrNoResponders, publishOutcomeFailed},
+		{"plain", errors.New("refused"), publishOutcomeFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, publishFailureOutcome(tc.err))
+		})
+	}
 }
