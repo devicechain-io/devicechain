@@ -3775,8 +3775,10 @@ No hay que hacer nada.
 ### v0.23.0 — usuarios de cliente con acceso acotado, y una ingesta MQTT que pierde menos {#v0230-upgrade}
 
 `v0.23.0` es una actualización en su sitio desde `v0.22.0`: `dcctl install` para el clúster y después
-`dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). A diferencia
-de la [`v0.22.0`](#v0220-upgrade), **sí ejecuta migraciones**: siete servicios añaden columnas,
+`dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). Pasa a
+`dcctl install` los ajustes con los que se instaló el clúster, como `--ha` y `--database-node-selector`,
+además de la nueva `--version`: se niega a cambiar los ajustes de un clúster mientras una instancia se
+ejecuta en él. A diferencia de la [`v0.22.0`](#v0220-upgrade), **sí ejecuta migraciones**: siete servicios añaden columnas,
 índices o tablas, y `user-management` sustituye el índice único de los tokens de rol por dos, uno para
 el catálogo del operador y otro para los roles propios de cada tenant. Ninguna reescribe filas existentes, los únicos rellenos registran los tokens de los
 clientes y grupos que ya existen, y cada una se puede volver a ejecutar sin riesgo si se interrumpe.
@@ -3830,8 +3832,10 @@ llega a device-state aunque un pod muera en el peor momento. Qué cambia para al
    [Usuarios de cliente, roles acotados y los permisos que los sustentan](#v0230-customer-users).
 3. **Si dependes de reglas de umbral**, lee [Alarmas de umbral y lecturas tardías](#v0230-threshold)
    para que una alarma que ahora se activa no sea una sorpresa.
-4. **Comprueba el `calculatedMetricsPerProfile` de cada nivel.** Si alguno es mayor que 0, ponlo a 0,
-   o no publiques ninguna métrica calculada, hasta que termine el despliegue. Consulta
+4. **Prevé dejar el `calculatedMetricsPerProfile` de cada nivel en 0 hasta que termine el
+   despliegue.** La `v0.22.0` no tiene ese ajuste, así que cada nivel empieza en 0 y no hay nada que
+   cambiar antes de actualizar. No lo subas, ni publiques una métrica calculada, hasta que todas las
+   réplicas de `device-management` y `event-management` ejecuten esta versión. Consulta
    [Métricas calculadas](#v0230-calculated-metrics).
 
 #### Durante la actualización {#v0230-during}
@@ -4038,6 +4042,11 @@ cuando ya se usan métricas calculadas conlleva el mismo riesgo de duplicados.
 ##### Alertas y métricas nuevas {#v0230-observability}
 
 - `JetStreamCaptureBacklogWillOverflow` (crítica), descrita arriba;
+- `JetStreamCaptureBacklogGrowing` (aviso), su aviso temprano: la misma comprobación del atraso con un
+  horizonte de veinte minutos;
+- `JetStreamCaptureLeaderChanged` (aviso): el stream de captura cambió de líder mientras llegaban
+  eventos, así que los eventos MQTT publicados durante el cambio pueden haberse confirmado y perdido
+  (consulta [Limitaciones conocidas](#v0230-known-limitations));
 - `DeviceStateDroppingEvents` (aviso): device-state descartó un evento tras su último intento de entrega,
   lo que deja obsoleta la conectividad de un dispositivo, una lectura o su posición hasta que llega un
   evento más reciente;
@@ -4051,7 +4060,8 @@ cuando ya se usan métricas calculadas conlleva el mismo riesgo de duplicados.
 - `devicechain_sparkplugingest_presence_probes_total` y
   `devicechain_sparkplugingest_presence_probe_disconnects_total` para los sondeos de actividad del Host;
 - `jetstream_consumer_leader_local`, `jetstream_publish_leader_local` y
-  `jetstream_consumer_leader_moves_total` para la ubicación de los líderes.
+  `jetstream_consumer_leader_moves_total` para la ubicación de los líderes, y
+  `jetstream_stream_leader_changes_total` para un cambio del líder de un stream.
 
 Cada resultado de los contadores de procesador compartidos se exporta ahora a cero, de modo que el primer
 descarte tras el primer scrape de un pod es visible para una alerta. Ninguna métrica cambió de nombre ni
@@ -4070,8 +4080,10 @@ clúster, no son una garantía para el tuyo.
 - **Las publicaciones MQTT QoS 1 pueden confirmarse y después perderse, sin contarse, mientras el stream
   de captura cambia de líder con mucha carga.** A 12.000 eventos por segundo, el líder del stream cedió
   una vez, y los eventos publicados durante los cinco segundos en que el stream no tuvo líder se
-  perdieron después de que los dispositivos recibieran su confirmación. Ningún contador ni alerta lo
-  notificó. Hay trabajo en curso para eliminarlo.
+  perdieron después de que los dispositivos recibieran su confirmación. Ningún contador registra los
+  eventos perdidos. `JetStreamCaptureLeaderChanged` avisa de que hubo un cambio de líder mientras
+  llegaban eventos, y su hora acota la ventana que revisar en los registros de tus propios
+  dispositivos. Hay trabajo en curso para eliminarlo.
 - **La tasa MQTT sostenida que ese clúster pudo seguir fue de unos 6.000 eventos por segundo**, limitada
   por el bróker. A 12.000 por segundo el atraso creció; por encima del techo del stream de captura se
   descartan los eventos más antiguos, y esa pérdida se cuenta y genera una alerta. La ingesta HTTP en el
