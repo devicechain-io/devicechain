@@ -28,8 +28,8 @@ run "the_default_cluster_has_a_database_and_a_services_pool" {
     error_message = "The database pool should default to 3 nodes."
   }
   assert {
-    condition     = google_container_node_pool.this["services"].node_config[0].machine_type == "n2-custom-4-8192"
-    error_message = "The services pool should default to n2-custom-4-8192 (4 vCPU, 8 GB)."
+    condition     = google_container_node_pool.this["services"].node_config[0].machine_type == "t2d-standard-4"
+    error_message = "The services pool should default to t2d-standard-4 (4 vCPU, 16 GB)."
   }
   assert {
     condition     = google_container_node_pool.this["services"].node_count == 3
