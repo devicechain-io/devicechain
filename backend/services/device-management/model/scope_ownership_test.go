@@ -19,32 +19,54 @@ import (
 )
 
 // captureOwnership records every ownership fact, and what the context it was handed
-// carried.
+// carried. Facts reach it only through the ownership drain, so every read of what it holds
+// drains first (when api is set): the facts a write queued are then the facts it records,
+// in the order the drain publishes them. fail, when set, refuses every publish with it.
 type captureOwnership struct {
 	mu     sync.Mutex
 	facts  []DeviceOwnershipChangedEvent
 	claims int // facts published under a context that carried the caller's claims
 	tenant []string
+	fail   error
+
+	api *Api
+	t   *testing.T
 }
 
-func (c *captureOwnership) PublishDeviceOwnershipChanged(ctx context.Context, e *DeviceOwnershipChangedEvent) {
+func (c *captureOwnership) PublishDeviceOwnershipChanged(ctx context.Context, e *DeviceOwnershipChangedEvent) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.fail != nil {
+		return c.fail
+	}
 	c.facts = append(c.facts, *e)
 	if _, ok := auth.ClaimsFromContext(ctx); ok {
 		c.claims++
 	}
 	t, _ := core.TenantFromContext(ctx)
 	c.tenant = append(c.tenant, t)
+	return nil
+}
+
+// drain publishes everything queued, as the service's drain pass would.
+func (c *captureOwnership) drain() {
+	if c.api == nil {
+		return
+	}
+	c.t.Helper()
+	_, err := c.api.DrainOwnershipFacts(context.Background(), OwnershipDrainPageSize)
+	require.NoError(c.t, err, "draining the queued ownership facts")
 }
 
 func (c *captureOwnership) count() int {
+	c.drain()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.facts)
 }
 
 func (c *captureOwnership) last() DeviceOwnershipChangedEvent {
+	c.drain()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.facts[len(c.facts)-1]
@@ -70,7 +92,7 @@ func ownershipFixture(t *testing.T) (*Api, context.Context, *captureOwnership) {
 	}
 	_, err := api.EnsureAssignmentType(ctx)
 	require.NoError(t, err)
-	pub := &captureOwnership{}
+	pub := &captureOwnership{api: api, t: t}
 	api.DeviceOwnershipPublisher = pub
 	return api, ctx, pub
 }

@@ -451,15 +451,25 @@ func (c membershipChange) or(o membershipChange) membershipChange {
 	return membershipChange{touched: c.touched || o.touched, access: c.access || o.access}
 }
 
+// queueAccessChangeOnTx queues, in the recompute's transaction, the ownership fact of a
+// device that entered or left an access scope, so device-state moves its live view
+// (ownership_outbox.go). Call it LAST in the transaction, for the reason queueOwnershipOnTx
+// gives: the recompute is followed by the configuration reconcile, which takes the device's
+// configuration lock.
+func queueAccessChangeOnTx(tx *gorm.DB, entityType string, entityId uint, change membershipChange) error {
+	if !change.access || entityType != string(entity.TypeDevice) {
+		return nil
+	}
+	_, err := queueOwnershipOnTx(tx, []uint{entityId})
+	return err
+}
+
 // afterMembershipRecompute fires, post-commit, what a recompute's change calls for: the
-// entity's cached memberships dropped, and — when it entered or left an access scope — the
-// device announced with its new anchors, so device-state moves its live view at once.
+// entity's cached memberships dropped. A device that entered or left an access scope had its
+// ownership fact queued in the transaction (queueAccessChangeOnTx).
 func (api *Api) afterMembershipRecompute(ctx context.Context, entityType string, entityId uint, change membershipChange) {
 	if change.touched {
 		api.evictMemberships(ctx, entityType, []uint{entityId})
-	}
-	if change.access && entityType == string(entity.TypeDevice) {
-		api.emitOwnershipChanged(ctx, []uint{entityId})
 	}
 }
 
@@ -506,8 +516,10 @@ func (api *Api) writeAttrThenRecompute(ctx context.Context, entityType string, e
 			}
 		}
 		var err error
-		minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true)
-		return err
+		if minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, true); err != nil {
+			return err
+		}
+		return queueAccessChangeOnTx(tx, entityType, entityId, change)
 	})
 	if err != nil {
 		return err

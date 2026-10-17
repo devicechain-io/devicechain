@@ -84,6 +84,11 @@ var (
 	// issuer seed is present in the instance config).
 	CalloutResponder *processor.CalloutResponder
 
+	// OwnershipDrain publishes the device ownership facts writes queue in their own
+	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
+	OwnershipDrain        *core.PeriodicTask
+	OwnershipDrainMetrics *core.PeriodicTaskMetrics
+
 	// The Prometheus instruments this service exports. All are built ONCE, in the
 	// initialize phase, and shared by every component the NATS manager's oncreate
 	// callback builds. See buildMetrics.
@@ -178,11 +183,12 @@ func buildMetrics() {
 	for _, path := range []string{model.CredentialPathConnect, model.CredentialPathEvent} {
 		CredentialMisconfigured.WithLabelValues(path)
 	}
+	OwnershipDrainMetrics = Microservice.NewPeriodicTaskMetrics("ownership_drain")
 	GeoFencePublishFails = Microservice.NewCounter(
 		"geofence_set_publish_failures_total",
 		"Geofence-set manifests that could not be published — a marshal error, a broker refusal, or a transport fault. Each one means event-processing was not told about a fence edit, so containment for that tenant holds its previous fence set until a reconcile sweep repairs it. A sustained non-zero rate means fence edits are not reaching the detection engine.")
 	FactPublishFails = Microservice.NewCounterVec("fact_publish_failures_total",
-		"Detection-rule, device-roster, device-attribute, device-desired and device-ownership notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once (a device-desired miss is repaired by the device's next sync, a device-ownership miss by the device's next event). A sustained rate means changes are taking minutes to take effect.",
+		"Detection-rule, device-roster, device-attribute, device-desired and device-ownership notifications that could not be published, by fact — a marshal error, a broker refusal or a transport fault. The change itself committed; the detection engine learns of it at its next reconcile against this service, a few minutes later, instead of at once (a device-desired miss is repaired by the device's next sync; a device-ownership miss stays queued and is retried by the ownership drain every second). A sustained rate means changes are taking minutes to take effect.",
 		[]string{"fact"})
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
@@ -202,7 +208,8 @@ const (
 	// device-desired channel. Unlike the facts above, the repair is the DEVICE's next sync.
 	factDeviceDesired = "device_desired"
 	// factDeviceOwnership is a device ownership-changed fact (ADR-081) that could not be
-	// published. The repair is the device's next resolved event, which carries its anchors.
+	// published. It stays queued (model/ownership_outbox.go) and the next drain pass
+	// publishes it again, so a sustained rate is a fact being delayed, not lost.
 	factDeviceOwnership = "device_ownership"
 )
 
@@ -473,6 +480,21 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	return nil
 }
 
+// ownershipDrainInterval is how often the ownership drain looks for queued facts. It bounds
+// how long a committed ownership change waits to reach device-state while the broker is
+// healthy; one pass on an empty queue is a lock round trip and one indexed read.
+const ownershipDrainInterval = time.Second
+
+// initOwnershipDrain builds and initializes the ownership drain. Once, in the initialize
+// phase: the task belongs to the process, and the publisher it drains through is re-wired by
+// createNatsComponents on every broker start.
+func initOwnershipDrain() error {
+	OwnershipDrain = core.NewPeriodicTask(Microservice.FunctionalArea, "ownership-drain", ownershipDrainInterval,
+		func(ctx context.Context) error { return Api.DrainOwnershipFactsLocked(ctx) },
+		core.NewNoOpLifecycleCallbacks(), core.WithImmediateFirstPass(), core.WithPassMetrics(OwnershipDrainMetrics))
+	return OwnershipDrain.Initialize(context.Background())
+}
+
 // newDeviceReportsConsumer assembles the device-reports consumer from this service's globals.
 // It hands the consumer the plain Api, not the cached one: a sync or a report resolves its
 // device by token, and a device deleted on another replica must stop resolving at once rather
@@ -655,6 +677,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			if err != nil {
 				return err
 			}
+			if err = initOwnershipDrain(); err != nil {
+				return err
+			}
 
 			// Report the size of this schema's append-only history tables (ADR-023). Every one of
 			// them only grows — nothing prunes a version history short of purging the whole tenant —
@@ -746,6 +771,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		return err
 	}
 
+	// Start draining queued device ownership facts. After Svc.Start, which wired the
+	// publisher the drain publishes through.
+	if err = OwnershipDrain.Start(ctx); err != nil {
+		return err
+	}
+
 	// Start the device auth-callout responder once the broker is configured for it
 	// (ADR-025): it authenticates every device connect at the broker against the
 	// device credential store. Absent an issuer seed the broker isn't running callout,
@@ -794,6 +825,12 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		}
 	}
 
+	// Stop the ownership drain before the NATS connection drains. What it has not published
+	// stays queued for whichever replica drains next.
+	if err := OwnershipDrain.Stop(ctx); err != nil {
+		return err
+	}
+
 	// Stop inbound events processor.
 	err := InboundEventsProcessor.Stop(ctx)
 	if err != nil {
@@ -821,6 +858,10 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 
 // Called before microservice has been terminated.
 func beforeMicroserviceTerminated(ctx context.Context) error {
+	if err := OwnershipDrain.Terminate(ctx); err != nil {
+		return err
+	}
+
 	// Terminate inbound events processor.
 	err := InboundEventsProcessor.Terminate(ctx)
 	if err != nil {

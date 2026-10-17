@@ -67,6 +67,7 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 		// Reopening a CLAIMED claim is a resale. Revoke the prior owner's edge and
 		// reopen in one transaction (review #2): without the revoke the previous
 		// customer keeps ownership of a device they sold.
+		var queued ownershipQueued
 		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			if ClaimStatus(existing.Status) == ClaimStatusClaimed && existing.ClaimedByCustomerId.Valid {
 				if err := tx.Where(
@@ -82,13 +83,19 @@ func (api *Api) InitiateDeviceClaim(ctx context.Context, request *DeviceClaimIni
 			existing.ExpiresAt = expiresAt
 			existing.ClaimedTime = sql.NullTime{}
 			existing.ClaimedByCustomerId = sql.NullInt64{}
-			return tx.Save(existing).Error
+			if err := tx.Save(existing).Error; err != nil {
+				return err
+			}
+			// The prior owner's edge is gone: device-state is owed the device's new owners.
+			var err error
+			queued, err = queueOwnershipOnTx(tx, []uint{existing.DeviceId})
+			return err
 		})
 		if err != nil {
 			return nil, err
 		}
 		// The prior owner's edge is gone: the device's cached tracked set still lists it.
-		api.evictRelationshipSources(ctx, []uint{existing.DeviceId})
+		api.evictRelationshipSources(ctx, queued)
 		return existing, nil
 	}
 
@@ -176,6 +183,7 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		TargetToken:        request.CustomerToken,
 		RelationshipTypeId: rtMatches[0].ID,
 	}
+	var queued ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
 		res := tx.Model(claim).
 			Where("id = ? AND status = ?", claim.ID, string(ClaimStatusOpen)).
@@ -206,7 +214,12 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 		if err := api.checkTrackedCeiling(ctx, tx, rtMatches[0], rel.SourceType, rel.SourceId, 1); err != nil {
 			return err
 		}
-		return tx.Create(rel).Error
+		if err := tx.Create(rel).Error; err != nil {
+			return err
+		}
+		var err error
+		queued, err = queueOwnershipOnTx(tx, []uint{rel.SourceId})
+		return err
 	})
 	if err != nil {
 		return nil, err
@@ -216,7 +229,7 @@ func (api *Api) ClaimDevice(ctx context.Context, request *DeviceClaimRequest, no
 	// path doesn't Preload it).
 	rel.RelationshipType = *rtMatches[0]
 	// The new owner's edge is on the device: its cached tracked set does not list it yet.
-	api.evictRelationshipSources(ctx, []uint{rel.SourceId})
+	api.evictRelationshipSources(ctx, queued)
 	return rel, nil
 }
 

@@ -99,11 +99,16 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 		}
 		return false, err
 	}
-	// Before the delete removes the relationship edges, capture the devices that
-	// track this entity as a target — their cached tracked-relationship set turns
-	// stale once the edge is gone (ADR-044 F2).
-	trackingSources := api.relationshipSourceDevices(ctx, "target_type = ? AND target_id = ?", string(etype), id)
+	var trackingSources ownershipQueued
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// Before the delete removes the relationship edges, capture the devices that
+		// track this entity as a target — their cached tracked-relationship set turns
+		// stale once the edge is gone (ADR-044 F2), and each may have lost an owner, so
+		// its ownership fact is queued below, last in this transaction.
+		sources, err := sourceDevicesOnTx(tx, "target_type = ? AND target_id = ?", string(etype), id)
+		if err != nil {
+			return err
+		}
 		if err := tx.Unscoped().Where(
 			"(source_type = ? AND source_id = ?) OR (target_type = ? AND target_id = ?)",
 			string(etype), id, string(etype), id).Delete(&EntityRelationship{}).Error; err != nil {
@@ -134,7 +139,11 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 				return err
 			}
 		}
-		return tx.Unscoped().Where("token = ?", token).Delete(model).Error
+		if err := tx.Unscoped().Where("token = ?", token).Delete(model).Error; err != nil {
+			return err
+		}
+		trackingSources, err = queueOwnershipOnTx(tx, sources)
+		return err
 	})
 	if err != nil {
 		return false, err
@@ -431,12 +440,25 @@ func (api *Api) RemoveEntityRelationship(ctx context.Context, token string) (boo
 	// Capture the source device before the edge is gone so its cached tracked set can
 	// be evicted (ADR-044 F2). Unlike a delete, the target entity survives here, so
 	// the reconciliation sweep will not repair a stale set — eviction is the only fix.
-	sources := api.relationshipSourceDevices(ctx, "token = ?", token)
-	deleted, err := api.hardDeleteByToken(ctx, &EntityRelationship{}, token)
+	var queued ownershipQueued
+	deleted := false
+	err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		sources, err := sourceDevicesOnTx(tx, "token = ?", token)
+		if err != nil {
+			return err
+		}
+		res := tx.Unscoped().Where("token = ?", token).Delete(&EntityRelationship{})
+		if res.Error != nil || res.RowsAffected == 0 {
+			return res.Error
+		}
+		deleted = true
+		queued, err = queueOwnershipOnTx(tx, sources)
+		return err
+	})
 	if err != nil || !deleted {
-		return deleted, err
+		return false, err
 	}
-	api.evictRelationshipSources(ctx, sources)
+	api.evictRelationshipSources(ctx, queued)
 	return deleted, nil
 }
 

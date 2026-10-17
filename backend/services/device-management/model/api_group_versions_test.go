@@ -28,7 +28,7 @@ func newGroupVersionTestApi(t *testing.T) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{},
 		&EntityGroupMembership{}, &EntityGroupFacetRef{},
-		&EntityRelationship{}, &EntityAttribute{}, &Alarm{},
+		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{},
 		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

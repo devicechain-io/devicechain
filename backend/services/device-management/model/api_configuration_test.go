@@ -43,7 +43,7 @@ func configTestApiAt(t *testing.T, dsn string) (*Api, context.Context) {
 	}
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{},
 		&EntityAttribute{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
-		&EntityGroupFacetRef{}, &EntityRelationship{}, &Alarm{},
+		&EntityGroupFacetRef{}, &EntityRelationship{}, &PendingOwnershipFact{}, &Alarm{},
 		&DeviceProfile{}, &DeviceProfileVersion{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{},
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{}); err != nil {

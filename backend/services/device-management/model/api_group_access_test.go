@@ -27,7 +27,7 @@ func accessFixture(t *testing.T) (*Api, context.Context, *captureOwnership) {
 	t.Helper()
 	api, ctx := newScopingTestApi(t)
 	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(ctx)).AutoMigrate(&EntityRelationshipType{}))
-	pub := &captureOwnership{}
+	pub := &captureOwnership{api: api, t: t}
 	api.DeviceOwnershipPublisher = pub
 	seedDevice(t, api, ctx, "d-arid")
 	seedDevice(t, api, ctx, "d-humid")
@@ -60,6 +60,7 @@ func visibleDevices(t *testing.T, api *Api, ctx context.Context) []string {
 // lastFactFor returns the newest ownership fact for device, and whether there was one at or
 // after index from.
 func lastFactFor(pub *captureOwnership, from int, device string) (DeviceOwnershipChangedEvent, bool) {
+	pub.drain()
 	pub.mu.Lock()
 	defer pub.mu.Unlock()
 	for i := len(pub.facts) - 1; i >= from; i-- {
