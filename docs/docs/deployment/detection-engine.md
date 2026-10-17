@@ -626,7 +626,13 @@ to arrive, and more engine capacity will not help. Time in `parked` or `probe` i
 waiting: on a retry or on the broker, not on the engine. Most of it in `plan` and `apply` means the engine itself is the
 limit. Most of it in `publish`, `save` and `ack` means checkpoints are the cost, and
 `devicechain_eventprocessing_detect_checkpoint_duration_seconds` shows how long each one takes.
-(`devicechain_eventprocessing_detect_checkpoint_seconds` keeps only the latest.)
+(`devicechain_eventprocessing_detect_checkpoint_seconds` keeps only the latest.) Two pairs of
+distributions say which part of a checkpoint it is. Time in `publish` is made of two waits per
+detection: the broker acknowledging the derived event
+(`devicechain_eventprocessing_detect_derived_publish_ack_seconds`) and the rule-health counter write
+that follows it (`devicechain_eventprocessing_detect_rule_stat_write_seconds`). Time in `save` is
+serializing the engine's state (`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`)
+and then writing it to the database (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).
 
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))

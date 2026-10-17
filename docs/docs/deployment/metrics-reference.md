@@ -107,9 +107,12 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | --- | --- |
 | `detect_applied_stream_seq` | Highest JetStream stream sequence captured in the committed snapshot. |
 | `detect_checkpoint_failures_total{stage}` | Scheduled DETECT checkpoints that did not commit, by stage (publish, serialize, save). A checkpoint call that outlives its deadline counts against the stage it was stuck in. A stale-writer refusal is not counted here: that ends the process. |
+| `detect_checkpoint_save_seconds` | Time each committed snapshot spent being written to the database, as a distribution: the second part of a checkpoint's cost, after serialization. |
+| `detect_checkpoint_serialize_seconds` | Time each committed snapshot spent serializing the engine's state, as a distribution: the first part of a checkpoint's cost. |
 | `detect_checkpoints_total` | Committed DETECT snapshot checkpoints. |
 | `detect_consumer_ack_pending` | Delivered-but-unacked messages on the resolved-events durable consumer (in-flight work). |
 | `detect_consumer_pending` | Undelivered messages waiting on the resolved-events durable consumer (the primary DETECT lag signal). |
+| `detect_derived_publish_ack_seconds` | Time each published derived event waited for the broker to acknowledge it, as a distribution. Successful publishes only. It is not detection latency: a detection waits for its checkpoint before it is published. |
 | `detect_derived_events_published_total` | Derived signal events published. |
 | `detect_derived_events_rejected_total{reason}` | Detections dropped before publish, by reason (bounded enum). |
 | `detect_events_applied_total` | Resolved events fed into the DETECT engine. |
@@ -131,6 +134,7 @@ it is stale while `detect_is_leader` and `detect_live` both read 1, the loop is 
 | `detect_loop_heartbeat_timestamp_seconds` | Unix time of the last pass of the DETECT single-writer loop, refreshed at least once per tick while a term is live. Stale while detect_is_leader and detect_live read 1 means the loop is hung inside a call. |
 | `detect_restore_seconds` | Time to restore engine state from the snapshot store at startup. |
 | `detect_rule_stat_write_failures_total` | Rule-health fire counter writes that failed and were dropped. Detection is unaffected (the write is best-effort and off the correctness path), but the console's rule-health counts stop advancing while this rises; the cause is in the service log. |
+| `detect_rule_stat_write_seconds` | Time each rule-health fire counter write held the detection loop after a derived event was published, as a distribution, including the tenant-deletion check it makes first. Failed writes are included. |
 | `detect_rules_active` | Rules loaded into the DETECT engine. |
 | `detect_stale_absence_dropped_total` | Absence **raises** dropped at publish because the device left the rule's scope: it was deleted, disabled, re-typed, or the rule version was superseded. It also counts a raise's paired clear when that raise was dropped in the same pass, and the clear a republish withholds because the new version keeps the rule. The clear for a device that has left scope is not dropped, so the alarm it raised is cleared. |
 | `detect_superseded_frontier_dropped_total` | Detections of the duration, session and aggregate kinds that fire from the passage of time, dropped at publish because their profile version has been superseded. |

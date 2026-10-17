@@ -318,7 +318,7 @@ dcctl dead-letters list --server <host> --email <you> --password <secret> \
 | `parked` | 关闭实时消息后的等待：要么卡在无法提交的挂钟推进之后，要么卡在无法读取的事件流缺口之后。这是引擎在重试成功前拒绝工作。 |
 | `probe` | 等待消息总线返回积压数量；引擎用它判断自己是否已追上进度并上报滞后。 |
 
-积压时大部分时间处于 `fetch_wait`，说明瓶颈不在引擎：它在等待消息到达，增加引擎容量没有帮助。`parked` 或 `probe` 中的时间属于同类等待：等重试或等消息总线，而不是等引擎。大部分时间在 `plan` 和 `apply`，说明引擎本身就是上限。大部分时间在 `publish`、`save` 和 `ack`，说明代价在检查点，`devicechain_eventprocessing_detect_checkpoint_duration_seconds` 显示每次检查点的耗时。（`devicechain_eventprocessing_detect_checkpoint_seconds` 只保留最近一次。）
+积压时大部分时间处于 `fetch_wait`，说明瓶颈不在引擎：它在等待消息到达，增加引擎容量没有帮助。`parked` 或 `probe` 中的时间属于同类等待：等重试或等消息总线，而不是等引擎。大部分时间在 `plan` 和 `apply`，说明引擎本身就是上限。大部分时间在 `publish`、`save` 和 `ack`，说明代价在检查点，`devicechain_eventprocessing_detect_checkpoint_duration_seconds` 显示每次检查点的耗时。（`devicechain_eventprocessing_detect_checkpoint_seconds` 只保留最近一次。）另有两组分布说明是检查点的哪一部分：`publish` 中的时间由每个检测的两次等待组成，即消息总线确认派生事件（`devicechain_eventprocessing_detect_derived_publish_ack_seconds`），以及随后的规则健康度计数写入（`devicechain_eventprocessing_detect_rule_stat_write_seconds`）；`save` 中的时间是序列化引擎状态（`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`），然后将其写入数据库（`devicechain_eventprocessing_detect_checkpoint_save_seconds`）。
 
 ```promql
 sum by (phase) (rate(devicechain_eventprocessing_detect_loop_seconds_total[5m]))

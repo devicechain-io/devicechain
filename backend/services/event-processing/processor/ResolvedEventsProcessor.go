@@ -2559,7 +2559,9 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 		}
 		rp.phases.enter(phaseSave)
 		start := rp.clock.Now()
+		serializeStart := time.Now()
 		payload, err := rp.snapshotEngine()
+		serializeDur := time.Since(serializeStart)
 		if err != nil {
 			log.Error().Err(err).Msg("Failed to serialize DETECT snapshot; deferring checkpoint")
 			rp.metrics.recordCheckpointFailure(checkpointStageSerialize)
@@ -2606,7 +2608,7 @@ func (rp *ResolvedEventsProcessor) runCheckpoint(ctx context.Context, force bool
 
 		// Observability (owned by this loop, ADR-051 thread).
 		now := rp.clock.Now()
-		rp.metrics.recordCheckpoint(rp.engine.LastSeq(), now.Sub(start).Seconds(), len(payload), now.Sub(wm).Seconds())
+		rp.metrics.recordCheckpoint(rp.engine.LastSeq(), now.Sub(start).Seconds(), serializeDur, saveDur, len(payload), now.Sub(wm).Seconds())
 	}
 
 	rp.phases.enter(phaseAck)
