@@ -41,7 +41,7 @@ func TestThePublishedMessageNeverCarriesThePresentedSecret(t *testing.T) {
 	tr := sealingFixture(t)
 	const secret = "a-password-as-the-device-sent-it"
 
-	_, msg, ok := inboundEventMessage("gw", "acme", presentingEvent(secret), &model.UnresolvedMeasurementsPayload{}, 1)
+	_, msg, ok := inboundEventMessage("gw", "acme", presentingEvent(secret), &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.True(t, ok)
 	require.NotContains(t, string(msg.Value), secret)
 
@@ -60,7 +60,7 @@ func TestThePublishedMessageNeverCarriesThePresentedSecret(t *testing.T) {
 func TestAnEventWithASecretIsDroppedWhenThereIsNoKeyToSealIt(t *testing.T) {
 	sealingFixture(t)
 	SecretTransit = nil
-	_, _, ok := inboundEventMessage("gw", "acme", presentingEvent("pw-long-enough-to-matter"), &model.UnresolvedMeasurementsPayload{}, 1)
+	_, _, ok := inboundEventMessage("gw", "acme", presentingEvent("pw-long-enough-to-matter"), &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.False(t, ok)
 }
 
@@ -70,7 +70,7 @@ func TestASecretPresentedWithoutACredentialIdIsDiscarded(t *testing.T) {
 	sealingFixture(t)
 	ev := presentingEvent("pw-long-enough-to-matter")
 	ev.CredentialId = nil
-	_, msg, ok := inboundEventMessage("gw", "acme", ev, &model.UnresolvedMeasurementsPayload{}, 1)
+	_, msg, ok := inboundEventMessage("gw", "acme", ev, &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.True(t, ok)
 	require.NotContains(t, string(msg.Value), "pw-long-enough")
 	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
@@ -86,7 +86,7 @@ func TestACredentialIdWithoutATypeIsDiscarded(t *testing.T) {
 	const token = "tok-typeless-0123456789"
 	ev := presentingToken(token)
 	ev.CredentialType = nil
-	_, msg, ok := inboundEventMessage("http", "acme", ev, &model.UnresolvedMeasurementsPayload{}, 1)
+	_, msg, ok := inboundEventMessage("http", "acme", ev, &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.True(t, ok)
 	require.NotContains(t, string(msg.Value), token)
 	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
@@ -131,7 +131,7 @@ func TestThePublishedMessageNeverCarriesTheAccessToken(t *testing.T) {
 	tr := sealingFixture(t)
 	const token = "tok-as-the-device-sent-it-0123456789"
 
-	_, msg, ok := inboundEventMessage("http", "acme", presentingToken(token), &model.UnresolvedMeasurementsPayload{}, 1)
+	_, msg, ok := inboundEventMessage("http", "acme", presentingToken(token), &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.True(t, ok)
 	require.NotContains(t, string(msg.Value), token)
 
@@ -154,7 +154,7 @@ func TestThePublishedMessageNeverCarriesTheAccessToken(t *testing.T) {
 func TestAnEventWithAnAccessTokenIsDroppedWhenThereIsNoKeyToSealIt(t *testing.T) {
 	sealingFixture(t)
 	SecretTransit = nil
-	_, _, ok := inboundEventMessage("http", "acme", presentingToken("tok-0123456789"), &model.UnresolvedMeasurementsPayload{}, 1)
+	_, _, ok := inboundEventMessage("http", "acme", presentingToken("tok-0123456789"), &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.False(t, ok)
 }
 
@@ -162,7 +162,7 @@ func TestAnEventWithAnAccessTokenIsDroppedWhenThereIsNoKeyToSealIt(t *testing.T)
 // not secret), and a type spelled in another case is still sealed.
 func TestOnlyBearerCredentialIdsAreSealed(t *testing.T) {
 	sealingFixture(t)
-	_, msg, ok := inboundEventMessage("gw", "acme", presentingEvent("pw-long-enough-to-matter"), &model.UnresolvedMeasurementsPayload{}, 1)
+	_, msg, ok := inboundEventMessage("gw", "acme", presentingEvent("pw-long-enough-to-matter"), &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.True(t, ok)
 	decoded, err := esproto.UnmarshalUnresolvedEvent(msg.Value)
 	require.NoError(t, err)
@@ -172,7 +172,7 @@ func TestOnlyBearerCredentialIdsAreSealed(t *testing.T) {
 	lower := presentingToken("tok-lowercase-0123456789")
 	ty := "access_token"
 	lower.CredentialType = &ty
-	_, msg, ok = inboundEventMessage("http", "acme", lower, &model.UnresolvedMeasurementsPayload{}, 1)
+	_, msg, ok = inboundEventMessage("http", "acme", lower, &model.UnresolvedMeasurementsPayload{}, "acme.1")
 	require.True(t, ok)
 	require.NotContains(t, string(msg.Value), "tok-lowercase")
 }

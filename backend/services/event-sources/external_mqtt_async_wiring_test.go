@@ -137,7 +137,7 @@ func (w *externalWiring) publish(t *testing.T, n int) error {
 		`{"device":"d1","eventType":"Measurement","payload":{"entries":[{"measurements":{"t":"%d"}}]}}`, n)), time.Time{})
 	require.NoError(t, err)
 	res := make(chan error, 1)
-	w.pub.Publish("ext-a", "acme", event, payload, 0, func(err error) { res <- err })
+	w.pub.Publish("ext-a", "acme", event, payload, "", func(err error) { res <- err })
 	select {
 	case err := <-res:
 		return err
@@ -192,7 +192,7 @@ func TestExternalMqttWindowIsTheConfiguredOne(t *testing.T) {
 					if err != nil {
 						return
 					}
-					w.pub.Publish("ext-a", "acme", event, payload, 0, func(err error) { res <- err })
+					w.pub.Publish("ext-a", "acme", event, payload, "", func(err error) { res <- err })
 				}
 			}()
 			require.Eventually(t, func() bool { return seen() >= tc.want }, 10*time.Second, time.Millisecond)

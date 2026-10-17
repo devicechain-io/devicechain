@@ -269,9 +269,9 @@ func startPipelineCaseWith(t *testing.T, w *heldWriter, n, numDelivered int, fai
 	build InboundMessageFunc) *pipelineCase {
 	t.Helper()
 	if build == nil {
-		build = func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
+		build = func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, id string) (context.Context, messaging.Message, bool) {
 			return core.WithTenant(context.Background(), tenant),
-				messaging.Message{Value: []byte(event.Device), DedupID: DedupID(tenant, seq)}, true
+				messaging.Message{Value: []byte(event.Device), DedupID: id}, true
 		}
 	}
 	pc := &pipelineCase{writer: w, reader: &sliceReader{}}
@@ -383,7 +383,7 @@ func TestAHeldPublishThatFailsLeavesItsMessageUnacked(t *testing.T) {
 func TestStartingWithoutAnInboundWriterFailsLoudly(t *testing.T) {
 	source := NewGatewayJetStreamSource(nil, "gw-no-writer", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+		func(string, string, *model.UnresolvedEvent, interface{}, string) (context.Context, messaging.Message, bool) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },
@@ -662,7 +662,7 @@ func TestStopTellsTheWriterItIsDrainingWhileTheReadLoopIsBlocked(t *testing.T) {
 func TestStoppingASourceThatNeverStartedDoesNothing(t *testing.T) {
 	source := NewGatewayJetStreamSource(nil, "gw-never-started", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+		func(string, string, *model.UnresolvedEvent, interface{}, string) (context.Context, messaging.Message, bool) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },
@@ -679,7 +679,7 @@ func TestStoppingASourceThatNeverStartedDoesNothing(t *testing.T) {
 func TestADeliberateDropOnThePipelinedPathIsAcked(t *testing.T) {
 	w := newHeldWriter(0)
 	pc := startPipelineCaseWith(t, w, 1, 1, nil,
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+		func(string, string, *model.UnresolvedEvent, interface{}, string) (context.Context, messaging.Message, bool) {
 			return nil, messaging.Message{}, false
 		})
 

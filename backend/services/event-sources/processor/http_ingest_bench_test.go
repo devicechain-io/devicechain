@@ -65,12 +65,12 @@ func BenchmarkHttpIngestPath(b *testing.B) {
 			n++
 			instance := fmt.Sprintf("httpbench%d", n)
 			b.Run(fmt.Sprintf("transport=%s/publish=%s", transport, publish), func(b *testing.B) {
-				var decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+				var decoded func(string, string, *model.UnresolvedEvent, interface{}, string) error
 				switch publish {
 				case "none":
 					decoded = func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-						seq uint64) error {
-						_, _, ok := benchInboundMessage(source, tenant, event, payload, seq)
+						id string) error {
+						_, _, ok := benchInboundMessage(source, tenant, event, payload, id)
 						if !ok {
 							return fmt.Errorf("event not built")
 						}
@@ -82,8 +82,8 @@ func BenchmarkHttpIngestPath(b *testing.B) {
 					}
 					w := httpBenchWriter(b, srv, fmt.Sprintf("%s-%d", instance, time.Now().UnixNano()))
 					decoded = func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-						seq uint64) error {
-						ctx, msg, ok := benchInboundMessage(source, tenant, event, payload, seq)
+						id string) error {
+						ctx, msg, ok := benchInboundMessage(source, tenant, event, payload, id)
 						if !ok {
 							return fmt.Errorf("event not built")
 						}
@@ -99,7 +99,7 @@ func BenchmarkHttpIngestPath(b *testing.B) {
 
 // httpBenchSource is the HTTP source as production builds it, with ceilings no bench reaches.
 func httpBenchSource(b *testing.B,
-	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error) *HttpEventSource {
+	decoded func(string, string, *model.UnresolvedEvent, interface{}, string) error) *HttpEventSource {
 	b.Helper()
 	flat := core.StaticCeiling(1e9, 1<<30)
 	msgs := func() *core.TenantRateLimiter { return core.NewTenantRateLimiter(flat) }

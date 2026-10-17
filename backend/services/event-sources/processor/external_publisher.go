@@ -20,7 +20,7 @@ type EventPublisher interface {
 	// Publish hands a decoded event on and reports the outcome to done exactly once (see
 	// DecodedFunc). It may return before the event is stored.
 	Publish(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-		captureSeq uint64, done func(error))
+		dedupID string, done func(error))
 	// Settle blocks until every Publish that returned before it was called has had its done
 	// run, or ctx ends (and then returns ctx's error). It publishes nothing and the
 	// publisher stays usable: it is how an owned source proves, before it releases its
@@ -30,15 +30,15 @@ type EventPublisher interface {
 
 // InlinePublisher adapts a synchronous publish callback to an EventPublisher. It has
 // nothing in flight once Publish returns, so its Settle has nothing to wait for.
-func InlinePublisher(decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error) EventPublisher {
+func InlinePublisher(decoded func(string, string, *model.UnresolvedEvent, interface{}, string) error) EventPublisher {
 	return inlinePublisher{Inline(decoded)}
 }
 
 type inlinePublisher struct{ DecodedFunc }
 
 func (p inlinePublisher) Publish(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64, done func(error)) {
-	p.DecodedFunc(source, tenant, event, payload, captureSeq, done)
+	dedupID string, done func(error)) {
+	p.DecodedFunc(source, tenant, event, payload, dedupID, done)
 }
 
 func (inlinePublisher) Settle(context.Context) error { return nil }
@@ -139,8 +139,8 @@ func (p *AsyncEventPublisher) current() messaging.AsyncWriter {
 // for it, which is before the PubAck: a full window holds the calling worker, which is the
 // same backpressure the synchronous publish applied, one window later.
 func (p *AsyncEventPublisher) Publish(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64, done func(error)) {
-	ctx, msg, ok := p.build(source, tenant, event, payload, captureSeq)
+	dedupID string, done func(error)) {
+	ctx, msg, ok := p.build(source, tenant, event, payload, dedupID)
 	if !ok {
 		// A terminal, deliberate drop (see InboundMessageFunc): nothing to publish.
 		done(nil)

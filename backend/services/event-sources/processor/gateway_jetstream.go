@@ -47,11 +47,12 @@ import (
 const POISON_ROUTE_LIMIT = 4
 
 // InboundMessageFunc builds the inbound-events message for one decoded event, with the
-// context it is published under (it carries the tenant). ok=false is a terminal,
+// context it is published under (it carries the tenant) and the dedup id the source named
+// the message by. ok=false is a terminal,
 // deliberate drop (no tenant, an event that cannot be marshalled): the source message is
 // settled nil and nothing is published — the ACK TRAP rule, as for every other drop.
 type InboundMessageFunc func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64) (ctx context.Context, msg messaging.Message, ok bool)
+	dedupID string) (ctx context.Context, msg messaging.Message, ok bool)
 
 // poisonRoutes bounds the failed-decode routes running at once (slots, POISON_ROUTE_LIMIT)
 // and counts them (running), so a stop can wait for them before the connection drains.
@@ -152,6 +153,10 @@ type GatewayJetStreamSource struct {
 	// (see ReadingGate). Never nil (the constructor refuses one).
 	readings ReadingGate
 
+	// fromStore makes this the source over the MQTT gateway's message store rather than the
+	// capture stream; see UseMessageStore.
+	fromStore bool
+
 	// readPacer spaces out the retries after a non-EOF read error and ends the loop once
 	// the errors stop clearing. It carries the microservice a give-up is reported to, so
 	// it is built in the constructor rather than lazily. Nil-safe by construction: a
@@ -201,6 +206,18 @@ func NewGatewayJetStreamSource(ms *core.Microservice, id string, decoder Decoder
 // NATS oncreate callback for this reason; this makes that the only way to do it.
 func (es *GatewayJetStreamSource) SetReader(reader messaging.MessageReader) {
 	es.reader = reader
+}
+
+// UseMessageStore makes this the source over the MQTT gateway's message store: its reader is
+// the events durable on that store (messaging.NewMqttMessageStoreReader), which hands each
+// message out as the device published it, and the dedup id of what it forwards is built
+// from the store's epoch and sequence (messaging.MqttMessageStoreDedupID) instead of the
+// capture sequence. Everything else (the gates, the decode pipeline, the ordered writer, and
+// acking only on the inbound-events PubAck) is the capture source's, unchanged: the store is
+// the copy of a device's QoS 1 publish the broker PUBACKed it on, so it is the one that has
+// to reach inbound-events. Call it before Start.
+func (es *GatewayJetStreamSource) UseMessageStore() {
+	es.fromStore = true
 }
 
 // SetWriter supplies the ordered writer to inbound-events. Like the reader it exists only
@@ -262,7 +279,11 @@ func (es *GatewayJetStreamSource) ExecuteStart(ctx context.Context) error {
 	// The loop is handed its OWN drained channel rather than reading the field, so
 	// a lingering loop from a previous start attempt cannot close the current one's.
 	go es.readLoop(loopCtx, drained)
-	log.Info().Str("source", es.Id).Msg("Gateway event source consuming the device-events capture stream.")
+	if es.fromStore {
+		log.Info().Str("source", es.Id).Msg("Gateway event source consuming the MQTT message store's events durable.")
+	} else {
+		log.Info().Str("source", es.Id).Msg("Gateway event source consuming the device-events capture stream.")
+	}
 	return nil
 }
 
@@ -309,8 +330,8 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 // logs it again with the tenant and capture sequence.
 func (es *GatewayJetStreamSource) submitter(publishes chan<- pendingPublish) DecodedFunc {
 	return func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-		captureSeq uint64, done func(error)) {
-		ctx, msg, ok := es.build(source, tenant, event, payload, captureSeq)
+		dedupID string, done func(error)) {
+		ctx, msg, ok := es.build(source, tenant, event, payload, dedupID)
 		if !ok {
 			done(nil)
 			return
@@ -545,6 +566,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 			Msg("Captured message carries no stream sequence; it will publish with NO dedup id " +
 				"and a redelivery would be stored twice.")
 	}
+	dedupID := es.dedupID(tenant, msg)
 
 	// Count the arrival only once it clears the gate, so a shed message is not
 	// counted as both inbound and rate-limited (matches the HTTP path). A message the
@@ -556,13 +578,26 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		tenant:     tenant,
 		payload:    msg.Value,
 		device:     deviceFromSubject(msg.Subject),
-		captureSeq: msg.StreamSeq,
+		dedupID:    dedupID,
 		receivedAt: msg.AppendTime,
 		meterAt:    meterAt,
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
 		done:       es.settler(msg, tenant),
 	}
+}
+
+// dedupID names a message by the stream it came from: the capture sequence, or the message
+// store's epoch and sequence. A store message whose epoch the reader could not show has
+// none (the reader leaves Message.DedupID empty), and publishes no dedup header: a redelivery of it may
+// be stored twice, which is the safe way round.
+func (es *GatewayJetStreamSource) dedupID(tenant string, msg messaging.Message) string {
+	if es.fromStore {
+		// The reader over the store names it: only it knows which incarnation of the store
+		// the sequence belongs to (messaging.Message.DedupID).
+		return msg.DedupID
+	}
+	return DedupID(tenant, msg.StreamSeq)
 }
 
 // settler returns the completion handler for a captured message: it acknowledges

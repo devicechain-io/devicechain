@@ -50,18 +50,18 @@ func (r *publishRecorder) hooks() PublishHooks {
 	}
 }
 
-func buildOK(source, tenant string, _ *model.UnresolvedEvent, _ interface{}, _ uint64) (context.Context, messaging.Message, bool) {
+func buildOK(source, tenant string, _ *model.UnresolvedEvent, _ interface{}, _ string) (context.Context, messaging.Message, bool) {
 	return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(source)}, true
 }
 
-func buildDrop(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+func buildDrop(string, string, *model.UnresolvedEvent, interface{}, string) (context.Context, messaging.Message, bool) {
 	return nil, messaging.Message{}, false
 }
 
 func publishOne(p *AsyncEventPublisher) error {
 	var got error
 	called := 0
-	p.Publish("ext", "acme", &model.UnresolvedEvent{}, nil, 0, func(err error) { got = err; called++ })
+	p.Publish("ext", "acme", &model.UnresolvedEvent{}, nil, "", func(err error) { got = err; called++ })
 	if called != 1 {
 		return errors.New("done did not run exactly once")
 	}

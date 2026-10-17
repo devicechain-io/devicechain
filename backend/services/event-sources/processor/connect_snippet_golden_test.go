@@ -225,7 +225,7 @@ func TestConnectSnippetCurlIsAcceptedByHttpIngest(t *testing.T) {
 			es, err := NewHttpEventSource("http-test", map[string]string{}, snippetInstance, config.HttpIngest{},
 				NewJsonDecoder(map[string]string{}),
 				func(string, []byte) {},
-				func(_ string, tenant string, event *model.UnresolvedEvent, payload interface{}, _ uint64) error {
+				func(_ string, tenant string, event *model.UnresolvedEvent, payload interface{}, _ string) error {
 					gotTenant, gotEvent, gotPayload = tenant, event, payload
 					return nil
 				},
