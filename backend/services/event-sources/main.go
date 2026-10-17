@@ -142,6 +142,11 @@ var (
 	// instance, and exports nothing).
 	MqttFailClosedMetrics *messaging.MqttFailClosedMetrics
 	MqttFailClosedWatch   *messaging.MqttFailClosedWatch
+	// MqttStoreBoundMetrics and MqttStoreBoundWatch keep the gateway's streams bounded as the
+	// gateway creates them (on the first device connection, long after startup). Every pod,
+	// whatever mqttFailClosed says.
+	MqttStoreBoundMetrics *messaging.MqttStoreBoundMetrics
+	MqttStoreBoundWatch   *messaging.MqttStoreBoundWatch
 	MqttMessageStore      messaging.MqttMessageStoreState
 	// StoreSource is the gateway source over the MQTT message store's events durable
 	// (processor.GatewayJetStreamSource.UseMessageStore), built beside GatewaySource with the
@@ -1114,6 +1119,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 
 	// Initialize metrics.
 	initializeMetrics()
+	MqttStoreBoundMetrics = messaging.NewMqttStoreBoundMetrics(Microservice)
 	// The fail-closed store's watch series exist only with the setting on, so an install
 	// with it off exports exactly what it did before the setting existed.
 	if Microservice.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed {
@@ -1229,6 +1235,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	MqttFailClosedWatch = NatsManager.StartMqttFailClosedWatch(ctx, MqttFailClosedMetrics,
 		messaging.MqttFailClosedWatchInterval, onFailClosedPass(ctx, NatsManager))
 
+	// The gateway creates its streams when the first device connects, which on a fresh install
+	// is after the reconcile above has stopped waiting; this bounds them whenever they appear.
+	// With the fail-closed setting on $MQTT_msgs is the fail-closed reconcile's (msgs 0: leave it).
+	msgsBound := natscfg.MqttStoreMaxBytes
+	if natscfg.MqttFailClosed {
+		msgsBound = 0
+	}
+	MqttStoreBoundWatch = NatsManager.StartMqttStoreBoundWatch(ctx, MqttStoreBoundMetrics,
+		messaging.MqttStoreBoundWatchInterval, msgsBound, natscfg.MqttQoS2StoreMaxBytes)
+
 	// Broker-asserted MQTT presence (ADR-067). Started LAST and never fatal: it is an
 	// enrichment of ingest, not a precondition for it. A missing writer is not an
 	// environment condition but a wiring fault, so it alone stops the service.
@@ -1250,6 +1266,8 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// manager drains below.
 	MqttFailClosedWatch.Stop()
 	MqttFailClosedWatch = nil
+	MqttStoreBoundWatch.Stop()
+	MqttStoreBoundWatch = nil
 
 	// Stop each event source. The external sources' writers outlive their terms, so they are
 	// closed here, once the sources (and with them the last term, which settled its
