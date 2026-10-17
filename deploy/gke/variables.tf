@@ -59,9 +59,9 @@ variable "database_disk_size_gb" {
 }
 
 variable "services_machine_type" {
-  description = "Machine type for the services pool, where everything but the databases runs. CPU binds first, then memory: on 4 GB nodes NATS and the services left too little page cache. The default is a custom N2 shape, 4 vCPU and 8 GB. See the README."
+  description = "Machine type for the services pool, where everything but the databases runs. CPU binds first, then memory: on 4 GB nodes NATS and the services left too little page cache. The default is t2d-standard-4: 4 vCPU (four physical cores, no SMT) and 16 GB. See the README, including which zones offer T2D."
   type        = string
-  default     = "n2-custom-4-8192"
+  default     = "t2d-standard-4"
 }
 
 variable "services_node_count" {

@@ -13,7 +13,7 @@ and `dcctl` neither reads it nor ships it.
 | --- | --- |
 | A zonal GKE cluster on the `REGULAR` release channel | `devicechain` in `us-east4-b` |
 | A `database` node pool, tainted so only pods placed there run there | 3 × `n2-standard-4` (4 vCPU, 16 GB) |
-| A `services` node pool for everything else | 3 × `n2-custom-4-8192` (4 vCPU, 8 GB) |
+| A `services` node pool for everything else | 3 × `t2d-standard-4` (4 vCPU, 16 GB) |
 | Every node's boot disk | 100 GB `pd-standard` |
 | An optional `loadgen` node pool, tainted so only a load generator runs there | none; set `loadgen_node_count = 1` |
 
@@ -24,7 +24,7 @@ different `database` nodes. See [Install DeviceChain](#install-devicechain).
 
 Check the price of the six nodes and their disks with Google's
 [pricing calculator](https://cloud.google.com/products/calculator) before you apply:
-a custom machine type's vCPUs and memory are priced separately from the predefined
+the custom machine types' vCPUs and memory are priced separately from the predefined
 types'. **It bills until you destroy it.** See [Tearing it down](#tearing-it-down).
 
 ## Choosing the machine types
@@ -35,13 +35,41 @@ with 1.2 to 2.0 GiB left available and pages read back from disk several times a
 second; NATS alone used about 0.7 GiB per server. The databases want memory:
 Postgres keeps a small buffer cache of its own and leans on the node's page cache
 for the rest, so memory on a database node buys speed. That is why the `database`
-pool has 16 GB nodes and the `services` pool 8 GB ones, with the same 4 vCPU each.
-On those 8 GB services nodes, in runs offered up to 9,200 events a second, every
-node kept at least 5.2 GiB available, which leaves CPU as the services pool's limit.
-The services shape is a custom one, `n2-custom-4-8192`, because no predefined N2
-type has 4 vCPU and 8 GB. For more throughput, `n2-highcpu-8` adds CPU, which is
-what binds first. It needs 12 more vCPUs, which takes the cluster past a new
-project's 32 (see below).
+pool has 16 GB nodes. The services pool's memory is not what limits it: on 8 GB
+services nodes, in runs offered up to 9,200 events a second, every node kept at
+least 5.2 GiB available, which leaves CPU as the services pool's limit.
+
+The services shape is `t2d-standard-4`. A T2D vCPU is a whole physical core, where
+an N2 or N2D 4-vCPU shape is two cores with two threads each, and the event path is
+many busy goroutines across the broker and the services, so whole cores show. Against
+3 × `n2-custom-4-8192` and 3 × `n2d-custom-4-8192` services nodes, on the same build
+and database nodes, it persisted about 18% more events a second on a 3-node HA
+install (about 17,200 against 14,500 and 14,700, offered 18,000 over HTTP), at much
+lower tail latency (MQTT QoS 1 acknowledgement p99 of 38 ms against 578 and 171 ms at
+9,000 events a second), with the services nodes at 81 to 86% CPU instead of 91 to 95%.
+It also had the lowest cost per event, even though T2D gets no sustained-use discount
+and the N2 and N2D shapes do. T2D has no custom shapes, so the 16 GB is not a choice;
+the extra memory went unused in those runs. At that rate the bottleneck moved to the
+database node hosting the event store's primary, so the `database` pool is the next
+limit, and `n2-standard-4` is kept there: T2D for the database pool has not been
+measured. For more throughput, give the database pool more CPU first.
+
+**T2D is not offered in every zone.** `us-east4-b`, the default, offers it (so do
+`us-east4-a` and `us-east4-c`). If you change `location`, check before you apply:
+
+```bash
+gcloud compute machine-types list --filter="name=t2d-standard-4 AND zone~us-east4-b"   --format="value(zone,name)"
+```
+
+If the list is empty, the zone does not offer it. Set `services_machine_type` to
+`n2d-custom-4-8192`, which measured equal to the N2 shape within noise and costs
+about 13% less per node, or to `n2-custom-4-8192`.
+
+T2D CPUs count against their own quota, `T2D_CPUS`, not `N2_CPUS`, so check that
+one too (step 4 of [Before you start](#before-you-start)). If you use N2D for
+both pools, three plus three 4-vCPU nodes need an `N2D_CPUS` quota of at least 28 in
+the region, 24 plus 4 for the node GKE adds while it upgrades a pool; a new project's
+default is lower, and the increase request can be denied.
 
 The busiest pod is the NATS server that leads the incoming-event stream. In runs
 offered 6,800 events a second and more, it used 1.6 to 1.8 cores against its 500m
@@ -65,8 +93,9 @@ minutes, on each of two development builds that went into v0.22.0, and stored ev
 event exactly once, checked event by event: none missing, none stored twice, none unexpected.
 In those runs the event-path services and the broker's stream leaders were held to one
 balanced placement across the three service nodes. With placement left to the scheduler, the
-v0.19.0 release candidate was measured the same way at 6,000 events a second. Those nodes are
-this configuration's defaults, on its standard boot disks.
+v0.19.0 release candidate was measured the same way at 6,000 events a second. Those service nodes were
+`n2-custom-4-8192` (8 GB), the default before the services pool moved to T2D (above); the
+database nodes and the standard boot disks are unchanged.
 See [Measured throughput](https://docs.devicechain.io/deployment/bootstrap#measured-throughput).
 
 The defaults use 24 vCPUs, and 28 with a load-generator node. The extra node GKE
@@ -122,6 +151,9 @@ after it, needs 1.9, and `dcctl` does not check the version before it starts.
 4. Check your quota. A new project often allows only **32 vCPUs across all
    regions** and **500 GB of SSD per region**. The default cluster uses 24 vCPUs,
    and 28 with a load-generator node.
+   The services pool is T2D, so its 12 vCPUs (16 while it upgrades) count against
+   the `T2D_CPUS` quota and the other 12 against `N2_CPUS`, on top of the
+   all-regions and region totals.
 
    **A default `--ha` install with one instance fits a new project's 500 GB of
    SSD.** With one instance, DeviceChain claims 348 GB of persistent volumes,
@@ -185,7 +217,7 @@ gcloud compute instances create cap-probe-db --zone us-east4-b \
   --machine-type n2-standard-4 --image-family debian-12 --image-project debian-cloud \
   --boot-disk-size 10 --no-address
 gcloud compute instances create cap-probe-svc --zone us-east4-b \
-  --machine-type n2-custom-4-8192 --image-family debian-12 --image-project debian-cloud \
+  --machine-type t2d-standard-4 --image-family debian-12 --image-project debian-cloud \
   --boot-disk-size 10 --no-address
 gcloud compute instances delete cap-probe-db cap-probe-svc --zone us-east4-b --quiet
 ```
