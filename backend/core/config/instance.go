@@ -86,6 +86,29 @@ type NatsConfiguration struct {
 	// arrives — and it discards NEW on full, so this ceiling turns that from a
 	// disk-exhaustion vector into a refused publish.
 	MqttQoS2StoreMaxBytes int64
+	// MqttFailClosed makes a QoS 1 PUBACK from the broker's MQTT gateway mean that the
+	// platform holds the message. It is OFF unless set, and while it is off nothing about
+	// the gateway's streams differs from an install that has never heard of it.
+	//
+	// The gateway already answers a QoS 1 PUBLISH only once its own message store,
+	// $MQTT_msgs, has stored the message, and closes the connection without a PUBACK when
+	// that store refuses it. When this is on, event-sources declares that store itself
+	// (discard NEW, bounded by the hot stream ceiling, replicas explicit) and keeps a
+	// platform durable consumer on it for each kind of device publish: events, command
+	// responses and device reports. A full store then refuses rather than evicts, and the
+	// device keeps the message.
+	//
+	// 🔴 NOT YET AN OPERATING MODE. This release builds the store and its durables and
+	// watches them; nothing reads the durables yet, so with this on, QoS 1 device
+	// publishes accumulate in the store until it is full and the gateway then refuses
+	// every one. Ingest itself still runs through the capture stream. Leave it off until
+	// the release notes say the reader has shipped.
+	//
+	// It is refused at startup on a broker that also serves another instance: the store is
+	// per broker account, so one instance's backlog would refuse the other's devices, and
+	// each instance would rewrite the other's bound. Turning it off again removes the
+	// platform durables and restores the gateway's default discard policy.
+	MqttFailClosed bool
 	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
 	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in
 	// the same account and draw on the same max_file_store, but until now nothing
@@ -1037,7 +1060,21 @@ const MqttGatewayStreamCount = 3
 // messaging.ReconcileMqttStores gives them a ceiling, JetStream reserves it like
 // any other stream's — so this belongs in the same budget as the platform's own.
 func (c *NatsConfiguration) MqttStoreReservation() int64 {
-	return c.MqttStoreMaxBytes + 2*c.MqttQoS2StoreMaxBytes
+	return c.MqttMessageStoreMaxBytes() + 2*c.MqttQoS2StoreMaxBytes
+}
+
+// MqttMessageStoreMaxBytes is the ceiling on the gateway's message store, $MQTT_msgs.
+//
+// With MqttFailClosed off it is MqttStoreMaxBytes, a safety cap on a store the platform
+// does not read. With it on, the store is the platform's own buffer for every QoS 1 device
+// publish, which is the job the device-events capture stream's hot ceiling is sized for,
+// so it takes that ceiling instead. Both the reconciler and the disk reservation read it
+// here, so the bound applied and the bound budgeted cannot differ.
+func (c *NatsConfiguration) MqttMessageStoreMaxBytes() int64 {
+	if c.MqttFailClosed {
+		return c.StreamMaxBytesFor(streams.DeviceEventsCapture)
+	}
+	return c.MqttStoreMaxBytes
 }
 
 func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {

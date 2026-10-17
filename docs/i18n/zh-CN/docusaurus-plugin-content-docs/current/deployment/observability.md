@@ -372,6 +372,10 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 在线状态转换持续十分钟写入事件流失败（`devicechain_eventsources_presence_events_failed_total` 上升）时，`BrokerPresenceLosingTransitions`（warning）触发。每条转换在下一轮对账前都处于丢失状态，期间设备可能在线却显示离线。应检查平台的消息代理，并在 event-sources 日志中查找 `Failed to emit a broker presence transition`，其中注明每台设备。读取器停止期间到达的转换不计入，因此滚动重启不会触发该告警，单次突发也会自行消退。
 
+`MqttFailClosedDurableMissing`（critical）和 `MqttFailClosedStoreNotAsDeclared`（critical）只会在开启了 `infrastructure.nats.mqttFailClosed` 的实例上触发。该设置默认关闭，目前还不是受支持的运行方式：它正在构建中，目的是让代理的 QoS 1 PUBACK 意味着平台已保存该消息。开启后，`event-sources` 会声明代理自身的 MQTT 消息存储（`$MQTT_msgs`），使存储写满时拒绝新的发布，而不是丢弃已经确认过的消息，并在该存储上为每类设备发布（事件、命令响应和设备报告）各保留一个平台自己的消费者。每个 Pod 每 30 秒检查一次存储和这些消费者，重新创建缺失的部分，并恢复被改动的设置。如果代理同时服务另一个实例，该设置会在启动时被拒绝，因为同一代理上的所有实例共用这个存储。
+
+检查一旦发现其中某个消费者缺失（`devicechain_eventsources_mqtt_failclosed_durable_missing_total` 上升），`MqttFailClosedDurableMissing` 立即触发；只要有 Pod 报告某个消费者无法创建（`devicechain_eventsources_mqtt_failclosed_durable_present` 为 0），它就持续触发。消费者缺失期间，代理会确认该类设备发布却不保存，因此每条都会丢失，尽管设备已被告知送达。在关闭该设置的滚动更新期间，直到最后一个仍开启该设置的 Pod 停止前，该告警也会触发。除此之外，应查明是什么删除了该消费者，并在 event-sources 日志中查找 `platform durable on the MQTT message store`。当检查不得不恢复存储的某项设置（`devicechain_eventsources_mqtt_failclosed_store_repaired_total`，按设置区分），或发现代理上还有另一个实例（`devicechain_eventsources_mqtt_failclosed_foreign_instances` 大于 0）时，`MqttFailClosedStoreNotAsDeclared` 触发。被改动的设置会在 30 秒内恢复，但在此期间，写满的存储可能丢弃已确认的消息，或拒绝所有发布。代理上的另一个实例会共用该存储及其大小上限，因此应为每个实例配备独立的代理，或关闭该设置。
+
 ## 事件持久化 {#event-persistence}
 
 事件管理批量写入。每个写入器拿取已等待事件到上限，在一个事务提交，对批次每个租户每张表写一次，而非每事件一次。连接和断开仍在批次中逐条写。事务提交后才确认事件。批次中某事件被拒绝时，事务全部回滚；拒绝事件单独重写，按非批量方式重试或报告，其他事件排除它后重新提交。因租户已删除而被拒绝的事件例外：拒绝适用于该租户的所有事件，因此都不再重写，而是立即确认、不作任何报告，并计为 `erased`（参见[租户删除](./tenant-deletion.md#database-writes)）。数据库拒绝多事件语句中的行时无法指出原事件，因此先在新事务逐事件写入来定位。若失败不是单个事件原因，例如数据库连接丢失，全部事件逐个重写。
