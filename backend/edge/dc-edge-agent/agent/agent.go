@@ -405,6 +405,16 @@ func (a *Agent) newServer(mqttEnabled bool) (*natsserver.Server, error) {
 		// outage, reboot) E3 exists for. Pinning it decouples admission from boot-time
 		// free space; the headroom covers the internal MQTT streams too.
 		JetStreamMaxStore: a.cfg.Local.SpoolMaxBytes + mqttStoreHeadroom,
+		// Lift the per-stream consumer cap nats-server 2.15 introduced. Left at zero it
+		// resolves to 1,000 consumers per stream, and every QoS 1 or 2 MQTT subscription
+		// is a durable consumer on the server's own $MQTT_msgs stream (a QoS 2 session
+		// adds one on $MQTT_out), which sets no limit of its own. So the 1,001st QoS 1
+		// subscription on a site would be answered SUBACK 0x80 while its CONNECT
+		// succeeded: the device stays connected and never receives what it subscribed
+		// to. -1 is the documented way back to the 2.14 behaviour of no default; a
+		// per-stream or account limit cannot opt out, because -1 there counts as "unset".
+		// The cloud broker gets the same setting from the nats OpenTofu module.
+		JetStreamLimits: natsserver.JSLimitOpts{DefaultMaxConsumers: -1},
 	}
 	if mqttEnabled {
 		opts.MQTT = natsserver.MQTTOpts{
