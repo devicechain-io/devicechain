@@ -75,7 +75,7 @@ func startDeliveryFixture(t *testing.T) *deliveryFixture {
 	db := sqlitetest.OpenMemory(t, nil)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceCredential{}, &model.DeviceReplacement{},
-		&model.EntityAttribute{}, &model.EntityGroup{}, &model.EntityGroupVersion{}, &model.EntityGroupMembership{},
+		&model.EntityAttribute{}, &model.EntityGroup{}, &model.IssuedGroupToken{}, &model.EntityGroupVersion{}, &model.EntityGroupMembership{},
 		&model.EntityGroupFacetRef{}, &model.EntityRelationship{}, &model.Alarm{},
 		&model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 		&model.DetectionRule{}, &model.DetectionRuleScopeRef{},

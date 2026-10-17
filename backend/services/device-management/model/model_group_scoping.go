@@ -75,4 +75,9 @@ type GroupMembership struct {
 	GroupId         uint
 	GroupToken      string
 	SelectorVersion int32
+	// AccessScope is true when the row is the published version of an access scope
+	// (ADR-081): the entity then carries the anchor "group:<GroupToken>". It is not a
+	// property of the row — a rule pinning the same group@version reads the same row — so
+	// it is read from the group when the membership is (MembershipsForEntity).
+	AccessScope bool `json:",omitempty"`
 }

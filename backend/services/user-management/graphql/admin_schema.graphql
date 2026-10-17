@@ -71,13 +71,14 @@ enum ScopeAnchorKind {
     """A customer: the anchor covers the devices assigned to that customer."""
     CUSTOMER
     """
-    An entity group. Not available yet: a scope naming a group is refused with the error code
-    INVALID_VALUE.
+    An entity group: the anchor covers the devices in the group while it is an access scope (at
+    its active version), so a device moved into or out of the group is seen or not without the
+    member being edited. A group that is not an access scope covers nothing.
     """
     GROUP
 }
 
-"""One entry of a membership's scope: a customer whose devices the member can see."""
+"""One entry of a membership's scope: a customer or group whose devices the member can see."""
 type ScopeAnchor {
     """What the anchor names."""
     kind: ScopeAnchorKind!
@@ -87,7 +88,7 @@ type ScopeAnchor {
 
 """One entry of a scope to set on a membership."""
 input ScopeAnchorInput {
-    """What the anchor names. Only CUSTOMER is accepted for now."""
+    """What the anchor names."""
     kind: ScopeAnchorKind!
     """Token of the customer the anchor names."""
     token: String!
@@ -1879,11 +1880,11 @@ type Mutation {
         scope: [ScopeAnchorInput!]
     ): AdminIdentity!
     """
-    Replaces the customers a membership is limited to and returns the identity. An empty list
+    Replaces the customers and groups a membership is limited to and returns the identity. An empty list
     gives the whole tenant. The change takes effect at the identity's next token refresh
     (within 15 minutes; 5 for customer-scoped access): an access token already issued keeps
     its old scope until it expires, and its sessions in other tenants are not affected. Fails if the identity has no membership in
-    the tenant, for more than 16 anchors (LIMIT_EXCEEDED) or a group anchor (INVALID_VALUE).
+    the tenant, or for more than 16 anchors (LIMIT_EXCEEDED).
     Requires user:write.
     """
     setMembershipScope(

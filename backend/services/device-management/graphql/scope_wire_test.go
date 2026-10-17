@@ -57,10 +57,17 @@ func newScopeFixture(t *testing.T) scopeFixture {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&model.DeviceType{}, &model.Device{}, &model.DeviceProfile{},
+	return seedScopeFixture(t, db)
+}
+
+// seedScopeFixture migrates and seeds the scope fixture on db, which has tenant scoping
+// registered.
+func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
+	t.Helper()
+	if err := db.AutoMigrate(append([]any{&model.DeviceType{}, &model.Device{}, &model.DeviceProfile{},
 		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
 		&model.EntityRelationship{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{},
-		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{}); err != nil {
+		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	f := scopeFixture{db: db, api: model.NewApi(&rdb.RdbManager{Database: db})}

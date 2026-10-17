@@ -116,6 +116,7 @@ func TestSamplePairingKindsMatchAnEventTimeOracle(t *testing.T) {
 // detector is the slice of the engine surface this test drives, satisfied by Engine and Sharded.
 type detector interface {
 	ProcessResolved(seq uint64, t time.Time, evs []Event)
+	ProcessReceived(seq uint64, t time.Time, r Receipt, evs []Event)
 	Advance(w time.Time) bool
 	Drain() []Detection
 	DrainLateSamples() uint64

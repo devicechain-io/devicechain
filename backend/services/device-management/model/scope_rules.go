@@ -4,6 +4,7 @@
 package model
 
 import (
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
@@ -21,7 +22,9 @@ import (
 //   - the DEVICE row is visible while the caller's scope currently owns it: an edge of a
 //     TRACKED relationship type from the device to a customer the scope names
 //     (rdb.DeviceEdge). Keyed on the tracked flag, not on a type token: "assigned" is only
-//     the default, and any tracked type to a customer is ownership;
+//     the default, and any tracked type to a customer is ownership. It is visible, too,
+//     while it is a member of an access-scope group the scope names, at the group's
+//     published version (the rule's group branch, api_group_access.go);
 //   - a device-derived row (an alarm) carries the anchors its device had when it was
 //     written (rdb.AnchorColumn), so it keeps the owner it had then;
 //   - tenant configuration a customer's console needs to render what it may see — device
@@ -35,6 +38,13 @@ var deviceOwnership = rdb.OwnershipEdges{
 	SourceType: "source_type", SourceID: "source_id", SourceKind: string(entity.TypeDevice), Row: "id",
 	TargetType: "target_type", TargetToken: "target_token",
 	EdgeType: "relationship_type_id", TypeID: "id", Tracked: "tracked", TypeToken: "token",
+	Groups: &rdb.GroupMembers{
+		Kind:   auth.AnchorKindGroup,
+		Member: &EntityGroupMembership{}, Group: &EntityGroup{},
+		MemberType: "entity_type", MemberID: "entity_id", MemberKind: string(entity.TypeDevice),
+		MemberGroup: "group_id", MemberVersion: "selector_version",
+		GroupID: "id", GroupToken: "token", GroupVersion: "active_version", GroupEnabled: "access_scope_at",
+	},
 }
 
 // ScopedBy: a scoped caller sees the devices its scope currently owns.

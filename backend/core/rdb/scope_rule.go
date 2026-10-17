@@ -204,6 +204,37 @@ type OwnershipEdges struct {
 	// is keyed on the tracked flag, never on a type's token); EdgeTo, which matches one
 	// type by its token, requires it.
 	TypeToken string
+	// Groups, when set, is a second way a device is reached: by being a member of a group
+	// a scope names (see GroupMembers). Nil means a scope's group anchors match only edges.
+	Groups *GroupMembers
+}
+
+// GroupMembers describes a group READ-MODEL for DeviceEdge: a MEMBER table holding one row
+// per (member entity, group, group version) and a GROUP table naming each group's token, the
+// version currently in force, and whether the group may be named by a scope at all. A device
+// is reached through it when it is a member of a group whose anchor ("<Kind>:<token>") the
+// scope names, at the version the group currently holds, while the group is enabled. Every
+// name is a field or column of the model it belongs to; every value compared against is bound.
+type GroupMembers struct {
+	// Kind is the anchor kind this branch serves ("group"). Only a scope's anchors of this
+	// kind are matched against it.
+	Kind string
+	// Member and Group are the member and group models. Both must be tenant-scoped: the
+	// predicate carries the tenant on BOTH tables.
+	Member, Group any
+	// MemberType and MemberID are the member columns naming the member entity's type and row
+	// id; MemberKind is the type value that names a row of the model being read ("device").
+	// The row's id column is OwnershipEdges.Row.
+	MemberType, MemberID, MemberKind string
+	// MemberGroup and MemberVersion are the member columns naming the group's id and the
+	// version the row was computed at.
+	MemberGroup, MemberVersion string
+	// GroupID, GroupToken and GroupVersion are the group's id, token and current-version
+	// columns. A member row of any other version confers nothing.
+	GroupID, GroupToken, GroupVersion string
+	// GroupEnabled is the group's column that is non-NULL while a scope may reach devices
+	// through it. A group with it NULL confers nothing, whatever its members.
+	GroupEnabled string
 }
 
 // DeviceEdge is the rule of the DEVICE row itself (ADR-081): a scoped caller sees a device
@@ -219,6 +250,20 @@ type OwnershipEdges struct {
 //	          AND dc_scope_type.<tracked> = $true
 //	          AND dc_scope_edge.<source type> = $kind AND dc_scope_edge.<source id> = "<table>".<row>
 //	          AND ((dc_scope_edge.<target type> = $1 AND dc_scope_edge.<target token> = $2) OR ...))
+//
+// With Groups set, a device is ALSO visible while it is a member of a group a scope names
+// (see GroupMembers), and the predicate is the edge EXISTS OR:
+//
+//	EXISTS (SELECT 1 FROM <member> AS dc_scope_member
+//	        JOIN <group> AS dc_scope_group ON dc_scope_group.<id> = dc_scope_member.<group>
+//	        WHERE dc_scope_member.<tenant> = $tenant AND dc_scope_group.<tenant> = $tenant
+//	          [AND dc_scope_member.deleted_at IS NULL] [AND dc_scope_group.deleted_at IS NULL]
+//	          AND dc_scope_group.<enabled> IS NOT NULL
+//	          AND dc_scope_member.<version> = dc_scope_group.<version>
+//	          AND dc_scope_member.<member type> = $kind AND dc_scope_member.<member id> = "<table>".<row>
+//	          AND dc_scope_group.<token> IN ($1, $2, ...))
+//
+// added only when the scope names an anchor of Groups.Kind.
 //
 // It is CURRENT ownership: an edge removed is a device no longer visible, at once. History
 // (events, alarms) is stamped when written and keeps the owner it had then. Scoped writes

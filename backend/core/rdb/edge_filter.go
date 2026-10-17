@@ -83,9 +83,13 @@ func edgeToExpr(db *gorm.DB, e OwnershipEdges, target EdgeTarget) (clause.Expres
 		return nil, fmt.Errorf("an edge filter naming no row column %q", e.Row)
 	}
 	typeToken := target.Type
-	return edgeExistsExpr(db, clause.Column{Table: stmt.Schema.Table, Name: row.DBName}, e, tenant, edgeMatch{
+	expr, err := edgeExistsExpr(db, clause.Column{Table: stmt.Schema.Table, Name: row.DBName}, e, tenant, edgeMatch{
 		trackedOnly: target.TrackedOnly,
 		typeToken:   &typeToken,
 		targets:     []edgeTarget{{kind: target.Kind, token: target.Token}},
 	})
+	if err != nil {
+		return nil, err
+	}
+	return expr, nil
 }

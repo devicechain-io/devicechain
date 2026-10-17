@@ -1942,6 +1942,12 @@ type EntityGroup implements Model & TokenReference & NamedEntity & BrandedEntity
     # The group's published versions, newest first (ADR-062 S1). Empty for a group
     # that has never been published (and always empty for a static group).
     versions: [EntityGroupVersion!]!
+    """
+    Whether the group is an access scope: a group a member's access can be limited to. A member
+    limited to it sees the devices in the group at its active version — and only while they
+    are in it — and the history recorded while they were. Set with setEntityGroupAccessScope.
+    """
+    accessScope: Boolean!
 }
 
 # An immutable published snapshot of a DYNAMIC entity group's membership selector
@@ -2045,6 +2051,10 @@ input EntityGroupSearchCriteria {
     pageSize: Int!
     memberType: String
     membershipMode: String
+    """
+    Keep only the groups that are (true) or are not (false) access scopes. Omit it for both.
+    """
+    accessScope: Boolean
 }
 
 # Search results returned from entity groups query.
@@ -3911,6 +3921,23 @@ type Mutation {
     # Re-point a dynamic group's active version at an existing version — a
     # non-destructive rollback; the draft is untouched. Returns the updated group.
     rollbackEntityGroup(token: String!, version: Int!): EntityGroup!
+    """
+    Make a group an access scope, or stop it being one, and return the group. A member whose
+    access is limited to the group sees the devices in it at its active version, so publishing
+    or rolling the group back changes what they see, and a device whose attributes move it into
+    or out of the group appears or disappears for them without anyone editing the member.
+    Records written about a device while it is in the group (events, alarms, commands, update
+    assignments) stay visible to them afterwards. Only a published dynamic group of devices can
+    be one (INVALID_VALUE otherwise), and a tenant may have at most 32 (LIMIT_EXCEEDED). Setting
+    what is already set changes nothing. A deleted group's token is never reused, so a member
+    limited to it is never handed a new group's devices. Requires device:write.
+    """
+    setEntityGroupAccessScope(
+        """Token of the group."""
+        token: String!,
+        """True to make it an access scope, false to stop it being one."""
+        enabled: Boolean!
+    ): EntityGroup!
     # Declare (upsert) a facet key by its natural key (memberType, key) — ADR-061 G2.
     setFacetKey(request: FacetKeySetRequest): FacetKey!
     # Delete a facet key by its natural key. Returns whether a row was removed; a

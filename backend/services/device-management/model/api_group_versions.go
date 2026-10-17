@@ -5,9 +5,11 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/internal/selector"
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -90,7 +92,15 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 	// Insert the version and advance the active pointer atomically: a pointer update
 	// that failed after the insert would leave an orphan version and rules resolving
 	// the stale one, so wrap both.
+	var evictions []membershipEviction
+	var changed bool
+	var members []uint
 	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		// The family lock FIRST, before the group row is touched (see movePointerOnTx).
+		from, err := api.lockFamilyAndReadPointerOnTx(ctx, tx, group)
+		if err != nil {
+			return err
+		}
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
@@ -105,18 +115,51 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: entity group %q", gorm.ErrRecordNotFound, token)
 		}
-		// ADR-062 S2 maintenance hook goes HERE, inside the publish txn after the
-		// repoint: if this group is already rule-referenced, enroll the new group@v for
-		// membership maintenance (backfill the read-model, extend the reverse index)
-		// enlisted in this same transaction so the read-model advances atomically with
-		// the active pointer. No-op in S1 — no rule can reference a group until S4 adds
-		// the DetectionRule scope column, so there is nothing to enroll yet.
-		return nil
+		// A rule pins a VERSION, so a publish enrolls nothing for rules. An access scope
+		// follows the pointer (ADR-081): its new version is materialized, and the old torn
+		// down unless a rule pins it, in this same transaction.
+		evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
+	api.afterAccessScopeMoved(ctx, evictions, changed, members)
 	return version, nil
+}
+
+// afterAccessScopeMoved fires, post-commit, what moving an access scope's pointer produced:
+// the read-model evictions, the members' cached memberships (their access marker may have
+// changed even where no row did), and an ownership-changed fact for each member device.
+func (api *Api) afterAccessScopeMoved(ctx context.Context, evictions []membershipEviction, changed bool, members []uint) {
+	api.fireScopingEvictions(ctx, evictions, changed)
+	api.evictMemberships(ctx, string(entity.TypeDevice), members)
+	api.emitOwnershipChanged(ctx, members)
+}
+
+// lockFamilyAndReadPointerOnTx takes the group's family lock and returns the published
+// pointer as it is NOW, under that lock, for a pointer move on tx. Two things depend on the
+// lock coming before the group row is touched:
+//
+//   - the order of locks. SetEntityGroupAccessScope and DeleteEntityGroup take the family
+//     lock and then the group row; a move that took the row first and the family lock
+//     second (inside moveAccessScopeOnTx) would be the opposite order, and the engine
+//     answers that with a deadlock for one of the two callers.
+//   - what the switch reads. SetEntityGroupAccessScope enrolls the pointer it reads under
+//     the family lock; a move committed between its read and its write would leave the
+//     scope enabled at a version nobody materialized, and its members seeing nothing.
+//
+// The pointer is re-read rather than taken from the group loaded before the transaction,
+// for the same reason: a move that committed in between is the one this move is after.
+func (api *Api) lockFamilyAndReadPointerOnTx(ctx context.Context, tx *gorm.DB, group *EntityGroup) (sql.NullInt32, error) {
+	if err := api.lockMembershipFamily(ctx, tx, group.MemberType); err != nil {
+		return sql.NullInt32{}, err
+	}
+	var current EntityGroup
+	if err := tx.Where("id = ?", group.ID).First(&current).Error; err != nil {
+		return sql.NullInt32{}, err
+	}
+	return current.ActiveVersion, nil
 }
 
 // RollbackEntityGroup re-points the group's active version at an existing version,
@@ -141,15 +184,32 @@ func (api *Api) RollbackEntityGroup(ctx context.Context, token string, version i
 		return nil, fmt.Errorf("%w: entity group %q has no version %d", gorm.ErrRecordNotFound, token, version)
 	}
 
-	res := api.RDB.DB(ctx).Model(group).Where("id = ?", group.ID).
-		Update("active_version", version)
-	if res.Error != nil {
-		return nil, res.Error
+	// The pointer flip and an access scope's re-enrollment commit together (see
+	// PublishEntityGroup), under the family lock, as there.
+	var evictions []membershipEviction
+	var changed bool
+	var members []uint
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		from, err := api.lockFamilyAndReadPointerOnTx(ctx, tx, group)
+		if err != nil {
+			return err
+		}
+		res := tx.Model(group).Where("id = ?", group.ID).
+			Update("active_version", version)
+		if res.Error != nil {
+			return res.Error
+		}
+		// The group was deleted between the existence check and here.
+		if res.RowsAffected == 0 {
+			return fmt.Errorf("%w: entity group %q", gorm.ErrRecordNotFound, token)
+		}
+		evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from)
+		return err
+	})
+	if err != nil {
+		return nil, err
 	}
-	// The group was deleted between the existence check and here.
-	if res.RowsAffected == 0 {
-		return nil, fmt.Errorf("%w: entity group %q", gorm.ErrRecordNotFound, token)
-	}
+	api.afterAccessScopeMoved(ctx, evictions, changed, members)
 	// Reload so the returned group carries the freshly-bumped updated_at.
 	return api.entityGroupByToken(ctx, token)
 }

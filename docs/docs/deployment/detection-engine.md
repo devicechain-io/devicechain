@@ -223,15 +223,20 @@ size the setting:
   raised, a reading older than the newest one the device has sent is discarded and counted, whether
   it is inside the tolerance or far past it, such as a retried publish a minute late, so an older
   reading cannot clear an alarm that a newer reading keeps raised. While no alarm is raised, a
-  matching reading is evaluated if it is within the tolerance and discarded and counted if it is
-  further behind, so a retried publish cannot raise an alarm that newer readings had cleared.
-  Readings that arrive in timestamp order are evaluated the moment they arrive, so this adds no
-  delay. Two trade-offs follow. A matching reading that arrives out of order but within the
-  tolerance still raises, even if a newer reading had already cleared the alarm; the device's next
-  reading clears it again. And because event time is shared by every device, a device whose
-  readings are dated more than the tolerance behind the rest, such as one whose clock runs slow or
-  one uploading readings it stored during an outage, cannot raise a threshold alarm from those
-  readings, though it can still clear one. The device's newest reading is remembered only while its
+  matching reading is discarded and counted only if it is further behind than the tolerance and
+  also was queued for detection more than 30 seconds after the platform received it, as a
+  retried publish is (time the detection engine itself takes to read the queue, during a restart
+  for example, does not count), so a retried publish cannot raise an alarm that newer readings had
+  cleared. Any other matching reading is evaluated, so a device whose readings are dated more than
+  the tolerance behind the rest, such as one whose clock runs slow or one uploading readings it
+  stored during an outage, raises a threshold alarm from them as they arrive. Readings that arrive
+  in timestamp order are evaluated the moment they arrive, so this adds no delay. Two trade-offs
+  follow. A matching reading that arrives out of order still raises, even if a newer reading had
+  already cleared the alarm, when it is within the tolerance or reaches the platform afresh, such as
+  a reading the device sends a second time; the device's next reading clears it again. And a
+  reading the platform held for more than 30 seconds before queuing it for detection, during a
+  backlog in ingest or resolution for example, is treated like a retried publish: if it is a matching reading further behind than the
+  tolerance, it is discarded and counted. The device's newest reading is remembered only while its
   alarm is raised, and only a reading up to ten minutes older than it is discarded: an older one is
   evaluated as it arrives, so a device whose clock is set back by more than ten minutes, by a
   time-zone correction for example, does not keep its alarm raised until its clock catches up.
@@ -268,8 +273,8 @@ what they discard**, once for each rule that discards a reading. `detect_late_sa
 a reading arrives after the window it belonged to has passed, when a duration rule discards a
 matching reading further behind the frontier than its hold time, when a count-window or rate rule
 discards a reading older than one it has already settled, when a threshold rule discards a reading
-older than the newest one of a device in alarm, or a matching reading too far behind from a device
-that is not, and when a reading that does not meet a
+older than the newest one of a device in alarm, or a retried matching reading too far behind from a
+device that is not, and when a reading that does not meet a
 duration rule's condition arrives after its alarm was raised but was taken inside the run that
 raised it, before the raise.
 A late reading older than the whole run is ignored and not counted: the run began after it. A
@@ -463,7 +468,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 
 | Setting | Default | What it does |
 |---|---|---|
-| `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, duration, count-window and rate rules place it by its own time, and a threshold rule in alarm discards a reading older than the device's newest, while one not in alarm discards a matching reading that arrives later than this margin. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
+| `watermarkLatenessSeconds` | 5 | How long to wait for out-of-order events before treating a moment as settled. **Raise this** if events arrive in batches or an upstream hop can stall; it is the main defence against a false absence alarm. It also tolerates the small reorder between one device's events that resolution introduces, which grows with the number of `device-management` replicas: a windowed rule still counts an event that arrives within this margin, duration, count-window and rate rules place it by its own time, and a threshold rule in alarm discards a reading older than the device's newest, while one not in alarm discards a matching reading that arrives later than this margin only when it was retried or held up on its way. It does not cover an event whose publish failed and was retried, which arrives at least 60 seconds late. |
 | `idleAdvanceGuardSeconds` | 5 | How long the engine must be quiet before it will fire a rule on wall-clock time. A negative value turns that path off: absence rules then fire only when a *later event* moves event time past their deadline, so a device that goes silent and stays silent never raises one. Count-window and rate rules likewise decide the last reading before a quiet spell only when a later event arrives. |
 | `detectShards` | 1 | How many ways the engine's state is split, by each rule's series (a device, or the anchor for a correlation rule), from 1 to 64 (anything else is refused at startup). Detections, the event-time clock and the saved checkpoint are identical at every value, so it can be changed at any restart, up or down, with nothing to migrate. In this release the shards are processed one after another, so a value above 1 does not make detection faster yet: leave it at 1 unless you are measuring. The value in force is the `detect_shards` metric. |
 | `checkpointEvents` | 1000 | Maximum events processed between checkpoints. |

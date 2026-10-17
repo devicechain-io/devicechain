@@ -266,14 +266,24 @@ func (api *Api) fireScopingEvictions(ctx context.Context, evictions []membership
 	}
 }
 
-// scopeRefcountOnTx counts the LIVE (published, enabled) rules that pin exactly this group@v,
-// across all profiles (tenant-scoped by the rdb callback). It is the enrollment refcount: the
-// read-model for group@v stays materialized while this is > 0.
+// scopeRefcountOnTx counts what holds exactly this group@v materialized: the LIVE (published,
+// enabled) rules that pin it, across all profiles (tenant-scoped by the rdb callback), plus
+// one when it is the published version of an access scope (ADR-081, api_group_access.go). It
+// is the enrollment refcount: the read-model for group@v stays materialized while this is > 0,
+// so neither a rule's un-reference nor an access scope's removal tears down rows the other
+// still reads.
 func (api *Api) scopeRefcountOnTx(tx *gorm.DB, groupToken string, version int32) (int64, error) {
 	var n int64
 	err := tx.Model(&DetectionRuleScopeRef{}).
 		Where("group_token = ? AND group_version = ?", groupToken, version).
 		Count(&n).Error
+	if err != nil {
+		return 0, err
+	}
+	access, err := accessReferenceOnTx(tx, groupToken, version)
+	if access {
+		n++
+	}
 	return n, err
 }
 

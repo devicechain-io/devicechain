@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"slices"
 
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -34,6 +35,10 @@ import (
 // skipped, as the event resolver skips it, rather than emitted as an anchor no scope can
 // name.
 //
+// The access scopes a device is in (ADR-081) follow its relationship anchors, as
+// "group:<token>": a command enqueued to a device in "north" is visible to a member scoped to
+// group:north, exactly as it is to the device's customer.
+//
 // More than rdb.MaxLookupKeys tokens is refused with LIMIT_EXCEEDED.
 func (api *Api) DeviceScopeAnchors(ctx context.Context, tokens []string) (map[string][]string, error) {
 	devices := make([]*Device, 0)
@@ -59,6 +64,10 @@ func (api *Api) DeviceScopeAnchors(ctx context.Context, tokens []string) (map[st
 		Order("entity_relationships.id ASC"), &rels, "source_id", ids); err != nil {
 		return nil, err
 	}
+	groups, err := accessGroupAnchors(api.RDB.DB(ctx), ids)
+	if err != nil {
+		return nil, err
+	}
 	seen := make(map[string]struct{}, len(rels))
 	for _, r := range rels {
 		device, ok := tokenOf[r.SourceId]
@@ -72,6 +81,14 @@ func (api *Api) DeviceScopeAnchors(ctx context.Context, tokens []string) (map[st
 		}
 		seen[key] = struct{}{}
 		out[device] = append(out[device], anchor)
+	}
+	for id, anchors := range groups {
+		device := tokenOf[id]
+		for _, anchor := range anchors {
+			if !slices.Contains(out[device], anchor) {
+				out[device] = append(out[device], anchor)
+			}
+		}
 	}
 	return out, nil
 }

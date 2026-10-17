@@ -76,15 +76,15 @@ func TestPartialUpdate(t *testing.T) {
 		Families: partialUpdateFamilies(),
 
 		// The strictness probe. An entity group is used because it is the cheapest
-		// token-keyed create in this service — one table, no references — so a refusal
-		// can only be the token grammar's.
+		// token-keyed create in this service — its own table and its token ledger, no
+		// references — so a refusal can only be the token grammar's.
 		CreateWithToken: func(t *testing.T, api *Api, ctx context.Context, token string) error {
 			_, err := api.CreateEntityGroup(ctx, &EntityGroupCreateRequest{
 				Token: token, MemberType: "device",
 			})
 			return err
 		},
-		StrictnessTables: []any{&EntityGroup{}},
+		StrictnessTables: []any{&EntityGroup{}, &IssuedGroupToken{}},
 		ValidToken:       "a-valid_token1",
 	})
 }
