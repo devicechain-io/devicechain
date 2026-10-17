@@ -91,6 +91,7 @@ const (
 	measurementClassifier = protowire.Number(3)
 	measurementUnit       = protowire.Number(4)
 	measurementDataType   = protowire.Number(5)
+	measurementDerived    = protowire.Number(6)
 )
 
 // tagSize is the size of every tag here but one: a field number up to 15 encodes with its
@@ -386,6 +387,11 @@ func measurementSize(mx *model.ResolvedMeasurementEntry) int {
 	if mx.DataType != nil {
 		size += presentStringSize(*mx.DataType)
 	}
+	if mx.Derived {
+		// An implicit-presence bool: written only when true, so a raw entry is the bytes it
+		// always was, in either wire format.
+		size += tagSize + 1
+	}
 	return size
 }
 
@@ -412,6 +418,10 @@ func appendMeasurementsPayload(out []byte, payload *model.ResolvedMeasurementsPa
 			}
 			if mx.DataType != nil {
 				out = appendPresentString(out, measurementDataType, *mx.DataType)
+			}
+			if mx.Derived {
+				out = protowire.AppendTag(out, measurementDerived, protowire.VarintType)
+				out = protowire.AppendVarint(out, 1)
 			}
 		}
 		out = at.appendString(out, measurementsEntryTime, sizing.times)
