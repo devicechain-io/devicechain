@@ -102,7 +102,7 @@ func TestPreviewThresholdRaiseResolve(t *testing.T) {
 		msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base),                  // rising → RAISE
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "70", base.Add(time.Minute)), // falling → RESOLVE
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestPreviewFiltersTenantAndProfile(t *testing.T) {
 		msg(t, 2, "acme", "d1", "p@2", "temperature", "90", base),  // wrong profile version
 		msg(t, 3, "acme", "d1", "p@1", "temperature", "90", base),  // the only in-scope one → RAISE
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestPreviewWindowFilter(t *testing.T) {
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "90", tr.End.Add(time.Minute)),    // after end
 		msg(t, 3, "acme", "d2", "p@1", "temperature", "90", base),                       // in window → RAISE
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestPreviewAgedOut(t *testing.T) {
 		firstTime: tr.Start.Add(30 * time.Minute), // earliest retained is AFTER the requested start
 		msgs:      []messaging.Message{msg(t, 1, "acme", "d1", "p@1", "temperature", "90", base)},
 	}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestPreviewReadCap(t *testing.T) {
 	}
 	op := &fakeOpener{msgs: msgs}
 	// maxRead=2: the loop must stop after reading 2 messages, not drain all 5, despite zero in-scope.
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 2, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 2, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -218,7 +218,7 @@ func TestPreviewScanCap(t *testing.T) {
 		msg(t, 2, "acme", "b", "p@1", "temperature", "90", base.Add(time.Second)),
 		msg(t, 3, "acme", "c", "p@1", "temperature", "90", base.Add(2*time.Second)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 1, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 1, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestPreviewEvaluatesABatchWhoseEnvelopeIsOutsideTheWindow(t *testing.T) {
 			base.Add(65*time.Minute), base.Add(30*time.Minute)),
 	}}
 
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestPreviewSpanStillExcludesAnEventOutsideTheWindow(t *testing.T) {
 		batchMsg(t, 1, "acme", "d1", "p@1", "temperature", "150", after, after),
 	}}
 
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", tr, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestPreviewTimeBudgetDegradesInsteadOfFailing(t *testing.T) {
 	}}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	res, err := Run(ctx, op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(ctx, op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("a spent time budget must degrade, not fail: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestPreviewCancellationStillFails(t *testing.T) {
 	op := &blockingOpener{}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
-	if _, err := Run(ctx, op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil); err == nil {
+	if _, err := Run(ctx, op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil); err == nil {
 		t.Fatal("a cancelled preview must return the error")
 	}
 }

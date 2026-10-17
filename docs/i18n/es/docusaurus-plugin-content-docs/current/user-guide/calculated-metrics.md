@@ -73,6 +73,27 @@ Cuando la fórmula compila, un panel de **muestra** enumera las métricas medida
 Escribe un valor para cada una y el panel muestra el **valor** que produciría la fórmula o el
 **motivo** por el que no produciría ninguno. La muestra se escribe a mano y no se almacena nada.
 
+### Probar una fórmula con el historial reciente
+
+Debajo de la muestra, **Probar con el historial reciente** ejecuta la fórmula sobre las lecturas
+almacenadas de un dispositivo. Escribe un **Token del dispositivo**, elige una ventana (las últimas
+1, 24 o 168 horas) y elige **Ejecutar sobre el historial**. El panel muestra cuántas muestras
+evaluó, cuántas produjeron un valor, cuántas se omitieron y por qué, y las 50 muestras más recientes
+con las entradas que leyó la fórmula y lo que dio. Una muestra son las lecturas que un mensaje
+transportó para un instante, que es exactamente lo que ve una fórmula cuando llegan las lecturas. No
+se almacena nada.
+
+- Las entradas son los valores **almacenados**, que conservan 8 decimales (consulta
+  [Almacenamiento y precisión](#almacenamiento-y-precisión)). El valor que se calcula cuando llega
+  una lectura usa el valor del dispositivo con precisión completa, así que ambos pueden diferir para
+  una entrada con más decimales: una corriente de `0.000000015` A se almacena como `0.00000002`. El
+  panel lo indica en cada resultado, y lo que muestra es una vista previa, no el valor que se
+  almacenará.
+- Una ventana con más de 50.000 muestras se rechaza en lugar de recortarse. Elige una ventana más
+  corta.
+- Necesita permiso para leer los eventos del dispositivo. Un miembro limitado a algunos clientes ve
+  solo las lecturas registradas mientras el dispositivo pertenecía a uno de ellos.
+
 ### Qué rechaza la comprobación al publicar
 
 Al publicar un perfil se comprueban todas las métricas calculadas y se informa de todos los
@@ -88,6 +109,24 @@ problemas a la vez. Se rechaza un perfil cuando:
   datos no es Double, Integer ni Boolean;
 - una clave está declarada dos veces;
 - el perfil tiene más métricas calculadas de las que permite el nivel de tu inquilino.
+
+## Métricas calculadas en la vista previa de una regla
+
+Cuando previsualizas una regla de detección (**Vista previa contra el historial**, en el formulario
+de una regla o en el lienzo de automatización), la vista previa usa las métricas calculadas del
+**borrador** del perfil. A cada lectura reproducida se le recalculan sus métricas calculadas a partir
+de sus valores medidos con las fórmulas del borrador, que sustituyen a los valores almacenados
+cuando llegó. Por eso, una regla sobre una métrica calculada que acabas de añadir o editar se
+previsualiza con los valores que tendrá esa métrica cuando publiques, y una métrica calculada que el
+borrador ya no tiene no da ningún valor en la vista previa. La vista previa indica cuántas lecturas
+se recalcularon y cuántos resultados de fórmula no produjeron valor.
+
+El recálculo lee los valores de cada lectura tal como los envió el dispositivo, con precisión
+completa, así que da el mismo valor que calcularía la fórmula publicada para esa lectura. Hay dos
+cosas que no puede reconstruir: un valor que se descartó cuando llegó la lectura (por ejemplo, uno
+que un dispositivo envió con una clave que en ese momento era una métrica calculada) y los cambios
+en las definiciones de las métricas medidas. Solo se recalculan los valores calculados. Nada de lo
+que calcula una vista previa se almacena ni llega a las reglas activas.
 
 ## El lenguaje de las fórmulas
 

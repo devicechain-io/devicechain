@@ -241,7 +241,7 @@ describe('the preview in the form', () => {
       ok: true,
       degraded: null,
       diagnostics: [],
-      stats: { eventsScanned: 42, firingCount: 2, evalErrors: 0, wallMs: 7 },
+      stats: { eventsScanned: 42, firingCount: 2, evalErrors: 0, wallMs: 7, recalculatedSamples: 3, calculatedSkips: 1 },
       firings: [
         { occurredAt: '2026-10-13T10:00:00Z', series: 'dev-1', signal: 'raised', trace: [] },
         { occurredAt: '2026-10-13T10:20:00Z', series: 'dev-1', signal: 'resolved', trace: [] },
@@ -255,8 +255,15 @@ describe('the preview in the form', () => {
     expect(arg.ruleDefinition).toBe(definition);
     expect(arg.graph).toBeUndefined();
     expect(arg.profileToken).toBe('p');
+    // The profile's draft metric list rides along, so calculated metrics are recomputed with the
+    // draft's formulas; a measured metric carries no formula.
+    expect(arg.draftMetrics?.map((m) => m.metricKey)).toEqual(['temperature', 'battery_level']);
+    expect(arg.draftMetrics?.every((m) => m.expression === null)).toBe(true);
     expect(await screen.findByText('RAISE')).toBeTruthy();
     expect(screen.getByText('RESOLVE')).toBeTruthy();
+    expect(screen.getByTestId('preview-recalculated').textContent).toBe(
+      "Calculated metrics recomputed with the draft profile's formulas for 3 readings. 1 draft formula result produced no value.",
+    );
   });
 
   it('renders a failed run and a rejected draft the way the canvas does', async () => {
@@ -269,7 +276,7 @@ describe('the preview in the form', () => {
       ok: false,
       degraded: null,
       firings: [],
-      stats: { eventsScanned: 0, firingCount: 0, evalErrors: 0, wallMs: 0 },
+      stats: { eventsScanned: 0, firingCount: 0, evalErrors: 0, wallMs: 0, recalculatedSamples: 0, calculatedSkips: 0 },
       diagnostics: [{ nodeId: null, severity: 'error', message: 'timeout is too long', code: null, params: [] }],
     });
     fireEvent.click(screen.getByRole('button', { name: 'Run preview' }));

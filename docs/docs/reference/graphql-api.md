@@ -46,7 +46,7 @@ the request reaches that service's own `/graphql`. Every endpoint below is there
 |---|---|
 | `user-management` | authentication — `login`, `selectTenant`, `refresh` — and the tenant's own governance view |
 | `device-management` | devices, device types, profiles, assets, areas, customers, groups, relationships, alarms, credentials, detection-rule authoring |
-| `event-management` | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` |
+| `event-management` | time-series event queries — `events`, `locationEvents`, `measurementEvents`, `alertEvents`, `bucketedMeasurements` — plus `calculatedEvents`, which previews a draft calculated-metric formula over a device's stored readings |
 | `device-state` | live last-known state — `latestMeasurements`, `latestLocation`, `deviceStates` — plus `demoteAssertedPresence`, which returns an event source's asserted devices to inferred presence |
 | `command-delivery` | command dispatch — `createCommand`, `cancelCommand`, fleet-wide batches (`createCommandBatch`, `cancelCommandBatch`), command history |
 | `event-processing` | detection-rule validation, replay preview, rule health |

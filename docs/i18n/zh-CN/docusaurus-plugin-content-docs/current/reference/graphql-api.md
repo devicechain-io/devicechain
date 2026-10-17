@@ -43,7 +43,7 @@ Ingress 将 `/api/<area>/graphql` 路由到各功能区服务，并移除前缀�
 |---|---|
 | `user-management` | 认证：`login`、`selectTenant`、`refresh`，以及租户自身的治理视图 |
 | `device-management` | 设备、设备类型、配置文件、资产、区域、客户、组、关系、告警、凭据、检测规则编写 |
-| `event-management` | 时序事件查询：`events`、`locationEvents`、`measurementEvents`、`alertEvents`、`bucketedMeasurements` |
+| `event-management` | 时序事件查询：`events`、`locationEvents`、`measurementEvents`、`alertEvents`、`bucketedMeasurements`，以及 `calculatedEvents`：在设备已存储的上报上预览计算指标的草稿公式 |
 | `device-state` | 实时最后已知状态：`latestMeasurements`、`latestLocation`、`deviceStates`；以及把事件源明确声明在线的设备转回推断在线状态的 `demoteAssertedPresence` |
 | `command-delivery` | 命令派发：`createCommand`、`cancelCommand`、设备群批次（`createCommandBatch`、`cancelCommandBatch`）、命令历史 |
 | `event-processing` | 检测规则验证、回放预览、规则健康状况 |

@@ -32,7 +32,7 @@ func TestPreviewSettlesASampleAtTheWindowEnd(t *testing.T) {
 		msg(t, 2, "acme", "d1", "p@1", "temperature", "100", end), // +100 > 50, exactly at End
 	}}
 	res, err := Run(context.Background(), op, "resolved-events", reg, "acme", "p@1",
-		TimeRange{Start: base.Add(-time.Hour), End: end}, 0, 0, 0, nil)
+		TimeRange{Start: base.Add(-time.Hour), End: end}, 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

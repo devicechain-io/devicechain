@@ -366,6 +366,68 @@ type MeasurementBucket {
     count: Int!
 }
 
+"""
+One input a draft calculated-metric formula reads: a measured metric's key and data type.
+"""
+input CalculatedInput {
+    """The measured metric's key, as readings and the formula name it."""
+    key: String!
+    """The measured metric's data type: DOUBLE, INT or BOOLEAN."""
+    dataType: String!
+}
+
+"""One input of one evaluated sample, as the formula read it from storage."""
+type CalculatedInputValue {
+    """The input's key."""
+    key: String!
+    """The stored value the formula read, as text."""
+    value: String!
+}
+
+"""
+One sample a draft formula was evaluated over: the readings of one stored event that share
+one instant. Exactly one of value and skippedReason is set.
+"""
+type CalculatedSample {
+    """When the readings were taken, as an RFC 3339 timestamp with fractional seconds."""
+    occurredTime: String!
+    """Identifier of the stored event the readings belong to, as a hexadecimal string."""
+    eventId: String!
+    """The inputs the sample held, as the formula read them."""
+    inputs: [CalculatedInputValue!]!
+    """What the formula gave for the sample, as text; null when it produced no value."""
+    value: String
+    """
+    Why the formula produced no value for the sample: missing_input, invalid_input,
+    non_finite, div_zero, overflow, range, unstorable or eval_error. Null when it produced one.
+    """
+    skippedReason: String
+}
+
+"""How many samples a draft formula produced no value for, for one reason."""
+type CalculatedSkipCount {
+    """The skip reason, as in CalculatedSample.skippedReason."""
+    reason: String!
+    """How many samples were skipped for it."""
+    count: Int!
+}
+
+"""
+A draft formula evaluated over a device's stored readings. Inputs are read back from storage,
+which keeps a reading to inputDecimalPlaces decimal places, so a value here can differ from the
+one computed from the full-precision reading when it was recorded. Nothing here is stored.
+"""
+type CalculatedEventsResult {
+    """Every evaluated sample in the range, oldest first."""
+    samples: [CalculatedSample!]!
+    """How many samples produced a value."""
+    computed: Int!
+    """How many samples produced no value, by reason; only reasons that occurred are listed."""
+    skipped: [CalculatedSkipCount!]!
+    """How many decimal places stored inputs keep."""
+    inputDecimalPlaces: Int!
+}
+
 # Contains queries executed against model.
 type Query {
     """
@@ -418,6 +480,39 @@ type Query {
         """Filters and bucket width."""
         criteria: MeasurementAggregationCriteria!
     ): [MeasurementBucket!]!
+    """
+    Evaluates a DRAFT calculated-metric formula over one device's stored readings, for previewing
+    the formula while it is being written: each sample (the readings of one stored event that
+    share one instant) is evaluated as it would be when readings are recorded, and returned with
+    its inputs and its value or the reason it produced none. The formula is checked as a publish
+    checks it, and an invalid one is refused. Inputs are the values as stored, to
+    inputDecimalPlaces decimal places, so a result can differ from the value computed from the
+    full-precision reading. A range holding more than 50,000 samples is refused with
+    LIMIT_EXCEEDED rather than truncated. Nothing is stored. Requires event:read. A member whose
+    access is limited to some customers sees only events recorded while the device belonged to
+    one of them.
+    """
+    # Draft-formula history preview (ADR-082). Console-only: the console
+    # sends the draft formula and its inputs' types; nothing computed here is written, streamed
+    # or fed to detection.
+    calculatedEvents(
+        """Token of the device whose readings to evaluate."""
+        deviceToken: String!
+        """The formula, as written on the calculated metric."""
+        expression: String!
+        """The calculated metric's data type: DOUBLE, INT or BOOLEAN."""
+        dataType: String!
+        """The measured metrics the formula reads, with their data types."""
+        inputs: [CalculatedInput!]!
+        """Smallest value the metric may take; a result below it is skipped as range."""
+        minValue: Float
+        """Largest value the metric may take; a result above it is skipped as range."""
+        maxValue: Float
+        """Start of the range by occurred time, as an RFC 3339 timestamp."""
+        from: String!
+        """End of the range by occurred time, as an RFC 3339 timestamp; not before from."""
+        to: String!
+    ): CalculatedEventsResult!
 }
 
 # Events are written by the persistence pipeline, not via the API.

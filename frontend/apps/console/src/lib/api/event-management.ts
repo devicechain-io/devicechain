@@ -4,7 +4,11 @@
 // Typed GraphQL operations against the event-management service.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/event-management';
-import type { EventsQuery } from '@/gql/event-management/graphql';
+import type {
+  EventsQuery,
+  CalculatedEventsQuery,
+  CalculatedEventsQueryVariables,
+} from '@/gql/event-management/graphql';
 
 // Public type derived from the generated operation result so it always reflects
 // the actual selection set and can never drift from the schema.
@@ -41,4 +45,58 @@ export async function listEvents(opts: {
       },
     })
   ).events;
+}
+
+// ── Draft-formula history preview ─────────────────────────────────────────
+// A calculated metric's DRAFT formula evaluated over one device's stored readings. Inputs are
+// read back from storage (to inputDecimalPlaces places), so a value can differ from the one
+// computed from the device's full-precision reading when it is recorded. Nothing is stored.
+
+const CALCULATED_EVENTS = graphql(`
+  query CalculatedEvents(
+    $deviceToken: String!
+    $expression: String!
+    $dataType: String!
+    $inputs: [CalculatedInput!]!
+    $minValue: Float
+    $maxValue: Float
+    $from: String!
+    $to: String!
+  ) {
+    calculatedEvents(
+      deviceToken: $deviceToken
+      expression: $expression
+      dataType: $dataType
+      inputs: $inputs
+      minValue: $minValue
+      maxValue: $maxValue
+      from: $from
+      to: $to
+    ) {
+      samples {
+        occurredTime
+        eventId
+        inputs {
+          key
+          value
+        }
+        value
+        skippedReason
+      }
+      computed
+      skipped {
+        reason
+        count
+      }
+      inputDecimalPlaces
+    }
+  }
+`);
+
+export type CalculatedEventsResult = CalculatedEventsQuery['calculatedEvents'];
+
+/** Evaluates a draft formula over a device's stored readings in [from, to]. Stores nothing. */
+export async function calculatedEvents(vars: CalculatedEventsQueryVariables): Promise<CalculatedEventsResult> {
+  const data = await gql('event-management', CALCULATED_EVENTS, vars);
+  return data.calculatedEvents;
 }

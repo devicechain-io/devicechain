@@ -54,7 +54,7 @@ func TestPreviewThresholdReadsTheMessagesReceipt(t *testing.T) {
 		receivedMsg(t, 2, "lagging", "90", behind, wall, wall.Add(time.Second)),
 		receivedMsg(t, 3, "redelivered", "90", behind, behind, wall.Add(time.Minute)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", thresholdReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

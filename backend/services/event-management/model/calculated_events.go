@@ -1,0 +1,290 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package model
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/integrity"
+	"github.com/devicechain-io/dc-microservice/limit"
+)
+
+// Draft-formula history preview (ADR-082, technical spec §4a): evaluate a DRAFT calculated
+// metric's formula over a device's stored readings, for the author of the formula and nobody
+// else. It is a read: nothing it computes is written, streamed or handed to detection, and it
+// sees only what the caller can already read.
+//
+// 🔑 THE FORMULA TRAVELS IN THE REQUEST. event-management holds no profiles, and its one client
+// of device-management is a service-token background sweep; using that on a user's read would be
+// a confused deputy. So the console sends the draft's formula and the types of the inputs it
+// reads, and this compiles them with core/calcfield under the same static cost gate the
+// resolver's formulas pass. A caller who sends some other formula learns nothing more than the
+// readings they could already list.
+//
+// 🔴 WHAT A RESULT IS, AND IS NOT. Inputs are read back from storage, which keeps a reading as
+// decimal(20,8) (calcfield.StoredDecimals places): a result is what the formula gives for the
+// STORED inputs. The value the resolver stores is computed once, at resolve, from the device's
+// own full-precision string — the two differ wherever an input had more than eight decimal
+// places (V·I with a current of 0.000000015 A computes 0 here). So a result is labelled as
+// previewed from stored inputs, and never called the value that will be stored.
+
+// MaxCalculatedSamples is the most samples one calculatedEvents read evaluates. A range that
+// holds more is refused with LIMIT_EXCEEDED, never truncated: the console narrows the range.
+// It matches MaxMeasurementRows; about 14 hours of a 1 Hz device, or 6 days at 0.1 Hz.
+const MaxCalculatedSamples = 50_000
+
+// calculatedSampleCap is the cap CalculatedEvents applies: MaxCalculatedSamples, lowered only by
+// this package's tests to reach the refusal without writing fifty thousand rows.
+var calculatedSampleCap = MaxCalculatedSamples
+
+// CalculatedInput is one input a draft formula reads: a measured metric's key and data type.
+type CalculatedInput struct {
+	Key      string
+	DataType string
+}
+
+// CalculatedEventsRequest is a draft formula and the device and range to evaluate it over.
+type CalculatedEventsRequest struct {
+	DeviceToken string
+	Expression  string
+	DataType    string
+	Inputs      []CalculatedInput
+	MinValue    *float64
+	MaxValue    *float64
+	From        time.Time
+	To          time.Time
+}
+
+// CalculatedInputValue is one input of one sample, as the formula read it: the stored value
+// rendered by calcfield.FormatStored.
+type CalculatedInputValue struct {
+	Key   string
+	Value string
+}
+
+// CalculatedSample is one evaluated sample: the readings of one event that share one instant.
+// Exactly one of Value or SkippedReason is set.
+type CalculatedSample struct {
+	OccurredTime  time.Time
+	EventId       []byte
+	Inputs        []CalculatedInputValue
+	Value         *string
+	SkippedReason *string
+}
+
+// CalculatedSkipCount is how many samples a formula skipped for one reason.
+type CalculatedSkipCount struct {
+	Reason string
+	Count  int
+}
+
+// CalculatedEventsResult is every evaluated sample in the range, oldest first, and the tally:
+// Computed samples produced a value, and Skipped counts the rest by reason (non-zero reasons
+// only, in calcfield.SkipReasons order), so a gap in the series is never mistaken for data.
+type CalculatedEventsResult struct {
+	Samples  []CalculatedSample
+	Computed int
+	Skipped  []CalculatedSkipCount
+}
+
+// compileDraftFormula builds the environment of the request's inputs and compiles its formula,
+// refusing with the author's message what the resolver would never run.
+func compileDraftFormula(req CalculatedEventsRequest) (*calcfield.Formula, *calcfield.Env, map[string]calcfield.Type, error) {
+	invalid := func(format string, args ...any) error {
+		return integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf(format, args...))
+	}
+	if req.DeviceToken == "" {
+		return nil, nil, nil, invalid("deviceToken is required")
+	}
+	if req.To.Before(req.From) {
+		return nil, nil, nil, invalid("to must not be before from")
+	}
+	if len(req.Inputs) == 0 {
+		return nil, nil, nil, invalid("inputs must name at least one measured metric the formula reads")
+	}
+	if len(req.Inputs) > calcfield.MaxInputs {
+		return nil, nil, nil, limit.Exceeded("inputs", len(req.Inputs), calcfield.MaxInputs)
+	}
+	resultType, ok := calcfield.ParseType(req.DataType)
+	if !ok {
+		return nil, nil, nil, invalid("dataType %q cannot be calculated; use DOUBLE, INT or BOOLEAN", req.DataType)
+	}
+	inputs := make([]calcfield.Input, 0, len(req.Inputs))
+	types := make(map[string]calcfield.Type, len(req.Inputs))
+	for _, in := range req.Inputs {
+		t, ok := calcfield.ParseType(in.DataType)
+		if !ok {
+			return nil, nil, nil, invalid("input %q: dataType %q is not DOUBLE, INT or BOOLEAN", in.Key, in.DataType)
+		}
+		inputs = append(inputs, calcfield.Input{Key: in.Key, Type: t})
+		types[in.Key] = t
+	}
+	env, err := calcfield.NewEnv(inputs)
+	if err != nil {
+		return nil, nil, nil, invalid("%s", err.Error())
+	}
+	if req.MinValue != nil && req.MaxValue != nil && *req.MinValue > *req.MaxValue {
+		return nil, nil, nil, invalid("minValue %v is above maxValue %v", *req.MinValue, *req.MaxValue)
+	}
+	f, err := env.Compile(calcfield.Definition{Expression: req.Expression, Type: resultType,
+		Min: req.MinValue, Max: req.MaxValue})
+	if err != nil {
+		var ce *calcfield.CompileError
+		var cost *calcfield.CostError
+		switch {
+		case errors.As(err, &ce):
+			return nil, nil, nil, invalid("the formula does not compile: %v", ce.Err)
+		case errors.As(err, &cost):
+			return nil, nil, nil, invalid("the formula's estimated cost %d is above the ceiling of %d", cost.EstimatedMax, cost.Ceiling)
+		}
+		return nil, nil, nil, invalid("%s", err.Error())
+	}
+	return f, env, types, nil
+}
+
+// storedInputRow is one stored reading of an input.
+type storedInputRow struct {
+	EventId      []byte
+	OccurredTime time.Time
+	Name         string
+	Value        sql.NullFloat64
+}
+
+// CalculatedEvents evaluates a draft formula over every stored sample of one device in
+// [From, To] and returns each sample's inputs and outcome. A sample is the readings of the
+// formula's inputs that share one event and one instant — (event_id, occurred_time), the same
+// sample the resolver evaluates — so a batch of readings taken at different times is several
+// samples, as it was at resolve.
+//
+// It reads through DB(ctx) and the MeasurementEvent model, so the tenant predicate and a scoped
+// caller's scope rule apply as they do to measurementEvents: a sample is wholly visible or
+// wholly invisible, since scope is per event. The read is bounded as it goes: the
+// cap+1'th sample stops it with LIMIT_EXCEEDED, so a refused range costs at
+// most the cap, where counting first would scan the whole range.
+func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsRequest) (*CalculatedEventsResult, error) {
+	formula, env, types, err := compileDraftFormula(req)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(types))
+	for k := range types {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	// Ordered by sample, then name and row identity, so a sample's rows are adjacent and a key
+	// a sample holds twice (two readings of one batch at one instant) resolves the same way on
+	// every read: the first row by payload id.
+	rows, err := api.RDB.DB(ctx).Model(&MeasurementEvent{}).
+		Select("event_id, occurred_time, name, value").
+		Where("device_token = ? AND name IN ? AND occurred_time >= ? AND occurred_time <= ?",
+			req.DeviceToken, keys, req.From, req.To).
+		Order("occurred_time ASC, event_id ASC, name ASC, payload_id ASC").
+		Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	ev := newSampleEvaluator(formula, env, types)
+	defer ev.release()
+	var cur *storedInputRow
+	for rows.Next() {
+		var row storedInputRow
+		if err := rows.Scan(&row.EventId, &row.OccurredTime, &row.Name, &row.Value); err != nil {
+			return nil, err
+		}
+		if cur == nil || !row.OccurredTime.Equal(cur.OccurredTime) || !bytes.Equal(row.EventId, cur.EventId) {
+			if cur != nil {
+				ev.finish()
+			}
+			if len(ev.result.Samples) >= calculatedSampleCap {
+				return nil, limit.Exceeded("samples", calculatedSampleCap+1, calculatedSampleCap)
+			}
+			ev.begin(row.EventId, row.OccurredTime)
+			cur = &row
+		}
+		ev.add(row.Name, row.Value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if cur != nil {
+		ev.finish()
+	}
+	return ev.done(), nil
+}
+
+// sampleEvaluator evaluates a formula over samples given one stored row at a time: begin a
+// sample, add its rows, finish it. It is the whole evaluation, apart from the read, so it is
+// tested on literal rows without a database.
+type sampleEvaluator struct {
+	formula *calcfield.Formula
+	types   map[string]calcfield.Type
+	sample  *calcfield.Sample
+	skipped map[calcfield.SkipReason]int
+	result  CalculatedEventsResult
+	open    *CalculatedSample
+}
+
+func newSampleEvaluator(f *calcfield.Formula, env *calcfield.Env, types map[string]calcfield.Type) *sampleEvaluator {
+	return &sampleEvaluator{formula: f, types: types, sample: env.Sample(),
+		skipped: map[calcfield.SkipReason]int{}, result: CalculatedEventsResult{Samples: []CalculatedSample{}}}
+}
+
+func (e *sampleEvaluator) begin(eventId []byte, at time.Time) {
+	e.sample.Reset()
+	e.open = &CalculatedSample{OccurredTime: at.UTC(), EventId: eventId, Inputs: []CalculatedInputValue{}}
+}
+
+// add records one stored reading. A key already set in the sample keeps its first value; a
+// row with no value (never written by the store, which refuses a non-numeric reading) is left
+// absent, so a formula reading it skips as a missing input.
+func (e *sampleEvaluator) add(name string, v sql.NullFloat64) {
+	t, ok := e.types[name]
+	if !ok || !v.Valid {
+		return
+	}
+	for _, in := range e.open.Inputs {
+		if in.Key == name {
+			return
+		}
+	}
+	raw := calcfield.FormatStored(t, v.Float64)
+	_, _ = e.sample.Set(name, raw) // a value that does not parse is recorded on the sample
+	e.open.Inputs = append(e.open.Inputs, CalculatedInputValue{Key: name, Value: raw})
+}
+
+func (e *sampleEvaluator) finish() {
+	out := e.formula.Eval(e.sample)
+	if out.OK() {
+		v := out.Value
+		e.open.Value = &v
+		e.result.Computed++
+	} else {
+		r := string(out.Skip)
+		e.open.SkippedReason = &r
+		e.skipped[out.Skip]++
+	}
+	e.result.Samples = append(e.result.Samples, *e.open)
+	e.open = nil
+}
+
+func (e *sampleEvaluator) done() *CalculatedEventsResult {
+	e.result.Skipped = []CalculatedSkipCount{}
+	for _, r := range calcfield.SkipReasons {
+		if n := e.skipped[r]; n > 0 {
+			e.result.Skipped = append(e.result.Skipped, CalculatedSkipCount{Reason: string(r), Count: n})
+		}
+	}
+	return &e.result
+}
+
+func (e *sampleEvaluator) release() { e.sample.Release() }

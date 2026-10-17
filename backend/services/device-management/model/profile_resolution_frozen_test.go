@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 )
 
 // copiesWhole reports whether a value of t, copied, shares no memory with the original: it
@@ -109,6 +110,11 @@ func TestAResolutionHandsOutNothingWritable(t *testing.T) {
 			m := typ.Method(i)
 			if m.Name == "MarshalJSON" {
 				continue // a new []byte each call, encoding the value
+			}
+			if m.Name == "Recalculate" {
+				// A new slice each call, holding the caller's own entries and freshly
+				// stamped derived ones (TestRecalculatedEntriesAreTheCallers).
+				continue
 			}
 			for o := 0; o < m.Type.NumOut(); o++ {
 				if out := m.Type.Out(o); !readOnly[out] && !copiesWhole(out) {
@@ -286,5 +292,28 @@ func TestAKeyDeclaredTwiceResolvesToItsLast(t *testing.T) {
 	var zero ProfileResolution
 	if _, ok := zero.Metric("temp"); ok || zero.MetricCount() != 0 || zero.ValidateMeasurement("temp", "x") != nil {
 		t.Fatal("the zero resolution declares something")
+	}
+}
+
+// TestRecalculatedEntriesAreTheCallers: what Recalculate returns shares nothing with the
+// resolution. Writing through a derived entry's stamp pointers, or into the slice, changes
+// no later recalculation.
+func TestRecalculatedEntriesAreTheCallers(t *testing.T) {
+	unit := sql.NullString{String: "kW", Valid: true}
+	r := NewProfileResolution(ProfileScope{}, []*MetricDefinition{
+		{Model: gorm.Model{ID: 1}, MetricKey: "v", DataType: string(MetricDouble)},
+		{Model: gorm.Model{ID: 2}, MetricKey: "p", DataType: string(MetricDouble), Unit: unit,
+			Expression: sql.NullString{String: "v * 2.0", Valid: true}},
+	})
+	entries := []ResolvedMeasurementEntry{{Name: "v", Value: "3"}}
+	first := r.Recalculate(entries, nopObserver{})
+	if len(first) != 2 || first[0].Name != "p" || first[0].Value != "6" {
+		t.Fatalf("recalculated %+v", first)
+	}
+	*first[0].Unit, *first[0].DataType, *first[0].Classifier = "W", "INT", 99
+	first[0].Value = "x"
+	again := r.Recalculate(entries, nopObserver{})
+	if *again[0].Unit != "kW" || *again[0].DataType != "DOUBLE" || *again[0].Classifier != 2 || again[0].Value != "6" {
+		t.Errorf("a recalculated entry pointed into the resolution: %+v", again[0])
 	}
 }
