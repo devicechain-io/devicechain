@@ -1876,6 +1876,274 @@
      "sort": "desc"
     }
    }
+  },
+  {
+   "id": 35,
+   "type": "row",
+   "title": "Rule health & derived publish",
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 96
+   }
+  },
+  {
+   "id": 36,
+   "type": "timeseries",
+   "title": "Rule-health updates discarded",
+   "description": "Fire-count updates that will never be written, by reason (full, overflow, closed, write_failed, purged, shutdown). Detection is unaffected; the console's fire counts are short by this much.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 97
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum by (reason) (rate(devicechain_eventprocessing_detect_rule_stat_updates_discarded_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "{{reason}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 37,
+   "type": "timeseries",
+   "title": "Rule-health backlog",
+   "description": "Distinct rules with fire updates not yet written, and the age of the oldest one: how stale the console's fire counts may be.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 97
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(devicechain_eventprocessing_detect_rule_stat_pending_keys{namespace=\"$namespace\"})",
+     "legendFormat": "pending rules"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "max(devicechain_eventprocessing_detect_rule_stat_oldest_pending_seconds{namespace=\"$namespace\"})",
+     "legendFormat": "oldest pending (s)"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 38,
+   "type": "timeseries",
+   "title": "Rule-health write throughput",
+   "description": "Fire-count updates admitted from published detections, merged into an already-pending rule row (coalesced), and committed to the database. Written below admitted for long means a backlog; coalesced is the single-row writes avoided.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 105
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_rule_stat_updates_admitted_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "admitted"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_rule_stat_updates_coalesced_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "coalesced"
+    },
+    {
+     "refId": "C",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_rule_stat_updates_written_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "written"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
+  },
+  {
+   "id": 39,
+   "type": "timeseries",
+   "title": "Derived publish time share",
+   "description": "Share of the detection loop's wall time spent handing detections to the broker at a checkpoint (1 means fully saturated), beside the derived events published per second.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 105
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_loop_seconds_total{namespace=\"$namespace\",phase=\"publish\"}[5m]))",
+     "legendFormat": "publish phase (share of wall time)"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_derived_events_published_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "published /s"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
   }
  ]
 }

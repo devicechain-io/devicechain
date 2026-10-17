@@ -550,7 +550,9 @@ hizo por última vez. Esos contadores no se escriben al publicar cada detección
 detección publicada a un total en memoria por regla y escribe los totales en segundo plano, una
 transacción por inquilino, cada `flushIntervalMillis`. Una regla muy activa cuesta así una escritura
 de fila por intervalo en lugar de una por detección, y una base de datos lenta o caída nunca frena la
-detección.
+detección. El único caso en que se espera una escritura es el borrado de un inquilino: la purga espera
+a que se resuelva la escritura de ese inquilino que ya está en curso, como máximo
+`writeTimeoutMillis` más un segundo.
 
 Lo que eso significa para las cifras:
 
