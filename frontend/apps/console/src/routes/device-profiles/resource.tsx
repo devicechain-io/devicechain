@@ -11,6 +11,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
@@ -188,7 +189,15 @@ function ProfileForm({ entity, onDone }: { entity?: DeviceProfile; onDone: (mess
 // (b)-sweep lint scans (mode: jsx-only) — matching how `@/components/registry`'s
 // own tokenColumn()/descriptionColumn() are plain functions, not inline literals.
 const metricColumns: DefinitionColumn<MetricDefinition>[] = [
-  { header: 'deviceProfiles:defColKey', cell: (d) => <span className="font-medium">{d.metricKey}</span> },
+  {
+    header: 'deviceProfiles:defColKey',
+    cell: (d) => (
+      <span className="inline-flex items-center gap-2">
+        <span className="font-medium">{d.metricKey}</span>
+        {d.calculated && <CalculatedBadge />}
+      </span>
+    ),
+  },
   { header: 'common:colType', cell: (d) => d.dataType },
   { header: 'deviceProfiles:defColUnit', cell: (d) => d.unit || <Dash /> },
   {
@@ -203,6 +212,15 @@ const metricColumns: DefinitionColumn<MetricDefinition>[] = [
       ),
   },
 ];
+
+function CalculatedBadge() {
+  const { t } = useTranslation('deviceProfiles');
+  return (
+    <Badge variant="secondary" title={t('metricCalculatedBadgeTitle')}>
+      {t('metricKindCalculated')}
+    </Badge>
+  );
+}
 
 function MetricsTab({ profile }: { profile: DeviceProfile }) {
   const { t } = useTranslation('deviceProfiles');

@@ -109,6 +109,9 @@ Choose **New metric** to add one, or **Edit** on a row to change it. A metric ha
 - an optional **Min** and **Max**, shown in the **Range** column;
 - a name and a description.
 
+A metric can also be **calculated** from a formula over the others instead of reported by the
+device. See [Calculated metrics](calculated-metrics.md).
+
 ### Commands
 
 **Commands** lists the commands a device of this profile accepts. These are the commands offered

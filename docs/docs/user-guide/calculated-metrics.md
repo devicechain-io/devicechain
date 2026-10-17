@@ -1,0 +1,183 @@
+---
+title: Calculated metrics
+sidebar_position: 5
+---
+
+# Calculated metrics
+
+A **calculated metric** is a metric on a device profile whose value is computed from a formula
+instead of being reported by the device. A meter that reports `voltage` and `current` can have a
+calculated `power_kw` of `voltage * current / 1000`, and from then on `power_kw` is stored,
+charted, alarmed on and shown on the device like any measurement the device sent. This chapter is
+for people who author device profiles. It covers what a calculated metric is, how to write one,
+the formula language, and what happens when a formula cannot produce a value.
+
+Calculated metrics are **off by default**. Your instance operator turns them on by giving your
+tenant's tier a ceiling above zero. See [Turning calculated metrics on](#turning-calculated-metrics-on).
+
+## What a calculated metric is
+
+- A formula reads the **measured** metrics of **one reading**: the values a device reports together
+  in a single measurement. It never reads an earlier reading, another device, or the clock.
+- The result is **computed once, when the reading arrives**, and stored as a normal measurement
+  next to the values the device sent. Dashboards, history, exports, the device's latest values and
+  detection rules all read it like any other metric, by its key.
+- **History is never rewritten.** Editing a formula and publishing the profile changes what is
+  computed for readings that arrive afterwards. Values already stored keep the formula that was
+  active when they were computed.
+- Whether a metric is measured or calculated is **fixed when you create it**. You can edit a
+  calculated metric's formula, but you cannot turn a measured metric into a calculated one or the
+  other way round. Delete it and create a new one instead.
+- A device cannot overwrite a calculated value. If a device sends a value under the key of a
+  calculated metric, the device's value is dropped and the computed one is kept.
+
+## Authoring a calculated metric
+
+Open a device profile and choose the **Metrics** tab (see
+[Metrics](device-types-and-profiles.md#metrics)). Choose **New metric**.
+
+1. Set **Kind** to **Calculated**. The choice is final, so it is locked when you edit a metric.
+2. Fill in the **Metric key**, the **Token** and the **Data type**: **Double**, **Integer** or
+   **Boolean**. The formula must produce exactly that type (see [Types](#types)). Calculated
+   metrics cannot be strings.
+3. Optionally set a **Unit**, and a **Min** and **Max**. A result outside that range is skipped,
+   not stored.
+4. Type the **Formula**.
+5. Choose **Create metric**.
+
+Calculated metrics carry a **Calculated** badge in the Metrics list.
+
+Like every profile edit, a new or changed formula applies to devices only after you
+[publish a version](device-types-and-profiles.md#publishing-a-version).
+
+### Checking a formula as you type
+
+The formula box asks the server to check the formula as you type, using the same compiler that
+checks it at publish time and computes it on real readings. Below the box you see:
+
+- the **compile error**, in words, if the formula is not valid;
+- the **estimated cost** against the ceiling of 100. A formula whose estimated cost is above 100
+  is refused;
+- **warnings**, which never block a publish. For example, that the published version declares this
+  key as a measured metric (so devices may be sending it, and those values will be dropped), that
+  a result of magnitude 1e12 or more cannot be stored, or that units are not converted.
+
+Once the formula compiles, a **sample** panel lists the measured metrics the formula reads. Type a
+value for each, and the panel shows the **value** the formula would produce or the **reason** it
+would produce none. The sample is hand-typed, and nothing is stored.
+
+### What the publish check refuses
+
+Publishing a profile checks every calculated metric and reports all the problems at once. It
+refuses a profile when:
+
+- a formula does not compile or does not produce the declared type;
+- a formula reads a key that is not a declared, **measured** metric of the same profile. A
+  calculated metric cannot read another calculated metric;
+- a formula reads no metric at all;
+- a formula is longer than 1,024 bytes, its estimated cost is above 100, or the formulas of one
+  profile together cost more than 1,000;
+- a calculated metric's Min is above its Max, it declares allowed values, or its data type is not
+  Double, Integer or Boolean;
+- a key is declared twice;
+- the profile has more calculated metrics than your tenant's tier allows.
+
+## The formula language
+
+Formulas are written in a small expression language. It has no loops, no strings and no
+state, so every formula runs in a small, bounded amount of time.
+
+### Inputs
+
+Each measured metric of the profile is a variable named by its key, such as `voltage` or `temp`. A
+key that is not a plain identifier, such as `flow-rate`, is read as `m["flow-rate"]`, wrapped in
+the conversion for its type: `double(m["flow-rate"])`, `int(m["count"])` or `bool(m["door"])`.
+
+### Operators
+
+| Kind | Operators |
+| --- | --- |
+| Arithmetic | `+` `-` `*` `/` `%` and unary `-` |
+| Comparison | `==` `!=` `<` `<=` `>` `>=` |
+| Logic | `&&` `\|\|` `!` |
+| Choice | `condition ? a : b` |
+
+### Math functions
+
+`math.abs(x)`, `math.floor(x)`, `math.ceil(x)`, `math.round(x)` (halves round away from zero),
+`math.sqrt(x)`, `math.pow(x, n)`, `math.min(a, b)`, `math.max(a, b)` and
+`math.clamp(x, low, high)`.
+
+`math.pow` takes a **whole-number exponent** only: `math.pow(x, 2)` works and `math.pow(x, 0.5)`
+does not. Fractional powers can differ in the last digit between processor architectures, and a
+stored value must not depend on which machine computed it. For a square root, use `math.sqrt`.
+
+### Presence
+
+`has(m.fan)` and `"fan" in m` test whether a reading carries a value for `fan`. This is how you
+give a missing input an explicit default: `has(m.fan) ? fan : 0.0`.
+
+### Types
+
+A formula is checked against the metric's data type, and the checks are strict:
+
+- An **integer** and a **double** mix in `+ - * /` and in ordering comparisons (the integer is
+  promoted). They do not mix in `==` or `!=`, or in the two branches of `condition ? a : b`: write
+  `80.0`, not `80`, when comparing with a double.
+- A formula for a **Double** metric must produce a double. A formula that produces an integer
+  needs `double(...)`.
+- A formula for an **Integer** metric must produce an integer. Convert a double with `int(...)`.
+  `math.sqrt` and `math.pow` return doubles, so wrap them in `int()` for an Integer metric.
+- A formula for a **Boolean** metric must produce a boolean, such as `temp > 80.0 && fan == 0`.
+  Booleans are stored as `1` and `0`.
+
+### Not available
+
+Strings (except as the key in `m["key"]`), lists, maps, time and durations, randomness,
+comprehensions, regular expressions, and anything that looks outside the reading.
+
+## When a formula produces no value
+
+If a formula cannot produce a value for a reading, that one metric is **skipped** for that
+reading. The rest of the reading is stored as usual, and nothing is ever substituted: there is no
+default value and no zero. The reasons are:
+
+| Reason | Meaning |
+| --- | --- |
+| `missing_input` | An input the formula reads was not in the reading. An input is required unless the formula tests for it with `has()` or `in`. |
+| `invalid_input` | An input was present but is not a valid value for its type. |
+| `non_finite` | A number was not finite: an input that was not a finite number, a division by zero, a result too large for a double, or the square root of a negative number. |
+| `div_zero` | An integer division or remainder by zero. |
+| `overflow` | An integer result or conversion overflowed 64 bits. |
+| `range` | The result is outside the metric's Min and Max. |
+| `unstorable` | The result is 1e12 or larger in magnitude, which measurements cannot be stored with. |
+| `eval_error` | Any other failure, such as `math.clamp` with its bounds reversed. |
+
+An absent input is noticed whatever the order of the operands. `temp > 80.0 || fan > 1` is skipped
+on a reading with no `fan`, even though a hot reading would make the first half true. If you want
+the formula to work without `fan`, test for it with `has()`.
+
+## Storage and precision
+
+- Measurements are stored with at most 12 digits before the decimal point and **8 decimal places**.
+  A calculated value is rounded to 8 decimal places when it is stored, and a result of magnitude
+  1e12 or more is skipped as `unstorable`. Setting a Min and a Max inside plus or minus
+  999,999,999,999 tells the editor you know the range and removes that warning.
+- A calculated value is stored like any measurement, so it follows your tenant's measurement
+  retention.
+- Units are not converted or checked. A formula reads its inputs as plain numbers, and the result
+  carries only the unit you declare on the calculated metric.
+
+## Turning calculated metrics on
+
+How many calculated metrics one profile may publish is set per **tier**, by the instance operator,
+as **Calculated metrics per profile** under **Admin → Tiers**. The platform default is `0`, which
+means calculated metrics are off: you can write formulas and test them, but publishing a profile
+that has one is refused with:
+
+> cannot publish device profile: it has N calculated metric(s), and calculated metrics are not
+> enabled for this tenant's tier
+
+When the ceiling is above zero but below the number the profile has, the message says how many the
+tier allows per profile. The most any tier can grant is 32. Ask your operator to raise the ceiling
+if you need calculated metrics.

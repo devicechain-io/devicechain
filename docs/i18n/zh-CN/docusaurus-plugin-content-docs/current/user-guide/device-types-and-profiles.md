@@ -80,6 +80,8 @@ import GuideShot from '@site/src/components/GuideShot';
 - 可选的 **Min**（最小值）和 **Max**（最大值），显示在 **Range**（范围）列中；
 - 名称和描述。
 
+指标也可以是**计算**指标，即由基于其他指标的公式得出，而不是由设备上报。参见[计算指标](calculated-metrics.md)。
+
 ### Commands {#commands}
 
 **Commands**（命令）列出该配置文件的设备接受的命令。这些命令会出现在设备的 [Commands 选项卡](/user-guide/devices#commands)中。

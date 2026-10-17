@@ -113,6 +113,9 @@ Elige **Nueva métrica** para añadir una, o edita una fila para cambiarla. Una 
 - un **Mín.** y un **Máx.** opcionales, que se muestran como rango;
 - un nombre y una descripción.
 
+Una métrica también puede ser **calculada** a partir de una fórmula sobre las demás, en lugar de ser enviada
+por el dispositivo. Consulta [Métricas calculadas](calculated-metrics.md).
+
 ### Comandos
 
 **Comandos** enumera los comandos que acepta un dispositivo de este perfil. Son los comandos que se

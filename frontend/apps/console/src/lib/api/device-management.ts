@@ -24,6 +24,8 @@ import type {
   DeviceProfileCreateRequest,
   DeviceProfileUpdateRequest,
   MetricDefinitionsQuery,
+  TestMetricFormulaQuery,
+  TestMetricFormulaQueryVariables,
   MetricDefinitionCreateRequest,
   MetricDefinitionUpdateRequest,
   CommandDefinitionsQuery,
@@ -1131,6 +1133,8 @@ const METRIC_DEFINITIONS = graphql(`
         enum
         descriptor
         metadata
+        expression
+        calculated
       }
       pagination {
         pageStart
@@ -1177,6 +1181,45 @@ export async function updateMetricDefinition(
   request: MetricDefinitionUpdateRequest,
 ): Promise<void> {
   await gql('device-management', UPDATE_METRIC_DEFINITION, { token, request });
+}
+
+const TEST_METRIC_FORMULA = graphql(`
+  query TestMetricFormula(
+    $profileToken: String!
+    $expression: String!
+    $dataType: String!
+    $metricKey: String
+    $minValue: Float
+    $maxValue: Float
+    $sample: [MetricValueInput!]!
+  ) {
+    testMetricFormula(
+      profileToken: $profileToken
+      expression: $expression
+      dataType: $dataType
+      metricKey: $metricKey
+      minValue: $minValue
+      maxValue: $maxValue
+      sample: $sample
+    ) {
+      compileError
+      value
+      skippedReason
+      inputs
+      warnings
+      estimatedCost
+    }
+  }
+`);
+
+export type MetricFormulaTest = TestMetricFormulaQuery['testMetricFormula'];
+
+/** Checks a draft calculated-metric formula and evaluates it for a hand-typed sample. Stores nothing. */
+export async function testMetricFormula(
+  vars: TestMetricFormulaQueryVariables,
+): Promise<MetricFormulaTest> {
+  const data = await gql('device-management', TEST_METRIC_FORMULA, vars);
+  return data.testMetricFormula;
 }
 
 const DELETE_METRIC_DEFINITION = graphql(`

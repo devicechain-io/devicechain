@@ -122,6 +122,7 @@ const sidebars: SidebarsConfig = {
         'user-guide/console-at-a-glance',
         'user-guide/devices',
         'user-guide/device-types-and-profiles',
+        'user-guide/calculated-metrics',
         'user-guide/detection-rules',
         'user-guide/alarms',
         'user-guide/commanding-a-fleet',
