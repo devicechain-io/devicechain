@@ -91,7 +91,7 @@ variable "jetstream_storage" {
     This default is NOT a free choice — it must hold the platform's whole
     reservation. JetStream reserves each stream's MaxBytes UP FRONT at creation,
     so the disk floor is the SUM of the ceilings, and today that sum is
-    10184Mi (9.945Gi): 8712Mi of platform streams, 384Mi of MQTT gateway stores, and 1088Mi of
+    11592Mi (11.32Gi): 9864Mi of platform streams, 384Mi of MQTT gateway stores, and 1344Mi of
     KV buckets. The ceiling that has to hold it is max_file_store, which is 90% of
     this value FLOORED to a whole unit of its own magnitude.
 
@@ -99,7 +99,7 @@ variable "jetstream_storage" {
     times and each server holds one copy of the reservation, so the size does NOT
     scale with cluster_replicas.
 
-    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 9.945Gi
+    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 11.32Gi
     reserved, so a consumer using this module directly with its defaults would hit
     the "insufficient storage resources available" crashloop on the last services
     to create a stream. The root module always passes its own value explicitly, so

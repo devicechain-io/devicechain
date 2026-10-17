@@ -39,7 +39,8 @@ import (
 //	sync   the shape this source had before its publishes were pipelined: a synchronous
 //	       MessageWriter publish on each of DECODE_WORKER_COUNT goroutines at once
 //	w=N    the real ordered writer with a window of N (1 behaves as a serial writer;
-//	       capture.publishWindow, default 512, is what ships; loopback cannot show why)
+//	       capture.publishWindow, default 1024, is what ships; loopback cannot show why, and
+//	       BenchmarkCaptureIngestUnderPubAckLatency is the arm that can)
 //
 // In-process over loopback: the absolute numbers are a FLOOR, the ratios are the result.
 //
@@ -152,6 +153,14 @@ func (p *syncPool) Close()                           { p.wg.Wait() }
 // runCapturePipeline runs one arm and returns events/s.
 func runCapturePipeline(b *testing.B, srv *natsserver.Server, instance string, replicas int, mode string, events int) float64 {
 	b.Helper()
+	return runCapturePipelineVia(b, srv, "", instance, replicas, mode, events)
+}
+
+// runCapturePipelineVia is runCapturePipeline with the ordered writer, when writerVia is not
+// empty, built on a second manager that connects through writerVia (a delay proxy; see
+// BenchmarkCaptureIngestUnderPubAckLatency) while the reader keeps its direct connection.
+func runCapturePipelineVia(b *testing.B, srv *natsserver.Server, writerVia, instance string, replicas int, mode string, events int) float64 {
+	b.Helper()
 	b.StopTimer()
 	u, err := url.Parse(srv.ClientURL())
 	if err != nil {
@@ -184,6 +193,9 @@ func runCapturePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 			writer = &syncPool{w: w, slots: make(chan struct{}, DECODE_WORKER_COUNT)}
 			return err
 		default:
+			if writerVia != "" {
+				return nil // built on the delayed manager below
+			}
 			window, err := strconv.Atoi(mode[len("w="):])
 			if err != nil {
 				return err
@@ -192,6 +204,29 @@ func runCapturePipeline(b *testing.B, srv *natsserver.Server, instance string, r
 			return err
 		}
 	})
+	if writerVia != "" {
+		window, err := strconv.Atoi(mode[len("w="):])
+		if err != nil {
+			b.Fatal(err)
+		}
+		host, wport := hostPort(b, writerVia)
+		wms := &core.Microservice{InstanceId: instance, FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}
+		wms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{
+			Hostname: host, Port: wport, StreamReplicas: uint32(replicas)}
+		wms.Readiness.MarkReadyWithoutAuthSurface()
+		wmgr := messaging.NewNatsManager(wms, core.NewNoOpLifecycleCallbacks(), func(n *messaging.NatsManager) error {
+			var err error
+			writer, err = n.NewOrderedWriter(streams.InboundEvents, messaging.WriterCapture, window)
+			return err
+		})
+		if err := wmgr.Initialize(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+		if err := wmgr.Start(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+		defer func() { _ = wmgr.Stop(context.Background()) }()
+	}
 	nmgr.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
 		return func(context.Context, messaging.MaxDelivery) (messaging.MaxDeliveryOutcome, error) {
 			return messaging.MaxDeliveryLettered, nil

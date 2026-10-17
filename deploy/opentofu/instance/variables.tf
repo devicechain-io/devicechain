@@ -153,20 +153,22 @@ variable "nats_jetstream_storage" {
     That was first fixed by raising the PV to 32Gi, which worked but spent most of it
     on control-plane streams that never hold more than a few MiB.
 
-    The bound is now split hot/cold in backend/core/streams (see streams.All): 7 hot
-    streams at 1 GiB, 10 control-plane streams at 128 MiB, the device-events capture
-    stream at 256 MiB and the max-delivery capture at 8 MiB reserve 8712Mi (8.51Gi).
+    The bound is now split hot/cold in backend/core/streams (see streams.All): 8 hot
+    streams at 1 GiB (the device-events capture stream among them: it was capped at
+    256 MiB until a perf run lost acknowledged MQTT events at that cap), 13
+    control-plane streams at 128 MiB and the max-delivery capture at 8 MiB reserve
+    9864Mi (9.63Gi).
     The MQTT gateway's own streams — which nats-server creates UNBOUNDED, and which
     the platform bounds at startup so they cannot eat the rest — add 384Mi. The KV
-    buckets are bounded on the same principle (see kv.All): 6 State buckets at 128Mi
-    + 5 Cache buckets at 64Mi reserve a further 1088Mi. Total reserved: 10184Mi (9.945Gi).
+    buckets are bounded on the same principle (see kv.All): 8 State buckets at 128Mi
+    + 5 Cache buckets at 64Mi reserve a further 1344Mi. Total reserved: 11592Mi (11.32Gi).
 
     Why 16Gi and not 12Gi: at 12Gi the ceiling is 10Gi, which left 120Mi unreserved
     when 16Gi was chosen — BELOW the 512Mi headroom floor the budget test asserts. It
-    holds today's reservation with 56Mi to spare, still far below that floor. A PV sized to the margin
+    cannot hold today's reservation at all. A PV sized to the margin
     has to be moved for every stream or bucket the platform adds, and the failure for
-    not doing so is the crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 4152Mi (4.055Gi), which is
-    room for the reservation to grow by about 40%. The extra 4Gi of disk is the
+    not doing so is the crashloop above rather than a test. 16Gi (→14Gi ceiling) leaves 2744Mi (2.68Gi), which is
+    room for the reservation to grow by about 24%. The extra 4Gi of disk is the
     cheapest part of this deployment; the alternative was a budget where every new
     bucket is a deploy-time landmine.
 
@@ -174,7 +176,7 @@ variable "nats_jetstream_storage" {
     (sum of stream ceilings) / 0.9 — the flooring above makes that formula unsafe.
     At any sum above 10Gi, (sum) / 0.9 rounds to a 12Gi PV, whose ceiling is
     floor(12 × 0.9) = 10Gi, which is BELOW the sum and brings the crashloop back; today's
-    9.945Gi sum clears that ceiling by only 56Mi. Pick the smallest whole
+    11.32Gi sum is already 1352Mi over it. Pick the smallest whole
     magnitude where floor(magnitude × 0.9) >= the sum, then leave real margin above
     it. Raise it for real ingest volume.
 

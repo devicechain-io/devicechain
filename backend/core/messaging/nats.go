@@ -660,6 +660,35 @@ func applyStreamDuplicateWindow(cfg *nats.StreamConfig, window time.Duration) bo
 	return true
 }
 
+// applyStreamDiscard reconciles an existing stream's discard policy to DiscardOld, the one
+// every declared stream is created with, reporting whether it changed.
+//
+// 🔴 A DISCARD-NEW STREAM LOSES THE SAME MESSAGES WITH NOTHING TO SAY SO. The obvious
+// "fail closed" edit to a full stream is to make it refuse rather than evict, and it is wrong
+// for the streams here: on the device-events capture stream the broker's MQTT gateway
+// PUBACKs the device whether or not this stream stores the message (see
+// streams.DeviceEventsCapture), so a refusal reaches no one and the NEWEST message is dropped
+// after its PUBACK, where DiscardOld drops the oldest unread one and the capture durable
+// counts it (JetStreamDurableLostUnread). On the Limits streams a full stream is mostly a
+// week of history its readers have already read, and refusing on that is an outage; the
+// platform's own backpressure (backpressure.go) is what refuses there, and it assumes the
+// broker discards old. So a stream someone edited out of band (`nats stream edit --discard
+// new`, the follow-up a reader of the alert might reasonably try) is put back, the way an
+// out-of-band ceiling is. JetStream allows the policy to change in place.
+//
+// The per-subject flag goes with it. `--discard-per-subject` is only valid on a discard-new
+// stream (nats-server checkStreamCfg: "discard new per subject requires discard new policy to
+// be set"), so restoring discard-old while leaving it set makes the UpdateStream invalid, and
+// the reconcile would fail the service's start on every retry instead of putting it back.
+func applyStreamDiscard(cfg *nats.StreamConfig) bool {
+	if cfg.Discard == nats.DiscardOld && !cfg.DiscardNewPerSubject {
+		return false
+	}
+	cfg.Discard = nats.DiscardOld
+	cfg.DiscardNewPerSubject = false
+	return true
+}
+
 // applyStreamReplicas reconciles a stream's replica factor UPWARD only, reporting
 // whether it changed and whether a downward change was refused.
 //
@@ -749,8 +778,9 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		if err == nil {
 			// The stream exists — an older build (or an earlier ceiling) may have left
 			// it unbounded, so reconcile in place. UpdateStream touches the byte/msg
-			// ceilings, the captured subjects, the dedup window and the replica factor
-			// on the existing config, leaving storage and retention untouched. Config
+			// ceilings, the captured subjects, the dedup window, the discard policy
+			// (applyStreamDiscard) and the replica factor on the existing config,
+			// leaving storage and retention untouched. Config
 			// is the source of truth: an out-of-band tune (e.g. a raised MaxBytes set
 			// via the nats CLI) is intentionally reverted to the config value on the
 			// next restart — and shrinking a ceiling below current usage makes
@@ -798,7 +828,15 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
 			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)
-			if boundsChanged || subjectsChanged || dupChanged {
+			had := cfg.Discard
+			discardChanged := applyStreamDiscard(&cfg)
+			if discardChanged {
+				log.Warn().Str("stream", name).Str("have", had.String()).Str("want", cfg.Discard.String()).
+					Msg("Stream was set to discard new messages when full; restoring discard-old. A refused " +
+						"store on the device-events capture stream reaches no device, so discard-new loses the " +
+						"newest events with nothing counting them")
+			}
+			if boundsChanged || subjectsChanged || dupChanged || discardChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 					return err
 				}

@@ -273,36 +273,60 @@ func TestKvCeilingsAreNeverUnlimited(t *testing.T) {
 // cheap and visible, while under-bounding a busy stream silently evicts live data
 // via DiscardOld. A regression here is invisible in a dev cluster.
 // A per-stream cap must only ever LOWER a ceiling. If it could raise one it would
-// silently overrun the budget the PV was sized from — and the case that matters
-// is --compact, whose Hot ceiling (64 MiB) is far below the capture stream's cap
-// (256 MiB), so the tier must win there and the cap must not apply at all.
+// silently overrun the budget the PV was sized from. The one capped stream is the
+// max-delivery capture (8 MiB against a 128 MiB Cold tier), so the tier must win when an
+// operator sets the Cold ceiling below the cap.
 func TestStreamMaxBytesForAppliesACapOnlyDownward(t *testing.T) {
-	capped := streams.MaxBytesCapFor(streams.DeviceEventsCapture)
+	capped := streams.MaxBytesCapFor(streams.MaxDeliveries)
 	if capped <= 0 {
-		t.Fatal("the capture stream declares no cap — this test would assert nothing")
+		t.Fatal("the max-delivery capture declares no cap — this test would assert nothing")
 	}
 
-	// A default-sized deployment: the Hot tier exceeds the cap, so the cap binds.
+	// A default-sized deployment: the Cold tier exceeds the cap, so the cap binds.
 	big := &InstanceConfiguration{}
 	big.ApplyDefaults()
-	if got := big.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != capped {
-		t.Errorf("at the default Hot ceiling the capture stream got %d B, want its cap %d B", got, capped)
+	if got := big.Infrastructure.Nats.StreamMaxBytesFor(streams.MaxDeliveries); got != capped {
+		t.Errorf("at the default Cold ceiling the max-delivery capture got %d B, want its cap %d B", got, capped)
 	}
 
-	// A --compact-sized deployment: the Hot tier is BELOW the cap, so the tier must
-	// win. A cap that applied here would claim four times the largest other stream
-	// in a 2Gi store and crashloop the bring-up.
+	// A Cold tier BELOW the cap: the tier must win.
 	small := &InstanceConfiguration{}
 	small.Infrastructure.Nats.StreamMaxBytes = 64 << 20
-	small.Infrastructure.Nats.StreamMaxBytesCold = 16 << 20
+	small.Infrastructure.Nats.StreamMaxBytesCold = 4 << 20
 	small.ApplyDefaults()
-	if got := small.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != 64<<20 {
-		t.Errorf("at a compact Hot ceiling of 64 MiB the capture stream got %d B, want 64 MiB: "+
+	if got := small.Infrastructure.Nats.StreamMaxBytesFor(streams.MaxDeliveries); got != 4<<20 {
+		t.Errorf("at a Cold ceiling of 4 MiB the max-delivery capture got %d B, want 4 MiB: "+
 			"a cap must never raise a ceiling above the tier an operator configured", got)
 	}
 	// And it must not disturb an uncapped stream on the same config.
-	if got := small.Infrastructure.Nats.StreamMaxBytesFor(streams.InboundEvents); got != 64<<20 {
-		t.Errorf("uncapped Hot stream got %d B, want the configured 64 MiB", got)
+	if got := small.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceRoster); got != 4<<20 {
+		t.Errorf("uncapped Cold stream got %d B, want the configured 4 MiB", got)
+	}
+}
+
+// The device-events capture stream takes the Hot ceiling the operator configured, at the
+// default and when it is raised. Its backlog is MQTT events the broker has already PUBACKed,
+// so its ceiling is the margin before they are lost, and it must move with the one setting an
+// operator sizes a fleet with. It used to be capped at 256 MiB, which no setting could raise.
+func TestTheCaptureStreamTakesTheHotCeilingTheOperatorSets(t *testing.T) {
+	def := &InstanceConfiguration{}
+	def.ApplyDefaults()
+	if got := def.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != DefaultStreamMaxBytes {
+		t.Errorf("at the defaults the capture stream got %d B, want the Hot ceiling %d B", got, DefaultStreamMaxBytes)
+	}
+	raised := &InstanceConfiguration{}
+	raised.Infrastructure.Nats.StreamMaxBytes = 4 << 30
+	raised.ApplyDefaults()
+	if got := raised.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != 4<<30 {
+		t.Errorf("with streamMaxBytes raised to 4 GiB the capture stream got %d B: an operator "+
+			"could not size the one stream whose overflow loses acknowledged events", got)
+	}
+	compact := &InstanceConfiguration{}
+	compact.Infrastructure.Nats.StreamMaxBytes = 64 << 20
+	compact.Infrastructure.Nats.StreamMaxBytesCold = 16 << 20
+	compact.ApplyDefaults()
+	if got := compact.Infrastructure.Nats.StreamMaxBytesFor(streams.DeviceEventsCapture); got != 64<<20 {
+		t.Errorf("at a compact Hot ceiling of 64 MiB the capture stream got %d B, want 64 MiB", got)
 	}
 }
 
