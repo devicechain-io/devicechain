@@ -669,3 +669,61 @@ func TestOutputConfigBounds(t *testing.T) {
 		require.Error(t, c.Validate(), "%+v", c)
 	}
 }
+
+// The lowest buffer position goes first: the window's first sends are the lanes' first
+// detections in buffer order, so the retirement cursor advances as early as it can and a
+// window narrower than the lanes favours the oldest work. The writer holds every send until
+// the window is full, so the first sends are exactly the ones the first admission chose.
+func TestTheLowestBufferPositionGoesFirst(t *testing.T) {
+	const window = 4
+	var fw *faultWriter
+	var arrived atomic.Int32
+	full := make(chan struct{})
+	r, _ := pipelineRig(t, window, &fw, func(attempt, int, int) (bool, error) {
+		if arrived.Add(1) == window {
+			close(full)
+		}
+		select {
+		case <-full:
+		case <-time.After(5 * time.Second):
+		}
+		return true, nil
+	})
+	seen := map[string]bool{}
+	var heads []string
+	for _, d := range r.rp.pendingDets {
+		lane := mustTenant(t, d.RuleID) + "|" + d.Series
+		if !seen[lane] {
+			seen[lane] = true
+			heads = append(heads, fmt.Sprintf("%s %s %d", d.RuleID, lane, d.At.UnixNano()))
+		}
+	}
+	require.Greater(t, len(heads), window, "fewer lanes than the window; the test proves nothing about priority")
+	require.True(t, r.rp.checkpoint(context.Background()))
+	var first []string
+	for _, a := range fw.snapshot()[:window] {
+		first = append(first, fmt.Sprintf("%s %s %d", a.rule, a.lane, a.at.UnixNano()))
+	}
+	require.ElementsMatch(t, heads[:window], first, "the first sends were not the lanes' first detections in buffer order")
+}
+
+// The first failed outcome stops new sends: what was already in flight settles, nothing more
+// is sent in that pass, and the next pass carries on. The failed send is answered at once and
+// every other one takes a few milliseconds, so it is settled long before the window could turn
+// over even once.
+func TestTheFirstFailureStopsNewSends(t *testing.T) {
+	const window, victim = 8, 5
+	var fw *faultWriter
+	r, _ := pipelineRig(t, window, &fw, func(_ attempt, index, earlier int) (bool, error) {
+		if index == victim && earlier == 0 {
+			return false, errors.New("refused")
+		}
+		time.Sleep(2 * time.Millisecond)
+		return true, nil
+	})
+	total := len(r.rp.pendingDets)
+	require.False(t, r.rp.checkpoint(context.Background()))
+	sent := len(fw.snapshot())
+	require.Less(t, sent, victim+3*window, "sends went on after a failed outcome: %d of %d", sent, total)
+	require.True(t, r.rp.checkpoint(context.Background()))
+}
