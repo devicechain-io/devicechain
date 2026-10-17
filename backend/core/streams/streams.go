@@ -739,7 +739,9 @@ var All = []Stream{
 	// exactly as DeviceDesired is.
 	// Window: devices publish it, and nothing gives them a Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceReports, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	// event-sources is an area too: with the fail-closed MQTT acknowledgement it forwards
+	// device reports from the MQTT gateway's message store into this stream.
+	{Suffix: DeviceReports, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"device-management", "event-sources", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the

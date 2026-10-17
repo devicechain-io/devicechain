@@ -33,20 +33,21 @@ func TestLoadInstanceConfigurationAppliesTheEventWireFormat(t *testing.T) {
 	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, withFormat("legacy"))))
 	assert.Equal(t, eventtime.WireLegacy, eventtime.ProducerWireFormat())
 
-	// Omitted: the default, which in this release is legacy. Set compact first, so this
-	// cannot pass by leaving the setting alone.
-	require.NoError(t, eventtime.SetProducerWireFormat(eventtime.WireCompact))
+	// Omitted: the default, which is compact. Set legacy first, so this cannot pass by
+	// leaving the setting alone.
+	require.NoError(t, eventtime.SetProducerWireFormat(eventtime.WireLegacy))
 	ms = &Microservice{}
 	require.NoError(t, ms.LoadInstanceConfigurationFrom(instanceDoc(t, minimalInstanceDoc)))
-	assert.Equal(t, eventtime.WireLegacy, eventtime.ProducerWireFormat())
-	assert.Equal(t, "legacy", ms.InstanceConfiguration.Infrastructure.Messaging.WireFormat)
+	assert.Equal(t, eventtime.WireCompact, eventtime.ProducerWireFormat())
+	assert.Equal(t, "compact", ms.InstanceConfiguration.Infrastructure.Messaging.WireFormat)
 }
 
 // A value that names no format refuses the load and NAMES the key; the process setting is
 // left as it was rather than defaulted.
 func TestLoadInstanceConfigurationRefusesAnUnknownEventWireFormat(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, eventtime.SetProducerWireFormat(eventtime.DefaultWireFormat)) })
-	require.NoError(t, eventtime.SetProducerWireFormat(eventtime.WireCompact))
+	// The non-default format, so a load that wrongly fell back to the default would show.
+	require.NoError(t, eventtime.SetProducerWireFormat(eventtime.WireLegacy))
 
 	for _, value := range []string{"Compact", "binary", " legacy"} {
 		ms := &Microservice{}
@@ -55,7 +56,7 @@ func TestLoadInstanceConfigurationRefusesAnUnknownEventWireFormat(t *testing.T) 
 		         "messaging":{"wireFormat":"`+value+`"}}}`))
 		require.Error(t, err, "%q", value)
 		assert.Contains(t, err.Error(), "wireFormat", "%q", value)
-		assert.Equal(t, eventtime.WireCompact, eventtime.ProducerWireFormat(), "%q changed the setting", value)
+		assert.Equal(t, eventtime.WireLegacy, eventtime.ProducerWireFormat(), "%q changed the setting", value)
 	}
 
 	ms := &Microservice{}

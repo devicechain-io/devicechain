@@ -266,7 +266,8 @@ func startBrokerPresence(ctx context.Context) {
 	}
 
 	tapEmitter := adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
-	tap := presence.NewTap(Microservice.InstanceId, source, tapEmitter, presenceGate(), presenceMetrics())
+	tap := newPresenceTap(source, tapEmitter, presenceGate(), presenceMetrics(),
+		Microservice.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed)
 	if !presenceTapSynchronous {
 		// The advisories go through the async writer; the reconciler (which holds the same tap)
 		// keeps the synchronous InboundEventsWriter through Apply. A nil PresenceWriter here is
@@ -960,6 +961,24 @@ func presenceEmitter() presence.Emitter {
 // presenceDedupPrefix namespaces the broker presence source's dedup ids; see presenceEmitter.
 const presenceDedupPrefix = "bp"
 
+// newPresenceTap builds the broker tap, holding refusal-close disconnects back only with
+// infrastructure.nats.mqttFailClosed on (failClosed).
+//
+// 🔴 OFF, A "Protocol Violation" DISCONNECT IS REPORTED AT ONCE, AS IT ALWAYS WAS. The debounce
+// exists because the fail-closed store closes a device's connection for a refused publish and the
+// device is back in seconds. Without the setting nothing closes connections that way, and the
+// same reason names a client the broker dropped for a malformed packet, which is gone: delaying
+// its offline by RefusalCloseDebounce would change what every install that never turned the
+// setting on sees, for nothing.
+func newPresenceTap(source string, emitter presence.Emitter, gate presence.Gate, metrics presence.Metrics,
+	failClosed bool) *presence.Tap {
+	tap := presence.NewTap(Microservice.InstanceId, source, emitter, gate, metrics)
+	if !failClosed {
+		tap.WithRefusalDebounce(0)
+	}
+	return tap
+}
+
 func presenceMetrics() presence.Metrics {
 	return presence.Metrics{
 		Emitted:           PresenceEmittedCounter,
@@ -967,6 +986,8 @@ func presenceMetrics() presence.Metrics {
 		Refused:           PresenceRefusedCounter,
 		Failed:            PresenceFailedCounter,
 		RegressedSessions: PresenceRegressedCounter,
+		Deferred:          PresenceDeferredCounter,
+		DeferredDropped:   PresenceDeferredDropped,
 	}
 }
 
@@ -1003,6 +1024,8 @@ var (
 	PresenceRefusedCounter     prometheus.Counter
 	PresenceFailedCounter      prometheus.Counter
 	PresenceRegressedCounter   prometheus.Counter
+	PresenceDeferredCounter    prometheus.Counter
+	PresenceDeferredDropped    prometheus.Counter
 	PresenceReconcileCounter   *prometheus.CounterVec
 	PresenceRepairedCounter    *prometheus.CounterVec
 	PresenceUnappliedCounter   *prometheus.CounterVec
@@ -1060,6 +1083,15 @@ func initializePresenceMetrics() {
 		"Presence transitions observed with a session id lower than this replica's high-water mark "+
 			"(a broker node's clock may be trailing its peers). Diagnostic only: whether such a "+
 			"transition is applied is decided downstream by the projection")
+	PresenceDeferredCounter = Microservice.NewCounter(
+		"presence_disconnects_deferred_total",
+		"Device disconnects the broker reported as a refusal-close (its MQTT gateway closed the connection "+
+			"because the message store refused or did not acknowledge a publish), held back for the debounce "+
+			"before being emitted. A device that reconnects within it never reads offline")
+	PresenceDeferredDropped = Microservice.NewCounter(
+		"presence_disconnects_deferred_dropped_total",
+		"Held-back refusal-close disconnects this pod dropped because it was stopping; the reconciler "+
+			"recovers them")
 	PresenceReconcileCounter = Microservice.NewCounterVec(
 		"presence_reconcile_runs_total",
 		"Presence reconciliation passes, by outcome",

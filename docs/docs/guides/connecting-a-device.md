@@ -210,6 +210,27 @@ mosquitto_pub \
 
 The credential authenticates the connection (broker) and the event (pipeline). The TLS host, CA source and port exposure depend on how the instance is deployed; see [Deployment](../deployment/kubernetes-operator.md).
 
+The broker speaks TLS, so `--cafile` needs the instance's CA certificate. On a local kind install it
+is in the instance namespace's `dc-nats-tls` Secret, under the key `ca.crt`. Save it as
+`instance-ca.crt` with one command (substitute your instance id after the `dci-` prefix):
+
+```bash
+kubectl -n dci-devicechain get secret dc-nats-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > instance-ca.crt
+```
+
+On a local kind cluster the broker is on `localhost:1883`, but its certificate is not issued for
+`localhost` or `host.docker.internal`, so verification fails on the host name. For local testing
+only, add `--insecure` to `mosquitto_pub` to skip the host name check:
+
+```bash
+mosquitto_pub --cafile instance-ca.crt --insecure -h localhost -p 1883 ...
+```
+
+:::warning Local testing only
+`--insecure` turns off host name verification, so the connection no longer proves it reached your
+broker. Never use it in production; connect to a host name the certificate covers instead.
+:::
+
 ### Quality of service {#quality-of-service}
 
 Publish telemetry at **QoS 0** unless you have a specific reason not to. The examples above do, because `mosquitto_pub` defaults to it.

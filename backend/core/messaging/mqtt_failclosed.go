@@ -92,10 +92,12 @@ import (
 //     service that created the bucket chose (user-management's is 5 s), shorter than a pass
 //     that retries, so a lock that was only taken would expire under a slow pass and let a
 //     second pod write beside it (TestTheFailClosedLockOutlivesTheLocksBucketTTL).
-//   - DURABLES BEFORE DISCARD NEW. Taking a store over creates the durables, then reads each
-//     direct stream's last sequence (the "from" marks the readers skip above), and only then
-//     writes the fail-closed config, so no pod skips a direct copy whose store copy nobody
-//     held.
+//   - DURABLES BEFORE DISCARD NEW, AND THE FROM MARKS A SETTLE AFTER THE DURABLES. Taking a
+//     store over creates the durables, then writes the fail-closed config, and records each
+//     direct stream's last sequence (the "from" mark a reader skips direct copies above) only
+//     on a pass made once that kind's durable has existed for mqttFailClosedFromSettle. Until
+//     then the kind has no mark and nothing of it is skipped, so no pod skips a direct copy
+//     whose store copy nobody held: the cost of the wait is a duplicate, never a loss.
 //
 // 🔴 ONE INSTANCE PER BROKER ACCOUNT. The store is per account, and on a shared broker every
 // instance's devices are in the same one, so they share one store and one bound: one
@@ -166,6 +168,39 @@ var (
 	// replicas were raised, while the new peers catch up.
 	mqttFailClosedInsufficientRetry = []time.Duration{time.Second, 2 * time.Second, 3 * time.Second}
 )
+
+// mqttFailClosedFromSettle is how long a platform durable must have existed before a pass
+// records its kind's from mark, the direct stream's last sequence that readers skip above.
+//
+// 🔴 A MARK READ AS SOON AS THE DURABLE EXISTS CAN LOSE A PUBLISH. The gateway sends a QoS 1
+// publish's direct copy into the subject space BEFORE it stores the store copy, and the two go
+// to different streams with their own leaders. So a publish can be in flight across the
+// durable's creation: its store copy applied on a replica that did not yet know the durable
+// (interest is decided per replica, when the write is applied) and skipped for no interest,
+// while its direct copy, still queued at the direct stream's leader, has not been given a
+// sequence. A mark read at that moment is BELOW the sequence the direct copy then gets, so
+// every reader skips the only copy, after the device had its PUBACK.
+//
+// Waiting narrows that window to nothing in practice, and 🔴 IT IS A HEURISTIC, NOT A BOUND.
+// It assumes that once the durable has existed for this long, every replica has applied it
+// and every direct copy whose store copy predates it has landed: that no direct copy spends
+// longer than the settle between the gateway and its stream's sequence (the route to the
+// stream leader and its ingest queue). Nothing in the broker bounds that delay; a direct copy
+// held up longer than the settle, after a store copy skipped for no interest, would be above
+// the mark and skipped. Under the assumption, a sequence above the mark read now belongs to a
+// publish whose store copy a durable holds. Clock skew between broker nodes (the durable's
+// creation stamped by one, the answer's time stamp by another) shortens the real wait by the
+// skew; up to about 10 s of it still leaves the gateway's 5 s store wait covered. Until the
+// mark is recorded the kind has none, and a reader skips nothing of it (carriedByStore): the
+// store copy and the direct copy are both forwarded, a duplicate the dedup id cannot fold,
+// for at most this long plus a pass after every take-over or re-created durable.
+//
+// The age is the BROKER's: the durable's creation time against the time stamp of the broker's
+// answer, both from its own clock, so a pod's clock does not decide it. Half a watch interval:
+// three times the gateway's 5 s wait for a store acknowledgement, and short enough that the
+// first watch pass after a take-over records the marks. A variable only so a test can shorten
+// it.
+var mqttFailClosedFromSettle = MqttFailClosedWatchInterval / 2
 
 // mqttFailClosedRequestTimeout bounds each raw JetStream API request the reconcile makes
 // itself (the stream listing). The nats.go JetStream calls bound theirs with the context's
@@ -335,6 +370,9 @@ type mqttFailClosedReport struct {
 	// pendingReplicas is true when a replica raise was refused for want of resources and is
 	// left for the next pass.
 	pendingReplicas bool
+	// pendingFrom names each durable whose kind the pass left without a from mark because the
+	// durable is younger than mqttFailClosedFromSettle: nothing of that kind is skipped yet.
+	pendingFrom []string
 	// released is true when the pass released the store; finished when it removed the
 	// durables of a released store and cleared its marks.
 	released, finished bool
@@ -406,6 +444,19 @@ func (nmgr *NatsManager) mqttNow() time.Time {
 func (nmgr *NatsManager) SetMqttFailClosedClockForTesting(tb interface{ Helper() }, now func() time.Time) {
 	tb.Helper()
 	nmgr.mqttClock = now
+}
+
+// SetMqttFailClosedFromSettleForTesting replaces mqttFailClosedFromSettle for the rest of a
+// test, so a test outside this package can have a pass record the from marks without waiting
+// the settle out. It is process-wide; the test's Cleanup restores it. Production never calls it.
+func SetMqttFailClosedFromSettleForTesting(tb interface {
+	Helper()
+	Cleanup(func())
+}, d time.Duration) {
+	tb.Helper()
+	saved := mqttFailClosedFromSettle
+	mqttFailClosedFromSettle = d
+	tb.Cleanup(func() { mqttFailClosedFromSettle = saved })
 }
 
 // ReconcileMqttFailClosed is a start's pass with infrastructure.nats.mqttFailClosed on: it
@@ -739,12 +790,26 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	}
 
 	// The from marks: kept where the durable has existed throughout (this instance held the
-	// store, and the pass did not have to create it); read again otherwise.
+	// store, and the pass did not have to create it). Otherwise one is recorded only once the
+	// durable has existed for mqttFailClosedFromSettle, and until then its kind has NO mark,
+	// so no reader skips a direct copy of it: see mqttFailClosedFromSettle for why a mark read
+	// as soon as the durable exists can lose a publish.
 	from := map[string]uint64{}
 	for _, d := range MqttFailClosedDurables(instanceId) {
 		suffix := mqttFailClosedDirectSuffix[d.Kind]
-		if have, ok := marks.from[suffix]; ok && marks.owned && !createdKind[d.Kind] && !rep.createdStore {
+		if createdKind[d.Kind] || rep.createdStore {
+			continue
+		}
+		if have, ok := marks.from[suffix]; ok && marks.owned {
 			from[suffix] = have
+			continue
+		}
+		age, err := nmgr.mqttDurableAge(ctx, d.Name)
+		if err != nil {
+			return rep, err
+		}
+		if age < mqttFailClosedFromSettle {
+			rep.pendingFrom = append(rep.pendingFrom, d.Name)
 			continue
 		}
 		seq, err := nmgr.directStreamLastSeq(ctx, suffix)
@@ -752,6 +817,11 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 			return rep, err
 		}
 		from[suffix] = seq
+	}
+	for _, d := range MqttFailClosedDurables(instanceId) {
+		if createdKind[d.Kind] || rep.createdStore {
+			rep.pendingFrom = append(rep.pendingFrom, d.Name)
+		}
 	}
 
 	now := nmgr.mqttNow()
@@ -911,6 +981,40 @@ func isTransientRaise(err error) bool {
 	var apiErr *nats.APIError
 	return isInsufficientResources(err) ||
 		(errors.As(err, &apiErr) && apiErr.ErrorCode == jsErrConsumerReplicasExceedsStream)
+}
+
+// mqttDurableAge is how long the platform durable name on the store has existed, by the
+// broker's clock: its creation time against the time stamp of the broker's answer. nats.go's
+// ConsumerInfo does not decode that time stamp, so this is a raw API request. On a broker that
+// does not report one, the pod's clock stands in for it.
+func (nmgr *NatsManager) mqttDurableAge(ctx context.Context, name string) (time.Duration, error) {
+	rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
+	defer cancel()
+	msg, err := nmgr.nc.RequestWithContext(rctx, "$JS.API.CONSUMER.INFO."+MqttMessageStore+"."+name, nil)
+	if err != nil {
+		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %w", name, MqttMessageStore, err)
+	}
+	var resp struct {
+		Error   *jsAPIError `json:"error"`
+		Created time.Time   `json:"created"`
+		Now     time.Time   `json:"ts"`
+	}
+	if err := json.Unmarshal(msg.Data, &resp); err != nil {
+		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %w", name, MqttMessageStore, err)
+	}
+	if resp.Error != nil {
+		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %s", name, MqttMessageStore,
+			resp.Error.Description)
+	}
+	if resp.Created.IsZero() {
+		// No creation time: the age cannot be shown, so it is not old enough.
+		return 0, nil
+	}
+	now := resp.Now
+	if now.IsZero() {
+		now = nmgr.mqttNow()
+	}
+	return now.Sub(resp.Created), nil
 }
 
 // directStreamLastSeq is the last sequence of the platform stream suffix, 0 when it does not

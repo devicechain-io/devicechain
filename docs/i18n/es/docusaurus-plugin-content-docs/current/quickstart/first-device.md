@@ -49,6 +49,20 @@ dcctl install local
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
 
+:::note En un script o un trabajo de CI
+`dcctl bootstrap` pide una frase de contraseña para sellar el artefacto de custodia de la clave raíz. Sin un terminal donde preguntarla se detiene con `no escrow passphrase and no terminal to ask at`. Facilítala sin interacción, con un archivo o con una variable de entorno:
+
+```bash
+dcctl bootstrap local devicechain --host localhost --no-tls --escrow-passphrase-file ./escrow.pass
+# o
+DCCTL_ESCROW_PASSPHRASE='<passphrase>' dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+Para una instancia desechable puedes omitir la custodia con `--no-escrow` (`--dev` la implica). El coste: la clave raíz del almacén de secretos existe entonces solo dentro del clúster, así que si el clúster se pierde, todos los secretos que la instancia guardó quedan ilegibles para siempre, incluso desde una copia de seguridad de la base de datos. Consulta [la custodia de la clave raíz](../deployment/bootstrap.md#escrow).
+:::
+
+En un clúster kind local, el puerto **1883** de tu máquina llega al broker MQTT de la primera instancia que arranques. Habla TLS; consulta [Publicación de un evento](../guides/connecting-a-device.md#publishing-an-event) para conectarte.
+
 `dcctl install` crea el clúster de kind e instala lo que comparten todas sus instancias: el operador
 de DeviceChain y sus definiciones de recurso personalizado, la base de datos relacional, el operador
 CloudNativePG, cert-manager, la monitorización y el ingress. Se ejecuta una vez por clúster, y
@@ -87,6 +101,9 @@ administración a mano, usa el comando que lo hace en un solo paso:
 ```bash
 dcctl sim create demo
 ```
+
+`dcctl sim create` se comunica por defecto con la instancia en `localhost`. Si la consola se sirve en otro puerto, indica host y puerto en `--server`, y también el ingreso del plano de dispositivos, porque este se deriva del host y no conoce el puerto:
+`dcctl sim create demo --server localhost:8080 --ingress http://localhost:8081`.
 
 Este comando:
 

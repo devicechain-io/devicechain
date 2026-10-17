@@ -129,7 +129,11 @@ func (f *fcFleet) check(what string) {
 	require.Equalf(f.t, owned || released, failClosed, "%s: discard new without a mark of this instance, or the reverse: %v", what, md)
 	if owned {
 		require.Falsef(f.t, released, "%s: owned and released at once", what)
-		require.Lenf(f.t, mqttFailClosedFromMarks(md), len(mqttFailClosedDirectSuffix), "%s: owned without a from mark per stream", what)
+		// A kind may have no from mark yet (its durable is younger than the settle, so nothing
+		// of it is skipped); a mark for anything but a direct stream is a key nothing reads.
+		for suffix := range mqttFailClosedFromMarks(md) {
+			require.Truef(f.t, carriesDirectCopies(suffix), "%s: a from mark for %q, which is not a direct stream", what, suffix)
+		}
 		names := consumerNames(f.t, f.b.js, MqttMessageStore)
 		for _, d := range MqttFailClosedDurables(guardInstance) {
 			require.Containsf(f.t, names, d.Name, "%s: fail-closed without its %s durable", what, d.Kind)
