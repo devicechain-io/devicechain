@@ -181,9 +181,16 @@ var (
 // sequence. A mark read at that moment is BELOW the sequence the direct copy then gets, so
 // every reader skips the only copy, after the device had its PUBACK.
 //
-// Waiting closes that window: once the durable has existed for this long, every replica has
-// applied it and every direct copy whose store copy predates it has landed, so a sequence
-// above the mark read now belongs to a publish whose store copy a durable holds. Until the
+// Waiting narrows that window to nothing in practice, and 🔴 IT IS A HEURISTIC, NOT A BOUND.
+// It assumes that once the durable has existed for this long, every replica has applied it
+// and every direct copy whose store copy predates it has landed: that no direct copy spends
+// longer than the settle between the gateway and its stream's sequence (the route to the
+// stream leader and its ingest queue). Nothing in the broker bounds that delay; a direct copy
+// held up longer than the settle, after a store copy skipped for no interest, would be above
+// the mark and skipped. Under the assumption, a sequence above the mark read now belongs to a
+// publish whose store copy a durable holds. Clock skew between broker nodes (the durable's
+// creation stamped by one, the answer's time stamp by another) shortens the real wait by the
+// skew; up to about 10 s of it still leaves the gateway's 5 s store wait covered. Until the
 // mark is recorded the kind has none, and a reader skips nothing of it (carriedByStore): the
 // store copy and the direct copy are both forwarded, a duplicate the dedup id cannot fold,
 // for at most this long plus a pass after every take-over or re-created durable.

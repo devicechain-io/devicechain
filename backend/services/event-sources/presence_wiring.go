@@ -266,7 +266,8 @@ func startBrokerPresence(ctx context.Context) {
 	}
 
 	tapEmitter := adapter.NewEmitter(InboundEventsWriter, time.Now, presenceDedupPrefix, true)
-	tap := presence.NewTap(Microservice.InstanceId, source, tapEmitter, presenceGate(), presenceMetrics())
+	tap := newPresenceTap(source, tapEmitter, presenceGate(), presenceMetrics(),
+		Microservice.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed)
 	if !presenceTapSynchronous {
 		// The advisories go through the async writer; the reconciler (which holds the same tap)
 		// keeps the synchronous InboundEventsWriter through Apply. A nil PresenceWriter here is
@@ -959,6 +960,24 @@ func presenceEmitter() presence.Emitter {
 
 // presenceDedupPrefix namespaces the broker presence source's dedup ids; see presenceEmitter.
 const presenceDedupPrefix = "bp"
+
+// newPresenceTap builds the broker tap, holding refusal-close disconnects back only with
+// infrastructure.nats.mqttFailClosed on (failClosed).
+//
+// 🔴 OFF, A "Protocol Violation" DISCONNECT IS REPORTED AT ONCE, AS IT ALWAYS WAS. The debounce
+// exists because the fail-closed store closes a device's connection for a refused publish and the
+// device is back in seconds. Without the setting nothing closes connections that way, and the
+// same reason names a client the broker dropped for a malformed packet, which is gone: delaying
+// its offline by RefusalCloseDebounce would change what every install that never turned the
+// setting on sees, for nothing.
+func newPresenceTap(source string, emitter presence.Emitter, gate presence.Gate, metrics presence.Metrics,
+	failClosed bool) *presence.Tap {
+	tap := presence.NewTap(Microservice.InstanceId, source, emitter, gate, metrics)
+	if !failClosed {
+		tap.WithRefusalDebounce(0)
+	}
+	return tap
+}
 
 func presenceMetrics() presence.Metrics {
 	return presence.Metrics{
