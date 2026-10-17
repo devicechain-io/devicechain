@@ -94,10 +94,17 @@ func (p *Publisher) admit(tenant string) bool {
 // repairs it did not make — which is worst precisely when something is wrong, since a
 // tenant over its ceiling would show a healthy repair rate while nothing was written.
 func (p *Publisher) Apply(ctx context.Context, transition Transition) bool {
+	return p.apply(ctx, transition, true)
+}
+
+// apply is Apply, with the regression check only when note is set (see Tap.emitHeld).
+func (p *Publisher) apply(ctx context.Context, transition Transition, note bool) bool {
 	if !p.admit(transition.Tenant) {
 		return false
 	}
-	p.noteSession(transition)
+	if note {
+		p.noteSession(transition)
+	}
 	return p.settled(transition, p.emitter.EmitPresence(ctx, transition.Tenant, p.source, transition.DeviceToken, transition.Event))
 }
 
@@ -128,10 +135,17 @@ var ErrNoAsyncEmitter = errors.New("presence: this publisher has no asynchronous
 // The reconciler and the demoter keep the synchronous Apply: they report whether each
 // repair landed, and pace themselves on it.
 func (p *Publisher) ApplyAsync(ctx context.Context, transition Transition) {
+	p.applyAsync(ctx, transition, true)
+}
+
+// applyAsync is ApplyAsync, with the regression check only when note is set (see Tap.emitHeld).
+func (p *Publisher) applyAsync(ctx context.Context, transition Transition, note bool) {
 	if !p.admit(transition.Tenant) {
 		return
 	}
-	p.noteSession(transition)
+	if note {
+		p.noteSession(transition)
+	}
 	if p.async == nil {
 		p.settled(transition, ErrNoAsyncEmitter)
 		return

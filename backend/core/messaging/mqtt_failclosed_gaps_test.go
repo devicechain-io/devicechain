@@ -116,9 +116,13 @@ func TestARecreatedDurableReadsItsFromMarkAgain(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		fcPublish(t, c, topic, 1, fmt.Sprintf("unheld-%d", i))
 	}
-	ds, err := b.js.StreamInfo(StreamName(guardInstance, SubjectDeviceReports))
-	require.NoError(t, err)
-	require.EqualValues(t, 3, ds.State.LastSeq, "premise: the direct copies landed")
+	// The direct copy is not ordered with the PUBACK (it goes to another stream, before the
+	// store copy), so it may land just after the publish returns.
+	var ds *nats.StreamInfo
+	require.Eventually(t, func() bool {
+		ds, err = b.js.StreamInfo(StreamName(guardInstance, SubjectDeviceReports))
+		return err == nil && ds.State.LastSeq == 3
+	}, 5*time.Second, 10*time.Millisecond, "premise: the direct copies landed")
 
 	rep, err := onMgr.checkMqttFailClosed(context.Background(), fcMetrics(guardInstance))
 	require.NoError(t, err)
@@ -189,4 +193,26 @@ func TestADirectCopyInFlightAcrossTheDurablesCreationIsNotSkipped(t *testing.T) 
 	fcPublish(t, c, fmt.Sprintf("%s/%s/%s/d1", guardInstance, guardTenant, SubjectDeviceReports), 1, "held")
 	fcNothing(t, onReader, time.Second, "a settled kind")
 	require.EqualValues(t, 1, onMgr.mqttSkipped.Load(), "control: once settled, the direct copy is skipped")
+}
+
+// 🔴 THE SETTLE IS MEASURED ON THE BROKER'S CLOCK. A pod whose clock runs far ahead of the
+// broker's would read a just-created durable as old, record the from mark at once, and skip the
+// in-flight direct copy TestADirectCopyInFlightAcrossTheDurablesCreationIsNotSkipped protects.
+//
+// GUARD: kills an age measured against the pod's clock rather than the broker's answer.
+func TestTheDurableAgeIsReadOffTheBrokersClock(t *testing.T) {
+	fastMqttStoreLookup(t)
+	b := startGuardBroker(t)
+	onMgr, _ := fcDirectReader(t, b, "device-management", true)
+	_, err := onMgr.ReconcileMqttFailClosed(context.Background())
+	require.NoError(t, err)
+	name := fcDurable(t, guardInstance, MqttFailClosedReports).Name
+	onMgr.mqttClock = func() time.Time { return time.Now().Add(time.Hour) }
+	ci, err := b.js.ConsumerInfo(MqttMessageStore, name)
+	require.NoError(t, err)
+	require.Greater(t, onMgr.mqttNow().Sub(ci.Created), mqttFailClosedFromSettle,
+		"premise: by the pod's clock the durable is long settled")
+	age, err := onMgr.mqttDurableAge(context.Background(), name)
+	require.NoError(t, err)
+	require.Less(t, age, mqttFailClosedFromSettle, "a pod clock an hour ahead made a just-created durable read as settled")
 }

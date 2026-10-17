@@ -293,6 +293,22 @@ func (t *Tap) emit(ctx context.Context, transition Transition) {
 	t.Apply(ctx, transition)
 }
 
+// emitHeld emits a disconnect the debounce held back, without the session-regression check.
+//
+// 🔴 A HELD DISCONNECT IS OLDER THAN WHAT FOLLOWED IT BY DESIGN. Its device has usually
+// reconnected within the hold, and when that reconnect's advisory reached this replica, the
+// held disconnect's session is below the one already emitted for the device. The regression
+// check reads exactly that as a broker node whose clock trails its peers, so counting it would
+// put one RegressedSessions increment and one clock-skew warning on every debounced refusal:
+// under overload, the whole fleet, pointing the operator at clocks during a store overload.
+func (t *Tap) emitHeld(ctx context.Context, transition Transition) {
+	if t.async != nil {
+		t.applyAsync(ctx, transition, false)
+		return
+	}
+	t.apply(ctx, transition, false)
+}
+
 // deferDeath holds a refusal-close disconnect back for the debounce (see RefusalCloseReason)
 // and emits it then. It reports false when it did not hold it (no debounce, the tap is
 // stopping, or the ceiling is reached), and the caller then emits it at once.
@@ -322,7 +338,7 @@ func (t *Tap) deferDeath(transition Transition) bool {
 		if !held {
 			return // dropped by StopDeferred, and counted there
 		}
-		t.emit(context.Background(), transition)
+		t.emitHeld(context.Background(), transition)
 	})
 	t.deferred[timer] = struct{}{}
 	incr(t.metrics.Deferred)

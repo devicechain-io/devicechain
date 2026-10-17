@@ -23,7 +23,7 @@ import (
 // upgrade that renames the close reason fails here instead of quietly turning the debounce off.
 //
 // GUARD: kills a RefusalCloseReason that does not match what the broker sends for a refused
-// store write.
+// store write, and (the control) one the broker also sends for a device that hung up.
 func TestAStoreRefusalCloseCarriesTheReasonTheTapDebounces(t *testing.T) {
 	srv, mqttPort := broker(t)
 	svc, err := nats.Connect(srv.ClientURL(), nats.UserInfo("dc_service", "svc"))
@@ -51,6 +51,27 @@ func TestAStoreRefusalCloseCarriesTheReasonTheTapDebounces(t *testing.T) {
 	stop, err := tap.Subscribe(sysConn(t, srv))
 	require.NoError(t, err)
 	t.Cleanup(stop)
+
+	// The negative control, first: a device that hangs up cleanly is disconnected for a reason
+	// that is NOT the refusal-close one, and is reported at once. Without it, a broker that put
+	// RefusalCloseReason on every MQTT disconnect would pass the assertions below while the
+	// debounce held back every device that really went away.
+	popts := mqtt.NewClientOptions()
+	popts.AddBroker(fmt.Sprintf("tcp://127.0.0.1:%d", mqttPort))
+	popts.SetClientID(testInstance + ":acme:polite")
+	popts.SetUsername("dc_service")
+	popts.SetPassword("svc")
+	popts.SetAutoReconnect(false)
+	polite := mqtt.NewClient(popts)
+	ptok := polite.Connect()
+	require.True(t, ptok.WaitTimeout(20*time.Second))
+	require.NoError(t, ptok.Error())
+	emitter.await(t, "the polite device's connect", isDevice("acme", "polite", true))
+	polite.Disconnect(250)
+	gone := emitter.await(t, "the polite device's disconnect", isDevice("acme", "polite", false))
+	require.NotEqual(t, RefusalCloseReason, gone.Event.Reason,
+		"control: a clean hang-up carries the refusal-close reason, so the reason cannot tell a refusal apart")
+	require.Zero(t, testutil.ToFloat64(deferred), "control: a clean hang-up was held back")
 
 	lost := make(chan struct{})
 	opts := mqtt.NewClientOptions()

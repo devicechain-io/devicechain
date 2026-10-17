@@ -150,3 +150,37 @@ func TestTheDebounceIsBounded(t *testing.T) {
 	tap.Handle(context.Background(), false, refusalAdvisoryFor("over", 1_000, 2_000, RefusalCloseReason))
 	require.Equal(t, 1, held.pending(), "past the ceiling the disconnect must be emitted at once")
 }
+
+// 🔴 A HELD DISCONNECT IS NOT A CLOCK PROBLEM. A device refused and reconnected within the hold
+// has its newer session emitted first, so its held disconnect's session is lower by design. The
+// session-regression counter exists to point at a broker node whose clock trails its peers;
+// counting every debounced refusal there would make it read as fleet-wide clock skew during the
+// very overload that caused the refusals.
+//
+// GUARD: kills a held disconnect emitted through the regression check. The control (a genuine
+// backwards step on a connect) proves the counter is wired and still counts.
+func TestAHeldDisconnectIsNotCountedAsASessionRegression(t *testing.T) {
+	held := &heldAsync{}
+	m, _, _ := debounceMetrics()
+	regressed := prometheus.NewCounter(prometheus.CounterOpts{Name: "r"})
+	m.RegressedSessions = regressed
+	tap := NewTap(testInstance, "mqtt1", failingEmitter{errors.New("sync")}, nil, m).
+		WithAsyncEmitter(held).WithRefusalDebounce(100 * time.Millisecond)
+
+	base := time.Now().Add(-time.Minute).UnixNano()
+	tap.Handle(context.Background(), true, connectAdvisoryFor("pump", base))
+	tap.Handle(context.Background(), false, refusalAdvisoryFor("pump", base, base+1_000_000, RefusalCloseReason))
+	tap.Handle(context.Background(), true, connectAdvisoryFor("pump", base+2_000_000))
+	require.Eventually(t, func() bool { return held.pending() == 3 }, 5*time.Second, 10*time.Millisecond)
+	require.Zero(t, testutil.ToFloat64(regressed), "a held disconnect was counted as a broker clock going backwards")
+
+	// The control: a connect whose session is genuinely below the one already emitted.
+	tap.Handle(context.Background(), true, connectAdvisoryFor("pump", base+1_000))
+	require.Equal(t, 1.0, testutil.ToFloat64(regressed), "control: a real backwards step is counted")
+}
+
+// The hold is the documented one: the operator documentation says a refusal-close is not
+// reported for 30 seconds, so a change to it is a change to that page too.
+func TestTheRefusalCloseDebounceIsTheDocumentedThirtySeconds(t *testing.T) {
+	require.Equal(t, 30*time.Second, RefusalCloseDebounce)
+}
