@@ -18,6 +18,7 @@ import (
 	"hash/fnv"
 	"reflect"
 	goruntime "runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -125,6 +126,9 @@ type faultWriter struct {
 	// decide sees the attempt, its 1-based position among all attempts, and how many earlier
 	// attempts had the same dedup id.
 	decide func(a attempt, index, earlier int) (store bool, err error)
+	// stored, when set, is called after an attempt the broker stored and before its outcome is
+	// returned to the caller.
+	stored func(a attempt)
 
 	mu       sync.Mutex
 	attempts []attempt
@@ -152,6 +156,9 @@ func (w *faultWriter) WriteMessages(ctx context.Context, msgs ...messaging.Messa
 	if store {
 		if ierr := w.inner.WriteMessages(ctx, msgs...); ierr != nil {
 			return ierr
+		}
+		if w.stored != nil {
+			w.stored(a)
 		}
 	}
 	return err
@@ -356,24 +363,51 @@ func logKinds(events []outputEvent) (published, saved, acked int) {
 // sent again, even the detections after the failed one in the buffer, and each detection's fire
 // is recorded exactly once.
 func TestAnUnknownOutcomeIsRetriedWithTheSameBytesAndDedupID(t *testing.T) {
-	for _, window := range []int{1, 8} {
+	for _, window := range []int{1, 2, 8, 32} {
 		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
 			var fw *faultWriter
 			var target atomic.Pointer[pendingDetection]
 			var victim atomic.Value
-			r, _ := pipelineRig(t, window, &fw, func(a attempt, _, earlier int) (bool, error) {
+			var r *outputRig
+			// later are the attempts of buffer positions after the victim's, other than its lane.
+			var later sync.Map
+			var storedTotal, laterStored atomic.Int64
+			r, _ = pipelineRig(t, window, &fw, func(a attempt, _, earlier int) (bool, error) {
 				// The 20th buffered detection's first attempt: stored, acknowledgement lost.
 				if d := target.Load(); earlier == 0 && d != nil && a.rule == d.RuleID && a.lane == "acme|"+d.Series && a.at.Equal(d.At) {
 					victim.Store(a.dedupID)
+					if window > 1 {
+						// Fix the completion order: the loss is reported only after an item behind
+						// the victim in the buffer was stored AND its acknowledgement applied, so the
+						// known-success suffix the test asserts exists by construction, not by luck.
+						deadline := time.Now().Add(10 * time.Second)
+						for time.Now().Before(deadline) {
+							if laterStored.Load() > 0 && testutil.ToFloat64(r.metrics.derivedPublished) >= float64(storedTotal.Load()) {
+								break
+							}
+							time.Sleep(time.Millisecond)
+						}
+					}
 					return true, fmt.Errorf("lost: %w", nats.ErrTimeout)
 				}
 				return true, nil
 			})
+			fw.stored = func(a attempt) {
+				storedTotal.Add(1)
+				if _, ok := later.Load(a.rule + "|" + a.lane + "|" + strconv.FormatInt(a.at.UnixNano(), 10)); ok {
+					laterStored.Add(1)
+				}
+			}
 			k := 19
 			for mustTenant(t, r.rp.pendingDets[k].RuleID) != "acme" {
 				k++
 			}
 			d := r.rp.pendingDets[k]
+			for _, o := range r.rp.pendingDets[k+1:] {
+				if tenant := mustTenant(t, o.RuleID); tenant+"|"+o.Series != "acme|"+d.Series {
+					later.Store(o.RuleID+"|"+tenant+"|"+o.Series+"|"+strconv.FormatInt(o.At.UnixNano(), 10), true)
+				}
+			}
 			target.Store(&d)
 			ctx := context.Background()
 			require.False(t, r.rp.checkpoint(ctx), "a checkpoint with an unknown publish outcome committed")
