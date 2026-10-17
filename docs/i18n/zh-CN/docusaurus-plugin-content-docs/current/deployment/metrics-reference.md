@@ -84,6 +84,13 @@ title: 指标参考
 | `detect_consumer_ack_pending` | 已解析事件持久消费者上已投递但未确认的消息（进行中的工作）。 |
 | `detect_consumer_pending` | 已解析事件持久消费者上等待的未投递消息（主要的 DETECT 滞后信号）。 |
 | `detect_derived_publish_ack_seconds` | 每个已发布的派生事件等待代理确认的时间（分布）。仅统计成功的发布。这不是检测延迟：检测在发布之前要先等待其检查点。 |
+| `detect_derived_publish_pass_seconds` | 每个检查点发布其检测所用的时间，从第一次发送到最后一次确认，以分布形式记录。不包括检测等待其检查点的时间。 |
+| `detect_derived_publish_outstanding` | 当前已发送、正在等待消息总线确认的派生事件数（受 `derivedPublishing.maxInFlight` 限制）。检查点之间为零。 |
+| `detect_derived_publish_outstanding_bytes` | 这些事件的负载字节数（受 `derivedPublishing.maxBufferedBytes` 限制，但单个更大的事件会单独发送）。 |
+| `detect_derived_publish_window_full_seconds_total` | 检查点在另一个检测已可发送、但在途上限或字节预算没有空间时，等待确认所花的秒数。 |
+| `detect_derived_publish_lane_waits_total` | 在 `derivedPublishing.maxInFlight` 大于 1 时，需要等待同一设备（或关联锚点）的前一个检测得到确认后才能发送的检测数。 |
+| `detect_derived_publish_failures_total{outcome}` | 未得到肯定确认的派生事件发布，按 `outcome` 区分：`unknown`（超时：事件可能已被存储）或 `failed`（消息总线拒绝）。每次都会推迟其检查点，并以相同的事件和标识重试，因此已存储的事件不会被存储两次。 |
+| `detect_derived_publish_stale_outcomes_total` | 因不属于当前检查点正在等待的任何发布而被拒绝的发布结果。除非出现问题，否则始终为零。 |
 | `detect_derived_events_published_total` | 已发布的派生信号事件。 |
 | `detect_derived_events_rejected_total{reason}` | 发布前被丢弃的检测，按原因区分（有界枚举）。 |
 | `detect_events_applied_total` | 送入 DETECT 引擎的已解析事件。 |

@@ -29,6 +29,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"reflect"
 	"strconv"
 	"strings"
@@ -221,12 +222,37 @@ type outputEvent struct {
 type outputLog struct {
 	mu     sync.Mutex
 	events []outputEvent
+	// times is when each event was logged, beside events rather than in them so that two logs
+	// can still be compared for equality.
+	times []time.Time
 }
 
 func (l *outputLog) add(e outputEvent) {
+	now := time.Now()
 	l.mu.Lock()
 	l.events = append(l.events, e)
+	l.times = append(l.times, now)
 	l.mu.Unlock()
+}
+
+// outputLatencies is, for every positively acknowledged derived event, how long after its input
+// was handled the acknowledgement came: the detection's whole output latency, INCLUDING its wait
+// in the buffer for the checkpoint that publishes it. handled[seq] is when input seq was handled.
+func (l *outputLog) outputLatencies(handled []time.Time) []time.Duration {
+	events := l.snapshot()
+	l.mu.Lock()
+	times := append([]time.Time(nil), l.times...)
+	l.mu.Unlock()
+	var out []time.Duration
+	for i, e := range events {
+		if e.kind != evPublished {
+			continue
+		}
+		if s := e.det.inputSeq(); s < uint64(len(handled)) && !handled[s].IsZero() {
+			out = append(out, times[i].Sub(handled[s]))
+		}
+	}
+	return out
 }
 
 // snapshot is the log so far, with every published payload decoded. A payload that does not
@@ -326,12 +352,20 @@ func (r oracleAdmissions) RecordFire(ctx context.Context, ruleID, tenant string,
 	r.inner.RecordFire(ctx, ruleID, tenant, at, edge)
 }
 
-// latencyWriter is a broker whose acknowledgement takes a fixed time and always succeeds.
-type latencyWriter struct{ ack time.Duration }
+// latencyWriter is a broker whose acknowledgement takes a fixed time, plus up to jitter more
+// chosen deterministically from the message's dedup id, and always succeeds. Each write waits on
+// its caller's own goroutine, so concurrent writes overlap as they would on a real broker.
+type latencyWriter struct{ ack, jitter time.Duration }
 
-func (w latencyWriter) WriteMessages(context.Context, ...messaging.Message) error {
-	if w.ack > 0 {
-		time.Sleep(w.ack)
+func (w latencyWriter) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+	d := w.ack
+	if w.jitter > 0 && len(msgs) > 0 {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(msgs[0].DedupID))
+		d += time.Duration(h.Sum32()%1024) * w.jitter / 1024
+	}
+	if d > 0 {
+		time.Sleep(d)
 	}
 	return nil
 }
@@ -456,6 +490,8 @@ type outputVariant struct {
 	checkpoint func(ctx context.Context, rp *ResolvedEventsProcessor) bool
 	// settle waits for anything the variant left in flight, before the oracle reads the log.
 	settle func()
+	// window is the production publish window the variant runs at (0: the default, 1).
+	window int
 }
 
 // variantA is the baseline: per-detection publish, each waiting for its broker acknowledgement,
@@ -506,12 +542,25 @@ var variantProduction = outputVariant{name: "production", checkpoint: func(ctx c
 	return rp.checkpoint(ctx)
 }}
 
-// variantB is the batched rule-health path: the production checkpoint (whose publishing is
-// still serial) with the production accumulator as the recorder. The rig wires the accumulator
-// when the spec carries a batch store; the variant itself is the production checkpoint.
-var variantB = outputVariant{name: "B", checkpoint: func(ctx context.Context, rp *ResolvedEventsProcessor) bool {
-	return rp.checkpoint(ctx)
-}}
+// variantB is the batched rule-health path with SERIAL publishing: the baseline's publish loop
+// with the production accumulator as the recorder. The rig wires the accumulator when the spec
+// carries a batch store. It was the production checkpoint until publishing was pipelined; it is
+// kept as a benchmark-only adapter so "B" still means what it measured (stats batched, publishes
+// serial) rather than whatever production now does.
+var variantB = outputVariant{name: "B", checkpoint: baselineCheckpoint}
+
+// variantPipelined is the production checkpoint at a given publish window: variant C at window 1
+// (the new publisher, still one publish at a time) and variant D above it. The rig sets the
+// window from the spec; the variant itself is the production checkpoint.
+func variantPipelined(window int) outputVariant {
+	name := "C"
+	if window > 1 {
+		name = fmt.Sprintf("D%d", window)
+	}
+	return outputVariant{name: name, window: window, checkpoint: func(ctx context.Context, rp *ResolvedEventsProcessor) bool {
+		return rp.checkpoint(ctx)
+	}}
+}
 
 // outputRigSpec says what one rig is built over.
 type outputRigSpec struct {
@@ -531,6 +580,9 @@ type outputRigSpec struct {
 	variant   outputVariant
 	// checkpointEvents is the batch-count checkpoint trigger; 0 is the service default.
 	checkpointEvents int
+	// output is the production publish window and byte budget. Zero: the variant's window with
+	// the default budget, or the service default when the variant has none.
+	output runtime.OutputConfig
 }
 
 // outputRig is a processor built over a spec, the oracle's log, and the split timings.
@@ -542,6 +594,8 @@ type outputRig struct {
 	variant outputVariant
 	// handleTime is the wall time spent in handle: decode, fan-out and the engine.
 	handleTime time.Duration
+	// handled is when each input was handled, by stream sequence, for the output latencies.
+	handled []time.Time
 	// checkpointTime is the wall time spent in checkpoints, publish included.
 	checkpointTime time.Duration
 	checkpoints    int
@@ -555,6 +609,9 @@ type outputRig struct {
 
 func newOutputRig(tb testing.TB, spec outputRigSpec) *outputRig {
 	tb.Helper()
+	if spec.output == (runtime.OutputConfig{}) && spec.variant.window > 0 {
+		spec.output = runtime.OutputConfig{MaxInFlight: spec.variant.window, MaxBufferedBytes: runtime.DefaultMaxBufferedBytes}
+	}
 	ms := &core.Microservice{InstanceId: "detperf", FunctionalArea: "event-processing"}
 	ms.UseMetricsRegistry(prometheus.NewRegistry())
 	metrics := NewDetectMetrics(ms)
@@ -608,6 +665,7 @@ func newOutputRig(tb testing.TB, spec outputRigSpec) *outputRig {
 			CheckpointInterval: time.Hour,
 			TickInterval:       time.Hour,
 			Clock:              detectcore.RealClock{},
+			Output:             spec.output,
 		},
 		registry:   reg,
 		publisher:  pub,
@@ -632,10 +690,20 @@ func newOutputRig(tb testing.TB, spec outputRigSpec) *outputRig {
 func (r *outputRig) run(tb testing.TB, msgs []messaging.Message) {
 	tb.Helper()
 	ctx := context.Background()
+	if cap(r.handled) < len(msgs)+2 {
+		r.handled = make([]time.Time, 0, len(msgs)+2)
+	}
 	for _, m := range msgs {
 		start := time.Now()
 		r.rp.handle(m)
-		r.handleTime += time.Since(start)
+		end := time.Now()
+		r.handleTime += end.Sub(start)
+		if m.StreamSeq < 1<<24 {
+			for uint64(len(r.handled)) <= m.StreamSeq {
+				r.handled = append(r.handled, time.Time{})
+			}
+			r.handled[m.StreamSeq] = end
+		}
 		if len(r.rp.pendingAcks) >= r.rp.cfg.CheckpointEvents {
 			r.checkpoint(tb, ctx)
 		}

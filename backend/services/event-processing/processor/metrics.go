@@ -153,6 +153,17 @@ type DetectMetrics struct {
 	// detect_loop_seconds_total{phase="publish"} is these plus the loop's own work. No labels.
 	derivedPublishAck prometheus.Observer
 
+	// The publish phase's own accounting (derived_publish.go). None is labelled beyond the closed
+	// outcome enum: no tenant, rule, series or lane.
+	publishOutstanding      prometheus.Gauge
+	publishOutstandingBytes prometheus.Gauge
+	publishWindowFull       prometheus.Counter
+	publishPass             prometheus.Observer
+	publishFailures         *prometheus.CounterVec
+	publishFailuresBy       map[string]prometheus.Counter
+	publishStale            prometheus.Counter
+	publishLaneWaits        prometheus.Counter
+
 	// The rule-health accumulator (internal/rulehealth). Its writes run on its own worker, so
 	// none of this is loop time: ruleStatWrite is one tenant batch transaction (the erasure-fence
 	// read and the upsert), whatever its outcome. Every count is of fire UPDATES (detections)
@@ -267,6 +278,26 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	m.derivedPublishAck = ms.NewHistogramVec("detect_derived_publish_ack_seconds",
 		"Time each published derived event waited for the broker to acknowledge it, from the write to the acknowledgement. Positive outcomes only. It is not detection latency: a detection waits for its checkpoint before it is written.",
 		nil, waitBuckets).WithLabelValues()
+	m.publishOutstanding = ms.NewGauge("detect_derived_publish_outstanding",
+		"Derived events sent and waiting for the broker's acknowledgement right now (bounded by derivedPublishing.maxInFlight). Zero between checkpoints.")
+	m.publishOutstandingBytes = ms.NewGauge("detect_derived_publish_outstanding_bytes",
+		"Payload bytes of those derived events (bounded by derivedPublishing.maxBufferedBytes, except that a single larger event is sent on its own).")
+	m.publishWindowFull = ms.NewCounter("detect_derived_publish_window_full_seconds_total",
+		"Seconds a checkpoint spent waiting for an acknowledgement while another detection was ready to send but the in-flight limit or byte budget had no room. With derivedPublishing.maxInFlight 1 that is nearly all of the publish wait.")
+	m.publishPass = ms.NewHistogramVec("detect_derived_publish_pass_seconds",
+		"Time each checkpoint spent publishing its buffered detections, from the first send to the last acknowledgement, whether or not every one succeeded. Detections wait in the buffer for their checkpoint before this starts, so it is not detection latency.",
+		nil, checkpointBuckets).WithLabelValues()
+	m.publishFailures = ms.NewCounterVec("detect_derived_publish_failures_total",
+		"Derived-event publishes that did not get a positive acknowledgement, by outcome: unknown (a timeout: the event may have been stored) or failed (the broker refused it). Each defers its checkpoint and is retried with the same bytes and broker dedup id, so a stored one is not stored twice.",
+		[]string{"outcome"})
+	m.publishFailuresBy = make(map[string]prometheus.Counter, len(publishFailureOutcomes))
+	for _, o := range publishFailureOutcomes {
+		m.publishFailuresBy[o] = m.publishFailures.WithLabelValues(o)
+	}
+	m.publishStale = ms.NewCounter("detect_derived_publish_stale_outcomes_total",
+		"Publish outcomes refused because they did not belong to a publish the current checkpoint was waiting for. Always zero unless something is wrong; a non-zero value is a bug to report.")
+	m.publishLaneWaits = ms.NewCounter("detect_derived_publish_lane_waits_total",
+		"Detections that waited for an earlier detection of the same device (or correlation anchor) to be acknowledged before they could be sent, with derivedPublishing.maxInFlight above 1. A high share of all published detections means a few busy series, which a wider window cannot overlap.")
 	m.ruleStatWrite = ms.NewHistogramVec("detect_rule_stat_write_seconds",
 		"Time each rule-health fire counter batch write (one tenant's transaction, including the tenant-deletion check it makes first) took on the background writer. It is not detection-loop time. Failed writes are included; they are also counted in detect_rule_stat_write_failures_total.",
 		nil, waitBuckets).WithLabelValues()
@@ -634,6 +665,43 @@ func (m *DetectMetrics) RecordDerivedPublishAck(wait time.Duration) {
 		return
 	}
 	m.derivedPublishAck.Observe(wait.Seconds())
+}
+
+// setPublishOutstanding sets the in-flight publish gauges.
+func (m *DetectMetrics) setPublishOutstanding(n int, bytes int64) {
+	if m == nil {
+		return
+	}
+	m.publishOutstanding.Set(float64(n))
+	m.publishOutstandingBytes.Set(float64(bytes))
+}
+
+// recordPublishFailure counts one publish without a positive outcome, by outcome.
+func (m *DetectMetrics) recordPublishFailure(outcome string) {
+	if m == nil {
+		return
+	}
+	if c, ok := m.publishFailuresBy[outcome]; ok {
+		c.Inc()
+	}
+}
+
+// recordPublishPass records one publish pass: its duration, the part of it spent with the window
+// full, the detections that waited on their lane, and any refused outcomes.
+func (m *DetectMetrics) recordPublishPass(took, windowFull time.Duration, laneWaits, stale int) {
+	if m == nil {
+		return
+	}
+	m.publishPass.Observe(took.Seconds())
+	if windowFull > 0 {
+		m.publishWindowFull.Add(windowFull.Seconds())
+	}
+	if laneWaits > 0 {
+		m.publishLaneWaits.Add(float64(laneWaits))
+	}
+	if stale > 0 {
+		m.publishStale.Add(float64(stale))
+	}
 }
 
 // recordRuleStatWrite observes one rule-health write's duration (the benchmark baseline's

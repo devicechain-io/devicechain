@@ -539,9 +539,11 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `ruleHealth.maxPendingBytes` | 4194304 | Presupuesto de memoria para esos disparos pendientes, de 65536 a 268435456 (256 MiB). |
 | `ruleHealth.maxBatchRows` | 256 | Máximo de reglas que lleva una escritura de un inquilino, de 1 a 4096; un inquilino con más pendientes se escribe en varias transacciones. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | Cuánto puede tardar la escritura de un inquilino, de 100 a 60000. Una escritura que falla o agota el tiempo se descarta, no se reintenta. |
+| `derivedPublishing.maxInFlight` | 1 | Cuántas detecciones puede tener a la vez un punto de control esperando la confirmación del bus de mensajes, de 1 a 1024. Con 1, cada una se confirma antes de enviar la siguiente. Por encima de 1, las detecciones de dispositivos distintos se publican en paralelo, nunca más de una por dispositivo a la vez. Véase más abajo. |
+| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones en espera, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
 
-Cada ajuste de `ruleHealth` es opcional; si se indica, debe estar dentro de su rango (incluido el
-cero) o el servicio no arranca.
+Cada ajuste de `ruleHealth` y de `derivedPublishing` es opcional; si se indica, debe estar dentro de
+su rango (incluido el cero) o el servicio no arranca.
 
 ### Los recuentos de salud de reglas son aproximados
 
@@ -576,6 +578,40 @@ esté donde esté (acumulando disparos, apartada para la siguiente escritura o d
 en curso), y su tamaño se calcula como 160 bytes más la longitud de su id de regla, más 320 bytes y el
 token del inquilino para la primera entrada de un inquilino. Eso sobrestima lo que realmente ocupa, de
 modo que el presupuesto de bytes es un límite estricto.
+
+### Publicar varias detecciones a la vez
+
+Un punto de control publica en el bus de mensajes todas las detecciones que cubre, y guarda el
+estado del motor y confirma los eventos que las originaron solo cuando todas han sido confirmadas.
+Con `derivedPublishing.maxInFlight` en 1, el valor por defecto, eso es una detección cada vez, así
+que un punto de control con muchas detecciones espera otras tantas confirmaciones una tras otra.
+Donde una confirmación es lenta, por ejemplo en un stream replicado cuyos servidores están lejos
+entre sí, esa espera es lo que limita la rapidez con que se entregan las detecciones.
+
+Subir `maxInFlight` permite que un punto de control espere varias confirmaciones a la vez. Lo que no
+cambia:
+
+- **Las detecciones de cada dispositivo llegan en orden.** La siguiente detección de un dispositivo,
+  de cualquiera de sus reglas, se envía solo cuando la anterior ha sido confirmada, así que nunca hay
+  más de una por dispositivo en espera. Las detecciones de una regla de correlación cuentan como de
+  su ancla. Las de dispositivos distintos pueden llegar en otro orden que antes; nada posterior
+  depende de ese orden, porque cada alarma pertenece a un solo dispositivo.
+- **Nada se confirma antes que sus detecciones.** El punto de control se guarda solo cuando todas
+  las detecciones que cubre han sido confirmadas, exactamente igual que con 1.
+- **Un fallo se reintenta sin duplicados.** Cuando una publicación falla o agota el tiempo, no se
+  envían más, el punto de control no se guarda, y el siguiente intento envía la misma detección con
+  la misma identidad. El bus de mensajes reconoce una copia que ya guardó, así que una publicación que
+  agotó el tiempo pero sí llegó se guarda una vez. Las detecciones ya confirmadas no se reenvían.
+- **Los recuentos de salud de reglas se registran en el mismo orden**, sea cual sea el orden en que
+  vuelvan las confirmaciones.
+
+Solo ayuda cuando la fase `publish` es una parte grande del tiempo del bucle (véase
+[en qué se va el tiempo del bucle](#loop-phases)) y las detecciones se reparten entre muchos
+dispositivos. Un único dispositivo muy activo no gana nada, porque sus detecciones se siguen enviando
+de una en una. `devicechain_eventprocessing_detect_derived_publish_window_full_seconds_total` es el
+tiempo que los puntos de control pasaron esperando con otra detección lista para enviar; si se acerca
+al tiempo en `publish`, una ventana más ancha puede ayudar. Deje el valor por defecto salvo que esté
+midiendo.
 
 ### El techo de duración de regla sí se aplica
 
@@ -733,7 +769,10 @@ espera por detección: la confirmación del evento derivado por el broker
 (`devicechain_eventprocessing_detect_derived_publish_ack_seconds`). Los contadores de salud de reglas
 los escribe un proceso aparte en segundo plano, así que su tiempo de base de datos no está en ninguna
 de estas fases; es `devicechain_eventprocessing_detect_rule_stat_write_seconds`, una observación por
-escritura de inquilino. El tiempo
+escritura de inquilino. Con `derivedPublishing.maxInFlight` por encima de 1 las esperas de
+confirmación se solapan, así que `publish` es menor que su suma;
+`devicechain_eventprocessing_detect_derived_publish_pass_seconds` es la publicación completa de cada
+punto de control. El tiempo
 en `save` es la serialización del estado del motor
 (`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`) y después su escritura en la base
 de datos (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).

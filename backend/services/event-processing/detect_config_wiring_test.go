@@ -22,3 +22,17 @@ func TestProcessorConfigCarriesDetectShards(t *testing.T) {
 		t.Fatalf("default processor Shards = %d, want 1", got)
 	}
 }
+
+// The publish window a deployment configures is the one the processor runs at; an absent one is
+// the serial default.
+func TestProcessorConfigCarriesThePublishWindow(t *testing.T) {
+	c := config.NewEventProcessingConfiguration()
+	w := 32
+	c.DerivedPublishing.MaxInFlight = &w
+	if got := detectProcessorConfig(c).Output.MaxInFlight; got != 32 {
+		t.Fatalf("processor publish window = %d, want the configured 32", got)
+	}
+	if got := detectProcessorConfig(config.NewEventProcessingConfiguration()).Output.MaxInFlight; got != 1 {
+		t.Fatalf("default processor publish window = %d, want 1", got)
+	}
+}
