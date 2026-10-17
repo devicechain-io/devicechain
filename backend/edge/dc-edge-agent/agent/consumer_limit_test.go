@@ -4,10 +4,12 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
@@ -21,34 +23,25 @@ const qos1Subscriptions = 1050
 // subscribeQoS1 opens enough clean-session clients on addr to hold n QoS 1 subscriptions
 // at once (a session's subscriptions may hold at most 65,535 un-acked messages between
 // them at 1,024 each, so ~63 per session), keeps them all connected, and returns how
-// many filters the broker granted at QoS 1 and how many it refused with 0x80. A filter
-// the SUBACK does not mention counts as neither, and fails the test.
+// many the broker granted and how many it refused with SUBACK 0x80. Any other outcome
+// (no SUBACK, a transport error) fails the test, so neither count can absorb it.
 func subscribeQoS1(t *testing.T, addr, prefix string, n int) (granted, refused int) {
 	t.Helper()
 	const perClient = 50
-	for c := 0; c*perClient < n; c++ {
-		client := mqttConnect(t, addr, fmt.Sprintf("%s-%d", prefix, c))
-		filters := map[string]byte{}
-		for i := c * perClient; i < n && i < (c+1)*perClient; i++ {
-			filters[fmt.Sprintf("site/%s/dev%d/cmd", prefix, i)] = 1
+	var client mqtt.Client
+	for i := 0; i < n; i++ {
+		if i%perClient == 0 {
+			client = mqttConnect(t, addr, fmt.Sprintf("%s-%d", prefix, i/perClient))
 		}
-		tok := client.SubscribeMultiple(filters, func(mqtt.Client, mqtt.Message) {})
-		if !tok.WaitTimeout(30*time.Second) || tok.Error() != nil {
-			t.Fatalf("SUBSCRIBE from client %d: no SUBACK within 30s (err %v)", c, tok.Error())
-		}
-		res := tok.(*mqtt.SubscribeToken).Result()
-		for f := range filters {
-			code, ok := res[f]
-			switch {
-			case !ok:
-				t.Fatalf("SUBACK for client %d did not answer filter %q", c, f)
-			case code == 1:
-				granted++
-			case code == 0x80:
-				refused++
-			default:
-				t.Fatalf("filter %q granted at QoS %d, asked for 1", f, code)
-			}
+		filter := fmt.Sprintf("site/%s/dev%d/cmd", prefix, i)
+		err := messaging.SubscribeMqttConfirmed(client, filter, 1, func(mqtt.Client, mqtt.Message) {}, 30*time.Second)
+		switch {
+		case err == nil:
+			granted++
+		case errors.Is(err, messaging.ErrSubscriptionRefused):
+			refused++
+		default:
+			t.Fatalf("subscription %d: %v", i, err)
 		}
 	}
 	return granted, refused
