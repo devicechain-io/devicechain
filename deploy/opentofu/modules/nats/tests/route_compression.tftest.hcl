@@ -172,6 +172,13 @@ run "unset_on_a_single_server_is_off" {
     condition     = output.ha_topology.route_compression == "off" && !output.ha_topology.clustered
     error_message = "a single server with route_compression unset reports off"
   }
+
+  # The report above reads the mode back out of the merge, so a merge carrying
+  # "off" would satisfy it too. A single server's values must not change at all.
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.nats.values[0]).config.cluster), "merge")
+    error_message = "a single server with route_compression unset must render no merge key on the cluster block"
+  }
 }
 
 run "explicit_off_on_a_single_server" {
