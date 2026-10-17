@@ -7,6 +7,7 @@ import (
 	"time"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventidentity"
 	"github.com/devicechain-io/dc-microservice/presence"
 )
 
@@ -120,6 +121,13 @@ func (p *ResolvedMeasurementsPayload) IdentityView() *ResolvedMeasurementsPayloa
 	}
 	return view
 }
+
+// IdentityPayload makes the payload an eventidentity.Viewer, so event-management can hash its
+// identity view without importing this package. It is IdentityView, by value: a value and a
+// pointer both reach it, which is how callers hand the payload over.
+func (p ResolvedMeasurementsPayload) IdentityPayload() any { return p.IdentityView() }
+
+var _ eventidentity.Viewer = ResolvedMeasurementsPayload{}
 
 // hasDerived reports whether any entry of the payload is Derived.
 func (p *ResolvedMeasurementsPayload) hasDerived() bool {

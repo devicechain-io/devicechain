@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/eventidentity"
 )
 
 // The canonical preimage of each payload table's row identity, and of the base event's,
@@ -129,20 +129,14 @@ func DeriveAlertPayloadId(request *AlertEventCreateRequest) ([]byte, error) {
 // the PRODUCER's: the payload must already be canonical, because json.Marshal of a slice
 // preserves slice order and nothing here can know which slices carry meaning in theirs.
 //
-// A measurements payload is hashed through its IdentityView: its calculated (Derived)
+// A payload that has an identity view (eventidentity.Viewer; for measurements, ResolvedMeasurementsPayload.IdentityView) is hashed through it: its calculated (Derived)
 // values are left out (ADR-082), so the id is a function of what the device sent and one
 // reading keeps one id across a formula change. A payload with no calculated value is
 // hashed as is — byte for byte the document it was hashed as before calculated metrics
 // existed, which is what every stored event's id was derived from. Both callers come
 // through here, so neither can forget the filter.
 func DeriveEventIdForPayload(tenantId string, event *Event, payload any) ([]byte, error) {
-	switch p := payload.(type) {
-	case *dmmodel.ResolvedMeasurementsPayload:
-		payload = p.IdentityView()
-	case dmmodel.ResolvedMeasurementsPayload:
-		payload = p.IdentityView()
-	}
-	encoded, err := json.Marshal(payload)
+	encoded, err := json.Marshal(eventidentity.Payload(payload))
 	if err != nil {
 		return nil, fmt.Errorf("canonicalizing payload for the event identity: %w", err)
 	}

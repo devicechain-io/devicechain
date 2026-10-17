@@ -67,6 +67,26 @@ type calcObserver struct {
 	ctx     context.Context
 	device  string
 	version string
+	// seen is this observer's own memory of what it has already put to the shared set. A
+	// resolver is single-threaded, so it needs no lock, and a repeat skip (the common case:
+	// a has()-guarded input that is usually absent skips on nearly every reading) is answered
+	// here without building a key string or touching the pool-wide mutex. It is a cache in
+	// front of the shared set, never a second authority: a miss still asks the shared set,
+	// which alone decides whether this process reports. Cleared when full, so it is bounded.
+	//
+	// Each entry holds the shared set's insert count when this observer last touched the key
+	// there. The shared set is an LRU, and the old path's touch on every repeat is what kept
+	// a hot outcome from ageing out of it; a cache that never touched it again would let a hot
+	// outcome be evicted under churn and reported a second time (by any observer, or by this
+	// one after a clear). So a hit older than half the shared capacity in inserts falls
+	// through and touches the shared set once more, which keeps it held while it stays hot.
+	seen map[claimKey]uint64
+}
+
+// claimKey is the identity of one reportable outcome: (tenant, profile version, metric,
+// outcome). A struct of strings, so building it allocates nothing.
+type claimKey struct {
+	tenant, version, key, outcome string
 }
 
 // Computed implements model.CalculationObserver.
@@ -110,12 +130,36 @@ func (o *calcObserver) deviceKeyDropped(key, value string) {
 
 // claim reports whether this (tenant, profile version, metric, outcome) is being reported
 // for the first time in this process.
+//
+// The per-observer cache answers a repeat without a lock. A key it has not seen goes to the
+// shared set, and is remembered here whatever the answer: if another worker already reported
+// it, this one has nothing to report either. So the log stays bounded by the shared set exactly
+// as before; only the cost of repeating a suppressed outcome moved.
 func (o *calcObserver) claim(key, outcome string) bool {
 	if o.metrics.warned == nil {
 		return false
 	}
 	tenant, _ := core.TenantFromContext(o.ctx)
-	return o.metrics.warned.putIfAbsent(tenant+"|"+o.version+"|"+key+"|"+outcome, struct{}{})
+	k := claimKey{tenant: tenant, version: o.version, key: key, outcome: outcome}
+	now := o.metrics.warned.insertCount()
+	if at, ok := o.seen[k]; ok && now-at < calcWarnRefresh {
+		return false
+	}
+	if o.seen == nil || len(o.seen) >= calcWarnCapacity {
+		o.seen = make(map[claimKey]uint64, 64)
+	}
+	o.seen[k] = now
+	return o.metrics.warned.putIfAbsent(claimString(k), struct{}{})
+}
+
+// calcWarnRefresh is how many shared inserts a cached claim answers for before it touches
+// the shared set again: half its capacity, so a key used within that window cannot have
+// been evicted, and is moved back to the front well before it could be.
+const calcWarnRefresh = calcWarnCapacity / 2
+
+// claimString is the shared set's key for a claim.
+func claimString(k claimKey) string {
+	return k.tenant + "|" + k.version + "|" + k.key + "|" + k.outcome
 }
 
 // The observer is what the resolution reports to.
