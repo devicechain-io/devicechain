@@ -234,6 +234,19 @@ func TestRenderedReservationFitsTheJetStreamStore(t *testing.T) {
 			"PV provides: a fresh bring-up crashloops with \"insufficient storage "+
 			"resources available\"", reserved, maxFileStore)
 	}
+	// L5: with infrastructure.nats.mqttFailClosed on, the message store takes the capture
+	// stream's ceiling instead of the safety cap, and the capture stream keeps its own. The
+	// chart does not set the key (it is refused in this release), so it is turned on here, on
+	// the ceilings the chart rendered, which is what an operator turning it on would get.
+	n.MqttFailClosed = true
+	onReserved := reserved - cfg.Infrastructure.Nats.MqttStoreReservation() + n.MqttStoreReservation()
+	if onReserved <= reserved {
+		t.Fatalf("premise: with mqttFailClosed on the reservation grows (%d B, from %d B)", onReserved, reserved)
+	}
+	if onReserved > maxFileStore {
+		t.Errorf("with mqttFailClosed on the chart's ceilings reserve %d B against the %d B store the shipped "+
+			"PV provides: a fresh bring-up with the setting on crashloops", onReserved, maxFileStore)
+	}
 	if kv.Count(kv.Cache) == 0 || len(streams.Suffixes()) == 0 {
 		t.Fatal("an inventory is empty — the sum above is vacuous")
 	}

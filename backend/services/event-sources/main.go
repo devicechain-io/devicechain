@@ -135,12 +135,19 @@ var (
 	CaptureReader messaging.MessageReader
 	// MqttFailClosedMetrics, MqttFailClosedWatch and MqttMessageStore are the fail-closed
 	// MQTT acknowledgement's (infrastructure.nats.mqttFailClosed; see messaging.
-	// ReconcileMqttFailClosed). All three stay zero with the setting off. The metrics are
-	// built once, in INITIALIZE; the store is declared in createNatsComponents, ahead of
-	// every reader; the watch runs from start to stop.
+	// ReconcileMqttFailClosed). The metrics and the store state stay zero with the setting
+	// off. The metrics are built once, in INITIALIZE; the store is declared in
+	// createNatsComponents, ahead of every reader; the watch runs from start to stop in every
+	// pod (with the setting off it writes nothing on a store that carries no mark of this
+	// instance, and exports nothing).
 	MqttFailClosedMetrics *messaging.MqttFailClosedMetrics
 	MqttFailClosedWatch   *messaging.MqttFailClosedWatch
 	MqttMessageStore      messaging.MqttMessageStoreState
+	// StoreSource is the gateway source over the MQTT message store's events durable
+	// (processor.GatewayJetStreamSource.UseMessageStore), built beside GatewaySource with the
+	// same decoder and gates, and started by mqttStoreIngest rather than with EventSources: a
+	// pod with the setting off starts it only once it sees the store marked for this instance.
+	StoreSource *processor.GatewayJetStreamSource
 	// GatewaySource is the capture-stream source, held from the INITIALIZE phase
 	// (where sources are built) so that START (where readers are created) can hand
 	// it CaptureReader. nil when no source is pointed at the platform broker.
@@ -544,6 +551,14 @@ func buildEventSources() error {
 				// is nothing to wire here yet.
 				GatewaySource = gateway
 				created = append(created, gateway)
+				// The same source over the MQTT message store: the copy of a device's QoS 1
+				// publish the broker PUBACKs on, read with the fail-closed store (see
+				// mqttStoreIngest). The same id, so what it forwards is attributed to the
+				// same source as what the capture path forwards.
+				StoreSource = processor.NewGatewayJetStreamSource(Microservice, source.Id, decoder,
+					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
+					ingestGate, readingGate)
+				StoreSource.UseMessageStore()
 				continue
 			}
 			// An external broker must NOT be forced to verify against the NATS CA (it
@@ -769,7 +784,7 @@ func shedClassOf(tenant string) string {
 // reporting them as failures would ask the broker to redeliver a message that will be
 // dropped identically forever.
 func inboundEventMessage(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64) (context.Context, messaging.Message, bool) {
+	dedupID string) (context.Context, messaging.Message, bool) {
 	// Increment counter for metrics.
 	DecodedCounter.WithLabelValues(source).Inc()
 
@@ -809,7 +824,7 @@ func inboundEventMessage(source string, tenant string, event *model.UnresolvedEv
 	return ctx, messaging.Message{
 		Key:     []byte(event.Device),
 		Value:   bytes,
-		DedupID: processor.DedupID(tenant, captureSeq),
+		DedupID: dedupID,
 	}, true
 }
 
@@ -907,8 +922,8 @@ func sealPresentedToken(tenant string, event *model.UnresolvedEvent) bool {
 // a swallowed error here would ack a message that was never forwarded; sources with
 // nothing to acknowledge ignore the result.
 func onEventDecoded(source string, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64) error {
-	ctx, msg, ok := inboundEventMessage(source, tenant, event, payload, captureSeq)
+	dedupID string) error {
+	ctx, msg, ok := inboundEventMessage(source, tenant, event, payload, dedupID)
 	if !ok {
 		return nil
 	}
@@ -989,6 +1004,9 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// platform durables are what make it keep them. A store this cannot declare would
 	// acknowledge and then lose, so with the setting on its failure stops the start.
 	if nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.MqttFailClosed {
+		if StoreSource == nil {
+			return errNoGatewaySourceForStore
+		}
 		state, err := nmgr.ReconcileMqttFailClosed(context.Background())
 		if err != nil {
 			return err
@@ -1187,14 +1205,29 @@ func afterMicroserviceStarted(ctx context.Context) error {
 				"Could not bound the MQTT gateway's QoS 2 streams. They are UNBOUNDED as nats-server " +
 					"creates them and share the same max_file_store as the platform's streams. Ingest continues.")
 		}
-		MqttFailClosedWatch = NatsManager.StartMqttFailClosedWatch(ctx, MqttFailClosedMetrics,
-			messaging.MqttFailClosedWatchInterval)
-	} else if err := NatsManager.ReconcileMqttStores(ctx, natscfg.MqttStoreMaxBytes, natscfg.MqttQoS2StoreMaxBytes); err != nil {
-		log.Error().Err(err).Msg(
-			"Could not bound the MQTT gateway's JetStream streams. They are UNBOUNDED as " +
-				"nats-server creates them and share the same max_file_store as the platform's " +
-				"streams, so QoS>=1 traffic can consume the disk budget's headroom. Ingest continues.")
+		// The readers over the store's durables, declared in createNatsComponents. Fatal:
+		// a store with durables nobody reads fills, and then refuses every QoS 1 publish.
+		if err := mqttStoreIngest.start(ctx, NatsManager); err != nil {
+			return err
+		}
+	} else {
+		if err := NatsManager.ReconcileMqttStores(ctx, natscfg.MqttStoreMaxBytes, natscfg.MqttQoS2StoreMaxBytes); err != nil {
+			log.Error().Err(err).Msg(
+				"Could not bound the MQTT gateway's JetStream streams. They are UNBOUNDED as " +
+					"nats-server creates them and share the same max_file_store as the platform's " +
+					"streams, so QoS>=1 traffic can consume the disk budget's headroom. Ingest continues.")
+		}
+		// A store still marked for this instance (pods with the setting on hold it, or it was
+		// released and has durables left) has durables this pod reads too; see storeIngest.
+		if NatsManager.MqttMessageStoreMarked() {
+			if err := mqttStoreIngest.start(ctx, NatsManager); err != nil {
+				log.Error().Err(err).Msg("Could not start reading the platform durables on the MQTT message store; " +
+					"the next check tries again")
+			}
+		}
 	}
+	MqttFailClosedWatch = NatsManager.StartMqttFailClosedWatch(ctx, MqttFailClosedMetrics,
+		messaging.MqttFailClosedWatchInterval, onFailClosedPass(ctx, NatsManager))
 
 	// Broker-asserted MQTT presence (ADR-067). Started LAST and never fatal: it is an
 	// enrichment of ingest, not a precondition for it. A missing writer is not an
@@ -1230,10 +1263,14 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 		err := source.Stop(ctx)
 		if err != nil {
 			closeExternalPublishers()
+			mqttStoreIngest.stop(ctx)
 			return err
 		}
 	}
 	closeExternalPublishers()
+	// The readers over the MQTT message store settle their publishes in their own stop, which
+	// has to run before the broker manager drains the connection, as the sources' does.
+	mqttStoreIngest.stop(ctx)
 
 	// Stop the GraphQL manager, then the broker manager.
 	return Svc.Stop(ctx)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -218,8 +219,9 @@ func TestTheFailClosedReconcileUpdatesAGatewayCreatedStoreInPlaceAndOnlyOnce(t *
 	cfg.Description = "idempotency-marker"
 	_, err = b.js.UpdateStream(&cfg)
 	require.NoError(t, err)
-	rep, err := nmgr.reconcileMqttFailClosed(context.Background(), true)
+	rep, err := nmgr.mqttFailClosedPass(context.Background(), true)
 	require.NoError(t, err)
+	require.Equal(t, mqttStandingHolder, rep.standing)
 	require.Empty(t, rep.repaired)
 	require.Empty(t, rep.createdDurables)
 	require.Equal(t, "idempotency-marker", b.storeInfo().Config.Description, "a conforming store is not rewritten")
@@ -321,57 +323,104 @@ func TestWithTheSettingOffANeverEnabledStoreIsReconciledExactlyAsBefore(t *testi
 	require.ElementsMatch(t, consumersBefore, consumerNames(t, b.js, MqttMessageStore))
 }
 
-// Turning the setting off after it was on removes the platform durables, puts the gateway's
-// default discard policy back and drops the owner mark, so the store is the safety-capped
-// store it was before: left alone, durables nobody reads would fill a discard-new store and
-// the gateway would then refuse every QoS 1 publish.
+// Turning the setting off after it was on hands the store back to the gateway, but only once
+// no pod with it on holds it, and in two steps: the release (the gateway's default discard
+// policy, the setting-off bound, the released mark) and, once the release grace has passed and
+// the durables are drained, their removal and the clearing of the marks. Left alone, durables
+// nobody reads would fill a discard-new store and the gateway would then refuse every QoS 1
+// publish; removed at once, they would take with them the store copies of what a pod with the
+// setting on had already skipped on its direct stream.
 //
-// GUARD: kills a flag-off start that leaves the durables, the discard policy or the mark.
-func TestTurningTheSettingOffReleasesAStoreThisInstanceMadeFailClosed(t *testing.T) {
+// GUARD: kills a flag-off start that releases a store pods with the setting on still hold, a
+// release that leaves the discard policy, the bound or the owner mark, one that removes the
+// durables (with the release, before the grace, or while they hold messages), and a finish
+// that leaves a mark behind.
+func TestTurningTheSettingOffReleasesTheStoreOnceItsHoldersAreGone(t *testing.T) {
 	fastMqttStoreLookup(t)
 	b := startGuardBroker(t)
-	_, err := failClosedManager(t, b.nc, b.js, guardInstance, true).ReconcileMqttFailClosed(context.Background())
+	clock := newFcClock()
+	on := failClosedManager(t, b.nc, b.js, guardInstance, true)
+	on.mqttClock = clock.now
+	_, err := on.ReconcileMqttFailClosed(context.Background())
 	require.NoError(t, err)
 
 	off := failClosedManager(t, b.nc, b.js, guardInstance, false)
+	off.mqttClock = clock.now
 	n := off.Microservice.InstanceConfiguration.Infrastructure.Nats
-	require.NoError(t, off.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes))
-
-	si := b.storeInfo()
-	require.Equal(t, nats.DiscardOld, si.Config.Discard)
-	require.EqualValues(t, n.MqttStoreMaxBytes, si.Config.MaxBytes)
-	_, marked := si.Config.Metadata[mqttFailClosedOwnerKey]
-	require.False(t, marked, "the owner mark is dropped")
-	require.Empty(t, consumerNames(t, b.js, MqttMessageStore), "the platform durables are gone")
-
-	// A pod still running with the setting on (a rolling update turning it off) must not
-	// create the durables again behind the pod that removed them: its watch stands down and
-	// reports them missing, since in its view the guarantee is not in force.
-	on := failClosedManager(t, b.nc, b.js, guardInstance, true)
-	m := fcMetrics(guardInstance)
-	on.checkMqttFailClosed(context.Background(), m)
-	require.Empty(t, consumerNames(t, b.js, MqttMessageStore), "the watch recreated durables on a released store")
-	require.Equal(t, nats.DiscardOld, b.storeInfo().Config.Discard, "the watch undid the release")
-	for _, d := range MqttFailClosedDurables(guardInstance) {
-		require.EqualValues(t, 0, testutil.ToFloat64(m.durablePresent.WithLabelValues(d.Name)))
+	reconcileOff := func() {
+		t.Helper()
+		require.NoError(t, off.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes))
 	}
-	// A START with the setting on declares the store again, released or not.
+
+	// The holder's heartbeat is fresh: the flag-off start leaves the store as it is.
+	reconcileOff()
+	require.Equal(t, nats.DiscardNew, b.storeInfo().Config.Discard, "released a store a live pod with the setting on holds")
+	require.True(t, off.MqttMessageStoreMarked(), "the flag-off pod is told the store has durables for it to read")
+
+	// Its holders are gone: the next flag-off start releases it, and keeps the durables, and
+	// keeps discard new and the bound until they are drained (discard old, or the lower
+	// setting-off bound, would evict what they hold).
+	clock.advance(mqttFailClosedLeaseTTL)
+	reconcileOff()
+	si := b.storeInfo()
+	require.Equal(t, nats.DiscardNew, si.Config.Discard, "the release evicts nothing: discard new until drained")
+	require.EqualValues(t, fcHotBytes, si.Config.MaxBytes, "the release evicts nothing: the bound until drained")
+	for _, k := range []string{mqttFailClosedOwnerKey, mqttFailClosedHolderKey, mqttFailClosedHeartbeatKey} {
+		_, marked := si.Config.Metadata[k]
+		require.Falsef(t, marked, "%s is dropped on release", k)
+	}
+	require.Empty(t, mqttFailClosedFromMarks(si.Config.Metadata), "the from marks are dropped on release")
+	require.Equal(t, guardInstance, si.Config.Metadata[mqttFailClosedReleasedKey])
+	require.Len(t, consumerNames(t, b.js, MqttMessageStore), len(MqttFailClosedDurables(guardInstance)),
+		"the durables stay through the release")
+
+	// Inside the grace nothing more happens, however often the pod with it off looks.
+	off.checkMqttFailClosed(context.Background(), nil)
+	require.Len(t, consumerNames(t, b.js, MqttMessageStore), len(MqttFailClosedDurables(guardInstance)))
+
+	// After it, a durable that still holds a message is not removed...
+	clock.advance(mqttFailClosedReleaseGrace)
+	clientID, err := DeviceClientID(guardInstance, guardTenant, "d1")
+	require.NoError(t, err)
+	c := connectGuardClient(t, b.mqttURL(), clientID, mqtt.NewMemoryStore(), false)
+	require.True(t, c.publish(guardTopic(guardInstance, guardTenant, "d1"), "held", 10*time.Second))
+	off.checkMqttFailClosed(context.Background(), nil)
+	require.Contains(t, consumerNames(t, b.js, MqttMessageStore), fcDurable(t, guardInstance, MqttFailClosedEvents).Name,
+		"removed a durable that still held a message")
+	// ...and once it is drained, the durables go and so do the marks.
+	require.Equal(t, []string{"held"}, guardDrain(t, b.js, fcDurable(t, guardInstance, MqttFailClosedEvents).Name, 5*time.Second, nil))
+	off.checkMqttFailClosed(context.Background(), nil)
+	si = b.storeInfo()
+	for _, name := range consumerNames(t, b.js, MqttMessageStore) {
+		for _, d := range MqttFailClosedDurables(guardInstance) {
+			require.NotEqual(t, d.Name, name, "a platform durable outlived the finish")
+		}
+	}
+	for k := range si.Config.Metadata {
+		require.Falsef(t, strings.HasPrefix(k, mqttFailClosedKeyPrefix), "the finish left %s", k)
+	}
+	require.Equal(t, nats.DiscardOld, si.Config.Discard, "the finish hands the store back to the gateway's discard policy")
+	require.EqualValues(t, n.MqttStoreMaxBytes, si.Config.MaxBytes, "the finish puts the setting-off bound back")
+	require.False(t, off.MqttMessageStoreMarked())
+
+	// A START with the setting on declares the store again.
 	_, err = on.ReconcileMqttFailClosed(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, nats.DiscardNew, b.storeInfo().Config.Discard)
 	_, releasedMark := b.storeInfo().Config.Metadata[mqttFailClosedReleasedKey]
 	require.False(t, releasedMark, "enabling again clears the released mark")
-	require.Len(t, consumerNames(t, b.js, MqttMessageStore), len(MqttFailClosedDurables(guardInstance)))
-	require.NoError(t, off.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes))
-	require.Empty(t, consumerNames(t, b.js, MqttMessageStore), "and turning it off again releases it again")
 
 	// Another instance's mark is not this instance's to release: the bound is applied as it
 	// always was, and nothing else is touched.
-	_, err = failClosedManager(t, b.nc, b.js, "otherinst", true).ReconcileMqttFailClosed(context.Background())
+	b2 := startGuardBroker(t)
+	_, err = failClosedManager(t, b2.nc, b2.js, "otherinst", true).ReconcileMqttFailClosed(context.Background())
 	require.NoError(t, err)
-	require.NoError(t, off.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes))
-	require.Equal(t, "otherinst", b.storeInfo().Config.Metadata[mqttFailClosedOwnerKey])
-	require.Len(t, consumerNames(t, b.js, MqttMessageStore), len(MqttFailClosedDurables("otherinst")))
+	off2 := failClosedManager(t, b2.nc, b2.js, guardInstance, false)
+	off2.mqttClock = func() time.Time { return time.Now().Add(time.Hour) }
+	require.NoError(t, off2.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes))
+	require.Equal(t, "otherinst", b2.storeInfo().Config.Metadata[mqttFailClosedOwnerKey])
+	require.Equal(t, nats.DiscardNew, b2.storeInfo().Config.Discard)
+	require.Len(t, consumerNames(t, b2.js, MqttMessageStore), len(MqttFailClosedDurables("otherinst")))
 }
 
 // The watch is what turns a durable deleted at runtime from silent loss into an alert: it
@@ -616,8 +665,8 @@ func TestABrokerErrorWhileLookingForOtherInstancesFailsTheReconcile(t *testing.T
 	require.ErrorIs(t, err, nats.ErrStreamNotFound, "the failed reconcile created the store anyway")
 }
 
-// 🔴 THE RELEASE ORDER. Turning the setting off updates the store FIRST (the released mark,
-// the default discard policy) and removes the platform durables only once that update has
+// 🔴 THE RELEASE ORDER. Turning the setting off updates the store FIRST (the released mark)
+// and removes the platform durables only once that update has
 // succeeded. Here the update is refused: the release fails, and the store is left exactly
 // as fail-closed as it was, durables and all. Removing the durables first would leave a
 // discard-new store owned by this instance with nothing interested in device publishes,
@@ -634,13 +683,36 @@ func TestAReleaseWhoseStoreUpdateFailsLeavesTheDurablesInPlace(t *testing.T) {
 	require.Len(t, before, len(MqttFailClosedDurables(guardInstance)), "premise: the durables exist")
 
 	off := failClosedManager(t, nc, js, guardInstance, false)
+	// The holders are long gone, so the start does try to release it.
+	off.mqttClock = func() time.Time { return time.Now().Add(time.Hour) }
 	n := off.Microservice.InstanceConfiguration.Infrastructure.Nats
 	require.Error(t, off.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes),
 		"premise: the store update is refused")
 
 	si, err := adminJS.StreamInfo(MqttMessageStore)
 	require.NoError(t, err)
-	require.Equal(t, nats.DiscardNew, si.Config.Discard, "premise: the store was not released")
+	require.Equal(t, guardInstance, si.Config.Metadata[mqttFailClosedOwnerKey], "premise: the store was not released")
 	require.ElementsMatch(t, before, consumerNames(t, adminJS, MqttMessageStore),
 		"the durables were removed from a store that is still discard-new and owned")
+}
+
+// fcClock is a lease clock several managers share, so a test can move them all past a
+// heartbeat or a grace together.
+type fcClock struct {
+	mu  sync.Mutex
+	off time.Duration
+}
+
+func newFcClock() *fcClock { return &fcClock{} }
+
+func (c *fcClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return time.Now().Add(c.off)
+}
+
+func (c *fcClock) advance(d time.Duration) {
+	c.mu.Lock()
+	c.off += d
+	c.mu.Unlock()
 }

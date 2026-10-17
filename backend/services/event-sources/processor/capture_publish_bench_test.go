@@ -98,7 +98,7 @@ var benchTransit = func() *credential.SecretTransit {
 // MarshalUnresolvedEvent refuses an event still carrying one in the clear, so a copy that
 // skipped the seal would build nothing for the HTTP bench's ACCESS_TOKEN body.
 func benchInboundMessage(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64) (context.Context, messaging.Message, bool) {
+	dedupID string) (context.Context, messaging.Message, bool) {
 	event.Source = source
 	event.Payload = payload
 	if esproto.IsBearerCredentialType(event.CredentialType) && event.CredentialId != nil {
@@ -113,7 +113,7 @@ func benchInboundMessage(source, tenant string, event *model.UnresolvedEvent, pa
 		return nil, messaging.Message{}, false
 	}
 	return core.WithTenant(context.Background(), tenant), messaging.Message{
-		Key: []byte(event.Device), Value: bytes, DedupID: DedupID(tenant, captureSeq),
+		Key: []byte(event.Device), Value: bytes, DedupID: dedupID,
 	}, true
 }
 

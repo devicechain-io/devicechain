@@ -333,8 +333,8 @@ func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 }
 
 // 🔴 infrastructure.nats.mqttFailClosed is refused at the load every service makes, until
-// the reader over the broker's message store ships: on, it would fill that store and then
-// refuse every QoS 1 device publish. The key is spelled correctly here, so this is the value
+// devices are backed off before the broker's message store fills: on, a full store would
+// disconnect them all at once. The key is spelled correctly here, so this is the value
 // refusal and not the strict decode's.
 func TestLoadInstanceConfigurationRefusesMqttFailClosedOn(t *testing.T) {
 	doc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"mqttFailClosed":true},

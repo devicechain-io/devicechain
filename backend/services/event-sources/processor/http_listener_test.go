@@ -91,7 +91,7 @@ func newListeningSource(t *testing.T, id string, ingest config.HttpIngest,
 	es, err := NewHttpEventSource(id, map[string]string{}, "inst-1", ingest,
 		NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, captureSeq uint64) error {
+		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, dedupID string) error {
 			dec.called = true
 			dec.tenant = tenant
 			dec.event = event

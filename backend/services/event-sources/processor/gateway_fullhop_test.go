@@ -119,10 +119,10 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 	out := make(chan decodedEvent, 32)
 	src := NewGatewayJetStreamSource(nil, id, NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		// The build callback is (sourceId, tenant, event, payload, captureSeq); the
+		// The build callback is (sourceId, tenant, event, payload, dedupID); the
 		// device token the payload claims is on the event, not a positional argument.
-		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
-			out <- decodedEvent{device: event.Device, seq: seq}
+		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, id string) (context.Context, messaging.Message, bool) {
+			out <- decodedEvent{device: event.Device, seq: captureSeqOf(id)}
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		func(_ string, _ string, _ []byte, decodeErr error) error {
