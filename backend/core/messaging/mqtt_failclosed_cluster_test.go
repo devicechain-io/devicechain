@@ -247,17 +247,22 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 			moves.Add(1)
 		}
 	}
+	// The leaders are stepped down until the test has CONFIRMED enough moves, not for a fixed
+	// time: a step-down is refused while a new leader is still being elected, so a fixed window
+	// sometimes confirmed one. The devices keep publishing (another round each) until that
+	// many moves have happened, so the load spans all of them.
+	const requiredMoves = 6
 	stopMoves := make(chan struct{})
 	var mover sync.WaitGroup
 	mover.Add(1)
 	go func() {
 		defer mover.Done()
 		capture := StreamName(guardInstance, streams.DeviceEventsCapture)
-		for i := 0; i < 20; i++ {
+		for i := 0; ; i++ {
 			select {
 			case <-stopMoves:
 				return
-			case <-time.After(150 * time.Millisecond):
+			case <-time.After(200 * time.Millisecond):
 				if i%2 == 0 {
 					stepDown(MqttMessageStore)
 				} else {
@@ -268,6 +273,7 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 	}()
 
 	const devices, perDevice = 6, 200
+	loadDeadline := time.Now().Add(90 * time.Second)
 	var acked []string
 	var wg sync.WaitGroup
 	for d := 0; d < devices; d++ {
@@ -275,17 +281,19 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 		go func(d int) {
 			defer wg.Done()
 			dev := fmt.Sprintf("load%d", d)
-			got := publishThrough(t, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPorts[d%3]), dev,
-				guardTopic(guardInstance, guardTenant, dev), dev, perDevice)
-			mu.Lock()
-			acked = append(acked, got...)
-			mu.Unlock()
+			for round := 0; round == 0 || (moves.Load() < requiredMoves+2 && time.Now().Before(loadDeadline)); round++ {
+				got := publishThrough(t, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPorts[d%3]), dev,
+					guardTopic(guardInstance, guardTenant, dev), fmt.Sprintf("%s-r%d", dev, round), perDevice)
+				mu.Lock()
+				acked = append(acked, got...)
+				mu.Unlock()
+			}
 		}(d)
 	}
 	wg.Wait()
 	close(stopMoves)
 	mover.Wait()
-	require.Greater(t, moves.Load(), int64(4), "the leaders were hardly moved, so little was tested")
+	require.GreaterOrEqual(t, moves.Load(), int64(requiredMoves), "the leaders were hardly moved, so little was tested")
 	mu.Lock()
 	require.NotEmpty(t, acked)
 	mu.Unlock()

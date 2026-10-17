@@ -166,13 +166,16 @@ func publishThrough(t *testing.T, url, device, topic, prefix string, n int) []st
 	t.Helper()
 	clientID, err := DeviceClientID(guardInstance, guardTenant, device)
 	require.NoError(t, err)
-	// A CONNECT that lands on a leader move can be refused (the gateway looks its streams up
-	// at CONNECT); a device tries again, and so does this.
+	// A CONNECT that lands on a leader move can be refused or dropped (the gateway looks its
+	// streams up at CONNECT, and "non-CONNACK first packet" is how that shows), so a device
+	// tries again. It does so for a bounded TIME, as a real device would, not a bounded count:
+	// a run of step-downs back to back can refuse more attempts than any fixed count.
 	var g *guardClient
-	for attempt := 0; g == nil; attempt++ {
+	deadline := time.Now().Add(30 * time.Second)
+	for g == nil {
 		var err error
 		if g, err = tryConnectGuardClient(t, url, clientID, mqtt.NewMemoryStore(), true); err != nil {
-			require.Less(t, attempt, 10, "connecting %q: %v", clientID, err)
+			require.True(t, time.Now().Before(deadline), "connecting %q kept failing for 30s: %v", clientID, err)
 			time.Sleep(500 * time.Millisecond)
 		}
 	}
