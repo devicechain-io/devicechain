@@ -657,6 +657,44 @@ func TestEveryDeclaredStreamIsStillCreatedDiscardOld(t *testing.T) {
 	}
 }
 
+// A stream someone switched to discard-new out of band is put back to discard-old on the next
+// start, the way an out-of-band ceiling is. The capture stream is the case that matters: there
+// a refused store reaches no device (the broker has already PUBACKed it), so discard-new would
+// drop the newest events with nothing counting them. The first half is the control: the edit
+// really does land on the broker, so a discard-old reading afterwards is the reconcile's work.
+func TestAnOutOfBandDiscardNewIsRestoredToDiscardOld(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	svc := newBPService(t, srv, "event-sources", bpBounds{})
+	for _, suffix := range []string{streams.DeviceEventsCapture, streams.InboundEvents} {
+		name, err := svc.nmgr.ensureStream(suffix)
+		if err != nil {
+			t.Fatalf("ensure %s: %v", suffix, err)
+		}
+		info, err := svc.nmgr.js.StreamInfo(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := info.Config
+		cfg.Discard = nats.DiscardNew
+		if _, err := svc.nmgr.js.UpdateStream(&cfg); err != nil {
+			t.Fatalf("out-of-band edit of %s: %v", suffix, err)
+		}
+		// CONTROL: the broker holds the edit.
+		if info, err = svc.nmgr.js.StreamInfo(name); err != nil || info.Config.Discard != nats.DiscardNew {
+			t.Fatalf("control: %s reads %v after setting discard-new (err %v); the test cannot see the edit", suffix, info.Config.Discard, err)
+		}
+		if _, err := svc.nmgr.ensureStream(suffix); err != nil {
+			t.Fatalf("re-ensure %s: %v", suffix, err)
+		}
+		if info, err = svc.nmgr.js.StreamInfo(name); err != nil {
+			t.Fatal(err)
+		}
+		if info.Config.Discard != nats.DiscardOld {
+			t.Errorf("stream %s still discards %v after a start; an out-of-band discard-new must be put back", suffix, info.Config.Discard)
+		}
+	}
+}
+
 // consumerInfoFunc is the gates' consumerInfo seam.
 type consumerInfoFunc func(ctx context.Context, stream, durable string) (*nats.ConsumerInfo, error)
 
