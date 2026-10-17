@@ -16,14 +16,14 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtime"
 )
 
-// The goldens in lwm2m_emit_golden_test.go and emit_split_test.go run in the process's
-// default wire format, which in this release is LEGACY, and still hold the digests captured
-// before the compact format existed: that is the proof that a producer left on the default
-// writes, byte for byte, what the release before wrote, through the whole Emit/Ingest path a
-// transport adapter (LwM2M, Sparkplug) takes.
+// The goldens in lwm2m_emit_golden_test.go and emit_split_test.go run with the process set
+// to LEGACY, and still hold the digests captured before the compact format existed: that is
+// the proof that a producer set to wireFormat: legacy writes, byte for byte, what the
+// releases before the compact reader wrote, through the whole Emit/Ingest path a transport
+// adapter (LwM2M, Sparkplug) takes.
 //
-// These are the same scenarios with the process set to COMPACT, the way an operator's
-// infrastructure.messaging.wireFormat: compact sets it. The digests are the ones captured
+// These are the same scenarios with the process set to COMPACT, the default, and the way an
+// operator's infrastructure.messaging.wireFormat: compact sets it. The digests are the ones captured
 // when the compact format was introduced; every dedup id is the legacy one, unchanged,
 // because the dedup id is derived from the event, never from its encoding, which is what
 // lets a redelivery that straddles a format change still be dropped as a duplicate.

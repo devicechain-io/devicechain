@@ -110,17 +110,21 @@ func ParseWireString(text string) (time.Time, error) {
 // and write the compact form: during its own rollout, an upgraded producer would be
 // feeding consumers that have not been upgraded yet, and every such event would be lost.
 //
-//   - THIS release reads both forms and writes WireLegacy by default, byte for byte what
-//     the release before wrote. Upgrading to it loses nothing, whichever pods roll first.
-//   - WireCompact is opt-in (infrastructure.messaging.wireFormat: compact). It is safe
-//     once EVERY producer and consumer runs a release that reads both, i.e. once the
-//     upgrade to this release has finished rolling. Changing the setting rolls the pods
-//     again, and during that roll every pod reads both.
-//   - The NEXT release flips DefaultWireFormat to WireCompact. Its consumers still read
-//     both, so its own rollout is safe for the same reason; WireLegacy stays selectable
-//     there as the way back.
-//   - Rolling BACK to a release before this one needs WireLegacy first, and needs the
-//     retained streams to have no compact message the old release would still read.
+//   - The release that introduced the compact reader read both forms and wrote WireLegacy
+//     by default, byte for byte what the release before it wrote, so upgrading to it lost
+//     nothing, whichever pods rolled first. WireCompact was opt-in there.
+//   - THIS release writes WireCompact by default (DefaultWireFormat). Its consumers still
+//     read both, and so did the release before it, so its own rollout is safe: an
+//     upgraded producer feeds consumers that already read compact. Messages written in
+//     the legacy form before the upgrade stay on the retained streams and still decode
+//     (every reader, the replay preview included). WireLegacy stays selectable
+//     (infrastructure.messaging.wireFormat: legacy) as the way back.
+//   - 🔴 An upgrade must therefore come FROM a release that reads both. One that skips
+//     the release that introduced the compact reader (from a release that reads only
+//     legacy) has to set wireFormat: legacy for the upgrade, and compact only once every
+//     pod has rolled.
+//   - Rolling BACK to a release that reads only legacy needs WireLegacy first, and needs
+//     the retained streams to have no compact message the old release would still read.
 type WireFormat uint8
 
 const (
@@ -136,9 +140,9 @@ const (
 // infrastructure.messaging.wireFormat. It is the ONE definition of the default: the
 // instance configuration's ApplyDefaults and the process setting below both read it.
 //
-// 🔴 Flip it to WireCompact in the release AFTER the one that introduced the compact
-// reader, never in that release (see WireFormat).
-const DefaultWireFormat = WireLegacy
+// It is WireCompact from the release AFTER the one that introduced the compact reader,
+// never in that release (see WireFormat).
+const DefaultWireFormat = WireCompact
 
 // ErrUnknownWireFormat is the refusal of a format that is neither WireLegacy nor
 // WireCompact, the zero value included: a producer handed one writes nothing rather

@@ -499,6 +499,33 @@ Rate ceilings are enforced by each replica separately, so two replicas of `event
 [Governance](../concepts/governance.md#per-replica).
 :::
 
+### The event wire format {#event-wire-format}
+
+Every event a device sends crosses the broker twice as a message on a retained stream: once as
+received, and once resolved against its device. `infrastructure.messaging.wireFormat` in the
+instance configuration sets how those messages are encoded:
+
+| Value | Encoding |
+| --- | --- |
+| `compact` | **The default.** Each time as a count of nanoseconds and each device credential's seal in binary. About a third smaller per message, which means less broker disk, network and retention used per event. |
+| `legacy` | Each time as text and each seal in its text form, byte for byte what `v0.22.0` and earlier wrote. |
+
+Anything else, including `Compact`, is refused: the service does not start, and its log names
+the key. It is part of the mounted configuration, like the [log level](./observability.md#the-log-level),
+and is set the same way.
+
+- **Every service reads both.** Messages written in the `legacy` form before an upgrade stay on
+  the retained streams and are read as before, including by the replay preview of a detection
+  rule over a window that started before the upgrade.
+- **`v0.22.0` and earlier read only `legacy`.** A service on one of those releases drops a
+  `compact` message, or sets it aside as failed, so a rolling upgrade from such a release
+  straight to one that writes `compact` loses the events written while old and new pods run side
+  by side. Upgrade through the first release that reads both formats, which writes `legacy` by
+  default, and then to this one. On a chart install you can instead set `legacy` for the upgrade
+  and remove it once every pod has rolled. `dcctl` has no option to set it.
+- **Rolling back** to `v0.22.0` or earlier needs `legacy` set first, and the consumers to have
+  drained every `compact` message from the streams.
+
 ### The v0.9.0 baseline squash {#v090-baseline-squash}
 
 `v0.9.0` is the **first** of the two releases that cannot be reached by upgrading in place

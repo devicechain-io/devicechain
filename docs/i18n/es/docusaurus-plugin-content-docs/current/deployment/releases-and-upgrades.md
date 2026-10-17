@@ -527,6 +527,35 @@ Los techos de tasa los aplica cada réplica por separado, de modo que dos répli
 [Gobernanza](../concepts/governance.md#per-replica).
 :::
 
+### El formato de los eventos en el bróker {#event-wire-format}
+
+Cada evento que envía un dispositivo cruza el bróker dos veces como mensaje en un flujo retenido:
+una vez tal como se recibió, y otra resuelto contra su dispositivo.
+`infrastructure.messaging.wireFormat` en la configuración de la instancia define cómo se codifican
+esos mensajes:
+
+| Valor | Codificación |
+| --- | --- |
+| `compact` | **El valor por defecto.** Cada instante como un recuento de nanosegundos y el sello de cada credencial de dispositivo en binario. Alrededor de un tercio más pequeño por mensaje, lo que significa menos disco, red y retención del bróker por evento. |
+| `legacy` | Cada instante como texto y cada sello en su forma de texto, byte a byte lo que escribían `v0.22.0` y anteriores. |
+
+Cualquier otro valor, incluido `Compact`, se rechaza: el servicio no arranca y su registro nombra
+la clave. Forma parte de la configuración montada, como el
+[nivel de registro](./observability.md#el-nivel-de-registro), y se establece de la misma forma.
+
+- **Todos los servicios leen ambos.** Los mensajes escritos en la forma `legacy` antes de una
+  actualización siguen en los flujos retenidos y se leen como antes, incluida la vista previa de
+  repetición de una regla de detección sobre una ventana que empezó antes de la actualización.
+- **`v0.22.0` y anteriores solo leen `legacy`.** Un servicio en una de esas versiones descarta un
+  mensaje `compact`, o lo aparta como fallido, así que una actualización gradual desde una de
+  ellas directamente a una que escribe `compact` pierde los eventos escritos mientras los pods
+  antiguos y nuevos funcionan a la vez. Actualiza pasando por la primera versión que lee ambos
+  formatos, que escribe `legacy` por defecto, y después a esta. En una instalación con el chart
+  puedes, en su lugar, establecer `legacy` para la actualización y quitarlo cuando todos los pods
+  se hayan renovado. `dcctl` no tiene opción para establecerlo.
+- **Volver atrás** a `v0.22.0` o anterior requiere establecer `legacy` primero, y que los
+  consumidores hayan vaciado de los flujos todo mensaje `compact`.
+
 ### La compactación de la línea base de la v0.9.0 {#v090-baseline-squash}
 
 La `v0.9.0` es la **primera** de las dos versiones a las que no se puede llegar actualizando en sitio
