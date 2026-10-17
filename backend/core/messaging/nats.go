@@ -1375,7 +1375,7 @@ func publishContext(ctx context.Context) (pctx context.Context, callerBound bool
 // jsErrCodeDuplicateMsgIdInProcess is the JetStream error code (HTTP 409) a replicated stream
 // answers a publish with when a message carrying the same Nats-Msg-Id has been proposed and
 // not yet committed: nats-server's JSStreamDuplicateMessageConflict, "duplicate message id is
-// in process" (the same code in 2.14.4, which the chart runs, and 2.15.x). nats.go names no
+// in process" (the same code in 2.15.1, which the chart runs, and in 2.14.4). nats.go names no
 // constant for it and returns it as a plain *nats.APIError, so the code is matched here. The
 // code belongs to this error alone, so the description is not part of the match.
 const jsErrCodeDuplicateMsgIdInProcess nats.ErrorCode = 10158

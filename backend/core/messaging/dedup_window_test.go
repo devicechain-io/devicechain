@@ -320,7 +320,7 @@ func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 		referenceEvents = 10_000.0
 		// bytesPerHeldID is the live heap one held id costs, measured against nats-server
 		// v2.15.0 with 35-byte ids (a ddentry, the id's own bytes, a map slot and the ordered
-		// array's pointer). The deployed broker (nats chart 2.14.4) has the same structures.
+		// array's pointer). The deployed broker (nats chart 2.15.1) has the same structures.
 		// See streams.BrokerDefaultDuplicateWindowSeconds.
 		bytesPerHeldID = 120.0
 		// derivedIDExtraBytes: a derived-events id is "de." plus a hex sha256, 67 bytes, which

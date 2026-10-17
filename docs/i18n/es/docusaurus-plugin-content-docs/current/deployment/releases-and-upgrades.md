@@ -3772,6 +3772,45 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### Próxima versión: el bróker pasa a NATS 2.15 {#next-nats-215}
+
+El bróker de mensajería de la instancia pasa de NATS `2.14.4` a `2.15.1` (el chart oficial `nats`,
+misma versión). `dcctl upgrade` lo aplica y el bróker se reinicia una vez: con `--ha` sus servidores
+se reinician de uno en uno, cada uno Ready antes de que se detenga el siguiente; sin `--ha` el único
+servidor se reinicia y el bróker no está disponible durante aproximadamente un minuto. Los
+dispositivos se vuelven a conectar solos, y una sesión MQTT persistente conserva sus suscripciones y
+los mensajes QoS 1 retenidos para ella mientras el dispositivo no estaba.
+
+- **No cambie la replicación del bróker en la misma actualización.** Mientras los servidores se
+  reinician, unos ejecutan `2.14.4` y otros `2.15.1`. NATS 2.15 cambió la forma en que un stream
+  cambia su número de réplicas, y un cambio iniciado mientras algún servidor sigue en 2.14 espera
+  hasta que todos estén en 2.15. Los streams se pueden leer y escribir durante todo el proceso; solo
+  espera el cambio. Suba `streamReplicas` o `nats_cluster_replicas` antes o después de esta
+  actualización, no durante.
+- **Se rechaza un chart de NATS anterior a `2.15.0`.** La configuración del bróker está escrita ahora
+  para NATS 2.15 y un servidor 2.14 la rechaza al arrancar, así que un `nats_chart_version` inferior
+  a `2.15.0` hace fallar el plan en lugar de dejar el bróker en un bucle de reinicios. Volver al
+  bróker anterior significa volver a la versión anterior.
+- **Se levanta el límite de 1.000 consumidores que NATS 2.15 añade a cada stream.** Cada
+  suscripción MQTT con QoS 1 o 2 es un consumidor en el stream de mensajes propio del bróker, así que
+  con el nuevo valor por defecto al dispositivo número 1.001 que se suscribiera se le rechazaría la
+  suscripción mientras seguía conectado, y nunca recibiría un comando. Si instala usted mismo el
+  módulo `nats`, mantenga `jetstream.limits.default_max_consumers` en `-1`.
+
+Qué mejora:
+
+- **Las publicaciones QoS 1 de una misma conexión MQTT ya no se esperan unas a otras.** El bróker
+  almacena ahora hasta 1.024 mensajes QoS 1 de una conexión a la vez, en lugar de uno en uno. En un
+  clúster de prueba de tres servidores, una conexión que enviaba 5.000 mensajes pasó de unos 1.100 a
+  unos 20.000 confirmados por segundo.
+- **Recargar la configuración del bróker ya no detiene la entrega QoS 1 y 2 a los dispositivos ya
+  conectados.** Con TLS en el listener MQTT, que es el valor por defecto, cada recarga volvía a
+  aplicar los ajustes MQTT y dejaba cada sesión conectada sin poder recibir mensajes QoS 1 o 2,
+  comandos incluidos, hasta que se reconectaba. Una renovación de certificado podía provocar una.
+- **Correcciones en el inicio de sesión de dispositivos y los permisos**, entre ellas cómo decide el
+  bróker qué inicios de sesión omiten la comprobación de dispositivo, y un rechazo de inicio de
+  sesión que ahora se informa como error de autenticación.
+
 ### v0.23.0 — usuarios de cliente con acceso acotado, y una ingesta MQTT que pierde menos {#v0230-upgrade}
 
 `v0.23.0` es una actualización en su sitio desde `v0.22.0`: `dcctl install` para el clúster y después

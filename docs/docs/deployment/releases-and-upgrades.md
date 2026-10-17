@@ -3513,6 +3513,42 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
+### Next release — the broker moves to NATS 2.15 {#next-nats-215}
+
+The instance's message broker moves from NATS `2.14.4` to `2.15.1` (the official `nats` chart, same
+version). `dcctl upgrade` applies it, and the broker restarts once: under `--ha` its servers restart
+one at a time, each Ready before the next stops; without `--ha` the single server restarts and the
+broker is unavailable for about a minute. Devices reconnect on their own, and a persistent MQTT
+session keeps its subscriptions and the QoS 1 messages held for it while the device was away.
+
+- **Do not change the broker's replication in the same upgrade.** While the servers restart, some
+  run `2.14.4` and some `2.15.1`. NATS 2.15 changed how a stream changes its replica count, and a
+  change started while any server is still on 2.14 waits until every server is on 2.15. Streams
+  stay readable and writable throughout; only the change waits. Raise `streamReplicas` or
+  `nats_cluster_replicas` before or after this upgrade, not during it.
+- **A NATS chart older than `2.15.0` is refused.** The broker configuration is now written for
+  NATS 2.15 and a 2.14 server refuses it at startup, so `nats_chart_version` below `2.15.0` fails
+  the plan rather than crash-looping the broker. Going back to the older broker means going back to
+  the previous release.
+- **The 1,000-consumer limit NATS 2.15 adds to every stream is lifted.** Each MQTT subscription at
+  QoS 1 or 2 is a consumer on the broker's own message stream, so with the new default the
+  1,001st device to subscribe would have its subscription refused while it stayed connected, and
+  never receive a command. If you install the `nats` module yourself, keep
+  `jetstream.limits.default_max_consumers` at `-1`.
+
+What gets better:
+
+- **QoS 1 publishes on one MQTT connection no longer wait for each other.** The broker now stores
+  up to 1,024 of a connection's QoS 1 messages at once instead of one at a time. On a three-server
+  test cluster, one connection sending 5,000 messages went from about 1,100 to about 20,000
+  acknowledged a second.
+- **A broker configuration reload no longer stops QoS 1 and 2 delivery to devices already
+  connected.** With TLS on the MQTT listener, which is the default, every reload re-applied the
+  MQTT settings and left each connected session unable to receive QoS 1 or 2 messages, commands
+  included, until it reconnected. A certificate renewal could trigger one.
+- **Fixes to device sign-in and permissions**, among them how the broker decides which logins skip
+  the device sign-in check, and a sign-in refusal now reported as an authentication error.
+
 ### v0.23.0 — customer users with scoped access, and an MQTT ingest that loses less {#v0230-upgrade}
 
 `v0.23.0` is an in-place upgrade from `v0.22.0`: `dcctl install` for the cluster, then

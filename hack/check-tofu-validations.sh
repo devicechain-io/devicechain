@@ -969,7 +969,7 @@ run_assertions() {
   # regex that is subtly too strict refuses the very versions we ship — `v1.21.1` has a
   # leading v and `1.2.3-rc.1` has a pre-release suffix, and a naive `^[0-9.]+$` eats
   # both while passing every rejection above.
-  for _cv in nats_chart_version cnpg_chart_version cnpg_plugin_chart_version \
+  for _cv in cnpg_chart_version cnpg_plugin_chart_version \
   	ingress_nginx_chart_version cert_manager_chart_version monitoring_chart_version; do
   	rejects "$_cv" ""
   	rejects "$_cv" "4.15.1 - 5.0.0"
@@ -978,6 +978,23 @@ run_assertions() {
   	accepts "$_cv" "1.2.3-rc.1"
   done
   unset _cv
+
+  # The nats chart carries a SECOND block, a 2.15 floor: the broker config the module
+  # renders (jetstream.limits.default_max_consumers) is refused at startup by an older
+  # nats-server, so an older pin would crash-loop the broker rather than downgrade it.
+  # The same exactness cases as above, at versions above the floor, plus the floor
+  # itself from both sides. 2.14.4 is the pin this replaced; 1.3.16 is the last chart
+  # of the old 1.x line, whose numbering is not the server's.
+  rejects nats_chart_version ""
+  rejects nats_chart_version "4.15.1 - 5.0.0"
+  rejects nats_chart_version "2.14.4"
+  rejects nats_chart_version "v2.14.99"
+  rejects nats_chart_version "1.3.16"
+  accepts nats_chart_version "2.15.0"
+  accepts nats_chart_version "v2.15.1"
+  accepts nats_chart_version "2.15.2-rc.1"
+  accepts nats_chart_version "2.16.0"
+  accepts nats_chart_version "3.0.0"
 
   # --- the instance namespace ---------------------------------------------------
   #

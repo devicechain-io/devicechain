@@ -18,8 +18,8 @@ import (
 // message is stored. That is the broker's contract, and this test holds a real replicated
 // stream to it rather than trusting a stub's reply.
 //
-// What the contract rests on, in nats-server (2.14.4, which the chart runs, and 2.15.x, which
-// these tests embed): a clustered publish with an id is staged in the dedup map with sequence 0
+// What the contract rests on, in nats-server (2.15.1, which the chart runs and these tests
+// embed, and 2.14.4 before it): a clustered publish with an id is staged in the dedup map with sequence 0
 // before its proposal, and a second publish meeting a sequence-0 entry is answered 10158
 // (checkMsgHeadersPreClusteredProposal). The entry gets its real sequence only in
 // processJetStreamMsg, after the committed entry has been stored, and only an entry with a
