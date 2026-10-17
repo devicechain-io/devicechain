@@ -331,3 +331,21 @@ func TestLoadInstanceConfigurationAppliesTheAffinitySettings(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "consumerLeader")
 }
+
+// 🔴 infrastructure.nats.mqttFailClosed is refused at the load every service makes, until
+// the reader over the broker's message store ships: on, it would fill that store and then
+// refuse every QoS 1 device publish. The key is spelled correctly here, so this is the value
+// refusal and not the strict decode's.
+func TestLoadInstanceConfigurationRefusesMqttFailClosedOn(t *testing.T) {
+	doc := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"mqttFailClosed":true},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	ms := &Microservice{}
+	err := ms.LoadInstanceConfigurationFrom(instanceDoc(t, doc))
+	require.ErrorIs(t, err, config.ErrMqttFailClosedNotAvailable)
+	assert.Contains(t, err.Error(), "not available in this build")
+
+	off := `{"infrastructure":{"nats":{"hostname":"h","port":4222,"mqttFailClosed":false},
+	         "userManagement":{"hostname":"u","port":8080}}}`
+	require.NoError(t, (&Microservice{}).LoadInstanceConfigurationFrom(instanceDoc(t, off)),
+		"control: the key written as false loads")
+}
