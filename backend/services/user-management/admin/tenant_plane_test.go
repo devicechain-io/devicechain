@@ -212,8 +212,12 @@ func TestAdminCannotGrantAboveSelf(t *testing.T) {
 
 	// Acting on someone above: the deputy may not strip, scope, disable or remove the boss.
 	for name, op := range map[string]func() error{
-		"roles":   func() error { _, err := e.s.SetMemberRoles(deputy, "boss@acme.example", nil); return err },
-		"scope":   func() error { _, err := e.s.SetMemberScope(deputy, "boss@acme.example", customers("c1")); return err },
+		"roles": func() error { _, err := e.s.SetMemberRoles(deputy, "boss@acme.example", nil); return err },
+		"scope": func() error { _, err := e.s.SetMemberScope(deputy, "boss@acme.example", customers("c1")); return err },
+		"access": func() error {
+			_, err := e.s.SetMemberAccess(deputy, "boss@acme.example", []string{iam.TenantAdminRoleToken}, customers("c1"))
+			return err
+		},
 		"disable": func() error { _, err := e.s.SetMemberEnabled(deputy, "boss@acme.example", false); return err },
 		"remove":  func() error { _, err := e.s.RemoveMember(deputy, "boss@acme.example"); return err },
 	} {
@@ -243,6 +247,9 @@ func TestAStaleTokenCannotGrantWhatTheStoreNoLongerHolds(t *testing.T) {
 	_, err = e.s.SetMemberRoles(stale, "pat@acme.example", []string{"operator"})
 	require.Equal(t, CodeEscalation, refusalCode(err), "a demoted administrator's still-valid token granted "+
 		"an authority its membership no longer holds: %v", err)
+	_, err = e.s.SetMemberAccess(stale, "pat@acme.example", []string{"operator"}, nil)
+	require.Equal(t, CodeEscalation, refusalCode(err), "setMemberAccess: a demoted administrator's still-valid token granted "+
+		"an authority its membership no longer holds: %v", err)
 }
 
 // ---- self-modification, last admin, IdP-managed --------------------------------------------
@@ -257,7 +264,11 @@ func TestNobodyChangesTheirOwnMembership(t *testing.T) {
 			_, err := e.s.SetMemberRoles(me, "boss@acme.example", []string{iam.TenantAdminRoleToken})
 			return err
 		},
-		"scope":   func() error { _, err := e.s.SetMemberScope(me, "boss@acme.example", nil); return err },
+		"scope": func() error { _, err := e.s.SetMemberScope(me, "boss@acme.example", nil); return err },
+		"access": func() error {
+			_, err := e.s.SetMemberAccess(me, "boss@acme.example", []string{iam.TenantAdminRoleToken}, nil)
+			return err
+		},
 		"disable": func() error { _, err := e.s.SetMemberEnabled(me, "boss@acme.example", false); return err },
 		"remove":  func() error { _, err := e.s.RemoveMember(me, "boss@acme.example"); return err },
 	} {
@@ -295,7 +306,17 @@ func TestLastAdminCannotBeRemovedScopedOrStripped(t *testing.T) {
 			_, err := e.s.SetMemberRoles(root, "boss@acme.example", []string{iam.ViewerRoleToken})
 			return err
 		},
-		"scope":   func() error { _, err := e.s.SetMemberScope(root, "boss@acme.example", customers("c1")); return err },
+		"scope": func() error { _, err := e.s.SetMemberScope(root, "boss@acme.example", customers("c1")); return err },
+		// The combined change is decided on both halves at once: either one alone leaves no
+		// administrator, so each is refused through it too.
+		"access strip": func() error {
+			_, err := e.s.SetMemberAccess(root, "boss@acme.example", []string{iam.ViewerRoleToken}, nil)
+			return err
+		},
+		"access scope": func() error {
+			_, err := e.s.SetMemberAccess(root, "boss@acme.example", []string{iam.TenantAdminRoleToken}, customers("c1"))
+			return err
+		},
 		"disable": func() error { _, err := e.s.SetMemberEnabled(root, "boss@acme.example", false); return err },
 		"remove":  func() error { _, err := e.s.RemoveMember(root, "boss@acme.example"); return err },
 	} {
@@ -342,8 +363,12 @@ func TestManagedMembershipIsReadOnlyOnTenantPlane(t *testing.T) {
 		conn, "idp@acme.example").Error)
 	me := as("boss@acme.example", "acme", "*")
 	for name, op := range map[string]func() error{
-		"roles":   func() error { _, err := e.s.SetMemberRoles(me, "idp@acme.example", nil); return err },
-		"scope":   func() error { _, err := e.s.SetMemberScope(me, "idp@acme.example", customers("c1")); return err },
+		"roles": func() error { _, err := e.s.SetMemberRoles(me, "idp@acme.example", nil); return err },
+		"scope": func() error { _, err := e.s.SetMemberScope(me, "idp@acme.example", customers("c1")); return err },
+		"access": func() error {
+			_, err := e.s.SetMemberAccess(me, "idp@acme.example", []string{iam.ViewerRoleToken}, customers("c1"))
+			return err
+		},
 		"disable": func() error { _, err := e.s.SetMemberEnabled(me, "idp@acme.example", false); return err },
 		"remove":  func() error { _, err := e.s.RemoveMember(me, "idp@acme.example"); return err },
 	} {
@@ -369,9 +394,13 @@ func TestAMemberElsewhereIsNotFound(t *testing.T) {
 
 	_, err = e.s.SetMemberEnabled(me, "gil@globex.example", false)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, err = e.s.SetMemberAccess(me, "gil@globex.example", []string{iam.TenantAdminRoleToken}, nil)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	mem, err := e.s.iam.MembershipByIdentityTenant(context.Background(), mustID(t, e, "gil@globex.example"), "globex")
 	require.NoError(t, err)
 	require.True(t, mem.Enabled, "acme's administrator disabled a globex membership")
+	require.Len(t, mem.TenantRoles, 1, "acme's administrator changed a globex membership's roles")
+	require.Equal(t, iam.ViewerRoleToken, mem.TenantRoles[0].Token, "acme's administrator changed a globex membership's roles")
 
 	page, _, err := e.s.Members(me, iam.MemberSearchCriteria{})
 	require.NoError(t, err)
@@ -625,10 +654,23 @@ func TestTheAdminPlaneCannotEditATenantsOwnRole(t *testing.T) {
 func TestAPurgingTenantRefusesAdministration(t *testing.T) {
 	e := newPlaneEnv(t)
 	e.member(t, "boss@acme.example", "acme", []string{iam.TenantAdminRoleToken})
+	e.member(t, "pat@acme.example", "acme", []string{iam.ViewerRoleToken})
 	require.NoError(t, e.db.WithContext(core.WithSystemContext(context.Background())).Model(&iam.Tenant{}).
 		Where("token = ?", "acme").Update("purge_state", iam.PurgePurging).Error)
-	_, _, err := e.s.InviteMember(as("boss@acme.example", "acme", "*"), InviteInput{Email: "x@acme.example"})
+	boss := as("boss@acme.example", "acme", "*")
+	_, _, err := e.s.InviteMember(boss, InviteInput{Email: "x@acme.example"})
 	require.ErrorIs(t, err, ErrTenantDeleted)
+	// Every change to a member goes through the same refusal, the combined one included.
+	for name, op := range map[string]func() error{
+		"roles": func() error { _, err := e.s.SetMemberRoles(boss, "pat@acme.example", []string{"operator"}); return err },
+		"scope": func() error { _, err := e.s.SetMemberScope(boss, "pat@acme.example", customers("c1")); return err },
+		"access": func() error {
+			_, err := e.s.SetMemberAccess(boss, "pat@acme.example", []string{"operator"}, customers("c1"))
+			return err
+		},
+	} {
+		require.ErrorIsf(t, op(), ErrTenantDeleted, "%s changed a member of a tenant being deleted", name)
+	}
 }
 
 // The email-prefix filter matches literally: "_" and "%" in the prefix are not wildcards.

@@ -26,6 +26,7 @@ type wireEnv struct {
 	schema *gqlcore.Schema
 	svc    *admin.Service
 	mgr    *identity.Manager
+	store  *iam.Store
 }
 
 func newWireEnv(t *testing.T) *wireEnv {
@@ -49,6 +50,7 @@ func newWireEnv(t *testing.T) *wireEnv {
 	return &wireEnv{
 		schema: gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
 		svc:    svc,
+		store:  store,
 		mgr:    identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, nil),
 	}
 }
