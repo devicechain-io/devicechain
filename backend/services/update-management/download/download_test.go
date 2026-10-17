@@ -43,6 +43,9 @@ type countingStore struct {
 	// gate, when set, makes the returned reader block until it is closed (a slow client).
 	gate    chan struct{}
 	started chan struct{}
+	// readDelay, when set, makes every Read of the returned reader take at least that long: a
+	// source slow enough that the elapsed time, not the speed of the socket, decides the outcome.
+	readDelay atomic.Int64 // a time.Duration; atomic because the handler goroutine outlives the client's view
 }
 
 type countingReader struct {
@@ -53,6 +56,9 @@ type countingReader struct {
 func (r *countingReader) Read(p []byte) (int, error) {
 	if int64(len(p)) > r.s.maxRead.Load() {
 		r.s.maxRead.Store(int64(len(p)))
+	}
+	if d := time.Duration(r.s.readDelay.Load()); d > 0 {
+		time.Sleep(d) // never returns early, so d has provably elapsed afterwards
 	}
 	return r.ReadCloser.Read(p)
 }
@@ -542,23 +548,39 @@ func TestResolveRangeTable(t *testing.T) {
 // a ceiling of its own: past it the response is cut and the slot is given back.
 func TestADownloadThatRunsPastItsWindowIsCut(t *testing.T) {
 	e := newEnv(t, 1)
-	data := content(16 << 20)
+	data := content(1 << 20)
 	e.artifact(t, "acme", "fw-1", data)
 	_, minted := e.grant(t, "acme", "dev-1", "fw-1")
-	e.h.window = func(int64) time.Duration { return 30 * time.Millisecond }
+	// Deterministic by construction: every read of the object takes longer than the whole window, so
+	// by the time the first chunk is written the window has provably elapsed and the next loop
+	// iteration must cut. Nothing depends on socket buffer sizes or on how fast the machine is.
+	// The handler goroutine can outlive what the client sees, so the switch back to a normal window
+	// is an atomic the already-installed hooks read, not a write to the handler's fields.
+	var cutting atomic.Bool
+	cutting.Store(true)
+	e.h.window = func(length int64) time.Duration {
+		if cutting.Load() {
+			return 30 * time.Millisecond
+		}
+		return model.UploadWindow(length)
+	}
+	e.store.readDelay.Store(int64(60 * time.Millisecond))
 
 	req, err := http.NewRequest(http.MethodGet, e.rebase(t, minted), nil)
 	require.NoError(t, err)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	// The client stops reading: the server fills the socket buffers, blocks, and passes its window.
-	time.Sleep(300 * time.Millisecond)
-	got, _ := io.ReadAll(resp.Body)
-	require.Less(t, len(got), len(data), "the response was cut short of the artifact")
+	// The cut may land before the first byte (the write deadline is the window, and it has passed by
+	// the time the slow first read returns) or after it; either way the client never gets the whole
+	// artifact and the transfer reads as failed, never as a complete one.
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		defer resp.Body.Close()
+		got, rerr := io.ReadAll(resp.Body)
+		require.Error(t, rerr, "a cut response is a failed transfer, never a silently short artifact")
+		require.Less(t, len(got), len(data), "the response was cut short of the artifact")
+	}
 
 	// The slot came back: with a normal window the next request is served in full.
-	e.h.window = model.UploadWindow
+	cutting.Store(false)
+	e.store.readDelay.Store(0)
 	require.Eventually(t, func() bool {
 		r, body := get(t, e.rebase(t, minted))
 		return r.StatusCode == http.StatusOK && len(body) == len(data)
