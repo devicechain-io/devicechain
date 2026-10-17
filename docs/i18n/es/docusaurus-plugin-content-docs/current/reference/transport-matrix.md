@@ -56,7 +56,7 @@ Cómo llegan los dispositivos a la plataforma, y cómo llega la plataforma de vu
 | [Sparkplug B](../concepts/sparkplug.md) | ○ | ○ | ◐ |
 | [LwM2M](../concepts/lwm2m.md) | ◐ | ◐ | ◐ |
 
-### MQTT — el bróker de la plataforma
+### MQTT — el bróker de la plataforma {#mqtt--the-platform-broker}
 
 La vía por defecto, y la más completa. El bróker es el servidor MQTT integrado en NATS, así que no
 hay ningún bróker aparte que operar.
