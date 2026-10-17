@@ -66,9 +66,9 @@ never_started() {
   local transcript n
   transcript=$(cat)
   for n in "$@"; do
-    if ! printf '%s\n' "$transcript" | grep -qE "^=== RUN +$n\$"; then
+    if ! grep -qE "^=== RUN +$n\$" <<<"$transcript"; then
       echo "$n (never started)"
-    elif printf '%s\n' "$transcript" | grep -qE "^--- SKIP: $n "; then
+    elif grep -qE "^--- SKIP: $n " <<<"$transcript"; then
       echo "$n (skipped)"
     fi
   done
@@ -107,10 +107,10 @@ if [ "${1:-}" = "--self-test" ]; then
   # And the tag matcher, because a pattern that misses a syntax silently drops a file from every
   # check built on it.
   for ok in '//go:build integration' '//go:build integration && unix' '//go:build unix && integration' '// +build integration'; do
-    printf '%s\n' "$ok" | grep -qE "$TAG_RE" || { echo "self-test FAILED: tag matcher missed [$ok]"; exit 1; }
+    grep -qE "$TAG_RE" <<<"$ok" || { echo "self-test FAILED: tag matcher missed [$ok]"; exit 1; }
   done
   for no in '//go:build !integration' '//go:build interop' '//go:build integrationx' '// integration notes'; do
-    if printf '%s\n' "$no" | grep -qE "$TAG_RE"; then echo "self-test FAILED: tag matcher accepted [$no]"; exit 1; fi
+    if grep -qE "$TAG_RE" <<<"$no"; then echo "self-test FAILED: tag matcher accepted [$no]"; exit 1; fi
   done
   echo "self-test passed: the no-tests-ran and per-test guards fire on a bad run and stay silent on a real one"
   exit 0
