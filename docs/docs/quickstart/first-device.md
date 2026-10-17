@@ -48,6 +48,27 @@ dcctl install local
 dcctl bootstrap local devicechain --host localhost --no-tls
 ```
 
+:::note In a script or CI job
+`dcctl bootstrap` asks for a passphrase to seal the root-key escrow artifact. With no terminal to
+ask at it stops with `no escrow passphrase and no terminal to ask at`. Supply one without a
+prompt, either by file or by environment variable:
+
+```bash
+dcctl bootstrap local devicechain --host localhost --no-tls --escrow-passphrase-file ./escrow.pass
+# or
+DCCTL_ESCROW_PASSPHRASE='<passphrase>' dcctl bootstrap local devicechain --host localhost --no-tls
+```
+
+For a throwaway instance you can skip the escrow with `--no-escrow` (`--dev` implies it). The cost:
+the instance's secret-store root key then exists only inside the cluster, so if the cluster is
+lost, every secret the instance stored becomes permanently unreadable, even from a database
+backup. See [the root-key escrow](../deployment/bootstrap.md#escrow).
+:::
+
+On a local kind cluster, port **1883** on your machine reaches the MQTT broker of the first
+instance you bootstrap. It speaks TLS; see [Publishing an event](../guides/connecting-a-device.md#publishing-an-event)
+to connect to it.
+
 `dcctl install` creates the kind cluster and installs what every instance on it shares: the
 DeviceChain operator and its custom resource definitions, the relational database, the
 CloudNativePG operator, cert-manager, monitoring and ingress. You run it once per cluster, and
@@ -86,6 +107,11 @@ the command that does it in one step:
 ```bash
 dcctl sim create demo
 ```
+
+`dcctl sim create` talks to the instance at `localhost` by default. If the console is served on
+another port, give the host and port in `--server`, and the device-plane ingress too, because
+that one is derived from the host and is not told about the port:
+`dcctl sim create demo --server localhost:8080 --ingress http://localhost:8081`.
 
 This command:
 
