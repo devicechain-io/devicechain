@@ -8,10 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/rs/zerolog/log"
 )
 
 // Device ownership (ADR-081): which customers a device belongs to, as the scope of a
@@ -31,12 +29,18 @@ type DeviceOwnershipChangedEvent struct {
 	DeviceToken string
 	Anchors     []string
 	ChangedTime time.Time
+
+	// deviceId is the device's row id, which the drain matches the fact to its queued row
+	// by. It is not part of the fact.
+	deviceId uint
 }
 
-// DeviceOwnershipPublisher publishes ownership-changed facts. Fire-and-forget, like the
-// other fact publishers: a failure is the publisher's to log and count, never the write's.
+// DeviceOwnershipPublisher publishes ownership-changed facts for the ownership drain
+// (ownership_outbox.go). Unlike the other fact publishers it REPORTS a failure: the drain
+// deletes a queued fact only once it has been published, so a failure it was not told of
+// would be a fact lost.
 type DeviceOwnershipPublisher interface {
-	PublishDeviceOwnershipChanged(ctx context.Context, event *DeviceOwnershipChangedEvent)
+	PublishDeviceOwnershipChanged(ctx context.Context, event *DeviceOwnershipChangedEvent) error
 }
 
 // scopeAnchorOf renders a tracked edge as a scope anchor, or "" for an edge that cannot
@@ -80,61 +84,6 @@ func (api *Api) deviceScopeAnchors(ctx context.Context, deviceId uint) (rdb.Anch
 	return withGroupAnchors(anchorSetOf(found.Results), groups[deviceId]), nil
 }
 
-// ownershipReadContext is the context the ownership fact's reads run under: the tenant of
-// the write and NOTHING else of the caller's. The fact is the service's own statement of
-// state, so it must not be bounded by — or attributed to — whoever made the write (a
-// confused deputy in either direction), and it is published after the write has
-// committed, so it must not inherit a request deadline that is about to fire.
-func ownershipReadContext(ctx context.Context) (context.Context, bool) {
-	tenant, ok := core.TenantFromContext(ctx)
-	if !ok {
-		return nil, false
-	}
-	return core.WithTenant(context.Background(), tenant), true
-}
-
-// emitOwnershipChanged publishes, for each given device, its complete current anchor set.
-// It is called post-commit by the funnel every edge writer already goes through
-// (evictRelationshipSources, evictEntityDelete), which is what makes "every writer"
-// true by construction rather than by a list: a write that changes a device's tracked set
-// must evict the device's cached set or ingest stamps stale anchors, so a writer that
-// forgot this fact would already be a stale-anchor bug. Over-publishing is harmless — the
-// fact is a statement of state, not a delta.
-//
-// A device that no longer exists (a delete raced the read) is skipped: the entity-deleted
-// fact is its last word. A read failure is logged and drops the facts of that batch; the
-// write stands, and the device's next resolved event carries its anchors anyway.
-func (api *Api) emitOwnershipChanged(ctx context.Context, deviceIds []uint) {
-	if api.DeviceOwnershipPublisher == nil || len(deviceIds) == 0 {
-		return
-	}
-	svc, ok := ownershipReadContext(ctx)
-	if !ok {
-		log.Warn().Int("devices", len(deviceIds)).
-			Msg("Unable to publish device ownership changes: no tenant on the write's context")
-		return
-	}
-	ids := make([]uint, 0, len(deviceIds))
-	for _, id := range deviceIds {
-		if id != 0 && !slices.Contains(ids, id) {
-			ids = append(ids, id)
-		}
-	}
-	now := time.Now().UTC()
-	for start := 0; start < len(ids); start += rdb.MaxLookupKeys {
-		chunk := ids[start:min(start+rdb.MaxLookupKeys, len(ids))]
-		facts, err := api.ownershipFacts(svc, chunk, now)
-		if err != nil {
-			log.Warn().Err(err).Int("devices", len(chunk)).
-				Msg("Unable to read device ownership after a relationship change; those devices' ownership facts were not published")
-			continue
-		}
-		for _, f := range facts {
-			api.DeviceOwnershipPublisher.PublishDeviceOwnershipChanged(svc, f)
-		}
-	}
-}
-
 // ownershipFacts reads the current anchor sets of a batch of devices in two statements.
 func (api *Api) ownershipFacts(ctx context.Context, ids []uint, now time.Time) ([]*DeviceOwnershipChangedEvent, error) {
 	type deviceRow struct {
@@ -171,6 +120,7 @@ func (api *Api) ownershipFacts(ctx context.Context, ids []uint, now time.Time) (
 			DeviceToken: d.Token,
 			Anchors:     []string(withGroupAnchors(anchorSetOf(bySource[d.ID]), groups[d.ID])),
 			ChangedTime: now,
+			deviceId:    d.ID,
 		})
 	}
 	return facts, nil

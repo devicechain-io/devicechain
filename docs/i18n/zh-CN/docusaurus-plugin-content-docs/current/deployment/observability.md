@@ -524,6 +524,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote` |
+| device-management | `ownership_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
 
 例如用户管理租户删除协调器导出 `devicechain_usermanagement_tenant_purge_passes_total`。

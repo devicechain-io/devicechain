@@ -68,7 +68,7 @@ func newFacetAuthoringTestApi(t *testing.T) (*Api, context.Context) {
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{},
 		&FacetKey{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &DetectionRuleScopeRef{},
-		&EntityRelationship{}, &EntityRelationshipType{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityRelationshipType{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})

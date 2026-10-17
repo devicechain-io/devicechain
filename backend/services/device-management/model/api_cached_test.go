@@ -24,7 +24,7 @@ func newCachedApiForTest(t *testing.T) (*CachedApi, *msgtest.MemoryKV, context.C
 	require.NoError(t, err, "open sqlite")
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{},
-		&EntityRelationship{}, &EntityRelationshipType{}), "migrate")
+		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityRelationshipType{}), "migrate")
 
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")

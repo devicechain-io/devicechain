@@ -118,7 +118,10 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		// A rule pins a VERSION, so a publish enrolls nothing for rules. An access scope
 		// follows the pointer (ADR-081): its new version is materialized, and the old torn
 		// down unless a rule pins it, in this same transaction.
-		evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from)
+		if evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from); err != nil {
+			return err
+		}
+		_, err = queueOwnershipOnTx(tx, members)
 		return err
 	})
 	if err != nil {
@@ -129,12 +132,12 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 }
 
 // afterAccessScopeMoved fires, post-commit, what moving an access scope's pointer produced:
-// the read-model evictions, the members' cached memberships (their access marker may have
-// changed even where no row did), and an ownership-changed fact for each member device.
+// the read-model evictions and the members' cached memberships (their access marker may have
+// changed even where no row did). Each member device's ownership fact was queued in the
+// move's transaction.
 func (api *Api) afterAccessScopeMoved(ctx context.Context, evictions []membershipEviction, changed bool, members []uint) {
 	api.fireScopingEvictions(ctx, evictions, changed)
 	api.evictMemberships(ctx, string(entity.TypeDevice), members)
-	api.emitOwnershipChanged(ctx, members)
 }
 
 // lockFamilyAndReadPointerOnTx takes the group's family lock and returns the published
@@ -203,7 +206,10 @@ func (api *Api) RollbackEntityGroup(ctx context.Context, token string, version i
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: entity group %q", gorm.ErrRecordNotFound, token)
 		}
-		evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from)
+		if evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from); err != nil {
+			return err
+		}
+		_, err = queueOwnershipOnTx(tx, members)
 		return err
 	})
 	if err != nil {

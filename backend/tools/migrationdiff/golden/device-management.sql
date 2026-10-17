@@ -159,6 +159,8 @@ ALTER TABLE ONLY "device-management".maintenance_windows ALTER COLUMN id SET DEF
 ALTER TABLE ONLY "device-management".metric_definitions
  ADD CONSTRAINT metric_definitions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".metric_definitions ALTER COLUMN id SET DEFAULT nextval('"device-management".metric_definitions_id_seq'::regclass);
+ALTER TABLE ONLY "device-management".pending_ownership_facts
+ ADD CONSTRAINT pending_ownership_facts_pkey PRIMARY KEY (tenant_id, device_id);
 ALTER TABLE ONLY "device-management".provisioning_profiles
  ADD CONSTRAINT "uni_device-management_provisioning_profiles_provision_key" UNIQUE (provision_key);
 ALTER TABLE ONLY "device-management".provisioning_profiles
@@ -997,6 +999,12 @@ CREATE TABLE "device-management".metric_definitions (
  enum jsonb,
  descriptor text,
  device_profile_id bigint NOT NULL
+);
+CREATE TABLE "device-management".pending_ownership_facts (
+ tenant_id character varying(128) NOT NULL,
+ device_id bigint NOT NULL,
+ generation bigint NOT NULL,
+ requested_at timestamp with time zone NOT NULL
 );
 CREATE TABLE "device-management".provisioning_profiles (
  id bigint NOT NULL,

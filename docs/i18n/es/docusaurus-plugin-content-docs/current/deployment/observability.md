@@ -1171,6 +1171,7 @@ reconciliador o un planificador. Cada una exporta tres series con el nombre de s
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote` |
+| device-management | `ownership_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
 
 Por ejemplo, el coordinador de eliminación de inquilinos de user-management exporta

@@ -38,7 +38,7 @@ func newRuleScopeTestApi(t *testing.T) (*Api, context.Context) {
 		&DeviceProfile{}, &DeviceProfileVersion{}, &MetricDefinition{}, &CommandDefinition{},
 		&DetectionRule{}, &DetectionRuleScopeRef{}, &EntityAttribute{},
 		&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{}, &EntityGroupFacetRef{},
-		&EntityRelationship{}, &Alarm{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &Alarm{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	api := NewApi(&rdb.RdbManager{Database: db})

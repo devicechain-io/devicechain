@@ -24,7 +24,10 @@ import (
 //     it resolved the event, and the projection folds them in with the event;
 //   - device-management publishes a device ownership-changed fact after every write that may
 //     have moved a device's owners, carrying its complete current set, so a device that
-//     reports nothing after it is sold still leaves its old owner's view.
+//     reports nothing after it is sold still leaves its old owner's view. The write queues
+//     the fact in its own transaction and device-management's drain publishes it, retrying
+//     until the broker accepts it, so a committed change is announced however long the
+//     broker is away (device-management model/ownership_outbox.go).
 //
 // They arrive on two streams. An event device-management resolved BEFORE a move can reach
 // this service AFTER the move's fact — under any backlog in the resolved-events consumer, or
@@ -37,13 +40,17 @@ import (
 //   - an event's precedence is its RECEIPT time (ResolvedEvent.ProcessedTime, set by the
 //     platform when the event arrived, never by the device), which is no later than the
 //     moment its anchors were read;
-//   - a fact's precedence is the moment of the change PLUS ownershipSettle.
+//   - a fact's precedence is the moment its anchors were read PLUS ownershipSettle. The drain
+//     reads them after the change has committed, so that moment is never earlier than the
+//     change — later by however long the fact waited in the queue.
 //
 // An event received before a change therefore never overrides the change's fact, whichever
 // arrives first. One received inside the settle window does not either; it carries the new
 // owners anyway once device-management's caches have caught up, so nothing is lost. One
-// received after the window does, which is what repairs a fact that was lost (the fact is
-// at-most-once): the device's next event restamps it. Two facts order by their change times.
+// received after the window does: it was resolved after the change, so it carries the new
+// owners too, and it is what restamps a device whose fact has not arrived yet — or was
+// dropped HERE, after its last delivery failed to write (handle). Two facts order by the
+// moments their anchors were read.
 // The rule is a max over a total order, so it commutes, which is what lets the batch path
 // fold a device's events in Go or in SQL and land where merging them one at a time would.
 //

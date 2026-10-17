@@ -1109,6 +1109,7 @@ exports three series under its own service's name, `devicechain_<area>_<task>_â€
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
 | event-sources | `presence_demote` |
+| device-management | `ownership_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
 
 For example, user-management's tenant-deletion coordinator exports

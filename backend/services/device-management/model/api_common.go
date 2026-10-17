@@ -72,18 +72,37 @@ func (api *Api) UpdateEntityRelationshipType(ctx context.Context, token string,
 	updated.Metadata = metadataJSON
 	flipped := tracked != updated.Tracked
 	updated.Tracked = tracked
+	if flipped {
+		// Flipping `tracked` makes every edge of the type ownership, or stops it being
+		// ownership (ADR-081): every device with an edge of the type is owed its new anchors,
+		// so the devices are read and their facts queued in the flip's own transaction, and
+		// the funnel then evicts their cached sets.
+		var queued ownershipQueued
+		err := api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Save(updated).Error; err != nil {
+				return err
+			}
+			sources, err := sourceDevicesOnTx(tx, "relationship_type_id = ?", updated.ID)
+			if err != nil {
+				return err
+			}
+			queued, err = queueOwnershipOnTx(tx, sources)
+			return err
+		})
+		if err != nil {
+			return nil, err
+		}
+		api.evictRelationshipSources(ctx, queued)
+		return updated, nil
+	}
 	if err := api.RDB.DB(ctx).Save(updated).Error; err != nil {
 		return nil, err
 	}
-	// The `tracked` flag decides which edges a device's cached set holds, and the cached
-	// edges carry the type's own fields: so every device with an edge of this type has a
-	// stale set. Not bounded by a device list the caller named, so it is read from the edges.
+	// The cached edges carry the type's own fields, so every device with an edge of this
+	// type has a stale set. Not bounded by a device list the caller named, so it is read
+	// from the edges.
 	sources := api.relationshipSourceDevices(ctx, "relationship_type_id = ?", updated.ID)
-	if flipped {
-		// Flipping `tracked` makes every edge of the type ownership, or stops it being
-		// ownership (ADR-081): the funnel evicts AND publishes each device's new anchors.
-		api.evictRelationshipSources(ctx, sources)
-	} else if api.CacheEvictor != nil && len(sources) > 0 {
+	if api.CacheEvictor != nil && len(sources) > 0 {
 		// A rename or a description edit changes the cached edges' copy of the type and
 		// nobody's ownership, so it evicts without publishing a fact per device — on the
 		// built-in "assigned" type that would be one fact per assigned device in the tenant.
@@ -179,7 +198,25 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 		TargetToken:        request.Target,
 		RelationshipTypeId: rtmatches[0].ID,
 	}
-	if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+	if created.SourceType != string(entity.TypeDevice) {
+		if err := api.RDB.DB(ctx).Create(created).Error; err != nil {
+			return nil, err
+		}
+		created.RelationshipType = *rtmatches[0]
+		return created, nil
+	}
+	// A new edge from a device may make it owned (a tracked type): the edge and the
+	// device's queued ownership fact commit together.
+	var queued ownershipQueued
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(created).Error; err != nil {
+			return err
+		}
+		var err error
+		queued, err = queueOwnershipOnTx(tx, []uint{created.SourceId})
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
 	// Populate the association from the type we already resolved, so a resolver
@@ -189,9 +226,7 @@ func (api *Api) CreateEntityRelationship(ctx context.Context,
 	// A new edge from a device changes that device's cached tracked set, whether or not its
 	// type is tracked (the cache holds the tracked edges, and the type decides): drop it,
 	// after the commit, on every replica.
-	if created.SourceType == string(entity.TypeDevice) {
-		api.evictRelationshipSources(ctx, []uint{created.SourceId})
-	}
+	api.evictRelationshipSources(ctx, queued)
 	return created, nil
 }
 
