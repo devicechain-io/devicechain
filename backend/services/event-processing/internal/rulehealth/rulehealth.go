@@ -44,9 +44,9 @@
 // batch for a fenced tenant is refused by the database. Purge removes the tenant's pending
 // entries (they hold its rule ids) and cancels and WAITS FOR a write of that tenant already in
 // flight, so the processor's eviction answer is sent only once nothing of the tenant's is still
-// on its way to the table. An in-flight write counts as evicted whatever its outcome, because a
-// cancelled commit may still have landed; a non-zero eviction makes the purge coordinator sweep
-// again, and its sweep is what removes such a row. Admissions after a term ends are refused by
+// on its way to the table. An in-flight write counts as evicted for the rules it had not yet
+// written (a cancelled commit may still have landed); a non-zero eviction makes the purge
+// coordinator sweep again, and its sweep is what removes such a row. Admissions after a term ends are refused by
 // that term's closed accumulator, and a new term gets a new one, so no list of purged tokens is
 // kept anywhere.
 package rulehealth
@@ -420,8 +420,8 @@ func (a *Accumulator) Pending() (keys int, bytes int64, oldest time.Duration) {
 
 // Purge removes every pending entry of tenant, cancels a write of that tenant already in
 // flight and waits, within ctx, for it to settle. It returns how many pending entries it
-// removed, the in-flight write's included whatever its outcome (a cancelled commit may still
-// have landed). An error means the in-flight write had not settled by ctx's end: the caller
+// removed, the in-flight write's rules not yet written included (a cancelled commit may still
+// have landed, so those are counted as evicted). An error means the in-flight write had not settled by ctx's end: the caller
 // must not report the tenant clean.
 func (a *Accumulator) Purge(ctx context.Context, tenant string) (int64, error) {
 	a.mu.Lock()

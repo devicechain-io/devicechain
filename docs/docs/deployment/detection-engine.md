@@ -501,7 +501,9 @@ The console's rule-health view shows each rule's fire count and when it last fir
 are not written as each detection is published: the engine adds each published detection to an
 in-memory total per rule and writes the totals in the background, one transaction per tenant, every
 `flushIntervalMillis`. A busy rule therefore costs one row write per interval rather than one per
-detection, and a slow or unavailable database never slows detection down.
+detection, and a slow or unavailable database never slows detection down. The one place a write is
+waited on is erasing a tenant: the purge waits for that tenant's write already in flight to settle,
+for at most `writeTimeoutMillis` plus one second.
 
 What that means for the numbers:
 
