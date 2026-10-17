@@ -86,6 +86,14 @@ const (
 	MqttFailClosedWatchInterval = 30 * time.Second
 )
 
+// mqttFailClosedRequestTimeout bounds each raw JetStream API request the reconcile makes
+// itself (the stream listing). The nats.go JetStream calls bound theirs with the context's
+// default wait; a raw request does not, and the startup reconcile and the watch both pass
+// a context with no deadline, so an API request the broker never answers (a meta-leader
+// election) would otherwise stall the start, or stop the watch for good, without a word.
+// A variable only so a test can shorten it.
+var mqttFailClosedRequestTimeout = 5 * time.Second
+
 // mqttFailClosedRetry is the backoff the startup reconcile retries a broker failure on. A
 // JetStream API timeout during a leader election is ordinary at startup; failing the start
 // on the first one would turn a blip into a restart.
@@ -209,6 +217,9 @@ type mqttFailClosedReport struct {
 	absentDurables []string
 	// foreign names the other instances the pass saw on this broker.
 	foreign []string
+	// foreignKnown is true when the pass completed the look for other instances, so that
+	// an empty foreign means "none" rather than "could not ask".
+	foreignKnown bool
 	// released is true when the watch stood down on a store this instance released.
 	released bool
 }
@@ -285,7 +296,7 @@ func (nmgr *NatsManager) reconcileMqttFailClosed(ctx context.Context, startup bo
 	if err != nil {
 		return rep, err
 	}
-	rep.foreign = foreign
+	rep.foreign, rep.foreignKnown = foreign, true
 	if len(foreign) > 0 && startup {
 		return rep, fmt.Errorf("%w (%s): the MQTT gateway keeps ONE message store per broker account, "+
 			"so with infrastructure.nats.mqttFailClosed on, one instance's backlog would refuse the other's "+
@@ -515,7 +526,9 @@ func streamNamesStrict(ctx context.Context, nc *nats.Conn) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-		msg, err := nc.RequestWithContext(ctx, "$JS.API.STREAM.NAMES", payload)
+		rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
+		msg, err := nc.RequestWithContext(rctx, "$JS.API.STREAM.NAMES", payload)
+		cancel()
 		if err != nil {
 			return nil, err
 		}
@@ -713,7 +726,11 @@ func (nmgr *NatsManager) checkMqttFailClosed(ctx context.Context, m *MqttFailClo
 				"store again")
 		return
 	}
-	m.foreignInstances.Set(float64(len(rep.foreign)))
+	// As with the durable gauge below, only a look that completed moves this one: a pass
+	// that could not list the streams has not seen the other instance go away.
+	if rep.foreignKnown {
+		m.foreignInstances.Set(float64(len(rep.foreign)))
+	}
 	if len(rep.foreign) > 0 {
 		log.Error().Strs("instances", rep.foreign).Str("stream", MqttMessageStore).
 			Msg("The broker also serves other DeviceChain instances. They share this instance's fail-closed MQTT " +

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -416,12 +417,15 @@ func TestTheWatchRecreatesAMissingDurableAndCountsWhatItRepaired(t *testing.T) {
 	require.Len(t, consumerNames(t, b.js, MqttMessageStore), len(MqttFailClosedDurables(guardInstance)),
 		"the durables stay: removing them would turn refusals into silent loss")
 
-	// A pass that cannot reach the broker leaves the gauge as it was.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// A pass that cannot reach the broker leaves both gauges as they were. The context is
+	// live: a cancelled one returns before the pass reads anything, and would hold this to
+	// nothing.
 	b.stop()
-	nmgr.checkMqttFailClosed(ctx, m)
-	require.EqualValues(t, 1, testutil.ToFloat64(m.durablePresent.WithLabelValues(events.Name)))
+	nmgr.checkMqttFailClosed(context.Background(), m)
+	require.EqualValues(t, 1, testutil.ToFloat64(m.durablePresent.WithLabelValues(events.Name)),
+		"could not ask read as missing")
+	require.EqualValues(t, 1, testutil.ToFloat64(m.foreignInstances),
+		"could not ask read as no other instance")
 }
 
 // The store deleted at runtime is created again by the watch, with a new epoch, and counted.
@@ -492,4 +496,66 @@ func TestASharedBrokerIsRefusedAtOnceNotRetried(t *testing.T) {
 	_, err = failClosedManager(t, b.nc, b.js, guardInstance, true).ReconcileMqttFailClosed(context.Background())
 	require.True(t, errors.Is(err, ErrMqttFailClosedSharedBroker))
 	require.Less(t, time.Since(start), time.Second, "the refusal waited out the retry schedule")
+}
+
+// The stream listing is bounded even when the caller's context is not. Both callers pass
+// one with no deadline, so an API request the broker takes and never answers (a meta-leader
+// election in a cluster) would otherwise hold the start, or the watch, for good. Here a
+// subscriber takes the request and never replies.
+//
+// GUARD: kills a listing that waits on the caller's context alone.
+func TestTheStreamListingDoesNotWaitForeverOnABrokerThatNeverAnswers(t *testing.T) {
+	// A broker without JetStream, so the only taker of the request is the subscriber.
+	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv.Shutdown)
+	nc, err := nats.Connect(srv.ClientURL())
+	require.NoError(t, err)
+	t.Cleanup(nc.Close)
+	_, err = nc.Subscribe("$JS.API.STREAM.NAMES", func(*nats.Msg) {})
+	require.NoError(t, err)
+	require.NoError(t, nc.Flush())
+	saved := mqttFailClosedRequestTimeout
+	mqttFailClosedRequestTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { mqttFailClosedRequestTimeout = saved })
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := streamNamesStrict(context.Background(), nc)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		require.Error(t, err, "a listing nobody answered must fail, not read as no other instance")
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stream listing waited on a broker that never answers")
+	}
+}
+
+// Another instance's stream on a later page of the listing is still seen. The server pages
+// STREAM.NAMES (1024 names a page); a look that read only the first page would read a broker
+// with many streams as serving no other instance.
+//
+// GUARD: kills a listing that stops after one page.
+func TestAnotherInstanceOnALaterPageOfTheListingIsSeen(t *testing.T) {
+	b := startGuardBroker(t)
+	const filler = 1100
+	for i := 0; i < filler; i++ {
+		_, err := b.js.AddStream(&nats.StreamConfig{Name: fmt.Sprintf("a%04d", i),
+			Subjects: []string{fmt.Sprintf("filler.%d", i)}, Storage: nats.MemoryStorage})
+		require.NoError(t, err)
+	}
+	// Names are listed sorted, so "zz..." lands on the second page.
+	_, err := b.js.AddStream(&nats.StreamConfig{Name: StreamName("zzother", streams.InboundEvents),
+		Subjects: []string{"zzother.*." + streams.InboundEvents}, Storage: nats.MemoryStorage})
+	require.NoError(t, err)
+
+	names, err := streamNamesStrict(context.Background(), b.nc)
+	require.NoError(t, err)
+	require.Len(t, names, filler+1, "every stream name, across pages")
+	_, err = failClosedManager(t, b.nc, b.js, guardInstance, true).ReconcileMqttFailClosed(context.Background())
+	require.ErrorIs(t, err, ErrMqttFailClosedSharedBroker)
+	require.Contains(t, err.Error(), "zzother")
 }
