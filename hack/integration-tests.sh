@@ -20,11 +20,59 @@
 # TestARealMissingDatabase..., neither of which contains "Integration", so BOTH were skipped while
 # the module reported rc=0. A green result from a filter that matches nothing is the most
 # expensive kind of pass, which is also why the guard below exists.
+#
+# 🔴 "RAN SOMETHING" IS NOT "RAN EVERYTHING". Per module, after the run, the script derives every
+# top-level Test function declared in an integration-tagged file and requires each to have STARTED
+# (and not skipped) in the transcript, so a tagged test that never executes fails the job by name.
+# The file set is cross-checked against the package loader's own view (`go list` with and without
+# the tag), so a build-constraint spelling the text match does not know is a failure rather than
+# an untested file. Tagged Benchmarks are measurement rigs and are listed, not run.
 set -u
 
 # ran_count reads a `go test -v` transcript on stdin and reports how many tests actually STARTED.
 # It is a function so --self-test can exercise the same expression the run below trusts.
 ran_count() { grep -c '^=== RUN' || true; }
+
+# A file is integration-tagged when its constraint NAMES the tag positively: `integration`,
+# `integration && unix`, `unix && integration`, or the legacy `// +build` form. `!integration`
+# does not match. ONE definition, used by module discovery and by the per-test guard below, so the
+# two cannot disagree about which files count.
+TAG_RE='^(//go:build (.* )?integration( .*)?|// \+build .*integration.*)$'
+
+# tagged_files lists (relative to the current directory, ./-prefixed) the integration-tagged
+# *_test.go files. Run it from a module root.
+tagged_files() { grep -rlE "$TAG_RE" . --include='*_test.go' 2>/dev/null | sort; }
+
+# gated_files prints the *_test.go files (./-relative, like tagged_files) that exist ONLY with the
+# integration tag, as the compiler's package loader sees it: the test files `go list` reports with
+# the tag minus those it reports without. It shares no code with tagged_files, so a build-constraint
+# spelling the grep does not know (a parenthesised or `||` expression, say) shows up as a file this
+# lists and that does not. Run it from a module root.
+gated_files() {
+  local fmt='{{range .TestGoFiles}}{{$.Module.Path}} {{$.ImportPath}} {{.}}{{"\n"}}{{end}}{{range .XTestGoFiles}}{{$.Module.Path}} {{$.ImportPath}} {{.}}{{"\n"}}{{end}}'
+  comm -23 <(go list -tags integration -f "$fmt" ./... 2>/dev/null | tr -d '\r' | sort -u) \
+           <(go list -f "$fmt" ./... 2>/dev/null | tr -d '\r' | sort -u) |
+    awk '{ d=$2; sub("^" $1, "", d); print "." d "/" $3 }' | sort -u
+}
+
+# names_in prints the top-level Test functions declared in the files given as arguments.
+names_in() { [ $# -eq 0 ] || sed -n 's/^func \(Test[A-Za-z0-9_]*\)(.*\*testing\.T).*/\1/p' "$@" | sort -u; }
+
+# never_started reads a `go test -v` transcript on stdin and the expected test names as arguments,
+# and prints each name that has no `=== RUN` line (never started) or that started and was SKIPPED.
+# A tagged test that skips itself is as unexecuted as one that never started: every integration
+# test here fails, rather than skips, when its server is missing.
+never_started() {
+  local transcript n
+  transcript=$(cat)
+  for n in "$@"; do
+    if ! printf '%s\n' "$transcript" | grep -qE "^=== RUN +$n\$"; then
+      echo "$n (never started)"
+    elif printf '%s\n' "$transcript" | grep -qE "^--- SKIP: $n "; then
+      echo "$n (skipped)"
+    fi
+  done
+}
 
 # The negative control, in the shape the other hack/ gates use: a guard is worth nothing until it
 # has been shown to fire. This one exists because a `-run` filter that matches nothing exits 0 with
@@ -43,7 +91,28 @@ if [ "${1:-}" = "--self-test" ]; then
     echo "self-test FAILED: the guard counted $real started tests in a transcript that ran 2"
     exit 1
   fi
-  echo "self-test passed: the no-tests-ran guard fires on an empty run and stays silent on a real one"
+  # The per-test guard gets the same pair of controls: it must name a test that never started and
+  # one that skipped, and must stay silent when every expected test ran.
+  gone=$(printf '=== RUN   TestOne\n--- PASS: TestOne (0.00s)\n=== RUN   TestSkipped\n--- SKIP: TestSkipped (0.00s)\n' \
+    | never_started TestOne TestMissing TestSkipped | tr '\n' ';')
+  if [ "$gone" != "TestMissing (never started);TestSkipped (skipped);" ]; then
+    echo "self-test FAILED: the per-test guard reported [$gone] for a missing and a skipped test"
+    exit 1
+  fi
+  quiet=$(printf '=== RUN   TestOne\n--- PASS: TestOne (0.00s)\n=== RUN   TestOneMore\n' | never_started TestOne)
+  if [ -n "$quiet" ]; then
+    echo "self-test FAILED: the per-test guard named [$quiet] although every expected test ran"
+    exit 1
+  fi
+  # And the tag matcher, because a pattern that misses a syntax silently drops a file from every
+  # check built on it.
+  for ok in '//go:build integration' '//go:build integration && unix' '//go:build unix && integration' '// +build integration'; do
+    printf '%s\n' "$ok" | grep -qE "$TAG_RE" || { echo "self-test FAILED: tag matcher missed [$ok]"; exit 1; }
+  done
+  for no in '//go:build !integration' '//go:build interop' '//go:build integrationx' '// integration notes'; do
+    if printf '%s\n' "$no" | grep -qE "$TAG_RE"; then echo "self-test FAILED: tag matcher accepted [$no]"; exit 1; fi
+  done
+  echo "self-test passed: the no-tests-ran and per-test guards fire on a bad run and stay silent on a real one"
   exit 0
 fi
 
@@ -99,9 +168,23 @@ echo "postgres on ${DC_IT_PGHOST}:${DC_IT_PGPORT}"
 # the day it does — no list here to fall out of step with go.work.
 modules=()
 for m in $(go list -m -f '{{.Dir}}'); do
-  grep -rlq '^//go:build integration' "$m" --include=*.go 2>/dev/null || continue
+  ( cd "$m" && [ -n "$(tagged_files)" ] ) || continue
   modules+=("$m")
 done
+# Cross-check the count against a second, independent parse, the way CI's go-module discovery does:
+# a loose matcher above would otherwise shrink the set with no one the wiser. This one asks the
+# package loader instead of the text: a module is integration-gated iff `go list` sees more test
+# files with the tag than without it.
+want=0
+for m in $(go list -m -f '{{.Dir}}'); do
+  tw=$(cd "$m" && go list -tags integration -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' ./... 2>/dev/null | awk '{s+=$1+$2} END{print s+0}')
+  to=$(cd "$m" && go list -f '{{len .TestGoFiles}} {{len .XTestGoFiles}}' ./... 2>/dev/null | awk '{s+=$1+$2} END{print s+0}')
+  if [ "$tw" -gt "$to" ]; then want=$((want + 1)); fi
+done
+if [ "$want" -ne ${#modules[@]} ]; then
+  echo "module discovery disagrees: grep found ${#modules[@]} integration-tagged modules, go list found $want"
+  exit 1
+fi
 if [ ${#modules[@]} -eq 0 ]; then
   echo "no module carries an integration-tagged test; this script would be a no-op that reports success"
   exit 1
@@ -144,6 +227,34 @@ for m in "${modules[@]}"; do
     rc=1
   fi
   [ $status -eq 0 ] || { echo "  FAILED: $name"; rc=1; }
+  # 🔴 THE PER-TEST GUARD. `tests_run > 0` says the module ran SOMETHING; it cannot say that THIS
+  # file's tests ran, and a suite that is only partly executed is how a gate stays green over a
+  # test that has never once run. So: derive the tagged Test functions from the files, require each
+  # to have started in the transcript, and fail a module where one did not, or where it skipped.
+  # Benchmarks do not run without -bench; they are listed, not run.
+  files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done < <(cd "$m" && tagged_files)
+  missed=$(comm -23 <(cd "$m" && gated_files) <(printf '%s\n' "${files[@]}" | sort -u))
+  if [ -n "$missed" ]; then
+    echo "  FAILED: $name has test files that exist only under the integration tag but whose constraint"
+    echo "          this script does not recognise, so their tests would never be checked:"
+    printf '%s\n' "$missed" | sed 's/^/            /'
+    rc=1
+  fi
+  expected=$(cd "$m" && names_in "${files[@]}")
+  if [ -n "$expected" ]; then
+    names=()
+    while IFS= read -r n; do names+=("$n"); done <<<"$expected"
+    gone=$(printf '%s\n' "$out" | never_started "${names[@]}")
+    echo "  tagged tests expected=${#names[@]} not_run=$(printf '%s' "$gone" | grep -c . || true)"
+    if [ -n "$gone" ]; then
+      echo "  FAILED: $name carries integration-tagged tests that did not execute:"
+      printf '%s\n' "$gone" | sed 's/^/            /'
+      rc=1
+    fi
+  fi
+  benches=$(cd "$m" && grep -hoE '^func Benchmark[A-Za-z0-9_]*' "${files[@]}" 2>/dev/null | sed 's/^func //' | sort -u | tr '\n' ' ')
+  if [ -n "${benches// /}" ]; then echo "  note: tagged benchmarks, measurement rigs this script does not run: $benches"; fi
 done
 echo "INTEGRATION_OVERALL_RC=$rc"
 exit "$rc"
