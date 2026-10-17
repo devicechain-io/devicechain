@@ -484,6 +484,45 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `shedLetterBurst` | 60 | Burst allowance for the above. |
 | `shedLetterGlobalPerSecond` | 10 | The same, across every tenant. Shed actions past either budget are counted and summarised in one dead letter per tenant per minute. |
 | `shedLetterGlobalBurst` | 100 | Burst allowance for the above. |
+| `ruleHealth.flushIntervalMillis` | 1000 | How often the per-rule fire counters are written to the database, from 50 to 60000. It is roughly how stale the console's fire counts and last-fired times may be; detection never waits for it. |
+| `ruleHealth.maxPendingKeys` | 4096 | Most rules that can have fires waiting to be written at once, from 1 to 1048576. A fire for a rule beyond this is not counted (see below). |
+| `ruleHealth.maxPendingBytes` | 4194304 | Memory budget for those waiting fires, from 65536 to 268435456 (256 MiB). |
+| `ruleHealth.maxBatchRows` | 256 | Most rules one tenant's write carries, from 1 to 4096; a tenant with more waiting is written in several transactions. |
+| `ruleHealth.writeTimeoutMillis` | 2000 | How long one tenant's write may take, from 100 to 60000. A write that fails or times out is dropped, not retried. |
+
+Each `ruleHealth` setting is optional; one that is given must be inside its range (zero included) or
+the service refuses to start.
+
+### Rule-health counts are approximate
+
+The console's rule-health view shows each rule's fire count and when it last fired. Those counters
+are not written as each detection is published: the engine adds each published detection to an
+in-memory total per rule and writes the totals in the background, one transaction per tenant, every
+`flushIntervalMillis`. A busy rule therefore costs one row write per interval rather than one per
+detection, and a slow or unavailable database never slows detection down.
+
+What that means for the numbers:
+
+- **They lag.** On a healthy database a fire normally appears within the flush interval plus one
+  write. Under sustained overload, or while the database is failing, no freshness is promised.
+- **They can fall short.** A write that fails or times out is dropped rather than retried, because it
+  may have committed and a retry could count its fires twice. Fires are also dropped when the
+  waiting budget (`maxPendingKeys`, `maxPendingBytes`) is full, when a tenant is deleted, and when
+  the engine stops or loses its leadership with fires still waiting (a graceful stop first makes one
+  bounded final write). Every dropped fire is counted, by reason, in
+  `devicechain_eventprocessing_detect_rule_stat_updates_discarded_total`.
+- **They can run over.** After a restart the engine re-publishes detections since its last checkpoint,
+  and those count again.
+- **Only published detections count.** A fire is counted only after the broker has acknowledged its
+  derived event; a detection that was dropped or is still waiting to be published is not.
+
+The last-fired edge is the most recent one the counters saw, not the rule's current alarm state.
+Use the alarm itself, or the detection feed, for that.
+
+Accounting for the two budgets: a waiting entry is one rule with fires not yet written, wherever it
+is (still collecting fires, set aside for the next write, or inside a write in progress), and its
+size is reckoned as 160 bytes plus the length of its rule id, plus 320 bytes and the tenant's token
+for a tenant's first entry. That overstates what it really holds, so the byte budget is a hard bound.
 
 ### The rule-duration ceiling is enforced
 
@@ -575,7 +614,7 @@ total, because attributing it to a tenant would mean walking the whole heap on e
 | `ReactShedLettersOverBudget` | A tenant is shedding outbound actions faster than they are recorded one by one, so the excess is summarised in one dead letter per tenant per minute. |
 | `RateMeteringClockFallback` | Outbound actions have been metered on broker or arrival time for an hour because they carried no trigger time, so a catch-up can be shed as a flood again. Check that event-processing and outbound-connectors run the same release. A trigger time later than its message's broker time is counted separately, as source `capped`, and does not fire this: that is clock skew between the pod and the broker, not a missing time. |
 | `DetectFactReconcileFailing` | The engine cannot compare its rules, profile versions, devices and thresholds with device-management. Nothing is removed while it fails, but a missed change stays missed until it recovers. |
-| `DetectRuleStatWriteFailing` | Rule-health counters cannot be written. Detection is unaffected, but the console's per-rule fire counts stop advancing. The error is in event-processing's log; check its database connection. |
+| `DetectRuleStatWriteFailing` | Rule-health counters cannot be written. Detection is unaffected, but the console's per-rule fire counts fall short: each failed write is dropped, not retried, and the fires it held are counted in `devicechain_eventprocessing_detect_rule_stat_updates_discarded_total`. The error is in event-processing's log; check its database connection. |
 | `DetectLiveGapFillFailing` | Live detection has stopped because part of the event stream cannot be read. The engine will not skip past events it has not seen, so it applies nothing new until the broker answers; the backlog grows meanwhile. Rule and tenant changes are still applied, and nothing is lost. Look at the broker and the engine's connection to it. If the same range still cannot be read after ten minutes, the engine restarts its detection term and re-reads it from the stream. If the stream is still unreadable, the rebuild fails too, and after five failed rebuilds the pod restarts: a JetStream outage longer than ten minutes, with the lease intact, ends in a pod restart. |
 | `DetectLiveDeliveriesRecovered` | Events the broker handed out never reached the engine, and it read them from the stream and applied them in order. Detection is correct. Recurring means connections to the broker are dropping, or two engines are consuming at once. |
 | `DetectFactsRepaired` | The engine corrected state it had not been told about. Detection is right again; recurring means notifications are being lost. |
@@ -627,10 +666,11 @@ waiting: on a retry or on the broker, not on the engine. Most of it in `plan` an
 limit. Most of it in `publish`, `save` and `ack` means checkpoints are the cost, and
 `devicechain_eventprocessing_detect_checkpoint_duration_seconds` shows how long each one takes.
 (`devicechain_eventprocessing_detect_checkpoint_seconds` keeps only the latest.) Two pairs of
-distributions say which part of a checkpoint it is. Time in `publish` is made of two waits per
+distributions say which part of a checkpoint it is. Time in `publish` is mostly one wait per
 detection: the broker acknowledging the derived event
-(`devicechain_eventprocessing_detect_derived_publish_ack_seconds`) and the rule-health counter write
-that follows it (`devicechain_eventprocessing_detect_rule_stat_write_seconds`). Time in `save` is
+(`devicechain_eventprocessing_detect_derived_publish_ack_seconds`). The rule-health counters are
+written by a separate background writer, so their database time is not in any of these phases; it
+is `devicechain_eventprocessing_detect_rule_stat_write_seconds`, one observation per tenant write. Time in `save` is
 serializing the engine's state (`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`)
 and then writing it to the database (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).
 

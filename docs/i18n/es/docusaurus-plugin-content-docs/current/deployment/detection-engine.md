@@ -534,6 +534,48 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `shedLetterBurst` | 60 | Margen de ráfaga para lo anterior. |
 | `shedLetterGlobalPerSecond` | 10 | Lo mismo, para todos los inquilinos. Las acciones descartadas por encima de cualquiera de los dos presupuestos se cuentan y se resumen en un mensaje no entregado por inquilino y minuto. |
 | `shedLetterGlobalBurst` | 100 | Margen de ráfaga para lo anterior. |
+| `ruleHealth.flushIntervalMillis` | 1000 | Cada cuánto se escriben en la base de datos los contadores de disparos por regla, de 50 a 60000. Es aproximadamente cuánto pueden ir retrasados los recuentos de disparos y la hora del último disparo en la consola; la detección nunca lo espera. |
+| `ruleHealth.maxPendingKeys` | 4096 | Máximo de reglas que pueden tener disparos pendientes de escribir a la vez, de 1 a 1048576. Un disparo de una regla más allá de este límite no se cuenta (véase más abajo). |
+| `ruleHealth.maxPendingBytes` | 4194304 | Presupuesto de memoria para esos disparos pendientes, de 65536 a 268435456 (256 MiB). |
+| `ruleHealth.maxBatchRows` | 256 | Máximo de reglas que lleva una escritura de un inquilino, de 1 a 4096; un inquilino con más pendientes se escribe en varias transacciones. |
+| `ruleHealth.writeTimeoutMillis` | 2000 | Cuánto puede tardar la escritura de un inquilino, de 100 a 60000. Una escritura que falla o agota el tiempo se descarta, no se reintenta. |
+
+Cada ajuste de `ruleHealth` es opcional; si se indica, debe estar dentro de su rango (incluido el
+cero) o el servicio no arranca.
+
+### Los recuentos de salud de reglas son aproximados
+
+La vista de salud de reglas de la consola muestra cuántas veces ha disparado cada regla y cuándo lo
+hizo por última vez. Esos contadores no se escriben al publicar cada detección: el motor suma cada
+detección publicada a un total en memoria por regla y escribe los totales en segundo plano, una
+transacción por inquilino, cada `flushIntervalMillis`. Una regla muy activa cuesta así una escritura
+de fila por intervalo en lugar de una por detección, y una base de datos lenta o caída nunca frena la
+detección.
+
+Lo que eso significa para las cifras:
+
+- **Van con retraso.** Con una base de datos sana, un disparo suele aparecer en el intervalo de
+  escritura más una escritura. Con sobrecarga sostenida, o mientras la base de datos falla, no se
+  promete ninguna frescura.
+- **Pueden quedarse cortas.** Una escritura que falla o agota el tiempo se descarta en lugar de
+  reintentarse, porque puede haberse confirmado y un reintento contaría sus disparos dos veces. También
+  se descartan disparos cuando el presupuesto de pendientes (`maxPendingKeys`, `maxPendingBytes`) está
+  lleno, cuando se elimina un inquilino y cuando el motor se detiene o pierde su liderazgo con disparos
+  pendientes (una parada ordenada hace antes una última escritura acotada). Cada disparo descartado se
+  cuenta, por motivo, en `devicechain_eventprocessing_detect_rule_stat_updates_discarded_total`.
+- **Pueden pasarse.** Tras un reinicio el motor vuelve a publicar las detecciones desde su último punto
+  de control, y esas cuentan otra vez.
+- **Solo cuentan las detecciones publicadas.** Un disparo se cuenta solo después de que el broker haya
+  confirmado su evento derivado; una detección descartada o que aún espera publicarse no cuenta.
+
+El último flanco disparado es el más reciente que vieron los contadores, no el estado actual de la
+alarma de la regla. Para eso, use la propia alarma o el flujo de detecciones.
+
+Contabilidad de los dos presupuestos: una entrada pendiente es una regla con disparos aún sin escribir,
+esté donde esté (acumulando disparos, apartada para la siguiente escritura o dentro de una escritura
+en curso), y su tamaño se calcula como 160 bytes más la longitud de su id de regla, más 320 bytes y el
+token del inquilino para la primera entrada de un inquilino. Eso sobrestima lo que realmente ocupa, de
+modo que el presupuesto de bytes es un límite estricto.
 
 ### El techo de duración de regla sí se aplica
 
@@ -632,7 +674,7 @@ exigiría recorrerlo entero en cada punto de control.
 | `ReactShedLettersOverBudget` | Un inquilino descarta acciones de salida más rápido de lo que se registran una a una, así que el exceso se resume en un mensaje no entregado por inquilino y minuto. |
 | `RateMeteringClockFallback` | Durante una hora, las acciones de salida se han medido según la hora del bróker o de llegada porque no llevaban hora de desencadenamiento, así que una puesta al día puede volver a descartarse como una inundación. Compruebe que event-processing y outbound-connectors ejecutan la misma versión. Una hora de desencadenamiento posterior a la hora del bróker de su mensaje se cuenta aparte, con el origen `capped`, y no dispara este aviso: es un desfase de reloj entre el pod y el bróker, no una hora que falte. |
 | `DetectFactReconcileFailing` | El motor no puede comparar sus reglas, versiones de perfil, dispositivos y umbrales con device-management. Mientras falla no se elimina nada, pero un cambio perdido sigue perdido hasta que se recupere. |
-| `DetectRuleStatWriteFailing` | No se pueden escribir los contadores de salud de reglas. La detección no se ve afectada, pero los recuentos de disparos por regla de la consola dejan de avanzar. El error está en el registro de event-processing; revise su conexión a la base de datos. |
+| `DetectRuleStatWriteFailing` | No se pueden escribir los contadores de salud de reglas. La detección no se ve afectada, pero los recuentos de disparos por regla de la consola se quedan cortos: cada escritura fallida se descarta, no se reintenta, y los disparos que llevaba se cuentan en `devicechain_eventprocessing_detect_rule_stat_updates_discarded_total`. El error está en el registro de event-processing; revise su conexión a la base de datos. |
 | `DetectLiveGapFillFailing` | La detección en vivo se ha detenido porque no se puede leer una parte del flujo de eventos. El motor no salta eventos que no ha visto, así que no aplica nada nuevo hasta que el broker responda; mientras tanto crece el retraso. Los cambios de reglas y de tenants se siguen aplicando y no se pierde nada. Revise el broker y la conexión del motor con él. Si pasados diez minutos sigue sin poder leerse el mismo rango, el motor reinicia su periodo de detección y lo vuelve a leer desde el flujo. Si el flujo sigue sin poder leerse, la reconstrucción también falla y, tras cinco reconstrucciones fallidas, el pod se reinicia: una caída de JetStream de más de diez minutos, con el arrendamiento intacto, termina en un reinicio del pod. |
 | `DetectLiveDeliveriesRecovered` | Eventos que el broker entregó nunca llegaron al motor, y este los leyó del flujo y los aplicó en orden. La detección es correcta. Si se repite, las conexiones con el broker se están cayendo o dos motores consumen a la vez. |
 | `DetectFactsRepaired` | El motor corrigió un estado del que no se le había avisado. La detección vuelve a ser correcta; si se repite, se están perdiendo avisos. |
@@ -686,10 +728,12 @@ espera: a un reintento o al broker, no al motor. Si la mayor parte está en `pla
 motor. Si está en `publish`, `save` y `ack`, el coste son los puntos de control, y
 `devicechain_eventprocessing_detect_checkpoint_duration_seconds` muestra cuánto tarda cada uno.
 (`devicechain_eventprocessing_detect_checkpoint_seconds` conserva solo el último.) Dos pares de
-distribuciones dicen qué parte del punto de control es. El tiempo en `publish` se compone de dos
-esperas por detección: la confirmación del evento derivado por el broker
-(`devicechain_eventprocessing_detect_derived_publish_ack_seconds`) y la escritura del contador de
-salud de reglas que la sigue (`devicechain_eventprocessing_detect_rule_stat_write_seconds`). El tiempo
+distribuciones dicen qué parte del punto de control es. El tiempo en `publish` es sobre todo una
+espera por detección: la confirmación del evento derivado por el broker
+(`devicechain_eventprocessing_detect_derived_publish_ack_seconds`). Los contadores de salud de reglas
+los escribe un proceso aparte en segundo plano, así que su tiempo de base de datos no está en ninguna
+de estas fases; es `devicechain_eventprocessing_detect_rule_stat_write_seconds`, una observación por
+escritura de inquilino. El tiempo
 en `save` es la serialización del estado del motor
 (`devicechain_eventprocessing_detect_checkpoint_serialize_seconds`) y después su escritura en la base
 de datos (`devicechain_eventprocessing_detect_checkpoint_save_seconds`).

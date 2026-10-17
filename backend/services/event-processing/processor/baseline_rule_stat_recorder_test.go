@@ -11,13 +11,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// ruleStatRecorder is the processor-side runtime.FireRecorder: it persists each durably-
-// published detection into the RuleStat projection for the console's rule-health view
-// (ADR-051 slice 7b). It runs on the publish hot path, so it is deliberately best-effort —
-// a stat-write failure is logged and dropped, NEVER returned, because it must not turn a
-// successfully-published detection into a retryable error or wedge the checkpoint loop. The
-// projection is a counting read-model, off the correctness path; a dropped fire only skews an
-// approximate health number (and a replay re-records it).
+// ruleStatRecorder is the BENCHMARK BASELINE's rule-health recorder: the inline write the
+// detection loop made before the accumulator (internal/rulehealth) replaced it, one erasure-fence
+// read and one upsert per published detection, on the loop. It lives in a test file because it
+// is not an operator-facing option: it exists so variant A of the output-path comparison
+// (detect_output_fixture_test.go) keeps meaning the path as it was. Like the original it is
+// best-effort, logging and dropping a failed write, and it times every write into
+// detect_rule_stat_write_seconds so the benchmark can split the loop's waits.
 type ruleStatRecorder struct {
 	store   fireStatStore
 	metrics *DetectMetrics

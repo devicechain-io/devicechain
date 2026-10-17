@@ -9,6 +9,7 @@ import (
 	"time"
 
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
@@ -218,6 +219,114 @@ type EventProcessingConfiguration struct {
 	ShedLetterBurst           int
 	ShedLetterGlobalPerSecond float64
 	ShedLetterGlobalBurst     int
+
+	// RuleHealth bounds the rule-health fire counters (the console's per-rule "last fired" and
+	// fire count), which are coalesced in memory and written in the background rather than on
+	// the detection loop. See RuleHealthConfiguration.
+	RuleHealth RuleHealthConfiguration
+}
+
+// RuleHealthConfiguration is functionalAreas.event-processing.config.ruleHealth. Every field is
+// optional, and an absent one takes its default; a field that IS given must be inside its
+// bounds, zero included, or the service refuses to start. The bounds are finite on purpose:
+// each one sizes memory or a database transaction.
+//
+// Accounting model for the two budgets: a pending entry is one (tenant, rule) pair with fires
+// not yet written, wherever it is (being added to, detached for the next write, or inside the
+// write in flight); a rule pending in two of those places counts twice. Its accounted size is
+// 160 bytes plus its rule id, plus 320 bytes and the tenant token for a tenant's first entry,
+// which overstates what it really retains. A fire that would take either budget past its
+// bound is not admitted and is counted as discarded (reason full).
+type RuleHealthConfiguration struct {
+	// FlushIntervalMillis is how often pending fire counts are written: 50 to 60000, default
+	// 1000. It is not a detection timer; it is roughly how stale the console's counts may be.
+	FlushIntervalMillis *int
+	// MaxPendingKeys bounds the distinct rules with fires not yet written: 1 to 1048576,
+	// default 4096.
+	MaxPendingKeys *int
+	// MaxPendingBytes bounds their accounted memory: 65536 to 268435456, default 4194304.
+	MaxPendingBytes *int64
+	// MaxBatchRows is the most rules one tenant's write carries; a tenant with more pending is
+	// written in several transactions: 1 to 4096, default 256.
+	MaxBatchRows *int
+	// WriteTimeoutMillis bounds one tenant write's whole transaction: 100 to 60000, default
+	// 2000. A write that fails or times out is discarded, never retried, because it may have
+	// committed and a retry would count its fires twice.
+	WriteTimeoutMillis *int
+}
+
+func intPtr(v int) *int       { return &v }
+func int64Ptr(v int64) *int64 { return &v }
+
+// applyDefaults fills every absent field.
+func (r *RuleHealthConfiguration) applyDefaults() {
+	d := rulehealth.DefaultConfig()
+	if r.FlushIntervalMillis == nil {
+		r.FlushIntervalMillis = intPtr(int(d.FlushInterval / time.Millisecond))
+	}
+	if r.MaxPendingKeys == nil {
+		r.MaxPendingKeys = intPtr(d.MaxPendingKeys)
+	}
+	if r.MaxPendingBytes == nil {
+		r.MaxPendingBytes = int64Ptr(d.MaxPendingBytes)
+	}
+	if r.MaxBatchRows == nil {
+		r.MaxBatchRows = intPtr(d.MaxBatchRows)
+	}
+	if r.WriteTimeoutMillis == nil {
+		r.WriteTimeoutMillis = intPtr(int(d.WriteTimeout / time.Millisecond))
+	}
+}
+
+// validate refuses a field outside its bounds, naming the key as an operator writes it.
+func (r RuleHealthConfiguration) validate() error {
+	millis := func(key string, v *int, lo, hi time.Duration) error {
+		if v == nil {
+			return nil // absent: the default
+		}
+		if *v < int(lo/time.Millisecond) || *v > int(hi/time.Millisecond) {
+			return fmt.Errorf("ruleHealth.%s must be between %d and %d, got %d", key, lo/time.Millisecond, hi/time.Millisecond, *v)
+		}
+		return nil
+	}
+	count := func(key string, v *int, lo, hi int) error {
+		if v == nil {
+			return nil
+		}
+		if *v < lo || *v > hi {
+			return fmt.Errorf("ruleHealth.%s must be between %d and %d, got %d", key, lo, hi, *v)
+		}
+		return nil
+	}
+	if err := millis("flushIntervalMillis", r.FlushIntervalMillis, rulehealth.MinFlushInterval, rulehealth.MaxFlushInterval); err != nil {
+		return err
+	}
+	if err := count("maxPendingKeys", r.MaxPendingKeys, 1, rulehealth.MaxMaxPendingKeys); err != nil {
+		return err
+	}
+	if b := r.MaxPendingBytes; b != nil && (*b < rulehealth.MinMaxPendingBytes || *b > rulehealth.MaxMaxPendingBytes) {
+		return fmt.Errorf("ruleHealth.maxPendingBytes must be between %d and %d, got %d",
+			rulehealth.MinMaxPendingBytes, rulehealth.MaxMaxPendingBytes, *b)
+	}
+	if err := count("maxBatchRows", r.MaxBatchRows, 1, rulehealth.MaxMaxBatchRows); err != nil {
+		return err
+	}
+	if err := millis("writeTimeoutMillis", r.WriteTimeoutMillis, rulehealth.MinWriteTimeout, rulehealth.MaxWriteTimeout); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Config is the configuration as the accumulator takes it, an absent field as its default.
+func (r RuleHealthConfiguration) Config() rulehealth.Config {
+	r.applyDefaults() // r is a copy: the caller's absent fields stay absent
+	return rulehealth.Config{
+		FlushInterval:   time.Duration(*r.FlushIntervalMillis) * time.Millisecond,
+		MaxPendingKeys:  *r.MaxPendingKeys,
+		MaxPendingBytes: *r.MaxPendingBytes,
+		MaxBatchRows:    *r.MaxBatchRows,
+		WriteTimeout:    time.Duration(*r.WriteTimeoutMillis) * time.Millisecond,
+	}
 }
 
 // NewEventProcessingConfiguration creates the default configuration.
@@ -278,6 +387,7 @@ func (c *EventProcessingConfiguration) ApplyDefaults() {
 	if c.ShedLetterGlobalBurst == 0 {
 		c.ShedLetterGlobalBurst = DefaultShedLetterGlobalBurst
 	}
+	c.RuleHealth.applyDefaults()
 }
 
 // RetiredConfigKeys names the keys this service accepted in an earlier release and has
@@ -413,6 +523,14 @@ func (c *EventProcessingConfiguration) Validate() error {
 	}
 	if c.ShedLetterGlobalBurst < 0 {
 		return fmt.Errorf("shedLetterGlobalBurst must not be negative, got %d", c.ShedLetterGlobalBurst)
+	}
+	// Bounds checked here against the accumulator's own: the two must agree, and a config that
+	// passed here and was then refused by rulehealth.New would fail at the first term, not at load.
+	if err := c.RuleHealth.validate(); err != nil {
+		return err
+	}
+	if err := c.RuleHealth.Config().Validate(); err != nil {
+		return err
 	}
 	return nil
 }

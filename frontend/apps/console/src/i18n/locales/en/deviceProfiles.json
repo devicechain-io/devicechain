@@ -96,7 +96,7 @@
   "healthEdgeResolved": "resolved",
   "healthEmpty": "No published detection rules. Author rules in the Detection Rules tab and publish the profile.",
   "healthFeedEmpty": "Waiting for detections… firings appear here as rules trigger.",
-  "healthIntro": "Per-rule health for this profile's active published version. A rule fires against live telemetry only after the profile is published.",
+  "healthIntro": "Per-rule health for this profile's active published version. A rule fires against live telemetry only after the profile is published. Fire counts and last-fired times are approximate: they are written in the background, so they can lag by a few seconds, and they can miss fires while the database is struggling. The last signal is the latest the counters saw, not the rule's current alarm state.",
   "healthLiveDetectionsHeading": "Live detections",
   "healthLoading": "Loading rule health…",
   "healthStatusActive": "Active",

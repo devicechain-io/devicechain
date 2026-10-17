@@ -104,8 +104,18 @@ title: 指标参考
 | `detect_live_gap_sequences_total{outcome}` | 实时缺口填补中的流序号，按结果区分：applied（代理已计为投递、却从未到达循环的消息，现已应用）、absent（不在流中：已被清除或淘汰）、skipped（读回后无法处理，被记为已处理而未应用任何内容）。非零的 applied 速率表示投递正在代理与此循环之间丢失。 |
 | `detect_loop_heartbeat_timestamp_seconds` | DETECT 单写入者循环最近一次通过的 Unix 时间，任期有效期间每个周期至少刷新一次。在 detect_is_leader 和 detect_live 读数为 1 时陈旧，表示循环挂在了某次调用内部。 |
 | `detect_restore_seconds` | 启动时从快照存储恢复引擎状态的时间。 |
-| `detect_rule_stat_write_failures_total` | 失败并被丢弃的规则健康度触发计数写入。检测不受影响（该写入为尽力而为，不在正确性路径上），但此值上升期间控制台的规则健康度计数不再增长；原因见服务日志。 |
-| `detect_rule_stat_write_seconds` | 派生事件发布后，每次规则健康度触发计数写入占用检测循环的时间（分布），包括其先进行的租户删除检查。包含失败的写入。 |
+| `detect_rule_stat_write_failures_total` | 失败或超时并被丢弃（不重试）的规则健康度触发计数写入（一个租户的一个事务）。检测不受影响（计数器在后台写入），但此值上升期间控制台的规则健康度计数会偏少；丢失的触发计入 `detect_rule_stat_updates_discarded_total`，原因为 `write_failed`，故障原因见服务日志。 |
+| `detect_rule_stat_write_seconds` | 后台写入程序完成每次规则健康度触发计数写入（一个租户的一个事务，包括其先进行的租户删除检查）所用的时间（分布）。这不是检测循环的时间。包含失败的写入。 |
+| `detect_rule_stat_updates_admitted_total` | 加入规则健康度触发计数器、等待后台写入的已发布检测。 |
+| `detect_rule_stat_updates_coalesced_total` | 其中合并到已在等待写入的规则上的部分，因此不额外占用一行。 |
+| `detect_rule_stat_updates_written_total` | 已提交到数据库的规则健康度触发更新。 |
+| `detect_rule_stat_updates_discarded_total` | 永远不会写入的规则健康度触发更新，按 `reason` 区分：`full`（待写入预算已用尽）、`overflow`（某规则的待写入计数达到上限）、`closed`（在引擎的领导任期结束后到达）、`write_failed`（其写入失败或超时）、`purged`（其租户先被删除）、`shutdown`（任期结束时仍在等待）。检测不受影响。 |
+| `detect_rule_stat_admission_contended_total` | 等待后台写入程序完成一个简短记账步骤的规则健康度累加。每次等待都有上限，且从不包含数据库调用。 |
+| `detect_rule_stat_pending_keys` | 尚有未写入触发更新的规则数（上限为 `ruleHealth.maxPendingKeys`）。 |
+| `detect_rule_stat_pending_bytes` | 未写入触发更新所计的内存（上限为 `ruleHealth.maxPendingBytes`）。 |
+| `detect_rule_stat_oldest_pending_seconds` | 最早一条尚未写入的触发更新的时长：控制台触发计数可能滞后的程度。 |
+| `detect_rule_stat_batch_rows` | 每次规则健康度写入中的规则数（分布）。 |
+| `detect_rule_stat_batch_updates` | 每次规则健康度写入中的触发更新数（分布）：它替代了多少次单行写入。 |
 | `detect_rules_active` | 加载到 DETECT 引擎的规则。 |
 | `detect_stale_absence_dropped_total` | 因设备离开规则范围（已删除、已禁用、重新分型，或规则版本已被取代）而在发布时丢弃的缺席**触发**。当某次触发在同一轮中被丢弃时，与之配对的清除也计入；重新发布时因新版本保留该规则而被扣下的清除同样计入。已离开范围的设备的清除不会被丢弃，因此它此前触发的告警会被清除。 |
 | `detect_superseded_frontier_dropped_total` | 因其档案版本已被取代而在发布时丢弃的、随时间流逝而触发的持续时间、会话和聚合类检测。 |

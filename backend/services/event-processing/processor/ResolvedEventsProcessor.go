@@ -16,6 +16,7 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
+	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -123,6 +124,9 @@ type Config struct {
 	// 0 and 1 are the plain single engine. The snapshot format is the same for every K, so it may be
 	// changed at any restart. See newDetector.
 	Shards int
+	// RuleHealth bounds the rule-health fire counters' accumulator (internal/rulehealth). The
+	// zero value is rulehealth.DefaultConfig; the service always supplies a validated one.
+	RuleHealth rulehealth.Config
 }
 
 // ResolvedEventsProcessor is event-processing's single-writer tap on the
@@ -433,6 +437,12 @@ type ResolvedEventsProcessor struct {
 	cfg       Config
 	registry  *runtime.RuleRegistry
 	publisher *runtime.Publisher
+	// ruleStats is the rule-health store, nil on the scaffold and test paths (no counters are
+	// kept). health is the current term's accumulator over it: started by buildTerm, stopped by
+	// stopRuleHealth when the term ends, nil between terms. Both are touched only on the
+	// goroutine that builds and ends terms, or on the loop it starts and joins in between.
+	ruleStats rulehealth.Store
+	health    *rulehealth.Accumulator
 	clock     detectcore.Clock
 	metrics   *DetectMetrics
 	// phases is the live loop's stopwatch (loop_phases.go): armed by run, a no-op everywhere else.
@@ -734,10 +744,11 @@ func NewResolvedEventsProcessor(ms *core.Microservice, reader messaging.MessageR
 		factAbsent:   newAbsentSeen(),
 	}
 	rp.publisher = runtime.NewPublisher(derivedWriter, registry, rp.metrics)
-	// Wire the rule-health fire projection (slice 7b) when a store is supplied. It is off the
-	// correctness path (best-effort writes), so the scaffold/test paths pass nil and record none.
+	// The rule-health fire projection (slice 7b) is kept when a store is supplied; each term
+	// starts its own accumulator over it (startRuleHealth). It is off the correctness path, so
+	// the scaffold/test paths pass nil and record none.
 	if ruleStats != nil {
-		rp.publisher.SetFireRecorder(ruleStatRecorder{store: ruleStats, metrics: rp.metrics})
+		rp.ruleStats = ruleStats
 	}
 	rp.metrics.setRulesActive(registry.Count())
 	rpname := fmt.Sprintf("%s-%s", ms.FunctionalArea, "resolved-events-proc")
@@ -800,7 +811,12 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 			"would consume without checking ownership; set both or neither")
 	}
 	if !rp.leadershipEnabled() {
-		return rp.buildTerm(ctx)
+		if err := rp.buildTerm(ctx); err != nil {
+			// No ExecuteStop follows a start that failed, so the term's worker is joined here.
+			rp.stopRuleHealth(false, context.Background())
+			return err
+		}
+		return nil
 	}
 	// Deliberately not "standing by": at replicas:1 this replica normally acquires within
 	// milliseconds, and a log line claiming otherwise would send an operator looking for a
@@ -827,6 +843,10 @@ func (rp *ResolvedEventsProcessor) ExecuteStart(ctx context.Context) error {
 // adding state to this type.
 func (rp *ResolvedEventsProcessor) buildTerm(ctx context.Context) error {
 	rp.resetForTerm()
+	// Before the replay, which can checkpoint and so publish detections that count as fires.
+	if err := rp.startRuleHealth(); err != nil {
+		return err
+	}
 	// Attach the durables for this term. Doing it here rather than at the END of the
 	// previous term is what keeps a bind failure visible: see bindTermReaders.
 	if rp.leadershipEnabled() {
@@ -3079,6 +3099,7 @@ func (rp *ResolvedEventsProcessor) ExecuteStop(ctx context.Context) error {
 	}
 	rp.pcancel()
 	rp.readerWG.Wait()
+	rp.stopRuleHealth(true, ctx)
 	return nil
 }
 
