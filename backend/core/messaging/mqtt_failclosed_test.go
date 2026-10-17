@@ -21,6 +21,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 )
 
 // The fail-closed reconcile against a real broker with its MQTT gateway on. The guard tests
@@ -558,4 +559,88 @@ func TestAnotherInstanceOnALaterPageOfTheListingIsSeen(t *testing.T) {
 	_, err = failClosedManager(t, b.nc, b.js, guardInstance, true).ReconcileMqttFailClosed(context.Background())
 	require.ErrorIs(t, err, ErrMqttFailClosedSharedBroker)
 	require.Contains(t, err.Error(), "zzother")
+}
+
+// permBroker is a JetStream server with two users: "admin", who may do anything, and
+// "limited", who may not publish on the subjects in deny. It returns a connection and a
+// JetStream context for each; the limited one waits briefly on a JetStream call, since a
+// denied request is never answered.
+func permBroker(t *testing.T, deny ...string) (adminNC *nats.Conn, adminJS nats.JetStreamContext, limitedNC *nats.Conn, limitedJS nats.JetStreamContext) {
+	t.Helper()
+	srv, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
+		StoreDir: dctest.JetStreamStoreDir(t),
+		Users: []*natsserver.User{
+			{Username: "admin", Password: "admin"},
+			{Username: "limited", Password: "limited", Permissions: &natsserver.Permissions{
+				Publish: &natsserver.SubjectPermission{Allow: []string{">"}, Deny: deny}}},
+		},
+	})
+	require.NoError(t, err)
+	go srv.Start()
+	require.True(t, srv.ReadyForConnections(10*time.Second))
+	t.Cleanup(srv.Shutdown)
+	connect := func(user string) *nats.Conn {
+		nc, err := nats.Connect(srv.ClientURL(), nats.UserInfo(user, user),
+			nats.ErrorHandler(func(*nats.Conn, *nats.Subscription, error) {}))
+		require.NoError(t, err)
+		t.Cleanup(nc.Close)
+		return nc
+	}
+	adminNC = connect("admin")
+	adminJS, err = adminNC.JetStream()
+	require.NoError(t, err)
+	limitedNC = connect("limited")
+	limitedJS, err = limitedNC.JetStream(nats.MaxWait(500 * time.Millisecond))
+	require.NoError(t, err)
+	return adminNC, adminJS, limitedNC, limitedJS
+}
+
+// 🔴 A broker error while looking for other instances FAILS the reconcile, and before
+// anything is written. A look that could not finish has not shown the broker to be this
+// instance's alone, so going ahead would enable the store on a broker that may be shared.
+// Here the listing is denied (so never answered) while every other call works.
+//
+// GUARD: kills a reconcile that reads a failed look as "no other instance".
+func TestABrokerErrorWhileLookingForOtherInstancesFailsTheReconcile(t *testing.T) {
+	_, adminJS, nc, js := permBroker(t, "$JS.API.STREAM.NAMES")
+	savedTimeout, savedRetry := mqttFailClosedRequestTimeout, mqttFailClosedRetry
+	mqttFailClosedRequestTimeout, mqttFailClosedRetry = 200*time.Millisecond, []time.Duration{0}
+	t.Cleanup(func() { mqttFailClosedRequestTimeout, mqttFailClosedRetry = savedTimeout, savedRetry })
+
+	_, err := failClosedManager(t, nc, js, guardInstance, true).ReconcileMqttFailClosed(context.Background())
+	require.Error(t, err, "a look that could not finish must not pass for a broker of this instance's own")
+	require.NotErrorIs(t, err, ErrMqttFailClosedSharedBroker, "it is a failure to look, not a finding")
+	require.Contains(t, err.Error(), "listing the broker's streams")
+	_, err = adminJS.StreamInfo(MqttMessageStore)
+	require.ErrorIs(t, err, nats.ErrStreamNotFound, "the failed reconcile created the store anyway")
+}
+
+// 🔴 THE RELEASE ORDER. Turning the setting off updates the store FIRST (the released mark,
+// the default discard policy) and removes the platform durables only once that update has
+// succeeded. Here the update is refused: the release fails, and the store is left exactly
+// as fail-closed as it was, durables and all. Removing the durables first would leave a
+// discard-new store owned by this instance with nothing interested in device publishes,
+// which acknowledges every one and keeps none, and which a pod still running with the
+// setting on would not see as released.
+//
+// GUARD: kills a release that removes the durables before the store update has gone through.
+func TestAReleaseWhoseStoreUpdateFailsLeavesTheDurablesInPlace(t *testing.T) {
+	fastMqttStoreLookup(t)
+	adminNC, adminJS, nc, js := permBroker(t, "$JS.API.STREAM.UPDATE."+MqttMessageStore)
+	_, err := failClosedManager(t, adminNC, adminJS, guardInstance, true).ReconcileMqttFailClosed(context.Background())
+	require.NoError(t, err)
+	before := consumerNames(t, adminJS, MqttMessageStore)
+	require.Len(t, before, len(MqttFailClosedDurables(guardInstance)), "premise: the durables exist")
+
+	off := failClosedManager(t, nc, js, guardInstance, false)
+	n := off.Microservice.InstanceConfiguration.Infrastructure.Nats
+	require.Error(t, off.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes),
+		"premise: the store update is refused")
+
+	si, err := adminJS.StreamInfo(MqttMessageStore)
+	require.NoError(t, err)
+	require.Equal(t, nats.DiscardNew, si.Config.Discard, "premise: the store was not released")
+	require.ElementsMatch(t, before, consumerNames(t, adminJS, MqttMessageStore),
+		"the durables were removed from a store that is still discard-new and owned")
 }
