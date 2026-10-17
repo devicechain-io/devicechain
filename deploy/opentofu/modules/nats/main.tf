@@ -55,9 +55,16 @@ variable "chart_version" {
     the chart hashing the rendered ConfigMap into the pod template; the reloader
     sidecar's cert watch-list is derived by the chart's own helpers; the lame-duck
     and terminationGracePeriod floors the timeout on helm_release.nats is sized
-    against are chart defaults. All of those were read and verified at 2.14.4. On
+    against are chart defaults. All of those were read and verified at 2.15.1. On
     "latest" they are whatever upstream last shipped, and nothing here would notice
     them moving.
+
+    2.14.4 -> 2.15.1 was checked that way: the two charts' templates are
+    byte-identical (only Chart.yaml and the image tags in values.yaml differ), so
+    the checksum template, the reloader's watch-list helpers, the pod labels and port
+    names the MQTT NodePort Service and the PodMonitor select on, and the lame-duck
+    (10s + 30s) and terminationGracePeriod (60s) defaults are all unchanged. The
+    reloader image moves 0.23.0 -> 0.24.0 with dependency and build changes only.
 
     There is a second, sharper reason. The hashed manifest includes the chart's
     standard labels — `helm.sh/chart` and `app.kubernetes.io/version` — so under
@@ -70,7 +77,7 @@ variable "chart_version" {
     lame-duck defaults before raising it.
   EOT
   type        = string
-  default     = "2.14.4"
+  default     = "2.15.1"
 
   # Fail closed. An empty string used to mean "install latest", which made the chart
   # version resolve at APPLY time — the chart repository became a dependency of
@@ -81,6 +88,18 @@ variable "chart_version" {
   validation {
     condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.chart_version))
     error_message = "chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
+
+  # 🔴 A FLOOR, BECAUSE THE VALUES BELOW ARE WRITTEN FOR 2.15. config.jetstream.merge
+  # renders `limits { default_max_consumers }`, a key nats-server 2.14 does not know
+  # and refuses at startup ("unknown field"), so pinning an older chart under this
+  # module would not downgrade the broker, it would crash-loop it. The chart and
+  # server versions move together (chart 2.15.1 ships nats-server 2.15.1). try() keeps
+  # a malformed value on the clean message of the block above instead of a function
+  # error here: OpenTofu before 1.10 evaluates every operand.
+  validation {
+    condition     = try(tonumber(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.chart_version)[0]) * 1000 + tonumber(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.chart_version)[1]) >= 2015, false)
+    error_message = "chart_version must be 2.15.0 or later: this module renders nats-server 2.15 configuration (jetstream.limits.default_max_consumers), which an older server refuses at startup."
   }
 }
 
@@ -393,7 +412,7 @@ variable "route_compression" {
     cluster part-way through the roll is safe: compression is negotiated per route,
     and a server left on the default `accept` follows a peer that asks, so a route
     compresses as soon as either end has a mode, and stops once both are back on
-    "off" (nats-server 2.14.4, server.go selectCompressionMode).
+    "off" (nats-server 2.14.4 and 2.15.1, server.go selectCompressionMode).
 
     Only meaningful on a clustered broker. A mode SET on a single server, where the
     chart renders no cluster block at all, is refused rather than silently dropped.
@@ -716,6 +735,27 @@ locals {
           # (backend config) sub-divide this budget across streams.
           maxSize = local.js_max_file_store
         }
+        # 🔴 WITHOUT THIS, THE 1,001st MQTT DEVICE CANNOT RECEIVE COMMANDS.
+        #
+        # nats-server 2.15 caps every stream at 1,000 consumers unless the stream or
+        # the account sets its own limit, and the MQTT gateway's $MQTT_msgs stream
+        # sets neither (the broker creates it, not DeviceChain, and the APP account's
+        # JetStream limits are dynamic). Each QoS 1 or 2 MQTT SUBSCRIBE is a durable
+        # consumer on that stream, so a fleet holding more than 1,000 such
+        # subscriptions has the next one refused. Measured on 2.15.1: the 1,001st
+        # device's QoS 1 subscription is answered with SUBACK return code 0x80 while
+        # its CONNECT succeeds, so the device stays connected and simply never gets a
+        # command; with -1 all 1,010 subscribed.
+        #
+        # -1 is the documented way back to the 2.14 behaviour of no per-stream
+        # default. A finite value would be a fleet-size ceiling chosen by accident.
+        # The platform's own streams are unaffected either way: their consumers are
+        # a handful per service, not per device.
+        merge = {
+          limits = {
+            default_max_consumers = -1
+          }
+        }
       }
       # Each tls block emits BOTH keys on both toggle states so the HCL branches
       # unify: a `? {enabled=true,secretName=x} : {enabled=false}` shape would
@@ -922,7 +962,7 @@ locals {
       # "temporarily unavailable" for ~6s. The ingress refused 80 publishes, a
       # handful of in-flight deliveries waited out one AckWait (~53s) before
       # redelivery, nothing was lost, and every client re-bound on its own. The
-      # upstream 2.15.0 source has the same two step-down paths (the higher-term
+      # upstream 2.15.0 and 2.15.1 sources have the same two step-down paths (the higher-term
       # branch of processAppendEntryResponse, and processVoteRequest), so no
       # release to date removes it. Treat a node's RETURN like its loss when
       # planning maintenance; the operator-facing account is in the bootstrap
@@ -931,7 +971,7 @@ locals {
     promExporter = {
       enabled = var.enable_prom_exporter
     }
-    # The server container's resources and environment. Chart 2.14.4 renders
+    # The server container's resources and environment. Chart 2.15.1 renders
     # .Values.container.resources and .Values.container.env (a name -> value map)
     # into the nats container (files/stateful-set/nats-container.yaml). Not under
     # podTemplate: that map has no resources key, and the chart has no values schema,
@@ -999,6 +1039,10 @@ locals {
     # to the wrong parent is accepted by the chart in silence.
     resources    = local.chart_values.container.resources
     go_mem_limit = local.chart_values.container.env.GOMEMLIMIT
+    # Read back for the same reason: the chart has no values schema, so a limits
+    # block under the wrong parent is accepted and the 1,000-consumer default
+    # silently returns.
+    default_max_consumers = local.chart_values.config.jetstream.merge.limits.default_max_consumers
     route_tls_verified = (local.chart_values.config.cluster.enabled
       && local.chart_values.config.cluster.tls.enabled
     && local.chart_values.config.cluster.tls.merge.verify)
@@ -1247,6 +1291,9 @@ output "ha_topology" {
     # Each server's requests and limits, and the GOMEMLIMIT derived from the limit.
     resources    = local.reported.resources
     go_mem_limit = local.reported.go_mem_limit
+    # The per-stream consumer default handed to every server (-1 = none). See
+    # config.jetstream.merge for why it is not left to nats-server.
+    default_max_consumers = local.reported.default_max_consumers
     # The ONE field here that is not a read-back, because it has no chart value
     # to read: it reports a contradiction in what was ASKED for, which the
     # precondition below refuses. Shared with that precondition through

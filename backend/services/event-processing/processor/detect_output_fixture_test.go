@@ -40,6 +40,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
@@ -310,6 +311,21 @@ func (s oracleStatStore) RecordFire(ctx context.Context, ruleID, tenant string, 
 	return nil
 }
 
+// oracleAdmissions logs each fire the PRODUCTION accumulator is handed, at the moment it is
+// handed it. That is what the fire oracle judges for variant B: admission is the decision to
+// count a fire, so it must come after the publish's positive acknowledgement, exactly as the
+// baseline's inline write must. Whether admitted fires reach the table is checked against the
+// store separately.
+type oracleAdmissions struct {
+	inner runtime.FireRecorder
+	log   *outputLog
+}
+
+func (r oracleAdmissions) RecordFire(ctx context.Context, ruleID, tenant string, at time.Time, edge string) {
+	r.log.add(outputEvent{kind: evStat, det: detKey{tenant: tenant, rule: ruleID, edge: edge, at: at.UnixNano()}})
+	r.inner.RecordFire(ctx, ruleID, tenant, at, edge)
+}
+
 // latencyWriter is a broker whose acknowledgement takes a fixed time and always succeeds.
 type latencyWriter struct{ ack time.Duration }
 
@@ -339,16 +355,38 @@ func (s latencyStatStore) RecordFire(ctx context.Context, ruleID, tenant string,
 	return s.inner.RecordFire(ctx, ruleID, tenant, at, edge)
 }
 
+// RecordFireBatch puts the same round trip in front of one batch, for variant B.
+func (s latencyStatStore) RecordFireBatch(ctx context.Context, tenant string, deltas []model.RuleFireDelta) (int, error) {
+	if s.rtt > 0 {
+		select {
+		case <-time.After(s.rtt):
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+	return s.inner.(rulehealth.Store).RecordFireBatch(ctx, tenant, deltas)
+}
+
 // watchSnapshotWrites records every snapshot write db makes into log. It is the statement, not the
 // commit (gorm traces no COMMIT), so it fires slightly EARLY: an oracle that holds the write to
 // "after every output it covers" is stricter than the invariant, never looser.
 func watchSnapshotWrites(tb testing.TB, db *gorm.DB, log *outputLog) {
 	tb.Helper()
+	// A database reused across runs (a benchmark's cached PostgreSQL manager) keeps its one
+	// pair of callbacks, and each run points them at its own log.
+	if p, ok := snapshotWatches.Load(db); ok {
+		p.(*atomic.Pointer[outputLog]).Store(log)
+		return
+	}
+	target := &atomic.Pointer[outputLog]{}
+	target.Store(log)
+	snapshotWatches.Store(db, target)
 	snapType := reflect.TypeOf(model.DetectSnapshot{})
 	record := func(tx *gorm.DB) {
 		if tx.Error != nil || tx.Statement.Schema == nil || tx.Statement.Schema.ModelType != snapType {
 			return
 		}
+		log := target.Load()
 		switch d := tx.Statement.Dest.(type) {
 		case *model.DetectSnapshot:
 			log.add(outputEvent{kind: evSaved, seq: uint64(d.StreamSeq)})
@@ -365,6 +403,9 @@ func watchSnapshotWrites(tb testing.TB, db *gorm.DB, log *outputLog) {
 		tb.Fatalf("register snapshot watcher: %v", err)
 	}
 }
+
+// snapshotWatches is each watched database's current log.
+var snapshotWatches sync.Map
 
 // newSqliteSnapshotManager is an in-memory checkpoint store with tenant scoping, as newTestStore
 // builds one, but on a shared-cache database so every pooled connection sees the same rows.
@@ -465,13 +506,26 @@ var variantProduction = outputVariant{name: "production", checkpoint: func(ctx c
 	return rp.checkpoint(ctx)
 }}
 
+// variantB is the batched rule-health path: the production checkpoint (whose publishing is
+// still serial) with the production accumulator as the recorder. The rig wires the accumulator
+// when the spec carries a batch store; the variant itself is the production checkpoint.
+var variantB = outputVariant{name: "B", checkpoint: func(ctx context.Context, rp *ResolvedEventsProcessor) bool {
+	return rp.checkpoint(ctx)
+}}
+
 // outputRigSpec says what one rig is built over.
 type outputRigSpec struct {
 	fx outputFixture
 	// broker is the derived-event writer. Nil is a broker that acknowledges at once.
 	broker messaging.MessageWriter
-	// stats is the rule-health store. Nil wires no recorder at all.
+	// stats is the rule-health store written INLINE, the baseline's recorder. Nil wires none.
 	stats fireStatStore
+	// batch is the rule-health store written through the production accumulator
+	// (internal/rulehealth), with batchCfg (zero: the defaults). It replaces stats when set.
+	batch    rulehealth.Store
+	batchCfg rulehealth.Config
+	// statLossExpected lets run's final flush drop fires (a store that is meant to fail).
+	statLossExpected bool
 	// snapshots is the checkpoint store's database. Nil is a fresh in-memory sqlite.
 	snapshots *rdb.RdbManager
 	variant   outputVariant
@@ -491,6 +545,12 @@ type outputRig struct {
 	// checkpointTime is the wall time spent in checkpoints, publish included.
 	checkpointTime time.Duration
 	checkpoints    int
+	// acc is the production rule-health accumulator when the spec asked for one. run stops it
+	// with its final flush, so the store holds every admitted fire when run returns.
+	acc *rulehealth.Accumulator
+	// settleTime is the wall time of that final flush (inside run, so inside a benchmark's timer).
+	settleTime       time.Duration
+	statLossExpected bool
 }
 
 func newOutputRig(tb testing.TB, spec outputRigSpec) *outputRig {
@@ -510,7 +570,21 @@ func newOutputRig(tb testing.TB, spec outputRigSpec) *outputRig {
 		w = spec.variant.wrapWriter(tb, w)
 	}
 	pub := runtime.NewPublisher(w, reg, metrics)
-	if spec.stats != nil {
+	var acc *rulehealth.Accumulator
+	switch {
+	case spec.batch != nil:
+		cfg := spec.batchCfg
+		if cfg == (rulehealth.Config{}) {
+			cfg = rulehealth.DefaultConfig()
+		}
+		var err error
+		if acc, err = rulehealth.New(spec.batch, cfg, metrics); err != nil {
+			tb.Fatalf("rule-health accumulator: %v", err)
+		}
+		acc.Start()
+		tb.Cleanup(func() { acc.Stop(context.Background(), false) })
+		pub.SetFireRecorder(oracleAdmissions{inner: acc, log: log})
+	case spec.stats != nil:
 		pub.SetFireRecorder(ruleStatRecorder{store: oracleStatStore{inner: spec.stats, log: log}, metrics: metrics})
 	}
 
@@ -548,7 +622,8 @@ func newOutputRig(tb testing.TB, spec outputRigSpec) *outputRig {
 	if spec.variant.checkpoint == nil {
 		spec.variant.checkpoint = baselineCheckpoint
 	}
-	return &outputRig{fx: spec.fx, rp: rp, metrics: metrics, log: log, variant: spec.variant}
+	return &outputRig{fx: spec.fx, rp: rp, metrics: metrics, log: log, variant: spec.variant, acc: acc,
+		statLossExpected: spec.statLossExpected}
 }
 
 // run feeds msgs through the loop's own sequence, handle then a checkpoint whenever the
@@ -567,6 +642,13 @@ func (r *outputRig) run(tb testing.TB, msgs []messaging.Message) {
 	}
 	if len(r.rp.pendingAcks) > 0 || len(r.rp.pendingDets) > 0 || r.rp.dirty {
 		r.checkpoint(tb, ctx)
+	}
+	if r.acc != nil {
+		start := time.Now()
+		if dropped := r.acc.Stop(context.Background(), true); dropped != 0 && !r.statLossExpected {
+			tb.Fatalf("the rule-health accumulator's final flush dropped %d fires on a healthy store", dropped)
+		}
+		r.settleTime = time.Since(start)
 	}
 	if r.variant.settle != nil {
 		r.variant.settle()

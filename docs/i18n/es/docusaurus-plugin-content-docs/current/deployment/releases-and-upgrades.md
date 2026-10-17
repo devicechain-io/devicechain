@@ -3812,6 +3812,63 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
+### Próxima versión: el bróker pasa a NATS 2.15 {#next-nats-215}
+
+El bróker de mensajería de la instancia pasa de NATS `2.14.4` a `2.15.1` (el chart oficial `nats`,
+misma versión). `dcctl upgrade` lo aplica y el bróker se reinicia una vez: con `--ha` sus servidores
+se reinician de uno en uno, cada uno Ready antes de que se detenga el siguiente; sin `--ha` el único
+servidor se reinicia y el bróker no está disponible durante aproximadamente un minuto. Los
+dispositivos se vuelven a conectar solos, y una sesión MQTT persistente conserva sus suscripciones y
+los mensajes QoS 1 retenidos para ella mientras el dispositivo no estaba.
+
+- **No cambie la replicación del bróker en la misma actualización.** Mientras los servidores se
+  reinician, unos ejecutan `2.14.4` y otros `2.15.1`. NATS 2.15 cambió la forma en que un stream o
+  un consumidor cambia su número de réplicas o su ubicación, y solo NATS `2.14.7` y posteriores
+  entienden el nuevo mecanismo. Esta actualización parte de `2.14.4`, así que un cambio de réplicas
+  o de ubicación iniciado mientras algún servidor todavía lo ejecuta puede quedarse atascado, no
+  solo retrasado. Los streams se pueden leer y escribir durante todo el proceso, y crearlos o
+  eliminarlos no se ve afectado. Suba `streamReplicas` o `nats_cluster_replicas` antes o después de
+  esta actualización, no durante.
+- **No reinicie a mano un servidor del bróker mientras avanza la actualización.** La nueva
+  configuración llega a todos los servidores a la vez, pero cada servidor pasa a `2.15.1` solo
+  cuando le toca. Hasta entonces sigue funcionando con la configuración con la que arrancó, y si se
+  reinicia en ese intervalo (a mano, o porque falla su nodo) no puede arrancar con la nueva
+  configuración y queda caído hasta que la actualización lo reemplaza. Con `--ha` eso deja al
+  clúster con un servidor menos durante el resto del proceso, y los streams replicados dejan de
+  aceptar escrituras mientras el siguiente servidor se reinicia.
+- **Se rechaza un chart de NATS anterior a `2.15.0`.** La configuración del bróker está escrita ahora
+  para NATS 2.15 y un servidor 2.14 la rechaza al arrancar, así que un `nats_chart_version` inferior
+  a `2.15.0` hace fallar el plan en lugar de dejar el bróker en un bucle de reinicios. Si un
+  `terraform.tfvars` junto al estado de infraestructura de la instancia fija `nats_chart_version`,
+  súbalo a `2.15.1` o elimínelo antes de actualizar. Considere el paso a 2.15 como irreversible: NATS
+  solo admite volver de 2.15 a 2.14.7 o posterior, y la versión anterior ejecuta 2.14.4.
+- **Se levanta el límite de 1.000 consumidores que NATS 2.15 añade a cada stream.** Cada
+  suscripción MQTT con QoS 1 o 2 es un consumidor en el stream de mensajes propio del bróker, así que
+  con el nuevo valor por defecto se rechazaría la suscripción número 1.001 de ese tipo en toda la
+  flota mientras su dispositivo seguía conectado, y ese dispositivo nunca recibiría un comando. Se
+  cuentan suscripciones, no dispositivos: un dispositivo con dos suscripciones QoS 1 usa dos. Si
+  instala usted mismo el módulo `nats`, mantenga `jetstream.limits.default_max_consumers` en `-1`.
+
+Qué mejora:
+
+- **Las publicaciones QoS 1 de una misma conexión MQTT ya no se esperan unas a otras.** El bróker
+  almacena ahora hasta 1.024 mensajes QoS 1 de una conexión a la vez, en lugar de uno en uno. En un
+  clúster de prueba de tres servidores, una conexión que enviaba 5.000 mensajes pasó de unos 1.100 a
+  unos 20.000 confirmados por segundo.
+- **Recargar la configuración del bróker ya no detiene la entrega QoS 1 y 2 a los dispositivos ya
+  conectados.** Con TLS en el listener MQTT, que es el valor por defecto, cada recarga volvía a
+  aplicar los ajustes MQTT y dejaba cada sesión conectada sin poder recibir mensajes QoS 1 o 2,
+  comandos incluidos, hasta que se reconectaba. Una renovación de certificado podía provocar una.
+- **Correcciones en el inicio de sesión de dispositivos y los permisos**, entre ellas cómo decide el
+  bróker qué inicios de sesión omiten la comprobación de dispositivo, y un rechazo de inicio de
+  sesión que ahora se informa como error de autenticación.
+- **El bróker local del agente de borde ya no rechaza la suscripción QoS 1 o 2 número 1.001 de un
+  sitio.** `dc-edge-agent` integra NATS 2.15, y desde `v0.20.0` hasta `v0.23.0` su listener MQTT
+  local tenía el mismo límite de 1.000 consumidores: respondía a la suscripción QoS 1 o 2 número
+  1.001 de un sitio con un rechazo mientras el dispositivo seguía conectado. El límite se levanta
+  también allí. Actualice el agente en cualquier sitio cuyos dispositivos mantengan entre todos más
+  de 1.000 suscripciones de ese tipo en su listener.
+
 ### v0.23.0 — usuarios de cliente con acceso acotado, y una ingesta MQTT que pierde menos {#v0230-upgrade}
 
 `v0.23.0` es una actualización en su sitio desde `v0.22.0`: `dcctl install` para el clúster y después

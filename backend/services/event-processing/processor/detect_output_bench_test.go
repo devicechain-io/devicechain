@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog"
@@ -61,6 +62,46 @@ func BenchmarkDetectOutputBaseline(b *testing.B) {
 	}
 }
 
+// BenchmarkDetectOutputStats is the A/B comparison for the rule-health counters: variant A
+// writes them inline (the baseline), variant B through the production accumulator. Every case
+// runs A then B inside the same parent, so with -count N the two interleave N times rather than
+// one running all its repetitions first. Everything else is identical: the same source, rules,
+// keys, broker stand-in and checkpoint store, so snapshot size and evaluation cost cannot
+// masquerade as an output gain. The stand-in store delays are a SIMULATION of database round
+// trips, not a capacity figure; the PostgreSQL and JetStream runs are
+// BenchmarkDetectOutputStatsReal (-tags integration).
+//
+// B's figures include its final flush (settle-ns/event): the run is not done until the store
+// holds every admitted fire. Its rule-health write time (offloop-stat-ns/det) is reported but
+// is not loop time.
+//
+//	go test ./processor -run '^$' -bench BenchmarkDetectOutputStats -benchtime 2000x -count 7 -benchmem | tee ab.txt
+//	benchstat -col /variant ab.txt
+func BenchmarkDetectOutputStats(b *testing.B) {
+	for _, c := range []outputBenchCase{
+		{name: "stats=0ms/fire=100%/lanes=32", fx: benchFixture(16, 1)},
+		{name: "stats=0ms/fire=10%/lanes=32", fx: benchFixture(16, 10)},
+		{name: "stats=0ms/fire=0%/lanes=32", fx: benchFixture(16, 0)},
+		{name: "stats=0ms/fire=100%/lanes=1", fx: outputFixture{tenants: []string{"acme"}, devices: 1, rulesPerTenant: 1, firePeriod: 1}},
+		{name: "stats=0ms/fire=100%/rules=256", fx: outputFixture{tenants: []string{"acme", "beta"}, devices: 2, rulesPerTenant: 128, firePeriod: 1}},
+		{name: "stats=1ms/fire=100%/lanes=32", fx: benchFixture(16, 1), statRTT: time.Millisecond},
+		{name: "stats=10ms/fire=10%/lanes=32", fx: benchFixture(16, 10), statRTT: 10 * time.Millisecond},
+		{name: "stats=100ms/fire=5%/lanes=32", fx: benchFixture(16, 20), statRTT: 100 * time.Millisecond},
+	} {
+		for _, v := range []string{"A", "B"} {
+			c := c
+			c.batched = v == "B"
+			b.Run("variant="+v+"/"+c.name, func(b *testing.B) { benchOutput(b, c) })
+		}
+	}
+	// B alone: a store that never answers. A cannot run this case at all (it would hold the loop
+	// for the write timeout on every fire); B must keep detection at its healthy rate and turn the
+	// lost writes into counted discards.
+	b.Run("variant=B/stats=hang/fire=100%/lanes=32", func(b *testing.B) {
+		benchOutput(b, outputBenchCase{fx: benchFixture(16, 1), batched: true, batchStore: failingBatchStore{hang: true}})
+	})
+}
+
 // benchFixture is the benchmarks' source: two tenants, devicesPerTenant devices each, one rule
 // per tenant, crossing every firePeriod samples (0: never).
 func benchFixture(devicesPerTenant, firePeriod int) outputFixture {
@@ -85,6 +126,11 @@ type outputBenchCase struct {
 	// snapshots, when set, is a real checkpoint store, built per run.
 	snapshots func(b *testing.B) *rdb.RdbManager
 	variant   outputVariant
+	// batched writes the rule-health store through the production accumulator (variant B)
+	// rather than inline; the store must then also take batches (rulehealth.Store).
+	batched bool
+	// batchStore, when set with batched, replaces the store entirely (a failing one, say).
+	batchStore rulehealth.Store
 }
 
 func benchOutput(b *testing.B, c outputBenchCase) {
@@ -121,6 +167,21 @@ func benchOutput(b *testing.B, c outputBenchCase) {
 			store = latencyStatStore{inner: store, rtt: c.statRTT}
 		}
 		spec.stats = store
+	}
+	if c.batched {
+		switch {
+		case c.batchStore != nil:
+			spec.batch = c.batchStore
+			spec.statLossExpected = true
+			spec.batchCfg = rulehealth.DefaultConfig()
+			spec.batchCfg.WriteTimeout = rulehealth.MinWriteTimeout
+		case spec.stats != nil:
+			spec.batch = spec.stats.(rulehealth.Store)
+		}
+		spec.stats = nil
+		if spec.variant.name == variantA.name {
+			spec.variant = variantB
+		}
 	}
 	r := newOutputRig(b, spec)
 	msgs := c.fx.messages(b, b.N, r.log)
@@ -163,6 +224,26 @@ func reportOutputSplit(b *testing.B, r *outputRig, v outputVerdict, timer *state
 	b.ReportMetric(ns(serSum)/events, "serialize-ns/event")
 	b.ReportMetric(ns(saveSum)/events, "save-ns/event")
 	b.ReportMetric((float64(r.checkpointTime.Nanoseconds())-ns(ackSum+statSum+serSum+saveSum))/events, "ckptother-ns/event")
+	if r.acc != nil {
+		// Variant B: the rule-health writes ran on the accumulator's worker, so statSum is NOT
+		// loop time and is not in ckptother's subtraction; the final flush is inside the timer.
+		b.ReportMetric((float64(r.checkpointTime.Nanoseconds())-ns(ackSum+serSum+saveSum))/events, "ckptother-ns/event")
+		b.ReportMetric(float64(r.settleTime.Nanoseconds())/events, "settle-ns/event")
+		// The loop's own rate, without the final flush: what detection sustained while the
+		// counters were being written (or, against a failing store, discarded) behind it.
+		if loop := elapsed - r.settleTime; loop > 0 {
+			b.ReportMetric(events/loop.Seconds(), "loop-events/s")
+		}
+		if dets > 0 {
+			b.ReportMetric(ns(ackSum)/dets, "ack-ns/det")
+			b.ReportMetric(ns(statSum)/dets, "offloop-stat-ns/det")
+			if timer != nil {
+				b.ReportMetric(float64(timer.fenceN.Load())/dets, "fence-reads/det")
+				b.ReportMetric(float64(timer.otherN.Load())/dets, "stat-stmts/det")
+			}
+		}
+		return
+	}
 	if dets > 0 {
 		b.ReportMetric(ns(ackSum)/dets, "ack-ns/det")
 		b.ReportMetric(ns(statSum)/dets, "stat-ns/det")

@@ -115,7 +115,7 @@ variable "nats_chart_version" {
     so "latest" would roll the broker whenever upstream cuts a release.
   EOT
   type        = string
-  default     = "2.14.4"
+  default     = "2.15.1"
 
   # Fail closed. An empty string used to mean "install latest", which made the chart
   # version resolve at APPLY time — the chart repository became a dependency of
@@ -126,6 +126,13 @@ variable "nats_chart_version" {
   validation {
     condition     = can(regex("^v?[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.]+)?$", var.nats_chart_version))
     error_message = "nats_chart_version must be an exact chart version (e.g. \"1.2.3\" or \"v1.2.3\"); an empty value or a version range is resolved at apply time, which is not a pin."
+  }
+
+  # A floor, for the reason the module's chart_version gives: the broker config it
+  # renders is nats-server 2.15's, and an older server refuses it at startup.
+  validation {
+    condition     = try(tonumber(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.nats_chart_version)[0]) * 1000 + tonumber(regex("^v?([0-9]+)\\.([0-9]+)\\.", var.nats_chart_version)[1]) >= 2015, false)
+    error_message = "nats_chart_version must be 2.15.0 or later: the broker configuration this release renders is nats-server 2.15's, which an older server refuses at startup."
   }
 }
 

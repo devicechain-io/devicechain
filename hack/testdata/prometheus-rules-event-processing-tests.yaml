@@ -660,7 +660,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Rule-health counters cannot be written"
-              description: "event-processing could not write a rule-health fire counter. Detection is unaffected: the write is best-effort and a failure is dropped, so alarms still raise and clear. What stops is the console's per-rule fire count and last-fired time, which silently go stale. Each failure is logged by event-processing as a warning (not an error) with the cause; check its database connection and that the rule_stats table accepts writes."
+              description: "event-processing could not write a batch of rule-health fire counters (one tenant's transaction). Detection is unaffected: the counters are written in the background and a failed batch is dropped, not retried, so alarms still raise and clear. What suffers is the console's per-rule fire count and last-fired time, which fall short and go stale; the fires lost are counted in devicechain_eventprocessing_detect_rule_stat_updates_discarded_total (reason write_failed). event-processing logs one warning per flush that lost batches, with the first cause; check its database connection and that the rule_stats table accepts writes."
 
   - name: DetectRuleStatWriteFailing resolves once the failures stop, and never fires on a clean series
     interval: 1m
@@ -680,7 +680,7 @@ tests:
               devicechain_instance: devicechain
             exp_annotations:
               summary: "Rule-health counters cannot be written"
-              description: "event-processing could not write a rule-health fire counter. Detection is unaffected: the write is best-effort and a failure is dropped, so alarms still raise and clear. What stops is the console's per-rule fire count and last-fired time, which silently go stale. Each failure is logged by event-processing as a warning (not an error) with the cause; check its database connection and that the rule_stats table accepts writes."
+              description: "event-processing could not write a batch of rule-health fire counters (one tenant's transaction). Detection is unaffected: the counters are written in the background and a failed batch is dropped, not retried, so alarms still raise and clear. What suffers is the console's per-rule fire count and last-fired time, which fall short and go stale; the fires lost are counted in devicechain_eventprocessing_detect_rule_stat_updates_discarded_total (reason write_failed). event-processing logs one warning per flush that lost batches, with the first cause; check its database connection and that the rule_stats table accepts writes."
       # rate()[15m] is zero from 46m on, so the alert has cleared by 50m.
       - eval_time: 50m
         alertname: DetectRuleStatWriteFailing

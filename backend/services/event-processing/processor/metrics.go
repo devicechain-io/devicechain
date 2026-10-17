@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/react"
+	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -73,9 +74,10 @@ type DetectMetrics struct {
 	rulesActive       prometheus.Gauge
 	fanoutEventsTotal prometheus.Counter
 	fanoutEvalErrors  prometheus.Counter
-	// ruleStatWriteFailures counts rule-health fire writes that failed and were dropped. No labels:
-	// the recorder swallows the error by design, so this is the only aggregate signal of a broken
-	// projection write (a per-tenant or per-rule label would be unbounded).
+	// ruleStatWriteFailures counts rule-health batch transactions that failed through the
+	// store's fault and were discarded. No labels: the worker swallows the error by design, so
+	// this is the only aggregate signal of a broken projection write (a per-tenant or per-rule
+	// label would be unbounded). A refusal by the erasure fence is not counted here.
 	ruleStatWriteFailures prometheus.Counter
 	lateSamplesTotal      prometheus.Counter
 	derivedPublished      prometheus.Counter
@@ -146,13 +148,27 @@ type DetectMetrics struct {
 	checkpointSerialize prometheus.Observer
 	checkpointSave      prometheus.Observer
 
-	// The two waits a checkpoint's publish phase is made of, per detection: the broker's
-	// acknowledgement of the derived event (derivedPublishAck, positive outcomes only) and the
-	// synchronous rule-health write that follows it (ruleStatWrite, the erasure-fence read and
-	// the upsert, whatever their outcome). detect_loop_seconds_total{phase="publish"} is their
-	// sum plus the loop's own work; these say which of the two it is. No labels.
+	// derivedPublishAck is the wait a checkpoint's publish phase is made of, per detection: the
+	// broker's acknowledgement of the derived event (positive outcomes only).
+	// detect_loop_seconds_total{phase="publish"} is these plus the loop's own work. No labels.
 	derivedPublishAck prometheus.Observer
-	ruleStatWrite     prometheus.Observer
+
+	// The rule-health accumulator (internal/rulehealth). Its writes run on its own worker, so
+	// none of this is loop time: ruleStatWrite is one tenant batch transaction (the erasure-fence
+	// read and the upsert), whatever its outcome. Every count is of fire UPDATES (detections)
+	// unless it says batch; the one label is the closed DropReason enum.
+	ruleStatWrite         prometheus.Observer
+	ruleStatAdmitted      prometheus.Counter
+	ruleStatCoalesced     prometheus.Counter
+	ruleStatWritten       prometheus.Counter
+	ruleStatDiscarded     *prometheus.CounterVec
+	ruleStatDiscardedBy   map[rulehealth.DropReason]prometheus.Counter
+	ruleStatContended     prometheus.Counter
+	ruleStatPendingKeys   prometheus.Gauge
+	ruleStatPendingBytes  prometheus.Gauge
+	ruleStatOldestPending prometheus.Gauge
+	ruleStatBatchRows     prometheus.Observer
+	ruleStatBatchUpdates  prometheus.Observer
 }
 
 // waitBuckets are the bucket bounds of the per-detection wait distributions: from a loopback
@@ -198,7 +214,7 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		rulesActive:           ms.NewGauge("detect_rules_active", "Rules loaded into the DETECT engine."),
 		fanoutEventsTotal:     ms.NewCounter("detect_fanout_events_total", "Per-rule core events produced by the resolved-event fan-out."),
 		fanoutEvalErrors:      ms.NewCounter("detect_fanout_eval_errors_total", "Leaf-predicate evaluation errors during fan-out (the sample is skipped for that rule, not fed as a non-match)."),
-		ruleStatWriteFailures: ms.NewCounter("detect_rule_stat_write_failures_total", "Rule-health fire counter writes that failed and were dropped. Detection is unaffected (the write is best-effort and off the correctness path), but the console's rule-health counts stop advancing while this rises; the cause is in the service log."),
+		ruleStatWriteFailures: ms.NewCounter("detect_rule_stat_write_failures_total", "Rule-health fire counter batch writes (one tenant's transaction) that failed or timed out and were discarded, not retried. Detection is unaffected (the counters are written off the detection loop), but the console's rule-health counts fall short while this rises; the fires lost are in detect_rule_stat_updates_discarded_total with reason write_failed, and the cause is in the service log."),
 		lateSamplesTotal:      ms.NewCounter("detect_late_samples_total", "Samples that arrived too far behind the watermark to be used, counted once per rule that declined them: after their own trailing window had passed it (Repeating, SlidingAgg, Correlation), or, for a Duration rule, a matching reading more than the rule's hold behind it or a non-matching reading from inside the run of an alarm already raised, older than the raise. A store-and-forward device uploading buffered readings is the usual cause; a sustained non-zero rate means those rules are evaluating less than the device sent."),
 		derivedPublished:      ms.NewCounter("detect_derived_events_published_total", "Derived signal events published (ADR-037)."),
 		derivedRejected:       ms.NewCounterVec("detect_derived_events_rejected_total", "Detections dropped before publish, by reason (bounded enum).", []string{"reason"}),
@@ -252,8 +268,33 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 		"Time each published derived event waited for the broker to acknowledge it, from the write to the acknowledgement. Positive outcomes only. It is not detection latency: a detection waits for its checkpoint before it is written.",
 		nil, waitBuckets).WithLabelValues()
 	m.ruleStatWrite = ms.NewHistogramVec("detect_rule_stat_write_seconds",
-		"Time each rule-health fire counter write held the detection loop after a derived event was published, including the tenant-deletion check it makes first. Failed writes are included; they are also counted in detect_rule_stat_write_failures_total.",
+		"Time each rule-health fire counter batch write (one tenant's transaction, including the tenant-deletion check it makes first) took on the background writer. It is not detection-loop time. Failed writes are included; they are also counted in detect_rule_stat_write_failures_total.",
 		nil, waitBuckets).WithLabelValues()
+	m.ruleStatAdmitted = ms.NewCounter("detect_rule_stat_updates_admitted_total",
+		"Published detections admitted to the rule-health fire counters, to be written in the background.")
+	m.ruleStatCoalesced = ms.NewCounter("detect_rule_stat_updates_coalesced_total",
+		"Admitted rule-health fire updates that merged into a rule's pending count rather than adding a row to the next write.")
+	m.ruleStatWritten = ms.NewCounter("detect_rule_stat_updates_written_total",
+		"Rule-health fire updates committed to the database.")
+	m.ruleStatDiscarded = ms.NewCounterVec("detect_rule_stat_updates_discarded_total",
+		"Rule-health fire updates that will never be written, by reason: full (the pending budget was exhausted, so the update was refused at admission), overflow (the rule's pending count is at its ceiling), closed (admitted after the leadership term ended), write_failed (its batch failed or timed out and was not retried), purged (its tenant was deleted first), shutdown (still pending when the term ended). Detection is unaffected; the console's fire counts are short by this much.",
+		[]string{"reason"})
+	m.ruleStatDiscardedBy = make(map[rulehealth.DropReason]prometheus.Counter, len(rulehealth.DropReasons))
+	for _, r := range rulehealth.DropReasons {
+		m.ruleStatDiscardedBy[r] = m.ruleStatDiscarded.WithLabelValues(string(r))
+	}
+	m.ruleStatContended = ms.NewCounter("detect_rule_stat_admission_contended_total",
+		"Rule-health admissions that found the accumulator busy (its background writer swapping or settling a batch) and waited for it. Each wait is bounded by a constant-time step, never by a database call.")
+	m.ruleStatPendingKeys = ms.NewGauge("detect_rule_stat_pending_keys",
+		"Distinct rules with fire updates not yet written, across the active, detached and in-flight sets (bounded by ruleHealth.maxPendingKeys).")
+	m.ruleStatPendingBytes = ms.NewGauge("detect_rule_stat_pending_bytes",
+		"Accounted memory of the pending rule-health updates, across the active, detached and in-flight sets (bounded by ruleHealth.maxPendingBytes).")
+	m.ruleStatOldestPending = ms.NewGauge("detect_rule_stat_oldest_pending_seconds",
+		"Age of the oldest rule-health update not yet written: how stale the console's fire counts may be. Normally under the flush interval plus one write.")
+	m.ruleStatBatchRows = ms.NewHistogramVec("detect_rule_stat_batch_rows",
+		"Distinct rule rows in each rule-health batch write.", nil, batchSizeBuckets).WithLabelValues()
+	m.ruleStatBatchUpdates = ms.NewHistogramVec("detect_rule_stat_batch_updates",
+		"Fire updates (published detections) carried by each rule-health batch write: how many single-row writes it stands in for.", nil, batchSizeBuckets).WithLabelValues()
 	// Every label value exists from startup, so an alert on the rate sees a zero series rather
 	// than no series on a healthy instance.
 	for _, p := range repairProjections {
@@ -273,6 +314,9 @@ func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	}
 	return m
 }
+
+// batchSizeBuckets are the bucket bounds of the rule-health batch-size distributions.
+var batchSizeBuckets = []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 4096, 16384, 65536}
 
 // checkpointBuckets are the bucket bounds of the checkpoint distributions.
 var checkpointBuckets = []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30}
@@ -592,7 +636,8 @@ func (m *DetectMetrics) RecordDerivedPublishAck(wait time.Duration) {
 	m.derivedPublishAck.Observe(wait.Seconds())
 }
 
-// recordRuleStatWrite observes how long one rule-health fire write held the loop.
+// recordRuleStatWrite observes one rule-health write's duration (the benchmark baseline's
+// single inline write; the accumulator's batches go through RuleStatBatch).
 func (m *DetectMetrics) recordRuleStatWrite(d time.Duration) {
 	if m == nil {
 		return
@@ -821,4 +866,67 @@ func boolGauge(b bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// The rulehealth.Metrics implementation. Nil-safe, like every recorder here.
+var _ rulehealth.Metrics = (*DetectMetrics)(nil)
+
+// RuleStatAdmitted counts one admitted fire update.
+func (m *DetectMetrics) RuleStatAdmitted(coalesced bool) {
+	if m == nil {
+		return
+	}
+	m.ruleStatAdmitted.Inc()
+	if coalesced {
+		m.ruleStatCoalesced.Inc()
+	}
+}
+
+// RuleStatDiscarded counts updates fire updates that will never be written.
+func (m *DetectMetrics) RuleStatDiscarded(reason rulehealth.DropReason, updates int64) {
+	if m == nil || updates <= 0 {
+		return
+	}
+	if c, ok := m.ruleStatDiscardedBy[reason]; ok {
+		c.Add(float64(updates))
+	}
+}
+
+// RuleStatContended counts one admission that waited for the accumulator's lock.
+func (m *DetectMetrics) RuleStatContended() {
+	if m == nil {
+		return
+	}
+	m.ruleStatContended.Inc()
+}
+
+// RuleStatBatch observes one tenant batch write.
+func (m *DetectMetrics) RuleStatBatch(rows int, updates int64, took time.Duration, failed bool) {
+	if m == nil {
+		return
+	}
+	m.ruleStatWrite.Observe(took.Seconds())
+	m.ruleStatBatchRows.Observe(float64(rows))
+	m.ruleStatBatchUpdates.Observe(float64(updates))
+	if failed {
+		m.ruleStatWriteFailures.Inc()
+	}
+}
+
+// RuleStatWritten counts committed fire updates.
+func (m *DetectMetrics) RuleStatWritten(updates int64) {
+	if m == nil {
+		return
+	}
+	m.ruleStatWritten.Add(float64(updates))
+}
+
+// RuleStatPending reports the pending set.
+func (m *DetectMetrics) RuleStatPending(keys int, bytes int64, oldest time.Duration) {
+	if m == nil {
+		return
+	}
+	m.ruleStatPendingKeys.Set(float64(keys))
+	m.ruleStatPendingBytes.Set(float64(bytes))
+	m.ruleStatOldestPending.Set(oldest.Seconds())
 }

@@ -191,7 +191,7 @@ const (
 	// plus an ordered array (nats-server stream.go: ddmap, ddarr), and EVERY replica keeps its
 	// own, so under R3 each server holds every stream's table. Measured against nats-server
 	// v2.15.0 (the embedded test server) with 35-byte ids; the deployed broker is the nats
-	// chart's 2.14.4, whose ddentry, ddmap and ddarr are the same. A held id costs about 120
+	// chart's 2.15.1, whose ddentry, ddmap and ddarr are the same. A held id costs about 120
 	// bytes of live heap, more for a longer id (derived-events' are 67 bytes): about 120 MB per
 	// million ids per server, before the garbage collector's headroom. A table holds the
 	// stream's id rate times its window: at 10,000 ids/s a 120 s window holds 1.2M ids

@@ -616,6 +616,10 @@ func (rp *ResolvedEventsProcessor) endTerm(handle *termHandle) {
 				"the next leader then waits out its handover period")
 	}
 	rp.metrics.setLeader(false)
+	// 5. The rule-health counters, AFTER the release: a health projection must not hold the
+	//    partition from its successor. A graceful stop flushes within its budget; a lost
+	//    term discards. Either way the worker is joined here, before another term can start.
+	rp.stopRuleHealth(rp.stopBegun != nil && rp.stopBegun.Err() != nil, context.Background())
 }
 
 // bindTermReaders attaches every durable this term consumes.
