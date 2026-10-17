@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -267,4 +268,32 @@ func TestDeleteEntityGroup_UnknownTokenIsNoOp(t *testing.T) {
 	inUse, err := api.entityGroupReferencedByRule(ctx, api.RDB.DB(ctx), 1)
 	assert.NoError(t, err)
 	assert.False(t, inUse)
+}
+
+// A publish that states the active version it saw lands only while the group still holds it:
+// the first publish expects 0, a second writer's publish moves the pointer, and a publish
+// still stating the old version is refused and adds no version.
+func TestPublishEntityGroupIfRefusesAMovedGroup(t *testing.T) {
+	api, ctx := newGroupVersionTestApi(t)
+	createDynamicGroup(t, api, ctx, "g1", `attr["climate"] == "arid"`)
+
+	zero, one := int32(0), int32(1)
+	if v, err := api.PublishEntityGroupIf(ctx, "g1", nil, nil, "alice", &zero); err != nil || v.Version != 1 {
+		t.Fatalf("first publish expecting 0: %v %v", v, err)
+	}
+	// Bob looked before alice published, and so still states 0.
+	if _, err := api.PublishEntityGroupIf(ctx, "g1", nil, nil, "bob", &zero); !errors.Is(err, ErrGroupConflict) {
+		t.Fatalf("stale publish: got %v, want ErrGroupConflict", err)
+	}
+	versions, err := api.EntityGroupVersions(ctx, "g1", nil)
+	assert.NoError(t, err)
+	assert.Len(t, versions, 1, "the refused publish added no version")
+
+	// Stating the version it does hold publishes; no precondition always does.
+	if v, err := api.PublishEntityGroupIf(ctx, "g1", nil, nil, "carol", &one); err != nil || v.Version != 2 {
+		t.Fatalf("publish expecting 1: %v %v", v, err)
+	}
+	if v, err := api.PublishEntityGroupIf(ctx, "g1", nil, nil, "dan", nil); err != nil || v.Version != 3 {
+		t.Fatalf("unconditional publish: %v %v", v, err)
+	}
 }

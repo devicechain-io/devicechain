@@ -52,6 +52,26 @@ func (api *Api) entityGroupByToken(ctx context.Context, token string) (*EntityGr
 // static group is rejected — it has no selector to freeze.
 func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 	label, description *string, publishedBy string) (*EntityGroupVersion, error) {
+	return api.PublishEntityGroupIf(ctx, token, label, description, publishedBy, nil)
+}
+
+// ErrGroupConflict is returned by PublishEntityGroupIf when the caller states the version
+// the group had when it looked (expectedActiveVersion) and the group has moved on since:
+// someone else published or rolled back in between. The caller should reload and decide again.
+//
+// It is a stale-write refusal and never a conflict.Error, for the reason ErrConflict in
+// dashboard-management gives: CONFLICT reads as "already exists, carry on", which for a
+// publish that did not happen would report it done.
+var ErrGroupConflict = rdb.NewStaleWriteError("entity group")
+
+// PublishEntityGroupIf is PublishEntityGroup with an optional precondition. When
+// expectedActiveVersion is set it is the active version the caller saw (0 for a group never
+// published), and the publish proceeds only if the group's pointer still holds it — read
+// under the family lock inside the publishing transaction, so a publish that lands between
+// the caller's read and this write is refused with ErrGroupConflict rather than stacked as a
+// second version. Nil publishes unconditionally.
+func (api *Api) PublishEntityGroupIf(ctx context.Context, token string,
+	label, description *string, publishedBy string, expectedActiveVersion *int32) (*EntityGroupVersion, error) {
 	group, err := api.entityGroupByToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -100,6 +120,9 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		from, err := api.lockFamilyAndReadPointerOnTx(ctx, tx, group)
 		if err != nil {
 			return err
+		}
+		if expectedActiveVersion != nil && *expectedActiveVersion != from.Int32 {
+			return ErrGroupConflict
 		}
 		if err := tx.Create(version).Error; err != nil {
 			return err

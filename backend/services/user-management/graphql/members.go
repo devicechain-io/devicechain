@@ -185,6 +185,10 @@ type memberCriteriaInput struct {
 	PageSize    int32
 	EmailPrefix *string
 	Enabled     *bool
+	RoleToken   *string
+	ScopeAnchor *scopeAnchorInput
+	// ManagedByIdentityProvider filters on whether an identity provider manages the membership.
+	ManagedByIdentityProvider *bool
 }
 
 // Members lists one page of this tenant's members (requires member:read).
@@ -204,6 +208,24 @@ func (r *SchemaResolver) Members(ctx context.Context, args struct {
 		}
 		criteria.EmailPrefix = *args.Criteria.EmailPrefix
 	}
+	if args.Criteria.RoleToken != nil {
+		if len(*args.Criteria.RoleToken) > 256 {
+			return nil, limit.Exceeded("roleToken length", len(*args.Criteria.RoleToken), 256)
+		}
+		criteria.RoleToken = *args.Criteria.RoleToken
+	}
+	if args.Criteria.ScopeAnchor != nil {
+		in, err := toScopeInput([]scopeAnchorInput{*args.Criteria.ScopeAnchor})
+		if err != nil {
+			return nil, err
+		}
+		anchors, err := admin.NormalizeScope(in)
+		if err != nil {
+			return nil, err
+		}
+		criteria.ScopeAnchor = anchors[0]
+	}
+	criteria.ManagedByIdp = args.Criteria.ManagedByIdentityProvider
 	members, pag, err := r.getMembersService(ctx).Members(ctx, criteria)
 	if err != nil {
 		return nil, err
@@ -390,6 +412,29 @@ func (r *SchemaResolver) SetMemberScope(ctx context.Context, args struct {
 		return nil, err
 	}
 	m, err := r.getMembersService(ctx).SetMemberScope(ctx, args.Email, scope)
+	if err != nil {
+		return nil, err
+	}
+	return &MemberResolver{M: *m}, nil
+}
+
+// SetMemberAccess replaces a member's roles and scope together (requires member:write).
+func (r *SchemaResolver) SetMemberAccess(ctx context.Context, args struct {
+	Email      string
+	RoleTokens []string
+	Scope      []scopeAnchorInput
+}) (*MemberResolver, error) {
+	if err := auth.Authorize(ctx, auth.MemberWrite); err != nil {
+		return nil, err
+	}
+	if err := checkList("roleTokens", args.RoleTokens); err != nil {
+		return nil, err
+	}
+	scope, err := toScopeInput(args.Scope)
+	if err != nil {
+		return nil, err
+	}
+	m, err := r.getMembersService(ctx).SetMemberAccess(ctx, args.Email, args.RoleTokens, scope)
 	if err != nil {
 		return nil, err
 	}

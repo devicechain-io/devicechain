@@ -98,7 +98,22 @@ describe('the access-scope switch', () => {
     expect(await screen.findByText(/has not been published yet/)).toBeTruthy();
     expect(screen.queryByRole('checkbox')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Publish filter' }));
-    await waitFor(() => expect(h.publish).toHaveBeenCalledWith('north'));
+    await waitFor(() => expect(h.publish).toHaveBeenCalledWith('north', 0));
+  });
+
+  // Someone else published between this view's render and the click: the server refuses the
+  // stated version, and the panel says so and reloads rather than reporting a publish.
+  it('says so, and reloads, when the group moved on before the first publish', async () => {
+    h.group = group({ activeVersion: null });
+    h.publish.mockRejectedValue(
+      new GraphQLRequestError('entity group was modified by another writer; reload and try again', 200, [
+        { message: 'entity group was modified by another writer; reload and try again' },
+      ]),
+    );
+    render(<AccessScopePanel token="north" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Publish filter' }));
+    expect(await screen.findByText(/Someone else changed this group/)).toBeTruthy();
+    expect(h.toast).not.toHaveBeenCalled();
   });
 
   // Publishing is a device write like the switch: someone who cannot write devices is told the

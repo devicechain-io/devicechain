@@ -21,6 +21,7 @@ import {
   groupAnchor,
   inviteMember,
   listTenantRoles,
+  setMemberAccess,
   setMemberRoles,
   setMemberScope,
   type Member,
@@ -174,10 +175,12 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
       const sameRoles = sameSet(roles, initialRoles);
       const sameScope =
         sameSet(limited ? customers : [], initialCustomers) && sameSet(limited ? groups : [], initialGroups);
-      // Two calls, because they are two operations with their own refusals. Roles first:
-      // a refusal there leaves both unchanged, which is the state the form still shows.
-      if (!sameRoles) await setMemberRoles(editing.email, roles);
-      if (!sameScope) await setMemberScope(editing.email, scope);
+      // When both change they go in ONE call, so a refusal of either leaves both unchanged
+      // — the state the form still shows — instead of saving the roles and then failing on
+      // the scope. A single change keeps its own call.
+      if (!sameRoles && !sameScope) await setMemberAccess(editing.email, roles, scope);
+      else if (!sameRoles) await setMemberRoles(editing.email, roles);
+      else if (!sameScope) await setMemberScope(editing.email, scope);
       onDone(t('accessSavedToast', { email: editing.email }));
     } catch (err) {
       setFormError(memberErrorMessage(err, t, { CONFLICT: 'members:errorAlreadyMember', NOT_FOUND: 'members:errorUnknownRoleOrScope' }));

@@ -746,16 +746,23 @@ export async function setGroupAccessScope(token: string, enabled: boolean): Prom
 export const MAX_ACCESS_SCOPE_GROUPS = 32;
 
 const PUBLISH_ENTITY_GROUP = graphql(`
-  mutation PublishEntityGroup($token: String!) {
-    publishEntityGroup(token: $token) {
+  mutation PublishEntityGroup($token: String!, $expectedActiveVersion: Int) {
+    publishEntityGroup(token: $token, expectedActiveVersion: $expectedActiveVersion) {
       version
     }
   }
 `);
 
-/** Publish a dynamic group's filter as a new version, which becomes the one its members follow. */
-export async function publishEntityGroup(token: string): Promise<number> {
-  const data = await gql('device-management', PUBLISH_ENTITY_GROUP, { token });
+/** The text the server's refusal carries when a publish's stated version is no longer the group's. */
+export const GROUP_MOVED_MARKER = 'modified by another writer';
+
+/**
+ * Publish a dynamic group's filter as a new version, which becomes the one its members follow.
+ * `expectedActiveVersion` is the version the caller saw (0 for a group never published): if
+ * the group has moved on, the server refuses (GROUP_MOVED_MARKER) rather than publishing again.
+ */
+export async function publishEntityGroup(token: string, expectedActiveVersion: number): Promise<number> {
+  const data = await gql('device-management', PUBLISH_ENTITY_GROUP, { token, expectedActiveVersion });
   return data.publishEntityGroup.version;
 }
 

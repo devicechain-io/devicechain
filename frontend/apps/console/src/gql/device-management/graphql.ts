@@ -1492,6 +1492,7 @@ export type SetEntityGroupAccessScopeMutation = { setEntityGroupAccessScope: { t
 
 export type PublishEntityGroupMutationVariables = Exact<{
   token: string;
+  expectedActiveVersion?: number | null | undefined;
 }>;
 
 
@@ -3242,8 +3243,8 @@ export const SetEntityGroupAccessScopeDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<SetEntityGroupAccessScopeMutation, SetEntityGroupAccessScopeMutationVariables>;
 export const PublishEntityGroupDocument = new TypedDocumentString(`
-    mutation PublishEntityGroup($token: String!) {
-  publishEntityGroup(token: $token) {
+    mutation PublishEntityGroup($token: String!, $expectedActiveVersion: Int) {
+  publishEntityGroup(token: $token, expectedActiveVersion: $expectedActiveVersion) {
     version
   }
 }

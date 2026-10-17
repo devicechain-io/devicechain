@@ -647,7 +647,7 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 ### 管理租户时的拒绝 {#tenant-administration-refusals}
 
-租户自己的管理员通过 user-management 的租户 API（`inviteMember`、`setMemberRoles`、`setMemberScope`、`setMemberEnabled`、`removeMember`、`createTenantRole`、`updateTenantRole`、`deleteTenantRole` 等）管理该租户的成员、邀请和角色。这些操作使用各自的代码拒绝请求，因此客户端无需读取消息就能判断原因：
+租户自己的管理员通过 user-management 的租户 API（`inviteMember`、`setMemberRoles`、`setMemberScope`、`setMemberAccess`、`setMemberEnabled`、`removeMember`、`createTenantRole`、`updateTenantRole`、`deleteTenantRole` 等）管理该租户的成员、邀请和角色。这些操作使用各自的代码拒绝请求，因此客户端无需读取消息就能判断原因：
 
 | `extensions.code` | 含义 |
 | --- | --- |
