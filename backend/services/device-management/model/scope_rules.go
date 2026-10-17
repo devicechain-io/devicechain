@@ -14,8 +14,9 @@ import (
 // callback applies a model's rule beside the tenant predicate, and REFUSES a scoped read
 // of every tenant-scoped model that declares none. So this file is the whole list of what
 // a scoped caller can reach in device-management's store, and everything absent from it —
-// relationships, groups, assets, areas, rules, geofences, credentials, attributes,
-// provisioning, the audit journal — is refused at the model, whatever a resolver does.
+// relationships, group memberships and versions, assets, areas, rules, geofences,
+// credentials, attributes, provisioning, the audit journal — is refused at the model,
+// whatever a resolver does.
 //
 // Three kinds, by what decides visibility:
 //
@@ -37,7 +38,7 @@ var deviceOwnership = rdb.OwnershipEdges{
 	Edge: &EntityRelationship{}, Type: &EntityRelationshipType{},
 	SourceType: "source_type", SourceID: "source_id", SourceKind: string(entity.TypeDevice), Row: "id",
 	TargetType: "target_type", TargetToken: "target_token",
-	EdgeType: "relationship_type_id", TypeID: "id", Tracked: "tracked",
+	EdgeType: "relationship_type_id", TypeID: "id", Tracked: "tracked", TypeToken: "token",
 	Groups: &rdb.GroupMembers{
 		Kind:   auth.AnchorKindGroup,
 		Member: &EntityGroupMembership{}, Group: &EntityGroup{},
@@ -59,6 +60,14 @@ func (Alarm) ScopedBy() rdb.ScopeRule {
 // ScopedBy: a customer member reads its own customer record, and no other.
 func (Customer) ScopedBy() rdb.ScopeRule {
 	return rdb.NamedAnchor(string(entity.TypeCustomer), "token")
+}
+
+// ScopedBy: a member limited to a group reads that group's own record — so its console can
+// name what it is limited to — and no other group. Nothing the record leads to opens with
+// it: its members and versions are gated on Authorize, not AuthorizeScoped, and the
+// membership and version rows declare no rule, so the store refuses them too.
+func (EntityGroup) ScopedBy() rdb.ScopeRule {
+	return rdb.NamedAnchor(string(entity.TypeGroup), "token")
 }
 
 // The catalogue: configuration, not device-derived.

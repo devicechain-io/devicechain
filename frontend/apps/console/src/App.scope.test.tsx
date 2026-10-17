@@ -67,18 +67,23 @@ function visit(path: string, scope: string[]) {
   );
 }
 
+// A member limited to a group of devices is as scoped as one limited to a customer: the guard
+// keys on there being a scope, not on the kind of anchor it names.
+const SCOPES = [['customer:acme'], ['group:north'], ['customer:acme', 'group:north']];
+const cases = (paths: string[]) => SCOPES.flatMap((scope) => paths.map((path) => [path, scope] as [string, string[]]));
+
 describe('the route guard for a scoped member', () => {
-  it.each(['/customers', '/members', '/roles/new', '/device-types', '/audit'])(
-    'sends a scoped member home from %s',
-    async (path) => {
-      visit(path, ['customer:acme']);
+  it.each(cases(['/customers', '/members', '/roles/new', '/device-types', '/device-groups', '/audit']))(
+    'sends a scoped member home from %s (scope %j)',
+    async (path, scope) => {
+      visit(path, scope);
       expect(await screen.findByText('home page')).toBeTruthy();
       expect(screen.getByTestId('where').textContent).toBe('/');
     },
   );
 
-  it.each(['/devices', '/alarms', '/dashboards'])('lets a scoped member open %s', async (path) => {
-    visit(path, ['customer:acme']);
+  it.each(cases(['/devices', '/alarms', '/dashboards']))('lets a scoped member open %s (scope %j)', async (path, scope) => {
+    visit(path, scope);
     expect((await screen.findByTestId('where')).textContent).toBe(path);
     expect(screen.queryByText('home page')).toBeNull();
   });

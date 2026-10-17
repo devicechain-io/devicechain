@@ -342,17 +342,66 @@ func softDeleteColumn(s *schema.Schema) *schema.Field {
 	return nil
 }
 
-// deviceEdgeExpr builds a DeviceEdge predicate (see DeviceEdge). Every name comes from a
-// parsed schema and is quoted by gorm; the tenant, the source kind, the tracked flag and
-// every anchor are bound parameters.
+// deviceEdgeExpr builds a DeviceEdge predicate (see DeviceEdge): an edge of a TRACKED type
+// to any of the scope's anchors.
 func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []string) (clause.Expression, error) {
-	edge, edgeTenant, err := parseRuleModel(db, e.Edge, "device-edge")
+	row := db.Statement.Schema.LookUpField(e.Row)
+	if row == nil {
+		return nil, fmt.Errorf("a device-edge rule naming no row column %q", e.Row)
+	}
+	targets := make([]edgeTarget, 0, len(anchors))
+	var groupTokens []string
+	for _, a := range anchors {
+		kind, token, perr := auth.ParseAnchor(a)
+		if perr != nil {
+			return nil, perr
+		}
+		targets = append(targets, edgeTarget{kind: kind, token: token})
+		if e.Groups != nil && kind == e.Groups.Kind {
+			groupTokens = append(groupTokens, token)
+		}
+	}
+	edge, err := edgeExistsExpr(db, clause.Column{Table: db.Statement.Table, Name: row.DBName}, e, tenant,
+		edgeMatch{trackedOnly: true, targets: targets})
 	if err != nil {
 		return nil, err
 	}
-	typ, typeTenant, err := parseRuleModel(db, e.Type, "device-edge type")
+	if len(groupTokens) == 0 {
+		return edge, nil
+	}
+	members, err := groupMembersExpr(db, *e.Groups, row, tenant, groupTokens)
 	if err != nil {
 		return nil, err
+	}
+	return clause.Expr{SQL: "(" + edge.SQL + " OR " + members.SQL + ")", Vars: append(edge.Vars, members.Vars...)}, nil
+}
+
+// edgeTarget is one (kind, token) an edge's target may name.
+type edgeTarget struct{ kind, token string }
+
+// edgeMatch is what an edge must satisfy beyond its tenant, its liveness and its source.
+type edgeMatch struct {
+	// trackedOnly requires the edge's type to be tracked.
+	trackedOnly bool
+	// typeToken, when set, requires the edge's type to be the one with this token
+	// (OwnershipEdges.TypeToken names the column).
+	typeToken *string
+	// targets: the edge's target is one of these. None matches nothing.
+	targets []edgeTarget
+}
+
+// edgeExistsExpr builds the EXISTS over the edge graph that DeviceEdge and EdgeTo share:
+// a live edge, in the tenant (edge AND type), from the row (rowID), matching m. Every name
+// comes from a parsed schema and is quoted by gorm; the tenant, the source kind, the
+// tracked flag, the type token and every target are bound parameters.
+func edgeExistsExpr(db *gorm.DB, rowID clause.Column, e OwnershipEdges, tenant string, m edgeMatch) (clause.Expr, error) {
+	edge, edgeTenant, err := parseRuleModel(db, e.Edge, "device-edge")
+	if err != nil {
+		return clause.Expr{}, err
+	}
+	typ, typeTenant, err := parseRuleModel(db, e.Type, "device-edge type")
+	if err != nil {
+		return clause.Expr{}, err
 	}
 	col := func(s *schema.Schema, alias, name string) clause.Column {
 		c, cerr := aliasedColumn(s, alias, name)
@@ -368,15 +417,15 @@ func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []stri
 	sourceID := col(edge, scopeEdgeAlias, e.SourceID)
 	targetType := col(edge, scopeEdgeAlias, e.TargetType)
 	targetToken := col(edge, scopeEdgeAlias, e.TargetToken)
+	var typeToken clause.Column
+	if m.typeToken != nil {
+		typeToken = col(typ, scopeTypeAlias, e.TypeToken)
+	}
 	if err != nil {
-		return nil, err
+		return clause.Expr{}, err
 	}
 	if e.SourceKind == "" {
-		return nil, fmt.Errorf("a device-edge rule with no source kind")
-	}
-	row := db.Statement.Schema.LookUpField(e.Row)
-	if row == nil {
-		return nil, fmt.Errorf("a device-edge rule naming no row column %q", e.Row)
+		return clause.Expr{}, fmt.Errorf("a device-edge rule with no source kind")
 	}
 
 	var sql strings.Builder
@@ -396,38 +445,30 @@ func deviceEdgeExpr(db *gorm.DB, e OwnershipEdges, tenant string, anchors []stri
 		sql.WriteString(" AND ? IS NULL")
 		vars = append(vars, clause.Column{Table: scopeTypeAlias, Name: f.DBName})
 	}
-	sql.WriteString(" AND ? = ? AND ? = ? AND ? = ?")
-	vars = append(vars, tracked, true, sourceType, e.SourceKind,
-		sourceID, clause.Column{Table: db.Statement.Table, Name: row.DBName})
-	if len(anchors) == 0 {
+	if m.trackedOnly {
+		sql.WriteString(" AND ? = ?")
+		vars = append(vars, tracked, true)
+	}
+	if m.typeToken != nil {
+		sql.WriteString(" AND ? = ?")
+		vars = append(vars, typeToken, *m.typeToken)
+	}
+	sql.WriteString(" AND ? = ? AND ? = ?")
+	vars = append(vars, sourceType, e.SourceKind, sourceID, rowID)
+	if len(m.targets) == 0 {
 		sql.WriteString(" AND 1 = 0)")
 		return clause.Expr{SQL: sql.String(), Vars: vars}, nil
 	}
 	sql.WriteString(" AND (")
-	var groupTokens []string
-	for i, a := range anchors {
-		kind, token, perr := auth.ParseAnchor(a)
-		if perr != nil {
-			return nil, perr
-		}
+	for i, t := range m.targets {
 		if i > 0 {
 			sql.WriteString(" OR ")
 		}
 		sql.WriteString("(? = ? AND ? = ?)")
-		vars = append(vars, targetType, kind, targetToken, token)
-		if e.Groups != nil && kind == e.Groups.Kind {
-			groupTokens = append(groupTokens, token)
-		}
+		vars = append(vars, targetType, t.kind, targetToken, t.token)
 	}
 	sql.WriteString("))")
-	if len(groupTokens) == 0 {
-		return clause.Expr{SQL: sql.String(), Vars: vars}, nil
-	}
-	members, err := groupMembersExpr(db, *e.Groups, row, tenant, groupTokens)
-	if err != nil {
-		return nil, err
-	}
-	return clause.Expr{SQL: "(" + sql.String() + " OR " + members.SQL + ")", Vars: append(vars, members.Vars...)}, nil
+	return clause.Expr{SQL: sql.String(), Vars: vars}, nil
 }
 
 // Aliases of the member and group tables inside a DeviceEdge's group branch.

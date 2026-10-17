@@ -46,6 +46,14 @@ func newScopeFixture(t *testing.T) scopeFixture {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// ONE connection: every connection to ":memory:" is a database of its own, and a query
+	// whose field resolvers run concurrently (a relationship's source and target) would
+	// otherwise open a second, empty one.
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("sql db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
@@ -58,7 +66,7 @@ func seedScopeFixture(t *testing.T, db *gorm.DB, extra ...any) scopeFixture {
 	t.Helper()
 	if err := db.AutoMigrate(append([]any{&model.DeviceType{}, &model.Device{}, &model.DeviceProfile{},
 		&model.CustomerType{}, &model.Customer{}, &model.IssuedCustomerToken{}, &model.Area{}, &model.EntityRelationshipType{},
-		&model.EntityRelationship{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{},
+		&model.EntityRelationship{}, &model.PendingOwnershipFact{}, &model.DeviceClaim{}, &model.DeviceProfileVersion{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.Alarm{}, &model.EntityAttribute{}}, extra...)...); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

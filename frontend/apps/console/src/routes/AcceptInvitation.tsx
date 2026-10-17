@@ -42,7 +42,7 @@ type Way = 'new' | 'existing';
 export default function AcceptInvitationPage() {
   const { t } = useTranslation('members');
   const navigate = useNavigate();
-  const { acceptInvitation, login, selectTenant, identityToken } = useAuth();
+  const { acceptInvitation, login, selectTenant, logout, identityToken } = useAuth();
   const [code] = useState(takeCode);
   const [way, setWay] = useState<Way>('new');
   const [email, setEmail] = useState('');
@@ -72,6 +72,12 @@ export default function AcceptInvitationPage() {
   const fail = (err: unknown) => {
     const c = errorCode(err);
     if (c === 'INVALID_INVITATION') {
+      // The server gives ONE answer for an expired code and for one issued to another
+      // account, so it cannot be told which this is. Either way the HELD copy goes: one
+      // left in session storage sends every later single sign-on in this tab back here
+      // (the completion returns to the invitation whenever a code is held), to a page that
+      // can only refuse it again. The page keeps the code in memory, so someone signed in
+      // as the wrong account can still choose "Not you?", which holds it again.
       dropInvitation();
       setError(t('errorInvalidInvitation'));
     } else if (c === 'SSO_REQUIRED') {
@@ -112,9 +118,11 @@ export default function AcceptInvitationPage() {
   };
 
   // Single sign-on leaves the page; the code waits in session storage, and the sign-in's
-  // completion brings the browser back here holding an identity session.
+  // completion brings the browser back here holding an identity session. It is held
+  // again here rather than trusted to still be there: a refusal drops the held copy.
   const sso = async () => {
     setError(null);
+    if (code) holdInvitation(code);
     if (!email.trim()) {
       setError(t('login:ssoEmailRequired'));
       return;
@@ -131,6 +139,17 @@ export default function AcceptInvitationPage() {
     } catch (err) {
       fail(err);
     }
+  };
+
+  // Sign the current identity out and hold the code again: the page then offers a new
+  // account or signing in with the right one. Held, because a sign-out that ends the
+  // provider's session too leaves for the provider and comes back to the sign-in page,
+  // and the next single sign-on from there returns here only while a code is held.
+  // logout clears the tokens before it asks the server, so the identity is gone at once.
+  const switchAccount = () => {
+    setError(null);
+    if (code) holdInvitation(code);
+    void logout();
   };
 
   const wayOptions = [
@@ -185,6 +204,9 @@ export default function AcceptInvitationPage() {
                 onClick={() => void run(() => acceptInvitation(code, { identityToken }))}
               >
                 {t('acceptButton')}
+              </Button>
+              <Button variant="ghost" className="w-full" disabled={busy} onClick={switchAccount}>
+                {t('acceptNotYou')}
               </Button>
             </>
           ) : (

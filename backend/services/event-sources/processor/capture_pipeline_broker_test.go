@@ -140,7 +140,7 @@ func TestPipelinedCaptureReachesInboundEventsOnceEndToEnd(t *testing.T) {
 }
 
 // pinnedWindow is the window these tests ask the writer for. It is written out, and is
-// deliberately NOT the shipped default (config.DefaultCapturePublishWindow, 512), so that what
+// deliberately NOT the shipped default (config.DefaultCapturePublishWindow, 1024), so that what
 // the broker is seen holding is the argument NewInboundWriter was given: a writer that ignored
 // it and used some fixed number would hold a different count and fail. The shipped default's
 // value is pinned in the config package; the service handing the configured value to the

@@ -110,35 +110,32 @@ func TestShapeOf(t *testing.T) {
 	}
 }
 
-// The cap must be declared on the capture stream and on nothing else — an
-// accidental cap on a stream meant to track its tier would pin it below the
-// ceiling an operator sized the deployment with, and nothing would report it.
+// A cap may only be declared where it is intended, which is now the max-delivery capture
+// alone. An accidental cap on a stream meant to track its tier pins it below the ceiling an
+// operator sized the deployment with, and nothing reports it.
+//
+// 🔴 THE DEVICE-EVENTS CAPTURE STREAM IS NAMED HERE ON PURPOSE. It carried a 256 MiB cap, and
+// a perf run lost 7.2% of its PUBACKed MQTT events when the backlog crossed it, with no
+// setting able to raise it: streamMaxBytes moved the tier and the cap stayed.
+// Its ceiling is the whole margin between devices publishing faster than event-sources drains
+// and losing events the devices were told were accepted, so it must stay the operator's to set.
 func TestMaxBytesCapIsDeclaredOnlyWhereIntended(t *testing.T) {
-	if got := MaxBytesCapFor(DeviceEventsCapture); got != deviceEventsCaptureMaxBytesCap {
-		t.Errorf("MaxBytesCapFor(%q) = %d, want %d: the capture stream is capped because the "+
-			"Hot tier ceiling does not fit the disk budget",
-			DeviceEventsCapture, got, int64(deviceEventsCaptureMaxBytesCap))
+	if got := MaxBytesCapFor(DeviceEventsCapture); got != 0 {
+		t.Errorf("MaxBytesCapFor(%q) = %d, want 0: the capture stream's ceiling must track the Hot "+
+			"tier, the one an operator sizes, since it is all that stands between a slow drain and "+
+			"losing PUBACKed device events", DeviceEventsCapture, got)
 	}
-	// The cap must stay under the free space the default budget actually has. That
-	// is enforced end-to-end by config's reservation tests (and, at the far smaller
-	// --compact size, by dcctl's); this pins the intent at the declaration, where
-	// the number is chosen.
-	if deviceEventsCaptureMaxBytesCap > 384<<20 {
-		t.Errorf("capture cap %d B exceeds the 384 MiB the default budget leaves free above "+
-			"its headroom floor; see config.TestBudgetLeavesHeadroomForUnaccountedStreams",
-			int64(deviceEventsCaptureMaxBytesCap))
-	}
-	// The max-delivery capture is capped for the opposite reason: it is empty in steady
-	// state, and its tier ceiling would reserve far more than it could ever need.
+	// The max-delivery capture is capped because it is empty in steady state, and its tier
+	// ceiling would reserve far more than it could ever need.
 	if got := MaxBytesCapFor(MaxDeliveries); got != maxDeliveriesMaxBytesCap {
 		t.Errorf("MaxBytesCapFor(%q) = %d, want %d", MaxDeliveries, got, int64(maxDeliveriesMaxBytesCap))
 	}
 	for _, s := range All {
-		if s.Suffix == DeviceEventsCapture || s.Suffix == MaxDeliveries {
+		if s.Suffix == MaxDeliveries {
 			continue
 		}
 		if got := MaxBytesCapFor(s.Suffix); got != 0 {
-			t.Errorf("stream %q declares a ceiling cap of %d; only the two capture streams should, "+
+			t.Errorf("stream %q declares a ceiling cap of %d; only the max-delivery capture should, "+
 				"since every other stream is meant to track its tier's ceiling", s.Suffix, got)
 		}
 	}

@@ -1273,7 +1273,7 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "entityRelationshipType",
 		Token:   "ert-1",
-		Migrate: []any{&EntityRelationshipType{}},
+		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{
 				Token: "ert-1", Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),

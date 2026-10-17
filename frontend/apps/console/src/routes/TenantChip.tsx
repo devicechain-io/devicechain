@@ -7,7 +7,7 @@ import { scopeAnchorRefs } from '@devicechain/client';
 import { useAuth } from '@/auth/AuthProvider';
 import { useCurrentTenant } from '@/auth/TenantProvider';
 import { useBrandingLogoSrc } from '@/lib/useBrandingLogo';
-import { useCustomerNames } from '@/routes/members/ScopeBadges';
+import { scopeName, scopeRefs, useScopeNames } from '@/routes/members/ScopeBadges';
 
 // The tenant-context chip shown top-right in every tenant-app page header. Shows
 // the tenant name + token, and the tenant's branding logo in place of the generic
@@ -16,19 +16,20 @@ import { useCustomerNames } from '@/routes/members/ScopeBadges';
 // is fetched with the caller's token by useBrandingLogoSrc.
 //
 // For a member limited to part of the tenant (a customer user) the second line names what
-// they are limited to and the role they hold — "Acme · viewer" — so a person switching
-// between a full membership and a limited one can see which they are in.
+// they are limited to — customers and groups of devices, by name — and the role they hold —
+// "Acme · viewer" — so a person switching between a full membership and a limited one can
+// see which they are in.
 export function TenantChip() {
   const tenant = useCurrentTenant();
   const logo = useBrandingLogoSrc(tenant?.branding?.logo);
   const { t } = useTranslation('members');
   const { claims } = useAuth();
-  const anchors = scopeAnchorRefs(claims).filter((a) => a.kind === 'customer').map((a) => a.token);
-  const names = useCustomerNames(anchors);
+  const refs = scopeRefs(scopeAnchorRefs(claims));
+  const names = useScopeNames(refs);
   if (!tenant) return null;
-  const customers = anchors.map((a) => names[a] ?? a).join(', ');
+  const limitedTo = refs.map((r) => scopeName(r, names)).join(', ');
   const roles = (claims?.roles ?? []).join(', ');
-  const scopeLine = anchors.length === 0 ? null : roles ? t('chipScope', { customers, roles }) : customers;
+  const scopeLine = refs.length === 0 ? null : roles ? t('chipScope', { customers: limitedTo, roles }) : limitedTo;
 
   const label = tenant.name || tenant.token;
   return (

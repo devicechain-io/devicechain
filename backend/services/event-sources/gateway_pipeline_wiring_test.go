@@ -179,7 +179,7 @@ func TestConfiguredCapturePublishWindowReachesTheGatewayWriter(t *testing.T) {
 		{`{"capture":{"publishWindow":300}}`, 300},
 		// Counterweight: with nothing set the writer gets the default, so a wiring that
 		// always passed 300 (or any other fixed value) cannot pass both.
-		{`{}`, 512},
+		{`{}`, 1024},
 	} {
 		t.Run(tc.doc, func(t *testing.T) {
 			Microservice = &core.Microservice{InstanceId: "pubwindow", FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}

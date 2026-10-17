@@ -251,15 +251,19 @@ type Stream struct {
 	Shape Shape
 	// MaxBytesCap, when positive, is an upper bound on this stream's disk ceiling,
 	// applied ON TOP of its tier's rather than instead of it. It exists for a stream
-	// whose tier is right but whose tier ceiling does not fit the budget — see
-	// DeviceEventsCapture, where taking the Hot ceiling in full would overrun
-	// max_file_store.
+	// whose tier is right but whose tier ceiling would reserve far more than it can
+	// ever hold — see MaxDeliveries, which is empty in steady state.
+	//
+	// 🔴 NEVER ON A STREAM WHOSE BACKLOG IS DATA SOMEONE WAS PROMISED. A cap is not
+	// operator-tunable (raising the tier does not move it), so it fixes that stream's
+	// margin for every deployment. DeviceEventsCapture carried one, and in a perf run it
+	// set how soon PUBACKed device events were lost; see its declaration.
 	//
 	// A cap, specifically, and not an absolute size. The tier ceilings are what an
 	// operator sizes a deployment with, and --compact sets them far below the
 	// defaults (64 MiB Hot against a 3Gi volume). An absolute ceiling would ignore
-	// that entirely and claim four times the largest other stream in a compact
-	// install — the deployment profile would stop meaning anything for this stream.
+	// that entirely and could claim more than the tier in a compact install — the
+	// deployment profile would stop meaning anything for this stream.
 	// Taking the smaller of the two keeps the operator's sizing authoritative and
 	// lets the cap bind only where it is actually needed.
 	//
@@ -551,44 +555,6 @@ const (
 	SegmentEvents  = "events"
 )
 
-// deviceEventsCaptureMaxBytesCap caps DeviceEventsCapture below the Hot tier
-// ceiling, because taking the Hot ceiling in full does not fit the disk budget.
-//
-// The arithmetic, at the shipped defaults: the declared streams reserve 8968 MiB
-// (7 Hot x 1 GiB + 12 Cold x 128 MiB + this capped capture stream at 256 MiB + the
-// max-delivery capture capped at 8 MiB), the MQTT gateway stores 384 MiB and the KV
-// buckets 1088 MiB (6 State x 128 + 5 Cache x 64) — ~10.2 GiB reserved against the
-// 14 GiB max_file_store a 16Gi PV yields.
-// (The device-desired / device-reports streams are counted: they reserve budget like
-// every other Cold stream. Recount when a stream is added: this
-// sentence said "8 Cold / 9.5 GiB" while the tree held nine, and it is the sentence
-// anyone weighing a new stream reads.) Every
-// ceiling is reserved UP FRONT, so an uncapped capture stream does not merely
-// overcommit, it crashloops every stream-creating service at upgrade with
-// "insufficient storage resources available".
-//
-// 256 MiB: at ~250 B per raw device publish it buys roughly an hour of capture at
-// 250 events/s, which is a real outage-recovery envelope.
-//
-// READ THE NUMBER ABOVE BEFORE REUSING THIS REASONING. This cap was chosen when
-// the PV was 12Gi, whose 10 GiB ceiling left 512 MiB over the headroom floor —
-// i.e. nothing, so 256 MiB was as much as could be taken. The PV moved to 16Gi
-// (ADR-020 A0) precisely because a budget with no slack makes every new stream a
-// deploy-time landmine, and there is now 4.5 GiB unreserved. So the cap is no
-// longer pinned by the budget: if it proves tight, it can simply be raised. What
-// it is still pinned by is being a CAP rather than an absolute — see below.
-//
-// Being a CAP is what keeps this honest under --compact, whose Hot ceiling is
-// 64 MiB against a 3Gi volume: there the tier binds and this number never applies.
-// An absolute 256 MiB would have overrun the compact budget outright — it did,
-// which is how the cap semantics were arrived at rather than assumed.
-//
-// If it proves tight at the default size the PV now has room outright, but the
-// cheaper space to take first is still $MQTT_msgs: 256 MiB reserved for a gateway
-// store that stops buffering telemetry entirely once nothing subscribes to it
-// over MQTT (ADR-030 slice I7).
-const deviceEventsCaptureMaxBytesCap = 256 << 20
-
 // maxDeliveriesMaxBytesCap caps the max-delivery capture. An advisory is a few hundred
 // bytes and the stream is a work queue, so it holds only advisories no recorder has
 // finished with — steady state is empty. 8 MiB is some tens of thousands of them.
@@ -797,6 +763,17 @@ var All = []Stream{
 	// event-sources forwards what it reads here into inbound-events, so it stops reading
 	// while that stream applies backpressure, and the backlog waits here.
 	//
+	// SO ITS CEILING IS THE WHOLE MARGIN between devices publishing faster than event-sources
+	// drains and losing PUBACKed events, and it takes the Hot tier's in full: an operator
+	// sizing a fleet raises it with streamMaxBytes (and the volume), like every other Hot
+	// stream. It used to be capped at 256 MiB, below the tier, when the disk budget had no
+	// room for more. It is gone because it decided how soon events were lost and no setting
+	// could move it: GKE perf round 12 offered 12,000/s over 3,000 MQTT sessions,
+	// event-sources drained ~7,100/s, the backlog passed 256 MiB in about three minutes, and
+	// 155,415 of 2,159,925 PUBACKed events (7.2%) were evicted unread, while streamMaxBytes
+	// moved the tier and the cap stayed where it was. Under --compact the Hot tier is far below
+	// either number and binds as before.
+	//
 	// Nothing in the platform publishes here; the producer is the device. Writers
 	// are refused (messaging.WriteMessages) rather than allowed to publish to a
 	// subject that matches no stream.
@@ -812,8 +789,7 @@ var All = []Stream{
 	// Window: the broker's MQTT gateway stores device publishes here with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: DeviceEventsCapture, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
-		MaxBytesCap: deviceEventsCaptureMaxBytesCap, DeadLetterKind: kindEvent,
-		Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
+		DeadLetterKind: kindEvent, Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
 		Forwards: map[string]string{"event-sources": InboundEvents},
 		Why:      "raw device publishes, captured by the broker and held only until forwarded — the ingest durability floor"},
 

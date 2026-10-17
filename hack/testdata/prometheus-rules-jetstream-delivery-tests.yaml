@@ -504,6 +504,110 @@ tests:
         exp_alerts: []
 
   # ------------------------------------------------------------------
+  # The capture stream's unread backlog is growing 8 points a minute, as it did
+  # in a perf run that lost acknowledged MQTT events: at minute 2 (16%) ten
+  # minutes is not yet enough to fill it, at minute 3 (24%) it is, and one
+  # minute of `for` later, at minute 4 (32%), it pages, once per durable although
+  # two event-sources pods report it; it is still firing at minute 5 (40%).
+  # ------------------------------------------------------------------
+  - name: a capture backlog that will fill within ten minutes pages
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0+0.08x12'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-bbbbb", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0+0.075x12'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture
+            exp_annotations:
+              summary: "MQTT events the broker has already acknowledged are about to be lost"
+              description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 32% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+      - eval_time: 5m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture
+            exp_annotations:
+              summary: "MQTT events the broker has already acknowledged are about to be lost"
+              description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 40% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+
+  # ------------------------------------------------------------------
+  # A backlog that sat still at 30% for ten minutes and then starts climbing
+  # 10 points a minute. The rule must judge the rate it is growing at NOW,
+  # over its three-minute window: at minute 11 (40%) the window still holds
+  # the flat stretch and gives more than ten minutes, at 12 (50%) it gives
+  # five, and one minute of `for` later it pages. A window long enough to
+  # average the flat stretch in would still see more than ten minutes left
+  # at minute 13 and say nothing until it was too late.
+  # ------------------------------------------------------------------
+  - name: a steady capture backlog that starts climbing pages on its current rate
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0.3x10 0.4 0.5 0.6 0.7'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 13m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              stream: devicechain_device-events-capture
+              durable: devicechain_event-sources_device-events-capture
+            exp_annotations:
+              summary: "MQTT events the broker has already acknowledged are about to be lost"
+              description: "Durable devicechain_event-sources_device-events-capture has not yet forwarded 60% of what stream devicechain_device-events-capture can hold, and at the rate that backlog grew over the last three minutes the stream will be full within ten. Every event in it was sent by an MQTT device that the broker has already acknowledged, so the platform cannot refuse them: once the stream is full it discards the oldest unforwarded ones and the devices are never told (JetStreamDurableLostUnread). Devices are publishing faster than event-sources forwards. If event-sources is not busy on CPU, its publish window is the limit: devicechain_eventsources_jetstream_publish_window_full_seconds_total{writer=\"capture\"} grows by close to a second per second; add event-sources replicas, each of which brings its own window (capture.publishWindow already defaults to its maximum, 1024; raise it only if it was lowered). If inbound-events is refusing new events (JetStreamIngestBackpressureEngaged), the slow consumer is further downstream. To buy time, raise streamMaxBytes together with the JetStream volume, and streamMaxMsgs too if the stream fills by message count first (small payloads); event-sources applies the new ceilings when it restarts."
+
+  # ------------------------------------------------------------------
+  # Quiet, each case carrying its series:
+  #   - a capture backlog DRAINING from 60% (a negative slope is not a time left);
+  #   - one at 30% growing so slowly it would take hours to fill;
+  #   - a burst that stays under the 10% floor;
+  #   - device-state's durable filling just as fast (the rule is for the capture
+  #     durable only; JetStreamDurableUnreadNearFull covers every other one);
+  #   - another instance's capture durable filling fast.
+  # ------------------------------------------------------------------
+  - name: a draining, slow or small capture backlog, another durable and another instance are quiet
+    interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-aaaaa", job="devicechain/event-sources", stream="devicechain_device-events-capture", durable="devicechain_event-sources_device-events-capture"}'
+        values: '0.6-0.02x12'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ccccc", job="devicechain/event-sources", stream="slow_device-events-capture", durable="slow_event-sources_device-events-capture"}'
+        values: '0.3+0.002x12'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-event-sources-7c9f-ddddd", job="devicechain/event-sources", stream="burst_device-events-capture", durable="burst_event-sources_device-events-capture"}'
+        values: '0 0.09x11'
+      - series: 'devicechain_devicestate_jetstream_consumer_unread_ratio{namespace="dci-devicechain", pod="dc-device-state-7c9f-eeeee", job="devicechain/device-state", stream="devicechain_resolved-events", durable="devicechain_device-state_resolved-events"}'
+        values: '0+0.08x12'
+      - series: 'devicechain_eventsources_jetstream_consumer_unread_ratio{namespace="dci-other", pod="dc-event-sources-7c9f-zzzzz", job="other/event-sources", stream="other_device-events-capture", durable="other_event-sources_device-events-capture"}'
+        values: '0+0.08x12'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: JetStreamCaptureBacklogWillOverflow
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
   # A send ran past the acknowledgement window: one worker-stage count on
   # the notification service's reader.
   # ------------------------------------------------------------------

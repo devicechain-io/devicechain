@@ -29,6 +29,9 @@ const FORBIDDEN_PREFIX = /^forbidden\b/i;
  * error state.
  */
 export function isForbiddenError(err: unknown): boolean {
+  // A subscription's refusal arrives from graphql-ws as the bare list of GraphQL errors, not
+  // wrapped in a GraphQLRequestError; it is the same refusal and reads the same way.
+  if (Array.isArray(err)) return err.some(isForbiddenEntry);
   if (!(err instanceof GraphQLRequestError)) return false;
   // A transport-level 403 counts even with no GraphQL body to read.
   if (err.status === 403) return true;
@@ -38,6 +41,29 @@ export function isForbiddenError(err: unknown): boolean {
   if (err.errors?.some((e) => e.extensions?.code === 'FORBIDDEN')) return true;
   const messages = err.errors?.length ? err.errors.map((e) => e.message) : [err.message];
   return messages.some((m) => FORBIDDEN_PREFIX.test(m.trim()));
+}
+
+// One entry of a GraphQL error list: refused by code, or (from a server that predates the code)
+// by the message prefix.
+function isForbiddenEntry(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const entry = e as { message?: unknown; extensions?: { code?: unknown } };
+  if (entry.extensions?.code === 'FORBIDDEN') return true;
+  return typeof entry.message === 'string' && FORBIDDEN_PREFIX.test(entry.message.trim());
+}
+
+/**
+ * True when the server refused the request because the caller is a member limited to part
+ * of the tenant (a customer user) and the operation is not offered to such members at all
+ * (`FORBIDDEN` with reason `SCOPE_UNSUPPORTED`). Distinct from an ordinary refusal: nothing
+ * the member could be granted inside their scope would change the answer, so a caller
+ * renders "not available for customer users" rather than "you do not have access".
+ */
+export function isScopeUnsupportedError(err: unknown): boolean {
+  if (!(err instanceof GraphQLRequestError)) return false;
+  return (err.errors ?? []).some(
+    (e) => e.extensions?.code === 'FORBIDDEN' && e.extensions?.reason === 'SCOPE_UNSUPPORTED',
+  );
 }
 
 /**

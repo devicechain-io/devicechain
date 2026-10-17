@@ -135,21 +135,26 @@ instance:
         # Raise them (and the broker max_payload / PV) for a high-throughput deploy.
         #
         # The byte ceiling is split by stream class, because JetStream reserves it UP
-        # FRONT at creation: the platform's 19 streams would reserve 19 GiB at a
+        # FRONT at creation: the platform's 22 streams would reserve 22 GiB at a
         # uniform 1 GiB, most of it on control-plane streams that never hold more than
         # a few MiB. streamMaxBytes applies to the 8 HOT streams (volume scales with
-        # device count × message rate); streamMaxBytesCold applies to the 11
+        # device count × message rate); streamMaxBytesCold applies to the 14
         # control-plane ones (see streams.All in backend/core/streams for the
         # classification — it is set in code, not here, so every service agrees on the
-        # bound for a given stream). One hot stream, the device-events capture stream,
-        # additionally caps itself below that bound (256 MiB), and so does one cold
-        # stream, the max-delivery capture (8 MiB), so the platform streams reserve
-        # 8712 MiB (8.51 GiB) rather than 9.375. The MQTT gateway's own streams, bounded
-        # at startup because nats-server creates them unlimited, add 384 MiB for
-        # 8.883 GiB total. The KV buckets (device caches, locks, refresh tokens,
-        # OAuth codes, sign-in and MQTT password attempt counts) are bounded too — 6
-        # State buckets at 128 MiB + 5 Cache buckets at 64 MiB — and reserve a further
-        # 1088 MiB, for 9.945 GiB (10184 MiB) reserved.
+        # bound for a given stream). One cold stream, the max-delivery capture, caps
+        # itself below that bound (8 MiB), so the platform streams reserve 9864 MiB
+        # (9.63 GiB). The device-events capture stream takes the hot bound in full: it
+        # holds MQTT events the broker has already acknowledged to the device until
+        # event-sources forwards them, so its ceiling is how long a backlog can grow
+        # before acknowledged events are lost, and streamMaxBytes is how an operator
+        # sizes it. (It was capped at 256 MiB, which no setting could raise, until a
+        # perf run lost 7.2% of its acknowledged events when the backlog crossed it.) The MQTT
+        # gateway's own streams, bounded at startup because nats-server creates them
+        # unlimited, add 384 MiB for 10.01 GiB total. The KV buckets (device caches,
+        # locks, leases, refresh tokens, OAuth and single sign-on codes, sign-in and
+        # MQTT password attempt counts) are bounded too — 8 State buckets at 128 MiB +
+        # 5 Cache buckets at 64 MiB — and reserve a further 1344 MiB, for 11.32 GiB
+        # (11592 MiB) reserved.
         #
         # 🔴 THESE NUMBERS ARE COMPUTED FROM THE REGISTRY, NOT MAINTAINED BY HAND, AND
         # THEY HAD ALREADY DRIFTED ONCE. Before this was corrected the paragraph read
@@ -161,9 +166,10 @@ instance:
         # derives its own from streams.All and only ever gets a wider margin as
         # streams are removed), so if you change the stream inventory, recompute them
         # by summing StreamMaxBytesFor over streams.Suffixes() rather than adjusting
-        # the sentence.
+        # the sentence. (They drifted a second time: this paragraph said 10184 MiB
+        # while the tree reserved 10824, three streams and two State buckets later.)
         # That fits the 16Gi JetStream PV, whose max_file_store ceiling is 14Gi,
-        # leaving 4.055 GiB (4152 MiB) genuinely unreserved. Note that ceiling floors 90% of the
+        # leaving 2.68 GiB (2744 MiB) genuinely unreserved. Note that ceiling floors 90% of the
         # PV's MAGNITUDE and reattaches the unit (floor(16 * 0.9) = 14 → "14Gi"), so
         # it is 14Gi and not 14.4 GiB — the difference is 409 MiB of headroom that
         # does not exist.
@@ -1397,12 +1403,14 @@ functionalAreas:
     #
     # Inbound-events publish window: how many events a pod keeps awaiting the broker's
     # acknowledgement at once, 1 to 1024 (out of range, 0 included, stops the service).
-    # Ingest cannot exceed this divided by the acknowledgement time, ~8-11 ms on a
-    # replicated broker, so 128 capped a pod near 11,000 events/s. Each event in the
-    # window is held in memory with its source message until acknowledged.
+    # Ingest cannot exceed this divided by the acknowledgement time, ~8-11 ms on an
+    # idle replicated broker and ~70 ms on a loaded one, where 512 capped a pod near
+    # 7,100 events/s while MQTT devices published faster and the capture stream filled.
+    # Past 1024, add replicas. Each event in the window is held in memory with its
+    # source message until acknowledged.
     #   config:
     #     capture:
-    #       publishWindow: 512
+    #       publishWindow: 1024
     #
     # Broker-presence publish window: how many presence transitions a pod keeps awaiting
     # the broker's acknowledgement at once, 1 to 1024 (out of range, 0 included, stops the

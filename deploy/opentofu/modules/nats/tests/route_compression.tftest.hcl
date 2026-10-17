@@ -7,9 +7,9 @@
 # and it has no values schema, so a compression key under the wrong parent is
 # accepted and does nothing. These read the values document Helm is handed.
 #
-# "off" must leave that document as it was before the variable existed: no merge
-# key at all on the cluster block, so an upgrade that leaves the knob alone does not
-# change the rendered config and does not roll the broker.
+# Left unset, a clustered broker gets s2_fast and a single server gets off. An
+# explicit "off" wins over that default, and must leave the document as it was
+# before the variable existed: no merge key at all on the cluster block.
 #
 # Runs against mocked providers, so no cluster is needed. Run it with
 # hack/check-tofu-module-tests.sh, which tests a COPY of the module.
@@ -24,17 +24,50 @@ variables {
   ha          = true
 }
 
-run "off_by_default_renders_nothing" {
+run "s2_fast_by_default_on_a_cluster" {
   command = plan
 
   assert {
+    condition     = yamldecode(helm_release.nats.values[0]).config.cluster.merge == { compression = "s2_fast" }
+    error_message = "a clustered broker with route_compression unset must render config.cluster.merge.compression = s2_fast and nothing else"
+  }
+
+  assert {
+    condition     = output.ha_topology.route_compression == "s2_fast"
+    error_message = "ha_topology.route_compression must report s2_fast by default on a cluster"
+  }
+}
+
+# An explicit null is the same as leaving it out.
+run "explicit_null_is_the_default" {
+  command = plan
+
+  variables {
+    route_compression = null
+  }
+
+  assert {
+    condition     = output.ha_topology.route_compression == "s2_fast"
+    error_message = "route_compression = null must take the clustered default, s2_fast"
+  }
+}
+
+# An explicit off wins over the clustered default, and renders nothing.
+run "explicit_off_renders_nothing" {
+  command = plan
+
+  variables {
+    route_compression = "off"
+  }
+
+  assert {
     condition     = !contains(keys(yamldecode(helm_release.nats.values[0]).config.cluster), "merge")
-    error_message = "with route_compression at its default the cluster block must carry no merge key at all"
+    error_message = "with route_compression = off the cluster block must carry no merge key at all"
   }
 
   assert {
     condition     = output.ha_topology.route_compression == "off"
-    error_message = "ha_topology.route_compression must report off by default"
+    error_message = "ha_topology.route_compression must report off when off is asked for"
   }
 }
 
@@ -126,8 +159,9 @@ run "s2_auto" {
   }
 }
 
-# Off on a single server is what every single-server broker already is.
-run "off_on_a_single_server" {
+# Unset on a single server is off, and is not refused: the clustered default must
+# not trip the guard below on the install that has no routes.
+run "unset_on_a_single_server_is_off" {
   command = plan
 
   variables {
@@ -136,7 +170,28 @@ run "off_on_a_single_server" {
 
   assert {
     condition     = output.ha_topology.route_compression == "off" && !output.ha_topology.clustered
-    error_message = "a single server reports off"
+    error_message = "a single server with route_compression unset reports off"
+  }
+
+  # The report above reads the mode back out of the merge, so a merge carrying
+  # "off" would satisfy it too. A single server's values must not change at all.
+  assert {
+    condition     = !contains(keys(yamldecode(helm_release.nats.values[0]).config.cluster), "merge")
+    error_message = "a single server with route_compression unset must render no merge key on the cluster block"
+  }
+}
+
+run "explicit_off_on_a_single_server" {
+  command = plan
+
+  variables {
+    ha                = false
+    route_compression = "off"
+  }
+
+  assert {
+    condition     = output.ha_topology.route_compression == "off" && !output.ha_topology.clustered
+    error_message = "a single server with route_compression = off reports off"
   }
 }
 

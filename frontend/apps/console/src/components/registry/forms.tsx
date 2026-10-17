@@ -194,6 +194,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   create,
   update,
   onDone,
+  readOnly = false,
 }: {
   entity?: T;
   /** Family prefix in the `entities` catalog, e.g. "asset". */
@@ -206,6 +207,8 @@ export function RegistryInstanceForm<T extends NamedEntity>({
   create: (req: InstanceRequest) => Promise<unknown>;
   update: (token: string, req: InstanceRequest) => Promise<unknown>;
   onDone: (message: string) => void;
+  /** Show the values without offering to change them: inputs disabled, no save. */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation(['entities', 'common']);
   const e = (suffix: string, opts?: Record<string, unknown>) =>
@@ -268,7 +271,7 @@ export function RegistryInstanceForm<T extends NamedEntity>({
             onChange={setTypeToken}
             options={options}
             placeholder={e('TypeSelect')}
-            disabled={noTypes}
+            disabled={noTypes || readOnly}
           />
         </FormField>
         <FormField
@@ -292,20 +295,22 @@ export function RegistryInstanceForm<T extends NamedEntity>({
         </FormField>
       </div>
       <FormField label={t('common:colName')} htmlFor="r-name">
-        <Input id="r-name" value={name} onChange={(ev) => setName(ev.target.value)} />
+        <Input id="r-name" value={name} disabled={readOnly} onChange={(ev) => setName(ev.target.value)} />
       </FormField>
       <FormField label={t('common:colDescription')} htmlFor="r-description">
-        <Textarea id="r-description" value={description} onChange={(ev) => setDescription(ev.target.value)} />
+        <Textarea id="r-description" value={description} disabled={readOnly} onChange={(ev) => setDescription(ev.target.value)} />
       </FormField>
-      <div className="flex gap-2">
-        <Button
-          onClick={submit}
-          loading={busy}
-          disabled={busy || noTypes || (!editing && !token.trim()) || !typeToken}
-        >
-          {editing ? t('common:saveChanges') : e('CreateAction')}
-        </Button>
-      </div>
+      {!readOnly && (
+        <div className="flex gap-2">
+          <Button
+            onClick={submit}
+            loading={busy}
+            disabled={busy || noTypes || (!editing && !token.trim()) || !typeToken}
+          >
+            {editing ? t('common:saveChanges') : e('CreateAction')}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

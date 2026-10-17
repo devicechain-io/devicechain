@@ -279,6 +279,20 @@ type DeviceSearchCriteria struct {
 	DeviceType *string
 }
 
+// Search criteria for the devices of one customer: those with a live edge of one
+// relationship type from the device to the customer.
+type CustomerDeviceSearchCriteria struct {
+	rdb.Pagination
+	// Customer is the customer's token.
+	Customer string
+	// RelationshipType is the token of the edge's relationship type.
+	RelationshipType string
+	// OwnershipOnly additionally requires that type to be TRACKED, so the edge is one of
+	// ownership. The resolver sets it for a caller limited to part of the tenant; it is not
+	// part of the GraphQL input.
+	OwnershipOnly bool
+}
+
 // Results for device search.
 type DeviceSearchResults struct {
 	Results    []Device

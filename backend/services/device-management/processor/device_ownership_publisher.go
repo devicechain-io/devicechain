@@ -15,14 +15,19 @@ import (
 
 // DeviceOwnershipWriter is the NATS-backed model.DeviceOwnershipPublisher (ADR-081): it
 // publishes a device's complete current anchor set on the per-tenant device-ownership
-// subject after every write that may have changed it. Like the other fact writers it is
-// injected into the shared *Api at wiring time and never fails the write that called it:
-// a marshal or publish failure is logged and counted, and the device's next resolved
-// event carries the same anchors, which is what a consumer falls back on.
+// subject, for the ownership drain (model.DrainOwnershipFacts).
 //
-// The context it is handed is the service's own (model.ownershipReadContext): the tenant
-// of the write and nothing of the caller's, so the subject is the tenant's and the fact
-// is never attributed to, or bounded by, the member whose write caused it.
+// 🔴 IT RETURNS ITS FAILURE, UNLIKE THE OTHER FACT WRITERS. They are called after a commit by
+// a write that has nothing left to do with an error, so they log and count it. This one is
+// called by the drain, which deletes a queued fact only once the broker has acknowledged it:
+// a failure swallowed here would be a fact deleted unsent — the device's old owner keeping
+// its live view for as long as the device stays quiet, which is the loss the queue exists to
+// prevent. It still counts every failure, so a broker refusing ownership facts shows on the
+// same series as before.
+//
+// The context it is handed is the drain's: the tenant of the queued row and nothing of any
+// caller's, so the subject is the tenant's and the fact is never attributed to, or bounded
+// by, the member whose write queued it.
 type DeviceOwnershipWriter struct {
 	writer   messaging.MessageWriter
 	failures prometheus.Counter
@@ -34,17 +39,20 @@ func NewDeviceOwnershipWriter(writer messaging.MessageWriter, failures prometheu
 	return &DeviceOwnershipWriter{writer: writer, failures: failures}
 }
 
-// PublishDeviceOwnershipChanged marshals and publishes one ownership fact.
-func (w *DeviceOwnershipWriter) PublishDeviceOwnershipChanged(ctx context.Context, event *model.DeviceOwnershipChangedEvent) {
+// PublishDeviceOwnershipChanged marshals and publishes one ownership fact, and reports
+// whether the broker acknowledged it.
+func (w *DeviceOwnershipWriter) PublishDeviceOwnershipChanged(ctx context.Context, event *model.DeviceOwnershipChangedEvent) error {
 	bytes, err := proto.MarshalDeviceOwnershipChangedEvent(event)
 	if err != nil {
 		log.Error().Err(err).Str("device", event.DeviceToken).Msg("Unable to marshal device ownership-changed event")
 		countFactFailure(w.failures)
-		return
+		return err
 	}
 	if err := w.writer.WriteMessages(ctx, messaging.Message{Value: bytes}); err != nil {
-		log.Error().Err(err).Str("device", event.DeviceToken).
-			Msg("Unable to publish device ownership-changed event; consumers pick the device's owners up from its next resolved event.")
+		log.Warn().Err(err).Str("device", event.DeviceToken).
+			Msg("Unable to publish device ownership-changed event; it stays queued and is published on a later pass")
 		countFactFailure(w.failures)
+		return err
 	}
+	return nil
 }

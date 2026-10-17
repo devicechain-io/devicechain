@@ -23,16 +23,26 @@ const (
 	// divided by the time a PubAck takes (Little's law). On a replicated stream a PubAck is a
 	// quorum commit plus a route hop; measured on a three-node cluster it took 8.4 ms at the
 	// median and 11.4 ms on average at saturation, so the 128 this replaced capped a pod at
-	// 128 / 11.4 ms, about 11,200 events a second, at the platform's front door. 512 puts the
-	// cap near 45,000. The 128 was chosen with an in-process benchmark whose PubAck took well
-	// under a millisecond, where no window is ever full; it could not see this ceiling.
+	// 128 / 11.4 ms, about 11,200 events a second, at the platform's front door. The 128 was
+	// chosen with an in-process benchmark whose PubAck took well under a millisecond, where no
+	// window is ever full; it could not see this ceiling.
+	//
+	// 🔴 1024, NOT 512, BECAUSE THE PUBACK THAT COUNTS IS THE ONE UNDER LOAD. 512 was sized
+	// from that 11.4 ms. GKE perf round 12 drove 12,000 events/s over MQTT and one pod drained
+	// about 7,100/s at 0.38 cores with its whole pipeline in flight: 512 / 7,100 is a 72 ms
+	// mean settle time (the writer settles in order, so a slow PubAck holds every slot behind
+	// it, and the broker leading inbound-events was on a node 95% busy). Devices kept
+	// publishing at 12,000, and the difference filled the capture stream until the broker
+	// evicted events it had already PUBACKed. BenchmarkCaptureIngestUnderPubAckLatency
+	// reproduces it in process: with every PubAck 72 ms late, 512 drains 7,062/s and 1024
+	// 14,111/s, and at 36 ms, 13,990 and 27,497. 1024 is messaging.MaxOrderedWindow: past it,
+	// run more replicas, each of which brings its own window to the shared durable.
 	//
 	// MEMORY BOUND: at most window x (one built inbound event + the capture message it came
 	// from, held unacked until its publish is acknowledged) per pod. With typical payloads of
-	// a few KiB that is a few MiB at 512, and still small at the maximum of 1024 next to the
-	// reader's fetch batch and decode queue. A crash redelivers those sources at AckWait; the
-	// capture dedup id stores each once.
-	DefaultCapturePublishWindow = 512
+	// a few KiB that is a few MiB at 1024, small next to the reader's fetch batch and decode
+	// queue. A crash redelivers those sources at AckWait; the capture dedup id stores each once.
+	DefaultCapturePublishWindow = 1024
 
 	// DefaultPresencePublishWindow is how many presence transitions the broker tap keeps
 	// awaiting the broker's acknowledgement at once, across both of its subscriptions, when
@@ -42,7 +52,7 @@ const (
 	// device reconnect took about two minutes on one replica. 128 lifts that to about
 	// 128 / 11.4 ms, some 11,000 a second. A transition is a few hundred bytes, so the
 	// memory bound is negligible; the window is also a LOSS BOUND (see
-	// BrokerPresence.PublishWindow), which is why it is not the gateway's 512.
+	// BrokerPresence.PublishWindow), which is why it is not the gateway's 1024.
 	DefaultPresencePublishWindow = 128
 
 	// DefaultIngestReadingsPerSecond and DefaultIngestBurst are the platform
@@ -125,10 +135,10 @@ type IngestRateLimit struct {
 // about 11 ms) and, because one pod reads a source, that was the CLUSTER-WIDE ceiling for it.
 // 128 lifts that to about 128 / 11.4 ms, some 11,200 events a second for ONE source: more
 // than one MQTT subscription delivers in order to five decode workers, and about what the
-// whole platform downstream stores. It is deliberately NOT the gateway's 512
+// whole platform downstream stores. It is deliberately NOT the gateway's 1024
 // (DefaultCapturePublishWindow). There a deeper window costs only memory, because the capture
 // stream redelivers and its dedup id stores each event once; here the window is also a LOSS
-// BOUND (see ExternalMqtt.PublishWindow), so 512 would quadruple what a pod that dies can lose
+// BOUND (see ExternalMqtt.PublishWindow), so 1024 would multiply by eight what a pod that dies can lose
 // and buy throughput this source cannot use. The window is a ceiling, not an occupancy: a
 // low-rate source keeps about rate x acknowledgement time in flight, a handful, whatever it is.
 const DefaultExternalMqttPublishWindow = 128

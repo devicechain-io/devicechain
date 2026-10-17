@@ -16,7 +16,7 @@ import { useReload } from '@/routes/common';
 import { listAllMembers } from '@/lib/api/members';
 import { MemberAccessSheet, editMode, inviteMode, type MemberAccessMode } from '@/routes/members/MemberAccessSheet';
 import { MemberTable } from '@/routes/members/MembersPage';
-import { useCustomerNames } from '@/routes/members/ScopeBadges';
+import { scopeRefs, useScopeNames } from '@/routes/members/ScopeBadges';
 
 // CustomerUsersPanel shows the people whose access is limited to this customer — the
 // customer's own users — and invites a new one with the scope already set to it.
@@ -35,7 +35,7 @@ export function CustomerUsersPanel({ customerToken }: { customerToken: string })
   const members = (data ?? []).filter((m) =>
     m.scope.some((a) => a.kind === 'CUSTOMER' && a.token === customerToken),
   );
-  const names = useCustomerNames(members.flatMap((m) => m.scope.map((a) => a.token)));
+  const names = useScopeNames(members.flatMap((m) => scopeRefs(m.scope)));
 
   return (
     <div className="space-y-4">

@@ -15,8 +15,10 @@ import { CopyToken } from '@/components/ui/copy-token';
 import type { ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
 import { listCustomers } from '@/lib/api/customers';
+import { listAccessScopeGroups } from '@/lib/api/device-management';
 import {
   customerAnchor,
+  groupAnchor,
   inviteMember,
   listTenantRoles,
   setMemberRoles,
@@ -50,11 +52,18 @@ export function invitationLink(code: string): string {
   return `${window.location.origin}/invitation#code=${encodeURIComponent(code)}`;
 }
 
-type ScopeMode = 'all' | 'customers';
+type ScopeMode = 'all' | 'limited';
 
 // The customers a member can be limited to, offered in one list. A tenant with more than
 // the page shows can still type the token; the server refuses one that names nothing.
 const CUSTOMER_PAGE = { pageNumber: 1, pageSize: 1000 };
+
+/** The most entries one member's scope may name, customers and groups together (the server's limit). */
+export const MAX_SCOPE_ENTRIES = 16;
+
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x) => b.includes(x));
+}
 
 export function MemberAccessSheet({
   open,
@@ -100,11 +109,18 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
           : [],
     [editing, mode],
   );
+  const initialGroups = useMemo(
+    () => (editing ? editing.scope.filter((a) => a.kind === 'GROUP').map((a) => a.token) : []),
+    [editing],
+  );
 
   const [email, setEmail] = useState('');
   const [roles, setRoles] = useState<string[]>(initialRoles);
-  const [scopeMode, setScopeMode] = useState<ScopeMode>(initialCustomers.length > 0 ? 'customers' : 'all');
+  const [scopeMode, setScopeMode] = useState<ScopeMode>(
+    initialCustomers.length + initialGroups.length > 0 ? 'limited' : 'all',
+  );
   const [customers, setCustomers] = useState<string[]>(initialCustomers);
+  const [groups, setGroups] = useState<string[]>(initialGroups);
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // The one-time code, once an invitation has been issued. Held only in this component's
@@ -113,6 +129,9 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
 
   const { data: roleList } = useQuery(listTenantRoles, []);
   const { data: customerPage } = useQuery(() => listCustomers(CUSTOMER_PAGE), []);
+  // Only the groups that are access scopes are offered: a member limited to any other group
+  // would see nothing. The field's description says where a missing one is enabled.
+  const { data: accessGroups } = useQuery(listAccessScopeGroups, []);
 
   const roleOptions = useMemo<ComboboxOption[]>(
     () =>
@@ -129,9 +148,19 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
     const extra = customers.filter((c) => !known.some((k) => k.value === c)).map((c) => ({ value: c }));
     return [...known, ...extra];
   }, [customerPage, customers]);
+  const groupOptions = useMemo<ComboboxOption[]>(() => {
+    const known = (accessGroups ?? []).map((g) => ({ value: g.token, label: g.name || g.token }));
+    // A group already in the scope stays shown even once it stops being an access scope, so
+    // saving the sheet does not silently drop it; the member sees nothing through it until
+    // it is enabled again.
+    const extra = groups.filter((g) => !known.some((k) => k.value === g)).map((g) => ({ value: g }));
+    return [...known, ...extra];
+  }, [accessGroups, groups]);
 
-  const scope = scopeMode === 'customers' ? customers.map(customerAnchor) : [];
-  const scopeIncomplete = scopeMode === 'customers' && customers.length === 0;
+  const limited = scopeMode === 'limited';
+  const scope = limited ? [...customers.map(customerAnchor), ...groups.map(groupAnchor)] : [];
+  const scopeIncomplete = limited && customers.length + groups.length === 0;
+  const scopeTooLong = limited && customers.length + groups.length > MAX_SCOPE_ENTRIES;
 
   const submit = async () => {
     setFormError(null);
@@ -142,18 +171,16 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
         setIssued({ email: email.trim(), code: res.invitationCode });
         return;
       }
-      const sameRoles = roles.length === initialRoles.length && roles.every((r) => initialRoles.includes(r));
-      const targetCustomers = scopeMode === 'customers' ? customers : [];
+      const sameRoles = sameSet(roles, initialRoles);
       const sameScope =
-        targetCustomers.length === initialCustomers.length &&
-        targetCustomers.every((c) => initialCustomers.includes(c));
+        sameSet(limited ? customers : [], initialCustomers) && sameSet(limited ? groups : [], initialGroups);
       // Two calls, because they are two operations with their own refusals. Roles first:
       // a refusal there leaves both unchanged, which is the state the form still shows.
       if (!sameRoles) await setMemberRoles(editing.email, roles);
       if (!sameScope) await setMemberScope(editing.email, scope);
       onDone(t('accessSavedToast', { email: editing.email }));
     } catch (err) {
-      setFormError(memberErrorMessage(err, t, { CONFLICT: 'members:errorAlreadyMember', NOT_FOUND: 'members:errorUnknownRoleOrCustomer' }));
+      setFormError(memberErrorMessage(err, t, { CONFLICT: 'members:errorAlreadyMember', NOT_FOUND: 'members:errorUnknownRoleOrScope' }));
     } finally {
       setBusy(false);
     }
@@ -165,7 +192,7 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
 
   const scopeOptions = [
     { value: 'all' as const, label: t('scopeWholeTenant') },
-    { value: 'customers' as const, label: t('scopeCustomers') },
+    { value: 'limited' as const, label: t('scopeLimited') },
   ];
 
   return (
@@ -204,24 +231,45 @@ function MemberAccessForm({ mode, onDone }: { mode: MemberAccessMode; onDone: (m
           size="sm"
         />
       </FormField>
-      {scopeMode === 'customers' && (
-        <FormField label={t('scopeCustomersLabel')} htmlFor="m-customers" description={t('scopeCustomersDescription')}>
-          <MultiSelect
-            id="m-customers"
-            options={customerOptions}
-            value={customers}
-            onChange={setCustomers}
-            placeholder={t('scopeCustomersPlaceholder')}
-            searchPlaceholder={t('scopeCustomersSearchPlaceholder')}
-            emptyMessage={t('scopeCustomersEmpty')}
-          />
-        </FormField>
+      {limited && (
+        <>
+          <FormField label={t('scopeCustomersLabel')} htmlFor="m-customers" description={t('scopeCustomersDescription')}>
+            <MultiSelect
+              id="m-customers"
+              options={customerOptions}
+              value={customers}
+              onChange={setCustomers}
+              placeholder={t('scopeCustomersPlaceholder')}
+              searchPlaceholder={t('scopeCustomersSearchPlaceholder')}
+              emptyMessage={t('scopeCustomersEmpty')}
+            />
+          </FormField>
+          <FormField label={t('scopeGroupsLabel')} htmlFor="m-groups" description={t('scopeGroupsDescription')}>
+            <MultiSelect
+              id="m-groups"
+              options={groupOptions}
+              value={groups}
+              onChange={setGroups}
+              placeholder={t('scopeGroupsPlaceholder')}
+              searchPlaceholder={t('scopeGroupsSearchPlaceholder')}
+              emptyMessage={t('scopeGroupsEmpty')}
+            />
+          </FormField>
+          <p
+            className={scopeTooLong ? 'text-sm text-destructive' : 'text-sm text-muted-foreground'}
+            data-shot="member-scope-hint"
+          >
+            {scopeTooLong
+              ? t('scopeTooLong', { max: MAX_SCOPE_ENTRIES })
+              : t('scopeLimitedHint', { max: MAX_SCOPE_ENTRIES })}
+          </p>
+        </>
       )}
       <div className="flex gap-2">
         <Button
           onClick={submit}
           loading={busy}
-          disabled={busy || scopeIncomplete || (!editing && (!email.trim() || roles.length === 0))}
+          disabled={busy || scopeIncomplete || scopeTooLong || (!editing && (!email.trim() || roles.length === 0))}
         >
           {editing ? t('common:saveChanges') : t('inviteButton')}
         </Button>

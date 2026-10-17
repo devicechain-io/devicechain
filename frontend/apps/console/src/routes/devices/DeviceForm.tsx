@@ -17,9 +17,12 @@ import {
 export function DeviceForm({
   device,
   onDone,
+  readOnly,
 }: {
   device?: Device;
   onDone: (message: string) => void;
+  /** Show the device without offering to change it (a member without device:write). */
+  readOnly?: boolean;
 }) {
   return (
     <RegistryInstanceForm
@@ -50,6 +53,7 @@ export function DeviceForm({
         })
       }
       onDone={onDone}
+      readOnly={readOnly}
     />
   );
 }

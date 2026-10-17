@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/rdb"
 
 	"github.com/devicechain-io/dc-device-management/model"
 )
@@ -193,4 +194,69 @@ func (r *SchemaResolver) Devices(ctx context.Context, args struct {
 		S: r,
 		C: ctx,
 	}, nil
+}
+
+// CustomerDeviceSearchCriteriaInput is customerDevices' GraphQL input.
+type CustomerDeviceSearchCriteriaInput struct {
+	PageNumber       int32
+	PageSize         int32
+	Customer         string
+	RelationshipType string
+}
+
+// CustomerDevices lists the devices linked to one customer by one relationship type: what a
+// dashboard widget bound to a customer streams.
+//
+// A member limited to part of the tenant (ADR-081) is answered only about a customer its
+// scope names, and only through an OWNERSHIP edge (a tracked type), which together mean
+// the answer is never more than the devices that member already reads through its own
+// customer:
+//
+//   - 🔴 THE CUSTOMER MUST BE IN THE SCOPE, AND THAT IS CHECKED HERE, NOT IN THE STORE. The
+//     device rule beside the filter keeps every row one the caller can see, but a device may
+//     be assigned to two customers at once, so a caller asking about a customer outside its
+//     scope would be told which of ITS devices that other customer also holds — the
+//     disclosure deviceScopeAnchors is closed to scoped callers to avoid. The refusal is
+//     decided from the caller's claims alone, so a customer that exists and one that does
+//     not are refused alike: the answer says nothing about the customer asked about.
+//   - an untracked edge is not ownership, and the relationship graph is closed to a scoped
+//     caller, so for one the type must be tracked (OwnershipOnly); an untracked type matches
+//     nothing, as an unknown type does.
+//
+// An unscoped caller is answered for any customer through any type: the same members the
+// relationship search gives for (device → customer, type).
+func (r *SchemaResolver) CustomerDevices(ctx context.Context, args struct {
+	Criteria CustomerDeviceSearchCriteriaInput
+}) (*DeviceSearchResultsResolver, error) {
+	scope, err := auth.AuthorizeScoped(ctx, auth.DeviceRead)
+	if err != nil {
+		return nil, err
+	}
+	criteria := model.CustomerDeviceSearchCriteria{
+		Pagination:       rdb.Pagination{PageNumber: args.Criteria.PageNumber, PageSize: args.Criteria.PageSize},
+		Customer:         args.Criteria.Customer,
+		RelationshipType: args.Criteria.RelationshipType,
+	}
+	if scope.IsScoped() {
+		if !scopeNamesCustomer(scope, args.Criteria.Customer) {
+			return nil, auth.ErrForbidden
+		}
+		criteria.OwnershipOnly = true
+	}
+	found, err := r.GetApi(ctx).CustomerDevices(ctx, criteria)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceSearchResultsResolver{M: *found, S: r, C: ctx}, nil
+}
+
+// scopeNamesCustomer reports whether the scope names the customer with this token.
+func scopeNamesCustomer(scope auth.Scope, customer string) bool {
+	for _, a := range scope.Anchors() {
+		kind, token, err := auth.ParseAnchor(a)
+		if err == nil && kind == auth.AnchorKindCustomer && token == customer {
+			return true
+		}
+	}
+	return false
 }

@@ -353,25 +353,42 @@ Los datos generados se quedan en tu navegador y nunca se guardan.
 El historial solo crece. Publicar, activar una versión y revertir dejan las versiones anteriores en
 su sitio.
 
-## Compartir con clientes {#sharing-with-customers}
+## Compartir con clientes y grupos {#sharing-with-customers}
 
-Un miembro cuyo acceso está limitado a algunos de tus clientes ve un panel solo cuando se comparte con
-uno de esos clientes y se publica. En la lista de paneles, elige **Compartir** en un panel, elige los
-clientes y elige **Guardar uso compartido**. La lista que guardas sustituye a la anterior, y una lista
-vacía no comparte el panel con nadie. Puedes compartir un panel antes de publicarlo; sus clientes lo
-ven en cuanto se publica.
+Un miembro cuyo acceso está limitado a algunos de tus clientes, o a grupos de dispositivos, ve un
+panel solo cuando se comparte con uno de esos clientes o grupos y se publica. En la lista de paneles,
+elige **Compartir** en un panel, elige los **Clientes** y los **Grupos de dispositivos** y elige
+**Guardar uso compartido**. Las listas que guardas sustituyen a las anteriores, y unas listas vacías
+no comparten el panel con nadie. Puedes compartir un panel antes de publicarlo; los miembros con los
+que se comparte lo ven en cuanto se publica.
 
-{/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
+Solo se ofrecen los grupos usados como ámbito de acceso. Si falta un grupo, actívalo como ámbito de
+acceso en la página del grupo, como se describe en
+[Limitar un miembro a un grupo de dispositivos](/user-guide/members-roles-and-customer-users#group-scopes).
+Un grupo que deja de ser un ámbito de acceso conserva las comparticiones que tenía, pero no se puede
+volver a guardar hasta que lo sea de nuevo: al guardarlo se rechaza con un mensaje que dice que un
+grupo elegido ya no es un ámbito de acceso.
 
-Vincula a dispositivos los widgets de un panel que compartes. Un widget vinculado a un cliente, un
-activo o un área encuentra sus dispositivos a través de las relaciones, que un miembro con acceso
-limitado no puede leer, así que no le muestra nada.
+{/* TODO(screenshot): dashboard-share, the Share drawer with customers and groups picked. */}
+
+Vincula los widgets de un panel que compartes a dispositivos o a los clientes con los que lo
+compartes. Un widget vinculado a un cliente, con **Relationship** establecido en `assigned` (la
+relación que crea la pestaña **Assignment** de un dispositivo), muestra a cada usuario de cliente los
+dispositivos de ese cliente, siempre que el cliente sea uno de los suyos; vinculado a cualquier otro
+cliente, le muestra **No tiene acceso a estos datos**. Un widget vinculado a un activo, un área o un
+grupo encuentra sus dispositivos a través de las relaciones, que un miembro con acceso limitado no
+puede leer, así que en lugar de sus datos le muestra **Not available for customer users** (no
+disponible para usuarios de cliente). En un panel compartido con un grupo, vincula los widgets a los
+dispositivos del grupo.
 
 Un programa hace lo mismo con la mutación `shareDashboard`, que requiere `dashboard:write`:
 
 ```graphql
 mutation {
-  shareDashboard(token: "plant-overview", anchors: [{ kind: CUSTOMER, token: "acme" }]) {
+  shareDashboard(
+    token: "plant-overview"
+    anchors: [{ kind: CUSTOMER, token: "acme" }, { kind: GROUP, token: "north-wing" }]
+  ) {
     token
     sharedWith { kind token }
   }
@@ -379,15 +396,16 @@ mutation {
 ```
 
 - La lista que envías sustituye a la anterior. Una lista vacía no comparte el panel con nadie.
-- Todos los clientes deben existir. Si uno no existe, la solicitud falla con `NOT_FOUND` y nada
-  cambia.
-- Ese miembro solo ve en la lista los paneles **publicados** compartidos con sus clientes, y abre su
-  versión publicada. Nunca ve un borrador ni el historial de versiones. Cualquier otro panel se
+- Todos los clientes deben existir, y todos los grupos deben existir y ser un ámbito de acceso. Si
+  alguno no lo cumple, la solicitud falla con `NOT_FOUND` y nada cambia. Un grupo que existe pero no
+  es un ámbito de acceso se responde exactamente igual que uno que no existe.
+- Ese miembro solo ve en la lista los paneles **publicados** compartidos con sus clientes o grupos, y
+  abre su versión publicada. Nunca ve un borrador ni el historial de versiones. Cualquier otro panel se
   responde como si no existiera.
 - Compartir un panel no comparte datos. Cada widget sigue mostrando solo lo que el miembro puede ver.
 - Un miembro con acceso limitado no puede compartir un panel ni ver con quién está compartido.
-- Eliminar el panel elimina sus comparticiones. Eliminar un cliente elimina las comparticiones que lo
-  nombran.
+- Eliminar el panel elimina sus comparticiones. Eliminar un cliente o un grupo elimina las
+  comparticiones que lo nombran.
 
 ## Relacionado
 

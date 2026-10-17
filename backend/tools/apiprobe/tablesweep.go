@@ -217,6 +217,14 @@ var tableSweepExemptions = map[string]string{
 		"upgrade, not that the engine runs. Enabling one to fill this table would change what the " +
 		"drill claims, so it is a decision rather than an omission.",
 
+	// ---- queues that are empty once they have caught up -----------------------
+	"device-management.pending_ownership_facts": "the ownership outbox: a row lives from the commit of " +
+		"a write that may move a device's owners until device-management's drain, which runs every " +
+		"second, has published the device's anchors to device-state. Every edge the seed writes queues " +
+		"one, so the writer is exercised; empty afterwards is the drain having caught up. A row still " +
+		"here a few seconds after the seed means ownership facts are not reaching the broker, which is " +
+		"a finding this bucket should report.",
+
 	// ---- per-area journals, correctly empty ----------------------------------
 	//
 	// 🔑 Confirmed rather than assumed: device-management.audit_events is NOT among the

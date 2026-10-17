@@ -137,6 +137,11 @@ func (api *MockApi) Devices(ctx context.Context, criteria model.DeviceSearchCrit
 	return args.Get(0).(*model.DeviceSearchResults), args.Error(1)
 }
 
+func (api *MockApi) CustomerDevices(ctx context.Context, criteria model.CustomerDeviceSearchCriteria) (*model.DeviceSearchResults, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.DeviceSearchResults), args.Error(1)
+}
+
 func (api *MockApi) CreateDeviceCredential(ctx context.Context, request *model.DeviceCredentialCreateRequest) (*model.DeviceCredential, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.DeviceCredential), args.Error(1)

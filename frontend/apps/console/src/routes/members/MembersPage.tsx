@@ -46,7 +46,7 @@ import {
   type Member,
 } from '@/lib/api/members';
 import { MemberAccessSheet, InvitationIssued, editMode, inviteMode, type MemberAccessMode } from './MemberAccessSheet';
-import { ScopeBadges, useCustomerNames } from './ScopeBadges';
+import { ScopeBadges, scopeRefs, useScopeNames } from './ScopeBadges';
 import { memberErrorMessage } from './memberErrors';
 
 const PAGE_SIZE = 50;
@@ -62,7 +62,7 @@ export default function MembersPage() {
     [pageNumber, version],
   );
   const members = data?.results ?? [];
-  const names = useCustomerNames(members.flatMap((m) => m.scope.map((a) => a.token)));
+  const names = useScopeNames(members.flatMap((m) => scopeRefs(m.scope)));
   const [sheet, setSheet] = useState<MemberAccessMode | null>(null);
   const { toast } = useToast();
 
@@ -201,7 +201,7 @@ export function MemberTable({
               </div>
             </DataTableCell>
             <DataTableCell>
-              <ScopeBadges tokens={m.scope.map((a) => a.token)} names={names} />
+              <ScopeBadges refs={scopeRefs(m.scope)} names={names} />
             </DataTableCell>
             <DataTableCell>
               <MemberStatus member={m} />

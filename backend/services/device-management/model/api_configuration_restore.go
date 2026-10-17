@@ -261,7 +261,7 @@ func (api *Api) applyConfigurationDocument(ctx context.Context, deviceToken stri
 		if isNew {
 			minted = rev
 		}
-		return nil
+		return queueAccessChangeOnTx(tx, deviceType, deviceId, touched)
 	})
 	if err != nil {
 		return err

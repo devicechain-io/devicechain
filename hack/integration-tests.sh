@@ -128,6 +128,11 @@ for m in "${modules[@]}"; do
   # say WHY sends its reader to reproduce the run by hand, which is most of what it was for.
   if [ $status -ne 0 ]; then
     echo "  ---- failures in $name ----"
+    # 🔴 THE `--- FAIL` LINES COME FIRST, ON THEIR OWN. The evidence below is capped, and a
+    # PASSING package that logs a recovered panic (graphql-go prints the stack of every
+    # resolver panic it catches, 20 frame lines each) spends the whole cap before the failing
+    # package's output begins — which is how a red integration job once named no test at all.
+    printf '%s\n' "$out" | grep -E '^\s*--- FAIL' | sed -n '1,40p'
     printf '%s\n' "$out" | grep -E '^--- FAIL|_test\.go:[0-9]+:|^panic|^\s+/.*\.go:[0-9]+' | sed -n '1,60p'
   fi
   # 🔴 THE GUARD. A module whose tests all failed to MATCH, or whose build tag was mistyped,

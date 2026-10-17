@@ -91,7 +91,7 @@ variable "jetstream_storage" {
     This default is NOT a free choice — it must hold the platform's whole
     reservation. JetStream reserves each stream's MaxBytes UP FRONT at creation,
     so the disk floor is the SUM of the ceilings, and today that sum is
-    10184Mi (9.945Gi): 8712Mi of platform streams, 384Mi of MQTT gateway stores, and 1088Mi of
+    11592Mi (11.32Gi): 9864Mi of platform streams, 384Mi of MQTT gateway stores, and 1344Mi of
     KV buckets. The ceiling that has to hold it is max_file_store, which is 90% of
     this value FLOORED to a whole unit of its own magnitude.
 
@@ -99,7 +99,7 @@ variable "jetstream_storage" {
     times and each server holds one copy of the reservation, so the size does NOT
     scale with cluster_replicas.
 
-    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 9.945Gi
+    It was 8Gi, which no longer fits: floor(8 × 0.9) = 7Gi, well under the 11.32Gi
     reserved, so a consumer using this module directly with its defaults would hit
     the "insufficient storage resources available" crashloop on the last services
     to create a stream. The root module always passes its own value explicitly, so
@@ -368,19 +368,25 @@ variable "route_compression" {
     affected, and JetStream STREAM compression is deliberately not offered here: it
     rewrites every sealed block on every replica, adding disk writes and CPU.
 
-    "off" (the default) renders NO compression key, leaving nats-server's own
-    default for a cluster, `accept`: a server never initiates compression and only
-    follows a peer that asks. Every server gets the same value from this module, so
-    with "off" no route compresses, and the values Helm is handed are byte-identical
-    to a module that did not have this variable.
+    UNSET (null, the default) means s2_fast on a clustered broker and off on a
+    single server, which has no routes: see local.route_compression. An explicit
+    value always wins over that, "off" included.
 
-    "s2_fast" is the mode to choose. "s2_better" and "s2_best" trade more CPU for a
-    smaller frame. "s2_auto" picks a level from each route's RTT, and with nats-
-    server's default thresholds anything at or under 10 ms is UNCOMPRESSED, which is
-    every route inside one zone, so it does nothing there. Its thresholds are not
-    exposed. Measured in-process (3 servers, no TLS) at one 1-metric event: s2_fast
-    cut route bytes by 57-66% and cost 2-3% CPU, within noise. The cluster trade,
-    with TLS on and off, has not been measured, which is why the default is off.
+    "off" renders NO compression key, leaving nats-server's own default for a
+    cluster, `accept`: a server never initiates compression and only follows a peer
+    that asks. Every server gets the same value from this module, so with "off" no
+    route compresses, and the values Helm is handed are byte-identical to a module
+    that did not have this variable.
+
+    "s2_fast" is the mode to choose, and the clustered default. "s2_better" and
+    "s2_best" trade more CPU for a smaller frame. "s2_auto" picks a level from each
+    route's RTT, and with nats-server's default thresholds anything at or under
+    10 ms is UNCOMPRESSED, which is every route inside one zone, so it does nothing
+    there. Its thresholds are not exposed. Measured on a 3-server GKE cluster with
+    route TLS on, at 18,000 events/s offered: s2_fast cut route bytes per event by
+    60% and the broker pods' network bytes by 37%, and lowered broker CPU per event
+    by about 4%: compression costs each server 2.6-2.9% of its CPU, and the smaller
+    TLS writes repay more than that.
 
     Changing it ROLLS THE BROKER one server at a time (the config checksum
     annotation on podTemplate), although nats-server itself could reload it. A
@@ -389,15 +395,17 @@ variable "route_compression" {
     compresses as soon as either end has a mode, and stops once both are back on
     "off" (nats-server 2.14.4, server.go selectCompressionMode).
 
-    Only meaningful on a clustered broker. Set on a single server, where the chart
-    renders no cluster block at all, it is refused rather than silently dropped.
+    Only meaningful on a clustered broker. A mode SET on a single server, where the
+    chart renders no cluster block at all, is refused rather than silently dropped.
   EOT
   type        = string
-  default     = "off"
+  default     = null
 
   validation {
-    condition     = contains(["off", "s2_fast", "s2_better", "s2_best", "s2_auto"], var.route_compression)
-    error_message = "route_compression must be one of off, s2_fast, s2_better, s2_best, s2_auto (lowercase, as written)."
+    # A conditional, not `||`: OpenTofu before 1.10 evaluates both operands of
+    # `||`, and contains() refuses a null value.
+    condition     = var.route_compression == null ? true : contains(["off", "s2_fast", "s2_better", "s2_best", "s2_auto"], var.route_compression)
+    error_message = "route_compression must be one of off, s2_fast, s2_better, s2_best, s2_auto (lowercase, as written), or left unset."
   }
 }
 
@@ -457,22 +465,29 @@ locals {
   contradictory      = var.ha && var.cluster_replicas == 1
 
   # Route compression as the chart's cluster `merge`, which the chart lays over the
-  # cluster{} stanza it generates. EMPTY when off, so the cluster map, and with it
-  # the values document and the rendered config, are what they were before this
-  # knob existed: an upgrade that leaves it off rolls nothing.
+  # cluster{} stanza it generates. EMPTY when the mode in effect is off, so the
+  # cluster map, and with it the values document and the rendered config, are what
+  # they were before this knob existed. (A clustered broker that leaves the knob
+  # unset is NOT off: it gets s2_fast, so the first apply after that default
+  # arrived rolls its servers once.)
   #
   # A filtered for-expression rather than `off ? {} : {merge = ...}`: an HCL
   # conditional only unifies an empty object with the other branch while that
   # branch happens to convert to a map, so adding a second key of another shape
   # later would turn it into a type error. This form has one shape either way.
   route_compression_merge = {
-    for k, v in { merge = { compression = var.route_compression } } : k => v
-    if var.route_compression != "off"
+    for k, v in { merge = { compression = local.route_compression } } : k => v
+    if local.route_compression != "off"
   }
+  # The mode in effect: the one asked for, or, when none was, s2_fast on a
+  # clustered broker and off on a single server. An explicit "off" is a value
+  # and wins like any other.
+  route_compression = var.route_compression != null ? var.route_compression : (local.clustered ? "s2_fast" : "off")
   # A mode asked of a broker that has no routes. The chart renders no cluster
   # block for a single server, so the value would be dropped without a word; the
-  # precondition on helm_release.nats refuses it instead.
-  compression_without_routes = var.route_compression != "off" && !local.clustered
+  # precondition on helm_release.nats refuses it instead. Only an explicit mode
+  # can trip it: unset resolves to off on a single server.
+  compression_without_routes = local.route_compression != "off" && !local.clustered
 
   # Replication for the MQTT gateway's OWN streams ($MQTT_sess, $MQTT_msgs,
   # $MQTT_qos2in, $MQTT_out) — nats-server's `mqtt { stream_replicas }`.
@@ -727,8 +742,8 @@ locals {
           stream_replicas     = local.mqtt_stream_replicas
         }
       }
-      # Route compression (var.route_compression) is merged in as the cluster
-      # block's own `merge`, and only when asked for: see route_compression_merge.
+      # Route compression (local.route_compression) is merged in as the cluster
+      # block's own `merge`, and only when a mode is in effect: see route_compression_merge.
       cluster = merge({
         enabled  = local.clustered
         replicas = local.cluster_replicas
@@ -1119,7 +1134,7 @@ resource "helm_release" "nats" {
     # cluster block for a single server, so the mode would be accepted and dropped.
     precondition {
       condition     = !local.compression_without_routes
-      error_message = "nats route_compression=${var.route_compression} compresses the traffic between clustered servers, and this broker is a single server with no routes to compress. Set it to off, or cluster the broker (ha=true or cluster_replicas=3)."
+      error_message = "nats route_compression=${local.route_compression} compresses the traffic between clustered servers, and this broker is a single server with no routes to compress. Set it to off or leave it unset, or cluster the broker (ha=true or cluster_replicas=3)."
     }
 
     # Kubernetes refuses a pod whose memory request is above its limit, and the

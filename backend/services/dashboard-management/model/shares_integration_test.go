@@ -27,9 +27,13 @@ import (
 	"gorm.io/gorm"
 )
 
-type customersExist struct{}
+// targetsExist is a device-management in which every customer exists and every group is an
+// access scope: what these tests ask is the server's scope predicate, not the lookup.
+type targetsExist struct{}
 
-func (customersExist) Missing(context.Context, string, []string) ([]string, error) { return nil, nil }
+func (targetsExist) Missing(context.Context, string, string, []string) ([]string, error) {
+	return nil, nil
+}
 
 func pgApi(t *testing.T) *Api {
 	t.Helper()
@@ -60,7 +64,7 @@ func pgApi(t *testing.T) *Api {
 		}
 	})
 	api := NewApi(mgr)
-	api.Customers = customersExist{}
+	api.ShareTargets = targetsExist{}
 	return api
 }
 
@@ -74,16 +78,12 @@ func pgMember(anchors ...string) context.Context {
 		Authorities: []string{string(auth.DashboardRead)}, ScopeAnchors: anchors})
 }
 
-func pgDashboard(t *testing.T, api *Api, token string, customers ...string) *Dashboard {
+func pgDashboard(t *testing.T, api *Api, token string, anchors ...string) *Dashboard {
 	t.Helper()
 	d, err := api.CreateDashboard(pgAuthor(), &DashboardCreateRequest{Token: token, Definition: `{"schemaVersion":1}`})
 	require.NoError(t, err)
 	_, _, err = api.PublishDashboard(pgAuthor(), token, nil, nil, "author", nil)
 	require.NoError(t, err)
-	anchors := make([]string, 0, len(customers))
-	for _, c := range customers {
-		anchors = append(anchors, "customer:"+c)
-	}
 	_, err = api.ShareDashboard(pgAuthor(), token, anchors)
 	require.NoError(t, err)
 	return d
@@ -93,9 +93,11 @@ func pgDashboard(t *testing.T, api *Api, token string, customers ...string) *Das
 // its scope; the author is the control.
 func TestPostgresScopedDashboardReads(t *testing.T) {
 	api := pgApi(t)
-	pgDashboard(t, api, "d-acme", "acme")
-	pgDashboard(t, api, "d-globex", "globex")
-	pgDashboard(t, api, "d-both", "acme", "globex")
+	pgDashboard(t, api, "d-acme", "customer:acme")
+	pgDashboard(t, api, "d-globex", "customer:globex")
+	pgDashboard(t, api, "d-both", "customer:acme", "customer:globex")
+	pgDashboard(t, api, "d-north", "group:north")
+	pgDashboard(t, api, "d-mixed", "group:north", "customer:globex")
 
 	tokens := func(ctx context.Context) []string {
 		found, err := api.Dashboards(ctx, DashboardSearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 10}})
@@ -107,13 +109,24 @@ func TestPostgresScopedDashboardReads(t *testing.T) {
 		require.Equal(t, int32(len(out)), found.Pagination.TotalRecords)
 		return out
 	}
-	require.ElementsMatch(t, []string{"d-acme", "d-globex", "d-both"}, tokens(pgAuthor()))
+	require.ElementsMatch(t, []string{"d-acme", "d-globex", "d-both", "d-north", "d-mixed"}, tokens(pgAuthor()))
 	require.ElementsMatch(t, []string{"d-acme", "d-both"}, tokens(pgMember("customer:acme")))
+	// A group share is matched by kind AND token: a member limited to the group sees what is
+	// shared with it, a customer named like the group sees none of it, and another group none.
+	require.ElementsMatch(t, []string{"d-north", "d-mixed"}, tokens(pgMember("group:north")))
+	require.Empty(t, tokens(pgMember("customer:north")))
+	require.Empty(t, tokens(pgMember("group:south")))
+	require.ElementsMatch(t, []string{"d-acme", "d-both", "d-north", "d-mixed"}, tokens(pgMember("customer:acme", "group:north")))
 
 	_, v, err := api.PublishedDashboard(pgMember("customer:acme"), "d-both")
 	require.NoError(t, err)
 	require.Equal(t, int32(1), v.Version)
 	_, _, err = api.PublishedDashboard(pgMember("customer:acme"), "d-globex")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	_, v, err = api.PublishedDashboard(pgMember("group:north"), "d-north")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), v.Version)
+	_, _, err = api.PublishedDashboard(pgMember("group:north"), "d-acme")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
@@ -121,7 +134,7 @@ func TestPostgresScopedDashboardReads(t *testing.T) {
 // that names no share — and the table refuses a kind no scope can name.
 func TestPostgresSharesCascadeAndAreChecked(t *testing.T) {
 	api := pgApi(t)
-	d := pgDashboard(t, api, "d1", "acme")
+	d := pgDashboard(t, api, "d1", "customer:acme")
 	sys := api.RDB.Database.WithContext(core.WithSystemContext(context.Background()))
 
 	err := sys.Exec(`INSERT INTO "dashboard-management".dashboard_shares (tenant_id, dashboard_id, anchor_kind, anchor_token) VALUES (?, ?, 'asset', 'pump')`,

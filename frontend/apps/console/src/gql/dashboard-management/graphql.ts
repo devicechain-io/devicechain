@@ -48,7 +48,7 @@ export type DashboardUpdateRequest = {
 
 /** A customer or group to share with. */
 export type ScopeAnchorInput = {
-  /** What the anchor names. Only CUSTOMER is accepted. */
+  /** What the anchor names. */
   kind: ScopeAnchorKind;
   /** Token of the customer or group. */
   token: string;
@@ -58,7 +58,7 @@ export type ScopeAnchorInput = {
 export type ScopeAnchorKind =
   /** A customer, named by its token. */
   | 'CUSTOMER'
-  /** An entity group, named by its token. Not accepted yet. */
+  /** An entity group, named by its token. */
   | 'GROUP';
 
 export type DashboardsQueryVariables = Exact<{

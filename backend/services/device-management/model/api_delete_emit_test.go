@@ -36,7 +36,7 @@ func newDeleteEmitTestApi(t *testing.T) *Api {
 	// attributes, alarms, and (for a device) credentials before the row — so every
 	// table it touches must exist.
 	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceCredential{}, &DeviceReplacement{}, &DeviceConfigurationRevision{}, &DeviceConfigurationState{},
-		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
+		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db})

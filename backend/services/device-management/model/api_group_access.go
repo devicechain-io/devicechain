@@ -74,8 +74,8 @@ var ErrAccessScopeIneligible = integrity.NewRefusal(integrity.ClassInvalid,
 //
 // The flag and the read-model it implies change in ONE transaction, under the family lock the
 // rest of membership maintenance takes, so a member's visibility never reads a flag whose
-// members are not yet materialized. After it commits, the members' cached memberships are
-// dropped (their access marker changed) and each member device is announced with its anchors.
+// members are not yet materialized; each member device's ownership fact is queued in it too.
+// After it commits, the members' cached memberships are dropped (their access marker changed).
 func (api *Api) SetEntityGroupAccessScope(ctx context.Context, token string, enabled bool) (*EntityGroup, error) {
 	group, err := api.entityGroupByToken(ctx, token)
 	if err != nil {
@@ -131,8 +131,13 @@ func (api *Api) SetEntityGroupAccessScope(ctx context.Context, token string, ena
 			return err
 		}
 		if enabled {
-			members, err = api.membersAtOnTx(tx, current.ID, current.ActiveVersion)
+			if members, err = api.membersAtOnTx(tx, current.ID, current.ActiveVersion); err != nil {
+				return err
+			}
 		}
+		// Every member gained or lost the group's anchor: device-state is owed each one's new
+		// owners, queued last in this transaction (ownership_outbox.go).
+		_, err = queueOwnershipOnTx(tx, members)
 		return err
 	})
 	if err != nil {
@@ -140,7 +145,6 @@ func (api *Api) SetEntityGroupAccessScope(ctx context.Context, token string, ena
 	}
 	api.fireScopingEvictions(ctx, evictions, changed)
 	api.evictMemberships(ctx, string(entity.TypeDevice), members)
-	api.emitOwnershipChanged(ctx, members)
 	return api.entityGroupByToken(ctx, token)
 }
 
@@ -245,9 +249,23 @@ type accessGroup struct {
 	Version int32
 }
 
+// errAccessGroupsScoped refuses to read the tenant's access scopes for a member limited to part
+// of the tenant.
+var errAccessGroupsScoped = fmt.Errorf("%w: the tenant's access scopes are not read for a scoped caller", auth.ErrScopeUnsupported)
+
 // accessGroupsOnDB reads the tenant's access scopes, by group id. There are at most
 // MaxAccessScopeGroups.
+//
+// 🔴 It is the service's own statement of which groups are access scopes, so it is never read
+// under a scoped caller's context: EntityGroup's scope rule would answer such a caller only the
+// groups its scope names, and an anchor set built from that is silently short — a device's
+// stamp missing the access scopes the caller is not limited to — rather than refused.
 func accessGroupsOnDB(db *gorm.DB) (map[uint]accessGroup, error) {
+	if db.Statement != nil && db.Statement.Context != nil {
+		if _, scoped := auth.ScopeFromContext(db.Statement.Context); scoped {
+			return nil, errAccessGroupsScoped
+		}
+	}
 	groups := make([]EntityGroup, 0)
 	if err := db.Model(&EntityGroup{}).Select("id", "token", "active_version").
 		Where("access_scope_at IS NOT NULL AND active_version IS NOT NULL").
