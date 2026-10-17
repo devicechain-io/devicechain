@@ -11,22 +11,22 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtime"
 )
 
-// An omitted wire format is defaulted to legacy in this release, by ApplyDefaults and at the
-// point of use alike, and both read the one definition of the default.
-func TestEventWireFormatDefaultsToLegacy(t *testing.T) {
+// An omitted wire format is defaulted to compact, by ApplyDefaults and at the point of use
+// alike, and both read the one definition of the default.
+func TestEventWireFormatDefaultsToCompact(t *testing.T) {
 	c := validLoggingDoc("")
-	if f, err := c.Infrastructure.Messaging.EventWireFormat(); err != nil || f != eventtime.WireLegacy {
-		t.Fatalf("an omitted format reads as %v, %v; want legacy", f, err)
+	if f, err := c.Infrastructure.Messaging.EventWireFormat(); err != nil || f != eventtime.WireCompact {
+		t.Fatalf("an omitted format reads as %v, %v; want compact", f, err)
 	}
 	c.ApplyDefaults()
-	if c.Infrastructure.Messaging.WireFormat != "legacy" {
-		t.Fatalf("an omitted format defaulted to %q, want legacy", c.Infrastructure.Messaging.WireFormat)
+	if c.Infrastructure.Messaging.WireFormat != "compact" {
+		t.Fatalf("an omitted format defaulted to %q, want compact", c.Infrastructure.Messaging.WireFormat)
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("the defaulted document does not validate: %v", err)
 	}
-	if got := NewDefaultInstanceConfiguration().Infrastructure.Messaging.WireFormat; got != "legacy" {
-		t.Fatalf("the default instance configuration writes %q, want legacy", got)
+	if got := NewDefaultInstanceConfiguration().Infrastructure.Messaging.WireFormat; got != "compact" {
+		t.Fatalf("the default instance configuration writes %q, want compact", got)
 	}
 }
 

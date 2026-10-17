@@ -28,6 +28,12 @@ Four points in the history can require recreating the instance rather than upgra
 If you are on any of them, read the matching section below before you do anything else.
 :::
 
+:::caution Upgrade through v0.23.0
+Releases after `v0.23.0` write events in a form that `v0.22.0` and earlier cannot read. Coming
+from `v0.22.0` or earlier, upgrade every instance to `v0.23.0` first, and only then to a later
+release. See [The event wire format](#event-wire-format).
+:::
+
 :::caution Crossing v0.12.0 needs a few changes first
 `v0.12.0` upgrades in place, but it changes the topic a device answers a command on, moves
 one permission, and changes several things whose shape stayed the same. The upgrade
@@ -498,6 +504,36 @@ Rate ceilings are enforced by each replica separately, so two replicas of `event
 `outbound-connectors` or `ai-inference` can admit up to twice a tenant's ceiling. See
 [Governance](../concepts/governance.md#per-replica).
 :::
+
+### The event wire format {#event-wire-format}
+
+Every event a device sends crosses the broker twice as a message on a retained stream: once as
+received, and once resolved against its device. `infrastructure.messaging.wireFormat` in the
+instance configuration sets how those messages are encoded:
+
+| Value | Encoding |
+| --- | --- |
+| `compact` | **The default from the release after `v0.23.0`.** Each time as a count of nanoseconds and each device credential's seal in binary. About a third smaller per message, which means less broker disk, network and retention used per event. |
+| `legacy` | Each time as text and each seal in its text form, byte for byte what `v0.22.0` and earlier wrote. `v0.23.0` writes it by default. |
+
+Anything else, including `Compact`, is refused: the service does not start, and its log names
+the key. It is part of the mounted configuration, like the [log level](./observability.md#the-log-level),
+and is set the same way.
+
+- **Every release from `v0.23.0` on reads both.** Messages written in the `legacy` form before an
+  upgrade stay on the retained streams and are read as before, including by the replay preview of
+  a detection rule over a window that started before the upgrade.
+- **Upgrade through `v0.23.0`, not straight from `v0.22.0` or earlier.** `v0.22.0` and earlier
+  read only `legacy`: a service on one of them drops a `compact` message, or sets it aside as
+  failed, so a rolling upgrade from one of them straight to a release that writes `compact` loses
+  the events written while old and new pods run side by side. Upgrade every instance to `v0.23.0`
+  first, wait until every pod runs it, and only then upgrade to the later release. On a chart
+  install you can instead set `legacy` for the upgrade and remove it once every pod has rolled.
+  `dcctl` has no option to set it.
+- **Rolling back to `v0.23.0`** needs nothing for the wire format: it reads the `compact` messages
+  a later release wrote.
+- **Rolling back to `v0.22.0` or earlier** needs `legacy` set first, and the consumers to have
+  drained every `compact` message from the streams.
 
 ### The v0.9.0 baseline squash {#v090-baseline-squash}
 

@@ -71,11 +71,10 @@ func TestParseWireFormat(t *testing.T) {
 	require.False(t, WireFormat(3).Valid())
 }
 
-// 🔴 This release writes the legacy format unless told otherwise: the release that
-// introduces the compact reader must not also be the one that writes it by default.
-// Flip it in the NEXT release, and this assertion with it.
-func TestTheDefaultWireFormatIsLegacyInTheReleaseThatAddsTheReader(t *testing.T) {
-	require.Equal(t, WireLegacy, DefaultWireFormat)
+// The release after the one that introduced the compact reader writes the compact format
+// unless told otherwise; the one that introduced the reader wrote legacy (see WireFormat).
+func TestTheDefaultWireFormatIsCompact(t *testing.T) {
+	require.Equal(t, WireCompact, DefaultWireFormat)
 	require.Equal(t, DefaultWireFormat, ProducerWireFormat(), "a process that loads no instance document writes the default")
 }
 

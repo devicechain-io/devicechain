@@ -76,10 +76,12 @@ func TestTheLegacyResolvedFormatIsByteForByteWhatTheReleaseBeforeWrote(t *testin
 		require.NoError(t, err, name)
 		require.Equal(t, mainResolvedHex[name], hex.EncodeToString(got), "%s: legacy bytes differ from origin/main's", name)
 
-		// The process default is the legacy format.
+		// The process default is the compact format.
 		def, err := MarshalResolvedEvent(event)
 		require.NoError(t, err, name)
-		require.Equal(t, got, def, "%s: the default format is not legacy", name)
+		compact, err := MarshalResolvedEventAs(event, eventtime.WireCompact)
+		require.NoError(t, err, name)
+		require.Equal(t, compact, def, "%s: the default format is not compact", name)
 
 		// And nothing in it is a field the release before does not know.
 		var pb PResolvedEvent

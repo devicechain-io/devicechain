@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtime"
 )
 
 // LwM2M publishes through the synchronous Emit, Ingest and EmitPresence, and those are now
@@ -24,6 +25,9 @@ import (
 // the write is made under, the drop count): the literals were computed from the implementation
 // BEFORE the split, so their survival is the proof the split changed no byte LwM2M sends. A
 // test that compares Emit with BuildMeasurements cannot show that, because both sides moved.
+//
+// The literals are LEGACY-format bytes, so each test pins the process to the legacy format
+// (the default is compact); wire_format_golden_test.go pins the same scenarios in compact.
 
 // writtenDigest hashes every message a writer received, with the tenant each write was made
 // under. %#v prints every field, maps in key order.
@@ -41,6 +45,7 @@ func writtenDigest(t *testing.T, w *fakeWriter) string {
 }
 
 func TestGoldenLwm2mEmitWritesUnchanged(t *testing.T) {
+	inProducerWireFormat(t, eventtime.WireLegacy)
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "lw", true)
 	in := numberedSamples(300)                                  // two pieces
@@ -57,6 +62,7 @@ func TestGoldenLwm2mEmitWritesUnchanged(t *testing.T) {
 }
 
 func TestGoldenLwm2mEmitPresenceWritesUnchanged(t *testing.T) {
+	inProducerWireFormat(t, eventtime.WireLegacy)
 	w := &fakeWriter{}
 	e := NewEmitter(w, fixedNow, "lw", true)
 	for _, connected := range []bool{true, false} {
@@ -76,6 +82,7 @@ func TestGoldenLwm2mEmitPresenceWritesUnchanged(t *testing.T) {
 // count still reported, and from Ingest with nothing counted as emitted; a resolve failure is
 // returned before anything is written.
 func TestGoldenLwm2mIngestErrorPaths(t *testing.T) {
+	inProducerWireFormat(t, eventtime.WireLegacy)
 	boom := errors.New("broker down")
 	w := &fakeWriter{err: boom}
 	e := NewEmitter(w, fixedNow, "lw", true)

@@ -4,6 +4,7 @@
 package preview
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/stretchr/testify/require"
 )
 
 // legacyResolvedMeasurementHex is a resolved measurement as device-management wrote it before
@@ -29,6 +31,22 @@ const legacyResolvedMeasurementHex = "0a04687474701a1164657669636570756c73652d30
 // stream. Both must evaluate, at their own instants: the legacy reading raises, the
 // current-format one a minute later resolves.
 func TestPreviewReplaysAWindowThatSpansTheFormatChange(t *testing.T) {
+	replayAcrossTheFormatChange(t, func(ev *dmmodel.ResolvedEvent) ([]byte, error) {
+		return dmproto.MarshalResolvedEventAs(ev, eventtime.WireCompact)
+	})
+}
+
+// The same window, with the later message written the way a device-management that sets
+// no wireFormat writes it once the default is compact: what a retained stream holds after
+// an upgrade that flips the default, legacy messages from before it and default-written
+// ones after. The legacy message must still decode and evaluate.
+func TestPreviewReplaysLegacyMessagesWrittenBeforeTheDefaultBecameCompact(t *testing.T) {
+	require.Equal(t, eventtime.WireCompact, eventtime.ProducerWireFormat(), "the default producer format")
+	replayAcrossTheFormatChange(t, dmproto.MarshalResolvedEvent)
+}
+
+func replayAcrossTheFormatChange(t *testing.T, writeCurrent func(*dmmodel.ResolvedEvent) ([]byte, error)) {
+	t.Helper()
 	legacy, err := hex.DecodeString(legacyResolvedMeasurementHex)
 	if err != nil {
 		t.Fatal(err)
@@ -44,9 +62,17 @@ func TestPreviewReplaysAWindowThatSpansTheFormatChange(t *testing.T) {
 		OccurredTime: sampleAt.Add(time.Minute),
 		Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "10"}},
 	}}}
-	current, err := dmproto.MarshalResolvedEventAs(&later, eventtime.WireCompact)
+	current, err := writeCurrent(&later)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The stream must really hold both forms: the later message is not in the string form.
+	asLegacy, err := dmproto.MarshalResolvedEventAs(&later, eventtime.WireLegacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(asLegacy, current) {
+		t.Fatal("the later message was written in the legacy form; the window would not span the change")
 	}
 	at := func(seq uint64, b []byte) messaging.Message {
 		m := messaging.NewConsumedMessage("dc.acme.resolved-events", b, 0, nil, nil)

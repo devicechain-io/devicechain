@@ -656,18 +656,18 @@ type InfrastructureConfiguration struct {
 // (core.Microservice.LoadInstanceConfigurationFrom), and adopted by rolling the pods.
 type MessagingConfiguration struct {
 	// WireFormat is legacy or compact, exactly as written. Absent means
-	// eventtime.DefaultWireFormat, which in this release is legacy.
+	// eventtime.DefaultWireFormat, which is compact.
 	//
-	//   - legacy: every instant as an RFC 3339 string and every seal in its text form,
-	//     byte for byte what the release before this one wrote.
 	//   - compact: instants as nanosecond counts and seals in binary, about a third
-	//     smaller. Only this release on reads it.
+	//     smaller. Read by the release that introduced it and every release since.
+	//   - legacy: every instant as an RFC 3339 string and every seal in its text form,
+	//     byte for byte what the releases before the compact reader wrote.
 	//
-	// 🔴 Every reader in this release takes both, but a pod on an EARLIER release takes only
-	// legacy, and drops or dead-letters a compact message. Set compact only once every pod
-	// of the instance runs this release or later; never in the same change that upgrades
-	// to it. Set legacy again before rolling back to an earlier release. The full plan is
-	// on eventtime.WireFormat.
+	// 🔴 Every reader in this release takes both, but a pod on a release from before the
+	// compact reader takes only legacy, and drops or dead-letters a compact message. An
+	// upgrade straight from such a release sets legacy for the upgrade and compact only
+	// once every pod has rolled; set legacy again before rolling back to one. The full plan
+	// is on eventtime.WireFormat.
 	WireFormat string
 }
 
