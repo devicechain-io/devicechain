@@ -247,17 +247,22 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 			moves.Add(1)
 		}
 	}
+	// The leaders are stepped down until the test has CONFIRMED enough moves, not for a fixed
+	// time: a step-down is refused while a new leader is still being elected, so a fixed window
+	// sometimes confirmed one. The devices keep publishing (another round each) until that
+	// many moves have happened, so the load spans all of them.
+	const requiredMoves = 6
 	stopMoves := make(chan struct{})
 	var mover sync.WaitGroup
 	mover.Add(1)
 	go func() {
 		defer mover.Done()
 		capture := StreamName(guardInstance, streams.DeviceEventsCapture)
-		for i := 0; i < 20; i++ {
+		for i := 0; ; i++ {
 			select {
 			case <-stopMoves:
 				return
-			case <-time.After(150 * time.Millisecond):
+			case <-time.After(200 * time.Millisecond):
 				if i%2 == 0 {
 					stepDown(MqttMessageStore)
 				} else {
@@ -268,24 +273,44 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 	}()
 
 	const devices, perDevice = 6, 200
-	var acked []string
-	var wg sync.WaitGroup
+	loadDeadline := time.Now().Add(90 * time.Second)
+	var (
+		acked   []string
+		wg      sync.WaitGroup
+		okRound = make([]int, devices) // rounds each device finished whole, by device
+		lastErr = make([]error, devices)
+	)
 	for d := 0; d < devices; d++ {
 		wg.Add(1)
 		go func(d int) {
 			defer wg.Done()
 			dev := fmt.Sprintf("load%d", d)
-			got := publishThrough(t, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPorts[d%3]), dev,
-				guardTopic(guardInstance, guardTenant, dev), dev, perDevice)
-			mu.Lock()
-			acked = append(acked, got...)
-			mu.Unlock()
+			// A round that fails under the moves (a connect that kept being refused, a publish
+			// answered late) is tried again with fresh payloads, until the deadline. What it
+			// did get PUBACKed still counts: the device was told those were stored.
+			for round := 0; round == 0 || (moves.Load() < requiredMoves+2 && time.Now().Before(loadDeadline)); round++ {
+				got, err := publishThrough(t, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPorts[d%3]), dev,
+					guardTopic(guardInstance, guardTenant, dev), fmt.Sprintf("%s-r%d", dev, round), perDevice)
+				mu.Lock()
+				acked = append(acked, got...)
+				if err == nil {
+					okRound[d]++
+				}
+				lastErr[d] = err
+				mu.Unlock()
+				if err != nil && !time.Now().Before(loadDeadline) {
+					return
+				}
+			}
 		}(d)
 	}
 	wg.Wait()
 	close(stopMoves)
 	mover.Wait()
-	require.Greater(t, moves.Load(), int64(4), "the leaders were hardly moved, so little was tested")
+	for d := range okRound {
+		require.Positive(t, okRound[d], "device load%d never finished a round: %v", d, lastErr[d])
+	}
+	require.GreaterOrEqual(t, moves.Load(), int64(requiredMoves), "the leaders were hardly moved, so little was tested")
 	mu.Lock()
 	require.NotEmpty(t, acked)
 	mu.Unlock()
