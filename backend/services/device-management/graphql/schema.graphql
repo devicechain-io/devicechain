@@ -1889,6 +1889,18 @@ input DeviceSearchCriteria {
     deviceType: String
 }
 
+"""Which customer's devices to return, and the page."""
+input CustomerDeviceSearchCriteria {
+    """Page to return, starting at 1. Values below 1 are read as 1."""
+    pageNumber: Int!
+    """Results per page. Below 1 means the default of 100; above 1000 is capped at 1000."""
+    pageSize: Int!
+    """Token of the customer."""
+    customer: String!
+    """Token of the relationship type linking each device to the customer, such as "assigned"."""
+    relationshipType: String!
+}
+
 """One page of devices matching a search."""
 type DeviceSearchResults {
     """The devices on this page."""
@@ -3398,6 +3410,18 @@ type Query {
     devices(
         """Filters and the page to return."""
         criteria: DeviceSearchCriteria!
+    ): DeviceSearchResults!
+    """
+    Searches the devices linked to one customer by one relationship type, newest first,
+    one page at a time: the members of a dashboard widget bound to that customer. A
+    customer or relationship type that does not exist matches nothing. For a member limited
+    to part of the tenant, the customer must be one that member's access names, or the
+    request is refused with FORBIDDEN, and only an ownership relationship (a tracked type,
+    such as the default "assigned") matches. Requires device:read.
+    """
+    customerDevices(
+        """The customer, the relationship type and the page to return."""
+        criteria: CustomerDeviceSearchCriteria!
     ): DeviceSearchResults!
     # Find entity groups by unique id.
     entityGroupsById(ids: [ID!]!): [EntityGroup!]!

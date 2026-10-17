@@ -161,6 +161,61 @@ describe('ConnectedWidget', () => {
     await act(async () => {}); // let the optimistic availability check resolve
     expect(screen.getByText('Device unavailable')).toBeTruthy();
   });
+
+  // A customer user viewing a widget bound to an area or an asset: the platform does not offer
+  // that binding to them, and the widget says so in words rather than rendering empty.
+  describe('a binding not offered to customer users', () => {
+    const areaDs: DatasourceSelector = {
+      kind: 'anchor',
+      anchor: { relationship: 'located-in', targetType: 'area', targetToken: 'plant' },
+      measurements: ['temperature'],
+    };
+    const hubSupporting = (supported: boolean | undefined) => {
+      const asked: DatasourceSelector[] = [];
+      const hub = {
+        subscribeWidget: () => () => {},
+        subscribeMembers: () => () => {},
+        readMemberSeeds: async () => {},
+        isDatasourceAvailable: async () => true,
+        ...(supported === undefined
+          ? {}
+          : {
+              isDatasourceSupported: async (ds: DatasourceSelector) => {
+                asked.push(ds);
+                return supported;
+              },
+            }),
+      } as unknown as DashboardHub;
+      return { hub, asked };
+    };
+
+    it('shows "Not available for customer users" when the source refuses the binding', async () => {
+      const { hub, asked } = hubSupporting(false);
+      render(<ConnectedWidget widget={widget('latest-card', { title: 'Plant' }, areaDs)} hub={hub} />);
+      await act(async () => {});
+      expect(screen.getByText('Not available for customer users')).toBeTruthy();
+      expect(screen.getByText('Plant')).toBeTruthy();
+      expect(asked).toEqual([areaDs]);
+    });
+
+    it('shows nothing of the kind when the source supports it, or cannot say', async () => {
+      for (const supported of [true, undefined]) {
+        const { hub } = hubSupporting(supported);
+        render(<ConnectedWidget widget={widget('latest-card', {}, areaDs)} hub={hub} />);
+        await act(async () => {});
+        expect(screen.queryByText('Not available for customer users')).toBeNull();
+        cleanup();
+      }
+    });
+
+    it('does not ask about a widget that reads no datasource', async () => {
+      const { hub, asked } = hubSupporting(false);
+      render(<ConnectedWidget widget={widget('label', { text: 'hello' }, areaDs)} hub={hub} />);
+      await act(async () => {});
+      expect(asked).toEqual([]);
+      expect(screen.queryByText('Not available for customer users')).toBeNull();
+    });
+  });
 });
 
 describe('ConnectedWidget freshness (descriptor opt-in)', () => {

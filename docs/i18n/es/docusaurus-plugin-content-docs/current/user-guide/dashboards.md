@@ -363,9 +363,14 @@ ven en cuanto se publica.
 
 {/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
 
-Vincula a dispositivos los widgets de un panel que compartes. Un widget vinculado a un cliente, un
-activo o un área encuentra sus dispositivos a través de las relaciones, que un miembro con acceso
-limitado no puede leer, así que no le muestra nada.
+Vincula los widgets de un panel que compartes a dispositivos o a los clientes con los que lo
+compartes. Un widget vinculado a un cliente, con **Relationship** establecido en `assigned` (la
+relación que crea la pestaña **Assignment** de un dispositivo), muestra a cada usuario de cliente los
+dispositivos de ese cliente, siempre que el cliente sea uno de los suyos; vinculado a cualquier otro
+cliente, le indica que no tiene acceso. Un widget vinculado a un activo o un área encuentra sus
+dispositivos a través de las relaciones, que un miembro con acceso limitado no puede leer, así que en
+lugar de sus datos le muestra **Not available for customer users** (no disponible para usuarios de
+cliente).
 
 Un programa hace lo mismo con la mutación `shareDashboard`, que requiere `dashboard:write`:
 

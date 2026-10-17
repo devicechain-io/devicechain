@@ -37,7 +37,7 @@ var deviceOwnership = rdb.OwnershipEdges{
 	Edge: &EntityRelationship{}, Type: &EntityRelationshipType{},
 	SourceType: "source_type", SourceID: "source_id", SourceKind: string(entity.TypeDevice), Row: "id",
 	TargetType: "target_type", TargetToken: "target_token",
-	EdgeType: "relationship_type_id", TypeID: "id", Tracked: "tracked",
+	EdgeType: "relationship_type_id", TypeID: "id", Tracked: "tracked", TypeToken: "token",
 	Groups: &rdb.GroupMembers{
 		Kind:   auth.AnchorKindGroup,
 		Member: &EntityGroupMembership{}, Group: &EntityGroup{},

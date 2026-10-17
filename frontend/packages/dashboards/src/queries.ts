@@ -48,6 +48,42 @@ export const DEVICES_FOR_ANCHOR = `
   }
 ` as unknown as TypedDocument<EntityRelationshipsResult, EntityRelationshipsVariables>;
 
+// ── device-management: the devices of a customer anchor ─────────────────────
+// A customer anchor reads customerDevices rather than the relationship graph: the graph is
+// closed to a member limited to some customers (a customer user), and customerDevices
+// answers such a member about its own customers. For every other viewer it answers what
+// the relationship search above does for (device -> customer, type), so ONE read serves
+// every viewer. It carries each device's name, so the roster needs no second read.
+
+export interface CustomerDevicesResult {
+  customerDevices: {
+    results: Array<{ token: string; name: string | null }>;
+    pagination?: { totalRecords: number | null } | null;
+  };
+}
+export interface CustomerDevicesVariables {
+  criteria: {
+    pageNumber: number;
+    pageSize: number;
+    customer: string;
+    relationshipType: string;
+  };
+}
+
+export const CUSTOMER_DEVICES = `
+  query DashboardCustomerDevices($criteria: CustomerDeviceSearchCriteria!) {
+    customerDevices(criteria: $criteria) {
+      results {
+        token
+        name
+      }
+      pagination {
+        totalRecords
+      }
+    }
+  }
+` as unknown as TypedDocument<CustomerDevicesResult, CustomerDevicesVariables>;
+
 // ── device-management: which of the given device tokens still exist ──────────
 // A dashboard references a device by a STABLE token (ADR-044); the token re-key
 // dropped the token→id hop that used to fail on a deleted device, so a widget bound to

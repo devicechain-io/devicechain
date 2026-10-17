@@ -46,6 +46,14 @@ func newScopeFixture(t *testing.T) scopeFixture {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
+	// ONE connection: every connection to ":memory:" is a database of its own, and a query
+	// whose field resolvers run concurrently (a relationship's source and target) would
+	// otherwise open a second, empty one.
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("sql db: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}

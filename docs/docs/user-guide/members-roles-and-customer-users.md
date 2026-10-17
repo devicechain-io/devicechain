@@ -180,9 +180,10 @@ A customer user sees a dashboard only once it is shared with one of their custom
 On the **Dashboards** list, choose **Share** on a dashboard and pick the customers. See
 [Sharing with customers](/user-guide/dashboards#sharing-with-customers).
 
-A shared dashboard shows each customer user only their own data. Bind its widgets to devices: a
-widget bound to a customer, an asset or an area reads the relationship graph to find its devices,
-which customer users are not given, so it shows them nothing.
+A shared dashboard shows each customer user only their own data. Bind its widgets to devices, or to
+the customer with the `assigned` relationship: such a widget shows the customer's users the devices
+assigned to it. A widget bound to an asset or an area reads the relationship graph to find its
+devices, which customer users are not given, so it shows them **Not available for customer users**.
 
 ### What is not covered yet {#not-covered-yet}
 

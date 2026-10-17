@@ -41,6 +41,20 @@ export function isForbiddenError(err: unknown): boolean {
 }
 
 /**
+ * True when the server refused the request because the caller is a member limited to part
+ * of the tenant (a customer user) and the operation is not offered to such members at all
+ * (`FORBIDDEN` with reason `SCOPE_UNSUPPORTED`). Distinct from an ordinary refusal: nothing
+ * the member could be granted inside their scope would change the answer, so a caller
+ * renders "not available for customer users" rather than "you do not have access".
+ */
+export function isScopeUnsupportedError(err: unknown): boolean {
+  if (!(err instanceof GraphQLRequestError)) return false;
+  return (err.errors ?? []).some(
+    (e) => e.extensions?.code === 'FORBIDDEN' && e.extensions?.reason === 'SCOPE_UNSUPPORTED',
+  );
+}
+
+/**
  * The machine-readable code the server put on a refusal (`extensions.code` of the first
  * error that carries one), such as `NOT_FOUND`, `CONFLICT`, `ESCALATION` or `LAST_ADMIN`;
  * null when the error carries none or is not a GraphQL response at all. Branch on this,

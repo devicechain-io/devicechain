@@ -366,9 +366,12 @@ its customers see it once it is.
 
 {/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
 
-Bind the widgets of a dashboard you share to devices. A widget bound to a customer, an asset or an
-area finds its devices through relationships, which a member with limited access cannot read, so
-it shows them nothing.
+Bind the widgets of a dashboard you share to devices, or to the customers you share it with. A
+widget bound to a customer, with **Relationship** set to `assigned` (the relationship a device's
+**Assignment** tab creates), shows each customer user that customer's devices, provided the customer
+is one of theirs; bound to any other customer, it tells them they do not have access. A widget bound
+to an asset or an area finds its devices through relationships, which a member with limited access
+cannot read, so it shows them **Not available for customer users** instead of its data.
 
 A program does the same with the `shareDashboard` mutation, which needs `dashboard:write`:
 

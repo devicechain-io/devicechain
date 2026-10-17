@@ -34,7 +34,7 @@ import {
   type WidgetFreshness,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
-import { useMemo, type ComponentType, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { useHeld } from './use-held';
@@ -110,6 +110,10 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, i
   // never reads, so it must not turn the widget into an "unavailable" pane.
   const readsDatasource = descriptor !== undefined && descriptor.datasource.mode !== 'none';
   const availability = useDatasourceAvailability(hub, readsDatasource ? widget.datasource : undefined);
+  const supported = useDatasourceSupported(hub, readsDatasource ? widget.datasource : undefined);
+  if (!supported) {
+    return <WidgetNotForCustomerUsersFrame widget={widget} />;
+  }
   if (availability === 'unavailable') {
     return <WidgetUnavailableFrame widget={widget} />;
   }
@@ -143,6 +147,34 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, i
       )}
     </HostScope>
   );
+}
+
+// useDatasourceSupported asks the source whether the viewer is offered the widget's binding at
+// all (WidgetDataSource.isDatasourceSupported). Optimistic like the availability check: the
+// widget renders from its channel meanwhile, and a source without the method supports every
+// binding. Re-asked when the binding changes (value-compared).
+function useDatasourceSupported(hub: WidgetDataSource, datasource: WidgetInstance['datasource']): boolean {
+  const key = datasource ? JSON.stringify(datasource) : null;
+  const [refused, setRefused] = useState<string | null>(null);
+  useEffect(() => {
+    if (!datasource || !hub.isDatasourceSupported) return;
+    let cancelled = false;
+    hub.isDatasourceSupported(datasource).then(
+      (ok) => {
+        if (!cancelled) setRefused(ok ? null : key);
+      },
+      () => {
+        if (!cancelled) setRefused(null);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+    // `datasource` is intentionally read via `key` (value identity), not reference.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, key]);
+  // A refusal belongs to the binding it was given for; a changed binding is supported until asked.
+  return refused === null || refused !== key;
 }
 
 // HostScope hands ONE widget only the interactions it declared: a narrowed action seam, and
@@ -333,6 +365,21 @@ function LocationConnectedWidget({ widget, hub, Component, actions }: ChannelPro
   return <Component widget={widget} data={data} actions={actions} />;
 }
 
+// The body of every state pane below: a centered, muted column.
+const STATE_STYLE = {
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  justifyContent: 'center',
+  gap: 4,
+  width: '100%',
+  height: '100%',
+  padding: 12,
+  boxSizing: 'border-box',
+  textAlign: 'center',
+  color: 'hsl(var(--muted-foreground))',
+} as const;
+
 // The placeholder for a widget this build cannot resolve. It names the stored type and says
 // WHY (not installed, no version metadata, a settings or SDK generation it cannot read); the
 // stored object is otherwise untouched (the serializer writes it back verbatim).
@@ -351,19 +398,7 @@ function UnresolvedWidgetFrame({
   return (
     <WidgetFrame>
       <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 4,
-          width: '100%',
-          height: '100%',
-          padding: 12,
-          boxSizing: 'border-box',
-          textAlign: 'center',
-          color: 'hsl(var(--muted-foreground))',
-        }}
+        style={STATE_STYLE}
       >
         <div style={{ fontSize: 13, fontWeight: 600 }}>{heading}</div>
         {storedType && !reason?.message.includes(storedType) && (
@@ -383,23 +418,32 @@ function WidgetUnavailableFrame({ widget }: { widget: WidgetInstance }): ReactNo
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
       <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 4,
-          width: '100%',
-          height: '100%',
-          padding: 12,
-          boxSizing: 'border-box',
-          textAlign: 'center',
-          color: 'hsl(var(--muted-foreground))',
-        }}
+        style={STATE_STYLE}
       >
         <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
         <div style={{ fontSize: 13, fontWeight: 600 }}>Device unavailable</div>
         <div style={{ fontSize: 11, opacity: 0.8 }}>The bound device no longer exists.</div>
+      </div>
+    </WidgetFrame>
+  );
+}
+
+// WidgetNotForCustomerUsersFrame is shown when the platform does not offer the widget's binding to
+// the viewer at all: a member limited to some customers viewing a widget bound to an area or an
+// asset. A settled state, not a failure to retry, and not "no access" either, since nothing the
+// member could be granted would change it -- so the dashboard's author knows to bind it otherwise.
+function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }): ReactNode {
+  return (
+    <WidgetFrame title={optString(widget.options, 'title')}>
+      <div
+        role="status"
+        style={STATE_STYLE}
+      >
+        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Not available for customer users</div>
+        <div style={{ fontSize: 11, opacity: 0.8 }}>
+          This widget is bound to an area or an asset, which customer users cannot view.
+        </div>
       </div>
     </WidgetFrame>
   );
@@ -411,19 +455,7 @@ function WidgetErrorFrame({ widget, error }: { widget: WidgetInstance; error: un
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
       <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 4,
-          width: '100%',
-          height: '100%',
-          padding: 12,
-          boxSizing: 'border-box',
-          textAlign: 'center',
-          color: 'hsl(var(--muted-foreground))',
-        }}
+        style={STATE_STYLE}
       >
         <div style={{ fontSize: 20, lineHeight: 1 }}>⚠</div>
         <div style={{ fontSize: 13, fontWeight: 600 }}>Data unavailable</div>

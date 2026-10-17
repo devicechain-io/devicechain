@@ -205,7 +205,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 {/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
 
-请把共享的仪表板的组件绑定到设备。绑定到客户、资产或区域的组件需要通过关系查找其设备，而访问受限的成员无法读取关系，因此该组件不会向他们显示任何内容。
+请把共享的仪表板的组件绑定到设备，或绑定到仪表板所共享的客户。绑定到客户并把 **Relationship**（关系）设为 `assigned`（设备的 **Assignment** 选项卡所创建的关系）的组件，会向每个客户用户显示该客户的设备，前提是该客户是他们自己的客户；绑定到其他任何客户时，组件会提示他们没有访问权限。绑定到资产或区域的组件需要通过关系查找其设备，而访问受限的成员无法读取关系，因此该组件会向他们显示 **Not available for customer users**（不对客户用户提供），而不是其数据。
 
 程序可以通过需要 `dashboard:write` 的 `shareDashboard` 变更完成同样的操作：
 

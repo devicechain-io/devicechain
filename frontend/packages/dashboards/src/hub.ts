@@ -10,7 +10,7 @@
 // model fans out badly on a crowded board. The Hub owns the subscription
 // lifecycle; widgets just hand it a datasource selector and a sink.
 
-import { gql, isForbiddenError, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
+import { gql, isForbiddenError, isScopeUnsupportedError, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
 import { ConnectionTracker, type HubConnectionState } from './connection';
 import type { HistoryWindow } from './history';
@@ -328,6 +328,14 @@ export interface WidgetDataSource {
   // OPEN (true) on an inconclusive check, so a device-management blip never falsely marks
   // a live device unavailable.
   isDatasourceAvailable(datasource: DatasourceSelector | undefined): Promise<boolean>;
+  // Whether the platform offers this binding to the viewer at all. False only when the server
+  // refuses it as not available to a member limited to part of the tenant (a customer user):
+  // an area or asset anchor, whose members are found through the relationship graph such a
+  // member cannot read. The widget then says so rather than rendering empty or "no access",
+  // since nothing that member could be granted would change it. Optional: a source without it
+  // (the synthetic preview, a recorded run) supports every binding. Fails open (true) on any
+  // other failure, which the widget's own channel reports.
+  isDatasourceSupported?(datasource: DatasourceSelector | undefined): Promise<boolean>;
   // The source's idea of "now" (epoch ms), for measuring a time span against its samples. Omitted
   // = the wall clock, which is right for every live source. A source that plays back a recorded
   // run implements it, because the run's samples are dated by the run.
@@ -1002,6 +1010,20 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       return await this.resolver.deviceExists(deviceToken);
     } catch {
       return true;
+    }
+  }
+
+  // isDatasourceSupported reports whether the viewer is offered the binding at all: false only
+  // when resolving an anchor is refused as SCOPE_UNSUPPORTED (an area or asset anchor, for a
+  // customer user). The resolution is the same memoized one the widget's channel makes, so a
+  // supported anchor costs no second read. Every other answer, including a failure, is true.
+  async isDatasourceSupported(datasource: DatasourceSelector | undefined): Promise<boolean> {
+    if (datasource?.kind !== 'anchor') return true;
+    try {
+      await this.resolver.devicesForAnchor(datasource.anchor);
+      return true;
+    } catch (err) {
+      return !isScopeUnsupportedError(err);
     }
   }
 

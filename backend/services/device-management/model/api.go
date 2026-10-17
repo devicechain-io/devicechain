@@ -396,6 +396,7 @@ type DeviceManagementApi interface {
 	DevicesById(ctx context.Context, ids []uint) ([]*Device, error)
 	DevicesByToken(ctx context.Context, tokens []string) ([]*Device, error)
 	Devices(ctx context.Context, criteria DeviceSearchCriteria) (*DeviceSearchResults, error)
+	CustomerDevices(ctx context.Context, criteria CustomerDeviceSearchCriteria) (*DeviceSearchResults, error)
 
 	// Device credentials (ADR-014).
 	CreateDeviceCredential(ctx context.Context, request *DeviceCredentialCreateRequest) (*DeviceCredential, error)
