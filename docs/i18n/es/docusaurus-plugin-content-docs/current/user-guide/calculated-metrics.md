@@ -1,0 +1,193 @@
+---
+title: Métricas calculadas
+sidebar_position: 5
+---
+
+# Métricas calculadas
+
+Una **métrica calculada** es una métrica de un perfil de dispositivo cuyo valor se obtiene de una
+fórmula en lugar de ser enviado por el dispositivo. Un contador que envía `voltage` y `current`
+puede tener una `power_kw` calculada con `voltage * current / 1000`, y desde ese momento `power_kw`
+se almacena, se grafica, genera alarmas y se muestra en el dispositivo como cualquier medición que
+este hubiera enviado. Este capítulo es para quienes crean perfiles de dispositivo. Explica qué es
+una métrica calculada, cómo escribir una, el lenguaje de las fórmulas y qué ocurre cuando una
+fórmula no puede producir un valor.
+
+Las métricas calculadas están **desactivadas por defecto**. El operador de tu instancia las activa
+dándole al nivel de tu inquilino un límite mayor que cero. Consulta
+[Activar las métricas calculadas](#turning-calculated-metrics-on).
+
+## Qué es una métrica calculada
+
+- Una fórmula lee las métricas **medidas** de **una lectura**: los valores que un dispositivo envía
+  juntos en una sola medición. Nunca lee una lectura anterior, otro dispositivo ni el reloj.
+- El resultado se **calcula una sola vez, cuando llega la lectura**, y se almacena como una medición
+  normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
+  exportaciones, los últimos valores del dispositivo y las reglas de detección la leen como
+  cualquier otra métrica, por su clave.
+- **El historial nunca se reescribe.** Editar una fórmula y publicar el perfil cambia lo que se
+  calcula para las lecturas que lleguen después. Los valores ya almacenados conservan la fórmula
+  que estaba activa cuando se calcularon.
+- Que una métrica sea medida o calculada **se fija al crearla**. Puedes editar la fórmula de una
+  métrica calculada, pero no puedes convertir una métrica medida en calculada ni al revés. En ese
+  caso, elimínala y crea una nueva.
+- Un dispositivo no puede sobrescribir un valor calculado. Si un dispositivo envía un valor con la
+  clave de una métrica calculada, ese valor se descarta y se conserva el calculado.
+
+## Crear una métrica calculada
+
+Abre un perfil de dispositivo y elige la pestaña **Métricas** (consulta
+[Métricas](device-types-and-profiles.md#métricas)). Elige **Nueva métrica**.
+
+1. Establece **Tipo** en **Calculada**. La elección es definitiva, por lo que queda bloqueada al
+   editar una métrica.
+2. Rellena la **Clave de la métrica**, el **Token** y el **Tipo de datos**: **Double**,
+   **Integer** o **Boolean**. La fórmula debe producir exactamente ese tipo (consulta
+   [Tipos](#types)). Las métricas calculadas no pueden ser cadenas de texto.
+3. De forma opcional, define una **Unidad**, y un **Mín.** y un **Máx.** Un resultado fuera de ese
+   rango se omite y no se almacena.
+4. Escribe la **Fórmula**.
+5. Elige **Crear métrica**.
+
+Las métricas calculadas llevan una insignia **Calculada** en la lista de métricas.
+
+Como cualquier edición de un perfil, una fórmula nueva o modificada se aplica a los dispositivos
+solo después de que
+[publiques una versión](device-types-and-profiles.md#publishing-a-version).
+
+### Comprobar una fórmula mientras escribes
+
+El cuadro de la fórmula pide al servidor que la compruebe mientras escribes, con el mismo
+compilador que la comprueba al publicar y que la calcula con las lecturas reales. Debajo del cuadro
+ves:
+
+- el **error de compilación**, explicado con palabras, si la fórmula no es válida;
+- el **coste estimado** frente al límite de 100. Una fórmula con un coste estimado superior a 100
+  se rechaza;
+- **advertencias**, que nunca impiden publicar. Por ejemplo, que la versión publicada declara esta
+  clave como una métrica medida (de modo que los dispositivos pueden estar enviándola y esos
+  valores se descartarán), que un resultado de magnitud 1e12 o mayor no se puede almacenar, o que
+  las unidades no se convierten.
+
+Cuando la fórmula compila, un panel de **muestra** enumera las métricas medidas que lee la fórmula.
+Escribe un valor para cada una y el panel muestra el **valor** que produciría la fórmula o el
+**motivo** por el que no produciría ninguno. La muestra se escribe a mano y no se almacena nada.
+
+### Qué rechaza la comprobación al publicar
+
+Al publicar un perfil se comprueban todas las métricas calculadas y se informa de todos los
+problemas a la vez. Se rechaza un perfil cuando:
+
+- una fórmula no compila o no produce el tipo declarado;
+- una fórmula lee una clave que no es una métrica **medida** declarada del mismo perfil. Una métrica
+  calculada no puede leer otra métrica calculada;
+- una fórmula no lee ninguna métrica;
+- una fórmula supera los 1024 bytes, su coste estimado es superior a 100, o las fórmulas de un
+  mismo perfil cuestan juntas más de 1000;
+- el Mín. de una métrica calculada es mayor que su Máx., declara valores permitidos, o su tipo de
+  datos no es Double, Integer ni Boolean;
+- una clave está declarada dos veces;
+- el perfil tiene más métricas calculadas de las que permite el nivel de tu inquilino.
+
+## El lenguaje de las fórmulas
+
+Las fórmulas se escriben en un lenguaje de expresiones pequeño. No tiene bucles, cadenas de texto
+ni estado, de modo que cada fórmula se ejecuta en un tiempo pequeño y acotado.
+
+### Entradas
+
+Cada métrica medida del perfil es una variable con el nombre de su clave, como `voltage` o `temp`.
+Una clave que no es un identificador simple, como `flow-rate`, se lee como `m["flow-rate"]`,
+envuelta en la conversión de su tipo: `double(m["flow-rate"])`, `int(m["count"])` o
+`bool(m["door"])`.
+
+### Operadores
+
+| Tipo | Operadores |
+| --- | --- |
+| Aritméticos | `+` `-` `*` `/` `%` y el `-` unario |
+| Comparación | `==` `!=` `<` `<=` `>` `>=` |
+| Lógicos | `&&` `\|\|` `!` |
+| Condicional | `condición ? a : b` |
+
+### Funciones matemáticas
+
+`math.abs(x)`, `math.floor(x)`, `math.ceil(x)`, `math.round(x)` (las mitades se redondean alejándose
+de cero), `math.sqrt(x)`, `math.pow(x, n)`, `math.min(a, b)`, `math.max(a, b)` y
+`math.clamp(x, bajo, alto)`.
+
+`math.pow` acepta solo un **exponente entero**: `math.pow(x, 2)` funciona y `math.pow(x, 0.5)` no.
+Las potencias fraccionarias pueden diferir en la última cifra entre arquitecturas de procesador, y
+un valor almacenado no debe depender de qué máquina lo calculó. Para una raíz cuadrada, usa
+`math.sqrt`.
+
+### Presencia
+
+`has(m.fan)` y `"fan" in m` comprueban si una lectura trae un valor para `fan`. Así le das un valor
+por defecto explícito a una entrada ausente: `has(m.fan) ? fan : 0.0`.
+
+### Tipos {#types}
+
+Una fórmula se comprueba contra el tipo de datos de la métrica, y las comprobaciones son estrictas:
+
+- Un **entero** y un **double** se pueden mezclar en `+ - * /` y en las comparaciones de orden (el
+  entero se promociona). No se pueden mezclar en `==` ni `!=`, ni en las dos ramas de
+  `condición ? a : b`: escribe `80.0`, no `80`, al comparar con un double.
+- Una fórmula para una métrica **Double** debe producir un double. Una fórmula que produce un
+  entero necesita `double(...)`.
+- Una fórmula para una métrica **Integer** debe producir un entero. Convierte un double con
+  `int(...)`. `math.sqrt` y `math.pow` devuelven doubles, así que envuélvelas en `int()` para una
+  métrica Integer.
+- Una fórmula para una métrica **Boolean** debe producir un booleano, como
+  `temp > 80.0 && fan == 0`. Los booleanos se almacenan como `1` y `0`.
+
+### No disponible
+
+Cadenas de texto (salvo como clave en `m["clave"]`), listas, mapas, tiempo y duraciones,
+aleatoriedad, comprensiones, expresiones regulares y cualquier cosa que mire fuera de la lectura.
+
+## Cuando una fórmula no produce valor
+
+Si una fórmula no puede producir un valor para una lectura, esa métrica se **omite** para esa
+lectura. El resto de la lectura se almacena con normalidad y nunca se sustituye nada: no hay valor
+por defecto ni cero. Los motivos son:
+
+| Motivo | Significado |
+| --- | --- |
+| `missing_input` | Una entrada que lee la fórmula no estaba en la lectura. Una entrada es obligatoria salvo que la fórmula la compruebe con `has()` o `in`. |
+| `invalid_input` | Una entrada estaba presente pero no es un valor válido para su tipo. |
+| `non_finite` | Un número no era finito: una entrada que no era un número finito, una división entre cero, un resultado demasiado grande para un double o la raíz cuadrada de un número negativo. |
+| `div_zero` | Una división o un resto de enteros entre cero. |
+| `overflow` | Un resultado o una conversión de enteros desbordó los 64 bits. |
+| `range` | El resultado queda fuera del Mín. y el Máx. de la métrica. |
+| `unstorable` | El resultado tiene una magnitud de 1e12 o mayor, con la que no se pueden almacenar las mediciones. |
+| `eval_error` | Cualquier otro fallo, como `math.clamp` con sus límites invertidos. |
+
+Una entrada ausente se detecta sea cual sea el orden de los operandos. `temp > 80.0 || fan > 1` se
+omite en una lectura sin `fan`, aunque una lectura caliente hiciera verdadera la primera mitad. Si
+quieres que la fórmula funcione sin `fan`, compruébala con `has()`.
+
+## Almacenamiento y precisión
+
+- Las mediciones se almacenan con un máximo de 12 dígitos antes del punto decimal y **8 decimales**.
+  Un valor calculado se redondea a 8 decimales al almacenarse, y un resultado de magnitud 1e12 o
+  mayor se omite como `unstorable`. Definir un Mín. y un Máx. dentro de más o menos
+  999 999 999 999 le indica al editor que conoces el rango y elimina esa advertencia.
+- Un valor calculado se almacena como cualquier medición, así que sigue la retención de mediciones
+  de tu inquilino.
+- Las unidades no se convierten ni se comprueban. Una fórmula lee sus entradas como números
+  simples, y el resultado lleva solo la unidad que declares en la métrica calculada.
+
+## Activar las métricas calculadas {#turning-calculated-metrics-on}
+
+El operador de la instancia define por **nivel** cuántas métricas calculadas puede publicar un
+perfil, como **Métricas calculadas por perfil** en **Admin → Niveles**. El valor por defecto de la
+plataforma es `0`, lo que significa que las métricas calculadas están desactivadas: puedes escribir
+fórmulas y probarlas, pero publicar un perfil que tenga una se rechaza con:
+
+> cannot publish device profile: it has N calculated metric(s), and calculated metrics are not
+> enabled for this tenant's tier
+
+Cuando el límite es mayor que cero pero inferior al número que tiene el perfil, el mensaje indica
+cuántas permite el nivel por perfil. El máximo que puede conceder un nivel es 32. Pide a tu
+operador que suba el límite si necesitas métricas calculadas.

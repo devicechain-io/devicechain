@@ -920,6 +920,14 @@ export type MetricDefinitionUpdateRequest = {
   unit?: string | null | undefined;
 };
 
+/** One input value of a sample for testMetricFormula. */
+export type MetricValueInput = {
+  /** The measured metric's key. */
+  key: string;
+  /** The value as a device would send it, such as `230.5`, `12` or `true`. */
+  value: string;
+};
+
 /** Which page of results to return. */
 export type PaginationInput = {
   /** Page to return, starting at 1. Values below 1 are read as 1. */
@@ -1619,7 +1627,7 @@ export type MetricDefinitionsQueryVariables = Exact<{
 }>;
 
 
-export type MetricDefinitionsQuery = { metricDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metricKey: string, dataType: string, unit: string | null, minValue: number | null, maxValue: number | null, enum: string | null, descriptor: string | null, metadata: string | null }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+export type MetricDefinitionsQuery = { metricDefinitions: { results: Array<{ id: string, token: string, name: string | null, description: string | null, metricKey: string, dataType: string, unit: string | null, minValue: number | null, maxValue: number | null, enum: string | null, descriptor: string | null, metadata: string | null, expression: string | null, calculated: boolean }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
 export type CreateMetricDefinitionMutationVariables = Exact<{
   request?: MetricDefinitionCreateRequest | null | undefined;
@@ -1635,6 +1643,19 @@ export type UpdateMetricDefinitionMutationVariables = Exact<{
 
 
 export type UpdateMetricDefinitionMutation = { updateMetricDefinition: { id: string, token: string } };
+
+export type TestMetricFormulaQueryVariables = Exact<{
+  profileToken: string;
+  expression: string;
+  dataType: string;
+  metricKey?: string | null | undefined;
+  minValue?: number | null | undefined;
+  maxValue?: number | null | undefined;
+  sample: Array<MetricValueInput> | MetricValueInput;
+}>;
+
+
+export type TestMetricFormulaQuery = { testMetricFormula: { compileError: string | null, value: string | null, skippedReason: string | null, inputs: Array<string>, warnings: Array<string>, estimatedCost: number | null } };
 
 export type DeleteMetricDefinitionMutationVariables = Exact<{
   token: string;
@@ -3444,6 +3465,8 @@ export const MetricDefinitionsDocument = new TypedDocumentString(`
       enum
       descriptor
       metadata
+      expression
+      calculated
     }
     pagination {
       pageStart
@@ -3469,6 +3492,26 @@ export const UpdateMetricDefinitionDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateMetricDefinitionMutation, UpdateMetricDefinitionMutationVariables>;
+export const TestMetricFormulaDocument = new TypedDocumentString(`
+    query TestMetricFormula($profileToken: String!, $expression: String!, $dataType: String!, $metricKey: String, $minValue: Float, $maxValue: Float, $sample: [MetricValueInput!]!) {
+  testMetricFormula(
+    profileToken: $profileToken
+    expression: $expression
+    dataType: $dataType
+    metricKey: $metricKey
+    minValue: $minValue
+    maxValue: $maxValue
+    sample: $sample
+  ) {
+    compileError
+    value
+    skippedReason
+    inputs
+    warnings
+    estimatedCost
+  }
+}
+    `) as unknown as TypedDocumentString<TestMetricFormulaQuery, TestMetricFormulaQueryVariables>;
 export const DeleteMetricDefinitionDocument = new TypedDocumentString(`
     mutation DeleteMetricDefinition($token: String!) {
   deleteMetricDefinition(token: $token)

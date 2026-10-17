@@ -19,6 +19,8 @@ import { Combobox } from '@/components/ui/combobox';
 import { ErrorBanner } from '@/components/ui/error-banner';
 import { errMessage } from '@/routes/common';
 import { Textarea } from '@/components/ui/textarea';
+import { SegmentedControl, type SegmentedOption } from '@/components/ui/segmented-control';
+import { FormulaEditor } from './FormulaEditor';
 import { METRIC_DATA_TYPES, COMMAND_IMPACTS } from '@/lib/vocab';
 import {
   createMetricDefinition,
@@ -64,6 +66,16 @@ function SubmitRow({
 
 // ── Metric definition ─────────────────────────────────────────────────────
 
+// Declared outside the JSX so the literal-string lint reads the wire values as data.
+function metricKindOptions(t: (key: string) => string, locked: boolean): SegmentedOption<MetricKind>[] {
+  return [
+    { value: 'measured', label: t('deviceProfiles:metricKindMeasured'), disabled: locked },
+    { value: 'calculated', label: t('deviceProfiles:metricKindCalculated'), disabled: locked },
+  ];
+}
+
+type MetricKind = 'measured' | 'calculated';
+
 export function MetricDefinitionForm({
   profileToken,
   entity,
@@ -83,6 +95,10 @@ export function MetricDefinitionForm({
   const [minValue, setMinValue] = useState(entity?.minValue?.toString() ?? '');
   const [maxValue, setMaxValue] = useState(entity?.maxValue?.toString() ?? '');
   const [description, setDescription] = useState(entity?.description ?? '');
+  // Measured or calculated is fixed when the metric is created: the API refuses a switch in
+  // either direction, so an edit shows the kind but cannot change it.
+  const [calculated, setCalculated] = useState(entity?.calculated ?? false);
+  const [expression, setExpression] = useState(entity?.expression ?? '');
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -106,7 +122,8 @@ export function MetricDefinitionForm({
         maxValue: optNum(maxValue),
       };
       if (editing) {
-        await updateMetricDefinition(entity.token, edited);
+        // A measured metric's update names no formula at all: the API refuses one.
+        await updateMetricDefinition(entity.token, calculated ? { ...edited, expression: expression.trim() } : edited);
         onDone(t('deviceProfiles:defMetricUpdatedToast', { key: edited.metricKey }));
       } else {
         // A create has nothing to leave alone, so it names everything.
@@ -116,9 +133,7 @@ export function MetricDefinitionForm({
           enum: null,
           descriptor: null,
           metadata: null,
-          // This form creates MEASURED metrics; a calculated one is authored through the API
-          // until the console's formula editor lands.
-          expression: null,
+          expression: calculated ? expression.trim() : null,
         };
         await createMetricDefinition(created);
         onDone(t('deviceProfiles:defMetricCreatedToast', { key: created.metricKey }));
@@ -130,9 +145,22 @@ export function MetricDefinitionForm({
     }
   };
 
+  const kindOptions = metricKindOptions(t, editing);
+
   return (
     <div className="space-y-4">
       {formError && <ErrorBanner message={formError} onDismiss={() => setFormError(null)} />}
+      <FormField
+        label={t('deviceProfiles:metricKindLabel')}
+        description={editing ? t('deviceProfiles:metricKindLockedHint') : t('deviceProfiles:metricKindHint')}
+      >
+        <SegmentedControl
+          ariaLabel={t('deviceProfiles:metricKindLabel')}
+          value={calculated ? 'calculated' : 'measured'}
+          onValueChange={(v) => setCalculated(v === 'calculated')}
+          options={kindOptions}
+        />
+      </FormField>
       <FormField label={t('deviceProfiles:defMetricKeyLabel')} htmlFor="m-key" description={t('deviceProfiles:defMetricKeyHint')}>
         <Input
           id="m-key"
@@ -171,6 +199,17 @@ export function MetricDefinitionForm({
           </FormField>
         </div>
       </div>
+      {calculated && (
+        <FormulaEditor
+          profileToken={profileToken}
+          metricKey={metricKey}
+          dataType={dataType}
+          minValue={minValue}
+          maxValue={maxValue}
+          expression={expression}
+          onChange={setExpression}
+        />
+      )}
       <FormField label={t('common:colName')} htmlFor="m-name">
         <Input id="m-name" value={name} onChange={(e) => setName(e.target.value)} />
       </FormField>
@@ -181,7 +220,7 @@ export function MetricDefinitionForm({
         editing={editing}
         createLabel={t('deviceProfiles:defMetricCreateButton')}
         busy={busy}
-        disabled={busy || !metricKey.trim() || (!editing && !token.trim())}
+        disabled={busy || !metricKey.trim() || (!editing && !token.trim()) || (calculated && !expression.trim())}
         onClick={submit}
       />
     </div>
