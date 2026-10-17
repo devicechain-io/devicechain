@@ -9,19 +9,21 @@ import (
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
-// DashboardShare names one anchor a dashboard is shared with (ADR-081): a customer whose
-// scoped members may list the dashboard and open its published version. A dashboard is
-// shared with nobody until an author shares it; sharing is replaced whole by shareDashboard.
+// DashboardShare names one anchor a dashboard is shared with (ADR-081): a customer or an
+// access-scope group whose scoped members may list the dashboard and open its published
+// version. A dashboard is shared with nobody until an author shares it; sharing is replaced
+// whole by shareDashboard.
 //
 // The row is keyed by everything it says — tenant, dashboard, anchor — so a share is a fact
 // that either exists or does not, with nothing to update. It leaves with its dashboard (a
-// foreign key ON DELETE CASCADE, and DeleteDashboard's own delete) and with its customer
-// (the entity-deleted consumer). It is tenant-scoped like every row here, and it declares no
-// scope rule of its own: a scoped member never reads a share, only dashboards through one.
+// foreign key ON DELETE CASCADE, and DeleteDashboard's own delete) and with its customer or
+// group (the entity-deleted consumer). It is tenant-scoped like every row here, and it
+// declares no scope rule of its own: a scoped member never reads a share, only dashboards
+// through one.
 type DashboardShare struct {
 	TenantId    string `gorm:"primaryKey;not null;size:128"`
 	DashboardID uint   `gorm:"primaryKey;not null"`
-	// AnchorKind is "customer" today; "group" is reserved for group scopes.
+	// AnchorKind is "customer" or "group" (auth.AnchorKindCustomer, auth.AnchorKindGroup).
 	AnchorKind  string `gorm:"primaryKey;not null;size:16"`
 	AnchorToken string `gorm:"primaryKey;not null;size:128"`
 	CreatedAt   time.Time

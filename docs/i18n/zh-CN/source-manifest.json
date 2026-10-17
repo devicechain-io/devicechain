@@ -207,8 +207,8 @@
       "translationSha256": "0d032b544fe4b13c308375594a776b57eb6f39b6ad59521816dacfe1c7e3d96c"
     },
     "reference/graphql-api.md": {
-      "sourceSha256": "f31139ae23b5e95963f9dc42936916a4da4e1398c0e6757d4645cc8cea655bd3",
-      "translationSha256": "3b5c00a019d68f004dfde7c57e8c709d6125fec14d42b42f3c8a3e3ab03313e3"
+      "sourceSha256": "30e1ba3df3747380b89cb79954c3b4d968dae132a22f2d4752a3859f6610e1cf",
+      "translationSha256": "4f3dc48f6ebdc1c453fe713188945a6517f310d7bf347ca6619670e9985786c2"
     },
     "reference/npm-packages.md": {
       "sourceSha256": "a2950de3cf160b9a6e5194c6f92f67c99edc262295fe328236b98224fdf73aa4",
@@ -247,8 +247,8 @@
       "translationSha256": "98dff69ec499ce936a7a0beba510fcb0928dad3cac0388d80673a529bca76138"
     },
     "user-guide/dashboards.md": {
-      "sourceSha256": "4769b4b43dd4bbe994e6866d697d164b015d71e32ac023979369b096e9614081",
-      "translationSha256": "a8d531edaea9ff0ec42da477cdab577b0a80d5b73150608f4814a1fb2e5ea7b8"
+      "sourceSha256": "54a511ff2a984dbf4580edb4402a4b664ec0211923619c2353b50feb23adb04f",
+      "translationSha256": "c3ddbffaa5efa8248e4928004e659e05cdc751abf4f76667d7e49c9ed6ea7aa9"
     },
     "user-guide/detection-rules.md": {
       "sourceSha256": "13ca0e97825a2202e0c5186ff34ea0fdad9add676b9cfd74e8149a9a87a516f5",
@@ -275,8 +275,8 @@
       "translationSha256": "ec3e96d197156cd6e0e7a58407b8c01ad56c4df0298bfb552fd278fe3162632e"
     },
     "user-guide/members-roles-and-customer-users.md": {
-      "sourceSha256": "5a85dbc6e5de90e2bdfd5a0c70d3b4061d47382061b3e2f53fff1b7048ca74dd",
-      "translationSha256": "9539a099af5899b6cc069eb0154565ff17c68fde01a2b9f0d26b6719a8eb9e1e"
+      "sourceSha256": "d15e2b24ce353e5feb1125c5194a1bbca07ebb60be31ee6f7dc54fda0bdf98ed",
+      "translationSha256": "9b055195b2a8dd76402b2b9ad08c2ad26d7fa0ae57c2b78f010c99ff6f2750b0"
     },
     "user-guide/notification-policies.md": {
       "sourceSha256": "651a7280e313b66cb0ad2eec7747f914bb388f904d39969a1a90e5db6bac2028",
@@ -295,8 +295,8 @@
       "translationSha256": "e2d7ca0ca8b2434e280aa7a6a836109ac59f3b53f73a252a452bb98fa3f77470"
     },
     "user-guide/viewing-dashboards-in-dash.md": {
-      "sourceSha256": "93e24bb820db83aaebf55b4ba49938e9183c010ff429bdf05ad671d317d222ec",
-      "translationSha256": "2273d087f7be3789155d73a0fb1ff1f14a7eaedfb4f563b4f36ef9f6afb24e66"
+      "sourceSha256": "bba0944ff3eae43f2d5e6e0f770cd43a60c83c8010a5376c9f60768d01973316",
+      "translationSha256": "32ebeac863d4b9a343833a2f094053ac6ff25dd7b0a970603f080d807477ce64"
     }
   }
 }

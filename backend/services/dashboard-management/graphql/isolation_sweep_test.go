@@ -52,3 +52,36 @@ func TestIsolationSweep(t *testing.T) {
 		}
 	}
 }
+
+// TestIsolationSweepForAGroupMember is the same sweep for a member limited to a GROUP: every
+// operation, as group:north's member, aimed at the dashboard shared only with another group,
+// must neither carry it nor tell it apart from a dashboard that does not exist. The opted-in
+// reads must still answer with data — the dashboard shared with north — or it proves nothing.
+func TestIsolationSweepForAGroupMember(t *testing.T) {
+	f := newShareFixture(t)
+	sqldb, err := f.db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqldb.SetMaxOpenConns(1)
+	f.targets.shareable["group:yard"] = true
+	f.dashboard(t, "acme-tenant", "d-north", true, "group:north")
+	f.dashboard(t, "acme-tenant", "d-yard", true, "group:yard")
+	out := isolationsweep.Run(t, isolationsweep.Config{
+		Schema:   gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
+		Scoped:   f.member("group:north"),
+		Unscoped: f.author("acme-tenant"),
+		Probe:    "d-yard",
+		Hidden:   []string{"yard"},
+	})
+	t.Logf("swept %d operations as group:north's member", len(out))
+	for _, op := range []string{"query dashboards", "query publishedDashboard"} {
+		o, ok := isolationsweep.OutcomeOf(out, op)
+		if !ok || !o.Data {
+			t.Errorf("%s: %+v (reached=%v), want data for group:north's member", op, o, ok)
+		}
+	}
+	if got := listedTokens(t, f.member("group:north")); len(got) != 1 || got[0] != "d-north" {
+		t.Fatalf("group:north's member listed %v, want only d-north", got)
+	}
+}

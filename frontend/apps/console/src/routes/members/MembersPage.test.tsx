@@ -35,6 +35,14 @@ vi.mock('@/lib/api/customers', () => ({
     Object.fromEntries(tokens.filter((t) => t === 'acme').map((t) => [t, 'Acme Corp'])),
   ),
 }));
+vi.mock('@/lib/api/device-management', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api/device-management')>()),
+  // The access-scope groups the picker offers: only these, never every group.
+  listAccessScopeGroups: vi.fn(async () => [{ token: 'north', name: 'North wing' }]),
+  getGroupNames: vi.fn(async (tokens: string[]) =>
+    Object.fromEntries(tokens.filter((t) => t === 'north').map((t) => [t, 'North wing'])),
+  ),
+}));
 vi.mock('@/lib/api/members', async (orig) => ({
   ...(await orig<typeof import('@/lib/api/members')>()),
   listMembers: vi.fn(async () => ({
@@ -83,11 +91,18 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('the members list', () => {
-  it('names what each member can see: the whole tenant, or the customers they are limited to', async () => {
+  it('names what each member can see: the whole tenant, or the customers and groups they are limited to', async () => {
     h.members = [
       member({ email: 'staff@oem.example' }),
       member({ email: 'ann@acme.example', scope: [{ kind: 'CUSTOMER', token: 'acme' }] }),
       member({ email: 'gus@globex.example', scope: [{ kind: 'CUSTOMER', token: 'globex' }] }),
+      member({
+        email: 'nora@oem.example',
+        scope: [
+          { kind: 'GROUP', token: 'north' },
+          { kind: 'GROUP', token: 'retired' },
+        ],
+      }),
     ];
     renderPage();
     const staff = (await screen.findByText('staff@oem.example')).closest('tr')!;
@@ -98,6 +113,12 @@ describe('the members list', () => {
     const gus = screen.getByText('gus@globex.example').closest('tr')!;
     expect(within(gus).getByText('globex')).toBeTruthy();
     expect(within(gus).queryByText('Whole tenant')).toBeNull();
+    // A group is named like a customer, and marked as a group, not a customer.
+    const nora = screen.getByText('nora@oem.example').closest('tr')!;
+    await waitFor(() => expect(within(nora).getByText('North wing')).toBeTruthy());
+    expect(within(nora).getByText('retired')).toBeTruthy();
+    expect(within(nora).getAllByTitle('Group of devices')).toHaveLength(2);
+    expect(within(nora).queryByText('Whole tenant')).toBeNull();
   });
 
   it('offers no actions on your own row or on a membership the identity provider manages', async () => {
@@ -134,7 +155,7 @@ describe('inviting a member', () => {
     // Roles are picked through the kit's multi-select; open it and choose one.
     fireEvent.click(screen.getByLabelText('Roles'));
     fireEvent.click(await screen.findByText('Acme operator'));
-    fireEvent.click(screen.getByRole('radio', { name: 'Specific customers' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Specific customers or groups' }));
     fireEvent.click(await screen.findByLabelText('Customers'));
     fireEvent.click(await screen.findByText('Acme Corp'));
     fireEvent.click(screen.getByRole('button', { name: 'Invite member', hidden: false }));
@@ -150,6 +171,52 @@ describe('inviting a member', () => {
     // The code rides the fragment, which a browser never sends to a server.
     expect(link.value).toBe(`${window.location.origin}/invitation#code=${encodeURIComponent('c0de+/=')}`);
     expect(screen.getByText(/shown only once/)).toBeTruthy();
+  });
+
+  it('limits a member to an access-scope group, beside a customer, and says where a missing group is enabled', async () => {
+    h.members = [];
+    h.invite.mockResolvedValue({ member: { email: 'nora@oem.example' }, invitationCode: 'c0de' });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: 'Invite member' }));
+    fireEvent.change(await screen.findByLabelText('Email'), { target: { value: 'nora@oem.example' } });
+    fireEvent.click(screen.getByLabelText('Roles'));
+    fireEvent.click(await screen.findByText('Viewer'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Specific customers or groups' }));
+    expect(screen.getByText(/enable it as an access scope on the group's page/)).toBeTruthy();
+    fireEvent.click(await screen.findByLabelText('Customers'));
+    fireEvent.click(await screen.findByText('Acme Corp'));
+    fireEvent.click(screen.getByLabelText('Groups of devices'));
+    fireEvent.click(await screen.findByText('North wing'));
+    fireEvent.click(screen.getByRole('button', { name: 'Invite member', hidden: false }));
+
+    await waitFor(() =>
+      expect(h.invite).toHaveBeenCalledWith({
+        email: 'nora@oem.example',
+        roleTokens: ['viewer'],
+        scope: [
+          { kind: 'CUSTOMER', token: 'acme' },
+          { kind: 'GROUP', token: 'north' },
+        ],
+      }),
+    );
+  });
+
+  it('keeps a group already in the scope when it is edited, even once it is no longer an access scope', async () => {
+    h.members = [member({ email: 'nora@oem.example', scope: [{ kind: 'GROUP', token: 'retired' }] })];
+    h.setRoles.mockResolvedValue(undefined);
+    renderPage();
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Actions for nora@oem.example' }), {
+      button: 0,
+      ctrlKey: false,
+      pointerType: 'mouse',
+    });
+    fireEvent.click(await screen.findByText('Edit access'));
+    fireEvent.click(await screen.findByLabelText('Roles'));
+    fireEvent.click(await screen.findByText('Acme operator'));
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(h.setRoles).toHaveBeenCalled());
+    // Only the roles changed: the scope, naming the group, is not rewritten.
+    expect(h.setScope).not.toHaveBeenCalled();
   });
 
   it('maps a refusal code to words that say what to do', async () => {

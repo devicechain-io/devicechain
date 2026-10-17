@@ -3,6 +3,7 @@
 
 import { RegistryTypeForm, groupColumns, type RegistryResource } from '@/components/registry';
 import { MembershipPanel } from '@/components/MembershipPanel';
+import { AccessScopePanel } from './AccessScopePanel';
 import {
   listDeviceGroups,
   getDeviceGroup,
@@ -42,14 +43,26 @@ export const deviceGroupResource: RegistryResource<DeviceGroup> = {
       onDone={onDone}
     />
   ),
-  detailExtraLabel: 'common:membersTab',
-  renderDetailExtra: (g) => (
-    <MembershipPanel
-      groupType="group"
-      groupToken={g.token}
-      memberType="device"
-      memberI18nKey="device"
-      loadCandidates={() => listDevices({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
-    />
-  ),
+  detailTabs: [
+    {
+      value: 'members',
+      label: 'common:membersTab',
+      render: (g) => (
+        <MembershipPanel
+          groupType="group"
+          groupToken={g.token}
+          memberType="device"
+          memberI18nKey="device"
+          loadCandidates={() => listDevices({ pageNumber: 1, pageSize: 1000 }).then((r) => r.results)}
+        />
+      ),
+    },
+    // Whether members can be limited to this group, and dashboards shared with it. Only a
+    // device group can be one, so the tab lives on this family alone.
+    {
+      value: 'access',
+      label: 'members:groupAccessTab',
+      render: (g) => <AccessScopePanel token={g.token} />,
+    },
+  ],
 };

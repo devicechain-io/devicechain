@@ -1475,6 +1475,42 @@ export type DeleteEntityGroupMutationVariables = Exact<{
 
 export type DeleteEntityGroupMutation = { deleteEntityGroup: boolean };
 
+export type GroupAccessQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type GroupAccessQuery = { entityGroupsByToken: Array<{ token: string, memberType: string, membershipMode: string, activeVersion: number | null, accessScope: boolean }> };
+
+export type SetEntityGroupAccessScopeMutationVariables = Exact<{
+  token: string;
+  enabled: boolean;
+}>;
+
+
+export type SetEntityGroupAccessScopeMutation = { setEntityGroupAccessScope: { token: string, memberType: string, membershipMode: string, activeVersion: number | null, accessScope: boolean } };
+
+export type PublishEntityGroupMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type PublishEntityGroupMutation = { publishEntityGroup: { version: number } };
+
+export type AccessScopeGroupsQueryVariables = Exact<{
+  criteria: EntityGroupSearchCriteria;
+}>;
+
+
+export type AccessScopeGroupsQuery = { entityGroups: { results: Array<{ token: string, name: string | null }> } };
+
+export type GroupNamesQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type GroupNamesQuery = { entityGroupsByToken: Array<{ token: string, name: string | null }> };
+
 export type DeviceGroupTargetsQueryVariables = Exact<{ [key: string]: never; }>;
 
 
@@ -3183,6 +3219,53 @@ export const DeleteEntityGroupDocument = new TypedDocumentString(`
   deleteEntityGroup(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteEntityGroupMutation, DeleteEntityGroupMutationVariables>;
+export const GroupAccessDocument = new TypedDocumentString(`
+    query GroupAccess($tokens: [String!]!) {
+  entityGroupsByToken(tokens: $tokens) {
+    token
+    memberType
+    membershipMode
+    activeVersion
+    accessScope
+  }
+}
+    `) as unknown as TypedDocumentString<GroupAccessQuery, GroupAccessQueryVariables>;
+export const SetEntityGroupAccessScopeDocument = new TypedDocumentString(`
+    mutation SetEntityGroupAccessScope($token: String!, $enabled: Boolean!) {
+  setEntityGroupAccessScope(token: $token, enabled: $enabled) {
+    token
+    memberType
+    membershipMode
+    activeVersion
+    accessScope
+  }
+}
+    `) as unknown as TypedDocumentString<SetEntityGroupAccessScopeMutation, SetEntityGroupAccessScopeMutationVariables>;
+export const PublishEntityGroupDocument = new TypedDocumentString(`
+    mutation PublishEntityGroup($token: String!) {
+  publishEntityGroup(token: $token) {
+    version
+  }
+}
+    `) as unknown as TypedDocumentString<PublishEntityGroupMutation, PublishEntityGroupMutationVariables>;
+export const AccessScopeGroupsDocument = new TypedDocumentString(`
+    query AccessScopeGroups($criteria: EntityGroupSearchCriteria!) {
+  entityGroups(criteria: $criteria) {
+    results {
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AccessScopeGroupsQuery, AccessScopeGroupsQueryVariables>;
+export const GroupNamesDocument = new TypedDocumentString(`
+    query GroupNames($tokens: [String!]!) {
+  entityGroupsByToken(tokens: $tokens) {
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<GroupNamesQuery, GroupNamesQueryVariables>;
 export const DeviceGroupTargetsDocument = new TypedDocumentString(`
     query DeviceGroupTargets {
   entityGroups(criteria: {pageNumber: 1, pageSize: 500, memberType: "device"}) {

@@ -37,6 +37,7 @@ import type {
   DetectionRuleUpdateRequest,
   ScopeGroupsQuery,
   EntityGroupVersionsQuery,
+  GroupAccessQuery,
   DeviceGroupTargetsQuery,
   DeviceFacet,
 } from '@/gql/device-management/graphql';
@@ -682,6 +683,121 @@ export const createDeviceGroup = (request: GroupFormRequest) =>
 export const updateDeviceGroup = (token: string, request: EntityGroupUpdateRequest) =>
   updateEntityGroup(token, request);
 export const deleteDeviceGroup = deleteEntityGroup;
+
+// ── Access scopes (a group a member's access can be limited to) ─────────────
+//
+// SEPARATE documents rather than fields added to ENTITY_GROUPS, for the same reason as the
+// batch-target picker below: every group screen reads ENTITY_GROUPS, and only these need the
+// membership mode, the published version and the access-scope flag.
+
+const GROUP_ACCESS = graphql(`
+  query GroupAccess($tokens: [String!]!) {
+    entityGroupsByToken(tokens: $tokens) {
+      token
+      memberType
+      membershipMode
+      activeVersion
+      accessScope
+    }
+  }
+`);
+
+export type GroupAccess = GroupAccessQuery['entityGroupsByToken'][number];
+
+/** What decides whether a group can be an access scope, and whether it is one; null when there is no such group. */
+export async function getGroupAccess(token: string): Promise<GroupAccess | null> {
+  const data = await gql('device-management', GROUP_ACCESS, { tokens: [token] });
+  return data.entityGroupsByToken[0] ?? null;
+}
+
+/**
+ * Whether a group can be made an access scope: only a dynamic group of devices that has
+ * been published (the server refuses any other with INVALID_VALUE).
+ */
+export function accessScopeEligibility(g: GroupAccess): 'eligible' | 'notDevices' | 'static' | 'unpublished' {
+  if (g.memberType !== 'device') return 'notDevices';
+  if (g.membershipMode !== 'dynamic') return 'static';
+  if (g.activeVersion == null) return 'unpublished';
+  return 'eligible';
+}
+
+const SET_GROUP_ACCESS_SCOPE = graphql(`
+  mutation SetEntityGroupAccessScope($token: String!, $enabled: Boolean!) {
+    setEntityGroupAccessScope(token: $token, enabled: $enabled) {
+      token
+      memberType
+      membershipMode
+      activeVersion
+      accessScope
+    }
+  }
+`);
+
+/**
+ * Make a group an access scope, or stop it being one. A tenant may have at most
+ * MAX_ACCESS_SCOPE_GROUPS (LIMIT_EXCEEDED past that).
+ */
+export async function setGroupAccessScope(token: string, enabled: boolean): Promise<GroupAccess> {
+  const data = await gql('device-management', SET_GROUP_ACCESS_SCOPE, { token, enabled });
+  return data.setEntityGroupAccessScope;
+}
+
+/** The most groups one tenant may have as access scopes (the server's limit). */
+export const MAX_ACCESS_SCOPE_GROUPS = 32;
+
+const PUBLISH_ENTITY_GROUP = graphql(`
+  mutation PublishEntityGroup($token: String!) {
+    publishEntityGroup(token: $token) {
+      version
+    }
+  }
+`);
+
+/** Publish a dynamic group's filter as a new version, which becomes the one its members follow. */
+export async function publishEntityGroup(token: string): Promise<number> {
+  const data = await gql('device-management', PUBLISH_ENTITY_GROUP, { token });
+  return data.publishEntityGroup.version;
+}
+
+const ACCESS_SCOPE_GROUPS = graphql(`
+  query AccessScopeGroups($criteria: EntityGroupSearchCriteria!) {
+    entityGroups(criteria: $criteria) {
+      results {
+        token
+        name
+      }
+    }
+  }
+`);
+
+/** The groups a member's access can be limited to: the tenant's access scopes (at most MAX_ACCESS_SCOPE_GROUPS). */
+export async function listAccessScopeGroups(): Promise<{ token: string; name?: string | null }[]> {
+  const data = await gql('device-management', ACCESS_SCOPE_GROUPS, {
+    criteria: { pageNumber: 1, pageSize: MAX_ACCESS_SCOPE_GROUPS, accessScope: true },
+  });
+  return data.entityGroups.results;
+}
+
+const GROUP_NAMES = graphql(`
+  query GroupNames($tokens: [String!]!) {
+    entityGroupsByToken(tokens: $tokens) {
+      token
+      name
+    }
+  }
+`);
+
+/**
+ * Display names for group tokens, by token; a group with no name, or that does not exist, is
+ * absent. Answered to a member limited to a group too, for the groups their scope names.
+ */
+export async function getGroupNames(tokens: string[]): Promise<Record<string, string>> {
+  if (tokens.length === 0) return {};
+  const data = await gql('device-management', GROUP_NAMES, { tokens });
+  const out: Record<string, string> = {};
+  for (const g of data.entityGroupsByToken) if (g.name) out[g.token] = g.name;
+  return out;
+}
 
 // A device group as the command-batch target picker needs it (ADR-061 / ADR-043).
 //

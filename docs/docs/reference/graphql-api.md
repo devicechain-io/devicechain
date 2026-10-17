@@ -792,8 +792,15 @@ move it into the group appears without anyone editing the member, and a device m
 disappears. Publishing a new version of the group, or rolling it back, changes the set in the same
 way. The operations in the table above answer for a group as they do for a customer: events,
 alarms, commands and update assignments recorded while the device was in the group stay visible,
-and the live state follows the device. Dashboards can be shared only with customers, so a member
-limited only to groups sees no shared dashboard.
+and the live state follows the device. `entityGroupsByToken` answers with the member's own groups,
+and no others, so a client can name what the member is limited to; a group's `members` and
+`versions` are refused to them.
+
+A dashboard can be shared with an access-scope group as it is with a customer: `shareDashboard`
+takes `{ kind: GROUP, token: "..." }` beside customers, and a member limited to the group then lists
+and opens it. Every group named must exist in the tenant and be an access scope. One that does not
+exist, and one that exists but is not an access scope, both answer `NOT_FOUND` with the same message,
+and nothing is changed. A share with a group that later stops being an access scope is kept.
 
 A deleted group's token is retired as a customer's is, because a member's access and these records
 name the group by its token. `createEntityGroup` at a retired token answers `INVALID_VALUE`.

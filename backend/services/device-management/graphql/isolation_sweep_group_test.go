@@ -85,3 +85,41 @@ func TestIsolationSweepForAGroupMember(t *testing.T) {
 		t.Fatalf("group:north's member saw %v, want only acme-pump", results)
 	}
 }
+
+// A member limited to a group reads that group's own record by token — its console names what
+// it is limited to with it — and no other group's: not one its scope does not name, and none at
+// all for a member limited to a customer. Nothing the record leads to opens with it: its members
+// and versions stay refused. The operator is the control.
+func TestAGroupMemberReadsOnlyItsOwnGroupRecord(t *testing.T) {
+	f := newGroupScopeFixture(t)
+	dynamic, selector := "dynamic", `attr["region"] == "south"`
+	if _, err := f.api.CreateEntityGroup(f.operator(), &model.EntityGroupCreateRequest{Token: "south",
+		MemberType: "device", MembershipMode: &dynamic, Selector: &selector}); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	const q = `{ entityGroupsByToken(tokens: ["north", "south"]) { token accessScope } }`
+	tokens := func(s served) []string {
+		t.Helper()
+		requireServed(t, s, "entityGroupsByToken")
+		out := []string{}
+		for _, g := range s.data["entityGroupsByToken"].([]any) {
+			out = append(out, g.(map[string]any)["token"].(string))
+		}
+		return out
+	}
+	if got := tokens(serve(t, f.operator(), q, nil)); len(got) != 2 {
+		t.Fatalf("control: the operator read %v, want both groups", got)
+	}
+	if got := tokens(serve(t, f.member("group:north"), q, nil)); len(got) != 1 || got[0] != "north" {
+		t.Fatalf("group:north's member read %v, want only north", got)
+	}
+	if got := tokens(serve(t, f.member("customer:acme"), q, nil)); len(got) != 0 {
+		t.Fatalf("acme's member read %v, want no group", got)
+	}
+	for _, sub := range []string{`members(pagination: {pageNumber: 1, pageSize: 10}) { results { token } }`, `versions { version }`} {
+		s := serve(t, f.member("group:north"), `{ entityGroupsByToken(tokens: ["north"]) { token `+sub+` } }`, nil)
+		if len(s.errs) == 0 || s.errs[0].Extensions["code"] != "FORBIDDEN" {
+			t.Fatalf("group:north's member was served %s: %v %v", sub, s.data, s.errs)
+		}
+	}
+}

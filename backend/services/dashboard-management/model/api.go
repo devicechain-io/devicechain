@@ -63,9 +63,9 @@ type Api struct {
 	// tenant's rows is what erasure needs. Nil disables the gate, which is how main.go
 	// leaves it when user-management is not configured, and how unit tests run.
 	TenantDeleted func(tenant string) bool
-	// Customers confirms the customers a dashboard is shared with. Nil refuses every share
-	// that names one (ErrCustomersUnverifiable); it changes nothing else.
-	Customers CustomerChecker
+	// ShareTargets confirms the customers and groups a dashboard is shared with. Nil refuses
+	// every share that names one (ErrSharesUnverifiable); it changes nothing else.
+	ShareTargets ShareChecker
 }
 
 // refuseDeletedTenant is the lifecycle gate every dashboard write passes through.

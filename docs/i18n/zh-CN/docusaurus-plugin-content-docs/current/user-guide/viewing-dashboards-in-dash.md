@@ -21,7 +21,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 ## 加载仪表板 {#loading-a-dashboard}
 
-登录后，**Load a dashboard**（加载仪表板）会列出 **Your dashboards**（你的仪表板）：你可以打开的已发布仪表板。选择其中一个即可打开。如果你的访问权限仅限于租户的部分客户，列表中是共享给这些客户的已发布仪表板；否则是租户中的所有已发布仪表板。列表显示前 200 个，超出时会注明。
+登录后，**Load a dashboard**（加载仪表板）会列出 **Your dashboards**（你的仪表板）：你可以打开的已发布仪表板。选择其中一个即可打开。如果你的访问权限仅限于租户的部分客户或设备组，列表中是共享给这些客户或组的已发布仪表板；否则是租户中的所有已发布仪表板。列表显示前 200 个，超出时会注明。
 
 {/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}
 

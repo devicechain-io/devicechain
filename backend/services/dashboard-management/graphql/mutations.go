@@ -118,7 +118,7 @@ func publisher(ctx context.Context) string {
 	return claims.Email
 }
 
-// ShareDashboard replaces the customers the dashboard is shared with (ADR-081). It is an
+// ShareDashboard replaces the customers and groups the dashboard is shared with (ADR-081). It is an
 // author's decision about who may see a dashboard, so it is dashboard:write and refused to a
 // member limited to part of the tenant: a customer's user does not decide what other
 // customers see.

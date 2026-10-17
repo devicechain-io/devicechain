@@ -8,10 +8,10 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-dashboard-management/config"
-	"github.com/devicechain-io/dc-dashboard-management/customercheck"
 	"github.com/devicechain-io/dc-dashboard-management/graphql"
 	"github.com/devicechain-io/dc-dashboard-management/model"
 	"github.com/devicechain-io/dc-dashboard-management/processor"
+	"github.com/devicechain-io/dc-dashboard-management/sharecheck"
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -126,7 +126,7 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	// leaves the gate off with a warning; the per-area erasure fence is the guarantee.
 	infra := Microservice.InstanceConfiguration.Infrastructure
 	Api.TenantDeleted = governance.NewTenantLifecycleGate(infra.UserManagement, infra.ServiceAuth.Secret, "dashboard-management", governance.NewSafetyGates(Microservice))
-	wireCustomerChecker(infra.ServiceAuth.Secret, infra)
+	wireShareChecker(infra.ServiceAuth.Secret, infra)
 
 	// Report the size of this schema's append-only history tables (ADR-023): a dashboard version history only
 	// grows, and so does the audit journal the collector adds for every schema. Nothing
@@ -143,17 +143,17 @@ func afterRdb(ctx context.Context, m *service.Managers) error {
 	return nil
 }
 
-// wireCustomerChecker lets shareDashboard confirm the customers it names, against
+// wireShareChecker lets shareDashboard confirm the customers and groups it names, against
 // device-management under a device:read service token. Without the shared secret or the
-// endpoint there is nobody to ask, and every share naming a customer is refused rather than
-// written unchecked — said once, here, at startup.
-func wireCustomerChecker(secret string, infra mscfg.InfrastructureConfiguration) {
+// endpoint there is nobody to ask, and every share naming one is refused rather than written
+// unchecked — said once, here, at startup.
+func wireShareChecker(secret string, infra mscfg.InfrastructureConfiguration) {
 	if secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
-		log.Warn().Msg("Service secret or device-management endpoint not configured — dashboards cannot be shared with customers.")
+		log.Warn().Msg("Service secret or device-management endpoint not configured — dashboards cannot be shared with customers or groups.")
 		return
 	}
 	client := svcclient.New(infra.UserManagement, secret, "dashboard-management", []string{string(auth.DeviceRead)})
-	Api.Customers = customercheck.New(client,
+	Api.ShareTargets = sharecheck.New(client,
 		fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
 }
 
