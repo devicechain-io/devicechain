@@ -45,8 +45,35 @@ export type MetricHintInput = {
   unit?: string | null | undefined;
 };
 
+/**
+ * One metric definition of a draft device profile, as the preview reads it: a measured metric
+ * when expression is omitted, a calculated one when it is given.
+ */
+export type PreviewMetricInput = {
+  /** The metric's data type: DOUBLE, INT, BOOLEAN or STRING. */
+  dataType: string;
+  /** The formula of a calculated metric. Omit for a measured metric. */
+  expression?: string | null | undefined;
+  /** Largest value a calculated metric may take; a result above it produces no value. */
+  maxValue?: number | null | undefined;
+  /** The metric's key, as readings and formulas name it. */
+  metricKey: string;
+  /** Smallest value a calculated metric may take; a result below it produces no value. */
+  minValue?: number | null | undefined;
+};
+
 /** Input to previewRule. Exactly one of graph and ruleDefinition names the draft. */
 export type PreviewRuleInput = {
+  /**
+   * The draft profile's metric definitions, measured and calculated. When given, every replayed
+   * reading has its calculated metrics recomputed from its stored measured values with these
+   * formulas, replacing the values stored when it was recorded, so the draft rule is previewed
+   * against the values the draft profile would compute once published; a calculated metric the
+   * list does not declare has no value. Omit to preview the values as stored. The formulas are
+   * checked as a publish checks them, and a problem is returned in diagnostics. At most 1000
+   * entries. Nothing computed here is stored or streamed.
+   */
+  draftMetrics?: Array<PreviewMetricInput> | null | undefined;
   /**
    * End of the replay window by event occurred time, as an RFC 3339 timestamp. Must be after
    * start. A window longer than 24 hours is shortened to the 24 hours ending at end, and the
@@ -106,7 +133,7 @@ export type PreviewRuleQueryVariables = Exact<{
 }>;
 
 
-export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string, trace: Array<{ nodeId: string, kind: string, disposition: string, detail: string | null }> }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string, code: string | null, params: Array<string> }> } };
+export type PreviewRuleQuery = { previewRule: { ok: boolean, degraded: string | null, firings: Array<{ occurredAt: string, series: string, signal: string, trace: Array<{ nodeId: string, kind: string, disposition: string, detail: string | null }> }>, stats: { eventsScanned: number, firingCount: number, evalErrors: number, wallMs: number, recalculatedSamples: number, calculatedSkips: number }, diagnostics: Array<{ nodeId: string | null, severity: string, message: string, code: string | null, params: Array<string> }> } };
 
 export type RuleHealthQueryVariables = Exact<{
   profileToken: string;
@@ -219,6 +246,8 @@ export const PreviewRuleDocument = new TypedDocumentString(`
       firingCount
       evalErrors
       wallMs
+      recalculatedSamples
+      calculatedSkips
     }
     degraded
     diagnostics {

@@ -4,6 +4,14 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** One input a draft calculated-metric formula reads: a measured metric's key and data type. */
+export type CalculatedInput = {
+  /** The measured metric's data type: DOUBLE, INT or BOOLEAN. */
+  dataType: string;
+  /** The measured metric's key, as readings and the formula name it. */
+  key: string;
+};
+
 /** A relationship anchor to filter events by: events recorded against this entity. */
 export type EventAnchor = {
   /** Token of the entity, unique within the tenant. */
@@ -50,6 +58,20 @@ export type EventsQueryVariables = Exact<{
 
 export type EventsQuery = { events: { results: Array<{ id: string, deviceToken: string, eventType: number, occurredTime: string | null, source: string }>, pagination: { totalRecords: number | null } } };
 
+export type CalculatedEventsQueryVariables = Exact<{
+  deviceToken: string;
+  expression: string;
+  dataType: string;
+  inputs: Array<CalculatedInput> | CalculatedInput;
+  minValue?: number | null | undefined;
+  maxValue?: number | null | undefined;
+  from: string;
+  to: string;
+}>;
+
+
+export type CalculatedEventsQuery = { calculatedEvents: { computed: number, inputDecimalPlaces: number, samples: Array<{ occurredTime: string, eventId: string, value: string | null, skippedReason: string | null, inputs: Array<{ key: string, value: string }> }>, skipped: Array<{ reason: string, count: number }> } };
+
 export class TypedDocumentString<TResult, TVariables>
   extends String
   implements DocumentTypeDecoration<TResult, TVariables>
@@ -85,3 +107,34 @@ export const EventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<EventsQuery, EventsQueryVariables>;
+export const CalculatedEventsDocument = new TypedDocumentString(`
+    query CalculatedEvents($deviceToken: String!, $expression: String!, $dataType: String!, $inputs: [CalculatedInput!]!, $minValue: Float, $maxValue: Float, $from: String!, $to: String!) {
+  calculatedEvents(
+    deviceToken: $deviceToken
+    expression: $expression
+    dataType: $dataType
+    inputs: $inputs
+    minValue: $minValue
+    maxValue: $maxValue
+    from: $from
+    to: $to
+  ) {
+    samples {
+      occurredTime
+      eventId
+      inputs {
+        key
+        value
+      }
+      value
+      skippedReason
+    }
+    computed
+    skipped {
+      reason
+      count
+    }
+    inputDecimalPlaces
+  }
+}
+    `) as unknown as TypedDocumentString<CalculatedEventsQuery, CalculatedEventsQueryVariables>;

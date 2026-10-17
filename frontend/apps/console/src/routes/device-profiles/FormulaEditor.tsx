@@ -7,7 +7,8 @@
 // testMetricFormula query, which compiles it with the same code the publish gate and the
 // resolver run, so what this panel shows is what would be admitted and what would be
 // computed — never a second implementation that could drift. The sample is hand-typed
-// values for the measured metrics the formula reads; nothing is stored.
+// values for the measured metrics the formula reads; nothing is stored. Below it,
+// FormulaHistory runs the same draft over a device's stored readings (calculatedEvents).
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -17,6 +18,7 @@ import { FormField } from '@/components/ui/form-field';
 import { HintText } from '@/components/ui/hint-text';
 import { errMessage } from '@/routes/common';
 import { testMetricFormula, type MetricFormulaTest } from '@/lib/api/device-management';
+import { FormulaHistory } from './FormulaHistory';
 import { optNum } from '@/lib/utils';
 
 /** The per-formula cost ceiling the publish gate enforces (the API states it in its schema). */
@@ -183,6 +185,15 @@ export function FormulaEditor({
                     ? t('formulaSkipped', { reason: skipLabel(t, result.skippedReason) })
                     : null}
               </p>
+              <FormulaHistory
+                profileToken={profileToken}
+                expression={trimmed}
+                dataType={dataType}
+                minValue={minValue}
+                maxValue={maxValue}
+                inputs={inputs}
+                skipLabel={(reason) => skipLabel(t, reason)}
+              />
             </div>
           )}
         </div>

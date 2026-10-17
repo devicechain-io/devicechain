@@ -117,7 +117,7 @@ func TestPreviewResolvesTheHISTORICALFenceSet(t *testing.T) {
 		locMsg(t, 2, "acme", "d1", "p@1", 7, 5, 5, base.Add(time.Minute)), // outside it → RESOLVE
 	}}
 
-	res, err := Run(context.Background(), op, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, src)
+	res, err := Run(context.Background(), op, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, src, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestPreviewWithNoFenceSourceIsHonestlyDegraded(t *testing.T) {
 		locMsg(t, 1, "acme", "d1", "p@1", 7, 0.5, 0.5, base),
 		locMsg(t, 2, "acme", "d1", "p@1", 7, 5, 5, base.Add(time.Minute)),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, nil)
+	res, err := Run(context.Background(), op, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, nil, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestPreviewFenceSetsAreTenantScoped(t *testing.T) {
 	op := &fakeOpener{msgs: []messaging.Message{
 		locMsg(t, 1, "acme", "d1", "p@1", 7, 100.5, 40.5, base),
 	}}
-	res, err := Run(context.Background(), op, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, src)
+	res, err := Run(context.Background(), op, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, src, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -196,7 +196,7 @@ func TestPreviewFenceSetsAreTenantScoped(t *testing.T) {
 	}
 	// Control: acme's own yard does fire, so the tenant scoping is not just a broken lookup.
 	op2 := &fakeOpener{msgs: []messaging.Message{locMsg(t, 1, "acme", "d1", "p@1", 7, 0.5, 0.5, base)}}
-	res2, err := Run(context.Background(), op2, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, src)
+	res2, err := Run(context.Background(), op2, "resolved-events", fenceReg(t), "acme", "p@1", window(), 0, 0, 0, src, nil)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
