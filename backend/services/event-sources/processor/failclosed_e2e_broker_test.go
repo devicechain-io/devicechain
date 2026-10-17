@@ -430,8 +430,14 @@ func TestEveryPubackedMessageReachesInboundEventsExactlyOnce(t *testing.T) {
 	podA.stop()
 	advance(2 * time.Minute)
 	require.Eventually(t, func() bool {
+		// Released: the owner mark is gone (the store stays discard new until its durables
+		// are drained, so the discard policy does not show it).
 		si, err := js.StreamInfo(messaging.MqttMessageStore)
-		return err == nil && si.Config.Discard == nats.DiscardOld
+		if err != nil {
+			return false
+		}
+		_, owned := si.Config.Metadata["io.devicechain.mqtt-fail-closed.owner"]
+		return !owned
 	}, 10*time.Second, 50*time.Millisecond, "the pod with the setting off never released the store")
 	advance(2 * time.Minute)
 	require.Eventually(t, func() bool {

@@ -111,9 +111,9 @@ type NatsConfiguration struct {
 	//
 	// It is refused at startup on a broker that also serves another instance: the store is
 	// per broker account, so one instance's backlog would refuse the other's devices, and
-	// each instance would rewrite the other's bound. Turning it off again hands the store
-	// back to the gateway's default discard policy once no pod with it on holds it, and
-	// removes the platform durables once they are drained.
+	// each instance would rewrite the other's bound. Turning it off again releases the store
+	// once no pod with it on holds it, and once the platform durables are drained removes
+	// them and hands the store back to the gateway's default discard policy and bound.
 	MqttFailClosed bool
 	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
 	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in

@@ -68,19 +68,30 @@ import (
 //     once the heartbeat has gone stale (mqttFailClosedLeaseTTL), which is when no pod that
 //     wants it any more is alive. So the pods never undo each other every 30 s, and whichever
 //     wanted state is still running is the one the store converges to.
-//   - RELEASING DOES NOT REMOVE THE DURABLES. A pod with the setting off that takes over a
-//     stale store puts the gateway's discard policy back and marks it released, and leaves
-//     the durables in place: they hold store copies whose direct copies a pod with the
-//     setting on has already skipped (see mqtt_failclosed_view.go), and every event-sources
-//     pod that sees this instance's mark on the store reads them. They are removed only once
-//     the store has been released for mqttFailClosedReleaseGrace (every pod has stopped
-//     skipping by then) and all three are drained, and only then are the marks cleared. A pod
-//     with the setting off on a store that carries no mark of this instance never writes it.
+//   - RELEASING DOES NOT REMOVE THE DURABLES, OR THE BOUND. A pod with the setting off that
+//     takes over a stale store drops the owner mark (so no pod skips a direct copy any more)
+//     and marks it released, and leaves the durables in place: they hold store copies whose
+//     direct copies a pod with the setting on has already skipped (see
+//     mqtt_failclosed_view.go), and every event-sources pod that sees this instance's mark on
+//     the store reads them. The store stays discard NEW at its bound until they are drained:
+//     discard old, or a lower bound, would EVICT the oldest of those copies, which are the only
+//     ones (TestAReleaseKeepsEveryStoreCopyTheDurablesHold). Once the store has been released
+//     for mqttFailClosedReleaseGrace (every pod has stopped skipping by then) the pass records
+//     the store's last sequence as the drain cut; every copy of a skipped direct copy is at or
+//     below it. The durables are removed once each has acked past the cut (or holds nothing),
+//     which a reader keeping up with steady traffic reaches, and only then is the gateway's
+//     discard policy put back and the marks cleared. A pod with the setting off on a store that
+//     carries no mark of this instance never writes it.
 //   - EVERY WRITE IS UNDER A LOCK, read again inside it. The JetStream API has no
 //     compare-and-set on a stream's config, so two pods deciding from the same read could
 //     each write: a repair computed before a release would undo it, or create durables on a
 //     store just released. A pass takes the instance's lock (the locks KV bucket) before
 //     writing and re-reads the store under it, so it acts on what is there, not on what was.
+//     The lock is RENEWED, compare-and-set, before every write the pass makes, and a pass
+//     whose renewal fails stops before writing: the bucket's entry lifetime is whatever the
+//     service that created the bucket chose (user-management's is 5 s), shorter than a pass
+//     that retries, so a lock that was only taken would expire under a slow pass and let a
+//     second pod write beside it (TestTheFailClosedLockOutlivesTheLocksBucketTTL).
 //   - DURABLES BEFORE DISCARD NEW. Taking a store over creates the durables, then reads each
 //     direct stream's last sequence (the "from" marks the readers skip above), and only then
 //     writes the fail-closed config, so no pod skips a direct copy whose store copy nobody
@@ -113,6 +124,9 @@ const (
 	mqttFailClosedReleasedKey = mqttFailClosedKeyPrefix + "released"
 	// mqttFailClosedReleasedAtKey is when it was released, in Unix nanoseconds.
 	mqttFailClosedReleasedAtKey = mqttFailClosedKeyPrefix + "released-at"
+	// mqttFailClosedDrainToKey is a released store's drain cut: its last sequence once the
+	// release grace had passed. See finishMqttFailClosed.
+	mqttFailClosedDrainToKey = mqttFailClosedKeyPrefix + "drain-to"
 
 	// mqttFailClosedArea is the functional area that owns the platform durables. Their names
 	// are built from it, so it is fixed here rather than read from whichever service calls.
@@ -140,7 +154,9 @@ var (
 	// direct copy that was skipped is already in a durable.
 	mqttFailClosedReleaseGrace = 2 * MqttFailClosedWatchInterval
 	// mqttFailClosedLockTTL is the lock bucket's entry lifetime when this file creates the
-	// bucket: how long a pod that died holding the lock keeps the others out.
+	// bucket: how long a pod that died holding the lock keeps the others out. Usually the
+	// bucket already exists with another service's lifetime (user-management's 5 s), which is
+	// why a pass renews the lock before every write (mqttFenced) rather than relying on it.
 	mqttFailClosedLockTTL = 30 * time.Second
 	// mqttFailClosedLockWait is how long a START waits for the lock; a watch pass does not
 	// wait (another pod is making the pass for it).
@@ -336,6 +352,9 @@ type mqttStoreMarks struct {
 	heartbeat    time.Time
 	releasedAt   time.Time
 	from         map[string]uint64
+	// drainTo is the released store's drain cut, hasDrainTo whether it has been recorded.
+	drainTo    uint64
+	hasDrainTo bool
 }
 
 func (nmgr *NatsManager) marksOf(info *nats.StreamInfo) mqttStoreMarks {
@@ -352,6 +371,9 @@ func (nmgr *NatsManager) marksOf(info *nats.StreamInfo) mqttStoreMarks {
 	m.heartbeat = unixNanoTime(md[mqttFailClosedHeartbeatKey])
 	m.releasedAt = unixNanoTime(md[mqttFailClosedReleasedAtKey])
 	m.from = mqttFailClosedFromMarks(md)
+	if n, err := strconv.ParseUint(md[mqttFailClosedDrainToKey], 10, 64); err == nil {
+		m.drainTo, m.hasDrainTo = n, true
+	}
 	return m
 }
 
@@ -543,7 +565,7 @@ func (nmgr *NatsManager) mqttFailClosedPass(ctx context.Context, startup bool) (
 		wait = mqttFailClosedLockWait
 	}
 	var passErr error
-	held, err := nmgr.withMqttFailClosedLock(ctx, wait, func() error {
+	held, err := nmgr.withMqttFailClosedLock(ctx, wait, func(ctx context.Context) error {
 		// Everything is read and decided again under the lock: another pod may have
 		// written between the read above and now.
 		info, err := nmgr.readMqttStore(ctx)
@@ -560,7 +582,7 @@ func (nmgr *NatsManager) mqttFailClosedPass(ctx context.Context, startup bool) (
 		case mqttActRelease:
 			rep, passErr = nmgr.releaseMqttFailClosed(ctx, info, rep)
 		case mqttActFinish:
-			rep, passErr = nmgr.finishMqttFailClosed(ctx, info, rep)
+			rep, passErr = nmgr.finishMqttFailClosed(ctx, info, marks, rep)
 		default:
 			rep, passErr = nmgr.reportReadOnly(ctx, info, act, rep)
 		}
@@ -657,6 +679,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	rep.standing = mqttStandingHolder
 
 	if info == nil {
+		if err := mqttFenced(ctx); err != nil {
+			return rep, err
+		}
 		created, err := nmgr.js.AddStream(&nats.StreamConfig{
 			Name:      MqttMessageStore,
 			Subjects:  []string{mqttMsgsSubjectPrefix + ">"},
@@ -750,6 +775,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	md[mqttFailClosedHeartbeatKey] = heartbeat
 	if len(repaired) > 0 || !metadataEqual(md, cfg.Metadata) {
 		cfg.Metadata = md
+		if err := mqttFenced(ctx); err != nil {
+			return rep, err
+		}
 		updated, err := nmgr.js.UpdateStream(&cfg, opt)
 		if err != nil {
 			return rep, fmt.Errorf("updating %s into the fail-closed config (%s): %w",
@@ -759,6 +787,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	}
 
 	if changed, refusedDownward := applyStreamReplicas(&cfg, desiredReplicas); changed {
+		if err := mqttFenced(ctx); err != nil {
+			return rep, err
+		}
 		raised, err := nmgr.js.UpdateStream(&cfg, opt)
 		switch {
 		case err == nil:
@@ -819,7 +850,14 @@ func (nmgr *NatsManager) raiseMqttFailClosedDurables(ctx context.Context, replic
 		}
 		cfg := ci.Config
 		cfg.Replicas = replicas
-		_, err = nmgr.js.UpdateConsumer(MqttMessageStore, &cfg, opt)
+		raise := func() error {
+			if err := mqttFenced(ctx); err != nil {
+				return err
+			}
+			_, err := nmgr.js.UpdateConsumer(MqttMessageStore, &cfg, opt)
+			return err
+		}
+		err = raise()
 		for _, wait := range mqttFailClosedInsufficientRetry {
 			if err == nil || !isTransientRaise(err) {
 				break
@@ -829,7 +867,7 @@ func (nmgr *NatsManager) raiseMqttFailClosedDurables(ctx context.Context, replic
 				return ctx.Err()
 			case <-time.After(wait):
 			}
-			_, err = nmgr.js.UpdateConsumer(MqttMessageStore, &cfg, opt)
+			err = raise()
 		}
 		switch {
 		case err == nil:
@@ -937,7 +975,14 @@ func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d Mqtt
 	if errors.Is(err, nats.ErrConsumerNotFound) {
 		cfg := MqttFailClosedConsumerConfig(d, replicas)
 		cfg.AckWait = nmgr.ackWait()
-		_, err := nmgr.js.AddConsumer(MqttMessageStore, cfg, opt)
+		add := func() error {
+			if err := mqttFenced(ctx); err != nil {
+				return err
+			}
+			_, err := nmgr.js.AddConsumer(MqttMessageStore, cfg, opt)
+			return err
+		}
+		err := add()
 		for _, wait := range mqttFailClosedInsufficientRetry {
 			if err == nil || !isInsufficientResources(err) {
 				break
@@ -947,7 +992,7 @@ func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d Mqtt
 				return false, true, ctx.Err()
 			case <-time.After(wait):
 			}
-			_, err = nmgr.js.AddConsumer(MqttMessageStore, cfg, opt)
+			err = add()
 		}
 		if err != nil {
 			return false, true, fmt.Errorf("creating the platform durable %s on %s: %w", d.Name, MqttMessageStore, err)
@@ -961,6 +1006,9 @@ func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d Mqtt
 		cfg := ci.Config
 		cfg.FilterSubject = d.Filter
 		cfg.FilterSubjects = nil
+		if err := mqttFenced(ctx); err != nil {
+			return false, false, err
+		}
 		if _, err := nmgr.js.UpdateConsumer(MqttMessageStore, &cfg, opt); err != nil {
 			return false, false, fmt.Errorf("restoring the filter of the platform durable %s on %s: %w",
 				d.Name, MqttMessageStore, err)
@@ -972,13 +1020,13 @@ func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d Mqtt
 }
 
 // releaseMqttFailClosed releases a store whose holders are gone, for a pod with the setting
-// off, under the lock: the gateway's default discard policy, the setting-off bound, no owner,
-// holder, heartbeat or from marks, and the released mark with its time. The durables stay;
-// see the file comment and finishMqttFailClosed.
+// off, under the lock: no owner, holder, heartbeat or from marks, and the released mark with
+// its time. The durables stay, and so do discard new and the bound: the durables hold the
+// only copies of direct copies that were skipped, and discard old, or the lower setting-off
+// bound, would EVICT the oldest of them at once. finishMqttFailClosed puts the gateway's
+// policy back once they are drained; see the file comment.
 func (nmgr *NatsManager) releaseMqttFailClosed(ctx context.Context, info *nats.StreamInfo, rep mqttFailClosedReport) (mqttFailClosedReport, error) {
 	cfg := info.Config
-	applyStreamDiscard(&cfg)
-	cfg.MaxBytes = nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.MqttStoreMaxBytes
 	md := make(map[string]string, len(cfg.Metadata)+2)
 	for k, v := range cfg.Metadata {
 		if !strings.HasPrefix(k, mqttFailClosedKeyPrefix) {
@@ -988,6 +1036,9 @@ func (nmgr *NatsManager) releaseMqttFailClosed(ctx context.Context, info *nats.S
 	md[mqttFailClosedReleasedKey] = nmgr.Microservice.InstanceId
 	md[mqttFailClosedReleasedAtKey] = strconv.FormatInt(nmgr.mqttNow().UnixNano(), 10)
 	cfg.Metadata = md
+	if err := mqttFenced(ctx); err != nil {
+		return rep, err
+	}
 	updated, err := nmgr.js.UpdateStream(&cfg, nats.Context(ctx))
 	if err != nil {
 		return rep, fmt.Errorf("releasing %s: %w", MqttMessageStore, err)
@@ -998,20 +1049,53 @@ func (nmgr *NatsManager) releaseMqttFailClosed(ctx context.Context, info *nats.S
 	nmgr.mqttView().observe(updated, time.Now())
 	log.Warn().Str("stream", MqttMessageStore).
 		Msg("infrastructure.nats.mqttFailClosed is off, and no pod with it on is holding the MQTT message store any " +
-			"more: released it (the gateway's discard policy, the setting-off bound). A QoS 1 PUBACK no longer means " +
-			"the platform holds the message. Its platform durables are drained, then removed")
+			"more: released it. Its platform durables are drained; then they are removed and the store gets the " +
+			"gateway's discard policy and the setting-off bound back, and a QoS 1 PUBACK no longer means the platform " +
+			"holds the message")
 	return rep, nil
 }
 
-// finishMqttFailClosed removes the durables of a store released at least the grace ago, once
-// all three are drained, and then clears the released marks, under the lock. Durables first,
-// so a pass cut short leaves the marks that make the next one finish it.
-func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.StreamInfo, rep mqttFailClosedReport) (mqttFailClosedReport, error) {
+// finishMqttFailClosed ends the release of a store released at least the grace ago, under the
+// lock, in three steps a pass cut short can resume from (each leaves the marks that make the
+// next pass go on):
+//
+//  1. THE DRAIN CUT. The first pass after the grace records the store's last sequence. A
+//     direct copy can have been skipped only by a look taken before the release (at most
+//     mqttStoreViewTTL old when it skipped), and its store copy was stored before the device
+//     had its PUBACK, so every store copy that is the only copy of a skipped direct copy is at
+//     or below the cut. Above it, every store copy's direct copy was forwarded too.
+//  2. THE DURABLES, once each has acked everything up to the cut, or holds nothing at all.
+//     "Holds nothing at all" alone would never be reached by a durable that devices keep
+//     publishing into, however well its reader keeps up.
+//  3. THE STORE: the gateway's discard policy, the setting-off bound, and no mark of this
+//     instance. Only now, with the durables gone, can discard old or a lower bound evict
+//     nothing the platform still needs.
+func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.StreamInfo, marks mqttStoreMarks, rep mqttFailClosedReport) (mqttFailClosedReport, error) {
 	opt := nats.Context(ctx)
 	rep.marked = true
 	rep.standing = mqttStandingReleased
 	rep.state = mqttStateOf(info, rep.standing)
 	durables := MqttFailClosedDurables(nmgr.Microservice.InstanceId)
+	drainTo := marks.drainTo
+	if !marks.hasDrainTo {
+		drainTo = info.State.LastSeq
+		cfg := info.Config
+		md := make(map[string]string, len(cfg.Metadata)+1)
+		for k, v := range cfg.Metadata {
+			md[k] = v
+		}
+		md[mqttFailClosedDrainToKey] = strconv.FormatUint(drainTo, 10)
+		cfg.Metadata = md
+		if err := mqttFenced(ctx); err != nil {
+			return rep, err
+		}
+		updated, err := nmgr.js.UpdateStream(&cfg, opt)
+		if err != nil {
+			return rep, fmt.Errorf("recording the drain cut of %s: %w", MqttMessageStore, err)
+		}
+		info = updated
+		nmgr.mqttView().observe(updated, time.Now())
+	}
 	for _, d := range durables {
 		ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
 		if errors.Is(err, nats.ErrConsumerNotFound) {
@@ -1021,19 +1105,25 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 			return rep, fmt.Errorf("reading the platform durable %s on %s: %w", d.Name, MqttMessageStore, err)
 		}
 		rep.presentDurables = append(rep.presentDurables, d.Name)
-		if ci.NumPending > 0 || ci.NumAckPending > 0 {
-			// Not drained: the store copies in it may be the only copies of what a pod with
-			// the setting on skipped. The next pass looks again.
+		empty := ci.NumPending == 0 && ci.NumAckPending == 0
+		if !empty && ci.AckFloor.Stream < drainTo {
+			// Not drained: below the cut, the store copies in it may be the only copies of
+			// what a pod with the setting on skipped. The next pass looks again.
 			return rep, nil
 		}
 	}
 	for _, d := range durables {
+		if err := mqttFenced(ctx); err != nil {
+			return rep, err
+		}
 		if err := nmgr.js.DeleteConsumer(MqttMessageStore, d.Name, opt); err != nil && !errors.Is(err, nats.ErrConsumerNotFound) {
 			return rep, fmt.Errorf("deleting the platform durable %s from %s: %w", d.Name, MqttMessageStore, err)
 		}
 	}
 	rep.presentDurables = nil
 	cfg := info.Config
+	applyStreamDiscard(&cfg)
+	cfg.MaxBytes = nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.MqttStoreMaxBytes
 	md := make(map[string]string, len(cfg.Metadata))
 	for k, v := range cfg.Metadata {
 		if !strings.HasPrefix(k, mqttFailClosedKeyPrefix) {
@@ -1041,17 +1131,38 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 		}
 	}
 	cfg.Metadata = md
+	if err := mqttFenced(ctx); err != nil {
+		return rep, err
+	}
 	updated, err := nmgr.js.UpdateStream(&cfg, opt)
 	if err != nil {
-		return rep, fmt.Errorf("clearing the released marks of %s: %w", MqttMessageStore, err)
+		return rep, fmt.Errorf("handing %s back to the gateway's discard policy: %w", MqttMessageStore, err)
 	}
 	rep.finished, rep.marked = true, false
 	rep.standing = mqttStandingPristine
 	rep.state = mqttStateOf(updated, rep.standing)
 	nmgr.mqttView().observe(updated, time.Now())
 	log.Info().Str("stream", MqttMessageStore).
-		Msg("Removed the drained platform durables from the released MQTT message store; it is the gateway's store again")
+		Msg("Removed the drained platform durables from the released MQTT message store; it is the gateway's store again " +
+			"(its discard policy and the setting-off bound)")
 	return rep, nil
+}
+
+// errMqttFailClosedLockLost is a pass's refusal to write once it can no longer show it holds
+// the lock (its renewal failed: the entry expired and another pod may have taken it).
+var errMqttFailClosedLockLost = errors.New("the fail-closed store's lock was lost during the pass")
+
+// mqttFenceKey carries a pass's lock fence in its context; see mqttFenced.
+type mqttFenceKey struct{}
+
+// mqttFenced renews the lock the pass holds, compare-and-set, and fails when it cannot: call
+// it immediately before every write a pass makes. Outside a pass holding the lock it is a
+// no-op (nothing in production writes the store outside one).
+func mqttFenced(ctx context.Context) error {
+	if f, ok := ctx.Value(mqttFenceKey{}).(func() error); ok {
+		return f()
+	}
+	return nil
 }
 
 // withMqttFailClosedLock runs fn holding the instance's fail-closed lock, waiting up to wait
@@ -1060,16 +1171,22 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 // It is the locks bucket every service's DistributedLock uses, with a key of its own, but not
 // WithLock: a watch pass must not wait out WithLock's retries for a lock another pod is
 // already making the pass under, and it must not log at info every 30 seconds.
-func (nmgr *NatsManager) withMqttFailClosedLock(ctx context.Context, wait time.Duration, fn func() error) (held bool, err error) {
+//
+// fn gets a context carrying the lock's FENCE (mqttFenced): a compare-and-set renewal of the
+// entry, against the revision this pass last wrote. The bucket's entry lifetime is set by
+// whichever service created the bucket first, which in a real install is 5 s, so the lock is
+// held only while every write is preceded by a renewal that succeeds.
+func (nmgr *NatsManager) withMqttFailClosedLock(ctx context.Context, wait time.Duration, fn func(ctx context.Context) error) (held bool, err error) {
 	kv, err := nmgr.mqttFailClosedLockBucket()
 	if err != nil {
 		return false, fmt.Errorf("opening the fail-closed store's lock: %w", err)
 	}
 	key := kvKey(mqttFailClosedLockName)
+	value := []byte(nmgr.Microservice.InstanceId)
 	deadline := time.Now().Add(wait)
 	var rev uint64
 	for {
-		r, err := kv.Create(key, []byte(nmgr.Microservice.InstanceId))
+		r, err := kv.Create(key, value)
 		if err == nil {
 			rev = r
 			break
@@ -1086,12 +1203,25 @@ func (nmgr *NatsManager) withMqttFailClosedLock(ctx context.Context, wait time.D
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+	lost := false
+	fence := func() error {
+		if lost {
+			return errMqttFailClosedLockLost
+		}
+		r, err := kv.Update(key, value, rev)
+		if err != nil {
+			lost = true
+			return fmt.Errorf("%w: %v", errMqttFailClosedLockLost, err)
+		}
+		rev = r
+		return nil
+	}
 	defer func() {
 		// Only our own entry: a revision-checked delete is a no-op if it expired and another
 		// pod has taken the lock since.
 		_ = kv.Delete(key, nats.LastRevision(rev))
 	}()
-	return true, fn()
+	return true, fn(context.WithValue(ctx, mqttFenceKey{}, fence))
 }
 
 // mqttFailClosedLockBucket opens the instance's locks bucket once.

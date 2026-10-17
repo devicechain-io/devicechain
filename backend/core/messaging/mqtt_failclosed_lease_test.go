@@ -25,9 +25,10 @@ import (
 //   - it is never fail-closed (discard new) with nobody reading its durables and nobody
 //     exporting its metrics: some live pod has the setting on, or has the setting off and has
 //     seen the store marked (and so reads its durables);
-//   - it is coherent: discard new exactly when this instance's owner mark is on it, and then
-//     with all three durables and a from mark for each direct stream; released only discard
-//     old and without the owner mark.
+//   - it is coherent: discard new exactly when this instance's owner or released mark is on
+//     it; owned with all three durables and a from mark for each direct stream; released
+//     without the owner mark (and still discard new: its durables are being drained, and
+//     discard old would evict the copies they hold).
 //
 // and, once the old pods are gone, to having converged on what the remaining pods want.
 
@@ -125,7 +126,7 @@ func (f *fcFleet) check(what string) {
 	owned := md[mqttFailClosedOwnerKey] == guardInstance
 	released := md[mqttFailClosedReleasedKey] == guardInstance
 	failClosed := si.Config.Discard == nats.DiscardNew
-	require.Equalf(f.t, owned, failClosed, "%s: discard new without the owner mark, or the reverse: %v", what, md)
+	require.Equalf(f.t, owned || released, failClosed, "%s: discard new without a mark of this instance, or the reverse: %v", what, md)
 	if owned {
 		require.Falsef(f.t, released, "%s: owned and released at once", what)
 		require.Lenf(f.t, mqttFailClosedFromMarks(md), len(mqttFailClosedDirectSuffix), "%s: owned without a from mark per stream", what)
@@ -141,7 +142,12 @@ func (f *fcFleet) check(what string) {
 		require.Truef(f.t, reader || exporter, "%s: the store is fail-closed and no live pod reads its durables or exports its metrics", what)
 	}
 	if released {
-		require.Equalf(f.t, nats.DiscardOld, si.Config.Discard, "%s: released but still discard new", what)
+		require.NotContainsf(f.t, md, mqttFailClosedOwnerKey, "%s: released but still owned", what)
+		reader := false
+		for _, p := range f.pods {
+			reader = reader || p.reads()
+		}
+		require.Truef(f.t, reader, "%s: the store is released (still discard new) and no live pod reads its durables", what)
 	}
 }
 
@@ -334,7 +340,7 @@ func TestAPassDecidesAgainUnderTheLockBeforeItWrites(t *testing.T) {
 				require.Equal(t, guardInstance, si.Config.Metadata[mqttFailClosedOwnerKey])
 			} else {
 				require.True(t, rep.released, "control: with no renewal the release is made")
-				require.Equal(t, nats.DiscardOld, si.Config.Discard)
+				require.NotContains(t, si.Config.Metadata, mqttFailClosedOwnerKey)
 			}
 			f.check("after the interleaving")
 		})

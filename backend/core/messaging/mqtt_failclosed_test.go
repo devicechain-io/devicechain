@@ -357,12 +357,14 @@ func TestTurningTheSettingOffReleasesTheStoreOnceItsHoldersAreGone(t *testing.T)
 	require.Equal(t, nats.DiscardNew, b.storeInfo().Config.Discard, "released a store a live pod with the setting on holds")
 	require.True(t, off.MqttMessageStoreMarked(), "the flag-off pod is told the store has durables for it to read")
 
-	// Its holders are gone: the next flag-off start releases it, and keeps the durables.
+	// Its holders are gone: the next flag-off start releases it, and keeps the durables, and
+	// keeps discard new and the bound until they are drained (discard old, or the lower
+	// setting-off bound, would evict what they hold).
 	clock.advance(mqttFailClosedLeaseTTL)
 	reconcileOff()
 	si := b.storeInfo()
-	require.Equal(t, nats.DiscardOld, si.Config.Discard)
-	require.EqualValues(t, n.MqttStoreMaxBytes, si.Config.MaxBytes)
+	require.Equal(t, nats.DiscardNew, si.Config.Discard, "the release evicts nothing: discard new until drained")
+	require.EqualValues(t, fcHotBytes, si.Config.MaxBytes, "the release evicts nothing: the bound until drained")
 	for _, k := range []string{mqttFailClosedOwnerKey, mqttFailClosedHolderKey, mqttFailClosedHeartbeatKey} {
 		_, marked := si.Config.Metadata[k]
 		require.Falsef(t, marked, "%s is dropped on release", k)
@@ -397,6 +399,8 @@ func TestTurningTheSettingOffReleasesTheStoreOnceItsHoldersAreGone(t *testing.T)
 	for k := range si.Config.Metadata {
 		require.Falsef(t, strings.HasPrefix(k, mqttFailClosedKeyPrefix), "the finish left %s", k)
 	}
+	require.Equal(t, nats.DiscardOld, si.Config.Discard, "the finish hands the store back to the gateway's discard policy")
+	require.EqualValues(t, n.MqttStoreMaxBytes, si.Config.MaxBytes, "the finish puts the setting-off bound back")
 	require.False(t, off.MqttMessageStoreMarked())
 
 	// A START with the setting on declares the store again.
@@ -661,8 +665,8 @@ func TestABrokerErrorWhileLookingForOtherInstancesFailsTheReconcile(t *testing.T
 	require.ErrorIs(t, err, nats.ErrStreamNotFound, "the failed reconcile created the store anyway")
 }
 
-// 🔴 THE RELEASE ORDER. Turning the setting off updates the store FIRST (the released mark,
-// the default discard policy) and removes the platform durables only once that update has
+// 🔴 THE RELEASE ORDER. Turning the setting off updates the store FIRST (the released mark)
+// and removes the platform durables only once that update has
 // succeeded. Here the update is refused: the release fails, and the store is left exactly
 // as fail-closed as it was, durables and all. Removing the durables first would leave a
 // discard-new store owned by this instance with nothing interested in device publishes,
@@ -687,7 +691,7 @@ func TestAReleaseWhoseStoreUpdateFailsLeavesTheDurablesInPlace(t *testing.T) {
 
 	si, err := adminJS.StreamInfo(MqttMessageStore)
 	require.NoError(t, err)
-	require.Equal(t, nats.DiscardNew, si.Config.Discard, "premise: the store was not released")
+	require.Equal(t, guardInstance, si.Config.Metadata[mqttFailClosedOwnerKey], "premise: the store was not released")
 	require.ElementsMatch(t, before, consumerNames(t, adminJS, MqttMessageStore),
 		"the durables were removed from a store that is still discard-new and owned")
 }

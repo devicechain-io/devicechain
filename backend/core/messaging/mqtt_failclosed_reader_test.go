@@ -275,7 +275,7 @@ func TestADirectCopyIsSkippedOnlyWhileTheStoreHoldsIt(t *testing.T) {
 	// Released: no pod skips.
 	offMgr.mqttClock = func() time.Time { return time.Now().Add(time.Hour) }
 	require.NoError(t, offMgr.ReconcileMqttStores(context.Background(), n.MqttMessageStoreMaxBytes(), n.MqttQoS2StoreMaxBytes))
-	require.Equal(t, nats.DiscardOld, b.storeInfo().Config.Discard, "premise: released")
+	require.Equal(t, guardInstance, b.storeInfo().Config.Metadata[mqttFailClosedReleasedKey], "premise: released")
 	fcPublish(t, c, topic, 1, "after-release")
 	expect(onReader, "a pod with the setting on, after the release", "after-release")
 	expect(offReader, "a pod with the setting off, after the release", "after-release")
