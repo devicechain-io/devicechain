@@ -665,7 +665,14 @@ func TestEveryDeclaredStreamIsStillCreatedDiscardOld(t *testing.T) {
 func TestAnOutOfBandDiscardNewIsRestoredToDiscardOld(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	svc := newBPService(t, srv, "event-sources", bpBounds{})
-	for _, suffix := range []string{streams.DeviceEventsCapture, streams.InboundEvents} {
+	// The per-subject case is `nats stream edit --discard new --discard-per-subject`: the flag
+	// is valid only with discard-new, so a reconcile that restored the policy and left the flag
+	// would be refused by the broker and fail the service's start rather than put it back.
+	for _, tc := range []struct {
+		suffix     string
+		perSubject bool
+	}{{streams.DeviceEventsCapture, false}, {streams.InboundEvents, false}, {streams.DeviceEventsCapture, true}} {
+		suffix := tc.suffix
 		name, err := svc.nmgr.ensureStream(suffix)
 		if err != nil {
 			t.Fatalf("ensure %s: %v", suffix, err)
@@ -676,12 +683,18 @@ func TestAnOutOfBandDiscardNewIsRestoredToDiscardOld(t *testing.T) {
 		}
 		cfg := info.Config
 		cfg.Discard = nats.DiscardNew
+		if tc.perSubject {
+			cfg.DiscardNewPerSubject = true
+			cfg.MaxMsgsPerSubject = 1000
+		}
 		if _, err := svc.nmgr.js.UpdateStream(&cfg); err != nil {
 			t.Fatalf("out-of-band edit of %s: %v", suffix, err)
 		}
 		// CONTROL: the broker holds the edit.
-		if info, err = svc.nmgr.js.StreamInfo(name); err != nil || info.Config.Discard != nats.DiscardNew {
-			t.Fatalf("control: %s reads %v after setting discard-new (err %v); the test cannot see the edit", suffix, info.Config.Discard, err)
+		if info, err = svc.nmgr.js.StreamInfo(name); err != nil || info.Config.Discard != nats.DiscardNew ||
+			info.Config.DiscardNewPerSubject != tc.perSubject {
+			t.Fatalf("control: %s reads %v (per subject %v) after the edit (err %v); the test cannot see it",
+				suffix, info.Config.Discard, info.Config.DiscardNewPerSubject, err)
 		}
 		if _, err := svc.nmgr.ensureStream(suffix); err != nil {
 			t.Fatalf("re-ensure %s: %v", suffix, err)
@@ -689,8 +702,9 @@ func TestAnOutOfBandDiscardNewIsRestoredToDiscardOld(t *testing.T) {
 		if info, err = svc.nmgr.js.StreamInfo(name); err != nil {
 			t.Fatal(err)
 		}
-		if info.Config.Discard != nats.DiscardOld {
-			t.Errorf("stream %s still discards %v after a start; an out-of-band discard-new must be put back", suffix, info.Config.Discard)
+		if info.Config.Discard != nats.DiscardOld || info.Config.DiscardNewPerSubject {
+			t.Errorf("stream %s still discards %v (per subject %v) after a start; an out-of-band discard-new must be put back",
+				suffix, info.Config.Discard, info.Config.DiscardNewPerSubject)
 		}
 	}
 }

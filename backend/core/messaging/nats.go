@@ -675,11 +675,17 @@ func applyStreamDuplicateWindow(cfg *nats.StreamConfig, window time.Duration) bo
 // broker discards old. So a stream someone edited out of band (`nats stream edit --discard
 // new`, the follow-up a reader of the alert might reasonably try) is put back, the way an
 // out-of-band ceiling is. JetStream allows the policy to change in place.
+//
+// The per-subject flag goes with it. `--discard-per-subject` is only valid on a discard-new
+// stream (nats-server checkStreamCfg: "discard new per subject requires discard new policy to
+// be set"), so restoring discard-old while leaving it set makes the UpdateStream invalid, and
+// the reconcile would fail the service's start on every retry instead of putting it back.
 func applyStreamDiscard(cfg *nats.StreamConfig) bool {
-	if cfg.Discard == nats.DiscardOld {
+	if cfg.Discard == nats.DiscardOld && !cfg.DiscardNewPerSubject {
 		return false
 	}
 	cfg.Discard = nats.DiscardOld
+	cfg.DiscardNewPerSubject = false
 	return true
 }
 
