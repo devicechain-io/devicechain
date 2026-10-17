@@ -71,10 +71,11 @@ func shipMqttFailClosedForTest(t *testing.T) {
 	t.Cleanup(func() { mqttFailClosedShipped = saved })
 }
 
-// 🔴 UNTIL THE BACK-OFF SHIPS, THE SETTING IS REFUSED. The reader over the message store has
-// shipped, but nothing backs devices off before the store fills, so a full store would
-// disconnect the fleet into a reconnect storm. A document that sets it must fail validation,
-// saying what is missing, and the same document with it off must not.
+// 🔴 UNTIL ITS PREREQUISITES SHIP, THE SETTING IS REFUSED. The reader over the message store,
+// the back-off and the presence debounce have shipped, but the deployed broker is not the
+// version the gateway behaviour is pinned against, and the cutover and the overload
+// measurement are not done. A document that sets it must fail validation, saying what is
+// missing, and the same document with it off must not.
 //
 // GUARD: kills a Validate that accepts the setting (the outage switch is live), and one that
 // refuses the document for any other reason (the control passes with only the key changed).
@@ -87,7 +88,7 @@ func TestMqttFailClosedIsRefusedUntilTheBackOffShips(t *testing.T) {
 		t.Fatalf("Validate with mqttFailClosed on = %v, want ErrMqttFailClosedNotAvailable", err)
 	}
 	for _, want := range []string{"infrastructure.nats.mqttFailClosed", "not available in this build",
-		"not yet backed off before the broker's message store fills"} {
+		"nats-server 2.14.4", "verified only against 2.15.0", "capture stream", "measurement under overload"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("the refusal %q does not say %q", err, want)
 		}

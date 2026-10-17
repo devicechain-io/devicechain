@@ -967,6 +967,8 @@ func presenceMetrics() presence.Metrics {
 		Refused:           PresenceRefusedCounter,
 		Failed:            PresenceFailedCounter,
 		RegressedSessions: PresenceRegressedCounter,
+		Deferred:          PresenceDeferredCounter,
+		DeferredDropped:   PresenceDeferredDropped,
 	}
 }
 
@@ -1003,6 +1005,8 @@ var (
 	PresenceRefusedCounter     prometheus.Counter
 	PresenceFailedCounter      prometheus.Counter
 	PresenceRegressedCounter   prometheus.Counter
+	PresenceDeferredCounter    prometheus.Counter
+	PresenceDeferredDropped    prometheus.Counter
 	PresenceReconcileCounter   *prometheus.CounterVec
 	PresenceRepairedCounter    *prometheus.CounterVec
 	PresenceUnappliedCounter   *prometheus.CounterVec
@@ -1060,6 +1064,15 @@ func initializePresenceMetrics() {
 		"Presence transitions observed with a session id lower than this replica's high-water mark "+
 			"(a broker node's clock may be trailing its peers). Diagnostic only: whether such a "+
 			"transition is applied is decided downstream by the projection")
+	PresenceDeferredCounter = Microservice.NewCounter(
+		"presence_disconnects_deferred_total",
+		"Device disconnects the broker reported as a refusal-close (its MQTT gateway closed the connection "+
+			"because the message store refused or did not acknowledge a publish), held back for the debounce "+
+			"before being emitted. A device that reconnects within it never reads offline")
+	PresenceDeferredDropped = Microservice.NewCounter(
+		"presence_disconnects_deferred_dropped_total",
+		"Held-back refusal-close disconnects this pod dropped because it was stopping; the reconciler "+
+			"recovers them")
 	PresenceReconcileCounter = Microservice.NewCounterVec(
 		"presence_reconcile_runs_total",
 		"Presence reconciliation passes, by outcome",

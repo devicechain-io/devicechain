@@ -83,6 +83,10 @@ var (
 	// (ADR-025). Non-nil only when the broker is configured for auth callout (the
 	// issuer seed is present in the instance config).
 	CalloutResponder *processor.CalloutResponder
+	// MqttStoreBackoff samples the broker's MQTT message store and has the callout refuse
+	// device connects while it is above its high-water mark. Non-nil only when the callout
+	// runs and infrastructure.nats.mqttFailClosed is on.
+	MqttStoreBackoff *messaging.MqttStoreBackoff
 
 	// OwnershipDrain publishes the device ownership facts writes queue in their own
 	// transactions (ADR-081, model/ownership_outbox.go), one replica at a time.
@@ -826,6 +830,17 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
+		// message store closes the connections it refuses, and their reconnects would land here.
+		// Above the store's high-water mark every device connect is refused at once instead, so
+		// the devices still connected drain it. Off, nothing is sampled or registered.
+		if infra.Nats.MqttFailClosed {
+			MqttStoreBackoff = NatsManager.StartMqttStoreBackoff(context.Background(),
+				messaging.NewMqttStoreBackoffMetrics(Microservice), messaging.MqttStoreBackoffInterval)
+			CalloutResponder.WithStoreBackoff(MqttStoreBackoff.Engaged, Microservice.NewCounter("callout_refused_store_full_total",
+				"Device auth-callout requests refused with the generic denial because the broker's MQTT message store "+
+					"was above its high-water mark."))
+		}
 		if err = CalloutResponder.Start(); err != nil {
 			return err
 		}
@@ -843,6 +858,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 			return err
 		}
 	}
+	MqttStoreBackoff.Stop()
 
 	// Stop the ownership drain before the NATS connection drains. What it has not published
 	// stays queued for whichever replica drains next.

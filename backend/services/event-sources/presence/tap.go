@@ -6,6 +6,7 @@ package presence
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/adapter"
@@ -65,6 +66,12 @@ type Metrics struct {
 	// same device — which makes the hazard visible without pretending to detect every
 	// instance of it.
 	RegressedSessions prometheus.Counter
+	// Deferred counts disconnects held back by the refusal-close debounce (see
+	// RefusalCloseReason) rather than emitted at once.
+	Deferred prometheus.Counter
+	// DeferredDropped counts held-back disconnects the tap stopped before emitting. The
+	// reconciler's next pass recovers them, as it does any transition a stopping pod drops.
+	DeferredDropped prometheus.Counter
 }
 
 // Emitted's state labels. They mirror the wire vocabulary rather than the tap's internal
@@ -118,7 +125,52 @@ type Tap struct {
 	// admission or emission any more.
 	*Publisher
 	instanceId string
+
+	// debounce is how long a refusal-close disconnect is held back (RefusalCloseDebounce; 0
+	// holds nothing). See deferDeath.
+	debounce time.Duration
+	deferMu  sync.Mutex
+	deferred map[*time.Timer]struct{}
+	stopped  bool
 }
+
+// RefusalCloseReason is the reason the broker gives, on a DISCONNECT advisory, for a connection
+// its MQTT gateway closed because the message store refused a QoS 1 publish or did not
+// acknowledge it within the gateway's 5 s wait (nats-server v2.15.0's mqttAckLoop closes it as
+// ProtocolViolation, whose text this is). The same text also names a connection closed for a
+// malformed packet; such a device is disconnected for good, and is reported
+// RefusalCloseDebounce late.
+//
+// 🔴 A REFUSAL-CLOSE IS NOT THE DEVICE GOING AWAY. The device kept the publish the store would
+// not take and reconnects to send it again, in seconds. Under overload the store refuses many
+// devices at once, so reporting each close at once would flip a fleet offline and back:
+// command-delivery holds a device's commands while its presence reads offline, and DETECT's
+// offline rules fire, both during the overload that caused it. The tap therefore holds such a
+// disconnect back for RefusalCloseDebounce. A device that reconnects within it has a newer
+// session by then, so the held disconnect, carrying the old one, is refused by presence.Decide
+// wherever it lands (the projection, DETECT, command-delivery): the device never reads offline.
+// A device that does not reconnect is reported offline at the end of the hold, with the
+// broker's own stop time, as if the advisory had arrived late.
+//
+// 🔴 THE RECONCILER IS NOT DEBOUNCED, and that is a residual rather than an oversight. Its pass
+// (every few minutes) reports offline a device the broker is not holding, and it cannot tell a
+// device between a refusal and its reconnect from one that is gone. Such a device reads offline
+// from the pass until its reconnect, which is a newer session and wins. One pass is one sample,
+// so this touches the devices that happen to be between connections at that instant, not every
+// refusal.
+//
+// Pinned against the broker by TestAStoreRefusalCloseCarriesTheReasonTheTapDebounces.
+const RefusalCloseReason = "Protocol Violation"
+
+// RefusalCloseDebounce is how long a refusal-close disconnect is held back: well over the few
+// seconds a device takes to reconnect after the gateway closes it, and short beside what an
+// offline rule or the command hold acts on.
+const RefusalCloseDebounce = 30 * time.Second
+
+// maxDeferredDeaths bounds the disconnects held back at once. Refusals are device-driven (a
+// device can be refused and reconnect in a loop), so the set has a ceiling; past it a
+// refusal-close is reported at once, as before the debounce existed.
+const maxDeferredDeaths = 100_000
 
 // WithWaker attaches the command wake to a tap. Separate from NewTap because the waker
 // needs command-delivery's coordinates, which are resolved later than the tap itself and
@@ -142,7 +194,16 @@ func NewTap(instanceId, source string, emitter Emitter, gate Gate, metrics Metri
 	return &Tap{
 		Publisher:  NewPublisher(source, emitter, gate, metrics),
 		instanceId: instanceId,
+		debounce:   RefusalCloseDebounce,
+		deferred:   map[*time.Timer]struct{}{},
 	}
+}
+
+// WithRefusalDebounce replaces RefusalCloseDebounce for this tap; 0 holds nothing back. A test
+// seam: production keeps the constant.
+func (t *Tap) WithRefusalDebounce(d time.Duration) *Tap {
+	t.debounce = d
+	return t
 }
 
 // QueueGroup is the name every replica of one instance shares so an advisory is
@@ -192,7 +253,9 @@ func (t *Tap) Subscribe(nc *nats.Conn) (func(), error) {
 	}
 	log.Info().Str("instance", t.instanceId).Str("queueGroup", group).Str("source", t.source).
 		Msg("Broker-asserted MQTT presence is live: reading connection advisories from the system account.")
-	return func() { unsubscribeAll(subs) }, nil
+	// The stop also drops the disconnects still held back, before the caller closes the writer
+	// they would be emitted through.
+	return func() { unsubscribeAll(subs); t.StopDeferred() }, nil
 }
 
 func unsubscribeAll(subs []*nats.Subscription) {
@@ -216,9 +279,73 @@ func (t *Tap) Handle(ctx context.Context, connected bool, raw []byte) {
 		t.metrics.skipped(skip)
 		return
 	}
+	if !connected && transition.Event.Reason == RefusalCloseReason && t.deferDeath(transition) {
+		return
+	}
+	t.emit(ctx, transition)
+}
+
+func (t *Tap) emit(ctx context.Context, transition Transition) {
 	if t.async != nil {
 		t.ApplyAsync(ctx, transition)
 		return
 	}
 	t.Apply(ctx, transition)
+}
+
+// deferDeath holds a refusal-close disconnect back for the debounce (see RefusalCloseReason)
+// and emits it then. It reports false when it did not hold it (no debounce, the tap is
+// stopping, or the ceiling is reached), and the caller then emits it at once.
+//
+// Nothing about the held disconnect is changed, and nothing cancels it when the device
+// reconnects: the advisories are spread over a queue group, so the reconnect usually lands on
+// another replica. presence.Decide refusing the older session is what makes a held disconnect
+// harmless wherever it is emitted.
+func (t *Tap) deferDeath(transition Transition) bool {
+	if t.debounce <= 0 {
+		return false
+	}
+	t.deferMu.Lock()
+	defer t.deferMu.Unlock()
+	if t.stopped || len(t.deferred) >= maxDeferredDeaths {
+		return false
+	}
+	if t.deferred == nil {
+		t.deferred = map[*time.Timer]struct{}{}
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(t.debounce, func() {
+		t.deferMu.Lock()
+		_, held := t.deferred[timer]
+		delete(t.deferred, timer)
+		t.deferMu.Unlock()
+		if !held {
+			return // dropped by StopDeferred, and counted there
+		}
+		t.emit(context.Background(), transition)
+	})
+	t.deferred[timer] = struct{}{}
+	incr(t.metrics.Deferred)
+	return true
+}
+
+// StopDeferred drops the disconnects still held back and holds no more. A pod that is stopping
+// loses them, as it loses the transitions its writer had not had acknowledged, and the
+// reconciler recovers them. Safe to call more than once.
+func (t *Tap) StopDeferred() {
+	t.deferMu.Lock()
+	defer t.deferMu.Unlock()
+	t.stopped = true
+	for timer := range t.deferred {
+		timer.Stop()
+		incr(t.metrics.DeferredDropped)
+	}
+	clear(t.deferred)
+}
+
+// DeferredDeaths is how many disconnects are held back right now.
+func (t *Tap) DeferredDeaths() int {
+	t.deferMu.Lock()
+	defer t.deferMu.Unlock()
+	return len(t.deferred)
 }

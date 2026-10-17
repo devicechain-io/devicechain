@@ -66,9 +66,14 @@ func TestACommandResponseReachesItsConsumerOnceFromTheStore(t *testing.T) {
 		return n
 	}
 	var writer messaging.MessageWriter
+	// The from marks are recorded on the pass after the one that creates the durables, once
+	// they have settled (0 here); until then the consumer would read the direct copy as well.
+	messaging.SetMqttFailClosedFromSettleForTesting(t, 0)
 	es := manager("event-sources", func(n *messaging.NatsManager) error {
-		if _, err := n.ReconcileMqttFailClosed(context.Background()); err != nil {
-			return err
+		for i := 0; i < 2; i++ {
+			if _, err := n.ReconcileMqttFailClosed(context.Background()); err != nil {
+				return err
+			}
 		}
 		w, err := n.NewWriter(streams.CommandResponses)
 		writer = w
