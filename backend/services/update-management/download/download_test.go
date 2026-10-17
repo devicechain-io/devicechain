@@ -45,7 +45,7 @@ type countingStore struct {
 	started chan struct{}
 	// readDelay, when set, makes every Read of the returned reader take at least that long: a
 	// source slow enough that the elapsed time, not the speed of the socket, decides the outcome.
-	readDelay time.Duration
+	readDelay atomic.Int64 // a time.Duration; atomic because the handler goroutine outlives the client's view
 }
 
 type countingReader struct {
@@ -57,7 +57,7 @@ func (r *countingReader) Read(p []byte) (int, error) {
 	if int64(len(p)) > r.s.maxRead.Load() {
 		r.s.maxRead.Store(int64(len(p)))
 	}
-	if d := r.s.readDelay; d > 0 {
+	if d := time.Duration(r.s.readDelay.Load()); d > 0 {
 		time.Sleep(d) // never returns early, so d has provably elapsed afterwards
 	}
 	return r.ReadCloser.Read(p)
@@ -554,8 +554,17 @@ func TestADownloadThatRunsPastItsWindowIsCut(t *testing.T) {
 	// Deterministic by construction: every read of the object takes longer than the whole window, so
 	// by the time the first chunk is written the window has provably elapsed and the next loop
 	// iteration must cut. Nothing depends on socket buffer sizes or on how fast the machine is.
-	e.h.window = func(int64) time.Duration { return 30 * time.Millisecond }
-	e.store.readDelay = 60 * time.Millisecond
+	// The handler goroutine can outlive what the client sees, so the switch back to a normal window
+	// is an atomic the already-installed hooks read, not a write to the handler's fields.
+	var cutting atomic.Bool
+	cutting.Store(true)
+	e.h.window = func(length int64) time.Duration {
+		if cutting.Load() {
+			return 30 * time.Millisecond
+		}
+		return model.UploadWindow(length)
+	}
+	e.store.readDelay.Store(int64(60 * time.Millisecond))
 
 	req, err := http.NewRequest(http.MethodGet, e.rebase(t, minted), nil)
 	require.NoError(t, err)
@@ -570,8 +579,8 @@ func TestADownloadThatRunsPastItsWindowIsCut(t *testing.T) {
 	}
 
 	// The slot came back: with a normal window the next request is served in full.
-	e.h.window = model.UploadWindow
-	e.store.readDelay = 0
+	cutting.Store(false)
+	e.store.readDelay.Store(0)
 	require.Eventually(t, func() bool {
 		r, body := get(t, e.rebase(t, minted))
 		return r.StatusCode == http.StatusOK && len(body) == len(data)
