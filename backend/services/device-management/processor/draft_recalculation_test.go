@@ -167,6 +167,24 @@ func TestAValueThePublishedVersionDroppedIsNotRecovered(t *testing.T) {
 	assert.Equal(t, []string{"fan_pct*", "temp", "temp_f*"}, names(got))
 }
 
+// A raw value stored under a key the DRAFT calculates is dropped, as the resolver drops a
+// device-sent value under a calculated key: the draft's formula is the only value the key
+// has. Here "extra" is undeclared by the published version, so its device-sent value is
+// stored as a raw entry, and the draft turns it into a calculated metric. Keeping the raw
+// entry would hand the rule two values under one key.
+func TestARawValueUnderAKeyTheDraftCalculatesIsDropped(t *testing.T) {
+	published := publishedVersion()
+	draft := model.NewProfileResolution(model.ProfileScope{ProfileVersionToken: "meter@draft"}, append(parityMeasured(),
+		calculatedDef(30, "extra", model.MetricDouble, "", "temp * 1.0")))
+	reading := map[string]string{"temp": "20", "extra": "7.5"}
+	stored := resolveSamples(t, published, testCalcMetrics(), reading).Entries[0].Entries
+	require.Contains(t, names(stored), "extra", "the fixture must store the device's extra as a raw entry")
+	want := resolveSamples(t, draft, testCalcMetrics(), reading).Entries[0].Entries
+	got := draft.Recalculate(stored, newCountingObserver())
+	assert.Equal(t, []string{"extra*", "temp"}, names(got))
+	assert.Equal(t, want, got, "the draft's recalculation differs from resolving under the draft")
+}
+
 // A thousand recalculations of one stored reading are byte-identical: the preview of a draft
 // formula does not wobble between runs, replicas or goroutine schedules.
 func TestRecalculateIsDeterministic(t *testing.T) {
