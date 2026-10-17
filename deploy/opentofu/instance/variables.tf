@@ -290,13 +290,15 @@ variable "nats_memory_limit" {
 }
 
 variable "nats_route_compression" {
-  description = "S2 compression of the traffic between the servers of a clustered broker (routes, port 6222): off (the default), s2_fast, s2_better, s2_best or s2_auto. off renders nothing and leaves nats-server's default, under which no route compresses. s2_fast is the mode to choose; s2_auto is uncompressed on any route under 10 ms, which is every route in one zone. Changing it restarts the broker's servers one at a time. Refused on a single server, which has no routes. See modules/nats var.route_compression."
+  description = "S2 compression of the traffic between the servers of a clustered broker (routes, port 6222): off, s2_fast, s2_better, s2_best or s2_auto. Unset (the default) means s2_fast on a clustered broker and off on a single server; an explicit value, off included, always wins. off renders nothing and leaves nats-server's default, under which no route compresses. s2_fast is the mode to choose; s2_auto is uncompressed on any route under 10 ms, which is every route in one zone. Changing it restarts the broker's servers one at a time. A mode set on a single server, which has no routes, is refused. See modules/nats var.route_compression."
   type        = string
-  default     = "off"
+  default     = null
 
   validation {
-    condition     = contains(["off", "s2_fast", "s2_better", "s2_best", "s2_auto"], var.nats_route_compression)
-    error_message = "nats_route_compression must be one of off, s2_fast, s2_better, s2_best, s2_auto (lowercase, as written)."
+    # A conditional, not `||`: OpenTofu before 1.10 evaluates both operands of
+    # `||`, and contains() refuses a null value.
+    condition     = var.nats_route_compression == null ? true : contains(["off", "s2_fast", "s2_better", "s2_best", "s2_auto"], var.nats_route_compression)
+    error_message = "nats_route_compression must be one of off, s2_fast, s2_better, s2_best, s2_auto (lowercase, as written), or left unset."
   }
 }
 
