@@ -231,15 +231,11 @@ func TestThePublishGateEnforcesTheCeiling(t *testing.T) {
 		assert.NotContains(t, err.Error(), "user-management down", "the cause is logged, not served")
 		assert.Zero(t, f.versions())
 	})
-	t.Run("within the ceiling, the build still refuses: values are not computed yet", func(t *testing.T) {
+	t.Run("at the ceiling, it publishes", func(t *testing.T) {
 		f := setup(t)
 		f.api.CalculatedMetricsCeiling = &stubCeiling{n: 2}
-		err := f.publish()
-		var nc *CalculatedMetricsNotComputedError
-		require.ErrorAs(t, err, &nc)
-		assert.Equal(t, []string{"half", "power"}, nc.Keys)
-		assert.Equal(t, "UNSUPPORTED", codeOf(err))
-		assert.Zero(t, f.versions(), "a calculated metric must not reach a published version until it is computed")
+		require.NoError(t, f.publish())
+		assert.EqualValues(t, 1, f.versions(), "two calculated metrics within a ceiling of two reach a published version")
 	})
 }
 
@@ -420,12 +416,11 @@ func TestThePublishGateRefusesAProfileOverTheSummedCostCeiling(t *testing.T) {
 	assert.Contains(t, err.Error(), "1 calculated metric problem(s)")
 	assert.Zero(t, f.versions())
 
-	// Contrast: one fewer formula fits under the profile ceiling and reaches the
-	// not-computed refusal instead.
+	// Contrast: one fewer formula fits under the profile ceiling and publishes.
 	_, err = f.api.DeleteMetricDefinition(f.ctx, fmt.Sprintf("md-calc%02d", n-1))
 	require.NoError(t, err)
-	var nc *CalculatedMetricsNotComputedError
-	require.ErrorAs(t, f.publish(), &nc) // (n-1)*cost <= the ceiling by the choice of n
+	require.NoError(t, f.publish()) // (n-1)*cost <= the ceiling by the choice of n
+	assert.EqualValues(t, 1, f.versions())
 }
 
 // TestTheStorageBoundWarningFollowsTheStoredMagnitude pins warning (b) of the test panel at
@@ -448,4 +443,24 @@ func TestTheStorageBoundWarningFollowsTheStoredMagnitude(t *testing.T) {
 	assert.True(t, warns(fp(-1e12), fp(1)), "a min at the storage magnitude must warn")
 	assert.True(t, warns(nil, fp(1)), "a missing min must warn")
 	assert.True(t, warns(fp(1), nil), "a missing max must warn")
+}
+
+// TestTheGateRefusesAFormulaOverMoreMeasuredMetricsThanItCanDeclare pins the publish-time
+// answer to a profile with more measured metrics than a formula environment declares
+// (calcfield.MaxInputs): its calculated metrics are refused with a message saying so, rather
+// than published and then never computed. The resolver's backstop for the same case is
+// TestTooManyMeasuredMetricsSkipEveryFormula.
+func TestTheGateRefusesAFormulaOverMoreMeasuredMetricsThanItCanDeclare(t *testing.T) {
+	f := newCalcFixture(t)
+	f.api.CalculatedMetricsCeiling = &stubCeiling{n: 1}
+	for i := 0; i <= calcfield.MaxInputs; i++ {
+		f.metric(fmt.Sprintf("m%03d", i), "DOUBLE", "")
+	}
+	f.metric("sum", "DOUBLE", "m000 + m001")
+	err := f.publish()
+	require.Error(t, err)
+	assert.Equal(t, "INVALID_VALUE", codeOf(err))
+	assert.Contains(t, err.Error(), "cannot be declared as formula inputs")
+	assert.Contains(t, err.Error(), fmt.Sprintf("exceeds the maximum of %d", calcfield.MaxInputs))
+	assert.Zero(t, f.versions())
 }

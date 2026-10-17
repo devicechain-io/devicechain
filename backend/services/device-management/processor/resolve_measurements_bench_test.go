@@ -20,12 +20,12 @@ import (
 // one meter reading, on a profile with 0, 1 and 4 calculated metrics. It is committed BEFORE
 // the feature so the feature is measured against it: Calc0 must stay within noise of its
 // baseline through every slice — a profile with no formulas pays one length check and
-// nothing else — and Calc1/Calc4 become runnable when the resolver evaluates formulas.
+// nothing else — while Calc1/Calc4 measure what evaluating formulas adds.
 //
 // The reading is the same in all three: four declared, measured metrics (three DOUBLE, one
-// INT), one sample entry. Only the profile changes. When Calc1/Calc4 are wired they add, in
-// this order, the formulas core/calcfield's own benchmark measures in isolation
-// (calcfield/bench_test.go, benchFormulas), so the two read against each other:
+// INT), one sample entry. Only the profile changes. Calc1/Calc4 add, in this order, the
+// formulas core/calcfield's own benchmark measures in isolation (calcfield/bench_test.go,
+// benchFormulas), so the two read against each other:
 //
 //	power_kw  = voltage * current / 1000                               (DOUBLE)
 //	temp_f    = temp * 1.8 + 32                                        (DOUBLE)
@@ -38,6 +38,25 @@ var calcBenchMeasured = []*model.MetricDefinition{
 	{Model: gorm.Model{ID: 2}, MetricKey: "current", DataType: string(model.MetricDouble), Unit: sql.NullString{String: "A", Valid: true}},
 	{Model: gorm.Model{ID: 3}, MetricKey: "temp", DataType: string(model.MetricDouble), Unit: sql.NullString{String: "Cel", Valid: true}},
 	{Model: gorm.Model{ID: 4}, MetricKey: "fan", DataType: string(model.MetricInt)},
+}
+
+// calcBenchFormulas are the calculated metrics Calc1 and Calc4 add, in order.
+var calcBenchFormulas = []*model.MetricDefinition{
+	calcBenchMetric(5, "power_kw", model.MetricDouble, "kW", "voltage * current / 1000"),
+	calcBenchMetric(6, "temp_f", model.MetricDouble, "[degF]", "temp * 1.8 + 32"),
+	calcBenchMetric(7, "apparent", model.MetricDouble, "", "math.sqrt(voltage * voltage + current * current)"),
+	calcBenchMetric(8, "over_temp", model.MetricBoolean, "", "temp > 80.0 && (has(m.fan) ? fan == 0 : true)"),
+}
+
+func calcBenchMetric(id uint, key string, t model.MetricDataType, unit, expr string) *model.MetricDefinition {
+	return &model.MetricDefinition{Model: gorm.Model{ID: id}, MetricKey: key, DataType: string(t),
+		Unit: sql.NullString{String: unit, Valid: unit != ""}, Expression: sql.NullString{String: expr, Valid: true}}
+}
+
+// calcBenchProfile is the meter profile with the first n calculated metrics.
+func calcBenchProfile(n int) model.ProfileResolution {
+	defs := append(append([]*model.MetricDefinition{}, calcBenchMeasured...), calcBenchFormulas[:n]...)
+	return model.NewProfileResolution(model.ProfileScope{ProfileVersionToken: "meter@1"}, defs)
 }
 
 // calcBenchEvent is one meter reading carrying the four measured values.
@@ -54,6 +73,7 @@ func calcBenchEvent() *esmodel.UnresolvedEvent {
 
 // benchResolveMeasurements resolves the reading against profile, b.N times.
 func benchResolveMeasurements(b *testing.B, profile model.ProfileResolution) {
+	want := len(calcBenchMeasured) + profile.CalculatedCount()
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "METER-1"}}
 	event := calcBenchEvent()
@@ -64,8 +84,8 @@ func benchResolveMeasurements(b *testing.B, profile model.ProfileResolution) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if got := len(out.(*model.ResolvedMeasurementsPayload).Entries[0].Entries); got != len(calcBenchMeasured) {
-		b.Fatalf("resolved %d entries, want %d", got, len(calcBenchMeasured))
+	if got := len(out.(*model.ResolvedMeasurementsPayload).Entries[0].Entries); got != want {
+		b.Fatalf("resolved %d entries, want %d (a calculated metric that skipped measures nothing)", got, want)
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -83,15 +103,12 @@ func BenchmarkResolveMeasurements_Calc0(b *testing.B) {
 }
 
 // BenchmarkResolveMeasurements_Calc1 is the same reading with one calculated metric
-// (power_kw). A metric definition cannot carry a formula until device-management authoring
-// lands, and the resolver does not evaluate one until it is wired, so there is nothing yet to
-// measure; a skip says so rather than reporting Calc0's number under this name.
+// (power_kw).
 func BenchmarkResolveMeasurements_Calc1(b *testing.B) {
-	b.Skip("calculated fields not wired until S3")
+	benchResolveMeasurements(b, calcBenchProfile(1))
 }
 
 // BenchmarkResolveMeasurements_Calc4 is the same reading with all four calculated metrics.
-// See Calc1 for why it skips today.
 func BenchmarkResolveMeasurements_Calc4(b *testing.B) {
-	b.Skip("calculated fields not wired until S3")
+	benchResolveMeasurements(b, calcBenchProfile(4))
 }

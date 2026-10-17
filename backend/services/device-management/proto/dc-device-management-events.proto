@@ -172,6 +172,11 @@ message PResolvedLocationsPayload {
     optional uint64 classifier = 3;
     optional string unit = 4;
     optional string data_type = 5;
+    // A calculated metric's value (ADR-082): computed at resolve from the other entries of
+    // the same sample, never sent by the device. Implicit presence, so a raw entry is
+    // written exactly as before the field existed, and a message written before it decodes
+    // with every entry raw.
+    bool derived = 6;
 }
 
 /**

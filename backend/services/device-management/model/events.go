@@ -54,6 +54,17 @@ type ResolvedMeasurementEntry struct {
 	Classifier *uint64
 	Unit       *string
 	DataType   *string
+	// Derived marks a CALCULATED metric's value (ADR-082): computed by the resolver from
+	// the other entries of the same sample under the event's profile version, never sent
+	// by the device. Every consumer stores, projects and detects on it like any other
+	// entry; only event identity treats it differently (IdentityView).
+	//
+	// 🔴 omitempty IS LOAD-BEARING. This struct has no JSON tags, and event-management
+	// derives the event id from json.Marshal of the payload, so a field that always
+	// marshalled would move the id of every event ever stored. With omitempty a raw entry
+	// marshals exactly as it did before the field existed, and IdentityView drops derived
+	// entries before the payload is hashed, so the flag never reaches an id either way.
+	Derived bool `json:",omitempty"`
 }
 
 // Information for a measurements entry — ONE sample, a coherent set of named
@@ -78,6 +89,48 @@ type ResolvedMeasurementsEntry struct {
 // Payload with resolved measurement entries.
 type ResolvedMeasurementsPayload struct {
 	Entries []ResolvedMeasurementsEntry
+}
+
+// IdentityView is the payload as event identity sees it: every Derived entry removed
+// (ADR-082 decision 5). A calculated value is a function of the raw values and of the
+// profile version that computed it, so leaving it in the event id would give one device
+// reading two ids whenever a formula is published between two copies of it — a device-level
+// duplicate (a QoS 1 resend, an edge spool retransmit, every LwM2M and Sparkplug event, none
+// of which set an alternate id) would then store twice. Excluded, the id is a function of
+// what the device sent alone.
+//
+// A payload with no derived entry — every payload of a profile without formulas — is
+// returned AS IS, without allocating, so it hashes byte-identically to before calculated
+// metrics existed. Otherwise a copy is returned and the receiver is not modified; a sample
+// keeps its place (and its time) even if every entry in it was derived, so the remaining
+// structure is exactly what the same reading would have resolved to with no formulas.
+func (p *ResolvedMeasurementsPayload) IdentityView() *ResolvedMeasurementsPayload {
+	if p == nil || !p.hasDerived() {
+		return p
+	}
+	view := &ResolvedMeasurementsPayload{Entries: make([]ResolvedMeasurementsEntry, len(p.Entries))}
+	for i, sample := range p.Entries {
+		raw := make([]ResolvedMeasurementEntry, 0, len(sample.Entries))
+		for _, mx := range sample.Entries {
+			if !mx.Derived {
+				raw = append(raw, mx)
+			}
+		}
+		view.Entries[i] = ResolvedMeasurementsEntry{Entries: raw, OccurredTime: sample.OccurredTime}
+	}
+	return view
+}
+
+// hasDerived reports whether any entry of the payload is Derived.
+func (p *ResolvedMeasurementsPayload) hasDerived() bool {
+	for i := range p.Entries {
+		for j := range p.Entries[i].Entries {
+			if p.Entries[i].Entries[j].Derived {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Information for an alert entry. OccurredTime is this alert's instant and is
