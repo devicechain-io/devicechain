@@ -29,6 +29,23 @@ redelivery, so a failed transition is gone until the next reconciliation pass re
 A transition refused because the tap was stopping is NOT counted (the writer is closed only
 in the stop hook), so a rolling restart does not move it. Every pod exports it at 0 from
 start, so the first failure after a restart is an increase.
+
+MqttFailClosedDurableMissing and MqttFailClosedStoreNotAsDeclared watch the fail-closed MQTT
+acknowledgement (infrastructure.nats.mqttFailClosed). With it on, the MQTT gateway's message
+store is declared by event-sources (discard new, bounded) with one platform durable per kind
+of device publish, and every pod re-checks both every 30 seconds, creating again what is
+missing and putting back what was changed. A missing durable is the loss case that looks like
+success: the broker skips a publish nobody is interested in and still acknowledges it. So that
+alert is critical and has no `for`: each count is loss already, and the gauge arm covers a
+durable the check could not create. The series exist ONLY with the setting on, so an install
+with it off exports none and neither alert can fire there; no absent() arm, for the same reason
+as above. The counters are exported at 0 from start, so the first event is an increase.
+In this build the setting is refused at config load (nothing yet backs devices off before
+the store fills), so neither alert can fire yet; the rules ship with the plumbing they watch.
+Neither counts a planned change: a rolling update hands the store over without removing a
+durable (a pod with the setting off removes them only once no pod with it on holds the store
+and they are drained), and a bound or replica count changed in the configuration is a
+take-over or a raise, not a repair.
 */}}
 {{- if and .Values.metrics.enabled .Values.metrics.alerts }}
 {{- $ns := include "devicechain.instanceNamespace" . }}
@@ -83,4 +100,23 @@ spec:
           annotations:
             summary: "Broker presence transitions are not reaching the event stream"
             description: "For at least 10 minutes, event-sources has been failing to write device connects and disconnects to the platform's event stream ({{ "{{ $value }}" }} in the last 10 minutes). The broker does not resend connection notices, so each one is lost until the next reconciliation pass (every 5 minutes by default) puts the device right; until then a device can read offline while it is connected, or the other way round, and a reconnecting device's held commands are not released early. The cause is the platform's message broker refusing or not answering publishes. Check it, and the event-sources log for 'Failed to emit a broker presence transition', which names each device."
+        # Both arms by durable. The gauge is per pod; `min` because any pod that could not
+        # create the durable is enough. No `for`: see the header.
+        - alert: MqttFailClosedDurableMissing
+          expr: (min by (durable) (devicechain_eventsources_mqtt_failclosed_durable_present{namespace="{{ $ns }}"}) == 0) or (sum by (durable) (increase(devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="{{ $ns }}"}[10m])) > 0)
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "A platform durable on the MQTT message store is missing"
+            description: "Durable {{ "{{ $labels.durable }}" }} on the MQTT gateway's message store has been missing within the last 10 minutes. While it is missing, the broker acknowledges device QoS 1 publishes of its kind without keeping them, so each one is lost although the device was told it arrived. event-sources creates it again within 30 seconds, and this alert clears 10 minutes after the last time it was found missing; while it cannot be created, the alert stays. A rolling update does not remove a durable, so it does not raise this alert. Find what deleted it (a command run against the broker's consumers, or a tool that manages them), and check the event-sources log for 'platform durable on the MQTT message store'."
+        # Instance-wide: the store is one per broker account.
+        - alert: MqttFailClosedStoreNotAsDeclared
+          expr: (max(devicechain_eventsources_mqtt_failclosed_foreign_instances{namespace="{{ $ns }}"}) > 0) or (sum(increase(devicechain_eventsources_mqtt_failclosed_store_repaired_total{namespace="{{ $ns }}"}[10m])) > 0)
+          labels:
+            severity: critical
+            devicechain_instance: {{ $id }}
+          annotations:
+            summary: "The MQTT message store is not as the platform declared it"
+            description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."
 {{- end }}

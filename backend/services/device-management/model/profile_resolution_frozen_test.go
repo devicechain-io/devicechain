@@ -92,7 +92,17 @@ func TestAResolutionHandsOutNothingWritable(t *testing.T) {
 		t.Error("ProfileScope holds a reference, so Scope()'s copy shares it with the cached resolution")
 	}
 
-	readOnly := map[reflect.Type]bool{resolution: true, metric: true,
+	// A Calculation shares the resolution's compiled plan (immutable: compiled formulas
+	// and their Env are safe for concurrent use and nothing writes the plan after freeze)
+	// and owns a pooled sample nothing else holds. Its fields are unexported, so a holder
+	// reaches neither through it.
+	calculation := reflect.TypeOf(Calculation{})
+	for i := 0; i < calculation.NumField(); i++ {
+		if f := calculation.Field(i); f.IsExported() {
+			t.Errorf("Calculation.%s is exported: a holder could reach the shared plan", f.Name)
+		}
+	}
+	readOnly := map[reflect.Type]bool{resolution: true, metric: true, calculation: true,
 		reflect.TypeOf((*error)(nil)).Elem(): true}
 	for _, typ := range []reflect.Type{resolution, reflect.PointerTo(resolution), reflect.PointerTo(metric)} {
 		for i := 0; i < typ.NumMethod(); i++ {

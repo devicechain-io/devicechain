@@ -74,11 +74,13 @@ var mqttStoreLookupBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 
 // resources available" crashloop the budget exists to prevent — just from the
 // unaccounted side.
 //
-// $MQTT_msgs uses INTEREST retention, so it normally skips the write when nobody
-// is subscribed. That is not a reprieve here: event-sources holds a QoS-1
-// subscription across the whole device-plane topic tree, so interest exists for
-// every device subject at all times. Whether the second copy is written comes
-// down to the QoS a device publishes at, which is third-party firmware.
+// $MQTT_msgs uses INTEREST retention, so it skips the write for a subject no
+// consumer on it is interested in, and still acknowledges the publish. Device
+// telemetry normally has no such consumer: event-sources does not subscribe over
+// MQTT (it reads the device-events capture stream), so what the store holds is the
+// subjects some MQTT session has a QoS 1 subscription on. Which subjects those are
+// is up to the clients, device firmware included, so the store's size is not
+// something the platform controls either way, and it is bounded.
 //
 // Bounding trades one failure for a better one. Unbounded, exhaustion crashloops
 // every stream-creating service. Bounded, each stream fails in the way its own
@@ -86,6 +88,14 @@ var mqttStoreLookupBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 
 // the oldest undelivered messages — bad for those messages, survivable for the
 // cluster, and visible in the stream metrics. $MQTT_qos2in is DiscardNew, so it
 // REFUSES new QoS 2 publishes instead of evicting anything.
+//
+// With infrastructure.nats.mqttFailClosed on, $MQTT_msgs is not this function's:
+// ReconcileMqttFailClosed declares it (discard NEW, the hot ceiling, platform
+// durables) and a failure there is fatal, so the caller bounds only the QoS 2
+// stores, through ReconcileMqttQoS2Stores. With it off, a store that carries a mark
+// of THIS instance is handed to the fail-closed pass, which releases it once no pod
+// with the setting on holds it; a store that carries no mark of it is treated exactly
+// as it always was.
 //
 // This runs on EVERY startup rather than once at install. nats-server looks the
 // streams up before creating them and never reconciles config back onto an
@@ -103,6 +113,24 @@ func (nmgr *NatsManager) ReconcileMqttStores(ctx context.Context, maxBytes, qos2
 		return errors.New("mqtt store ceilings must be positive")
 	}
 	for _, s := range MqttStoreBounds(maxBytes, qos2MaxBytes) {
+		if err := nmgr.boundMqttStore(ctx, s.Name, s.MaxBytes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReconcileMqttQoS2Stores bounds only the gateway's two QoS 2 stores. It is the half of
+// ReconcileMqttStores that still applies with infrastructure.nats.mqttFailClosed on, when
+// ReconcileMqttFailClosed owns $MQTT_msgs.
+func (nmgr *NatsManager) ReconcileMqttQoS2Stores(ctx context.Context, qos2MaxBytes int64) error {
+	if qos2MaxBytes <= 0 {
+		return errors.New("mqtt store ceilings must be positive")
+	}
+	for _, s := range MqttStoreBounds(1, qos2MaxBytes) {
+		if s.Name == MqttMessageStore {
+			continue
+		}
 		if err := nmgr.boundMqttStore(ctx, s.Name, s.MaxBytes); err != nil {
 			return err
 		}
@@ -157,16 +185,29 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 			// Retry rather than give up on the first transient failure. This runs
 			// during startup, when a JetStream API timeout during a leader election
 			// is entirely ordinary — and because the caller treats failure as
-			// non-fatal, giving up here leaves the stream unbounded until the next
-			// restart, which could be weeks away. Returning the error only after the
+			// non-fatal (with mqttFailClosed off; with it on, $MQTT_msgs is reconciled
+			// by ReconcileMqttFailClosed, which is fatal), giving up here leaves the
+			// stream unbounded until the next restart, which could be weeks away. Returning the error only after the
 			// schedule is exhausted keeps the loud failure for a real problem.
 			lastErr = err
 			continue
 		}
-		if info.Config.MaxBytes == maxBytes {
+		cfg := info.Config
+		// A store that carries a mark of this instance (it made it fail-closed, or released
+		// it and has not finished removing its durables) is the fail-closed pass's: with the
+		// setting off, that pass releases it once no pod with the setting on holds it any
+		// more, and removes its durables once they are drained (mqttFailClosedPass). A store
+		// with no mark of this instance's is handled exactly as it was before the setting
+		// existed.
+		if name == MqttMessageStore {
+			if marks := nmgr.marksOf(info); marks.owned || marks.released {
+				_, err := nmgr.mqttFailClosedPass(ctx, true)
+				return err
+			}
+		}
+		if cfg.MaxBytes == maxBytes {
 			return nil
 		}
-		cfg := info.Config
 		previous := cfg.MaxBytes
 		cfg.MaxBytes = maxBytes
 		if _, err := nmgr.js.UpdateStream(&cfg); err != nil {

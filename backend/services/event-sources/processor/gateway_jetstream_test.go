@@ -150,10 +150,10 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			defer h.mu.Unlock()
 			h.received++
 		},
-		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, seq uint64) (context.Context, messaging.Message, bool) {
+		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, id string) (context.Context, messaging.Message, bool) {
 			h.mu.Lock()
 			h.published++
-			h.lastSeq = seq
+			h.lastSeq = captureSeqOf(id)
 			h.events = append(h.events, event)
 			h.mu.Unlock()
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
@@ -682,7 +682,7 @@ func TestFutureAppendTimeCannotMintTokens(t *testing.T) {
 func TestStartingWithoutACaptureReaderFailsLoudly(t *testing.T) {
 	source := NewGatewayJetStreamSource(nil, "gw-unwired", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64) (context.Context, messaging.Message, bool) {
+		func(string, string, *model.UnresolvedEvent, interface{}, string) (context.Context, messaging.Message, bool) {
 			return nil, messaging.Message{}, false
 		},
 		func(string, string, []byte, error) error { return nil },

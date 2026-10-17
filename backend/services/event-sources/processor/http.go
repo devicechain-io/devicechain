@@ -64,7 +64,7 @@ type HttpEventSource struct {
 	tracker   *connTracker
 	lifecycle core.LifecycleManager
 	received  func(string, []byte)
-	decoded   func(string, string, *model.UnresolvedEvent, interface{}, uint64) error
+	decoded   func(string, string, *model.UnresolvedEvent, interface{}, string) error
 	failed    func(string, string, []byte, error) error
 	// allow meters an inbound request against its tenant's ingest rate limit
 	// before the body is read/decoded; a false return sheds the request with a
@@ -96,7 +96,7 @@ type HttpEventSource struct {
 func NewHttpEventSource(id string, srcConfig map[string]string, instanceId string, ingest config.HttpIngest,
 	decoder Decoder,
 	received func(string, []byte),
-	decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error,
+	decoded func(string, string, *model.UnresolvedEvent, interface{}, string) error,
 	failed func(string, string, []byte, error) error,
 	allow RateGate,
 	readings ReadingGate,
@@ -229,7 +229,7 @@ func (es *HttpEventSource) handleEvent(w http.ResponseWriter, r *http.Request) {
 	// told the caller its data was safe when it had been dropped — the same silent
 	// loss ADR-030 removes from the MQTT path, on the one transport that can
 	// actually say so. A client that retries on 503 now loses nothing.
-	if err := es.decoded(es.Id, tenant, event, payload, 0); err != nil {
+	if err := es.decoded(es.Id, tenant, event, payload, ""); err != nil {
 		// The gate can close between the admit check and the publish; that refusal is
 		// the same answer as the one above.
 		if errors.Is(err, messaging.ErrStreamBackpressure) {

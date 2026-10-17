@@ -231,8 +231,8 @@ func TestExternalMqttKeepsTheWindowInFlight(t *testing.T) {
 				sync, err := rig.nmgr.NewWriter(streams.InboundEvents)
 				require.NoError(t, err)
 				publisher = InlinePublisher(func(source, tenant string, event *model.UnresolvedEvent,
-					payload interface{}, seq uint64) error {
-					ctx, msg, ok := benchInboundMessage(source, tenant, event, payload, seq)
+					payload interface{}, id string) error {
+					ctx, msg, ok := benchInboundMessage(source, tenant, event, payload, id)
 					if !ok {
 						return nil
 					}
@@ -479,10 +479,10 @@ type gatedPublisher struct {
 }
 
 func (p gatedPublisher) Publish(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64, done func(error)) {
+	dedupID string, done func(error)) {
 	p.entered <- struct{}{}
 	<-p.gate
-	p.EventPublisher.Publish(source, tenant, event, payload, captureSeq, done)
+	p.EventPublisher.Publish(source, tenant, event, payload, dedupID, done)
 }
 
 // The settle comes AFTER the workers are joined. A worker still inside its hand-off when the

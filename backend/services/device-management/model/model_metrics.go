@@ -75,7 +75,21 @@ type MetricDefinition struct {
 	MaxValue        sql.NullFloat64
 	Enum            *datatypes.JSON // optional allowed-values array
 	Descriptor      sql.NullString  // optional WoT @type / capability tag
+	// Expression is a calculated metric's formula (ADR-082): CEL over the other, MEASURED
+	// metrics of the same reading, compiled by core/calcfield. NULL means a measured
+	// metric — one devices report — which is every metric that predates the column.
+	//
+	// 🔴 WHETHER IT IS NULL IS FIXED AT CREATION. A measured metric cannot be given a
+	// formula and a calculated one cannot have its formula cleared; only the formula of a
+	// calculated metric can be edited. That keeps the definition id (a measurement's
+	// classifier) a stable provenance marker: every row ever stored under a calculated
+	// definition was computed, in every version of the profile.
+	Expression sql.NullString
 }
+
+// Calculated reports whether the metric is computed from a formula rather than reported
+// by devices.
+func (m *MetricDefinition) Calculated() bool { return m.Expression.Valid }
 
 // DefaultOrder implements rdb.Sortable with the registry default: newest first, token
 // as the unique tiebreak. A measurement event resolves its definition by MetricKey, not
@@ -98,6 +112,10 @@ type MetricDefinitionCreateRequest struct {
 	Enum               *string
 	Descriptor         *string
 	Metadata           *string
+	// Expression makes the new metric CALCULATED: its value is computed from this formula
+	// instead of reported by devices. Omitted (nil) makes it measured. Which one it is
+	// cannot change after creation.
+	Expression *string
 }
 
 // A PARTIAL update to a metric definition: omit a field to leave the stored value
@@ -138,6 +156,12 @@ type MetricDefinitionUpdateRequest struct {
 	Enum       dcgraphql.OptionalString
 	Descriptor dcgraphql.OptionalString
 	Metadata   dcgraphql.OptionalString
+	// Expression edits a CALCULATED metric's formula, and is refused on a measured one
+	// (calculated-ness is fixed at creation, see MetricDefinition.Expression). On a
+	// calculated metric a null or blank formula is refused like any required field —
+	// clearing it would turn the metric into a measured one. On a measured metric an
+	// explicit null asks for what it already is and is accepted.
+	Expression dcgraphql.OptionalString
 }
 
 // Search criteria for locating metric definitions.

@@ -83,7 +83,25 @@ type cluster struct {
 // hooks, failing tb when it cannot be made, and shut down when tb ends.
 func startedCluster(tb testing.TB, size int) *cluster {
 	tb.Helper()
-	c, err := startCluster(tb, size, defaultClusterHooks(), clusterStartBudget)
+	return startedClusterWith(tb, size, defaultClusterHooks())
+}
+
+// StartJetStreamClusterConfigured is StartJetStreamClusterWithRouteFaults with the last
+// word on each server's options handed to the caller: configure(i, o) runs on server i's
+// options just before it is created. It exists for a test that needs every node to carry
+// something the fixture has no opinion on, such as an MQTT listener.
+func StartJetStreamClusterConfigured(tb testing.TB, size int, configure func(i int, o *natsserver.Options)) ([]*natsserver.Server, *RouteFaults) {
+	tb.Helper()
+	h := defaultClusterHooks()
+	h.configure = configure
+	c := startedClusterWith(tb, size, h)
+	return c.servers, c.faults
+}
+
+// startedClusterWith is startedCluster with the construction's hooks chosen by the caller.
+func startedClusterWith(tb testing.TB, size int, h clusterHooks) *cluster {
+	tb.Helper()
+	c, err := startCluster(tb, size, h, clusterStartBudget)
 	// A route around the proxies is the fixture failing at its one job, and it is
 	// reported as what it is.
 	if errors.Is(err, errRoutesBypassProxies) {

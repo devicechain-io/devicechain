@@ -836,9 +836,17 @@ dispositivo cuyos atributos lo llevan al grupo aparece sin que nadie edite al mi
 desaparece. Publicar una versión nueva del grupo, o volver a una anterior, cambia el conjunto de la
 misma manera. Las operaciones de la tabla anterior responden para un grupo como para un cliente: los
 eventos, las alarmas, los comandos y las asignaciones de actualización registrados mientras el
-dispositivo estaba en el grupo siguen visibles, y el estado en vivo sigue al dispositivo. Los paneles
-solo pueden compartirse con clientes, así que un miembro limitado solo a grupos no ve ningún panel
-compartido.
+dispositivo estaba en el grupo siguen visibles, y el estado en vivo sigue al dispositivo.
+`entityGroupsByToken` responde con los grupos propios del miembro, y con ningún otro, para que un
+cliente pueda nombrar aquello a lo que está limitado; los `members` y `versions` de un grupo se le
+rechazan.
+
+Un panel puede compartirse con un grupo de ámbito de acceso igual que con un cliente:
+`shareDashboard` acepta `{ kind: GROUP, token: "..." }` junto a los clientes, y un miembro limitado
+al grupo lo ve entonces en la lista y lo abre. Todo grupo nombrado debe existir en el inquilino y ser
+un ámbito de acceso. Uno que no existe y uno que existe pero no es un ámbito de acceso responden
+ambos `NOT_FOUND` con el mismo mensaje, y nada cambia. Una compartición con un grupo que más tarde
+deja de ser un ámbito de acceso se conserva.
 
 El token de un grupo eliminado queda retirado igual que el de un cliente, porque el acceso de los
 miembros y estos registros nombran al grupo por su token. `createEntityGroup` con un token retirado
@@ -847,7 +855,7 @@ responde `INVALID_VALUE`.
 ### Rechazos al administrar un tenant {#tenant-administration-refusals}
 
 Los administradores de un tenant gestionan sus miembros, invitaciones y roles a través de la API de
-tenant de user-management (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberEnabled`,
+tenant de user-management (`inviteMember`, `setMemberRoles`, `setMemberScope`, `setMemberAccess`, `setMemberEnabled`,
 `removeMember`, `createTenantRole`, `updateTenantRole`, `deleteTenantRole` y las demás). Esas
 operaciones rechazan con códigos propios, para que un cliente conozca el motivo sin leer el mensaje:
 

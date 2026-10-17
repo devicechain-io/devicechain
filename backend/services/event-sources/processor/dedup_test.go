@@ -151,3 +151,14 @@ func TestDedupIDNeverMatchesAPreviousBuildsID(t *testing.T) {
 		check(seq)
 	}
 }
+
+// captureSeqOf reads the capture sequence back out of a capture dedup id (DedupID), 0 for an
+// empty one, for a test that wants to see which captured message an event was built from.
+func captureSeqOf(id string) uint64 {
+	i := strings.LastIndexByte(id, '.')
+	if i < 0 {
+		return 0
+	}
+	n, _ := strconv.ParseUint(id[i+1:], 36, 64)
+	return n
+}

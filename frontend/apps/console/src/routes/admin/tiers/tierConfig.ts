@@ -15,7 +15,7 @@ export type ConfigDimension = { rateField: string; burstField: string };
 // The scalar keys a tier carries beside its rate+burst dimensions. They are not dimensions
 // (no burst, no per-second unit), so the server's dimension query does not list them and
 // this editor declares them itself. Ranges mirror the server's validators in
-// iam/tierconfig.go: a whole number from 1 to max. The geofence maxima are the platform
+// iam/tierconfig.go: a whole number from min (1 unless stated) to max. The geofence maxima are the platform
 // constants in core/governance (geofence_caps.go); the held ceiling's is the
 // representational int32 wall. A value outside them is refused at write by the server, so
 // checking here only moves the same refusal in front of the operator.
@@ -25,6 +25,10 @@ export type ConfigDimension = { rateField: string; burstField: string };
 // cannot leave this form refusing a value the server would accept.
 export type TierScalar = {
   key: string;
+  // The smallest legal value. Omitted means 1: every ceiling but one refuses 0, because 0
+  // would admit nothing. calculatedMetricsPerProfile is that one: 0 is how a tier says
+  // calculated metrics are off, and it is the platform default too.
+  min?: number;
   max: number;
   labelKey: string;
   descriptionKey: string;
@@ -36,7 +40,13 @@ export const TIER_SCALARS: readonly TierScalar[] = [
   { key: 'geoFenceCeiling', max: 4000, labelKey: 'geoFenceCeilingLabel', descriptionKey: 'geoFenceCeilingDescription' },
   { key: 'geoFencePositionCeiling', max: 1024, labelKey: 'geoFencePositionCeilingLabel', descriptionKey: 'geoFencePositionCeilingDescription' },
   { key: 'geoFencePositionBudget', max: 128000, labelKey: 'geoFencePositionBudgetLabel', descriptionKey: 'geoFencePositionBudgetDescription' },
+  { key: 'calculatedMetricsPerProfile', min: 0, max: 32, labelKey: 'calculatedMetricsPerProfileLabel', descriptionKey: 'calculatedMetricsPerProfileDescription' },
 ];
+
+/** The smallest legal value of a scalar. */
+export function tierScalarMin(s: TierScalar): number {
+  return s.min ?? 1;
+}
 
 /**
  * The scalar a field's text is not acceptable for, or null when every one is blank or valid.
@@ -47,7 +57,7 @@ export function invalidTierScalar(settings: Record<string, string>): TierScalar 
     const raw = (settings[s.key] ?? '').trim();
     if (raw === '') continue;
     const n = Number(raw);
-    if (!Number.isInteger(n) || n < 1 || n > s.max) return s;
+    if (!Number.isInteger(n) || n < tierScalarMin(s) || n > s.max) return s;
   }
   return null;
 }

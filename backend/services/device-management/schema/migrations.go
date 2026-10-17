@@ -47,5 +47,7 @@ var (
 		NewIssuedCustomerTokensSchema(),
 		NewGroupAccessScopeSchema(),
 		NewIssuedGroupTokensSchema(),
+		NewPendingOwnershipFactsSchema(),
+		NewMetricExpressionSchema(),
 	}
 )

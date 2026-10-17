@@ -191,5 +191,8 @@ func (r *AdminTenantResolver) EffectiveScalarSettings() []*AdminTenantScalarSett
 			m.Tier.GeoFencePositionCeiling(), m.OverrideGeoFencePositionCeiling()),
 		row(iam.GeoFencePositionBudgetConfigKey, "Geofence position budget", m.EffectiveGeoFencePositionBudget,
 			m.Tier.GeoFencePositionBudget(), m.OverrideGeoFencePositionBudget()),
+		// No override level: the count is set on the tier only, so override is always nil.
+		row(iam.CalculatedMetricsPerProfileConfigKey, "Calculated metrics per profile",
+			m.EffectiveCalculatedMetricsPerProfile, m.Tier.CalculatedMetricsPerProfile(), nil),
 	}
 }

@@ -52,6 +52,26 @@ func (api *Api) entityGroupByToken(ctx context.Context, token string) (*EntityGr
 // static group is rejected — it has no selector to freeze.
 func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 	label, description *string, publishedBy string) (*EntityGroupVersion, error) {
+	return api.PublishEntityGroupIf(ctx, token, label, description, publishedBy, nil)
+}
+
+// ErrGroupConflict is returned by PublishEntityGroupIf when the caller states the version
+// the group had when it looked (expectedActiveVersion) and the group has moved on since:
+// someone else published or rolled back in between. The caller should reload and decide again.
+//
+// It is a stale-write refusal and never a conflict.Error, for the reason ErrConflict in
+// dashboard-management gives: CONFLICT reads as "already exists, carry on", which for a
+// publish that did not happen would report it done.
+var ErrGroupConflict = rdb.NewStaleWriteError("entity group")
+
+// PublishEntityGroupIf is PublishEntityGroup with an optional precondition. When
+// expectedActiveVersion is set it is the active version the caller saw (0 for a group never
+// published), and the publish proceeds only if the group's pointer still holds it — read
+// under the family lock inside the publishing transaction, so a publish that lands between
+// the caller's read and this write is refused with ErrGroupConflict rather than stacked as a
+// second version. Nil publishes unconditionally.
+func (api *Api) PublishEntityGroupIf(ctx context.Context, token string,
+	label, description *string, publishedBy string, expectedActiveVersion *int32) (*EntityGroupVersion, error) {
 	group, err := api.entityGroupByToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -101,6 +121,9 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		if err != nil {
 			return err
 		}
+		if expectedActiveVersion != nil && *expectedActiveVersion != from.Int32 {
+			return ErrGroupConflict
+		}
 		if err := tx.Create(version).Error; err != nil {
 			return err
 		}
@@ -118,7 +141,10 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 		// A rule pins a VERSION, so a publish enrolls nothing for rules. An access scope
 		// follows the pointer (ADR-081): its new version is materialized, and the old torn
 		// down unless a rule pins it, in this same transaction.
-		evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from)
+		if evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from); err != nil {
+			return err
+		}
+		_, err = queueOwnershipOnTx(tx, members)
 		return err
 	})
 	if err != nil {
@@ -129,12 +155,12 @@ func (api *Api) PublishEntityGroup(ctx context.Context, token string,
 }
 
 // afterAccessScopeMoved fires, post-commit, what moving an access scope's pointer produced:
-// the read-model evictions, the members' cached memberships (their access marker may have
-// changed even where no row did), and an ownership-changed fact for each member device.
+// the read-model evictions and the members' cached memberships (their access marker may have
+// changed even where no row did). Each member device's ownership fact was queued in the
+// move's transaction.
 func (api *Api) afterAccessScopeMoved(ctx context.Context, evictions []membershipEviction, changed bool, members []uint) {
 	api.fireScopingEvictions(ctx, evictions, changed)
 	api.evictMemberships(ctx, string(entity.TypeDevice), members)
-	api.emitOwnershipChanged(ctx, members)
 }
 
 // lockFamilyAndReadPointerOnTx takes the group's family lock and returns the published
@@ -203,7 +229,10 @@ func (api *Api) RollbackEntityGroup(ctx context.Context, token string, version i
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: entity group %q", gorm.ErrRecordNotFound, token)
 		}
-		evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from)
+		if evictions, changed, members, err = api.moveAccessScopeOnTx(ctx, tx, group.ID, from); err != nil {
+			return err
+		}
+		_, err = queueOwnershipOnTx(tx, members)
 		return err
 	})
 	if err != nil {

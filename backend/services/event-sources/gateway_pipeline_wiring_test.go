@@ -26,9 +26,10 @@ import (
 )
 
 // inboundEventMessage is the ONE definition of what a decoded event is published as, and
-// the gateway source pipelines it: the dedup id that keeps a redelivered capture message
-// from being stored twice must survive the split from the synchronous path.
-func TestTheInboundMessageCarriesTheCaptureDedupID(t *testing.T) {
+// the gateway sources pipeline it: the dedup id that keeps a redelivered capture (or message
+// store) message from being stored twice must survive the split from the synchronous path.
+// The source names the id (it alone knows which stream the sequence is of); this carries it.
+func TestTheInboundMessageCarriesTheDedupIDItsSourceNamed(t *testing.T) {
 	savedMs := Microservice
 	t.Cleanup(func() { Microservice = savedMs })
 	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
@@ -38,7 +39,8 @@ func TestTheInboundMessageCarriesTheCaptureDedupID(t *testing.T) {
 	event := func() *model.UnresolvedEvent {
 		return &model.UnresolvedEvent{Device: "sensor-001", EventType: model.Measurement, AuthenticatedTransport: true}
 	}
-	ctx, msg, ok := inboundEventMessage("gw", "acme", event(), &model.UnresolvedMeasurementsPayload{}, 4242)
+	ctx, msg, ok := inboundEventMessage("gw", "acme", event(), &model.UnresolvedMeasurementsPayload{},
+		processor.DedupID("acme", 4242))
 	require.True(t, ok)
 	require.Equal(t, "acme.39u", msg.DedupID, "tenant, then the capture sequence in base 36")
 	require.Equal(t, []byte("sensor-001"), msg.Key)
@@ -50,11 +52,11 @@ func TestTheInboundMessageCarriesTheCaptureDedupID(t *testing.T) {
 	require.Equal(t, "gw", decoded.Source)
 	require.False(t, decoded.AuthenticatedTransport, "the device-facing path must never mark an event transport-authenticated")
 
-	_, msg, ok = inboundEventMessage("http", "acme", event(), &model.UnresolvedMeasurementsPayload{}, 0)
+	_, msg, ok = inboundEventMessage("http", "acme", event(), &model.UnresolvedMeasurementsPayload{}, "")
 	require.True(t, ok)
 	require.Equal(t, "", msg.DedupID, "a transport with no capture sequence publishes no dedup id")
 
-	_, _, ok = inboundEventMessage("gw", "", event(), &model.UnresolvedMeasurementsPayload{}, 7)
+	_, _, ok = inboundEventMessage("gw", "", event(), &model.UnresolvedMeasurementsPayload{}, "x.7")
 	require.False(t, ok, "an event with no tenant is a deliberate drop")
 }
 
@@ -179,7 +181,7 @@ func TestConfiguredCapturePublishWindowReachesTheGatewayWriter(t *testing.T) {
 		{`{"capture":{"publishWindow":300}}`, 300},
 		// Counterweight: with nothing set the writer gets the default, so a wiring that
 		// always passed 300 (or any other fixed value) cannot pass both.
-		{`{}`, 512},
+		{`{}`, 1024},
 	} {
 		t.Run(tc.doc, func(t *testing.T) {
 			Microservice = &core.Microservice{InstanceId: "pubwindow", FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}

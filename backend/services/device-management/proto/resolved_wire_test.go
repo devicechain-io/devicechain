@@ -75,6 +75,7 @@ func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayl
 				Classifier: mxentry.Classifier,
 				Unit:       mxentry.Unit,
 				DataType:   mxentry.DataType,
+				Derived:    mxentry.Derived,
 			})
 		}
 		nanos, text := referenceInstant(mxsentry.OccurredTime, format, true)
@@ -486,6 +487,8 @@ func FuzzResolvedEventWire(f *testing.F) {
 				if flags&64 != 0 {
 					mx.DataType = strp(source)
 				}
+				// Every flag bit is taken; the classifier's bits say which readings are derived.
+				mx.Derived = (classifier>>uint(j))&1 == 1
 				entry.Entries = append(entry.Entries, mx)
 			}
 			payload.Entries = append(payload.Entries, entry)

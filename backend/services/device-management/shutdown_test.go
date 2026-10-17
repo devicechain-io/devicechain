@@ -93,9 +93,11 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 
 	prevMs, prevGql, prevNats, prevSvc := Microservice, GraphQLManager, NatsManager, Svc
 	prevIep, prevRac, prevCallout, prevDrc := InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer
+	prevDrain := OwnershipDrain
 	t.Cleanup(func() {
 		Microservice, GraphQLManager, NatsManager, Svc = prevMs, prevGql, prevNats, prevSvc
 		InboundEventsProcessor, RaiseAlarmConsumer, CalloutResponder, DeviceReportsConsumer = prevIep, prevRac, prevCallout, prevDrc
+		OwnershipDrain = prevDrain
 	})
 
 	area := fmt.Sprintf("device-management-shutdown-%d", time.Now().UnixNano())
@@ -144,6 +146,11 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 	DeviceReportsConsumer = processor.NewDeviceReportsConsumer(Microservice, nil,
 		core.NewNoOpLifecycleCallbacks(), nil, nil, processor.NewDeviceReportsMetrics(Microservice))
 	require.NoError(t, DeviceReportsConsumer.Initialize(context.Background()))
+	// The ownership drain is stopped unconditionally too. Initialized, not started: its pass
+	// would need the Api this test does not build.
+	OwnershipDrain = core.NewPeriodicTask(area, "ownership-drain", time.Hour,
+		func(context.Context) error { return nil }, core.NewNoOpLifecycleCallbacks())
+	require.NoError(t, OwnershipDrain.Initialize(context.Background()))
 
 	// The callout responder is nil-guarded in the stopper; there is nothing to stop.
 	CalloutResponder = nil

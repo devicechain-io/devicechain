@@ -234,6 +234,21 @@ func TestCompactReservationFitsItsSmallerVolume(t *testing.T) {
 			"floor(magnitude x 0.9) clears the reservation, or lower the ceilings",
 			headroom>>20, minHeadroom>>20)
 	}
+
+	// L5: the same with infrastructure.nats.mqttFailClosed on, where the message store takes
+	// the capture stream's hot ceiling instead of the safety cap and the capture stream keeps
+	// its own. Turned on over the ceilings compact rendered, as an operator would.
+	on := n
+	on.MqttFailClosed = true
+	onReserved := reserved - n.MqttStoreReservation() + on.MqttStoreReservation()
+	if onReserved > ceiling {
+		t.Errorf("with mqttFailClosed on, --compact reserves %d MiB against its %d MiB store",
+			onReserved>>20, ceiling>>20)
+	}
+	if headroom := ceiling - onReserved; headroom < minHeadroom {
+		t.Errorf("with mqttFailClosed on, --compact leaves %d MiB unreserved, below the %d MiB floor",
+			headroom>>20, minHeadroom>>20)
+	}
 }
 
 // compactJetStreamStorage reads the JetStream volume size the compact infra apply

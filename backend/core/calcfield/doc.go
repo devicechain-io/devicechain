@@ -53,7 +53,9 @@
 // No double inside an evaluation is ever NaN or ±Inf: a non-finite input value is refused
 // at [Sample.Set], and a division, overflow or square root producing one is an error. Either
 // skips the formula as [SkipNonFinite] wherever it occurs, so `voltage / current > 10.0`
-// skips when current is 0 instead of storing a plausible true.
+// skips when current is 0 instead of storing a plausible true. A DOUBLE or INT result the
+// measurement store cannot hold (magnitude [StoredMagnitude] or more) skips as
+// [SkipUnstorable] whatever the definition's bounds, rather than failing its reading there.
 //
 // # Determinism
 //

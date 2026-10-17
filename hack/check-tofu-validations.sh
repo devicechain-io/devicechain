@@ -524,10 +524,13 @@ run_assertions() {
   evaluates false module.nats.ha_topology.route_tls_verified -var ha=true -var nats_enable_tls=false
   evaluates true module.nats.ha_topology.clustered -var ha=true
   evaluates false module.nats.ha_topology.clustered -var ha=false
-  # Route compression reaches the values only when asked for, and off by default.
-  # Read back out of the cluster merge, so a mode that drifts to the wrong parent
-  # reads "off" here and fails the s2_fast line.
-  evaluates '"off"' module.nats.ha_topology.route_compression -var ha=true
+  # Route compression: s2_fast by default on a clustered broker, off by default on a
+  # single server, and an explicit off wins over the clustered default. Read back
+  # out of the cluster merge, so a mode that drifts to the wrong parent reads "off"
+  # here and fails the s2_fast lines.
+  evaluates '"s2_fast"' module.nats.ha_topology.route_compression -var ha=true
+  evaluates '"off"' module.nats.ha_topology.route_compression -var ha=false
+  evaluates '"off"' module.nats.ha_topology.route_compression -var ha=true -var nats_route_compression=off
   evaluates '"s2_fast"' module.nats.ha_topology.route_compression -var ha=true -var nats_route_compression=s2_fast
   evaluates '"s2_auto"' module.nats.ha_topology.route_compression -var ha=true -var nats_route_compression=s2_auto
 

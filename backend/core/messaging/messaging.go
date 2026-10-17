@@ -262,6 +262,13 @@ type Message struct {
 	// nothing at all. An id must therefore be both tenant-scoped and derived only
 	// from values that survive a redelivery unchanged.
 	//
+	// On a message CONSUMED from the MQTT gateway's message store (NewMqttMessageStoreReader)
+	// the reader has already set it: the id the message's forward is published under,
+	// MqttMessageStoreDedupID from the message's tenant, the epoch of the store incarnation it
+	// was stored in and its sequence. Only the reader can name that epoch (see
+	// mqttStoreView.epochOf); where it cannot show it, it leaves the id empty, and the cost is
+	// a possible duplicate, never a suppressed message.
+	//
 	// It is 0-cost when unset: no header, no dedup, and the stream's window is
 	// irrelevant. That is the correct posture for a producer whose duplicates are
 	// prevented some other way — the HTTP ingest path has no broker redelivery at

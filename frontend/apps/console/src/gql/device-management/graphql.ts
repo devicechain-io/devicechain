@@ -838,6 +838,14 @@ export type MetricDefinitionCreateRequest = {
   deviceProfileToken: string;
   /** Allowed values as a JSON array of strings. Must be valid JSON. */
   enum?: string | null | undefined;
+  /**
+   * A formula, which makes the new metric calculated: its value is computed from the
+   * profile's measured metrics instead of reported by devices. Omit it for a measured
+   * metric. Which of the two a metric is cannot be changed later. At most 1024 bytes and not
+   * blank. The formula is checked when the profile is published, not here; use
+   * testMetricFormula to check it sooner.
+   */
+  expression?: string | null | undefined;
   /** Largest value accepted for a DOUBLE or INT metric. */
   maxValue?: number | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
@@ -889,6 +897,12 @@ export type MetricDefinitionUpdateRequest = {
   deviceProfileToken?: string | null | undefined;
   /** New allowed values as a JSON array of strings, or null to allow any value. */
   enum?: string | null | undefined;
+  /**
+   * New formula for a calculated metric. Refused on a measured metric, which cannot become
+   * calculated. A null or blank value is refused on a calculated metric, which cannot become
+   * measured; delete it and create a new metric instead.
+   */
+  expression?: string | null | undefined;
   /** New upper bound, or null to remove it. */
   maxValue?: number | null | undefined;
   /** New metadata (valid JSON, replacing the stored document), or null to clear it. */
@@ -1474,6 +1488,43 @@ export type DeleteEntityGroupMutationVariables = Exact<{
 
 
 export type DeleteEntityGroupMutation = { deleteEntityGroup: boolean };
+
+export type GroupAccessQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type GroupAccessQuery = { entityGroupsByToken: Array<{ token: string, memberType: string, membershipMode: string, activeVersion: number | null, accessScope: boolean }> };
+
+export type SetEntityGroupAccessScopeMutationVariables = Exact<{
+  token: string;
+  enabled: boolean;
+}>;
+
+
+export type SetEntityGroupAccessScopeMutation = { setEntityGroupAccessScope: { token: string, memberType: string, membershipMode: string, activeVersion: number | null, accessScope: boolean } };
+
+export type PublishEntityGroupMutationVariables = Exact<{
+  token: string;
+  expectedActiveVersion?: number | null | undefined;
+}>;
+
+
+export type PublishEntityGroupMutation = { publishEntityGroup: { version: number } };
+
+export type AccessScopeGroupsQueryVariables = Exact<{
+  criteria: EntityGroupSearchCriteria;
+}>;
+
+
+export type AccessScopeGroupsQuery = { entityGroups: { results: Array<{ token: string, name: string | null }> } };
+
+export type GroupNamesQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type GroupNamesQuery = { entityGroupsByToken: Array<{ token: string, name: string | null }> };
 
 export type DeviceGroupTargetsQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -3183,6 +3234,53 @@ export const DeleteEntityGroupDocument = new TypedDocumentString(`
   deleteEntityGroup(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteEntityGroupMutation, DeleteEntityGroupMutationVariables>;
+export const GroupAccessDocument = new TypedDocumentString(`
+    query GroupAccess($tokens: [String!]!) {
+  entityGroupsByToken(tokens: $tokens) {
+    token
+    memberType
+    membershipMode
+    activeVersion
+    accessScope
+  }
+}
+    `) as unknown as TypedDocumentString<GroupAccessQuery, GroupAccessQueryVariables>;
+export const SetEntityGroupAccessScopeDocument = new TypedDocumentString(`
+    mutation SetEntityGroupAccessScope($token: String!, $enabled: Boolean!) {
+  setEntityGroupAccessScope(token: $token, enabled: $enabled) {
+    token
+    memberType
+    membershipMode
+    activeVersion
+    accessScope
+  }
+}
+    `) as unknown as TypedDocumentString<SetEntityGroupAccessScopeMutation, SetEntityGroupAccessScopeMutationVariables>;
+export const PublishEntityGroupDocument = new TypedDocumentString(`
+    mutation PublishEntityGroup($token: String!, $expectedActiveVersion: Int) {
+  publishEntityGroup(token: $token, expectedActiveVersion: $expectedActiveVersion) {
+    version
+  }
+}
+    `) as unknown as TypedDocumentString<PublishEntityGroupMutation, PublishEntityGroupMutationVariables>;
+export const AccessScopeGroupsDocument = new TypedDocumentString(`
+    query AccessScopeGroups($criteria: EntityGroupSearchCriteria!) {
+  entityGroups(criteria: $criteria) {
+    results {
+      token
+      name
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<AccessScopeGroupsQuery, AccessScopeGroupsQueryVariables>;
+export const GroupNamesDocument = new TypedDocumentString(`
+    query GroupNames($tokens: [String!]!) {
+  entityGroupsByToken(tokens: $tokens) {
+    token
+    name
+  }
+}
+    `) as unknown as TypedDocumentString<GroupNamesQuery, GroupNamesQueryVariables>;
 export const DeviceGroupTargetsDocument = new TypedDocumentString(`
     query DeviceGroupTargets {
   entityGroups(criteria: {pageNumber: 1, pageSize: 500, memberType: "device"}) {

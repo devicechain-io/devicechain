@@ -63,9 +63,9 @@ type Dashboard {
     """When the served version was published, as an RFC 3339 timestamp; null if never published."""
     publishedAt: String
     """
-    The customers the dashboard is shared with, sorted. Members whose access is limited to
-    one of these customers can list the dashboard and open its published version. Empty
-    when it is shared with nobody. Not available to a member whose access is limited to
+    The customers and groups the dashboard is shared with, sorted. Members whose access is
+    limited to one of these customers or groups can list the dashboard and open its published
+    version. Empty when it is shared with nobody. Not available to a member whose access is limited to
     part of the tenant.
     """
     sharedWith: [ScopeAnchor!]!
@@ -75,7 +75,7 @@ type Dashboard {
 enum ScopeAnchorKind {
     """A customer, named by its token."""
     CUSTOMER
-    """An entity group, named by its token. Not accepted yet."""
+    """An entity group, named by its token."""
     GROUP
 }
 
@@ -91,7 +91,7 @@ type ScopeAnchor {
 
 """A customer or group to share with."""
 input ScopeAnchorInput {
-    """What the anchor names. Only CUSTOMER is accepted."""
+    """What the anchor names."""
     kind: ScopeAnchorKind!
     """Token of the customer or group."""
     token: String!
@@ -253,7 +253,7 @@ type Query {
     """
     Searches the tenant's dashboards, one page at a time. Results carry metadata only;
     read a definition with the dashboard query. A member whose access is limited to part of
-    the tenant sees only published dashboards shared with a customer in its scope. Requires
+    the tenant sees only published dashboards shared with a customer or group in its scope. Requires
     dashboard:read.
     """
     dashboards(
@@ -279,7 +279,7 @@ type Query {
     Returns the version of the dashboard that viewers are served, with its definition, or
     null if there is no dashboard with the token. Fails with code NOT_PUBLISHED if the
     dashboard exists but has never been published. For a member whose access is limited to
-    part of the tenant, a dashboard not shared with a customer in its scope is null, as if
+    part of the tenant, a dashboard not shared with a customer or group in its scope is null, as if
     it did not exist. Requires dashboard:read.
     """
     publishedDashboard(
@@ -370,17 +370,19 @@ type Mutation {
         version: Int!
     ): DashboardSummary!
     """
-    Replaces the customers a dashboard is shared with, and returns the dashboard. Members
-    whose access is limited to one of these customers can then list the dashboard and open
-    its published version; an empty list shares it with nobody. Every customer must exist,
-    or the request fails with NOT_FOUND and nothing changes. GROUP is refused with
-    INVALID_VALUE, and more than 1000 customers with LIMIT_EXCEEDED. Not available to a
-    member whose access is limited to part of the tenant. Requires dashboard:write.
+    Replaces the customers and groups a dashboard is shared with, and returns the dashboard.
+    Members whose access is limited to one of them can then list the dashboard and open its
+    published version; an empty list shares it with nobody. Every customer must exist, and
+    every group must exist and be an access scope (see setEntityGroupAccessScope), or the
+    request fails with NOT_FOUND and nothing changes; a group that is not an access scope
+    answers exactly as one that does not exist. More than 1000 anchors fail with
+    LIMIT_EXCEEDED. Not available to a member whose access is limited to part of the tenant.
+    Requires dashboard:write.
     """
     shareDashboard(
         """Token of the dashboard to share."""
         token: String!
-        """The customers to share it with, replacing the current list."""
+        """The customers and groups to share it with, replacing the current list."""
         anchors: [ScopeAnchorInput!]!
     ): Dashboard!
     """

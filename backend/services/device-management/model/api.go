@@ -129,9 +129,10 @@ type Api struct {
 	// a NATS writer) and may be nil — in tests, or before wiring — disabling emission.
 	// Emission is post-commit and best-effort (at-most-once), like the other fact publishers.
 	DeviceRosterPublisher DeviceRosterPublisher
-	// DeviceOwnershipPublisher, when set, publishes a device's complete current anchor set
-	// after every write that may have changed which tracked relationships it has
-	// (ADR-081). Nil disables the fact; nothing else reads it.
+	// DeviceOwnershipPublisher is what the ownership drain (DrainOwnershipFacts) publishes a
+	// device's complete current anchor set through, after a write that may have moved its
+	// owners queued it (ADR-081, ownership_outbox.go). Writes queue the fact whether or not
+	// it is set; the drain refuses to run without it rather than discard what is queued.
 	DeviceOwnershipPublisher DeviceOwnershipPublisher
 
 	// DeviceAttributePublisher emits device-attribute events (ADR-051 slice 4c-3) when a
@@ -166,6 +167,11 @@ type Api struct {
 	// tier-driven, so an unconfigured instance behaves as the previous release did rather
 	// than as an ungoverned one. main.go warns at startup when it leaves this nil.
 	GeoFenceCapsResolver GeoFenceCapsResolver
+
+	// CalculatedMetricsCeiling, when set, supplies how many calculated metrics one of the
+	// tenant's profiles may publish. NIL MEANS THE PLATFORM DEFAULT, WHICH IS ZERO: with
+	// nothing wired, no profile may publish a calculated metric.
+	CalculatedMetricsCeiling CalculatedMetricsCeilingResolver
 
 	// GeoFenceCapRefusals, when set, counts refusals by which cap refused. Nil disables
 	// counting only; it never changes a verdict.
@@ -305,12 +311,12 @@ func (api *Api) emitGeoFenceSet(ctx context.Context, manifest *GeoFenceSetManife
 // and is a no-op otherwise. Called post-commit alongside emitEntityDeleted.
 //
 // The devices in sources tracked the deleted entity, so each has lost an owner (or an
-// anchor): their ownership facts go out here too, from the same funnel.
-func (api *Api) evictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, sources []uint) {
+// anchor): the delete's transaction queued their ownership facts (queueOwnershipOnTx), and
+// sources is that proof.
+func (api *Api) evictEntityDelete(ctx context.Context, etype entity.Type, id uint, token string, sources ownershipQueued) {
 	if api.CacheEvictor != nil {
-		api.CacheEvictor.EvictEntityDelete(ctx, etype, id, token, sources)
+		api.CacheEvictor.EvictEntityDelete(ctx, etype, id, token, sources.ids)
 	}
-	api.emitOwnershipChanged(ctx, sources)
 }
 
 // evictDeviceCredentials drops the cached credentials of the given devices of tenant when
@@ -344,15 +350,15 @@ func (api *Api) evictDeviceByToken(ctx context.Context, token string) {
 //
 // 🔑 IT IS ALSO THE OWNERSHIP FUNNEL (ADR-081). Every write that changes a device's tracked
 // set must come through here — or ingest stamps stale anchors until the cache entry
-// expires — so it is the one place that publishes the device ownership-changed fact, and a
-// new edge writer gets the fact by doing what it already had to do. The fact is published
+// expires — and it takes the devices as an ownershipQueued, which only queueOwnershipOnTx
+// makes: so a new edge writer cannot evict without having queued, in its own transaction,
+// the ownership facts device-state is owed (ownership_outbox.go). The facts are queued
 // whether or not an evictor is wired: the cache and the fact are two consumers of the same
-// event, and an Api without a cache still changes ownership.
-func (api *Api) evictRelationshipSources(ctx context.Context, sourceDeviceIds []uint) {
-	if api.CacheEvictor != nil && len(sourceDeviceIds) > 0 {
-		api.CacheEvictor.EvictRelationshipSources(ctx, sourceDeviceIds)
+// change, and an Api without a cache still changes ownership.
+func (api *Api) evictRelationshipSources(ctx context.Context, sources ownershipQueued) {
+	if api.CacheEvictor != nil && len(sources.ids) > 0 {
+		api.CacheEvictor.EvictRelationshipSources(ctx, sources.ids)
 	}
-	api.emitOwnershipChanged(ctx, sourceDeviceIds)
 }
 
 // evictMemberships drops the cached membership entries of the given entities when an
@@ -442,6 +448,7 @@ type DeviceManagementApi interface {
 	MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error)
 	MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*MetricDefinition, error)
 	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
+	TestMetricFormula(ctx context.Context, request *MetricFormulaTestRequest) (*MetricFormulaTestResult, error)
 
 	// ProfileResolutionByDeviceType resolves a device type's active published profile
 	// version as one value: its metric definitions and its rule-scoping identity

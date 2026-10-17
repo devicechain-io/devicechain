@@ -26,12 +26,14 @@ type rawMessage struct {
 	// broker-authorized identity — a device may only publish to its own events
 	// topic — so it is checked against the device the PAYLOAD claims to be.
 	device string
-	// captureSeq is the JetStream sequence of the capture-stream message this
-	// payload came from, and 0 for a transport that has none (HTTP, and the
-	// external-broker MQTT source). It becomes the publish dedup id, so a
-	// redelivery of the same captured message is stored once — see
-	// processor.DedupID (ADR-030 amendment).
-	captureSeq uint64
+	// dedupID is the inbound-events dedup id the source names this payload by: built from
+	// the capture-stream sequence (processor.DedupID) or from the MQTT message store's
+	// epoch and sequence (messaging.MqttMessageStoreDedupID), so a redelivery of the same
+	// message is stored once (ADR-030 amendment). "" for a transport that has none (HTTP,
+	// and the external-broker MQTT source), which publishes no dedup header. The SOURCE
+	// builds it because only the source knows which stream, and which incarnation of it,
+	// the sequence belongs to.
+	dedupID string
 	// receivedAt is the broker time the capture stream stored the message: when the
 	// platform received it. It becomes the event's ProcessedTime, and the OccurredTime
 	// of an event that reports none, and it is identical on every redelivery. Zero for
@@ -98,14 +100,14 @@ var ErrDeadLetterUnavailable = errors.New("failed-decode route unavailable")
 // later, from another goroutine (a pipelined publish). done is never nil: the worker
 // passes rawMessage.settle, which tolerates a transport with nothing to acknowledge.
 type DecodedFunc func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-	captureSeq uint64, done func(error))
+	dedupID string, done func(error))
 
 // Inline adapts a synchronous publish callback to a DecodedFunc: it publishes on the
 // calling worker and reports the result to done before returning.
-func Inline(decoded func(string, string, *model.UnresolvedEvent, interface{}, uint64) error) DecodedFunc {
+func Inline(decoded func(string, string, *model.UnresolvedEvent, interface{}, string) error) DecodedFunc {
 	return func(source, tenant string, event *model.UnresolvedEvent, payload interface{},
-		captureSeq uint64, done func(error)) {
-		done(decoded(source, tenant, event, payload, captureSeq))
+		dedupID string, done func(error)) {
+		done(decoded(source, tenant, event, payload, dedupID))
 	}
 }
 
@@ -180,7 +182,7 @@ func (wrk *DecodeWorker) Process() {
 				// over-shed by milliseconds and can never mint tokens.
 				raw.settle(nil)
 			} else {
-				wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.captureSeq, raw.settle)
+				wrk.Callback(wrk.SourceId, raw.tenant, event, payload, raw.dedupID, raw.settle)
 			}
 		} else {
 			log.Debug().Msg("Decode worker received shutdown signal.")

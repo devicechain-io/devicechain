@@ -32,8 +32,12 @@ vi.mock('@/lib/api/dashboards', () => ({
   createDashboard: vi.fn(),
   deleteDashboard: vi.fn(),
   getDashboard: h.getDashboard,
-  getDashboardSharing: vi.fn(async () => ['acme']),
+  getDashboardSharing: vi.fn(async () => ({ customers: ['acme'], groups: ['north'] })),
   shareDashboard: h.shareDashboard,
+}));
+vi.mock('@/lib/api/device-management', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api/device-management')>()),
+  listAccessScopeGroups: vi.fn(async () => [{ token: 'north', name: 'North wing' }]),
 }));
 vi.mock('@/lib/api/customers', () => ({
   listCustomers: vi.fn(async () => ({
@@ -46,6 +50,7 @@ vi.mock('@/lib/api/customers', () => ({
 }));
 
 import { CURRENT_SCHEMA_VERSION } from '@devicechain/dashboards';
+import { GraphQLRequestError } from '@devicechain/client';
 
 import DashboardsPage from './DashboardsPage';
 
@@ -124,15 +129,29 @@ describe('DashboardsPage for a customer user', () => {
     }
   });
 
-  it('shares with the customers picked, replacing the list the dashboard had', async () => {
+  it('shares with the customers and groups picked, replacing the list the dashboard had', async () => {
     h.authorities = ['dashboard:read', 'dashboard:write'];
     h.toast.mockClear();
-    h.shareDashboard.mockResolvedValue(['acme']);
+    h.shareDashboard.mockResolvedValue({ customers: ['acme'], groups: ['north'] });
     renderPage();
     await screen.findByText('Ops');
     fireEvent.click(screen.getByRole('button', { name: 'Share' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Save sharing' }));
-    await waitFor(() => expect(h.shareDashboard).toHaveBeenCalledWith('ops', ['acme']));
-    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Ops is shared with 1 customer.'));
+    await waitFor(() => expect(h.shareDashboard).toHaveBeenCalledWith('ops', { customers: ['acme'], groups: ['north'] }));
+    await waitFor(() => expect(h.toast).toHaveBeenCalledWith('Ops is shared with 2 customers and groups.'));
+  });
+
+  it('says a group may no longer be an access scope when the share is refused as not found', async () => {
+    h.authorities = ['dashboard:read', 'dashboard:write'];
+    h.shareDashboard.mockRejectedValue(
+      new GraphQLRequestError('GraphQL error', 200, [
+        { message: 'record not found: group "north" does not exist or is not an access scope', extensions: { code: 'NOT_FOUND' } },
+      ]),
+    );
+    renderPage();
+    await screen.findByText('Ops');
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save sharing' }));
+    expect(await screen.findByText(/a chosen group is no longer an access scope/)).toBeTruthy();
   });
 });

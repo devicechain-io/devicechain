@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -86,6 +87,34 @@ type NatsConfiguration struct {
 	// arrives — and it discards NEW on full, so this ceiling turns that from a
 	// disk-exhaustion vector into a refused publish.
 	MqttQoS2StoreMaxBytes int64
+	// MqttFailClosed makes a QoS 1 PUBACK from the broker's MQTT gateway mean that the
+	// platform holds the message. It is OFF unless set, and while it is off nothing about
+	// the gateway's streams differs from an install that has never heard of it.
+	//
+	// The gateway already answers a QoS 1 PUBLISH only once its own message store,
+	// $MQTT_msgs, has stored the message, and closes the connection without a PUBACK when
+	// that store refuses it. When this is on, event-sources declares that store itself
+	// (discard NEW, bounded by the hot stream ceiling, replicas explicit) and keeps a
+	// platform durable consumer on it for each kind of device publish: events, command
+	// responses and device reports. A full store then refuses rather than evicts, and the
+	// device keeps the message.
+	//
+	// 🔴 REFUSED IN THIS BUILD (ErrMqttFailClosedNotAvailable). The store, its durables,
+	// their watch and the readers that forward from them are built, but nothing yet backs
+	// devices off before the store fills: once it is full the gateway refuses publishes by
+	// closing connections, and the fleet's reconnects (each one TLS and an auth callout) land
+	// on a platform that is already behind, while every refusal reads as the device going
+	// offline. Validate therefore refuses a document that sets it, and every service fails
+	// its config load on it, until the back-off ahead of overflow and the presence debounce
+	// ship and remove the refusal. The plumbing is exercised in tests, which set the field on
+	// a configuration they never validate.
+	//
+	// It is refused at startup on a broker that also serves another instance: the store is
+	// per broker account, so one instance's backlog would refuse the other's devices, and
+	// each instance would rewrite the other's bound. Turning it off again releases the store
+	// once no pod with it on holds it, and once the platform durables are drained removes
+	// them and hands the store back to the gateway's default discard policy and bound.
+	MqttFailClosed bool
 	// KvCacheMaxBytes / KvStateMaxBytes bound each JetStream KV bucket
 	// (messaging.KeyValueStore). KV buckets are backed by KV_-prefixed streams in
 	// the same account and draw on the same max_file_store, but until now nothing
@@ -1037,7 +1066,21 @@ const MqttGatewayStreamCount = 3
 // messaging.ReconcileMqttStores gives them a ceiling, JetStream reserves it like
 // any other stream's — so this belongs in the same budget as the platform's own.
 func (c *NatsConfiguration) MqttStoreReservation() int64 {
-	return c.MqttStoreMaxBytes + 2*c.MqttQoS2StoreMaxBytes
+	return c.MqttMessageStoreMaxBytes() + 2*c.MqttQoS2StoreMaxBytes
+}
+
+// MqttMessageStoreMaxBytes is the ceiling on the gateway's message store, $MQTT_msgs.
+//
+// With MqttFailClosed off it is MqttStoreMaxBytes, a safety cap on a store the platform
+// does not read. With it on, the store is the platform's own buffer for every QoS 1 device
+// publish, which is the job the device-events capture stream's hot ceiling is sized for,
+// so it takes that ceiling instead. Both the reconciler and the disk reservation read it
+// here, so the bound applied and the bound budgeted cannot differ.
+func (c *NatsConfiguration) MqttMessageStoreMaxBytes() int64 {
+	if c.MqttFailClosed {
+		return c.StreamMaxBytesFor(streams.DeviceEventsCapture)
+	}
+	return c.MqttStoreMaxBytes
 }
 
 func (c *NatsConfiguration) StreamMaxBytesFor(suffix string) int64 {
@@ -1199,12 +1242,31 @@ func (c *InstanceConfiguration) ApplyDefaults() {
 	}
 }
 
+// ErrMqttFailClosedNotAvailable is Validate's refusal of infrastructure.nats.mqttFailClosed
+// on. The fail-closed MQTT acknowledgement forwards from the broker's message store, but
+// nothing yet backs devices off before that store fills or tells a refusal from a device
+// going offline, so a store that fills would disconnect the fleet into a reconnect storm. It
+// is refused rather than accepted as a setting that does harm.
+var ErrMqttFailClosedNotAvailable = errors.New("infrastructure.nats.mqttFailClosed is not available in " +
+	"this build: devices are not yet backed off before the broker's message store fills, so a full " +
+	"store would disconnect them all at once")
+
+// mqttFailClosedShipped lifts that refusal. It is a package variable, not a key, so no
+// document can lift it: only this package's tests set it, to validate the rest of a
+// document with the setting on. The change that ships the back-off deletes it and the check.
+var mqttFailClosedShipped = false
+
 // Validate fails closed on an instance configuration missing the infrastructure
 // a service cannot run without (ADR-022 decision 1 / review E3): the NATS
 // backbone and the user-management endpoint every service validates tokens
 // against. A misrendered config Secret then surfaces at startup rather than as a
 // confusing downstream connection failure.
 func (c *InstanceConfiguration) Validate() error {
+	if c.Infrastructure.Nats.MqttFailClosed && !mqttFailClosedShipped {
+		return fmt.Errorf("%w, and every refusal would read as the device going offline. Remove "+
+			"infrastructure.nats.mqttFailClosed from the instance configuration or set it to false",
+			ErrMqttFailClosedNotAvailable)
+	}
 	if c.Infrastructure.Nats.Hostname == "" || c.Infrastructure.Nats.Port == 0 {
 		return fmt.Errorf("infrastructure.nats hostname and port are required")
 	}

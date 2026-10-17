@@ -34,10 +34,12 @@ import {
   type WidgetFreshness,
   type WidgetRegistry,
 } from '@devicechain/widget-sdk';
+import { isForbiddenError } from '@devicechain/client';
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
 import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { useHeld } from './use-held';
+import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
 import {
   optString,
@@ -410,6 +412,18 @@ function UnresolvedWidgetFrame({
   );
 }
 
+// WidgetForbiddenFrame is shown when the platform refused the widget's read for the viewer.
+function WidgetForbiddenFrame({ widget }: { widget: WidgetInstance }): ReactNode {
+  return (
+    <WidgetFrame title={optString(widget.options, 'title')}>
+      <div role="status" style={STATE_STYLE}>
+        <div style={{ fontSize: 20, lineHeight: 1 }} aria-hidden="true">⊘</div>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>{accessStrings().forbidden}</div>
+      </div>
+    </WidgetFrame>
+  );
+}
+
 // WidgetUnavailableFrame is shown when a widget's bound device no longer exists (a
 // deleted device's stable token). Distinct from the error frame: not a transient
 // failure to retry, but a settled "this entity is gone" — so it reads as a state, not
@@ -451,7 +465,13 @@ function WidgetNotForCustomerUsersFrame({ widget }: { widget: WidgetInstance }):
 
 // A resolution/socket error surfaces as a muted error state rather than a blank pane.
 // Shared by both the measurement and alarm channels.
+//
+// A REFUSAL is not such an error: a member limited to part of the tenant, viewing a widget
+// bound to a customer or device outside it, is refused by design. It reads as the same plain
+// state the fleet widgets show ("You do not have access to this data"), never as "Data
+// unavailable" over the server's raw "forbidden: missing required authority".
 function WidgetErrorFrame({ widget, error }: { widget: WidgetInstance; error: unknown }): ReactNode {
+  if (isForbiddenError(error)) return <WidgetForbiddenFrame widget={widget} />;
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
       <div

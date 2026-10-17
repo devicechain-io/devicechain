@@ -21,7 +21,7 @@ export type Invitation = InvitationsQuery['invitations']['results'][number];
 export type TenantRole = TenantRolesQuery['tenantRoles'][number];
 export type MemberInvitation = InviteMemberMutation['inviteMember'];
 
-/** One entry of a scope as the API takes it. Only customers are accepted for now. */
+/** One entry of a scope as the API takes it: a customer, or a group that is an access scope. */
 export interface ScopeAnchorInput {
   kind: ScopeAnchorKind;
   token: string;
@@ -30,6 +30,11 @@ export interface ScopeAnchorInput {
 /** A customer anchor for the given customer token. */
 export function customerAnchor(token: string): ScopeAnchorInput {
   return { kind: 'CUSTOMER' as ScopeAnchorKind, token };
+}
+
+/** A group anchor for the given group token. */
+export function groupAnchor(token: string): ScopeAnchorInput {
+  return { kind: 'GROUP' as ScopeAnchorKind, token };
 }
 
 // One selection for a member everywhere, so a list row, a detail read and a write's
@@ -63,31 +68,40 @@ const MEMBERS = graphql(`
   }
 `);
 
-export async function listMembers(criteria: {
-  pageNumber: number;
-  pageSize: number;
+/** The cuts of the member list the server makes; they combine with AND. */
+export interface MemberFilter {
   emailPrefix?: string;
   enabled?: boolean;
-}): Promise<MemberPage> {
+  /** Only members holding the role with this token. */
+  roleToken?: string;
+  /** Only members whose scope names this customer or group. */
+  scopeAnchor?: ScopeAnchorInput;
+  /** True for memberships the identity provider manages, false for manual ones. */
+  managedByIdentityProvider?: boolean;
+}
+
+export async function listMembers(
+  criteria: MemberFilter & {
+    pageNumber: number;
+    pageSize: number;
+  },
+): Promise<MemberPage> {
   const data = await gql('user-management', MEMBERS, { criteria });
   return data.members;
 }
 
 // The most pages listAllMembers will read. The server caps a page at 1000, so this is ten
-// thousand members — far beyond a tenant's own team. Reaching it throws rather than
-// answering with a list that silently stops part-way.
+// thousand members. The server makes the cut, so a view asking for one customer's users
+// reads only those; reaching the cap throws rather than answering with a list that silently
+// stops part-way.
 const MAX_MEMBER_PAGES = 10;
 
-/**
- * Every member of the tenant, read page by page. The members query filters by email
- * prefix and status only, so a view that needs another cut (the members limited to one
- * customer) reads them all and filters here.
- */
-export async function listAllMembers(): Promise<Member[]> {
+/** Every member matching the filter, read page by page. */
+export async function listAllMembers(filter: MemberFilter = {}): Promise<Member[]> {
   const pageSize = 1000;
   const out: Member[] = [];
   for (let page = 1; page <= MAX_MEMBER_PAGES; page++) {
-    const res = await listMembers({ pageNumber: page, pageSize });
+    const res = await listMembers({ ...filter, pageNumber: page, pageSize });
     out.push(...res.results);
     const total = res.pagination.totalRecords ?? out.length;
     if (out.length >= total || res.results.length < pageSize) return out;
@@ -200,6 +214,19 @@ const SET_MEMBER_SCOPE = graphql(`
 
 export async function setMemberScope(email: string, scope: ScopeAnchorInput[]): Promise<void> {
   await gql('user-management', SET_MEMBER_SCOPE, { email, scope });
+}
+
+const SET_MEMBER_ACCESS = graphql(`
+  mutation SetMemberAccess($email: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {
+    setMemberAccess(email: $email, roleTokens: $roleTokens, scope: $scope) {
+      email
+    }
+  }
+`);
+
+/** Replace a member's roles and scope together: both change or neither does. */
+export async function setMemberAccess(email: string, roleTokens: string[], scope: ScopeAnchorInput[]): Promise<void> {
+  await gql('user-management', SET_MEMBER_ACCESS, { email, roleTokens, scope });
 }
 
 const SET_MEMBER_ENABLED = graphql(`

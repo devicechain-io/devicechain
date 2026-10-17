@@ -22,6 +22,10 @@ import (
 // 25,000 events a second. 25,000 x 0.0114 = 285 publishes in flight, so a default below that
 // makes the window, not the broker, the limit on a replicated install. The 128 this replaced
 // allowed 11,200 a second, which is the ceiling the cluster measured.
+//
+// Under load the PubAck that binds is far slower than that idle figure: a 12,000/s MQTT run
+// on the same kind of cluster settled at a mean of about 72 ms, where 512 caps a pod at about
+// 7,100 a second. The default is 1024 for that; see DefaultCapturePublishWindow.
 func TestDefaultCapturePublishWindowCoversReplicatedPubAck(t *testing.T) {
 	const targetPerSecond = 25_000
 	const replicatedPubAck = 11400 * time.Microsecond
@@ -30,7 +34,7 @@ func TestDefaultCapturePublishWindowCoversReplicatedPubAck(t *testing.T) {
 	assert.GreaterOrEqual(t, DefaultCapturePublishWindow, need,
 		"the default capture publish window caps one pod at %d events a second against a replicated PubAck of %s; %d are needed for %d",
 		int(float64(DefaultCapturePublishWindow)/replicatedPubAck.Seconds()), replicatedPubAck, need, targetPerSecond)
-	assert.Equal(t, 512, DefaultCapturePublishWindow)
+	assert.Equal(t, 1024, DefaultCapturePublishWindow)
 	assert.LessOrEqual(t, DefaultCapturePublishWindow, messaging.MaxOrderedWindow)
 }
 

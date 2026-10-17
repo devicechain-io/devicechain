@@ -244,6 +244,11 @@ func (api *MockApi) MetricDefinitions(ctx context.Context, criteria model.Metric
 	return args.Get(0).(*model.MetricDefinitionSearchResults), args.Error(1)
 }
 
+func (api *MockApi) TestMetricFormula(ctx context.Context, request *model.MetricFormulaTestRequest) (*model.MetricFormulaTestResult, error) {
+	args := api.Mock.Called()
+	return args.Get(0).(*model.MetricFormulaTestResult), args.Error(1)
+}
+
 // ProfileResolutionByDeviceType returns the suite-set ProfileScopeResult and
 // MetricDefsResult as one resolution, or an empty one when neither is set (the default
 // for tests that don't care about it).

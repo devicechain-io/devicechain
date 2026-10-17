@@ -195,6 +195,15 @@ func (r *TenantGovernanceResolver) GeoFencePositionBudget() (*int32, error) {
 	return util.IntPtrInt32("geoFencePositionBudget", v)
 }
 
+// CalculatedMetricsPerProfile resolves how many calculated metrics one of this tenant's
+// profiles may publish — the tier's setting, else null. Null means the reader
+// (device-management) applies the platform default, which is zero: calculated metrics are
+// off unless the tenant's tier turns them on.
+func (r *TenantGovernanceResolver) CalculatedMetricsPerProfile() (*int32, error) {
+	v, _ := r.t.EffectiveCalculatedMetricsPerProfile()
+	return util.IntPtrInt32("calculatedMetricsPerProfile", v)
+}
+
 // PurgeState resolves where the tenant sits in the ADR-077 deletion lifecycle, as the
 // raw state string ("active" | "purging").
 //

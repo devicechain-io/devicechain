@@ -63,7 +63,7 @@ func replacementTestApi(t *testing.T) (*Api, context.Context) {
 		&DeviceType{}, &Device{}, &DeviceCredential{}, &DeviceReplacement{},
 		&DeviceConfigurationRevision{}, &DeviceConfigurationState{},
 		&AssetType{}, &Asset{},
-		&EntityRelationshipType{}, &EntityRelationship{},
+		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{},
 		&EntityAttribute{}, &Alarm{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{},
 	), "migrate")
 	require.NoError(t, db.Exec(

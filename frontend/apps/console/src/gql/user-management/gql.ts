@@ -22,6 +22,7 @@ type Documents = {
     "\n  mutation InviteMember($request: InviteMemberRequest!) {\n    inviteMember(request: $request) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n": typeof types.InviteMemberDocument,
     "\n  mutation SetMemberRoles($email: String!, $roleTokens: [String!]!) {\n    setMemberRoles(email: $email, roleTokens: $roleTokens) {\n      email\n    }\n  }\n": typeof types.SetMemberRolesDocument,
     "\n  mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {\n    setMemberScope(email: $email, scope: $scope) {\n      email\n    }\n  }\n": typeof types.SetMemberScopeDocument,
+    "\n  mutation SetMemberAccess($email: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {\n    setMemberAccess(email: $email, roleTokens: $roleTokens, scope: $scope) {\n      email\n    }\n  }\n": typeof types.SetMemberAccessDocument,
     "\n  mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {\n    setMemberEnabled(email: $email, enabled: $enabled) {\n      email\n    }\n  }\n": typeof types.SetMemberEnabledDocument,
     "\n  mutation RemoveMember($email: String!) {\n    removeMember(email: $email)\n  }\n": typeof types.RemoveMemberDocument,
     "\n  mutation RevokeInvitation($email: String!) {\n    revokeInvitation(email: $email) {\n      email\n    }\n  }\n": typeof types.RevokeInvitationDocument,
@@ -57,6 +58,7 @@ const documents: Documents = {
     "\n  mutation InviteMember($request: InviteMemberRequest!) {\n    inviteMember(request: $request) {\n      member {\n        email\n      }\n      invitationCode\n    }\n  }\n": types.InviteMemberDocument,
     "\n  mutation SetMemberRoles($email: String!, $roleTokens: [String!]!) {\n    setMemberRoles(email: $email, roleTokens: $roleTokens) {\n      email\n    }\n  }\n": types.SetMemberRolesDocument,
     "\n  mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {\n    setMemberScope(email: $email, scope: $scope) {\n      email\n    }\n  }\n": types.SetMemberScopeDocument,
+    "\n  mutation SetMemberAccess($email: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {\n    setMemberAccess(email: $email, roleTokens: $roleTokens, scope: $scope) {\n      email\n    }\n  }\n": types.SetMemberAccessDocument,
     "\n  mutation SetMemberEnabled($email: String!, $enabled: Boolean!) {\n    setMemberEnabled(email: $email, enabled: $enabled) {\n      email\n    }\n  }\n": types.SetMemberEnabledDocument,
     "\n  mutation RemoveMember($email: String!) {\n    removeMember(email: $email)\n  }\n": types.RemoveMemberDocument,
     "\n  mutation RevokeInvitation($email: String!) {\n    revokeInvitation(email: $email) {\n      email\n    }\n  }\n": types.RevokeInvitationDocument,
@@ -113,6 +115,10 @@ export function graphql(source: "\n  mutation SetMemberRoles($email: String!, $r
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  mutation SetMemberScope($email: String!, $scope: [ScopeAnchorInput!]!) {\n    setMemberScope(email: $email, scope: $scope) {\n      email\n    }\n  }\n"): typeof import('./graphql').SetMemberScopeDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  mutation SetMemberAccess($email: String!, $roleTokens: [String!]!, $scope: [ScopeAnchorInput!]!) {\n    setMemberAccess(email: $email, roleTokens: $roleTokens, scope: $scope) {\n      email\n    }\n  }\n"): typeof import('./graphql').SetMemberAccessDocument;
 /**
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */

@@ -356,28 +356,40 @@ frozen copy of the draft that viewers are shown.
 History only grows. Publishing, making a version live and rolling back each leave the earlier
 versions in place.
 
-## Sharing with customers {#sharing-with-customers}
+## Sharing with customers and groups {#sharing-with-customers}
 
-A member whose access is limited to some of your customers sees a dashboard only once it is shared
-with one of those customers and published. In the dashboard list, choose **Share** on a dashboard,
-pick the customers, and choose **Save sharing**. The list you save replaces the one before it, and
-an empty list shares the dashboard with nobody. You can share a dashboard before it is published;
-its customers see it once it is.
+A member whose access is limited to some of your customers, or to groups of devices, sees a
+dashboard only once it is shared with one of those customers or groups and published. In the
+dashboard list, choose **Share** on a dashboard, pick the **Customers** and the **Groups of
+devices**, and choose **Save sharing**. The lists you save replace the ones before, and empty lists
+share the dashboard with nobody. You can share a dashboard before it is published; the members it is
+shared with see it once it is.
 
-{/* TODO(screenshot): dashboard-share, the Share drawer with customers picked. */}
+Only groups used as an access scope are offered. If a group is missing, enable it as an access scope
+on the group's page, as described in
+[Limiting a member to a group of devices](/user-guide/members-roles-and-customer-users#group-scopes).
+A group that stops being an access scope keeps its existing shares, but cannot be saved again until
+it is one: saving it is refused with a message that a chosen group is no longer an access scope.
+
+{/* TODO(screenshot): dashboard-share, the Share drawer with customers and groups picked. */}
 
 Bind the widgets of a dashboard you share to devices, or to the customers you share it with. A
 widget bound to a customer, with **Relationship** set to `assigned` (the relationship a device's
 **Assignment** tab creates), shows each customer user that customer's devices, provided the customer
-is one of theirs; bound to any other customer, it tells them they do not have access. A widget bound
-to an asset or an area finds its devices through relationships, which a member with limited access
-cannot read, so it shows them **Not available for customer users** instead of its data.
+is one of theirs; bound to any other customer, it tells them **You do not have access to this
+data**. A widget bound to an asset, an area or a group finds its devices through relationships,
+which a member with limited access cannot read, so it shows them **Not available for customer
+users** instead of its data. For a dashboard shared with a group, bind its widgets to the group's
+devices.
 
 A program does the same with the `shareDashboard` mutation, which needs `dashboard:write`:
 
 ```graphql
 mutation {
-  shareDashboard(token: "plant-overview", anchors: [{ kind: CUSTOMER, token: "acme" }]) {
+  shareDashboard(
+    token: "plant-overview"
+    anchors: [{ kind: CUSTOMER, token: "acme" }, { kind: GROUP, token: "north-wing" }]
+  ) {
     token
     sharedWith { kind token }
   }
@@ -385,15 +397,17 @@ mutation {
 ```
 
 - The list you send replaces the one before it. An empty list shares the dashboard with nobody.
-- Every customer must exist. If one does not, the request fails with `NOT_FOUND` and nothing
-  changes.
-- Such a member lists only the **published** dashboards shared with its customers, and opens their
-  published version. It never sees a draft or the version history. Any other dashboard is answered
+- Every customer must exist, and every group must exist and be an access scope. If one is not, the
+  request fails with `NOT_FOUND` and nothing changes. A group that exists but is not an access scope
+  is answered exactly as one that does not exist.
+- Such a member lists only the **published** dashboards shared with its customers or groups, and
+  opens their published version. It never sees a draft or the version history. Any other dashboard is answered
   as if it did not exist.
 - Sharing a dashboard does not share data. Each widget still shows only what the member may see.
 - A member whose access is limited cannot share a dashboard, and cannot see who a dashboard is
   shared with.
-- Deleting the dashboard removes its shares. Deleting a customer removes the shares that name it.
+- Deleting the dashboard removes its shares. Deleting a customer or a group removes the shares that
+  name it.
 
 ## Related
 

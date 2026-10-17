@@ -142,3 +142,45 @@ func TestTheServedCapsNeverExceedThePlatformMaximum(t *testing.T) {
 	require.Nil(t, i32(r.GeoFenceCeiling()), "an out-of-band over-large fence count must serve as inherit")
 	require.Nil(t, i32(r.GeoFencePositionBudget()), "an out-of-band over-large budget must serve as inherit")
 }
+
+// TestTheCalculatedMetricsCeilingIsServedUnderItsTierKeyName is the user-management half of
+// the contract device-management reads at profile publish through core/governance: the
+// field must be served under the tier key's name, as a NULLABLE Int (null inherits the
+// platform default of zero).
+func TestTheCalculatedMetricsCeilingIsServedUnderItsTierKeyName(t *testing.T) {
+	schema := gql.MustParseSchema(SchemaContent, &SchemaResolver{})
+	res := schema.Exec(context.Background(),
+		`{ __type(name: "TenantGovernance") { fields { name type { kind name } } } }`, "", nil)
+	require.Empty(t, res.Errors)
+	var out struct {
+		Type struct {
+			Fields []struct {
+				Name string `json:"name"`
+				Type struct {
+					Kind string `json:"kind"`
+					Name string `json:"name"`
+				} `json:"type"`
+			} `json:"fields"`
+		} `json:"__type"`
+	}
+	require.NoError(t, json.Unmarshal(res.Data, &out))
+	for _, f := range out.Type.Fields {
+		if f.Name == iam.CalculatedMetricsPerProfileConfigKey {
+			require.Equal(t, "SCALAR", f.Type.Kind, "must be a nullable Int")
+			require.Equal(t, "Int", f.Type.Name)
+			return
+		}
+	}
+	t.Fatalf("TenantGovernance does not serve %q", iam.CalculatedMetricsPerProfileConfigKey)
+}
+
+func TestTheCalculatedMetricsCeilingResolvesFromTheTier(t *testing.T) {
+	tier := &iam.TenantTier{Token: iam.TierGoldToken, Config: map[string]any{iam.CalculatedMetricsPerProfileConfigKey: float64(4)}}
+	got, err := (&TenantGovernanceResolver{t: &iam.Tenant{Tier: tier}}).CalculatedMetricsPerProfile()
+	require.NoError(t, err)
+	require.EqualValues(t, 4, *got)
+
+	got, err = (&TenantGovernanceResolver{t: &iam.Tenant{Tier: &iam.TenantTier{Token: iam.TierSilverToken}}}).CalculatedMetricsPerProfile()
+	require.NoError(t, err)
+	require.Nil(t, got)
+}

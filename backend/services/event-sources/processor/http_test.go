@@ -60,11 +60,11 @@ func newTestHttpSourceGated(t *testing.T, allow RateGate, readings ReadingGate, 
 	es, err := NewHttpEventSource("http-test", map[string]string{}, "inst-1", ingest,
 		NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, captureSeq uint64) error {
+		func(source string, tenant string, event *model.UnresolvedEvent, payload interface{}, dedupID string) error {
 			dec.called = true
 			dec.tenant = tenant
 			dec.event = event
-			dec.captureSeq = captureSeq
+			dec.dedupID = dedupID
 			return dec.publishErr
 		},
 		func(source string, tenant string, raw []byte, err error) error {
@@ -79,10 +79,10 @@ func newTestHttpSourceGated(t *testing.T, allow RateGate, readings ReadingGate, 
 }
 
 type capturedDecode struct {
-	called     bool
-	tenant     string
-	event      *model.UnresolvedEvent
-	captureSeq uint64
+	called  bool
+	tenant  string
+	event   *model.UnresolvedEvent
+	dedupID string
 	// publishErr is returned to the source as the publish outcome, so a test can
 	// exercise what the handler tells the CLIENT when the event never reached the
 	// stream.
@@ -148,7 +148,7 @@ func TestHttpEventSource_PublishFailureIsNotReportedAsAccepted(t *testing.T) {
 		"an event that never reached the stream must not be reported as accepted")
 	assert.True(t, dec.called, "the publish should have been attempted")
 	assert.False(t, fail.called, "a publish failure is not a decode failure")
-	assert.Zero(t, dec.captureSeq, "HTTP has no capture sequence, so it must publish no dedup id")
+	assert.Empty(t, dec.dedupID, "HTTP has no capture sequence, so it must publish no dedup id")
 }
 
 // A body that cannot be decoded routes to the failed callback (with the path

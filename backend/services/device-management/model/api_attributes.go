@@ -348,8 +348,10 @@ func (api *Api) DeleteEntityAttribute(ctx context.Context, entityType string,
 			// Removing a declared configuration key changes the device's document: mint
 			// the revision in the delete's transaction.
 			var err error
-			minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, false)
-			return err
+			if minted, err = api.reconcileDeviceConfigurationOnTx(ctx, tx, entityType, entityId, scope, attrKey, false); err != nil {
+				return err
+			}
+			return queueAccessChangeOnTx(tx, entityType, entityId, recomputed)
 		})
 		if err != nil {
 			return false, err

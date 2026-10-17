@@ -221,7 +221,7 @@ func TestSourcesRefuseToBeBuiltWithoutAReadingGate(t *testing.T) {
 	_, err = NewMqttEventSource("m", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, string) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		nil, nil, admitAll, alwaysOwns, func(error) {})
 	require.ErrorIs(t, err, errNoReadingGate)
@@ -244,7 +244,7 @@ func TestDecodeWorkerShedsOverCeilingReadingsAndAcks(t *testing.T) {
 	called := false
 	w := NewDecodeWorker(1, "s", NewJsonDecoder(map[string]string{}), raw,
 		func(string, string, time.Time, bool, Origin, int) bool { return false },
-		func(string, string, *model.UnresolvedEvent, interface{}, uint64, func(error)) { called = true },
+		func(string, string, *model.UnresolvedEvent, interface{}, string, func(error)) { called = true },
 		func(string, string, []byte, error) error { t.Error("a shed is not a decode failure"); return nil })
 	settled := make(chan error, 1)
 	raw <- rawMessage{tenant: "acme", payload: []byte(wideEntryBody(10)), origin: OriginAuthenticated,

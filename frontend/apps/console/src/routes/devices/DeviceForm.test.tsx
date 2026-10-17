@@ -162,3 +162,19 @@ describe('editing a device', () => {
     expect(Object.keys(request).sort()).toEqual([...EDITED].sort());
   });
 });
+
+describe('a device shown read-only (a member without device:write)', () => {
+  it('shows the values, disables every field and offers no save', async () => {
+    render(<DeviceForm device={device()} onDone={vi.fn()} readOnly />);
+    const name = (await screen.findByLabelText('Name')) as HTMLInputElement;
+    expect(name.disabled).toBe(true);
+    expect(name.value).not.toBe('');
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).disabled).toBe(true);
+    expect((screen.getByLabelText('Token') as HTMLInputElement).disabled).toBe(true);
+    // The type picker is a button, not an input, so it is found by its id; with a type
+    // on offer it is disabled by the read-only form alone.
+    expect((document.getElementById('r-type') as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Save changes' })).toBeNull();
+    expect(writes()).toHaveLength(0);
+  });
+});

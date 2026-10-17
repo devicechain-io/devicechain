@@ -122,9 +122,10 @@ describe('tier scalar settings', () => {
     geoFenceCeiling: '100',
     geoFencePositionCeiling: '256',
     geoFencePositionBudget: '20000',
+    calculatedMetricsPerProfile: '4',
   };
 
-  it('carries all five scalar keys the server accepts', () => {
+  it('carries all six scalar keys the server accepts', () => {
     expect(TIER_SCALARS.map((s) => s.key).sort()).toEqual(Object.keys(ALL).sort());
   });
 
@@ -132,6 +133,12 @@ describe('tier scalar settings', () => {
     const out = JSON.parse(buildTierConfigPatch(DIMS, { ...parseTierConfig(GOLD), ...ALL }, GOLD)!);
     expect(out).toMatchObject({ ingestBurst: 4000, heldCommandCeiling: 5000, shedPriority: 80, geoFenceCeiling: 100 });
     expect(out.geoFencePositionBudget).toBe(20000);
+    expect(out.calculatedMetricsPerProfile).toBe(4);
+  });
+
+  it('writes an explicit 0 rather than dropping it as blank', () => {
+    const out = JSON.parse(buildTierConfigPatch(DIMS, { calculatedMetricsPerProfile: '0' }, GOLD)!);
+    expect(out.calculatedMetricsPerProfile).toBe(0);
   });
 
   it('reads stored scalars back so an unrelated save does not drop them', () => {
@@ -158,6 +165,15 @@ describe('tier scalar settings', () => {
     expect(invalidTierScalar({ heldCommandCeiling: 'lots' })?.key).toBe('heldCommandCeiling');
     expect(invalidTierScalar({ heldCommandCeiling: '2147483647' })).toBeNull();
     expect(invalidTierScalar({ heldCommandCeiling: '2147483648' })?.key).toBe('heldCommandCeiling');
+  });
+
+  it('accepts 0 only where the server does', () => {
+    // 0 is how a tier turns calculated metrics off; every other ceiling refuses it.
+    expect(invalidTierScalar({ calculatedMetricsPerProfile: '0' })).toBeNull();
+    expect(invalidTierScalar({ calculatedMetricsPerProfile: '32' })).toBeNull();
+    expect(invalidTierScalar({ calculatedMetricsPerProfile: '33' })?.key).toBe('calculatedMetricsPerProfile');
+    expect(invalidTierScalar({ calculatedMetricsPerProfile: '-1' })?.key).toBe('calculatedMetricsPerProfile');
+    expect(invalidTierScalar({ heldCommandCeiling: '0' })?.key).toBe('heldCommandCeiling');
   });
 });
 
@@ -188,6 +204,16 @@ describe('tier scalar maxima match the server', () => {
     expect(band, 'validateShedPriority band not found in tierconfig.go').not.toBeNull();
     expect(band![1]).toBe('1');
     expect(max('shedPriority')).toBe(Number(band![2]));
+  });
+
+  it('calculated metrics: 0 to the platform maximum', () => {
+    const calc = readFileSync(resolve(repo, 'backend/core/governance/calculated_metrics_ceiling.go'), 'utf8');
+    const m = calc.match(/^\s*MaxCalculatedMetricsPerProfile\s*=\s*([0-9_]+)\s*$/m);
+    expect(m, 'MaxCalculatedMetricsPerProfile not found').not.toBeNull();
+    const s = TIER_SCALARS.find((x) => x.key === 'calculatedMetricsPerProfile');
+    expect(s?.max).toBe(Number(m![1].replace(/_/g, '')));
+    expect(tierGo).toMatch(/func validateCalculatedMetricsPerProfile[\s\S]*?if f < 0 \|\| f > governance\.MaxCalculatedMetricsPerProfile \{/);
+    expect(s?.min).toBe(0);
   });
 
   it('held ceiling stops at the int32 wall', () => {

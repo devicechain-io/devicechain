@@ -31,6 +31,7 @@ vi.mock('@devicechain/widget-sdk/echarts', async (importOriginal) => {
   };
 });
 
+import { GraphQLRequestError } from '@devicechain/client';
 import { ConnectedWidget } from './connected-widget';
 import { type MeasurementStreamState } from '@devicechain/widget-sdk';
 import { Gauge } from './widgets/gauge';
@@ -149,6 +150,31 @@ describe('ConnectedWidget', () => {
     act(() => sink?.error?.(new Error('device not found')));
     expect(screen.getByText('Data unavailable')).toBeTruthy();
     expect(screen.getByText(/device not found/)).toBeTruthy();
+  });
+
+  // A refusal is a state, not an outage: the plain sentence the fleet widgets show, never
+  // "Data unavailable" over the server's raw "forbidden: missing required authority".
+  it('renders a refused read as no access rather than as "Data unavailable"', () => {
+    let sink: WidgetStreamSink | null = null;
+    const hub = {
+      subscribeWidget: (_ds: DatasourceSelector, s: WidgetStreamSink) => {
+        sink = s;
+        return () => {};
+      },
+      isDatasourceAvailable: async () => true,
+    } as unknown as DashboardHub;
+
+    render(<ConnectedWidget widget={widget('latest-card', { title: 'Temp', precision: 0 })} hub={hub} />);
+    act(() =>
+      sink?.error?.(
+        new GraphQLRequestError('GraphQL error', 200, [
+          { message: 'forbidden: missing required authority', extensions: { code: 'FORBIDDEN' } },
+        ]),
+      ),
+    );
+    expect(screen.getByText('You do not have access to this data')).toBeTruthy();
+    expect(screen.queryByText('Data unavailable')).toBeNull();
+    expect(screen.queryByText(/missing required authority/)).toBeNull();
   });
 
   it('renders a "Device unavailable" pane when the bound device no longer exists', async () => {

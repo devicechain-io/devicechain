@@ -654,6 +654,11 @@ func metricDefinitionFamily() putest.Family[*Api] {
 		nameSeed        = "Original name"
 		descriptionSeed = "Original description"
 		metadataSeed    = `{"fleet":"north"}`
+		// The seeded metric is CALCULATED, because expression is three-state only on one:
+		// a calculated metric's formula is a required value (settable, unclearable), while a
+		// measured metric refuses any formula at all, which no field kind describes. The
+		// measured side is pinned in calculated_metrics_test.go.
+		expressionSeed = "humidity_raw * 0.5"
 	)
 	return putest.Family[*Api]{
 		Name:    "metricDefinition",
@@ -667,6 +672,7 @@ func metricDefinitionFamily() putest.Family[*Api] {
 				Name: strp(nameSeed), Description: strp(descriptionSeed), DataType: dataTypeSeed,
 				Unit: strp(unitSeed), MinValue: &minValue, MaxValue: &maxValue,
 				Enum: strp(enumSeed), Descriptor: strp(descriptorSeed), Metadata: strp(metadataSeed),
+				Expression: strp(expressionSeed),
 			}); err != nil {
 				t.Fatalf("seed metric definition: %v", err)
 			}
@@ -686,6 +692,7 @@ func metricDefinitionFamily() putest.Family[*Api] {
 				"enum":               jsonStr(e.Enum),
 				"descriptor":         nullStr(e.Descriptor),
 				"metadata":           jsonStr(e.Metadata),
+				"expression":         nullStr(e.Expression),
 			}
 		},
 		NewRequest: func() any { return new(MetricDefinitionUpdateRequest) },
@@ -719,6 +726,8 @@ func metricDefinitionFamily() putest.Family[*Api] {
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Descriptor }),
 			putest.OptionalStringField("metadata", metadataSeed, `{"fleet":"south"}`,
 				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Metadata }),
+			putest.RequiredStringField("expression", expressionSeed, "humidity_raw * 0.25",
+				func(r *MetricDefinitionUpdateRequest) *dcgraphql.OptionalString { return &r.Expression }),
 		},
 	}
 }
@@ -1264,7 +1273,7 @@ func entityRelationshipTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:    "entityRelationshipType",
 		Token:   "ert-1",
-		Migrate: []any{&EntityRelationshipType{}},
+		Migrate: []any{&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			if _, err := api.CreateEntityRelationshipType(ctx, &EntityRelationshipTypeCreateRequest{
 				Token: "ert-1", Name: strp(memberSeed.Name), Description: strp(memberSeed.Description),

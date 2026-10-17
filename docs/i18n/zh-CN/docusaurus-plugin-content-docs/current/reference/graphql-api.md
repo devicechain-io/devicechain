@@ -639,13 +639,15 @@ token 会拼入基础设施命名空间：租户 ID 成为 NATS subject 中按 `
 
 成员的访问权限也可以仅限于某个实体组，或同时限于若干组和客户。该组必须是访问范围：即拥有 `device:write` 的人通过 `setEntityGroupAccessScope` 设为访问范围的、已发布的设备动态组。每个租户最多 32 个。不是访问范围的组不会给仅限于它的成员任何访问权限。
 
-仅限某个组的成员能看到该组当前活动版本中的设备，并且只在设备位于组内期间可见。组成员关系随设备的共享属性变化，因此属性变化使设备进入组时，无需编辑该成员即可看到它；设备移出组后则不再可见。发布组的新版本或回滚版本，也会以同样方式改变这一集合。上表中的操作对组的处理与对客户相同：设备在组内期间记录的事件、告警、命令和更新分配始终可见，实时状态随设备变化。仪表板只能与客户共享，因此仅限于组的成员看不到任何共享仪表板。
+仅限某个组的成员能看到该组当前活动版本中的设备，并且只在设备位于组内期间可见。组成员关系随设备的共享属性变化，因此属性变化使设备进入组时，无需编辑该成员即可看到它；设备移出组后则不再可见。发布组的新版本或回滚版本，也会以同样方式改变这一集合。上表中的操作对组的处理与对客户相同：设备在组内期间记录的事件、告警、命令和更新分配始终可见，实时状态随设备变化。`entityGroupsByToken` 只返回该成员自己的组，不返回其他组，以便客户端能说出该成员被限定于什么；组的 `members` 和 `versions` 会被拒绝。
+
+仪表板可以像与客户共享那样与访问范围组共享：`shareDashboard` 在客户之外接受 `{ kind: GROUP, token: "..." }`，之后限定于该组的成员即可在列表中看到并打开它。所指定的每个组都必须存在于该租户中且是访问范围。不存在的组与存在但不是访问范围的组，都以相同的消息返回 `NOT_FOUND`，且不做任何更改。与某个组的共享在该组之后不再是访问范围时会被保留。
 
 已删除组的令牌与客户令牌一样会被停用，因为成员的访问权限和这些记录都通过令牌指向该组。用已停用的令牌调用 `createEntityGroup` 会返回 `INVALID_VALUE`。
 
 ### 管理租户时的拒绝 {#tenant-administration-refusals}
 
-租户自己的管理员通过 user-management 的租户 API（`inviteMember`、`setMemberRoles`、`setMemberScope`、`setMemberEnabled`、`removeMember`、`createTenantRole`、`updateTenantRole`、`deleteTenantRole` 等）管理该租户的成员、邀请和角色。这些操作使用各自的代码拒绝请求，因此客户端无需读取消息就能判断原因：
+租户自己的管理员通过 user-management 的租户 API（`inviteMember`、`setMemberRoles`、`setMemberScope`、`setMemberAccess`、`setMemberEnabled`、`removeMember`、`createTenantRole`、`updateTenantRole`、`deleteTenantRole` 等）管理该租户的成员、邀请和角色。这些操作使用各自的代码拒绝请求，因此客户端无需读取消息就能判断原因：
 
 | `extensions.code` | 含义 |
 | --- | --- |

@@ -29,9 +29,9 @@ alone. Reloading the page, or opening `/dash/` in another tab, asks you to sign 
 ## Loading a dashboard
 
 After you sign in, **Load a dashboard** lists **Your dashboards**: the published dashboards you may
-open. Choose one to open it. If your access is limited to some of the tenant's customers, the list
-holds the published dashboards shared with those customers; otherwise it holds every published
-dashboard in the tenant. The list shows the first 200, and says so when there are more.
+open. Choose one to open it. If your access is limited to some of the tenant's customers or groups
+of devices, the list holds the published dashboards shared with those customers or groups;
+otherwise it holds every published dashboard in the tenant. The list shows the first 200, and says so when there are more.
 
 {/* TODO(screenshot): dash-list, the Your dashboards list above the token field. */}
 

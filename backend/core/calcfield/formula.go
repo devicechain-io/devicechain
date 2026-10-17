@@ -19,6 +19,19 @@ import (
 // MaxExpressionBytes bounds a formula's source.
 const MaxExpressionBytes = 1024
 
+// StoredMagnitude bounds a stored measurement value: event storage keeps one as
+// decimal(20,8), twelve digits before the point, so a value whose magnitude is 1e12 or more
+// cannot be written at all. A result at or beyond it is skipped as SkipUnstorable, whatever
+// the definition's Min/Max say: a row the store refuses fails the whole reading it belongs
+// to, raw values included, where a skip loses only the one calculated value.
+//
+// The store also rounds to eight decimal places. That rounding is not a skip — the stored
+// row is the rounded value, while the resolved event (which DETECT, preview and the live
+// stream read) carries the full shortest-round-trip string. Nothing about event identity
+// depends on either: a calculated value is outside the event id and its row's payload id is
+// value-free.
+const StoredMagnitude = 1e12
+
 // CostCeiling is the static worst-case cost one formula may estimate to, in cel-go cost
 // units. It is the DETECT predicate ceiling: a formula is the same kind of small arithmetic
 // expression over one sample.
@@ -285,6 +298,9 @@ func (f *Formula) finish(out ref.Val) Result {
 		if !f.inRange(v) {
 			return Result{Skip: SkipRange}
 		}
+		if math.Abs(v) >= StoredMagnitude {
+			return Result{Skip: SkipUnstorable}
+		}
 		return Result{Value: FormatDouble(v)}
 	case Integer:
 		n, ok := out.(types.Int)
@@ -293,6 +309,9 @@ func (f *Formula) finish(out ref.Val) Result {
 		}
 		if !f.inRange(float64(n)) {
 			return Result{Skip: SkipRange}
+		}
+		if n >= StoredMagnitude || n <= -StoredMagnitude {
+			return Result{Skip: SkipUnstorable}
 		}
 		return Result{Value: FormatInt(int64(n))}
 	case Boolean:

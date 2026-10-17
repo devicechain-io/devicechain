@@ -263,3 +263,176 @@ tests:
       - eval_time: 35m
         alertname: BrokerPresenceLosingTransitions
         exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # MqttFailClosedDurableMissing. The series exist only with infrastructure.nats.mqttFailClosed
+  # on. Healthy: two pods, every durable present, the missing counters flat at 0. Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-command-responses"}'
+        values: '1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '0x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # The setting off: no fail-closed series at all, while event-sources is otherwise
+  # exporting. Neither alert can fire.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_total_inbound_messages{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", source="gateway"}'
+        values: '0+100x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE EVENTS DURABLE IS DELETED at 10m; pod a's check finds it missing and creates it
+  # again in the same pass. The gauge never reads 0, so only the counter can say it: the
+  # alert fires AT ONCE (no `for`, each count is loss already), names only that durable,
+  # and clears once the increase leaves the 10-minute window.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '1x40'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-command-responses"}'
+        values: '1x40'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '0x9 1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-command-responses"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              durable: inst-1_event-sources_mqtt-msgs-events
+            exp_annotations:
+              summary: "A platform durable on the MQTT message store is missing"
+              description: "Durable inst-1_event-sources_mqtt-msgs-events on the MQTT gateway's message store has been missing within the last 10 minutes. While it is missing, the broker acknowledges device QoS 1 publishes of its kind without keeping them, so each one is lost although the device was told it arrived. event-sources creates it again within 30 seconds, and this alert clears 10 minutes after the last time it was found missing; while it cannot be created, the alert stays. A rolling update does not remove a durable, so it does not raise this alert. Find what deleted it (a command run against the broker's consumers, or a tool that manages them), and check the event-sources log for 'platform durable on the MQTT message store'."
+      - eval_time: 25m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE DURABLE CANNOT BE CREATED: from 10m pod b reports it absent (0) while pod a
+  # still reports 1. Any one pod is enough (`min`), and it fires for as long as it lasts,
+  # well past the counter's window.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '1x40'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_present{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '1x9 0x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '0x40'
+      - series: 'devicechain_eventsources_mqtt_failclosed_durable_missing_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources", durable="inst-1_event-sources_mqtt-msgs-events"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: MqttFailClosedDurableMissing
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+              durable: inst-1_event-sources_mqtt-msgs-events
+            exp_annotations:
+              summary: "A platform durable on the MQTT message store is missing"
+              description: "Durable inst-1_event-sources_mqtt-msgs-events on the MQTT gateway's message store has been missing within the last 10 minutes. While it is missing, the broker acknowledges device QoS 1 publishes of its kind without keeping them, so each one is lost although the device was told it arrived. event-sources creates it again within 30 seconds, and this alert clears 10 minutes after the last time it was found missing; while it cannot be created, the alert stays. A rolling update does not remove a durable, so it does not raise this alert. Find what deleted it (a command run against the broker's consumers, or a tool that manages them), and check the event-sources log for 'platform durable on the MQTT message store'."
+
+  # ------------------------------------------------------------------
+  # MqttFailClosedStoreNotAsDeclared. Healthy: no other instance, the repair counters flat.
+  # Quiet.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_failclosed_foreign_instances{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_foreign_instances{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources"}'
+        values: '0x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_store_repaired_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", setting="discard"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 THE DISCARD POLICY IS CHANGED OUT OF BAND at 10m and put back by pod a's next check.
+  # Fires at once, and clears once the repair leaves the window.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_failclosed_foreign_instances{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x40'
+      - series: 'devicechain_eventsources_mqtt_failclosed_store_repaired_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", setting="discard"}'
+        values: '0x9 1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_store_repaired_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", setting="maxBytes"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The MQTT message store is not as the platform declared it"
+              description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."
+      - eval_time: 25m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts: []
+
+  # ------------------------------------------------------------------
+  # 🔴 ANOTHER INSTANCE APPEARS ON THE BROKER at 10m. Nothing is repaired (it is not this
+  # instance's to fix), and the alert fires for as long as the other instance is there.
+  # ------------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'devicechain_eventsources_mqtt_failclosed_foreign_instances{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources"}'
+        values: '0x9 1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_foreign_instances{namespace="dci-devicechain", pod="dc-event-sources-5d8f-bbbbb", job="devicechain/event-sources"}'
+        values: '0x9 1x30'
+      - series: 'devicechain_eventsources_mqtt_failclosed_store_repaired_total{namespace="dci-devicechain", pod="dc-event-sources-5d8f-aaaaa", job="devicechain/event-sources", setting="discard"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: MqttFailClosedStoreNotAsDeclared
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              devicechain_instance: devicechain
+            exp_annotations:
+              summary: "The MQTT message store is not as the platform declared it"
+              description: "Within the last 10 minutes event-sources found the MQTT gateway's message store changed from its fail-closed configuration, or found another DeviceChain instance on the same broker. A changed setting (the discard policy, the size bound, or the store deleted outright) is put back within 30 seconds, but while it lasted a full store could discard messages it had already acknowledged, or refuse every publish. Another instance on the broker shares the store and its bound, so one instance's backlog refuses the other's devices: give each instance its own broker, or turn infrastructure.nats.mqttFailClosed off. The event-sources log names the setting it put back, or the other instances."

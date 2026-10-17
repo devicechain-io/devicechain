@@ -307,6 +307,28 @@ type NatsManager struct {
 	// under affOnce, for the same reason as bp.
 	affOnce  sync.Once
 	affState *affinity
+
+	// mqttViewState is this manager's look at the MQTT gateway's message store
+	// (mqtt_failclosed_view.go), built on first use under mqttViewOnce, like bp.
+	mqttViewOnce  sync.Once
+	mqttViewState *mqttStoreView
+	// mqttLockKV is the locks bucket the fail-closed pass writes under, opened on first use
+	// under mqttLockMu. mqttClock is the lease's clock, nil (time.Now) outside tests.
+	mqttLockMu sync.Mutex
+	mqttLockKV nats.KeyValue
+	mqttClock  func() time.Time
+	// mqttPassHook, when set, is called by a fail-closed pass at the named point ("decided":
+	// a write decided on from a read without the lock, before taking it; "locked": holding the
+	// lock, the store just read again). A test seam for interleaving two passes.
+	mqttPassHook func(point string)
+	// storeReaders are the readers over the message store (NewMqttMessageStoreReader),
+	// kept apart from readers: they are built at runtime, after the recorder and the sampler
+	// have taken their list, and their durables are the fail-closed pass's, not this area's.
+	// ExecuteStop releases their subscriptions with the rest. Guarded by streamMu.
+	storeReaders []*natsReader
+	// mqttSkipped counts the messages readers acked and skipped because the other copy of the
+	// same device publish is the one forwarded (skipHandOut); read by tests.
+	mqttSkipped atomic.Uint64
 }
 
 // SetAckWaitForTesting sets the AckWait this manager configures on the durables it
@@ -660,6 +682,35 @@ func applyStreamDuplicateWindow(cfg *nats.StreamConfig, window time.Duration) bo
 	return true
 }
 
+// applyStreamDiscard reconciles an existing stream's discard policy to DiscardOld, the one
+// every declared stream is created with, reporting whether it changed.
+//
+// 🔴 A DISCARD-NEW STREAM LOSES THE SAME MESSAGES WITH NOTHING TO SAY SO. The obvious
+// "fail closed" edit to a full stream is to make it refuse rather than evict, and it is wrong
+// for the streams here: on the device-events capture stream the broker's MQTT gateway
+// PUBACKs the device whether or not this stream stores the message (see
+// streams.DeviceEventsCapture), so a refusal reaches no one and the NEWEST message is dropped
+// after its PUBACK, where DiscardOld drops the oldest unread one and the capture durable
+// counts it (JetStreamDurableLostUnread). On the Limits streams a full stream is mostly a
+// week of history its readers have already read, and refusing on that is an outage; the
+// platform's own backpressure (backpressure.go) is what refuses there, and it assumes the
+// broker discards old. So a stream someone edited out of band (`nats stream edit --discard
+// new`, the follow-up a reader of the alert might reasonably try) is put back, the way an
+// out-of-band ceiling is. JetStream allows the policy to change in place.
+//
+// The per-subject flag goes with it. `--discard-per-subject` is only valid on a discard-new
+// stream (nats-server checkStreamCfg: "discard new per subject requires discard new policy to
+// be set"), so restoring discard-old while leaving it set makes the UpdateStream invalid, and
+// the reconcile would fail the service's start on every retry instead of putting it back.
+func applyStreamDiscard(cfg *nats.StreamConfig) bool {
+	if cfg.Discard == nats.DiscardOld && !cfg.DiscardNewPerSubject {
+		return false
+	}
+	cfg.Discard = nats.DiscardOld
+	cfg.DiscardNewPerSubject = false
+	return true
+}
+
 // applyStreamReplicas reconciles a stream's replica factor UPWARD only, reporting
 // whether it changed and whether a downward change was refused.
 //
@@ -749,8 +800,9 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		if err == nil {
 			// The stream exists — an older build (or an earlier ceiling) may have left
 			// it unbounded, so reconcile in place. UpdateStream touches the byte/msg
-			// ceilings, the captured subjects, the dedup window and the replica factor
-			// on the existing config, leaving storage and retention untouched. Config
+			// ceilings, the captured subjects, the dedup window, the discard policy
+			// (applyStreamDiscard) and the replica factor on the existing config,
+			// leaving storage and retention untouched. Config
 			// is the source of truth: an out-of-band tune (e.g. a raised MaxBytes set
 			// via the nats CLI) is intentionally reverted to the config value on the
 			// next restart — and shrinking a ceiling below current usage makes
@@ -798,7 +850,15 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			boundsChanged := applyStreamBounds(&cfg, bounds)
 			subjectsChanged := applyStreamSubjects(&cfg, subjects)
 			dupChanged := applyStreamDuplicateWindow(&cfg, dupWindow)
-			if boundsChanged || subjectsChanged || dupChanged {
+			had := cfg.Discard
+			discardChanged := applyStreamDiscard(&cfg)
+			if discardChanged {
+				log.Warn().Str("stream", name).Str("have", had.String()).Str("want", cfg.Discard.String()).
+					Msg("Stream was set to discard new messages when full; restoring discard-old. A refused " +
+						"store on the device-events capture stream reaches no device, so discard-new loses the " +
+						"newest events with nothing counting them")
+			}
+			if boundsChanged || subjectsChanged || dupChanged || discardChanged {
 				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 					return err
 				}
@@ -1530,6 +1590,18 @@ type natsReader struct {
 	drainEWMA   time.Duration // moving average of how long a batch takes to hand out
 	aheadStarts atomic.Int64  // futures started, for tests and diagnosis
 	aheadLive   atomic.Int64  // futures whose goroutine is still running, for tests and diagnosis
+
+	// carried, when set, is the direct stream (one a device QoS 1 publish lands in, see
+	// mqtt_failclosed_view.go) whose copies the MQTT message store holds while the
+	// fail-closed store is in force; this reader acks and skips them. With the setting off
+	// and the store never seen marked for this instance, the check returns at once.
+	carried string
+	// store marks a reader over the MQTT message store (NewMqttMessageStoreReader): it binds
+	// to its durable and never creates it, and hands its messages out as the device published
+	// them (mqtt_failclosed_reader.go). storeMissingLogged edge-triggers its one log line
+	// while the durable is gone. Read goroutine only.
+	store              bool
+	storeMissingLogged bool
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
@@ -1804,11 +1876,15 @@ func (r *natsReader) bindLocked() error {
 	if r.ackFloor() {
 		return r.bindAckFloorLocked()
 	}
-	if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig()); err != nil {
-		return err
-	}
-	if err := r.reconcileFilterSubject(); err != nil {
-		return err
+	// A reader over the MQTT message store binds to its durable and never creates it: the
+	// fail-closed pass owns the durables (see mqtt_failclosed_reader.go).
+	if !r.store {
+		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig()); err != nil {
+			return err
+		}
+		if err := r.reconcileFilterSubject(); err != nil {
+			return err
+		}
 	}
 	sub, err := r.nmgr.js.PullSubscribe(r.subject, r.durable, nats.Bind(r.stream, r.durable))
 	if err != nil {
@@ -1903,6 +1979,13 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	}
 	if err := r.validateAckFloor(); err != nil {
 		return nil, err
+	}
+	// A reader of a stream device QoS 1 publishes land in directly skips the copies the
+	// fail-closed MQTT store holds (mqtt_failclosed_view.go, carriedByStore, which decides
+	// nothing in a pod with the setting off that has never seen the store marked). Not on an
+	// ack-floor reader, whose ack of one message acknowledges everything below it.
+	if carriesDirectCopies(suffix) && !r.ackFloor() {
+		r.carried = suffix
 	}
 	if r.ackFloor() {
 		r.durable = AckFloorDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
@@ -2374,6 +2457,19 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 		if len(r.pending) == 0 {
 			r.noteDrained()
 			sub := r.sub.Load()
+			if sub == nil && r.store {
+				// A store reader whose durable is missing (or not created yet): look for it
+				// again every mqttStoreBindRetry, quietly. See storeLost.
+				if r.storeRebind() {
+					continue
+				}
+				select {
+				case <-ctx.Done():
+					return Message{}, io.EOF
+				case <-time.After(mqttStoreBindRetry):
+				}
+				continue
+			}
 			if sub == nil {
 				// UnbindTerm has run and BindTerm has not yet: we are between terms.
 				// The gate above normally covers this, but the two are set by different
@@ -2444,6 +2540,8 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 							// proof the broker is serving this consumer, not just that a
 							// socket is open (see answered).
 							r.answered.Store(true)
+						case errors.Is(cerr, nats.ErrConsumerNotFound) && r.store:
+							r.storeLost(cerr)
 						case errors.Is(cerr, nats.ErrConsumerNotFound):
 							log.Warn().Str("durable", r.durable).Msg("Durable consumer missing on liveness probe; re-binding")
 							if rebindErr := r.rebindWithBackoff(ctx); rebindErr != nil {
@@ -2472,6 +2570,10 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 				// durable it owned; from then on the durable survives and there is no
 				// replay. A fresh bring-up (down+up) avoids the one-time transition
 				// replay entirely.
+				if isConsumerGone(err) && r.store {
+					r.storeLost(err)
+					continue
+				}
 				if isConsumerGone(err) {
 					log.Warn().Err(err).Str("durable", r.durable).Msg("Durable consumer unavailable; re-binding")
 					if rebindErr := r.rebindWithBackoff(ctx); rebindErr != nil {
@@ -2513,11 +2615,21 @@ func (r *natsReader) ReadMessage(ctx context.Context) (_ Message, err error) {
 			}
 		}
 		seq, deliv, appended := msgMeta(nm)
+		// A direct copy of a device QoS 1 publish the fail-closed store holds: the store copy is
+		// the one forwarded, so this one is acked and skipped.
+		if r.carried != "" && r.nmgr.mqttView().carriedByStore(r.carried, nm.Header.Get(mqttGatewayHeader), seq) {
+			r.skipHandOut(nm, sl)
+			continue
+		}
 		var ack Acknowledger = natsAck{nm: nm}
 		if r.ackFloor() {
 			ack = floorAck{nm: nm, r: r, gen: r.ackGen.Load()}
 		}
 		msg := NewConsumedMessage(nm.Subject, nm.Data, deliv, natsHeaders(nm), ack)
+		if r.store && !r.storeHandOut(nm, &msg, seq, appended) {
+			r.skipHandOut(nm, sl)
+			continue
+		}
 		msg.StreamSeq = seq
 		msg.AppendTime = appended
 		msg.slot = sl
@@ -2721,6 +2833,19 @@ func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffi
 	}()
 	log.Info().Str("subject", subject).Msg("Opened live NATS subscription")
 	return out, nil
+}
+
+// skipHandOut acks a delivered message the reader does not hand out (a direct copy the
+// fail-closed store carries, or a store copy of a publish the direct copy carries) and gives
+// back its capacity slot. A failed ack only redelivers it, to be skipped again.
+func (r *natsReader) skipHandOut(nm *nats.Msg, sl *slot) {
+	if err := nm.Ack(); err != nil {
+		log.Debug().Err(err).Str("durable", r.durable).Msg("Failed to ack a skipped message; it will be redelivered and skipped again")
+	}
+	if sl != nil {
+		sl.release()
+	}
+	r.nmgr.mqttSkipped.Add(1)
 }
 
 // natsHeaders flattens a delivered message's NATS headers into the transport-
@@ -3230,6 +3355,9 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 			Msg("NATS connection is already closed; no reader subscriptions to release.")
 	} else {
 		log.Info().Msg("Shutting down NATS readers.")
+		nmgr.streamMu.Lock()
+		readers = append(readers, nmgr.storeReaders...)
+		nmgr.streamMu.Unlock()
 		for _, r := range readers {
 			// A bound subscription's Unsubscribe does NOT delete the durable (that is the
 			// whole point of the Bind attach), so this releases local interest without

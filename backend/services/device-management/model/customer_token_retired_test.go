@@ -34,7 +34,7 @@ func newRetiredTokenApi(t *testing.T) (*Api, context.Context) {
 	require.NoError(t, rdb.RegisterTenantScoping(db), "register tenant scoping")
 	require.NoError(t, db.AutoMigrate(
 		&CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &Device{}, &DeviceType{},
-		&EntityRelationship{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{},
+		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{}, &EntityGroupMembership{},
 	), "migrate")
 	api := NewApi(&rdb.RdbManager{Database: db})
 	ctx := core.WithTenant(context.Background(), "acme")

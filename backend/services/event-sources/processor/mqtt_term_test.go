@@ -26,7 +26,7 @@ func newBlockingDecodeSource(t *testing.T, entered chan<- struct{}, release <-ch
 	es, err := NewMqttEventSource("ext", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
-		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { block(); return nil }),
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, string) error { block(); return nil }),
 		func(string, string, []byte, error) error { block(); return nil },
 		nil, admitAllReadings, admitAll, alwaysOwns, func(err error) { t.Errorf("the source asked to end the process: %v", err) })
 	require.NoError(t, err)
@@ -81,7 +81,7 @@ func TestAMessageArrivingAfterStopIsDropped(t *testing.T) {
 	es, err := NewMqttEventSource("ext", "cid", map[string]string{"host": "h", "port": "1883", "topic": "t"},
 		nil, "", "", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) { received++ },
-		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, uint64) error { return nil }),
+		InlinePublisher(func(string, string, *model.UnresolvedEvent, interface{}, string) error { return nil }),
 		func(string, string, []byte, error) error { return nil },
 		nil, admitAllReadings, admitAll, alwaysOwns, func(err error) { t.Errorf("the source asked to end the process: %v", err) })
 	require.NoError(t, err)

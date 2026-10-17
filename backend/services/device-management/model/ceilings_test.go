@@ -42,7 +42,7 @@ func tokRef(token string) rdb.TokenReference { return rdb.TokenReference{Token: 
 func trackedRig(t *testing.T, targets int) (*Api, context.Context) {
 	t.Helper()
 	api := newPartialUpdateApi(t, &DeviceType{}, &Device{}, &DeviceCredential{},
-		&EntityRelationshipType{}, &EntityRelationship{}, &EntityAttribute{}, &Alarm{},
+		&EntityRelationshipType{}, &EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{},
 		&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupMembership{}, &CustomerType{}, &Customer{}, &IssuedCustomerToken{}, &DeviceClaim{})
 	ctx := partialUpdateCtx()
 	dt := &DeviceType{}

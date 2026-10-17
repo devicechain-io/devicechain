@@ -26,6 +26,7 @@ type wireEnv struct {
 	schema *gqlcore.Schema
 	svc    *admin.Service
 	mgr    *identity.Manager
+	store  *iam.Store
 }
 
 func newWireEnv(t *testing.T) *wireEnv {
@@ -49,6 +50,7 @@ func newWireEnv(t *testing.T) *wireEnv {
 	return &wireEnv{
 		schema: gqlcore.MustParseSchema(SchemaContent, &SchemaResolver{}),
 		svc:    svc,
+		store:  store,
 		mgr:    identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, nil),
 	}
 }
@@ -135,6 +137,7 @@ func TestAScopedCallerIsRefusedTenantAdministration(t *testing.T) {
 		"inviteMember":      `mutation { inviteMember(request: {email: "x@y.example", roleTokens: []}) { invitationCode } }`,
 		"setMemberRoles":    `mutation { setMemberRoles(email: "boss@acme.example", roleTokens: []) { email } }`,
 		"setMemberScope":    `mutation { setMemberScope(email: "boss@acme.example", scope: []) { email } }`,
+		"setMemberAccess":   `mutation { setMemberAccess(email: "boss@acme.example", roleTokens: [], scope: []) { email } }`,
 		"setMemberEnabled":  `mutation { setMemberEnabled(email: "boss@acme.example", enabled: false) { email } }`,
 		"removeMember":      `mutation { removeMember(email: "boss@acme.example") }`,
 		"revokeInvitation":  `mutation { revokeInvitation(email: "boss@acme.example") { email } }`,

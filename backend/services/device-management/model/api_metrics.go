@@ -5,8 +5,11 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"strings"
 
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -32,6 +35,12 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 	if !MetricDataType(request.DataType).StorableAsMetric() {
 		return nil, fmt.Errorf("metric data type %s is not storable as a time-series measurement; "+
 			"model string-valued telemetry as device state (ADR-016 amd)", request.DataType)
+	}
+
+	if request.Expression != nil {
+		if err := checkMetricExpression(*request.Expression); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := api.checkProfileChildCeiling(ctx, &MetricDefinition{}, childKindMetric, matches[0].ID); err != nil {
@@ -65,6 +74,7 @@ func (api *Api) CreateMetricDefinition(ctx context.Context,
 		MaxValue:      rdb.NullFloat64Of(request.MaxValue),
 		Enum:          enumJSON,
 		Descriptor:    rdb.NullStrOf(request.Descriptor),
+		Expression:    rdb.NullStrOf(request.Expression),
 	}
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
@@ -123,6 +133,10 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 				"model string-valued telemetry as device state (ADR-016 amd)", dataType)
 		}
 	}
+	expression, err := applyMetricExpression(request.Expression, updated.Expression)
+	if err != nil {
+		return nil, err
+	}
 	metadataJSON, err := rdb.JSONInputOf("metadata", request.Metadata.ApplyTo(dcgraphql.MetadataStr(updated.Metadata)))
 	if err != nil {
 		return nil, err
@@ -142,6 +156,7 @@ func (api *Api) UpdateMetricDefinition(ctx context.Context, token string,
 	updated.MinValue = rdb.NullFloat64Of(request.MinValue.ApplyTo(dcgraphql.NullFloat64(updated.MinValue)))
 	updated.MaxValue = rdb.NullFloat64Of(request.MaxValue.ApplyTo(dcgraphql.NullFloat64(updated.MaxValue)))
 	updated.Descriptor = request.Descriptor.ApplyToNullString(updated.Descriptor)
+	updated.Expression = expression
 	if reparent != nil {
 		updated.DeviceProfile = reparent
 		updated.DeviceProfileId = reparent.ID
@@ -204,4 +219,38 @@ func (api *Api) MetricDefinitionsByDeviceProfile(ctx context.Context, profileId 
 	}
 	api.ceilings.observeChildren(childKindMetric, len(found))
 	return found, nil
+}
+
+// checkMetricExpression is the WRITE-time check on a calculated metric's formula: present
+// and bounded. It does not compile the formula — a draft may name an input that is created
+// next — so compiling, typing and costing it is the publish gate's job
+// (checkCalculatedMetrics), and testMetricFormula's for an author who wants to know sooner.
+func checkMetricExpression(expression string) error {
+	if strings.TrimSpace(expression) == "" {
+		return &InvalidArgumentError{Msg: "expression must not be blank; omit it to create a measured metric"}
+	}
+	return checkBytes("expression", expression, calcfield.MaxExpressionBytes)
+}
+
+// applyMetricExpression folds an update's expression onto the stored one, keeping a
+// metric measured or calculated as it was created.
+func applyMetricExpression(field dcgraphql.OptionalString, current sql.NullString) (sql.NullString, error) {
+	if !field.Set {
+		return current, nil
+	}
+	if !current.Valid {
+		if field.Value == nil {
+			return current, nil // null on a measured metric: what it already is
+		}
+		return current, &InvalidArgumentError{Msg: "a measured metric cannot be given a formula; " +
+			"create a new calculated metric instead"}
+	}
+	if field.Value == nil {
+		return current, &InvalidArgumentError{Msg: "a calculated metric's formula cannot be cleared; " +
+			"delete it and create a measured metric instead"}
+	}
+	if err := checkMetricExpression(*field.Value); err != nil {
+		return current, err
+	}
+	return sql.NullString{String: *field.Value, Valid: true}, nil
 }
