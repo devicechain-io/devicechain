@@ -92,9 +92,10 @@ var mqttStoreLookupBackoff = []time.Duration{0, time.Second, 2 * time.Second, 5 
 // With infrastructure.nats.mqttFailClosed on, $MQTT_msgs is not this function's:
 // ReconcileMqttFailClosed declares it (discard NEW, the hot ceiling, platform
 // durables) and a failure there is fatal, so the caller bounds only the QoS 2
-// stores, through ReconcileMqttQoS2Stores. With it off, a store THIS instance had
-// made fail-closed is released here first (releaseMqttFailClosedConfig); a store that
-// carries no mark of it is treated exactly as it always was.
+// stores, through ReconcileMqttQoS2Stores. With it off, a store that carries a mark
+// of THIS instance is handed to the fail-closed pass, which releases it once no pod
+// with the setting on holds it; a store that carries no mark of it is treated exactly
+// as it always was.
 //
 // This runs on EVERY startup rather than once at install. nats-server looks the
 // streams up before creating them and never reconciles config back onto an
@@ -192,23 +193,19 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 			continue
 		}
 		cfg := info.Config
-		// A store this instance made fail-closed, or released and may not have finished
-		// releasing; see releaseMqttFailClosedConfig. A store with no mark of this
-		// instance's on it is handled exactly as it was before the setting existed.
-		owned, released := false, false
+		// A store that carries a mark of this instance (it made it fail-closed, or released
+		// it and has not finished removing its durables) is the fail-closed pass's: with the
+		// setting off, that pass releases it once no pod with the setting on holds it any
+		// more, and removes its durables once they are drained (mqttFailClosedPass). A store
+		// with no mark of this instance's is handled exactly as it was before the setting
+		// existed.
 		if name == MqttMessageStore {
-			owned, released = nmgr.mqttFailClosedMarks(cfg)
-		}
-		if owned {
-			nmgr.releaseMqttFailClosedConfig(&cfg)
-		}
-		if !owned && cfg.MaxBytes == maxBytes {
-			if released {
-				if err := nmgr.removeMqttFailClosedDurables(ctx); err != nil {
-					lastErr = err
-					continue
-				}
+			if marks := nmgr.marksOf(info); marks.owned || marks.released {
+				_, err := nmgr.mqttFailClosedPass(ctx, true)
+				return err
 			}
+		}
+		if cfg.MaxBytes == maxBytes {
 			return nil
 		}
 		previous := cfg.MaxBytes
@@ -216,18 +213,6 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 		if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 			lastErr = err
 			continue
-		}
-		if owned || released {
-			if err := nmgr.removeMqttFailClosedDurables(ctx); err != nil {
-				lastErr = err
-				continue
-			}
-		}
-		if owned {
-			log.Warn().Str("stream", name).
-				Msg("infrastructure.nats.mqttFailClosed is off, and this instance had turned it on: restored the " +
-					"MQTT message store's default discard policy and removed its platform durables. A QoS 1 PUBACK " +
-					"no longer means the platform holds the message; MQTT ingest is on the device-events capture stream")
 		}
 		log.Info().Str("stream", name).Int64("maxBytes", maxBytes).Int64("previous", previous).
 			Msg("Bounded MQTT gateway stream so it cannot consume the JetStream disk budget's headroom")
