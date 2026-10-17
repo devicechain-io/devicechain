@@ -47,5 +47,6 @@ var (
 		NewIssuedCustomerTokensSchema(),
 		NewGroupAccessScopeSchema(),
 		NewIssuedGroupTokensSchema(),
+		NewMetricExpressionSchema(),
 	}
 )

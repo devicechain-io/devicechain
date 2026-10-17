@@ -140,6 +140,11 @@ func (e *Env) Index(key string) (int, bool) {
 var baseEnv = sync.OnceValues(func() (*cel.Env, error) {
 	opts := []cel.EnvOption{
 		cel.StdLib(cel.StdLibSubset(stdlibSubset())),
+		// Bound the parser's error recovery. A refused formula is the common case while an
+		// author types, and without a bound one malformed 1 KiB source makes the parser
+		// recover at every operator, reporting dozens of errors nobody reads. Four
+		// recoveries still name the first mistakes, which is what the author fixes next.
+		cel.ParserErrorRecoveryLimit(4),
 		// `temp > 80` with temp a double: ordering across int and double.
 		cel.CrossTypeNumericComparisons(true),
 		cel.Variable(VarM, cel.MapType(cel.StringType, cel.DynType)),

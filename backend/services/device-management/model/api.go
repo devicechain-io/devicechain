@@ -167,6 +167,11 @@ type Api struct {
 	// than as an ungoverned one. main.go warns at startup when it leaves this nil.
 	GeoFenceCapsResolver GeoFenceCapsResolver
 
+	// CalculatedMetricsCeiling, when set, supplies how many calculated metrics one of the
+	// tenant's profiles may publish. NIL MEANS THE PLATFORM DEFAULT, WHICH IS ZERO: with
+	// nothing wired, no profile may publish a calculated metric.
+	CalculatedMetricsCeiling CalculatedMetricsCeilingResolver
+
 	// GeoFenceCapRefusals, when set, counts refusals by which cap refused. Nil disables
 	// counting only; it never changes a verdict.
 	GeoFenceCapRefusals GeoFenceCapRefusalCounter
@@ -441,6 +446,7 @@ type DeviceManagementApi interface {
 	MetricDefinitionsById(ctx context.Context, ids []uint) ([]*MetricDefinition, error)
 	MetricDefinitionsByToken(ctx context.Context, tokens []string) ([]*MetricDefinition, error)
 	MetricDefinitions(ctx context.Context, criteria MetricDefinitionSearchCriteria) (*MetricDefinitionSearchResults, error)
+	TestMetricFormula(ctx context.Context, request *MetricFormulaTestRequest) (*MetricFormulaTestResult, error)
 
 	// ProfileResolutionByDeviceType resolves a device type's active published profile
 	// version as one value: its metric definitions and its rule-scoping identity

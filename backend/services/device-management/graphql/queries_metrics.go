@@ -89,3 +89,29 @@ func (r *SchemaResolver) MetricDefinitions(ctx context.Context, args struct {
 		C: ctx,
 	}, nil
 }
+
+// TestMetricFormula compiles a calculated-metric formula against a profile's draft
+// measured metrics and evaluates it against a hand-typed sample, through the same code the
+// resolver will use. Nothing is stored. An authoring tool, so it is closed to a scoped
+// member (Authorize, not AuthorizeCatalogue), like every other authoring door.
+func (r *SchemaResolver) TestMetricFormula(ctx context.Context, args struct {
+	ProfileToken string
+	Expression   string
+	DataType     string
+	MetricKey    *string
+	MinValue     *float64
+	MaxValue     *float64
+	Sample       []model.MetricValueInput
+}) (*MetricFormulaTestResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	res, err := r.GetApi(ctx).TestMetricFormula(ctx, &model.MetricFormulaTestRequest{
+		ProfileToken: args.ProfileToken, Expression: args.Expression, DataType: args.DataType,
+		MetricKey: args.MetricKey, MinValue: args.MinValue, MaxValue: args.MaxValue, Sample: args.Sample,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &MetricFormulaTestResolver{M: *res}, nil
+}

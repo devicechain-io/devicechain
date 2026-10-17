@@ -116,6 +116,9 @@ export function MetricDefinitionForm({
           enum: null,
           descriptor: null,
           metadata: null,
+          // This form creates MEASURED metrics; a calculated one is authored through the API
+          // until the console's formula editor lands.
+          expression: null,
         };
         await createMetricDefinition(created);
         onDone(t('deviceProfiles:defMetricCreatedToast', { key: created.metricKey }));

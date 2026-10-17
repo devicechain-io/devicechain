@@ -201,6 +201,12 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		return nil, err
 	}
 
+	// The calculated-metrics gate (ADR-082): local, so it runs before the cross-service
+	// detection-rule check, and over the same exact bytes.
+	if err := api.checkCalculatedMetrics(ctx, snapshot); err != nil {
+		return nil, err
+	}
+
 	// ADR-044 sync gate (ADR-051 slice 4b): compile the snapshot's detection rules against
 	// event-processing BEFORE freezing this version, so a profile can never publish a rule
 	// the DETECT engine cannot run. It validates the EXACT bytes just serialized — not a

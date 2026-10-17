@@ -103,6 +103,21 @@ const (
 	GeoFencePositionBudgetConfigKey = governance.GeoFencePositionBudgetField
 )
 
+// CalculatedMetricsPerProfileConfigKey is the tier config key carrying how many
+// calculated metrics one of a tenant's device profiles may publish (ADR-082, packaged per
+// ADR-065). Registered outside the dimension loop like the scalars above.
+//
+// 🔴 IT IS THE ONE TIER CEILING WHERE ZERO IS A LEGAL VALUE, AND ZERO IS ALSO THE
+// PLATFORM DEFAULT. Every other ceiling refuses zero because zero would admit nothing — an
+// outage for the tier. Here admitting nothing is the point: calculated metrics are off on
+// every tier until an operator turns them on, and an operator may write 0 to say so
+// explicitly. Omitting the key inherits that same default (governance's
+// DefaultCalculatedMetricsPerProfile). It carries a semantic maximum, like the geofence
+// caps, because each calculated metric is one more stored row per reading.
+//
+// It has NO per-tenant override column: the count is packaging, set on the tier.
+const CalculatedMetricsPerProfileConfigKey = governance.CalculatedMetricsPerProfileField
+
 // tierConfigKeys is the registry, keyed by config-blob key name.
 var tierConfigKeys = buildTierConfigKeys()
 
@@ -122,6 +137,7 @@ func buildTierConfigKeys() map[string]tierConfigKey {
 	keys[GeoFencePositionCeilingConfigKey] = tierConfigKey{validate: validateGeoFencePositionCeiling}
 	keys[GeoFenceCeilingConfigKey] = tierConfigKey{validate: validateGeoFenceCeiling}
 	keys[GeoFencePositionBudgetConfigKey] = tierConfigKey{validate: validateGeoFencePositionBudget}
+	keys[CalculatedMetricsPerProfileConfigKey] = tierConfigKey{validate: validateCalculatedMetricsPerProfile}
 	return keys
 }
 
@@ -337,6 +353,36 @@ func validateGeoFenceCeiling(v any) error {
 func validateGeoFencePositionBudget(v any) error {
 	return validateBoundedCount(v, governance.MaxTenantGeometryPositions,
 		"positions across the tenant's fence set", governance.GeoFencePositionBudgetBecause)
+}
+
+// validateCalculatedMetricsPerProfile accepts a whole number from 0 to
+// governance.MaxCalculatedMetricsPerProfile. Zero is legal — see
+// CalculatedMetricsPerProfileConfigKey — so this cannot delegate to validatePositiveBurst.
+func validateCalculatedMetricsPerProfile(v any) error {
+	f, ok := toFloat(v)
+	if !ok {
+		return fmt.Errorf("must be a number (got %T)", v)
+	}
+	if math.IsInf(f, 0) || math.IsNaN(f) {
+		return fmt.Errorf("must be a finite number (got %v)", f)
+	}
+	if f != math.Trunc(f) {
+		return fmt.Errorf("must be a whole number (got %v)", f)
+	}
+	if f < 0 || f > governance.MaxCalculatedMetricsPerProfile {
+		return fmt.Errorf("must be between 0 and %d calculated metrics per profile (got %v); %s",
+			governance.MaxCalculatedMetricsPerProfile, v, governance.CalculatedMetricsPerProfileBecause)
+	}
+	return nil
+}
+
+// CalculatedMetricsPerProfile returns how many calculated metrics the tier lets one
+// profile publish, or nil if the tier declares none (inherit the platform default, which
+// is zero). Read through the write path's validator, so a junk value parked by an
+// out-of-band write inherits rather than becoming a ceiling. Unlike the accessors beside
+// it, a returned 0 is a real setting (off), not an unusable one.
+func (t *TenantTier) CalculatedMetricsPerProfile() *int {
+	return t.positiveInt(CalculatedMetricsPerProfileConfigKey, validateCalculatedMetricsPerProfile)
 }
 
 // HeldCommandCeiling returns the tier's default bound on a tenant's HELD-command

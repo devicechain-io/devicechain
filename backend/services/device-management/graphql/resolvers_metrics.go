@@ -138,3 +138,31 @@ func (r *MetricDefinitionSearchResultsResolver) Pagination() *SearchResultsPagin
 		C: r.C,
 	}
 }
+
+// Expression is a calculated metric's formula, or null for a measured metric.
+func (r *MetricDefinitionResolver) Expression() *string {
+	return util.NullStr(r.M.Expression)
+}
+
+// Calculated reports whether the metric is computed from its formula.
+func (r *MetricDefinitionResolver) Calculated() bool {
+	return r.M.Calculated()
+}
+
+// MetricFormulaTestResolver resolves the result of testMetricFormula.
+type MetricFormulaTestResolver struct {
+	M model.MetricFormulaTestResult
+}
+
+func (r *MetricFormulaTestResolver) CompileError() *string  { return r.M.CompileError }
+func (r *MetricFormulaTestResolver) Value() *string         { return r.M.Value }
+func (r *MetricFormulaTestResolver) SkippedReason() *string { return r.M.SkippedReason }
+func (r *MetricFormulaTestResolver) Inputs() []string       { return r.M.Inputs }
+func (r *MetricFormulaTestResolver) Warnings() []string     { return r.M.Warnings }
+func (r *MetricFormulaTestResolver) EstimatedCost() *int32 {
+	if r.M.EstimatedCost == nil {
+		return nil
+	}
+	v := int32(*r.M.EstimatedCost)
+	return &v
+}

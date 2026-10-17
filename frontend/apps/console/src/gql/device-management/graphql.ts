@@ -838,6 +838,14 @@ export type MetricDefinitionCreateRequest = {
   deviceProfileToken: string;
   /** Allowed values as a JSON array of strings. Must be valid JSON. */
   enum?: string | null | undefined;
+  /**
+   * A formula, which makes the new metric calculated: its value is computed from the
+   * profile's measured metrics instead of reported by devices. Omit it for a measured
+   * metric. Which of the two a metric is cannot be changed later. At most 1024 bytes and not
+   * blank. The formula is checked when the profile is published, not here; use
+   * testMetricFormula to check it sooner.
+   */
+  expression?: string | null | undefined;
   /** Largest value accepted for a DOUBLE or INT metric. */
   maxValue?: number | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
@@ -889,6 +897,12 @@ export type MetricDefinitionUpdateRequest = {
   deviceProfileToken?: string | null | undefined;
   /** New allowed values as a JSON array of strings, or null to allow any value. */
   enum?: string | null | undefined;
+  /**
+   * New formula for a calculated metric. Refused on a measured metric, which cannot become
+   * calculated. A null or blank value is refused on a calculated metric, which cannot become
+   * measured; delete it and create a new metric instead.
+   */
+  expression?: string | null | undefined;
   /** New upper bound, or null to remove it. */
   maxValue?: number | null | undefined;
   /** New metadata (valid JSON, replacing the stored document), or null to clear it. */

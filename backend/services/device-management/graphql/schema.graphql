@@ -429,6 +429,17 @@ type MetricDefinition implements Model & TokenReference & NamedEntity & Metadata
     descriptor: String
     """Caller-defined metadata as a JSON document, or null when none is set."""
     metadata: String
+    """
+    The formula a calculated metric is computed from, written over the profile's measured
+    metrics (for example `voltage * current / 1000`). Null for a measured metric, which
+    devices report.
+    """
+    expression: String
+    """
+    True when the metric is calculated from its formula rather than reported by devices.
+    Fixed when the metric is created.
+    """
+    calculated: Boolean!
 }
 
 """Fields for a new metric definition."""
@@ -463,6 +474,14 @@ input MetricDefinitionCreateRequest {
     descriptor: String
     """Caller-defined metadata. Must be valid JSON; an empty string means none."""
     metadata: String
+    """
+    A formula, which makes the new metric calculated: its value is computed from the
+    profile's measured metrics instead of reported by devices. Omit it for a measured
+    metric. Which of the two a metric is cannot be changed later. At most 1024 bytes and not
+    blank. The formula is checked when the profile is published, not here; use
+    testMetricFormula to check it sooner.
+    """
+    expression: String
 }
 
 # A PARTIAL update. Every field is optional in three senses, not two: omit it to leave
@@ -513,6 +532,45 @@ input MetricDefinitionUpdateRequest {
     descriptor: String
     """New metadata (valid JSON, replacing the stored document), or null to clear it."""
     metadata: String
+    """
+    New formula for a calculated metric. Refused on a measured metric, which cannot become
+    calculated. A null or blank value is refused on a calculated metric, which cannot become
+    measured; delete it and create a new metric instead.
+    """
+    expression: String
+}
+
+"""One input value of a sample for testMetricFormula."""
+input MetricValueInput {
+    """The measured metric's key."""
+    key: String!
+    """The value as a device would send it, such as `230.5`, `12` or `true`."""
+    value: String!
+}
+
+"""
+What a calculated-metric formula gives for a sample. A formula that does not compile has
+compileError and no value; one that compiles has exactly one of value or skippedReason.
+"""
+type MetricFormulaTest {
+    """Why the formula was refused, or null when it compiles."""
+    compileError: String
+    """The value the formula produces for the sample, formatted as it would be stored."""
+    value: String
+    """
+    Why the formula produces no value for the sample: missing_input, invalid_input,
+    non_finite, div_zero, overflow, range or eval_error. No value is ever substituted.
+    """
+    skippedReason: String
+    """The measured metrics the formula reads."""
+    inputs: [String!]!
+    """
+    Advisory findings that do not stop a publish, such as a sample value no formula can
+    read, or a result range wider than measurements can be stored with.
+    """
+    warnings: [String!]!
+    """The formula's estimated worst-case cost; a formula above 100 is refused."""
+    estimatedCost: Int
 }
 
 """Criteria for searching metric definitions. Results are newest first."""
@@ -3136,6 +3194,30 @@ type Query {
         """Filters and the page to return."""
         criteria: MetricDefinitionSearchCriteria!
     ): MetricDefinitionSearchResults!
+    """
+    Checks a calculated-metric formula against a profile's draft measured metrics and
+    evaluates it for a sample you type. Nothing is stored. Calculated metrics are not yet
+    computed from readings in this release, so a profile carrying one cannot be published;
+    this lets you write and check formulas ahead of that. A sample of more than 256 values
+    is refused with LIMIT_EXCEEDED, and naming a key twice with INVALID_VALUE. Requires
+    device:read.
+    """
+    testMetricFormula(
+        """Token of the profile whose draft measured metrics the formula reads."""
+        profileToken: String!
+        """The formula."""
+        expression: String!
+        """The result type: DOUBLE, INT or BOOLEAN."""
+        dataType: String!
+        """The calculated metric's key, when the formula belongs to one."""
+        metricKey: String
+        """Smallest value the metric accepts; a result below it is skipped."""
+        minValue: Float
+        """Largest value the metric accepts; a result above it is skipped."""
+        maxValue: Float
+        """The input values, at most 256."""
+        sample: [MetricValueInput!]!
+    ): MetricFormulaTest!
     """
     Returns the command definitions with the given ids. Ids that match nothing are omitted,
     an id that is not a number fails the request, and more than 1000 ids are refused with

@@ -996,7 +996,8 @@ CREATE TABLE "device-management".metric_definitions (
  max_value numeric,
  enum jsonb,
  descriptor text,
- device_profile_id bigint NOT NULL
+ device_profile_id bigint NOT NULL,
+ expression text
 );
 CREATE TABLE "device-management".provisioning_profiles (
  id bigint NOT NULL,

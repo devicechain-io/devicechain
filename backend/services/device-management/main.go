@@ -583,6 +583,24 @@ func wireGeoFenceCapsResolver() {
 		Msg("Per-tenant geofence caps enabled (override, else tier, else the platform default).")
 }
 
+// wireCalculatedMetricsCeilingResolver injects the per-tenant calculated-metrics ceiling
+// (ADR-082, packaged per ADR-065): the tenant's tier setting, else the platform default of
+// zero. Left nil — every tenant at zero, so no profile publishes a calculated metric — when
+// the service secret or the user-management coordinate is unset, for the reasons
+// wireGeoFenceCapsResolver gives. It reads tenantGovernance, so tenant:read.
+func wireCalculatedMetricsCeilingResolver() {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.UserManagement.Hostname == "" || infra.UserManagement.Port == 0 {
+		log.Warn().Int("calculatedMetricsPerProfile", governance.DefaultCalculatedMetricsPerProfile).
+			Msg("Service secret or user-management endpoint not configured — the calculated-metrics ceiling is the platform default for every tenant.")
+		return
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "device-management",
+		[]string{string(auth.TenantRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.UserManagement.Hostname, infra.UserManagement.Port)
+	Api.CalculatedMetricsCeiling = governance.NewCalculatedMetricsCeilingResolver(client, url)
+}
+
 // Called after microservice has been initialized.
 // safetyGates reports whether this service's optional safety gates are wired
 // (<area>_safety_gate_enabled). Built once in afterMicroserviceInitialized.
@@ -678,6 +696,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// counter is set unconditionally, unlike the resolver: with no resolver the platform
 			// defaults are still enforced, so refusals still happen and still need reporting.
 			wireGeoFenceCapsResolver()
+			wireCalculatedMetricsCeilingResolver()
 			Api.GeoFenceCapRefusals = processor.NewGeoFenceCapRefusalCounter(
 				Microservice.NewCounterVec(
 					"geofence_cap_refusals_total",

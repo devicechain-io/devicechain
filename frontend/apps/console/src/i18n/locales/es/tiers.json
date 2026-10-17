@@ -55,5 +55,7 @@
   "geoFencePositionCeilingDescription": "Cuántos puntos puede tener una sola geovalla (hasta {{max}}). En blanco hereda el valor predeterminado de la plataforma.",
   "geoFencePositionBudgetLabel": "Presupuesto de puntos de geovallas",
   "geoFencePositionBudgetDescription": "Cuántos puntos pueden sumar las geovallas de un inquilino en todo el conjunto (hasta {{max}}). Usa espacio compartido entre todos los inquilinos. En blanco hereda el valor predeterminado de la plataforma.",
-  "scalarInvalid": "{{label}} debe ser un número entero de 1 a {{max}}, o quedar en blanco para heredar el valor predeterminado de la plataforma."
+  "calculatedMetricsPerProfileLabel": "Métricas calculadas por perfil",
+  "calculatedMetricsPerProfileDescription": "Cuántas métricas calculadas (obtenidas con una fórmula a partir de las demás métricas de una lectura) puede publicar un perfil de dispositivo de un inquilino de este nivel ({{min}}–{{max}}). Cada una almacena una medición más por cada lectura. 0 las desactiva; en blanco hereda el valor predeterminado de la plataforma, que también las desactiva.",
+  "scalarInvalid": "{{label}} debe ser un número entero de {{min}} a {{max}}, o quedar en blanco para heredar el valor predeterminado de la plataforma."
 }
