@@ -35,7 +35,9 @@ with 1.2 to 2.0 GiB left available and pages read back from disk several times a
 second; NATS alone used about 0.7 GiB per server. The databases want memory:
 Postgres keeps a small buffer cache of its own and leans on the node's page cache
 for the rest, so memory on a database node buys speed. That is why the `database`
-pool has 16 GB nodes. The services pool's memory is not what limits it: on 8 GB
+pool has 16 GB nodes and the `services` pool 16 GB ones, with the same 4 vCPU each,
+though for the services pool that memory comes with the shape rather than being
+needed. The services pool's memory is not what limits it: on 8 GB
 services nodes, in runs offered up to 9,200 events a second, every node kept at
 least 5.2 GiB available, which leaves CPU as the services pool's limit.
 
@@ -43,7 +45,8 @@ The services shape is `t2d-standard-4`. A T2D vCPU is a whole physical core, whe
 an N2 or N2D 4-vCPU shape is two cores with two threads each, and the event path is
 many busy goroutines across the broker and the services, so whole cores show. Against
 3 × `n2-custom-4-8192` and 3 × `n2d-custom-4-8192` services nodes, on the same build
-and database nodes, it persisted about 18% more events a second on a 3-node HA
+(the N2 and N2D runs on `n2-standard-4` database nodes, the T2D runs on
+`n2d-standard-4`), it persisted about 18% more events a second on a 3-node HA
 install (about 17,200 against 14,500 and 14,700, offered 18,000 over HTTP), at much
 lower tail latency (MQTT QoS 1 acknowledgement p99 of 38 ms against 578 and 171 ms at
 9,000 events a second), with the services nodes at 81 to 86% CPU instead of 91 to 95%.
@@ -52,7 +55,9 @@ and the N2 and N2D shapes do. T2D has no custom shapes, so the 16 GB is not a ch
 the extra memory went unused in those runs. At that rate the bottleneck moved to the
 database node hosting the event store's primary, so the `database` pool is the next
 limit, and `n2-standard-4` is kept there: T2D for the database pool has not been
-measured. For more throughput, give the database pool more CPU first.
+measured. For more throughput, give the database pool more CPU first. Once the
+database is no longer the limit, `t2d-standard-8` adds services CPU. It needs 12 more
+vCPUs, which takes the cluster past a new project's 32 (see below).
 
 **T2D is not offered in every zone.** `us-east4-b`, the default, offers it (so do
 `us-east4-a` and `us-east4-c`). If you change `location`, check before you apply:
