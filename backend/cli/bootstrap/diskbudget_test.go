@@ -441,9 +441,9 @@ func numberWord(t *testing.T, w string) int64 {
 	return 0
 }
 
-var n2Machine = regexp.MustCompile(`^n2-(?:(standard|highcpu|highmem)-([0-9]+)|custom-([0-9]+)-([0-9]+))$`)
+var n2Machine = regexp.MustCompile(`^(?:n2|n2d|t2d)-(?:(standard|highcpu|highmem)-([0-9]+)|custom-([0-9]+)-([0-9]+))$`)
 
-// n2Shape sizes an N2 machine type the way the GKE guide prints it: vCPUs and
+// n2Shape sizes an N2, N2D or T2D machine type the way the GKE guide prints it: vCPUs and
 // whole GB, where Google's GB is 2^30 bytes. A predefined type is named
 // family-class-vCPUs, and its class fixes the memory per vCPU; a custom type is
 // n2-custom-<vCPUs>-<MiB>. Anything else, extended memory included, and a custom
@@ -451,7 +451,7 @@ var n2Machine = regexp.MustCompile(`^n2-(?:(standard|highcpu|highmem)-([0-9]+)|c
 func n2Shape(mt string) (vcpu, gb int64, err error) {
 	m := n2Machine.FindStringSubmatch(mt)
 	if m == nil {
-		return 0, 0, fmt.Errorf("%s is not an N2 type this test can size; extend n2Shape", mt)
+		return 0, 0, fmt.Errorf("%s is not an N2, N2D or T2D type this test can size; extend n2Shape", mt)
 	}
 	if m[1] != "" {
 		vcpu, err = strconv.ParseInt(m[2], 10, 64)
@@ -490,7 +490,9 @@ func TestN2Shape(t *testing.T) {
 		{mt: "n2-custom-8-65536", vcpu: 8, gb: 64},
 		{mt: "n2-custom-4-6400", wantError: true},
 		{mt: "n2-custom-4-8192-ext", wantError: true},
-		{mt: "n2d-standard-4", wantError: true},
+		{mt: "n2d-standard-4", vcpu: 4, gb: 16},
+		{mt: "n2d-custom-4-8192", vcpu: 4, gb: 8},
+		{mt: "t2d-standard-4", vcpu: 4, gb: 16},
 		{mt: "e2-standard-4", wantError: true},
 		{mt: "n2-ultracpu-4", wantError: true},
 	} {
@@ -608,7 +610,7 @@ func TestGKEGuideShapeIsTheDefaults(t *testing.T) {
 	// the vCPUs it adds across the pool, and that they take the default cluster
 	// past the vCPU quota of a new project.
 	quotas := figures("a new project's vCPU quota", "\\*\\*([0-9]+) vCPUs across all regions\\*\\*")
-	for _, m := range figures("the larger services shape", "`(n2-[a-z0-9-]+)` adds CPU, which is what binds first\\. "+
+	for _, m := range figures("the larger services shape", "`((?:n2|n2d|t2d)-[a-z0-9-]+)` adds services CPU\\. "+
 		"It needs ([0-9]+) more vCPUs, which takes the cluster past a new project's ([0-9]+)") {
 		bigger, _, err := n2Shape(m[1])
 		if err != nil {
