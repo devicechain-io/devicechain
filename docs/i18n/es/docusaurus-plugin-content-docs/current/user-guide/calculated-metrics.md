@@ -192,7 +192,8 @@ Una fórmula puede leer un número que pertenece a un **dispositivo** y no a una
 factor de calibración o la relación de un transformador de corriente. Se escribe como `device.`
 seguido del nombre: `voltage * device.calibration`. Para un nombre que no sea un identificador
 simple, escribe `device["ct-ratio"]`. El nombre `device` está reservado para esto: una métrica
-medida cuya clave sea `device` se lee como `double(m["device"])`.
+medida cuya clave sea `device` se lee a través de `m`, envuelta en la conversión de su tipo, como
+`double(m["device"])`.
 
 El número procede de los **metadatos del dispositivo**. Edita el dispositivo y pon la constante en
 sus metadatos como un número JSON con el mismo nombre:

@@ -78,7 +78,10 @@ func (api *Api) DeviceConstantsPage(ctx context.Context, profileToken string, ke
 	rows := make([]row, 0, limit)
 	q := api.RDB.DB(ctx).Model(&Device{}).
 		Select("devices.id AS id, devices.token AS token, devices.metadata AS metadata").
-		Joins("JOIN device_types ON device_types.id = devices.device_type_id AND device_types.deleted_at IS NULL").
+		// The tenant equality makes the joined table tenant-safe by the query itself, not only
+		// by the provenance of device_type_id (hack/check-raw-joins.sh).
+		Joins("JOIN device_types ON device_types.id = devices.device_type_id AND device_types.tenant_id = devices.tenant_id "+
+			"AND device_types.deleted_at IS NULL").
 		Where("device_types.profile_id = ?", profile.ID)
 	if afterId > 0 {
 		q = q.Where("devices.id > ?", afterId)

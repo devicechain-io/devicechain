@@ -179,7 +179,8 @@ A formula can read a number that belongs to a **device** rather than to a readin
 calibration factor or a current-transformer ratio. Write it as `device.` followed by the name:
 `voltage * device.calibration`. For a name that is not a plain identifier, write
 `device["ct-ratio"]`. The name `device` is reserved for this: a measured metric whose key is
-`device` is read as `double(m["device"])`.
+`device` is read through `m`, wrapped in the conversion for its type, such as
+`double(m["device"])`.
 
 The number comes from the **device's metadata**. Edit the device and put the constant in its
 metadata as a JSON number under the same name:

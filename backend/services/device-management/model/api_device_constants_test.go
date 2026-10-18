@@ -4,8 +4,11 @@
 package model
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,10 +78,20 @@ func TestDeviceConstantsPageRefusals(t *testing.T) {
 		_, err := api.DeviceConstantsPage(ctx, "meter-profile", []string{"k"}, 0, n)
 		assert.Error(t, err, "limit %d", n)
 	}
-	for _, keys := range [][]string{nil, {}, {""}, make([]string, 33)} {
+	// 33 names, each one a well-formed name, so the COUNT is what is refused (33 empty names
+	// would be refused for being empty, whatever the count bound said).
+	tooMany := make([]string, calcfield.MaxProfileConstants+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("k%d", i)
+	}
+	for _, keys := range [][]string{nil, {}, {""}, {strings.Repeat("k", calcfield.MaxConstantKeyBytes+1)}, tooMany} {
 		_, err := api.DeviceConstantsPage(ctx, "meter-profile", keys, 0, 10)
 		assert.Error(t, err, "keys %v", keys)
 	}
-	_, err := api.DeviceConstantsPage(ctx, "no-such-profile", []string{"k"}, 0, 10)
+	_, err := api.DeviceConstantsPage(ctx, "meter-profile", tooMany[:calcfield.MaxProfileConstants], 0, 10)
+	assert.NoError(t, err, "the bound itself is admitted")
+	_, err = api.DeviceConstantsPage(ctx, "meter-profile", []string{strings.Repeat("k", calcfield.MaxConstantKeyBytes)}, 0, 10)
+	assert.NoError(t, err, "a name at the byte bound is admitted")
+	_, err = api.DeviceConstantsPage(ctx, "no-such-profile", []string{"k"}, 0, 10)
 	assert.Error(t, err)
 }

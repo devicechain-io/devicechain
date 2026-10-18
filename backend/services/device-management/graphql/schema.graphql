@@ -3472,7 +3472,16 @@ type Query {
     Pass the previous page's nextCursor as afterId and stop when it is null. A limit outside
     1..500, or no key or more than 32, is refused with INVALID_VALUE. Requires device:read.
     """
-    deviceConstantsPage(profileToken: String!, keys: [String!]!, afterId: String, limit: Int!): DeviceConstantsPage!
+    deviceConstantsPage(
+        """The token of the profile whose devices are read."""
+        profileToken: String!
+        """The constant names to read, 1 to 32 of them, each 1 to 64 bytes."""
+        keys: [String!]!
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, 1 to 500."""
+        limit: Int!
+    ): DeviceConstantsPage!
     """
     One page of the tokens of the devices an operator has disabled, in device order. Pass the
     previous page's nextCursor as afterId and stop when it is null; a limit outside 1..1000 is

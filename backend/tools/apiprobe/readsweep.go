@@ -553,6 +553,10 @@ var sweepExemptions = map[string]string{
 	"device-management.commandDispatchSchedule": "a pre-flight decision about a command the CALLER is " +
 		"about to send; it needs a commandKey from the device's own vocabulary, which is a choice, not a " +
 		"token. The window it reads is swept through maintenanceWindowOpening",
+	"device-management.deviceConstantsPage": "an authoring preview's read: it takes the constant NAMES " +
+		"a draft formula reads as device.name, which are the author's choice, not a stored token, and " +
+		"answers only the numbers device metadata holds under them. The metadata itself is swept " +
+		"through devices",
 
 	// The two below are exempt because their argument is a GUESS, and a guess that
 	// misses does not fail quietly — `geoFenceSetSnapshot(version:)` on an unknown
