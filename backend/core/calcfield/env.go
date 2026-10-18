@@ -90,9 +90,17 @@ func NewEnv(inputs []Input) (*Env, error) { return newEnv(inputs, len(inputs)) }
 
 // newEnv is NewEnv where the first `measured` inputs are measured metrics and the rest are
 // calculated ones (see Plan).
+//
+// MaxInputs bounds each of the two separately. It was the bound on a profile's measured
+// metrics before a Plan declared its calculated ones in the same Env, and counting them
+// together would refuse — at publish, and at resolve for a version already published — a
+// profile whose measured metrics it always admitted.
 func newEnv(inputs []Input, measured int) (*Env, error) {
-	if len(inputs) > MaxInputs {
-		return nil, fmt.Errorf("%w: %d inputs exceeds the maximum of %d", ErrInvalidInputs, len(inputs), MaxInputs)
+	if measured > MaxInputs {
+		return nil, fmt.Errorf("%w: %d inputs exceeds the maximum of %d", ErrInvalidInputs, measured, MaxInputs)
+	}
+	if n := len(inputs) - measured; n > MaxInputs {
+		return nil, fmt.Errorf("%w: %d calculated inputs exceeds the maximum of %d", ErrInvalidInputs, n, MaxInputs)
 	}
 	base, err := baseEnv()
 	if err != nil {

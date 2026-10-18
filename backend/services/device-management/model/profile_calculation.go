@@ -181,16 +181,6 @@ func resolvedFormulaInputs(metrics []ResolvedMetric) []calcfield.Input {
 	return inputs
 }
 
-// compileResolved compiles one calculated metric of a resolution.
-func compileResolved(env *calcfield.Env, m *ResolvedMetric) (*calcfield.Formula, error) {
-	t, ok := calcfield.ParseType(m.m.DataType)
-	if !ok {
-		return nil, fmt.Errorf("data type %s cannot be calculated", m.m.DataType)
-	}
-	return env.Compile(calcfield.Definition{Key: m.m.MetricKey, Expression: *m.m.Expression, Type: t,
-		Min: m.m.MinValue, Max: m.m.MaxValue})
-}
-
 // CalculatedCount is how many calculated metrics the version declares. Zero — every
 // profile without formulas — is the resolver's whole cost for the feature: one compare.
 func (r ProfileResolution) CalculatedCount() int {
@@ -286,7 +276,7 @@ type CalculationObserver interface {
 // value, never a plausible one and never a failed reading.
 //
 // A formula that reads another calculated metric reads the value this appended for it — the
-// string that will be stored, parsed as the metric's declared type — and, when that metric
+// string the resolved event carries, parsed as the metric's declared type — and, when that metric
 // produced none, finds it absent: it skips as missing_input unless it guards the read with
 // has(). So a chain's values are a function of the sample alone, whatever the order they are
 // appended in, and the Recalculate of a draft computes the same ones.

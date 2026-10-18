@@ -200,10 +200,12 @@ a measured one. Real power, apparent power and power factor make a chain of thre
   publishing names the cycle.
 - **They are evaluated in dependency order**, once per reading, whatever order you declared them
   in. Each formula runs after everything it reads.
-- **A downstream formula reads the value that is stored.** The result of `kva` is formatted as its
-  data type before `kw` reads it, so an Integer metric has already dropped its fraction and a
-  Boolean is `1` or `0`. The chain never uses a more precise intermediate than the one you can see
-  in the history.
+- **A downstream formula reads the value the reading records.** The result of `kva` is formatted as
+  its data type before `kw` reads it, so an Integer metric is a whole number and a Boolean is `1` or
+  `0`, and `kw` reads exactly the value `kva` is given on the reading: the one detection rules and
+  live views see. Storage then rounds it to 8 decimal places (see
+  [Storage and precision](#storage-and-precision)), so for a value with more decimal places than
+  that, the history shows a less precise `kva` than the one `kw` was computed from.
 - **If an upstream metric produces no value, so do the formulas that read it.** If `kva` is
   skipped, `kw` is skipped as `missing_input`, and so is `pf` through it. To give such a formula a
   fallback, test for the metric as for any input: `has(m.kva) ? kva : 0.0`.

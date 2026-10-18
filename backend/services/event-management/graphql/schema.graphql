@@ -514,7 +514,8 @@ type Query {
         dataType: String!
         """
         The metrics the formula reads, with their data types: measured ones, and calculated
-        ones, whose stored values are read as they were computed at resolve.
+        ones, whose stored values are read like a measured one's: rounded as stored, and as
+        computed by the formula that was published when each reading arrived.
         """
         inputs: [CalculatedInput!]!
         """Smallest value the metric may take; a result below it is skipped as range."""

@@ -67,9 +67,11 @@ type Step struct {
 // A calculated metric may read another calculated metric. The Plan declares every calculated
 // metric as an input of one Env, after the measured ones, compiles each formula against it,
 // and orders the formulas topologically, so a formula runs after everything it reads. Eval
-// then writes each value it computes — as its declared type, the exact string that will be
-// stored — into the sample, where the formulas that read it find it: a downstream formula
-// sees what is persisted, not a wider or unrounded intermediate.
+// then writes each value it computes — as its declared type, the exact string the resolved
+// event carries — into the sample, where the formulas that read it find it: a downstream
+// formula sees the value detection and the live stream see, not a wider intermediate. (The
+// measurement store then rounds a DOUBLE to StoredDecimals places, as it rounds any value;
+// a chain is not recomputed from the rounded row.)
 //
 // A metric that produced no value for the sample (a skip) leaves its slot absent, so a
 // formula that reads it without a presence guard skips as [SkipMissingInput] and one that

@@ -54,8 +54,9 @@
 // the measured ones, refuses a ring of metrics reading each other ([CycleError], naming the
 // ring) and a chain too deep ([DepthError], naming the chain), and orders the formulas so each
 // follows what it reads. [Plan.Eval] runs one in that order and writes the value it computed
-// back into the sample as its declared type, the exact string that is stored, so a downstream
-// formula reads what is persisted and not a wider intermediate. A metric that produced no value
+// back into the sample as its declared type, the exact string the resolved event carries, so a
+// downstream formula reads that value and not a wider intermediate (the store then rounds a
+// DOUBLE to [StoredDecimals] places, as it rounds every measurement). A metric that produced no value
 // leaves its slot absent: a formula that reads it unguarded skips as [SkipMissingInput], one
 // that tests it with has() runs. A profile whose formulas read only measured metrics has no
 // edges and pays nothing for any of this. Every consumer that evaluates a profile's formulas

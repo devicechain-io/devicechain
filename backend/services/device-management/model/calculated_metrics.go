@@ -424,6 +424,13 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		result.CompileError = &msg
 		return result, nil
 	}
+	// The formula is planned with every other calculated metric of the draft, so the platform
+	// maximum bounds how much one request compiles, as it bounds the publish gate's. A draft
+	// above it could not be published either.
+	if n := len(p.calculated) + 1; n > governance.MaxCalculatedMetricsPerProfile {
+		return refuse(fmt.Sprintf("the draft would have %d calculated metrics with this one, above the maximum of %d",
+			n, governance.MaxCalculatedMetricsPerProfile))
+	}
 	t, ok := calcfield.ParseType(request.DataType)
 	if !ok {
 		return refuse(fmt.Sprintf("data type %s cannot be calculated; use DOUBLE, INT or BOOLEAN", request.DataType))
@@ -465,6 +472,14 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 	}
 	f := plan.Step(at).Formula
 	if f == nil {
+		var deep *calcfield.DepthError
+		if errors.As(plan.Step(at).Err, &deep) {
+			// Named from this formula, which may not have a key yet.
+			chain := slices.Clone(deep.Chain)
+			chain[0] = "this formula"
+			return refuse(fmt.Sprintf("the formula ends a chain of %d calculated metrics, %s (each reads the next), "+
+				"above the maximum of %d", deep.Depth, strings.Join(chain, " -> "), calcfield.MaxChainDepth))
+		}
 		return refuse(strings.ReplaceAll(describeFormulaError(plan.Step(at).Err, false), `"`+testKey+`"`, "this formula"))
 	}
 	result.Inputs = f.InputKeys()
@@ -534,7 +549,7 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		}
 		result.Warnings = append(result.Warnings, fmt.Sprintf("the formula reads the calculated metric(s) %s: "+
 			"each is computed here from the sample through its own formula, in dependency order, and is read "+
-			"as the value that would be stored (a chain may be at most %d calculated metrics deep); a metric "+
+			"as the value the reading would carry (a chain may be at most %d calculated metrics deep); a metric "+
 			"that produces no value in this sample leaves the formulas that read it without that input",
 			strings.Join(names, ", "), calcfield.MaxChainDepth))
 	}

@@ -215,10 +215,12 @@ tres:
   o a través de otras, y al publicar se nombra el ciclo.
 - **Se evalúan en orden de dependencia**, una vez por lectura, sea cual sea el orden en que las
   declaraste. Cada fórmula se ejecuta después de todo lo que lee.
-- **Una fórmula posterior lee el valor que se almacena.** El resultado de `kva` se formatea con su
-  tipo de datos antes de que lo lea `kw`, de modo que una métrica Integer ya ha perdido su parte
-  decimal y un Boolean es `1` o `0`. La cadena nunca usa un valor intermedio más preciso que el que
-  puedes ver en el historial.
+- **Una fórmula posterior lee el valor que registra la lectura.** El resultado de `kva` se formatea
+  con su tipo de datos antes de que lo lea `kw`, de modo que una métrica Integer es un número entero
+  y un Boolean es `1` o `0`, y `kw` lee exactamente el valor que `kva` recibe en la lectura: el mismo
+  que ven las reglas de detección y las vistas en vivo. Después, el almacenamiento lo redondea a 8
+  decimales (consulta «Almacenamiento y precisión», más abajo), así que, para un valor con más
+  decimales, el historial muestra un `kva` menos preciso que aquel con el que se calculó `kw`.
 - **Si una métrica anterior no produce valor, tampoco lo producen las fórmulas que la leen.** Si
   `kva` se omite, `kw` se omite como `missing_input`, y también `pf` a través de ella. Para dar a
   una fórmula así un valor alternativo, comprueba la métrica como cualquier entrada:
