@@ -124,36 +124,79 @@ func (dc *drainCluster) metaLeader() string {
 
 // publish stores n events, asynchronously, and returns the store sequences the broker
 // acknowledged: what the gateway's PUBACK to a device reports.
+//
+// Every one of the n is stored, or the test stops: the tests build their backlogs from n, and
+// a publish dropped on the way is a premise that failed, not a smaller backlog. A publish the
+// client refused (its in-flight window stayed full past the stall wait, which a slow runner
+// reaches) and one the broker answered with an error were not stored, so both are sent again;
+// one that got no answer at all may have been, so it is not, and the test stops naming it.
 func (dc *drainCluster) publish(from, n int) map[uint64]bool {
 	dc.t.Helper()
 	acked := map[uint64]bool{}
-	futures := make([]nats.PubAckFuture, 0, 4096)
+	type inflight struct {
+		f    nats.PubAckFuture
+		subj string
+		data []byte
+	}
+	failures := map[string]int{}
+	var retry []inflight
+	// Below the client's in-flight cap (4,000 by default), so a batch does not by itself make
+	// PublishAsync wait.
+	futures := make([]inflight, 0, 2048)
 	flush := func() {
 		select {
 		case <-dc.js.PublishAsyncComplete():
 		case <-time.After(60 * time.Second):
 		}
-		for _, f := range futures {
+		unanswered := 0
+		for _, p := range futures {
 			select {
-			case pa := <-f.Ok():
+			case pa := <-p.f.Ok():
 				acked[pa.Sequence] = true
-			case <-f.Err():
+			case err := <-p.f.Err():
+				failures[err.Error()]++
+				retry = append(retry, p)
 			default:
+				unanswered++
 			}
 		}
 		futures = futures[:0]
+		require.Zero(dc.t, unanswered, "publishes the broker never answered (they may be stored, so they "+
+			"are not sent again); failures so far: %v", failures)
 	}
-	for i := 0; i < n; i++ {
-		subj := fmt.Sprintf("%s%s.%s.devices.d%d.events", mqttMsgsSubjectPrefix, guardInstance, guardTenant, (from+i)%500)
-		f, err := dc.js.PublishAsync(subj, []byte(fmt.Sprintf("m%d", from+i)))
-		if err == nil {
-			futures = append(futures, f)
+	send := func(subj string, data []byte) {
+		var f nats.PubAckFuture
+		var err error
+		for try := 0; try < 10; try++ {
+			if f, err = dc.js.PublishAsync(subj, data); err == nil {
+				break
+			}
+			failures[err.Error()]++
+			flush()
 		}
+		require.NoError(dc.t, err, "publishing %s; failures so far: %v", subj, failures)
+		futures = append(futures, inflight{f: f, subj: subj, data: data})
 		if len(futures) == cap(futures) {
 			flush()
 		}
 	}
+	for i := 0; i < n; i++ {
+		send(fmt.Sprintf("%s%s.%s.devices.d%d.events", mqttMsgsSubjectPrefix, guardInstance, guardTenant, (from+i)%500),
+			[]byte(fmt.Sprintf("m%d", from+i)))
+	}
 	flush()
+	for round := 0; len(retry) > 0 && round < 5; round++ {
+		again := retry
+		retry = nil
+		for _, p := range again {
+			send(p.subj, p.data)
+		}
+		flush()
+	}
+	require.Empty(dc.t, retry, "publishes still refused after retries; failures: %v", failures)
+	if len(failures) > 0 {
+		dc.t.Logf("publish: sent again after %v", failures)
+	}
 	return acked
 }
 
