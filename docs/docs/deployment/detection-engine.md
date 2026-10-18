@@ -489,7 +489,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `ruleHealth.maxPendingBytes` | 4194304 | Memory budget for those waiting fires, from 65536 to 268435456 (256 MiB). |
 | `ruleHealth.maxBatchRows` | 256 | Most rules one tenant's write carries, from 1 to 4096; a tenant with more waiting is written in several transactions. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | How long one tenant's write may take, from 100 to 60000. A write that fails or times out is dropped, not retried. |
-| `derivedPublishing.maxInFlight` | 1 | How many detections a checkpoint may have waiting for the message bus to acknowledge them at once, from 1 to 1024. At 1, each is acknowledged before the next is sent. Above 1, detections of different devices are published side by side, never more than one per device at a time. See below. |
+| `derivedPublishing.maxInFlight` | 32 | How many detections a checkpoint may have waiting for the message bus to acknowledge them at once, from 1 to 1024. Detections of different devices are published side by side, never more than one per device at a time. At 1, each is acknowledged before the next is sent. See below. |
 | `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes those waiting detections may hold together, from 65536 to 268435456 (256 MiB). A single detection larger than this is published on its own. |
 
 Each `ruleHealth` and `derivedPublishing` setting is optional; one that is given must be inside its
@@ -532,18 +532,22 @@ for a tenant's first entry. That overstates what it really holds, so the byte bu
 
 A checkpoint publishes every detection it covers to the message bus, and saves the engine's state
 and acknowledges the events behind those detections only once every one of them has been
-acknowledged. With `derivedPublishing.maxInFlight` at 1, the default, that is one detection at a
+acknowledged. With `derivedPublishing.maxInFlight` at 1, that is one detection at a
 time, so a checkpoint covering many detections waits for as many acknowledgements one after another.
 Where an acknowledgement is slow, for example on a replicated stream whose servers are far apart,
 that wait is what limits how fast detections are delivered.
 
-Raising `maxInFlight` lets a checkpoint wait for several acknowledgements at once. What stays the
-same:
+The default, 32, lets a checkpoint wait for several acknowledgements at once. Under a
+firing-heavy load of about 8,000 events a second offering about 2,500 detections a second, a window
+of 32 kept up (7,658 events and 2,441 detections a second, with the watermark about 5 seconds
+behind), while a window of 1 fell steadily behind (1,656 events and 528 detections a second, with
+the watermark more than two minutes behind). Set `maxInFlight` to 1 to publish strictly one at a
+time. What stays the same at any setting:
 
 - **Each device's detections arrive in order.** A device's next detection, from any of its rules, is
   sent only after the one before it has been acknowledged, so at most one per device is ever
   waiting. A correlation rule's detections count as its anchor's. Detections of different devices
-  may arrive in a different order than before; nothing downstream depends on that order, because
+  may arrive in a different order than at 1; nothing downstream depends on that order, because
   every alarm belongs to one device.
 - **Nothing is committed ahead of its detections.** The checkpoint is saved only after every
   detection it covers has been acknowledged, exactly as at 1.

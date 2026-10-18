@@ -87,6 +87,7 @@ func stampingProcessor(t *testing.T, reg *runtime.RuleRegistry, w *derivedCaptur
 			CheckpointInterval: time.Hour,
 			TickInterval:       time.Hour,
 			Clock:              detectcore.RealClock{},
+			Output:             serialOutput,
 		},
 		registry:  reg,
 		publisher: runtime.NewPublisher(w, reg, (*DetectMetrics)(nil)),

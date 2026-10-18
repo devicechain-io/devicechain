@@ -490,7 +490,7 @@ type outputVariant struct {
 	checkpoint func(ctx context.Context, rp *ResolvedEventsProcessor) bool
 	// settle waits for anything the variant left in flight, before the oracle reads the log.
 	settle func()
-	// window is the production publish window the variant runs at (0: the default, 1).
+	// window is the production publish window the variant runs at (0: the default, 32).
 	window int
 }
 
@@ -536,9 +536,14 @@ func baselinePublishPending(ctx context.Context, rp *ResolvedEventsProcessor) bo
 	return true
 }
 
-// variantProduction runs the production checkpoint unmodified: today it IS variant A, and the
-// parity test holds the two together.
-var variantProduction = outputVariant{name: "production", checkpoint: func(ctx context.Context, rp *ResolvedEventsProcessor) bool {
+// serialOutput pins the publish window to 1, the serial path, for the tests that assert one
+// global publish order across devices (the default window overlaps devices' publishes, so only
+// each device's own order is fixed).
+var serialOutput = runtime.OutputConfig{MaxInFlight: 1, MaxBufferedBytes: runtime.DefaultMaxBufferedBytes}
+
+// variantProduction runs the production checkpoint unmodified at window 1: that IS variant A, and
+// the parity test holds the two together. The window is pinned because the default is wider.
+var variantProduction = outputVariant{name: "production", window: 1, checkpoint: func(ctx context.Context, rp *ResolvedEventsProcessor) bool {
 	return rp.checkpoint(ctx)
 }}
 
