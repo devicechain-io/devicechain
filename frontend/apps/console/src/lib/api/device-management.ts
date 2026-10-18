@@ -1208,6 +1208,8 @@ const TEST_METRIC_FORMULA = graphql(`
       value
       skippedReason
       inputs
+      chain
+      measuredInputs
       constants
       warnings
       estimatedCost

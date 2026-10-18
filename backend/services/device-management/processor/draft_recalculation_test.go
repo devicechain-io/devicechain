@@ -213,9 +213,14 @@ func TestCheckDraftCalculatedMetricsIsThePublishGate(t *testing.T) {
 	chained := append(parityMeasured(),
 		calculatedDef(9, "p", model.MetricDouble, "", "voltage * current"),
 		calculatedDef(10, "q", model.MetricDouble, "", "p * 2.0"))
-	problems := model.CheckDraftCalculatedMetrics(chained)
-	require.Len(t, problems, 1)
-	assert.Contains(t, problems[0], "a formula may read only measured metrics")
+	assert.Empty(t, model.CheckDraftCalculatedMetrics(chained), "a calculated metric may read another")
+
+	cycle := append(parityMeasured(),
+		calculatedDef(9, "p", model.MetricDouble, "", "q * 2.0 + voltage"),
+		calculatedDef(10, "q", model.MetricDouble, "", "p * 2.0"))
+	problems := model.CheckDraftCalculatedMetrics(cycle)
+	require.Len(t, problems, 1, "a ring is one problem")
+	assert.Contains(t, problems[0], "p -> q -> p")
 
 	wrongType := append(parityMeasured(), calculatedDef(9, "p", model.MetricDouble, "", "fan * 2"))
 	assert.Len(t, model.CheckDraftCalculatedMetrics(wrongType), 1)

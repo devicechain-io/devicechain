@@ -512,7 +512,10 @@ type Query {
         expression: String!
         """The calculated metric's data type: DOUBLE, INT or BOOLEAN."""
         dataType: String!
-        """The measured metrics the formula reads, with their data types."""
+        """
+        The metrics the formula reads, with their data types: measured ones, and calculated
+        ones, whose stored values are read as they were computed at resolve.
+        """
         inputs: [CalculatedInput!]!
         """Smallest value the metric may take; a result below it is skipped as range."""
         minValue: Float

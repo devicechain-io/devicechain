@@ -137,3 +137,44 @@ func TestGraphQLTestsAFormulaOverDeviceConstants(t *testing.T) {
 	require.NotNil(t, without.R.SkippedReason)
 	require.Equal(t, "missing_input", *without.R.SkippedReason)
 }
+
+// A formula that reads a calculated metric answers through the schema with the chain it depends
+// on and the measured metrics a sample must supply.
+func TestGraphQLTestsAFormulaOverAChain(t *testing.T) {
+	ctx := profileLocationCtx(t)
+	execProfileGql(t, ctx, createProfileMutation, map[string]any{"request": map[string]any{"token": "meter"}})
+	const create = `mutation ($request: MetricDefinitionCreateRequest) {
+	  createMetricDefinition(request: $request) { metricKey }
+	}`
+	for _, m := range []map[string]any{
+		{"token": "md-v", "metricKey": "voltage", "dataType": "DOUBLE"},
+		{"token": "md-c", "metricKey": "current", "dataType": "DOUBLE"},
+		{"token": "md-p", "metricKey": "power", "dataType": "DOUBLE", "expression": "voltage * current"},
+		{"token": "md-k", "metricKey": "kw", "dataType": "DOUBLE", "expression": "power / 1000.0"},
+	} {
+		m["deviceProfileToken"] = "meter"
+		execProfileGql(t, ctx, create, map[string]any{"request": m})
+	}
+	data := execProfileGql(t, ctx, `query {
+	  testMetricFormula(profileToken: "meter", expression: "kw * 2.0", dataType: "DOUBLE",
+	    sample: [{key: "voltage", value: "230"}, {key: "current", value: "10"}]) {
+	    compileError value inputs chain measuredInputs
+	  }
+	}`, nil)
+	var tested struct {
+		R struct {
+			CompileError   *string  `json:"compileError"`
+			Value          *string  `json:"value"`
+			Inputs         []string `json:"inputs"`
+			Chain          []string `json:"chain"`
+			MeasuredInputs []string `json:"measuredInputs"`
+		} `json:"testMetricFormula"`
+	}
+	require.NoError(t, json.Unmarshal(data, &tested))
+	require.Nil(t, tested.R.CompileError)
+	require.NotNil(t, tested.R.Value)
+	require.Equal(t, "4.6", *tested.R.Value)
+	require.Equal(t, []string{"kw"}, tested.R.Inputs)
+	require.Equal(t, []string{"power", "kw"}, tested.R.Chain)
+	require.Equal(t, []string{"voltage", "current"}, tested.R.MeasuredInputs)
+}

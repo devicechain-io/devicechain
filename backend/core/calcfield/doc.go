@@ -46,6 +46,21 @@
 // for an input. The value is frozen into the computed result: nothing here remembers a
 // constant, so editing the device later never rewrites a stored value.
 //
+// # Chaining
+//
+// A formula may read another calculated metric of the same profile version, to a chain of
+// at most [MaxChainDepth] calculated metrics (kW, then kVA from it, then power factor). A
+// [Plan] compiles the metrics together: it declares each calculated metric as an input after
+// the measured ones, refuses a ring of metrics reading each other ([CycleError], naming the
+// ring) and a chain too deep ([DepthError], naming the chain), and orders the formulas so each
+// follows what it reads. [Plan.Eval] runs one in that order and writes the value it computed
+// back into the sample as its declared type, the exact string that is stored, so a downstream
+// formula reads what is persisted and not a wider intermediate. A metric that produced no value
+// leaves its slot absent: a formula that reads it unguarded skips as [SkipMissingInput], one
+// that tests it with has() runs. A profile whose formulas read only measured metrics has no
+// edges and pays nothing for any of this. Every consumer that evaluates a profile's formulas
+// together (the resolver, the draft preview) goes through a Plan.
+//
 // # Fail closed at compile, skip loudly at eval
 //
 // [Env.Compile] parses, type-checks the result to the declared type exactly (an int formula

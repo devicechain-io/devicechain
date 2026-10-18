@@ -569,8 +569,23 @@ type MetricFormulaTest {
     measurements cannot be stored with) or eval_error. No value is ever substituted.
     """
     skippedReason: String
-    """The measured metrics the formula reads."""
+    """
+    The metrics the formula reads directly: measured metrics and, since a formula may read
+    another calculated metric, calculated ones.
+    """
     inputs: [String!]!
+    """
+    The calculated metrics the formula depends on, directly or through others, in the order
+    they are evaluated, each computed from the sample through its own formula. Empty for a
+    formula over measured metrics only.
+    """
+    chain: [String!]!
+    """
+    Every measured metric the evaluation reads: the formula's own and those read through the
+    calculated metrics in the chain. These are the values a sample supplies; equal to inputs
+    when the chain is empty.
+    """
+    measuredInputs: [String!]!
     """
     The device constants the formula reads as `device.name`, sorted. Each comes from a
     device's metadata when a reading is resolved; empty when the formula reads none.

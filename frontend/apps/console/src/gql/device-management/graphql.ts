@@ -1661,7 +1661,7 @@ export type TestMetricFormulaQueryVariables = Exact<{
 }>;
 
 
-export type TestMetricFormulaQuery = { testMetricFormula: { compileError: string | null, value: string | null, skippedReason: string | null, inputs: Array<string>, constants: Array<string>, warnings: Array<string>, estimatedCost: number | null } };
+export type TestMetricFormulaQuery = { testMetricFormula: { compileError: string | null, value: string | null, skippedReason: string | null, inputs: Array<string>, chain: Array<string>, measuredInputs: Array<string>, constants: Array<string>, warnings: Array<string>, estimatedCost: number | null } };
 
 export type DeleteMetricDefinitionMutationVariables = Exact<{
   token: string;
@@ -3514,6 +3514,8 @@ export const TestMetricFormulaDocument = new TypedDocumentString(`
     value
     skippedReason
     inputs
+    chain
+    measuredInputs
     constants
     warnings
     estimatedCost

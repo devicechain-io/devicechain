@@ -81,20 +81,19 @@ func (e *CalculatedMetricsCeilingError) Extensions() map[string]any {
 }
 
 // profileFormulas is one profile snapshot's metrics, split the way a formula sees them:
-// the MEASURED metrics are the inputs (the compile environment), and the calculated ones
-// are what is compiled. v1 is one level deep (ADR-082 decision 3): a calculated metric is
-// never an input, so the dependency graph is acyclic by construction.
+// the MEASURED metrics are the inputs a formula reads, and the calculated ones are what is
+// compiled, together, into a calcfield.Plan. A calculated metric may read another one
+// (ADR-082, chaining), so the plan also refuses a cycle and a chain deeper than
+// calcfield.MaxChainDepth.
 type profileFormulas struct {
 	all        []*MetricDefinition
 	measured   []*MetricDefinition
 	calculated []*MetricDefinition // sorted by key, so problems are reported in a stable order
 	duplicate  []string            // keys declared more than once, sorted
-	env        *calcfield.Env
-	envErr     error
 }
 
-// newProfileFormulas splits metrics and builds the input environment from the measured
-// ones. A measured metric whose type a formula cannot read is simply not an input.
+// newProfileFormulas splits metrics. A measured metric whose type a formula cannot read is
+// simply not an input.
 func newProfileFormulas(metrics []*MetricDefinition) *profileFormulas {
 	p := &profileFormulas{all: metrics}
 	seen := map[string]int{}
@@ -113,7 +112,6 @@ func newProfileFormulas(metrics []*MetricDefinition) *profileFormulas {
 	}
 	sort.Strings(p.duplicate)
 	sort.Slice(p.calculated, func(i, j int) bool { return p.calculated[i].MetricKey < p.calculated[j].MetricKey })
-	p.env, p.envErr = calcfield.NewEnv(formulaInputs(p.measured, ""))
 	return p
 }
 
@@ -133,49 +131,91 @@ func formulaInputs(metrics []*MetricDefinition, except string) []calcfield.Input
 	return inputs
 }
 
-// compile compiles one formula against the measured inputs. When that fails, it tries
-// once more with the calculated metrics declared too, ONLY to say the true reason when the
-// formula reads another calculated metric — which the measured-only environment reports as
-// an undeclared reference, a message that would send the author looking for a typo.
-func (p *profileFormulas) compile(def calcfield.Definition) (*calcfield.Formula, error) {
-	if p.envErr != nil {
-		return nil, &calcfield.CompileError{Key: def.Key, Expression: def.Expression,
-			Err: fmt.Errorf("the profile's measured metrics cannot be declared as formula inputs: %w", p.envErr)}
+// plan compiles definitions against the measured metrics, as the resolver compiles a
+// published version's (buildCalcPlan): the same rule, so a formula this gate admits is one
+// the resolver can run. The error is for measured metrics that cannot be declared as inputs.
+func (p *profileFormulas) plan(defs []calcfield.Definition) (*calcfield.Plan, error) {
+	plan, err := calcfield.NewPlan(formulaInputs(p.measured, ""), defs)
+	if err != nil {
+		return nil, fmt.Errorf("the profile's measured metrics cannot be declared as formula inputs: %w", err)
 	}
-	f, err := p.env.Compile(def)
-	if err == nil {
-		return f, nil
+	return plan, nil
+}
+
+// planProblems is why each metric of plan that cannot run cannot, in key order, leaving out
+// the keys in skip (already reported another way).
+func planProblems(plan *calcfield.Plan, skip map[string]bool) []string {
+	var failed []*calcfield.Step
+	for i := 0; i < plan.Len(); i++ {
+		if s := plan.Step(i); s.Err != nil && !skip[s.Key] {
+			failed = append(failed, s)
+		}
 	}
-	var ce *calcfield.CompileError
-	if !errors.As(err, &ce) || len(p.calculated) == 0 {
-		return nil, err
+	sort.Slice(failed, func(a, b int) bool { return failed[a].Key < failed[b].Key })
+	// A ring is one problem however many metrics are on it.
+	out := make([]string, 0, len(failed))
+	for _, s := range failed {
+		if msg := s.Err.Error(); !slices.Contains(out, msg) {
+			out = append(out, msg)
+		}
 	}
-	wide, werr := calcfield.NewEnv(formulaInputs(p.all, def.Key))
-	if werr != nil {
-		return nil, err
+	return out
+}
+
+// hasKey reports whether any metric of the profile has key.
+func (p *profileFormulas) hasKey(key string) bool {
+	for _, m := range p.all {
+		if m.MetricKey == key {
+			return true
+		}
 	}
-	probe, perr := wide.Compile(def)
-	if perr != nil {
-		return nil, err
-	}
-	var reads []string
-	for _, k := range probe.InputKeys() {
-		for _, c := range p.calculated {
-			if c.MetricKey == k {
-				reads = append(reads, k)
+	return false
+}
+
+// measuredInputsOf is the measured metrics f and the formulas it depends on read, in the
+// plan's input order.
+func measuredInputsOf(plan *calcfield.Plan, f *calcfield.Formula, upstream []*calcfield.Formula) []string {
+	read := map[string]bool{}
+	for _, g := range append([]*calcfield.Formula{f}, upstream...) {
+		for _, k := range g.InputKeys() {
+			if !plan.Env().IsCalculated(k) {
+				read[k] = true
 			}
 		}
 	}
-	if len(reads) == 0 {
-		return nil, err
+	out := make([]string, 0, len(read))
+	for _, in := range plan.Env().Inputs() {
+		if read[in.Key] {
+			out = append(out, in.Key)
+		}
 	}
-	verb := "are"
-	if len(reads) == 1 {
-		verb = "is"
+	return out
+}
+
+// upstreamFormulas is the formulas f reads, directly or through others, in evaluation order.
+func upstreamFormulas(plan *calcfield.Plan, f *calcfield.Formula) []*calcfield.Formula {
+	byKey := make(map[string]*calcfield.Formula, plan.Len())
+	for _, g := range plan.Formulas() {
+		byKey[g.Key()] = g
 	}
-	return nil, &calcfield.CompileError{Key: def.Key, Expression: def.Expression,
-		Err: fmt.Errorf("the formula reads %s, which %s calculated; a formula may read only measured metrics",
-			strings.Join(reads, ", "), verb)}
+	seen := map[string]*calcfield.Formula{}
+	var walk func(g *calcfield.Formula)
+	walk = func(g *calcfield.Formula) {
+		for _, k := range g.InputKeys() {
+			if u, ok := byKey[k]; ok && seen[k] == nil {
+				seen[k] = u
+				walk(u)
+			}
+		}
+	}
+	walk(f)
+	out := make([]*calcfield.Formula, 0, len(seen))
+	for _, g := range plan.Formulas() { // evaluation order
+		if seen[g.Key()] != nil {
+			out = append(out, g)
+		}
+	}
+	return out
 }
 
 // describeFormulaError renders a compile refusal for the author. In the publish gate the
@@ -225,33 +265,38 @@ func (p *profileFormulas) problems() []string {
 	for _, k := range p.duplicate {
 		out = append(out, fmt.Sprintf("metric key %q is declared more than once", k))
 	}
-	compiled := make([]*calcfield.Formula, 0, len(p.calculated))
+	defs := make([]calcfield.Definition, 0, len(p.calculated))
+	// reported are the metrics already refused below, whose compile error would only repeat it.
+	reported := map[string]bool{}
 	for _, m := range p.calculated {
 		def, err := definitionOf(m)
 		if err != nil {
 			out = append(out, err.Error())
+			reported[m.MetricKey] = true
 			continue
 		}
+		defs = append(defs, def)
 		// The same reading Resolved gives an allowed-values list: only a non-empty array of
 		// strings restricts anything, so only that is a problem here.
 		var allowed []string
 		if m.Enum != nil && json.Unmarshal(*m.Enum, &allowed) == nil && len(allowed) > 0 {
 			out = append(out, fmt.Sprintf("calculated metric %q declares allowed values; a calculated metric "+
 				"cannot restrict its values with a list (use minValue and maxValue)", m.MetricKey))
+			reported[m.MetricKey] = true
 			continue
 		}
 		if def.Min != nil && def.Max != nil && *def.Min > *def.Max {
 			out = append(out, fmt.Sprintf("calculated metric %q: minValue %v is above maxValue %v, so no value "+
 				"could ever be stored", m.MetricKey, *def.Min, *def.Max))
-			continue
+			reported[m.MetricKey] = true
 		}
-		f, err := p.compile(def)
-		if err != nil {
-			out = append(out, err.Error())
-			continue
-		}
-		compiled = append(compiled, f)
 	}
+	plan, err := p.plan(defs)
+	if err != nil {
+		return append(out, err.Error())
+	}
+	out = append(out, planProblems(plan, reported)...)
+	compiled := plan.Formulas()
 	if err := calcfield.CheckProfileCost(compiled); err != nil {
 		out = append(out, err.Error())
 	}
@@ -327,9 +372,14 @@ type MetricFormulaTestResult struct {
 	Value         *string
 	SkippedReason *string
 	Inputs        []string
-	Constants     []string
-	Warnings      []string
-	EstimatedCost *int
+	// Chain is the calculated metrics the formula depends on, directly or through others, in
+	// evaluation order; MeasuredInputs every measured metric the evaluation reads (the formula's
+	// own and the chain's), in the profile's input order.
+	Chain          []string
+	MeasuredInputs []string
+	Constants      []string
+	Warnings       []string
+	EstimatedCost  *int
 }
 
 // storedMeasurementMagnitude is the bound on a stored measurement value: event storage
@@ -368,7 +418,8 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		drafted = append(drafted, m)
 	}
 	p := newProfileFormulas(drafted)
-	result := &MetricFormulaTestResult{Inputs: []string{}, Constants: []string{}, Warnings: []string{}}
+	result := &MetricFormulaTestResult{Inputs: []string{}, Chain: []string{}, MeasuredInputs: []string{},
+		Constants: []string{}, Warnings: []string{}}
 	refuse := func(msg string) (*MetricFormulaTestResult, error) {
 		result.CompileError = &msg
 		return result, nil
@@ -381,17 +432,58 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		return refuse(fmt.Sprintf("minValue %v is above maxValue %v, so no value could ever be stored",
 			*request.MinValue, *request.MaxValue))
 	}
-	f, err := p.compile(calcfield.Definition{Key: key, Expression: request.Expression, Type: t,
+	// The formula is compiled WITH the draft's other calculated metrics, as one plan, so it may
+	// read them (chaining) and a cycle or a chain too deep is refused here as the publish gate
+	// would. A formula with no key yet is planned under a name no metric has.
+	testKey := key
+	if testKey == "" {
+		testKey = "_formula_under_test"
+		for p.hasKey(testKey) {
+			testKey += "_"
+		}
+	}
+	defs := make([]calcfield.Definition, 0, len(p.calculated)+1)
+	for _, m := range p.calculated {
+		if def, err := definitionOf(m); err == nil {
+			defs = append(defs, def)
+		}
+	}
+	defs = append(defs, calcfield.Definition{Key: testKey, Expression: request.Expression, Type: t,
 		Min: request.MinValue, Max: request.MaxValue})
+	plan, err := p.plan(defs)
 	if err != nil {
-		return refuse(describeFormulaError(err, false))
+		return refuse(err.Error())
+	}
+	at := -1
+	for i := 0; i < plan.Len(); i++ {
+		if plan.Step(i).Key == testKey {
+			at = i
+		}
+	}
+	if at < 0 {
+		return refuse(fmt.Sprintf("the formula's key %q cannot be planned", key))
+	}
+	f := plan.Step(at).Formula
+	if f == nil {
+		return refuse(strings.ReplaceAll(describeFormulaError(plan.Step(at).Err, false), `"`+testKey+`"`, "this formula"))
 	}
 	result.Inputs = f.InputKeys()
+	// The constants the formula's whole chain reads: the values the evaluation below needs.
+	upstream := upstreamFormulas(plan, f)
+	result.MeasuredInputs = measuredInputsOf(plan, f, upstream)
+	for _, u := range upstream {
+		result.Chain = append(result.Chain, u.Key())
+	}
 	result.Constants = f.ConstantKeys()
+	for _, u := range upstream {
+		result.Constants = append(result.Constants, u.ConstantKeys()...)
+	}
+	sort.Strings(result.Constants)
+	result.Constants = slices.Compact(result.Constants)
 	cost := int(f.CostMax())
 	result.EstimatedCost = &cost
 
-	sample := p.env.Sample()
+	sample := plan.Env().Sample()
 	defer sample.Release()
 	seen := make(map[string]bool, len(request.Sample))
 	for _, v := range request.Sample {
@@ -399,7 +491,10 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 			return nil, &InvalidArgumentError{Msg: fmt.Sprintf("sample names %q more than once", v.Key)}
 		}
 		seen[v.Key] = true
-		if isInput, _ := sample.Set(v.Key, v.Value); !isInput {
+		if plan.Env().IsCalculated(v.Key) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("the sample value for %q is ignored: it is a "+
+				"calculated metric, computed here from its own formula as it is when a reading is resolved", v.Key))
+		} else if isInput, _ := sample.Set(v.Key, v.Value); !isInput {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("the sample value for %q is ignored: it is "+
 				"not a measured metric of this profile, so a formula cannot read it", v.Key))
 		}
@@ -412,14 +507,37 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		}
 		seenConstant[v.Key] = true
 		if !slices.Contains(result.Constants, v.Key) {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("the constant value for %q is ignored: the "+
-				"formula does not read device.%s", v.Key, v.Key))
+			who := "the formula does not"
+			if len(upstream) > 0 {
+				who = "neither the formula nor the calculated metrics it reads"
+			}
+			result.Warnings = append(result.Warnings, fmt.Sprintf("the constant value for %q is ignored: %s read device.%s",
+				v.Key, who, v.Key))
 			continue
 		}
 		constants = append(constants, calcfield.ConstantFromString(v.Key, v.Value))
 	}
 	sample.UseConstants(constants)
-	out := f.Eval(sample)
+	// Every metric up to the formula under test, in the order the resolver evaluates them, so
+	// an upstream calculated metric has the value it would be stored with when this one reads it.
+	var out calcfield.Result
+	for i := 0; i <= at; i++ {
+		r := plan.Eval(sample, i)
+		if i == at {
+			out = r
+		}
+	}
+	if len(upstream) > 0 {
+		names := make([]string, len(upstream))
+		for i, u := range upstream {
+			names[i] = u.Key()
+		}
+		result.Warnings = append(result.Warnings, fmt.Sprintf("the formula reads the calculated metric(s) %s: "+
+			"each is computed here from the sample through its own formula, in dependency order, and is read "+
+			"as the value that would be stored (a chain may be at most %d calculated metrics deep); a metric "+
+			"that produces no value in this sample leaves the formulas that read it without that input",
+			strings.Join(names, ", "), calcfield.MaxChainDepth))
+	}
 	if len(result.Constants) > 0 {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("the formula reads the device constants %s: each is "+
 			"read from the device's metadata when a reading is resolved and must be a JSON number there; a device "+
