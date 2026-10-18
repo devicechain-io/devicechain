@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/governance"
 )
 
@@ -32,6 +33,15 @@ import (
 //     (BeginCalculation, Set, Append), so their values, skips and formatting are the
 //     resolver's by construction, and the entries are sorted by name as the resolver sorts
 //     them.
+//
+// Per-device constants (`device.name` in a formula) are the one input a stored event does not
+// carry. A recalculation takes them from its CALLER, which supplies the device's CURRENT
+// constants (DeviceConstants over the device's metadata as it is now): a replayed reading is
+// recomputed with today's calibration factor, not the one the device had when it was
+// resolved, so it can differ from the value that was stored then — and from what an edit
+// made after the replay window will compute. The stored value is not rewritten; only the
+// preview shows it. A device whose constants are not supplied has none, and a formula
+// reading one skips as missing_input.
 //
 // What it cannot reproduce, and does not pretend to: a value the version that resolved the
 // event DROPPED (an undeclared non-numeric value, a device-sent value under a key that was
@@ -61,9 +71,10 @@ func CheckDraftCalculatedMetrics(defs []*MetricDefinition) []string {
 // contract above). It never writes to entries: it returns a new slice, and the entries it
 // keeps are copied by value with their pointers shared, as the resolver's own copies are.
 // obs is told every formula's outcome, as the resolver's observer is.
-func (r ProfileResolution) Recalculate(entries []ResolvedMeasurementEntry, obs CalculationObserver) []ResolvedMeasurementEntry {
+func (r ProfileResolution) Recalculate(entries []ResolvedMeasurementEntry, constants []calcfield.Constant,
+	obs CalculationObserver) []ResolvedMeasurementEntry {
 	out := make([]ResolvedMeasurementEntry, 0, len(entries)+r.CalculatedCount())
-	calc := r.BeginCalculation()
+	calc := r.BeginCalculation(constants)
 	defer calc.Release()
 	for _, e := range entries {
 		if e.Derived {

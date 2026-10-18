@@ -30,6 +30,9 @@ type Sample struct {
 	// as its declared type, SkipNonFinite for a DOUBLE that parsed to NaN or ±Inf. SkipNone
 	// for an input that is present or simply absent.
 	bad []SkipReason
+	// consts are the device's constants (UseConstants), held not copied; nil for a profile
+	// whose formulas read none.
+	consts []Constant
 }
 
 // Sample takes an empty Sample for this Env from its pool.
@@ -47,6 +50,7 @@ func (s *Sample) Release() {
 func (s *Sample) Reset() {
 	clear(s.vals)
 	clear(s.bad)
+	s.consts = nil
 }
 
 // Set records the raw string value of the input with the given key, parsing it once as the
@@ -145,8 +149,11 @@ func (s *Sample) present(i int) bool { return s.vals[i] != nil }
 // identifier resolves to its value or, when absent or unparseable, to the inputError CEL then
 // propagates as the attribute's error.
 func (s *Sample) ResolveName(name string) (any, bool) {
-	if name == VarM {
+	switch name {
+	case VarM:
 		return sampleMap{s: s}, true
+	case VarDevice:
+		return constMap{s: s}, true
 	}
 	i, ok := s.env.index[name]
 	if !ok {

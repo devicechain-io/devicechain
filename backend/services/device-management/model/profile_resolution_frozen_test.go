@@ -116,6 +116,12 @@ func TestAResolutionHandsOutNothingWritable(t *testing.T) {
 				// stamped derived ones (TestRecalculatedEntriesAreTheCallers).
 				continue
 			}
+			if m.Name == "ConstantKeys" || m.Name == "DeviceConstants" {
+				// A clone of the plan's names, and constants freshly read from the caller's
+				// metadata: neither is the resolution's memory
+				// (TestConstantAccessorsHandOutCopies).
+				continue
+			}
 			for o := 0; o < m.Type.NumOut(); o++ {
 				if out := m.Type.Out(o); !readOnly[out] && !copiesWhole(out) {
 					t.Errorf("%s.%s returns %s, which shares memory with the resolution", typ, m.Name, out)
@@ -306,13 +312,13 @@ func TestRecalculatedEntriesAreTheCallers(t *testing.T) {
 			Expression: sql.NullString{String: "v * 2.0", Valid: true}},
 	})
 	entries := []ResolvedMeasurementEntry{{Name: "v", Value: "3"}}
-	first := r.Recalculate(entries, nopObserver{})
+	first := r.Recalculate(entries, nil, nopObserver{})
 	if len(first) != 2 || first[0].Name != "p" || first[0].Value != "6" {
 		t.Fatalf("recalculated %+v", first)
 	}
 	*first[0].Unit, *first[0].DataType, *first[0].Classifier = "W", "INT", 99
 	first[0].Value = "x"
-	again := r.Recalculate(entries, nopObserver{})
+	again := r.Recalculate(entries, nil, nopObserver{})
 	if *again[0].Unit != "kW" || *again[0].DataType != "DOUBLE" || *again[0].Classifier != 2 || again[0].Value != "6" {
 		t.Errorf("a recalculated entry pointed into the resolution: %+v", again[0])
 	}

@@ -225,3 +225,62 @@ type DisabledDevicePageResolver struct {
 
 func (r *DisabledDevicePageResolver) DeviceTokens() []string { return r.M.Tokens }
 func (r *DisabledDevicePageResolver) NextCursor() *string    { return formatCursor(r.M.NextCursor) }
+
+// DeviceConstantsPage resolves one page of the constants a profile's devices hold in their
+// metadata (model/api_device_constants.go), for the rule preview's recalculation.
+func (r *SchemaResolver) DeviceConstantsPage(ctx context.Context, args struct {
+	ProfileToken string
+	Keys         []string
+	AfterId      *string
+	Limit        int32
+}) (*DeviceConstantsPageResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	afterId, err := optionalCursor(args.AfterId)
+	if err != nil {
+		return nil, err
+	}
+	page, err := r.GetApi(ctx).DeviceConstantsPage(ctx, args.ProfileToken, args.Keys, afterId, int(args.Limit))
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceConstantsPageResolver{M: *page}, nil
+}
+
+// DeviceConstantsPageResolver exposes one page of device constants.
+type DeviceConstantsPageResolver struct {
+	M model.DeviceConstantsPage
+}
+
+func (r *DeviceConstantsPageResolver) Entries() []*DeviceConstantsEntryResolver {
+	out := make([]*DeviceConstantsEntryResolver, 0, len(r.M.Entries))
+	for i := range r.M.Entries {
+		out = append(out, &DeviceConstantsEntryResolver{M: r.M.Entries[i]})
+	}
+	return out
+}
+
+func (r *DeviceConstantsPageResolver) NextCursor() *string { return formatCursor(r.M.NextCursor) }
+
+// DeviceConstantsEntryResolver exposes the constants one device holds.
+type DeviceConstantsEntryResolver struct {
+	M model.DeviceConstantsEntry
+}
+
+func (r *DeviceConstantsEntryResolver) DeviceToken() string { return r.M.DeviceToken }
+func (r *DeviceConstantsEntryResolver) Constants() []*DeviceConstantResolver {
+	out := make([]*DeviceConstantResolver, 0, len(r.M.Constants))
+	for i := range r.M.Constants {
+		out = append(out, &DeviceConstantResolver{M: r.M.Constants[i]})
+	}
+	return out
+}
+
+// DeviceConstantResolver exposes one constant.
+type DeviceConstantResolver struct {
+	M model.DeviceConstant
+}
+
+func (r *DeviceConstantResolver) Key() string      { return r.M.Key }
+func (r *DeviceConstantResolver) Number() *float64 { return r.M.Number }

@@ -105,3 +105,34 @@ func BenchmarkCompile(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkEval_Const is BenchmarkEval_One with the formula reading a device constant
+// (`voltage * current / 1000 * device.calibration`), the constants built once per event as
+// the resolver builds them and handed to every sample: the per-sample cost of a constant
+// over a formula that has none.
+func BenchmarkEval_Const(b *testing.B) {
+	env := fixtureEnv(b)
+	f, err := env.Compile(Definition{Key: "power_kw", Type: Double,
+		Expression: "voltage * current / 1000 * device.calibration"})
+	if err != nil {
+		b.Fatal(err)
+	}
+	idx := make([]int, len(benchSample))
+	for i, kv := range benchSample {
+		idx[i], _ = env.Index(kv.key)
+	}
+	consts := []Constant{NewConstant("calibration", 1.02)}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		s := env.Sample()
+		for i, kv := range benchSample {
+			_ = s.SetAt(idx[i], kv.value)
+		}
+		s.UseConstants(consts)
+		if r := f.Eval(s); !r.OK() {
+			b.Fatalf("skipped: %s %v", r.Skip, r.Err)
+		}
+		s.Release()
+	}
+}

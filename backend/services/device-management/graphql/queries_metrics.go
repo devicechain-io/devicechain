@@ -102,6 +102,7 @@ func (r *SchemaResolver) TestMetricFormula(ctx context.Context, args struct {
 	MinValue     *float64
 	MaxValue     *float64
 	Sample       []model.MetricValueInput
+	Constants    *[]model.MetricValueInput
 }) (*MetricFormulaTestResolver, error) {
 	if err := auth.Authorize(ctx, auth.DeviceRead); err != nil {
 		return nil, err
@@ -109,9 +110,18 @@ func (r *SchemaResolver) TestMetricFormula(ctx context.Context, args struct {
 	res, err := r.GetApi(ctx).TestMetricFormula(ctx, &model.MetricFormulaTestRequest{
 		ProfileToken: args.ProfileToken, Expression: args.Expression, DataType: args.DataType,
 		MetricKey: args.MetricKey, MinValue: args.MinValue, MaxValue: args.MaxValue, Sample: args.Sample,
+		Constants: derefList(args.Constants),
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &MetricFormulaTestResolver{M: *res}, nil
+}
+
+// derefList is the list an optional list argument carries, or none.
+func derefList[T any](in *[]T) []T {
+	if in == nil {
+		return nil
+	}
+	return *in
 }

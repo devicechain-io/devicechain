@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -65,6 +66,14 @@ type CalculatedInput struct {
 	DataType string
 }
 
+// CalculatedConstant is one per-device constant a draft formula reads as `device.name`: the
+// number the device's metadata holds, as text. The caller (the console) reads it from the device
+// it is previewing; this service holds no device records.
+type CalculatedConstant struct {
+	Key   string
+	Value string
+}
+
 // CalculatedEventsRequest is a draft formula and the device and range to evaluate it over.
 type CalculatedEventsRequest struct {
 	DeviceToken string
@@ -73,8 +82,14 @@ type CalculatedEventsRequest struct {
 	Inputs      []CalculatedInput
 	MinValue    *float64
 	MaxValue    *float64
-	From        time.Time
-	To          time.Time
+	// Constants are the device's current values for the constants the formula reads, at most
+	// calcfield.MaxProfileConstants. One the formula reads and this omits is absent (the samples
+	// are skipped as missing_input), one it does not read is ignored. Every sample is evaluated
+	// with the same constants: they are the device's current ones, not the ones its history was
+	// recorded under.
+	Constants []CalculatedConstant
+	From      time.Time
+	To        time.Time
 }
 
 // CalculatedInputValue is one input of one sample, as the formula read it: the stored value
@@ -130,6 +145,9 @@ func compileDraftFormula(req CalculatedEventsRequest) (*calcfield.Formula, *calc
 	}
 	if len(req.Inputs) > calcfield.MaxInputs {
 		return nil, nil, nil, limit.Exceeded("inputs", len(req.Inputs), calcfield.MaxInputs)
+	}
+	if len(req.Constants) > calcfield.MaxProfileConstants {
+		return nil, nil, nil, limit.Exceeded("constants", len(req.Constants), calcfield.MaxProfileConstants)
 	}
 	resultType, ok := calcfield.ParseType(req.DataType)
 	if !ok {
@@ -227,7 +245,11 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 	}
 	defer rows.Close()
 
-	ev := newSampleEvaluator(formula, env, types)
+	constants, err := formulaConstants(formula, req.Constants)
+	if err != nil {
+		return nil, err
+	}
+	ev := newSampleEvaluator(formula, env, types, constants)
 	defer ev.release()
 	var cur *storedInputRow
 	for rows.Next() {
@@ -270,15 +292,38 @@ type sampleEvaluator struct {
 	result  CalculatedEventsResult
 	open    *CalculatedSample
 	values  int // input values recorded across every sample
+	// constants are the device's, shared by every sample of the read.
+	constants []calcfield.Constant
 }
 
-func newSampleEvaluator(f *calcfield.Formula, env *calcfield.Env, types map[string]calcfield.Type) *sampleEvaluator {
-	return &sampleEvaluator{formula: f, types: types, sample: env.Sample(),
+func newSampleEvaluator(f *calcfield.Formula, env *calcfield.Env, types map[string]calcfield.Type,
+	constants []calcfield.Constant) *sampleEvaluator {
+	return &sampleEvaluator{formula: f, types: types, sample: env.Sample(), constants: constants,
 		skipped: map[calcfield.SkipReason]int{}, result: CalculatedEventsResult{Samples: []CalculatedSample{}}}
+}
+
+// formulaConstants is the request's constants the formula reads, parsed once as DOUBLEs: text
+// that is not a number is an unusable constant (invalid_input), never a zero. A name given twice
+// is refused rather than resolved by order.
+func formulaConstants(f *calcfield.Formula, given []CalculatedConstant) ([]calcfield.Constant, error) {
+	read := f.ConstantKeys()
+	var out []calcfield.Constant
+	seen := make(map[string]bool, len(given))
+	for _, c := range given {
+		if seen[c.Key] {
+			return nil, integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf("constants name %q more than once", c.Key))
+		}
+		seen[c.Key] = true
+		if slices.Contains(read, c.Key) {
+			out = append(out, calcfield.ConstantFromString(c.Key, c.Value))
+		}
+	}
+	return out, nil
 }
 
 func (e *sampleEvaluator) begin(eventId []byte, at time.Time) {
 	e.sample.Reset()
+	e.sample.UseConstants(e.constants)
 	e.open = &CalculatedSample{OccurredTime: at.UTC(), EventId: eventId, Inputs: []CalculatedInputValue{}}
 }
 

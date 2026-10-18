@@ -20,6 +20,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -435,8 +436,15 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 	// Calculated metrics (ADR-082). A version with none — every profile without formulas —
 	// pays this one compare per event and nothing else: no sample is taken, no value parsed.
 	calculated := profile.CalculatedCount() > 0
+	var constants []calcfield.Constant
 	if calculated {
 		rez.calcObs.ctx, rez.calcObs.device, rez.calcObs.version = ctx, device.Token, profile.Scope().ProfileVersionToken
+		// The device's numeric constants (`device.name` in a formula), read ONCE for the event
+		// from the device record already in hand — no extra read, no per-type cache change —
+		// and nil, with the metadata untouched, for a version whose formulas read none. Each
+		// computed value is frozen with the constants as they are now: a later edit to the
+		// device never rewrites it.
+		constants = profile.DeviceConstants(device.Metadata)
 	}
 	for _, umsentry := range mpayload.Entries {
 		rmentries := make([]model.ResolvedMeasurementEntry, 0)
@@ -444,7 +452,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		if calculated {
 			// Sized for the calculated values too, so appending them does not regrow it.
 			rmentries = make([]model.ResolvedMeasurementEntry, 0, len(umsentry.Measurements)+profile.CalculatedCount())
-			calc = profile.BeginCalculation()
+			calc = profile.BeginCalculation(constants)
 		}
 		for mxkey, mxvalue := range umsentry.Measurements {
 			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}

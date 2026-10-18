@@ -92,7 +92,7 @@ describe('MetricDefinitionForm: calculated metrics', () => {
 
     await screen.findByText(/The formula compiles/);
     expect(screen.getByText(/estimated cost 7 of at most 100/)).toBeTruthy();
-    expect(screen.getByTestId('formula-outcome').textContent).toContain('an input the formula reads is missing');
+    expect(screen.getByTestId('formula-outcome').textContent).toContain('an input or device constant the formula reads is missing');
 
     fireEvent.change(screen.getByLabelText('voltage'), { target: { value: '230' } });
     fireEvent.change(screen.getByLabelText('current'), { target: { value: '5' } });

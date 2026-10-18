@@ -1192,6 +1192,7 @@ const TEST_METRIC_FORMULA = graphql(`
     $minValue: Float
     $maxValue: Float
     $sample: [MetricValueInput!]!
+    $constants: [MetricValueInput!]
   ) {
     testMetricFormula(
       profileToken: $profileToken
@@ -1201,11 +1202,13 @@ const TEST_METRIC_FORMULA = graphql(`
       minValue: $minValue
       maxValue: $maxValue
       sample: $sample
+      constants: $constants
     ) {
       compileError
       value
       skippedReason
       inputs
+      constants
       warnings
       estimatedCost
     }

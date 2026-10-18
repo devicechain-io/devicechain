@@ -90,6 +90,11 @@ type Formula struct {
 	// required are the inputs the expression never tests for presence (no has(m.k), no
 	// "k" in m), ascending. Any of them absent skips the formula before it runs.
 	required []int
+	// constants are the device constants the expression names, and requiredConstants the ones
+	// it never tests for presence (no has(device.k), no "k" in device); both sorted by name.
+	// Both are nil for a formula that reads none, which is every formula that predates them.
+	constants         []string
+	requiredConstants []string
 }
 
 // Compile parses, type-checks, allowlists and cost-gates a definition against e. It fails
@@ -102,7 +107,8 @@ type Formula struct {
 //   - the result type is not exactly the declared type (an int formula for a DOUBLE metric
 //     needs double(...), a double for an INT metric needs int(...));
 //   - it uses anything outside the allowlist (see the package documentation);
-//   - it reads no input at all (a constant is not a measurement);
+//   - it reads no input at all (a literal or a device constant is not a measurement), or reads
+//     more than MaxConstants device constants;
 //   - its static worst-case cost exceeds CostCeiling.
 func (e *Env) Compile(def Definition) (*Formula, error) {
 	return e.compile(def, CostCeiling)
@@ -135,11 +141,11 @@ func (e *Env) compile(def Definition, staticCeiling uint64) (*Formula, error) {
 			ast.OutputType(), def.Type, conversionHint(def.Type)))
 	}
 	w := &allowlist{env: e}
-	inputs, required, err := w.check(ast.NativeRep().Expr())
+	walk, err := w.check(ast.NativeRep().Expr())
 	if err != nil {
 		return refuse(err)
 	}
-	if len(inputs) == 0 {
+	if len(walk.inputs) == 0 {
 		return refuse(errors.New("the formula reads no input: a calculated metric must use at least one measured metric"))
 	}
 	est, err := e.cel.EstimateCost(ast, estimator{size: uint64(len(e.inputs))})
@@ -154,7 +160,8 @@ func (e *Env) compile(def Definition, staticCeiling uint64) (*Formula, error) {
 	if err != nil {
 		return refuse(fmt.Errorf("build program: %w", err))
 	}
-	return &Formula{env: e, def: def, program: program, costMax: est.Max, inputs: inputs, required: required}, nil
+	return &Formula{env: e, def: def, program: program, costMax: est.Max, inputs: walk.inputs,
+		required: walk.required, constants: walk.constants, requiredConstants: walk.reqConstant}, nil
 }
 
 // CheckProfileCost sums the static cost of a profile's formulas against ProfileCostCeiling.
@@ -213,6 +220,10 @@ func (f *Formula) InputKeys() []string {
 	return keys
 }
 
+// ConstantKeys returns the names of the device constants the formula reads, sorted. Empty for
+// a formula that reads none. The caller reads exactly these from the device record.
+func (f *Formula) ConstantKeys() []string { return append([]string{}, f.constants...) }
+
 // errForeignSample is a Sample from another Env handed to Eval: a caller bug, skipped loudly.
 var errForeignSample = errors.New("calcfield: the sample belongs to a different environment")
 
@@ -249,6 +260,11 @@ func (f *Formula) Eval(s *Sample) Result {
 	for _, i := range f.required {
 		if s.vals[i] == nil {
 			return Result{Skip: s.absentReason(i)}
+		}
+	}
+	for _, k := range f.requiredConstants {
+		if r := s.constantReason(k); r != SkipNone {
+			return Result{Skip: r}
 		}
 	}
 	out, _, err := f.program.Eval(s)
@@ -371,8 +387,13 @@ func FormatBool(b bool) string {
 type estimator struct{ size uint64 }
 
 func (e estimator) EstimateSize(node checker.AstNode) *checker.SizeEstimate {
-	if path := node.Path(); len(path) > 0 && path[0] == VarM {
-		return &checker.SizeEstimate{Min: 0, Max: e.size}
+	if path := node.Path(); len(path) > 0 {
+		switch path[0] {
+		case VarM:
+			return &checker.SizeEstimate{Min: 0, Max: e.size}
+		case VarDevice:
+			return &checker.SizeEstimate{Min: 0, Max: MaxConstants}
+		}
 	}
 	return nil
 }

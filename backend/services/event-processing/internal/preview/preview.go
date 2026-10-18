@@ -33,6 +33,15 @@
 // stream are never written, and the draft reaches no live engine, store or subject — it lives in
 // this call's arguments and nowhere else (TestDraftCalculationLeaksNowhere).
 //
+// PER-DEVICE CONSTANTS (a formula's `device.name`) are the one input a replayed event does not
+// carry, and event-processing holds no device records. The caller reads the CURRENT constants of
+// the profile's devices (ConstantSource, from device-management's metadata) and hands them in with
+// WithDeviceConstants; each replayed event is recalculated with the constants of the device that
+// sent it. So a preview shows what the draft would compute NOW, with each device as it is NOW:
+// a reading stored under an older calibration factor previews under today's, and may differ from
+// the value that was stored then. A device the source did not list has none, and a formula that
+// reads a constant skips on its readings as missing_input.
+//
 // A preview is an APPROXIMATION by design, in honest ways it documents rather than hides: it starts
 // COLD at the window (no state carried from before the window, so a mid-window duration hold that
 // began earlier is not seen, and an aggregate pane straddling the window End never closes); it
@@ -130,6 +139,35 @@ type ReplayOpener interface {
 	NewReplayReaderFromTime(suffix string, startTime time.Time) (messaging.ReplayReader, time.Time, error)
 }
 
+// MaxConstantDevices bounds how many of a profile's devices a preview reads constants for. A
+// profile with more devices previews the first MaxConstantDevices (by device id) with their
+// constants and the rest without, and says so: reading every device of a large fleet to
+// preview a window of its history is not a bounded job.
+const MaxConstantDevices = 10_000
+
+// ConstantSource reads the current per-device constants of a profile's devices: for each device
+// that holds at least one of keys, its constants as device-management's resolver would read them
+// from the device's metadata. It scans at most maxDevices devices and reports truncated when the
+// profile has more. The tenant rides the source's own credentials (a service token on the
+// request's tenant), never an argument.
+type ConstantSource interface {
+	DeviceConstants(ctx context.Context, tenant, profileToken string, keys []string, maxDevices int) (
+		byDevice map[string][]calcfield.Constant, truncated bool, err error)
+}
+
+// Option adjusts a Run.
+type Option func(*options)
+
+type options struct {
+	constants map[string][]calcfield.Constant
+}
+
+// WithDeviceConstants gives the replay each device's current constants, by device token, for the
+// draft's formulas that read `device.name`. The map is read, never written, and may be nil.
+func WithDeviceConstants(byDevice map[string][]calcfield.Constant) Option {
+	return func(o *options) { o.constants = byDevice }
+}
+
 // Run drives an ephemeral DETECT engine over the replayed resolved-event history for one tenant and
 // profile version across an occurred-time window, collecting the RAISE/RESOLVE edges reg's rules would
 // have produced. It never publishes, snapshots, or touches the live singleton (see the package doc).
@@ -148,7 +186,11 @@ type ReplayOpener interface {
 // values as stored.
 func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.RuleRegistry,
 	tenant, profileVersion string, tr TimeRange, lateness time.Duration, maxScan, maxRead int,
-	fences runtime.FenceSetSource, draft *dmmodel.ProfileResolution) (Result, error) {
+	fences runtime.FenceSetSource, draft *dmmodel.ProfileResolution, opts ...Option) (Result, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
 	if maxScan <= 0 {
 		maxScan = DefaultMaxScan
 	}
@@ -274,7 +316,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		}
 		res.Stats.EventsScanned++
 		if draft != nil {
-			event = recalculated(event, *draft, &res.Stats)
+			event = recalculated(event, *draft, o.constants[event.SourceDeviceToken], &res.Stats)
 		}
 		// nil attr: a preview resolves no device attributes, so every device previews as having none.
 		// A structured dynamic threshold therefore does not fire (its positive presence guard reads
@@ -392,7 +434,8 @@ func occurredSpan(event *dmmodel.ResolvedEvent) (time.Time, time.Time) {
 // value sharing nothing writable with the one decoded off the stream: the payload and every
 // sample's entry slice are new. A non-measurement event is returned as it is — no formula
 // reads a location or an alert.
-func recalculated(event *dmmodel.ResolvedEvent, draft dmmodel.ProfileResolution, stats *Stats) *dmmodel.ResolvedEvent {
+func recalculated(event *dmmodel.ResolvedEvent, draft dmmodel.ProfileResolution, constants []calcfield.Constant,
+	stats *Stats) *dmmodel.ResolvedEvent {
 	payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
 	if !ok {
 		return event
@@ -406,7 +449,7 @@ func recalculated(event *dmmodel.ResolvedEvent, draft dmmodel.ProfileResolution,
 	samples := make([]dmmodel.ResolvedMeasurementsEntry, len(payload.Entries))
 	for i, sample := range payload.Entries {
 		samples[i] = dmmodel.ResolvedMeasurementsEntry{
-			Entries:      draft.Recalculate(sample.Entries, obs),
+			Entries:      draft.Recalculate(sample.Entries, constants, obs),
 			OccurredTime: sample.OccurredTime,
 		}
 	}

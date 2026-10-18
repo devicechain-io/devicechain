@@ -70,8 +70,11 @@ export type PreviewRuleInput = {
    * formulas, replacing the values stored when it was recorded, so the draft rule is previewed
    * against the values the draft profile would compute once published; a calculated metric the
    * list does not declare has no value. Omit to preview the values as stored. The formulas are
-   * checked as a publish checks them, and a problem is returned in diagnostics. At most 1000
-   * entries. Nothing computed here is stored or streamed.
+   * checked as a publish checks them, and a problem is returned in diagnostics. A formula that
+   * reads a number its device carries (`device.name`) is recomputed with that device's CURRENT
+   * metadata, read now, so a reading stored under an older value previews under today's; a
+   * device without it, or that cannot be read, has no value for those readings, and the result
+   * says so. At most 1000 entries. Nothing computed here is stored or streamed.
    */
   draftMetrics?: Array<PreviewMetricInput> | null | undefined;
   /**

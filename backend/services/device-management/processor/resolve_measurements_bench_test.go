@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -111,4 +112,36 @@ func BenchmarkResolveMeasurements_Calc1(b *testing.B) {
 // BenchmarkResolveMeasurements_Calc4 is the same reading with all four calculated metrics.
 func BenchmarkResolveMeasurements_Calc4(b *testing.B) {
 	benchResolveMeasurements(b, calcBenchProfile(4))
+}
+
+// calcConstMetric is the formula CalcConst adds: power_kw calibrated per device.
+var calcConstMetric = calcBenchMetric(5, "power_cal", model.MetricDouble, "kW",
+	"voltage * current / 1000 * device.calibration")
+
+// BenchmarkResolveMeasurements_CalcConst is Calc1 with the formula reading a per-device
+// constant: the device record carries realistic metadata (a numeric calibration among other
+// keys), parsed once per event. The difference to Calc1 is the whole cost of a constant.
+func BenchmarkResolveMeasurements_CalcConst(b *testing.B) {
+	defs := append(append([]*model.MetricDefinition{}, calcBenchMeasured...), calcConstMetric)
+	profile := model.NewProfileResolution(model.ProfileScope{ProfileVersionToken: "meter@1"}, defs)
+	meta := datatypes.JSON(`{"site":"north","tags":["a","b"],"calibration":1.02,"installedBy":"crew-7"}`)
+	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+	device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "METER-1"},
+		MetadataEntity: rdb.MetadataEntity{Metadata: &meta}}
+	event := calcBenchEvent()
+	ctx := context.Background()
+	out, err := rez.ResolveMeasurementsEventPayload(ctx, device, profile, event)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if got := len(out.(*model.ResolvedMeasurementsPayload).Entries[0].Entries); got != len(calcBenchMeasured)+1 {
+		b.Fatalf("resolved %d entries, want %d (a constant that was not read skips the formula)", got, len(calcBenchMeasured)+1)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := rez.ResolveMeasurementsEventPayload(ctx, device, profile, event); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

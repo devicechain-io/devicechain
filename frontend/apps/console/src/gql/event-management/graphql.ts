@@ -4,6 +4,14 @@ type Exact<T extends { [key: string]: unknown }> = { [K in keyof T]: T[K] };
 /** Internal type. DO NOT USE DIRECTLY. */
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
 import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
+/** One device constant a draft calculated-metric formula reads as `device.name`. */
+export type CalculatedConstant = {
+  /** The constant's name, as the formula spells it after `device.`. */
+  key: string;
+  /** The number the device's metadata holds under that name, as text such as `1.02`. */
+  value: string;
+};
+
 /** One input a draft calculated-metric formula reads: a measured metric's key and data type. */
 export type CalculatedInput = {
   /** The measured metric's data type: DOUBLE, INT or BOOLEAN. */
@@ -65,6 +73,7 @@ export type CalculatedEventsQueryVariables = Exact<{
   inputs: Array<CalculatedInput> | CalculatedInput;
   minValue?: number | null | undefined;
   maxValue?: number | null | undefined;
+  constants?: Array<CalculatedConstant> | CalculatedConstant | null | undefined;
   from: string;
   to: string;
 }>;
@@ -108,7 +117,7 @@ export const EventsDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<EventsQuery, EventsQueryVariables>;
 export const CalculatedEventsDocument = new TypedDocumentString(`
-    query CalculatedEvents($deviceToken: String!, $expression: String!, $dataType: String!, $inputs: [CalculatedInput!]!, $minValue: Float, $maxValue: Float, $from: String!, $to: String!) {
+    query CalculatedEvents($deviceToken: String!, $expression: String!, $dataType: String!, $inputs: [CalculatedInput!]!, $minValue: Float, $maxValue: Float, $constants: [CalculatedConstant!], $from: String!, $to: String!) {
   calculatedEvents(
     deviceToken: $deviceToken
     expression: $expression
@@ -116,6 +125,7 @@ export const CalculatedEventsDocument = new TypedDocumentString(`
     inputs: $inputs
     minValue: $minValue
     maxValue: $maxValue
+    constants: $constants
     from: $from
     to: $to
   ) {

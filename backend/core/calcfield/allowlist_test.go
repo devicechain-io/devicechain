@@ -40,7 +40,7 @@ func TestAllowlistIsTheSecondFence(t *testing.T) {
 			ast, iss := wide.Compile(c.expr)
 			require.NoError(t, iss.Err(), "the wide environment must admit %q, or this case tests nothing", c.expr)
 			w := &allowlist{env: env}
-			_, _, err := w.check(ast.NativeRep().Expr())
+			_, err := w.check(ast.NativeRep().Expr())
 			require.Error(t, err)
 			assert.ErrorContains(t, err, c.want)
 		})

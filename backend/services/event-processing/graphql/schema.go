@@ -47,6 +47,11 @@ type SchemaResolver struct {
 	// production, where the NATS manager injected as a graphql provider is used; a test sets it to
 	// preview against canned history without a broker.
 	Replay preview.ReplayOpener
+	// Constants reads the current per-device constants (`device.name` in a calculated-metric
+	// formula) of a profile's devices from device-management, for a preview of a draft whose
+	// formulas read them. Nil when the seam is not wired, in which case such a preview says so
+	// and skips those formulas rather than computing them with defaults.
+	Constants preview.ConstantSource
 }
 
 // EventProcessingInfo resolves the scaffold identity query.

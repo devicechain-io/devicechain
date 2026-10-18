@@ -60,6 +60,9 @@ export function FormulaEditor({
 }) {
   const { t } = useTranslation('deviceProfiles');
   const [sample, setSample] = useState<Record<string, string>>({});
+  // The hand-typed values of the device constants the formula reads (`device.name`): the numbers
+  // a device's metadata would hold. Sent with the sample; nothing is stored.
+  const [constants, setConstants] = useState<Record<string, string>>({});
   const [result, setResult] = useState<MetricFormulaTest | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -70,6 +73,7 @@ export function FormulaEditor({
   const trimmed = expression.trim();
   const tooLong = new TextEncoder().encode(expression).length > FORMULA_MAX_BYTES;
   const sampleKey = JSON.stringify(sample);
+  const constantsKey = JSON.stringify(constants);
 
   useEffect(() => {
     if (!trimmed || tooLong) {
@@ -95,6 +99,9 @@ export function FormulaEditor({
           sample: Object.entries(JSON.parse(sampleKey) as Record<string, string>)
             .filter(([, v]) => v.trim() !== '')
             .map(([key, value]) => ({ key, value: value.trim() })),
+          constants: Object.entries(JSON.parse(constantsKey) as Record<string, string>)
+            .filter(([, v]) => v.trim() !== '')
+            .map(([key, value]) => ({ key, value: value.trim() })),
         });
         if (mine !== latest.current) return;
         setResult(answer);
@@ -108,9 +115,10 @@ export function FormulaEditor({
       }
     }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [profileToken, trimmed, tooLong, dataType, metricKey, minValue, maxValue, sampleKey]);
+  }, [profileToken, trimmed, tooLong, dataType, metricKey, minValue, maxValue, sampleKey, constantsKey]);
 
   const inputs = result?.compileError ? [] : (result?.inputs ?? []);
+  const constantNames = result?.compileError ? [] : (result?.constants ?? []);
   const cost = result?.estimatedCost ?? null;
 
   return (
@@ -178,6 +186,24 @@ export function FormulaEditor({
                   </FormField>
                 ))}
               </div>
+              {constantNames.length > 0 && (
+                <div className="space-y-2" data-testid="formula-constants">
+                  <p className="text-sm font-medium">{t('formulaConstantsTitle')}</p>
+                  <HintText size="md">{t('formulaConstantsHint')}</HintText>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {constantNames.map((name) => (
+                      <FormField key={name} label={`device.${name}`} htmlFor={`m-constant-${name}`}>
+                        <Input
+                          id={`m-constant-${name}`}
+                          value={constants[name] ?? ''}
+                          onChange={(e) => setConstants((s) => ({ ...s, [name]: e.target.value }))}
+                          inputMode="decimal"
+                        />
+                      </FormField>
+                    ))}
+                  </div>
+                </div>
+              )}
               <p className="text-sm" data-testid="formula-outcome">
                 {result.value != null
                   ? t('formulaValue', { value: result.value })
@@ -192,6 +218,7 @@ export function FormulaEditor({
                 minValue={minValue}
                 maxValue={maxValue}
                 inputs={inputs}
+                constants={constantNames}
                 skipLabel={(reason) => skipLabel(t, reason)}
               />
             </div>
