@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -315,6 +316,11 @@ func tenantSubjectFor(t *testing.T, nmgr *NatsManager, suffix string) string {
 // The windows and the limit are read from the live declarations (core/streams, the OpenTofu
 // default). The rates are the reference load's, stated per stream below: they are the
 // assumptions of the budget, not measurements, and a reason to change one belongs next to it.
+//
+// The budget is the one with infrastructure.nats.mqttFailClosed ON, the larger of the two:
+// the fail-closed message store adds what it costs each server to hold a full store's backlog
+// (failClosedStoreMiB). It is small, and that is a measurement worth keeping next to the
+// budget: a backlog in the store is not what fills a broker's memory, the duplicate tables are.
 func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 	const (
 		referenceEvents = 10_000.0
@@ -338,6 +344,16 @@ func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 		// continuously against a live set it cannot shrink.
 		goMemLimitFraction = 0.80
 		headroom           = 0.15
+		// storeHeldMsgBytes is the live heap each server spends per message the fail-closed
+		// message store holds unread, measured against nats-server v2.15.1 on a three-node
+		// cluster (TestPerfStoreMemory: 1.5M messages, 570 MiB on disk, ~25-35 MiB of heap per
+		// server at rest; the block caches a reader loads while it drains are transient and are
+		// the same for the capture stream a reader drains with the setting off).
+		storeHeldMsgBytes = 25.0
+		// storedEventBytes is what one device event takes in the store, measured on GKE round 15:
+		// 1,557,739 messages held 57% of a 1 GiB store, about 412 bytes each. A smaller event
+		// packs more messages into the bound, so this is the figure to lower if events shrink.
+		storedEventBytes = 412.0
 	)
 	// ids/s each stream receives at the reference load.
 	rates := map[string]float64{
@@ -359,6 +375,13 @@ func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 	limitMiB := natsMemoryLimitMiB(t)
 	budgetMiB := limitMiB * goMemLimitFraction * (1 - headroom)
 	totalMiB := existingBrokerMiB
+	// The fail-closed store, full: its bound as the setting on applies it, in messages.
+	on := config.NewDefaultInstanceConfiguration()
+	on.Infrastructure.Nats.MqttFailClosed = true
+	on.ApplyDefaults()
+	storeMsgs := float64(on.Infrastructure.Nats.MqttMessageStoreMaxBytes()) / storedEventBytes
+	failClosedStoreMiB := storeMsgs * storeHeldMsgBytes / (1 << 20)
+	totalMiB += failClosedStoreMiB
 	t.Logf("%-24s %8s %8s %10s %10s", "stream", "ids/s", "window", "ids held", "MiB")
 	for _, suffix := range streams.Suffixes() {
 		rate, ok := rates[suffix]
@@ -375,6 +398,7 @@ func TestDuplicateWindowsFitTheBrokerMemoryLimit(t *testing.T) {
 		totalMiB += mib
 		t.Logf("%-24s %8.0f %7.0fs %10.0f %10.0f", suffix, rate, window, ids, mib)
 	}
+	t.Logf("%-24s %40.0f (%.0f messages held)", "fail-closed store, full", failClosedStoreMiB, storeMsgs)
 	t.Logf("%-24s %40.0f", "existing broker memory", existingBrokerMiB)
 	t.Logf("%-24s %40.0f (limit %.0f MiB, GOMEMLIMIT %.0f MiB, budget %.0f MiB)", "total",
 		totalMiB, limitMiB, limitMiB*goMemLimitFraction, budgetMiB)

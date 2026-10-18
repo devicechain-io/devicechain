@@ -303,3 +303,68 @@ func TestAStaleLookAtTheStoreSkipsNothing(t *testing.T) {
 	v.snap = stale
 	require.False(t, v.carriedByStore(streams.DeviceEventsCapture, "1", 11), "a stale look skipped a copy")
 }
+
+// The subject check an unfiltered store reader runs on every message it is delivered: single
+// token wildcards only, every token present, nothing more and nothing less.
+//
+// GUARD: kills a matcher that accepts a prefix (a longer subject of another kind), a shorter
+// subject, an empty token, or a different literal.
+func TestStoreSubjectMatchesIsATokenMatch(t *testing.T) {
+	events := mqttMsgsSubjectPrefix + DeviceEventsWildcard("inst")
+	for subj, want := range map[string]bool{
+		mqttMsgsSubjectPrefix + DeviceEventsSubject("inst", "t1", "d1"):                          true,
+		mqttMsgsSubjectPrefix + DeviceEventsSubject("inst", "t2", "d-9"):                         true,
+		mqttMsgsSubjectPrefix + DeviceEventsSubject("other", "t1", "d1"):                         false,
+		mqttMsgsSubjectPrefix + DeviceEventsSubject("inst", "t1", "d1") + ".x":                   false,
+		mqttMsgsSubjectPrefix + "inst.t1.devices.d1":                                             false,
+		mqttMsgsSubjectPrefix + "inst..devices.d1.events":                                        false,
+		mqttMsgsSubjectPrefix + DeviceScopedSubject("inst", "t1", SubjectCommandResponses, "d1"): false,
+		"inst.t1.devices.d1.events":                                                              false,
+		"":                                                                                       false,
+	} {
+		require.Equalf(t, want, storeSubjectMatches(events, subj), "%q against %q", subj, events)
+	}
+	require.True(t, storeSubjectMatches("a.*.c", "a.b.c"))
+	require.False(t, storeSubjectMatches("a.*.c", "a.b"))
+	require.False(t, storeSubjectMatches("a.*", "a.b.c"))
+}
+
+// 🔴 THE EVENTS DURABLE IS UNFILTERED, and a store whose events durable still has the filter an
+// earlier build gave it is moved onto the new one by the reconcile, in place (same durable,
+// same position). A wildcard filter over the store makes the broker visit every device's
+// subject for each message it delivers to a reader that has fallen a block behind
+// (MqttFailClosedDurable.Filter); measured, it caps the reader at a tenth to a quarter of
+// its unfiltered rate on a three-node cluster, which is the throughput cliff a backlog then
+// does not recover from.
+//
+// GUARD: kills a durable set that filters events again, and a reconcile that leaves an existing
+// durable on its old filter.
+func TestTheEventsDurableIsUnfilteredAndAnOldFilterIsMoved(t *testing.T) {
+	ev := fcDurable(t, "inst", MqttFailClosedEvents)
+	require.Empty(t, ev.Filter, "the events durable is unfiltered")
+	require.Equal(t, mqttMsgsSubjectPrefix+DeviceEventsWildcard("inst"), ev.Forwards)
+	for _, d := range MqttFailClosedDurables("inst") {
+		if d.Kind != MqttFailClosedEvents {
+			require.Equalf(t, d.Forwards, d.Filter, "the %s durable is filtered to its kind", d.Kind)
+		}
+	}
+
+	b := startGuardBroker(t)
+	nmgr := failClosedManager(t, b.nc, b.js, guardInstance, true)
+	_, err := nmgr.ReconcileMqttFailClosed(context.Background())
+	require.NoError(t, err)
+	name := fcDurable(t, guardInstance, MqttFailClosedEvents).Name
+	ci, err := b.js.ConsumerInfo(MqttMessageStore, name)
+	require.NoError(t, err)
+	cfg := ci.Config
+	cfg.FilterSubject = mqttMsgsSubjectPrefix + DeviceEventsWildcard(guardInstance)
+	_, err = b.js.UpdateConsumer(MqttMessageStore, &cfg)
+	require.NoError(t, err, "premise: a durable carrying the earlier filter")
+
+	_, err = nmgr.ReconcileMqttFailClosed(context.Background())
+	require.NoError(t, err)
+	after, err := b.js.ConsumerInfo(MqttMessageStore, name)
+	require.NoError(t, err)
+	require.Empty(t, after.Config.FilterSubject, "the reconcile moved the durable onto no filter")
+	require.Equal(t, ci.Created, after.Created, "moved in place, not recreated")
+}

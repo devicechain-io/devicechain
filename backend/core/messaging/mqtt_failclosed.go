@@ -33,8 +33,8 @@ import (
 //
 // With infrastructure.nats.mqttFailClosed on, event-sources declares the store instead:
 // discard NEW, a positive byte ceiling, replicas set explicitly, and one platform durable
-// per kind of device publish (events, command responses, device reports), each filtered to
-// this instance. The gateway looks the store up before creating it and keeps a store it
+// per kind of device publish (events, command responses, device reports), each forwarding
+// only this instance's publishes of its kind. The gateway looks the store up before creating it and keeps a store it
 // finds, so the declared config is the one it uses. Every behaviour named here is pinned
 // against the real broker in mqtt_failclosed_guard_test.go.
 //
@@ -262,31 +262,50 @@ type MqttFailClosedDurable struct {
 	Kind MqttFailClosedKind
 	// Name is the durable consumer's name.
 	Name string
-	// Filter is the durable's filter subject: the gateway's store prefix in front of the
-	// subject a device is granted to publish this kind of message on, with a wildcard for
-	// the tenant and for the device.
+	// Forwards is what the durable's reader hands out: the gateway's store prefix in front of
+	// the subject a device is granted to publish this kind of message on, with a wildcard for
+	// the tenant and for the device. The reader acks and drops anything else it is delivered.
+	Forwards string
+	// Filter is the durable's filter subject on the broker. It is Forwards for every kind but
+	// events, whose durable is UNFILTERED ("").
 	//
-	// 🔑 THE TENANT IS A WILDCARD, AND THE TENANT PURGE RELIES ON IT. The purge deletes every
-	// consumer on this store whose filter begins with "$MQTT.msgs.{instance}.{tenant}.", and
-	// no valid tenant is "*", so these filters can never be matched by it
-	// (TestTheTenantPurgeNeverDeletesThePlatformDurable and
-	// TestTheTenantPurgeNeverDeletesAFailClosedDurable).
+	// 🔴 WHY EVENTS ARE UNFILTERED: THE BROKER'S COST OF A WILDCARD FILTER GROWS WITH THE
+	// BACKLOG. For each message it delivers, the broker looks for the next one the filter
+	// matches in the current file block. A filter that is not the stream's own subject
+	// ("$MQTT.msgs.>") is looked up through the block's per-subject index, which visits every
+	// device subject in the block, unless the rest of the block is shorter than four times its
+	// subject count (nats-server 2.15 filestore, msgBlock.firstMatching). A reader that keeps
+	// up reads near the end of a block and takes the cheap linear walk; one that has fallen a
+	// block behind pays a visit to every device's subject PER MESSAGE, so it reads slower the
+	// further behind it is and does not catch up. Measured on a three-node cluster with 3,000
+	// device subjects (TestPerfRawDrain), a 300k backlog drained at ~11k/s filtered and ~117k/s
+	// unfiltered. Events are nearly everything in the store, so an unfiltered durable whose
+	// reader drops the rest costs one delivery and one ack per message of another kind.
+	// Command responses and device reports, which are sparse, keep their filters: for a
+	// sparse filter the index is the cheap path.
+	//
+	// 🔑 THE TENANT IS A WILDCARD (OR ABSENT), AND THE TENANT PURGE RELIES ON IT. The purge
+	// deletes every consumer on this store whose filter begins with
+	// "$MQTT.msgs.{instance}.{tenant}.", and no valid tenant is "*", so these filters can never
+	// be matched by it (TestTheTenantPurgeNeverDeletesThePlatformDurable and
+	// TestTheTenantPurgeNeverDeletesAFailClosedDurable); an empty filter begins with nothing.
 	Filter string
 }
 
 // MqttFailClosedDurables is the exact set of platform durables for an instance: one per kind
-// of device QoS 1 publish, each matching exactly what natsauth grants a device for that kind.
+// of device QoS 1 publish, each forwarding exactly what natsauth grants a device for that
+// kind (see Filter for why the events durable's broker filter is wider than that).
 func MqttFailClosedDurables(instanceId string) []MqttFailClosedDurable {
 	durable := func(kind MqttFailClosedKind) string {
 		return DurableName(instanceId, mqttFailClosedArea, "mqtt-msgs-"+string(kind))
 	}
+	responses := mqttMsgsSubjectPrefix + DeviceScopedSubject(instanceId, "*", SubjectCommandResponses, "*")
+	reports := mqttMsgsSubjectPrefix + DeviceScopedSubject(instanceId, "*", SubjectDeviceReports, "*")
 	return []MqttFailClosedDurable{
-		{MqttFailClosedEvents, durable(MqttFailClosedEvents),
-			mqttMsgsSubjectPrefix + DeviceEventsWildcard(instanceId)},
-		{MqttFailClosedResponses, durable(MqttFailClosedResponses),
-			mqttMsgsSubjectPrefix + DeviceScopedSubject(instanceId, "*", SubjectCommandResponses, "*")},
-		{MqttFailClosedReports, durable(MqttFailClosedReports),
-			mqttMsgsSubjectPrefix + DeviceScopedSubject(instanceId, "*", SubjectDeviceReports, "*")},
+		{Kind: MqttFailClosedEvents, Name: durable(MqttFailClosedEvents),
+			Forwards: mqttMsgsSubjectPrefix + DeviceEventsWildcard(instanceId), Filter: ""},
+		{Kind: MqttFailClosedResponses, Name: durable(MqttFailClosedResponses), Forwards: responses, Filter: responses},
+		{Kind: MqttFailClosedReports, Name: durable(MqttFailClosedReports), Forwards: reports, Filter: reports},
 	}
 }
 
@@ -1535,8 +1554,9 @@ func NewMqttFailClosedMetrics(ms *core.Microservice, instanceId string) *MqttFai
 			"Other DeviceChain instances the last check saw on this broker. Above 0, the instances share one "+
 				"MQTT message store and one bound."),
 		durablePending: ms.NewGaugeVec("mqtt_failclosed_durable_pending",
-			"Messages of this platform durable's kind in the MQTT gateway's message store that it has not been "+
-				"handed yet, as of the last 30 s check. Absent while the durable cannot be read.",
+			"Messages in the MQTT gateway's message store that this platform durable has not been handed yet, "+
+				"as of the last 30 s check: of its own kind for command responses and device reports, of every kind "+
+				"for the unfiltered events durable. Absent while the durable cannot be read.",
 			[]string{"durable"}),
 		durableAckPending: ms.NewGaugeVec("mqtt_failclosed_durable_ack_pending",
 			"Messages handed to this platform durable on the MQTT gateway's message store and not yet "+
