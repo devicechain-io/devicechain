@@ -1731,7 +1731,7 @@ func (nmgr *NatsManager) checkMqttFailClosed(ctx context.Context, m *MqttFailClo
 // mark (it is missing, or was not created again): there are no platform durables to have one.
 // 🔴 So does a durable whose count cannot be trusted: the broker computes it on the durable's
 // leader from that server's copy of the store, which after a leader change or a restart can
-// be behind and report 0 over a backlog of hundreds of thousands. While the store or the
+// be behind and report 0 over a backlog (mqtt_failclosed_drain.go). While the store or the
 // durable has no leader or a replica offline, or a zero is contradicted by the store itself,
 // the series is absent rather than a reassuring 0 (mqttPendingTrusted).
 func (nmgr *NatsManager) sampleMqttFailClosedDurables(ctx context.Context, m *MqttFailClosedMetrics) {

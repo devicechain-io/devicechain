@@ -206,10 +206,10 @@ func (dc *drainCluster) awaitSettled() {
 
 // falseZeroJS answers ConsumerInfo for one durable with what a consumer leader whose copy of
 // the store is behind answers (nats-server 2.15, consumer.checkNumPending): nothing pending and
-// nothing awaiting an ack, with its real ack floor and delivered position. On three
-// nats-server processes the events durable answered exactly that for 45 to 90 s after a leader
-// change or a SIGKILL, over 70k to 430k undelivered messages. The in-process cluster did not
-// open that window on its own (step-downs every 5 s under 8k/s with a reader behind; a server
+// nothing awaiting an ack, with its real ack floor and delivered position. That answer is read
+// from the server's code; neither three nats-server processes (the zeros an earlier chaos run
+// printed were timed-out ConsumerInfo requests) nor the in-process cluster opened the window
+// on its own (step-downs every 5 s under 8k/s with a reader behind; a server
 // restarted into a 400k backlog with the durable's leader moved onto it as it caught up; a
 // killed consumer leader: the count stayed right in each), so the window is put in here, at
 // the one boundary that reads it, while everything else is the real replicated store going

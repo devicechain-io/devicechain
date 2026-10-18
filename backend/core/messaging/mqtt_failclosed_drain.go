@@ -19,13 +19,16 @@ import (
 // consumer's NumPending on the consumer's LEADER, from that server's own copy of the stream,
 // and resets it to 0 whenever the consumer's next sequence is past the last sequence that copy
 // holds (nats-server 2.15, consumer.checkNumPending). A leader whose copy is behind, after a
-// consumer or stream leader change or a server that was killed and is catching up, therefore
-// reports 0 pending and 0 ack pending while the store holds every message it has yet to
-// deliver: on three nats-server processes the events durable reported that for 45 to 90 s
-// over 70k to 430k undelivered messages. A finish that took that zero for "drained" deleted
-// the durables, and with no consumer left, interest retention removes the store copies,
-// which are the only copies of what pods with the setting on skipped: messages devices were
-// PUBACKed on.
+// consumer or stream leader change or a server that was killed and is catching up, can
+// therefore report 0 pending and 0 ack pending while the store holds messages it has yet to
+// deliver. That is read from the server's code, NOT observed: an earlier multi-process chaos
+// run seemed to show it for 45 to 90 s, but those zeros were ConsumerInfo requests that timed
+// out during the SIGKILLs and that the harness printed as 0, and runs on three nats-server
+// 2.15.1 processes that moved the events durable's leader onto a server catching up on 250k
+// messages saw the count right every time. The guard stands on the code path. A finish that
+// took such a zero for "drained" would delete the durables, and with no consumer left,
+// interest retention removes the store copies, which are the only copies of what pods with
+// the setting on skipped: messages devices were PUBACKed on.
 //
 // What the finish relies on instead:
 //
