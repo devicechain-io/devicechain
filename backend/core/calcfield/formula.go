@@ -129,7 +129,7 @@ func (e *Env) compile(def Definition, staticCeiling uint64) (*Formula, error) {
 	if len(def.Expression) > MaxExpressionBytes {
 		return refuse(fmt.Errorf("the formula is %d bytes, above the maximum of %d", len(def.Expression), MaxExpressionBytes))
 	}
-	if _, isInput := e.index[def.Key]; isInput {
+	if i, isInput := e.index[def.Key]; isInput && i < e.measured {
 		return refuse(errors.New("the key is already a measured metric of this profile"))
 	}
 	ast, iss := e.cel.Compile(def.Expression)
@@ -146,7 +146,7 @@ func (e *Env) compile(def Definition, staticCeiling uint64) (*Formula, error) {
 		return refuse(err)
 	}
 	if len(walk.inputs) == 0 {
-		return refuse(errors.New("the formula reads no input: a calculated metric must use at least one measured metric"))
+		return refuse(errors.New("the formula reads no input: a calculated metric must use at least one measured or calculated metric"))
 	}
 	est, err := e.cel.EstimateCost(ast, estimator{size: uint64(len(e.inputs))})
 	if err != nil {

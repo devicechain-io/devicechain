@@ -121,6 +121,7 @@ func newGapRigWith(t *testing.T, opener ReplayOpener, reg *runtime.RuleRegistry)
 			CheckpointInterval: time.Hour,
 			TickInterval:       time.Hour,
 			Clock:              detectcore.RealClock{},
+			Output:             serialOutput,
 		},
 		registry:     reg,
 		publisher:    runtime.NewPublisher(rec, reg, metrics),

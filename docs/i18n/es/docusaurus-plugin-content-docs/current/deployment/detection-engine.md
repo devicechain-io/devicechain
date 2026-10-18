@@ -539,7 +539,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `ruleHealth.maxPendingBytes` | 4194304 | Presupuesto de memoria para esos disparos pendientes, de 65536 a 268435456 (256 MiB). |
 | `ruleHealth.maxBatchRows` | 256 | Máximo de reglas que lleva una escritura de un inquilino, de 1 a 4096; un inquilino con más pendientes se escribe en varias transacciones. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | Cuánto puede tardar la escritura de un inquilino, de 100 a 60000. Una escritura que falla o agota el tiempo se descarta, no se reintenta. |
-| `derivedPublishing.maxInFlight` | 1 | Cuántas detecciones puede tener a la vez un punto de control esperando la confirmación del bus de mensajes, de 1 a 1024. Con 1, cada una se confirma antes de enviar la siguiente. Por encima de 1, las detecciones de dispositivos distintos se publican en paralelo, nunca más de una por dispositivo a la vez. Véase más abajo. |
+| `derivedPublishing.maxInFlight` | 32 | Cuántas detecciones puede tener a la vez un punto de control esperando la confirmación del bus de mensajes, de 1 a 1024. Con 1, cada una se confirma antes de enviar la siguiente. Por encima de 1, las detecciones de dispositivos distintos se publican en paralelo, nunca más de una por dispositivo a la vez. Véase más abajo. |
 | `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones en espera, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
 
 Cada ajuste de `ruleHealth` y de `derivedPublishing` es opcional; si se indica, debe estar dentro de
@@ -585,18 +585,23 @@ modo que el presupuesto de bytes es un límite estricto.
 
 Un punto de control publica en el bus de mensajes todas las detecciones que cubre, y guarda el
 estado del motor y confirma los eventos que las originaron solo cuando todas han sido confirmadas.
-Con `derivedPublishing.maxInFlight` en 1, el valor por defecto, eso es una detección cada vez, así
+Con `derivedPublishing.maxInFlight` en 1, eso es una detección cada vez, así
 que un punto de control con muchas detecciones espera otras tantas confirmaciones una tras otra.
 Donde una confirmación es lenta, por ejemplo en un stream replicado cuyos servidores están lejos
 entre sí, esa espera es lo que limita la rapidez con que se entregan las detecciones.
 
-Subir `maxInFlight` permite que un punto de control espere varias confirmaciones a la vez. Lo que no
-cambia:
+El valor por defecto, 32, permite que un punto de control espere varias confirmaciones a la vez. Con
+una carga intensa en disparos, de unos 8.000 eventos por segundo que ofrecen unas 2.500 detecciones
+por segundo, una ventana de 32 se mantuvo al día (7.658 eventos y 2.441 detecciones por segundo, con
+la marca de agua unos 5 segundos atrás), mientras que una ventana de 1 fue quedando cada vez más
+atrás (1.656 eventos y 528 detecciones por segundo, con la marca de agua más de dos minutos atrás).
+Pon `maxInFlight` en 1 para publicar estrictamente una detección cada vez. Lo que no cambia con
+ningún valor:
 
 - **Las detecciones de cada dispositivo llegan en orden.** La siguiente detección de un dispositivo,
   de cualquiera de sus reglas, se envía solo cuando la anterior ha sido confirmada, así que nunca hay
   más de una por dispositivo en espera. Las detecciones de una regla de correlación cuentan como de
-  su ancla. Las de dispositivos distintos pueden llegar en otro orden que antes; nada posterior
+  su ancla. Las de dispositivos distintos pueden llegar en otro orden que con 1; nada posterior
   depende de ese orden, porque cada alarma pertenece a un solo dispositivo.
 - **Nada se confirma antes que sus detecciones.** El punto de control se guarda solo cuando todas
   las detecciones que cubre han sido confirmadas, exactamente igual que con 1.

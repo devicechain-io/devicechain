@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,11 +21,14 @@ import (
 
 // captureWriter records derived-event writes and can be made to fail (broker outage).
 type captureWriter struct {
+	mu     sync.Mutex // the default publish window writes from several goroutines
 	writes int
 	err    error
 }
 
 func (w *captureWriter) WriteMessages(ctx context.Context, msgs ...messaging.Message) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.err != nil {
 		return w.err
 	}

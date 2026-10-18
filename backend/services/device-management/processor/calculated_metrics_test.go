@@ -263,7 +263,7 @@ func TestAFormulaThatDoesNotCompileHereSkipsLoudly(t *testing.T) {
 	metrics := testCalcMetrics()
 	profile := meterResolution(
 		calculatedDef(5, "power_kw", model.MetricDouble, "", "voltage * current"),
-		calculatedDef(6, "power_x2", model.MetricDouble, "", "power_kw * 2.0"),
+		calculatedDef(6, "power_x2", model.MetricDouble, "", "voltage * undeclared_input"),
 	)
 	got := resolveSamples(t, profile, metrics, map[string]string{"voltage": "2", "current": "3", "power_x2": "1"})
 	assert.Equal(t, []string{"current", "power_kw*", "voltage"}, names(got.Entries[0].Entries))

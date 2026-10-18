@@ -114,6 +114,24 @@ func BenchmarkResolveMeasurements_Calc4(b *testing.B) {
 	benchResolveMeasurements(b, calcBenchProfile(4))
 }
 
+// calcChainFormulas are CalcChain4's calculated metrics: a chain of depth four (the most a
+// profile may publish), each link a single multiplication on the one before it, so the
+// difference to Calc4 is what evaluation order, writing a value back to the sample and
+// reading it again cost, not a heavier formula.
+var calcChainFormulas = []*model.MetricDefinition{
+	calcBenchMetric(5, "power_kw", model.MetricDouble, "kW", "voltage * current / 1000"),
+	calcBenchMetric(6, "power_x2", model.MetricDouble, "kW", "power_kw * 2.0"),
+	calcBenchMetric(7, "power_x4", model.MetricDouble, "kW", "power_x2 * 2.0"),
+	calcBenchMetric(8, "power_x8", model.MetricDouble, "kW", "power_x4 * 2.0"),
+}
+
+// BenchmarkResolveMeasurements_CalcChain4 is the same reading with a depth-4 chain of
+// calculated metrics (calcChainFormulas): four formulas like Calc4, each after the one it reads.
+func BenchmarkResolveMeasurements_CalcChain4(b *testing.B) {
+	defs := append(append([]*model.MetricDefinition{}, calcBenchMeasured...), calcChainFormulas...)
+	benchResolveMeasurements(b, model.NewProfileResolution(model.ProfileScope{ProfileVersionToken: "meter@1"}, defs))
+}
+
 // calcConstMetric is the formula CalcConst adds: power_kw calibrated per device.
 var calcConstMetric = calcBenchMetric(5, "power_cal", model.MetricDouble, "kW",
 	"voltage * current / 1000 * device.calibration")

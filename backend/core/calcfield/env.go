@@ -69,6 +69,10 @@ func celType(t Type) *cel.Type {
 // NewEnv and safe for concurrent use; every Formula compiled from it reads Samples from it.
 type Env struct {
 	inputs []Input
+	// measured is how many of the leading inputs are MEASURED metrics; the rest, if any, are
+	// the calculated metrics of a Plan, declared so a formula may read them (chaining). For
+	// every Env built by NewEnv it is len(inputs).
+	measured int
 	// index maps every input key (identifier or not) to its position in inputs and in a
 	// Sample's value slice. Read-only after construction.
 	index map[string]int
@@ -82,15 +86,27 @@ var ErrInvalidInputs = errors.New("calcfield: invalid inputs")
 // NewEnv builds the environment for the given declared, measured inputs. Keys must be
 // non-empty and unique, and every type valid; at most MaxInputs. The order of inputs is the
 // order of the Sample value slice (Env.Index).
-func NewEnv(inputs []Input) (*Env, error) {
-	if len(inputs) > MaxInputs {
-		return nil, fmt.Errorf("%w: %d inputs exceeds the maximum of %d", ErrInvalidInputs, len(inputs), MaxInputs)
+func NewEnv(inputs []Input) (*Env, error) { return newEnv(inputs, len(inputs)) }
+
+// newEnv is NewEnv where the first `measured` inputs are measured metrics and the rest are
+// calculated ones (see Plan).
+//
+// MaxInputs bounds each of the two separately. It was the bound on a profile's measured
+// metrics before a Plan declared its calculated ones in the same Env, and counting them
+// together would refuse — at publish, and at resolve for a version already published — a
+// profile whose measured metrics it always admitted.
+func newEnv(inputs []Input, measured int) (*Env, error) {
+	if measured > MaxInputs {
+		return nil, fmt.Errorf("%w: %d inputs exceeds the maximum of %d", ErrInvalidInputs, measured, MaxInputs)
+	}
+	if n := len(inputs) - measured; n > MaxInputs {
+		return nil, fmt.Errorf("%w: %d calculated inputs exceeds the maximum of %d", ErrInvalidInputs, n, MaxInputs)
 	}
 	base, err := baseEnv()
 	if err != nil {
 		return nil, err
 	}
-	e := &Env{inputs: make([]Input, len(inputs)), index: make(map[string]int, len(inputs))}
+	e := &Env{inputs: make([]Input, len(inputs)), measured: measured, index: make(map[string]int, len(inputs))}
 	copy(e.inputs, inputs)
 	vars := make([]cel.EnvOption, 0, len(inputs))
 	for i, in := range e.inputs {
@@ -123,6 +139,13 @@ func (e *Env) Inputs() []Input {
 	out := make([]Input, len(e.inputs))
 	copy(out, e.inputs)
 	return out
+}
+
+// IsCalculated reports whether key is a calculated metric declared by a Plan, as opposed to
+// a measured input (or no input at all).
+func (e *Env) IsCalculated(key string) bool {
+	i, ok := e.index[key]
+	return ok && i >= e.measured
 }
 
 // Index returns the Sample position of an input key.

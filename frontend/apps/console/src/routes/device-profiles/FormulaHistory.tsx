@@ -53,7 +53,7 @@ export function FormulaHistory({
   dataType: string;
   minValue: string;
   maxValue: string;
-  /** The measured metric keys the formula reads, as the server reported them. */
+  /** The metric keys the formula reads directly (measured or calculated), as the server reported them. */
   inputs: string[];
   /** The device constants the formula reads (`device.name`), read from the device's metadata. */
   constants: string[];
@@ -77,9 +77,10 @@ export function FormulaHistory({
     setState({ status: 'running' });
     try {
       // The inputs' types come from the profile's draft metrics: the formula compiled against
-      // them, so each key it reads is a measured metric there.
+      // them, so each key it reads is a metric there. A calculated one is read from the value
+      // stored for it at resolve, like a measured one.
       const metrics = await listMetricDefinitions(profileToken);
-      const types = new Map(metrics.filter((m) => !m.calculated).map((m) => [m.metricKey, m.dataType]));
+      const types = new Map(metrics.map((m) => [m.metricKey, m.dataType]));
       // A formula that reads device constants is run with THIS device's constants as its metadata
       // holds them now (the server holds no device records, so the console reads them).
       const held = constants.length > 0 ? await deviceConstants(deviceToken.trim(), constants) : [];
