@@ -223,6 +223,7 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 
 	var mu sync.Mutex
 	seen := map[string]int{}
+	deliveries := newDeliveryLog()
 	ctx, cancel := context.WithCancel(context.Background())
 	readDone := make(chan struct{})
 	go func() {
@@ -235,16 +236,19 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 			mu.Lock()
 			seen[string(msg.Value)]++
 			mu.Unlock()
+			deliveries.add(msg.StreamSeq, string(msg.Value))
 			_ = msg.Ack()
 		}
 	}()
 	t.Cleanup(func() { cancel(); <-readDone })
 
 	var moves atomic.Int64
+	timeline := newMoveLog()
 	stepDown := func(stream string) {
 		msg, err := nc.Request("$JS.API.STREAM.LEADER.STEPDOWN."+stream, nil, 3*time.Second)
 		if err == nil && !bytes.Contains(msg.Data, []byte(`"error"`)) {
 			moves.Add(1)
+			timeline.add(stream)
 		}
 	}
 	// The leaders are stepped down until the test has CONFIRMED enough moves, not for a fixed
@@ -276,6 +280,7 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 	loadDeadline := time.Now().Add(90 * time.Second)
 	var (
 		acked   []string
+		resumed []string // completed with no PUBACK: not acknowledged, so not owed
 		wg      sync.WaitGroup
 		okRound = make([]int, devices) // rounds each device finished whole, by device
 		lastErr = make([]error, devices)
@@ -289,10 +294,11 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 			// answered late) is tried again with fresh payloads, until the deadline. What it
 			// did get PUBACKed still counts: the device was told those were stored.
 			for round := 0; round == 0 || (moves.Load() < requiredMoves+2 && time.Now().Before(loadDeadline)); round++ {
-				got, err := publishThrough(t, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPorts[d%3]), dev,
+				got, err := publishThroughResult(t, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPorts[d%3]), dev,
 					guardTopic(guardInstance, guardTenant, dev), fmt.Sprintf("%s-r%d", dev, round), perDevice)
 				mu.Lock()
-				acked = append(acked, got...)
+				acked = append(acked, got.pubacked...)
+				resumed = append(resumed, got.resumed...)
 				if err == nil {
 					okRound[d]++
 				}
@@ -326,13 +332,36 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 		}
 		return out
 	}
-	require.Eventually(t, func() bool { return len(lost()) == 0 }, 60*time.Second, 200*time.Millisecond,
-		"PUBACKed messages never reached the platform reader across leader moves")
+	// A message the durable delivered and the reader then dropped at a move (a fetch answered
+	// by a leader that stepped down, a buffer a new term discarded) is redelivered only once its
+	// AckWait has run out, so the bound is past it: what is still unread then is not late.
+	loadEnd := timeline.since()
+	deadline := time.Now().Add(AckWait + 30*time.Second)
+	for len(lost()) > 0 && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if unread := lost(); len(unread) > 0 {
+		t.Logf("load ended at %s", loadEnd)
+		absent := unreadReport(t, js, fcDurable(t, guardInstance, MqttFailClosedEvents).Name,
+			mqttMsgsSubjectPrefix+">", unread, timeline)
+		if si, err := js.StreamInfo(MqttMessageStore); err == nil {
+			deliveries.report(t, si.State.LastSeq, unread)
+		}
+		t.Fatalf("%d PUBACKed messages never reached the platform reader across leader moves, %d of them absent from the store",
+			len(unread), len(absent))
+	}
 	mu.Lock()
 	dups := 0
 	for _, c := range seen {
 		dups += c - 1
 	}
-	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves", len(acked), dups, moves.Load())
+	unacked := 0
+	for _, r := range resumed {
+		if seen[r] == 0 {
+			unacked++
+		}
+	}
+	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves; %d publishes completed with no PUBACK, %d of them never read",
+		len(acked), dups, moves.Load(), len(resumed), unacked)
 	mu.Unlock()
 }

@@ -30,6 +30,7 @@ import (
 	corepresence "github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
+	"github.com/devicechain-io/dc-microservice/test/mqttack"
 )
 
 // THE FAIL-CLOSED MQTT ACKNOWLEDGEMENT ON A THREE-NODE CLUSTER, UNDER LOAD: what the setting
@@ -279,6 +280,7 @@ func (p *presenceLedger) snapshot() (online int, flips map[string]int, offlineNo
 type clusterDevice struct {
 	token    string
 	c        mqtt.Client
+	store    *mqttack.Store
 	pushback atomic.Int64
 	answered atomic.Int64
 	errs     chan error
@@ -288,10 +290,10 @@ func connectClusterDevice(t *testing.T, url, token string) *clusterDevice {
 	t.Helper()
 	clientID, err := messaging.DeviceClientID(e2eInstance, e2eTenant, token)
 	require.NoError(t, err)
-	d := &clusterDevice{token: token, errs: make(chan error, 1)}
+	d := &clusterDevice{token: token, store: mqttack.NewStore(), errs: make(chan error, 1)}
 	opts := mqtt.NewClientOptions().AddBroker(url).SetClientID(clientID).
 		SetUsername("dc_service").SetPassword("svc").
-		SetCleanSession(false).SetStore(mqtt.NewMemoryStore()).
+		SetCleanSession(false).SetStore(d.store).
 		SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(250 * time.Millisecond).
 		SetMaxReconnectInterval(500 * time.Millisecond).SetConnectTimeout(10 * time.Second).
 		SetConnectionLostHandler(func(mqtt.Client, error) { d.pushback.Add(1) })
@@ -322,6 +324,7 @@ func (d *clusterDevice) run(l *ledger, stop <-chan struct{}, wg *sync.WaitGroup)
 		}
 		id := fmt.Sprintf("%s-%06d", d.token, i)
 		tok := d.c.Publish(topic, 1, false, d.body(id))
+		answered := time.Now().Add(2 * time.Minute)
 		if !tok.WaitTimeout(2 * time.Minute) {
 			select {
 			case d.errs <- fmt.Errorf("%s was never answered", id):
@@ -329,10 +332,24 @@ func (d *clusterDevice) run(l *ledger, stop <-chan struct{}, wg *sync.WaitGroup)
 			}
 			return
 		}
-		if tok.Error() == nil {
-			l.ack(id)
-			d.answered.Add(1)
+		if tok.Error() != nil {
+			continue
 		}
+		// A completed token is not a PUBACK: a reconnect completes the token of every publish it
+		// re-sends (see mqttack). The id is PUBACKed when the store says so, for either send.
+		mid := tok.(*mqtt.PublishToken).MessageID()
+		for !d.store.PubAcked(mid) && time.Now().Before(answered) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !d.store.PubAcked(mid) {
+			select {
+			case d.errs <- fmt.Errorf("%s was re-sent and its re-send never answered", id):
+			default:
+			}
+			return
+		}
+		l.ack(id)
+		d.answered.Add(1)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	dctest "github.com/devicechain-io/dc-microservice/test"
+	"github.com/devicechain-io/dc-microservice/test/mqttack"
 )
 
 // The cluster half of the fail-closed MQTT guard (see mqtt_failclosed_guard_test.go for what
@@ -31,12 +32,13 @@ import (
 
 // guardCluster is a three-node JetStream cluster with the MQTT gateway on every node.
 type guardCluster struct {
-	servers []*natsserver.Server
-	mqtt    []int
-	nc      *nats.Conn
-	js      nats.JetStreamContext
-	moves   atomic.Int64
-	pending sync.WaitGroup
+	servers  []*natsserver.Server
+	mqtt     []int
+	nc       *nats.Conn
+	js       nats.JetStreamContext
+	moves    atomic.Int64
+	timeline *moveLog
+	pending  sync.WaitGroup
 }
 
 func startGuardCluster(t *testing.T) *guardCluster {
@@ -44,7 +46,7 @@ func startGuardCluster(t *testing.T) *guardCluster {
 	if runtime.GOOS == "windows" {
 		t.Skip("the in-process cluster fixture holds its refusing route addresses with unix sockets")
 	}
-	gc := &guardCluster{mqtt: make([]int, 3)}
+	gc := &guardCluster{mqtt: make([]int, 3), timeline: newMoveLog()}
 	for i := range gc.mqtt {
 		gc.mqtt[i] = dctest.FreeTCPPort(t)
 	}
@@ -77,6 +79,7 @@ func (gc *guardCluster) stepDown() {
 	}
 	if !bytes.Contains(msg.Data, []byte(`"error"`)) {
 		gc.moves.Add(1)
+		gc.timeline.add(MqttMessageStore)
 	}
 }
 
@@ -92,17 +95,18 @@ func (gc *guardCluster) stepDownAsync() {
 // guardCollector reads a durable continuously, through leader moves, and keeps every
 // delivery, duplicates included.
 type guardCollector struct {
-	mu   sync.Mutex
-	seen map[string]int
-	stop chan struct{}
-	done chan struct{}
+	mu         sync.Mutex
+	seen       map[string]int
+	deliveries *deliveryLog
+	stop       chan struct{}
+	done       chan struct{}
 }
 
 func startGuardCollector(t *testing.T, js nats.JetStreamContext, durable, filter string) *guardCollector {
 	t.Helper()
 	sub, err := js.PullSubscribe(filter, durable, nats.Bind(MqttMessageStore, durable))
 	require.NoError(t, err)
-	c := &guardCollector{seen: map[string]int{}, stop: make(chan struct{}), done: make(chan struct{})}
+	c := &guardCollector{seen: map[string]int{}, deliveries: newDeliveryLog(), stop: make(chan struct{}), done: make(chan struct{})}
 	go func() {
 		defer close(c.done)
 		defer sub.Unsubscribe()
@@ -118,6 +122,9 @@ func startGuardCollector(t *testing.T, js nats.JetStreamContext, durable, filter
 				c.mu.Lock()
 				c.seen[string(m.Data)]++
 				c.mu.Unlock()
+				if md, err := m.Metadata(); err == nil {
+					c.deliveries.add(md.Sequence.Stream, string(m.Data))
+				}
 				_ = m.AckSync()
 			}
 		}
@@ -158,32 +165,50 @@ func (c *guardCollector) duplicates() int {
 	return d
 }
 
+// publishResult is what one device's round of publishes got.
+type publishResult struct {
+	// pubacked are the payloads the broker PUBACKed: what a device was told was stored.
+	pubacked []string
+	// resumed are the payloads whose token completed WITHOUT a PUBACK (see mqttack): the
+	// broker never acknowledged them, so their absence is not a loss.
+	resumed []string
+}
+
 // publishThrough publishes n messages from one auto-reconnecting device. A publish whose
 // connection the broker closed is re-sent by the client library on reconnect (its session is
-// persistent), exactly as a device's would be, and the PUBACK it finally gets is the one
-// counted.
+// persistent), exactly as a device's would be, and only a PUBACK the broker sent, for either
+// send, counts: a completed token is not one (see mqttack). Before disconnecting, the device
+// waits for the PUBACKs of its re-sends, as a device that wants its messages delivered would.
 //
 // It reports failure as an error and never asserts: it runs on per-device goroutines, where
 // FailNow is not allowed, and under leader moves a slow connect or a slow answer is an
 // expected cost the caller decides what to do about. The messages PUBACKed before an error
 // are still returned, because the device WAS told they were stored.
 func publishThrough(t *testing.T, url, device, topic, prefix string, n int) ([]string, error) {
+	res, err := publishThroughResult(t, url, device, topic, prefix, n)
+	return res.pubacked, err
+}
+
+func publishThroughResult(t *testing.T, url, device, topic, prefix string, n int) (publishResult, error) {
 	t.Helper()
+	var res publishResult
 	clientID, err := DeviceClientID(guardInstance, guardTenant, device)
 	if err != nil {
-		return nil, err
+		return res, err
 	}
 	// A CONNECT that lands on a leader move can be refused or dropped (the gateway looks its
 	// streams up at CONNECT, and "non-CONNACK first packet" is how that shows), so a device
 	// tries again. It does so for a bounded TIME, as a real device would, not a bounded count:
 	// a run of step-downs back to back can refuse more attempts than any fixed count.
 	var g *guardClient
+	var store *mqttack.Store
 	deadline := time.Now().Add(30 * time.Second)
 	for g == nil {
 		var err error
-		if g, err = tryConnectGuardClient(t, url, clientID, mqtt.NewMemoryStore(), true); err != nil {
+		store = mqttack.NewStore()
+		if g, err = tryConnectGuardClient(t, url, clientID, store, true); err != nil {
 			if !time.Now().Before(deadline) {
-				return nil, fmt.Errorf("connecting %q kept failing for 30s: %w", clientID, err)
+				return res, fmt.Errorf("connecting %q kept failing for 30s: %w", clientID, err)
 			}
 			time.Sleep(500 * time.Millisecond)
 		}
@@ -191,20 +216,41 @@ func publishThrough(t *testing.T, url, device, topic, prefix string, n int) ([]s
 	// One device, one live connection: a later round of the same device must not fight this
 	// one for the client ID.
 	defer g.c.Disconnect(100)
-	var acked []string
+	type sent struct {
+		payload string
+		mid     uint16
+	}
+	var done []sent
+	collect := func() {
+		for _, s := range done {
+			if store.PubAcked(s.mid) {
+				res.pubacked = append(res.pubacked, s.payload)
+			} else {
+				res.resumed = append(res.resumed, s.payload)
+			}
+		}
+	}
 	for i := 0; i < n; i++ {
 		p := fmt.Sprintf("%s-%03d", prefix, i)
 		tok := g.c.Publish(topic, 1, false, p)
 		select {
 		case <-tok.Done():
 			if tok.Error() == nil {
-				acked = append(acked, p)
+				done = append(done, sent{p, tok.(*mqtt.PublishToken).MessageID()})
 			}
 		case <-time.After(45 * time.Second):
-			return acked, fmt.Errorf("publish %q was never answered", p)
+			collect()
+			return res, fmt.Errorf("publish %q was never answered", p)
 		}
 	}
-	return acked, nil
+	// The re-sends a reconnect queued are answered on tokens nobody holds: wait for their
+	// PUBACKs here, or the disconnect below cuts them off.
+	settle := time.Now().Add(45 * time.Second)
+	for store.Outstanding() > 0 && time.Now().Before(settle) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	collect()
+	return res, nil
 }
 
 // A leader move of $MQTT_msgs while devices publish never loses a message a device was told
@@ -218,14 +264,18 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 	require.NoError(t, guardAddDurable(gc.js, guardDurable, guardFilter(guardInstance), 3))
 	col := startGuardCollector(t, gc.js, guardDurable, guardFilter(guardInstance))
 
+	// The leader is stepped down until the test has CONFIRMED enough moves, not a fixed number
+	// of times: a step-down is refused while a new leader is still being elected, and on a fast
+	// machine the devices finished before a fixed fifteen had confirmed more than one. The
+	// devices keep publishing (another round each) until that many moves have happened, so the
+	// load spans all of them.
+	const requiredMoves = 3
 	stopMoves := make(chan struct{})
 	var moves sync.WaitGroup
 	moves.Add(1)
 	go func() {
 		defer moves.Done()
-		// A bounded number of moves: enough to land among the publishes, not so many that
-		// the cluster does nothing else.
-		for i := 0; i < 15; i++ {
+		for {
 			select {
 			case <-stopMoves:
 				return
@@ -236,24 +286,33 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 	}()
 
 	const devices, perDevice = 6, 200
+	loadDeadline := time.Now().Add(90 * time.Second)
 	var (
-		mu    sync.Mutex
-		acked []string
-		errs  []error
-		wg    sync.WaitGroup
+		mu      sync.Mutex
+		acked   []string
+		resumed []string // completed with no PUBACK: not acknowledged, so not owed
+		errs    []error
+		wg      sync.WaitGroup
 	)
 	for d := 0; d < devices; d++ {
 		wg.Add(1)
 		go func(d int) {
 			defer wg.Done()
 			dev := fmt.Sprintf("load%d", d)
-			got, err := publishThrough(t, gc.mqttURL(d%3), dev, guardTopic(guardInstance, guardTenant, dev), dev, perDevice)
-			mu.Lock()
-			acked = append(acked, got...)
-			if err != nil {
-				errs = append(errs, err)
+			for round := 0; round == 0 || (gc.moves.Load() < requiredMoves && time.Now().Before(loadDeadline)); round++ {
+				got, err := publishThroughResult(t, gc.mqttURL(d%3), dev, guardTopic(guardInstance, guardTenant, dev),
+					fmt.Sprintf("%s-r%d", dev, round), perDevice)
+				mu.Lock()
+				acked = append(acked, got.pubacked...)
+				resumed = append(resumed, got.resumed...)
+				if err != nil {
+					errs = append(errs, err)
+				}
+				mu.Unlock()
+				if err != nil {
+					return
+				}
 			}
-			mu.Unlock()
 		}(d)
 	}
 	wg.Wait()
@@ -262,26 +321,24 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 
 	require.Empty(t, errs, "a device could not finish its publishes")
 	require.NotEmpty(t, acked)
-	require.Greater(t, gc.moves.Load(), int64(2), "the leader was never moved, so nothing was tested")
-	deadline := time.Now().Add(30 * time.Second)
+	require.GreaterOrEqual(t, gc.moves.Load(), int64(requiredMoves), "the leader was hardly moved, so little was tested")
+	// A message delivered and lost on the way at a move is redelivered only once the durable's
+	// AckWait has run out, so the bound is past it: what is still unread then is not late.
+	ci, err := gc.js.ConsumerInfo(MqttMessageStore, guardDurable)
+	require.NoError(t, err)
+	deadline := time.Now().Add(ci.Config.AckWait + 30*time.Second)
 	for len(col.lostOf(acked)) > 0 && time.Now().Before(deadline) {
 		time.Sleep(200 * time.Millisecond)
 	}
-	if lost := col.lostOf(acked); len(lost) > 0 {
-		// Whether the store still holds them (the collector stopped reading: a harness fault) or
-		// the durable is past them with nothing pending (they are gone: a loss).
-		if ci, err := gc.js.ConsumerInfo(MqttMessageStore, guardDurable); err == nil {
-			t.Logf("durable: pending %d, ack-pending %d, ack floor %d, delivered %d/%d, waiting pulls %d",
-				ci.NumPending, ci.NumAckPending, ci.AckFloor.Stream, ci.Delivered.Consumer, ci.Delivered.Stream, ci.NumWaiting)
-		} else {
-			t.Logf("durable: unreadable: %v", err)
-		}
+	if unread := col.lostOf(acked); len(unread) > 0 {
+		absent := unreadReport(t, gc.js, guardDurable, guardFilter(guardInstance), unread, gc.timeline)
 		if si, err := gc.js.StreamInfo(MqttMessageStore); err == nil {
-			t.Logf("store: %d msgs, first %d last %d", si.State.Msgs, si.State.FirstSeq, si.State.LastSeq)
+			col.deliveries.report(t, si.State.LastSeq, unread)
 		}
-		t.Fatalf("%d PUBACKed messages were never read from the durable: lost %v", len(lost), lost)
+		t.Fatalf("%d PUBACKed messages were never read from the durable, %d of them absent from the store", len(unread), len(absent))
 	}
-	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves", len(acked), col.duplicates(), gc.moves.Load())
+	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves; %d publishes completed with no PUBACK, %d of them never read",
+		len(acked), col.duplicates(), gc.moves.Load(), len(resumed), len(col.lostOf(resumed)))
 }
 
 // The leader of $MQTT_msgs moves while the platform durable is being created, and a burst
