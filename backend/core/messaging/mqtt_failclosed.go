@@ -78,7 +78,8 @@ import (
 //     ones (TestAReleaseKeepsEveryStoreCopyTheDurablesHold). Once the store has been released
 //     for mqttFailClosedReleaseGrace (every pod has stopped skipping by then) the pass records
 //     the store's last sequence as the drain cut; every copy of a skipped direct copy is at or
-//     below it. The durables are removed once each has acked past the cut (or holds nothing),
+//     below it. The durables are removed once each has acked past the cut (or the store holds
+//     nothing for it up to the cut, read from the store and not from its pending count),
 //     which a reader keeping up with steady traffic reaches, and only then is the gateway's
 //     discard policy put back and the marks cleared. A pod with the setting off on a store that
 //     carries no mark of this instance never writes it.
@@ -1227,9 +1228,11 @@ func (nmgr *NatsManager) releaseMqttFailClosed(ctx context.Context, info *nats.S
 //     mqttStoreViewTTL old when it skipped), and its store copy was stored before the device
 //     had its PUBACK, so every store copy that is the only copy of a skipped direct copy is at
 //     or below the cut. Above it, every store copy's direct copy was forwarded too.
-//  2. THE DURABLES, once each has acked everything up to the cut, or holds nothing at all.
-//     "Holds nothing at all" alone would never be reached by a durable that devices keep
-//     publishing into, however well its reader keeps up.
+//  2. THE DURABLES, once each has acked everything up to the cut, or the store holds nothing
+//     for it between its ack floor and the cut. "Holds nothing at all" alone would never be
+//     reached by a durable that devices keep publishing into, however well its reader keeps
+//     up. Both are read from the store through its leader, on a settled cluster, and never
+//     from the durable's pending count (mqttDurableDrained, mqtt_failclosed_drain.go).
 //  3. THE STORE: the gateway's discard policy, the setting-off bound, and no mark of this
 //     instance. Only now, with the durables gone, can discard old or a lower bound evict
 //     nothing the platform still needs.
@@ -1241,6 +1244,19 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 	durables := MqttFailClosedDurables(nmgr.Microservice.InstanceId)
 	drainTo := marks.drainTo
 	if !marks.hasDrainTo {
+		// The cut is the store's last sequence as its leader has it, so it is recorded only
+		// from a settled store: a leader still applying what it was elected with would put it
+		// below store copies it does not hold yet (mqtt_failclosed_drain.go).
+		settled, why, err := nmgr.mqttSettledStore(ctx, info)
+		if err != nil {
+			return rep, err
+		}
+		if why != "" {
+			log.Debug().Str("stream", MqttMessageStore).Str("why", why).
+				Msg("Not recording the drain cut of the released MQTT message store yet")
+			return rep, nil
+		}
+		info = settled
 		drainTo = info.State.LastSeq
 		cfg := info.Config
 		md := make(map[string]string, len(cfg.Metadata)+1)
@@ -1260,18 +1276,22 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 		nmgr.mqttView().observe(updated, time.Now())
 	}
 	for _, d := range durables {
-		ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
-		if errors.Is(err, nats.ErrConsumerNotFound) {
+		// Decided from the store, never from the durable's pending count, which a leader
+		// whose copy of the store is behind reports as 0: see mqtt_failclosed_drain.go.
+		v, absent, err := nmgr.mqttDurableDrained(ctx, d, drainTo)
+		if err != nil {
+			return rep, err
+		}
+		if absent {
 			continue
 		}
-		if err != nil {
-			return rep, fmt.Errorf("reading the platform durable %s on %s: %w", d.Name, MqttMessageStore, err)
-		}
 		rep.presentDurables = append(rep.presentDurables, d.Name)
-		empty := ci.NumPending == 0 && ci.NumAckPending == 0
-		if !empty && ci.AckFloor.Stream < drainTo {
-			// Not drained: below the cut, the store copies in it may be the only copies of
-			// what a pod with the setting on skipped. The next pass looks again.
+		if !v.drained {
+			// Not drained, or the cluster cannot say: below the cut, the store copies it holds
+			// may be the only copies of what a pod with the setting on skipped. The next pass
+			// looks again.
+			log.Debug().Str("durable", d.Name).Bool("unsettled", v.unsettled).Str("why", v.why).
+				Msg("A platform durable of the released MQTT message store is not drained yet; it stays")
 			return rep, nil
 		}
 	}
@@ -1556,11 +1576,13 @@ func NewMqttFailClosedMetrics(ms *core.Microservice, instanceId string) *MqttFai
 		durablePending: ms.NewGaugeVec("mqtt_failclosed_durable_pending",
 			"Messages in the MQTT gateway's message store that this platform durable has not been handed yet, "+
 				"as of the last 30 s check: of its own kind for command responses and device reports, of every kind "+
-				"for the unfiltered events durable. Absent while the durable cannot be read.",
+				"for the unfiltered events durable. Absent while the durable cannot be read, or while its count cannot "+
+				"be trusted (no leader, a replica offline, or a zero the store contradicts).",
 			[]string{"durable"}),
 		durableAckPending: ms.NewGaugeVec("mqtt_failclosed_durable_ack_pending",
 			"Messages handed to this platform durable on the MQTT gateway's message store and not yet "+
-				"acknowledged, as of the last 30 s check. Absent while the durable cannot be read.",
+				"acknowledged, as of the last 30 s check. Absent while the durable cannot be read, or while its "+
+				"pending count cannot be trusted.",
 			[]string{"durable"}),
 	}
 	m.init(instanceId)
@@ -1707,6 +1729,11 @@ func (nmgr *NatsManager) checkMqttFailClosed(ctx context.Context, m *MqttFailClo
 // A durable that cannot be read has its series withdrawn, as the stream sampler does, so a
 // stale backlog is never read as a current one; so do all of them while the store carries no
 // mark (it is missing, or was not created again): there are no platform durables to have one.
+// 🔴 So does a durable whose count cannot be trusted: the broker computes it on the durable's
+// leader from that server's copy of the store, which after a leader change or a restart can
+// be behind and report 0 over a backlog of hundreds of thousands. While the store or the
+// durable has no leader or a replica offline, or a zero is contradicted by the store itself,
+// the series is absent rather than a reassuring 0 (mqttPendingTrusted).
 func (nmgr *NatsManager) sampleMqttFailClosedDurables(ctx context.Context, m *MqttFailClosedMetrics) {
 	if m == nil {
 		return
@@ -1716,13 +1743,34 @@ func (nmgr *NatsManager) sampleMqttFailClosedDurables(ctx context.Context, m *Mq
 		m.durableAckPending.Reset()
 		return
 	}
+	withdraw := func(name string) {
+		m.durablePending.DeleteLabelValues(name)
+		m.durableAckPending.DeleteLabelValues(name)
+	}
+	// The store first: a zero computed by the durable's leader is checked against messages
+	// the store already held when it was computed (mqttPendingTrusted).
+	rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
+	si, err := nmgr.js.StreamInfo(MqttMessageStore, nats.Context(rctx))
+	cancel()
 	for _, d := range MqttFailClosedDurables(nmgr.Microservice.InstanceId) {
-		rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
-		ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, nats.Context(rctx))
-		cancel()
 		if err != nil {
-			m.durablePending.DeleteLabelValues(d.Name)
-			m.durableAckPending.DeleteLabelValues(d.Name)
+			withdraw(d.Name)
+			continue
+		}
+		rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
+		ci, cerr := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, nats.Context(rctx))
+		cancel()
+		if cerr != nil {
+			withdraw(d.Name)
+			continue
+		}
+		why, terr := nmgr.mqttPendingTrusted(ctx, d, si, ci)
+		if terr != nil || why != "" {
+			if why != "" {
+				log.Warn().Str("durable", d.Name).Str("why", why).
+					Msg("Not reporting a platform durable's backlog on the MQTT message store: the broker's count cannot be trusted right now")
+			}
+			withdraw(d.Name)
 			continue
 		}
 		m.durablePending.WithLabelValues(d.Name).Set(float64(ci.NumPending))
