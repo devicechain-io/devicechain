@@ -45,7 +45,7 @@ func TestAPublishedCalculatedMetricResolvesAsCalculated(t *testing.T) {
 	assert.True(t, def.Calculated())
 
 	// And it computes, from the published version alone.
-	calc := r.BeginCalculation()
+	calc := r.BeginCalculation(nil)
 	defer calc.Release()
 	for key, raw := range map[string]string{"voltage": "230", "current": "10"} {
 		m, ok := r.Metric(key)
@@ -84,7 +84,7 @@ func TestOneResolutionCalculatesForManyWorkersAtOnce(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < rounds; i++ {
 				v, c := w+1, i+1
-				calc := r.BeginCalculation()
+				calc := r.BeginCalculation(nil)
 				calc.Set(&voltage, strconv.Itoa(v))
 				calc.Set(&current, strconv.Itoa(c))
 				out := calc.Append(nil, nopObserver{})

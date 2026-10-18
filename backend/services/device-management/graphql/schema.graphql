@@ -431,8 +431,9 @@ type MetricDefinition implements Model & TokenReference & NamedEntity & Metadata
     metadata: String
     """
     The formula a calculated metric is computed from, written over the profile's measured
-    metrics (for example `voltage * current / 1000`). Null for a measured metric, which
-    devices report.
+    metrics (for example `voltage * current / 1000`), and optionally over numbers a device
+    carries in its metadata, as `device.name` (for example `voltage * device.calibration`).
+    Null for a measured metric, which devices report.
     """
     expression: String
     """
@@ -479,7 +480,9 @@ input MetricDefinitionCreateRequest {
     profile's measured metrics instead of reported by devices. Omit it for a measured
     metric. Which of the two a metric is cannot be changed later. At most 1024 bytes and not
     blank. The formula is checked when the profile is published, not here; use
-    testMetricFormula to check it sooner.
+    testMetricFormula to check it sooner. It may read up to 8 numbers from the device's
+    metadata as `device.name`; naming one is declaring it, and a device whose metadata lacks
+    it gets no value for the reading.
     """
     expression: String
 }
@@ -540,11 +543,14 @@ input MetricDefinitionUpdateRequest {
     expression: String
 }
 
-"""One input value of a sample for testMetricFormula."""
+"""One typed value for testMetricFormula: a measured input of the sample, or a device constant."""
 input MetricValueInput {
-    """The measured metric's key."""
+    """The measured metric's key, or the device constant's name."""
     key: String!
-    """The value as a device would send it, such as `230.5`, `12` or `true`."""
+    """
+    The value as a device would send it, such as `230.5`, `12` or `true`; for a device
+    constant, a number such as `1.02`.
+    """
     value: String!
 }
 
@@ -565,6 +571,11 @@ type MetricFormulaTest {
     skippedReason: String
     """The measured metrics the formula reads."""
     inputs: [String!]!
+    """
+    The device constants the formula reads as `device.name`, sorted. Each comes from a
+    device's metadata when a reading is resolved; empty when the formula reads none.
+    """
+    constants: [String!]!
     """
     Advisory findings that do not stop a publish, such as a sample value no formula can
     read, or a result range wider than measurements can be stored with.
@@ -1333,6 +1344,33 @@ type DeviceRosterEntry {
 type DisabledDevicePage {
     """The tokens of the disabled devices on this page."""
     deviceTokens: [String!]!
+    """The cursor to pass as afterId for the next page; null when the walk is complete."""
+    nextCursor: String
+}
+
+"""One constant a device holds under a requested name."""
+type DeviceConstant {
+    """The name."""
+    key: String!
+    """
+    The value, or null when the device's metadata holds the name but not a finite number
+    (a string, a boolean, null, an object): present and unusable, which is not absent.
+    """
+    number: Float
+}
+
+"""The requested constants one device holds."""
+type DeviceConstantsEntry {
+    """The device's token."""
+    deviceToken: String!
+    """The requested names the device's metadata holds."""
+    constants: [DeviceConstant!]!
+}
+
+"""One page of device constants."""
+type DeviceConstantsPage {
+    """The devices on this page that hold at least one requested name."""
+    entries: [DeviceConstantsEntry!]!
     """The cursor to pass as afterId for the next page; null when the walk is complete."""
     nextCursor: String
 }
@@ -3229,6 +3267,13 @@ type Query {
         maxValue: Float
         """The input values, at most 256."""
         sample: [MetricValueInput!]!
+        """
+        The values of the device constants the formula reads as `device.name`, as the
+        device's metadata would hold them, at most 32. A constant the formula reads and this
+        omits is absent, and the formula is skipped as missing_input, as it would be for a
+        device without it. Omit this when the formula reads none.
+        """
+        constants: [MetricValueInput!]
     ): MetricFormulaTest!
     """
     Returns the command definitions with the given ids. Ids that match nothing are omitted,
@@ -3419,6 +3464,24 @@ type Query {
     # One page of the device roster: every device, the profile its type adopts (empty when
     # none) and when that membership began.
     deviceRosterPage(afterId: String, limit: Int!): DeviceRosterPage!
+    """
+    One page of the numbers the devices of a profile (those whose type adopts it) hold in
+    their metadata under the given names, which a draft calculated-metric formula reads as
+    `device.name`. Only devices holding at least one of the names are listed. This is the
+    rule preview's source for recalculating history with the devices' CURRENT constants.
+    Pass the previous page's nextCursor as afterId and stop when it is null. A limit outside
+    1..500, or no key or more than 32, is refused with INVALID_VALUE. Requires device:read.
+    """
+    deviceConstantsPage(
+        """The token of the profile whose devices are read."""
+        profileToken: String!
+        """The constant names to read, 1 to 32 of them, each 1 to 64 bytes."""
+        keys: [String!]!
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, 1 to 500."""
+        limit: Int!
+    ): DeviceConstantsPage!
     """
     One page of the tokens of the devices an operator has disabled, in device order. Pass the
     previous page's nextCursor as afterId and stop when it is null; a limit outside 1..1000 is

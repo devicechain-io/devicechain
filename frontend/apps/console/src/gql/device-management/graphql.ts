@@ -843,7 +843,9 @@ export type MetricDefinitionCreateRequest = {
    * profile's measured metrics instead of reported by devices. Omit it for a measured
    * metric. Which of the two a metric is cannot be changed later. At most 1024 bytes and not
    * blank. The formula is checked when the profile is published, not here; use
-   * testMetricFormula to check it sooner.
+   * testMetricFormula to check it sooner. It may read up to 8 numbers from the device's
+   * metadata as `device.name`; naming one is declaring it, and a device whose metadata lacks
+   * it gets no value for the reading.
    */
   expression?: string | null | undefined;
   /** Largest value accepted for a DOUBLE or INT metric. */
@@ -920,11 +922,14 @@ export type MetricDefinitionUpdateRequest = {
   unit?: string | null | undefined;
 };
 
-/** One input value of a sample for testMetricFormula. */
+/** One typed value for testMetricFormula: a measured input of the sample, or a device constant. */
 export type MetricValueInput = {
-  /** The measured metric's key. */
+  /** The measured metric's key, or the device constant's name. */
   key: string;
-  /** The value as a device would send it, such as `230.5`, `12` or `true`. */
+  /**
+   * The value as a device would send it, such as `230.5`, `12` or `true`; for a device
+   * constant, a number such as `1.02`.
+   */
   value: string;
 };
 
@@ -1652,10 +1657,11 @@ export type TestMetricFormulaQueryVariables = Exact<{
   minValue?: number | null | undefined;
   maxValue?: number | null | undefined;
   sample: Array<MetricValueInput> | MetricValueInput;
+  constants?: Array<MetricValueInput> | MetricValueInput | null | undefined;
 }>;
 
 
-export type TestMetricFormulaQuery = { testMetricFormula: { compileError: string | null, value: string | null, skippedReason: string | null, inputs: Array<string>, warnings: Array<string>, estimatedCost: number | null } };
+export type TestMetricFormulaQuery = { testMetricFormula: { compileError: string | null, value: string | null, skippedReason: string | null, inputs: Array<string>, constants: Array<string>, warnings: Array<string>, estimatedCost: number | null } };
 
 export type DeleteMetricDefinitionMutationVariables = Exact<{
   token: string;
@@ -3493,7 +3499,7 @@ export const UpdateMetricDefinitionDocument = new TypedDocumentString(`
 }
     `) as unknown as TypedDocumentString<UpdateMetricDefinitionMutation, UpdateMetricDefinitionMutationVariables>;
 export const TestMetricFormulaDocument = new TypedDocumentString(`
-    query TestMetricFormula($profileToken: String!, $expression: String!, $dataType: String!, $metricKey: String, $minValue: Float, $maxValue: Float, $sample: [MetricValueInput!]!) {
+    query TestMetricFormula($profileToken: String!, $expression: String!, $dataType: String!, $metricKey: String, $minValue: Float, $maxValue: Float, $sample: [MetricValueInput!]!, $constants: [MetricValueInput!]) {
   testMetricFormula(
     profileToken: $profileToken
     expression: $expression
@@ -3502,11 +3508,13 @@ export const TestMetricFormulaDocument = new TypedDocumentString(`
     minValue: $minValue
     maxValue: $maxValue
     sample: $sample
+    constants: $constants
   ) {
     compileError
     value
     skippedReason
     inputs
+    constants
     warnings
     estimatedCost
   }

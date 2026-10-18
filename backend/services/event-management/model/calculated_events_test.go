@@ -231,7 +231,7 @@ func TestSampleEvaluatorOnLiteralRows(t *testing.T) {
 		DataType: "INT", Inputs: []CalculatedInput{{"a", "INT"}, {"b", "INT"}},
 		From: calcAt, To: calcAt.Add(time.Second)})
 	require.NoError(t, err)
-	ev := newSampleEvaluator(f, env, types)
+	ev := newSampleEvaluator(f, env, types, nil)
 	defer ev.release()
 	ev.begin([]byte("e1"), calcAt)
 	ev.add("a", sql.NullFloat64{Float64: 1, Valid: true})
@@ -321,4 +321,55 @@ func TestCalculatedEventsRefusesAboveTheInputValueCap(t *testing.T) {
 	require.True(t, errors.As(err, &le), "want LIMIT_EXCEEDED, got %v", err)
 	assert.Equal(t, "inputValues", le.What)
 	assert.Equal(t, 4, le.Max)
+}
+
+// A draft formula that reads a per-device constant is evaluated with the constants the request
+// carries, the same for every sample; one it omits is absent and one it carries but the formula
+// does not read is ignored.
+func TestCalculatedEventsEvaluatesWithTheDevicesConstants(t *testing.T) {
+	api := newCalculatedTestApi(t)
+	seedReading(t, api, "acme", "meter-1", "ev1", calcAt, "voltage", 230)
+	seedReading(t, api, "acme", "meter-1", "ev1", calcAt, "current", 10)
+	seedReading(t, api, "acme", "meter-1", "ev2", calcAt.Add(time.Minute), "voltage", 100)
+	seedReading(t, api, "acme", "meter-1", "ev2", calcAt.Add(time.Minute), "current", 2)
+
+	req := powerRequest()
+	req.Expression = "voltage * current / 1000.0 * device.calibration"
+
+	req.Constants = []CalculatedConstant{{Key: "calibration", Value: "2"}, {Key: "unread", Value: "9"}}
+	res, err := api.CalculatedEvents(acme(), req)
+	require.NoError(t, err)
+	require.Len(t, res.Samples, 2)
+	assert.Equal(t, "4.6", *res.Samples[0].Value)
+	assert.Equal(t, "0.4", *res.Samples[1].Value)
+	assert.Equal(t, 2, res.Computed)
+
+	req.Constants = nil
+	res, err = api.CalculatedEvents(acme(), req)
+	require.NoError(t, err)
+	assert.Zero(t, res.Computed)
+	require.Len(t, res.Skipped, 1)
+	assert.Equal(t, CalculatedSkipCount{Reason: "missing_input", Count: 2}, res.Skipped[0])
+
+	req.Constants = []CalculatedConstant{{Key: "calibration", Value: "not a number"}}
+	res, err = api.CalculatedEvents(acme(), req)
+	require.NoError(t, err)
+	require.Len(t, res.Skipped, 1)
+	assert.Equal(t, CalculatedSkipCount{Reason: "invalid_input", Count: 2}, res.Skipped[0])
+}
+
+func TestCalculatedEventsRefusesBadConstants(t *testing.T) {
+	api := newCalculatedTestApi(t)
+	req := powerRequest()
+	req.Expression = "voltage * device.k"
+	req.Constants = []CalculatedConstant{{Key: "k", Value: "1"}, {Key: "k", Value: "2"}}
+	_, err := api.CalculatedEvents(acme(), req)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, `"k" more than once`)
+
+	req.Constants = make([]CalculatedConstant, calcfield.MaxProfileConstants+1)
+	_, err = api.CalculatedEvents(acme(), req)
+	require.Error(t, err)
+	var le *limit.Error
+	require.True(t, errors.As(err, &le), "%v", err)
 }

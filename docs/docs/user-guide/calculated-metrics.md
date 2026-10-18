@@ -18,7 +18,9 @@ tenant's tier a ceiling above zero. See [Turning calculated metrics on](#turning
 ## What a calculated metric is
 
 - A formula reads the **measured** metrics of **one reading**: the values a device reports together
-  in a single measurement. It never reads an earlier reading, another device, or the clock.
+  in a single measurement, and optionally numbers the **device itself** carries, such as a
+  calibration factor (see [Device constants](#device-constants)). It never reads an earlier
+  reading, another device, or the clock.
 - The result is **computed once, when the reading arrives**, and stored as a normal measurement
   next to the values the device sent. Dashboards, history, exports, the device's latest values and
   detection rules all read it like any other metric, by its key.
@@ -64,7 +66,10 @@ checks it at publish time and computes it on real readings. Below the box you se
 
 Once the formula compiles, a **sample** panel lists the measured metrics the formula reads. Type a
 value for each, and the panel shows the **value** the formula would produce or the **reason** it
-would produce none. The sample is hand-typed, and nothing is stored.
+would produce none. If the formula reads [device constants](#device-constants), a **Device
+constants** group lists them too: type the number the device's metadata would hold for each, and
+leave one blank to see what a device without it gets. The sample is hand-typed, and nothing is
+stored.
 
 ### Trying a formula on recent history
 
@@ -82,6 +87,10 @@ sees when readings arrive. Nothing is stored.
   result, and what it shows is a preview, not the value that will be stored.
 - Only the metrics the formula reads are shown, and a message that carried none of them is not a
   sample.
+- If the formula reads [device constants](#device-constants), the panel uses the typed device's
+  **current** metadata for them, for every sample: not the values the device had when each reading
+  was recorded. It says so under the result. A constant the device's metadata lacks makes its
+  samples `missing_input`.
 - A window is at most 7 days. One holding more than 50,000 samples, or more than 250,000 input
   values, is refused rather than cut short. Choose a shorter window.
 - It needs permission to read the device's events. A member limited to some customers sees only
@@ -95,7 +104,9 @@ refuses a profile when:
 - a formula does not compile or does not produce the declared type;
 - a formula reads a key that is not a declared, **measured** metric of the same profile. A
   calculated metric cannot read another calculated metric;
-- a formula reads no metric at all;
+- a formula reads no metric at all (a device constant is not a metric);
+- a formula reads more than 8 device constants, or the formulas of one profile together read more
+  than 32;
 - a formula is longer than 1,024 bytes, its estimated cost is above 100, or the formulas of one
   profile together cost more than 1,000;
 - a calculated metric's Min is above its Max, it declares allowed values, or its data type is not
@@ -112,6 +123,13 @@ values stored when it arrived. A rule over a calculated metric you have just add
 therefore previewed against the values that metric will have once you publish, and a calculated
 metric the draft no longer has gives the preview no value. The preview says how many readings were
 recomputed and how many formula results produced no value.
+
+A formula that reads [device constants](#device-constants) is recomputed with each device's
+**current** metadata, read when you run the preview. A reading stored under an earlier value
+therefore previews under today's, and can differ from the value that was stored then. A device
+whose metadata lacks a constant gets no value for its readings. If the constants cannot be read,
+or the profile has more than 10,000 devices, the result says so rather than computing with
+defaults.
 
 The recomputation reads each reading's values as the device sent them, at full precision, so it
 gives the same value the published formula would compute for that reading. Two things it cannot
@@ -155,6 +173,42 @@ stored value must not depend on which machine computed it. For a square root, us
 `has(m.fan)` and `"fan" in m` test whether a reading carries a value for `fan`. This is how you
 give a missing input an explicit default: `has(m.fan) ? fan : 0.0`.
 
+### Device constants {#device-constants}
+
+A formula can read a number that belongs to a **device** rather than to a reading, such as a
+calibration factor or a current-transformer ratio. Write it as `device.` followed by the name:
+`voltage * device.calibration`. For a name that is not a plain identifier, write
+`device["ct-ratio"]`. The name `device` is reserved for this: a measured metric whose key is
+`device` is read through `m`, wrapped in the conversion for its type, such as
+`double(m["device"])`.
+
+The number comes from the **device's metadata**. Edit the device and put the constant in its
+metadata as a JSON number under the same name:
+
+```json
+{ "site": "north plant", "calibration": 1.02 }
+```
+
+- **Naming a constant declares it.** There is nothing else to set up on the profile. Publishing
+  cannot know which devices carry which constants; it checks that the formula compiles and uses
+  constants as numbers.
+- Every constant is a **double**. A whole number is a double with no fraction, and
+  `int(device.step)` reads it as an integer. A formula that reads constants but no measured metric
+  is refused.
+- A formula reads at most 8 constants, and the formulas of one profile together at most 32.
+- A constant must be a **JSON number**. A number written as text (`"1.02"`), a boolean, `null`, an
+  object or a list is not a number, and is never converted.
+- Like a measured input, a constant is **required** unless the formula tests for it. A device whose
+  metadata lacks it is skipped as `missing_input`, and one that holds something that is not a
+  finite number is skipped as `invalid_input`. For a default, test for it:
+  `has(device.calibration) ? device.calibration : 1.0`, or `"calibration" in device`.
+- **The value is frozen into the result.** The constant is read when the reading arrives, and the
+  computed value is stored like any other. Editing the device's metadata later changes what is
+  computed for the readings that arrive after the change (a service can take a few seconds to see
+  it) and never changes a value already stored.
+- Each device has its own constants, so two devices of one type can have different values, and the
+  same formula gives each its own result.
+
 ### Types
 
 A formula is checked against the metric's data type, and the checks are strict:
@@ -182,9 +236,9 @@ default value and no zero. The reasons are:
 
 | Reason | Meaning |
 | --- | --- |
-| `missing_input` | An input the formula reads was not in the reading. An input is required unless the formula tests for it with `has()` or `in`. |
-| `invalid_input` | An input was present but is not a valid value for its type. |
-| `non_finite` | A number was not finite: an input that was not a finite number, a division by zero, a result too large for a double, or the square root of a negative number. |
+| `missing_input` | An input the formula reads was not in the reading, or a device constant it reads is not in the device's metadata. An input or constant is required unless the formula tests for it with `has()` or `in`. |
+| `invalid_input` | An input was present but is not a valid value for its type, or a device constant is present but is not a number. |
+| `non_finite` | A number was not finite: an input or device constant that was not a finite number, a division by zero, a result too large for a double, or the square root of a negative number. |
 | `div_zero` | An integer division or remainder by zero. |
 | `overflow` | An integer result or conversion overflowed 64 bits. |
 | `range` | The result is outside the metric's Min and Max. |

@@ -116,7 +116,7 @@ describe('FormulaEditor: recent history', () => {
     );
     const tally = screen.getByTestId('formula-history-tally').textContent ?? '';
     expect(tally).toContain('2 samples, 1 with a value');
-    expect(tally).toContain('1 skipped: an input the formula reads is missing from the sample');
+    expect(tally).toContain('1 skipped: an input or device constant the formula reads is missing');
     expect(screen.getByText(/voltage=230 current=10/)).toBeTruthy();
     expect(screen.getByText(/→ 2\.3/)).toBeTruthy();
   });

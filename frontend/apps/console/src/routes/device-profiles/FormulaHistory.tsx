@@ -19,7 +19,7 @@ import { FormField } from '@/components/ui/form-field';
 import { HintText } from '@/components/ui/hint-text';
 import { SegmentedControl } from '@/components/ui/segmented-control';
 import { errMessage } from '@/routes/common';
-import { listMetricDefinitions } from '@/lib/api/device-management';
+import { getDevice, listMetricDefinitions } from '@/lib/api/device-management';
 import { calculatedEvents, type CalculatedEventsResult } from '@/lib/api/event-management';
 import { optNum } from '@/lib/utils';
 
@@ -45,6 +45,7 @@ export function FormulaHistory({
   minValue,
   maxValue,
   inputs,
+  constants,
   skipLabel,
 }: {
   profileToken: string;
@@ -54,6 +55,8 @@ export function FormulaHistory({
   maxValue: string;
   /** The measured metric keys the formula reads, as the server reported them. */
   inputs: string[];
+  /** The device constants the formula reads (`device.name`), read from the device's metadata. */
+  constants: string[];
   skipLabel: (reason: string) => string;
 }) {
   const { t } = useTranslation('deviceProfiles');
@@ -63,7 +66,7 @@ export function FormulaHistory({
   // Only the newest run may write, and an edit to the formula drops a shown result: it described
   // another formula.
   const runToken = useRef(0);
-  const formulaKey = JSON.stringify([expression, dataType, minValue, maxValue, inputs]);
+  const formulaKey = JSON.stringify([expression, dataType, minValue, maxValue, inputs, constants]);
   useEffect(() => {
     runToken.current++;
     setState((s) => (s.status === 'idle' ? s : { status: 'idle' }));
@@ -77,6 +80,9 @@ export function FormulaHistory({
       // them, so each key it reads is a measured metric there.
       const metrics = await listMetricDefinitions(profileToken);
       const types = new Map(metrics.filter((m) => !m.calculated).map((m) => [m.metricKey, m.dataType]));
+      // A formula that reads device constants is run with THIS device's constants as its metadata
+      // holds them now (the server holds no device records, so the console reads them).
+      const held = constants.length > 0 ? await deviceConstants(deviceToken.trim(), constants) : [];
       const to = new Date();
       const from = new Date(to.getTime() - hours * 3_600_000);
       const result = await calculatedEvents({
@@ -86,6 +92,7 @@ export function FormulaHistory({
         inputs: inputs.filter((k) => types.has(k)).map((key) => ({ key, dataType: types.get(key) ?? '' })),
         minValue: optNum(minValue),
         maxValue: optNum(maxValue),
+        constants: held,
         from: from.toISOString(),
         to: to.toISOString(),
       });
@@ -135,9 +142,36 @@ export function FormulaHistory({
           {state.message}
         </p>
       )}
+      {state.status === 'done' && constants.length > 0 && (
+        <p className="text-xs text-warning" data-testid="formula-history-constants">
+          {t('formulaHistoryConstants', { names: constants.map((c) => `device.${c}`).join(', ') })}
+        </p>
+      )}
       {state.status === 'done' && <HistoryOutcome result={state.result} skipLabel={skipLabel} />}
     </div>
   );
+}
+
+/**
+ * The device's current values for the constants a formula reads, as the server's resolver would
+ * read them: a JSON number under the name is a constant; a name the metadata holds as anything
+ * else is sent as blank text, which the server reads as present and not a number (invalid_input);
+ * a name it does not hold is left out (missing_input). A device that does not exist, or whose
+ * metadata is not a JSON object, holds none.
+ */
+async function deviceConstants(deviceToken: string, names: string[]): Promise<{ key: string; value: string }[]> {
+  const device = await getDevice(deviceToken);
+  let doc: unknown = null;
+  try {
+    doc = device?.metadata ? JSON.parse(device.metadata) : null;
+  } catch {
+    doc = null;
+  }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc)) return [];
+  const held = doc as Record<string, unknown>;
+  return names
+    .filter((name) => Object.prototype.hasOwnProperty.call(held, name))
+    .map((key) => ({ key, value: typeof held[key] === 'number' && Number.isFinite(held[key]) ? String(held[key]) : '' }));
 }
 
 function HistoryOutcome({ result, skipLabel }: { result: CalculatedEventsResult; skipLabel: (reason: string) => string }) {

@@ -98,3 +98,42 @@ func TestTestMetricFormulaRefusesScopedAndUnauthorizedCallers(t *testing.T) {
 	// Contrast: the same query under the fixture's unscoped device:read answers.
 	execProfileGql(t, base, testMetricFormulaQuery, nil)
 }
+
+// The wire half of per-device constants: testMetricFormula takes `constants` (optional) and
+// answers with the names the formula reads, under those names.
+func TestGraphQLTestsAFormulaOverDeviceConstants(t *testing.T) {
+	ctx := profileLocationCtx(t)
+	execProfileGql(t, ctx, createProfileMutation, map[string]any{"request": map[string]any{"token": "meter"}})
+	execProfileGql(t, ctx, `mutation ($request: MetricDefinitionCreateRequest) {
+	  createMetricDefinition(request: $request) { token }
+	}`, map[string]any{"request": map[string]any{
+		"token": "md-v", "deviceProfileToken": "meter", "metricKey": "voltage", "dataType": "DOUBLE"}})
+
+	type result struct {
+		R struct {
+			CompileError  *string  `json:"compileError"`
+			Value         *string  `json:"value"`
+			SkippedReason *string  `json:"skippedReason"`
+			Constants     []string `json:"constants"`
+		} `json:"testMetricFormula"`
+	}
+	run := func(constants string) result {
+		data := execProfileGql(t, ctx, `query {
+		  testMetricFormula(profileToken: "meter", expression: "voltage * device.calibration", dataType: "DOUBLE",
+		    sample: [{key: "voltage", value: "100"}]`+constants+`) { compileError value skippedReason constants }
+		}`, nil)
+		var out result
+		require.NoError(t, json.Unmarshal(data, &out))
+		return out
+	}
+	with := run(`, constants: [{key: "calibration", value: "1.02"}]`)
+	require.Nil(t, with.R.CompileError)
+	require.NotNil(t, with.R.Value)
+	require.Equal(t, "102", *with.R.Value)
+	require.Equal(t, []string{"calibration"}, with.R.Constants)
+
+	without := run(``)
+	require.Nil(t, without.R.Value)
+	require.NotNil(t, without.R.SkippedReason)
+	require.Equal(t, "missing_input", *without.R.SkippedReason)
+}

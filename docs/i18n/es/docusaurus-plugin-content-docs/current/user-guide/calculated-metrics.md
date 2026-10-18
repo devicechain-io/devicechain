@@ -20,7 +20,9 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
 ## Qué es una métrica calculada
 
 - Una fórmula lee las métricas **medidas** de **una lectura**: los valores que un dispositivo envía
-  juntos en una sola medición. Nunca lee una lectura anterior, otro dispositivo ni el reloj.
+  juntos en una sola medición, y opcionalmente números que lleva el **propio dispositivo**, como un
+  factor de calibración (consulta [Constantes del dispositivo](#device-constants)). Nunca lee una
+  lectura anterior, otro dispositivo ni el reloj.
 - El resultado se **calcula una sola vez, cuando llega la lectura**, y se almacena como una medición
   normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
   exportaciones, los últimos valores del dispositivo y las reglas de detección la leen como
@@ -71,7 +73,11 @@ ves:
 
 Cuando la fórmula compila, un panel de **muestra** enumera las métricas medidas que lee la fórmula.
 Escribe un valor para cada una y el panel muestra el **valor** que produciría la fórmula o el
-**motivo** por el que no produciría ninguno. La muestra se escribe a mano y no se almacena nada.
+**motivo** por el que no produciría ninguno. Si la fórmula lee [constantes del
+dispositivo](#device-constants), un grupo **Constantes del dispositivo** las enumera también:
+escribe el número que contendrían los metadatos del dispositivo para cada una, o deja una en blanco
+para ver qué obtiene un dispositivo que no la tiene. La muestra se escribe a mano y no se almacena
+nada.
 
 ### Probar una fórmula con el historial reciente
 
@@ -91,6 +97,10 @@ se almacena nada.
   almacenará.
 - Solo se muestran las métricas que lee la fórmula, y un mensaje que no llevaba ninguna de ellas no
   es una muestra.
+- Si la fórmula lee [constantes del dispositivo](#device-constants), el panel usa para ellas los
+  metadatos **actuales** del dispositivo indicado, en todas las muestras: no los valores que tenía
+  el dispositivo cuando se registró cada lectura. Lo indica bajo el resultado. Una constante que no
+  tienen los metadatos del dispositivo deja sus muestras en `missing_input`.
 - Una ventana abarca como máximo 7 días. Una con más de 50.000 muestras, o más de 250.000 valores
   de entrada, se rechaza en lugar de recortarse. Elige una ventana más corta.
 - Necesita permiso para leer los eventos del dispositivo. Un miembro limitado a algunos clientes ve
@@ -104,7 +114,9 @@ problemas a la vez. Se rechaza un perfil cuando:
 - una fórmula no compila o no produce el tipo declarado;
 - una fórmula lee una clave que no es una métrica **medida** declarada del mismo perfil. Una métrica
   calculada no puede leer otra métrica calculada;
-- una fórmula no lee ninguna métrica;
+- una fórmula no lee ninguna métrica (una constante del dispositivo no es una métrica);
+- una fórmula lee más de 8 constantes del dispositivo, o las fórmulas de un mismo perfil leen juntas
+  más de 32;
 - una fórmula supera los 1024 bytes, su coste estimado es superior a 100, o las fórmulas de un
   mismo perfil cuestan juntas más de 1000;
 - el Mín. de una métrica calculada es mayor que su Máx., declara valores permitidos, o su tipo de
@@ -122,6 +134,13 @@ cuando llegó. Por eso, una regla sobre una métrica calculada que acabas de añ
 previsualiza con los valores que tendrá esa métrica cuando publiques, y una métrica calculada que el
 borrador ya no tiene no da ningún valor en la vista previa. La vista previa indica cuántas lecturas
 se recalcularon y cuántos resultados de fórmula no produjeron valor.
+
+Una fórmula que lee [constantes del dispositivo](#device-constants) se recalcula con los
+metadatos **actuales** de cada dispositivo, leídos cuando ejecutas la vista previa. Una lectura
+almacenada con un valor anterior se previsualiza, por tanto, con el de hoy, y puede diferir del
+valor que se almacenó entonces. Un dispositivo cuyos metadatos no tienen una constante no obtiene
+ningún valor para sus lecturas. Si no se pueden leer las constantes, o el perfil tiene más de
+10.000 dispositivos, el resultado lo dice en lugar de calcular con valores por defecto.
 
 El recálculo lee los valores de cada lectura tal como los envió el dispositivo, con precisión
 completa, así que da el mismo valor que calcularía la fórmula publicada para esa lectura. Hay dos
@@ -167,6 +186,44 @@ un valor almacenado no debe depender de qué máquina lo calculó. Para una raí
 `has(m.fan)` y `"fan" in m` comprueban si una lectura trae un valor para `fan`. Así le das un valor
 por defecto explícito a una entrada ausente: `has(m.fan) ? fan : 0.0`.
 
+### Constantes del dispositivo {#device-constants}
+
+Una fórmula puede leer un número que pertenece a un **dispositivo** y no a una lectura, como un
+factor de calibración o la relación de un transformador de corriente. Se escribe como `device.`
+seguido del nombre: `voltage * device.calibration`. Para un nombre que no sea un identificador
+simple, escribe `device["ct-ratio"]`. El nombre `device` está reservado para esto: una métrica
+medida cuya clave sea `device` se lee a través de `m`, envuelta en la conversión de su tipo, como
+`double(m["device"])`.
+
+El número procede de los **metadatos del dispositivo**. Edita el dispositivo y pon la constante en
+sus metadatos como un número JSON con el mismo nombre:
+
+```json
+{ "site": "north plant", "calibration": 1.02 }
+```
+
+- **Nombrar una constante la declara.** No hay nada más que configurar en el perfil. Al publicar no
+  se puede saber qué dispositivos llevan qué constantes; se comprueba que la fórmula compile y que
+  use las constantes como números.
+- Toda constante es un **double**. Un número entero es un double sin parte decimal, y
+  `int(device.step)` lo lee como entero. Una fórmula que lee constantes pero ninguna métrica medida
+  se rechaza.
+- Una fórmula lee como máximo 8 constantes, y las fórmulas de un mismo perfil, como máximo 32 en
+  conjunto.
+- Una constante debe ser un **número JSON**. Un número escrito como texto (`"1.02"`), un booleano,
+  `null`, un objeto o una lista no es un número y nunca se convierte.
+- Como una entrada medida, una constante es **obligatoria** salvo que la fórmula la compruebe. Un
+  dispositivo cuyos metadatos no la tienen se omite como `missing_input`, y uno que contiene algo
+  que no es un número finito se omite como `invalid_input`. Para un valor por defecto,
+  compruébala: `has(device.calibration) ? device.calibration : 1.0`, o
+  `"calibration" in device`.
+- **El valor queda fijado en el resultado.** La constante se lee cuando llega la lectura, y el valor
+  calculado se almacena como cualquier otro. Editar los metadatos del dispositivo después cambia lo
+  que se calcula para las lecturas que llegan tras el cambio (un servicio puede tardar unos
+  segundos en verlo) y nunca cambia un valor ya almacenado.
+- Cada dispositivo tiene sus propias constantes, así que dos dispositivos del mismo tipo pueden
+  tener valores distintos, y la misma fórmula da a cada uno su propio resultado.
+
 ### Tipos {#types}
 
 Una fórmula se comprueba contra el tipo de datos de la métrica, y las comprobaciones son estrictas:
@@ -195,9 +252,9 @@ por defecto ni cero. Los motivos son:
 
 | Motivo | Significado |
 | --- | --- |
-| `missing_input` | Una entrada que lee la fórmula no estaba en la lectura. Una entrada es obligatoria salvo que la fórmula la compruebe con `has()` o `in`. |
-| `invalid_input` | Una entrada estaba presente pero no es un valor válido para su tipo. |
-| `non_finite` | Un número no era finito: una entrada que no era un número finito, una división entre cero, un resultado demasiado grande para un double o la raíz cuadrada de un número negativo. |
+| `missing_input` | Una entrada que lee la fórmula no estaba en la lectura, o una constante del dispositivo que lee no está en los metadatos del dispositivo. Una entrada o constante es obligatoria salvo que la fórmula la compruebe con `has()` o `in`. |
+| `invalid_input` | Una entrada estaba presente pero no es un valor válido para su tipo, o una constante del dispositivo está presente pero no es un número. |
+| `non_finite` | Un número no era finito: una entrada o constante del dispositivo que no era un número finito, una división entre cero, un resultado demasiado grande para un double o la raíz cuadrada de un número negativo. |
 | `div_zero` | Una división o un resto de enteros entre cero. |
 | `overflow` | Un resultado o una conversión de enteros desbordó los 64 bits. |
 | `range` | El resultado queda fuera del Mín. y el Máx. de la métrica. |

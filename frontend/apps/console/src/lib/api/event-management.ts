@@ -60,6 +60,7 @@ const CALCULATED_EVENTS = graphql(`
     $inputs: [CalculatedInput!]!
     $minValue: Float
     $maxValue: Float
+    $constants: [CalculatedConstant!]
     $from: String!
     $to: String!
   ) {
@@ -70,6 +71,7 @@ const CALCULATED_EVENTS = graphql(`
       inputs: $inputs
       minValue: $minValue
       maxValue: $maxValue
+      constants: $constants
       from: $from
       to: $to
     ) {

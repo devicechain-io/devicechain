@@ -39,7 +39,18 @@ type allowlist struct {
 	env     *Env
 	refs    map[int]struct{}
 	guarded map[int]struct{}
-	errs    []string
+	// crefs and cguarded are the same for the device's constants, by name.
+	crefs    map[string]struct{}
+	cguarded map[string]struct{}
+	errs     []string
+}
+
+// walked is what the allowlist walk derives from an admitted expression: the input
+// positions it names and the ones it never tests for presence, and the same for the device
+// constants it names (sorted by name).
+type walked struct {
+	inputs, required       []int
+	constants, reqConstant []string
 }
 
 func (w *allowlist) fail(format string, args ...any) {
@@ -51,21 +62,34 @@ func (w *allowlist) fail(format string, args ...any) {
 
 // check walks the expression and returns its input positions and, of those, the positions
 // it never tests for presence (both ascending), or an error naming every refusal.
-func (w *allowlist) check(root celast.Expr) (inputs, required []int, err error) {
+func (w *allowlist) check(root celast.Expr) (walked, error) {
 	w.refs, w.guarded = map[int]struct{}{}, map[int]struct{}{}
+	w.crefs, w.cguarded = map[string]struct{}{}, map[string]struct{}{}
 	w.expr(root, 0)
-	if len(w.errs) > 0 {
-		return nil, nil, fmt.Errorf("%s", strings.Join(w.errs, "; "))
+	if len(w.errs) == 0 && len(w.crefs) > MaxConstants {
+		w.fail("the formula reads %d device constants, above the maximum of %d", len(w.crefs), MaxConstants)
 	}
+	if len(w.errs) > 0 {
+		return walked{}, fmt.Errorf("%s", strings.Join(w.errs, "; "))
+	}
+	var out walked
 	for i := range w.refs {
-		inputs = append(inputs, i)
+		out.inputs = append(out.inputs, i)
 		if _, ok := w.guarded[i]; !ok {
-			required = append(required, i)
+			out.required = append(out.required, i)
 		}
 	}
-	sort.Ints(inputs)
-	sort.Ints(required)
-	return inputs, required, nil
+	for k := range w.crefs {
+		out.constants = append(out.constants, k)
+		if _, ok := w.cguarded[k]; !ok {
+			out.reqConstant = append(out.reqConstant, k)
+		}
+	}
+	sort.Ints(out.inputs)
+	sort.Ints(out.required)
+	sort.Strings(out.constants)
+	sort.Strings(out.reqConstant)
+	return out, nil
 }
 
 // expr checks one node. conv is the type of the conversion call directly enclosing it, or 0:
@@ -86,6 +110,10 @@ func (w *allowlist) expr(e celast.Expr, conv Type) {
 			w.fail("m may only be used as m[\"key\"], m.key, has(m.key) or \"key\" in m")
 			return
 		}
+		if name == VarDevice {
+			w.fail("device may only be used as device.name, device[\"name\"], has(device.name) or \"name\" in device")
+			return
+		}
 		i, ok := w.env.index[name]
 		if !ok {
 			// The checker only admits declared identifiers, so this is unreachable — but an
@@ -96,8 +124,12 @@ func (w *allowlist) expr(e celast.Expr, conv Type) {
 		w.refs[i] = struct{}{}
 	case celast.SelectKind:
 		sel := e.AsSelect()
+		if isDevice(sel.Operand()) {
+			w.cAccess(sel.FieldName(), sel.IsTestOnly())
+			return
+		}
 		if !isM(sel.Operand()) {
-			w.fail("field selection .%s is not allowed: only m.key reads an input", sel.FieldName())
+			w.fail("field selection .%s is not allowed: only m.key reads an input and device.name a device constant", sel.FieldName())
 			return
 		}
 		w.mAccess(sel.FieldName(), sel.IsTestOnly(), conv)
@@ -126,8 +158,17 @@ func (w *allowlist) call(call celast.CallExpr, conv Type) {
 	}
 	switch fn {
 	case operators.Index:
+		if len(args) == 2 && isDevice(args[0]) {
+			key, ok := stringLiteral(args[1])
+			if !ok {
+				w.fail("device must be indexed by a constant string name, as device[\"name\"]")
+				return
+			}
+			w.cAccess(key, false)
+			return
+		}
 		if len(args) != 2 || !isM(args[0]) {
-			w.fail("indexing is only allowed as m[\"key\"]")
+			w.fail("indexing is only allowed as m[\"key\"] or device[\"name\"]")
 			return
 		}
 		key, ok := stringLiteral(args[1])
@@ -138,8 +179,17 @@ func (w *allowlist) call(call celast.CallExpr, conv Type) {
 		w.mAccess(key, false, conv)
 		return
 	case operators.In:
+		if len(args) == 2 && isDevice(args[1]) {
+			key, ok := stringLiteral(args[0])
+			if !ok {
+				w.fail("`in device` needs a constant string name, as \"name\" in device")
+				return
+			}
+			w.cAccess(key, true)
+			return
+		}
 		if len(args) != 2 || !isM(args[1]) {
-			w.fail("`in` is only allowed as \"key\" in m")
+			w.fail("`in` is only allowed as \"key\" in m or \"name\" in device")
 			return
 		}
 		key, ok := stringLiteral(args[0])
@@ -187,6 +237,20 @@ func (w *allowlist) mAccess(key string, presenceOnly bool, conv Type) {
 	}
 }
 
+// cAccess checks a reference to device constant name: a presence test (has, in) or a read.
+// Any name is admissible — which constants a device has is a fact about the device, found at
+// evaluation — but the name must be one a device could carry.
+func (w *allowlist) cAccess(name string, presenceOnly bool) {
+	if name == "" || len(name) > MaxConstantKeyBytes {
+		w.fail("a device constant name must be 1 to %d bytes", MaxConstantKeyBytes)
+		return
+	}
+	w.crefs[name] = struct{}{}
+	if presenceOnly {
+		w.cguarded[name] = struct{}{}
+	}
+}
+
 // conversionFor is the conversion function that reads an input of type t through m.
 func conversionFor(t Type) string {
 	for fn, ct := range conversions {
@@ -204,6 +268,9 @@ func displayName(fn string) string {
 	}
 	return fn + "()"
 }
+
+// isDevice reports whether e is the identifier device.
+func isDevice(e celast.Expr) bool { return e.Kind() == celast.IdentKind && e.AsIdent() == VarDevice }
 
 // isM reports whether e is the identifier m.
 func isM(e celast.Expr) bool { return e.Kind() == celast.IdentKind && e.AsIdent() == VarM }

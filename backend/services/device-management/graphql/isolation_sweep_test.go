@@ -64,4 +64,10 @@ func TestIsolationSweep(t *testing.T) {
 	if o, ok := isolationsweep.OutcomeOf(out, "query deviceScopeAnchors"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
 		t.Errorf("query deviceScopeAnchors: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
 	}
+	// deviceConstantsPage reads device METADATA (the numbers under the names asked for) for every
+	// device of a profile. It is the rule preview's door, reached over a service token, so it is
+	// gated on Authorize: a scoped member is refused before any profile or device is looked up.
+	if o, ok := isolationsweep.OutcomeOf(out, "query deviceConstantsPage"); !ok || o.Data || len(o.Codes) == 0 || o.Codes[0] != "FORBIDDEN" {
+		t.Errorf("query deviceConstantsPage: %+v (reached=%v), want FORBIDDEN for acme's member", o, ok)
+	}
 }

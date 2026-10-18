@@ -98,7 +98,7 @@ func TestRecalculateEqualsResolvingUnderTheDraft(t *testing.T) {
 			want := resolveSamples(t, draft, testCalcMetrics(), reading).Entries[0].Entries
 			before := mustJSON(t, stored)
 
-			got := draft.Recalculate(stored, newCountingObserver())
+			got := draft.Recalculate(stored, nil, newCountingObserver())
 
 			assert.Equal(t, want, got, "the draft's recalculation differs from resolving under the draft")
 			assert.Equal(t, before, mustJSON(t, stored), "Recalculate wrote to the stored entries")
@@ -121,7 +121,7 @@ func TestKeepingStoredCalculatedValuesFailsParity(t *testing.T) {
 		if !assert.ObjectsAreEqual(want, addOnlyWhereAbsent(draft, stored, obs)) {
 			diverged++
 		}
-		draft.Recalculate(stored, obs)
+		draft.Recalculate(stored, nil, obs)
 	}
 	assert.Greater(t, diverged, 0, "keeping stored values matched the draft on every reading: the corpus cannot tell the designs apart")
 	for _, key := range []string{"power_kw", "open_and_hot", "fan_pct", "temp_f"} {
@@ -143,7 +143,7 @@ func addOnlyWhereAbsent(draft model.ProfileResolution, stored []model.ResolvedMe
 		}
 	}
 	out := slices.Clone(stored)
-	for _, e := range draft.Recalculate(stored, obs) {
+	for _, e := range draft.Recalculate(stored, nil, obs) {
 		if e.Derived && !have[e.Name] {
 			out = append(out, e)
 		}
@@ -162,7 +162,7 @@ func TestAValueThePublishedVersionDroppedIsNotRecovered(t *testing.T) {
 	reading := map[string]string{"temp": "20", "retired": "1"}
 	stored := resolveSamples(t, published, testCalcMetrics(), reading).Entries[0].Entries
 	want := resolveSamples(t, draft, testCalcMetrics(), reading).Entries[0].Entries
-	got := draft.Recalculate(stored, newCountingObserver())
+	got := draft.Recalculate(stored, nil, newCountingObserver())
 	assert.Equal(t, []string{"fan_pct*", "retired", "temp", "temp_f*"}, names(want))
 	assert.Equal(t, []string{"fan_pct*", "temp", "temp_f*"}, names(got))
 }
@@ -180,7 +180,7 @@ func TestARawValueUnderAKeyTheDraftCalculatesIsDropped(t *testing.T) {
 	stored := resolveSamples(t, published, testCalcMetrics(), reading).Entries[0].Entries
 	require.Contains(t, names(stored), "extra", "the fixture must store the device's extra as a raw entry")
 	want := resolveSamples(t, draft, testCalcMetrics(), reading).Entries[0].Entries
-	got := draft.Recalculate(stored, newCountingObserver())
+	got := draft.Recalculate(stored, nil, newCountingObserver())
 	assert.Equal(t, []string{"extra*", "temp"}, names(got))
 	assert.Equal(t, want, got, "the draft's recalculation differs from resolving under the draft")
 }
@@ -190,9 +190,9 @@ func TestARawValueUnderAKeyTheDraftCalculatesIsDropped(t *testing.T) {
 func TestRecalculateIsDeterministic(t *testing.T) {
 	published, draft := publishedVersion(), draftVersion()
 	stored := resolveSamples(t, published, testCalcMetrics(), parityCorpus()[1]).Entries[0].Entries
-	first := mustJSON(t, draft.Recalculate(stored, newCountingObserver()))
+	first := mustJSON(t, draft.Recalculate(stored, nil, newCountingObserver()))
 	for i := 0; i < 1000; i++ {
-		require.Equal(t, first, mustJSON(t, draft.Recalculate(stored, newCountingObserver())), "run %d", i)
+		require.Equal(t, first, mustJSON(t, draft.Recalculate(stored, nil, newCountingObserver())), "run %d", i)
 	}
 }
 
@@ -202,7 +202,7 @@ func TestADraftWithoutFormulasStripsStoredCalculatedValues(t *testing.T) {
 	stored := resolveSamples(t, publishedVersion(), testCalcMetrics(), parityCorpus()[0]).Entries[0].Entries
 	require.Contains(t, names(stored), "power_kw*")
 	none := model.NewProfileResolution(model.ProfileScope{}, parityMeasured())
-	got := none.Recalculate(stored, newCountingObserver())
+	got := none.Recalculate(stored, nil, newCountingObserver())
 	assert.Equal(t, []string{"current", "door", "fan", "temp", "voltage"}, names(got))
 }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -254,6 +255,9 @@ func (p *profileFormulas) problems() []string {
 	if err := calcfield.CheckProfileCost(compiled); err != nil {
 		out = append(out, err.Error())
 	}
+	if err := calcfield.CheckProfileConstants(compiled); err != nil {
+		out = append(out, err.Error())
+	}
 	return out
 }
 
@@ -308,6 +312,10 @@ type MetricFormulaTestRequest struct {
 	MinValue  *float64
 	MaxValue  *float64
 	Sample    []MetricValueInput
+	// Constants are the hand-typed per-device constants the formula reads as `device.name`:
+	// the numbers a device's metadata would hold. One the formula does not read is ignored
+	// with a warning.
+	Constants []MetricValueInput
 }
 
 // MetricFormulaTestResult is what a formula gives for the sample, through the same
@@ -319,6 +327,7 @@ type MetricFormulaTestResult struct {
 	Value         *string
 	SkippedReason *string
 	Inputs        []string
+	Constants     []string
 	Warnings      []string
 	EstimatedCost *int
 }
@@ -334,6 +343,9 @@ const storedMeasurementMagnitude = calcfield.StoredMagnitude
 func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTestRequest) (*MetricFormulaTestResult, error) {
 	if len(request.Sample) > calcfield.MaxInputs {
 		return nil, limit.Exceeded("sample values", len(request.Sample), calcfield.MaxInputs)
+	}
+	if len(request.Constants) > calcfield.MaxProfileConstants {
+		return nil, limit.Exceeded("constant values", len(request.Constants), calcfield.MaxProfileConstants)
 	}
 	profile, err := api.deviceProfileByToken(ctx, request.ProfileToken)
 	if err != nil {
@@ -356,7 +368,7 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		drafted = append(drafted, m)
 	}
 	p := newProfileFormulas(drafted)
-	result := &MetricFormulaTestResult{Inputs: []string{}, Warnings: []string{}}
+	result := &MetricFormulaTestResult{Inputs: []string{}, Constants: []string{}, Warnings: []string{}}
 	refuse := func(msg string) (*MetricFormulaTestResult, error) {
 		result.CompileError = &msg
 		return result, nil
@@ -375,6 +387,7 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 		return refuse(describeFormulaError(err, false))
 	}
 	result.Inputs = f.InputKeys()
+	result.Constants = f.ConstantKeys()
 	cost := int(f.CostMax())
 	result.EstimatedCost = &cost
 
@@ -391,7 +404,29 @@ func (api *Api) TestMetricFormula(ctx context.Context, request *MetricFormulaTes
 				"not a measured metric of this profile, so a formula cannot read it", v.Key))
 		}
 	}
+	constants := make([]calcfield.Constant, 0, len(request.Constants))
+	seenConstant := make(map[string]bool, len(request.Constants))
+	for _, v := range request.Constants {
+		if seenConstant[v.Key] {
+			return nil, &InvalidArgumentError{Msg: fmt.Sprintf("constants name %q more than once", v.Key)}
+		}
+		seenConstant[v.Key] = true
+		if !slices.Contains(result.Constants, v.Key) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("the constant value for %q is ignored: the "+
+				"formula does not read device.%s", v.Key, v.Key))
+			continue
+		}
+		constants = append(constants, calcfield.ConstantFromString(v.Key, v.Value))
+	}
+	sample.UseConstants(constants)
 	out := f.Eval(sample)
+	if len(result.Constants) > 0 {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("the formula reads the device constants %s: each is "+
+			"read from the device's metadata when a reading is resolved and must be a JSON number there; a device "+
+			"that lacks one (missing_input) or holds something else (invalid_input) gets no value for that reading, "+
+			"and a value computed from a constant keeps the constant as it was then, whatever the device is "+
+			"later edited to", strings.Join(result.Constants, ", ")))
+	}
 	if out.OK() {
 		result.Value = &out.Value
 	} else {

@@ -158,6 +158,7 @@ func (r *MetricFormulaTestResolver) CompileError() *string  { return r.M.Compile
 func (r *MetricFormulaTestResolver) Value() *string         { return r.M.Value }
 func (r *MetricFormulaTestResolver) SkippedReason() *string { return r.M.SkippedReason }
 func (r *MetricFormulaTestResolver) Inputs() []string       { return r.M.Inputs }
+func (r *MetricFormulaTestResolver) Constants() []string    { return r.M.Constants }
 func (r *MetricFormulaTestResolver) Warnings() []string     { return r.M.Warnings }
 func (r *MetricFormulaTestResolver) EstimatedCost() *int32 {
 	if r.M.EstimatedCost == nil {

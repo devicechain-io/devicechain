@@ -31,6 +31,21 @@
 // key of `m`), lists, maps, macros other than has, comprehensions, regex, or any function
 // reaching outside the sample.
 //
+// # Per-device constants
+//
+// A formula may also read numbers its DEVICE carries — a calibration factor, a CT ratio — as
+// `device.name` (or `device["a-name"]`, `has(device.name)`, `"name" in device`). Referencing a
+// constant is declaring it: there is no list to keep in step with the formula. Every constant
+// is a DOUBLE (int(device.k) reads a whole number as an int), a formula may read at most
+// [MaxConstants], and one that reads constants and no measured input is refused. The caller
+// reads the values from the device record it already holds and hands them over with the
+// sample ([Sample.UseConstants], built once per event from [NewConstant], [ConstantFromString]
+// and [InvalidConstant]); this package never reads a device. An unguarded constant a device
+// lacks skips the formula as [SkipMissingInput], one that is not a number as
+// [SkipInvalidInput], one that is not finite as [SkipNonFinite] — before the formula runs, as
+// for an input. The value is frozen into the computed result: nothing here remembers a
+// constant, so editing the device later never rewrites a stored value.
+//
 // # Fail closed at compile, skip loudly at eval
 //
 // [Env.Compile] parses, type-checks the result to the declared type exactly (an int formula

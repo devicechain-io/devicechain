@@ -37,7 +37,7 @@ func calcTestDefs() []*MetricDefinition {
 // evaluate runs a resolution's formulas against one sample, as the resolver does.
 func evaluate(r ProfileResolution, values map[string]string) ([]ResolvedMeasurementEntry, *recordingObserver) {
 	obs := &recordingObserver{}
-	calc := r.BeginCalculation()
+	calc := r.BeginCalculation(nil)
 	defer calc.Release()
 	for k, v := range values {
 		if m, ok := r.Metric(k); ok && !m.Calculated() {

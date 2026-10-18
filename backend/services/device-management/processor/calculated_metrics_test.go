@@ -57,6 +57,15 @@ func (m *CalcMetrics) skips(r calcfield.SkipReason) float64 { return testutil.To
 func resolveSamples(t *testing.T, profile model.ProfileResolution, metrics *CalcMetrics,
 	samples ...map[string]string) *model.ResolvedMeasurementsPayload {
 	t.Helper()
+	device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
+	return resolveSamplesFor(t, device, profile, metrics, samples...)
+}
+
+// resolveSamplesFor is resolveSamples for a given device record, whose metadata carries the
+// per-device constants.
+func resolveSamplesFor(t *testing.T, device *model.Device, profile model.ProfileResolution, metrics *CalcMetrics,
+	samples ...map[string]string) *model.ResolvedMeasurementsPayload {
+	t.Helper()
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	rez.calcObs.metrics = metrics
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
@@ -68,7 +77,6 @@ func resolveSamples(t *testing.T, profile model.ProfileResolution, metrics *Calc
 	event := &esmodel.UnresolvedEvent{Source: "test", Device: "meter-1", EventType: esmodel.Measurement,
 		OccurredTime: at, ProcessedTime: at.Add(time.Hour),
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: entries}}
-	device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
 	out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, profile, event)
 	require.NoError(t, err)
 	return out.(*model.ResolvedMeasurementsPayload)

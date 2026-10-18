@@ -21,6 +21,13 @@ type CalculatedInputInput struct {
 	DataType string
 }
 
+// CalculatedConstantInput is one device constant a draft formula reads (the CalculatedConstant
+// input object).
+type CalculatedConstantInput struct {
+	Key   string
+	Value string
+}
+
 // CalculatedEvents evaluates a draft calculated-metric formula over one device's stored
 // readings (ADR-082, technical spec §4a) — the console formula editor's history panel. It is a
 // read under the caller's own event:read, through the same scoped measurement read as
@@ -32,6 +39,7 @@ func (r *SchemaResolver) CalculatedEvents(ctx context.Context, args struct {
 	Inputs      []CalculatedInputInput
 	MinValue    *float64
 	MaxValue    *float64
+	Constants   *[]CalculatedConstantInput
 	From        string
 	To          string
 }) (*CalculatedEventsResultResolver, error) {
@@ -50,9 +58,15 @@ func (r *SchemaResolver) CalculatedEvents(ctx context.Context, args struct {
 	for _, in := range args.Inputs {
 		inputs = append(inputs, model.CalculatedInput{Key: in.Key, DataType: in.DataType})
 	}
+	var constants []model.CalculatedConstant
+	if args.Constants != nil {
+		for _, c := range *args.Constants {
+			constants = append(constants, model.CalculatedConstant{Key: c.Key, Value: c.Value})
+		}
+	}
 	res, err := r.GetApi(ctx).CalculatedEvents(ctx, model.CalculatedEventsRequest{
 		DeviceToken: args.DeviceToken, Expression: args.Expression, DataType: args.DataType,
-		Inputs: inputs, MinValue: args.MinValue, MaxValue: args.MaxValue, From: from, To: to,
+		Inputs: inputs, MinValue: args.MinValue, MaxValue: args.MaxValue, Constants: constants, From: from, To: to,
 	})
 	if err != nil {
 		return nil, err

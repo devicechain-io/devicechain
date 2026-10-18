@@ -376,6 +376,14 @@ input CalculatedInput {
     dataType: String!
 }
 
+"""One device constant a draft calculated-metric formula reads as `device.name`."""
+input CalculatedConstant {
+    """The constant's name, as the formula spells it after `device.`."""
+    key: String!
+    """The number the device's metadata holds under that name, as text such as `1.02`."""
+    value: String!
+}
+
 """One input of one evaluated sample, as the formula read it from storage."""
 type CalculatedInputValue {
     """The input's key."""
@@ -510,6 +518,14 @@ type Query {
         minValue: Float
         """Largest value the metric may take; a result above it is skipped as range."""
         maxValue: Float
+        """
+        The values of the device constants the formula reads as `device.name`, as the device's
+        metadata holds them now, at most 32. Every sample is evaluated with these same values:
+        they are the device's current constants, not the ones its history was recorded under. A
+        constant the formula reads and this omits is absent, so its samples are skipped as
+        missing_input. Omit this when the formula reads none.
+        """
+        constants: [CalculatedConstant!]
         """Start of the range by occurred time, as an RFC 3339 timestamp."""
         from: String!
         """End of the range by occurred time, as an RFC 3339 timestamp; after from, by at most 7 days."""

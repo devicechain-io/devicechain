@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/graphql"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/nldraft"
+	"github.com/devicechain-io/dc-event-processing/internal/preview"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -75,7 +76,10 @@ var (
 	// rules, roster and threshold attributes (and user-management's tenant list) through, to
 	// repair a projection whose fact never reached its stream. Nil when the seam is
 	// unconfigured — see buildFactReconcileSeam.
-	DeviceManagementFacts   processor.DeviceManagementFacts
+	DeviceManagementFacts processor.DeviceManagementFacts
+	// DeviceConstants reads the per-device constants a draft calculated-metric formula names, for
+	// the rule preview (ADR-082). Nil when the seam is unconfigured: such a preview then says so.
+	DeviceConstants         preview.ConstantSource
 	ResolvedEventsReader    messaging.MessageReader
 	ResolvedEventsProcessor *processor.ResolvedEventsProcessor
 	// ReactDispatcher is the REACT stage's derived-event consumer (ADR-051 slice 5b/5c). Since the
@@ -521,6 +525,25 @@ func buildFenceSetSeam() (runtime.FenceSetSource, runtime.CurrentFenceSetSource,
 		geofence.NewGeometryCache(geofence.DefaultMaxCachedVertices))
 }
 
+// buildDeviceConstantsSeam constructs the rule preview's source of per-device constants (ADR-082):
+// the numbers a profile's devices hold in their metadata under the names a draft formula reads as
+// `device.name`, read from device-management's constants door over a service-token client carrying
+// least-privilege device:read, the authority the preview's own caller needed to ask. The tenant
+// rides the token's header, never an argument.
+//
+// Enabled only when the shared service secret and device-management's coordinate are set;
+// otherwise nil, and a preview of a draft that reads constants says it cannot read them.
+func buildDeviceConstantsSeam() preview.ConstantSource {
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret == "" || infra.DeviceManagement.Hostname == "" || infra.DeviceManagement.Port == 0 {
+		log.Warn().Msg("Service secret or device-management endpoint not configured — a preview of a draft calculated metric that reads device constants cannot read them.")
+		return nil
+	}
+	client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-processing", []string{string(auth.DeviceRead)})
+	url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+	return processor.NewDeviceConstantsClient(client, url)
+}
+
 // buildFactReconcileSeam constructs the seam the DETECT fact reconcile reads through: the tenant
 // list from user-management (tenant:read, the SYSTEM-tier authority its one cross-tenant query
 // takes) and the three reconcile doors from device-management (device:read, the authority every
@@ -643,6 +666,7 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Build the fact reconcile's seam alongside it, for the same reason: the processor
 			// is wired from it in createNatsComponents.
 			DeviceManagementFacts = buildFactReconcileSeam()
+			DeviceConstants = buildDeviceConstantsSeam()
 
 			// buildDrafter wires the ADR-056 NL→rule drafting seam (nil ⇒ the draft door reports
 			// unavailable, fail-closed). It is built here so the resolver below can carry it
@@ -681,6 +705,9 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 					// fences that were live then. It is off the DETECT loop and may block, which is why the
 					// preview holds it and the fan-out does not.
 					FenceSets: FenceSets,
+					// A preview of a draft calculated metric that reads `device.name` recalculates
+					// history with each device's CURRENT constants, read through this seam.
+					Constants: DeviceConstants,
 				}
 			},
 			// The NATS manager is injected as a provider so the slice-7c detectionStream

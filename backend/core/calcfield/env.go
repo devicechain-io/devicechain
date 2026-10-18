@@ -31,7 +31,7 @@ const MaxInputs = 256
 var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // reservedNames cannot be top-level variables: CEL's reserved words, the type identifiers,
-// the `m` map, the `math` function namespace and the has macro. A metric with one of these
+// the `m` and `device` maps, the `math` function namespace and the has macro. A metric with one of these
 // keys is still an input, reached as m["key"].
 var reservedNames = map[string]struct{}{
 	// CEL language keywords and reserved words.
@@ -42,7 +42,7 @@ var reservedNames = map[string]struct{}{
 	"int": {}, "uint": {}, "double": {}, "bool": {}, "string": {}, "bytes": {}, "list": {},
 	"map": {}, "type": {}, "null_type": {}, "dyn": {},
 	// This environment's own names.
-	VarM: {}, "math": {}, "has": {},
+	VarM: {}, VarDevice: {}, "math": {}, "has": {},
 }
 
 // isTopLevel reports whether a key is declared as a top-level variable.
@@ -148,6 +148,9 @@ var baseEnv = sync.OnceValues(func() (*cel.Env, error) {
 		// `temp > 80` with temp a double: ordering across int and double.
 		cel.CrossTypeNumericComparisons(true),
 		cel.Variable(VarM, cel.MapType(cel.StringType, cel.DynType)),
+		// The device's constants (constants.go). Typed double, so `device.k` needs no conversion
+		// and nothing dynamic reaches a result through it.
+		cel.Variable(VarDevice, cel.MapType(cel.StringType, cel.DoubleType)),
 	}
 	opts = append(opts, arithmetic()...)
 	opts = append(opts, mathFunctions()...)

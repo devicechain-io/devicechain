@@ -5,10 +5,12 @@ package model
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/rs/zerolog/log"
+	"gorm.io/datatypes"
 )
 
 // Calculated metrics at resolve (ADR-082 decision 4): the compiled formulas of one published
@@ -36,6 +38,10 @@ type calcPlan struct {
 	// formulas are the calculated metrics, sorted by key, so the order values are appended
 	// in (and so skips are reported in) does not depend on declaration order.
 	formulas []calcFormula
+	// constKeys are the device constants the version's formulas read, together: sorted,
+	// distinct. nil for a version none of whose formulas reads one, which is what makes a
+	// device's metadata untouched on the resolver's path for every such profile.
+	constKeys []string
 }
 
 // calcFormula is one calculated metric: its compiled formula and what its value is stamped
@@ -87,6 +93,15 @@ func buildCalcPlan(scope ProfileScope, metrics []ResolvedMetric) *calcPlan {
 		plan.formulas = append(plan.formulas, cf)
 	}
 	sort.Slice(plan.formulas, func(a, b int) bool { return plan.formulas[a].key < plan.formulas[b].key })
+	for _, cf := range plan.formulas {
+		if cf.formula != nil {
+			plan.constKeys = append(plan.constKeys, cf.formula.ConstantKeys()...)
+		}
+	}
+	if len(plan.constKeys) > 0 {
+		sort.Strings(plan.constKeys)
+		plan.constKeys = slices.Compact(plan.constKeys)
+	}
 
 	if plan.env != nil {
 		for _, cf := range plan.formulas {
@@ -147,6 +162,40 @@ func (r ProfileResolution) CalculatedCount() int {
 	return len(r.calc.formulas)
 }
 
+// DeviceConstants reads, from a device's metadata, the numeric constants this version's
+// formulas read as `device.name` (ADR-082, per-device constants). Call it once per EVENT, with
+// the metadata of the device record the resolver already holds, and hand the result to
+// BeginCalculation for every sample entry of the event.
+//
+// 🔴 It returns nil WITHOUT TOUCHING the metadata when the version reads no constant, which is
+// every version that has no formulas and every one whose formulas read only measurements: the
+// whole cost of the feature on those profiles is this one compare. The resolution caches
+// nothing per device (the per-type cache is unchanged); the values come from the device
+// record's own cache, evicted on every device write, and are frozen into each computed value
+// when it is computed.
+//
+// Strict by construction, one outcome per name the formulas read: a JSON number is a constant;
+// a key the metadata lacks is absent (a formula reading it is skipped as missing_input); a
+// value that is not a finite number — a string, a boolean, an object, an array, null, or a
+// number out of range — is present but unusable (invalid_input), never read as zero and never
+// coerced from text. Of a key repeated in the document the last wins, as JSON decoders do.
+// Metadata that is not a JSON object has no constants.
+func (r ProfileResolution) DeviceConstants(metadata *datatypes.JSON) []calcfield.Constant {
+	if r.calc == nil || len(r.calc.constKeys) == 0 || metadata == nil {
+		return nil
+	}
+	return readConstants(*metadata, r.calc.constKeys)
+}
+
+// ConstantKeys returns the device constants this version's formulas read, sorted; empty when
+// none. A copy.
+func (r ProfileResolution) ConstantKeys() []string {
+	if r.calc == nil {
+		return nil
+	}
+	return slices.Clone(r.calc.constKeys)
+}
+
 // Calculation is one sample entry's evaluation of a version's calculated metrics: take one
 // with BeginCalculation, Set each measured value the entry carries, Append the computed
 // values, Release it. It is not safe for concurrent use; one resolver uses one at a time.
@@ -161,10 +210,14 @@ type Calculation struct {
 // BeginCalculation takes an empty Calculation for one sample entry. Call it only when
 // CalculatedCount is not zero; on a resolution with none it returns one that appends
 // nothing.
-func (r ProfileResolution) BeginCalculation() Calculation {
+//
+// constants are the device's (DeviceConstants), shared by every entry of the event and not
+// copied: the caller must leave the slice alone until the last Release.
+func (r ProfileResolution) BeginCalculation(constants []calcfield.Constant) Calculation {
 	c := Calculation{plan: r.calc}
 	if r.calc != nil && r.calc.env != nil {
 		c.sample = r.calc.env.Sample()
+		c.sample.UseConstants(constants)
 	}
 	return c
 }

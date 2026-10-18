@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,8 +19,10 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/rules/graph"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
+	"github.com/devicechain-io/dc-microservice/calcfield"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/streams"
+	"github.com/rs/zerolog/log"
 )
 
 // maxConcurrentPreviewsPerTenant bounds how many replay previews one tenant may run at once (ADR-023):
@@ -126,6 +129,30 @@ func draftResolution(in *[]previewMetricInput) (*dmmodel.ProfileResolution, []gr
 	}
 	r := dmmodel.NewProfileResolution(dmmodel.ProfileScope{}, defs)
 	return &r, nil
+}
+
+// draftConstants reads the current per-device constants the draft's formulas name, for the
+// profile's devices, and returns them by device token with the note the result carries when they
+// are partial or unavailable ("" when complete). A failure to read them is not a failed preview:
+// the replay still answers, with every constant absent and the formulas that read one skipped as
+// missing_input, which the note says in so many words so the skips are not mistaken for data.
+func (r *SchemaResolver) draftConstants(ctx context.Context, tenant, profileToken string,
+	keys []string) (map[string][]calcfield.Constant, string) {
+	const consequence = "formulas that read them are skipped as missing_input on every reading"
+	if r.Constants == nil {
+		return nil, "this draft reads device constants (" + strings.Join(keys, ", ") + "), which cannot be read from " +
+			"this service, so " + consequence
+	}
+	byDevice, truncated, err := r.Constants.DeviceConstants(ctx, tenant, profileToken, keys, preview.MaxConstantDevices)
+	if err != nil {
+		log.Warn().Err(err).Str("profile", profileToken).Msg("Preview could not read device constants")
+		return nil, "the device constants this draft reads (" + strings.Join(keys, ", ") + ") could not be read, so " + consequence
+	}
+	if truncated {
+		return byDevice, fmt.Sprintf("device constants were read for the first %d devices of the profile; later devices "+
+			"have none, so a formula that reads one is skipped as missing_input on their readings", preview.MaxConstantDevices)
+	}
+	return byDevice, ""
 }
 
 // PreviewRule runs a DRAFT detection rule against replayed history and reports the RAISE/RESOLVE edges
@@ -284,14 +311,34 @@ func (r *SchemaResolver) PreviewRule(ctx context.Context, args struct{ Input pre
 	// as a truncated (degraded) result with a response to deliver rather than as a deadline error.
 	runCtx, cancel := context.WithTimeout(ctx, previewBudget(ctx))
 	defer cancel()
+	// A draft whose formulas read per-device constants (`device.name`) is replayed with each
+	// device's CURRENT constants, read now from device-management: a stored event does not carry
+	// them. Whatever cannot be read is said, never silently defaulted.
+	var runOpts []preview.Option
+	var constantsNote string
+	if draft != nil {
+		if keys := draft.ConstantKeys(); len(keys) > 0 {
+			var byDevice map[string][]calcfield.Constant
+			byDevice, constantsNote = r.draftConstants(runCtx, tenant, in.ProfileToken, keys)
+			runOpts = append(runOpts, preview.WithDeviceConstants(byDevice))
+		}
+	}
 	res, err := preview.Run(runCtx, opener, streams.ResolvedEvents, reg,
-		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets, draft)
+		tenant, active.ActiveVersionToken, preview.TimeRange{Start: start, End: end}, 0, preview.DefaultMaxScan, preview.DefaultMaxRead, r.FenceSets, draft,
+		runOpts...)
 	if err != nil {
 		return nil, err
 	}
 	wallMs := int32(time.Since(startedAt).Milliseconds())
 
 	degraded := res.Degraded
+	if constantsNote != "" {
+		if degraded != "" {
+			degraded = constantsNote + "; " + degraded
+		} else {
+			degraded = constantsNote
+		}
+	}
 	if clampNote != "" {
 		if degraded != "" {
 			degraded = clampNote + "; " + degraded
