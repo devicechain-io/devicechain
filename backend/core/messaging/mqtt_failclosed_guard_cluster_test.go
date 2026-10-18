@@ -46,13 +46,11 @@ func startGuardCluster(t *testing.T) *guardCluster {
 	if runtime.GOOS == "windows" {
 		t.Skip("the in-process cluster fixture holds its refusing route addresses with unix sockets")
 	}
-	gc := &guardCluster{mqtt: make([]int, 3), timeline: newMoveLog()}
-	for i := range gc.mqtt {
-		gc.mqtt[i] = dctest.FreeTCPPort(t)
-	}
+	gc := &guardCluster{timeline: newMoveLog()}
 	gc.servers, _ = dctest.StartJetStreamClusterConfigured(t, 3, func(i int, o *natsserver.Options) {
-		o.MQTT = natsserver.MQTTOpts{Host: "127.0.0.1", Port: gc.mqtt[i], StreamReplicas: 3}
+		o.MQTT = natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1, StreamReplicas: 3}
 	})
+	gc.mqtt = clusterMQTTPorts(t, gc.servers)
 	nc, err := nats.Connect(gc.servers[0].ClientURL())
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
@@ -66,6 +64,26 @@ func startGuardCluster(t *testing.T) *guardCluster {
 		return err == nil
 	}, 30*time.Second, 200*time.Millisecond, "the replicated message store was never created")
 	return gc
+}
+
+// clusterMQTTPorts reads back the MQTT port each server bound. Configure the listener with
+// Port -1, so the server binds a port of the kernel's choosing and keeps it: a port picked
+// beforehand by a probe listener and released (dctest.FreeTCPPort) is free only until something
+// else binds it, and a cluster's own routes, proxies and dials bind ports in between. A server
+// whose MQTT listener lost that race starts without one ("bind: address already in use"), and
+// its devices' CONNECTs land on whatever took the port: a route listener answers them with
+// "authentication error", which paho reports as "non-CONNACK first packet", and the device can
+// never connect.
+func clusterMQTTPorts(t *testing.T, servers []*natsserver.Server) []int {
+	t.Helper()
+	ports := make([]int, len(servers))
+	for i, s := range servers {
+		vz, err := s.Varz(nil)
+		require.NoError(t, err)
+		require.NotZerof(t, vz.MQTT.Port, "server %d reports no MQTT port", i)
+		ports[i] = vz.MQTT.Port
+	}
+	return ports
 }
 
 func (gc *guardCluster) mqttURL(i int) string { return fmt.Sprintf("tcp://127.0.0.1:%d", gc.mqtt[i]) }
@@ -172,6 +190,10 @@ type publishResult struct {
 	// resumed are the payloads whose token completed WITHOUT a PUBACK (see mqttack): the
 	// broker never acknowledged them, so their absence is not a loss.
 	resumed []string
+	// early counts the tokens completed before their PUBACK: by a reconnect's re-send, since
+	// paho records a real PUBACK in the store before it completes the token. It is how often the
+	// path that made these tests report false losses was taken.
+	early int
 }
 
 // publishThrough publishes n messages from one auto-reconnecting device. A publish whose
@@ -236,7 +258,11 @@ func publishThroughResult(t *testing.T, url, device, topic, prefix string, n int
 		select {
 		case <-tok.Done():
 			if tok.Error() == nil {
-				done = append(done, sent{p, tok.(*mqtt.PublishToken).MessageID()})
+				mid := tok.(*mqtt.PublishToken).MessageID()
+				if !store.PubAcked(mid) {
+					res.early++
+				}
+				done = append(done, sent{p, mid})
 			}
 		case <-time.After(45 * time.Second):
 			collect()
@@ -291,6 +317,7 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 		mu      sync.Mutex
 		acked   []string
 		resumed []string // completed with no PUBACK: not acknowledged, so not owed
+		early   int
 		errs    []error
 		wg      sync.WaitGroup
 	)
@@ -305,6 +332,7 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 				mu.Lock()
 				acked = append(acked, got.pubacked...)
 				resumed = append(resumed, got.resumed...)
+				early += got.early
 				if err != nil {
 					errs = append(errs, err)
 				}
@@ -337,8 +365,8 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 		}
 		t.Fatalf("%d PUBACKed messages were never read from the durable, %d of them absent from the store", len(unread), len(absent))
 	}
-	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves; %d publishes completed with no PUBACK, %d of them never read",
-		len(acked), col.duplicates(), gc.moves.Load(), len(resumed), len(col.lostOf(resumed)))
+	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves; %d tokens completed before their PUBACK, %d publishes never PUBACKed (%d of them never read)",
+		len(acked), col.duplicates(), gc.moves.Load(), early, len(resumed), len(col.lostOf(resumed)))
 }
 
 // The leader of $MQTT_msgs moves while the platform durable is being created, and a burst

@@ -197,10 +197,10 @@ func TestInsufficientResourcesAroundAReplicaRaiseIsRetriedNotFailed(t *testing.T
 // would be R1 on a node that lost leadership, or missing), a reader that gives up on a durable
 // whose leader moved, and a nats-server whose store acknowledges what a new leader then lacks.
 func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *testing.T) {
-	mqttPorts := []int{dctest.FreeTCPPort(t), dctest.FreeTCPPort(t), dctest.FreeTCPPort(t)}
 	servers, _ := dctest.StartJetStreamClusterConfigured(t, 3, func(i int, o *natsserver.Options) {
-		o.MQTT = natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPorts[i], StreamReplicas: 3}
+		o.MQTT = natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1, StreamReplicas: 3}
 	})
+	mqttPorts := clusterMQTTPorts(t, servers)
 	nc, err := nats.Connect(servers[0].ClientURL())
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
@@ -281,6 +281,7 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 	var (
 		acked   []string
 		resumed []string // completed with no PUBACK: not acknowledged, so not owed
+		early   int
 		wg      sync.WaitGroup
 		okRound = make([]int, devices) // rounds each device finished whole, by device
 		lastErr = make([]error, devices)
@@ -299,6 +300,7 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 				mu.Lock()
 				acked = append(acked, got.pubacked...)
 				resumed = append(resumed, got.resumed...)
+				early += got.early
 				if err == nil {
 					okRound[d]++
 				}
@@ -361,7 +363,7 @@ func TestALeaderMoveUnderLoadLosesNoPubackedMessageThroughThePlatformReader(t *t
 			unacked++
 		}
 	}
-	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves; %d publishes completed with no PUBACK, %d of them never read",
-		len(acked), dups, moves.Load(), len(resumed), unacked)
+	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves; %d tokens completed before their PUBACK, %d publishes never PUBACKed (%d of them never read)",
+		len(acked), dups, moves.Load(), early, len(resumed), unacked)
 	mu.Unlock()
 }
