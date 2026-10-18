@@ -154,12 +154,15 @@ func (f *RouteFaults) setServers(servers []*natsserver.Server) {
 // one that has shut down.
 func (f *RouteFaults) target(to int) (string, bool) {
 	f.mu.Lock()
-	servers := f.servers
+	var srv *natsserver.Server
+	if to < len(f.servers) {
+		srv = f.servers[to]
+	}
 	f.mu.Unlock()
-	if to >= len(servers) {
+	if srv == nil {
 		return "", false
 	}
-	addr := servers[to].ClusterAddr()
+	addr := srv.ClusterAddr()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if addr == nil {
