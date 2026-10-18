@@ -235,14 +235,14 @@ type EventProcessingConfiguration struct {
 // Every field is optional, and an absent one takes its default; a field that IS given must be
 // inside its bounds, zero included, or the service refuses to start.
 //
-// A checkpoint publishes the detections it covers before it saves the snapshot. MaxInFlight 1,
-// the default, sends one and waits for its acknowledgement before the next. Above 1, detections
-// of different devices (or correlation anchors) wait for their acknowledgements at the same
-// time, never more than one per device at once, so each device's detections still reach the
-// broker in order.
+// A checkpoint publishes the detections it covers before it saves the snapshot. MaxInFlight 32,
+// the default, lets detections of different devices (or correlation anchors) wait for their
+// acknowledgements at the same time, never more than one per device at once, so each device's
+// detections still reach the broker in order. MaxInFlight 1 sends one and waits for its
+// acknowledgement before the next.
 type DerivedPublishingConfiguration struct {
 	// MaxInFlight is the most publishes waiting for an acknowledgement at once: 1 to 1024,
-	// default 1.
+	// default 32.
 	MaxInFlight *int
 	// MaxBufferedBytes bounds their payload bytes together: 65536 to 268435456, default
 	// 4194304. A single event larger than this is sent alone rather than never.

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,11 +167,14 @@ func TestALiveGapIsAppliedNotDroppedAsADuplicate(t *testing.T) {
 // derivedRecorder is a derived-event writer that keeps what it was given, so a test can say
 // WHICH detections were published rather than how many.
 type derivedRecorder struct {
+	mu     sync.Mutex // the default publish window writes from several goroutines
 	events []runtime.DerivedEvent
 	other  int
 }
 
 func (w *derivedRecorder) WriteMessages(_ context.Context, msgs ...messaging.Message) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for _, m := range msgs {
 		var de runtime.DerivedEvent
 		if err := json.Unmarshal(m.Value, &de); err != nil {
@@ -191,6 +195,8 @@ func (w *derivedRecorder) HandleResponse(error) {}
 // is counted in other.
 func (w *derivedRecorder) raisedSeries(t *testing.T) []string {
 	t.Helper()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	seen := map[string]bool{}
 	var out []string
 	for _, de := range w.events {

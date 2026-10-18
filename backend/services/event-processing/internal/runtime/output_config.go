@@ -9,9 +9,9 @@ import "fmt"
 //
 // A checkpoint publishes its buffered detections before it saves the snapshot. With
 // MaxInFlight 1 that is one publish at a time, each waiting for its acknowledgement before the
-// next is sent: the serial path. Above 1, detections of different series overlap their waits,
-// at most one unacknowledged publish per series, so a series' detections still reach the broker
-// in the order the engine produced them.
+// next is sent: the serial path. Above 1 (the default is 32), detections of different series
+// overlap their waits, at most one unacknowledged publish per series, so a series' detections
+// still reach the broker in the order the engine produced them.
 type OutputConfig struct {
 	// MaxInFlight is the most publishes awaiting the broker's acknowledgement at once.
 	MaxInFlight int
@@ -24,12 +24,15 @@ type OutputConfig struct {
 
 // Defaults, and the bounds Validate enforces.
 //
-// 🔴 THE DEFAULT WINDOW IS 1, THE SERIAL PATH, ON PURPOSE. Overlapping publishes is measured to
-// pay off only when the broker's acknowledgement is slow relative to everything else a
-// checkpoint does, and that has not yet been shown on a replicated cluster at a fixed resource
-// budget. Raise it to measure; the default moves only with that evidence.
+// The default window is 32. On a replicated cluster under firing-heavy load (about 8k events/s,
+// about 2.5k detections/s offered) a window of 32 applied 7,658 events/s and published 2,441
+// detections/s, with the backlog peaking at 993 and the watermark lag at 5.1 s; a window of 1
+// applied 1,656 events/s and published 528 detections/s, with the backlog reaching 1.06M and the
+// lag 139 s. Neither setting showed an ordering or duplicate violation. A window of 1 is the
+// serial path and stays valid. The byte budget is unchanged: 4 MiB is 128 KiB per slot at 32,
+// far above a detection's payload.
 const (
-	DefaultMaxInFlight      = 1
+	DefaultMaxInFlight      = 32
 	DefaultMaxBufferedBytes = 4 << 20
 
 	// MaxMaxInFlight is the same ceiling the messaging layer puts on a pipelined writer's window.

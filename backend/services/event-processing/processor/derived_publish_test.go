@@ -694,7 +694,7 @@ func TestTheSupersessionGateKeepsAKnownPositive(t *testing.T) {
 // The window's bound is the messaging layer's.
 func TestOutputConfigBounds(t *testing.T) {
 	require.NoError(t, runtime.DefaultOutputConfig().Validate())
-	require.Equal(t, 1, runtime.DefaultOutputConfig().MaxInFlight, "the default window moved; the documentation states 1")
+	require.Equal(t, 32, runtime.DefaultOutputConfig().MaxInFlight, "the default window moved; the documentation states 32")
 	for _, c := range []runtime.OutputConfig{
 		{MaxInFlight: 0, MaxBufferedBytes: runtime.DefaultMaxBufferedBytes},
 		{MaxInFlight: 1025, MaxBufferedBytes: runtime.DefaultMaxBufferedBytes},

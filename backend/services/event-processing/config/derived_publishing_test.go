@@ -22,7 +22,7 @@ func TestDerivedPublishingDefaults(t *testing.T) {
 			t.Fatalf("%q: %+v, want the defaults %+v", doc, got, runtime.DefaultOutputConfig())
 		}
 	}
-	want := runtime.OutputConfig{MaxInFlight: 1, MaxBufferedBytes: 4 << 20}
+	want := runtime.OutputConfig{MaxInFlight: 32, MaxBufferedBytes: 4 << 20}
 	if runtime.DefaultOutputConfig() != want {
 		t.Fatalf("the defaults moved: %+v; the documentation states %+v", runtime.DefaultOutputConfig(), want)
 	}

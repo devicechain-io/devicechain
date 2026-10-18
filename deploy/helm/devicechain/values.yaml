@@ -1819,15 +1819,14 @@ functionalAreas:
     #   maxBatchRows: 256             # rules per tenant transaction, 1 to 4096
     #   writeTimeoutMillis: 2000      # one tenant transaction, 100 to 60000
     # Derived-event publishing at a checkpoint: how many detections may be waiting for the
-    # broker's acknowledgement at once. 1 (the default) publishes them one at a time. Above 1,
-    # detections of different devices are published side by side, never more than one per
-    # device at a time, so each device's detections still arrive in order; the checkpoint is
-    # still saved only after every detection it covers is acknowledged. It helps only when
-    # acknowledgements are slow and detections are spread over many devices; leave it at 1
-    # unless you are measuring. Each key is optional; a key that is set must be inside its range
+    # broker's acknowledgement at once. 32 (the default) publishes detections of different
+    # devices side by side, never more than one per device at a time, so each device's
+    # detections still arrive in order; the checkpoint is still saved only after every
+    # detection it covers is acknowledged. Set 1 to publish them strictly one at a time.
+    # Each key is optional; a key that is set must be inside its range
     # (zero included) or startup fails.
     # derivedPublishing:
-    #   maxInFlight: 1                # 1 to 1024
+    #   maxInFlight: 32               # 1 to 1024
     #   maxBufferedBytes: 4194304     # bytes of those waiting detections, 65536 to 268435456
   mcp:
     # The MCP server (ADR-047): an OAuth 2.1 Resource Server fronting the per-area

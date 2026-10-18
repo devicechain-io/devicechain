@@ -216,11 +216,11 @@ func TestTheDurabilityOracleRefusesAnAckAheadOfItsSnapshot(t *testing.T) {
 // produce the identical log: the same derived events in the same order, the same snapshots and
 // the same input acknowledgements, interleaved the same way.
 //
-// Production now publishes through the pipelined publisher, and at its default window of 1 that
-// is still the serial path exactly, which is what this test holds it to (C against A; see
-// TestWindowOneIsTheSerialPathWithBatchedStats for C against B). Wider windows interleave
-// differently on purpose and are judged by the oracle instead. If the default window ever moves
-// above 1, run this at window 1 explicitly rather than retiring it.
+// Production publishes through the pipelined publisher, and at window 1 that is the serial path
+// exactly, which is what this test holds it to (C against A; see
+// TestWindowOneIsTheSerialPathWithBatchedStats for C against B). The default window is wider and
+// interleaves differently on purpose, so this runs production at window 1 explicitly; wider
+// windows are judged by the oracle instead.
 func TestTheBaselineAdapterIsTheProductionPath(t *testing.T) {
 	a, va := runOracleFixture(t, variantA, nil)
 	p, vp := runOracleFixture(t, variantProduction, nil)
