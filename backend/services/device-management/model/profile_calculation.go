@@ -31,29 +31,29 @@ import (
 
 // calcPlan is a version's calculated metrics, compiled. nil on a resolution with none.
 type calcPlan struct {
-	// env is the compile environment of the version's MEASURED metrics: the same inputs,
-	// by the same rule, as the publish gate's (newProfileFormulas). nil when they could not
-	// be declared, in which case every formula below is broken.
-	env *calcfield.Env
-	// formulas are the calculated metrics, sorted by key, so the order values are appended
-	// in (and so skips are reported in) does not depend on declaration order.
-	formulas []calcFormula
+	// plan holds the formulas compiled together over the version's MEASURED metrics (the same
+	// inputs, by the same rule, as the publish gate's) and the other calculated metrics they
+	// read, in the order they are evaluated: topological, so a formula follows the ones it
+	// reads, and by key otherwise. nil when the measured metrics could not be declared, in
+	// which case every metric below is broken (planErr).
+	plan    *calcfield.Plan
+	planErr error
+	// metas are the calculated metrics in plan order (sorted by key when plan is nil), so
+	// the values are appended in (and the skips reported in) an order that does not depend on
+	// declaration order.
+	metas []calcMeta
+	// untyped are the calculated metrics whose data type no formula can produce: not in the
+	// plan, skipped loudly on every sample like a metric that does not compile.
+	untyped []calcMeta
 	// constKeys are the device constants the version's formulas read, together: sorted,
 	// distinct. nil for a version none of whose formulas reads one, which is what makes a
 	// device's metadata untouched on the resolver's path for every such profile.
 	constKeys []string
 }
 
-// calcFormula is one calculated metric: its compiled formula and what its value is stamped
-// with.
-type calcFormula struct {
-	key string
-	// formula is nil when the formula did not compile here, with broken saying why. The
-	// publish gate compiled it with the same package, so this is a backstop (a release that
-	// tightened the language under an already-published version); it is skipped loudly as
-	// SkipEvalError on every sample, never computed from anything else.
-	formula    *calcfield.Formula
-	broken     error
+// calcMeta is what one calculated metric's value is stamped with.
+type calcMeta struct {
+	key        string
 	classifier uint64
 	unit       *string
 	dataType   string
@@ -62,65 +62,103 @@ type calcFormula struct {
 // buildCalcPlan compiles the calculated metrics among metrics, and marks on each measured
 // metric a formula reads its input slot. It runs inside freeze, before the resolution is
 // shared, and is the only writer of inputSlot.
+//
+// A metric that cannot run — it does not compile here, it is in a cycle, it ends a chain deeper
+// than calcfield.MaxChainDepth — is skipped loudly as SkipEvalError on every sample and never
+// computed from anything else. The publish gate compiled the version with the same package,
+// so this is a backstop (a release that tightened the language under an already-published
+// version).
 func buildCalcPlan(scope ProfileScope, metrics []ResolvedMetric) *calcPlan {
-	var calculated []int
+	var defs []calcfield.Definition
+	byKey := map[string]*ResolvedMetric{}
 	for i := range metrics {
-		if metrics[i].Calculated() {
-			calculated = append(calculated, i)
+		m := &metrics[i]
+		if !m.Calculated() {
+			continue
 		}
+		if _, dup := byKey[m.m.MetricKey]; dup {
+			continue // the first declaration of a key is the metric; a repeat is refused at publish
+		}
+		byKey[m.m.MetricKey] = m
+		t, ok := calcfield.ParseType(m.m.DataType)
+		if !ok {
+			log.Error().Str("profileVersion", scope.ProfileVersionToken).Str("metric", m.m.MetricKey).
+				Msg("A published calculated metric has a data type that cannot be calculated; it will produce no value for any reading of this version")
+			t = 0 // NewPlan does not declare it; the metric is reported broken below
+		}
+		defs = append(defs, calcfield.Definition{Key: m.m.MetricKey, Expression: *m.m.Expression, Type: t,
+			Min: m.m.MinValue, Max: m.m.MaxValue})
 	}
-	if len(calculated) == 0 {
+	if len(defs) == 0 {
 		return nil
 	}
-	plan := &calcPlan{formulas: make([]calcFormula, 0, len(calculated))}
-	env, envErr := calcfield.NewEnv(resolvedFormulaInputs(metrics))
-	if envErr == nil {
-		plan.env = env
-	}
-	for _, i := range calculated {
-		m := &metrics[i]
-		cf := calcFormula{key: m.m.MetricKey, classifier: uint64(m.m.ID), unit: m.m.Unit, dataType: m.m.DataType}
-		switch {
-		case envErr != nil:
-			cf.broken = fmt.Errorf("the version's measured metrics cannot be declared as formula inputs: %w", envErr)
-		default:
-			cf.formula, cf.broken = compileResolved(env, m)
+	cp := &calcPlan{}
+	plan, err := calcfield.NewPlan(resolvedFormulaInputs(metrics), defs)
+	if err != nil {
+		cp.planErr = fmt.Errorf("the version's measured metrics cannot be declared as formula inputs: %w", err)
+		log.Error().Err(cp.planErr).Str("profileVersion", scope.ProfileVersionToken).
+			Msg("A published version's calculated metrics cannot be compiled; they will produce no value for any reading of this version")
+		keys := make([]string, 0, len(byKey))
+		for k := range byKey {
+			keys = append(keys, k)
 		}
-		if cf.broken != nil {
-			log.Error().Err(cf.broken).Str("profileVersion", scope.ProfileVersionToken).Str("metric", cf.key).
-				Msg("A published calculated metric does not compile; it will produce no value for any reading of this version")
+		sort.Strings(keys)
+		for _, k := range keys {
+			cp.metas = append(cp.metas, metaOf(byKey[k]))
 		}
-		plan.formulas = append(plan.formulas, cf)
+		return cp
 	}
-	sort.Slice(plan.formulas, func(a, b int) bool { return plan.formulas[a].key < plan.formulas[b].key })
-	for _, cf := range plan.formulas {
-		if cf.formula != nil {
-			plan.constKeys = append(plan.constKeys, cf.formula.ConstantKeys()...)
+	cp.plan = plan
+	for i := 0; i < plan.Len(); i++ {
+		st := plan.Step(i)
+		cp.metas = append(cp.metas, metaOf(byKey[st.Key]))
+		if st.Formula != nil {
+			cp.constKeys = append(cp.constKeys, st.Formula.ConstantKeys()...)
+			continue
 		}
+		log.Error().Err(st.Err).Str("profileVersion", scope.ProfileVersionToken).Str("metric", st.Key).
+			Msg("A published calculated metric does not compile; it will produce no value for any reading of this version")
 	}
-	if len(plan.constKeys) > 0 {
-		sort.Strings(plan.constKeys)
-		plan.constKeys = slices.Compact(plan.constKeys)
+	// A metric whose type no formula can produce is not in the plan at all.
+	if len(cp.metas) < len(byKey) {
+		have := make(map[string]bool, len(cp.metas))
+		for _, m := range cp.metas {
+			have[m.key] = true
+		}
+		for _, m := range byKey {
+			if !have[m.m.MetricKey] {
+				cp.untyped = append(cp.untyped, metaOf(m))
+			}
+		}
+		sort.Slice(cp.untyped, func(a, b int) bool { return cp.untyped[a].key < cp.untyped[b].key })
+	}
+	if len(cp.constKeys) > 0 {
+		sort.Strings(cp.constKeys)
+		cp.constKeys = slices.Compact(cp.constKeys)
 	}
 
-	if plan.env != nil {
-		for _, cf := range plan.formulas {
-			if cf.formula == nil {
-				continue
-			}
-			for _, key := range cf.formula.InputKeys() {
-				pos, _ := plan.env.Index(key)
-				// Every declaration of the key: the resolver reads a key's LAST one (byKey),
-				// and marking all of them keeps that true whichever it is.
-				for j := range metrics {
-					if metrics[j].m.MetricKey == key && !metrics[j].Calculated() {
-						metrics[j].inputSlot = pos + 1
-					}
+	for i := 0; i < plan.Len(); i++ {
+		f := plan.Step(i).Formula
+		if f == nil {
+			continue
+		}
+		for _, key := range f.InputKeys() {
+			pos, _ := plan.Env().Index(key)
+			// Every declaration of the key: the resolver reads a key's LAST one (byKey),
+			// and marking all of them keeps that true whichever it is. A calculated metric's
+			// value reaches the formulas that read it through the plan, not through a slot.
+			for j := range metrics {
+				if metrics[j].m.MetricKey == key && !metrics[j].Calculated() {
+					metrics[j].inputSlot = pos + 1
 				}
 			}
 		}
 	}
-	return plan
+	return cp
+}
+
+func metaOf(m *ResolvedMetric) calcMeta {
+	return calcMeta{key: m.m.MetricKey, classifier: uint64(m.m.ID), unit: m.m.Unit, dataType: m.m.DataType}
 }
 
 // resolvedFormulaInputs is formulaInputs over a resolution's projection: the measured
@@ -143,23 +181,13 @@ func resolvedFormulaInputs(metrics []ResolvedMetric) []calcfield.Input {
 	return inputs
 }
 
-// compileResolved compiles one calculated metric of a resolution.
-func compileResolved(env *calcfield.Env, m *ResolvedMetric) (*calcfield.Formula, error) {
-	t, ok := calcfield.ParseType(m.m.DataType)
-	if !ok {
-		return nil, fmt.Errorf("data type %s cannot be calculated", m.m.DataType)
-	}
-	return env.Compile(calcfield.Definition{Key: m.m.MetricKey, Expression: *m.m.Expression, Type: t,
-		Min: m.m.MinValue, Max: m.m.MaxValue})
-}
-
 // CalculatedCount is how many calculated metrics the version declares. Zero — every
 // profile without formulas — is the resolver's whole cost for the feature: one compare.
 func (r ProfileResolution) CalculatedCount() int {
 	if r.calc == nil {
 		return 0
 	}
-	return len(r.calc.formulas)
+	return len(r.calc.metas) + len(r.calc.untyped)
 }
 
 // DeviceConstants reads, from a device's metadata, the numeric constants this version's
@@ -215,8 +243,8 @@ type Calculation struct {
 // copied: the caller must leave the slice alone until the last Release.
 func (r ProfileResolution) BeginCalculation(constants []calcfield.Constant) Calculation {
 	c := Calculation{plan: r.calc}
-	if r.calc != nil && r.calc.env != nil {
-		c.sample = r.calc.env.Sample()
+	if r.calc != nil && r.calc.plan != nil {
+		c.sample = r.calc.plan.Env().Sample()
 		c.sample.UseConstants(constants)
 	}
 	return c
@@ -241,22 +269,34 @@ type CalculationObserver interface {
 	Skipped(key string, reason calcfield.SkipReason, err error)
 }
 
-// Append evaluates every calculated metric against the values Set so far and appends each
-// one that produced a value to dst as a Derived entry, stamped with its definition's
-// classifier, unit and data type exactly as a device-sent value of it would have been. A
-// metric that produced nothing is reported to obs and appends nothing: one missing value,
-// never a plausible one and never a failed reading.
+// Append evaluates every calculated metric against the values Set so far, in dependency
+// order, and appends each one that produced a value to dst as a Derived entry, stamped with its
+// definition's classifier, unit and data type exactly as a device-sent value of it would have
+// been. A metric that produced nothing is reported to obs and appends nothing: one missing
+// value, never a plausible one and never a failed reading.
+//
+// A formula that reads another calculated metric reads the value this appended for it — the
+// string the resolved event carries, parsed as the metric's declared type — and, when that metric
+// produced none, finds it absent: it skips as missing_input unless it guards the read with
+// has(). So a chain's values are a function of the sample alone, whatever the order they are
+// appended in, and the Recalculate of a draft computes the same ones.
 func (c Calculation) Append(dst []ResolvedMeasurementEntry, obs CalculationObserver) []ResolvedMeasurementEntry {
 	if c.plan == nil {
 		return dst
 	}
-	for i := range c.plan.formulas {
-		cf := &c.plan.formulas[i]
-		if cf.formula == nil {
-			obs.Skipped(cf.key, calcfield.SkipEvalError, cf.broken)
-			continue
+	for i := range c.plan.untyped {
+		obs.Skipped(c.plan.untyped[i].key, calcfield.SkipEvalError,
+			fmt.Errorf("data type %s cannot be calculated", c.plan.untyped[i].dataType))
+	}
+	if c.plan.plan == nil {
+		for i := range c.plan.metas {
+			obs.Skipped(c.plan.metas[i].key, calcfield.SkipEvalError, c.plan.planErr)
 		}
-		out := cf.formula.Eval(c.sample)
+		return dst
+	}
+	for i := range c.plan.metas {
+		cf := &c.plan.metas[i]
+		out := c.plan.plan.Eval(c.sample, i)
 		if !out.OK() {
 			obs.Skipped(cf.key, out.Skip, out.Err)
 			continue

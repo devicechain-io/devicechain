@@ -1,0 +1,346 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package calcfield
+
+import (
+	"errors"
+	"fmt"
+	"math/rand"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+var planMeasured = []Input{
+	{Key: "voltage", Type: Double},
+	{Key: "current", Type: Double},
+	{Key: "pf_in", Type: Double},
+	{Key: "fan", Type: Integer},
+}
+
+func def(key, expr string, t Type) Definition { return Definition{Key: key, Expression: expr, Type: t} }
+
+// kwChain is the textbook chain: kW from V and I, kVA from V and I, power factor from both.
+func kwChain() []Definition {
+	return []Definition{
+		def("pf", "kw / kva", Double),
+		def("kva", "voltage * current / 1000.0", Double),
+		def("kw", "kva * pf_in", Double),
+	}
+}
+
+func planKeys(p *Plan) []string {
+	keys := make([]string, p.Len())
+	for i := range keys {
+		keys[i] = p.Step(i).Key
+	}
+	return keys
+}
+
+func fill(t *testing.T, p *Plan, vals map[string]string) *Sample {
+	t.Helper()
+	s := p.Env().Sample()
+	for k, v := range vals {
+		ok, _ := s.Set(k, v)
+		require.True(t, ok, k)
+	}
+	return s
+}
+
+// run evaluates the whole plan in order and returns each metric's result.
+func run(p *Plan, s *Sample) map[string]Result {
+	out := map[string]Result{}
+	for i := 0; i < p.Len(); i++ {
+		out[p.Step(i).Key] = p.Eval(s, i)
+	}
+	return out
+}
+
+func TestPlanOrdersTopologically(t *testing.T) {
+	p, err := NewPlan(planMeasured, kwChain())
+	require.NoError(t, err)
+	require.Empty(t, p.Problems())
+	assert.Equal(t, []string{"kva", "kw", "pf"}, planKeys(p))
+	assert.True(t, p.Chained())
+	assert.Equal(t, 1, p.Step(0).Depth)
+	assert.Equal(t, 2, p.Step(1).Depth)
+	assert.Equal(t, 3, p.Step(2).Depth)
+}
+
+// The order is a function of the metrics, not of how they were declared.
+func TestPlanOrderIgnoresDeclarationOrder(t *testing.T) {
+	defs := kwChain()
+	want := []string{"kva", "kw", "pf"}
+	rng := rand.New(rand.NewSource(7))
+	for i := 0; i < 50; i++ {
+		rng.Shuffle(len(defs), func(a, b int) { defs[a], defs[b] = defs[b], defs[a] })
+		p, err := NewPlan(planMeasured, defs)
+		require.NoError(t, err)
+		assert.Equal(t, want, planKeys(p))
+	}
+}
+
+func TestPlanWithoutChainingIsKeyOrderAndWritesNothingBack(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("zeta", "voltage * 2.0", Double), def("alpha", "current * 2.0", Double)})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alpha", "zeta"}, planKeys(p))
+	assert.False(t, p.Chained())
+	for i := 0; i < p.Len(); i++ {
+		assert.Equal(t, -1, p.Step(i).feed)
+	}
+}
+
+func TestPlanEvaluatesAChainWithStoredValues(t *testing.T) {
+	p, err := NewPlan(planMeasured, kwChain())
+	require.NoError(t, err)
+	s := fill(t, p, map[string]string{"voltage": "230", "current": "10", "pf_in": "0.5"})
+	defer s.Release()
+	got := run(p, s)
+	assert.Equal(t, "2.3", got["kva"].Value)
+	assert.Equal(t, "1.15", got["kw"].Value) // 2.3 * 0.5, read from the stored "2.3"
+	assert.Equal(t, "0.5", got["pf"].Value)
+}
+
+// A downstream formula sees the value that is persisted, formatted as its declared type: an
+// INT upstream is truncated before it is read, a BOOLEAN is the 1/0 it is stored as.
+func TestPlanFeedsTheDeclaredTypeNotTheWiderIntermediate(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("whole", "int(voltage / current)", Integer), // 23 for 230/10, truncated from 23.7
+		def("twice", "whole * 2", Integer),
+		def("hot", "voltage > 200.0", Boolean),
+		def("flag", "hot ? 1 : 0", Integer),
+	})
+	require.NoError(t, err)
+	s := fill(t, p, map[string]string{"voltage": "237", "current": "10"})
+	defer s.Release()
+	got := run(p, s)
+	assert.Equal(t, "23", got["whole"].Value)
+	assert.Equal(t, "46", got["twice"].Value)
+	assert.Equal(t, "1", got["hot"].Value)
+	assert.Equal(t, "1", got["flag"].Value)
+}
+
+func TestPlanSkipPropagatesAsMissingInput(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("ratio", "voltage / current", Double),
+		def("half", "ratio / 2.0", Double),
+		def("safe", "has(m.ratio) ? ratio : -1.0", Double),
+		def("viaGuard", "has(m.half) ? half : -2.0", Double),
+	})
+	require.NoError(t, err)
+	// current is 0: ratio skips as non_finite; the dependents are decided by the guard.
+	s := fill(t, p, map[string]string{"voltage": "5", "current": "0"})
+	defer s.Release()
+	got := run(p, s)
+	assert.Equal(t, SkipNonFinite, got["ratio"].Skip)
+	assert.Equal(t, SkipMissingInput, got["half"].Skip, "an unguarded read of a skipped metric is a missing input")
+	assert.Equal(t, "-1", got["safe"].Value)
+	assert.Equal(t, "-2", got["viaGuard"].Value)
+}
+
+// A sample that is reused without Reset must not leak the previous evaluation's value.
+func TestPlanClearsAFedValueWhenTheMetricSkips(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("ratio", "voltage / current", Double), def("half", "ratio / 2.0", Double)})
+	require.NoError(t, err)
+	s := fill(t, p, map[string]string{"voltage": "10", "current": "5"})
+	defer s.Release()
+	assert.Equal(t, "1", run(p, s)["half"].Value)
+	require.NoError(t, s.SetAt(mustIndex(t, p, "current"), "0"))
+	got := run(p, s)
+	assert.Equal(t, SkipNonFinite, got["ratio"].Skip)
+	assert.Equal(t, SkipMissingInput, got["half"].Skip)
+}
+
+func mustIndex(t *testing.T, p *Plan, key string) int {
+	t.Helper()
+	i, ok := p.Env().Index(key)
+	require.True(t, ok, key)
+	return i
+}
+
+func TestPlanRefusesCyclesAndNamesThem(t *testing.T) {
+	for name, tc := range map[string]struct {
+		defs []Definition
+		ring string
+	}{
+		"self":     {[]Definition{def("a", "a + voltage", Double)}, "a -> a"},
+		"pair":     {[]Definition{def("b", "a + voltage", Double), def("a", "b + voltage", Double)}, "a -> b -> a"},
+		"triangle": {[]Definition{def("c", "a * 1.0 + voltage", Double), def("a", "b * 1.0 + voltage", Double), def("b", "c * 1.0 + voltage", Double)}, "a -> b -> c -> a"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := NewPlan(planMeasured, tc.defs)
+			require.NoError(t, err)
+			probs := p.Problems()
+			require.NotEmpty(t, probs)
+			var ce *CycleError
+			require.True(t, errors.As(probs[0], &ce), probs[0].Error())
+			assert.Equal(t, tc.ring, strings.Join(ce.Path, " -> "))
+			assert.Contains(t, ce.Error(), tc.ring)
+			// Every member of the ring is disabled and skips loudly.
+			s := fill(t, p, map[string]string{"voltage": "1"})
+			defer s.Release()
+			for i := 0; i < p.Len(); i++ {
+				if p.Step(i).Formula == nil {
+					assert.Equal(t, SkipEvalError, p.Eval(s, i).Skip)
+				}
+			}
+		})
+	}
+}
+
+func TestPlanCycleOutsideMetricsStillRun(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("a", "b + voltage", Double), def("b", "a + voltage", Double), def("ok", "voltage + 1.0", Double)})
+	require.NoError(t, err)
+	assert.Len(t, p.Problems(), 2)
+	s := fill(t, p, map[string]string{"voltage": "1"})
+	defer s.Release()
+	assert.Equal(t, "2", run(p, s)["ok"].Value)
+}
+
+func chainOf(n int) []Definition {
+	defs := make([]Definition, n)
+	for i := range defs {
+		src := "voltage"
+		if i > 0 {
+			src = fmt.Sprintf("c%d", i)
+		}
+		defs[i] = def(fmt.Sprintf("c%d", i+1), src+" + 1.0", Double)
+	}
+	return defs
+}
+
+func TestPlanDepthLimit(t *testing.T) {
+	p, err := NewPlan(planMeasured, chainOf(MaxChainDepth))
+	require.NoError(t, err)
+	assert.Empty(t, p.Problems(), "a chain of exactly the maximum is allowed")
+	assert.Equal(t, MaxChainDepth, p.Step(p.Len()-1).Depth)
+
+	p, err = NewPlan(planMeasured, chainOf(MaxChainDepth+1))
+	require.NoError(t, err)
+	probs := p.Problems()
+	require.Len(t, probs, 1)
+	var de *DepthError
+	require.True(t, errors.As(probs[0], &de))
+	assert.Equal(t, "c5", de.Key)
+	assert.Equal(t, 5, de.Depth)
+	assert.Equal(t, []string{"c5", "c4", "c3", "c2", "c1"}, de.Chain)
+	assert.Contains(t, de.Error(), "above the maximum of 4")
+
+	// The too-deep link never runs; the four before it still do.
+	s := fill(t, p, map[string]string{"voltage": "0"})
+	defer s.Release()
+	got := run(p, s)
+	assert.Equal(t, "4", got["c4"].Value)
+	assert.Equal(t, SkipEvalError, got["c5"].Skip)
+
+	p, err = NewPlan(planMeasured, chainOf(7))
+	require.NoError(t, err)
+	assert.Len(t, p.Problems(), 3, "every metric past the limit is named")
+}
+
+// Depth is the LONGEST chain, whichever branch of a diamond is shorter.
+func TestPlanDepthTakesTheLongestBranch(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("a", "voltage + 1.0", Double),
+		def("b", "a + 1.0", Double),
+		def("c", "b + 1.0", Double),
+		def("d", "c + a", Double), // via c: depth 4; via a: depth 2
+	})
+	require.NoError(t, err)
+	assert.Empty(t, p.Problems())
+	assert.Equal(t, 4, p.Step(p.Len()-1).Depth)
+}
+
+func TestPlanCompileErrorsArePerMetric(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("bad", "nosuch + 1.0", Double), def("ok", "voltage + 1.0", Double),
+		def("dep", "bad + 1.0", Double)})
+	require.NoError(t, err)
+	probs := p.Problems()
+	require.Len(t, probs, 1, "dep reads a declared metric; only bad fails to compile")
+	var ce *CompileError
+	require.True(t, errors.As(probs[0], &ce))
+	assert.Equal(t, "bad", ce.Key)
+	s := fill(t, p, map[string]string{"voltage": "1"})
+	defer s.Release()
+	got := run(p, s)
+	assert.Equal(t, "2", got["ok"].Value)
+	assert.Equal(t, SkipMissingInput, got["dep"].Skip)
+}
+
+func TestPlanKeyCollidingWithMeasuredIsRefused(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{def("voltage", "current * 2.0", Double)})
+	require.NoError(t, err)
+	probs := p.Problems()
+	require.Len(t, probs, 1)
+	assert.Contains(t, probs[0].Error(), "already a measured metric")
+	assert.Nil(t, p.Step(0).Formula)
+}
+
+func TestPlanCostOfAChainSumsAgainstTheProfileCeiling(t *testing.T) {
+	p, err := NewPlan(planMeasured, kwChain())
+	require.NoError(t, err)
+	var sum uint64
+	for _, f := range p.Formulas() {
+		sum += f.CostMax()
+	}
+	require.NoError(t, CheckProfileCost(p.Formulas()))
+	assert.Greater(t, sum, p.Formulas()[0].CostMax(), "the chain is more than its first link")
+	// Ninety links of a heavy formula exceed the profile ceiling together though each is under its own.
+	heavy := "math.sqrt(math.abs(voltage * current + voltage)) + math.sqrt(math.abs(current * voltage + current)) + math.sqrt(math.abs(voltage - current))"
+	defs := make([]Definition, 0, 90)
+	prev := "voltage"
+	for i := 0; i < 90; i++ {
+		key := fmt.Sprintf("h%02d", i)
+		defs = append(defs, def(key, strings.ReplaceAll(heavy, "voltage", prev), Double))
+		if i%MaxChainDepth == MaxChainDepth-1 {
+			prev = "voltage"
+		} else {
+			prev = key
+		}
+	}
+	hp, err := NewPlan(planMeasured, defs)
+	require.NoError(t, err)
+	require.Empty(t, hp.Problems(), "each link is under the per-formula ceiling and no chain is too deep")
+	var ce *CostError
+	require.True(t, errors.As(CheckProfileCost(hp.Formulas()), &ce))
+	assert.Equal(t, ProfileCostCeiling, ce.Ceiling)
+}
+
+// 1000 evaluations of one chain are byte-identical.
+func TestPlanIsDeterministic(t *testing.T) {
+	p, err := NewPlan(planMeasured, append(kwChain(), def("code", "int(pf * 100.0)", Integer)))
+	require.NoError(t, err)
+	var first string
+	for n := 0; n < 1000; n++ {
+		s := fill(t, p, map[string]string{"voltage": "230.7", "current": "12.31", "pf_in": "0.93"})
+		var b strings.Builder
+		for i := 0; i < p.Len(); i++ {
+			r := p.Eval(s, i)
+			fmt.Fprintf(&b, "%s=%s/%s;", p.Step(i).Key, r.Value, r.Skip)
+		}
+		s.Release()
+		if n == 0 {
+			first = b.String()
+			require.Contains(t, first, "code=")
+		}
+		require.Equal(t, first, b.String(), "evaluation %d", n)
+	}
+}
+
+// A calculated metric may read measured and calculated metrics through m[...] too.
+func TestPlanReadsCalculatedMetricsThroughM(t *testing.T) {
+	p, err := NewPlan(planMeasured, []Definition{
+		def("a-b", "voltage + 1.0", Double), def("down", `double(m["a-b"]) * 2.0`, Double)})
+	require.NoError(t, err)
+	require.Empty(t, p.Problems())
+	s := fill(t, p, map[string]string{"voltage": "1"})
+	defer s.Release()
+	assert.Equal(t, "4", run(p, s)["down"].Value)
+}

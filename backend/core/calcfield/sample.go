@@ -66,6 +66,9 @@ func (s *Sample) Set(key, raw string) (bool, error) {
 	return true, s.SetAt(i, raw)
 }
 
+// clearAt makes input i absent again, as if it had never been set.
+func (s *Sample) clearAt(i int) { s.vals[i], s.bad[i] = nil, SkipNone }
+
 // SetAt is Set by input position (Env.Index), for a caller that resolved the position once.
 // A DOUBLE that parses to NaN or ±Inf is refused the same way, and a formula that reads it is
 // skipped as SkipNonFinite.

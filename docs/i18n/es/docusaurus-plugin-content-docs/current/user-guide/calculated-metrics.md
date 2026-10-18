@@ -19,10 +19,11 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
 
 ## Qué es una métrica calculada
 
-- Una fórmula lee las métricas **medidas** de **una lectura**: los valores que un dispositivo envía
-  juntos en una sola medición, y opcionalmente números que lleva el **propio dispositivo**, como un
-  factor de calibración (consulta [Constantes del dispositivo](#device-constants)). Nunca lee una
-  lectura anterior, otro dispositivo ni el reloj.
+- Una fórmula lee las métricas de **una lectura**: los valores **medidos** que un dispositivo envía
+  juntos en una sola medición, otras métricas **calculadas** del mismo perfil (consulta [Encadenar
+  métricas calculadas](#chaining-calculated-metrics)) y, opcionalmente, números que lleva el
+  **propio dispositivo**, como un factor de calibración (consulta [Constantes del
+  dispositivo](#device-constants)). Nunca lee una lectura anterior, otro dispositivo ni el reloj.
 - El resultado se **calcula una sola vez, cuando llega la lectura**, y se almacena como una medición
   normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
   exportaciones, los últimos valores del dispositivo y las reglas de detección la leen como
@@ -73,7 +74,10 @@ ves:
 
 Cuando la fórmula compila, un panel de **muestra** enumera las métricas medidas que lee la fórmula.
 Escribe un valor para cada una y el panel muestra el **valor** que produciría la fórmula o el
-**motivo** por el que no produciría ninguno. Si la fórmula lee [constantes del
+**motivo** por el que no produciría ninguno. Si la fórmula lee otras métricas calculadas, el panel
+muestra también la **cadena** en la que se apoya y pide las métricas medidas que lee toda la
+cadena: las calculadas se obtienen de tu muestra, en orden, exactamente como cuando llega una
+lectura. Si la fórmula lee [constantes del
 dispositivo](#device-constants), un grupo **Constantes del dispositivo** las enumera también:
 escribe el número que contendrían los metadatos del dispositivo para cada una, o deja una en blanco
 para ver qué obtiene un dispositivo que no la tiene. La muestra se escribe a mano y no se almacena
@@ -96,7 +100,9 @@ se almacena nada.
   panel lo indica en cada resultado, y lo que muestra es una vista previa, no el valor que se
   almacenará.
 - Solo se muestran las métricas que lee la fórmula, y un mensaje que no llevaba ninguna de ellas no
-  es una muestra.
+  es una muestra. Una métrica calculada que lee la fórmula se toma del valor **almacenado** para
+  ella cuando llegó cada lectura, con la fórmula publicada entonces, no se recalcula con el
+  borrador.
 - Si la fórmula lee [constantes del dispositivo](#device-constants), el panel usa para ellas los
   metadatos **actuales** del dispositivo indicado, en todas las muestras: no los valores que tenía
   el dispositivo cuando se registró cada lectura. Lo indica bajo el resultado. Una constante que no
@@ -112,13 +118,16 @@ Al publicar un perfil se comprueban todas las métricas calculadas y se informa 
 problemas a la vez. Se rechaza un perfil cuando:
 
 - una fórmula no compila o no produce el tipo declarado;
-- una fórmula lee una clave que no es una métrica **medida** declarada del mismo perfil. Una métrica
-  calculada no puede leer otra métrica calculada;
+- una fórmula lee una clave que no es una métrica declarada del mismo perfil;
+- unas métricas calculadas se leen entre sí en un ciclo (el mensaje lo nombra, por ejemplo
+  `a -> b -> a`), o una métrica se lee a sí misma;
+- una cadena de métricas calculadas tiene más de 4 eslabones (el mensaje nombra la cadena);
 - una fórmula no lee ninguna métrica (una constante del dispositivo no es una métrica);
 - una fórmula lee más de 8 constantes del dispositivo, o las fórmulas de un mismo perfil leen juntas
   más de 32;
 - una fórmula supera los 1024 bytes, su coste estimado es superior a 100, o las fórmulas de un
-  mismo perfil cuestan juntas más de 1000;
+  mismo perfil cuestan juntas más de 1000. Las fórmulas de una cadena se evalúan todas en cada
+  lectura, así que una cadena cuesta la suma de sus fórmulas;
 - el Mín. de una métrica calculada es mayor que su Máx., declara valores permitidos, o su tipo de
   datos no es Double, Integer ni Boolean;
 - una clave está declarada dos veces;
@@ -133,7 +142,8 @@ de sus valores medidos con las fórmulas del borrador, que sustituyen a los valo
 cuando llegó. Por eso, una regla sobre una métrica calculada que acabas de añadir o editar se
 previsualiza con los valores que tendrá esa métrica cuando publiques, y una métrica calculada que el
 borrador ya no tiene no da ningún valor en la vista previa. La vista previa indica cuántas lecturas
-se recalcularon y cuántos resultados de fórmula no produjeron valor.
+se recalcularon y cuántos resultados de fórmula no produjeron valor. Las métricas calculadas que se
+leen entre sí se recalculan en orden de dependencia, como cuando llega una lectura.
 
 Una fórmula que lee [constantes del dispositivo](#device-constants) se recalcula con los
 metadatos **actuales** de cada dispositivo, leídos cuando ejecutas la vista previa. Una lectura
@@ -156,10 +166,11 @@ ni estado, de modo que cada fórmula se ejecuta en un tiempo pequeño y acotado.
 
 ### Entradas
 
-Cada métrica medida del perfil es una variable con el nombre de su clave, como `voltage` o `temp`.
-Una clave que no es un identificador simple, como `flow-rate`, se lee como `m["flow-rate"]`,
-envuelta en la conversión de su tipo: `double(m["flow-rate"])`, `int(m["count"])` o
-`bool(m["door"])`.
+Cada métrica medida del perfil es una variable con el nombre de su clave, como `voltage` o `temp`,
+y también lo es cada métrica calculada que puede leer (consulta [Encadenar métricas
+calculadas](#chaining-calculated-metrics)). Una clave que no es un identificador simple, como
+`flow-rate`, se lee como `m["flow-rate"]`, envuelta en la conversión de su tipo:
+`double(m["flow-rate"])`, `int(m["count"])` o `bool(m["door"])`.
 
 ### Operadores
 
@@ -185,6 +196,42 @@ un valor almacenado no debe depender de qué máquina lo calculó. Para una raí
 
 `has(m.fan)` y `"fan" in m` comprueban si una lectura trae un valor para `fan`. Así le das un valor
 por defecto explícito a una entrada ausente: `has(m.fan) ? fan : 0.0`.
+
+### Encadenar métricas calculadas {#chaining-calculated-metrics}
+
+Una fórmula puede leer otra métrica calculada del mismo perfil, por su clave, exactamente como lee
+una medida. La potencia real, la potencia aparente y el factor de potencia forman una cadena de
+tres:
+
+| Clave | Fórmula |
+| --- | --- |
+| `kva` | `voltage * current / 1000.0` |
+| `kw` | `kva * pf_in` |
+| `pf` | `kw / kva` |
+
+- **Una cadena tiene como máximo 4 métricas calculadas.** Una fórmula que solo lee métricas medidas
+  es una cadena de una, `kw` arriba es de dos y `pf` de tres. Al publicar se rechaza una cadena más
+  larga y se nombra. Las métricas calculadas tampoco pueden leerse entre sí en un ciclo, directamente
+  o a través de otras, y al publicar se nombra el ciclo.
+- **Se evalúan en orden de dependencia**, una vez por lectura, sea cual sea el orden en que las
+  declaraste. Cada fórmula se ejecuta después de todo lo que lee.
+- **Una fórmula posterior lee el valor que registra la lectura.** El resultado de `kva` se formatea
+  con su tipo de datos antes de que lo lea `kw`, de modo que una métrica Integer es un número entero
+  y un Boolean es `1` o `0`, y `kw` lee exactamente el valor que `kva` recibe en la lectura: el mismo
+  que ven las reglas de detección y las vistas en vivo. Después, el almacenamiento lo redondea a 8
+  decimales (consulta «Almacenamiento y precisión», más abajo), así que, para un valor con más
+  decimales, el historial muestra un `kva` menos preciso que aquel con el que se calculó `kw`.
+- **Si una métrica anterior no produce valor, tampoco lo producen las fórmulas que la leen.** Si
+  `kva` se omite, `kw` se omite como `missing_input`, y también `pf` a través de ella. Para dar a
+  una fórmula así un valor alternativo, comprueba la métrica como cualquier entrada:
+  `has(m.kva) ? kva : 0.0`.
+- **Un dispositivo no puede aportar un eslabón.** Un valor que un dispositivo envía bajo la clave de
+  una métrica calculada se descarta, así que nunca llega a las fórmulas que leen esa clave.
+- La identidad de una lectura no cambia: los valores calculados, encadenados o no, no forman parte
+  de ella, así que una lectura reenviada se sigue reconociendo como la misma.
+- Un valor encadenado se calcula a partir de la lectura y de la versión del perfil que estaba activa,
+  como cualquier otro, así que la misma lectura da los mismos valores en todas las réplicas y en
+  todas las vistas previas.
 
 ### Constantes del dispositivo {#device-constants}
 
