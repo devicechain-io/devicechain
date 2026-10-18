@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,8 +56,15 @@ import (
 //
 // While the setting is OFF the faults are paused: off, a QoS 1 publish reaches the platform only
 // through the capture stream, which is the configuration the setting exists to replace, and a
-// capture leader move under load is allowed to lose what it held. The load continues, and loses
-// nothing because nothing faults it.
+// capture leader move under load is allowed to lose what it held. The load continues, and what
+// is PUBACKed then may be lost too, without any fault: at this load the capture stream's ceiling
+// (clusterHot, the store's own bound) holds well under a second of publishes, so a reader that
+// falls behind for a moment, as it does whenever the machine is busy, overflows it and the
+// stream discards its oldest. That is the setting-off behaviour, documented as such. So the span
+// in which the store is not held fail-closed (from its release by the pod with the setting off
+// until the durables of the pod turning it back on have existed for openMargin) is the one span
+// whose losses are counted and reported rather than failed. Its ends are read from the broker
+// (the release time on the store, the durable's creation time), not from the test's phases.
 
 const (
 	clusterDevices = 9
@@ -85,10 +93,20 @@ type ledger struct {
 	// failure reports, so a loss points at the transition that caused it.
 	phase   string
 	phaseOf map[string]string
+	// ackAt is when each id was PUBACKed, and [openFrom, openTo) the span in which the store was
+	// not held fail-closed (see the test comment): a PUBACK in it is the setting-off one.
+	ackAt            map[string]time.Time
+	openFrom, openTo time.Time
 }
 
+// openMargin is how long after the re-created events durable a PUBACK may still be for a
+// message the store took before the durable existed (and so kept for nobody): the time from a
+// store write to its PUBACK reaching the device.
+const openMargin = 2 * time.Second
+
 func newLedger() *ledger {
-	return &ledger{acked: map[string]bool{}, delivered: map[string]int{}, phaseOf: map[string]string{}, phase: "start"}
+	return &ledger{acked: map[string]bool{}, delivered: map[string]int{}, phaseOf: map[string]string{},
+		ackAt: map[string]time.Time{}, phase: "start"}
 }
 
 func (l *ledger) setPhase(p string) {
@@ -101,7 +119,28 @@ func (l *ledger) ack(id string) {
 	l.mu.Lock()
 	l.acked[id] = true
 	l.phaseOf[id] = l.phase
+	l.ackAt[id] = time.Now()
 	l.mu.Unlock()
+}
+
+// setOpen records where the span in which the store was not held fail-closed begins (from) or
+// ends (to); a zero time leaves that end as it was.
+func (l *ledger) setOpen(from, to time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !from.IsZero() {
+		l.openFrom = from
+	}
+	if !to.IsZero() {
+		l.openTo = to
+	}
+}
+
+// inOpen reports whether id was PUBACKed in the span in which the store was not held
+// fail-closed. l.mu is held.
+func (l *ledger) inOpen(id string) bool {
+	at := l.ackAt[id]
+	return !l.openFrom.IsZero() && !at.Before(l.openFrom) && (l.openTo.IsZero() || at.Before(l.openTo))
 }
 
 // lostByPhase counts the lost messages by the phase they were PUBACKed in, with a few ids.
@@ -123,17 +162,34 @@ func (l *ledger) deliver(id string) {
 	l.mu.Unlock()
 }
 
-// lost is the PUBACKed messages that have not reached inbound-events.
+// lost is the messages PUBACKed while the store was held fail-closed that have not reached
+// inbound-events.
 func (l *ledger) lost() []string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []string
 	for id := range l.acked {
-		if l.delivered[id] == 0 {
+		if l.delivered[id] == 0 && !l.inOpen(id) {
 			out = append(out, id)
 		}
 	}
 	return out
+}
+
+// lostOpen counts the messages PUBACKed while the store was not held fail-closed, and how many
+// of those have not reached inbound-events.
+func (l *ledger) lostOpen() (acked, lost int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id := range l.acked {
+		if l.inOpen(id) {
+			acked++
+			if l.delivered[id] == 0 {
+				lost++
+			}
+		}
+	}
+	return acked, lost
 }
 
 func (l *ledger) counts() (acked, delivered, duplicates int) {
@@ -332,10 +388,6 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a minutes-long load run on a three-node cluster")
 	}
-	mqttPorts := make([]int, 3)
-	for i := range mqttPorts {
-		mqttPorts[i] = dctest.FreeTCPPort(t)
-	}
 	conf := filepath.Join(t.TempDir(), "accounts.conf")
 	require.NoError(t, os.WriteFile(conf, []byte(clusterAccounts), 0o600))
 	servers, _ := dctest.StartJetStreamClusterConfigured(t, 3, func(i int, o *natsserver.Options) {
@@ -344,8 +396,19 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 			panic(err)
 		}
 		o.Accounts, o.Users, o.SystemAccount, o.NoAuthUser = parsed.Accounts, parsed.Users, parsed.SystemAccount, parsed.NoAuthUser
-		o.MQTT = natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPorts[i], StreamReplicas: 3}
+		// Port -1: the server binds a port of the kernel's choosing and keeps it. A port picked
+		// beforehand by a probe listener and released is free only until something else binds
+		// it, and this fixture's own routes and listeners bind ports in between: a server
+		// whose MQTT listener lost that race fails its start, and no device can connect to it.
+		o.MQTT = natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1, StreamReplicas: 3}
 	})
+	mqttPorts := make([]int, len(servers))
+	for i, s := range servers {
+		vz, err := s.Varz(nil)
+		require.NoError(t, err)
+		require.NotZerof(t, vz.MQTT.Port, "server %d reports no MQTT port", i)
+		mqttPorts[i] = vz.MQTT.Port
+	}
 	nc, err := nats.Connect(servers[0].ClientURL(), nats.UserInfo("dc_service", "svc"))
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)
@@ -451,6 +514,15 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 
 	storeName := messaging.MqttMessageStore
 	captureName := messaging.StreamName(e2eInstance, streams.DeviceEventsCapture)
+	captureInfo, err := js.StreamInfo(captureName)
+	require.NoError(t, err)
+	captureFirst := captureInfo.State.FirstSeq
+	var eventsDurable string
+	for _, d := range messaging.MqttFailClosedDurables(e2eInstance) {
+		if d.Kind == messaging.MqttFailClosedEvents {
+			eventsDurable = d.Name
+		}
+	}
 	faults := startClusterFaults(nc, 700*time.Millisecond, storeName, captureName)
 	t.Cleanup(faults.close)
 
@@ -484,14 +556,23 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 	a1.stop()
 	a2.stop()
 	advance(2 * time.Minute)
+	var releasedAt string
 	require.Eventually(t, func() bool {
 		si, err := js.StreamInfo(storeName)
 		if err != nil {
 			return false
 		}
 		_, owned := si.Config.Metadata["io.devicechain.mqtt-fail-closed.owner"]
+		releasedAt = si.Config.Metadata["io.devicechain.mqtt-fail-closed.released-at"]
 		return !owned
 	}, 30*time.Second, 100*time.Millisecond, "the pod with the setting off never released the store")
+	// The release time is the pod's clock, which runs skew ahead of the test's. The grace
+	// before the durables can go has not passed on that clock yet, so the store still carries it.
+	relNanos, err := strconv.ParseInt(releasedAt, 10, 64)
+	require.NoErrorf(t, err, "the released store carries no release time (%q)", releasedAt)
+	clockMu.Lock()
+	l.setOpen(time.Unix(0, relNanos).Add(-skew), time.Time{})
+	clockMu.Unlock()
 	advance(2 * time.Minute)
 	require.Eventually(t, func() bool {
 		for n := range js.ConsumerNames(storeName) {
@@ -509,6 +590,9 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 	// 4. And back ON while the pod with it off still runs; then that pod goes.
 	l.setPhase("turning-on")
 	a3 := pod("A3-on", 0, true)
+	ci, err := js.ConsumerInfo(storeName, eventsDurable)
+	require.NoError(t, err, "the pod turning the setting back on created no events durable")
+	l.setOpen(time.Time{}, ci.Created.Add(openMargin))
 	faults.paused.Store(false)
 	steady("on again, beside the pod with it off", 10*time.Second)
 	b.stop()
@@ -540,11 +624,12 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 					ci.NumAckPending, ci.AckFloor.Stream, ci.Delivered.Stream)
 			}
 		}
-		if si, err := js.StreamInfo(captureName); err == nil {
-			t.Logf("capture: %d msgs, first %d last %d", si.State.Msgs, si.State.FirstSeq, si.State.LastSeq)
-		}
+		logCapture(t, js, captureName, captureFirst)
 		t.FailNow()
 	}
+	logCapture(t, js, captureName, captureFirst)
+	openAcked, openLost := l.lostOpen()
+	t.Logf("while the store was not held fail-closed (the setting off): %d PUBACKed, %d of them lost", openAcked, openLost)
 
 	// Every held disconnect has fired by now (the debounce is 30 s), and been refused or not.
 	require.Eventually(t, func() bool { return tap.DeferredDeaths() == 0 }, 45*time.Second, 250*time.Millisecond,
@@ -564,4 +649,26 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 	require.Empty(t, flips, "presence read devices offline that were only refused and reconnected")
 	require.Empty(t, offlineNow, "presence reads connected devices offline")
 	_ = a3
+}
+
+// logCapture reports the capture stream and its platform durable: how many messages the stream
+// took since first (its first sequence when the test began), and how many the durable was
+// handed. With nothing left in the stream, a gap between the two is what the stream discarded
+// before anyone read it.
+func logCapture(t *testing.T, js nats.JetStreamContext, name string, first uint64) {
+	t.Helper()
+	si, err := js.StreamInfo(name)
+	if err != nil {
+		t.Logf("capture: unreadable: %v", err)
+		return
+	}
+	t.Logf("capture: %d msgs now, first %d last %d: %d taken during the test", si.State.Msgs, si.State.FirstSeq,
+		si.State.LastSeq, si.State.LastSeq-first+1)
+	for n := range js.ConsumerNames(name) {
+		if ci, err := js.ConsumerInfo(name, n); err == nil {
+			t.Logf("capture consumer %s: handed %d (last stream seq %d), ack floor %d, pending %d, ack-pending %d, "+
+				"redelivered %d", n, ci.Delivered.Consumer, ci.Delivered.Stream, ci.AckFloor.Stream, ci.NumPending,
+				ci.NumAckPending, ci.NumRedelivered)
+		}
+	}
 }

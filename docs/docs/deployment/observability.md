@@ -745,7 +745,7 @@ Two things keep a full store from turning into a reconnect storm. While the stor
 Known limitations of the setting:
 
 - The guarantee is stated for a replicated broker (`streamReplicas` 3). With one replica, a node crash can lose messages the broker had acknowledged and not yet written to disk.
-- A consumer deleted on the broker by hand is created again within 30 seconds. Until then, publishes of its kind are acknowledged and not kept, which is why `MqttFailClosedDurableMissing` is critical.
+- A consumer deleted on the broker by hand is created again within 30 seconds. Until then, and for a few seconds after while the pods look at the store again, publishes of its kind are acknowledged and not kept, which is why `MqttFailClosedDurableMissing` is critical.
 - A message over its tenant's ingest ceiling is still acknowledged and dropped, as with the setting off.
 - The edge agent's own MQTT broker is not covered. Its uplink to the platform is a QoS 1 publish like any other device's, and is covered.
 - The capture stream still receives a copy of every QoS 1 publish, which its reader skips. If it fills under overload, `JetStreamDurableLostUnread` on it counts those skipped copies too, so it overstates what was lost: only QoS 0 publishes in it are lost, and the QoS 1 ones are held by the store. For the same reason `JetStreamCaptureLeaderChanged` loses nothing of QoS 1 with the setting on.

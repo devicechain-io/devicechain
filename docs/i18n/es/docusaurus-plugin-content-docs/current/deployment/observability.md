@@ -776,7 +776,7 @@ Dos mecanismos evitan que un almacén lleno se convierta en una avalancha de rec
 Limitaciones conocidas del ajuste:
 
 - La garantía se da para un bróker replicado (`streamReplicas` 3). Con una sola réplica, la caída de un nodo puede perder mensajes que el bróker había confirmado y aún no había escrito en disco.
-- Un consumidor borrado a mano en el bróker se vuelve a crear en 30 segundos. Hasta entonces, las publicaciones de su tipo se confirman y no se guardan, y por eso `MqttFailClosedDurableMissing` es crítica.
+- Un consumidor borrado a mano en el bróker se vuelve a crear en 30 segundos. Hasta entonces, y durante unos segundos más mientras los pods vuelven a consultar el almacén, las publicaciones de su tipo se confirman y no se guardan, y por eso `MqttFailClosedDurableMissing` es crítica.
 - Un mensaje por encima del techo de ingesta de su inquilino se sigue confirmando y descartando, igual que con el ajuste desactivado.
 - El bróker MQTT propio del agente de borde no está cubierto. Su enlace de subida a la plataforma es una publicación QoS 1 como la de cualquier otro dispositivo, y sí está cubierto.
 - El stream de captura sigue recibiendo una copia de cada publicación QoS 1, que su lector omite. Si se llena bajo sobrecarga, `JetStreamDurableLostUnread` sobre él cuenta también esas copias omitidas, así que exagera lo perdido: solo se pierden las publicaciones QoS 0 que contiene, y las QoS 1 las guarda el almacén. Por el mismo motivo, con el ajuste activado `JetStreamCaptureLeaderChanged` no pierde nada de QoS 1.

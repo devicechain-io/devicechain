@@ -5,6 +5,10 @@ package messaging
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,8 +29,9 @@ import (
 // once the pass has finished.
 //
 // GUARD: kills a re-creation that gives the store the gateway's subjects before the durables
-// exist (the publish made between the two is PUBACKed), and one that leaves the pending subject
-// in place after them (the resend is never stored). Shown to fail with the store created on
+// exist (the publish made between the two is PUBACKed; one that does it after the moment of
+// creation is caught by the order of the pass's own requests), and one that leaves the pending
+// subject in place after them (the resend is never stored). Shown to fail with the store created on
 // $MQTT.msgs.>: "during" was PUBACKed.
 func TestARecreatedStoreTakesNothingUntilItsDurablesExist(t *testing.T) {
 	b := startGuardBroker(t)
@@ -52,12 +57,53 @@ func TestARecreatedStoreTakesNothingUntilItsDurablesExist(t *testing.T) {
 			"the store was created on the gateway's subjects")
 		during = g.publish(topic, "during", 15*time.Second)
 	}
+	// The order of the pass's own JetStream requests: the store may take the gateway's
+	// subjects only after the last durable exists. The publish at the hook sees only the
+	// moment of creation; a pass that gave the subjects back between that moment and the
+	// durables would acknowledge every publish in between into a store nobody reads.
+	var apiMu sync.Mutex
+	var api []string
+	sub, err := b.nc.Subscribe("$JS.API.>", func(msg *nats.Msg) {
+		kind := ""
+		switch {
+		case strings.HasPrefix(msg.Subject, "$JS.API.CONSUMER.CREATE."+MqttMessageStore+"."),
+			strings.HasPrefix(msg.Subject, "$JS.API.CONSUMER.DURABLE.CREATE."+MqttMessageStore+"."):
+			kind = "durable"
+		case msg.Subject == "$JS.API.STREAM.UPDATE."+MqttMessageStore:
+			var cfg nats.StreamConfig
+			if json.Unmarshal(msg.Data, &cfg) == nil && slices.Contains(cfg.Subjects, mqttMsgsSubjectPrefix+">") {
+				kind = "gateway-subjects"
+			}
+		}
+		if kind != "" {
+			apiMu.Lock()
+			api = append(api, kind)
+			apiMu.Unlock()
+		}
+	})
+	require.NoError(t, err)
 	m := fcMetrics(guardInstance)
 	_, err = nmgr.checkMqttFailClosed(context.Background(), m)
 	nmgr.mqttPassHook = nil
 	require.NoError(t, err)
+	require.NoError(t, b.nc.Flush())
+	require.NoError(t, sub.Unsubscribe())
 	require.True(t, window, "premise: the watch created the store again")
 	require.False(t, during, "a store with no durable yet acknowledged a device publish")
+	apiMu.Lock()
+	order := append([]string(nil), api...)
+	apiMu.Unlock()
+	durables := 0
+	for _, k := range order {
+		if k == "durable" {
+			durables++
+			continue
+		}
+		require.Equalf(t, len(MqttFailClosedDurables(guardInstance)), durables,
+			"the store was given the gateway's subjects before its durables existed: %v", order)
+	}
+	require.Equalf(t, len(MqttFailClosedDurables(guardInstance)), durables, "premise: the pass created every durable: %v", order)
+	require.Contains(t, order, "gateway-subjects", "premise: the pass gave the store the gateway's subjects")
 
 	info := b.storeInfo()
 	require.Equal(t, []string{mqttMsgsSubjectPrefix + ">"}, info.Config.Subjects,
@@ -117,8 +163,8 @@ func TestAnAbandonedPendingStoreGetsTheGatewaysSubjectsBack(t *testing.T) {
 // withdrawn rather than left at its last value.
 //
 // GUARD: kills a sampler that reports the store's whole backlog for every durable (the response
-// and report durables hold none of the events), one that does not sample, and one that keeps a
-// deleted durable's backlog.
+// and report durables hold none of the events), one that does not sample, one that keeps a
+// deleted durable's backlog, and one that keeps every durable's backlog once the store is gone.
 func TestTheWatchExportsEachPlatformDurablesBacklog(t *testing.T) {
 	b := startGuardBroker(t)
 	nmgr := failClosedManager(t, b.nc, b.js, guardInstance, true)
@@ -151,4 +197,12 @@ func TestTheWatchExportsEachPlatformDurablesBacklog(t *testing.T) {
 	require.Equal(t, len(MqttFailClosedDurables(guardInstance))-1, testutil.CollectAndCount(m.durablePending),
 		"a durable that could not be read kept its backlog")
 	require.Equal(t, len(MqttFailClosedDurables(guardInstance))-1, testutil.CollectAndCount(m.durableAckPending))
+
+	// The store gone, and seen gone: no durable has a backlog, so none keeps a series.
+	require.NoError(t, b.js.DeleteStream(MqttMessageStore))
+	_, err = nmgr.readMqttStore(context.Background())
+	require.NoError(t, err)
+	nmgr.sampleMqttFailClosedDurables(context.Background(), m)
+	require.Zero(t, testutil.CollectAndCount(m.durablePending), "a missing store's durables kept their backlog")
+	require.Zero(t, testutil.CollectAndCount(m.durableAckPending), "a missing store's durables kept their backlog")
 }

@@ -389,7 +389,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 该设置的已知限制：
 
 - 该保证针对多副本代理（`streamReplicas` 为 3）。单副本时，节点崩溃可能丢失代理已确认但尚未写入磁盘的消息。
-- 在代理上被手动删除的消费者会在 30 秒内重新创建。在此之前，该类发布会被确认却不保存，这也是 `MqttFailClosedDurableMissing` 为 critical 的原因。
+- 在代理上被手动删除的消费者会在 30 秒内重新创建。在此之前（以及之后各 Pod 重新读取存储前的几秒内），该类发布会被确认却不保存，这也是 `MqttFailClosedDurableMissing` 为 critical 的原因。
 - 超出租户接入上限的消息仍会被确认后丢弃，与关闭该设置时相同。
 - 边缘代理内置的 MQTT 消息代理不在覆盖范围内。它上行到平台的连接与其他设备一样是 QoS 1 发布，属于覆盖范围。
 - 捕获流仍会收到每条 QoS 1 发布的一份副本，由其读取器跳过。如果它在过载下写满，其上的 `JetStreamDurableLostUnread` 也会把这些被跳过的副本计入，因此会高估丢失量：真正丢失的只有其中的 QoS 0 发布，QoS 1 发布由存储保存。同理，开启该设置后 `JetStreamCaptureLeaderChanged` 不会导致 QoS 1 丢失。

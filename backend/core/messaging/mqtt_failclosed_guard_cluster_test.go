@@ -263,8 +263,24 @@ func TestAMessageStoreLeaderMoveUnderLoadDuplicatesButNeverLosesAPubackedMessage
 	require.Empty(t, errs, "a device could not finish its publishes")
 	require.NotEmpty(t, acked)
 	require.Greater(t, gc.moves.Load(), int64(2), "the leader was never moved, so nothing was tested")
-	require.Eventually(t, func() bool { return len(col.lostOf(acked)) == 0 }, 30*time.Second, 200*time.Millisecond,
-		"PUBACKed messages were never read from the durable: lost %v", col.lostOf(acked))
+	deadline := time.Now().Add(30 * time.Second)
+	for len(col.lostOf(acked)) > 0 && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if lost := col.lostOf(acked); len(lost) > 0 {
+		// Whether the store still holds them (the collector stopped reading: a harness fault) or
+		// the durable is past them with nothing pending (they are gone: a loss).
+		if ci, err := gc.js.ConsumerInfo(MqttMessageStore, guardDurable); err == nil {
+			t.Logf("durable: pending %d, ack-pending %d, ack floor %d, delivered %d/%d, waiting pulls %d",
+				ci.NumPending, ci.NumAckPending, ci.AckFloor.Stream, ci.Delivered.Consumer, ci.Delivered.Stream, ci.NumWaiting)
+		} else {
+			t.Logf("durable: unreadable: %v", err)
+		}
+		if si, err := gc.js.StreamInfo(MqttMessageStore); err == nil {
+			t.Logf("store: %d msgs, first %d last %d", si.State.Msgs, si.State.FirstSeq, si.State.LastSeq)
+		}
+		t.Fatalf("%d PUBACKed messages were never read from the durable: lost %v", len(lost), lost)
+	}
 	t.Logf("%d PUBACKed, 0 lost, %d duplicate deliveries across %d leader moves", len(acked), col.duplicates(), gc.moves.Load())
 }
 

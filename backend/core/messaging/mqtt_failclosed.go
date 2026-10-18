@@ -1685,9 +1685,15 @@ func (nmgr *NatsManager) checkMqttFailClosed(ctx context.Context, m *MqttFailClo
 // is: which kind's reader is behind, when the store fills and refuses.
 //
 // A durable that cannot be read has its series withdrawn, as the stream sampler does, so a
-// stale backlog is never read as a current one.
+// stale backlog is never read as a current one; so do all of them while the store carries no
+// mark (it is missing, or was not created again): there are no platform durables to have one.
 func (nmgr *NatsManager) sampleMqttFailClosedDurables(ctx context.Context, m *MqttFailClosedMetrics) {
-	if m == nil || !nmgr.MqttMessageStoreMarked() {
+	if m == nil {
+		return
+	}
+	if !nmgr.MqttMessageStoreMarked() {
+		m.durablePending.Reset()
+		m.durableAckPending.Reset()
 		return
 	}
 	for _, d := range MqttFailClosedDurables(nmgr.Microservice.InstanceId) {
