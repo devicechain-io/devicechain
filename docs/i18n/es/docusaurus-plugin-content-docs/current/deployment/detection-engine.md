@@ -601,7 +601,7 @@ ningún valor:
 - **Las detecciones de cada dispositivo llegan en orden.** La siguiente detección de un dispositivo,
   de cualquiera de sus reglas, se envía solo cuando la anterior ha sido confirmada, así que nunca hay
   más de una por dispositivo en espera. Las detecciones de una regla de correlación cuentan como de
-  su ancla. Las de dispositivos distintos pueden llegar en otro orden que antes; nada posterior
+  su ancla. Las de dispositivos distintos pueden llegar en otro orden que con 1; nada posterior
   depende de ese orden, porque cada alarma pertenece a un solo dispositivo.
 - **Nada se confirma antes que sus detecciones.** El punto de control se guarda solo cuando todas
   las detecciones que cubre han sido confirmadas, exactamente igual que con 1.

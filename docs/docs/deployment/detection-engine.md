@@ -547,7 +547,7 @@ time. What stays the same at any setting:
 - **Each device's detections arrive in order.** A device's next detection, from any of its rules, is
   sent only after the one before it has been acknowledged, so at most one per device is ever
   waiting. A correlation rule's detections count as its anchor's. Detections of different devices
-  may arrive in a different order than before; nothing downstream depends on that order, because
+  may arrive in a different order than at 1; nothing downstream depends on that order, because
   every alarm belongs to one device.
 - **Nothing is committed ahead of its detections.** The checkpoint is saved only after every
   detection it covers has been acknowledged, exactly as at 1.

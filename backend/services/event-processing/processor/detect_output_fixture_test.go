@@ -490,7 +490,7 @@ type outputVariant struct {
 	checkpoint func(ctx context.Context, rp *ResolvedEventsProcessor) bool
 	// settle waits for anything the variant left in flight, before the oracle reads the log.
 	settle func()
-	// window is the production publish window the variant runs at (0: the default, 1).
+	// window is the production publish window the variant runs at (0: the default, 32).
 	window int
 }
 
