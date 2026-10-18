@@ -319,7 +319,9 @@ type NatsManager struct {
 	mqttClock  func() time.Time
 	// mqttPassHook, when set, is called by a fail-closed pass at the named point ("decided":
 	// a write decided on from a read without the lock, before taking it; "locked": holding the
-	// lock, the store just read again). A test seam for interleaving two passes.
+	// lock, the store just read again; "store-created": the store just created, before its
+	// durables). A test seam for interleaving two passes, and for publishing into the moment
+	// between creating a store and finishing it.
 	mqttPassHook func(point string)
 	// storeReaders are the readers over the message store (NewMqttMessageStoreReader),
 	// kept apart from readers: they are built at runtime, after the recorder and the sampler

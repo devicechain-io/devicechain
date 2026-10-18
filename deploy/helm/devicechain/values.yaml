@@ -213,6 +213,17 @@ instance:
         # should not reserve disk the recommended configuration never uses.
         mqttStoreMaxBytes: 268435456 # 256 MiB for the QoS>=1 message store
         mqttQoS2StoreMaxBytes: 67108864 # 64 MiB per QoS 2 store ($MQTT_out, $MQTT_qos2in)
+        # Fail-closed MQTT QoS 1 (off by default). On, a QoS 1 PUBACK means the platform
+        # holds the message: event-sources declares $MQTT_msgs itself (discard NEW, at the
+        # hot ceiling streamMaxBytes, which it then reserves in place of mqttStoreMaxBytes)
+        # and reads device events, command responses and device reports from it, so a full
+        # store REFUSES a publish (no PUBACK, connection closed, the device resends) rather
+        # than evicting one it acknowledged. Above 80% full, device-management refuses new
+        # device connections until it is below 60%. QoS 0 is unaffected. Only on a broker
+        # that serves this one instance (a start refuses it on a shared broker), and stated
+        # for streamReplicas 3. Turning it off again hands the store back once its consumers
+        # are drained.
+        # mqttFailClosed: false
         # The JetStream KV buckets (device caches, locks, refresh tokens, OAuth
         # codes, sign-in attempt counts). They are streams too — backed by KV_-prefixed streams in the same
         # account — so a bounded bucket reserves its ceiling up front like any other.

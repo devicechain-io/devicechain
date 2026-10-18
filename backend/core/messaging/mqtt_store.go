@@ -205,7 +205,15 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 				return err
 			}
 		}
-		if cfg.MaxBytes == maxBytes {
+		// A store a fail-closed pass created and did not finish (it stopped between creating
+		// the store and creating its durables) still has only the subject it was created with,
+		// so it takes none of the gateway's copies and the gateway refuses every QoS 1 publish.
+		// With no mark on it, it is nobody's: it gets the gateway's subjects back.
+		pending := name == MqttMessageStore && isAbandonedPendingMqttStore(info)
+		if pending {
+			cfg.Subjects = []string{mqttMsgsSubjectPrefix + ">"}
+		}
+		if cfg.MaxBytes == maxBytes && !pending {
 			return nil
 		}
 		previous := cfg.MaxBytes
@@ -213,6 +221,11 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 		if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
 			lastErr = err
 			continue
+		}
+		if pending {
+			log.Warn().Str("stream", name).
+				Msg("Gave the MQTT message store the gateway's subjects back: a fail-closed check created it and " +
+					"stopped before finishing, so until now it refused every QoS 1 device publish")
 		}
 		log.Info().Str("stream", name).Int64("maxBytes", maxBytes).Int64("previous", previous).
 			Msg("Bounded MQTT gateway stream so it cannot consume the JetStream disk budget's headroom")
@@ -227,4 +240,19 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 	log.Info().Str("stream", name).
 		Msg("MQTT gateway stream does not exist yet; nothing has connected over MQTT. The ceiling is applied by the periodic check once it appears.")
 	return nil
+}
+
+// mqttFailClosedPendingAbandon is how long a store may keep only the subject a fail-closed pass
+// created it with before a pod with the setting off gives it the gateway's subjects back. A
+// pass finishes the store within seconds of creating it, under the fail-closed lock; this is
+// long enough that a pass still running is never cut into, whatever the pods' clocks say
+// within a minute or so of each other. A variable so a test can shorten it.
+var mqttFailClosedPendingAbandon = 2 * time.Minute
+
+// isAbandonedPendingMqttStore reports a message store a fail-closed pass created and never
+// finished: its one subject is the one it is created with (mqttFailClosedPendingSubject), and
+// it was created longer ago than mqttFailClosedPendingAbandon.
+func isAbandonedPendingMqttStore(info *nats.StreamInfo) bool {
+	return info != nil && len(info.Config.Subjects) == 1 && info.Config.Subjects[0] == mqttFailClosedPendingSubject &&
+		time.Since(info.Created) >= mqttFailClosedPendingAbandon
 }

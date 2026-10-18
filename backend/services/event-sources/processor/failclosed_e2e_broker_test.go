@@ -30,8 +30,8 @@ import (
 // THE FAIL-CLOSED MQTT ACKNOWLEDGEMENT END TO END: a device publishing QoS 1 over the broker's
 // MQTT gateway, the event-sources ingest built from this package's sources, the fail-closed
 // store and its watch from core, and inbound-events as the platform sees it. The setting is
-// turned on by setting the field on configurations that are never validated (the release
-// refuses it at config load).
+// turned on by setting the field on each pod's configuration. The same on a three-node cluster,
+// under load, with leader moves, is failclosed_e2e_cluster_test.go.
 //
 // What is held: every message the device was PUBACKed reaches inbound-events EXACTLY ONCE, by
 // its dedup id, through
@@ -101,7 +101,29 @@ func e2eSource(t *testing.T, id string) *GatewayJetStreamSource {
 func startE2EPod(t *testing.T, serverURL, name string, on bool, clock func() time.Time,
 	wrap func(messaging.OrderedWriter) messaging.OrderedWriter) *e2ePod {
 	t.Helper()
-	messaging.SetMqttFailClosedFromSettleForTesting(t, 0)
+	return startE2EPodWith(t, serverURL, name, on, clock, wrap, e2ePodOpts{})
+}
+
+// e2ePodOpts is what the cluster test sets on a pod beyond the single-server one's defaults.
+type e2ePodOpts struct {
+	// nats, when set, has the last word on the pod's broker configuration.
+	nats func(*mscfg.NatsConfiguration)
+	// wrapCapture wraps the capture source's inbound writer, as wrap does the store source's.
+	wrapCapture func(messaging.OrderedWriter) messaging.OrderedWriter
+	// productionSettle keeps the from-mark settle at its production value instead of 0. A test
+	// that turns the setting on while devices publish needs it: with no settle, a publish in
+	// flight across the durables' creation can have its store copy skipped for no interest
+	// and its direct copy skipped above the mark, which is the window the settle exists to
+	// close.
+	productionSettle bool
+}
+
+func startE2EPodWith(t *testing.T, serverURL, name string, on bool, clock func() time.Time,
+	wrap func(messaging.OrderedWriter) messaging.OrderedWriter, opts e2ePodOpts) *e2ePod {
+	t.Helper()
+	if !opts.productionSettle {
+		messaging.SetMqttFailClosedFromSettleForTesting(t, 0)
+	}
 	u, err := url.Parse(serverURL)
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())
@@ -109,6 +131,9 @@ func startE2EPod(t *testing.T, serverURL, name string, on bool, clock func() tim
 	ms := &core.Microservice{InstanceId: e2eInstance, FunctionalArea: "event-sources", Readiness: core.NewReadinessGate()}
 	ms.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: u.Hostname(), Port: uint32(port),
 		StreamMaxBytes: e2eHot, MqttFailClosed: on}
+	if opts.nats != nil {
+		opts.nats(&ms.InstanceConfiguration.Infrastructure.Nats)
+	}
 	ms.InstanceConfiguration.ApplyDefaults()
 	ms.Readiness.MarkReadyWithoutAuthSurface()
 
@@ -132,6 +157,9 @@ func startE2EPod(t *testing.T, serverURL, name string, on bool, clock func() tim
 		}
 		reader = r
 		writer, err = NewInboundWriter(n, 64)
+		if err == nil && opts.wrapCapture != nil {
+			writer = opts.wrapCapture(writer)
+		}
 		return err
 	})
 	p.nmgr.RecordMaxDeliveries(func(*messaging.NatsManager) (messaging.MaxDeliveryFunc, error) {
@@ -187,6 +215,21 @@ func (p *e2ePod) startStore() {
 	src.SetWriter(w)
 	require.NoError(p.t, src.Start(ctx))
 	p.store, p.storeReader = src, r
+}
+
+// stopStore stops the pod's store source and closes its reader, so the store is read by
+// nobody in this pod until startStore is called again.
+func (p *e2ePod) stopStore() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.store == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_ = p.store.Stop(ctx)
+	p.storeReader.Close()
+	p.store, p.storeReader = nil, nil
 }
 
 func (p *e2ePod) stop() {
