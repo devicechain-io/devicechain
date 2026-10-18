@@ -373,3 +373,24 @@ func TestCalculatedEventsRefusesBadConstants(t *testing.T) {
 	var le *limit.Error
 	require.True(t, errors.As(err, &le), "%v", err)
 }
+
+// A draft formula that reads a CALCULATED metric (chaining) reads the value stored under that
+// metric's key like any input: the stored calculated value is a reading of the event. The
+// result is evaluated by the same Formula.Eval the resolver runs.
+func TestCalculatedEventsReadsAStoredCalculatedMetric(t *testing.T) {
+	api := newCalculatedTestApi(t)
+	seedReading(t, api, "acme", "meter-1", "e1", calcAt, "voltage", 230)
+	seedReading(t, api, "acme", "meter-1", "e1", calcAt, "current", 10)
+	seedReading(t, api, "acme", "meter-1", "e1", calcAt, "power_kw", 2.3) // stored, calculated
+	req := CalculatedEventsRequest{
+		DeviceToken: "meter-1", Expression: "power_kw * 2.0", DataType: "DOUBLE",
+		Inputs: []CalculatedInput{{Key: "power_kw", DataType: "DOUBLE"}},
+		From:   calcAt.Add(-time.Hour), To: calcAt.Add(time.Hour),
+	}
+	res, err := api.CalculatedEvents(acme(), req)
+	require.NoError(t, err)
+	require.Len(t, res.Samples, 1)
+	require.NotNil(t, res.Samples[0].Value)
+	assert.Equal(t, "4.6", *res.Samples[0].Value)
+	assert.Equal(t, []CalculatedInputValue{{Key: "power_kw", Value: "2.3"}}, res.Samples[0].Inputs)
+}

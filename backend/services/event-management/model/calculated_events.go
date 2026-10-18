@@ -141,7 +141,7 @@ func compileDraftFormula(req CalculatedEventsRequest) (*calcfield.Formula, *calc
 		return nil, nil, nil, limit.Exceeded("rangeHours", int((span+time.Hour-1)/time.Hour), int(MaxCalculatedSpan/time.Hour))
 	}
 	if len(req.Inputs) == 0 {
-		return nil, nil, nil, invalid("inputs must name at least one measured metric the formula reads")
+		return nil, nil, nil, invalid("inputs must name at least one metric the formula reads")
 	}
 	if len(req.Inputs) > calcfield.MaxInputs {
 		return nil, nil, nil, limit.Exceeded("inputs", len(req.Inputs), calcfield.MaxInputs)

@@ -24,6 +24,9 @@ import { optNum } from '@/lib/utils';
 /** The per-formula cost ceiling the publish gate enforces (the API states it in its schema). */
 export const FORMULA_COST_CEILING = 100;
 
+/** Most calculated metrics in one chain (the publish gate refuses a longer one). */
+export const FORMULA_CHAIN_DEPTH = 4;
+
 /** Longest formula the API accepts, in bytes. */
 export const FORMULA_MAX_BYTES = 1024;
 
@@ -118,6 +121,11 @@ export function FormulaEditor({
   }, [profileToken, trimmed, tooLong, dataType, metricKey, minValue, maxValue, sampleKey, constantsKey]);
 
   const inputs = result?.compileError ? [] : (result?.inputs ?? []);
+  // A formula may read other calculated metrics. The sample supplies the MEASURED metrics the whole
+  // chain reads (the server computes the calculated ones from them, in order, as it does when a
+  // reading arrives), and the chain is shown so the author can see what the formula rests on.
+  const chain = result?.compileError ? [] : (result?.chain ?? []);
+  const sampleInputs = result?.compileError ? [] : result?.measuredInputs?.length ? result.measuredInputs : inputs;
   const constantNames = result?.compileError ? [] : (result?.constants ?? []);
   const cost = result?.estimatedCost ?? null;
 
@@ -170,12 +178,19 @@ export function FormulaEditor({
               {w}
             </p>
           ))}
+          {chain.length > 0 && (
+            <div className="space-y-1" data-testid="formula-chain">
+              <p className="text-sm font-medium">{t('formulaChainTitle')}</p>
+              <p className="font-mono text-sm">{[...chain, metricKey.trim() || t('formulaChainThis')].join(' → ')}</p>
+              <HintText size="md">{t('formulaChainHint', { max: FORMULA_CHAIN_DEPTH })}</HintText>
+            </div>
+          )}
           {inputs.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm font-medium">{t('formulaSampleTitle')}</p>
               <HintText size="md">{t('formulaSampleHint')}</HintText>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                {inputs.map((key) => (
+                {sampleInputs.map((key) => (
                   <FormField key={key} label={key} htmlFor={`m-sample-${key}`}>
                     <Input
                       id={`m-sample-${key}`}

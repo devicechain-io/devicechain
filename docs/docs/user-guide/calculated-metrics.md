@@ -17,10 +17,11 @@ tenant's tier a ceiling above zero. See [Turning calculated metrics on](#turning
 
 ## What a calculated metric is
 
-- A formula reads the **measured** metrics of **one reading**: the values a device reports together
-  in a single measurement, and optionally numbers the **device itself** carries, such as a
-  calibration factor (see [Device constants](#device-constants)). It never reads an earlier
-  reading, another device, or the clock.
+- A formula reads the metrics of **one reading**: the **measured** values a device reports together
+  in a single measurement, other **calculated** metrics of the same profile (see
+  [Chaining calculated metrics](#chaining-calculated-metrics)), and optionally numbers the **device
+  itself** carries, such as a calibration factor (see [Device constants](#device-constants)). It
+  never reads an earlier reading, another device, or the clock.
 - The result is **computed once, when the reading arrives**, and stored as a normal measurement
   next to the values the device sent. Dashboards, history, exports, the device's latest values and
   detection rules all read it like any other metric, by its key.
@@ -66,7 +67,9 @@ checks it at publish time and computes it on real readings. Below the box you se
 
 Once the formula compiles, a **sample** panel lists the measured metrics the formula reads. Type a
 value for each, and the panel shows the **value** the formula would produce or the **reason** it
-would produce none. If the formula reads [device constants](#device-constants), a **Device
+would produce none. If the formula reads other calculated metrics, the panel also shows the
+**chain** it builds on, and asks for the measured metrics the whole chain reads: the calculated
+ones are computed from your sample, in order, exactly as they are when a reading arrives. If the formula reads [device constants](#device-constants), a **Device
 constants** group lists them too: type the number the device's metadata would hold for each, and
 leave one blank to see what a device without it gets. The sample is hand-typed, and nothing is
 stored.
@@ -86,7 +89,8 @@ sees when readings arrive. Nothing is stored.
   than that: a current of `0.000000015` A is stored as `0.00000002`. The panel says so on every
   result, and what it shows is a preview, not the value that will be stored.
 - Only the metrics the formula reads are shown, and a message that carried none of them is not a
-  sample.
+  sample. A calculated metric the formula reads is taken from the value **stored** for it when
+  each reading arrived, under the formula that was published then, not recomputed from the draft.
 - If the formula reads [device constants](#device-constants), the panel uses the typed device's
   **current** metadata for them, for every sample: not the values the device had when each reading
   was recorded. It says so under the result. A constant the device's metadata lacks makes its
@@ -102,13 +106,16 @@ Publishing a profile checks every calculated metric and reports all the problems
 refuses a profile when:
 
 - a formula does not compile or does not produce the declared type;
-- a formula reads a key that is not a declared, **measured** metric of the same profile. A
-  calculated metric cannot read another calculated metric;
+- a formula reads a key that is not a declared metric of the same profile;
+- calculated metrics read each other in a cycle (the message names it, for example
+  `a -> b -> a`), or a metric reads itself;
+- a chain of calculated metrics is longer than 4 (the message names the chain);
 - a formula reads no metric at all (a device constant is not a metric);
 - a formula reads more than 8 device constants, or the formulas of one profile together read more
   than 32;
 - a formula is longer than 1,024 bytes, its estimated cost is above 100, or the formulas of one
-  profile together cost more than 1,000;
+  profile together cost more than 1,000. The formulas of a chain are all evaluated for each reading,
+  so a chain costs the sum of its formulas;
 - a calculated metric's Min is above its Max, it declares allowed values, or its data type is not
   Double, Integer or Boolean;
 - a key is declared twice;
@@ -121,7 +128,8 @@ canvas), the preview uses the profile's **draft** calculated metrics. Each repla
 calculated metrics recomputed from its measured values with the draft's formulas, replacing the
 values stored when it arrived. A rule over a calculated metric you have just added or edited is
 therefore previewed against the values that metric will have once you publish, and a calculated
-metric the draft no longer has gives the preview no value. The preview says how many readings were
+metric the draft no longer has gives the preview no value. Calculated metrics that read each other are recomputed in dependency
+order, as they are when a reading arrives. The preview says how many readings were
 recomputed and how many formula results produced no value.
 
 A formula that reads [device constants](#device-constants) is recomputed with each device's
@@ -145,9 +153,11 @@ state, so every formula runs in a small, bounded amount of time.
 
 ### Inputs
 
-Each measured metric of the profile is a variable named by its key, such as `voltage` or `temp`. A
-key that is not a plain identifier, such as `flow-rate`, is read as `m["flow-rate"]`, wrapped in
-the conversion for its type: `double(m["flow-rate"])`, `int(m["count"])` or `bool(m["door"])`.
+Each measured metric of the profile is a variable named by its key, such as `voltage` or `temp`, and
+so is each calculated metric it may read (see [Chaining calculated
+metrics](#chaining-calculated-metrics)). A key that is not a plain identifier, such as `flow-rate`,
+is read as `m["flow-rate"]`, wrapped in the conversion for its type: `double(m["flow-rate"])`,
+`int(m["count"])` or `bool(m["door"])`.
 
 ### Operators
 
@@ -172,6 +182,39 @@ stored value must not depend on which machine computed it. For a square root, us
 
 `has(m.fan)` and `"fan" in m` test whether a reading carries a value for `fan`. This is how you
 give a missing input an explicit default: `has(m.fan) ? fan : 0.0`.
+
+### Chaining calculated metrics {#chaining-calculated-metrics}
+
+A formula can read another calculated metric of the same profile, by its key, exactly as it reads
+a measured one. Real power, apparent power and power factor make a chain of three:
+
+| Key | Formula |
+| --- | --- |
+| `kva` | `voltage * current / 1000.0` |
+| `kw` | `kva * pf_in` |
+| `pf` | `kw / kva` |
+
+- **A chain is at most 4 calculated metrics long.** A formula over measured metrics only is a
+  chain of one, `kw` above is two and `pf` three. Publishing refuses a longer chain and names it.
+  Calculated metrics also cannot read each other in a cycle, directly or through others, and
+  publishing names the cycle.
+- **They are evaluated in dependency order**, once per reading, whatever order you declared them
+  in. Each formula runs after everything it reads.
+- **A downstream formula reads the value the reading records.** The result of `kva` is formatted as
+  its data type before `kw` reads it, so an Integer metric is a whole number and a Boolean is `1` or
+  `0`, and `kw` reads exactly the value `kva` is given on the reading: the one detection rules and
+  live views see. Storage then rounds it to 8 decimal places (see
+  [Storage and precision](#storage-and-precision)), so for a value with more decimal places than
+  that, the history shows a less precise `kva` than the one `kw` was computed from.
+- **If an upstream metric produces no value, so do the formulas that read it.** If `kva` is
+  skipped, `kw` is skipped as `missing_input`, and so is `pf` through it. To give such a formula a
+  fallback, test for the metric as for any input: `has(m.kva) ? kva : 0.0`.
+- **A device cannot supply a link.** A value a device sends under the key of a calculated metric is
+  dropped, so it never reaches the formulas that read that key.
+- Nothing about a reading's identity changes: calculated values, chained or not, are not part of
+  it, so a resent reading is still recognised as the same reading.
+- A chained value is computed from the reading and the profile version that was active, like any
+  other, so the same reading gives the same values on every replica and in every preview.
 
 ### Device constants {#device-constants}
 

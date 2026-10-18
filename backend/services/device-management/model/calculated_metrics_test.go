@@ -164,7 +164,7 @@ func TestThePublishGateReportsEveryFormulaProblem(t *testing.T) {
 	f.metric("current", "DOUBLE", "")
 	f.metric("count", "INT", "")
 	f.metric("power", "DOUBLE", "voltage * current")
-	f.metric("chain", "DOUBLE", "power * 2.0")                 // reads a calculated metric
+	f.metric("chain", "DOUBLE", "power * 2.0")                 // reads a calculated metric: allowed (chaining)
 	f.metric("typed", "DOUBLE", "count + 1")                   // INT formula for a DOUBLE metric
 	f.metric("nosuch", "DOUBLE", "voltage * missing")          // undeclared input
 	f.metric("constant", "DOUBLE", "1.0 + 2.0")                // reads no input
@@ -183,12 +183,11 @@ func TestThePublishGateReportsEveryFormulaProblem(t *testing.T) {
 	require.Error(t, err)
 	assert.Equal(t, "INVALID_VALUE", codeOf(err))
 	msg := err.Error()
-	assert.Contains(t, msg, `"chain"`)
-	assert.Contains(t, msg, "reads power, which is calculated")
+	assert.NotContains(t, msg, `"chain"`, "a chain of calculated metrics is not a problem")
 	for _, key := range []string{"typed", "nosuch", "constant", "syntax", "clock", "enumed", "empty"} {
 		assert.Containsf(t, msg, fmt.Sprintf("%q", key), "the refusal does not name %s", key)
 	}
-	assert.Contains(t, msg, "8 calculated metric problem(s)")
+	assert.Contains(t, msg, "7 calculated metric problem(s)")
 	assert.NotContains(t, msg, `"power"`, "a valid formula is not a problem")
 	assert.Zero(t, ceiling.calls, "a refused formula is refused before the ceiling is read")
 	assert.Zero(t, f.versions())
@@ -316,10 +315,26 @@ func TestTestMetricFormula(t *testing.T) {
 		assert.Nil(t, res.SkippedReason)
 		assert.Empty(t, res.Inputs)
 	})
-	t.Run("reading a calculated metric says so", func(t *testing.T) {
+	t.Run("reading a calculated metric evaluates the chain", func(t *testing.T) {
 		res := run(t, MetricFormulaTestRequest{Expression: "power * 2.0", DataType: "DOUBLE", Sample: sample})
+		require.Nil(t, res.CompileError)
+		require.NotNil(t, res.Value)
+		assert.Equal(t, "2070", *res.Value) // power is 230 * 4.5 = 1035, computed from the sample
+		assert.Equal(t, []string{"power"}, res.Inputs)
+		assert.Contains(t, strings.Join(res.Warnings, "|"), "reads the calculated metric(s) power")
+	})
+	t.Run("a typed value for a calculated metric is ignored with a warning", func(t *testing.T) {
+		res := run(t, MetricFormulaTestRequest{Expression: "power * 2.0", DataType: "DOUBLE",
+			Sample: append(append([]MetricValueInput{}, sample...), MetricValueInput{Key: "power", Value: "1"})})
+		require.NotNil(t, res.Value)
+		assert.Equal(t, "2070", *res.Value)
+		assert.Contains(t, strings.Join(res.Warnings, "|"), `the sample value for "power" is ignored`)
+	})
+	t.Run("a formula reading itself through a cycle is refused", func(t *testing.T) {
+		key := "power"
+		res := run(t, MetricFormulaTestRequest{MetricKey: &key, Expression: "power + voltage", DataType: "DOUBLE", Sample: sample})
 		require.NotNil(t, res.CompileError)
-		assert.Contains(t, *res.CompileError, "reads power, which is calculated")
+		assert.Contains(t, *res.CompileError, "power -> power")
 	})
 	t.Run("the formula under test replaces the draft's own", func(t *testing.T) {
 		key := "power"
@@ -463,4 +478,81 @@ func TestTheGateRefusesAFormulaOverMoreMeasuredMetricsThanItCanDeclare(t *testin
 	assert.Contains(t, err.Error(), "cannot be declared as formula inputs")
 	assert.Contains(t, err.Error(), fmt.Sprintf("exceeds the maximum of %d", calcfield.MaxInputs))
 	assert.Zero(t, f.versions())
+}
+
+func TestThePublishGateAdmitsAChain(t *testing.T) {
+	f := newCalcFixture(t)
+	f.api.CalculatedMetricsCeiling = &stubCeiling{n: governance.MaxCalculatedMetricsPerProfile}
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("current", "DOUBLE", "")
+	f.metric("kva", "DOUBLE", "voltage * current / 1000.0")
+	f.metric("kw", "DOUBLE", "kva * 0.9")
+	f.metric("pf", "DOUBLE", "kw / kva")
+	require.NoError(t, f.publish())
+	assert.EqualValues(t, 1, f.versions())
+}
+
+func TestThePublishGateRefusesACycleAndNamesIt(t *testing.T) {
+	f := newCalcFixture(t)
+	f.api.CalculatedMetricsCeiling = &stubCeiling{n: governance.MaxCalculatedMetricsPerProfile}
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("a", "DOUBLE", "c + voltage")
+	f.metric("b", "DOUBLE", "a + voltage")
+	f.metric("c", "DOUBLE", "b + voltage")
+	f.metric("self", "DOUBLE", "self + voltage")
+	err := f.publish()
+	require.Error(t, err)
+	assert.Equal(t, "INVALID_VALUE", codeOf(err))
+	assert.Contains(t, err.Error(), "a -> c -> b -> a")
+	assert.Contains(t, err.Error(), "self -> self")
+	assert.Contains(t, err.Error(), "2 calculated metric problem(s)", "a ring is one problem however long")
+	assert.Zero(t, f.versions())
+}
+
+func TestThePublishGateRefusesAChainDeeperThanTheLimit(t *testing.T) {
+	build := func(n int) *calcFixture {
+		f := newCalcFixture(t)
+		f.api.CalculatedMetricsCeiling = &stubCeiling{n: governance.MaxCalculatedMetricsPerProfile}
+		f.metric("voltage", "DOUBLE", "")
+		prev := "voltage"
+		for i := 1; i <= n; i++ {
+			key := fmt.Sprintf("c%d", i)
+			f.metric(key, "DOUBLE", prev+" + 1.0")
+			prev = key
+		}
+		return f
+	}
+	ok := build(calcfield.MaxChainDepth)
+	require.NoError(t, ok.publish())
+
+	f := build(calcfield.MaxChainDepth + 1)
+	err := f.publish()
+	require.Error(t, err)
+	assert.Equal(t, "INVALID_VALUE", codeOf(err))
+	assert.Contains(t, err.Error(), `"c5" ends a chain of 5 calculated metrics, c5 -> c4 -> c3 -> c2 -> c1`)
+	assert.Zero(t, f.versions())
+}
+
+// The static cost of a chain is the sum of its formulas, each of which runs once per sample,
+// and it counts against the profile ceiling like any other formulas.
+func TestAChainsCostCountsTowardTheProfileCeiling(t *testing.T) {
+	f := newCalcFixture(t)
+	f.api.CalculatedMetricsCeiling = &stubCeiling{n: governance.MaxCalculatedMetricsPerProfile}
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("current", "DOUBLE", "")
+	one := "math.sqrt(math.abs(%[1]s * current + %[1]s)) + math.sqrt(math.abs(current * %[1]s + current)) + math.sqrt(math.abs(%[1]s - current))"
+	heavy := one + " + " + one
+	prev := "voltage"
+	for i := 0; i < 32; i++ { // eight chains of four, each formula well under its own ceiling
+		key := fmt.Sprintf("h%02d", i)
+		f.metric(key, "DOUBLE", fmt.Sprintf(heavy, prev))
+		if i%calcfield.MaxChainDepth == calcfield.MaxChainDepth-1 {
+			prev = "voltage"
+		} else {
+			prev = key
+		}
+	}
+	err := f.publish()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "together, above the ceiling of 1000")
 }

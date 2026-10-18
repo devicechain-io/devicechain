@@ -49,10 +49,9 @@ func ParseType(dataType string) (Type, bool) {
 	return 0, false
 }
 
-// Input is one declared, measured metric a formula may read: its key and its type. The
-// caller (the publish gate) passes only MEASURED metrics, which is what makes v1 formulas
-// one level deep: a calculated metric is never an input, so the dependency graph is acyclic
-// by construction.
+// Input is one declared metric a formula may read: its key and its type. A caller passes the
+// MEASURED metrics to NewEnv or NewPlan; the calculated metrics a formula may read are
+// declared by NewPlan from their definitions (chaining, see Plan).
 type Input struct {
 	Key  string
 	Type Type
