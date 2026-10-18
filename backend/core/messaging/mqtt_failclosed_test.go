@@ -161,16 +161,31 @@ func TestTheFailClosedReconcileDeclaresAStoreThatRefusesWhatItCannotKeep(t *test
 	require.Equal(t, acked, stored, "the events durable reads back exactly what was PUBACKed")
 }
 
-// Command responses and device reports are device QoS 1 publishes too, and each lands on its
-// own durable and on no other.
+// Command responses and device reports are device QoS 1 publishes too, and each is held by a
+// durable and handed out by exactly one reader: its own kind's. The events durable is
+// unfiltered (MqttFailClosedDurable.Filter), so it holds every kind and its reader drops what is
+// not an event; the other two durables are filtered to their kind.
 //
-// GUARD: kills a durable set that covers events only, and filters that overlap (a message
-// counted on two durables would be forwarded twice).
+// GUARD: kills a durable set that covers events only, filters that overlap (a message handed
+// out by two readers would be forwarded twice), and an events reader that forwards whatever its
+// unfiltered durable delivers (responses, reports and another instance's publishes would each
+// reach inbound-events as an event).
 func TestEachKindOfDevicePublishIsHeldByItsOwnDurable(t *testing.T) {
 	b := startGuardBroker(t)
 	nmgr := failClosedManager(t, b.nc, b.js, guardInstance, true)
 	_, err := nmgr.ReconcileMqttFailClosed(context.Background())
 	require.NoError(t, err)
+	for _, suffix := range []string{streams.InboundEvents, SubjectCommandResponses, SubjectDeviceReports} {
+		_, err := nmgr.NewWriter(suffix)
+		require.NoError(t, err)
+	}
+	readers := map[MqttFailClosedKind]*MqttStoreReader{}
+	for _, kind := range []MqttFailClosedKind{MqttFailClosedEvents, MqttFailClosedResponses, MqttFailClosedReports} {
+		r, err := nmgr.NewMqttMessageStoreReader(kind)
+		require.NoError(t, err)
+		t.Cleanup(r.Close)
+		readers[kind] = r
+	}
 
 	clientID, err := DeviceClientID(guardInstance, guardTenant, "d1")
 	require.NoError(t, err)
@@ -180,16 +195,25 @@ func TestEachKindOfDevicePublishIsHeldByItsOwnDurable(t *testing.T) {
 		MqttFailClosedResponses: fmt.Sprintf("%s/%s/%s/d1", guardInstance, guardTenant, SubjectCommandResponses),
 		MqttFailClosedReports:   fmt.Sprintf("%s/%s/%s/d1", guardInstance, guardTenant, SubjectDeviceReports),
 	}
-	for kind, topic := range topics {
-		require.Truef(t, c.publish(topic, string(kind), 10*time.Second), "publishing a %s", kind)
-	}
-	// Another instance's subjects are not this instance's to hold.
+	// Another instance's subjects are not this instance's to forward; the unfiltered events
+	// durable holds them, and its reader must drop them. Published first, so the event behind
+	// them is only read once they have been dropped.
 	require.True(t, c.publish(guardTopic("otherinst", guardTenant, "d1"), "foreign", 10*time.Second))
-
-	for kind := range topics {
-		got := guardDrain(t, b.js, fcDurable(t, guardInstance, kind).Name, 10*time.Second, nil)
-		require.Equalf(t, []string{string(kind)}, got, "the %s durable holds its own kind and only that", kind)
+	for _, kind := range []MqttFailClosedKind{MqttFailClosedResponses, MqttFailClosedReports, MqttFailClosedEvents} {
+		require.Truef(t, c.publish(topics[kind], string(kind), 10*time.Second), "publishing a %s", kind)
 	}
+
+	for kind, r := range readers {
+		msg := fcRead(t, r, 10*time.Second)
+		require.Equalf(t, string(kind), string(msg.Value), "the %s reader hands out its own kind", kind)
+		require.NoError(t, msg.Ack())
+		fcNothing(t, r, time.Second, fmt.Sprintf("the %s reader after its own message", kind))
+	}
+	// Premise of the drop: the events durable is the one that holds every kind.
+	ci, err := b.js.ConsumerInfo(MqttMessageStore, fcDurable(t, guardInstance, MqttFailClosedEvents).Name)
+	require.NoError(t, err)
+	require.Empty(t, ci.Config.FilterSubject, "the events durable is unfiltered")
+	require.EqualValues(t, 0, ci.NumPending, "what the events reader dropped was acked, not left pending")
 }
 
 // A store the gateway created first (discard old, unbounded: a device connected before

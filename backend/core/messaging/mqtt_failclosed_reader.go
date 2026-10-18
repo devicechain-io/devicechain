@@ -19,7 +19,7 @@ import (
 //
 // It is a durable reader like any other (batches, AckWait-paced retry, backpressure parking,
 // the one-goroutine contract), bound to one of the platform durables
-// (MqttFailClosedDurables), with four differences, each of which is here because the store is
+// (MqttFailClosedDurables), with five differences, each of which is here because the store is
 // not a platform stream:
 //
 //   - IT NEVER CREATES ITS DURABLE. The fail-closed pass owns them: it creates them in the
@@ -30,6 +30,11 @@ import (
 //   - IT HANDS EACH MESSAGE OUT AS THE DEVICE PUBLISHED IT: the subject without the store's
 //     "$MQTT.msgs." prefix, and without the gateway's header, so the message reads exactly
 //     like the direct copy a platform reader would have taken.
+//   - IT FORWARDS ITS OWN KIND ONLY. The events durable is unfiltered, because a wildcard filter
+//     over this store costs the broker a visit to every device's subject per delivered message
+//     once the reader is behind (MqttFailClosedDurable.Filter), so it is delivered every kind,
+//     another instance's publishes and the gateway's own; whatever does not match the kind's
+//     subject (MqttFailClosedDurable.Forwards) is acked and dropped here.
 //   - IT FORWARDS QoS 1 ONLY. A QoS 2 publish is delivered after its PUBREL down a path that
 //     does not wait on the store, so its direct copy stays the one the platform forwards (the
 //     readers of the direct streams skip only QoS 1); its store copy is acked and dropped here.
@@ -68,6 +73,7 @@ func (nmgr *NatsManager) NewMqttMessageStoreReader(kind MqttFailClosedKind) (*Mq
 		stream:     MqttMessageStore,
 		subject:    d.Filter,
 		durable:    d.Name,
+		forwards:   d.Forwards,
 		gate:       nmgr.Microservice.Readiness,
 		downstream: downstream,
 		store:      true,
@@ -85,7 +91,8 @@ func (nmgr *NatsManager) NewMqttMessageStoreReader(kind MqttFailClosedKind) (*Mq
 	nmgr.streamMu.Lock()
 	nmgr.storeReaders = append(nmgr.storeReaders, r)
 	nmgr.streamMu.Unlock()
-	log.Info().Str("durable", r.durable).Str("subject", r.subject).Msg("Added reader over the MQTT message store")
+	log.Info().Str("durable", r.durable).Str("filter", r.subject).Str("forwards", r.forwards).
+		Msg("Added reader over the MQTT message store")
 	return &MqttStoreReader{r}, nil
 }
 
@@ -107,8 +114,12 @@ func (s *MqttStoreReader) Close() {
 func (s *MqttStoreReader) Durable() string { return s.durable }
 
 // storeHandOut turns a delivered store message into what the reader hands out, or reports
-// that it is a QoS 2 copy to ack and drop (keep false).
+// that it is one to ack and drop (keep false): a QoS 2 copy, or a message that is not of this
+// reader's kind (the events durable is unfiltered, see MqttFailClosedDurable.Filter).
 func (r *natsReader) storeHandOut(nm *nats.Msg, msg *Message, seq uint64, appended time.Time) (keep bool) {
+	if r.forwards != r.subject && !storeSubjectMatches(r.forwards, nm.Subject) {
+		return false
+	}
 	if qos := nm.Header.Get(mqttGatewayHeader); qos != "" && qos[0] != '1' {
 		return false
 	}
@@ -155,4 +166,21 @@ func (r *natsReader) storeRebind() bool {
 		log.Info().Str("durable", r.durable).Msg("Bound to the platform durable on the MQTT message store again")
 	}
 	return true
+}
+
+// storeSubjectMatches reports whether subject matches pattern, a subject whose only wildcards
+// are single-token ones ("*"). It allocates nothing: it runs on every message an unfiltered
+// store reader is delivered.
+func storeSubjectMatches(pattern, subject string) bool {
+	for {
+		pt, prest, pmore := strings.Cut(pattern, ".")
+		st, srest, smore := strings.Cut(subject, ".")
+		if st == "" || (pt != "*" && pt != st) {
+			return false
+		}
+		if !pmore || !smore {
+			return pmore == smore
+		}
+		pattern, subject = prest, srest
+	}
 }

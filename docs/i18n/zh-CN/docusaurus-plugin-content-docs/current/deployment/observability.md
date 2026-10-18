@@ -384,7 +384,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 有两项机制防止写满的存储演变成重连风暴。存储超过其大小上限的 80% 时，`device-management` 会在检查任何凭据之前拒绝所有新的 MQTT 设备连接，直到存储回落到 60% 以下。已连接的设备继续发布，平台则逐步读空存储。被拒绝的设备收到的是连接未获授权（MQTT CONNACK 返回码 5），因为代理的 MQTT 网关在这种情况下无法发送返回码 3（服务器不可用），所以设备固件在收到返回码 5 后必须继续重试，而不是放弃。此外，当代理因存储拒绝或未确认设备的某条发布而关闭其连接时（断开原因为 `Protocol Violation`），该设备在 30 秒内不会被报告为离线。在此期间重新连接的设备不会显示离线，因此命令投递不会扣留它的命令，离线规则也不会触发。未重新连接的设备会在 30 秒结束时被报告为离线，时间为其断开的时刻。`devicechain_eventsources_presence_disconnects_deferred_total` 统计以这种方式暂缓的断开。如果对账在设备被拒绝后、重新连接前运行，仍可能将其报告为离线，直到它重新连接。
 
-当 `device-management` 因存储接近写满而持续两分钟拒绝新的 MQTT 设备连接时（`devicechain_devicemanagement_mqtt_store_backoff_engaged` 为 1），`MqttStoreBackoffEngaged`（warning）触发。`devicechain_devicemanagement_mqtt_store_fill_ratio` 表示存储的填充程度，`devicechain_devicemanagement_callout_refused_store_full_total` 统计被拒绝的连接。告警期间不会丢失任何数据，但设备被挡在平台之外，因为平台读取设备发布的速度低于设备发送的速度。`devicechain_eventsources_mqtt_failclosed_durable_pending{durable}` 和 `devicechain_eventsources_mqtt_failclosed_durable_ack_pending{durable}` 显示是哪类发布在填满存储：每 30 秒报告一次每个消费者尚未收到的消息数，以及已交给它但尚未确认的消息数。消费者无法读取时这两个指标不存在。应检查 `event-sources` 以及读取入站事件流的组件；对于命令响应和设备报告，则检查 `command-delivery` 和 `device-management`。
+当 `device-management` 因存储接近写满而持续两分钟拒绝新的 MQTT 设备连接时（`devicechain_devicemanagement_mqtt_store_backoff_engaged` 为 1），`MqttStoreBackoffEngaged`（warning）触发。`devicechain_devicemanagement_mqtt_store_fill_ratio` 表示存储的填充程度，`devicechain_devicemanagement_callout_refused_store_full_total` 统计被拒绝的连接。告警期间不会丢失任何数据，但设备被挡在平台之外，因为平台读取设备发布的速度低于设备发送的速度。`devicechain_eventsources_mqtt_failclosed_durable_pending{durable}` 和 `devicechain_eventsources_mqtt_failclosed_durable_ack_pending{durable}` 显示是哪个读取器落后：每 30 秒报告一次每个消费者尚未收到的消息数，以及已交给它但尚未确认的消息数。事件消费者读取整个存储并跳过非事件消息，因此它的待处理数包含所有类型；命令响应和设备报告消费者只计算各自类型的消息。消费者无法读取时这两个指标不存在。应检查 `event-sources` 以及读取入站事件流的组件；对于命令响应和设备报告，则检查 `command-delivery` 和 `device-management`。
 
 该设置的已知限制：
 
@@ -394,6 +394,10 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 - 边缘代理内置的 MQTT 消息代理不在覆盖范围内。它上行到平台的连接与其他设备一样是 QoS 1 发布，属于覆盖范围。
 - 捕获流仍会收到每条 QoS 1 发布的一份副本，由其读取器跳过。如果它在过载下写满，其上的 `JetStreamDurableLostUnread` 也会把这些被跳过的副本计入，因此会高估丢失量：真正丢失的只有其中的 QoS 0 发布，QoS 1 发布由存储保存。同理，开启该设置后 `JetStreamCaptureLeaderChanged` 不会导致 QoS 1 丢失。
 - 各 Pod 用自己的时钟判断彼此的租约。时钟相差超过约 30 秒时，Pod 之间可能来回交接存储，这只会产生重复，不会丢失。
+- 存储积压大量消息时发生的代理崩溃不在覆盖范围内。在一次每秒 9,000 条 QoS 1 事件的负载测试中（当时存储读取器尚未提速），存储积累了约 150 万条未读消息，三台 NATS 服务器中有两台内存耗尽并重启，约三分之一已确认的事件始终没有进入事件存储。这些事件在哪一环丢失尚未查明。在查明之前，不要指望该设置能扛住代理崩溃，并应把持续增长的存储（`devicechain_eventsources_mqtt_failclosed_durable_pending`）当作需要解决的问题，而不是存储能够吸收的情况。
+- 与捕获流相比，存储每次发布给代理带来的开销更大。拒绝而非淘汰的存储在每次发布时都要检查上限，其开销随同时发布的设备数增加而增长，因此开启该设置后 PUBACK 更慢：在一次每秒 6,000 条事件的测试中，第 99 百分位为 336 ms，关闭时为 35 ms。
+- 退避机制按字节衡量存储大小，并且只拒绝新连接：已连接的设备会继续发布。即使远低于上限的 80%，积压也可能很大。
+- 存储中的积压本身占用的代理内存很少，存储写满时每台服务器约为几十 MiB。每台 NATS 服务器的内存主要用于重复检测窗口，在每秒 10,000 条事件的持续负载下，无论该设置开启与否，都会接近其软内存上限。CPU 不足的服务器还会在内存中排队积压工作，因此如果某台服务器曾因内存不足（OOM）被终止，请调高 `nats_memory_limit`。
 
 ## 事件持久化 {#event-persistence}
 

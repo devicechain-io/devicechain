@@ -1604,6 +1604,10 @@ type natsReader struct {
 	// while the durable is gone. Read goroutine only.
 	store              bool
 	storeMissingLogged bool
+	// forwards is, on a store reader, the subject pattern of what it hands out; a message
+	// delivered outside it is acked and dropped (storeHandOut). It differs from subject (the
+	// durable's filter) only on the unfiltered events durable.
+	forwards string
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
