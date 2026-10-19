@@ -101,6 +101,14 @@ func (nmgr *NatsManager) mqttDurableDrainedOnce(ctx context.Context, d MqttFailC
 	// never higher, so a floor at or past the cut is true whatever state the replicas are in. Asked
 	// after the settled check, a durable fully acked past the cut was held forever by a replica
 	// that never comes back.
+	//
+	// The floor is the consumer leader's in-memory one (nats-server 2.15 consumer.go). Besides
+	// acks, the broker moves it only past sequences no reader of this durable can be handed
+	// any more: ones its leader's own copy of the store no longer holds (checkAckFloor after an
+	// eviction or a catch-up compaction, a purge), and ones terminated at MaxDeliver; or to the
+	// stream's end when a DeliverNew durable is created anew (that loses its predecessor's backlog
+	// at the creation, not here). None of those waits on a settled cluster, so the settled check
+	// never guarded them: deleting such a durable loses nothing it could still have delivered.
 	floor := ci.AckFloor.Stream
 	if floor >= drainTo {
 		return mqttDrainVerdict{drained: true, why: fmt.Sprintf("acked up to %d, at or past the cut %d", floor, drainTo)}, false, nil

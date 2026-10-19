@@ -255,8 +255,10 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 // long enough that a pass still running is never cut into. Its age is the BROKER's: the store's
 // creation time against the time stamp of the broker's own answer (mqttStoreAge), so a pod
 // whose clock runs ahead cannot hand the store its subjects while a pass is still finishing it
-// (that would be loss: the gateway would take its copies with no durable interested). A
-// variable so a test can shorten it.
+// (that would be loss: the gateway would take its copies with no durable interested). The
+// two times are still stamped by different broker nodes (the creation by the meta leader, the
+// answer by the store's leader), so skew between broker nodes moves the age by that much; the
+// two minutes are what absorbs it. A variable so a test can shorten it.
 var mqttFailClosedPendingAbandon = 2 * time.Minute
 
 // isAbandonedPendingMqttStore reports a message store a fail-closed pass created and never
