@@ -519,9 +519,15 @@ var sweepTokenArgs = map[string]string{
 	"device-management.entityGroupVersions.token":            "entity-group",
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
 	"device-management.maintenanceWindowOpening.token":       "maintenance-window",
-	"dashboard-management.dashboardVersions.token":           "dashboard",
-	"dashboard-management.dashboardVersion.token":            "dashboard",
-	"outbound-connectors.connectorVersions.token":            "connector",
+	// The calculated-metric backfill doors read the seeded profile's PUBLISHED version
+	// snapshot and compile its formulas (the version is optional: omitted, it is the active
+	// one, which the publish table makes exist), and walk the devices of its types. A
+	// snapshot that no longer decodes or compiles after an upgrade is an error here.
+	"device-management.calculatedMetricPlan.profileToken":     "device-profile",
+	"device-management.calculatedBackfillRoster.profileToken": "device-profile",
+	"dashboard-management.dashboardVersions.token":            "dashboard",
+	"dashboard-management.dashboardVersion.token":             "dashboard",
+	"outbound-connectors.connectorVersions.token":             "connector",
 }
 
 // sweepExemptions names the served doors this sweep will NOT call, and why.
@@ -557,13 +563,6 @@ var sweepExemptions = map[string]string{
 		"a draft formula reads as device.name, which are the author's choice, not a stored token, and " +
 		"answers only the numbers device metadata holds under them. The metadata itself is swept " +
 		"through devices",
-
-	"device-management.calculatedMetricPlan": "a worker's read of one published VERSION of a profile, and a " +
-		"version number is a guess: an unpublished one is NOT_FOUND by design. The profile it reads is " +
-		"swept through deviceProfiles",
-	"device-management.calculatedBackfillRoster": "a worker's walk of a profile's devices that also " +
-		"takes the constant NAMES a formula reads, the author's choice rather than a stored token. The " +
-		"devices themselves are swept through devices",
 
 	// The two below are exempt because their argument is a GUESS, and a guess that
 	// misses does not fail quietly — `geoFenceSetSnapshot(version:)` on an unknown

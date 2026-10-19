@@ -257,6 +257,9 @@ func TestReadSweepSuppliesSeededTokens(t *testing.T) {
 		{"dashboard-management.dashboardVersions", "probe-dashboard"},
 		{"outbound-connectors.connectorVersions", "probe-connector"},
 		{"device-management.geoFencesByToken", "probe-geo-fence"},
+		// The backfill doors read the seeded profile's published snapshot and compile it.
+		{"device-management.calculatedMetricPlan", "probe-device-profile"},
+		{"device-management.calculatedBackfillRoster", "probe-device-profile"},
 	} {
 		var found *sweepCall
 		for i := range calls {

@@ -297,7 +297,7 @@ func TestRosterListsEveryDeviceWithItsConstants(t *testing.T) {
 	// Bounds.
 	for _, limit := range []int{0, -1, MaxBackfillRosterPageSize + 1} {
 		_, err = f.api.CalculatedBackfillRoster(f.ctx, "meter", nil, nil, 0, limit)
-		assert.Error(t, err, "limit %d", limit)
+		assert.Equal(t, "INVALID_VALUE", codeOf(err), "limit %d: %v", limit, err)
 	}
 	many := make([]string, calcfield.MaxProfileConstants+1)
 	for i := range many {
@@ -375,4 +375,77 @@ func TestRosterKeysetWalkHasNoDuplicatesOrGapsUnderInserts(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, second.Entries, 1)
 	assert.NotEqual(t, first.Entries[0].DeviceToken, second.Entries[0].DeviceToken)
+}
+
+// The flags each compare against the right versions:
+//
+//	v1: a = x*2, b = x > 1 ? 1 : 0 (DOUBLE), e = x
+//	v2: a gains a lower bound (bounds only), b becomes the BOOLEAN x > 1, e dropped
+//	v3: e reinstated unchanged
+//
+// newInVersion reads the IMMEDIATELY previous version, not the first one (e is in v1, absent
+// from v2, so it is new in v3), and changedSinceEarlier sees a bounds-only edit. (A type-only edit
+// cannot publish: the gate type-checks the expression against the declared type, so a type change
+// always carries a different expression.)
+func TestPlanDoorFlagsReadThePreviousVersionAndEveryDeclaredField(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("x", "DOUBLE", "")
+	f.metric("a", "DOUBLE", "x * 2.0")
+	f.metric("b", "DOUBLE", "x > 1.0 ? 1.0 : 0.0")
+	f.metric("e", "DOUBLE", "x")
+	require.NoError(t, f.publish())
+
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&MetricDefinition{}).Where("metric_key = ?", "a").
+		Update("min_value", 0.0).Error)
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&MetricDefinition{}).Where("metric_key = ?", "b").
+		Updates(map[string]any{"data_type": "BOOLEAN", "expression": "x > 1.0"}).Error)
+	f.dropMetric("e")
+	require.NoError(t, f.publish())
+	f.metric("e", "DOUBLE", "x")
+	require.NoError(t, f.publish())
+
+	flagsOf := func(version int32) map[string][2]bool {
+		p, err := f.api.CalculatedMetricPlan(f.ctx, "meter", &version)
+		require.NoError(t, err)
+		out := map[string][2]bool{}
+		for _, m := range p.Calculated {
+			out[m.Key] = [2]bool{m.NewInVersion, m.ChangedSinceEarlier}
+		}
+		return out
+	}
+	v2 := flagsOf(2)
+	assert.Equal(t, [2]bool{false, true}, v2["a"], "a bounds-only edit is a change")
+	assert.Equal(t, [2]bool{false, true}, v2["b"], "a retyped formula is a change")
+	assert.Equal(t, [2]bool{true, false}, flagsOf(3)["e"],
+		"absent from the previous version: new, though the first version had it")
+}
+
+// A deleted device, and every device of a deleted type, are off the roster and are refused by
+// token: neither is a device the live resolver would compute for.
+func TestRosterLeavesOutDeletedDevicesAndTypes(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("x", "DOUBLE", "")
+	require.NoError(t, f.publish())
+	dt := f.adoptingType()
+	f.device(dt, "kept", "")
+	gone := f.device(dt, "gone", "")
+	require.NoError(t, f.api.RDB.DB(f.ctx).Delete(gone).Error)
+
+	var profile DeviceProfile
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("token = ?", "meter").First(&profile).Error)
+	dead := &DeviceType{ProfileId: &profile.ID}
+	dead.Token = "dead-type"
+	require.NoError(t, f.api.RDB.DB(f.ctx).Create(dead).Error)
+	f.device(dead, "orphan", "")
+	require.NoError(t, f.api.RDB.DB(f.ctx).Delete(dead).Error)
+
+	page, err := f.api.CalculatedBackfillRoster(f.ctx, "meter", nil, nil, 0, 10)
+	require.NoError(t, err)
+	require.Len(t, page.Entries, 1)
+	assert.Equal(t, "kept", page.Entries[0].DeviceToken)
+	assert.Equal(t, int64(1), *page.Total)
+	for _, tok := range []string{"gone", "orphan"} {
+		_, err = f.api.CalculatedBackfillRoster(f.ctx, "meter", nil, []string{tok}, 0, 10)
+		assert.Equal(t, "INVALID_VALUE", codeOf(err), "%s: %v", tok, err)
+	}
 }
