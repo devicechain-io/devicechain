@@ -69,7 +69,7 @@ func onlyAuditLine(t *testing.T, buf logs) map[string]any {
 func auditedSession(t *testing.T, upstreamURL string, sudo bool) *mcp.ClientSession {
 	t.Helper()
 	iss, validator := mustIssuerValidator(t)
-	mcpHandler, _ := New(testResource, "https://as.example.com", validator, testClient(upstreamURL))
+	mcpHandler, _ := New(testResource, "https://as.example.com", validator, testClient(upstreamURL), DefaultLimits())
 	ts := httptest.NewServer(mcpHandler)
 	t.Cleanup(ts.Close)
 
