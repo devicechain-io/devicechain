@@ -150,6 +150,13 @@ export type DeviceUpdateAssignmentsQueryVariables = Exact<{
 
 export type DeviceUpdateAssignmentsQuery = { updateAssignments: { results: Array<{ id: string, createdAt: string | null, token: string, deviceToken: string, component: string, actor: string | null, supersededAt: string | null, current: boolean, artifact: { id: string, token: string, kind: ArtifactKind, name: string, version: string, component: string, trustStatus: ArtifactTrustStatus, state: ArtifactState }, attempt: { token: string, state: UpdateState, targetVersion: string, requiresReboot: boolean, lastReportAt: string | null, cancelRequested: boolean, reconciled: boolean, progress: { bytes: string, total: string } | null, failure: { stage: string, code: string, detail: string, platform: boolean } | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
 
+export type DeviceUpdateAssignmentsScopedQueryVariables = Exact<{
+  criteria: UpdateAssignmentSearchCriteria;
+}>;
+
+
+export type DeviceUpdateAssignmentsScopedQuery = { updateAssignments: { results: Array<{ id: string, createdAt: string | null, token: string, deviceToken: string, component: string, supersededAt: string | null, current: boolean, artifact: { id: string, token: string, kind: ArtifactKind, name: string, version: string, component: string, trustStatus: ArtifactTrustStatus, state: ArtifactState }, attempt: { token: string, state: UpdateState, targetVersion: string, requiresReboot: boolean, lastReportAt: string | null, cancelRequested: boolean, reconciled: boolean, progress: { bytes: string, total: string } | null, failure: { stage: string, code: string, detail: string, platform: boolean } | null } }>, pagination: { pageStart: number | null, pageEnd: number | null, totalRecords: number | null } } };
+
 export type AssignmentSignerQueryVariables = Exact<{
   token: string;
 }>;
@@ -334,6 +341,55 @@ export const DeviceUpdateAssignmentsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceUpdateAssignmentsQuery, DeviceUpdateAssignmentsQueryVariables>;
+export const DeviceUpdateAssignmentsScopedDocument = new TypedDocumentString(`
+    query DeviceUpdateAssignmentsScoped($criteria: UpdateAssignmentSearchCriteria!) {
+  updateAssignments(criteria: $criteria) {
+    results {
+      id
+      createdAt
+      token
+      deviceToken
+      component
+      artifact {
+        id
+        token
+        kind
+        name
+        version
+        component
+        trustStatus
+        state
+      }
+      supersededAt
+      current
+      attempt {
+        token
+        state
+        targetVersion
+        requiresReboot
+        lastReportAt
+        progress {
+          bytes
+          total
+        }
+        failure {
+          stage
+          code
+          detail
+          platform
+        }
+        cancelRequested
+        reconciled
+      }
+    }
+    pagination {
+      pageStart
+      pageEnd
+      totalRecords
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceUpdateAssignmentsScopedQuery, DeviceUpdateAssignmentsScopedQueryVariables>;
 export const AssignmentSignerDocument = new TypedDocumentString(`
     query AssignmentSigner($token: String!) {
   updateAssignment(token: $token) {
