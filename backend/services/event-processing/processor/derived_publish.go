@@ -29,12 +29,14 @@ package processor
 // under its device and folds its contributors' edges by event time), so nothing ordered spans two
 // lanes. With a window of 1 the publishes go in buffer order exactly, which is the serial path.
 //
-// MEMORY. maxBufferedBytes bounds the payload bytes of the publishes outstanding. Nothing else
-// holds a payload beyond it: preparation is lazy (one item is prepared at a time, only when the
-// window and budget have room, so at most one prepared-unsent payload sits beside the bound), and
-// an acknowledged payload is released at its acknowledgement, so a settled-but-not-retired item
-// holds its identity and no bytes. A failed or unknown item keeps its bytes for the retry; the
-// first failure stops sends, so those are what was outstanding at that moment. A retired entry is
+// MEMORY. maxBufferedBytes bounds the payload bytes the buffer holds for publishing: every payload
+// that is prepared and not yet positively acknowledged, whether it is in flight, waiting for room,
+// or kept from an earlier pass for a retry (a failed or unknown item keeps its bytes and dedup id).
+// A new pass starts with the retained payloads already counted. An acknowledged payload is released
+// at its acknowledgement, so a settled-but-not-retired item holds its identity and no bytes.
+// Preparation is lazy (one item at a time, only when the window has room), so the item being
+// prepared can push the count past the bound by its own size; it then waits for room. A single
+// payload larger than the whole bound is sent when nothing else is in flight. A retired entry is
 // zeroed out of the buffer's backing array, not merely sliced off.
 //
 // FAILURE. The first failed or unknown outcome (a timeout may have been stored) stops further
@@ -149,8 +151,11 @@ type publishPass struct {
 	next   []int32 // the next item in the same lane, -1 for none
 	ready  ordHeap
 
-	inFlight  int
-	bytes     int64
+	inFlight int
+	bytes    int64 // payload bytes of the publishes in flight (the outstanding-bytes metric)
+	// held is the byte budget's count: the payload bytes of every item that is prepared and not
+	// positively acknowledged, in flight or not.
+	held      int64
 	cursor    int // items before it are retired
 	stopped   bool
 	leaseLost bool
@@ -180,9 +185,7 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	}
 	start := time.Now()
 	rp.publishPasses++
-	p := &publishPass{rp: rp, pub: rp.publisher, ctx: ctx, id: rp.publishPasses, cfg: rp.outputConfig(),
-		status: make([]itemStatus, n), next: make([]int32, n)}
-	p.buildLanes()
+	p := rp.newPublishPass(ctx, n)
 	if p.cfg.MaxInFlight > 1 {
 		workers := min(p.cfg.MaxInFlight, n)
 		p.jobs = make(chan publishJob, p.cfg.MaxInFlight)
@@ -208,6 +211,20 @@ func (rp *ResolvedEventsProcessor) publishPending(ctx context.Context) bool {
 	ok := p.finish()
 	rp.metrics.recordPublishPass(time.Since(start), p.windowFull, p.laneWaits, p.stale)
 	return ok
+}
+
+// newPublishPass sets up a pass over the n buffered detections, counting against the byte budget
+// the payloads already retained from earlier passes.
+func (rp *ResolvedEventsProcessor) newPublishPass(ctx context.Context, n int) *publishPass {
+	p := &publishPass{rp: rp, pub: rp.publisher, ctx: ctx, id: rp.publishPasses, cfg: rp.outputConfig(),
+		status: make([]itemStatus, n), next: make([]int32, n)}
+	for i := range rp.pendingDets {
+		if rp.pendingDets[i].state == outputPrepared {
+			p.held += int64(len(rp.pendingDets[i].out.Payload))
+		}
+	}
+	p.buildLanes()
+	return p
 }
 
 // buildLanes links every item to the next one in its lane and makes each lane's first item ready.
@@ -267,9 +284,11 @@ func (p *publishPass) admit() {
 					continue
 				}
 				d.out, d.state = out, outputPrepared
+				p.held += int64(len(out.Payload))
 			case outputPrepared:
 				// A retry: the same bytes, unless the registry no longer lets this detection out.
 				if !p.pub.Recheck(d.Detection, d.out) {
+					p.held -= int64(len(d.out.Payload))
 					p.drop(i)
 					continue
 				}
@@ -277,9 +296,10 @@ func (p *publishPass) admit() {
 			p.status[i] = itemChecked
 		}
 		size := int64(len(d.out.Payload))
-		if p.inFlight > 0 && p.bytes+size > p.cfg.MaxBufferedBytes {
-			// No room until something settles. An item larger than the whole budget is sent when
-			// nothing else is outstanding, and nothing is sent beside it.
+		if p.inFlight > 0 && p.held > p.cfg.MaxBufferedBytes {
+			// No room until something settles (held already counts this item). An item larger
+			// than the whole budget is sent when nothing else is outstanding, and nothing is
+			// sent beside it.
 			return
 		}
 		heap.Pop(&p.ready)
@@ -374,6 +394,7 @@ func (p *publishPass) apply(o publishOutcome) {
 	// A known positive is kept only so its fire is recorded in order once the items before it
 	// settle, and that needs the identity, not the bytes. Releasing them here is what keeps the
 	// byte budget a bound on everything held: an acknowledged-but-unretired payload holds nothing.
+	p.held -= int64(len(d.out.Payload))
 	d.out.Payload = nil
 	p.pub.Published(o.wait)
 	p.advanceLane(o.ord)

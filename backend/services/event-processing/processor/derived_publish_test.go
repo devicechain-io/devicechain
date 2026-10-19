@@ -830,3 +830,30 @@ func TestPublishFailureOutcomeClassification(t *testing.T) {
 		})
 	}
 }
+
+// The byte budget counts every prepared, unacknowledged payload, not only the ones in flight:
+// payloads kept from an earlier failed pass count against a new pass before any is sent.
+func TestTheByteBudgetCountsRetainedPreparedPayloads(t *testing.T) {
+	var fw *faultWriter
+	r, _ := pipelineRig(t, 32, &fw, func(attempt, int, int) (bool, error) { return false, errors.New("refused") })
+	require.False(t, r.rp.checkpoint(context.Background()))
+	var prepared int
+	var size int64
+	for _, d := range r.rp.pendingDets {
+		if d.state == outputPrepared {
+			prepared++
+			size = int64(len(d.out.Payload))
+		}
+	}
+	require.GreaterOrEqual(t, prepared, 4, "too few payloads were retained; the test proves nothing")
+	sent := func(budget int64) int {
+		r.rp.cfg.Output = runtime.OutputConfig{MaxInFlight: 32, MaxBufferedBytes: budget}
+		p := r.rp.newPublishPass(context.Background(), len(r.rp.pendingDets))
+		p.jobs = make(chan publishJob, 32)
+		p.admit()
+		return len(p.jobs)
+	}
+	require.Greater(t, sent(int64(prepared)*size*2), 1, "control: a roomy budget should send several at once")
+	// Room for two payloads, but `prepared` of them are already held: only the first goes.
+	require.Equal(t, 1, sent(2*size+size/2), "the retained payloads were not counted against the budget")
+}
