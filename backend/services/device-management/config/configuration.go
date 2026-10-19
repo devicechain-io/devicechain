@@ -497,8 +497,11 @@ type RaiseAlarmConfiguration struct {
 
 // ApplyDefaults fills the worker count when it is unset. The default is the share of the pool
 // the resolvers and PoolHeadroom leave, capped at DefaultRaiseAlarmWorkers and floored at 1, so
-// the two worker pools together never hold the whole pool by default and a deployment that
-// sized a small pool before this setting existed still starts. An explicit count is never
+// by default the two worker pools leave PoolHeadroom connections free whenever the pool is big
+// enough to. Where it is not, the floor wins over the headroom: a pool of 11 beside the 10
+// default resolvers gets 1 raise-alarm worker, and the two then hold all 11. That is the price
+// of a deployment that sized a small pool before this setting existed still starting, and it is
+// no worse than before, when the same pool got 8. An explicit count is never
 // adjusted, only validated on its own. resolution is the resolver count in effect, so it must
 // already have its defaults applied.
 func (r *RaiseAlarmConfiguration) ApplyDefaults(pool config.MicroserviceDatastoreConfiguration, resolution ResolutionConfiguration) {
