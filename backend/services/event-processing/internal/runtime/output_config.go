@@ -17,10 +17,12 @@ type OutputConfig struct {
 	MaxInFlight int
 	// MaxBufferedBytes bounds the payload bytes held for publishing together: every payload that is
 	// prepared and not yet acknowledged (in flight, waiting for room, or kept from an earlier pass
-	// for a retry). An acknowledged payload is released at once, so it holds none, and preparation
-	// is lazy, so the item being prepared can exceed the bound by its own size while it waits. A
-	// single derived event larger than the bound is sent on its own, with nothing beside it,
-	// rather than never.
+	// for a retry). An acknowledged payload is released at once, so it holds none.
+	// Nothing is prepared while the count is over the bound and a publish is in flight, so it is
+	// exceeded by the item that crossed it, waiting for room, and by at most one payload more: with
+	// nothing in flight the next item is prepared and sent whatever the count. That is how a single
+	// derived event larger than the bound is sent on its own, with nothing beside it, rather than
+	// never.
 	MaxBufferedBytes int64
 }
 

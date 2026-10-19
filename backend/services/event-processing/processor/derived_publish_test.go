@@ -19,6 +19,7 @@ import (
 	"reflect"
 	goruntime "runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -986,4 +987,49 @@ func TestTheByteBudgetAdmitsAnItemThatFillsItExactly(t *testing.T) {
 	exact := int64(len(all[0].out.Payload) + len(all[1].out.Payload))
 	require.Len(t, admitted(exact), 2, "an item that fills the budget exactly was held back")
 	require.Len(t, admitted(exact-1), 1, "an item that overfills the budget by a byte was sent")
+}
+
+// With sizes mixed across lanes, a pass that settles cleanly holds no more than the budget plus
+// the largest single payload: once what is held exceeds the budget while anything is in flight,
+// nothing more is prepared until something settles. (Preparing
+// the top item anyway let a lower-numbered item from another lane, promoted by an acknowledgement,
+// be prepared as well, so with mixed sizes the count crept past one payload's worth.)
+func TestTheByteBudgetBoundHoldsWithMixedPayloadSizes(t *testing.T) {
+	for _, window := range []int{8, 32} {
+		t.Run(fmt.Sprintf("window %d", window), func(t *testing.T) {
+			var fw *faultWriter
+			r, _ := pipelineRig(t, window, &fw, nil)
+			// Pad every series by an amount fixed by its name, so a lane keeps its identity while
+			// payload sizes differ widely between lanes.
+			for i := range r.rp.pendingDets {
+				d := &r.rp.pendingDets[i]
+				var sum int
+				for _, c := range d.Detection.Series {
+					sum += int(c)
+				}
+				d.Detection.Series += strings.Repeat("x", 1+(sum%7)*300)
+			}
+			budget := int64(1200)
+			r.rp.cfg.Output = runtime.OutputConfig{MaxInFlight: window, MaxBufferedBytes: budget}
+			var largest int64
+			peak := int64(0)
+			check := func(p *publishPass) {
+				for i := range p.status {
+					d := &r.rp.pendingDets[i]
+					if d.state == outputPrepared {
+						largest = max(largest, int64(len(d.out.Payload)))
+					}
+				}
+				peak = max(peak, p.held)
+				require.LessOrEqual(t, p.held, budget+largest, "held exceeded the budget plus the largest payload")
+			}
+			for range 1000 {
+				if drivePass(t, r.rp, check) {
+					break
+				}
+			}
+			require.Empty(t, r.rp.pendingDets, "the passes never settled the buffer")
+			require.Greater(t, peak, budget, "control: the budget was never reached, so the bound was not tested")
+		})
+	}
 }

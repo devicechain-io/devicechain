@@ -34,10 +34,13 @@ package processor
 // or kept from an earlier pass for a retry (a failed or unknown item keeps its bytes and dedup id).
 // A new pass starts with the retained payloads already counted. An acknowledged payload is released
 // at its acknowledgement, so a settled-but-not-retired item holds its identity and no bytes.
-// Preparation is lazy (one item at a time, only when the window has room), so the item being
-// prepared can push the count past the bound by its own size; it then waits for room. A single
-// payload larger than the whole bound is sent when nothing else is in flight. A retired entry is
-// zeroed out of the buffer's backing array, not merely sliced off.
+// Preparation is lazy (one item at a time, only when the window has room) and stops while the
+// count is over the bound and anything is in flight, so the count does not creep with mixed sizes:
+// the item that crossed the bound waits for room, and nothing is prepared behind it. With nothing
+// in flight the next item is prepared and sent whatever the count (that is how a payload larger
+// than the whole bound gets out, alone), so payloads already held there (one waiting for room, or
+// ones kept from a failed pass) can carry the count over the bound by one payload more. A retired
+// entry is zeroed out of the buffer's backing array, not merely sliced off.
 //
 // FAILURE. The first failed or unknown outcome (a timeout may have been stored) stops further
 // sends; what is already in flight settles under the same deadline. Items are judged by their
@@ -278,6 +281,12 @@ func (p *publishPass) admit() {
 				p.retire()
 				continue
 			case outputNew:
+				if p.inFlight > 0 && p.held > p.cfg.MaxBufferedBytes {
+					// Already over the budget: prepare nothing more until something settles. An
+					// acknowledgement can promote a lower-numbered item of another lane to the top,
+					// and preparing that one too would let the count creep with mixed sizes.
+					return
+				}
 				out, ok := p.pub.Prepare(d.Detection, d.triggeredAt)
 				if !ok {
 					p.drop(i)
