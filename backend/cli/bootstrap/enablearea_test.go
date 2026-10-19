@@ -520,31 +520,98 @@ func TestUpgradeRefusesAnAreaSetTheObjectStoreCannotMountBeforeRecording(t *test
 	}
 }
 
-// Upgrade must make that check before the version is recorded; held by the source, as above.
+// Upgrade must make that check before the version is recorded, and must act on its answer.
+// Held by the source, as above, because Upgrade itself needs a cluster: hydrateUpgradeState
+// reads the operator, the declaration and the credentials back before the branch is reached.
+//
+// Order alone is not enough. A call whose error is dropped (`_ = precheckUpgradeMount(...)`),
+// or one nested under a further condition (`if opts.DryRun {...}`), still comes first in the
+// source and refuses nothing. So the call must be the init of an `if err != nil` that
+// returns, standing directly in the plain-upgrade branch of `if st.AreaChange != nil`.
 func TestTheUpgradeMountPrecheckPrecedesTheRecordedVersion(t *testing.T) {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "upgrade.go", nil, parser.SkipObjectResolution)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var precheck, record token.Pos
-	ast.Inspect(file, func(n ast.Node) bool {
-		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name != "Upgrade" {
-			return false
+	var upgrade *ast.FuncDecl
+	for _, d := range file.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "Upgrade" {
+			upgrade = fn
 		}
-		if call, ok := n.(*ast.CallExpr); ok {
-			if id, ok := call.Fun.(*ast.Ident); ok {
-				switch {
-				case id.Name == "precheckUpgradeMount" && precheck == token.NoPos:
-					precheck = call.Pos()
-				case id.Name == "recordUpgradedVersion" && record == token.NoPos:
-					record = call.Pos()
+	}
+	if upgrade == nil {
+		t.Fatal("upgrade.go declares no Upgrade; this test is looking at the wrong thing")
+	}
+	callsNamed := func(n ast.Node, name string) (pos []token.Pos) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
+					pos = append(pos, call.Pos())
 				}
 			}
+			return true
+		})
+		return pos
+	}
+	records := callsNamed(upgrade.Body, "recordUpgradedVersion")
+	if len(records) == 0 {
+		t.Fatal("Upgrade no longer calls recordUpgradedVersion; this test is looking at the wrong thing")
+	}
+
+	// The branch: the first `if st.AreaChange != nil { ... } else { <plain upgrade> }` at the top level.
+	var plain *ast.BlockStmt
+	for _, stmt := range upgrade.Body.List {
+		ifs, ok := stmt.(*ast.IfStmt)
+		if !ok {
+			continue
 		}
-		return true
-	})
-	if precheck == token.NoPos || record == token.NoPos || precheck > record {
-		t.Errorf("Upgrade must call precheckUpgradeMount (%v) before recordUpgradedVersion (%v)", precheck, record)
+		if c, ok := ifs.Cond.(*ast.BinaryExpr); ok && c.Op == token.NEQ {
+			if sel, ok := c.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "AreaChange" && plain == nil {
+				plain, _ = ifs.Else.(*ast.BlockStmt)
+			}
+		}
+	}
+	if plain == nil {
+		t.Fatal("Upgrade has no plain-upgrade branch (the else of `if st.AreaChange != nil`); this test is looking at the wrong thing")
+	}
+
+	var guard *ast.IfStmt
+	for _, stmt := range plain.List {
+		ifs, ok := stmt.(*ast.IfStmt)
+		if !ok || ifs.Init == nil || len(callsNamed(ifs.Init, "precheckUpgradeMount")) == 0 {
+			continue
+		}
+		guard = ifs
+	}
+	if guard == nil {
+		t.Fatalf("the plain-upgrade branch does not refuse on precheckUpgradeMount directly "+
+			"(`if err := precheckUpgradeMount(ctx, st); err != nil { return err }`); calls found anywhere in Upgrade: %d",
+			len(callsNamed(upgrade.Body, "precheckUpgradeMount")))
+	}
+	assign, ok := guard.Init.(*ast.AssignStmt)
+	cond, cok := guard.Cond.(*ast.BinaryExpr)
+	if !ok || len(assign.Lhs) != 1 || !cok || cond.Op != token.NEQ {
+		t.Fatalf("the precheck at %s is not `if err := ...; err != nil`", fset.Position(guard.Pos()))
+	}
+	lhs, lok := assign.Lhs[0].(*ast.Ident)
+	cx, xok := cond.X.(*ast.Ident)
+	if !lok || !xok || lhs.Name != cx.Name {
+		t.Fatalf("the precheck at %s tests something other than its own error", fset.Position(guard.Pos()))
+	}
+	returns := false
+	for _, s := range guard.Body.List {
+		if r, ok := s.(*ast.ReturnStmt); ok && len(r.Results) == 1 {
+			if id, ok := r.Results[0].(*ast.Ident); ok && id.Name == lhs.Name {
+				returns = true
+			}
+		}
+	}
+	if !returns {
+		t.Fatalf("the precheck at %s does not return its refusal", fset.Position(guard.Pos()))
+	}
+	if guard.Pos() > records[0] {
+		t.Errorf("Upgrade refuses on precheckUpgradeMount (%s) after recordUpgradedVersion (%s)",
+			fset.Position(guard.Pos()), fset.Position(records[0]))
 	}
 }

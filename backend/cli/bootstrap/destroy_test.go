@@ -20,3 +20,20 @@ func TestRecordedWhereNamesTheContextOnce(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// And the announcement itself says it once: recordedWhere is worth nothing unless
+// announceBinding is what prints it.
+func TestTheRecordedBindingAnnouncementNamesTheContextOnce(t *testing.T) {
+	out := captureStdout(t, func() {
+		announceBinding(ClusterBinding{KubeContext: "kind-x"}, BindingFromRecord, "guide")
+	})
+	if n := strings.Count(out, "kind-x"); n != 1 {
+		t.Errorf("context named %d times in %q", n, out)
+	}
+	out = captureStdout(t, func() {
+		announceBinding(ClusterBinding{Cluster: "c", KubeContext: "kind-c"}, BindingFromRecord, "guide")
+	})
+	if !strings.Contains(out, "cluster c (context kind-c)") || strings.Count(out, "kind-c") != 1 {
+		t.Errorf("announcement %q does not name cluster c and context kind-c once each", out)
+	}
+}
