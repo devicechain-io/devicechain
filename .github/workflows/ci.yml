@@ -1807,7 +1807,7 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: global.json
 
       # The MQTT client is tested against the broker the platform actually ships, not a
       # generic one — nats-server's MQTT gateway has its own behaviour (3.1.1 only, session
@@ -1961,7 +1961,7 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: global.json
 
       - name: Tier-1 compile check (both platform branches)
         run: ./sdks/unity/tools/UnityCompileCheck/compile-check.sh
@@ -1988,7 +1988,7 @@ jobs:
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
-          dotnet-version: '8.0.x'
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore --locked-mode
