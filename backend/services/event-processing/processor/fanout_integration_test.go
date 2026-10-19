@@ -6,17 +6,15 @@ package processor
 import (
 	"context"
 	"errors"
-	"sync"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"sync"
+	"testing"
+	"time"
 )
 
 // captureWriter records derived-event writes and can be made to fail (broker outage).
@@ -48,7 +46,7 @@ func (w *captureWriter) HandleResponse(error) {}
 func measuredMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string, ack *fakeAck) messaging.Message {
 	t.Helper()
 	occurred := testBase.Add(time.Duration(seq) * time.Second)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "http1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
@@ -57,12 +55,12 @@ func measuredMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metri
 		EventType:           esmodel.Measurement,
 		// The entry carries its own instant, as the resolver always stamps one: the engine places a
 		// sample by it, so a zero here would be a reading from the year 1.
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}
@@ -181,10 +179,10 @@ func TestDeliverBeforeCheckpointDefersOnPublishError(t *testing.T) {
 
 // measuredMsgScoped is measuredMsg with the event's ScopeMemberships stamped (as the resolver
 // would, S3) — refs nil means "in no rule-scoped group".
-func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string, ack *fakeAck, refs []dmmodel.GroupRef) messaging.Message {
+func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string, ack *fakeAck, refs []resolvedevent.GroupRef) messaging.Message {
 	t.Helper()
 	occurred := testBase.Add(time.Duration(seq) * time.Second)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "http1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
@@ -194,12 +192,12 @@ func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion,
 		ScopeMemberships:    refs,
 		// The entry carries its own instant, as the resolver always stamps one: the engine places a
 		// sample by it, so a zero here would be a reading from the year 1.
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}
@@ -265,7 +263,7 @@ func TestScopedDurationDescopeSuppressesStaleTimer(t *testing.T) {
 	ctx := context.Background()
 	w := &captureWriter{}
 	rp := newScopedDurationProcessor(t, ctx, w)
-	arid := []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+	arid := []resolvedevent.GroupRef{{GroupToken: "arid-areas", Version: 1}}
 
 	// seq1 @ +1s, IN scope, temp 90 → opens the hold (timer arms at +11s).
 	rp.handle(measuredMsgScoped(t, 1, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
@@ -288,7 +286,7 @@ func TestScopedDurationStaysInScopeRaises(t *testing.T) {
 	ctx := context.Background()
 	w := &captureWriter{}
 	rp := newScopedDurationProcessor(t, ctx, w)
-	arid := []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+	arid := []resolvedevent.GroupRef{{GroupToken: "arid-areas", Version: 1}}
 
 	rp.handle(measuredMsgScoped(t, 1, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))
 	rp.handle(measuredMsgScoped(t, 12, "acme", "d1", "p@1", "temperature", "90", &fakeAck{}, arid))

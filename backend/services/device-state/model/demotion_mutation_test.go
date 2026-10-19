@@ -137,7 +137,7 @@ func TestTheEmittedDemotionCarriesTheArgumentSourceNotThisService(t *testing.T) 
 	if !ok {
 		t.Fatalf("payload is %T, want *UnresolvedStateChangePayload", ev.Payload)
 	}
-	if payload.State != esmodel.PresenceDemoted {
+	if payload.State != presence.StateDemoted {
 		t.Errorf("State = %q, want DEMOTED", payload.State)
 	}
 	// The row was seeded on session 1; the demotion must name the session the row HOLDS.

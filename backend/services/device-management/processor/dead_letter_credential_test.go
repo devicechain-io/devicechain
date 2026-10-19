@@ -5,11 +5,11 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strings"
 	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -109,7 +109,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDeadLetteredEventStillReportsT
 	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
-	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), item.event.Reason,
+	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Unauthenticated), item.event.Reason,
 		"the record must still say the event was refused for failing authentication")
 	assert.NotEmpty(suite.T(), item.event.Error, "the record must still carry the reason it failed")
 	assert.Equal(suite.T(), "tenant1", item.tenant)

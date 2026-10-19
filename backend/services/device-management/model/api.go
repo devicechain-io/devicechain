@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"slices"
 	"time"
 
@@ -255,7 +256,7 @@ func (api *Api) emitAlarmEvent(ctx context.Context, event *AlarmStateChangeEvent
 // and is a no-op otherwise. Like emitAlarmEvent it is best-effort and must be called
 // after the delete has committed: deleteEdgeEntity emits only once its transaction
 // returns nil, so the event never fires for a rolled-back delete.
-func (api *Api) emitEntityDeleted(ctx context.Context, event *EntityDeletedEvent) {
+func (api *Api) emitEntityDeleted(ctx context.Context, event *entityevent.EntityDeletedEvent) {
 	if api.EntityDeletedPublisher != nil {
 		api.EntityDeletedPublisher.PublishEntityDeleted(ctx, event)
 	}

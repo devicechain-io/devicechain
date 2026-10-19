@@ -7,15 +7,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"testing"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/mock"
+	"testing"
 )
 
 // Matching payloads for the four event types PersistEvent type-asserts. Built fresh
@@ -24,21 +23,21 @@ func matchingPayloadFor(etype esmodel.EventType) interface{} {
 	switch etype {
 	case esmodel.Location:
 		lat, lon := "33.7490", "-84.3880"
-		return &dmmodel.ResolvedLocationsPayload{
-			Entries: []dmmodel.ResolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
+		return &resolvedevent.ResolvedLocationsPayload{
+			Entries: []resolvedevent.ResolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		}
 	case esmodel.Measurement:
-		return &dmmodel.ResolvedMeasurementsPayload{
-			Entries: []dmmodel.ResolvedMeasurementsEntry{{
-				Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "101.5"}},
+		return &resolvedevent.ResolvedMeasurementsPayload{
+			Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+				Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: "101.5"}},
 			}},
 		}
 	case esmodel.Alert:
-		return &dmmodel.ResolvedAlertsPayload{
-			Entries: []dmmodel.ResolvedAlertEntry{{Type: "engine.overheat", Level: 3, Message: "hot", Source: "ecu"}},
+		return &resolvedevent.ResolvedAlertsPayload{
+			Entries: []resolvedevent.ResolvedAlertEntry{{Type: "engine.overheat", Level: 3, Message: "hot", Source: "ecu"}},
 		}
 	case esmodel.StateChange:
-		return &dmmodel.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse", SessionId: 42}
+		return &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse", SessionId: 42}
 	}
 	return nil
 }
@@ -236,8 +235,8 @@ func TestDatabaseValueRejectionIsDeterministic(t *testing.T) {
 // backstop for a resolved event that did not pass through them.
 func TestANonFiniteMeasurementIsADeterministicFailure(t *testing.T) {
 	for _, v := range []string{"NaN", "+Inf", "-Inf", "Infinity"} {
-		_, err := measurementRequests(model.Event{}, dmmodel.ResolvedMeasurementsPayload{
-			Entries: []dmmodel.ResolvedMeasurementsEntry{{Entries: []dmmodel.ResolvedMeasurementEntry{
+		_, err := measurementRequests(model.Event{}, resolvedevent.ResolvedMeasurementsPayload{
+			Entries: []resolvedevent.ResolvedMeasurementsEntry{{Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "temp", Value: v}}}}})
 		if !errors.Is(err, ErrDeterministic) {
 			t.Errorf("%q: got %v; want a deterministic failure", v, err)

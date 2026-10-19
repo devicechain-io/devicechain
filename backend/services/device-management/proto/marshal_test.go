@@ -8,96 +8,10 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/entity"
-	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 )
-
-// A resolved event's OccurredTime/ProcessedTime must survive the marshal/unmarshal
-// round-trip WITH SUB-SECOND PRECISION: they cross the messaging hop to every
-// downstream consumer (event-management persistence, device-state's latest-value +
-// connectivity projections), and a dropped timestamp lands as the zero time
-// (0001-01-01), corrupting the hypertable partition key and the last-activity/updated
-// columns. Precision is load-bearing, not cosmetic: the event natural key is
-// (tenant, device, event_type, occurred_time), so truncating occurred_time to the
-// whole second silently collapses two distinct sub-second readings from one device
-// into one persisted event (and orphans the second's child rows). The literals below
-// carry distinct nanoseconds so a marshal that truncated to RFC3339 would fail the
-// Equal() assertions below — the check that catches the regression.
-func TestMarshalResolvedEventCarriesTimestamps(t *testing.T) {
-	occurred := time.Date(2026, 7, 20, 10, 30, 15, 111222333, time.UTC)
-	processed := time.Date(2026, 7, 20, 10, 30, 15, 444555666, time.UTC)
-
-	classifier := uint64(42)
-	unit := "Cel"
-	dataType := "DOUBLE"
-	event := &model.ResolvedEvent{
-		Source:              "http1",
-		SourceDeviceToken:   "device-001",
-		DeviceTypeToken:     "sensor-type",
-		ProfileVersionToken: "temp-profile@3",
-		Anchors: []model.ResolvedAnchor{
-			{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 5},
-			{AnchorType: "area", AnchorToken: "warehouse-3", RelationshipId: 8},
-		},
-		ScopeMemberships: []model.GroupRef{
-			{GroupToken: "arid-areas", Version: 2},
-			{GroupToken: "beta-fleet", Version: 1},
-		},
-		OccurredTime:  occurred,
-		ProcessedTime: processed,
-		EventType:     esmodel.Measurement,
-		Payload: &model.ResolvedMeasurementsPayload{
-			Entries: []model.ResolvedMeasurementsEntry{
-				{Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5",
-					Classifier: &classifier, Unit: &unit, DataType: &dataType}}},
-			},
-		},
-	}
-
-	bytes, err := MarshalResolvedEventAs(event, eventtime.WireCompact)
-	require.NoError(t, err)
-
-	got, err := UnmarshalResolvedEvent(bytes)
-	require.NoError(t, err)
-	assert.True(t, got.OccurredTime.Equal(occurred), "occurred time round-trip: got %s want %s", got.OccurredTime, occurred)
-	assert.True(t, got.ProcessedTime.Equal(processed), "processed time round-trip: got %s want %s", got.ProcessedTime, processed)
-	// The full anchor set survives the round-trip.
-	assert.Equal(t, event.Anchors, got.Anchors)
-	// The stamped scope memberships survive intact (ADR-062) — the engine's scope check
-	// is a set test on exactly these replayed bytes.
-	assert.Equal(t, event.ScopeMemberships, got.ScopeMemberships)
-	// The denormalized rule-scoping tokens survive intact (ADR-051).
-	assert.Equal(t, "sensor-type", got.DeviceTypeToken)
-	assert.Equal(t, "temp-profile@3", got.ProfileVersionToken)
-	// The bound classifier + denormalized unit/data type survive intact (ADR-016).
-	assert.Equal(t, event.Payload, got.Payload)
-}
-
-// A resolved event with no rule-scoping tokens (the common unprofiled/unpublished
-// device case) round-trips with empty strings: empty encodes as an absent optional
-// proto field and decodes back to "" via the generated accessor (ADR-051).
-func TestMarshalResolvedEventEmptyProfileScope(t *testing.T) {
-	now := time.Now().UTC().Truncate(time.Second)
-	event := &model.ResolvedEvent{
-		Source:            "http1",
-		SourceDeviceToken: "device-001",
-		OccurredTime:      now,
-		ProcessedTime:     now,
-		EventType:         esmodel.Measurement,
-		Payload:           &model.ResolvedMeasurementsPayload{},
-	}
-
-	bytes, err := MarshalResolvedEventAs(event, eventtime.WireCompact)
-	require.NoError(t, err)
-	got, err := UnmarshalResolvedEvent(bytes)
-	require.NoError(t, err)
-	assert.Equal(t, "", got.DeviceTypeToken)
-	assert.Equal(t, "", got.ProfileVersionToken)
-}
 
 // An alarm state-change event (ADR-041) must survive the marshal/unmarshal round-trip
 // intact: it crosses the messaging hop to the subscription bridge (2.E) and
@@ -322,23 +236,4 @@ func TestMarshalDetectionRulesPublishedEventEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "p@1", got.ProfileVersionToken)
 	assert.Empty(t, got.Rules)
-}
-
-func TestMarshalEntityDeletedEventRoundTrips(t *testing.T) {
-	when := time.Date(2026, 7, 6, 8, 30, 0, 123456789, time.UTC)
-	event := &model.EntityDeletedEvent{
-		EntityType:  entity.TypeCustomer,
-		EntityId:    4242,
-		EntityToken: "acme-corp",
-		DeletedTime: when,
-	}
-	bytes, err := MarshalEntityDeletedEvent(event)
-	require.NoError(t, err)
-
-	got, err := UnmarshalEntityDeletedEvent(bytes)
-	require.NoError(t, err)
-	assert.Equal(t, entity.TypeCustomer, got.EntityType)
-	assert.Equal(t, uint(4242), got.EntityId)
-	assert.Equal(t, "acme-corp", got.EntityToken)
-	assert.True(t, got.DeletedTime.Equal(when), "deleted time must round-trip")
 }

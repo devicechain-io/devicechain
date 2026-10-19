@@ -5,9 +5,7 @@ package processor
 
 import (
 	"context"
-
-	"github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
 )
@@ -36,8 +34,8 @@ func NewEntityDeletedWriter(writer messaging.MessageWriter) *EntityDeletedWriter
 
 // PublishEntityDeleted marshals and publishes an entity-deletion event. It never
 // returns an error (the interface is fire-and-forget); failures are logged.
-func (w *EntityDeletedWriter) PublishEntityDeleted(ctx context.Context, event *model.EntityDeletedEvent) {
-	bytes, err := proto.MarshalEntityDeletedEvent(event)
+func (w *EntityDeletedWriter) PublishEntityDeleted(ctx context.Context, event *entityevent.EntityDeletedEvent) {
+	bytes, err := entityevent.MarshalEntityDeletedEvent(event)
 	if err != nil {
 		log.Error().Err(err).Str("entity", event.EntityToken).Msg("Unable to marshal entity-deletion event")
 		return

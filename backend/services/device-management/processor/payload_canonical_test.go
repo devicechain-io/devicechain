@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -256,18 +257,18 @@ func TestTheMeasurementFixtureActuallyVariesItsOrder(t *testing.T) {
 func countEntries(t *testing.T, payload any) int {
 	t.Helper()
 	switch p := payload.(type) {
-	case *model.ResolvedMeasurementsPayload:
+	case *resolvedevent.ResolvedMeasurementsPayload:
 		// The INNER slice is the one built from a map, so it is what must be counted.
 		total := 0
 		for _, e := range p.Entries {
 			total += len(e.Entries)
 		}
 		return total
-	case *model.ResolvedLocationsPayload:
+	case *resolvedevent.ResolvedLocationsPayload:
 		return len(p.Entries)
-	case *model.ResolvedAlertsPayload:
+	case *resolvedevent.ResolvedAlertsPayload:
 		return len(p.Entries)
-	case *model.ResolvedStateChangePayload:
+	case *resolvedevent.ResolvedStateChangePayload:
 		// Flat: no repeated element. Its fixture sets wantEntries to 0, so this is never
 		// compared against anything — returning a made-up count here would be a number
 		// invented to satisfy a guard.

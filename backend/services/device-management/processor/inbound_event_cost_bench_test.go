@@ -5,12 +5,12 @@ package processor
 
 import (
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/eventtime"
@@ -24,7 +24,7 @@ import (
 //	         (esproto.UnmarshalPayloadForMeasurementsEvent)
 //	resolve  resolution, every lookup a warm in-process cache hit, under required device
 //	         authentication with a sealed access token (the default mode)
-//	encode   the resolved event onto the wire (proto.MarshalResolvedEvent)
+//	encode   the resolved event onto the wire (resolvedevent.MarshalResolvedEvent)
 //	all      the three in sequence, as the resolver and the outbound loop run them
 //
 // declared= is the number of metrics the device's published profile declares, which the
@@ -107,7 +107,7 @@ func BenchmarkInboundEventCost(b *testing.B) {
 			return err
 		})
 		run("encode", func() error {
-			_, err := proto.MarshalResolvedEvent(resolved)
+			_, err := resolvedevent.MarshalResolvedEvent(resolved)
 			return err
 		})
 		run("all", func() error {
@@ -120,7 +120,7 @@ func BenchmarkInboundEventCost(b *testing.B) {
 				return err
 			}
 			for _, r := range out {
-				if _, err := proto.MarshalResolvedEvent(r.Resolved); err != nil {
+				if _, err := resolvedevent.MarshalResolvedEvent(r.Resolved); err != nil {
 					return err
 				}
 			}

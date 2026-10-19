@@ -5,17 +5,15 @@ package processor
 
 import (
 	"context"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"testing"
+	"time"
 )
 
 // demotionCaptureWriter is captureWriter plus the rest of messaging.MessageWriter, which
@@ -91,7 +89,7 @@ func TestTheOperatorDemotionSurvivesTheWholeChain(t *testing.T) {
 	}
 
 	// --- 4. device-management proto round trip ---
-	encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
+	encoded, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: device,
 		EventType:         unresolved.EventType,
@@ -102,7 +100,7 @@ func TestTheOperatorDemotionSurvivesTheWholeChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolved encode failed: %v", err)
 	}
-	resolved, err := dmproto.UnmarshalResolvedEvent(encoded)
+	resolved, err := resolvedevent.UnmarshalResolvedEvent(encoded)
 	if err != nil {
 		t.Fatalf("resolved decode failed: %v", err)
 	}

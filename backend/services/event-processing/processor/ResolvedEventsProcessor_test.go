@@ -6,13 +6,6 @@ package processor
 import (
 	"context"
 	"errors"
-	"io"
-	"sync"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -20,8 +13,13 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"io"
+	"sync"
+	"testing"
+	"time"
 )
 
 const testSubject = "dc.acme.resolved-events"
@@ -276,15 +274,15 @@ func newTestProcessor(store *model.SnapshotStore, rules []detectcore.Rule, check
 // instant (the value the loop uses to advance the watermark).
 func resolvedBytes(t *testing.T, occurred time.Time) []byte {
 	t.Helper()
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:            "http1",
 		SourceDeviceToken: "dev-1",
 		OccurredTime:      occurred,
 		ProcessedTime:     occurred,
 		EventType:         esmodel.Measurement,
-		Payload:           &dmmodel.ResolvedMeasurementsPayload{},
+		Payload:           &resolvedevent.ResolvedMeasurementsPayload{},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

@@ -4,11 +4,11 @@
 package processor
 
 import (
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dcmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
@@ -65,7 +65,7 @@ func TestOnlyATokenSealedForThisTenantAndTypeAuthenticates(t *testing.T) {
 				t.Errorf("%s/%s: authenticated", m, name)
 				continue
 			}
-			if reason != uint(dmproto.FailureReason_Unauthenticated) {
+			if reason != uint(resolvedevent.FailureReason_Unauthenticated) {
 				t.Errorf("%s/%s: reason %d, want Unauthenticated", m, name, reason)
 			}
 		}
@@ -95,7 +95,7 @@ func TestASealedTokenBesideASecretIsRefusedNotPanicked(t *testing.T) {
 		}
 		e.SealedCredentialSecret = sealed
 		_, reason, err := rez.ResolveEvent(rig.ctx, e)
-		if err == nil || reason != uint(dmproto.FailureReason_Unauthenticated) {
+		if err == nil || reason != uint(resolvedevent.FailureReason_Unauthenticated) {
 			t.Errorf("%s: reason %d, err %v, want Unauthenticated", m, reason, err)
 		}
 	}

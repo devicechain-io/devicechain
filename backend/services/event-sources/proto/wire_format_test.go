@@ -6,6 +6,7 @@ package proto
 import (
 	"bytes"
 	"encoding/hex"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"testing"
 	"time"
 
@@ -72,7 +73,7 @@ func goldenInboundEvents() map[string]*model.UnresolvedEvent {
 				{Type: "PRE", OccurredTime: gtp(time.Unix(-1, 999999999))},
 			}}},
 		"presence zero time": {Source: "lwm2m", Device: "d-2", EventType: model.StateChange, AuthenticatedTransport: true,
-			Payload: &model.UnresolvedStateChangePayload{State: model.PresenceConnected, Reason: "reg", SessionId: "7", OccurredTime: gsp("2026-10-16T09:30:15Z")}},
+			Payload: &model.UnresolvedStateChangePayload{State: presence.StateConnected, Reason: "reg", SessionId: "7", OccurredTime: gsp("2026-10-16T09:30:15Z")}},
 		"relationship": {Source: "http", Device: "d-3", OccurredTime: proc.In(goldenZone(-5)), ProcessedTime: proc, EventType: model.NewRelationship,
 			Payload: &model.UnresolvedNewRelationshipPayload{RelationshipType: "contains", TargetType: "device", Target: "d-4"}},
 	}

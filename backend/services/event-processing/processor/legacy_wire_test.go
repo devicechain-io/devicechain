@@ -6,17 +6,16 @@ package processor
 import (
 	"context"
 	"encoding/hex"
-	"testing"
-	"time"
-
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"testing"
+	"time"
 )
 
 // legacyResolvedMeasurementHex is a resolved measurement as device-management wrote it before
 // each instant became a count of nanoseconds, byte for byte (origin/main 9b680acf6; the same
-// message device-management/proto/legacy_wire_test.go decodes). Its envelope carries the
+// message core/resolvedevent/legacy_wire_test.go decodes). Its envelope carries the
 // device's +02:00 offset.
 const legacyResolvedMeasurementHex = "0a04687474701a1164657669636570756c73652d303030303122150a08637573746f6d6572120761636d652d636f18053a23323032362d31302d31365431313a33303a31352e3132333435363738392b30323a3030421e323032362d31302d31365430393a33303a31352e3132353030303030375a4802523f0a3d0a1b0a0474656d70120432312e351801220343656c2a06444f55424c45121e323032362d31302d31365430393a33303a31342e3938373635343332315a5a0b64657669636570756c7365620770756c7365403372156578742d64657669636570756c73652d3030303031"
 
@@ -28,11 +27,11 @@ func TestDetectionTakesALegacyMessageAsTheCurrentFormat(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ev, err := dmproto.UnmarshalResolvedEvent(legacy)
+	ev, err := resolvedevent.UnmarshalResolvedEvent(legacy)
 	if err != nil {
 		t.Fatal(err)
 	}
-	current, err := dmproto.MarshalResolvedEventAs(ev, eventtime.WireCompact)
+	current, err := resolvedevent.MarshalResolvedEventAs(ev, eventtime.WireCompact)
 	if err != nil {
 		t.Fatal(err)
 	}

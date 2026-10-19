@@ -6,18 +6,17 @@ package processor
 import (
 	"context"
 	"encoding/hex"
-	"testing"
-	"time"
-
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"testing"
+	"time"
 )
 
 // Resolved events as device-management wrote them before each instant became a count of
 // nanoseconds, byte for byte (origin/main 9b680acf6; the same messages
-// device-management/proto/legacy_wire_test.go decodes): a measurement from a device with an
+// core/resolvedevent/legacy_wire_test.go decodes): a measurement from a device with an
 // external id, and a location. Their envelopes carry the device's +02:00 offset. Such
 // messages are on the retained resolved stream across an upgrade.
 const (
@@ -60,11 +59,11 @@ func TestALegacyResolvedMessageProjectsAsTheCurrentFormatDoes(t *testing.T) {
 
 	asWritten := func(raw []byte) []byte { return raw }
 	reencoded := func(raw []byte) []byte {
-		ev, err := dmproto.UnmarshalResolvedEvent(raw)
+		ev, err := resolvedevent.UnmarshalResolvedEvent(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
-		current, err := dmproto.MarshalResolvedEventAs(ev, eventtime.WireCompact)
+		current, err := resolvedevent.MarshalResolvedEventAs(ev, eventtime.WireCompact)
 		if err != nil {
 			t.Fatal(err)
 		}

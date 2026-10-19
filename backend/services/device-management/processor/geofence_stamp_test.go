@@ -5,6 +5,8 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -50,7 +52,7 @@ func locationEvent() *esmodel.UnresolvedEvent {
 }
 
 // resolveOne runs one event through the standard-event path and returns the resolved event.
-func resolveOne(t *testing.T, api *dmtest.MockApi, event *esmodel.UnresolvedEvent) *dmodel.ResolvedEvent {
+func resolveOne(t *testing.T, api *dmtest.MockApi, event *esmodel.UnresolvedEvent) *resolvedevent.ResolvedEvent {
 	t.Helper()
 	rez := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	device := deviceWithToken("TEST-123")
@@ -149,7 +151,7 @@ func TestNonLocationEventsCarryNoFenceSetVersion(t *testing.T) {
 		Device:    "TEST-123",
 		EventType: esmodel.StateChange,
 		Payload: &esmodel.UnresolvedStateChangePayload{
-			State: esmodel.PresenceConnected, SessionId: "12345",
+			State: presence.StateConnected, SessionId: "12345",
 		},
 	}
 

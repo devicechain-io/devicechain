@@ -7,11 +7,10 @@ package processor
 
 import (
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // Which measured values the numeric(20,8) column takes, observed on a real server: a batch of
@@ -38,7 +37,7 @@ func TestMeasuredValuesAtTheEdgeOfTheColumnOnPostgres(t *testing.T) {
 			for i := 0; i < 8; i++ {
 				ev := batchEvent(i, true, base)
 				if i == 3 {
-					ev.Payload.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value = tc.value
+					ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value = tc.value
 				}
 				msgs = append(msgs, consumed(t, r.acks, i, tenant, 1, ev))
 			}

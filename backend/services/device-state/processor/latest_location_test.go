@@ -6,19 +6,17 @@ package processor
 import (
 	"context"
 	"database/sql"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 // Subject carrying a parseable tenant ({instance}.{tenant}.{suffix}), which the merge
@@ -81,21 +79,21 @@ func str(s string) *string { return &s }
 // device-management publishes it, so the merge path unmarshals real bytes rather than
 // reading a struct handed straight to it.
 func locationMessage(t *testing.T, deviceToken string, occurredAt time.Time,
-	entries []dmmodel.ResolvedLocationEntry) messaging.Message {
+	entries []resolvedevent.ResolvedLocationEntry) messaging.Message {
 	t.Helper()
 	// Stand in for the resolver's entry-versus-envelope rule: a fix that names no instant
 	// of its own is stamped with the message's, because that is what a real resolved event
 	// arriving here always carries. A fixture that left it zero would build an event this
 	// pipeline can no longer receive, and every assertion below would be measuring a shape
 	// that does not exist. A test needing DISTINCT per-fix instants sets them explicitly.
-	stamped := make([]dmmodel.ResolvedLocationEntry, len(entries))
+	stamped := make([]resolvedevent.ResolvedLocationEntry, len(entries))
 	for i, entry := range entries {
 		if entry.OccurredTime.IsZero() {
 			entry.OccurredTime = occurredAt
 		}
 		stamped[i] = entry
 	}
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
 		EventType:         esmodel.Location,
@@ -105,9 +103,9 @@ func locationMessage(t *testing.T, deviceToken string, occurredAt time.Time,
 		// and the connectivity projection reading the SERVER's processed time instead of the
 		// device's reported one would go unnoticed.
 		ProcessedTime: occurredAt.Add(250 * time.Millisecond),
-		Payload:       &dmmodel.ResolvedLocationsPayload{Entries: stamped},
+		Payload:       &resolvedevent.ResolvedLocationsPayload{Entries: stamped},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}
@@ -142,7 +140,7 @@ func TestLocationEventDrivesTheProjection(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "tenant1")
 	t0 := time.Date(2026, 8, 9, 14, 32, 17, 0, time.UTC)
 
-	sp.mergeOne(context.Background(), locationMessage(t, "dozer-01", t0, []dmmodel.ResolvedLocationEntry{{
+	sp.mergeOne(context.Background(), locationMessage(t, "dozer-01", t0, []resolvedevent.ResolvedLocationEntry{{
 		Latitude:  str("41.87231954"),
 		Longitude: str("-87.62819473"),
 		Elevation: str("179.6231"),
@@ -183,7 +181,7 @@ func TestLocationEventIsStillAHeartbeat(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "tenant1")
 	t0 := time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC)
 
-	fix := []dmmodel.ResolvedLocationEntry{{Latitude: str("41.87231954"), Longitude: str("-87.62819473")}}
+	fix := []resolvedevent.ResolvedLocationEntry{{Latitude: str("41.87231954"), Longitude: str("-87.62819473")}}
 	sp.mergeOne(context.Background(), locationMessage(t, "rover-01", t0, fix))
 
 	// The fix reported no elevation, accuracy, speed or heading, and those must reach
@@ -239,10 +237,10 @@ func TestLocationRedeliveryDoesNotRollBack(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "tenant1")
 	t0 := time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC)
 
-	newer := locationMessage(t, "dozer-01", t0.Add(10*time.Minute), []dmmodel.ResolvedLocationEntry{
+	newer := locationMessage(t, "dozer-01", t0.Add(10*time.Minute), []resolvedevent.ResolvedLocationEntry{
 		{Latitude: str("41.90118427"), Longitude: str("-87.61042956")},
 	})
-	older := locationMessage(t, "dozer-01", t0, []dmmodel.ResolvedLocationEntry{
+	older := locationMessage(t, "dozer-01", t0, []resolvedevent.ResolvedLocationEntry{
 		{Latitude: str("41.87231954"), Longitude: str("-87.62819473")},
 	})
 	// The older message is redelivered after the newer one already landed.
@@ -269,12 +267,12 @@ func TestLocationEntryWithNoPositionIsSkipped(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "tenant1")
 	t0 := time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC)
 
-	sp.mergeOne(context.Background(), locationMessage(t, "dozer-01", t0, []dmmodel.ResolvedLocationEntry{
+	sp.mergeOne(context.Background(), locationMessage(t, "dozer-01", t0, []resolvedevent.ResolvedLocationEntry{
 		{Latitude: str("41.87231954"), Longitude: str("-87.62819473")},
 	}))
 	// A later entry carrying only a heading — no position at all.
 	sp.mergeOne(context.Background(), locationMessage(t, "dozer-01", t0.Add(time.Minute),
-		[]dmmodel.ResolvedLocationEntry{{Heading: str("217.6384")}}))
+		[]resolvedevent.ResolvedLocationEntry{{Heading: str("217.6384")}}))
 
 	got := loadProjectedLocation(t, sp, ctx, "dozer-01")
 	if !got.Latitude.Valid || got.Latitude.Float64 != 41.87231954 {
@@ -296,17 +294,17 @@ func TestNonLocationEventLeavesTheProjectionAlone(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "tenant1")
 	t0 := time.Date(2026, 8, 9, 14, 0, 0, 0, time.UTC)
 
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: "dozer-01",
 		EventType:         esmodel.Measurement,
 		OccurredTime:      t0,
 		ProcessedTime:     t0,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "21.5"}},
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: "21.5"}},
 		}}},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

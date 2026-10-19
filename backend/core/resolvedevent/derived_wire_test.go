@@ -1,15 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"bytes"
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -20,11 +19,11 @@ import (
 // before it decodes with every entry raw (TestALegacyResolvedMessageDecodesToItsEvent).
 func TestADerivedEntryCrossesTheWireInBothFormats(t *testing.T) {
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	event := func(derived bool) *model.ResolvedEvent {
-		return &model.ResolvedEvent{Source: "mqtt", SourceDeviceToken: "meter-1", EventType: esmodel.Measurement,
-			OccurredTime: at, ProcessedTime: at, Anchors: []model.ResolvedAnchor{}, ScopeMemberships: []model.GroupRef{},
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{{
-				Entries: []model.ResolvedMeasurementEntry{
+	event := func(derived bool) *ResolvedEvent {
+		return &ResolvedEvent{Source: "mqtt", SourceDeviceToken: "meter-1", EventType: eventtype.Measurement,
+			OccurredTime: at, ProcessedTime: at, Anchors: []ResolvedAnchor{}, ScopeMemberships: []GroupRef{},
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{{
+				Entries: []ResolvedMeasurementEntry{
 					{Name: "current", Value: "12.25", Classifier: u64p(2), DataType: strp("DOUBLE")},
 					{Name: "power_kw", Value: "2.823625", Classifier: u64p(5), Unit: strp("kW"), DataType: strp("DOUBLE"), Derived: derived},
 				},

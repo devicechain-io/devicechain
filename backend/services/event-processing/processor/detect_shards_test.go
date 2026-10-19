@@ -7,14 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"sort"
-	"strings"
-	"sync"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
@@ -22,8 +14,14 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+	"time"
 )
 
 // valueCapture records the bytes of every derived event published, so two runs can be compared on
@@ -161,22 +159,22 @@ func shardedMessage(t *testing.T, seq uint64) messaging.Message {
 	case seq%5 != 0:
 		val = "85"
 	}
-	var refs []dmmodel.GroupRef
+	var refs []resolvedevent.GroupRef
 	if seq%11 != 0 {
-		refs = []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+		refs = []resolvedevent.GroupRef{{GroupToken: "arid-areas", Version: 1}}
 	}
 	occurred := testBase.Add(time.Duration(seq) * time.Second)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source: "http1", SourceDeviceToken: dev, ProfileVersionToken: "p@1",
 		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
 		ScopeMemberships: refs,
-		Anchors:          []dmmodel.ResolvedAnchor{{AnchorType: "area", AnchorToken: fmt.Sprintf("zone-%d", n%3)}},
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		Anchors:          []resolvedevent.ResolvedAnchor{{AnchorType: "area", AnchorToken: fmt.Sprintf("zone-%d", n%3)}},
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: val}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: val}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

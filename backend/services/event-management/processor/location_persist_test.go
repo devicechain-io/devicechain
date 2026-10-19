@@ -6,12 +6,11 @@ package processor
 import (
 	"context"
 	"errors"
-	"testing"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"gorm.io/gorm"
+	"testing"
 )
 
 // PersistLocationEvents is the last link in the location chain that nothing read
@@ -47,7 +46,7 @@ func (api *capturingLocationApi) CreateLocationEvents(ctx context.Context, db *g
 	return []*model.LocationEvent{}, nil
 }
 
-func persistLocations(t *testing.T, payload dmmodel.ResolvedLocationsPayload) (*capturingLocationApi, error) {
+func persistLocations(t *testing.T, payload resolvedevent.ResolvedLocationsPayload) (*capturingLocationApi, error) {
 	t.Helper()
 	api := &capturingLocationApi{MockApi: new(emtest.MockApi)}
 	worker := &EventPersistenceWorker{WorkerId: 1, Api: api}
@@ -61,8 +60,8 @@ func TestPersistLocationEventsCarriesEveryFixField(t *testing.T) {
 	// Distinct, non-round values throughout. Six fields all set to 1 would let a
 	// mapping that wrote accuracy into speed pass, and three of these fields were
 	// added at once, which is precisely when that mistake is made.
-	api, err := persistLocations(t, dmmodel.ResolvedLocationsPayload{
-		Entries: []dmmodel.ResolvedLocationEntry{{
+	api, err := persistLocations(t, resolvedevent.ResolvedLocationsPayload{
+		Entries: []resolvedevent.ResolvedLocationEntry{{
 			Latitude:  s("33.749"),
 			Longitude: s("-84.388"),
 			Elevation: s("320.5"),
@@ -105,8 +104,8 @@ func TestPersistLocationEventsCarriesEveryFixField(t *testing.T) {
 func TestPersistLocationEventsLeavesUnreportedFieldsNil(t *testing.T) {
 	s := func(v string) *string { return &v }
 
-	api, err := persistLocations(t, dmmodel.ResolvedLocationsPayload{
-		Entries: []dmmodel.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388")}},
+	api, err := persistLocations(t, resolvedevent.ResolvedLocationsPayload{
+		Entries: []resolvedevent.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388")}},
 	})
 	if err != nil {
 		t.Fatalf("persisting a minimal fix: %v", err)
@@ -132,8 +131,8 @@ func TestPersistLocationEventsLeavesUnreportedFieldsNil(t *testing.T) {
 func TestPersistLocationEventsKeepsPerEntryValues(t *testing.T) {
 	s := func(v string) *string { return &v }
 
-	api, err := persistLocations(t, dmmodel.ResolvedLocationsPayload{
-		Entries: []dmmodel.ResolvedLocationEntry{
+	api, err := persistLocations(t, resolvedevent.ResolvedLocationsPayload{
+		Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: s("1.5"), Longitude: s("2.5"), Speed: s("10")},
 			{Latitude: s("3.5"), Longitude: s("4.5"), Speed: s("20")},
 		},
@@ -163,18 +162,18 @@ func TestPersistLocationEventsRejectsANonNumericValueDeterministically(t *testin
 
 	for _, tc := range []struct {
 		name  string
-		entry dmmodel.ResolvedLocationEntry
+		entry resolvedevent.ResolvedLocationEntry
 	}{
-		{"latitude", dmmodel.ResolvedLocationEntry{Latitude: s("north"), Longitude: s("-84.388")}},
-		{"longitude", dmmodel.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("west")}},
-		{"elevation", dmmodel.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Elevation: s("high")}},
-		{"accuracy", dmmodel.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Accuracy: s("good")}},
-		{"speed", dmmodel.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Speed: s("fast")}},
-		{"heading", dmmodel.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Heading: s("nne")}},
+		{"latitude", resolvedevent.ResolvedLocationEntry{Latitude: s("north"), Longitude: s("-84.388")}},
+		{"longitude", resolvedevent.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("west")}},
+		{"elevation", resolvedevent.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Elevation: s("high")}},
+		{"accuracy", resolvedevent.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Accuracy: s("good")}},
+		{"speed", resolvedevent.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Speed: s("fast")}},
+		{"heading", resolvedevent.ResolvedLocationEntry{Latitude: s("33.749"), Longitude: s("-84.388"), Heading: s("nne")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := persistLocations(t, dmmodel.ResolvedLocationsPayload{
-				Entries: []dmmodel.ResolvedLocationEntry{tc.entry},
+			_, err := persistLocations(t, resolvedevent.ResolvedLocationsPayload{
+				Entries: []resolvedevent.ResolvedLocationEntry{tc.entry},
 			})
 			if err == nil {
 				t.Fatal("a non-numeric value must fail persistence")

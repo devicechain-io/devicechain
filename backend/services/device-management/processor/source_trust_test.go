@@ -6,8 +6,8 @@ package processor
 import (
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -37,7 +37,7 @@ func (suite *EventResolverTestSuite) TestTransportAuthenticatedConfinedToEmitted
 		event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: et, AuthenticatedTransport: true}
 		_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 		assert.Error(suite.T(), err, et.String())
-		assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), reason, et.String())
+		assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Unauthenticated), reason, et.String())
 	}
 	suite.API.AssertNotCalled(suite.T(), "DevicesByToken")
 }
@@ -49,7 +49,7 @@ func (suite *EventResolverTestSuite) TestRequiredUnmarkedStillRejected() {
 	event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: esmodel.StateChange, AuthenticatedTransport: false}
 	_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 	assert.Error(suite.T(), err)
-	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), reason)
+	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Unauthenticated), reason)
 	suite.API.AssertNotCalled(suite.T(), "DevicesByToken")
 }
 

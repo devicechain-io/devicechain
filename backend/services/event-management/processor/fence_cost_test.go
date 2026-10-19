@@ -6,18 +6,17 @@ package processor
 import (
 	"context"
 	"errors"
-	"strings"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"gorm.io/gorm"
+	"strings"
+	"testing"
+	"time"
 )
 
 // The erasure fence reads purged_tenants before a tenant-bearing create or update, at most
@@ -126,18 +125,18 @@ func rowCounts(t *testing.T, db *gorm.DB) (events, measurements, anchors int64) 
 // fenceCostMeasurement is a resolved 3-metric measurement with an alternate id and
 // anchors anchors. Every entry carries its own instant: a zero entry time is refused
 // (ErrZeroEntryTime), which is why the suite's buildMeasurementsEvent cannot be reused.
-func fenceCostMeasurement(altId string, at time.Time, anchors int) dmodel.ResolvedEvent {
+func fenceCostMeasurement(altId string, at time.Time, anchors int) resolvedevent.ResolvedEvent {
 	alt := altId
-	ev := dmodel.ResolvedEvent{
+	ev := resolvedevent.ResolvedEvent{
 		Source:            "mqtt1",
 		AltId:             &alt,
 		SourceDeviceToken: "fc-device",
 		EventType:         esmodel.Measurement,
 		OccurredTime:      at,
 		ProcessedTime:     at,
-		Payload: &dmodel.ResolvedMeasurementsPayload{Entries: []dmodel.ResolvedMeasurementsEntry{{
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: at,
-			Entries: []dmodel.ResolvedMeasurementEntry{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "temperature", Value: "21.5"},
 				{Name: "humidity", Value: "40.25"},
 				{Name: "pressure", Value: "1013.5"},
@@ -145,7 +144,7 @@ func fenceCostMeasurement(altId string, at time.Time, anchors int) dmodel.Resolv
 		}}},
 	}
 	for i := 0; i < anchors; i++ {
-		ev.Anchors = append(ev.Anchors, dmodel.ResolvedAnchor{AnchorType: "area", AnchorToken: "area-" + string(rune('a'+i))})
+		ev.Anchors = append(ev.Anchors, resolvedevent.ResolvedAnchor{AnchorType: "area", AnchorToken: "area-" + string(rune('a'+i))})
 	}
 	return ev
 }
@@ -157,8 +156,8 @@ func TestFenceCostOfAMeasurementMessage(t *testing.T) {
 	cases := []struct {
 		name string
 		// prior events persisted before the counted one; the counted one is last.
-		prior []dmodel.ResolvedEvent
-		event dmodel.ResolvedEvent
+		prior []resolvedevent.ResolvedEvent
+		event resolvedevent.ResolvedEvent
 		// statements and fence reads of the ONE counted persist.
 		wantAll, wantFence int64
 		// rows the counted persist must ADD to each table.
@@ -185,7 +184,7 @@ func TestFenceCostOfAMeasurementMessage(t *testing.T) {
 			// nothing is written, so the fence is never consulted. Each subtest has its own
 			// database, so this one persists the original itself.
 			name:    "altId redelivery",
-			prior:   []dmodel.ResolvedEvent{fenceCostMeasurement("fc-3", t0, 1)},
+			prior:   []resolvedevent.ResolvedEvent{fenceCostMeasurement("fc-3", t0, 1)},
 			event:   fenceCostMeasurement("fc-3", t0, 1),
 			wantAll: 1, wantFence: 0,
 		},

@@ -6,18 +6,16 @@ package processor
 import (
 	"context"
 	"fmt"
-	"reflect"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"gorm.io/gorm"
+	"reflect"
+	"testing"
+	"time"
 )
 
 // The grouped batch write, by VALUE: how many statements a batch costs, and that what it
@@ -26,10 +24,10 @@ import (
 // otherwise see two keys where PostgreSQL sees one.
 
 // anchorsOf is n area anchors named from tag.
-func anchorsOf(tag string, n int) []dmodel.ResolvedAnchor {
-	var out []dmodel.ResolvedAnchor
+func anchorsOf(tag string, n int) []resolvedevent.ResolvedAnchor {
+	var out []resolvedevent.ResolvedAnchor
 	for i := 0; i < n; i++ {
-		out = append(out, dmodel.ResolvedAnchor{AnchorType: "area", AnchorToken: fmt.Sprintf("%s-%d", tag, i)})
+		out = append(out, resolvedevent.ResolvedAnchor{AnchorType: "area", AnchorToken: fmt.Sprintf("%s-%d", tag, i)})
 	}
 	return out
 }
@@ -43,21 +41,21 @@ func altOf(alt string) *string {
 
 // measurementOf is a measurement from dev at at, one entry per value with each entry's own
 // instant a millisecond apart, under alt ("" for none) with n anchors.
-func measurementOf(dev string, at time.Time, alt string, anchors int, values ...string) dmodel.ResolvedEvent {
-	payload := &dmodel.ResolvedMeasurementsPayload{}
+func measurementOf(dev string, at time.Time, alt string, anchors int, values ...string) resolvedevent.ResolvedEvent {
+	payload := &resolvedevent.ResolvedMeasurementsPayload{}
 	for i, v := range values {
-		payload.Entries = append(payload.Entries, dmodel.ResolvedMeasurementsEntry{
+		payload.Entries = append(payload.Entries, resolvedevent.ResolvedMeasurementsEntry{
 			OccurredTime: at.Add(time.Duration(i) * time.Millisecond),
-			Entries:      []dmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: v}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: v}},
 		})
 	}
-	return dmodel.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
+	return resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
 		EventType: esmodel.Measurement, OccurredTime: at, ProcessedTime: at, Payload: payload,
 		Anchors: anchorsOf(dev, anchors)}
 }
 
 // threeReadings is a measurement entry of three readings at one instant, as batchEvent's.
-func threeReadings(dev string, at time.Time, alt string, anchors int) dmodel.ResolvedEvent {
+func threeReadings(dev string, at time.Time, alt string, anchors int) resolvedevent.ResolvedEvent {
 	ev := fenceCostMeasurement("", at, 0)
 	ev.AltId = altOf(alt)
 	ev.SourceDeviceToken = dev
@@ -65,31 +63,31 @@ func threeReadings(dev string, at time.Time, alt string, anchors int) dmodel.Res
 	return ev
 }
 
-func locationOf(dev string, at time.Time, alt string, anchors int, lat string) dmodel.ResolvedEvent {
+func locationOf(dev string, at time.Time, alt string, anchors int, lat string) resolvedevent.ResolvedEvent {
 	lon := "-71.5"
-	return dmodel.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
+	return resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
 		EventType: esmodel.Location, OccurredTime: at, ProcessedTime: at,
-		Payload: &dmodel.ResolvedLocationsPayload{Entries: []dmodel.ResolvedLocationEntry{
+		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &lat, Longitude: &lon, OccurredTime: at},
 		}},
 		Anchors: anchorsOf(dev, anchors)}
 }
 
-func alertOf(dev string, at time.Time, alt string, anchors int, message string) dmodel.ResolvedEvent {
-	return dmodel.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
+func alertOf(dev string, at time.Time, alt string, anchors int, message string) resolvedevent.ResolvedEvent {
+	return resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
 		EventType: esmodel.Alert, OccurredTime: at, ProcessedTime: at,
-		Payload: &dmodel.ResolvedAlertsPayload{Entries: []dmodel.ResolvedAlertEntry{
+		Payload: &resolvedevent.ResolvedAlertsPayload{Entries: []resolvedevent.ResolvedAlertEntry{
 			{Type: "overheat", Level: 2, Message: message, Source: "device", OccurredTime: at},
 		}},
 		Anchors: anchorsOf(dev, anchors)}
 }
 
-func stateChangeOf(dev string, at time.Time, alt string, state string, session uint64, anchors ...string) dmodel.ResolvedEvent {
-	ev := dmodel.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
+func stateChangeOf(dev string, at time.Time, alt string, state string, session uint64, anchors ...string) resolvedevent.ResolvedEvent {
+	ev := resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
 		EventType: esmodel.StateChange, OccurredTime: at, ProcessedTime: at,
-		Payload: &dmodel.ResolvedStateChangePayload{State: state, Reason: "test", SessionId: session}}
+		Payload: &resolvedevent.ResolvedStateChangePayload{State: state, Reason: "test", SessionId: session}}
 	for _, a := range anchors {
-		ev.Anchors = append(ev.Anchors, dmodel.ResolvedAnchor{AnchorType: "area", AnchorToken: a})
+		ev.Anchors = append(ev.Anchors, resolvedevent.ResolvedAnchor{AnchorType: "area", AnchorToken: a})
 	}
 	return ev
 }
@@ -97,7 +95,7 @@ func stateChangeOf(dev string, at time.Time, alt string, state string, session u
 // sent is one message of a test batch: its tenant and its event.
 type sent struct {
 	tenant string
-	ev     dmodel.ResolvedEvent
+	ev     resolvedevent.ResolvedEvent
 }
 
 func (r *batchRig) consume(t *testing.T, batch []sent) []messaging.Message {
@@ -254,7 +252,7 @@ func TestTwoEventsWithOneAlternateIdInABatchStoreTheFirst(t *testing.T) {
 	at := batchT0.Add(time.Hour)
 	for _, tc := range []struct {
 		name  string
-		first dmodel.ResolvedEvent
+		first resolvedevent.ResolvedEvent
 		// wantValue is the stored reading for the key; wantEvents the events rows in all.
 		wantValue  float64
 		wantEvents int64
@@ -423,7 +421,7 @@ func TestARefusalInAOneEventGroupNeedsNoSecondPass(t *testing.T) {
 				t.Errorf("the seven were written again with %d statements; want 5 (grouped)", lastAll)
 			}
 			if got := r.reported(); len(got) != 1 || got[0].device != "dev-3" ||
-				got[0].reason != uint(dmproto.FailureReason_Invalid) {
+				got[0].reason != uint(resolvedevent.FailureReason_Invalid) {
 				t.Errorf("reported %+v; want dev-3 as invalid", got)
 			}
 			if e, m := eventsFor(t, r.db, "dev-3"); e != 0 || m != 0 {
@@ -492,7 +490,7 @@ func TestTheAnchorStatementBlamesOnlyTheMessagesHoldingAnchors(t *testing.T) {
 				t.Errorf("fallbacks = %v; want %v", got, tc.wantFallbacks)
 			}
 			if got := r.reported(); len(got) != 1 || got[0].device != "dev-3" ||
-				got[0].reason != uint(dmproto.FailureReason_Invalid) {
+				got[0].reason != uint(resolvedevent.FailureReason_Invalid) {
 				t.Errorf("reported %+v; want dev-3 as invalid", got)
 			}
 			if e, _, _ := rowCounts(t, r.db); e != tc.wantEvents {
@@ -521,7 +519,7 @@ func oracleBatch() (seed, batch []sent) {
 		if i%2 == 0 {
 			alt = fmt.Sprintf("alt-%d", i)
 		}
-		var ev dmodel.ResolvedEvent
+		var ev resolvedevent.ResolvedEvent
 		switch i % 4 {
 		case 0:
 			ev = measurementOf(dev, at(i), alt, i%4, "1.25", "2.5", "3.75")

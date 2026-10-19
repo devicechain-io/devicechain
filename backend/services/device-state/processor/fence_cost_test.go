@@ -5,19 +5,18 @@ package processor
 
 import (
 	"context"
-	"strings"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"gorm.io/gorm"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
 )
 
 // The erasure fence reads purged_tenants before a tenant-bearing create or update, at most
@@ -133,7 +132,7 @@ func threeMetrics(t *testing.T, device string, at time.Time) messaging.Message {
 // aFix is a location message carrying one fix at at.
 func aFix(t *testing.T, device string, at time.Time, lat string) messaging.Message {
 	t.Helper()
-	return locationMessage(t, device, at, []dmmodel.ResolvedLocationEntry{{Latitude: str(lat), Longitude: str("-81.5")}})
+	return locationMessage(t, device, at, []resolvedevent.ResolvedLocationEntry{{Latitude: str(lat), Longitude: str("-81.5")}})
 }
 
 // mergeCounted merges one message with the counter reset around exactly that merge, and

@@ -5,21 +5,18 @@ package processor
 
 import (
 	"context"
-	"io"
-	"sync"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	dmtest "github.com/devicechain-io/dc-device-management/test"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/rs/zerolog"
+	"io"
+	"sync"
+	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -44,12 +41,12 @@ func (suite *EventPersistenceProcessorTestSuite) SetupTest() {
 	suite.Failed = new(msgtest.MockMessageWriter)
 	suite.API = new(emtest.MockApi)
 	suite.EP = NewEventPersistenceProcessor(
-		dmtest.DeviceManagementMicroservice,
+		emtest.EventManagementMicroservice,
 		suite.Inbound,
 		suite.Failed,
 		core.NewNoOpLifecycleCallbacks(),
 		suite.API,
-		NewPersistMetrics(dmtest.DeviceManagementMicroservice))
+		NewPersistMetrics(emtest.EventManagementMicroservice))
 	ctx := context.Background()
 	suite.EP.Initialize(ctx)
 }
@@ -84,13 +81,13 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
 }
 
 // Build resolved event with the given payload.
-func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *dmodel.ResolvedEvent {
+func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *resolvedevent.ResolvedEvent {
 	altid := "alternateId"
-	return &dmodel.ResolvedEvent{
+	return &resolvedevent.ResolvedEvent{
 		Source:            "mysource",
 		AltId:             &altid,
 		SourceDeviceToken: "device-1",
-		Anchors: []dmodel.ResolvedAnchor{
+		Anchors: []resolvedevent.ResolvedAnchor{
 			{AnchorType: "asset", AnchorToken: "asset-1", RelationshipId: 1},
 		},
 		EventType: etype,
@@ -99,32 +96,32 @@ func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *dmodel.Re
 }
 
 // Build a locations event.
-func buildLocationsEvent() *dmodel.ResolvedEvent {
+func buildLocationsEvent() *resolvedevent.ResolvedEvent {
 	lat := "33.7490"
 	lon := "-84.3880"
 	ele := "738"
-	entry := dmodel.ResolvedLocationEntry{
+	entry := resolvedevent.ResolvedLocationEntry{
 		Latitude:  &lat,
 		Longitude: &lon,
 		Elevation: &ele,
 	}
-	entries := make([]dmodel.ResolvedLocationEntry, 0)
+	entries := make([]resolvedevent.ResolvedLocationEntry, 0)
 	entries = append(entries, entry)
-	loc := &dmodel.ResolvedLocationsPayload{
+	loc := &resolvedevent.ResolvedLocationsPayload{
 		Entries: entries,
 	}
 	return buildResolvedEvent(esmodel.Location, loc)
 }
 
 // Build a measurements event.
-func buildMeasurementsEvent() *dmodel.ResolvedEvent {
-	mxs := make([]dmodel.ResolvedMeasurementEntry, 0)
-	mx1 := dmodel.ResolvedMeasurementEntry{
+func buildMeasurementsEvent() *resolvedevent.ResolvedEvent {
+	mxs := make([]resolvedevent.ResolvedMeasurementEntry, 0)
+	mx1 := resolvedevent.ResolvedMeasurementEntry{
 		Name:       "temp:inDegreesCelcius",
 		Value:      "101.5",
 		Classifier: nil,
 	}
-	mx2 := dmodel.ResolvedMeasurementEntry{
+	mx2 := resolvedevent.ResolvedMeasurementEntry{
 		Name:       "speed:inMilesPerHour",
 		Value:      "77.5",
 		Classifier: nil,
@@ -132,28 +129,28 @@ func buildMeasurementsEvent() *dmodel.ResolvedEvent {
 	mxs = append(mxs, mx1)
 	mxs = append(mxs, mx2)
 
-	entry := dmodel.ResolvedMeasurementsEntry{
+	entry := resolvedevent.ResolvedMeasurementsEntry{
 		Entries: mxs,
 	}
-	entries := make([]dmodel.ResolvedMeasurementsEntry, 0)
+	entries := make([]resolvedevent.ResolvedMeasurementsEntry, 0)
 	entries = append(entries, entry)
-	loc := &dmodel.ResolvedMeasurementsPayload{
+	loc := &resolvedevent.ResolvedMeasurementsPayload{
 		Entries: entries,
 	}
 	return buildResolvedEvent(esmodel.Measurement, loc)
 }
 
 // Build an alerts event.
-func buildAlertsEvent() *dmodel.ResolvedEvent {
-	entry := dmodel.ResolvedAlertEntry{
+func buildAlertsEvent() *resolvedevent.ResolvedEvent {
+	entry := resolvedevent.ResolvedAlertEntry{
 		Type:    "engine.overheat",
 		Level:   3,
 		Message: "Engine temperature exceeds threshold",
 		Source:  "ecu",
 	}
-	entries := make([]dmodel.ResolvedAlertEntry, 0)
+	entries := make([]resolvedevent.ResolvedAlertEntry, 0)
 	entries = append(entries, entry)
-	alert := &dmodel.ResolvedAlertsPayload{
+	alert := &resolvedevent.ResolvedAlertsPayload{
 		Entries: entries,
 	}
 	return buildResolvedEvent(esmodel.Alert, alert)
@@ -162,8 +159,8 @@ func buildAlertsEvent() *dmodel.ResolvedEvent {
 // Build a state change (presence) event. Unlike the others it carries NO AltId — a
 // StateChange has no base-event dedup key (ADR-067); redelivery dedup is the history
 // table's idempotency index.
-func buildStateChangeEvent() *dmodel.ResolvedEvent {
-	sc := &dmodel.ResolvedStateChangePayload{
+func buildStateChangeEvent() *resolvedevent.ResolvedEvent {
+	sc := &resolvedevent.ResolvedStateChangePayload{
 		State:     "DISCONNECTED",
 		Reason:    "lifetime-lapse",
 		SessionId: 42,
@@ -233,7 +230,7 @@ func (suite *EventPersistenceProcessorTestSuite) SuccessEventFlowFor(msg messagi
 func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 	// Encode payload as bytes.
 	loc := buildLocationsEvent()
-	bytes, err := dmproto.MarshalResolvedEvent(loc)
+	bytes, err := resolvedevent.MarshalResolvedEvent(loc)
 	assert.Nil(suite.T(), err)
 
 	// Build message.
@@ -249,7 +246,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleLocationEvent() {
 func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 	// Encode payload as bytes.
 	loc := buildMeasurementsEvent()
-	bytes, err := dmproto.MarshalResolvedEvent(loc)
+	bytes, err := resolvedevent.MarshalResolvedEvent(loc)
 	assert.Nil(suite.T(), err)
 
 	// Build message.
@@ -265,7 +262,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestSingleMeasurementEvent() {
 func (suite *EventPersistenceProcessorTestSuite) TestSingleAlertEvent() {
 	// Encode payload as bytes.
 	alert := buildAlertsEvent()
-	bytes, err := dmproto.MarshalResolvedEvent(alert)
+	bytes, err := resolvedevent.MarshalResolvedEvent(alert)
 	assert.Nil(suite.T(), err)
 
 	// Build message.

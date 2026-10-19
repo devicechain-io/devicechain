@@ -1,16 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"encoding/hex"
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -30,29 +29,29 @@ var legacyResolvedHex = map[string]string{
 
 // legacyResolvedEvents is what each legacy message says, every instant in UTC as a reader
 // now returns it: the same instants, to the nanosecond, as the offsets they were written with.
-func legacyResolvedEvents() map[string]*model.ResolvedEvent {
+func legacyResolvedEvents() map[string]*ResolvedEvent {
 	occurred := time.Date(2026, 10, 16, 9, 30, 15, 123456789, time.UTC)
 	processed := time.Date(2026, 10, 16, 9, 30, 15, 125000007, time.UTC)
 	entry := time.Date(2026, 10, 16, 9, 30, 14, 987654321, time.UTC)
-	return map[string]*model.ResolvedEvent{
+	return map[string]*ResolvedEvent{
 		"measurement": {Source: "http", SourceDeviceToken: "devicepulse-00001",
-			Anchors:         []model.ResolvedAnchor{{AnchorType: "customer", AnchorToken: "acme-co", RelationshipId: 5}},
+			Anchors:         []ResolvedAnchor{{AnchorType: "customer", AnchorToken: "acme-co", RelationshipId: 5}},
 			DeviceTypeToken: "devicepulse", ProfileVersionToken: "pulse@3", ExternalId: "ext-devicepulse-00001",
-			ScopeMemberships: []model.GroupRef{},
-			OccurredTime:     occurred, ProcessedTime: processed, EventType: esmodel.Measurement,
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{{
-				Entries:      []model.ResolvedMeasurementEntry{{Name: "temp", Value: "21.5", Classifier: u64p(1), Unit: strp("Cel"), DataType: strp("DOUBLE")}},
+			ScopeMemberships: []GroupRef{},
+			OccurredTime:     occurred, ProcessedTime: processed, EventType: eventtype.Measurement,
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{{
+				Entries:      []ResolvedMeasurementEntry{{Name: "temp", Value: "21.5", Classifier: u64p(1), Unit: strp("Cel"), DataType: strp("DOUBLE")}},
 				OccurredTime: entry}}}},
 		"location": {Source: "mqtt", SourceDeviceToken: "sensor-001", DeviceTypeToken: "tracker",
 			ProfileVersionToken: "trk@1", FenceSetVersion: 4,
-			Anchors: []model.ResolvedAnchor{}, ScopeMemberships: []model.GroupRef{},
-			OccurredTime: occurred, ProcessedTime: processed, EventType: esmodel.Location,
-			Payload: &model.ResolvedLocationsPayload{Entries: []model.ResolvedLocationEntry{
+			Anchors: []ResolvedAnchor{}, ScopeMemberships: []GroupRef{},
+			OccurredTime: occurred, ProcessedTime: processed, EventType: eventtype.Location,
+			Payload: &ResolvedLocationsPayload{Entries: []ResolvedLocationEntry{
 				{Latitude: strp("45.5"), Longitude: strp("-73.6"), OccurredTime: entry}}}},
 		"alert": {Source: "http", SourceDeviceToken: "devicepulse-00001",
-			Anchors: []model.ResolvedAnchor{}, ScopeMemberships: []model.GroupRef{},
-			OccurredTime: occurred, ProcessedTime: processed, EventType: esmodel.Alert,
-			Payload: &model.ResolvedAlertsPayload{Entries: []model.ResolvedAlertEntry{
+			Anchors: []ResolvedAnchor{}, ScopeMemberships: []GroupRef{},
+			OccurredTime: occurred, ProcessedTime: processed, EventType: eventtype.Alert,
+			Payload: &ResolvedAlertsPayload{Entries: []ResolvedAlertEntry{
 				{Type: "SENSOR_FAULT", Level: 2, Message: "probe", Source: "dev", OccurredTime: entry}}}},
 	}
 }
@@ -115,7 +114,7 @@ func TestAResolvedMessageWithNoInstantIsRefused(t *testing.T) {
 		"no occurred":  {Source: "s", SourceDeviceToken: "d", Processed: &nanos},
 		"no processed": {Source: "s", SourceDeviceToken: "d", Occurred: &nanos},
 	} {
-		pb.EventType = int64(esmodel.NewRelationship)
+		pb.EventType = int64(eventtype.NewRelationship)
 		raw, err := proto.Marshal(pb)
 		require.NoError(t, err, name)
 		_, err = UnmarshalResolvedEvent(raw)
@@ -134,17 +133,17 @@ func TestResolvedInstantsRoundTripToTheNanosecond(t *testing.T) {
 		time.Date(9999, 12, 31, 23, 59, 59, 999999990, time.UTC),
 		{},
 	} {
-		ev := &model.ResolvedEvent{Source: "s", SourceDeviceToken: "d", OccurredTime: at, ProcessedTime: at.Add(7),
-			EventType: esmodel.Measurement,
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
-				{OccurredTime: at.Add(-3), Entries: []model.ResolvedMeasurementEntry{{Name: "a", Value: "1"}}}}}}
+		ev := &ResolvedEvent{Source: "s", SourceDeviceToken: "d", OccurredTime: at, ProcessedTime: at.Add(7),
+			EventType: eventtype.Measurement,
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{
+				{OccurredTime: at.Add(-3), Entries: []ResolvedMeasurementEntry{{Name: "a", Value: "1"}}}}}}
 		encoded, err := MarshalResolvedEventAs(ev, eventtime.WireCompact)
 		require.NoError(t, err)
 		got, err := UnmarshalResolvedEvent(encoded)
 		require.NoError(t, err)
 		require.True(t, got.OccurredTime.Equal(at), "%s came back as %s", at, got.OccurredTime)
 		require.True(t, got.ProcessedTime.Equal(at.Add(7)), "%s", at)
-		entry := got.Payload.(*model.ResolvedMeasurementsPayload).Entries[0].OccurredTime
+		entry := got.Payload.(*ResolvedMeasurementsPayload).Entries[0].OccurredTime
 		require.True(t, entry.Equal(at.Add(-3)), "%s: entry came back as %s", at, entry)
 	}
 }

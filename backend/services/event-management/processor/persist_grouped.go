@@ -7,11 +7,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -186,11 +185,11 @@ func (ep *EventPersistenceWorker) groupBatch(batch []pendingEvent) ([]*tenantGro
 
 // buildRows builds a location, measurement or alert message's parent and payload rows into
 // rows, refusing a payload that is not of the event's type exactly as writeEvent does.
-func buildRows(pevent model.Event, event dmmodel.ResolvedEvent, rows *model.EventRows) error {
+func buildRows(pevent model.Event, event resolvedevent.ResolvedEvent, rows *model.EventRows) error {
 	var err error
 	switch event.EventType {
 	case esmodel.Location:
-		payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
+		payload, ok := event.Payload.(*resolvedevent.ResolvedLocationsPayload)
 		if !ok {
 			return errPayloadMismatch("location")
 		}
@@ -200,7 +199,7 @@ func buildRows(pevent model.Event, event dmmodel.ResolvedEvent, rows *model.Even
 		}
 		rows.Parents, rows.Locations, err = model.BuildLocationRows(requests)
 	case esmodel.Measurement:
-		payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+		payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 		if !ok {
 			return errPayloadMismatch("measurement")
 		}
@@ -210,7 +209,7 @@ func buildRows(pevent model.Event, event dmmodel.ResolvedEvent, rows *model.Even
 		}
 		rows.Parents, rows.Measurements, err = model.BuildMeasurementRows(requests)
 	case esmodel.Alert:
-		payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload)
+		payload, ok := event.Payload.(*resolvedevent.ResolvedAlertsPayload)
 		if !ok {
 			return errPayloadMismatch("alert")
 		}

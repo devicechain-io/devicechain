@@ -6,12 +6,13 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -50,7 +51,7 @@ func TestADisabledDeviceIsRefusedAtResolveAndFollowsItsState(t *testing.T) {
 	}
 	_, reason, err := rig.rez.ResolveEvent(rig.ctx, tempEvent("21.6"))
 	require.Error(t, err, "a disabled device's event resolved")
-	assert.Equal(t, uint(dmproto.FailureReason_DeviceDisabled), reason)
+	assert.Equal(t, uint(resolvedevent.FailureReason_DeviceDisabled), reason)
 	assert.True(t, errors.Is(err, dmodel.ErrDeviceDisabled), "%v", err)
 	assert.Equal(t, 1.0, testutil.ToFloat64(counter), "the refusal is counted once")
 
@@ -71,7 +72,7 @@ func (suite *EventResolverTestSuite) TestACredentialedEventFromADisabledDeviceIs
 
 	_, reason, err := rez.ResolveEvent(credCtx(), eventWithCredential(suite.T(), "TEST-123"))
 	require.Error(suite.T(), err)
-	assert.Equal(suite.T(), uint(dmproto.FailureReason_DeviceDisabled), reason)
+	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_DeviceDisabled), reason)
 	assert.True(suite.T(), errors.Is(err, dmodel.ErrDeviceDisabled), "%v", err)
 	assert.Equal(suite.T(), 1.0, testutil.ToFloat64(counter))
 }
@@ -105,7 +106,7 @@ func (suite *InboundEventsProcessorTestSuite) TestADisabledDevicesEventIsDiscard
 
 // presenceEvent is a transport's presence transition for the rig's device, fresh so the
 // age floor lets it through.
-func presenceEvent(source string, state esmodel.PresenceState, session string) *esmodel.UnresolvedEvent {
+func presenceEvent(source string, state presence.State, session string) *esmodel.UnresolvedEvent {
 	now := time.Now().UTC()
 	return &esmodel.UnresolvedEvent{
 		Source:        source,
@@ -127,7 +128,7 @@ func TestADisabledDevicesPresenceTransitionsAreResolvedAndMarked(t *testing.T) {
 	counter := prometheus.NewCounter(prometheus.CounterOpts{Name: "test_resolve_device_disabled_total"})
 	rig.rez.deviceDisabled = counter
 
-	connected := rig.resolve(presenceEvent("mqtt", esmodel.PresenceConnected, "7"))
+	connected := rig.resolve(presenceEvent("mqtt", presence.StateConnected, "7"))
 	assert.False(t, connected.SourceDeviceDisabled, "an enabled device's transition was marked disabled")
 
 	if _, err := rig.api.UpdateDevice(rig.ctx, "dev", &dmodel.DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)}); err != nil {
@@ -135,13 +136,13 @@ func TestADisabledDevicesPresenceTransitionsAreResolvedAndMarked(t *testing.T) {
 	}
 
 	for _, source := range []string{"mqtt", "lwm2m", "sparkplug"} {
-		for _, state := range []esmodel.PresenceState{esmodel.PresenceDisconnected, esmodel.PresenceConnected} {
+		for _, state := range []presence.State{presence.StateDisconnected, presence.StateConnected} {
 			results, reason, err := rig.rez.ResolveEvent(rig.ctx, presenceEvent(source, state, "8"))
 			require.NoError(t, err, "%s %s from a disabled device was refused", source, state)
 			require.Equal(t, uint(0), reason)
 			require.Len(t, results, 1)
 			resolved := results[0].Resolved
-			payload, ok := resolved.Payload.(*dmodel.ResolvedStateChangePayload)
+			payload, ok := resolved.Payload.(*resolvedevent.ResolvedStateChangePayload)
 			require.True(t, ok, "%T", resolved.Payload)
 			assert.Equal(t, string(state), payload.State)
 			assert.True(t, resolved.SourceDeviceDisabled, "%s %s was not marked as a disabled device's", source, state)
@@ -157,7 +158,7 @@ func TestADisabledDevicesPresenceTransitionsAreResolvedAndMarked(t *testing.T) {
 		_, reason, err := rig.rez.ResolveEvent(rig.ctx, event)
 		require.Error(t, err, "a disabled device's %s resolved", event.EventType)
 		assert.True(t, errors.Is(err, dmodel.ErrDeviceDisabled), "%v", err)
-		assert.Equal(t, uint(dmproto.FailureReason_DeviceDisabled), reason)
+		assert.Equal(t, uint(resolvedevent.FailureReason_DeviceDisabled), reason)
 	}
 	assert.Equal(t, 3.0, testutil.ToFloat64(counter), "each refused event is counted once")
 }

@@ -6,17 +6,15 @@ package processor
 import (
 	"context"
 	"errors"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 // TestAnUnmappableStateChangeIsAnErrorNotAHeartbeat is the reason this mapper returns an
@@ -26,10 +24,10 @@ import (
 // disguised as evidence of life, and keep an asserted device looking alive on the strength
 // of an event the platform could not interpret. The disposition has to be loud.
 func TestAnUnmappableStateChangeIsAnErrorNotAHeartbeat(t *testing.T) {
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		EventType:    esmodel.StateChange,
 		OccurredTime: time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
-		Payload:      &dmmodel.ResolvedStateChangePayload{State: "RETIRED", SessionId: 7},
+		Payload:      &resolvedevent.ResolvedStateChangePayload{State: "RETIRED", SessionId: 7},
 	}
 	pt, err := presenceTransitionFor(ev)
 	if err == nil {
@@ -44,9 +42,9 @@ func TestAnUnmappableStateChangeIsAnErrorNotAHeartbeat(t *testing.T) {
 // reachable: the event says StateChange but carries something else. Returning nil there was
 // equally a silent downgrade to a heartbeat.
 func TestAStateChangePayloadOfTheWrongTypeIsAnError(t *testing.T) {
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		EventType: esmodel.StateChange,
-		Payload:   &dmmodel.ResolvedMeasurementsPayload{},
+		Payload:   &resolvedevent.ResolvedMeasurementsPayload{},
 	}
 	if pt, err := presenceTransitionFor(ev); err == nil {
 		t.Fatalf("a mistyped state-change payload produced no error (pt = %+v)", pt)
@@ -62,15 +60,15 @@ func TestTheMapperCarriesEveryClaimAndStillPassesDataThrough(t *testing.T) {
 		state string
 		want  presence.Claim
 	}{
-		{string(esmodel.PresenceConnected), presence.ClaimConnected},
-		{string(esmodel.PresenceDisconnected), presence.ClaimDisconnected},
-		{string(esmodel.PresenceDemoted), presence.ClaimDemoted},
+		{string(presence.StateConnected), presence.ClaimConnected},
+		{string(presence.StateDisconnected), presence.ClaimDisconnected},
+		{string(presence.StateDemoted), presence.ClaimDemoted},
 	} {
 		t.Run(tc.state, func(t *testing.T) {
-			pt, err := presenceTransitionFor(&dmmodel.ResolvedEvent{
+			pt, err := presenceTransitionFor(&resolvedevent.ResolvedEvent{
 				EventType:    esmodel.StateChange,
 				OccurredTime: t0,
-				Payload:      &dmmodel.ResolvedStateChangePayload{State: tc.state, SessionId: 7},
+				Payload:      &resolvedevent.ResolvedStateChangePayload{State: tc.state, SessionId: 7},
 			})
 			if err != nil {
 				t.Fatalf("%s did not map: %v", tc.state, err)
@@ -84,10 +82,10 @@ func TestTheMapperCarriesEveryClaimAndStillPassesDataThrough(t *testing.T) {
 		})
 	}
 
-	pt, err := presenceTransitionFor(&dmmodel.ResolvedEvent{
+	pt, err := presenceTransitionFor(&resolvedevent.ResolvedEvent{
 		EventType:    esmodel.Measurement,
 		OccurredTime: t0,
-		Payload:      &dmmodel.ResolvedMeasurementsPayload{},
+		Payload:      &resolvedevent.ResolvedMeasurementsPayload{},
 	})
 	if err != nil || pt != nil {
 		t.Fatalf("a plain data event must map to (nil, nil), got (%+v, %v)", pt, err)
@@ -135,15 +133,15 @@ func TestAnUnmappableStateChangeNeverReachesTheProjection(t *testing.T) {
 func stateChangeMessage(t *testing.T, deviceToken string, occurredAt time.Time,
 	state string, session uint64) messaging.Message {
 	t.Helper()
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
 		EventType:         esmodel.StateChange,
 		OccurredTime:      occurredAt,
 		ProcessedTime:     occurredAt.Add(250 * time.Millisecond),
-		Payload:           &dmmodel.ResolvedStateChangePayload{State: state, SessionId: session},
+		Payload:           &resolvedevent.ResolvedStateChangePayload{State: state, SessionId: session},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

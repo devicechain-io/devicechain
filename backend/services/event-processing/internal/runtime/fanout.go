@@ -4,14 +4,13 @@
 package runtime
 
 import (
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"time"
 )
 
 // PlanResult is the outcome of fanning one resolved event out across its applicable rules.
@@ -54,7 +53,7 @@ type scopeMemberKey struct {
 // scopeMembershipSet projects an event's stamped ScopeMemberships into a set for O(1) rule
 // scope tests. Empty for the pay-nothing common case (a tenant not using rule scoping, or a
 // device in no rule-scoped group).
-func scopeMembershipSet(ev *dmmodel.ResolvedEvent) map[scopeMemberKey]struct{} {
+func scopeMembershipSet(ev *resolvedevent.ResolvedEvent) map[scopeMemberKey]struct{} {
 	if len(ev.ScopeMemberships) == 0 {
 		return nil
 	}
@@ -100,7 +99,7 @@ func scopeMembershipSet(ev *dmmodel.ResolvedEvent) map[scopeMemberKey]struct{} {
 // resolving it here from the event's own tenant is what confines containment to that tenant. Nil
 // means unresolvable — inFence then errors rather than answering "outside" — which is a different
 // state from a tenant with no fences (a known-EMPTY set).
-func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEvent, occurred time.Time,
+func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *resolvedevent.ResolvedEvent, occurred time.Time,
 	attr map[string]float64, fences *geofence.FenceSet) PlanResult {
 	// 🔴 A DISABLED DEVICE'S EVENT FEEDS NOTHING. The only events resolved for a disabled
 	// device are its presence transitions — its connection is the platform's to report, so
@@ -223,7 +222,7 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *dmmodel.ResolvedEve
 // stored. The live loop and the replay preview both build it here, so the two read a message the
 // same way. Either time may be zero when it is unknown, which the engine reads as "possibly a
 // redelivery" (core.Receipt).
-func ReceiptOf(ev *dmmodel.ResolvedEvent, stored time.Time) core.Receipt {
+func ReceiptOf(ev *resolvedevent.ResolvedEvent, stored time.Time) core.Receipt {
 	return core.Receipt{Received: ev.ProcessedTime, Stored: stored}
 }
 
@@ -232,8 +231,8 @@ func ReceiptOf(ev *dmmodel.ResolvedEvent, stored time.Time) core.Receipt {
 // Event.Value (a float64 loses a UnixNano-scale epoch). Non-Connectivity rules never see a
 // StateChange (a measurement rule has nothing to do with presence). One edge per rule, keyed on the
 // source device; the engine's per-series cursor orders it via presence.Decide.
-func (res *PlanResult) planConnectivity(seq uint64, ev *dmmodel.ResolvedEvent, occurred time.Time, scoped []*ScopedRule) {
-	p, ok := ev.Payload.(*dmmodel.ResolvedStateChangePayload)
+func (res *PlanResult) planConnectivity(seq uint64, ev *resolvedevent.ResolvedEvent, occurred time.Time, scoped []*ScopedRule) {
+	p, ok := ev.Payload.(*resolvedevent.ResolvedStateChangePayload)
 	if !ok {
 		return // malformed presence payload: nothing to feed (the persist/projection paths log it)
 	}
@@ -263,7 +262,7 @@ func (res *PlanResult) planConnectivity(seq uint64, ev *dmmodel.ResolvedEvent, o
 // with the source device as the member. Each fan gets an Input whose anchor-of-this-type is
 // pinned to the fan's anchor token, so a member gate referencing anchors[type] sees the anchor
 // the series is keyed on rather than whichever one BuildInputs collapsed to.
-func (res *PlanResult) fanCorrelation(seq uint64, cr *rules.CompiledRule, ev *dmmodel.ResolvedEvent, in predicate.Input) {
+func (res *PlanResult) fanCorrelation(seq uint64, cr *rules.CompiledRule, ev *resolvedevent.ResolvedEvent, in predicate.Input) {
 	at := cr.AnchorType
 	for _, a := range ev.Anchors {
 		if a.AnchorType != at {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
@@ -55,7 +56,7 @@ func (m *CalcMetrics) skips(r calcfield.SkipReason) float64 { return testutil.To
 // resolveSamples resolves one measurement event of the given sample entries against
 // profile, with metrics counting.
 func resolveSamples(t *testing.T, profile model.ProfileResolution, metrics *CalcMetrics,
-	samples ...map[string]string) *model.ResolvedMeasurementsPayload {
+	samples ...map[string]string) *resolvedevent.ResolvedMeasurementsPayload {
 	t.Helper()
 	device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
 	return resolveSamplesFor(t, device, profile, metrics, samples...)
@@ -64,7 +65,7 @@ func resolveSamples(t *testing.T, profile model.ProfileResolution, metrics *Calc
 // resolveSamplesFor is resolveSamples for a given device record, whose metadata carries the
 // per-device constants.
 func resolveSamplesFor(t *testing.T, device *model.Device, profile model.ProfileResolution, metrics *CalcMetrics,
-	samples ...map[string]string) *model.ResolvedMeasurementsPayload {
+	samples ...map[string]string) *resolvedevent.ResolvedMeasurementsPayload {
 	t.Helper()
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	rez.calcObs.metrics = metrics
@@ -79,7 +80,7 @@ func resolveSamplesFor(t *testing.T, device *model.Device, profile model.Profile
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: entries}}
 	out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, profile, event)
 	require.NoError(t, err)
-	return out.(*model.ResolvedMeasurementsPayload)
+	return out.(*resolvedevent.ResolvedMeasurementsPayload)
 }
 
 func meterResolution(extra ...*model.MetricDefinition) model.ProfileResolution {
@@ -92,7 +93,7 @@ func meterResolution(extra ...*model.MetricDefinition) model.ProfileResolution {
 	return model.NewProfileResolution(model.ProfileScope{ProfileVersionToken: "meter@1"}, append(defs, extra...))
 }
 
-func names(entries []model.ResolvedMeasurementEntry) []string {
+func names(entries []resolvedevent.ResolvedMeasurementEntry) []string {
 	out := make([]string, len(entries))
 	for i, e := range entries {
 		out[i] = e.Name
@@ -118,7 +119,7 @@ func TestTheResolverAppendsCalculatedValues(t *testing.T) {
 
 	entries := got.Entries[0].Entries
 	assert.Equal(t, []string{"current", "extra", "fan", "fan_x2*", "over_temp*", "power_kw*", "temp", "voltage"}, names(entries))
-	byName := map[string]model.ResolvedMeasurementEntry{}
+	byName := map[string]resolvedevent.ResolvedMeasurementEntry{}
 	for _, e := range entries {
 		byName[e.Name] = e
 	}

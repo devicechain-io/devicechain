@@ -5,21 +5,25 @@ package model
 
 import (
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
-type EventType int64
+// EventType and its constants are declared in core/eventtype, where the resolved-event wire
+// contract can reach them; these aliases keep this package the name every event-sources
+// caller already uses.
+type EventType = eventtype.EventType
 
 // Enumeration of event types.
-//
-//go:generate stringer -type=EventType
 const (
-	NewRelationship EventType = iota
-	Location
-	Measurement
-	Alert
-	StateChange
-	CommandInvocation
-	CommandResponse
+	NewRelationship   = eventtype.NewRelationship
+	Location          = eventtype.Location
+	Measurement       = eventtype.Measurement
+	Alert             = eventtype.Alert
+	StateChange       = eventtype.StateChange
+	CommandInvocation = eventtype.CommandInvocation
+	CommandResponse   = eventtype.CommandResponse
 )
 
 var EventTypesByName map[string]EventType
@@ -213,24 +217,6 @@ type UnresolvedAlertsPayload struct {
 	Entries []UnresolvedAlertEntry `json:"entries"`
 }
 
-// Presence state carried by a StateChange event (ADR-067). A closed enum, and NOT
-// purely a connectivity vocabulary: CONNECTED and DISCONNECTED are claims about the
-// device, while DEMOTED is a claim about the SOURCE — it says the source is releasing
-// custody and asserting nothing whatsoever about whether the device is up or down.
-//
-// 🔴 The distinction is load-bearing downstream. Both consumers used to derive
-// connectivity by string-comparing to CONNECTED, which reads every other value —
-// including one that means "no claim" — as a death. That is why the mapping onto a
-// presence.Claim is a single TOTAL function that reports its own failure
-// (ResolvedStateChangePayload.Claim) rather than a comparison repeated per consumer.
-type PresenceState string
-
-const (
-	PresenceConnected    PresenceState = "CONNECTED"
-	PresenceDisconnected PresenceState = "DISCONNECTED"
-	PresenceDemoted      PresenceState = "DEMOTED"
-)
-
 // Payload for a transport-level device presence transition (ADR-067). SessionId
 // is a producer-supplied monotonic session id (a host-observed connect epoch, not
 // e.g. a raw Sparkplug bdSeq). It rides the wire as a string so an epoch-sized
@@ -238,7 +224,7 @@ const (
 // resolver parses it to a uint64. Reason is descriptive metadata only, never an
 // ordering or authorization input.
 type UnresolvedStateChangePayload struct {
-	State  PresenceState
+	State  presence.State
 	Reason string
 	// ExpectedSessionId is a compare-and-set precondition on the projection's stored
 	// session, empty when the producer makes no claim (every transport advisory). It is
