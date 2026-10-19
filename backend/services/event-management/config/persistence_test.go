@@ -67,14 +67,18 @@ func TestPersistenceSettingsAreBounded(t *testing.T) {
 		{"negative writers", `{"persistence":{"writers":-1}}`, "persistence.writers must be at least 1, got -1"},
 		{"writers at the default pool", `{"persistence":{"writers":20}}`,
 			"persistence.writers is 20, but the connection pool holds 20; keep it below 20 so reads are not starved"},
-		{"writers just below the default pool", `{"persistence":{"writers":19}}`, ""},
+		// These two cases test the writers' own bound. The backfill worker holds a connection
+		// of its own, so beside it the pool must also leave PoolHeadroom, and it is switched off
+		// here to leave the writers' bound as the only thing under test (calculated_backfill_test.go
+		// covers the sum).
+		{"writers just below the default pool", `{"persistence":{"writers":19},"calculatedBackfill":{"enabled":false}}`, ""},
 		{"writers at a configured pool", `{"tsdbConfiguration":{"maxOpenConnections":30},"persistence":{"writers":30}}`,
 			"persistence.writers is 30, but the connection pool holds 30"},
 		{"writers below a configured pool", `{"tsdbConfiguration":{"maxOpenConnections":30},"persistence":{"writers":25}}`, ""},
 		// A pool set without setting writers runs the default writers on it. The default of 10
 		// stops a service whose pool is 10 or smaller, naming the writers and the pool; before
 		// the default was raised from 5, pools of 6 to 10 started, and the release notes say so.
-		{"default writers on a pool of 11", `{"tsdbConfiguration":{"maxOpenConnections":11}}`, ""},
+		{"default writers on a pool of 11", `{"tsdbConfiguration":{"maxOpenConnections":11},"calculatedBackfill":{"enabled":false}}`, ""},
 		{"default writers on a pool of 10", `{"tsdbConfiguration":{"maxOpenConnections":10}}`,
 			"persistence.writers is 10, but the connection pool holds 10"},
 		{"default writers on a small pool", `{"tsdbConfiguration":{"maxOpenConnections":8}}`,

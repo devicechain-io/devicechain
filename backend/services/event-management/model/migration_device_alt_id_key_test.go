@@ -23,7 +23,9 @@ func TestDeviceAltIdKeySnapshot(t *testing.T) {
 	m := NewDeviceAltIdKeySchema()
 	assert.Equal(t, "20261010000000", m.ID)
 	assert.Greater(t, m.ID, NewTenantDeviceIndexSchema().ID)
-	assert.Equal(t, m.ID, Migrations[len(Migrations)-1].ID, "appended last")
+	at := migrationPosition(t, m.ID)
+	assert.Equal(t, at+1, migrationPosition(t, NewCalculatedBackfillSchema().ID),
+		"the next migration appended is the job table's; this one is no longer last")
 	assert.Nil(t, m.Rollback)
 	assert.Contains(t, deviceAltIdKeyManualAdvice, deviceAltIdKey.name)
 }
@@ -36,4 +38,16 @@ func TestDeviceAltIdKeyManualStatements(t *testing.T) {
 	assert.NotContains(t, deviceAltIdKeyManualBuild, "transaction_per_chunk", "not accepted for a unique, partial index")
 	assert.NotContains(t, deviceAltIdKeyManualBuild, "IF NOT EXISTS")
 	assert.Equal(t, `DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_alt_id`, deviceAltIdKeyManualDrop)
+}
+
+// migrationPosition is where the migration with id sits in the chain, failing if it is absent.
+func migrationPosition(t *testing.T, id string) int {
+	t.Helper()
+	for i, m := range Migrations {
+		if m.ID == id {
+			return i
+		}
+	}
+	t.Fatalf("migration %s is not in the chain", id)
+	return -1
 }
