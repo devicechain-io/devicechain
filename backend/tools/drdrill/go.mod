@@ -14,9 +14,12 @@ require (
 require (
 	cel.dev/expr v0.25.1 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
+	github.com/devicechain-io/dc-device-management v0.0.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/friendsofgo/graphiql v0.2.2 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
+	github.com/golang/geo v0.0.0-20260713102120-857a528af641 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/graph-gophers/graphql-go v1.10.2 // indirect

@@ -15,6 +15,7 @@ require (
 	github.com/prometheus/client_golang v1.24.1
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
+	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2
 )
 
@@ -66,7 +67,6 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
-	gorm.io/datatypes v1.2.7 // indirect
 	gorm.io/driver/mysql v1.5.6 // indirect
 	gorm.io/driver/postgres v1.6.3 // indirect
 	modernc.org/libc v1.22.5 // indirect

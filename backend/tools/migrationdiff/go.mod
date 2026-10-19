@@ -51,6 +51,7 @@ require (
 	github.com/friendsofgo/graphiql v0.2.2 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
 	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/golang/geo v0.0.0-20260713102120-857a528af641 // indirect
 	github.com/google/cel-go v0.30.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
