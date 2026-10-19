@@ -33,10 +33,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pinned: PublishAot makes the SDK add both of these implicitly, at the version bundled with
-         the installed .NET SDK patch, which floats with the runner image (NU1004 in locked mode). -->
-    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="8.0.31" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.DotNet.ILCompiler" Version="8.0.31" />
     <ProjectReference Include="../../src/DeviceChain.Sdk/DeviceChain.Sdk.csproj" />
   </ItemGroup>
 
