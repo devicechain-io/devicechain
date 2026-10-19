@@ -616,8 +616,10 @@ func findCalcGroup(groups *[]calcGroup, occurred time.Time, idx int, profile mod
 }
 
 // set records a measured input into the sample. A name already recorded at this instant keeps
-// its FIRST value — the rule storage applies to a duplicate (name, instant), so a derived value
-// is computed from the value that is actually kept.
+// its FIRST value, in message order. That is this sample's rule, not storage's: both raw values
+// are still stored (a raw row's identity includes its value), and the preview, which reads stored
+// rows back in payload-id order, can pick the other one. Only a device that sends one metric
+// twice at one instant with two different values sees the difference.
 func (g *calcGroup) set(def *model.ResolvedMetric, name, raw string) {
 	if g.names != nil {
 		if _, dup := g.names[name]; dup {

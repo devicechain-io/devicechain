@@ -27,9 +27,13 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
 - Una **lectura** (una muestra) son todas las mediciones que un mensaje trae para el mismo instante,
   sin importar cómo las haya dividido el dispositivo en entradas. Un dispositivo que envía una
   métrica por entrada, como los dispositivos Sparkplug y LwM2M, también obtiene el cálculo de una
-  fórmula sobre dos de esas métricas, siempre que compartan instante. Las entradas con instantes
-  distintos son muestras separadas, y una fórmula nunca lee entre ellas. Si la misma métrica aparece
-  dos veces en un instante, se usa y se conserva el primer valor.
+  fórmula sobre dos de esas métricas, siempre que compartan instante. El instante debe coincidir
+  exactamente: las métricas a las que un dispositivo pone marca de tiempo una por una, aunque sea
+  con un milisegundo de diferencia, son muestras separadas, y una fórmula nunca lee entre ellas.
+  Una fórmula además solo lee las métricas que trae ese mensaje, así que un dispositivo que informa
+  solo lo que cambió (como suelen hacer los nodos Sparkplug) obtiene un valor solo cuando todas las
+  entradas llegan juntas. Si la misma métrica aparece dos veces en un instante, la fórmula usa el
+  primero de los dos; ambos valores se siguen almacenando tal como se enviaron.
 - El resultado se **calcula una sola vez, cuando llega la lectura**, y se almacena como una medición
   normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
   exportaciones, los últimos valores del dispositivo y las reglas de detección la leen como

@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-event-sources/adapter"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
@@ -114,8 +116,7 @@ func TestMixedInstantsGroupByInstant(t *testing.T) {
 	assert.Equal(t, map[time.Time]string{a: "30", b: "80"}, byTime)
 }
 
-// The same metric twice at one instant: the FIRST value written is the one kept (the storage
-// rule), and the derived value is computed from it.
+// The same metric twice at one instant: the formula reads the FIRST value in message order.
 func TestADuplicateNameAtOneInstantKeepsTheFirstValue(t *testing.T) {
 	got := resolveEntries(t, powerProfile(),
 		entry(nil, "voltage", "230"), entry(nil, "voltage", "999"), entry(nil, "current", "2"))
@@ -132,5 +133,49 @@ func TestADeviceSentCalculatedKeyInALaterEntryIsDropped(t *testing.T) {
 				assert.True(t, e.Derived, "only the computed power survives")
 			}
 		}
+	}
+}
+
+// An entry with no time of its own is dated at the envelope instant, so it joins an entry that
+// names that same instant explicitly: grouping keys on the BOUNDED instant, not on whether the
+// device sent one.
+func TestAnUntimedEntryJoinsAnExplicitEntryAtTheEnvelopeInstant(t *testing.T) {
+	envelope := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC) // resolveEntries' event time
+	got := resolveEntries(t, powerProfile(), entry(nil, "voltage", "230"), entry(&envelope, "current", "2"))
+	assert.Equal(t, map[string]string{"power": "460", "power_kw": "0.46"}, derivedValues(got))
+}
+
+// What the Sparkplug and LwM2M hosts actually publish: one entry per metric, each with its OWN
+// millisecond instant (Sparkplug: the metric timestamp, else the payload's; LwM2M: the SenML
+// record's resolved time), built by the shared emitter and carried over the wire codec. Metrics
+// stamped at the same millisecond form one sample; metrics stamped even a millisecond apart are
+// separate samples and a formula over both does not compute — the instant is matched exactly.
+func TestIngestShapedEventsThroughTheEmitterAndWire(t *testing.T) {
+	ms := time.Date(2026, 10, 16, 11, 59, 0, 0, time.UTC).UnixMilli()
+	for _, tc := range []struct {
+		name    string
+		samples []adapter.Sample
+		want    map[string]string
+	}{
+		{"same millisecond", []adapter.Sample{{Name: "voltage", Value: 230, Time: ms}, {Name: "current", Value: 2, Time: ms}},
+			map[string]string{"power": "460", "power_kw": "0.46"}},
+		{"three milliseconds apart", []adapter.Sample{{Name: "voltage", Value: 230, Time: ms}, {Name: "current", Value: 2, Time: ms + 3}},
+			map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+			msgs, _, err := adapter.NewEmitter(nil, func() time.Time { return now }, "sp", false).
+				BuildMeasurements("acme", "sparkplug", "meter-1", tc.samples)
+			require.NoError(t, err)
+			require.Len(t, msgs, 1)
+			event, err := esproto.UnmarshalUnresolvedEvent(msgs[0].Value)
+			require.NoError(t, err)
+			rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
+			rez.calcObs.metrics = testCalcMetrics()
+			device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
+			out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, powerProfile(), event)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, derivedValues(out.(*model.ResolvedMeasurementsPayload)))
+		})
 	}
 }
