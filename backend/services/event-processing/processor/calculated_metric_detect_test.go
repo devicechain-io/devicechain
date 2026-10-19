@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -37,7 +38,7 @@ func TestAThresholdOnACalculatedMetricFires(t *testing.T) {
 	device := &dmmodel.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
 	resolved := func(seq uint64, at time.Time, readings map[string]string, format eventtime.WireFormat) messaging.Message {
 		t.Helper()
-		unresolved := &esmodel.UnresolvedEvent{Source: "http1", Device: "meter-1", EventType: esmodel.Measurement,
+		unresolved := &esmodel.UnresolvedEvent{Source: "http1", Device: "meter-1", EventType: eventtype.Measurement,
 			OccurredTime: at, ProcessedTime: at,
 			Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: readings}}}}
 		payload, err := rez.ResolveMeasurementsEventPayload(context.Background(), device, profile, unresolved)
@@ -45,7 +46,7 @@ func TestAThresholdOnACalculatedMetricFires(t *testing.T) {
 			t.Fatalf("resolve: %v", err)
 		}
 		b, err := resolvedevent.MarshalResolvedEventAs(&resolvedevent.ResolvedEvent{Source: "http1", SourceDeviceToken: "meter-1",
-			ProfileVersionToken: "p@1", OccurredTime: at, ProcessedTime: at, EventType: esmodel.Measurement,
+			ProfileVersionToken: "p@1", OccurredTime: at, ProcessedTime: at, EventType: eventtype.Measurement,
 			Payload: payload}, format)
 		if err != nil {
 			t.Fatalf("marshal resolved event: %v", err)

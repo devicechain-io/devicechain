@@ -19,6 +19,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
@@ -184,7 +185,7 @@ func TestADisabledDevicesConnectionEndingShowsInItsPresence(t *testing.T) {
 			// Its own data is still refused while it is disabled.
 			now := time.Now().UTC()
 			_, _, err := c.resolver.ResolveEvent(c.ctx, &esmodel.UnresolvedEvent{
-				Source: producer.source, Device: disabledTestDevice, EventType: esmodel.Measurement,
+				Source: producer.source, Device: disabledTestDevice, EventType: eventtype.Measurement,
 				OccurredTime: now, ProcessedTime: now,
 				Payload: &esmodel.UnresolvedMeasurementsPayload{
 					Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"temp": "21.5"}}},

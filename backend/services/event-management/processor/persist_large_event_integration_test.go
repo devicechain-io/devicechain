@@ -23,8 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
@@ -127,7 +127,7 @@ func TestALargeMeasurementEventIsStoredWhole(t *testing.T) {
 		rows := make([]*model.MeasurementEvent, readings)
 		for i := range rows {
 			rows[i] = &model.MeasurementEvent{EventId: []byte("single"), PayloadId: []byte(fmt.Sprintf("p%05d", i)),
-				DeviceToken: "big", EventType: esmodel.Measurement, OccurredTime: at, Name: "m"}
+				DeviceToken: "big", EventType: eventtype.Measurement, OccurredTime: at, Name: "m"}
 		}
 		err := r.mgr.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			return tx.Clauses(clause.OnConflict{
@@ -157,7 +157,7 @@ func TestALargeEventOfEachOtherKindIsStoredWhole(t *testing.T) {
 		{name: "locations", table: "location_events", rows: 6000, width: 12,
 			fill: func(at time.Time) func(*resolvedevent.ResolvedEvent) {
 				return func(ev *resolvedevent.ResolvedEvent) {
-					ev.EventType = esmodel.Location
+					ev.EventType = eventtype.Location
 					entries := make([]resolvedevent.ResolvedLocationEntry, 6000)
 					for i := range entries {
 						entries[i] = resolvedevent.ResolvedLocationEntry{Latitude: coord(float64(i%80) + 0.25),
@@ -169,7 +169,7 @@ func TestALargeEventOfEachOtherKindIsStoredWhole(t *testing.T) {
 		{name: "alerts", table: "alert_events", rows: 7000, width: 10,
 			fill: func(at time.Time) func(*resolvedevent.ResolvedEvent) {
 				return func(ev *resolvedevent.ResolvedEvent) {
-					ev.EventType = esmodel.Alert
+					ev.EventType = eventtype.Alert
 					entries := make([]resolvedevent.ResolvedAlertEntry, 7000)
 					for i := range entries {
 						entries[i] = resolvedevent.ResolvedAlertEntry{Type: fmt.Sprintf("a%05d", i), Level: 1,
@@ -288,7 +288,7 @@ func TestAnUnencodableValueIsInvalidOnTheFirstDelivery(t *testing.T) {
 	tenant := fmt.Sprintf("le%d", time.Now().UnixNano())
 	base := time.Now().UTC().Truncate(time.Hour)
 	bad := largeEvent(base, func(ev *resolvedevent.ResolvedEvent) {
-		ev.EventType = esmodel.StateChange
+		ev.EventType = eventtype.StateChange
 		ev.Payload = &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse",
 			SessionId: math.MaxInt64 + 1}
 	})
@@ -335,7 +335,7 @@ func TestCreateChunkedRefusesAPurgedTenant(t *testing.T) {
 			rows := make([]*model.MeasurementEvent, 6000)
 			for i := range rows {
 				rows[i] = &model.MeasurementEvent{EventId: []byte("fenced"), PayloadId: []byte(fmt.Sprintf("p%05d", i)),
-					DeviceToken: "big", EventType: esmodel.Measurement, OccurredTime: at, Name: "m"}
+					DeviceToken: "big", EventType: eventtype.Measurement, OccurredTime: at, Name: "m"}
 			}
 			arbiter := clause.OnConflict{
 				Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},

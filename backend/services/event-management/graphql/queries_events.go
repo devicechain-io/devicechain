@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -47,9 +47,9 @@ func toEventSearchCriteria(in EventSearchCriteriaInput) (model.EventSearchCriter
 	}
 
 	if in.EventTypes != nil {
-		types := make([]esmodel.EventType, 0, len(*in.EventTypes))
+		types := make([]eventtype.EventType, 0, len(*in.EventTypes))
 		for _, t := range *in.EventTypes {
-			types = append(types, esmodel.EventType(t))
+			types = append(types, eventtype.EventType(t))
 		}
 		criteria.EventTypes = types
 	}
@@ -110,9 +110,9 @@ func toMeasurementAggregationCriteria(in MeasurementAggregationCriteriaInput) (m
 	}
 
 	if in.EventTypes != nil {
-		types := make([]esmodel.EventType, 0, len(*in.EventTypes))
+		types := make([]eventtype.EventType, 0, len(*in.EventTypes))
 		for _, t := range *in.EventTypes {
-			types = append(types, esmodel.EventType(t))
+			types = append(types, eventtype.EventType(t))
 		}
 		criteria.EventTypes = types
 	}

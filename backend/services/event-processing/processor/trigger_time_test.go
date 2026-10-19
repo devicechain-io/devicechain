@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
@@ -58,7 +58,7 @@ func stampedMsg(t *testing.T, seq uint64, device, value string, occurred, proces
 		ProfileVersionToken: "p@1",
 		OccurredTime:        occurred,
 		ProcessedTime:       processed,
-		EventType:           esmodel.Measurement,
+		EventType:           eventtype.Measurement,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
 			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},

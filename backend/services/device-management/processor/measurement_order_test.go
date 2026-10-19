@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -72,7 +73,7 @@ func resolveMeasurements(t *testing.T, ms map[string]string) []resolvedevent.Res
 	t.Helper()
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: ms}},
 		},
@@ -128,7 +129,7 @@ func TestMeasurementsResolveInNameOrder(t *testing.T) {
 func TestTheDeviceSampleOrderIsNotSorted(t *testing.T) {
 	earlier := fixtureTime.Add(-time.Minute)
 	event := &esmodel.UnresolvedEvent{
-		Device: "TEST-123", EventType: esmodel.Measurement, OccurredTime: fixtureTime,
+		Device: "TEST-123", EventType: eventtype.Measurement, OccurredTime: fixtureTime,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				// First sample: names sort LAST, instant sorts LAST.

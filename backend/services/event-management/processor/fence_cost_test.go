@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
@@ -131,7 +131,7 @@ func fenceCostMeasurement(altId string, at time.Time, anchors int) resolvedevent
 		Source:            "mqtt1",
 		AltId:             &alt,
 		SourceDeviceToken: "fc-device",
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		OccurredTime:      at,
 		ProcessedTime:     at,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{

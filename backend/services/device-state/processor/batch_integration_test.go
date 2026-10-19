@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/prometheus/client_golang/prometheus"
@@ -34,7 +34,7 @@ func poisonMeasurement(tb testing.TB, tenant, device string, at time.Time, ack m
 	tb.Helper()
 	dataType := strings.Repeat("X", 40)
 	event := &resolvedevent.ResolvedEvent{
-		Source: mqttTestSource, SourceDeviceToken: device, EventType: esmodel.Measurement,
+		Source: mqttTestSource, SourceDeviceToken: device, EventType: eventtype.Measurement,
 		OccurredTime: at, ProcessedTime: at,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: at,

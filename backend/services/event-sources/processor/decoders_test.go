@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -22,7 +22,7 @@ import (
 // BuildStateChangePayload case to Decode turns this red.
 func TestJsonDecoderRejectsDeviceStateChange(t *testing.T) {
 	jd := NewJsonDecoder(map[string]string{})
-	payload := []byte(`{"device":"d1","eventType":"` + model.StateChange.String() +
+	payload := []byte(`{"device":"d1","eventType":"` + eventtype.StateChange.String() +
 		`","payload":{"state":"CONNECTED","sessionId":"18446744073709551615"}}`)
 
 	_, _, err := jd.Decode(payload, time.Time{})

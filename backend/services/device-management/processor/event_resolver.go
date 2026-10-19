@@ -26,6 +26,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/google/uuid"
@@ -215,7 +216,7 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []re
 	// line that stops the stamp spreading to every event type, and it is guarded by a test
 	// that anchors a location event carrying a version against sibling event types that
 	// must not — an assertion on the absence alone would pass for the wrong reasons.
-	if event.EventType == esmodel.Location {
+	if event.EventType == eventtype.Location {
 		resolved.FenceSetVersion = scope.FenceSetVersion
 	}
 	return &EventResolutionResults{Device: device, Resolved: resolved}
@@ -784,13 +785,13 @@ func parseSessionId(raw, field string) (uint64, error) {
 func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model.Device,
 	profile model.ProfileResolution, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	switch event.EventType {
-	case esmodel.Location:
+	case eventtype.Location:
 		return rez.ResolveLocationsEventPayload(ctx, device, nil, event)
-	case esmodel.Measurement:
+	case eventtype.Measurement:
 		return rez.ResolveMeasurementsEventPayload(ctx, device, profile, event)
-	case esmodel.Alert:
+	case eventtype.Alert:
 		return rez.ResolveAlertsEventPayload(ctx, device, nil, event)
-	case esmodel.StateChange:
+	case eventtype.StateChange:
 		return rez.ResolveStateChangeEventPayload(ctx, device, nil, event)
 	default:
 		return nil, fmt.Errorf("unable to handle resolution for payload type: %s", event.EventType.String())
@@ -826,7 +827,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	// its type's profile, ADR-016/ADR-045): a non-conforming value routes the whole event to the dead-letter
 	// path rather than persisting bad data. Only a measurement reads the definitions;
 	// every other event type uses the read for its scope alone.
-	if event.EventType == esmodel.Measurement {
+	if event.EventType == eventtype.Measurement {
 		if reason, err := validateMeasurements(res, event); err != nil {
 			return nil, reason, err
 		}
@@ -854,7 +855,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	// return value: it observes, it never gates. Note it does not appear next to the
 	// measurement validation above, which CAN fail the event — putting it there would
 	// invite the next reader to give it the same power.
-	if event.EventType == esmodel.Location {
+	if event.EventType == eventtype.Location {
 		rez.warnIfLocationUndeclared(ctx, device, &scope)
 	}
 
@@ -1015,9 +1016,9 @@ func validateMeasurements(profile model.ProfileResolution, event *esmodel.Unreso
 func (rez *EventResolver) HandleEvent(ctx context.Context,
 	device *model.Device, unresolved *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
 	switch unresolved.EventType {
-	case esmodel.NewRelationship:
+	case eventtype.NewRelationship:
 		return rez.HandleNewRelationshipEvent(ctx, device, unresolved)
-	case esmodel.Location, esmodel.Measurement, esmodel.Alert, esmodel.StateChange:
+	case eventtype.Location, eventtype.Measurement, eventtype.Alert, eventtype.StateChange:
 		return rez.HandleStandardEvent(ctx, device, unresolved)
 	default:
 		return nil, uint(resolvedevent.FailureReason_Invalid), fmt.Errorf("unhandled event type: %s", unresolved.EventType.String())
@@ -1117,7 +1118,7 @@ func transportAuthenticatedBypass(unrez *esmodel.UnresolvedEvent) bool {
 		return false
 	}
 	switch unrez.EventType {
-	case esmodel.Measurement, esmodel.StateChange:
+	case eventtype.Measurement, eventtype.StateChange:
 		return true
 	default:
 		return false
@@ -1230,7 +1231,7 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// truth. The event is marked SourceDeviceDisabled, so detection, which acts on the
 	// device's behalf, skips it: a disabled device still raises no alarm.
 	if device.IsDisabled() {
-		if unrez.EventType == esmodel.StateChange {
+		if unrez.EventType == eventtype.StateChange {
 			results, reason, err := rez.HandleEvent(ctx, device, unrez)
 			for _, r := range results {
 				if r.Resolved != nil {

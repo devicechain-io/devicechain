@@ -14,6 +14,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 )
 
 // BenchmarkInboundEventCost is the in-process CPU device-management spends on one inbound
@@ -58,7 +59,7 @@ func BenchmarkInboundEventCost(b *testing.B) {
 			Device:        "dev",
 			OccurredTime:  now,
 			ProcessedTime: now,
-			EventType:     esmodel.Measurement,
+			EventType:     eventtype.Measurement,
 			Payload: &esmodel.UnresolvedMeasurementsPayload{
 				// Timed per entry, as the simulator's load generator sends it.
 				Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: values, OccurredTime: &now}},

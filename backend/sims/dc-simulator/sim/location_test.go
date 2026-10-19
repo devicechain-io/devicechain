@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-event-sources/processor"
 )
@@ -189,8 +191,8 @@ func TestEmittedLocationDecodesThroughTheRealDecoder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the REAL decoder rejected the emitter's own bytes: %v\n%s", err, body)
 	}
-	if event.EventType != model.Location {
-		t.Fatalf("decoded event type = %v, want %v", event.EventType, model.Location)
+	if event.EventType != eventtype.Location {
+		t.Fatalf("decoded event type = %v, want %v", event.EventType, eventtype.Location)
 	}
 	locations, ok := payload.(*model.UnresolvedLocationsPayload)
 	if !ok {

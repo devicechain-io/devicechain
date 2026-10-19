@@ -17,10 +17,10 @@ import (
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -152,7 +152,7 @@ func gateEvent(i int) EventResolutionResults {
 	return EventResolutionResults{Resolved: &resolvedevent.ResolvedEvent{
 		Source:            "gate",
 		SourceDeviceToken: fmt.Sprintf("dev-%d", i),
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		Payload:           &resolvedevent.ResolvedMeasurementsPayload{},
 		OccurredTime:      time.Now(),
 		ProcessedTime:     time.Now(),

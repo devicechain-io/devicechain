@@ -7,9 +7,9 @@ import (
 	"context"
 	"database/sql"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -96,7 +96,7 @@ func locationMessage(t *testing.T, deviceToken string, occurredAt time.Time,
 	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
-		EventType:         esmodel.Location,
+		EventType:         eventtype.Location,
 		OccurredTime:      occurredAt,
 		// DISTINCT from the occurred time on purpose. With the two equal, an assertion that
 		// a projection advanced to "the message's time" cannot tell which of them it read,
@@ -297,7 +297,7 @@ func TestNonLocationEventLeavesTheProjectionAlone(t *testing.T) {
 	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: "dozer-01",
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		OccurredTime:      t0,
 		ProcessedTime:     t0,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{

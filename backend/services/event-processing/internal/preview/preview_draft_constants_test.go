@@ -11,8 +11,8 @@ import (
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"gorm.io/gorm"
 )
@@ -26,7 +26,7 @@ func deviceMsg(t *testing.T, seq uint64, device, temp string, occurred time.Time
 	t.Helper()
 	ev := &resolvedevent.ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: device, ProfileVersionToken: "p@1",
-		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.Measurement,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: temp}},
 		}}},

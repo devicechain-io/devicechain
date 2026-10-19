@@ -41,7 +41,6 @@ require (
 	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/devicechain-io/dc-event-sources v0.0.0
 	github.com/fatih/color v1.19.0 // indirect
 	github.com/go-gormigrate/gormigrate/v2 v2.1.7 // indirect
 	github.com/go-sql-driver/mysql v1.8.1 // indirect
@@ -76,7 +75,6 @@ replace github.com/devicechain-io/dc-notification-management => ../../services/n
 
 replace github.com/graph-gophers/graphql-go => github.com/devicechain-io/graphql-go v1.10.2-dc.2
 
-replace github.com/devicechain-io/dc-event-sources => ../../services/event-sources
 
 replace github.com/devicechain-io/dc-device-management => ../../services/device-management
 

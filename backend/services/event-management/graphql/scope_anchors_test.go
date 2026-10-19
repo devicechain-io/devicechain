@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
@@ -49,13 +49,13 @@ func TestAScopedMemberSeesOnlyItsOwnAnchorsOnACoOwnedEvent(t *testing.T) {
 
 	const tenant = "tenant1"
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	event := model.Event{DeviceToken: "co-owned", EventType: esmodel.Measurement, OccurredTime: at, ProcessedTime: at, Source: "mqtt"}
+	event := model.Event{DeviceToken: "co-owned", EventType: eventtype.Measurement, OccurredTime: at, ProcessedTime: at, Source: "mqtt"}
 	event.EventId = model.DeriveEventId(tenant, &event, nil)
 	write := core.WithTenant(context.Background(), tenant)
 	require.NoError(t, db.WithContext(write).Create(&event).Error)
 	for _, token := range []string{"acme", "globex"} {
 		require.NoError(t, db.WithContext(write).Create(&model.EventAnchor{
-			EventId: event.EventId, DeviceToken: "co-owned", EventType: esmodel.Measurement,
+			EventId: event.EventId, DeviceToken: "co-owned", EventType: eventtype.Measurement,
 			OccurredTime: at, AnchorType: "customer", AnchorToken: token,
 		}).Error)
 	}

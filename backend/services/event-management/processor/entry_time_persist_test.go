@@ -8,7 +8,7 @@ import (
 	"errors"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -66,7 +66,7 @@ func entryTimeWorker() (*EventPersistenceWorker, *capturingEntryTimeApi, model.E
 	envelope := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 	parent := model.Event{
 		DeviceToken:   "device-4",
-		EventType:     esmodel.Measurement,
+		EventType:     eventtype.Measurement,
 		OccurredTime:  envelope,
 		ProcessedTime: envelope,
 	}

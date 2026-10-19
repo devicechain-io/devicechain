@@ -3,7 +3,11 @@
 
 package model
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
+)
 
 // The three fixture markers below stand in for the credential fields. They are
 // deliberately NOT shaped like a credential: every assertion here fails by printing
@@ -21,7 +25,7 @@ func eventWithCredentialMarkers() UnresolvedEvent {
 	return UnresolvedEvent{
 		Source:           "a-source",
 		Device:           "a-device",
-		EventType:        Measurement,
+		EventType:        eventtype.Measurement,
 		CredentialType:   &ctype,
 		CredentialId:     &cid,
 		CredentialSecret: &secret,

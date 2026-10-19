@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/eventtime"
@@ -320,29 +322,29 @@ func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.UnresolvedState
 }
 
 // Marshal unresolved payload based on event type, its instants in format.
-func MarshalUnresolvedPayload(etype model.EventType, payload interface{}, format eventtime.WireFormat) ([]byte, error) {
+func MarshalUnresolvedPayload(etype eventtype.EventType, payload interface{}, format eventtime.WireFormat) ([]byte, error) {
 	switch etype {
-	case model.NewRelationship:
+	case eventtype.NewRelationship:
 		if napayload, ok := payload.(*model.UnresolvedNewRelationshipPayload); ok {
 			return MarshalPayloadForNewRelationshipEvent(napayload)
 		}
 		return nil, fmt.Errorf("invalid new-relationship payload: %+v", payload)
-	case model.Location:
+	case eventtype.Location:
 		if locpayload, ok := payload.(*model.UnresolvedLocationsPayload); ok {
 			return MarshalPayloadForLocationsEvent(locpayload, format)
 		}
 		return nil, fmt.Errorf("invalid location payload: %+v", payload)
-	case model.Measurement:
+	case eventtype.Measurement:
 		if mxpayload, ok := payload.(*model.UnresolvedMeasurementsPayload); ok {
 			return MarshalPayloadForMeasurementsEvent(mxpayload, format)
 		}
 		return nil, fmt.Errorf("invalid measurement payload: %+v", payload)
-	case model.Alert:
+	case eventtype.Alert:
 		if apayload, ok := payload.(*model.UnresolvedAlertsPayload); ok {
 			return MarshalPayloadForAlertsEvent(apayload, format)
 		}
 		return nil, fmt.Errorf("invalid alert payload: %+v", payload)
-	case model.StateChange:
+	case eventtype.StateChange:
 		if scpayload, ok := payload.(*model.UnresolvedStateChangePayload); ok {
 			return MarshalPayloadForStateChangeEvent(scpayload)
 		}
@@ -353,17 +355,17 @@ func MarshalUnresolvedPayload(etype model.EventType, payload interface{}, format
 }
 
 // Unmarshal unresolved payload based on event type.
-func UnmarshalUnresolvedPayload(etype model.EventType, payload []byte) (interface{}, error) {
+func UnmarshalUnresolvedPayload(etype eventtype.EventType, payload []byte) (interface{}, error) {
 	switch etype {
-	case model.NewRelationship:
+	case eventtype.NewRelationship:
 		return UnmarshalPayloadForNewRelationshipEvent(payload)
-	case model.Location:
+	case eventtype.Location:
 		return UnmarshalPayloadForLocationsEvent(payload)
-	case model.Measurement:
+	case eventtype.Measurement:
 		return UnmarshalPayloadForMeasurementsEvent(payload)
-	case model.Alert:
+	case eventtype.Alert:
 		return UnmarshalPayloadForAlertsEvent(payload)
-	case model.StateChange:
+	case eventtype.StateChange:
 		return UnmarshalPayloadForStateChangeEvent(payload)
 	default:
 		return nil, fmt.Errorf("unable to unmarshal unresolved payload for event type: %s", etype.String())
@@ -471,7 +473,7 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 	}
 
 	// Decode event type.
-	etype := model.EventType(pbevent.EventType)
+	etype := eventtype.EventType(pbevent.EventType)
 
 	// Unmarshal payload.
 	payload, err := UnmarshalUnresolvedPayload(etype, pbevent.Payload)

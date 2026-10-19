@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
@@ -121,7 +122,7 @@ func buildNewAssignmentEvent() *model.UnresolvedEvent {
 		Source:    "mysource",
 		AltId:     &altid,
 		Device:    "TEST-123",
-		EventType: model.NewRelationship,
+		EventType: eventtype.NewRelationship,
 		Payload:   assn,
 	}
 	return event
@@ -147,7 +148,7 @@ func buildLocationsEvent() *model.UnresolvedEvent {
 		Source:    "mysource",
 		AltId:     &altid,
 		Device:    "TEST-123",
-		EventType: model.Location,
+		EventType: eventtype.Location,
 		Payload:   loc,
 	}
 	return event
@@ -172,7 +173,7 @@ func buildMeasurementsEvent() *model.UnresolvedEvent {
 		Source:    "mysource",
 		AltId:     &altid,
 		Device:    "TEST-123",
-		EventType: model.Measurement,
+		EventType: eventtype.Measurement,
 		Payload:   mxpayload,
 	}
 	return event
@@ -196,7 +197,7 @@ func buildAlertsEvent() *model.UnresolvedEvent {
 		Source:    "mysource",
 		AltId:     &altid,
 		Device:    "TEST-123",
-		EventType: model.Alert,
+		EventType: eventtype.Alert,
 		Payload:   mxpayload,
 	}
 	return event

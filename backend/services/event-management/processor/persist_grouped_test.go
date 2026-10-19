@@ -7,8 +7,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
@@ -50,7 +50,7 @@ func measurementOf(dev string, at time.Time, alt string, anchors int, values ...
 		})
 	}
 	return resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
-		EventType: esmodel.Measurement, OccurredTime: at, ProcessedTime: at, Payload: payload,
+		EventType: eventtype.Measurement, OccurredTime: at, ProcessedTime: at, Payload: payload,
 		Anchors: anchorsOf(dev, anchors)}
 }
 
@@ -66,7 +66,7 @@ func threeReadings(dev string, at time.Time, alt string, anchors int) resolvedev
 func locationOf(dev string, at time.Time, alt string, anchors int, lat string) resolvedevent.ResolvedEvent {
 	lon := "-71.5"
 	return resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
-		EventType: esmodel.Location, OccurredTime: at, ProcessedTime: at,
+		EventType: eventtype.Location, OccurredTime: at, ProcessedTime: at,
 		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &lat, Longitude: &lon, OccurredTime: at},
 		}},
@@ -75,7 +75,7 @@ func locationOf(dev string, at time.Time, alt string, anchors int, lat string) r
 
 func alertOf(dev string, at time.Time, alt string, anchors int, message string) resolvedevent.ResolvedEvent {
 	return resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
-		EventType: esmodel.Alert, OccurredTime: at, ProcessedTime: at,
+		EventType: eventtype.Alert, OccurredTime: at, ProcessedTime: at,
 		Payload: &resolvedevent.ResolvedAlertsPayload{Entries: []resolvedevent.ResolvedAlertEntry{
 			{Type: "overheat", Level: 2, Message: message, Source: "device", OccurredTime: at},
 		}},
@@ -84,7 +84,7 @@ func alertOf(dev string, at time.Time, alt string, anchors int, message string) 
 
 func stateChangeOf(dev string, at time.Time, alt string, state string, session uint64, anchors ...string) resolvedevent.ResolvedEvent {
 	ev := resolvedevent.ResolvedEvent{Source: "mqtt1", AltId: altOf(alt), SourceDeviceToken: dev,
-		EventType: esmodel.StateChange, OccurredTime: at, ProcessedTime: at,
+		EventType: eventtype.StateChange, OccurredTime: at, ProcessedTime: at,
 		Payload: &resolvedevent.ResolvedStateChangePayload{State: state, Reason: "test", SessionId: session}}
 	for _, a := range anchors {
 		ev.Anchors = append(ev.Anchors, resolvedevent.ResolvedAnchor{AnchorType: "area", AnchorToken: a})
@@ -278,7 +278,7 @@ func TestTwoEventsWithOneAlternateIdInABatchStoreTheFirst(t *testing.T) {
 				t.Errorf("%d events stored; want %d", got, tc.wantEvents)
 			}
 			var rows []model.MeasurementEvent
-			if err := sysDB(r.db).Where("event_type = ? AND device_token = ?", esmodel.Measurement,
+			if err := sysDB(r.db).Where("event_type = ? AND device_token = ?", eventtype.Measurement,
 				"dev-y").Find(&rows).Error; err != nil {
 				t.Fatalf("read the key's readings: %v", err)
 			}
@@ -371,7 +371,7 @@ func TestAStateChangeWithAnAlternateIdKeepsItsPlaceInTheBatch(t *testing.T) {
 	if err := sysDB(r.db).Where("alt_id = ?", "k").Find(&stored).Error; err != nil {
 		t.Fatalf("read the key's events: %v", err)
 	}
-	if len(stored) != 1 || stored[0].EventType != esmodel.StateChange {
+	if len(stored) != 1 || stored[0].EventType != eventtype.StateChange {
 		t.Errorf("the key's events are %+v; want the state change alone", stored)
 	}
 	if got := count(t, r.db, &model.MeasurementEvent{}, ""); got != 0 {

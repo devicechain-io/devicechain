@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/eventtime"
@@ -27,7 +29,7 @@ func TestAnInstantPastTheUTCYearRangeCrossesBothHops(t *testing.T) {
 	late := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.FixedZone("", -5*3600))
 	for _, inFormat := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
 		inbound, err := esproto.MarshalUnresolvedEventAs(&esmodel.UnresolvedEvent{
-			Source: "http", Device: "d", OccurredTime: late, ProcessedTime: late, EventType: esmodel.Alert,
+			Source: "http", Device: "d", OccurredTime: late, ProcessedTime: late, EventType: eventtype.Alert,
 			Payload: &esmodel.UnresolvedAlertsPayload{Entries: []esmodel.UnresolvedAlertEntry{{Type: "t", OccurredTime: &late}}},
 		}, inFormat)
 		require.NoError(t, err)
@@ -38,7 +40,7 @@ func TestAnInstantPastTheUTCYearRangeCrossesBothHops(t *testing.T) {
 		for _, outFormat := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
 			resolved, err := resolvedevent.MarshalResolvedEventAs(&resolvedevent.ResolvedEvent{
 				Source: "http", SourceDeviceToken: "d", OccurredTime: unrez.OccurredTime, ProcessedTime: unrez.ProcessedTime,
-				EventType: esmodel.Alert,
+				EventType: eventtype.Alert,
 				Payload:   &resolvedevent.ResolvedAlertsPayload{Entries: []resolvedevent.ResolvedAlertEntry{{Type: "t", OccurredTime: *entry}}},
 			}, outFormat)
 			require.NoError(t, err)

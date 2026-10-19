@@ -18,6 +18,7 @@ import (
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -57,7 +58,7 @@ func deviceWithToken(token string) *dmodel.Device {
 // device token.
 func eventWithCredential(t testing.TB, deviceToken string) *esmodel.UnresolvedEvent {
 	ctype := string(dmodel.CredentialAccessToken)
-	e := &esmodel.UnresolvedEvent{Device: deviceToken, EventType: esmodel.Location}
+	e := &esmodel.UnresolvedEvent{Device: deviceToken, EventType: eventtype.Location}
 	presentSealedToken(t, credCtx(), e, ctype, "tok-abc")
 	return e
 }
@@ -66,7 +67,7 @@ func eventWithCredential(t testing.TB, deviceToken string) *esmodel.UnresolvedEv
 func (suite *EventResolverTestSuite) TestOptionalNoCredentialUsesToken() {
 	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{deviceWithToken("TEST-123")}, nil)
 
-	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: eventtype.Location}
 	device, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), event)
 
 	assert.NoError(suite.T(), err)
@@ -96,7 +97,7 @@ func (suite *EventResolverTestSuite) TestCredentialAuthenticates() {
 // This pins the split against a later "unification" of the two.
 func (suite *EventResolverTestSuite) TestPasswordCredentialUsesAuthenticateDeviceNotTheCalloutPath() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
-	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: eventtype.Location}
 	ctx := core.WithTenant(context.Background(), "acme")
 	presentSealed(suite.T(), ctx, event, string(dmodel.CredentialMqttBasic), "dev1", "s3cret-0123456789")
 	rez := suite.resolver(config.AuthModeRequired)
@@ -143,7 +144,7 @@ func (suite *EventResolverTestSuite) TestCredentialAuthFails() {
 
 // required mode rejects an event that presents no credential.
 func (suite *EventResolverTestSuite) TestRequiredNoCredentialRejected() {
-	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: eventtype.Location}
 	_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(context.Background(), event)
 
 	assert.Error(suite.T(), err)
@@ -171,7 +172,7 @@ func (suite *EventResolverTestSuite) TestDisabledIgnoresCredential() {
 func (suite *EventResolverTestSuite) TestUnknownDeviceToken() {
 	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
 
-	event := &esmodel.UnresolvedEvent{Device: "MISSING", EventType: esmodel.Location}
+	event := &esmodel.UnresolvedEvent{Device: "MISSING", EventType: eventtype.Location}
 	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), event)
 
 	assert.Error(suite.T(), err)
@@ -184,7 +185,7 @@ func (suite *EventResolverTestSuite) TestUnknownDeviceToken() {
 func (suite *EventResolverTestSuite) TestDeviceLookupErrorIsApiCallFailed() {
 	suite.API.Mock.On("DevicesByToken").Return(([]*dmodel.Device)(nil), errors.New("db unreachable"))
 
-	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: esmodel.Location}
+	event := &esmodel.UnresolvedEvent{Device: "TEST-123", EventType: eventtype.Location}
 	_, reason, err := suite.resolver(config.AuthModeOptional).resolveDevice(context.Background(), event)
 
 	assert.Error(suite.T(), err)
@@ -198,7 +199,7 @@ func (suite *EventResolverTestSuite) TestDeviceLookupErrorIsApiCallFailed() {
 func (suite *EventResolverTestSuite) TestUnknownDeviceDoesNotReachHandleEvent() {
 	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{}, nil)
 
-	event := &esmodel.UnresolvedEvent{Device: "MISSING", EventType: esmodel.Measurement}
+	event := &esmodel.UnresolvedEvent{Device: "MISSING", EventType: eventtype.Measurement}
 	assert.NotPanics(suite.T(), func() {
 		_, reason, err := suite.resolver(config.AuthModeOptional).ResolveEvent(context.Background(), event)
 		assert.Error(suite.T(), err)
@@ -210,7 +211,7 @@ func (suite *EventResolverTestSuite) TestUnknownDeviceDoesNotReachHandleEvent() 
 func measurementEvent(key, value string) *esmodel.UnresolvedEvent {
 	return &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{key: value}},
@@ -336,7 +337,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnScop
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.NewRelationship,
+		EventType: eventtype.NewRelationship,
 		Payload: &esmodel.UnresolvedNewRelationshipPayload{
 			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
 		},
@@ -363,7 +364,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnMemb
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.NewRelationship,
+		EventType: eventtype.NewRelationship,
 		Payload: &esmodel.UnresolvedNewRelationshipPayload{
 			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
 		},
@@ -386,7 +387,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipAbortsBeforeCreateOnAnch
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.NewRelationship,
+		EventType: eventtype.NewRelationship,
 		Payload: &esmodel.UnresolvedNewRelationshipPayload{
 			RelationshipType: "located-in", TargetType: "area", Target: "warehouse-3",
 		},
@@ -438,7 +439,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipStampsTrackedAnchorMembe
 	device.ID = 500
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.NewRelationship,
+		EventType: eventtype.NewRelationship,
 		Payload: &esmodel.UnresolvedNewRelationshipPayload{
 			RelationshipType: "connected-to", TargetType: "gateway", Target: "gw-1",
 		},
@@ -481,7 +482,7 @@ func (suite *EventResolverTestSuite) TestNewRelationshipCarriesEveryAnchorTheDev
 	device.ID = 500
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.NewRelationship,
+		EventType: eventtype.NewRelationship,
 		Payload: &esmodel.UnresolvedNewRelationshipPayload{
 			RelationshipType: "connected-to", TargetType: "gateway", Target: "gw-1",
 		},
@@ -598,7 +599,7 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped(
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"temp": "42", "label": "hello"}},
@@ -623,7 +624,7 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped(
 func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnstorableDropped() {
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"temp": "42", "a": "NaN", "b": "+Inf", "c": "-Inf",
@@ -650,7 +651,7 @@ func (suite *EventResolverTestSuite) TestMeasurementDeclaredNonStorableDropped()
 
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"temp": "42", "label": "hello"}},
@@ -761,7 +762,7 @@ func (suite *EventResolverTestSuite) TestStateChangeSessionIdRange() {
 	dev := deviceWithToken("TEST-123")
 	sc := func(session string) *esmodel.UnresolvedEvent {
 		return &esmodel.UnresolvedEvent{
-			EventType: esmodel.StateChange,
+			EventType: eventtype.StateChange,
 			Payload:   &esmodel.UnresolvedStateChangePayload{State: presence.StateDisconnected, SessionId: session},
 		}
 	}
@@ -787,7 +788,7 @@ func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 	stamp := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	sc := func(session, expected string) *esmodel.UnresolvedEvent {
 		return &esmodel.UnresolvedEvent{
-			EventType:    esmodel.StateChange,
+			EventType:    eventtype.StateChange,
 			OccurredTime: stamp,
 			Payload: &esmodel.UnresolvedStateChangePayload{
 				State: presence.StateDemoted, SessionId: session, ExpectedSessionId: expected,
@@ -828,7 +829,7 @@ func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 	// absent), and a compare-and-set is the whole point of the reconnect-repair path.
 	conn := func(session, expected string) *esmodel.UnresolvedEvent {
 		return &esmodel.UnresolvedEvent{
-			EventType: esmodel.StateChange,
+			EventType: eventtype.StateChange,
 			Payload: &esmodel.UnresolvedStateChangePayload{
 				State: presence.StateConnected, SessionId: session, ExpectedSessionId: expected,
 			},
@@ -844,7 +845,7 @@ func (suite *EventResolverTestSuite) TestStateChangeDemotionShape() {
 
 	// And the enum stays closed: a state nobody named is still a deterministic failure.
 	_, err = rez.ResolveStateChangeEventPayload(context.Background(), dev, nil, &esmodel.UnresolvedEvent{
-		EventType: esmodel.StateChange,
+		EventType: eventtype.StateChange,
 		Payload:   &esmodel.UnresolvedStateChangePayload{State: presence.State("RETIRED"), SessionId: "42"},
 	})
 	assert.Error(suite.T(), err)
