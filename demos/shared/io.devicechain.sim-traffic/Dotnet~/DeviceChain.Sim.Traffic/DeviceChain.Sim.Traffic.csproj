@@ -20,6 +20,14 @@
     <IsAotCompatible>true</IsAotCompatible>
   </PropertyGroup>
 
+  <!-- Pinned on purpose. IsAotCompatible/PublishAot make the SDK add Microsoft.NET.ILLink.Tasks
+       implicitly, at the version bundled with whichever .NET SDK patch is installed. That floats
+       with the runner image, so a locked restore fails NU1004 the day the image moves a patch.
+       Declared here, the version is ours and moves only when this line (and the lock) does. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="8.0.31" PrivateAssets="all" />
+  </ItemGroup>
+
   <ItemGroup>
     <Compile Include="../../Runtime/**/*.cs" />
   </ItemGroup>
