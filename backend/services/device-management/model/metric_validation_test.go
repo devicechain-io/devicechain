@@ -24,6 +24,18 @@ func TestValidateMetricValue(t *testing.T) {
 	}{
 		{"double ok", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "21.5", true},
 		{"double non-numeric", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "warm", false},
+		// The store holds decimal(20,8): NaN passes every comparison and +/-Inf and 1e12 or more
+		// can never be written, so each is refused here rather than at the INSERT.
+		{"double NaN", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "NaN", false},
+		{"double +Inf", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "+Inf", false},
+		{"double -Inf", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "-Inf", false},
+		{"double NaN under bounds", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE",
+			MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}, "NaN", false},
+		{"double 1e12", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "1e12", false},
+		{"double -1.25e+21", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "-1.25e+21", false},
+		{"double 999999999999", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "999999999999", true},
+		{"double 1e-12", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "1e-12", true},
+		{"int 1e12", &MetricDefinition{MetricKey: "rpm", DataType: "INT"}, "1000000000000", false},
 		{"int ok", &MetricDefinition{MetricKey: "rpm", DataType: "INT"}, "1200", true},
 		{"int rejects float", &MetricDefinition{MetricKey: "rpm", DataType: "INT"}, "12.5", false},
 		{"bool ok", &MetricDefinition{MetricKey: "on", DataType: "BOOLEAN"}, "true", true},

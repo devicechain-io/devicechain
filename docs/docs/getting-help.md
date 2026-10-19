@@ -60,10 +60,12 @@ usually faster than waiting on a reply.
 - **The measurement is not on the profile, and its value is not a number.** Measurements are stored
   as numbers, so:
   - An undeclared measurement with a numeric value is stored as-is, with no warning at all.
+    The exceptions are `NaN`, `Inf` and any value of 1,000,000,000,000 or more in magnitude,
+    which the store cannot hold: that entry alone is dropped, with a warning in device-management's logs.
   - An undeclared measurement with a non-numeric value is dropped — that entry alone — with a
     warning in device-management's logs.
   - A *declared* measurement whose value does not match its declared type is worse: the whole event
-    is dead-lettered.
+    is dead-lettered. So is one that is `NaN`, infinite, or 1,000,000,000,000 or more in magnitude.
 
   Declaring the metric on the profile, with the right data type, fixes both.
 - **You are looking at a different tenant** than the one the device reports into.

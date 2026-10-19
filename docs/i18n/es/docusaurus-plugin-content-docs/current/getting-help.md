@@ -63,10 +63,14 @@ suele ser más rápido que esperar una respuesta.
 - **La medición no está en el perfil, y su valor no es un número.** Las mediciones se almacenan
   como números, así que:
   - Una medición sin declarar con valor numérico se almacena tal cual, sin ninguna advertencia.
+    Las excepciones son `NaN`, `Inf` y cualquier valor de magnitud igual o superior a
+    1.000.000.000.000, que el almacén no puede guardar: se descarta solo esa entrada, con una
+    advertencia en los registros de device-management.
   - Una medición sin declarar con valor no numérico se descarta —solo esa entrada— con una
     advertencia en los registros de device-management.
   - Una medición *declarada* cuyo valor no coincide con su tipo declarado es peor: el evento
-    completo se envía a la cola de mensajes no entregados.
+    completo se envía a la cola de mensajes no entregados. Lo mismo ocurre con un valor `NaN`,
+    infinito o de magnitud igual o superior a 1.000.000.000.000.
 
   Declarar la métrica en el perfil, con el tipo de dato correcto, resuelve ambos casos.
 - **Estás consultando un inquilino distinto** de aquel al que reporta el dispositivo.

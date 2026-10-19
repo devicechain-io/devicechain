@@ -616,6 +616,31 @@ func (suite *EventResolverTestSuite) TestMeasurementUndeclaredNonNumericDropped(
 	}
 }
 
+// An undeclared numeric value the store cannot hold (NaN, +/-Inf, 1e12 or more) is dropped the
+// same way: it parses, so the non-numeric check passes it, and it would otherwise reach the
+// persister and be refused there (or, for NaN, stored and poison every average over it).
+func (suite *EventResolverTestSuite) TestMeasurementUndeclaredUnstorableDropped() {
+	event := &esmodel.UnresolvedEvent{
+		Device:    "TEST-123",
+		EventType: esmodel.Measurement,
+		Payload: &esmodel.UnresolvedMeasurementsPayload{
+			Entries: []esmodel.UnresolvedMeasurementsEntry{
+				{Measurements: map[string]string{"temp": "42", "a": "NaN", "b": "+Inf", "c": "-Inf",
+					"d": "1e12", "e": "1.25e+21"}},
+			},
+		},
+	}
+
+	out, err := suite.resolver(config.AuthModeOptional).ResolveMeasurementsEventPayload(
+		context.Background(), deviceWithToken("TEST-123"), dmodel.ProfileResolution{}, event)
+
+	assert.NoError(suite.T(), err)
+	entries := out.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	if assert.Len(suite.T(), entries, 1) {
+		assert.Equal(suite.T(), "temp", entries[0].Name)
+	}
+}
+
 // A declared but non-storable metric (STRING is device state, not a time-series
 // metric) is dropped rather than dead-lettering the whole event — a defensive
 // backstop, since creating such a definition is already rejected (ADR-016).

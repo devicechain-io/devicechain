@@ -228,3 +228,18 @@ func TestDatabaseValueRejectionIsDeterministic(t *testing.T) {
 		t.Fatal("a value the driver cannot encode must be classified deterministic")
 	}
 }
+
+// A measurement that is NaN or infinite parses, but no payload identity can be derived for it,
+// and no delivery can change that: it is deterministic, not a failure to retry. Event-sources'
+// decoders and the validator refuse these too; this is the backstop for the ingest paths that
+// build a payload directly.
+func TestANonFiniteMeasurementIsADeterministicFailure(t *testing.T) {
+	for _, v := range []string{"NaN", "+Inf", "-Inf", "Infinity"} {
+		_, err := measurementRequests(model.Event{}, dmmodel.ResolvedMeasurementsPayload{
+			Entries: []dmmodel.ResolvedMeasurementsEntry{{Entries: []dmmodel.ResolvedMeasurementEntry{
+				{Name: "temp", Value: v}}}}})
+		if !errors.Is(err, ErrDeterministic) {
+			t.Errorf("%q: got %v; want a deterministic failure", v, err)
+		}
+	}
+}
