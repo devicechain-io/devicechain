@@ -254,6 +254,7 @@ func TestBrokerAgeIsTheAnswersOwnClock(t *testing.T) {
 	sub2, err := b.nc.Subscribe("test.age.unstamped", reply(`{"created":"`+stamp.Add(-90*time.Second).Format(time.RFC3339Nano)+`"}`))
 	require.NoError(t, err)
 	defer sub2.Unsubscribe()
+	require.NoError(t, b.nc.Flush(), "the replies are registered before they are asked for")
 	nmgr := failClosedManager(t, b.nc, b.js, guardInstance, false)
 	nmgr.mqttClock = func() time.Time { return stamp.Add(time.Hour) }
 

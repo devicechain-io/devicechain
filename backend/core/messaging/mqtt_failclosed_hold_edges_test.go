@@ -160,6 +160,7 @@ func TestBrokerAgeWithoutACreationTimeIsNotOld(t *testing.T) {
 	sub2, err := b.nc.Subscribe("test.age.refused", reply(`{"error":{"code":503,"description":"no"},"created":"2000-01-01T00:00:00Z","ts":"2030-01-01T12:00:00Z"}`))
 	require.NoError(t, err)
 	defer func() { _ = sub2.Unsubscribe() }()
+	require.NoError(t, b.nc.Flush(), "the replies are registered before they are asked for")
 	nmgr := failClosedManager(t, b.nc, b.js, guardInstance, false)
 
 	age, err := nmgr.brokerAge(context.Background(), "test.age.undated", "x")
