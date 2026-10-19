@@ -490,3 +490,61 @@ func TestAddingLwm2mDayTwoIsSaid(t *testing.T) {
 		t.Errorf("notes = %q, want one about the pre-shared keys", notes)
 	}
 }
+
+// 🔴 A PLAIN UPGRADE ASKS THE SAME QUESTION BEFORE IT RECORDS ANYTHING. A new chart over an
+// instance whose declaration already carries update-management, on a cluster dcctl was only
+// pointed at with a ReadWriteOnce store, is refused by the chart at the Helm step: after
+// recordUpgradedVersion has written a version that never happened.
+func TestUpgradeRefusesAnAreaSetTheObjectStoreCannotMountBeforeRecording(t *testing.T) {
+	inst := readyGuide()
+	inst.Spec.Managed = false
+	inst.Spec.ExtraFunctionalAreas = []string{"update-management"}
+	inst.Spec.ObjectStore = &dcv1beta1.ObjectStoreSpec{Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi"}
+	st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}}); err != nil {
+		t.Fatal(err)
+	}
+	err := precheckUpgradeMount(t.Context(), st)
+	if err == nil || !strings.Contains(err.Error(), "ReadWriteOnce") || !strings.Contains(err.Error(), "Nothing has been changed") {
+		t.Fatalf("a plain upgrade onto an unmountable area set was let through: %v", err)
+	}
+
+	// The control: the same instance with a store that can be shared.
+	inst.Spec.ObjectStore.AccessMode = "ReadWriteMany"
+	st = &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := precheckUpgradeMount(t.Context(), st); err != nil {
+		t.Errorf("a ReadWriteMany store was refused on a plain upgrade: %v", err)
+	}
+}
+
+// Upgrade must make that check before the version is recorded; held by the source, as above.
+func TestTheUpgradeMountPrecheckPrecedesTheRecordedVersion(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "upgrade.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var precheck, record token.Pos
+	ast.Inspect(file, func(n ast.Node) bool {
+		if fn, ok := n.(*ast.FuncDecl); ok && fn.Name.Name != "Upgrade" {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok {
+				switch {
+				case id.Name == "precheckUpgradeMount" && precheck == token.NoPos:
+					precheck = call.Pos()
+				case id.Name == "recordUpgradedVersion" && record == token.NoPos:
+					record = call.Pos()
+				}
+			}
+		}
+		return true
+	})
+	if precheck == token.NoPos || record == token.NoPos || precheck > record {
+		t.Errorf("Upgrade must call precheckUpgradeMount (%v) before recordUpgradedVersion (%v)", precheck, record)
+	}
+}

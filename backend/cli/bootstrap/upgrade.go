@@ -178,6 +178,13 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		fmt.Println(GreenUnderline(fmt.Sprintf(
 			"\nUpgrade instance %q on provider %q", opts.Instance, provider.Name())))
 		fmt.Printf("  %s %s\n", color.WhiteString("Context:"), color.GreenString(kubeContext))
+		// 🔴 A PLAIN UPGRADE RENDERS THE NEW CHART OVER THE DECLARED AREAS, and a chart that
+		// now mounts the object store from an area the instance already runs is refused at
+		// the Helm step, after recordUpgradedVersion has recorded a version that never
+		// happened. Asked here, while nothing is written. See precheckAreaChange.
+		if err := precheckUpgradeMount(ctx, st); err != nil {
+			return err
+		}
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
