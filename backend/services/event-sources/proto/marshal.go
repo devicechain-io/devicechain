@@ -6,6 +6,7 @@ package proto
 import (
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"strings"
 	"time"
 
@@ -310,7 +311,7 @@ func UnmarshalPayloadForStateChangeEvent(encoded []byte) (*model.UnresolvedState
 		return nil, err
 	}
 	return &model.UnresolvedStateChangePayload{
-		State:             model.PresenceState(pbpayload.State),
+		State:             presence.State(pbpayload.State),
 		Reason:            pbpayload.Reason,
 		ExpectedSessionId: pbpayload.ExpectedSessionId,
 		SessionId:         pbpayload.SessionId,

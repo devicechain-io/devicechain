@@ -4,13 +4,12 @@
 package runtime
 
 import (
+	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
 // geoBase is the shared occurred time of the geofence fan-out tests.
@@ -18,24 +17,24 @@ var geoBase = time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 
 // located builds a resolved LOCATION event stamped with a fence-set version, carrying one fix per
 // (lon, lat) pair.
-func located(device, profileVersion string, fenceSetVersion int32, occurred time.Time, fixes ...[2]float64) *dmmodel.ResolvedEvent {
-	entries := make([]dmmodel.ResolvedLocationEntry, 0, len(fixes))
+func located(device, profileVersion string, fenceSetVersion int32, occurred time.Time, fixes ...[2]float64) *resolvedevent.ResolvedEvent {
+	entries := make([]resolvedevent.ResolvedLocationEntry, 0, len(fixes))
 	for _, f := range fixes {
 		lon := strconv.FormatFloat(f[0], 'f', -1, 64)
 		lat := strconv.FormatFloat(f[1], 'f', -1, 64)
 		// Every resolved entry carries its own instant (the resolver guarantees it), so a
 		// fixture that left it zero would build an event this pipeline can no longer
 		// receive. These fixes share the message's time, which is the single-fix shape.
-		entries = append(entries, dmmodel.ResolvedLocationEntry{
+		entries = append(entries, resolvedevent.ResolvedLocationEntry{
 			Latitude: &lat, Longitude: &lon, OccurredTime: occurred})
 	}
-	return &dmmodel.ResolvedEvent{
+	return &resolvedevent.ResolvedEvent{
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		EventType:           esmodel.Location,
 		FenceSetVersion:     fenceSetVersion,
-		Payload:             &dmmodel.ResolvedLocationsPayload{Entries: entries},
+		Payload:             &resolvedevent.ResolvedLocationsPayload{Entries: entries},
 	}
 }
 
@@ -53,7 +52,7 @@ func fenceRuleReg(t *testing.T, tenant, profileVersion, fenceToken string) *Rule
 
 // planThroughView is the exact resolution the live processor performs: the fence set is looked up
 // from the loop-owned view using the event's OWN tenant and the version stamped on the event.
-func planThroughView(reg *RuleRegistry, v *FenceSetView, seq uint64, tenant string, ev *dmmodel.ResolvedEvent) PlanResult {
+func planThroughView(reg *RuleRegistry, v *FenceSetView, seq uint64, tenant string, ev *resolvedevent.ResolvedEvent) PlanResult {
 	return reg.Plan(seq, tenant, ev, ev.OccurredTime, nil, v.ForEvent(tenant, ev))
 }
 
@@ -265,13 +264,13 @@ func TestLocationEventWithUnparseablePositionIsSkipped(t *testing.T) {
 	reg := fenceRuleReg(t, "acme", "p@1", "origin")
 
 	lat := "0.5"
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken:   "d1",
 		ProfileVersionToken: "p@1",
 		OccurredTime:        geoBase,
 		EventType:           esmodel.Location,
 		FenceSetVersion:     1,
-		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &lat}, // no longitude: no point
 			{Latitude: &lat, Longitude: strptr("0.5")}, // a real fix, inside
 		}},

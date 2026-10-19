@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"database/sql"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
@@ -85,7 +86,7 @@ func benchResolveMeasurements(b *testing.B, profile model.ProfileResolution) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if got := len(out.(*model.ResolvedMeasurementsPayload).Entries[0].Entries); got != want {
+	if got := len(out.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries); got != want {
 		b.Fatalf("resolved %d entries, want %d (a calculated metric that skipped measures nothing)", got, want)
 	}
 	b.ReportAllocs()
@@ -152,7 +153,7 @@ func BenchmarkResolveMeasurements_CalcConst(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	if got := len(out.(*model.ResolvedMeasurementsPayload).Entries[0].Entries); got != len(calcBenchMeasured)+1 {
+	if got := len(out.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries); got != len(calcBenchMeasured)+1 {
 		b.Fatalf("resolved %d entries, want %d (a constant that was not read skips the formula)", got, len(calcBenchMeasured)+1)
 	}
 	b.ReportAllocs()

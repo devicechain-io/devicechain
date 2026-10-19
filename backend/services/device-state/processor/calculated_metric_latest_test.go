@@ -6,12 +6,12 @@ package processor
 import (
 	"context"
 	"database/sql"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
@@ -46,7 +46,7 @@ func TestACalculatedMetricIsTheDevicesLatestValue(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		encoded, err := dmproto.MarshalResolvedEventAs(&dmmodel.ResolvedEvent{Source: mqttTestSource,
+		encoded, err := resolvedevent.MarshalResolvedEventAs(&resolvedevent.ResolvedEvent{Source: mqttTestSource,
 			SourceDeviceToken: "meter-ds", EventType: esmodel.Measurement, OccurredTime: at, ProcessedTime: at,
 			ProfileVersionToken: "meter@1", Payload: payload}, format)
 		if err != nil {

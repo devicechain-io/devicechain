@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"reflect"
 	"strings"
 	"sync"
@@ -239,7 +240,7 @@ func (r *resolveRig) statements() []string {
 	return append([]string(nil), r.sql...)
 }
 
-func (r *resolveRig) resolve(event *esmodel.UnresolvedEvent) *model.ResolvedEvent {
+func (r *resolveRig) resolve(event *esmodel.UnresolvedEvent) *resolvedevent.ResolvedEvent {
 	r.t.Helper()
 	results, reason, err := r.rez.ResolveEvent(r.ctx, event)
 	if err != nil || reason != 0 {
@@ -273,9 +274,9 @@ func devLocationEvent() *esmodel.UnresolvedEvent {
 }
 
 // stampedUnit returns the unit stamped on the event's single measurement, or "" if none.
-func stampedUnit(t testing.TB, resolved *model.ResolvedEvent) string {
+func stampedUnit(t testing.TB, resolved *resolvedevent.ResolvedEvent) string {
 	t.Helper()
-	payload, ok := resolved.Payload.(*model.ResolvedMeasurementsPayload)
+	payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 	if !ok || len(payload.Entries) != 1 || len(payload.Entries[0].Entries) != 1 {
 		t.Fatalf("resolved payload is not one measurement: %#v", resolved.Payload)
 	}

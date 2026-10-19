@@ -6,12 +6,11 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
@@ -65,7 +64,7 @@ func failedRecordProcessor(t *testing.T, w *capturingWriter) (*InboundEventsProc
 // acks to ack. errText becomes the record's Error: "\xff" is not valid UTF-8, which the
 // proto3 encoder refuses.
 func queueFailed(iproc *InboundEventsProcessor, errText string, ack *countingAck) {
-	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), "device-management",
+	failed := resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), "device-management",
 		"event could not be resolved", errors.New(errText), []byte("payload"))
 	src := messaging.NewConsumedMessage(testTenantSubject, []byte("x"), 1, nil, ack)
 	src.StreamSeq = 42
@@ -76,9 +75,9 @@ func queueFailed(iproc *InboundEventsProcessor, errText string, ack *countingAck
 // holding invalid UTF-8 does not marshal. If a protobuf change stopped refusing it, the
 // failure would surface HERE, with the reason, instead of as a puzzling failure further down.
 func TestTheFailedEventEncoderRefusesInvalidUTF8(t *testing.T) {
-	_, err := proto.MarshalFailedEvent(&dmodel.FailedEvent{Error: "\xff"})
+	_, err := resolvedevent.MarshalFailedEvent(&resolvedevent.FailedEvent{Error: "\xff"})
 	require.Error(t, err)
-	_, err = proto.MarshalFailedEvent(&dmodel.FailedEvent{Error: "boom"})
+	_, err = resolvedevent.MarshalFailedEvent(&resolvedevent.FailedEvent{Error: "boom"})
 	require.NoError(t, err)
 }
 
@@ -111,12 +110,12 @@ func TestAnEncodableFailureRecordIsPublishedAndDecodes(t *testing.T) {
 	require.Len(t, w.msgs, 1)
 	msg := w.msgs[0]
 	require.NotEmpty(t, msg.Value)
-	got, err := proto.UnmarshalFailedEvent(msg.Value)
+	got, err := resolvedevent.UnmarshalFailedEvent(msg.Value)
 	require.NoError(t, err)
 	require.Equal(t, "event could not be resolved", got.Message)
 	require.Equal(t, "boom", got.Error)
-	require.Equal(t, uint(proto.FailureReason_Invalid), got.Reason)
-	require.Equal(t, strconv.Itoa(int(proto.FailureReason_Invalid)), string(msg.Key))
+	require.Equal(t, uint(resolvedevent.FailureReason_Invalid), got.Reason)
+	require.Equal(t, strconv.Itoa(int(resolvedevent.FailureReason_Invalid)), string(msg.Key))
 	// The failed kind, the tenant, and the source's stream sequence (42) and fan-out position in base 36.
 	require.Equal(t, "f:tenant1:16:0", msg.DedupID)
 	require.Equal(t, "corr-1", msg.CorrelationID())
@@ -154,7 +153,7 @@ func TestAnUnresolvedEventThatCannotBeEncodedIsCountedAsLost(t *testing.T) {
 	ack := &countingAck{}
 	src := messaging.NewConsumedMessage(testTenantSubject, []byte("x"), 1, nil, ack)
 
-	iproc.OnUnresolvedEvent(src, "tenant1", uint(proto.FailureReason_Invalid),
+	iproc.OnUnresolvedEvent(src, "tenant1", uint(resolvedevent.FailureReason_Invalid),
 		esmodel.UnresolvedEvent{Device: "\xff"}, errors.New("unresolved"))
 
 	require.Len(t, iproc.failed, 0, "an unencodable archive must not become a failure record")
@@ -220,7 +219,7 @@ type orderAck struct {
 func (a *orderAck) Ack() error { *a.log = append(*a.log, a.name); return nil }
 
 func queueFailedWith(iproc *InboundEventsProcessor, errText string, ack messaging.Acknowledger) {
-	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), "device-management",
+	failed := resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), "device-management",
 		"event could not be resolved", errors.New(errText), []byte("payload"))
 	src := messaging.NewConsumedMessage(testTenantSubject, []byte("x"), 1, nil, ack)
 	iproc.failed <- failedItem{tenant: "tenant1", event: *failed, src: src, correlation: "corr"}

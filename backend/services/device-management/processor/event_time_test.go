@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
@@ -50,12 +51,12 @@ func timedLocationEvent(envelope, processed time.Time, fixTimes ...*time.Time) *
 	}
 }
 
-func resolveFixes(t *testing.T, rez *EventResolver, event *esmodel.UnresolvedEvent) []model.ResolvedLocationEntry {
+func resolveFixes(t *testing.T, rez *EventResolver, event *esmodel.UnresolvedEvent) []resolvedevent.ResolvedLocationEntry {
 	t.Helper()
 	resolved, err := rez.ResolveLocationsEventPayload(context.Background(), nil, nil, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedLocationsPayload)
-	require.True(t, ok, "expected *model.ResolvedLocationsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedLocationsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedLocationsPayload, got %T", resolved)
 	return payload.Entries
 }
 
@@ -190,8 +191,8 @@ func TestAMeasurementBatchKeepsEachSamplesOwnInstant(t *testing.T) {
 	resolved, err := resolverWithMetricDefs(t, 5*time.Minute).
 		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedMeasurementsPayload)
-	require.True(t, ok, "expected *model.ResolvedMeasurementsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedMeasurementsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedMeasurementsPayload, got %T", resolved)
 	require.Len(t, payload.Entries, 2)
 
 	assert.True(t, payload.Entries[0].OccurredTime.Equal(first),
@@ -216,7 +217,7 @@ func TestAMeasurementSampleTimeIsBounded(t *testing.T) {
 	resolved, err := resolverWithMetricDefs(t, skew).
 		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
-	payload := resolved.(*model.ResolvedMeasurementsPayload)
+	payload := resolved.(*resolvedevent.ResolvedMeasurementsPayload)
 	require.Len(t, payload.Entries, 1)
 	assert.True(t, payload.Entries[0].OccurredTime.Equal(processed.Add(skew)),
 		"a poisoned sample time must be replaced with the ceiling: got %v", payload.Entries[0].OccurredTime)
@@ -238,8 +239,8 @@ func TestAnAlertBatchKeepsEachEntrysOwnInstant(t *testing.T) {
 	}
 	resolved, err := rez.ResolveAlertsEventPayload(context.Background(), nil, nil, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedAlertsPayload)
-	require.True(t, ok, "expected *model.ResolvedAlertsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedAlertsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedAlertsPayload, got %T", resolved)
 	require.Len(t, payload.Entries, 2)
 
 	assert.True(t, payload.Entries[0].OccurredTime.Equal(raised),

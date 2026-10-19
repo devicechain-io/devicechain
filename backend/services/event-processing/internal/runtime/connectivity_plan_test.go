@@ -4,23 +4,22 @@
 package runtime
 
 import (
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"testing"
+	"time"
 )
 
 // stateChange builds a resolved presence StateChange for a device under a profile version.
-func stateChange(tenant, device, profileVersion string, occurred time.Time, state string, session uint64) *dmmodel.ResolvedEvent {
-	return &dmmodel.ResolvedEvent{
+func stateChange(tenant, device, profileVersion string, occurred time.Time, state string, session uint64) *resolvedevent.ResolvedEvent {
+	return &resolvedevent.ResolvedEvent{
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		EventType:           esmodel.StateChange,
-		Payload:             &dmmodel.ResolvedStateChangePayload{State: state, SessionId: session},
+		Payload:             &resolvedevent.ResolvedStateChangePayload{State: state, SessionId: session},
 	}
 }
 
@@ -120,7 +119,7 @@ func TestPlanConnectivityGroupScopeDescopes(t *testing.T) {
 	}
 
 	// In scope (member of fleet@1): the edge is fed.
-	ev.ScopeMemberships = []dmmodel.GroupRef{{GroupToken: "fleet", Version: 1}}
+	ev.ScopeMemberships = []resolvedevent.GroupRef{{GroupToken: "fleet", Version: 1}}
 	inScope := planEv(reg, 2, "acme", ev)
 	if len(inScope.Events) != 1 || inScope.Events[0].Presence == nil {
 		t.Fatalf("an in-scope connectivity rule must feed the edge, got %+v", inScope.Events)

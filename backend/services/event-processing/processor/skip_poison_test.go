@@ -6,12 +6,10 @@ package processor
 import (
 	"bytes"
 	"context"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // garbageAt builds an unparseable payload on a tenanted subject at stream sequence seq.
@@ -182,9 +180,9 @@ func TestDuplicateIsDroppedBeforeDecode(t *testing.T) {
 	rp.checkpoint(ctx)
 
 	decodes := 0
-	rp.decodeResolved = func(b []byte) (*dmmodel.ResolvedEvent, error) {
+	rp.decodeResolved = func(b []byte) (*resolvedevent.ResolvedEvent, error) {
 		decodes++
-		return dmproto.UnmarshalResolvedEvent(b)
+		return resolvedevent.UnmarshalResolvedEvent(b)
 	}
 
 	if rp.applyResolved(msgAt(t, 2, &fakeAck{})) {

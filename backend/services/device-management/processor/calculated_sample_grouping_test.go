@@ -14,6 +14,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -23,7 +24,7 @@ import (
 // entry: Sparkplug and LwM2M ingest emit ONE entry per metric, and a formula over two of them
 // must still compute.
 
-func resolveEntries(t *testing.T, profile model.ProfileResolution, entries ...esmodel.UnresolvedMeasurementsEntry) *model.ResolvedMeasurementsPayload {
+func resolveEntries(t *testing.T, profile model.ProfileResolution, entries ...esmodel.UnresolvedMeasurementsEntry) *resolvedevent.ResolvedMeasurementsPayload {
 	t.Helper()
 	device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
@@ -34,7 +35,7 @@ func resolveEntries(t *testing.T, profile model.ProfileResolution, entries ...es
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: entries}}
 	out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, profile, event)
 	require.NoError(t, err)
-	return out.(*model.ResolvedMeasurementsPayload)
+	return out.(*resolvedevent.ResolvedMeasurementsPayload)
 }
 
 func entry(at *time.Time, kv ...string) esmodel.UnresolvedMeasurementsEntry {
@@ -45,7 +46,7 @@ func entry(at *time.Time, kv ...string) esmodel.UnresolvedMeasurementsEntry {
 	return esmodel.UnresolvedMeasurementsEntry{Measurements: m, OccurredTime: at}
 }
 
-func derivedValues(p *model.ResolvedMeasurementsPayload) map[string]string {
+func derivedValues(p *resolvedevent.ResolvedMeasurementsPayload) map[string]string {
 	out := map[string]string{}
 	for _, s := range p.Entries {
 		for _, e := range s.Entries {
@@ -175,7 +176,7 @@ func TestIngestShapedEventsThroughTheEmitterAndWire(t *testing.T) {
 			device := &model.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
 			out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, powerProfile(), event)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, derivedValues(out.(*model.ResolvedMeasurementsPayload)))
+			assert.Equal(t, tc.want, derivedValues(out.(*resolvedevent.ResolvedMeasurementsPayload)))
 		})
 	}
 }

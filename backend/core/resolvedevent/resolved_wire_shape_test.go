@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"fmt"
@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protodesc"
@@ -207,7 +207,7 @@ func resolvedHopLoss(t *testing.T, file protoreflect.FileDescriptor, hop func([]
 	}
 	want := dynamicpb.NewMessage(eventMD)
 	populate(t, want, 0)
-	want.Set(eventTypeFD, protoreflect.ValueOfInt64(int64(esmodel.Measurement)))
+	want.Set(eventTypeFD, protoreflect.ValueOfInt64(int64(eventtype.Measurement)))
 	want.Set(payloadFD, protoreflect.ValueOfBytes(payloadBytes))
 
 	in, err := proto.Marshal(want)
@@ -257,7 +257,7 @@ func resolvedHopLoss(t *testing.T, file protoreflect.FileDescriptor, hop func([]
 // TestResolvedEventWireCarriesEveryDeclaredField is the guard against the writer falling
 // behind the .proto: see the comment at the top of this file.
 func TestResolvedEventWireCarriesEveryDeclaredField(t *testing.T) {
-	if err := resolvedHopLoss(t, File_proto_dc_device_management_events_proto, resolvedHop); err != nil {
+	if err := resolvedHopLoss(t, File_resolvedevent_dc_resolved_events_proto, resolvedHop); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -304,7 +304,7 @@ func fieldsBeyondOneByteTags(t *testing.T, file protoreflect.FileDescriptor) []s
 // numbered 16 or above in any message the writer writes fails here, by name, rather than
 // as a sized-versus-written mismatch once the writer is taught it.
 func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
-	if beyond := fieldsBeyondOneByteTags(t, File_proto_dc_device_management_events_proto); len(beyond) > 0 {
+	if beyond := fieldsBeyondOneByteTags(t, File_resolvedevent_dc_resolved_events_proto); len(beyond) > 0 {
 		t.Fatalf("the direct writer (resolved_wire.go) sizes every tag as %d byte, which these fields "+
 			"do not fit; size their tags with protowire.SizeTag:\n  %s", tagSize, strings.Join(beyond, "\n  "))
 	}
@@ -312,7 +312,7 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 	// The negative control: field 19 added to each message must be named. (19, because
 	// PResolvedEvent already holds fields 16 to 18, each sized by its own tag.)
 	for _, message := range resolvedWireMessages {
-		fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
+		fdp := protodesc.ToFileDescriptorProto(File_resolvedevent_dc_resolved_events_proto)
 		for _, m := range fdp.MessageType {
 			if m.GetName() == message {
 				m.Field = append(m.Field, &descriptorpb.FieldDescriptorProto{
@@ -341,7 +341,7 @@ func TestResolvedWireFieldNumbersFitTheTagSize(t *testing.T) {
 func TestResolvedEventFieldGuardFailsOnANewField(t *testing.T) {
 	for _, message := range resolvedWireMessages {
 		t.Run(message, func(t *testing.T) {
-			fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
+			fdp := protodesc.ToFileDescriptorProto(File_resolvedevent_dc_resolved_events_proto)
 			var target *descriptorpb.DescriptorProto
 			for _, m := range fdp.MessageType {
 				if m.GetName() == message {

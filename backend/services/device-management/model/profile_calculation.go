@@ -5,6 +5,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"slices"
 	"sort"
 
@@ -281,7 +282,7 @@ type CalculationObserver interface {
 // produced none, finds it absent: it skips as missing_input unless it guards the read with
 // has(). So a chain's values are a function of the sample alone, whatever the order they are
 // appended in, and the Recalculate of a draft computes the same ones.
-func (c Calculation) Append(dst []ResolvedMeasurementEntry, obs CalculationObserver) []ResolvedMeasurementEntry {
+func (c Calculation) Append(dst []resolvedevent.ResolvedMeasurementEntry, obs CalculationObserver) []resolvedevent.ResolvedMeasurementEntry {
 	if c.plan == nil {
 		return dst
 	}
@@ -305,7 +306,7 @@ func (c Calculation) Append(dst []ResolvedMeasurementEntry, obs CalculationObser
 		// The entry's own copies of the stamp, in one allocation: an entry travels to every
 		// consumer, so it must never point into the shared plan.
 		st := &derivedStamp{classifier: cf.classifier, dataType: cf.dataType}
-		entry := ResolvedMeasurementEntry{Name: cf.key, Value: out.Value, Classifier: &st.classifier,
+		entry := resolvedevent.ResolvedMeasurementEntry{Name: cf.key, Value: out.Value, Classifier: &st.classifier,
 			DataType: &st.dataType, Derived: true}
 		if cf.unit != nil {
 			st.unit = *cf.unit

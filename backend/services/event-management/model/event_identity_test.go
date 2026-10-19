@@ -7,17 +7,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 // newIdentityTestApi builds an in-memory sqlite Api carrying the SAME keys production
@@ -204,18 +203,18 @@ func TestDeriveEventIdIsOrderSensitiveOverAPayload(t *testing.T) {
 	occurred := time.Date(2026, 7, 31, 20, 0, 0, 0, time.UTC)
 	base := Event{DeviceToken: "d", EventType: esmodel.Measurement, OccurredTime: occurred}
 
-	ascending := &dmmodel.ResolvedMeasurementsPayload{
-		Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{
+	ascending := &resolvedevent.ResolvedMeasurementsPayload{
+		Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "humidity", Value: "48"},
 				{Name: "temperature", Value: "21.5"},
 			},
 			OccurredTime: occurred,
 		}},
 	}
-	swapped := &dmmodel.ResolvedMeasurementsPayload{
-		Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{
+	swapped := &resolvedevent.ResolvedMeasurementsPayload{
+		Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "temperature", Value: "21.5"},
 				{Name: "humidity", Value: "48"},
 			},

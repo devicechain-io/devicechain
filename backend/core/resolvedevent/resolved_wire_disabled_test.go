@@ -1,16 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"bytes"
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/encoding/protowire"
@@ -21,13 +20,13 @@ import (
 	"google.golang.org/protobuf/types/dynamicpb"
 )
 
-func disabledPresence(disabled bool) *model.ResolvedEvent {
+func disabledPresence(disabled bool) *ResolvedEvent {
 	at := time.Date(2026, 10, 15, 8, 0, 0, 0, time.UTC)
-	return &model.ResolvedEvent{
+	return &ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: "dev-1", ProfileVersionToken: "p@1",
-		OccurredTime: at, ProcessedTime: at, EventType: esmodel.StateChange,
+		OccurredTime: at, ProcessedTime: at, EventType: eventtype.StateChange,
 		SourceDeviceDisabled: disabled,
-		Payload:              &model.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "close", SessionId: 7},
+		Payload:              &ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "close", SessionId: 7},
 	}
 }
 
@@ -69,7 +68,7 @@ func TestTheDisabledMarkRoundTripsThroughTheGeneratedDecoder(t *testing.T) {
 // holding the mark as an unknown field it ignores. Built from this file's descriptor with
 // field 16 removed, which is what the previous release's generated code is.
 func TestAPreviousReleaseDecodesAMarkedEvent(t *testing.T) {
-	fdp := protodesc.ToFileDescriptorProto(File_proto_dc_device_management_events_proto)
+	fdp := protodesc.ToFileDescriptorProto(File_resolvedevent_dc_resolved_events_proto)
 	for _, m := range fdp.MessageType {
 		if m.GetName() != "PResolvedEvent" {
 			continue
@@ -93,6 +92,6 @@ func TestAPreviousReleaseDecodesAMarkedEvent(t *testing.T) {
 	old := dynamicpb.NewMessage(md)
 	require.NoError(t, proto.Unmarshal(encoded, old))
 	assert.Equal(t, "dev-1", old.Get(md.Fields().ByName("source_device_token")).String())
-	assert.Equal(t, int64(esmodel.StateChange), old.Get(md.Fields().ByName("event_type")).Int())
+	assert.Equal(t, int64(eventtype.StateChange), old.Get(md.Fields().ByName("event_type")).Int())
 	assert.Equal(t, protoreflect.RawFields{0x80, 0x01, 0x01}, old.GetUnknown(), "the mark is not what an old consumer sees as unknown")
 }

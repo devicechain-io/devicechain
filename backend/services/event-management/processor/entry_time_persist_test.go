@@ -6,16 +6,15 @@ package processor
 import (
 	"context"
 	"errors"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 // The historian's WRITE SEAM: the worker turns a resolved payload into create requests,
@@ -79,9 +78,9 @@ func TestPersistMeasurementEventsCarriesEachSamplesInstant(t *testing.T) {
 	worker, api, parent, first, second := entryTimeWorker()
 
 	_, err := worker.PersistMeasurementEvents(context.Background(), nil, parent,
-		dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{
-			{OccurredTime: first, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5"}}},
-			{OccurredTime: second, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "22.5"}}},
+		resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{
+			{OccurredTime: first, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5"}}},
+			{OccurredTime: second, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: "22.5"}}},
 		}})
 	require.NoError(t, err)
 	require.Len(t, api.measurements, 2)
@@ -103,7 +102,7 @@ func TestPersistAlertEventsCarriesEachEntrysInstant(t *testing.T) {
 	worker, api, parent, first, second := entryTimeWorker()
 
 	_, err := worker.PersistAlertEvents(context.Background(), nil, parent,
-		dmmodel.ResolvedAlertsPayload{Entries: []dmmodel.ResolvedAlertEntry{
+		resolvedevent.ResolvedAlertsPayload{Entries: []resolvedevent.ResolvedAlertEntry{
 			{OccurredTime: first, Type: "SENSOR_FAULT", Level: 3, Message: "probe A open circuit"},
 			{OccurredTime: second, Type: "SENSOR_FAULT", Level: 3, Message: "probe B open circuit"},
 		}})
@@ -121,7 +120,7 @@ func TestPersistLocationEventsCarriesEachFixesInstant(t *testing.T) {
 	s := func(v string) *string { return &v }
 
 	_, err := worker.PersistLocationEvents(context.Background(), nil, parent,
-		dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+		resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: first},
 			{Latitude: s("47.6062"), Longitude: s("-122.3321"), OccurredTime: second},
 		}})

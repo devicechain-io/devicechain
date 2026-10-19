@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strings"
 	"sync"
 	"testing"
@@ -123,7 +124,7 @@ func TestUndeclaredLocationEventIsStoredNotRejected(t *testing.T) {
 	assert.Equal(t, uint(0), reason, "an undeclared location must not carry a failure reason")
 	require.Len(t, results, 1, "an undeclared location must produce a resolved event, not be dropped")
 
-	payload, ok := results[0].Resolved.Payload.(*dmodel.ResolvedLocationsPayload)
+	payload, ok := results[0].Resolved.Payload.(*resolvedevent.ResolvedLocationsPayload)
 	require.True(t, ok, "expected a resolved locations payload, got %T", results[0].Resolved.Payload)
 	require.Len(t, payload.Entries, 1, "the fix was filtered out of an event that was otherwise kept")
 	require.NotNil(t, payload.Entries[0].Latitude, "the coordinates were stripped from a stored fix")

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"reflect"
 	"strconv"
 	"strings"
@@ -311,7 +312,7 @@ func TestRecalculatedEntriesAreTheCallers(t *testing.T) {
 		{Model: gorm.Model{ID: 2}, MetricKey: "p", DataType: string(MetricDouble), Unit: unit,
 			Expression: sql.NullString{String: "v * 2.0", Valid: true}},
 	})
-	entries := []ResolvedMeasurementEntry{{Name: "v", Value: "3"}}
+	entries := []resolvedevent.ResolvedMeasurementEntry{{Name: "v", Value: "3"}}
 	first := r.Recalculate(entries, nil, nopObserver{})
 	if len(first) != 2 || first[0].Name != "p" || first[0].Value != "6" {
 		t.Fatalf("recalculated %+v", first)

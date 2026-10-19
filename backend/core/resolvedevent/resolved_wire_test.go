@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"bytes"
@@ -11,9 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -64,7 +63,7 @@ func oracleString(at time.Time, ownOffset bool) string {
 // bothFormats is every format a producer writes, which every equivalence below holds.
 var bothFormats = []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact}
 
-func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+func referenceMarshalMeasurementsPayload(payload *ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
 	pbpayload := &PResolvedMeasurementsPayload{}
 	for _, mxsentry := range payload.Entries {
 		pmxentries := make([]*PResolvedMeasurementEntry, 0)
@@ -88,10 +87,10 @@ func referenceMarshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayl
 	return proto.Marshal(pbpayload)
 }
 
-func referenceMarshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
+func referenceMarshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
 	var pybytes []byte
 	var err error
-	if mx, ok := event.Payload.(*model.ResolvedMeasurementsPayload); ok && event.EventType == esmodel.Measurement {
+	if mx, ok := event.Payload.(*ResolvedMeasurementsPayload); ok && event.EventType == eventtype.Measurement {
 		pybytes, err = referenceMarshalMeasurementsPayload(mx, format)
 	} else {
 		pybytes, err = MarshalResolvedPayload(event.EventType, event.Payload, format)
@@ -144,10 +143,10 @@ func u64p(v uint64) *uint64 { return &v }
 
 // readings is a measurements entry of n readings whose name and value lengths step
 // through every varint length boundary a realistic reading reaches.
-func readings(n int) []model.ResolvedMeasurementEntry {
-	out := make([]model.ResolvedMeasurementEntry, 0, n)
+func readings(n int) []ResolvedMeasurementEntry {
+	out := make([]ResolvedMeasurementEntry, 0, n)
 	for i := 0; i < n; i++ {
-		mx := model.ResolvedMeasurementEntry{Name: fmt.Sprintf("m%d", i), Value: fmt.Sprintf("%d.25", i)}
+		mx := ResolvedMeasurementEntry{Name: fmt.Sprintf("m%d", i), Value: fmt.Sprintf("%d.25", i)}
 		switch i % 4 {
 		case 1:
 			mx.Classifier, mx.Unit, mx.DataType = u64p(uint64(i)), strp("Cel"), strp("DOUBLE")
@@ -162,127 +161,127 @@ func readings(n int) []model.ResolvedMeasurementEntry {
 }
 
 // resolvedShapes is every shape the equivalence test holds against the oracle.
-func resolvedShapes() map[string]*model.ResolvedEvent {
+func resolvedShapes() map[string]*ResolvedEvent {
 	at := time.Date(2026, 10, 12, 9, 30, 15, 123456789, time.UTC)
 	whole := time.Date(2026, 10, 12, 9, 30, 15, 0, time.UTC)
 	offset := time.Date(2026, 10, 12, 9, 30, 15, 500, time.FixedZone("x", -7*3600-30*60))
-	mx := func(entries ...model.ResolvedMeasurementsEntry) *model.ResolvedMeasurementsPayload {
-		return &model.ResolvedMeasurementsPayload{Entries: entries}
+	mx := func(entries ...ResolvedMeasurementsEntry) *ResolvedMeasurementsPayload {
+		return &ResolvedMeasurementsPayload{Entries: entries}
 	}
-	base := func() *model.ResolvedEvent {
-		return &model.ResolvedEvent{
+	base := func() *ResolvedEvent {
+		return &ResolvedEvent{
 			Source: "http", SourceDeviceToken: "dev-1", DeviceTypeToken: "sensor",
 			ProfileVersionToken: "p@3", OccurredTime: at, ProcessedTime: at.Add(time.Millisecond),
-			EventType: esmodel.Measurement,
-			Payload: mx(model.ResolvedMeasurementsEntry{
-				Entries: []model.ResolvedMeasurementEntry{{Name: "temp", Value: "21.5"}}, OccurredTime: at}),
+			EventType: eventtype.Measurement,
+			Payload: mx(ResolvedMeasurementsEntry{
+				Entries: []ResolvedMeasurementEntry{{Name: "temp", Value: "21.5"}}, OccurredTime: at}),
 		}
 	}
-	with := func(f func(*model.ResolvedEvent)) *model.ResolvedEvent { e := base(); f(e); return e }
+	with := func(f func(*ResolvedEvent)) *ResolvedEvent { e := base(); f(e); return e }
 	long := strings.Repeat("x", 200)
 	longer := strings.Repeat("y", 20000)
 
-	return map[string]*model.ResolvedEvent{
+	return map[string]*ResolvedEvent{
 		"loadtest shape": base(),
-		"zero event":     {EventType: esmodel.Measurement, Payload: mx()},
-		"every field": with(func(e *model.ResolvedEvent) {
+		"zero event":     {EventType: eventtype.Measurement, Payload: mx()},
+		"every field": with(func(e *ResolvedEvent) {
 			e.AltId = strp("alt-1")
-			e.Anchors = []model.ResolvedAnchor{
+			e.Anchors = []ResolvedAnchor{
 				{AnchorType: "customer", AnchorToken: "acme", RelationshipId: 5},
 				{AnchorType: "area", AnchorToken: "w-3", RelationshipId: 1 << 40},
 			}
-			e.ScopeMemberships = []model.GroupRef{{GroupToken: "g1", Version: 2}, {GroupToken: "g2", Version: 1 << 30}}
+			e.ScopeMemberships = []GroupRef{{GroupToken: "g1", Version: 2}, {GroupToken: "g2", Version: 1 << 30}}
 			e.ExternalId = "grp/node/dev"
 			e.FenceSetVersion = 7
 			e.SourceDeviceDisabled = true
 		}),
-		"empty alt id is present": with(func(e *model.ResolvedEvent) { e.AltId = strp("") }),
-		"empty anchor and membership": with(func(e *model.ResolvedEvent) {
-			e.Anchors = []model.ResolvedAnchor{{}}
-			e.ScopeMemberships = []model.GroupRef{{}}
+		"empty alt id is present": with(func(e *ResolvedEvent) { e.AltId = strp("") }),
+		"empty anchor and membership": with(func(e *ResolvedEvent) {
+			e.Anchors = []ResolvedAnchor{{}}
+			e.ScopeMemberships = []GroupRef{{}}
 		}),
-		"negative int32s sign-extend": with(func(e *model.ResolvedEvent) {
-			e.ScopeMemberships = []model.GroupRef{{GroupToken: "g", Version: -1}, {Version: -1 << 31}}
+		"negative int32s sign-extend": with(func(e *ResolvedEvent) {
+			e.ScopeMemberships = []GroupRef{{GroupToken: "g", Version: -1}, {Version: -1 << 31}}
 			e.FenceSetVersion = -3
 		}),
-		"no tokens": with(func(e *model.ResolvedEvent) {
+		"no tokens": with(func(e *ResolvedEvent) {
 			e.Source, e.SourceDeviceToken, e.DeviceTypeToken, e.ProfileVersionToken = "", "", "", ""
 		}),
-		"unicode": with(func(e *model.ResolvedEvent) {
+		"unicode": with(func(e *ResolvedEvent) {
 			e.Source, e.ExternalId = "源", "grün/\U0001F600"
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: at,
-				Entries: []model.ResolvedMeasurementEntry{{Name: "température", Value: "２１", Unit: strp("°C")}}})
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: at,
+				Entries: []ResolvedMeasurementEntry{{Name: "température", Value: "２１", Unit: strp("°C")}}})
 		}),
-		"non-UTC and whole-second times": with(func(e *model.ResolvedEvent) {
+		"non-UTC and whole-second times": with(func(e *ResolvedEvent) {
 			e.OccurredTime, e.ProcessedTime = offset, whole
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: offset, Entries: readings(1)},
-				model.ResolvedMeasurementsEntry{OccurredTime: whole, Entries: readings(1)})
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: offset, Entries: readings(1)},
+				ResolvedMeasurementsEntry{OccurredTime: whole, Entries: readings(1)})
 		}),
-		"instants past the count (string form)": with(func(e *model.ResolvedEvent) {
+		"instants past the count (string form)": with(func(e *ResolvedEvent) {
 			far := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 			e.OccurredTime = far
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: far, Entries: readings(1)},
-				model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(1)})
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: far, Entries: readings(1)},
+				ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(1)})
 		}),
-		"an offset instant past the count (string form, in UTC)": with(func(e *model.ResolvedEvent) {
+		"an offset instant past the count (string form, in UTC)": with(func(e *ResolvedEvent) {
 			far := time.Date(9999, 12, 30, 1, 2, 3, 5, time.FixedZone("z", 2*3600))
 			e.ProcessedTime = far
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: far, Entries: readings(1)})
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: far, Entries: readings(1)})
 		}),
-		"the epoch itself is a count": with(func(e *model.ResolvedEvent) {
+		"the epoch itself is a count": with(func(e *ResolvedEvent) {
 			e.OccurredTime, e.ProcessedTime = time.Unix(0, 0), time.Unix(0, 0)
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: time.Unix(0, 0), Entries: readings(1)})
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: time.Unix(0, 0), Entries: readings(1)})
 		}),
-		"zero times": with(func(e *model.ResolvedEvent) {
+		"zero times": with(func(e *ResolvedEvent) {
 			e.OccurredTime, e.ProcessedTime = time.Time{}, time.Time{}
-			e.Payload = mx(model.ResolvedMeasurementsEntry{Entries: readings(1)})
+			e.Payload = mx(ResolvedMeasurementsEntry{Entries: readings(1)})
 		}),
-		"empty entry and empty readings": with(func(e *model.ResolvedEvent) {
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: at},
-				model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: []model.ResolvedMeasurementEntry{{}}})
+		"empty entry and empty readings": with(func(e *ResolvedEvent) {
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: at},
+				ResolvedMeasurementsEntry{OccurredTime: at, Entries: []ResolvedMeasurementEntry{{}}})
 		}),
-		"zero classifier and empty unit are present": with(func(e *model.ResolvedEvent) {
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: []model.ResolvedMeasurementEntry{
+		"zero classifier and empty unit are present": with(func(e *ResolvedEvent) {
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: at, Entries: []ResolvedMeasurementEntry{
 				{Name: "a", Classifier: u64p(0), Unit: strp(""), DataType: strp("")}}})
 		}),
-		"10 readings": with(func(e *model.ResolvedEvent) {
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(10)})
+		"10 readings": with(func(e *ResolvedEvent) {
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(10)})
 		}),
-		"256 readings": with(func(e *model.ResolvedEvent) {
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(256)})
+		"256 readings": with(func(e *ResolvedEvent) {
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: at, Entries: readings(256)})
 		}),
-		"many entries": with(func(e *model.ResolvedEvent) {
-			var entries []model.ResolvedMeasurementsEntry
+		"many entries": with(func(e *ResolvedEvent) {
+			var entries []ResolvedMeasurementsEntry
 			for i := 0; i < 9; i++ {
-				entries = append(entries, model.ResolvedMeasurementsEntry{OccurredTime: at.Add(time.Duration(i) * time.Second), Entries: readings(i)})
+				entries = append(entries, ResolvedMeasurementsEntry{OccurredTime: at.Add(time.Duration(i) * time.Second), Entries: readings(i)})
 			}
 			e.Payload = mx(entries...)
 		}),
-		"2- and 3-byte lengths": with(func(e *model.ResolvedEvent) {
+		"2- and 3-byte lengths": with(func(e *ResolvedEvent) {
 			e.Source, e.ExternalId = long, longer
-			e.Anchors = []model.ResolvedAnchor{{AnchorType: long, AnchorToken: longer}}
-			e.Payload = mx(model.ResolvedMeasurementsEntry{OccurredTime: at, Entries: []model.ResolvedMeasurementEntry{
+			e.Anchors = []ResolvedAnchor{{AnchorType: long, AnchorToken: longer}}
+			e.Payload = mx(ResolvedMeasurementsEntry{OccurredTime: at, Entries: []ResolvedMeasurementEntry{
 				{Name: long, Value: longer, Unit: strp(long)}}})
 		}),
-		"location": with(func(e *model.ResolvedEvent) {
-			e.EventType, e.FenceSetVersion = esmodel.Location, 4
-			e.Payload = &model.ResolvedLocationsPayload{Entries: []model.ResolvedLocationEntry{
+		"location": with(func(e *ResolvedEvent) {
+			e.EventType, e.FenceSetVersion = eventtype.Location, 4
+			e.Payload = &ResolvedLocationsPayload{Entries: []ResolvedLocationEntry{
 				{Latitude: strp("1.5"), Longitude: strp("-2.25"), OccurredTime: at}}}
 		}),
-		"alert": with(func(e *model.ResolvedEvent) {
-			e.EventType = esmodel.Alert
-			e.Payload = &model.ResolvedAlertsPayload{Entries: []model.ResolvedAlertEntry{
+		"alert": with(func(e *ResolvedEvent) {
+			e.EventType = eventtype.Alert
+			e.Payload = &ResolvedAlertsPayload{Entries: []ResolvedAlertEntry{
 				{Type: "t", Level: 2, Message: "m", Source: "s", OccurredTime: at}}}
 		}),
-		"state change": with(func(e *model.ResolvedEvent) {
-			e.EventType = esmodel.StateChange
-			e.Payload = &model.ResolvedStateChangePayload{State: "online", SessionId: 11, OccurredTime: strp("2026-10-12T00:00:00Z")}
+		"state change": with(func(e *ResolvedEvent) {
+			e.EventType = eventtype.StateChange
+			e.Payload = &ResolvedStateChangePayload{State: "online", SessionId: 11, OccurredTime: strp("2026-10-12T00:00:00Z")}
 		}),
-		"new relationship": with(func(e *model.ResolvedEvent) {
-			e.EventType = esmodel.NewRelationship
-			e.Payload = &model.ResolvedNewRelationshipPayload{RelationshipTypeId: 3, TargetType: strp("area"), TargetId: u64p(9)}
+		"new relationship": with(func(e *ResolvedEvent) {
+			e.EventType = eventtype.NewRelationship
+			e.Payload = &ResolvedNewRelationshipPayload{RelationshipTypeId: 3, TargetType: strp("area"), TargetId: u64p(9)}
 		}),
-		"measurements with an empty payload": with(func(e *model.ResolvedEvent) { e.Payload = mx() }),
+		"measurements with an empty payload": with(func(e *ResolvedEvent) { e.Payload = mx() }),
 	}
 }
 
@@ -298,7 +297,7 @@ func TestResolvedEventWireMatchesProtoMarshal(t *testing.T) {
 	}
 }
 
-func assertResolvedWireMatchesReference(t *testing.T, event *model.ResolvedEvent, format eventtime.WireFormat) {
+func assertResolvedWireMatchesReference(t *testing.T, event *ResolvedEvent, format eventtime.WireFormat) {
 	t.Helper()
 	{
 		{
@@ -315,7 +314,7 @@ func assertResolvedWireMatchesReference(t *testing.T, event *model.ResolvedEvent
 			require.NoError(t, err)
 			assert.Equal(t, wantEv, gotEv)
 
-			if mx, ok := event.Payload.(*model.ResolvedMeasurementsPayload); ok {
+			if mx, ok := event.Payload.(*ResolvedMeasurementsPayload); ok {
 				wantPayload, err := referenceMarshalMeasurementsPayload(mx, format)
 				require.NoError(t, err)
 				gotPayload, err := MarshalPayloadForMeasurementsEvent(mx, format)
@@ -330,16 +329,16 @@ func assertResolvedWireMatchesReference(t *testing.T, event *model.ResolvedEvent
 // is refused by both.
 func TestResolvedEventWireRefusesWhatProtoMarshalRefuses(t *testing.T) {
 	at := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
-	for name, event := range map[string]*model.ResolvedEvent{
-		"measurement without a payload":      {EventType: esmodel.Measurement, OccurredTime: at},
-		"measurement with another's payload": {EventType: esmodel.Measurement, Payload: &model.ResolvedAlertsPayload{}},
+	for name, event := range map[string]*ResolvedEvent{
+		"measurement without a payload":      {EventType: eventtype.Measurement, OccurredTime: at},
+		"measurement with another's payload": {EventType: eventtype.Measurement, Payload: &ResolvedAlertsPayload{}},
 		// The inverse: the writer takes the in-place path only for a MEASUREMENT event, so
 		// a measurements payload under any other type is refused as the runtime refuses it,
 		// never written as though the type had been right.
-		"another type with a measurements payload": {EventType: esmodel.Alert, OccurredTime: at,
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
-				{OccurredTime: at, Entries: []model.ResolvedMeasurementEntry{{Name: "n", Value: "v"}}}}}},
-		"unknown event type": {EventType: esmodel.EventType(99)},
+		"another type with a measurements payload": {EventType: eventtype.Alert, OccurredTime: at,
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{
+				{OccurredTime: at, Entries: []ResolvedMeasurementEntry{{Name: "n", Value: "v"}}}}}},
+		"unknown event type": {EventType: eventtype.EventType(99)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, format := range bothFormats {
@@ -358,32 +357,32 @@ func TestResolvedEventWireRefusesWhatProtoMarshalRefuses(t *testing.T) {
 func TestResolvedEventWireRefusesInvalidUTF8(t *testing.T) {
 	const bad = "ok\xff"
 	at := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
-	fresh := func() *model.ResolvedEvent {
-		return &model.ResolvedEvent{
-			EventType: esmodel.Measurement, OccurredTime: at, ProcessedTime: at,
-			Anchors:          []model.ResolvedAnchor{{AnchorType: "a", AnchorToken: "t"}},
-			ScopeMemberships: []model.GroupRef{{GroupToken: "g"}},
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
-				{OccurredTime: at, Entries: []model.ResolvedMeasurementEntry{{Name: "n", Value: "v"}}}}},
+	fresh := func() *ResolvedEvent {
+		return &ResolvedEvent{
+			EventType: eventtype.Measurement, OccurredTime: at, ProcessedTime: at,
+			Anchors:          []ResolvedAnchor{{AnchorType: "a", AnchorToken: "t"}},
+			ScopeMemberships: []GroupRef{{GroupToken: "g"}},
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{
+				{OccurredTime: at, Entries: []ResolvedMeasurementEntry{{Name: "n", Value: "v"}}}}},
 		}
 	}
-	reading := func(e *model.ResolvedEvent) *model.ResolvedMeasurementEntry {
-		return &e.Payload.(*model.ResolvedMeasurementsPayload).Entries[0].Entries[0]
+	reading := func(e *ResolvedEvent) *ResolvedMeasurementEntry {
+		return &e.Payload.(*ResolvedMeasurementsPayload).Entries[0].Entries[0]
 	}
-	for name, spoil := range map[string]func(*model.ResolvedEvent){
-		"source":                func(e *model.ResolvedEvent) { e.Source = bad },
-		"alt id":                func(e *model.ResolvedEvent) { e.AltId = strp(bad) },
-		"source device token":   func(e *model.ResolvedEvent) { e.SourceDeviceToken = bad },
-		"anchor type":           func(e *model.ResolvedEvent) { e.Anchors[0].AnchorType = bad },
-		"anchor token":          func(e *model.ResolvedEvent) { e.Anchors[0].AnchorToken = bad },
-		"device type token":     func(e *model.ResolvedEvent) { e.DeviceTypeToken = bad },
-		"profile version token": func(e *model.ResolvedEvent) { e.ProfileVersionToken = bad },
-		"membership group":      func(e *model.ResolvedEvent) { e.ScopeMemberships[0].GroupToken = bad },
-		"external id":           func(e *model.ResolvedEvent) { e.ExternalId = bad },
-		"reading name":          func(e *model.ResolvedEvent) { reading(e).Name = bad },
-		"reading value":         func(e *model.ResolvedEvent) { reading(e).Value = bad },
-		"reading unit":          func(e *model.ResolvedEvent) { reading(e).Unit = strp(bad) },
-		"reading data type":     func(e *model.ResolvedEvent) { reading(e).DataType = strp(bad) },
+	for name, spoil := range map[string]func(*ResolvedEvent){
+		"source":                func(e *ResolvedEvent) { e.Source = bad },
+		"alt id":                func(e *ResolvedEvent) { e.AltId = strp(bad) },
+		"source device token":   func(e *ResolvedEvent) { e.SourceDeviceToken = bad },
+		"anchor type":           func(e *ResolvedEvent) { e.Anchors[0].AnchorType = bad },
+		"anchor token":          func(e *ResolvedEvent) { e.Anchors[0].AnchorToken = bad },
+		"device type token":     func(e *ResolvedEvent) { e.DeviceTypeToken = bad },
+		"profile version token": func(e *ResolvedEvent) { e.ProfileVersionToken = bad },
+		"membership group":      func(e *ResolvedEvent) { e.ScopeMemberships[0].GroupToken = bad },
+		"external id":           func(e *ResolvedEvent) { e.ExternalId = bad },
+		"reading name":          func(e *ResolvedEvent) { reading(e).Name = bad },
+		"reading value":         func(e *ResolvedEvent) { reading(e).Value = bad },
+		"reading unit":          func(e *ResolvedEvent) { reading(e).Unit = strp(bad) },
+		"reading data type":     func(e *ResolvedEvent) { reading(e).DataType = strp(bad) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			event := fresh()
@@ -397,7 +396,7 @@ func TestResolvedEventWireRefusesInvalidUTF8(t *testing.T) {
 				require.ErrorIs(t, err, errResolvedNotUTF8, format)
 			}
 			if strings.HasPrefix(name, "reading") {
-				_, err = MarshalPayloadForMeasurementsEvent(event.Payload.(*model.ResolvedMeasurementsPayload), eventtime.WireCompact)
+				_, err = MarshalPayloadForMeasurementsEvent(event.Payload.(*ResolvedMeasurementsPayload), eventtime.WireCompact)
 				require.ErrorIs(t, err, errResolvedNotUTF8)
 			}
 		})
@@ -410,13 +409,13 @@ func TestResolvedEventWireRefusesInvalidUTF8(t *testing.T) {
 func TestResolvedEventWireAllocatesOnlyItsOutput(t *testing.T) {
 	at := time.Date(2026, 10, 12, 9, 30, 15, 123456789, time.UTC)
 	for _, n := range []int{1, 10, 256} {
-		event := &model.ResolvedEvent{
+		event := &ResolvedEvent{
 			Source: "http", AltId: strp("alt"), SourceDeviceToken: "dev-1", DeviceTypeToken: "sensor",
 			ProfileVersionToken: "p@3", ExternalId: "x",
-			Anchors:          []model.ResolvedAnchor{{AnchorType: "area", AnchorToken: "a", RelationshipId: 1}},
-			ScopeMemberships: []model.GroupRef{{GroupToken: "g", Version: 1}},
-			OccurredTime:     at, ProcessedTime: at, EventType: esmodel.Measurement,
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
+			Anchors:          []ResolvedAnchor{{AnchorType: "area", AnchorToken: "a", RelationshipId: 1}},
+			ScopeMemberships: []GroupRef{{GroupToken: "g", Version: 1}},
+			OccurredTime:     at, ProcessedTime: at, EventType: eventtype.Measurement,
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{
 				{OccurredTime: at, Entries: readings(n)}}},
 		}
 		allocs := testing.AllocsPerRun(100, func() {
@@ -427,7 +426,7 @@ func TestResolvedEventWireAllocatesOnlyItsOutput(t *testing.T) {
 		if allocs != 1 {
 			t.Errorf("%d readings: %v allocations, want 1 (the output)", n, allocs)
 		}
-		payload := event.Payload.(*model.ResolvedMeasurementsPayload)
+		payload := event.Payload.(*ResolvedMeasurementsPayload)
 		allocs = testing.AllocsPerRun(100, func() {
 			if _, err := MarshalPayloadForMeasurementsEvent(payload, eventtime.WireCompact); err != nil {
 				t.Fatal(err)
@@ -454,18 +453,18 @@ func FuzzResolvedEventWire(f *testing.F) {
 	f.Fuzz(func(t *testing.T, source, device, alt, anchor, token, group, value, unit string,
 		classifier uint64, nanos int64, version, fence int32, entries, perEntry, flags, kind uint8) {
 		at := time.Unix(1_760_000_000, nanos%1_000_000_000).In(time.FixedZone("z", int(version%50000)))
-		event := &model.ResolvedEvent{
+		event := &ResolvedEvent{
 			Source: source, SourceDeviceToken: device, OccurredTime: at, ProcessedTime: at.UTC(),
-			EventType: esmodel.Measurement, FenceSetVersion: fence,
+			EventType: eventtype.Measurement, FenceSetVersion: fence,
 		}
 		if flags&1 != 0 {
 			event.AltId = strp(alt)
 		}
 		if flags&2 != 0 {
-			event.Anchors = []model.ResolvedAnchor{{AnchorType: anchor, AnchorToken: token, RelationshipId: uint(classifier)}, {}}
+			event.Anchors = []ResolvedAnchor{{AnchorType: anchor, AnchorToken: token, RelationshipId: uint(classifier)}, {}}
 		}
 		if flags&4 != 0 {
-			event.ScopeMemberships = []model.GroupRef{{GroupToken: group, Version: version}}
+			event.ScopeMemberships = []GroupRef{{GroupToken: group, Version: version}}
 		}
 		if flags&8 != 0 {
 			event.DeviceTypeToken, event.ProfileVersionToken, event.ExternalId = anchor, token, group
@@ -473,11 +472,11 @@ func FuzzResolvedEventWire(f *testing.F) {
 		if flags&128 != 0 {
 			event.SourceDeviceDisabled = true
 		}
-		payload := &model.ResolvedMeasurementsPayload{}
+		payload := &ResolvedMeasurementsPayload{}
 		for i := 0; i < int(entries%6); i++ {
-			entry := model.ResolvedMeasurementsEntry{OccurredTime: at.Add(time.Duration(i) * time.Hour)}
+			entry := ResolvedMeasurementsEntry{OccurredTime: at.Add(time.Duration(i) * time.Hour)}
 			for j := 0; j < int(perEntry%5); j++ {
-				mx := model.ResolvedMeasurementEntry{Name: fmt.Sprintf("%s%d", value, j), Value: value}
+				mx := ResolvedMeasurementEntry{Name: fmt.Sprintf("%s%d", value, j), Value: value}
 				if flags&16 != 0 {
 					mx.Unit = strp(unit)
 				}
@@ -497,24 +496,24 @@ func FuzzResolvedEventWire(f *testing.F) {
 		refused := false // refused whatever its strings hold
 		switch kind % 7 {
 		case 1:
-			event.EventType = esmodel.Location
-			event.Payload = &model.ResolvedLocationsPayload{Entries: []model.ResolvedLocationEntry{
+			event.EventType = eventtype.Location
+			event.Payload = &ResolvedLocationsPayload{Entries: []ResolvedLocationEntry{
 				{Latitude: strp(value), Longitude: strp(unit), OccurredTime: at}}}
 		case 2:
-			event.EventType = esmodel.Alert
-			event.Payload = &model.ResolvedAlertsPayload{Entries: []model.ResolvedAlertEntry{
+			event.EventType = eventtype.Alert
+			event.Payload = &ResolvedAlertsPayload{Entries: []ResolvedAlertEntry{
 				{Type: value, Level: uint32(classifier), Message: unit, Source: source, OccurredTime: at}}}
 		case 3:
-			event.EventType = esmodel.StateChange
-			event.Payload = &model.ResolvedStateChangePayload{State: value, Reason: unit, SessionId: classifier}
+			event.EventType = eventtype.StateChange
+			event.Payload = &ResolvedStateChangePayload{State: value, Reason: unit, SessionId: classifier}
 		case 4:
-			event.EventType = esmodel.NewRelationship
-			event.Payload = &model.ResolvedNewRelationshipPayload{RelationshipTypeId: classifier, TargetType: strp(unit)}
+			event.EventType = eventtype.NewRelationship
+			event.Payload = &ResolvedNewRelationshipPayload{RelationshipTypeId: classifier, TargetType: strp(unit)}
 		case 5:
-			event.EventType, refused = esmodel.Alert, true // a measurements payload under another type
+			event.EventType, refused = eventtype.Alert, true // a measurements payload under another type
 		case 6:
-			event.EventType = esmodel.EventType(version)
-			refused = event.EventType != esmodel.Measurement
+			event.EventType = eventtype.EventType(version)
+			refused = event.EventType != eventtype.Measurement
 		}
 
 		var got []byte

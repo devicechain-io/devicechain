@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
@@ -67,7 +68,7 @@ func orderResolver() *EventResolver {
 }
 
 // Resolve one multi-metric sample and hand back the entries of its single sample.
-func resolveMeasurements(t *testing.T, ms map[string]string) []model.ResolvedMeasurementEntry {
+func resolveMeasurements(t *testing.T, ms map[string]string) []resolvedevent.ResolvedMeasurementEntry {
 	t.Helper()
 	event := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
@@ -79,8 +80,8 @@ func resolveMeasurements(t *testing.T, ms map[string]string) []model.ResolvedMea
 	out, err := orderResolver().ResolveMeasurementsEventPayload(
 		context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
-	payload, ok := out.(*model.ResolvedMeasurementsPayload)
-	require.True(t, ok, "expected *model.ResolvedMeasurementsPayload, got %T", out)
+	payload, ok := out.(*resolvedevent.ResolvedMeasurementsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedMeasurementsPayload, got %T", out)
 	require.Len(t, payload.Entries, 1)
 	return payload.Entries[0].Entries
 }
@@ -141,7 +142,7 @@ func TestTheDeviceSampleOrderIsNotSorted(t *testing.T) {
 	out, err := orderResolver().ResolveMeasurementsEventPayload(
 		context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
-	payload := out.(*model.ResolvedMeasurementsPayload)
+	payload := out.(*resolvedevent.ResolvedMeasurementsPayload)
 	require.Len(t, payload.Entries, 2)
 
 	// Within each sample the measurements ARE sorted — that half is the fix.

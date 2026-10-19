@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"testing"
 	"time"
 
@@ -80,7 +81,7 @@ func rosterMsg(t *testing.T, tenant, device, profile string, since time.Time, ac
 // lifecycle clock is newer than a create seeded at testBase and the monotonic guard applies it.
 func entityDeletedMsg(t *testing.T, tenant string, etype entity.Type, token string, ack *fakeAck) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalEntityDeletedEvent(&dmmodel.EntityDeletedEvent{
+	b, err := entityevent.MarshalEntityDeletedEvent(&entityevent.EntityDeletedEvent{
 		EntityType: etype, EntityId: 1, EntityToken: token, DeletedTime: testBase.Add(time.Hour),
 	})
 	if err != nil {

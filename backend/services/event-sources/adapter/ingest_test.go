@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"strings"
 	"sync"
 	"testing"
@@ -262,7 +263,7 @@ func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 	assert.False(t, ev.ProcessedTime.IsZero())
 	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
 	require.True(t, ok)
-	assert.Equal(t, esmodel.PresenceDisconnected, p.State)
+	assert.Equal(t, presence.StateDisconnected, p.State)
 	assert.Equal(t, "ndeath-will", p.Reason)
 	assert.Equal(t, "1799000000123456789", p.SessionId, "SessionId rides the wire as a string with full precision")
 
@@ -299,7 +300,7 @@ func TestEmitPresenceDemotionProducesResolverReadableStateChange(t *testing.T) {
 	assert.Equal(t, "mqtt1", ev.Source, "the demotion must be attributed to the RELEASING source")
 	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
 	require.True(t, ok)
-	assert.Equal(t, esmodel.PresenceDemoted, p.State)
+	assert.Equal(t, presence.StateDemoted, p.State)
 	assert.Equal(t, "presence tap disabled", p.Reason)
 	assert.Equal(t, "1799000000123456789", p.SessionId,
 		"a demotion must NAME the session it releases; the projection matches on it")

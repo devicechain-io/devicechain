@@ -5,6 +5,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"slices"
 	"strings"
 
@@ -71,9 +72,9 @@ func CheckDraftCalculatedMetrics(defs []*MetricDefinition) []string {
 // contract above). It never writes to entries: it returns a new slice, and the entries it
 // keeps are copied by value with their pointers shared, as the resolver's own copies are.
 // obs is told every formula's outcome, as the resolver's observer is.
-func (r ProfileResolution) Recalculate(entries []ResolvedMeasurementEntry, constants []calcfield.Constant,
-	obs CalculationObserver) []ResolvedMeasurementEntry {
-	out := make([]ResolvedMeasurementEntry, 0, len(entries)+r.CalculatedCount())
+func (r ProfileResolution) Recalculate(entries []resolvedevent.ResolvedMeasurementEntry, constants []calcfield.Constant,
+	obs CalculationObserver) []resolvedevent.ResolvedMeasurementEntry {
+	out := make([]resolvedevent.ResolvedMeasurementEntry, 0, len(entries)+r.CalculatedCount())
 	calc := r.BeginCalculation(constants)
 	defer calc.Release()
 	for _, e := range entries {
@@ -90,6 +91,6 @@ func (r ProfileResolution) Recalculate(entries []ResolvedMeasurementEntry, const
 		out = append(out, e)
 	}
 	out = calc.Append(out, obs)
-	slices.SortFunc(out, func(a, b ResolvedMeasurementEntry) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(out, func(a, b resolvedevent.ResolvedMeasurementEntry) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }

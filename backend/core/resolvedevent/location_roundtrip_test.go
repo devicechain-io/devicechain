@@ -1,15 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
@@ -29,7 +28,7 @@ func s(v string) *string {
 }
 
 // at parses a fixture instant. A resolved entry always carries one — see
-// model.ResolvedMeasurementsEntry.OccurredTime — so these are values, not pointers.
+// ResolvedMeasurementsEntry.OccurredTime — so these are values, not pointers.
 func at(t *testing.T, v string) time.Time {
 	t.Helper()
 	parsed, err := time.Parse(time.RFC3339Nano, v)
@@ -42,8 +41,8 @@ func at(t *testing.T, v string) time.Time {
 // simply arrives at event-management and device-state without its speed or heading.
 func TestLocationPayloadRoundTripCarriesEveryField(t *testing.T) {
 	occurred := at(t, "2026-08-09T14:32:07.125Z")
-	payload := &model.ResolvedLocationsPayload{
-		Entries: []model.ResolvedLocationEntry{{
+	payload := &ResolvedLocationsPayload{
+		Entries: []ResolvedLocationEntry{{
 			Latitude:     s("33.749"),
 			Longitude:    s("-84.388"),
 			Elevation:    s("320.5"),
@@ -82,8 +81,8 @@ func TestLocationPayloadRoundTripCarriesEveryField(t *testing.T) {
 // present-but-empty are genuinely different on the wire, and both must be preserved.
 // A device that reports no speed is not a device reporting a speed of "".
 func TestLocationPayloadRoundTripPreservesNilAndEmpty(t *testing.T) {
-	payload := &model.ResolvedLocationsPayload{
-		Entries: []model.ResolvedLocationEntry{{
+	payload := &ResolvedLocationsPayload{
+		Entries: []ResolvedLocationEntry{{
 			Latitude:  s("41.8781"),
 			Longitude: s("-87.6298"),
 			// Elevation and Accuracy deliberately absent.
@@ -119,8 +118,8 @@ func TestLocationPayloadRoundTripPreservesNilAndEmpty(t *testing.T) {
 func TestLocationPayloadRoundTripKeepsPerEntryValuesAndOrder(t *testing.T) {
 	firstTime := at(t, "2026-08-09T14:32:07.125Z")
 	secondTime := at(t, "2026-08-09T14:32:09.500Z")
-	payload := &model.ResolvedLocationsPayload{
-		Entries: []model.ResolvedLocationEntry{
+	payload := &ResolvedLocationsPayload{
+		Entries: []ResolvedLocationEntry{
 			{
 				Latitude: s("33.749"), Longitude: s("-84.388"), Elevation: s("320.5"),
 				Accuracy: s("4.2"), Speed: s("1.75"), Heading: s("271.5"),
@@ -150,8 +149,8 @@ func TestLocationPayloadRoundTripKeepsPerEntryValuesAndOrder(t *testing.T) {
 // event actually travels. Values must survive it too, not just the direct call.
 func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
 	occurred := at(t, "2026-08-09T14:32:07.125Z")
-	payload := &model.ResolvedLocationsPayload{
-		Entries: []model.ResolvedLocationEntry{{
+	payload := &ResolvedLocationsPayload{
+		Entries: []ResolvedLocationEntry{{
 			Latitude:     s("33.749"),
 			Longitude:    s("-84.388"),
 			Elevation:    s("320.5"),
@@ -162,14 +161,14 @@ func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
 		}},
 	}
 
-	encoded, err := MarshalResolvedPayload(esmodel.Location, payload, eventtime.WireCompact)
+	encoded, err := MarshalResolvedPayload(eventtype.Location, payload, eventtime.WireCompact)
 	require.NoError(t, err)
 
-	generic, err := UnmarshalResolvedPayload(esmodel.Location, encoded, time.Time{})
+	generic, err := UnmarshalResolvedPayload(eventtype.Location, encoded, time.Time{})
 	require.NoError(t, err)
 
-	decoded, ok := generic.(*model.ResolvedLocationsPayload)
-	require.True(t, ok, "expected *model.ResolvedLocationsPayload, got %T", generic)
+	decoded, ok := generic.(*ResolvedLocationsPayload)
+	require.True(t, ok, "expected *ResolvedLocationsPayload, got %T", generic)
 	require.Len(t, decoded.Entries, 1)
 	assertLocationEntry(t, decoded.Entries[0], "33.749", "-84.388", "320.5", "4.2", "1.75", "271.5", occurred)
 }
@@ -179,12 +178,12 @@ func TestLocationRoundTripsThroughGenericDispatchers(t *testing.T) {
 // never have caught.
 func TestResolvedEventCarriesLocationValues(t *testing.T) {
 	occurred := at(t, "2026-08-09T14:32:07.125Z")
-	event := &model.ResolvedEvent{
+	event := &ResolvedEvent{
 		Source:            "http1",
 		SourceDeviceToken: "device-001",
-		EventType:         esmodel.Location,
-		Payload: &model.ResolvedLocationsPayload{
-			Entries: []model.ResolvedLocationEntry{{
+		EventType:         eventtype.Location,
+		Payload: &ResolvedLocationsPayload{
+			Entries: []ResolvedLocationEntry{{
 				Latitude:     s("33.749"),
 				Longitude:    s("-84.388"),
 				Elevation:    s("320.5"),
@@ -202,14 +201,14 @@ func TestResolvedEventCarriesLocationValues(t *testing.T) {
 	decoded, err := UnmarshalResolvedEvent(encoded)
 	require.NoError(t, err)
 
-	payload, ok := decoded.Payload.(*model.ResolvedLocationsPayload)
-	require.True(t, ok, "expected *model.ResolvedLocationsPayload, got %T", decoded.Payload)
+	payload, ok := decoded.Payload.(*ResolvedLocationsPayload)
+	require.True(t, ok, "expected *ResolvedLocationsPayload, got %T", decoded.Payload)
 	require.Len(t, payload.Entries, 1)
 	assertLocationEntry(t, payload.Entries[0], "33.749", "-84.388", "320.5", "4.2", "1.75", "271.5", occurred)
 }
 
 // Assert every field of a resolved location entry against its own expected value.
-func assertLocationEntry(t *testing.T, got model.ResolvedLocationEntry,
+func assertLocationEntry(t *testing.T, got ResolvedLocationEntry,
 	lat, lon, elev, acc, speed, heading string, occurred time.Time) {
 	t.Helper()
 	require.NotNil(t, got.Latitude, "latitude missing")
@@ -237,13 +236,13 @@ func assertLocationEntry(t *testing.T, got model.ResolvedLocationEntry,
 // rule exists to prevent.
 func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
 	occurred := at(t, "2026-08-09T14:32:07.125Z")
-	location := &model.ResolvedEvent{
+	location := &ResolvedEvent{
 		Source:            "test-source",
 		SourceDeviceToken: "TEST-123",
-		EventType:         esmodel.Location,
+		EventType:         eventtype.Location,
 		FenceSetVersion:   19,
-		Payload: &model.ResolvedLocationsPayload{
-			Entries: []model.ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: occurred}},
+		Payload: &ResolvedLocationsPayload{
+			Entries: []ResolvedLocationEntry{{Latitude: s("33.749"), Longitude: s("-84.388"), OccurredTime: occurred}},
 		},
 	}
 	encoded, err := MarshalResolvedEventAs(location, eventtime.WireCompact)
@@ -252,13 +251,13 @@ func TestResolvedEventRoundTripCarriesFenceSetVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int32(19), decoded.FenceSetVersion, "the fence set version did not survive the wire")
 
-	measurement := &model.ResolvedEvent{
+	measurement := &ResolvedEvent{
 		Source:            "test-source",
 		SourceDeviceToken: "TEST-123",
-		EventType:         esmodel.Measurement,
-		Payload: &model.ResolvedMeasurementsPayload{
-			Entries: []model.ResolvedMeasurementsEntry{{
-				Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "42"}},
+		EventType:         eventtype.Measurement,
+		Payload: &ResolvedMeasurementsPayload{
+			Entries: []ResolvedMeasurementsEntry{{
+				Entries: []ResolvedMeasurementEntry{{Name: "temperature", Value: "42"}},
 			}},
 		},
 	}

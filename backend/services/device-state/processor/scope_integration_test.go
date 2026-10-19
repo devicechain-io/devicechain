@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"os"
 	"sort"
 	"strconv"
@@ -102,12 +103,12 @@ func asViewer(ctx context.Context, anchors ...string) context.Context {
 func ownedEvent(t *testing.T, device string, kind esmodel.EventType, occurred, processed time.Time,
 	value string, owners ...string) messaging.Message {
 	t.Helper()
-	anchors := make([]dmmodel.ResolvedAnchor, 0, len(owners))
+	anchors := make([]resolvedevent.ResolvedAnchor, 0, len(owners))
 	for i, o := range owners {
 		typ, tok, _ := strings.Cut(o, ":")
-		anchors = append(anchors, dmmodel.ResolvedAnchor{AnchorType: typ, AnchorToken: tok, RelationshipId: uint(i + 1)})
+		anchors = append(anchors, resolvedevent.ResolvedAnchor{AnchorType: typ, AnchorToken: tok, RelationshipId: uint(i + 1)})
 	}
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: device,
 		Anchors:           anchors,
@@ -117,13 +118,13 @@ func ownedEvent(t *testing.T, device string, kind esmodel.EventType, occurred, p
 	}
 	switch kind {
 	case esmodel.Measurement:
-		event.Payload = &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			OccurredTime: occurred, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: value}}}}}
+		event.Payload = &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			OccurredTime: occurred, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: value}}}}}
 	case esmodel.Location:
-		event.Payload = &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{{
+		event.Payload = &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{{
 			OccurredTime: occurred, Latitude: str(value), Longitude: str("-87.5")}}}
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	require.NoError(t, err)
 	return messaging.Message{Subject: scopeEventsSubj, Value: encoded}
 }

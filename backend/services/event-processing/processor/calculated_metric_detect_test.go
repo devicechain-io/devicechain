@@ -6,12 +6,12 @@ package processor
 import (
 	"context"
 	"database/sql"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
@@ -44,7 +44,7 @@ func TestAThresholdOnACalculatedMetricFires(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		b, err := dmproto.MarshalResolvedEventAs(&dmmodel.ResolvedEvent{Source: "http1", SourceDeviceToken: "meter-1",
+		b, err := resolvedevent.MarshalResolvedEventAs(&resolvedevent.ResolvedEvent{Source: "http1", SourceDeviceToken: "meter-1",
 			ProfileVersionToken: "p@1", OccurredTime: at, ProcessedTime: at, EventType: esmodel.Measurement,
 			Payload: payload}, format)
 		if err != nil {

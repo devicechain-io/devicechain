@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"sync"
 	"time"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -59,7 +59,7 @@ type ackCoord struct {
 // stream sequence it names the publish for the broker's dedup (resolvedDedupID).
 type resolvedItem struct {
 	tenant      string
-	event       dmodel.ResolvedEvent
+	event       resolvedevent.ResolvedEvent
 	coord       *ackCoord
 	index       int
 	correlation string
@@ -72,7 +72,7 @@ type resolvedItem struct {
 // ProcessFailedEvent).
 type failedItem struct {
 	tenant      string
-	event       dmodel.FailedEvent
+	event       resolvedevent.FailedEvent
 	src         messaging.Message
 	correlation string
 }
@@ -338,7 +338,7 @@ func (iproc *InboundEventsProcessor) ProcessFailedEvent(ctx context.Context) boo
 	// kept so one writer has one story, and TestAnUnencodableRecordIsAckedBehindEarlierOutcomes
 	// pins it.) Fail does not back the writer off, and the settle loop does not log it as a
 	// broker failure: nothing is wrong with the broker.
-	bytes, err := proto.MarshalFailedEvent(&item.event)
+	bytes, err := resolvedevent.MarshalFailedEvent(&item.event)
 	if err != nil {
 		iproc.FailedEventsWriter.Fail(err, func(error) {
 			iproc.loseRecord("a failed event's record", item.tenant, item.event.Reason, item.src,
@@ -460,7 +460,7 @@ func (iproc *InboundEventsProcessor) OnInvalidEvent(err error, msg messaging.Mes
 	// neither which message nor why.
 	log.Warn().Str("correlation", msg.CorrelationID()).
 		Msg(fmt.Sprintf("Dead-lettering an inbound message that could not be parsed (%s): %s", locator, bounded))
-	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), iproc.Microservice.FunctionalArea,
+	failed := resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), iproc.Microservice.FunctionalArea,
 		"message could not be parsed; payload not retained ("+locator+")", err, nil)
 	failed.Error = bounded
 	iproc.failed <- failedItem{tenant: tenant, event: *failed, src: msg, correlation: msg.CorrelationID()}
@@ -501,7 +501,7 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(src messaging.Message, te
 			Str("source", unrez.Source).Str("device", unrez.Device).
 			Str("eventType", unrez.EventType.String()).Str("correlation", correlation).
 			Msg("event could not be resolved; dead-lettering")
-		failed := dmodel.NewFailedEvent(reason, iproc.Microservice.FunctionalArea,
+		failed := resolvedevent.NewFailedEvent(reason, iproc.Microservice.FunctionalArea,
 			"event could not be resolved", rezerr, bytes)
 		iproc.failed <- failedItem{tenant: tenant, event: *failed, src: src, correlation: correlation}
 	}
@@ -520,7 +520,7 @@ func (iproc *InboundEventsProcessor) ProcessResolvedEvent(ctx context.Context) b
 	}
 	coord := item.coord
 	settle := func(err error) { iproc.settleResolved(coord, err) }
-	bytes, err := proto.MarshalResolvedEvent(&item.event)
+	bytes, err := resolvedevent.MarshalResolvedEvent(&item.event)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
 		// Through the writer, not inline: the outcome must reach the coordinator on the

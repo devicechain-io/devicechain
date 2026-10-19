@@ -8,19 +8,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"reflect"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"reflect"
+	"sync/atomic"
+	"testing"
+	"time"
 )
 
 // A batch of ONE event is one transaction, not two. The per-message path opens a transaction
@@ -53,15 +51,15 @@ func countTransactions(db *gorm.DB) *txCountingPool {
 
 func stateChange(t *testing.T, device, state string, session uint64, at time.Time) messaging.Message {
 	t.Helper()
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: device,
 		EventType:         esmodel.StateChange,
 		OccurredTime:      at,
 		ProcessedTime:     at,
-		Payload:           &dmmodel.ResolvedStateChangePayload{State: state, SessionId: session},
+		Payload:           &resolvedevent.ResolvedStateChangePayload{State: state, SessionId: session},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

@@ -13,21 +13,19 @@ package processor
 import (
 	"context"
 	"fmt"
-	"strings"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
 )
 
 // poisonMeasurement is a consumed measurement whose data type is longer than the column
@@ -35,15 +33,15 @@ import (
 func poisonMeasurement(tb testing.TB, tenant, device string, at time.Time, ack messaging.Acknowledger) messaging.Message {
 	tb.Helper()
 	dataType := strings.Repeat("X", 40)
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source: mqttTestSource, SourceDeviceToken: device, EventType: esmodel.Measurement,
 		OccurredTime: at, ProcessedTime: at,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: at,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5", DataType: &dataType}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5", DataType: &dataType}},
 		}}},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		tb.Fatalf("marshal: %v", err)
 	}

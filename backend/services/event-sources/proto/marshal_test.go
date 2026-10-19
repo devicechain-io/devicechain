@@ -4,6 +4,7 @@
 package proto
 
 import (
+	"github.com/devicechain-io/dc-microservice/presence"
 	"testing"
 	"time"
 
@@ -125,7 +126,7 @@ func TestMarshalRoundTripCarriesAuthenticatedTransport(t *testing.T) {
 			OccurredTime:           time.Now().UTC().Truncate(time.Second),
 			ProcessedTime:          time.Now().UTC().Truncate(time.Second),
 			EventType:              model.StateChange,
-			Payload:                &model.UnresolvedStateChangePayload{State: model.PresenceConnected, SessionId: "1"},
+			Payload:                &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
 			AuthenticatedTransport: marked,
 		}
 		bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)

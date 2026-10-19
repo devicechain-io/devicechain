@@ -5,15 +5,14 @@ package graphql
 
 import (
 	"database/sql"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 // `id` is declared `ID!` on all four event types, and until this file existed it did not
@@ -178,19 +177,19 @@ func TestPayloadRowsAreNotAddressedByTheirEventId(t *testing.T) {
 // two properties are what make the streamed `ID!` real rather than well-formed.
 func TestStreamedMeasurementsCarryDistinctPersistedIds(t *testing.T) {
 	sample := time.Date(2026, 9, 4, 9, 59, 0, 0, time.UTC)
-	resolved := &dmmodel.ResolvedEvent{
+	resolved := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: identityDevice,
 		OccurredTime:      identityOccurred,
 		EventType:         esmodel.Measurement,
 		Source:            "mqtt",
 	}
-	entry := dmmodel.ResolvedMeasurementsEntry{OccurredTime: sample}
+	entry := resolvedevent.ResolvedMeasurementsEntry{OccurredTime: sample}
 
 	temp, err := measurementFromResolved("tenant1", resolved, entry,
-		dmmodel.ResolvedMeasurementEntry{Name: "temp", Value: "21.5"})
+		resolvedevent.ResolvedMeasurementEntry{Name: "temp", Value: "21.5"})
 	require.NoError(t, err)
 	humidity, err := measurementFromResolved("tenant1", resolved, entry,
-		dmmodel.ResolvedMeasurementEntry{Name: "humidity", Value: "48"})
+		resolvedevent.ResolvedMeasurementEntry{Name: "humidity", Value: "48"})
 	require.NoError(t, err)
 
 	assertIdsAreUniqueAcrossTheSet(t, []func() (gql.ID, error){

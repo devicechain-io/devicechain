@@ -6,13 +6,12 @@ package processor
 import (
 	"context"
 	"fmt"
-	"sync"
-
-	"github.com/devicechain-io/dc-device-management/proto"
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
+	"sync"
 )
 
 // EntityAnchorReconciler consumes entity-deletion events (ADR-044) and removes the
@@ -133,7 +132,7 @@ func (r *EntityAnchorReconciler) handle(ctx context.Context, msg messaging.Messa
 		_ = msg.Ack()
 		return
 	}
-	event, err := proto.UnmarshalEntityDeletedEvent(msg.Value)
+	event, err := entityevent.UnmarshalEntityDeletedEvent(msg.Value)
 	if err != nil {
 		log.Error().Err(err).Str("subject", msg.Subject).Msg("Dropping unparseable entity-deleted event")
 		_ = msg.Ack()

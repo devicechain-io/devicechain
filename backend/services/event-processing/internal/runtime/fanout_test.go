@@ -4,38 +4,37 @@
 package runtime
 
 import (
+	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-event-processing/internal/rules"
 )
 
 func fptr(f float64) *float64 { return &f }
 
 // planEv fans an event out using its own occurred time as the (already-clamped) event time, with no
 // dynamic-threshold attributes bound (the common no-attr path).
-func planEv(reg *RuleRegistry, seq uint64, tenant string, ev *dmmodel.ResolvedEvent) PlanResult {
+func planEv(reg *RuleRegistry, seq uint64, tenant string, ev *resolvedevent.ResolvedEvent) PlanResult {
 	return reg.Plan(seq, tenant, ev, ev.OccurredTime, nil, nil)
 }
 
 // planEvAttr is planEv with the source device's flattened attribute map bound (dynamic-threshold path).
-func planEvAttr(reg *RuleRegistry, seq uint64, tenant string, ev *dmmodel.ResolvedEvent, attr map[string]float64) PlanResult {
+func planEvAttr(reg *RuleRegistry, seq uint64, tenant string, ev *resolvedevent.ResolvedEvent, attr map[string]float64) PlanResult {
 	return reg.Plan(seq, tenant, ev, ev.OccurredTime, attr, nil)
 }
 
 // measured builds a resolved measurement event for a device under a profile version,
 // carrying the given metric→value readings.
-func measured(tenant, device, profileVersion string, occurred time.Time, m map[string]string) *dmmodel.ResolvedEvent {
-	entries := make([]dmmodel.ResolvedMeasurementEntry, 0, len(m))
+func measured(tenant, device, profileVersion string, occurred time.Time, m map[string]string) *resolvedevent.ResolvedEvent {
+	entries := make([]resolvedevent.ResolvedMeasurementEntry, 0, len(m))
 	for name, val := range m {
-		entries = append(entries, dmmodel.ResolvedMeasurementEntry{Name: name, Value: val})
+		entries = append(entries, resolvedevent.ResolvedMeasurementEntry{Name: name, Value: val})
 	}
-	return &dmmodel.ResolvedEvent{
+	return &resolvedevent.ResolvedEvent{
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
-		Payload:             &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{Entries: entries}}},
+		Payload:             &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{Entries: entries}}},
 	}
 }
 
@@ -92,13 +91,13 @@ func TestPlanFansEverySampleInABatch(t *testing.T) {
 	}
 	reg := NewRuleRegistry([]ScopedRule{compileScoped(t, "acme", "p@1", thr)})
 
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken:   "d1",
 		ProfileVersionToken: "p@1",
 		OccurredTime:        base,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{
-			{Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "120"}}},
-			{Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: "80"}}},
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{
+			{Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: "120"}}},
+			{Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: "80"}}},
 		}},
 	}
 	res := planEv(reg, 1, "acme", ev)
@@ -209,7 +208,7 @@ func TestPlanCorrelationFansPerAnchor(t *testing.T) {
 	reg := NewRuleRegistry([]ScopedRule{compileScoped(t, "acme", "p@1", corr)})
 
 	ev := measured("acme", "d1", "p@1", base, map[string]string{"temperature": "90"})
-	ev.Anchors = []dmmodel.ResolvedAnchor{
+	ev.Anchors = []resolvedevent.ResolvedAnchor{
 		{AnchorType: "area", AnchorToken: "zone-a"},
 		{AnchorType: "area", AnchorToken: "zone-b"},
 		{AnchorType: "gateway", AnchorToken: "gw-1"},
@@ -228,7 +227,7 @@ func TestPlanCorrelationFansPerAnchor(t *testing.T) {
 
 	// An event with no matching anchor contributes nothing.
 	noArea := measured("acme", "d2", "p@1", base, map[string]string{"temperature": "90"})
-	noArea.Anchors = []dmmodel.ResolvedAnchor{{AnchorType: "gateway", AnchorToken: "gw-1"}}
+	noArea.Anchors = []resolvedevent.ResolvedAnchor{{AnchorType: "gateway", AnchorToken: "gw-1"}}
 	if res := planEv(reg, 2, "acme", noArea); len(res.Events) != 0 {
 		t.Fatalf("no matching anchor should contribute no events; got %d", len(res.Events))
 	}

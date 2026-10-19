@@ -6,12 +6,12 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
@@ -81,7 +81,7 @@ func TestAWarmCredentialedEventAsksNoKeyValueStoreAndNoDatabase(t *testing.T) {
 		presentSealed(t, rig.ctx, e, string(model.CredentialMqttBasic), "cred-1", secret)
 		return e
 	}
-	resolve := func() *model.ResolvedEvent {
+	resolve := func() *resolvedevent.ResolvedEvent {
 		results, reason, err := rez.ResolveEvent(rig.ctx, event())
 		if err != nil || reason != 0 || len(results) != 1 {
 			t.Fatalf("resolve a credentialed event: %d results, reason %d, err %v", len(results), reason, err)
@@ -116,7 +116,7 @@ func TestAWarmCredentialedEventAsksNoKeyValueStoreAndNoDatabase(t *testing.T) {
 		t.Fatalf("disable the credential: %v", err)
 	}
 	if _, reason, err := rez.ResolveEvent(rig.ctx, event()); !errors.Is(err, model.ErrCredentialNotResolved) ||
-		reason != uint(dmproto.FailureReason_Unauthenticated) {
+		reason != uint(resolvedevent.FailureReason_Unauthenticated) {
 		t.Fatalf("an event presenting the disabled credential: reason %d, err %v; want Unauthenticated, %v",
 			reason, err, model.ErrCredentialNotResolved)
 	}

@@ -12,6 +12,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
@@ -106,7 +107,7 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 	// evaluator did NOT skip is refused by the column, and takes its reading's raw values
 	// with it. That is what the unstorable skip prevents.
 	forged := resolveAt(t, v1, map[string]string{"voltage": "1", "current": "2"}, at(4))
-	entries := forged.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	entries := forged.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries
 	for i := range entries {
 		if entries[i].Derived {
 			entries[i].Value = "1e+13"
@@ -117,12 +118,12 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 }
 
 // resolveAt is resolveOverTheWire for a reading at a chosen instant.
-func resolveAt(t *testing.T, profile dmmodel.ProfileResolution, readings map[string]string, at time.Time) dmmodel.ResolvedEvent {
+func resolveAt(t *testing.T, profile dmmodel.ProfileResolution, readings map[string]string, at time.Time) resolvedevent.ResolvedEvent {
 	t.Helper()
 	ev := resolveOverTheWire(t, profile, readings, eventtime.WireCompact)
 	ev.OccurredTime, ev.ProcessedTime = at, at
-	for i := range ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries {
-		ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[i].OccurredTime = at
+	for i := range ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries {
+		ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[i].OccurredTime = at
 	}
 	return ev
 }

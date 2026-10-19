@@ -1,17 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"encoding/hex"
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -29,42 +27,42 @@ var mainResolvedHex = map[string]string{
 }
 
 // goldenResolvedEvents is, field for field, the input the origin/main capture ran on.
-func goldenResolvedEvents() map[string]*model.ResolvedEvent {
+func goldenResolvedEvents() map[string]*ResolvedEvent {
 	plus2 := time.FixedZone("", 2*3600)
 	minus5 := time.FixedZone("", -5*3600)
 	occ := time.Date(2026, 10, 16, 11, 30, 15, 123456789, plus2)
 	proc := time.Date(2026, 10, 16, 9, 30, 15, 125000007, time.UTC)
 	e1 := time.Date(2026, 10, 16, 9, 30, 14, 987654321, time.UTC)
 	e2 := time.Date(2026, 10, 16, 4, 30, 14, 1, minus5)
-	return map[string]*model.ResolvedEvent{
+	return map[string]*ResolvedEvent{
 		"measurement full": {Source: "http", AltId: strp("alt-1"), SourceDeviceToken: "devicepulse-00001",
-			Anchors:         []model.ResolvedAnchor{{AnchorType: "customer", AnchorToken: "acme-co", RelationshipId: 5}, {AnchorType: "area", AnchorToken: "a-1", RelationshipId: 9}},
+			Anchors:         []ResolvedAnchor{{AnchorType: "customer", AnchorToken: "acme-co", RelationshipId: 5}, {AnchorType: "area", AnchorToken: "a-1", RelationshipId: 9}},
 			DeviceTypeToken: "devicepulse", ProfileVersionToken: "pulse@3", ExternalId: "ext-1",
-			ScopeMemberships: []model.GroupRef{{GroupToken: "g-1", Version: 2}},
+			ScopeMemberships: []GroupRef{{GroupToken: "g-1", Version: 2}},
 			FenceSetVersion:  7, SourceDeviceDisabled: true,
-			OccurredTime: occ, ProcessedTime: proc, EventType: esmodel.Measurement,
-			Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{
-				{Entries: []model.ResolvedMeasurementEntry{{Name: "temp", Value: "21.5", Classifier: u64p(1), Unit: strp("Cel"), DataType: strp("DOUBLE")}, {Name: "hum", Value: "40"}}, OccurredTime: e1},
-				{Entries: []model.ResolvedMeasurementEntry{{Name: "temp", Value: "22"}}, OccurredTime: e2},
+			OccurredTime: occ, ProcessedTime: proc, EventType: eventtype.Measurement,
+			Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{
+				{Entries: []ResolvedMeasurementEntry{{Name: "temp", Value: "21.5", Classifier: u64p(1), Unit: strp("Cel"), DataType: strp("DOUBLE")}, {Name: "hum", Value: "40"}}, OccurredTime: e1},
+				{Entries: []ResolvedMeasurementEntry{{Name: "temp", Value: "22"}}, OccurredTime: e2},
 			}}},
 		"location": {Source: "mqtt", SourceDeviceToken: "sensor-001", DeviceTypeToken: "tracker",
 			ProfileVersionToken: "trk@1", FenceSetVersion: 4,
-			Anchors: []model.ResolvedAnchor{}, ScopeMemberships: []model.GroupRef{},
-			OccurredTime: occ.In(minus5), ProcessedTime: proc, EventType: esmodel.Location,
-			Payload: &model.ResolvedLocationsPayload{Entries: []model.ResolvedLocationEntry{
+			Anchors: []ResolvedAnchor{}, ScopeMemberships: []GroupRef{},
+			OccurredTime: occ.In(minus5), ProcessedTime: proc, EventType: eventtype.Location,
+			Payload: &ResolvedLocationsPayload{Entries: []ResolvedLocationEntry{
 				{Latitude: strp("45.5"), Longitude: strp("-73.6"), Heading: strp("90"), OccurredTime: e2}}}},
 		"alert out of range": {Source: "http", SourceDeviceToken: "d-1",
-			Anchors: []model.ResolvedAnchor{}, ScopeMemberships: []model.GroupRef{},
+			Anchors: []ResolvedAnchor{}, ScopeMemberships: []GroupRef{},
 			OccurredTime: time.Date(1500, 1, 2, 3, 4, 5, 6, time.UTC), ProcessedTime: time.Date(9999, 12, 31, 23, 59, 59, 999999999, minus5),
-			EventType: esmodel.Alert,
-			Payload: &model.ResolvedAlertsPayload{Entries: []model.ResolvedAlertEntry{
+			EventType: eventtype.Alert,
+			Payload: &ResolvedAlertsPayload{Entries: []ResolvedAlertEntry{
 				{Type: "FAULT", Level: 2, Message: "probe", Source: "dev", OccurredTime: time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)},
 				{Type: "EPOCH", OccurredTime: time.Unix(0, 0)},
 				{Type: "PRE", OccurredTime: time.Unix(-1, 999999999)}}}},
 		"presence disabled": {Source: "mqtt", SourceDeviceToken: "dev-1", ProfileVersionToken: "p@1",
-			OccurredTime: time.Unix(0, 0).UTC(), ProcessedTime: time.Time{}, EventType: esmodel.StateChange,
+			OccurredTime: time.Unix(0, 0).UTC(), ProcessedTime: time.Time{}, EventType: eventtype.StateChange,
 			SourceDeviceDisabled: true,
-			Payload:              &model.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "close", SessionId: 7, OccurredTime: strp("2026-10-16T09:30:15Z")}},
+			Payload:              &ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "close", SessionId: 7, OccurredTime: strp("2026-10-16T09:30:15Z")}},
 	}
 }
 
@@ -114,49 +112,17 @@ func TestBothResolvedFormatsDecodeToTheSameEvent(t *testing.T) {
 	}
 }
 
-// 🔴 The instant that broke the compact format as first written: a device's
-// 9999-12-31T23:59:59-05:00 is the year 10000 in UTC, which RFC 3339 cannot carry. It
-// crosses BOTH hops: the ingest source writes it, device-management reads it back and writes
-// it again on the resolved event. Written in UTC at either hop it is unparseable and the
-// event is lost (dead-lettered by device-management, dropped by every resolved consumer).
-func TestAnInstantPastTheUTCYearRangeCrossesBothHops(t *testing.T) {
-	late := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.FixedZone("", -5*3600))
-	for _, inFormat := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
-		inbound, err := esproto.MarshalUnresolvedEventAs(&esmodel.UnresolvedEvent{
-			Source: "http", Device: "d", OccurredTime: late, ProcessedTime: late, EventType: esmodel.Alert,
-			Payload: &esmodel.UnresolvedAlertsPayload{Entries: []esmodel.UnresolvedAlertEntry{{Type: "t", OccurredTime: &late}}},
-		}, inFormat)
-		require.NoError(t, err)
-		unrez, err := esproto.UnmarshalUnresolvedEvent(inbound)
-		require.NoError(t, err, "%s: the resolver could not read the inbound event", inFormat)
-		entry := unrez.Payload.(*esmodel.UnresolvedAlertsPayload).Entries[0].OccurredTime
-
-		for _, outFormat := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
-			resolved, err := MarshalResolvedEventAs(&model.ResolvedEvent{
-				Source: "http", SourceDeviceToken: "d", OccurredTime: unrez.OccurredTime, ProcessedTime: unrez.ProcessedTime,
-				EventType: esmodel.Alert,
-				Payload:   &model.ResolvedAlertsPayload{Entries: []model.ResolvedAlertEntry{{Type: "t", OccurredTime: *entry}}},
-			}, outFormat)
-			require.NoError(t, err)
-			got, err := UnmarshalResolvedEvent(resolved)
-			require.NoError(t, err, "%s -> %s: a resolved consumer could not read it", inFormat, outFormat)
-			require.True(t, got.OccurredTime.Equal(late), "%s -> %s", inFormat, outFormat)
-			require.True(t, got.Payload.(*model.ResolvedAlertsPayload).Entries[0].OccurredTime.Equal(late))
-		}
-	}
-}
-
 // A format that is neither is refused before anything is written.
 func TestAnUnknownResolvedWireFormatIsRefused(t *testing.T) {
 	event := goldenResolvedEvents()["measurement full"]
 	for _, format := range []eventtime.WireFormat{0, 3} {
 		_, err := MarshalResolvedEventAs(event, format)
 		require.ErrorIs(t, err, eventtime.ErrUnknownWireFormat)
-		_, err = MarshalPayloadForMeasurementsEvent(event.Payload.(*model.ResolvedMeasurementsPayload), format)
+		_, err = MarshalPayloadForMeasurementsEvent(event.Payload.(*ResolvedMeasurementsPayload), format)
 		require.ErrorIs(t, err, eventtime.ErrUnknownWireFormat)
-		_, err = MarshalPayloadForLocationsEvent(&model.ResolvedLocationsPayload{}, format)
+		_, err = MarshalPayloadForLocationsEvent(&ResolvedLocationsPayload{}, format)
 		require.ErrorIs(t, err, eventtime.ErrUnknownWireFormat)
-		_, err = MarshalPayloadForAlertsEvent(&model.ResolvedAlertsPayload{}, format)
+		_, err = MarshalPayloadForAlertsEvent(&ResolvedAlertsPayload{}, format)
 		require.ErrorIs(t, err, eventtime.ErrUnknownWireFormat)
 	}
 }
