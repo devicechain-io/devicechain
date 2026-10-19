@@ -34,6 +34,11 @@ type MqttStoreBoundMetrics struct {
 	// boundedLate counts each time a pass had to put the ceiling on a stream that was
 	// unbounded while the service ran.
 	boundedLate *prometheus.CounterVec
+	// finishHeld is how long, in seconds, the release of the fail-closed message store has been
+	// unable to finish because a replica of the store or of a platform durable is offline or not
+	// current, 0 when it is not held. It lives here because the pods that finish a release are
+	// the ones with the fail-closed setting off, which register no fail-closed series.
+	finishHeld prometheus.Gauge
 }
 
 // NewMqttStoreBoundMetrics registers the watch's series on ms, each exported at zero.
@@ -48,6 +53,10 @@ func NewMqttStoreBoundMetrics(ms *core.Microservice) *MqttStoreBoundMetrics {
 			"Times a check found a stream of the broker's MQTT gateway without its size ceiling while "+
 				"event-sources was running (the gateway creates them when the first device connects) and set it.",
 			[]string{"stream"}),
+		finishHeld: ms.NewGauge("mqtt_gateway_finish_held_seconds",
+			"Seconds the release of the MQTT fail-closed message store has been unable to finish because a "+
+				"replica of the store or of one of its platform durables is offline or not current, 0 when it "+
+				"is not held. While it is above 0 the released store keeps its platform durables."),
 	}
 	for _, s := range MqttStoreBounds(1, 1) {
 		m.unbounded.WithLabelValues(s.Name).Set(0)
@@ -116,6 +125,9 @@ func mqttWatchBounds(msgsMaxBytes, qos2MaxBytes int64) []MqttStoreBound {
 // checkMqttStoreBounds is one pass: a StreamInfo per stream, and an update only for a stream
 // whose ceiling is not the declared one.
 func (nmgr *NatsManager) checkMqttStoreBounds(ctx context.Context, m *MqttStoreBoundMetrics, bounds []MqttStoreBound) {
+	if m != nil {
+		m.finishHeld.Set(nmgr.MqttFinishHeldFor().Seconds())
+	}
 	for _, s := range bounds {
 		if ctx.Err() != nil {
 			return
@@ -134,7 +146,14 @@ func (nmgr *NatsManager) checkMqttStoreBounds(ctx context.Context, m *MqttStoreB
 		// it refuses every QoS 1 publish until it has the gateway's subjects (see
 		// boundMqttStore).
 		marks := nmgr.marksOf(info)
-		pending := s.Name == MqttMessageStore && isAbandonedPendingMqttStore(info) && !marks.owned && !marks.released
+		pending := false
+		if s.Name == MqttMessageStore && !marks.owned && !marks.released {
+			var perr error
+			if pending, perr = nmgr.isAbandonedPendingMqttStore(ctx, info); perr != nil {
+				log.Warn().Err(perr).Str("stream", s.Name).Msg("Could not tell whether the MQTT message store was abandoned by a fail-closed check; the next check tries again")
+				pending = false
+			}
+		}
 		if info.Config.MaxBytes == s.MaxBytes && !pending {
 			setUnbounded(m, s.Name, 0)
 			continue

@@ -209,7 +209,14 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 		// the store and creating its durables) still has only the subject it was created with,
 		// so it takes none of the gateway's copies and the gateway refuses every QoS 1 publish.
 		// With no mark on it, it is nobody's: it gets the gateway's subjects back.
-		pending := name == MqttMessageStore && isAbandonedPendingMqttStore(info)
+		pending := false
+		if name == MqttMessageStore {
+			var perr error
+			if pending, perr = nmgr.isAbandonedPendingMqttStore(ctx, info); perr != nil {
+				lastErr = perr
+				continue
+			}
+		}
 		if pending {
 			cfg.Subjects = []string{mqttMsgsSubjectPrefix + ">"}
 		}
@@ -245,14 +252,32 @@ func (nmgr *NatsManager) boundMqttStore(ctx context.Context, name string, maxByt
 // mqttFailClosedPendingAbandon is how long a store may keep only the subject a fail-closed pass
 // created it with before a pod with the setting off gives it the gateway's subjects back. A
 // pass finishes the store within seconds of creating it, under the fail-closed lock; this is
-// long enough that a pass still running is never cut into, whatever the pods' clocks say
-// within a minute or so of each other. A variable so a test can shorten it.
+// long enough that a pass still running is never cut into. Its age is the BROKER's: the store's
+// creation time against the time stamp of the broker's own answer (mqttStoreAge), so a pod
+// whose clock runs ahead cannot hand the store its subjects while a pass is still finishing it
+// (that would be loss: the gateway would take its copies with no durable interested). A
+// variable so a test can shorten it.
 var mqttFailClosedPendingAbandon = 2 * time.Minute
 
 // isAbandonedPendingMqttStore reports a message store a fail-closed pass created and never
 // finished: its one subject is the one it is created with (mqttFailClosedPendingSubject), and
-// it was created longer ago than mqttFailClosedPendingAbandon.
-func isAbandonedPendingMqttStore(info *nats.StreamInfo) bool {
-	return info != nil && len(info.Config.Subjects) == 1 && info.Config.Subjects[0] == mqttFailClosedPendingSubject &&
-		time.Since(info.Created) >= mqttFailClosedPendingAbandon
+// the broker says it was created longer ago than mqttFailClosedPendingAbandon. The age is only
+// asked for (one more API request) of a store that has that one subject.
+func (nmgr *NatsManager) isAbandonedPendingMqttStore(ctx context.Context, info *nats.StreamInfo) (bool, error) {
+	if info == nil || len(info.Config.Subjects) != 1 || info.Config.Subjects[0] != mqttFailClosedPendingSubject {
+		return false, nil
+	}
+	age, err := nmgr.mqttStoreAge(ctx)
+	if err != nil {
+		return false, err
+	}
+	return age >= mqttFailClosedPendingAbandon, nil
+}
+
+// mqttStoreAge is how long the message store has existed by the broker's clock: its creation
+// time against the time stamp of the answer to the stream-info request. nats.go's StreamInfo
+// does not decode that time stamp, so this is a raw API request. On a broker that does not
+// report one, the pod's clock stands in for it.
+func (nmgr *NatsManager) mqttStoreAge(ctx context.Context) (time.Duration, error) {
+	return nmgr.brokerAge(ctx, "$JS.API.STREAM.INFO."+MqttMessageStore, MqttMessageStore)
 }

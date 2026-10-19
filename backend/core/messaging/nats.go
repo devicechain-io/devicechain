@@ -323,6 +323,9 @@ type NatsManager struct {
 	// durables). A test seam for interleaving two passes, and for publishing into the moment
 	// between creating a store and finishing it.
 	mqttPassHook func(point string)
+	// mqttFinish is how long a release's finish has been held by an unsettled cluster
+	// (mqtt_failclosed_held.go).
+	mqttFinish mqttFinishHold
 	// storeReaders are the readers over the message store (NewMqttMessageStoreReader),
 	// kept apart from readers: they are built at runtime, after the recorder and the sampler
 	// have taken their list, and their durables are the fail-closed pass's, not this area's.

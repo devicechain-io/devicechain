@@ -179,7 +179,9 @@ var (
 	// holds against up to 30 s of skew through a failed pass, and 60 s without one. The release
 	// grace (60 s, judged against a release time another pod may have written) holds against up
 	// to 45 s before it comes within mqttStoreViewTTL. The lock and the from-mark settle are
-	// timed by the broker, not by a pod, and take no skew.
+	// timed by the broker, not by a pod, and take no skew; so is the age of a store a pass created
+	// and never finished, which a pod with the setting off judges before it gives the store the
+	// gateway's subjects back (mqttStoreAge).
 	//
 	// Beyond those bounds the pods hand the store back and forth: one with another wanted
 	// state reads a live holder's heartbeat as stale and takes the store over, and the holder
@@ -823,9 +825,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	if err != nil {
 		return rep, err
 	}
-	// A store this pass created is counted once, as "store": the subjects it was created with
-	// are this pass's own, not a change made out of band.
-	if countRepairs && !takeOver && !rep.createdStore {
+	// A store this pass created is never counted here: a missing store has no mark of this
+	// instance, so creating one is a take-over, and it is counted once, as "store", above.
+	if countRepairs && !takeOver {
 		rep.repaired = append(rep.repaired, repaired...)
 	}
 
@@ -1048,11 +1050,18 @@ func isTransientRaise(err error) bool {
 // ConsumerInfo does not decode that time stamp, so this is a raw API request. On a broker that
 // does not report one, the pod's clock stands in for it.
 func (nmgr *NatsManager) mqttDurableAge(ctx context.Context, name string) (time.Duration, error) {
+	return nmgr.brokerAge(ctx, "$JS.API.CONSUMER.INFO."+MqttMessageStore+"."+name, "the platform durable "+name+" on "+MqttMessageStore)
+}
+
+// brokerAge is how long the object a JetStream info request describes has existed, by the
+// broker's clock: the "created" of its answer against the answer's own "ts". what names the
+// object in an error.
+func (nmgr *NatsManager) brokerAge(ctx context.Context, subject, what string) (time.Duration, error) {
 	rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
 	defer cancel()
-	msg, err := nmgr.nc.RequestWithContext(rctx, "$JS.API.CONSUMER.INFO."+MqttMessageStore+"."+name, nil)
+	msg, err := nmgr.nc.RequestWithContext(rctx, subject, nil)
 	if err != nil {
-		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %w", name, MqttMessageStore, err)
+		return 0, fmt.Errorf("reading the age of %s: %w", what, err)
 	}
 	var resp struct {
 		Error   *jsAPIError `json:"error"`
@@ -1060,11 +1069,10 @@ func (nmgr *NatsManager) mqttDurableAge(ctx context.Context, name string) (time.
 		Now     time.Time   `json:"ts"`
 	}
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
-		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %w", name, MqttMessageStore, err)
+		return 0, fmt.Errorf("reading the age of %s: %w", what, err)
 	}
 	if resp.Error != nil {
-		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %s", name, MqttMessageStore,
-			resp.Error.Description)
+		return 0, fmt.Errorf("reading the age of %s: %s", what, resp.Error.Description)
 	}
 	if resp.Created.IsZero() {
 		// No creation time: the age cannot be shown, so it is not old enough.
@@ -1252,8 +1260,7 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 			return rep, err
 		}
 		if why != "" {
-			log.Debug().Str("stream", MqttMessageStore).Str("why", why).
-				Msg("Not recording the drain cut of the released MQTT message store yet")
+			nmgr.noteFinishHeld("Not recording the drain cut of the released MQTT message store yet", why)
 			return rep, nil
 		}
 		info = settled
@@ -1290,11 +1297,18 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 			// Not drained, or the cluster cannot say: below the cut, the store copies it holds
 			// may be the only copies of what a pod with the setting on skipped. The next pass
 			// looks again.
-			log.Debug().Str("durable", d.Name).Bool("unsettled", v.unsettled).Str("why", v.why).
-				Msg("A platform durable of the released MQTT message store is not drained yet; it stays")
+			if v.unsettled {
+				nmgr.noteFinishHeld("A platform durable of the released MQTT message store cannot be shown drained: "+
+					d.Name, v.why)
+			} else {
+				nmgr.mqttFinish.clear()
+				log.Debug().Str("durable", d.Name).Str("why", v.why).
+					Msg("A platform durable of the released MQTT message store is not drained yet; it stays")
+			}
 			return rep, nil
 		}
 	}
+	nmgr.mqttFinish.clear()
 	for _, d := range durables {
 		if err := mqttFenced(ctx); err != nil {
 			return rep, err
