@@ -32,6 +32,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/require"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
@@ -180,7 +181,7 @@ type nopObserver struct{}
 func (nopObserver) Computed(string)                             {}
 func (nopObserver) Skipped(string, calcfield.SkipReason, error) {}
 
-func (o *liveOracle) derive(raw map[string]string, md *datatypes.JSON) []dmmodel.ResolvedMeasurementEntry {
+func (o *liveOracle) derive(raw map[string]string, md *datatypes.JSON) []resolvedevent.ResolvedMeasurementEntry {
 	calc := o.res.BeginCalculation(o.res.DeviceConstants(md))
 	defer calc.Release()
 	for k, v := range raw {
