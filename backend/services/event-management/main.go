@@ -186,8 +186,9 @@ func wireAnchorSweep(ctx context.Context) error {
 	return nil
 }
 
-// wireBackfill builds the calculated-metric backfill worker (ADR-082), unless the operator
-// switched it off. It is inert until a job exists: a pass is one lock attempt and one query.
+// wireBackfill builds the calculated-metric backfill worker (ADR-082), unless it is off: the
+// operator switched it off, or left it unset on a pool with no room for it
+// (CalculatedBackfillConfiguration.Runs). It is inert until a job exists: a pass is one lock attempt and one query.
 //
 // Its device-management client is its own, built here and not inside wireAnchorSweep's branch,
 // because that one exists only when the sweep is on. It holds device:read and nothing else: the
@@ -197,8 +198,16 @@ func wireAnchorSweep(ctx context.Context) error {
 // it leaves a job it finds alone and says so, rather than failing a job for a deployment gap.
 func wireBackfill(ctx context.Context) error {
 	bc := Configuration.CalculatedBackfill
-	if !bc.On() {
-		log.Info().Msg("Calculated-metric backfill worker disabled (calculatedBackfill.enabled is false).")
+	if run, why := bc.Runs(Configuration.TsdbConfiguration, Configuration.Persistence); !run {
+		// Validate already refused the one case that is an error (enabled: true on a pool too
+		// small for it). What reaches here is an operator's false, or an unset switch on a pool
+		// tuned before the worker existed, which is left off rather than refused; the second
+		// is a warning because nothing else says the worker is not running.
+		ev := log.Warn()
+		if bc.Enabled != nil {
+			ev = log.Info()
+		}
+		ev.Str("reason", why).Msg("Calculated-metric backfill worker is not running.")
 		return nil
 	}
 	var roster backfill.Roster

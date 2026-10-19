@@ -1639,13 +1639,16 @@ functionalAreas:
     #                         # already waiting, which adds no latency.
     #
     # Calculated-metric backfill worker (defaults shown). It fills calculated metrics into
-    # stored history for jobs a tenant creates; with no job it costs one cheap query every
-    # ten seconds. One worker runs for the whole instance and holds ONE pooled connection,
-    # so persistence.writers + 1 + 4 spare connections must fit the pool or the service
-    # refuses to start (set enabled to false, or raise the pool).
+    # stored history for jobs a tenant creates; with no job it costs one lock attempt and
+    # two small queries every ten seconds. One worker runs for the whole instance and holds
+    # ONE pooled connection, so it needs persistence.writers + 1 + 4 spare connections to
+    # fit the pool. Left unset, it runs when they fit and stays off (with a startup warning
+    # naming the settings) when they do not; set to true, a pool that cannot hold it stops
+    # the service at startup.
     #   config:
     #     calculatedBackfill:
-    #       enabled: true         # false stops the worker; a running job stays RUNNING.
+    #       enabled:              # unset (the default), true, or false. false stops the
+    #                             # worker; a running job stays RUNNING.
     #                             # To stop jobs cleanly instead, set cancel_requested_at on
     #                             # "event-management".calculated_backfills rows that are
     #                             # QUEUED or RUNNING: each ends CANCELLED within one batch.

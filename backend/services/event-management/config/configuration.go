@@ -119,10 +119,19 @@ const (
 
 // CalculatedBackfillConfiguration sizes and switches the backfill worker.
 type CalculatedBackfillConfiguration struct {
-	// Enabled turns the worker on. Unset (nil) is on: the worker finds no job until one is
-	// created, and costs one cheap query every ten seconds. false stops it, which is the
-	// operator's instance-wide lever (a running job stays RUNNING until it is turned on again
-	// or cancelled).
+	// Enabled switches the worker, in three states:
+	//
+	//   - unset (nil), the default: the worker runs when the pool has room for it beside the
+	//     persistence writers and PoolHeadroom, and is left off — with a startup warning naming
+	//     the settings — when it has not. An instance whose writers and pool were tuned before
+	//     the worker existed therefore starts exactly as it did, rather than being refused for
+	//     a connection budget it never agreed to;
+	//   - true: the operator asked for the worker, so a pool that cannot hold it stops the
+	//     service at startup naming the settings;
+	//   - false: the worker does not run. This is the operator's instance-wide lever (a running
+	//     job stays RUNNING until it is turned on again or cancelled).
+	//
+	// With no job the worker costs one lock attempt and one query every ten seconds.
 	Enabled *bool
 
 	// RowsPerSecond is the most rows the worker reads plus writes in a second, across every
@@ -131,37 +140,45 @@ type CalculatedBackfillConfiguration struct {
 	RowsPerSecond int
 }
 
-// ApplyDefaults fills what is unset.
+// ApplyDefaults fills what is unset. Enabled stays as written: unset and true decide
+// differently when the pool is short (see Enabled), so the default is not a value.
 func (b *CalculatedBackfillConfiguration) ApplyDefaults() {
-	if b.Enabled == nil {
-		on := true
-		b.Enabled = &on
-	}
 	if b.RowsPerSecond == 0 {
 		b.RowsPerSecond = DefaultBackfillRowsPerSecond
 	}
 }
 
-// On reports whether the worker runs; an unset value is on, as ApplyDefaults reads it.
-func (b CalculatedBackfillConfiguration) On() bool { return b.Enabled == nil || *b.Enabled }
+// Runs reports whether the worker runs beside these writers on this pool and, when it does
+// not, why, in words for the startup log. It is the one decision; Validate refuses only the
+// case where the operator asked for the worker and Runs says it cannot.
+func (b CalculatedBackfillConfiguration) Runs(pool config.MicroserviceDatastoreConfiguration,
+	persistence PersistenceConfiguration) (bool, string) {
+	if b.Enabled != nil && !*b.Enabled {
+		return false, "calculatedBackfill.enabled is false"
+	}
+	if need, have := persistence.Writers+BackfillPoolConnections+PoolHeadroom, rdb.EffectiveMaxOpenConnections(pool); need > have {
+		return false, fmt.Sprintf("persistence.writers (%d) + the backfill worker (%d) + %d spare connections is %d, "+
+			"but the connection pool holds %d; raise tsdbConfiguration.maxOpenConnections or lower "+
+			"persistence.writers to run it, or set calculatedBackfill.enabled to false to say it stays off",
+			persistence.Writers, BackfillPoolConnections, PoolHeadroom, need, have)
+	}
+	return true, ""
+}
 
-// Validate refuses a rate nobody can mean and, when the worker is on, a pool too small to hold
-// it beside the persistence writers and PoolHeadroom. pool is the event store's datastore
-// configuration, persistence the writers that draw from the same pool.
+// Validate refuses a rate nobody can mean and, when the operator set enabled to true, a pool
+// too small to hold the worker beside the persistence writers and PoolHeadroom. pool is the
+// event store's datastore configuration, persistence the writers that draw from the same pool.
 func (b CalculatedBackfillConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration,
 	persistence PersistenceConfiguration) error {
 	if b.RowsPerSecond < 1 || b.RowsPerSecond > MaxBackfillRowsPerSecond {
 		return fmt.Errorf("calculatedBackfill.rowsPerSecond must be between 1 and %d, got %d",
 			MaxBackfillRowsPerSecond, b.RowsPerSecond)
 	}
-	if !b.On() {
+	if b.Enabled == nil || !*b.Enabled {
 		return nil
 	}
-	if need, have := persistence.Writers+BackfillPoolConnections+PoolHeadroom, rdb.EffectiveMaxOpenConnections(pool); need > have {
-		return fmt.Errorf("persistence.writers (%d) + the backfill worker (%d) + %d spare connections is %d, "+
-			"but the connection pool holds %d; raise tsdbConfiguration.maxOpenConnections, lower "+
-			"persistence.writers, or set calculatedBackfill.enabled to false",
-			persistence.Writers, BackfillPoolConnections, PoolHeadroom, need, have)
+	if ok, why := b.Runs(pool, persistence); !ok {
+		return fmt.Errorf("calculatedBackfill.enabled is true, but %s", why)
 	}
 	return nil
 }
