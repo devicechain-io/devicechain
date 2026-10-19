@@ -1116,7 +1116,8 @@ type Mutation {
     member with a one-time invitation code. The membership stays disabled until the code is
     accepted. The answer is the same whether or not the person already has an account. Fails
     with the error code CONFLICT if they are already a member, ESCALATION if a role grants an
-    authority you do not hold, NOT_FOUND if a role token is not assignable here, and
+    authority you do not hold, NOT_FOUND if a role token is not assignable here,
+    INVALID_VALUE for a scope anchor whose token is not valid, and
     LIMIT_EXCEEDED for more than 16 scope anchors. Requires member:write.
     """
     inviteMember(
@@ -1143,8 +1144,8 @@ type Mutation {
     Replaces the customers and groups a member is limited to and returns the member. An empty list gives
     them the whole tenant. The change takes effect at the member's next token refresh, as
     setMemberRoles does. Fails with the same error codes as setMemberRoles,
-    plus LIMIT_EXCEEDED for more than 16 anchors. Requires
-    member:write.
+    plus INVALID_VALUE for an anchor whose token is not valid, and LIMIT_EXCEEDED for more
+    than 16 anchors. Requires member:write.
     """
     setMemberScope(
         """Email of the member."""
@@ -1157,7 +1158,8 @@ type Mutation {
     returns the member: both change or neither does. Use it instead of calling setMemberRoles
     and setMemberScope in turn, which can leave the roles changed when the scope is refused.
     The change takes effect at the member's next token refresh, as setMemberRoles describes.
-    Fails with the error codes of setMemberRoles, plus LIMIT_EXCEEDED for more than 16 anchors.
+    Fails with the error codes of setMemberRoles, plus INVALID_VALUE for an anchor whose token is
+    not valid, and LIMIT_EXCEEDED for more than 16 anchors.
     Requires member:write.
     """
     setMemberAccess(
