@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -240,6 +241,13 @@ func measurementRequests(event model.Event, payload dmmodel.ResolvedMeasurements
 			fval, err := parseNullableFloat64(&val)
 			if err != nil {
 				return nil, err
+			}
+			// NaN and +/-Inf parse, and the payload identity cannot canonicalize them (JSON has
+			// no such number), so the failure used to read as transient and the message was
+			// redelivered until its budget ran out. No delivery can change the bytes.
+			if math.IsNaN(*fval) || math.IsInf(*fval, 0) {
+				return nil, fmt.Errorf("%w: measurement %q: %q is not a finite number",
+					ErrDeterministic, mx.Name, val)
 			}
 			var classifier *uint
 			if mx.Classifier != nil {

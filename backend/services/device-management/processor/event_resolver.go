@@ -496,13 +496,18 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 					// The value as the device sent it, parsed once as its declared type.
 					calc.Set(&def, mxvalue)
 				}
-			} else if _, err := strconv.ParseFloat(mxvalue, 64); err != nil {
+			} else if f, err := strconv.ParseFloat(mxvalue, 64); err != nil {
 				// Undeclared and non-numeric: a measurement stores in the numeric
 				// column, so this value cannot be persisted. Undeclared keys are
 				// best-effort (ADR-016 lenient additive typing), so drop just this
 				// entry instead of dead-lettering the whole event and discarding its
 				// valid numeric siblings. Declare it as a metric to persist it.
 				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and non-numeric")
+				continue
+			} else if err := model.CheckStorableMeasurement(f); err != nil {
+				// Numeric but not storable: NaN, +/-Inf, or beyond decimal(20,8). Dropped like
+				// the non-numeric case, so a lenient key costs only its own entry.
+				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and not storable: "+err.Error())
 				continue
 			}
 			rmentries = append(rmentries, rmentry)
