@@ -34,7 +34,6 @@ import (
 // test can read the files the broker writes.
 func startGatewayWithStore(t *testing.T) (nc *nats.Conn, mqttPort int, storeDir string) {
 	t.Helper()
-	mqttPort = dctest.FreeTCPPort(t)
 	storeDir = dctest.JetStreamStoreDir(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host:       "127.0.0.1",
@@ -42,12 +41,13 @@ func startGatewayWithStore(t *testing.T) (nc *nats.Conn, mqttPort int, storeDir 
 		JetStream:  true,
 		StoreDir:   storeDir,
 		ServerName: "capture-workqueue-test",
-		MQTT:       natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		MQTT:       natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(15*time.Second), "embedded nats server not ready")
 	t.Cleanup(srv.Shutdown)
+	mqttPort = dctest.MQTTPort(t, srv)
 	nc, err = nats.Connect(srv.ClientURL())
 	require.NoError(t, err)
 	t.Cleanup(nc.Close)

@@ -37,7 +37,6 @@ const (
 // everything except the Sparkplug group "denied", and refusalObsUser may do anything.
 func startRefusingBroker(t *testing.T) string {
 	t.Helper()
-	mqttPort := dctest.FreeTCPPort(t)
 	// NATS maps an MQTT topic onto a subject by turning '/' into '.' and a literal '.'
 	// into "//", and subscribes a trailing "/#" filter on both the parent subject and its
 	// ">" wildcard. Both are denied, so the whole group filter is refused.
@@ -48,7 +47,7 @@ func startRefusingBroker(t *testing.T) string {
 		JetStream:  true, // the MQTT gateway is built on JetStream
 		StoreDir:   dctest.JetStreamStoreDir(t),
 		ServerName: "sparkplug-refusal-test",
-		MQTT:       natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		MQTT:       natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 		Users: []*natsserver.User{
 			{
 				Username: refusalHostUser, Password: refusalHostPass,
@@ -63,7 +62,7 @@ func startRefusingBroker(t *testing.T) string {
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(15*time.Second), "embedded broker not ready")
 	t.Cleanup(srv.Shutdown)
-	return fmt.Sprintf("tcp://127.0.0.1:%d", mqttPort)
+	return fmt.Sprintf("tcp://127.0.0.1:%d", dctest.MQTTPort(t, srv))
 }
 
 // watchState subscribes an unrestricted observer to the host's STATE topic and returns

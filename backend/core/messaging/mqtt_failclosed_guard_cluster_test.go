@@ -68,7 +68,7 @@ func startGuardCluster(t *testing.T) *guardCluster {
 
 // clusterMQTTPorts reads back the MQTT port each server bound. Configure the listener with
 // Port -1, so the server binds a port of the kernel's choosing and keeps it: a port picked
-// beforehand by a probe listener and released (dctest.FreeTCPPort) is free only until something
+// beforehand by a probe listener and released is free only until something
 // else binds it, and a cluster's own routes, proxies and dials bind ports in between. A server
 // whose MQTT listener lost that race starts without one ("bind: address already in use"), and
 // its devices' CONNECTs land on whatever took the port: a route listener answers them with

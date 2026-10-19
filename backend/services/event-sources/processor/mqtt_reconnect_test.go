@@ -102,8 +102,10 @@ func stopWithin(t *testing.T, es *MqttEventSource, d time.Duration) {
 // MQTT listener), restarts that broker on the same ports and store, waits for paho to
 // reconnect, and then requires a device event to arrive again.
 func TestExternalMqttSourceResubscribesAfterBrokerRestart(t *testing.T) {
-	natsPort := dctest.FreeTCPPort(t)
-	mqttPort := dctest.FreeTCPPort(t)
+	// The first start binds both ports itself (-1) and they are read back; the restart then
+	// comes back on those SAME ports, because the paho source under test reconnects to the
+	// address it already has. That rebind of a just-released port is the one reuse left.
+	natsPort, mqttPort := -1, -1
 	storeDir := dctest.JetStreamStoreDir(t)
 	start := func() *natsserver.Server {
 		srv, err := natsserver.NewServer(&natsserver.Options{
@@ -113,6 +115,10 @@ func TestExternalMqttSourceResubscribesAfterBrokerRestart(t *testing.T) {
 		require.NoError(t, err)
 		go srv.Start()
 		require.True(t, srv.ReadyForConnections(15*time.Second), "the broker did not come up")
+		if natsPort == -1 {
+			natsPort = srv.Addr().(*net.TCPAddr).Port
+			mqttPort = dctest.MQTTPort(t, srv)
+		}
 		return srv
 	}
 	srv := start()

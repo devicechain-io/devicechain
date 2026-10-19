@@ -35,14 +35,14 @@ import (
 // copy is skipped), one that forwards to the wrong subject (the device would not be the
 // responder), and a consumer that reads both copies.
 func TestACommandResponseReachesItsConsumerOnceFromTheStore(t *testing.T) {
-	mqttPort := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true,
 		StoreDir: dctest.JetStreamStoreDir(t), NoLog: true, NoSigs: true,
-		MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort}})
+		MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1}})
 	require.NoError(t, err)
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(15*time.Second))
 	t.Cleanup(srv.Shutdown)
+	mqttPort := dctest.MQTTPort(t, srv)
 	u, err := url.Parse(srv.ClientURL())
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())

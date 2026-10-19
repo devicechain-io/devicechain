@@ -22,15 +22,15 @@ import (
 // messages each received.
 func twoSourcesOnOneBroker(t *testing.T, idA, idB string) (connA, connB uint64, recvA, recvB int64) {
 	t.Helper()
-	mqttPort := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t), NoLog: true, NoSigs: true,
-		ServerName: "client-id", MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		ServerName: "client-id", MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(15*time.Second), "the broker did not come up")
 	t.Cleanup(srv.Shutdown)
+	mqttPort := dctest.MQTTPort(t, srv)
 
 	var gotA, gotB atomic.Int64
 	failsA, failsB := newFailRecorder(), newFailRecorder()

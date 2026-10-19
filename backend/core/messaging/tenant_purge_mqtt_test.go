@@ -61,7 +61,6 @@ func mqttRig(t *testing.T) (*nats.Conn, nats.JetStreamContext, string) {
 // which was measured, not assumed: that mutation survived the test before this rig existed.
 func mqttRigInDomain(t *testing.T, domain string) (*nats.Conn, nats.JetStreamContext, string) {
 	t.Helper()
-	mqttPort := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host:            "127.0.0.1",
 		Port:            -1,
@@ -71,7 +70,7 @@ func mqttRigInDomain(t *testing.T, domain string) (*nats.Conn, nats.JetStreamCon
 		StoreDir:        dctest.JetStreamStoreDir(t),
 		MQTT: natsserver.MQTTOpts{
 			Host: "127.0.0.1",
-			Port: mqttPort,
+			Port: -1,
 		},
 	})
 	require.NoError(t, err)
@@ -84,7 +83,7 @@ func mqttRigInDomain(t *testing.T, domain string) (*nats.Conn, nats.JetStreamCon
 	t.Cleanup(nc.Close)
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	return nc, js, fmt.Sprintf("tcp://127.0.0.1:%d", mqttPort)
+	return nc, js, fmt.Sprintf("tcp://127.0.0.1:%d", dctest.MQTTPort(t, srv))
 }
 
 // connectDevice opens a PERSISTENT MQTT session for one device and subscribes it to its own
