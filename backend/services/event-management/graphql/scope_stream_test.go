@@ -7,10 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -88,7 +88,7 @@ func (f *streamFixture) publishReading(t *testing.T, device, anchor, name, value
 		Anchors:           anchors,
 		OccurredTime:      now,
 		ProcessedTime:     now,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: now,
 			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: name, Value: value}},

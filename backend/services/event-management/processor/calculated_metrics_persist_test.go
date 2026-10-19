@@ -19,6 +19,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -51,13 +52,13 @@ func resolveOverTheWire(t testing.TB, profile dmmodel.ProfileResolution, reading
 	t.Helper()
 	rez := dmprocessor.NewEventResolver(1, nil, "", dmprocessor.EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	device := &dmmodel.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
-	unresolved := &esmodel.UnresolvedEvent{Source: "lwm2m", Device: "meter-1", EventType: esmodel.Measurement,
+	unresolved := &esmodel.UnresolvedEvent{Source: "lwm2m", Device: "meter-1", EventType: eventtype.Measurement,
 		OccurredTime: calcAt, ProcessedTime: calcAt,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: readings}}}}
 	payload, err := rez.ResolveMeasurementsEventPayload(context.Background(), device, profile, unresolved)
 	require.NoError(t, err)
 	scope := profile.Scope()
-	resolved := &resolvedevent.ResolvedEvent{Source: "lwm2m", SourceDeviceToken: "meter-1", EventType: esmodel.Measurement,
+	resolved := &resolvedevent.ResolvedEvent{Source: "lwm2m", SourceDeviceToken: "meter-1", EventType: eventtype.Measurement,
 		OccurredTime: calcAt, ProcessedTime: calcAt, DeviceTypeToken: scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken, Payload: payload}
 	encoded, err := resolvedevent.MarshalResolvedEventAs(resolved, format)
@@ -154,7 +155,7 @@ func TestAFormulaFreeReadingKeepsItsEventIdThroughTheResolver(t *testing.T) {
 		`{"Name":"current","Value":"12.25","Classifier":2,"Unit":"A","DataType":"DOUBLE"},` +
 		`{"Name":"voltage","Value":"230.5","Classifier":1,"Unit":"V","DataType":"DOUBLE"}],` +
 		`"OccurredTime":"2026-10-16T12:00:00Z"}]}`
-	parent := &model.Event{DeviceToken: "meter-1", EventType: esmodel.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
+	parent := &model.Event{DeviceToken: "meter-1", EventType: eventtype.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
 	want := model.DeriveEventId("acme", parent, []byte(literal))
 	for _, format := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
 		ev := resolveOverTheWire(t, profile, meterReading, format)
@@ -177,7 +178,7 @@ func TestAFormulaFreeReadingKeepsItsEventIdThroughTheResolver(t *testing.T) {
 func TestOneSampleResolvesToOneIdAndOneCalculatedValue(t *testing.T) {
 	profile := calcProfileFour()
 	reading := map[string]string{"voltage": "230.123456789", "current": "12.987654321", "temp": "81.3", "fan": "0"}
-	parent := &model.Event{DeviceToken: "meter-1", EventType: esmodel.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
+	parent := &model.Event{DeviceToken: "meter-1", EventType: eventtype.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
 	formats := []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact}
 
 	run := func(i int, format func(resolvedevent.ResolvedMeasurementEntry) string) (string, string) {

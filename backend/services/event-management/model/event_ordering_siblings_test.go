@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -41,7 +41,7 @@ func seedAlerts(t *testing.T, api *Api, ctx context.Context, offsets []int) {
 	t.Helper()
 	for _, offset := range offsets {
 		occurred := orderingBase.Add(time.Duration(offset) * time.Minute)
-		ev := eventOfType("acme", "device-1", esmodel.Alert, occurred, fmt.Sprintf("alert-%d", offset))
+		ev := eventOfType("acme", "device-1", eventtype.Alert, occurred, fmt.Sprintf("alert-%d", offset))
 		_, err := api.CreateAlertEvents(ctx, api.RDB.DB(ctx), []*AlertEventCreateRequest{{
 			Event:             ev,
 			EntryOccurredTime: ev.OccurredTime,

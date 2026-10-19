@@ -5,7 +5,7 @@ package runtime
 
 import (
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"testing"
@@ -32,7 +32,7 @@ func located(device, profileVersion string, fenceSetVersion int32, occurred time
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload:             &resolvedevent.ResolvedLocationsPayload{Entries: entries},
 	}
@@ -268,7 +268,7 @@ func TestLocationEventWithUnparseablePositionIsSkipped(t *testing.T) {
 		SourceDeviceToken:   "d1",
 		ProfileVersionToken: "p@1",
 		OccurredTime:        geoBase,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     1,
 		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &lat}, // no longitude: no point

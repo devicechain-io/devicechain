@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 )
 
@@ -514,7 +516,7 @@ func (jd *JsonDecoder) decodeOnce(payload []byte, receivedAt time.Time) (*model.
 	}
 	var built interface{}
 	switch event.EventType {
-	case model.NewRelationship:
+	case eventtype.NewRelationship:
 		// Read through the same map decode as before: BuildNewRelationshipPayload
 		// formats the values with %v, which depends on the decoded Go types.
 		source := &JsonEvent{}
@@ -522,11 +524,11 @@ func (jd *JsonDecoder) decodeOnce(payload []byte, receivedAt time.Time) (*model.
 			return nil, nil, false
 		}
 		built, err = jd.BuildNewRelationshipPayload(source)
-	case model.Location:
+	case eventtype.Location:
 		built, err = jd.buildLocationsPayloadFromBytes(body, false)
-	case model.Measurement:
+	case eventtype.Measurement:
 		built, err = jd.buildMeasurementsPayloadFromBytes(body, false)
-	case model.Alert:
+	case eventtype.Alert:
 		built, err = jd.buildAlertsPayloadFromBytes(body, false)
 	default:
 		return nil, nil, false
@@ -599,15 +601,15 @@ func (jd *JsonDecoder) decodeReference(payload []byte, receivedAt time.Time) (*m
 	// per-event reading limit is then applied ONCE, below, to whatever was built.
 	var built interface{}
 	switch event.EventType {
-	case model.NewRelationship:
+	case eventtype.NewRelationship:
 		built, err = jd.BuildNewRelationshipPayload(jevent)
-	case model.Location:
+	case eventtype.Location:
 		built, err = jd.BuildLocationsPayload(jevent)
-	case model.Measurement:
+	case eventtype.Measurement:
 		built, err = jd.BuildMeasurementsPayload(jevent)
-	case model.Alert:
+	case eventtype.Alert:
 		built, err = jd.BuildAlertsPayload(jevent)
-	case model.StateChange:
+	case eventtype.StateChange:
 		// StateChange (presence, ADR-067) is a PLATFORM-PRODUCER event: a presence-
 		// asserting adapter (the Sparkplug host) emits it directly over the wire
 		// contract (proto), never through this device-facing JSON decoder. Accepting it

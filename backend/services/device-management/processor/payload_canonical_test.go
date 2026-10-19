@@ -13,6 +13,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,13 +56,13 @@ type resolutionFixture struct {
 // canonicalFixtures maps each event type the resolver handles to a fixture exercising its
 // payload branch. Each carries MORE THAN ONE entry wherever the type allows it, because a
 // single-entry payload has only one possible encoding and would make the assertion vacuous.
-func canonicalFixtures() map[esmodel.EventType]resolutionFixture {
+func canonicalFixtures() map[eventtype.EventType]resolutionFixture {
 	entryTime := fixtureTime
-	return map[esmodel.EventType]resolutionFixture{
-		esmodel.Measurement: {
+	return map[eventtype.EventType]resolutionFixture{
+		eventtype.Measurement: {
 			event: func() *esmodel.UnresolvedEvent {
 				return &esmodel.UnresolvedEvent{
-					Device: "TEST-123", EventType: esmodel.Measurement, OccurredTime: fixtureTime,
+					Device: "TEST-123", EventType: eventtype.Measurement, OccurredTime: fixtureTime,
 					Payload: &esmodel.UnresolvedMeasurementsPayload{
 						Entries: []esmodel.UnresolvedMeasurementsEntry{
 							{Measurements: orderFixture},
@@ -73,12 +74,12 @@ func canonicalFixtures() map[esmodel.EventType]resolutionFixture {
 			api:         noMetricDefsApi(),
 			wantEntries: len(orderFixture) + 2,
 		},
-		esmodel.Location: {
+		eventtype.Location: {
 			event: func() *esmodel.UnresolvedEvent {
 				lat, lon := "33.749", "-84.388"
 				lat2, lon2 := "47.6062", "-122.3321"
 				return &esmodel.UnresolvedEvent{
-					Device: "TEST-123", EventType: esmodel.Location, OccurredTime: fixtureTime,
+					Device: "TEST-123", EventType: eventtype.Location, OccurredTime: fixtureTime,
 					Payload: &esmodel.UnresolvedLocationsPayload{
 						Entries: []esmodel.UnresolvedLocationEntry{
 							{Latitude: &lat, Longitude: &lon, OccurredTime: &entryTime},
@@ -89,10 +90,10 @@ func canonicalFixtures() map[esmodel.EventType]resolutionFixture {
 			},
 			wantEntries: 2,
 		},
-		esmodel.Alert: {
+		eventtype.Alert: {
 			event: func() *esmodel.UnresolvedEvent {
 				return &esmodel.UnresolvedEvent{
-					Device: "TEST-123", EventType: esmodel.Alert, OccurredTime: fixtureTime,
+					Device: "TEST-123", EventType: eventtype.Alert, OccurredTime: fixtureTime,
 					Payload: &esmodel.UnresolvedAlertsPayload{
 						Entries: []esmodel.UnresolvedAlertEntry{
 							{Type: "overheat", Level: 3, Message: "too hot", Source: "sensor"},
@@ -103,10 +104,10 @@ func canonicalFixtures() map[esmodel.EventType]resolutionFixture {
 			},
 			wantEntries: 2,
 		},
-		esmodel.StateChange: {
+		eventtype.StateChange: {
 			event: func() *esmodel.UnresolvedEvent {
 				return &esmodel.UnresolvedEvent{
-					Device: "TEST-123", EventType: esmodel.StateChange, OccurredTime: fixtureTime,
+					Device: "TEST-123", EventType: eventtype.StateChange, OccurredTime: fixtureTime,
 					Payload: &esmodel.UnresolvedStateChangePayload{
 						State: "CONNECTED", Reason: "birth", SessionId: "7",
 					},
@@ -124,10 +125,10 @@ func canonicalFixtures() map[esmodel.EventType]resolutionFixture {
 // NewRelationship is resolved on its own path (HandleNewRelationshipEvent) rather than
 // through ResolveEventPayload; the two command types are enum values HandleEvent rejects.
 // Anything moving OUT of this set must gain a fixture above.
-var notResolvedAsPayload = map[esmodel.EventType]string{
-	esmodel.NewRelationship:   "resolved on its own path, not through ResolveEventPayload",
-	esmodel.CommandInvocation: "not routed to a payload resolver",
-	esmodel.CommandResponse:   "not routed to a payload resolver",
+var notResolvedAsPayload = map[eventtype.EventType]string{
+	eventtype.NewRelationship:   "resolved on its own path, not through ResolveEventPayload",
+	eventtype.CommandInvocation: "not routed to a payload resolver",
+	eventtype.CommandResponse:   "not routed to a payload resolver",
 }
 
 // declaredEventTypes walks the EventType enum itself, using the fact that stringer returns
@@ -141,11 +142,11 @@ var notResolvedAsPayload = map[esmodel.EventType]string{
 // skipped the test, which is precisely the silent gap this test exists to close. The
 // stringer table is generated from the const block and carries a compile-time guard against
 // the two drifting apart, so it is the more honest source.
-func declaredEventTypes(t *testing.T) []esmodel.EventType {
+func declaredEventTypes(t *testing.T) []eventtype.EventType {
 	t.Helper()
-	var out []esmodel.EventType
+	var out []eventtype.EventType
 	for i := 0; i < 64; i++ {
-		typ := esmodel.EventType(i)
+		typ := eventtype.EventType(i)
 		if typ.String() == fmt.Sprintf("EventType(%d)", i) {
 			return out
 		}

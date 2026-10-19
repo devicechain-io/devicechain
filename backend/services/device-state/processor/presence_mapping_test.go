@@ -7,8 +7,8 @@ import (
 	"context"
 	"errors"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -25,7 +25,7 @@ import (
 // of an event the platform could not interpret. The disposition has to be loud.
 func TestAnUnmappableStateChangeIsAnErrorNotAHeartbeat(t *testing.T) {
 	ev := &resolvedevent.ResolvedEvent{
-		EventType:    esmodel.StateChange,
+		EventType:    eventtype.StateChange,
 		OccurredTime: time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC),
 		Payload:      &resolvedevent.ResolvedStateChangePayload{State: "RETIRED", SessionId: 7},
 	}
@@ -43,7 +43,7 @@ func TestAnUnmappableStateChangeIsAnErrorNotAHeartbeat(t *testing.T) {
 // equally a silent downgrade to a heartbeat.
 func TestAStateChangePayloadOfTheWrongTypeIsAnError(t *testing.T) {
 	ev := &resolvedevent.ResolvedEvent{
-		EventType: esmodel.StateChange,
+		EventType: eventtype.StateChange,
 		Payload:   &resolvedevent.ResolvedMeasurementsPayload{},
 	}
 	if pt, err := presenceTransitionFor(ev); err == nil {
@@ -66,7 +66,7 @@ func TestTheMapperCarriesEveryClaimAndStillPassesDataThrough(t *testing.T) {
 	} {
 		t.Run(tc.state, func(t *testing.T) {
 			pt, err := presenceTransitionFor(&resolvedevent.ResolvedEvent{
-				EventType:    esmodel.StateChange,
+				EventType:    eventtype.StateChange,
 				OccurredTime: t0,
 				Payload:      &resolvedevent.ResolvedStateChangePayload{State: tc.state, SessionId: 7},
 			})
@@ -83,7 +83,7 @@ func TestTheMapperCarriesEveryClaimAndStillPassesDataThrough(t *testing.T) {
 	}
 
 	pt, err := presenceTransitionFor(&resolvedevent.ResolvedEvent{
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: t0,
 		Payload:      &resolvedevent.ResolvedMeasurementsPayload{},
 	})
@@ -136,7 +136,7 @@ func stateChangeMessage(t *testing.T, deviceToken string, occurredAt time.Time,
 	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
-		EventType:         esmodel.StateChange,
+		EventType:         eventtype.StateChange,
 		OccurredTime:      occurredAt,
 		ProcessedTime:     occurredAt.Add(250 * time.Millisecond),
 		Payload:           &resolvedevent.ResolvedStateChangePayload{State: state, SessionId: session},

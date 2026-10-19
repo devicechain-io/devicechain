@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -641,7 +643,7 @@ func (e *Emitter) measurementMessage(tenant, source, deviceToken string, piece [
 	ev := &esmodel.UnresolvedEvent{
 		Source:                 source,
 		Device:                 deviceToken,
-		EventType:              esmodel.Measurement,
+		EventType:              eventtype.Measurement,
 		OccurredTime:           time.UnixMilli(latest).UTC(),
 		ProcessedTime:          now.UTC(),
 		Payload:                &esmodel.UnresolvedMeasurementsPayload{Entries: entries},
@@ -813,7 +815,7 @@ func (e *Emitter) stateChangeMessage(tenant, source, deviceToken string, sc stat
 	uev := &esmodel.UnresolvedEvent{
 		Source:                 source,
 		Device:                 deviceToken,
-		EventType:              esmodel.StateChange,
+		EventType:              eventtype.StateChange,
 		OccurredTime:           occurred,
 		ProcessedTime:          e.now().UTC(),
 		AuthenticatedTransport: e.authenticatedTransport,

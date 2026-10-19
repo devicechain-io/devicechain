@@ -4,7 +4,7 @@
 package runtime
 
 import (
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math"
 	"testing"
@@ -131,7 +131,7 @@ func TestBuildInputsBatchedLocationFixes(t *testing.T) {
 	ev := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: "d1",
 		OccurredTime:      base,
-		EventType:         esmodel.Location,
+		EventType:         eventtype.Location,
 		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &lat, Longitude: &lon, OccurredTime: first},
 			{Latitude: &lat, Longitude: &lon, OccurredTime: base},

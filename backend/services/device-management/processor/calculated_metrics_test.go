@@ -15,6 +15,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -75,7 +76,7 @@ func resolveSamplesFor(t *testing.T, device *model.Device, profile model.Profile
 		when := at.Add(time.Duration(i) * time.Second)
 		entries[i] = esmodel.UnresolvedMeasurementsEntry{Measurements: s, OccurredTime: &when}
 	}
-	event := &esmodel.UnresolvedEvent{Source: "test", Device: "meter-1", EventType: esmodel.Measurement,
+	event := &esmodel.UnresolvedEvent{Source: "test", Device: "meter-1", EventType: eventtype.Measurement,
 		OccurredTime: at, ProcessedTime: at.Add(time.Hour),
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: entries}}
 	out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, profile, event)
@@ -185,7 +186,7 @@ func TestADeviceSentCalculatedKeyIsDropped(t *testing.T) {
 	profile := meterResolution(bounded)
 
 	for _, forged := range []string{"999", "not a number", "1e300"} {
-		event := &esmodel.UnresolvedEvent{EventType: esmodel.Measurement,
+		event := &esmodel.UnresolvedEvent{EventType: eventtype.Measurement,
 			Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"voltage": "230.5", "current": "12.25", "power_kw": forged}}}}}
 		reason, err := validateMeasurements(profile, event)
@@ -200,7 +201,7 @@ func TestADeviceSentCalculatedKeyIsDropped(t *testing.T) {
 	assert.EqualValues(t, 3, testutil.ToFloat64(metrics.deviceKeyDropped))
 
 	// The counterweight: a MEASURED metric's bounds are still enforced by validation.
-	event := &esmodel.UnresolvedEvent{EventType: esmodel.Measurement,
+	event := &esmodel.UnresolvedEvent{EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 			{Measurements: map[string]string{"voltage": "not a number"}}}}}
 	_, err := validateMeasurements(profile, event)

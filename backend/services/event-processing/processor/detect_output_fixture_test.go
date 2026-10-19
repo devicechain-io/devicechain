@@ -34,8 +34,8 @@ import (
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
@@ -139,7 +139,7 @@ func (fx outputFixture) messages(tb testing.TB, n int, log *outputLog) []messagi
 		}
 		ev := &resolvedevent.ResolvedEvent{
 			Source: "http1", SourceDeviceToken: fx.device(i), ProfileVersionToken: "p@1",
-			OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
+			OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.Measurement,
 			Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 				OccurredTime: occurred,
 				Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},

@@ -13,6 +13,7 @@ import (
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 )
 
 // These tests cover the geofence stamp (ADR-078): the tenant's active fence-set version
@@ -44,7 +45,7 @@ func locationEvent() *esmodel.UnresolvedEvent {
 	lat, lon := "33.7490", "-84.3880"
 	return &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload: &esmodel.UnresolvedLocationsPayload{
 			Entries: []esmodel.UnresolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		},
@@ -133,7 +134,7 @@ func TestNonLocationEventsCarryNoFenceSetVersion(t *testing.T) {
 
 	measurement := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"temperature": "42"}},
@@ -142,14 +143,14 @@ func TestNonLocationEventsCarryNoFenceSetVersion(t *testing.T) {
 	}
 	alert := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Alert,
+		EventType: eventtype.Alert,
 		Payload: &esmodel.UnresolvedAlertsPayload{
 			Entries: []esmodel.UnresolvedAlertEntry{{Type: "overheat", Level: 1, Message: "hot"}},
 		},
 	}
 	stateChange := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.StateChange,
+		EventType: eventtype.StateChange,
 		Payload: &esmodel.UnresolvedStateChangePayload{
 			State: presence.StateConnected, SessionId: "12345",
 		},

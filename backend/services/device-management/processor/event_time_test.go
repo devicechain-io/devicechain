@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ func timedLocationEvent(envelope, processed time.Time, fixTimes ...*time.Time) *
 	return &esmodel.UnresolvedEvent{
 		Source:        "test",
 		Device:        "TEST-123",
-		EventType:     esmodel.Location,
+		EventType:     eventtype.Location,
 		OccurredTime:  envelope,
 		ProcessedTime: processed,
 		Payload:       &esmodel.UnresolvedLocationsPayload{Entries: entries},
@@ -181,7 +182,7 @@ func TestAMeasurementBatchKeepsEachSamplesOwnInstant(t *testing.T) {
 	first := processed.Add(-90 * time.Second)
 
 	event := &esmodel.UnresolvedEvent{
-		Source: "test", Device: "TEST-123", EventType: esmodel.Measurement,
+		Source: "test", Device: "TEST-123", EventType: eventtype.Measurement,
 		OccurredTime: envelope, ProcessedTime: processed,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 			{OccurredTime: &first, Measurements: map[string]string{"temperature": "21.5"}},
@@ -208,7 +209,7 @@ func TestAMeasurementSampleTimeIsBounded(t *testing.T) {
 	poisoned := processed.Add(72 * time.Hour)
 
 	event := &esmodel.UnresolvedEvent{
-		Source: "test", Device: "TEST-123", EventType: esmodel.Measurement,
+		Source: "test", Device: "TEST-123", EventType: eventtype.Measurement,
 		OccurredTime: processed, ProcessedTime: processed,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 			{OccurredTime: &poisoned, Measurements: map[string]string{"temperature": "21.5"}},
@@ -230,7 +231,7 @@ func TestAnAlertBatchKeepsEachEntrysOwnInstant(t *testing.T) {
 
 	rez, _ := boundedResolver(5 * time.Minute)
 	event := &esmodel.UnresolvedEvent{
-		Source: "test", Device: "TEST-123", EventType: esmodel.Alert,
+		Source: "test", Device: "TEST-123", EventType: eventtype.Alert,
 		OccurredTime: envelope, ProcessedTime: processed,
 		Payload: &esmodel.UnresolvedAlertsPayload{Entries: []esmodel.UnresolvedAlertEntry{
 			{OccurredTime: &raised, Type: "SENSOR_FAULT", Level: 3, Message: "probe A open circuit"},

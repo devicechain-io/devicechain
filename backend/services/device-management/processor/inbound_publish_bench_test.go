@@ -17,6 +17,7 @@ import (
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -256,7 +257,7 @@ func benchMeasurement(device int) *esmodel.UnresolvedEvent {
 	return &esmodel.UnresolvedEvent{
 		Source:       "bench",
 		Device:       fmt.Sprintf("dev-%d", device),
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: time.Now(),
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 			{Measurements: map[string]string{"temp": "21.5"}},

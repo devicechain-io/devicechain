@@ -6,8 +6,8 @@ package processor
 import (
 	"context"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
@@ -60,7 +60,7 @@ func TestAnAnchorFilteredEventIsFoundThroughTheWriter(t *testing.T) {
 		}
 		want := at.Add(time.Duration(i) * time.Second)
 		if len(res.Results) != 1 || res.Results[0].DeviceToken != dev || !res.Results[0].OccurredTime.Equal(want) ||
-			res.Results[0].EventType != esmodel.Measurement {
+			res.Results[0].EventType != eventtype.Measurement {
 			t.Errorf("%s: the anchor-filtered read found %+v; want its one event at %v", dev, res.Results, want)
 		}
 		if res.Pagination.TotalRecords != 1 {

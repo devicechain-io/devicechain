@@ -7,6 +7,7 @@ import (
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 )
@@ -18,7 +19,7 @@ import (
 func (suite *EventResolverTestSuite) TestRequiredTransportAuthenticatedBypass() {
 	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{deviceWithToken("lw-dev-1")}, nil)
 	// Honored for exactly the event types the marked ingest path emits.
-	for _, et := range []esmodel.EventType{esmodel.StateChange, esmodel.Measurement} {
+	for _, et := range []eventtype.EventType{eventtype.StateChange, eventtype.Measurement} {
 		event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: et, AuthenticatedTransport: true}
 		device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 		assert.NoError(suite.T(), err, et.String())
@@ -33,7 +34,7 @@ func (suite *EventResolverTestSuite) TestRequiredTransportAuthenticatedBypass() 
 // `required` — so a future emit path for a more dangerous type (a relationship
 // mutation, say) cannot silently inherit the credential bypass.
 func (suite *EventResolverTestSuite) TestTransportAuthenticatedConfinedToEmittedTypes() {
-	for _, et := range []esmodel.EventType{esmodel.NewRelationship, esmodel.Location, esmodel.Alert} {
+	for _, et := range []eventtype.EventType{eventtype.NewRelationship, eventtype.Location, eventtype.Alert} {
 		event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: et, AuthenticatedTransport: true}
 		_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 		assert.Error(suite.T(), err, et.String())
@@ -46,7 +47,7 @@ func (suite *EventResolverTestSuite) TestTransportAuthenticatedConfinedToEmitted
 // marker is still rejected. Guards the trust boundary — the marker must be set by a
 // trusted source, never assumed.
 func (suite *EventResolverTestSuite) TestRequiredUnmarkedStillRejected() {
-	event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: esmodel.StateChange, AuthenticatedTransport: false}
+	event := &esmodel.UnresolvedEvent{Device: "lw-dev-1", EventType: eventtype.StateChange, AuthenticatedTransport: false}
 	_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 	assert.Error(suite.T(), err)
 	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Unauthenticated), reason)
@@ -59,7 +60,7 @@ func (suite *EventResolverTestSuite) TestRequiredUnmarkedStillRejected() {
 func (suite *EventResolverTestSuite) TestTransportAuthenticatedStillVerifiesPresentedCredential() {
 	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
 	event := eventWithCredential(suite.T(), "TEST-123")
-	event.EventType = esmodel.Measurement
+	event.EventType = eventtype.Measurement
 	event.AuthenticatedTransport = true
 	device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
 	assert.NoError(suite.T(), err)

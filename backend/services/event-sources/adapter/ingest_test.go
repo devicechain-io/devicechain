@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -198,7 +200,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	require.NoError(t, err, "the emitted bytes must round-trip through the resolver's decoder")
 	assert.Equal(t, "dev-1", ev.Device)
 	assert.Equal(t, "sparkplug:h1", ev.Source)
-	assert.Equal(t, esmodel.Measurement, ev.EventType)
+	assert.Equal(t, eventtype.Measurement, ev.EventType)
 	assert.Nil(t, ev.AltId, "AltId must be nil so event-management's dedup index does not collapse distinct messages")
 	assert.False(t, ev.ProcessedTime.IsZero(), "ProcessedTime must be a real time, not the zero value")
 	assert.False(t, ev.OccurredTime.IsZero())
@@ -258,7 +260,7 @@ func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
 	require.NoError(t, err)
-	assert.Equal(t, esmodel.StateChange, ev.EventType)
+	assert.Equal(t, eventtype.StateChange, ev.EventType)
 	assert.Equal(t, "dev-1", ev.Device)
 	assert.False(t, ev.ProcessedTime.IsZero())
 	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
@@ -296,7 +298,7 @@ func TestEmitPresenceDemotionProducesResolverReadableStateChange(t *testing.T) {
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
 	require.NoError(t, err)
-	assert.Equal(t, esmodel.StateChange, ev.EventType)
+	assert.Equal(t, eventtype.StateChange, ev.EventType)
 	assert.Equal(t, "mqtt1", ev.Source, "the demotion must be attributed to the RELEASING source")
 	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
 	require.True(t, ok)

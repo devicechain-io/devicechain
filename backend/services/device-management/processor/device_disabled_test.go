@@ -15,6 +15,7 @@ import (
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
@@ -111,7 +112,7 @@ func presenceEvent(source string, state presence.State, session string) *esmodel
 	return &esmodel.UnresolvedEvent{
 		Source:        source,
 		Device:        "dev",
-		EventType:     esmodel.StateChange,
+		EventType:     eventtype.StateChange,
 		OccurredTime:  now,
 		ProcessedTime: now,
 		Payload:       &esmodel.UnresolvedStateChangePayload{State: state, Reason: "test", SessionId: session},
@@ -152,7 +153,7 @@ func TestADisabledDevicesPresenceTransitionsAreResolvedAndMarked(t *testing.T) {
 
 	// The device's own data is still refused: a measurement, a location and an alert.
 	for _, event := range []*esmodel.UnresolvedEvent{tempEvent("21.6"), devLocationEvent(), {
-		Device: "dev", EventType: esmodel.Alert,
+		Device: "dev", EventType: eventtype.Alert,
 		Payload: &esmodel.UnresolvedAlertsPayload{Entries: []esmodel.UnresolvedAlertEntry{{Type: "smoke"}}},
 	}} {
 		_, reason, err := rig.rez.ResolveEvent(rig.ctx, event)

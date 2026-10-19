@@ -5,7 +5,7 @@ package preview
 
 import (
 	"context"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
@@ -18,7 +18,7 @@ func presenceMsg(t *testing.T, seq uint64, device string, occurred time.Time, di
 	t.Helper()
 	b, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: device, ProfileVersionToken: "p@1",
-		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.StateChange,
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.StateChange,
 		SourceDeviceDisabled: disabled,
 		Payload:              &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", SessionId: 9},
 	})

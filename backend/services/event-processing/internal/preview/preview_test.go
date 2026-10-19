@@ -7,7 +7,7 @@ import (
 	"context"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"io"
@@ -61,7 +61,7 @@ func msg(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Measurement,
+		EventType:           eventtype.Measurement,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
 			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: metric, Value: value}},
@@ -243,7 +243,7 @@ func batchMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metric, 
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        uploadedAt,
 		ProcessedTime:       uploadedAt,
-		EventType:           esmodel.Measurement,
+		EventType:           eventtype.Measurement,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: sampledAt,
 			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: metric, Value: value}},

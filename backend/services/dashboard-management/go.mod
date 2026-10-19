@@ -60,7 +60,6 @@ require (
 	modernc.org/sqlite v1.23.1 // indirect
 )
 
-replace github.com/devicechain-io/dc-device-management => ../device-management
 
 replace github.com/devicechain-io/dc-event-sources => ../event-sources
 

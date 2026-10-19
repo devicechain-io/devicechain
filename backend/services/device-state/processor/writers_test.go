@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/prometheus/client_golang/prometheus"
@@ -85,7 +85,7 @@ func TestTheProjectionRunsTheConfiguredNumberOfWriters(t *testing.T) {
 			for i := 0; i < 12; i++ {
 				encoded, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 					SourceDeviceToken: fmt.Sprintf("dev-%d", i),
-					EventType:         esmodel.Alert,
+					EventType:         eventtype.Alert,
 					OccurredTime:      time.Date(2026, 9, 20, 12, 0, i, 0, time.UTC),
 					Payload:           &resolvedevent.ResolvedAlertsPayload{},
 				})

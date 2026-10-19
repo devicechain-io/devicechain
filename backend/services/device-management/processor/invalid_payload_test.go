@@ -12,8 +12,8 @@ import (
 	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -122,7 +122,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUndecodableMessageDeadLetterBo
 	echoed := strings.Repeat("q", 4000) + fixtureCredentialSecret
 	encoded, err := gproto.Marshal(&esproto.PUnresolvedEvent{
 		Device:       "TEST-123",
-		EventType:    int64(esmodel.Location),
+		EventType:    int64(eventtype.Location),
 		OccurredTime: echoed,
 	})
 	require.NoError(suite.T(), err)
