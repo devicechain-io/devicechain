@@ -989,8 +989,9 @@ func TestTheByteBudgetAdmitsAnItemThatFillsItExactly(t *testing.T) {
 	require.Len(t, admitted(exact-1), 1, "an item that overfills the budget by a byte was sent")
 }
 
-// The bound is the budget plus the largest single payload, however the sizes mix: once what is
-// held already exceeds the budget, nothing more is prepared until something settles. (Preparing
+// With sizes mixed across lanes, a pass that settles cleanly holds no more than the budget plus
+// the largest single payload: once what is held exceeds the budget while anything is in flight,
+// nothing more is prepared until something settles. (Preparing
 // the top item anyway let a lower-numbered item from another lane, promoted by an acknowledgement,
 // be prepared as well, so with mixed sizes the count crept past one payload's worth.)
 func TestTheByteBudgetBoundHoldsWithMixedPayloadSizes(t *testing.T) {
