@@ -22,6 +22,11 @@ tenant's tier a ceiling above zero. See [Turning calculated metrics on](#turning
   [Chaining calculated metrics](#chaining-calculated-metrics)), and optionally numbers the **device
   itself** carries, such as a calibration factor (see [Device constants](#device-constants)). It
   never reads an earlier reading, another device, or the clock.
+- A **reading** (a sample) is every measurement one message carries for the same instant, however
+  the device split them into entries. A device that sends one metric per entry, as Sparkplug and
+  LwM2M devices do, still gets a formula over two of those metrics computed, as long as they share
+  an instant. Entries at different instants are separate samples, and a formula never reads across
+  them. If the same metric appears twice at one instant, the first value is the one used and kept.
 - The result is **computed once, when the reading arrives**, and stored as a normal measurement
   next to the values the device sent. Dashboards, history, exports, the device's latest values and
   detection rules all read it like any other metric, by its key.

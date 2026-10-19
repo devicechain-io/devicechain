@@ -24,6 +24,12 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
   métricas calculadas](#chaining-calculated-metrics)) y, opcionalmente, números que lleva el
   **propio dispositivo**, como un factor de calibración (consulta [Constantes del
   dispositivo](#device-constants)). Nunca lee una lectura anterior, otro dispositivo ni el reloj.
+- Una **lectura** (una muestra) son todas las mediciones que un mensaje trae para el mismo instante,
+  sin importar cómo las haya dividido el dispositivo en entradas. Un dispositivo que envía una
+  métrica por entrada, como los dispositivos Sparkplug y LwM2M, también obtiene el cálculo de una
+  fórmula sobre dos de esas métricas, siempre que compartan instante. Las entradas con instantes
+  distintos son muestras separadas, y una fórmula nunca lee entre ellas. Si la misma métrica aparece
+  dos veces en un instante, se usa y se conserva el primer valor.
 - El resultado se **calcula una sola vez, cuando llega la lectura**, y se almacena como una medición
   normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
   exportaciones, los últimos valores del dispositivo y las reglas de detección la leen como

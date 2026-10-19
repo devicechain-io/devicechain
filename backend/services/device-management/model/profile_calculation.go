@@ -23,7 +23,8 @@ import (
 //
 // 🔴 NO STATE, AND THAT IS A RED LINE. Nothing here, and nothing the resolver does with it,
 // keeps a value between samples, devices or events: a formula is a pure function of ONE
-// sample entry and of the profile version named on the event. A request for "the previous
+// sample (every measurement of one message at one instant) and of the profile version named
+// on the event. A request for "the previous
 // reading", "since the last value" or "the other message" is a request for a windowed
 // derivation stage in event-processing, never for a cache here — a cache would make the
 // stored value depend on which replica resolved the event and in what order, which is
@@ -224,7 +225,7 @@ func (r ProfileResolution) ConstantKeys() []string {
 	return slices.Clone(r.calc.constKeys)
 }
 
-// Calculation is one sample entry's evaluation of a version's calculated metrics: take one
+// Calculation is one sample's evaluation of a version's calculated metrics: take one
 // with BeginCalculation, Set each measured value the entry carries, Append the computed
 // values, Release it. It is not safe for concurrent use; one resolver uses one at a time.
 //
