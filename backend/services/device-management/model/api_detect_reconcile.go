@@ -27,7 +27,9 @@ import (
 // checkReconcilePageSize refuses a page size outside 1..max.
 func checkReconcilePageSize(what string, limit, max int) error {
 	if limit < 1 || limit > max {
-		return fmt.Errorf("%s page size must be between 1 and %d, got %d", what, max, limit)
+		// INVALID_VALUE, the code the doors' SDL promises for a limit out of range; a plain
+		// error reached the wire with no code at all.
+		return &InvalidArgumentError{Msg: fmt.Sprintf("%s page size must be between 1 and %d, got %d", what, max, limit)}
 	}
 	return nil
 }

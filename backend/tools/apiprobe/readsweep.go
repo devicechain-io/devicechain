@@ -519,9 +519,15 @@ var sweepTokenArgs = map[string]string{
 	"device-management.entityGroupVersions.token":            "entity-group",
 	"device-management.resolveDeviceGroupTargets.groupToken": "entity-group",
 	"device-management.maintenanceWindowOpening.token":       "maintenance-window",
-	"dashboard-management.dashboardVersions.token":           "dashboard",
-	"dashboard-management.dashboardVersion.token":            "dashboard",
-	"outbound-connectors.connectorVersions.token":            "connector",
+	// The calculated-metric backfill doors read the seeded profile's PUBLISHED version
+	// snapshot and compile its formulas (the version is optional: omitted, it is the active
+	// one, which the publish table makes exist), and walk the devices of its types. A
+	// snapshot that no longer decodes or compiles after an upgrade is an error here.
+	"device-management.calculatedMetricPlan.profileToken":     "device-profile",
+	"device-management.calculatedBackfillRoster.profileToken": "device-profile",
+	"dashboard-management.dashboardVersions.token":            "dashboard",
+	"dashboard-management.dashboardVersion.token":             "dashboard",
+	"outbound-connectors.connectorVersions.token":             "connector",
 }
 
 // sweepExemptions names the served doors this sweep will NOT call, and why.
