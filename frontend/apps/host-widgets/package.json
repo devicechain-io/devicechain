@@ -28,8 +28,8 @@
     "@types/react": "^19.3.0",
     "eslint": "^10.11.0",
     "eslint-plugin-i18next": "^6.1.5",
-    "react": "^19.3.0",
+    "react": "^19.3.1",
     "typescript": "~7.0.2",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   }
 }
