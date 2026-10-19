@@ -1,16 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"encoding/hex"
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,19 +34,19 @@ var v023CompactResolvedHex = map[string]string{
 
 // v023DerivedEvent carries a calculated metric's value, so the Derived flag is in the capture:
 // v0.23.0 already wrote and read it, in both formats.
-func v023DerivedEvent() *model.ResolvedEvent {
+func v023DerivedEvent() *ResolvedEvent {
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	return &model.ResolvedEvent{Source: "mqtt", SourceDeviceToken: "meter-1", EventType: esmodel.Measurement,
-		OccurredTime: at, ProcessedTime: at, Anchors: []model.ResolvedAnchor{}, ScopeMemberships: []model.GroupRef{},
-		Payload: &model.ResolvedMeasurementsPayload{Entries: []model.ResolvedMeasurementsEntry{{
-			Entries: []model.ResolvedMeasurementEntry{
+	return &ResolvedEvent{Source: "mqtt", SourceDeviceToken: "meter-1", EventType: eventtype.Measurement,
+		OccurredTime: at, ProcessedTime: at, Anchors: []ResolvedAnchor{}, ScopeMemberships: []GroupRef{},
+		Payload: &ResolvedMeasurementsPayload{Entries: []ResolvedMeasurementsEntry{{
+			Entries: []ResolvedMeasurementEntry{
 				{Name: "current", Value: "12.25", Classifier: u64p(2), DataType: strp("DOUBLE")},
 				{Name: "power_kw", Value: "2.823625", Classifier: u64p(5), Unit: strp("kW"), DataType: strp("DOUBLE"), Derived: true},
 			},
 			OccurredTime: at}}}}
 }
 
-func v023ResolvedEvents() map[string]*model.ResolvedEvent {
+func v023ResolvedEvents() map[string]*ResolvedEvent {
 	events := goldenResolvedEvents()
 	events["derived measurement"] = v023DerivedEvent()
 	return events

@@ -4,10 +4,10 @@
 package adapter
 
 import (
+	"github.com/devicechain-io/dc-microservice/presence"
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -71,9 +71,9 @@ func TestGoldenDedupIDs(t *testing.T) {
 	// the three values in it today, so it is asserted rather than left in a comment: every
 	// declared state must produce a token distinct from every other. The one way the
 	// default arm could collide is a state literally named "0", "1" or "2".
-	seen := map[string]esmodel.PresenceState{}
-	for _, st := range []esmodel.PresenceState{
-		esmodel.PresenceConnected, esmodel.PresenceDisconnected, esmodel.PresenceDemoted,
+	seen := map[string]presence.State{}
+	for _, st := range []presence.State{
+		presence.StateConnected, presence.StateDisconnected, presence.StateDemoted,
 	} {
 		tok := dedupStateToken(st)
 		if other, dup := seen[tok]; dup {

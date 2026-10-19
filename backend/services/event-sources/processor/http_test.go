@@ -19,6 +19,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -123,7 +124,7 @@ func TestHttpEventSource_DecodeSuccess(t *testing.T) {
 	assert.False(t, fail.called, "failed callback should not fire")
 	assert.Equal(t, "acme", dec.tenant)
 	assert.Equal(t, "sensor-001", dec.event.Device)
-	assert.Equal(t, model.Measurement, dec.event.EventType)
+	assert.Equal(t, eventtype.Measurement, dec.event.EventType)
 }
 
 // A well-formed event whose PUBLISH fails must not be answered 202.

@@ -6,6 +6,7 @@ package processor
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -42,7 +43,7 @@ func chainVersion(token string) model.ProfileResolution {
 	})
 }
 
-func chainValues(t *testing.T, p *model.ResolvedMeasurementsPayload) map[string]string {
+func chainValues(t *testing.T, p *resolvedevent.ResolvedMeasurementsPayload) map[string]string {
 	t.Helper()
 	out := map[string]string{}
 	for _, e := range p.Entries[0].Entries {

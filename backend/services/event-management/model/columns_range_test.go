@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,7 +23,7 @@ func TestAClassifierAboveTheBigintRangeIsRefused(t *testing.T) {
 	at := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	big := uint(math.MaxInt64) + 5
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{{
-		Event:             Event{EventId: []byte("e"), DeviceToken: "d", EventType: esmodel.Measurement, OccurredTime: at},
+		Event:             Event{EventId: []byte("e"), DeviceToken: "d", EventType: eventtype.Measurement, OccurredTime: at},
 		EntryOccurredTime: at, Name: "m", Value: f64(1), Classifier: &big}})
 	require.Error(t, err, "a classifier of %d was accepted", big)
 	var n int64

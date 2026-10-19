@@ -5,6 +5,7 @@ package processor
 
 import (
 	"errors"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -287,14 +288,14 @@ func decodeRosterFact(rp *ResolvedEventsProcessor, msg messaging.Message) (strin
 
 // decodeEntityDeletedFact unmarshals one entity-deleted fact into its owning tenant and payload,
 // with the same drop-not-fatal contract as decodeRosterFact.
-func decodeEntityDeletedFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *dmmodel.EntityDeletedEvent, bool) {
+func decodeEntityDeletedFact(rp *ResolvedEventsProcessor, msg messaging.Message) (string, *entityevent.EntityDeletedEvent, bool) {
 	_, tenant, ok := messaging.TenantContextFromSubject(rp.pctx(), msg.Subject)
 	if !ok {
 		log.Warn().Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping entity-deleted fact with no parseable tenant in subject %q", msg.Subject)
 		return "", nil, false
 	}
-	ev, err := dmproto.UnmarshalEntityDeletedEvent(msg.Value)
+	ev, err := entityevent.UnmarshalEntityDeletedEvent(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).
 			Msgf("Dropping entity-deleted fact that could not be parsed from subject %q", msg.Subject)

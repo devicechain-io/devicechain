@@ -6,20 +6,19 @@ package processor
 import (
 	"context"
 	"encoding/hex"
-	"testing"
-	"time"
-
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 // legacyResolvedMeasurementHex is a resolved measurement event as device-management wrote it
 // before each instant became a count of nanoseconds, byte for byte (origin/main 9b680acf6;
-// the same message device-management/proto/legacy_wire_test.go decodes). Its envelope
+// the same message core/resolvedevent/legacy_wire_test.go decodes). Its envelope
 // carries the device's +02:00 offset. Such messages are on the retained resolved stream
 // across an upgrade, and are what a redelivery straddling the upgrade replays.
 const legacyResolvedMeasurementHex = "0a04687474701a1164657669636570756c73652d303030303122150a08637573746f6d6572120761636d652d636f18053a23323032362d31302d31365431313a33303a31352e3132333435363738392b30323a3030421e323032362d31302d31365430393a33303a31352e3132353030303030375a4802523f0a3d0a1b0a0474656d70120432312e351801220343656c2a06444f55424c45121e323032362d31302d31365430393a33303a31342e3938373635343332315a5a0b64657669636570756c7365620770756c7365403372156578742d64657669636570756c73652d3030303031"
@@ -32,14 +31,14 @@ const legacyResolvedMeasurementHex = "0a04687474701a1164657669636570756c73652d30
 func TestALegacyResolvedMessagePersistsAsTheCurrentFormatDoes(t *testing.T) {
 	legacy, err := hex.DecodeString(legacyResolvedMeasurementHex)
 	require.NoError(t, err)
-	decoded, err := dmproto.UnmarshalResolvedEvent(legacy)
+	decoded, err := resolvedevent.UnmarshalResolvedEvent(legacy)
 	require.NoError(t, err)
-	current, err := dmproto.MarshalResolvedEventAs(decoded, eventtime.WireCompact)
+	current, err := resolvedevent.MarshalResolvedEventAs(decoded, eventtime.WireCompact)
 	require.NoError(t, err)
 	require.Less(t, len(current), len(legacy))
 
 	persist := func(encoded []byte) *capturingEntryTimeApi {
-		event, err := dmproto.UnmarshalResolvedEvent(encoded)
+		event, err := resolvedevent.UnmarshalResolvedEvent(encoded)
 		require.NoError(t, err)
 		api := &capturingEntryTimeApi{MockApi: new(emtest.MockApi)}
 		api.Mock.On("CreateEventAnchors", mock.Anything, mock.Anything).Return(nil)
@@ -56,7 +55,7 @@ func TestALegacyResolvedMessagePersistsAsTheCurrentFormatDoes(t *testing.T) {
 	// And this release writing the LEGACY format (its default) persists the same rows under
 	// the same id: a producer's format choice never moves an event's identity, whichever way
 	// it is set during a rollout.
-	rewritten, err := dmproto.MarshalResolvedEventAs(decoded, eventtime.WireLegacy)
+	rewritten, err := resolvedevent.MarshalResolvedEventAs(decoded, eventtime.WireLegacy)
 	require.NoError(t, err)
 	require.Equal(t, fromLegacy.measurements, persist(rewritten).measurements)
 	got := fromLegacy.measurements[0]

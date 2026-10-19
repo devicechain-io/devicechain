@@ -5,13 +5,13 @@ package processor
 
 import (
 	"context"
-	"testing"
-	"time"
-
-	"github.com/devicechain-io/dc-device-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 // These tests exist because location resolution had NO value-level coverage: every
@@ -50,19 +50,19 @@ func atTime(t *testing.T, v string) *time.Time {
 }
 
 // Resolve the given entries and return the resolved payload.
-func resolveLocations(t *testing.T, entries ...esmodel.UnresolvedLocationEntry) *model.ResolvedLocationsPayload {
+func resolveLocations(t *testing.T, entries ...esmodel.UnresolvedLocationEntry) *resolvedevent.ResolvedLocationsPayload {
 	t.Helper()
 	event := &esmodel.UnresolvedEvent{
 		Source:       "test-source",
 		Device:       "TEST-123",
-		EventType:    esmodel.Location,
+		EventType:    eventtype.Location,
 		OccurredTime: envelopeTime,
 		Payload:      &esmodel.UnresolvedLocationsPayload{Entries: entries},
 	}
 	resolved, err := locationResolver().ResolveLocationsEventPayload(context.Background(), nil, nil, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedLocationsPayload)
-	require.True(t, ok, "expected *model.ResolvedLocationsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedLocationsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedLocationsPayload, got %T", resolved)
 	return payload
 }
 
@@ -197,7 +197,7 @@ func TestResolveLocationsRejectsWrongPayloadType(t *testing.T) {
 	event := &esmodel.UnresolvedEvent{
 		Source:    "test-source",
 		Device:    "TEST-123",
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload:   &esmodel.UnresolvedMeasurementsPayload{},
 	}
 	resolved, err := locationResolver().ResolveLocationsEventPayload(context.Background(), nil, nil, event)

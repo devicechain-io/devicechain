@@ -35,9 +35,9 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
@@ -179,7 +179,7 @@ func envOr(key, fallback string) string {
 func pgEvent(tenant, device, altId string, occurred time.Time, payload string) Event {
 	ev := Event{
 		DeviceToken:  device,
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: occurred,
 		Source:       "mqtt",
 		AltId:        rdb.NullStrOf(&altId),
@@ -278,7 +278,7 @@ func TestIntegrationNoAltIdRedeliveryDuplicatesNothing(t *testing.T) {
 
 	ev := Event{
 		DeviceToken:  "device-1",
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: occurred,
 		Source:       "lwm2m",
 	}
@@ -292,7 +292,7 @@ func TestIntegrationNoAltIdRedeliveryDuplicatesNothing(t *testing.T) {
 				EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(21.5)}})
 		require.NoErrorf(t, err, "delivery %d", i+1)
 		require.NoErrorf(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
-			EventId: ev.EventId, DeviceToken: "device-1", EventType: esmodel.Measurement,
+			EventId: ev.EventId, DeviceToken: "device-1", EventType: eventtype.Measurement,
 			OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3",
 		}}), "anchors, delivery %d", i+1)
 	}
@@ -382,7 +382,7 @@ func TestIntegrationManyParentsAndStateChangesInOneCall(t *testing.T) {
 
 	measurements := make([]*MeasurementEventCreateRequest, n)
 	for i := range measurements {
-		ev := Event{DeviceToken: "device-1", EventType: esmodel.Measurement,
+		ev := Event{DeviceToken: "device-1", EventType: eventtype.Measurement,
 			OccurredTime: base.Add(time.Duration(i) * time.Millisecond), Source: "sparkplug"}
 		ev.EventId = DeriveEventId("acme", &ev, []byte(fmt.Sprintf("m=%d", i)))
 		measurements[i] = &MeasurementEventCreateRequest{Event: ev, EntryOccurredTime: ev.OccurredTime,
@@ -405,7 +405,7 @@ func TestIntegrationManyParentsAndStateChangesInOneCall(t *testing.T) {
 
 	changes := make([]*StateChangeEventCreateRequest, n)
 	for i := range changes {
-		ev := Event{DeviceToken: "device-2", EventType: esmodel.StateChange,
+		ev := Event{DeviceToken: "device-2", EventType: eventtype.StateChange,
 			OccurredTime: base.Add(time.Duration(i) * time.Millisecond), Source: "lwm2m"}
 		ev.EventId = DeriveEventId("acme", &ev, []byte(fmt.Sprintf("s=%d", i)))
 		changes[i] = &StateChangeEventCreateRequest{Event: ev, State: "connected", SessionId: uint64(i + 1)}

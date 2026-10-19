@@ -6,13 +6,13 @@ package preview
 import (
 	"context"
 	"database/sql"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"gorm.io/gorm"
 )
@@ -24,14 +24,14 @@ import (
 
 func deviceMsg(t *testing.T, seq uint64, device, temp string, occurred time.Time) messaging.Message {
 	t.Helper()
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: device, ProfileVersionToken: "p@1",
-		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			OccurredTime: occurred, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: temp}},
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.Measurement,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			OccurredTime: occurred, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: temp}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}

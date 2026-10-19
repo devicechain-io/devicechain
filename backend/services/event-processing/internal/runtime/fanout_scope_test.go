@@ -4,11 +4,10 @@
 package runtime
 
 import (
+	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-event-processing/internal/rules"
 )
 
 // compileScopedGroup compiles a rule and wraps it as a ScopedRule pinned to a group@version.
@@ -21,7 +20,7 @@ func compileScopedGroup(t *testing.T, tenant, profileVersion string, r rules.Rul
 }
 
 // withMemberships stamps a resolved event's scope memberships (as the resolver would, S3).
-func withMemberships(ev *dmmodel.ResolvedEvent, refs ...dmmodel.GroupRef) *dmmodel.ResolvedEvent {
+func withMemberships(ev *resolvedevent.ResolvedEvent, refs ...resolvedevent.GroupRef) *resolvedevent.ResolvedEvent {
 	ev.ScopeMemberships = refs
 	return ev
 }
@@ -43,7 +42,7 @@ func TestPlanScopedRuleFiresForMember(t *testing.T) {
 	})
 	ev := withMemberships(
 		measured("acme", "d1", "p@1", base, map[string]string{"temperature": "90"}),
-		dmmodel.GroupRef{GroupToken: "arid-areas", Version: 3},
+		resolvedevent.GroupRef{GroupToken: "arid-areas", Version: 3},
 	)
 	res := planEv(reg, 1, "acme", ev)
 	if len(res.Events) != 1 || !res.Events[0].Match {
@@ -65,7 +64,7 @@ func TestPlanScopedRuleDescopesNonMember(t *testing.T) {
 	// Event carries a DIFFERENT group membership (or none for this rule's group).
 	ev := withMemberships(
 		measured("acme", "d1", "p@1", base, map[string]string{"temperature": "90"}),
-		dmmodel.GroupRef{GroupToken: "humid-areas", Version: 1},
+		resolvedevent.GroupRef{GroupToken: "humid-areas", Version: 1},
 	)
 	res := planEv(reg, 1, "acme", ev)
 	if len(res.Events) != 0 {
@@ -89,7 +88,7 @@ func TestPlanScopedRuleVersionExact(t *testing.T) {
 	})
 	ev := withMemberships(
 		measured("acme", "d1", "p@1", base, map[string]string{"temperature": "90"}),
-		dmmodel.GroupRef{GroupToken: "arid-areas", Version: 2}, // wrong version
+		resolvedevent.GroupRef{GroupToken: "arid-areas", Version: 2}, // wrong version
 	)
 	res := planEv(reg, 1, "acme", ev)
 	if len(res.Events) != 0 || len(res.Descopes) != 1 {
@@ -105,7 +104,7 @@ func TestPlanUnscopedRuleUnaffectedByMemberships(t *testing.T) {
 	// Even with an unrelated membership stamped, the unscoped rule fires.
 	ev := withMemberships(
 		measured("acme", "d1", "p@1", base, map[string]string{"temperature": "90"}),
-		dmmodel.GroupRef{GroupToken: "arid-areas", Version: 3},
+		resolvedevent.GroupRef{GroupToken: "arid-areas", Version: 3},
 	)
 	res := planEv(reg, 1, "acme", ev)
 	if len(res.Events) != 1 || !res.Events[0].Match {

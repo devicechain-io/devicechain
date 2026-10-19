@@ -5,13 +5,12 @@ package model
 
 import (
 	"encoding/json"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 // Calculated metrics and event identity (ADR-082 decision 5). A calculated value is outside
@@ -25,20 +24,20 @@ func u64Ptr(v uint64) *uint64 { return &v }
 
 // meterPayload is one meter reading as the resolver emits it: the raw readings sorted by
 // name, with the derived entries the profile computed, if any, in their sorted places.
-func meterPayload(derived ...dmmodel.ResolvedMeasurementEntry) *dmmodel.ResolvedMeasurementsPayload {
-	entries := []dmmodel.ResolvedMeasurementEntry{
+func meterPayload(derived ...resolvedevent.ResolvedMeasurementEntry) *resolvedevent.ResolvedMeasurementsPayload {
+	entries := []resolvedevent.ResolvedMeasurementEntry{
 		{Name: "current", Value: "12.25", Classifier: u64Ptr(2), Unit: strPtr("A"), DataType: strPtr("DOUBLE")},
 	}
 	entries = append(entries, derived...)
 	entries = append(entries,
-		dmmodel.ResolvedMeasurementEntry{Name: "voltage", Value: "230.5", Classifier: u64Ptr(1), Unit: strPtr("V"), DataType: strPtr("DOUBLE")})
-	return &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{
+		resolvedevent.ResolvedMeasurementEntry{Name: "voltage", Value: "230.5", Classifier: u64Ptr(1), Unit: strPtr("V"), DataType: strPtr("DOUBLE")})
+	return &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{
 		{Entries: entries, OccurredTime: calcOccurred},
 	}}
 }
 
-func powerEntry(value string) dmmodel.ResolvedMeasurementEntry {
-	return dmmodel.ResolvedMeasurementEntry{Name: "power_kw", Value: value, Classifier: u64Ptr(5),
+func powerEntry(value string) resolvedevent.ResolvedMeasurementEntry {
+	return resolvedevent.ResolvedMeasurementEntry{Name: "power_kw", Value: value, Classifier: u64Ptr(5),
 		Unit: strPtr("kW"), DataType: strPtr("DOUBLE"), Derived: true}
 }
 
@@ -51,7 +50,7 @@ const meterRawJSON = `{"Entries":[{"Entries":[` +
 	`"OccurredTime":"2026-10-16T12:00:00Z"}]}`
 
 func meterEvent() *Event {
-	return &Event{DeviceToken: "meter-1", EventType: esmodel.Measurement, OccurredTime: calcOccurred, Source: "lwm2m"}
+	return &Event{DeviceToken: "meter-1", EventType: eventtype.Measurement, OccurredTime: calcOccurred, Source: "lwm2m"}
 }
 
 // (a) A payload with no calculated value hashes to the id it had before the change: the
@@ -87,7 +86,7 @@ func TestCalculatedValuesAreOutsideTheEventId(t *testing.T) {
 	// id would be had the filter been missed — differs between the two formulas. Without
 	// this the equalities above could hold because the derived entry never reached the
 	// encoder at all.
-	unfiltered := func(p *dmmodel.ResolvedMeasurementsPayload) []byte {
+	unfiltered := func(p *resolvedevent.ResolvedMeasurementsPayload) []byte {
 		return DeriveEventId("acme", meterEvent(), mustJSON(t, p))
 	}
 	assert.NotEqual(t, unfiltered(meterPayload(powerEntry("2.823625"))), unfiltered(meterPayload(powerEntry("2823.625"))),
@@ -109,7 +108,7 @@ func TestIdentityViewLeavesThePayloadAlone(t *testing.T) {
 	assert.Len(t, view.Entries[0].Entries, 2)
 	assert.Equal(t, meterRawJSON, string(mustJSON(t, view)))
 
-	var nilPayload *dmmodel.ResolvedMeasurementsPayload
+	var nilPayload *resolvedevent.ResolvedMeasurementsPayload
 	assert.Nil(t, nilPayload.IdentityView())
 }
 

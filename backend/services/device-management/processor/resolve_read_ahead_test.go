@@ -8,21 +8,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/devicechain-io/dc-microservice/test/msgtest"
+	"github.com/nats-io/nats.go/jetstream"
+	"gorm.io/gorm"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-
-	"github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/entity"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/test/msgtest"
-	"github.com/nats-io/nats.go/jetstream"
-	"gorm.io/gorm"
 )
 
 // inFlight counts calls in progress across every store sharing it, and the most seen at
@@ -375,7 +373,7 @@ func TestAnInvalidMeasurementReadsOnlyItsProfileFromTheDatabase(t *testing.T) {
 	rig.resetCounters()
 
 	_, reason, err := rig.rez.ResolveEvent(rig.ctx, tempEvent("not-a-number"))
-	if err == nil || reason != uint(dmproto.FailureReason_Invalid) {
+	if err == nil || reason != uint(resolvedevent.FailureReason_Invalid) {
 		t.Fatalf("resolve = (reason %d, %v), want Invalid", reason, err)
 	}
 	for _, s := range rig.statements() {
@@ -398,11 +396,11 @@ func TestThroughTheCachesAnInvalidMeasurementWinsOverARelationshipFailure(t *tes
 		t.Fatalf("drop relationships: %v", err)
 	}
 	if _, reason, err := rig.rez.ResolveEvent(rig.ctx, tempEvent("not-a-number")); err == nil ||
-		reason != uint(dmproto.FailureReason_Invalid) {
+		reason != uint(resolvedevent.FailureReason_Invalid) {
 		t.Errorf("invalid measurement = (reason %d, %v), want Invalid", reason, err)
 	}
 	if _, reason, err := rig.rez.ResolveEvent(rig.ctx, tempEvent("21")); err == nil ||
-		reason != uint(dmproto.FailureReason_ApiCallFailed) {
+		reason != uint(resolvedevent.FailureReason_ApiCallFailed) {
 		t.Errorf("valid measurement = (reason %d, %v), want ApiCallFailed from the relationships read", reason, err)
 	}
 }
@@ -428,7 +426,7 @@ func TestAnInvalidMeasurementWinsOverARelationshipFailure(t *testing.T) {
 	rez := NewEventResolver(1, failingRelationships{}, "disabled", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	ctx := core.WithTenant(context.Background(), "acme")
 	_, reason, err := rez.HandleEvent(ctx, &model.Device{}, tempEvent("abc"))
-	if err == nil || reason != uint(dmproto.FailureReason_Invalid) {
+	if err == nil || reason != uint(resolvedevent.FailureReason_Invalid) {
 		t.Fatalf("resolve = (reason %d, %v), want Invalid", reason, err)
 	}
 }

@@ -8,21 +8,19 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-device-state/config"
+	"github.com/devicechain-io/dc-device-state/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog/log"
 	"math/rand"
 	"strconv"
 	"sync"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	"github.com/devicechain-io/dc-device-state/config"
-	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/rs/zerolog/log"
 )
 
 const (
@@ -377,7 +375,7 @@ func (sp *StateProcessor) processMessages(ctx context.Context) {
 type pendingMerge struct {
 	msg    messaging.Message
 	ctx    context.Context // the message's own tenant-scoped context, for the per-message path
-	event  *dmmodel.ResolvedEvent
+	event  *resolvedevent.ResolvedEvent
 	update model.ProjectionUpdate
 	done   func(result string)
 }
@@ -406,7 +404,7 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 
 	// Attempt to unmarshal the resolved event. A projection has no failed-events
 	// channel, so an unparseable message is logged and dropped.
-	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
+	event, err := resolvedevent.UnmarshalResolvedEvent(msg.Value)
 	if err != nil {
 		log.Warn().Err(err).Str("correlation", msg.CorrelationID()).Msg(fmt.Sprintf("Skipping resolved event that could not be parsed from subject %q", msg.Subject))
 		// Poison message: redelivery will not make it parseable, so ack to drop.
@@ -439,9 +437,9 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 	// location is a data event like any other, so it is still a liveness heartbeat. A device
 	// that only ever reports its position must not be swept inactive for saying nothing.
 	switch event.EventType {
-	case esmodel.Measurement:
+	case eventtype.Measurement:
 		update.Measurements = measurementInputs(event)
-	case esmodel.Location:
+	case eventtype.Location:
 		update.Locations = locationInputs(event)
 	}
 	return pendingMerge{msg: msg, ctx: msgctx, event: event, update: update, done: done}, true
@@ -552,7 +550,7 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	}
 
 	// For a measurement event, also advance the per-key latest-value projection.
-	if event.EventType == esmodel.Measurement {
+	if event.EventType == eventtype.Measurement {
 		if err := sp.retryOnConflict(p.ctx, func() error {
 			return sp.Api.MergeLatestMeasurements(p.ctx, u.DeviceToken, u.Measurements)
 		}); err != nil {
@@ -563,7 +561,7 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 
 	// For a location event, also advance the last-known-position projection (in addition
 	// to the device state above: a location is a liveness heartbeat too).
-	if event.EventType == esmodel.Location {
+	if event.EventType == eventtype.Location {
 		if err := sp.retryOnConflict(p.ctx, func() error {
 			return sp.Api.MergeLatestLocations(p.ctx, u.DeviceToken, u.Locations)
 		}); err != nil {
@@ -618,7 +616,7 @@ func (sp *StateProcessor) dispose(p pendingMerge, err error, detail string) {
 // anchors is a stamp too — the device was owned by nobody — so an empty set is never
 // skipped. An anchor missing either half cannot be one and is dropped, as device-management
 // drops it from the ownership fact.
-func ownersOf(event *dmmodel.ResolvedEvent) model.Owners {
+func ownersOf(event *resolvedevent.ResolvedEvent) model.Owners {
 	anchors := make([]string, 0, len(event.Anchors))
 	for _, a := range event.Anchors {
 		if a.AnchorType == "" || a.AnchorToken == "" {
@@ -637,8 +635,8 @@ func ownersOf(event *dmmodel.ResolvedEvent) model.Owners {
 // disagree with the history table about the same reading. A measurement event whose
 // payload is not the expected shape contributes nothing (connectivity is still updated)
 // rather than being treated as a retryable error.
-func measurementInputs(event *dmmodel.ResolvedEvent) []model.LatestMeasurementInput {
-	payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+func measurementInputs(event *resolvedevent.ResolvedEvent) []model.LatestMeasurementInput {
+	payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 	if !ok {
 		return nil
 	}
@@ -697,8 +695,8 @@ func nullableFloat(val *string) sql.NullFloat64 {
 // empty one and stamp it as the newest fix. A location event whose payload is not the
 // expected shape contributes nothing (connectivity is still updated) rather than being
 // treated as a retryable error — redelivery cannot change its shape.
-func locationInputs(event *dmmodel.ResolvedEvent) []model.LatestLocationInput {
-	payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
+func locationInputs(event *resolvedevent.ResolvedEvent) []model.LatestLocationInput {
+	payload, ok := event.Payload.(*resolvedevent.ResolvedLocationsPayload)
 	if !ok {
 		return nil
 	}
@@ -837,11 +835,11 @@ func (sp *StateProcessor) ExecuteTerminate(context.Context) error {
 // silently dropped: every layer still compiles, every existing test still passes, and the
 // field simply never arrives. A test that rebuilt this mapping itself would agree with
 // whatever the mapping forgot. See TestARegressedSessionSurvivesTheWholeChain.
-func presenceTransitionFor(event *dmmodel.ResolvedEvent) (*model.PresenceTransition, error) {
-	if event.EventType != esmodel.StateChange {
+func presenceTransitionFor(event *resolvedevent.ResolvedEvent) (*model.PresenceTransition, error) {
+	if event.EventType != eventtype.StateChange {
 		return nil, nil
 	}
-	p, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload)
+	p, ok := event.Payload.(*resolvedevent.ResolvedStateChangePayload)
 	if !ok {
 		return nil, fmt.Errorf("state-change event carries a %T payload", event.Payload)
 	}

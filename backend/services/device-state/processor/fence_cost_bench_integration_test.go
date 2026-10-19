@@ -26,23 +26,21 @@ package processor
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-device-state/model"
+	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/rs/zerolog"
+	"gorm.io/gorm"
 	"os"
 	"sort"
 	"strconv"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/config"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
-	"github.com/rs/zerolog"
-	"gorm.io/gorm"
 )
 
 // The fence's callback names, as core/rdb/tenant_fence.go registers them. Stated here
@@ -143,22 +141,22 @@ func newBenchProcessor(mgr *rdb.RdbManager) *StateProcessor {
 // benchMeasurement is a consumed 3-metric measurement for device under tenant.
 func benchMeasurement(tb testing.TB, tenant, device string, at time.Time, ack messaging.Acknowledger) messaging.Message {
 	tb.Helper()
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: device,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		OccurredTime:      at,
 		ProcessedTime:     at,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: at,
-			Entries: []dmmodel.ResolvedMeasurementEntry{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "temperature", Value: "21.5"},
 				{Name: "humidity", Value: "40.25"},
 				{Name: "pressure", Value: "1013.5"},
 			},
 		}}},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		tb.Fatalf("marshal resolved event: %v", err)
 	}

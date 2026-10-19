@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math/rand"
 	"strings"
 	"testing"
@@ -32,7 +33,7 @@ func meta(s string) *datatypes.JSON {
 }
 
 // evaluateWith is evaluate with a device's metadata, as the resolver passes it.
-func evaluateWith(r ProfileResolution, md *datatypes.JSON, values map[string]string) ([]ResolvedMeasurementEntry, *recordingObserver) {
+func evaluateWith(r ProfileResolution, md *datatypes.JSON, values map[string]string) ([]resolvedevent.ResolvedMeasurementEntry, *recordingObserver) {
 	obs := &recordingObserver{}
 	calc := r.BeginCalculation(r.DeviceConstants(md))
 	defer calc.Release()
@@ -151,7 +152,7 @@ func TestConstantsSurviveTheCache(t *testing.T) {
 // none gets missing_input, never a default.
 func TestRecalculateUsesTheConstantsItIsGiven(t *testing.T) {
 	draft := NewProfileResolution(ProfileScope{}, constDefs("voltage * device.calibration"))
-	stored := []ResolvedMeasurementEntry{{Name: "voltage", Value: "2"}}
+	stored := []resolvedevent.ResolvedMeasurementEntry{{Name: "voltage", Value: "2"}}
 
 	got := draft.Recalculate(stored, draft.DeviceConstants(meta(`{"calibration": 3}`)), nopObserver{})
 	require.Len(t, got, 2)

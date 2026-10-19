@@ -5,24 +5,22 @@ package preview
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // presenceMsg is a resolved presence transition for device, marked as a disabled device's
 // when disabled is set.
 func presenceMsg(t *testing.T, seq uint64, device string, occurred time.Time, disabled bool) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
+	b, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: device, ProfileVersionToken: "p@1",
-		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.StateChange,
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.StateChange,
 		SourceDeviceDisabled: disabled,
-		Payload:              &dmmodel.ResolvedStateChangePayload{State: "DISCONNECTED", SessionId: 9},
+		Payload:              &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", SessionId: 9},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

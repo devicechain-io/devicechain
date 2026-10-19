@@ -8,13 +8,12 @@ package processor
 import (
 	"context"
 	"fmt"
-	"sync"
-	"time"
-
-	"github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/rs/zerolog/log"
+	"sync"
+	"time"
 )
 
 // ShareRemover is the slice of the Api this consumer writes through.
@@ -112,7 +111,7 @@ func (r *ShareReconciler) handle(ctx context.Context, msg messaging.Message) {
 		_ = msg.Ack()
 		return
 	}
-	event, err := proto.UnmarshalEntityDeletedEvent(msg.Value)
+	event, err := entityevent.UnmarshalEntityDeletedEvent(msg.Value)
 	if err != nil {
 		log.Error().Err(err).Str("subject", msg.Subject).Msg("Dropping unparseable entity-deleted event")
 		_ = msg.Ack()

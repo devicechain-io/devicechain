@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"errors"
@@ -9,9 +9,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -55,7 +54,7 @@ import (
 // errResolvedNotUTF8 is the refusal of an event carrying a string that is not valid UTF-8.
 var errResolvedNotUTF8 = errors.New("resolved event carries a string that is not valid UTF-8")
 
-// Field numbers, from dc-device-management-events.proto.
+// Field numbers, from dc-resolved-events.proto.
 const (
 	resolvedSource               = protowire.Number(1)
 	resolvedAltId                = protowire.Number(2)
@@ -178,7 +177,7 @@ func (w wireInstant) appendCount(out []byte, num protowire.Number) []byte {
 
 // marshalResolvedEvent writes event in the PResolvedEvent wire format into a buffer sized
 // exactly once, every instant in format. An unknown format is refused.
-func marshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
+func marshalResolvedEvent(event *ResolvedEvent, format eventtime.WireFormat) ([]byte, error) {
 	if !format.Valid() {
 		return nil, eventtime.ErrUnknownWireFormat
 	}
@@ -192,15 +191,15 @@ func marshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireForma
 	// The payload: a measurements payload is sized here and written in place below; any
 	// other is marshalled now and copied in.
 	var (
-		mx            *model.ResolvedMeasurementsPayload
+		mx            *ResolvedMeasurementsPayload
 		mxSizing      measurementsSizing
 		entryScratch  [64]byte
 		boundsScratch [4]wireInstant
 		other         []byte
 		payloadSize   int
 	)
-	if event.EventType == esmodel.Measurement {
-		mx, _ = event.Payload.(*model.ResolvedMeasurementsPayload)
+	if event.EventType == eventtype.Measurement {
+		mx, _ = event.Payload.(*ResolvedMeasurementsPayload)
 	}
 	if mx != nil {
 		var err error
@@ -282,7 +281,7 @@ func marshalResolvedEvent(event *model.ResolvedEvent, format eventtime.WireForma
 // sizeResolvedEnvelope is the encoded size of every envelope field but the payload, and
 // refuses a string proto.Marshal would refuse. The times have already taken their form, and
 // a string form is never empty.
-func sizeResolvedEnvelope(event *model.ResolvedEvent, occurred, processed wireInstant) (int, error) {
+func sizeResolvedEnvelope(event *ResolvedEvent, occurred, processed wireInstant) (int, error) {
 	size := stringSize(event.Source) + stringSize(event.SourceDeviceToken) +
 		stringSize(event.DeviceTypeToken) + stringSize(event.ProfileVersionToken) +
 		stringSize(event.ExternalId)
@@ -314,12 +313,12 @@ func sizeResolvedEnvelope(event *model.ResolvedEvent, occurred, processed wireIn
 }
 
 // anchorSize is the encoded size of one PResolvedAnchor's body.
-func anchorSize(a *model.ResolvedAnchor) int {
+func anchorSize(a *ResolvedAnchor) int {
 	return stringSize(a.AnchorType) + stringSize(a.AnchorToken) + uintSize(uint64(a.RelationshipId))
 }
 
 // membershipSize is the encoded size of one PScopeMembership's body.
-func membershipSize(m *model.GroupRef) int {
+func membershipSize(m *GroupRef) int {
 	return stringSize(m.GroupToken) + uintSize(uint64(m.Version))
 }
 
@@ -336,7 +335,7 @@ type measurementsSizing struct {
 // a string proto.Marshal would refuse. times and entries are scratch the caller usually
 // keeps on its stack: a one-entry payload, which is what every device sends, needs neither
 // to grow.
-func sizeMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, times []byte, entries []wireInstant, compact bool) (measurementsSizing, error) {
+func sizeMeasurementsPayload(payload *ResolvedMeasurementsPayload, times []byte, entries []wireInstant, compact bool) (measurementsSizing, error) {
 	size := 0
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
@@ -356,7 +355,7 @@ func sizeMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, times [
 
 // measurementsEntrySize is the encoded size of one PResolvedMeasurementsEntry's body, whose
 // time is at.
-func measurementsEntrySize(entry *model.ResolvedMeasurementsEntry, at wireInstant) (int, error) {
+func measurementsEntrySize(entry *ResolvedMeasurementsEntry, at wireInstant) (int, error) {
 	size := at.stringSize() + at.countSize(entryNanosSize)
 	for j := range entry.Entries {
 		mx := &entry.Entries[j]
@@ -369,14 +368,14 @@ func measurementsEntrySize(entry *model.ResolvedMeasurementsEntry, at wireInstan
 }
 
 // measurementValid reports whether every string of one reading is valid UTF-8.
-func measurementValid(mx *model.ResolvedMeasurementEntry) bool {
+func measurementValid(mx *ResolvedMeasurementEntry) bool {
 	return utf8.ValidString(mx.Name) && utf8.ValidString(mx.Value) &&
 		(mx.Unit == nil || utf8.ValidString(*mx.Unit)) &&
 		(mx.DataType == nil || utf8.ValidString(*mx.DataType))
 }
 
 // measurementSize is the encoded size of one PResolvedMeasurementEntry's body.
-func measurementSize(mx *model.ResolvedMeasurementEntry) int {
+func measurementSize(mx *ResolvedMeasurementEntry) int {
 	size := stringSize(mx.Name) + stringSize(mx.Value)
 	if mx.Classifier != nil {
 		size += tagSize + protowire.SizeVarint(*mx.Classifier)
@@ -396,7 +395,7 @@ func measurementSize(mx *model.ResolvedMeasurementEntry) int {
 }
 
 // appendMeasurementsPayload writes payload's PResolvedMeasurementsPayload body as sized.
-func appendMeasurementsPayload(out []byte, payload *model.ResolvedMeasurementsPayload, sizing measurementsSizing) []byte {
+func appendMeasurementsPayload(out []byte, payload *ResolvedMeasurementsPayload, sizing measurementsSizing) []byte {
 	for i := range payload.Entries {
 		entry := &payload.Entries[i]
 		at := sizing.entries[i]
@@ -432,7 +431,7 @@ func appendMeasurementsPayload(out []byte, payload *model.ResolvedMeasurementsPa
 
 // marshalMeasurementsPayload writes payload alone in the PResolvedMeasurementsPayload wire
 // format, into a buffer sized exactly once.
-func marshalMeasurementsPayload(payload *model.ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
+func marshalMeasurementsPayload(payload *ResolvedMeasurementsPayload, format eventtime.WireFormat) ([]byte, error) {
 	if !format.Valid() {
 		return nil, eventtime.ErrUnknownWireFormat
 	}

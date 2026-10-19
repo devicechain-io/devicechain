@@ -4,11 +4,11 @@
 package processor
 
 import (
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dcmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
@@ -64,7 +64,7 @@ func TestOnlyASecretSealedForThisCredentialAuthenticates(t *testing.T) {
 			t.Errorf("%s: authenticated", name)
 			continue
 		}
-		if reason != uint(dmproto.FailureReason_Unauthenticated) {
+		if reason != uint(resolvedevent.FailureReason_Unauthenticated) {
 			t.Errorf("%s: reason %d, want Unauthenticated", name, reason)
 		}
 	}

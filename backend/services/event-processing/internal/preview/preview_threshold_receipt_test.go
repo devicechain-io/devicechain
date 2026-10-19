@@ -5,33 +5,31 @@ package preview
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strings"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // receivedMsg is msg for tenant acme / profile p@1 with the event's ProcessedTime and the message's
 // broker append time chosen by the test.
 func receivedMsg(t *testing.T, seq uint64, device, value string, occurred, processed, appended time.Time) messaging.Message {
 	t.Helper()
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "http1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: "p@1",
 		OccurredTime:        occurred,
 		ProcessedTime:       processed,
-		EventType:           esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		EventType:           eventtype.Measurement,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

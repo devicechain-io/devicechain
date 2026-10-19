@@ -5,14 +5,13 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-event-management/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // TestAnAnchorFilteredEventIsFoundThroughTheWriter writes events through the REAL worker —
@@ -31,13 +30,13 @@ func TestAnAnchorFilteredEventIsFoundThroughTheWriter(t *testing.T) {
 	at := batchT0.Add(2 * time.Hour)
 
 	// A message whose readings were buffered: both entries are earlier than the message.
-	buffered := func(dev string, at time.Time) dmodel.ResolvedEvent {
+	buffered := func(dev string, at time.Time) resolvedevent.ResolvedEvent {
 		ev := measurementOf(dev, at, "", 0, "21.5", "22.5")
-		p := ev.Payload.(*dmodel.ResolvedMeasurementsPayload)
+		p := ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 		for i := range p.Entries {
 			p.Entries[i].OccurredTime = at.Add(-time.Duration(5-i) * time.Minute)
 		}
-		ev.Anchors = []dmodel.ResolvedAnchor{{AnchorType: "customer", AnchorToken: "cust-" + dev}}
+		ev.Anchors = []resolvedevent.ResolvedAnchor{{AnchorType: "customer", AnchorToken: "cust-" + dev}}
 		return ev
 	}
 
@@ -61,7 +60,7 @@ func TestAnAnchorFilteredEventIsFoundThroughTheWriter(t *testing.T) {
 		}
 		want := at.Add(time.Duration(i) * time.Second)
 		if len(res.Results) != 1 || res.Results[0].DeviceToken != dev || !res.Results[0].OccurredTime.Equal(want) ||
-			res.Results[0].EventType != esmodel.Measurement {
+			res.Results[0].EventType != eventtype.Measurement {
 			t.Errorf("%s: the anchor-filtered read found %+v; want its one event at %v", dev, res.Results, want)
 		}
 		if res.Pagination.TotalRecords != 1 {

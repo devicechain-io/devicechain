@@ -6,15 +6,16 @@ package processor
 import (
 	"context"
 	"database/sql"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
@@ -39,15 +40,15 @@ func TestACalculatedMetricIsTheDevicesLatestValue(t *testing.T) {
 
 	publish := func(at time.Time, readings map[string]string, format eventtime.WireFormat) {
 		t.Helper()
-		unresolved := &esmodel.UnresolvedEvent{Source: mqttTestSource, Device: "meter-ds", EventType: esmodel.Measurement,
+		unresolved := &esmodel.UnresolvedEvent{Source: mqttTestSource, Device: "meter-ds", EventType: eventtype.Measurement,
 			OccurredTime: at, ProcessedTime: at,
 			Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: readings}}}}
 		payload, err := rez.ResolveMeasurementsEventPayload(ctx, device, profile, unresolved)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
-		encoded, err := dmproto.MarshalResolvedEventAs(&dmmodel.ResolvedEvent{Source: mqttTestSource,
-			SourceDeviceToken: "meter-ds", EventType: esmodel.Measurement, OccurredTime: at, ProcessedTime: at,
+		encoded, err := resolvedevent.MarshalResolvedEventAs(&resolvedevent.ResolvedEvent{Source: mqttTestSource,
+			SourceDeviceToken: "meter-ds", EventType: eventtype.Measurement, OccurredTime: at, ProcessedTime: at,
 			ProfileVersionToken: "meter@1", Payload: payload}, format)
 		if err != nil {
 			t.Fatalf("marshal: %v", err)

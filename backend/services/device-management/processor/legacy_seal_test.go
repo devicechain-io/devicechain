@@ -6,11 +6,11 @@ package processor
 import (
 	"bytes"
 	"encoding/hex"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dcmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 )
 
@@ -58,7 +58,7 @@ func TestATokenSealedInTheTextFormStillAuthenticates(t *testing.T) {
 	}
 	tampered := bytes.Clone(legacy.SealedCredentialId)
 	tampered[len(tampered)-1] ^= 0x01
-	if reason, err := resolve(tampered); err == nil || reason != uint(dmproto.FailureReason_Unauthenticated) {
+	if reason, err := resolve(tampered); err == nil || reason != uint(resolvedevent.FailureReason_Unauthenticated) {
 		t.Fatalf("a tampered text-form seal: reason %d, err %v; want Unauthenticated", reason, err)
 	}
 }

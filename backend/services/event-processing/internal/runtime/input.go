@@ -10,14 +10,13 @@
 package runtime
 
 import (
+	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
+	"github.com/devicechain-io/dc-event-processing/internal/geofence"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math"
 	"strconv"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
-	"github.com/devicechain-io/dc-event-processing/internal/geofence"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
 // BuildInputs projects a resolved event onto one predicate.Input PER measurement sample it
@@ -56,8 +55,8 @@ import (
 // which turns it into a typed connect/disconnect edge for Connectivity rules only; the engine folds
 // those edges into alarms. So a StateChange feeds exactly one rule kind, by a path that cannot touch
 // an absence timer — which is the whole point of keeping it out of the Input stream.
-func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Input {
-	if ev.EventType == esmodel.StateChange {
+func BuildInputs(ev *resolvedevent.ResolvedEvent, occurred time.Time) []predicate.Input {
+	if ev.EventType == eventtype.StateChange {
 		return nil
 	}
 	// Collapse to one anchor per type by taking the LOWEST token, not the first one seen. A device
@@ -82,7 +81,7 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 	// keeps nil M (a location carries no measurement), so it is still a heartbeat for an absence
 	// rule, and each fix is stamped at the instant IT was taken — which is what lets a rule tell
 	// a slow drift through a fence from a single upload of the whole run.
-	if loc, ok := ev.Payload.(*dmmodel.ResolvedLocationsPayload); ok && len(loc.Entries) > 0 {
+	if loc, ok := ev.Payload.(*resolvedevent.ResolvedLocationsPayload); ok && len(loc.Entries) > 0 {
 		out := make([]predicate.Input, 0, len(loc.Entries))
 		for _, entry := range loc.Entries {
 			in := base
@@ -93,7 +92,7 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 		return out
 	}
 
-	p, ok := ev.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+	p, ok := ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 	if !ok || len(p.Entries) == 0 {
 		return []predicate.Input{base} // heartbeat: nil M
 	}
@@ -114,7 +113,7 @@ func BuildInputs(ev *dmmodel.ResolvedEvent, occurred time.Time) []predicate.Inpu
 // coordinate contract, so this parses rather than re-validates; a value that will not parse
 // yields no position, which the position-scoped feed reads as "this sample cannot answer a fence
 // question" rather than as a position at (0, 0) off the coast of Africa.
-func entryPosition(entry dmmodel.ResolvedLocationEntry) *geofence.Position {
+func entryPosition(entry resolvedevent.ResolvedLocationEntry) *geofence.Position {
 	lat, ok := parseCoord(entry.Latitude)
 	if !ok {
 		return nil
@@ -149,7 +148,7 @@ func parseCoord(raw *string) (float64, bool) {
 // serializable aggregate state (the core guards this too — defense in depth). A duplicate name
 // within a single sample keeps the last reading (a degenerate case; distinct samples are separate
 // Inputs).
-func sampleMetrics(entry dmmodel.ResolvedMeasurementsEntry) map[string]float64 {
+func sampleMetrics(entry resolvedevent.ResolvedMeasurementsEntry) map[string]float64 {
 	if len(entry.Entries) == 0 {
 		return nil
 	}

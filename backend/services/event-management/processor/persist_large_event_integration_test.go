@@ -22,29 +22,27 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"strings"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"math"
+	"strings"
+	"testing"
+	"time"
 )
 
 // largeEvent is a resolved event from device "big" with no alternate id; fill gives it its
 // payload.
-func largeEvent(at time.Time, fill func(ev *dmodel.ResolvedEvent)) dmodel.ResolvedEvent {
+func largeEvent(at time.Time, fill func(ev *resolvedevent.ResolvedEvent)) resolvedevent.ResolvedEvent {
 	ev := fenceCostMeasurement("unused", at, 0)
 	ev.AltId = nil
 	ev.SourceDeviceToken = "big"
@@ -52,13 +50,13 @@ func largeEvent(at time.Time, fill func(ev *dmodel.ResolvedEvent)) dmodel.Resolv
 	return ev
 }
 
-func measurementsOf(n int, at time.Time) func(*dmodel.ResolvedEvent) {
-	return func(ev *dmodel.ResolvedEvent) {
-		entries := make([]dmodel.ResolvedMeasurementEntry, n)
+func measurementsOf(n int, at time.Time) func(*resolvedevent.ResolvedEvent) {
+	return func(ev *resolvedevent.ResolvedEvent) {
+		entries := make([]resolvedevent.ResolvedMeasurementEntry, n)
 		for i := range entries {
-			entries[i] = dmodel.ResolvedMeasurementEntry{Name: fmt.Sprintf("m%05d", i), Value: "1.5"}
+			entries[i] = resolvedevent.ResolvedMeasurementEntry{Name: fmt.Sprintf("m%05d", i), Value: "1.5"}
 		}
-		ev.Payload = &dmodel.ResolvedMeasurementsPayload{Entries: []dmodel.ResolvedMeasurementsEntry{
+		ev.Payload = &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{
 			{OccurredTime: at, Entries: entries}}}
 	}
 }
@@ -67,7 +65,7 @@ func measurementsOf(n int, at time.Time) func(*dmodel.ResolvedEvent) {
 // about what a tenant-scoped read may see, how many of table's rows belong to the event
 // ev is persisted as, how many of those carry a tenant other than tenant, and how many are
 // duplicates of another by the table's own identity.
-func storedRows(t *testing.T, r *pgBatchRig, tenant string, ev dmodel.ResolvedEvent, table string) (rows, foreign, dups int64) {
+func storedRows(t *testing.T, r *pgBatchRig, tenant string, ev resolvedevent.ResolvedEvent, table string) (rows, foreign, dups int64) {
 	t.Helper()
 	pevent, err := r.ep.baseEvent(core.WithTenant(context.Background(), tenant), ev)
 	require.NoError(t, err)
@@ -85,7 +83,7 @@ func storedRows(t *testing.T, r *pgBatchRig, tenant string, ev dmodel.ResolvedEv
 // deliverWithTwoSmallOnes runs the large event through the batching worker between two
 // ordinary messages of the same tenant, on the last delivery the stream allows, so a
 // failure is reported rather than left for redelivery.
-func deliverWithTwoSmallOnes(t *testing.T, r *pgBatchRig, tenant string, big dmodel.ResolvedEvent, base time.Time) {
+func deliverWithTwoSmallOnes(t *testing.T, r *pgBatchRig, tenant string, big resolvedevent.ResolvedEvent, base time.Time) {
 	t.Helper()
 	r.run([]messaging.Message{
 		consumed(t, r.acks, 0, tenant, messaging.MaxDeliver, big),
@@ -129,7 +127,7 @@ func TestALargeMeasurementEventIsStoredWhole(t *testing.T) {
 		rows := make([]*model.MeasurementEvent, readings)
 		for i := range rows {
 			rows[i] = &model.MeasurementEvent{EventId: []byte("single"), PayloadId: []byte(fmt.Sprintf("p%05d", i)),
-				DeviceToken: "big", EventType: esmodel.Measurement, OccurredTime: at, Name: "m"}
+				DeviceToken: "big", EventType: eventtype.Measurement, OccurredTime: at, Name: "m"}
 		}
 		err := r.mgr.DB(ctx).Transaction(func(tx *gorm.DB) error {
 			return tx.Clauses(clause.OnConflict{
@@ -154,40 +152,40 @@ func TestALargeEventOfEachOtherKindIsStoredWhole(t *testing.T) {
 		table string
 		// rows is how many the event writes to table, and width the parameters one binds.
 		rows, width int
-		fill        func(at time.Time) func(*dmodel.ResolvedEvent)
+		fill        func(at time.Time) func(*resolvedevent.ResolvedEvent)
 	}{
 		{name: "locations", table: "location_events", rows: 6000, width: 12,
-			fill: func(at time.Time) func(*dmodel.ResolvedEvent) {
-				return func(ev *dmodel.ResolvedEvent) {
-					ev.EventType = esmodel.Location
-					entries := make([]dmodel.ResolvedLocationEntry, 6000)
+			fill: func(at time.Time) func(*resolvedevent.ResolvedEvent) {
+				return func(ev *resolvedevent.ResolvedEvent) {
+					ev.EventType = eventtype.Location
+					entries := make([]resolvedevent.ResolvedLocationEntry, 6000)
 					for i := range entries {
-						entries[i] = dmodel.ResolvedLocationEntry{Latitude: coord(float64(i%80) + 0.25),
+						entries[i] = resolvedevent.ResolvedLocationEntry{Latitude: coord(float64(i%80) + 0.25),
 							Longitude: coord(float64(i%170) + 0.5), OccurredTime: at.Add(time.Duration(i) * time.Millisecond)}
 					}
-					ev.Payload = &dmodel.ResolvedLocationsPayload{Entries: entries}
+					ev.Payload = &resolvedevent.ResolvedLocationsPayload{Entries: entries}
 				}
 			}},
 		{name: "alerts", table: "alert_events", rows: 7000, width: 10,
-			fill: func(at time.Time) func(*dmodel.ResolvedEvent) {
-				return func(ev *dmodel.ResolvedEvent) {
-					ev.EventType = esmodel.Alert
-					entries := make([]dmodel.ResolvedAlertEntry, 7000)
+			fill: func(at time.Time) func(*resolvedevent.ResolvedEvent) {
+				return func(ev *resolvedevent.ResolvedEvent) {
+					ev.EventType = eventtype.Alert
+					entries := make([]resolvedevent.ResolvedAlertEntry, 7000)
 					for i := range entries {
-						entries[i] = dmodel.ResolvedAlertEntry{Type: fmt.Sprintf("a%05d", i), Level: 1,
+						entries[i] = resolvedevent.ResolvedAlertEntry{Type: fmt.Sprintf("a%05d", i), Level: 1,
 							Message: "m", Source: "s", OccurredTime: at}
 					}
-					ev.Payload = &dmodel.ResolvedAlertsPayload{Entries: entries}
+					ev.Payload = &resolvedevent.ResolvedAlertsPayload{Entries: entries}
 				}
 			}},
 		// Anchors are written by persistEventAnchors, after the payload: a three-reading
 		// event anchored to 10,000 targets.
 		{name: "anchors", table: "event_anchors", rows: 10000, width: 7,
-			fill: func(at time.Time) func(*dmodel.ResolvedEvent) {
-				return func(ev *dmodel.ResolvedEvent) {
+			fill: func(at time.Time) func(*resolvedevent.ResolvedEvent) {
+				return func(ev *resolvedevent.ResolvedEvent) {
 					measurementsOf(3, at)(ev)
 					for i := 0; i < 10000; i++ {
-						ev.Anchors = append(ev.Anchors, dmodel.ResolvedAnchor{AnchorType: "area",
+						ev.Anchors = append(ev.Anchors, resolvedevent.ResolvedAnchor{AnchorType: "area",
 							AnchorToken: fmt.Sprintf("a%05d", i)})
 					}
 				}
@@ -259,7 +257,7 @@ func TestALargeEventRefusedInItsLastStatementIsStoredNowhere(t *testing.T) {
 	tenant := fmt.Sprintf("lr%d", time.Now().UnixNano())
 	base := time.Now().UTC().Truncate(time.Hour)
 	big := largeEvent(base, measurementsOf(6000, base))
-	entries := big.Payload.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	entries := big.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries
 	// numeric(20,8) holds 12 integer digits; this parses, and overflows at the INSERT.
 	entries[len(entries)-1].Value = "1e13"
 
@@ -275,7 +273,7 @@ func TestALargeEventRefusedInItsLastStatementIsStoredNowhere(t *testing.T) {
 	assert.EqualValues(t, 2, r.count(t, tenant, ""), "its batch-mates must be stored")
 	if assert.Len(t, r.failures, 1) {
 		assert.Equal(t, "big", r.failures[0].device)
-		assert.Equal(t, uint(dmproto.FailureReason_Invalid), r.failures[0].reason)
+		assert.Equal(t, uint(resolvedevent.FailureReason_Invalid), r.failures[0].reason)
 	}
 	assert.Len(t, r.acks.snapshot(), 3)
 }
@@ -289,9 +287,9 @@ func TestAnUnencodableValueIsInvalidOnTheFirstDelivery(t *testing.T) {
 	r := newPgBatchRig(t, "emlargetest", 8)
 	tenant := fmt.Sprintf("le%d", time.Now().UnixNano())
 	base := time.Now().UTC().Truncate(time.Hour)
-	bad := largeEvent(base, func(ev *dmodel.ResolvedEvent) {
-		ev.EventType = esmodel.StateChange
-		ev.Payload = &dmodel.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse",
+	bad := largeEvent(base, func(ev *resolvedevent.ResolvedEvent) {
+		ev.EventType = eventtype.StateChange
+		ev.Payload = &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse",
 			SessionId: math.MaxInt64 + 1}
 	})
 
@@ -305,7 +303,7 @@ func TestAnUnencodableValueIsInvalidOnTheFirstDelivery(t *testing.T) {
 	assert.EqualValues(t, 2, r.count(t, tenant, ""), "its batch-mates must be stored")
 	if assert.Len(t, r.failures, 1) {
 		assert.Equal(t, "big", r.failures[0].device)
-		assert.Equal(t, uint(dmproto.FailureReason_Invalid), r.failures[0].reason)
+		assert.Equal(t, uint(resolvedevent.FailureReason_Invalid), r.failures[0].reason)
 	}
 	assert.Len(t, r.acks.snapshot(), 3)
 }
@@ -337,7 +335,7 @@ func TestCreateChunkedRefusesAPurgedTenant(t *testing.T) {
 			rows := make([]*model.MeasurementEvent, 6000)
 			for i := range rows {
 				rows[i] = &model.MeasurementEvent{EventId: []byte("fenced"), PayloadId: []byte(fmt.Sprintf("p%05d", i)),
-					DeviceToken: "big", EventType: esmodel.Measurement, OccurredTime: at, Name: "m"}
+					DeviceToken: "big", EventType: eventtype.Measurement, OccurredTime: at, Name: "m"}
 			}
 			arbiter := clause.OnConflict{
 				Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "payload_id"}, {Name: "occurred_time"}},

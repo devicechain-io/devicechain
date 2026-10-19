@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"reflect"
 	"strings"
 	"testing"
@@ -72,7 +73,7 @@ func TestAResolvedEventDoesNotDependOnUnreadDeviceColumns(t *testing.T) {
 	}
 	for label, mk := range events {
 		t.Run(label, func(t *testing.T) {
-			var got [2]*model.ResolvedEvent
+			var got [2]*resolvedevent.ResolvedEvent
 			for i, rez := range []*EventResolver{narrow, full} {
 				ev := mk()
 				presentSealed(t, rig.ctx, ev, string(model.CredentialMqttBasic), "cred-1", secret)

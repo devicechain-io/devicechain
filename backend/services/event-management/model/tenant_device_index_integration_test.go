@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -265,19 +265,19 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 		SELECT tn, sha256(convert_to(tn || ':' || d::text || ':' || g::text, 'UTF8')), 'dev-' || d::text, ?::bigint,
 		       ?::timestamptz + g * interval '95 minutes', 'mqtt'
 		FROM unnest(ARRAY['acme', 'globex']) tn, generate_series(0, 499) d, generate_series(0, 199) g`,
-		int(esmodel.Measurement), seedStart).Error)
+		int(eventtype.Measurement), seedStart).Error)
 
 	// gateway-1: 2,000 rows for globex, 5 for acme (the last an alert), spread over the seed.
 	require.NoError(t, sys.Exec(`INSERT INTO "event-management".events
 		(tenant_id, event_id, device_token, event_type, occurred_time, source)
 		SELECT 'globex', sha256(convert_to('globex:gw:' || g::text, 'UTF8')), 'gateway-1', ?::bigint,
 		       ?::timestamptz + g * interval '10 minutes' + interval '1 second', 'mqtt'
-		FROM generate_series(0, 1999) g`, int(esmodel.Measurement), seedStart).Error)
+		FROM generate_series(0, 1999) g`, int(eventtype.Measurement), seedStart).Error)
 	require.NoError(t, sys.Exec(`INSERT INTO "event-management".events
 		(tenant_id, event_id, device_token, event_type, occurred_time, source)
 		SELECT 'acme', sha256(convert_to('acme:gw:' || g::text, 'UTF8')), 'gateway-1',
 		       CASE WHEN g = 4 THEN ?::bigint ELSE ?::bigint END, ?::timestamptz + g * interval '3 hours', 'mqtt'
-		FROM generate_series(0, 4) g`, int(esmodel.Alert), int(esmodel.Measurement), seedStart).Error)
+		FROM generate_series(0, 4) g`, int(eventtype.Alert), int(eventtype.Measurement), seedStart).Error)
 	require.NoError(t, sys.Exec(`ANALYZE "event-management".events`).Error)
 
 	counter := rdbtest.NewStatementCounter(`"event-management"`)
@@ -298,7 +298,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 
 	counter.Reset()
 	typed, err := api.Events(ctx, EventSearchCriteria{Pagination: page, DeviceToken: &device,
-		EventTypes: []esmodel.EventType{esmodel.Alert}})
+		EventTypes: []eventtype.EventType{eventtype.Alert}})
 	require.NoError(t, err)
 	require.Len(t, typed.Results, 1)
 	typedData := capture(t, counter, "ORDER BY")
@@ -370,7 +370,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	require.NoError(t, sys.Exec(`INSERT INTO "event-management".events
 		(tenant_id, event_id, device_token, event_type, occurred_time, source) VALUES
 		('acme', '\x01', 'gateway-1', ?::bigint, ?, 'mqtt'), ('acme', '\x02', 'gateway-1', ?::bigint, ?, 'mqtt')`,
-		int(esmodel.Measurement), tied, int(esmodel.Measurement), tied).Error)
+		int(eventtype.Measurement), tied, int(eventtype.Measurement), tied).Error)
 	all, err := api.Events(ctx, EventSearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 50},
 		DeviceToken: &device})
 	require.NoError(t, err)
@@ -390,7 +390,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	assert.Positive(t, bytes.Compare(all.Results[tiedAt].EventId, all.Results[tiedAt+1].EventId),
 		"within one timestamp, event_id DESC")
 	alerts, err := api.Events(ctx, EventSearchCriteria{Pagination: page, DeviceToken: &device,
-		EventTypes: []esmodel.EventType{esmodel.Alert}})
+		EventTypes: []eventtype.EventType{eventtype.Alert}})
 	require.NoError(t, err)
 	require.Len(t, alerts.Results, 1)
 	assert.EqualValues(t, 1, alerts.Pagination.TotalRecords)
