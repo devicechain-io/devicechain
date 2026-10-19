@@ -114,6 +114,7 @@
   "deleteRoleConfirm": "¿Eliminar el rol {{token}}? Un rol que todavía tiene algún miembro no se puede eliminar.",
   "customerUsersTab": "Usuarios",
   "customerUsersDescription": "Las personas que pueden iniciar sesión y ver solo los dispositivos de este cliente y sus datos.",
+  "customerUsersTruncated": "Se muestran los primeros {{count}} usuarios. Este cliente tiene más de los que la consola lista aquí; abre Miembros y filtra por este cliente para revisar el resto.",
   "customerUsersEmpty": "Todavía no hay nadie limitado a este cliente. Invita a un usuario para dar al cliente su propio acceso.",
   "inviteCustomerUser": "Invitar usuario",
   "customerDevicesTab": "Dispositivos",

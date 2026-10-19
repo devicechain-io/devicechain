@@ -114,6 +114,7 @@
   "deleteRoleConfirm": "Delete the role {{token}}? A role still held by a member cannot be deleted.",
   "customerUsersTab": "Users",
   "customerUsersDescription": "The people who can sign in and see only this customer's devices and their data.",
+  "customerUsersTruncated": "Showing the first {{count}} users. This customer has more than the console lists here; open Members and filter by this customer to work through the rest.",
   "customerUsersEmpty": "Nobody is limited to this customer yet. Invite a user to give the customer its own access.",
   "inviteCustomerUser": "Invite user",
   "customerDevicesTab": "Devices",

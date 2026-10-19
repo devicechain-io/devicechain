@@ -92,21 +92,28 @@ export async function listMembers(
 
 // The most pages listAllMembers will read. The server caps a page at 1000, so this is ten
 // thousand members. The server makes the cut, so a view asking for one customer's users
-// reads only those; reaching the cap throws rather than answering with a list that silently
-// stops part-way.
+// reads only those. Reaching the cap is reported (truncated), never answered with a list
+// that silently stops part-way and never thrown: the view shows what it has and says to
+// narrow the cut.
 const MAX_MEMBER_PAGES = 10;
 
-/** Every member matching the filter, read page by page. */
-export async function listAllMembers(filter: MemberFilter = {}): Promise<Member[]> {
+/** The members matching a filter, and whether more matched than were read. */
+export interface AllMembers {
+  members: Member[];
+  truncated: boolean;
+}
+
+/** Every member matching the filter, read page by page up to the cap. */
+export async function listAllMembers(filter: MemberFilter = {}): Promise<AllMembers> {
   const pageSize = 1000;
   const out: Member[] = [];
   for (let page = 1; page <= MAX_MEMBER_PAGES; page++) {
     const res = await listMembers({ ...filter, pageNumber: page, pageSize });
     out.push(...res.results);
     const total = res.pagination.totalRecords ?? out.length;
-    if (out.length >= total || res.results.length < pageSize) return out;
+    if (out.length >= total || res.results.length < pageSize) return { members: out, truncated: false };
   }
-  throw new Error(`more than ${MAX_MEMBER_PAGES * pageSize} members`);
+  return { members: out, truncated: true };
 }
 
 const INVITATIONS = graphql(`
