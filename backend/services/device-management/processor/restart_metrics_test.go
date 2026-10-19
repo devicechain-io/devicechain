@@ -56,7 +56,7 @@ func TestSecondStartDoesNotReRegisterMetrics(t *testing.T) {
 		}
 		sink := producer.NewSink(&deadRecorder{})
 		if c := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), nil, sink,
-			raiseAlarm); c == nil {
+			raiseAlarm, 1); c == nil {
 			t.Fatalf("start %d built no raise-alarm consumer", start)
 		}
 		// The alarm-event publisher is built in the same callback; its counter used to be
