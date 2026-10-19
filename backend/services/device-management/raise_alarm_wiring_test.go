@@ -58,4 +58,9 @@ func TestTheRaiseAlarmConsumerGetsTheConfiguredWorkers(t *testing.T) {
 		Configuration.RaiseAlarm.Workers = n
 		require.Equal(t, n, newRaiseAlarmConsumer(nil, nil).Workers)
 	}
+
+	// An unset count reaches the consumer as the default derived from the pool, not the cap.
+	Configuration = config.NewDeviceManagementConfiguration()
+	require.Equal(t, 6, Configuration.RaiseAlarm.Workers)
+	require.Equal(t, Configuration.RaiseAlarm.Workers, newRaiseAlarmConsumer(nil, nil).Workers)
 }

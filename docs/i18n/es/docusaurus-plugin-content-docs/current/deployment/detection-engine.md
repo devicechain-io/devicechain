@@ -716,7 +716,7 @@ detrás de ese tope.
 
 | Ajuste (en `device-management`) | Valor por defecto | Qué hace |
 |---|---|---|
-| `raiseAlarm.workers` | 8, o uno menos que el pool de conexiones a la base de datos si este es menor | Cuántos cambios de alarma se aplican a la vez, de 1 a uno menos que `rdbConfiguration.maxOpenConnections` (20 si no se establece). Cualquier valor fuera de ese rango detiene el servicio al arrancar y nombra el ajuste. Cada trabajador retiene una conexión a la base de datos mientras escribe, por lo que un valor superior a la mitad del pool se registra en el log. Se lee una sola vez al arrancar. |
+| `raiseAlarm.workers` | 8, reducido para que este y `resolution.workers` dejen libres al menos 4 conexiones del pool (6 con el pool predeterminado de 20), y nunca menos de 1 | Cuántos cambios de alarma se aplican a la vez, de 1 a uno menos que `rdbConfiguration.maxOpenConnections` (20 si no se establece). Cualquier valor fuera de ese rango detiene el servicio al arrancar y nombra el ajuste. Cada trabajador retiene una conexión a la base de datos mientras escribe, por lo que un valor superior a la mitad del pool se registra en el log. Un valor explícito se comprueba por separado, no frente a `resolution.workers`, así que elija ambos a la vez. Los valores en vigor se registran al arrancar. Se lee una sola vez al arrancar. |
 
 Dentro de una réplica, los cambios de **una** misma alarma se aplican en el orden en que llegan,
 sea cual sea el ajuste; solo se solapan los cambios de alarmas distintas. El resultado nunca

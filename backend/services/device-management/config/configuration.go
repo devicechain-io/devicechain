@@ -466,15 +466,24 @@ func (r ResolutionConfiguration) Validate(pool config.MicroserviceDatastoreConfi
 	return rdb.CheckWriterCount("resolution.workers", r.Workers, pool)
 }
 
-// DefaultRaiseAlarmWorkers is how many alarm edges are applied at once when raiseAlarm.workers
-// is not set. See RaiseAlarmConfiguration.Workers for what it is bounded by.
+// DefaultRaiseAlarmWorkers is the most alarm edges applied at once when raiseAlarm.workers is
+// not set. The default in effect can be lower: see RaiseAlarmConfiguration.ApplyDefaults.
 const DefaultRaiseAlarmWorkers = 8
+
+// PoolHeadroom is how many pooled connections the two worker pools leave to everything else
+// that draws on the relational pool: GraphQL requests, the MQTT connect checks and the other
+// consumers' reads. With the defaults (a pool of 20, 10 resolvers) it caps an unset
+// raiseAlarm.workers at 6, so the workers hold at most 16 connections and 4 remain. Two would
+// have left the old default of 8 unchanged, and 18 of 20 held by workers is the starvation
+// this exists to prevent.
+const PoolHeadroom = 4
 
 // RaiseAlarmConfiguration sizes the raise-alarm consumer.
 type RaiseAlarmConfiguration struct {
-	// Workers is how many alarm edges are applied at once. Unset (0) defaults to
-	// DefaultRaiseAlarmWorkers; 1 applies them one after another, as the consumer did before
-	// this setting existed.
+	// Workers is how many alarm edges are applied at once. Unset (0) defaults to the smaller of
+	// DefaultRaiseAlarmWorkers and what the pool has left after resolution.workers and
+	// PoolHeadroom, but at least 1; 1 applies them one after another, as the consumer did
+	// before this setting existed.
 	//
 	// One edge is about ten sequential database round trips, so a single worker applies only as
 	// many edges per second as the round trips allow (about 110 per second against a local
@@ -486,12 +495,19 @@ type RaiseAlarmConfiguration struct {
 	Workers int
 }
 
-// ApplyDefaults fills the worker count when it is unset. The default is held below the pool the
-// workers draw from, so a deployment that sized a small pool before this setting existed still
-// starts; an explicit count is never adjusted, only validated.
-func (r *RaiseAlarmConfiguration) ApplyDefaults(pool config.MicroserviceDatastoreConfiguration) {
+// ApplyDefaults fills the worker count when it is unset. The default is the share of the pool
+// the resolvers and PoolHeadroom leave, capped at DefaultRaiseAlarmWorkers and floored at 1, so
+// by default the two worker pools leave PoolHeadroom connections free whenever the pool is big
+// enough to. Where it is not, the floor wins over the headroom: a pool of 11 beside the 10
+// default resolvers gets 1 raise-alarm worker, and the two then hold all 11. That is the price
+// of a deployment that sized a small pool before this setting existed still starting, and it is
+// no worse than before, when the same pool got 8. An explicit count is never
+// adjusted, only validated on its own. resolution is the resolver count in effect, so it must
+// already have its defaults applied.
+func (r *RaiseAlarmConfiguration) ApplyDefaults(pool config.MicroserviceDatastoreConfiguration, resolution ResolutionConfiguration) {
 	if r.Workers == 0 {
-		r.Workers = max(1, min(DefaultRaiseAlarmWorkers, rdb.EffectiveMaxOpenConnections(pool)-1))
+		spare := rdb.EffectiveMaxOpenConnections(pool) - resolution.Workers - PoolHeadroom
+		r.Workers = max(1, min(DefaultRaiseAlarmWorkers, spare))
 	}
 }
 
@@ -533,7 +549,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
 	}
 	c.Resolution.ApplyDefaults()
-	c.RaiseAlarm.ApplyDefaults(c.RdbConfiguration)
+	c.RaiseAlarm.ApplyDefaults(c.RdbConfiguration, c.Resolution)
 	c.InMemoryCache.ApplyDefaults()
 }
 
