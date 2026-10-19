@@ -244,8 +244,9 @@ type DerivedPublishingConfiguration struct {
 	// MaxInFlight is the most publishes waiting for an acknowledgement at once: 1 to 1024,
 	// default 32.
 	MaxInFlight *int
-	// MaxBufferedBytes bounds their payload bytes together: 65536 to 268435456, default
-	// 4194304. A single event larger than this is sent alone rather than never.
+	// MaxBufferedBytes bounds the payload bytes held for publishing together (in flight, waiting
+	// for room, or kept for a retry): 65536 to 268435456, default 4194304. A single event larger
+	// than this is sent alone rather than never.
 	MaxBufferedBytes *int64
 }
 

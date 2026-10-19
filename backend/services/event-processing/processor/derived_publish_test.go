@@ -769,9 +769,16 @@ func TestARetiredDetectionsPayloadIsNotRetained(t *testing.T) {
 	for _, window := range []int{1, 8} {
 		t.Run(fmt.Sprintf("window=%d", window), func(t *testing.T) {
 			var fw *faultWriter
+			// The victim is chosen by its place in the buffer, not by the order attempts reach the
+			// writer: at a window above 1 that order is the scheduler's, and a victim that happened
+			// to be the buffer's first detection would leave nothing to retire.
 			const victim = 5
-			r, _ := pipelineRig(t, window, &fw, func(_ attempt, index, earlier int) (bool, error) {
-				if index == victim && earlier == 0 {
+			var victimRule, victimLane atomic.Value
+			var victimAt atomic.Int64
+			r, _ := pipelineRig(t, window, &fw, func(a attempt, _, earlier int) (bool, error) {
+				rule, _ := victimRule.Load().(string)
+				lane, _ := victimLane.Load().(string)
+				if earlier == 0 && a.rule == rule && a.lane == lane && a.at.UnixNano() == victimAt.Load() {
 					return false, errors.New("refused")
 				}
 				return true, nil
@@ -780,6 +787,10 @@ func TestARetiredDetectionsPayloadIsNotRetained(t *testing.T) {
 			before := r.rp.pendingDets
 			total := len(before)
 			require.Greater(t, total, victim+1)
+			v := before[victim]
+			victimRule.Store(v.RuleID)
+			victimLane.Store(mustTenant(t, v.RuleID) + "|" + v.Series)
+			victimAt.Store(v.At.UnixNano())
 
 			// A failed pass compacts: the retired prefix and the dropped entries leave the buffer.
 			require.False(t, r.rp.checkpoint(ctx))
@@ -829,4 +840,150 @@ func TestPublishFailureOutcomeClassification(t *testing.T) {
 			require.Equal(t, tc.want, publishFailureOutcome(tc.err))
 		})
 	}
+}
+
+// The byte budget counts every prepared, unacknowledged payload, not only the ones in flight:
+// payloads kept from an earlier failed pass count against a new pass before any is sent.
+func TestTheByteBudgetCountsRetainedPreparedPayloads(t *testing.T) {
+	var fw *faultWriter
+	r, _ := pipelineRig(t, 32, &fw, func(attempt, int, int) (bool, error) { return false, errors.New("refused") })
+	require.False(t, r.rp.checkpoint(context.Background()))
+	var prepared int
+	var size int64
+	for _, d := range r.rp.pendingDets {
+		if d.state == outputPrepared {
+			prepared++
+			size = int64(len(d.out.Payload))
+		}
+	}
+	require.GreaterOrEqual(t, prepared, 4, "too few payloads were retained; the test proves nothing")
+	sent := func(budget int64) int {
+		r.rp.cfg.Output = runtime.OutputConfig{MaxInFlight: 32, MaxBufferedBytes: budget}
+		p := r.rp.newPublishPass(context.Background(), len(r.rp.pendingDets))
+		p.jobs = make(chan publishJob, 32)
+		p.admit()
+		return len(p.jobs)
+	}
+	require.Greater(t, sent(int64(prepared)*size*2), 1, "control: a roomy budget should send several at once")
+	// Room for two payloads, but `prepared` of them are already held: only the first goes.
+	require.Equal(t, 1, sent(2*size+size/2), "the retained payloads were not counted against the budget")
+}
+
+// drivePass runs publishPending's loop by hand, calling check after every admit and every
+// applied outcome, so a test can hold the pass to an invariant at each step.
+func drivePass(t *testing.T, rp *ResolvedEventsProcessor, check func(*publishPass)) bool {
+	t.Helper()
+	rp.dropSupersededDetections()
+	n := len(rp.pendingDets)
+	if n == 0 {
+		return true
+	}
+	rp.publishPasses++
+	p := rp.newPublishPass(context.Background(), n)
+	check(p)
+	if p.cfg.MaxInFlight > 1 {
+		workers := min(p.cfg.MaxInFlight, n)
+		p.jobs = make(chan publishJob, p.cfg.MaxInFlight)
+		p.results = make(chan publishOutcome, p.cfg.MaxInFlight)
+		p.workers.Add(workers)
+		for range workers {
+			go p.work()
+		}
+	}
+	for {
+		p.admit()
+		check(p)
+		if p.inFlight == 0 {
+			break
+		}
+		p.await()
+		check(p)
+	}
+	if p.jobs != nil {
+		close(p.jobs)
+		p.workers.Wait()
+	}
+	return p.finish()
+}
+
+// heldNow is what the byte budget should count at this moment: every payload prepared, not
+// positively acknowledged and not dropped.
+func heldNow(p *publishPass) int64 {
+	var sum int64
+	for i := range p.status {
+		d := &p.rp.pendingDets[i]
+		if d.state == outputPrepared && p.status[i] != itemDropped {
+			sum += int64(len(d.out.Payload))
+		}
+	}
+	return sum
+}
+
+// The budget's count is exact at every step of every pass: a first pass that fails part-way, a
+// retry pass that starts with retained payloads and drops some on recheck (their rules are gone),
+// and a pass that settles everything, where it ends at zero.
+func TestTheByteBudgetCountIsExactAtEveryStep(t *testing.T) {
+	for _, window := range []int{1, 8, 32} {
+		t.Run(fmt.Sprintf("window %d", window), func(t *testing.T) {
+			var fw *faultWriter
+			r, _ := pipelineRig(t, window, &fw, func(_ attempt, index, earlier int) (bool, error) {
+				if earlier == 0 && index%3 == 0 && index <= 90 {
+					return index%2 == 0, errors.New("refused")
+				}
+				return true, nil
+			})
+			check := func(p *publishPass) {
+				require.Equal(t, heldNow(p), p.held, "the budget's count drifted from what is held")
+			}
+			r.rp.cfg.Output = runtime.OutputConfig{MaxInFlight: window, MaxBufferedBytes: 1 << 20}
+			require.False(t, drivePass(t, r.rp, check), "the first pass should fail part-way")
+			var retained int
+			for _, d := range r.rp.pendingDets {
+				if d.state == outputPrepared {
+					retained++
+				}
+			}
+			require.Positive(t, retained, "nothing was retained; the retry pass proves nothing")
+			ids := r.rp.registry.IDs()
+			for _, id := range ids[:len(ids)/2] {
+				r.rp.registry.Remove(id)
+			}
+			for range 1000 {
+				if drivePass(t, r.rp, check) {
+					break
+				}
+			}
+			require.Empty(t, r.rp.pendingDets, "the passes never settled the buffer")
+		})
+	}
+}
+
+// The budget is inclusive: an item that brings what is held to exactly the budget goes beside
+// what is in flight; one byte less and it waits.
+func TestTheByteBudgetAdmitsAnItemThatFillsItExactly(t *testing.T) {
+	var fw *faultWriter
+	r, _ := pipelineRig(t, 32, &fw, nil)
+	admitted := func(budget int64) []publishJob {
+		for i := range r.rp.pendingDets {
+			if d := &r.rp.pendingDets[i]; d.state == outputPrepared {
+				d.state, d.out = outputNew, runtime.PreparedOutput{}
+			}
+		}
+		r.rp.cfg.Output = runtime.OutputConfig{MaxInFlight: 32, MaxBufferedBytes: budget}
+		p := r.rp.newPublishPass(context.Background(), len(r.rp.pendingDets))
+		require.Zero(t, p.held)
+		p.jobs = make(chan publishJob, 32)
+		p.admit()
+		close(p.jobs)
+		var jobs []publishJob
+		for j := range p.jobs {
+			jobs = append(jobs, j)
+		}
+		return jobs
+	}
+	all := admitted(1 << 30)
+	require.Greater(t, len(all), 2, "control: a roomy budget should send several at once")
+	exact := int64(len(all[0].out.Payload) + len(all[1].out.Payload))
+	require.Len(t, admitted(exact), 2, "an item that fills the budget exactly was held back")
+	require.Len(t, admitted(exact-1), 1, "an item that overfills the budget by a byte was sent")
 }

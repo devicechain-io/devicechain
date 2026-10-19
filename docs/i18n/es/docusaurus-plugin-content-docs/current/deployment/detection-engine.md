@@ -540,7 +540,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `ruleHealth.maxBatchRows` | 256 | Máximo de reglas que lleva una escritura de un inquilino, de 1 a 4096; un inquilino con más pendientes se escribe en varias transacciones. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | Cuánto puede tardar la escritura de un inquilino, de 100 a 60000. Una escritura que falla o agota el tiempo se descarta, no se reintenta. |
 | `derivedPublishing.maxInFlight` | 32 | Cuántas detecciones puede tener a la vez un punto de control esperando la confirmación del bus de mensajes, de 1 a 1024. Con 1, cada una se confirma antes de enviar la siguiente. Por encima de 1, las detecciones de dispositivos distintos se publican en paralelo, nunca más de una por dispositivo a la vez. Véase más abajo. |
-| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones en espera, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
+| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones mientras esperan su publicación, incluidas las que se conservan para reintentar tras un intento fallido, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
 
 Cada ajuste de `ruleHealth` y de `derivedPublishing` es opcional; si se indica, debe estar dentro de
 su rango (incluido el cero) o el servicio no arranca.

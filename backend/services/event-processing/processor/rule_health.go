@@ -96,10 +96,10 @@ func (rp *ResolvedEventsProcessor) ruleHealthStopContext(parent context.Context)
 
 // purgeRuleHealth removes a purged tenant's pending fire counts and settles a write of that
 // tenant already in flight, on the loop, before the eviction is answered. It returns how many
-// entries it removed (each one is the tenant's rule id held in memory, and an in-flight write
-// counts whatever its outcome, so a write that may have landed makes the coordinator sweep
-// again). An error means the in-flight write did not settle in time: the eviction must not be
-// reported clean.
+// entries it removed (each one is the tenant's rule id held in memory; an in-flight write
+// adds the rules of its batch not yet confirmed written, so a write that may have landed makes
+// the coordinator sweep again). An error means the in-flight write did not settle in time: the
+// eviction must not be reported clean.
 func (rp *ResolvedEventsProcessor) purgeRuleHealth(tenant string) (int64, error) {
 	if rp.health == nil {
 		return 0, nil
