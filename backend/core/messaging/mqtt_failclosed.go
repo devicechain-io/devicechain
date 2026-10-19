@@ -835,9 +835,23 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	if replicas < 1 {
 		replicas = 1
 	}
+	// 🔴 A DURABLE THIS INSTANCE ALREADY HELD, MISSING AGAIN, IS CREATED AT THE STORE'S FIRST
+	// SEQUENCE, NOT AT ITS TAIL. Deleting a consumer from an interest-retention store drops
+	// every copy only that consumer wanted, so usually there is nothing to read back. But a copy
+	// another consumer still holds interest in (a gateway session consumer on the same subject)
+	// stays in the store, and its direct copy was skipped as carried by the store: a DeliverNew
+	// durable starts above it and reports an ack floor at the tail, so the copy is never read
+	// and a finish reads the kind as drained. From the first sequence the copy is delivered; a
+	// duplicate of a copy already read is folded by the store-sequence dedup id, and what the
+	// kind does not want the reader acks and drops. A first creation keeps DeliverNew: the store
+	// may hold messages kept for the gateway's own consumers, none of them the platform's.
+	var startSeq uint64
+	if (marks.owned || marks.released) && info.State.Msgs > 0 {
+		startSeq = info.State.FirstSeq
+	}
 	createdKind := map[MqttFailClosedKind]bool{}
 	for _, d := range MqttFailClosedDurables(instanceId) {
-		created, absent, err := nmgr.ensureMqttFailClosedDurable(ctx, d, replicas)
+		created, absent, err := nmgr.ensureMqttFailClosedDurable(ctx, d, replicas, startSeq)
 		if absent {
 			rep.absentDurables = append(rep.absentDurables, d.Name)
 		}
@@ -1136,17 +1150,22 @@ func conformMqttFailClosedStore(cfg *nats.StreamConfig, maxBytes int64) ([]strin
 // ensureMqttFailClosedDurable creates a platform durable if it is missing and puts its filter
 // back if it has changed, reporting whether it had to create it and whether it is missing
 // still (it was not there and could not be created). A create the cluster refuses for want of
-// resources is retried a few times first (mqttFailClosedInsufficientRetry).
+// resources is retried a few times first (mqttFailClosedInsufficientRetry). A positive startSeq
+// creates a missing durable at that store sequence rather than at the tail.
 //
 // The filter is checked by reading it back, because AddConsumer on an existing durable with
 // a changed filter returns success and keeps the old one
 // (TestAddConsumerSilentlyIgnoresAChangedFilterSubject).
-func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d MqttFailClosedDurable, replicas int) (created, absent bool, err error) {
+func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d MqttFailClosedDurable, replicas int, startSeq uint64) (created, absent bool, err error) {
 	opt := nats.Context(ctx)
 	ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
 	if errors.Is(err, nats.ErrConsumerNotFound) {
 		cfg := MqttFailClosedConsumerConfig(d, replicas)
 		cfg.AckWait = nmgr.ackWait()
+		if startSeq > 0 {
+			cfg.DeliverPolicy = nats.DeliverByStartSequencePolicy
+			cfg.OptStartSeq = startSeq
+		}
 		add := func() error {
 			if err := mqttFenced(ctx); err != nil {
 				return err
