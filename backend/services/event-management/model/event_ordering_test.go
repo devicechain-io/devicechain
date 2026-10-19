@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,7 +48,7 @@ func seedLocationFixes(t *testing.T, api *Api, ctx context.Context, offsets []in
 	t.Helper()
 	for _, offset := range offsets {
 		occurred := orderingBase.Add(time.Duration(offset) * time.Minute)
-		ev := eventOfType("acme", "device-1", esmodel.Location, occurred, fmt.Sprintf("fix-%d", offset))
+		ev := eventOfType("acme", "device-1", eventtype.Location, occurred, fmt.Sprintf("fix-%d", offset))
 		_, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{{
 			Event:             ev,
 			EntryOccurredTime: ev.OccurredTime,
@@ -114,7 +114,7 @@ func TestLocationEventsPagingIsTotalOverTiedOccurredTimes(t *testing.T) {
 
 	const tied = 5
 	for i := 0; i < tied; i++ {
-		ev := eventOfType("acme", "device-1", esmodel.Location, orderingBase, fmt.Sprintf("tied-%d", i))
+		ev := eventOfType("acme", "device-1", eventtype.Location, orderingBase, fmt.Sprintf("tied-%d", i))
 		_, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{{
 			Event:             ev,
 			EntryOccurredTime: ev.OccurredTime,
@@ -197,7 +197,7 @@ func TestMeasurementEventsReadNewestFirst(t *testing.T) {
 
 	for _, offset := range shuffledOffsets {
 		occurred := orderingBase.Add(time.Duration(offset) * time.Minute)
-		ev := eventOfType("acme", "device-1", esmodel.Measurement, occurred, fmt.Sprintf("m-%d", offset))
+		ev := eventOfType("acme", "device-1", eventtype.Measurement, occurred, fmt.Sprintf("m-%d", offset))
 		_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{{
 			Event:             ev,
 			EntryOccurredTime: ev.OccurredTime,

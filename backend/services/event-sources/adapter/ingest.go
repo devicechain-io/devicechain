@@ -7,10 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"hash/fnv"
 	"sort"
 	"strconv"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
@@ -640,7 +643,7 @@ func (e *Emitter) measurementMessage(tenant, source, deviceToken string, piece [
 	ev := &esmodel.UnresolvedEvent{
 		Source:                 source,
 		Device:                 deviceToken,
-		EventType:              esmodel.Measurement,
+		EventType:              eventtype.Measurement,
 		OccurredTime:           time.UnixMilli(latest).UTC(),
 		ProcessedTime:          now.UTC(),
 		Payload:                &esmodel.UnresolvedMeasurementsPayload{Entries: entries},
@@ -706,9 +709,9 @@ func (e *Emitter) EmitPresenceAsync(ctx context.Context, tenant, source, deviceT
 // production uses — a golden built from a hand-written literal agrees with whatever the
 // real mapping forgot.
 func presenceStateChange(ev PresenceEvent) stateChange {
-	state := esmodel.PresenceDisconnected
+	state := presence.StateDisconnected
 	if ev.Connected {
-		state = esmodel.PresenceConnected
+		state = presence.StateConnected
 	}
 	return stateChange{
 		state:             state,
@@ -724,7 +727,7 @@ func demotionStateChange(ev DemotionEvent) stateChange {
 	// expectedSessionId is unset and unreachable: the resolver refuses a demotion that
 	// carries one.
 	return stateChange{
-		state:      esmodel.PresenceDemoted,
+		state:      presence.StateDemoted,
 		reason:     ev.Reason,
 		sessionId:  ev.SessionId,
 		occurredAt: ev.OccurredAt,
@@ -746,7 +749,7 @@ func (e *Emitter) EmitPresenceDemotion(ctx context.Context, tenant, source, devi
 // reach expectedSessionId at all — rather than in two hand-written copies of the same
 // marshalling, which is where a newly added field goes missing on one path.
 type stateChange struct {
-	state             esmodel.PresenceState
+	state             presence.State
 	reason            string
 	sessionId         uint64
 	expectedSessionId uint64
@@ -812,7 +815,7 @@ func (e *Emitter) stateChangeMessage(tenant, source, deviceToken string, sc stat
 	uev := &esmodel.UnresolvedEvent{
 		Source:                 source,
 		Device:                 deviceToken,
-		EventType:              esmodel.StateChange,
+		EventType:              eventtype.StateChange,
 		OccurredTime:           occurred,
 		ProcessedTime:          e.now().UTC(),
 		AuthenticatedTransport: e.authenticatedTransport,
@@ -889,13 +892,13 @@ func stateChangeDedupID(prefix, tenant, deviceToken string, sc stateChange) stri
 // silently drops the second one for the length of the duplicate window, and reports
 // success while doing it. The raw name cannot collide with the digits above, so a state
 // added later is distinct by default even if nobody remembers this function exists.
-func dedupStateToken(s esmodel.PresenceState) string {
+func dedupStateToken(s presence.State) string {
 	switch s {
-	case esmodel.PresenceDisconnected:
+	case presence.StateDisconnected:
 		return "0"
-	case esmodel.PresenceConnected:
+	case presence.StateConnected:
 		return "1"
-	case esmodel.PresenceDemoted:
+	case presence.StateDemoted:
 		return "2"
 	default:
 		return string(s)

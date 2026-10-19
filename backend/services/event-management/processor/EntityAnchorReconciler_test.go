@@ -6,16 +6,14 @@ package processor
 import (
 	"context"
 	"errors"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"testing"
+	"time"
 )
 
 // stubAck records how many times a message was acked so a test can assert its
@@ -25,9 +23,9 @@ type stubAck struct{ acked int }
 
 func (s *stubAck) Ack() error { s.acked++; return nil }
 
-func deletedMsg(t *testing.T, subject string, event *dmodel.EntityDeletedEvent, numDelivered int, ack messaging.Acknowledger) messaging.Message {
+func deletedMsg(t *testing.T, subject string, event *entityevent.EntityDeletedEvent, numDelivered int, ack messaging.Acknowledger) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalEntityDeletedEvent(event)
+	b, err := entityevent.MarshalEntityDeletedEvent(event)
 	assert.NoError(t, err)
 	return messaging.NewConsumedMessage(subject, b, numDelivered, nil, ack)
 }
@@ -42,7 +40,7 @@ func TestReconciler_DeletesAndAcks(t *testing.T) {
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
-		&dmodel.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, EntityToken: "dev-4", DeletedTime: time.Now().UTC()}, 1, ack))
+		&entityevent.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, EntityToken: "dev-4", DeletedTime: time.Now().UTC()}, 1, ack))
 
 	api.Mock.AssertCalled(t, "DeleteAnchorsForEntity", "device", "dev-4", mock.Anything)
 	assert.Equal(t, 1, ack.acked)
@@ -68,7 +66,7 @@ func TestReconciler_NoTenantDropped(t *testing.T) {
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, "no-tenant",
-		&dmodel.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, DeletedTime: time.Now().UTC()}, 1, ack))
+		&entityevent.EntityDeletedEvent{EntityType: entity.TypeDevice, EntityId: 4, DeletedTime: time.Now().UTC()}, 1, ack))
 
 	assert.Equal(t, 1, ack.acked)
 	api.Mock.AssertNotCalled(t, "DeleteAnchorsForEntity", mock.Anything, mock.Anything, mock.Anything)
@@ -83,7 +81,7 @@ func TestReconciler_TransientErrorLeftUnacked(t *testing.T) {
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
-		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, 1, ack))
+		&entityevent.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, 1, ack))
 
 	// Corroborate that the DB call was attempted (and failed), so acked==0 means "reached the
 	// transient arm and deliberately left unacked", not "early-returned without touching the message".
@@ -100,7 +98,7 @@ func TestReconciler_PoisonCeilingDrops(t *testing.T) {
 	ack := &stubAck{}
 
 	r.handle(context.Background(), deletedMsg(t, reconcilerSubject,
-		&dmodel.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, messaging.MaxDeliver, ack))
+		&entityevent.EntityDeletedEvent{EntityType: entity.TypeCustomer, EntityId: 3, EntityToken: "cust-3", DeletedTime: time.Now().UTC()}, messaging.MaxDeliver, ack))
 
 	assert.Equal(t, 1, ack.acked)
 }

@@ -5,6 +5,7 @@ package model
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/core"
@@ -17,9 +18,11 @@ import (
 
 // captureEntityPublisher records the entity-deletion events emitted, so a test can
 // assert the delete path published them (ADR-044).
-type captureEntityPublisher struct{ events []*EntityDeletedEvent }
+type captureEntityPublisher struct {
+	events []*entityevent.EntityDeletedEvent
+}
 
-func (c *captureEntityPublisher) PublishEntityDeleted(_ context.Context, e *EntityDeletedEvent) {
+func (c *captureEntityPublisher) PublishEntityDeleted(_ context.Context, e *entityevent.EntityDeletedEvent) {
 	c.events = append(c.events, e)
 }
 

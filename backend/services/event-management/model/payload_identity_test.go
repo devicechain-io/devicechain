@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +42,7 @@ func newPayloadIdentityTestApi(t *testing.T) *Api {
 func noAltIdEvent(tenant, device string, occurred time.Time, payload string) Event {
 	ev := Event{
 		DeviceToken:  device,
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: occurred,
 		Source:       "lwm2m",
 	}
@@ -120,7 +120,7 @@ func TestOneEventKeepsItsDistinctPayloadRows(t *testing.T) {
 	assert.NotEqual(t, measurements[0].PayloadId, measurements[1].PayloadId)
 
 	alertEv := ev
-	alertEv.EventType = esmodel.Alert
+	alertEv.EventType = eventtype.Alert
 	alertEv.EventId = DeriveEventId("acme", &alertEv, []byte("alerts"))
 	_, err = api.CreateAlertEvents(ctx, api.RDB.DB(ctx), []*AlertEventCreateRequest{
 		{Event: alertEv, EntryOccurredTime: alertEv.OccurredTime,

@@ -5,6 +5,7 @@ package runtime
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"sort"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
@@ -185,7 +186,7 @@ func (v *FenceSetView) For(tenant string, version int32) *geofence.FenceSet {
 // for a fresh event) and would silently answer a different question for every event that is even
 // slightly late. It is a named function rather than an inlined field read so that the invariant
 // has somewhere to be stated, and somewhere to be broken on purpose.
-func (v *FenceSetView) ForEvent(tenant string, ev *dmmodel.ResolvedEvent) *geofence.FenceSet {
+func (v *FenceSetView) ForEvent(tenant string, ev *resolvedevent.ResolvedEvent) *geofence.FenceSet {
 	if ev == nil {
 		return nil
 	}

@@ -8,12 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
@@ -70,7 +68,7 @@ type pendingEvent struct {
 	msg    messaging.Message
 	ctx    context.Context // the message's own tenant-scoped context
 	tenant string
-	event  *dmmodel.ResolvedEvent
+	event  *resolvedevent.ResolvedEvent
 	done   func(result string)
 }
 
@@ -102,7 +100,7 @@ func (ep *EventPersistenceWorker) admit(ctx context.Context, msg messaging.Messa
 	}
 
 	// Attempt to unmarshal event.
-	event, err := dmproto.UnmarshalResolvedEvent(msg.Value)
+	event, err := resolvedevent.UnmarshalResolvedEvent(msg.Value)
 	if err != nil {
 		ep.Invalid(err, msg)
 		// Terminal: reported on the failed-events stream (which nothing
@@ -263,11 +261,11 @@ func (ep *EventPersistenceWorker) dispose(p pendingEvent, err error) {
 		p.msg.Ack()
 		p.done(core.ResultErased)
 	case errors.Is(err, ErrDeterministic):
-		ep.Failed(p.tenant, uint(dmproto.FailureReason_Invalid), *p.event, err, p.msg.CorrelationID())
+		ep.Failed(p.tenant, uint(resolvedevent.FailureReason_Invalid), *p.event, err, p.msg.CorrelationID())
 		p.msg.Ack()
 		p.done(core.ResultFailed)
 	case disposition == messaging.Exhausted:
-		ep.Failed(p.tenant, uint(dmproto.FailureReason_ApiCallFailed), *p.event, err, p.msg.CorrelationID())
+		ep.Failed(p.tenant, uint(resolvedevent.FailureReason_ApiCallFailed), *p.event, err, p.msg.CorrelationID())
 		p.msg.Ack()
 		p.done(core.ResultFailed)
 	default:

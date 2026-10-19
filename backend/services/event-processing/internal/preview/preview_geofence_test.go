@@ -7,17 +7,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"strconv"
+	"testing"
+	"time"
 )
 
 // boxFenceSet builds a frozen fence set of one axis-aligned lon/lat box.
@@ -59,19 +57,19 @@ func locMsg(t *testing.T, seq uint64, tenant, device, profileVersion string, fen
 	t.Helper()
 	lonS := strconv.FormatFloat(lon, 'f', -1, 64)
 	latS := strconv.FormatFloat(lat, 'f', -1, 64)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "mqtt1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
-		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &latS, Longitude: &lonS, OccurredTime: occurred},
 		}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

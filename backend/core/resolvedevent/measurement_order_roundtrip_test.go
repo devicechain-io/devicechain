@@ -1,15 +1,14 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package proto
+package resolvedevent
 
 import (
 	"testing"
 	"time"
 
-	"github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,13 +39,13 @@ import (
 //
 // The denormalized fields ride on one entry and not the others, so a shuffle that happened
 // to preserve names is still caught by which entry carries the classifier.
-func descendingSample(occurred time.Time) *model.ResolvedMeasurementsPayload {
+func descendingSample(occurred time.Time) *ResolvedMeasurementsPayload {
 	classifier := uint64(42)
 	unit := "Cel"
 	dataType := "DOUBLE"
-	return &model.ResolvedMeasurementsPayload{
-		Entries: []model.ResolvedMeasurementsEntry{{
-			Entries: []model.ResolvedMeasurementEntry{
+	return &ResolvedMeasurementsPayload{
+		Entries: []ResolvedMeasurementsEntry{{
+			Entries: []ResolvedMeasurementEntry{
 				{Name: "voltage", Value: "3.7"},
 				{Name: "temperature", Value: "21.5", Classifier: &classifier, Unit: &unit, DataType: &dataType},
 				{Name: "pressure", Value: "1013"},
@@ -63,14 +62,14 @@ func descendingSample(occurred time.Time) *model.ResolvedMeasurementsPayload {
 func TestMeasurementPayloadRoundTripCarriesTheProducersOrderVerbatim(t *testing.T) {
 	occurred := at(t, "2026-08-09T14:32:07.125Z")
 
-	encoded, err := MarshalResolvedPayload(esmodel.Measurement, descendingSample(occurred), eventtime.WireCompact)
+	encoded, err := MarshalResolvedPayload(eventtype.Measurement, descendingSample(occurred), eventtime.WireCompact)
 	require.NoError(t, err)
 
-	generic, err := UnmarshalResolvedPayload(esmodel.Measurement, encoded, time.Time{})
+	generic, err := UnmarshalResolvedPayload(eventtype.Measurement, encoded, time.Time{})
 	require.NoError(t, err)
 
-	decoded, ok := generic.(*model.ResolvedMeasurementsPayload)
-	require.True(t, ok, "expected *model.ResolvedMeasurementsPayload, got %T", generic)
+	decoded, ok := generic.(*ResolvedMeasurementsPayload)
+	require.True(t, ok, "expected *ResolvedMeasurementsPayload, got %T", generic)
 	require.Len(t, decoded.Entries, 1)
 
 	got := decoded.Entries[0].Entries
@@ -98,18 +97,18 @@ func TestMeasurementPayloadRoundTripCarriesTheProducersOrderVerbatim(t *testing.
 func TestMeasurementRoundTripPreservesSampleOrder(t *testing.T) {
 	first := at(t, "2026-08-09T14:32:07.125Z")
 	second := at(t, "2026-08-09T14:32:08.250Z")
-	payload := &model.ResolvedMeasurementsPayload{
-		Entries: []model.ResolvedMeasurementsEntry{
-			{Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5"}}, OccurredTime: second},
-			{Entries: []model.ResolvedMeasurementEntry{{Name: "temperature", Value: "21.6"}}, OccurredTime: first},
+	payload := &ResolvedMeasurementsPayload{
+		Entries: []ResolvedMeasurementsEntry{
+			{Entries: []ResolvedMeasurementEntry{{Name: "temperature", Value: "21.5"}}, OccurredTime: second},
+			{Entries: []ResolvedMeasurementEntry{{Name: "temperature", Value: "21.6"}}, OccurredTime: first},
 		},
 	}
 
-	encoded, err := MarshalResolvedPayload(esmodel.Measurement, payload, eventtime.WireCompact)
+	encoded, err := MarshalResolvedPayload(eventtype.Measurement, payload, eventtime.WireCompact)
 	require.NoError(t, err)
-	generic, err := UnmarshalResolvedPayload(esmodel.Measurement, encoded, time.Time{})
+	generic, err := UnmarshalResolvedPayload(eventtype.Measurement, encoded, time.Time{})
 	require.NoError(t, err)
-	decoded := generic.(*model.ResolvedMeasurementsPayload)
+	decoded := generic.(*ResolvedMeasurementsPayload)
 
 	require.Len(t, decoded.Entries, 2)
 	// Deliberately out of time order in the fixture: if the wire (or a future consumer)

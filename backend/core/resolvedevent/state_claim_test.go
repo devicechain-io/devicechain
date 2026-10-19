@@ -1,7 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+package resolvedevent
 
 import (
 	"fmt"
@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"testing"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/presence"
 )
 
@@ -24,9 +23,9 @@ func TestClaimMapsEveryNamedState(t *testing.T) {
 		want  presence.Claim
 		ok    bool
 	}{
-		{string(esmodel.PresenceConnected), presence.ClaimConnected, true},
-		{string(esmodel.PresenceDisconnected), presence.ClaimDisconnected, true},
-		{string(esmodel.PresenceDemoted), presence.ClaimDemoted, true},
+		{string(presence.StateConnected), presence.ClaimConnected, true},
+		{string(presence.StateDisconnected), presence.ClaimDisconnected, true},
+		{string(presence.StateDemoted), presence.ClaimDemoted, true},
 		{"", presence.ClaimUnset, false},
 		{"connected", presence.ClaimUnset, false}, // the wire enum is not case-folded
 		{"RETIRED", presence.ClaimUnset, false},
@@ -50,12 +49,12 @@ func TestClaimMapsEveryNamedState(t *testing.T) {
 
 // TestClaimCoversTheDeclaredVocabulary is the guard the table above cannot be: a table
 // enumerates what its author remembered. The failure this exists for is adding a fourth
-// PresenceState and not teaching the mapper — everything still compiles, every test still
+// presence.State and not teaching the mapper — everything still compiles, every test still
 // passes, and the new state is read as a malformed payload and dropped in production.
 //
 // So the vocabulary is read from the file that DECLARES it. That file is in another
-// module, which Go's test cache does not track, so this test is only honest when run with
-// -count=1 — which CI and the workspace sweep both pass.
+// package (core/presence), read by path rather than imported, because an import cannot
+// enumerate constants. Run with -count=1, as CI and the workspace sweep both do.
 //
 // 🔴 IT PARSES THE SOURCE RATHER THAN GREPPING IT, AND THE DIFFERENCE IS THE WHOLE POINT.
 // A regexp sees one spelling. It misses the idiomatic untyped form inside the same const
@@ -64,7 +63,7 @@ func TestClaimMapsEveryNamedState(t *testing.T) {
 // and a guard that cannot see them is green while the thing it guards is broken — which is
 // exactly the failure it was written to prevent, wearing the guard's own uniform.
 func TestClaimCoversTheDeclaredVocabulary(t *testing.T) {
-	const decl = "../../event-sources/model/events.go"
+	const decl = "../presence/state.go"
 	states := declaredPresenceStates(t, decl)
 	if len(states) < 3 {
 		t.Fatalf("found %d declared presence states in %s (%v); the scan is broken, not the vocabulary",
@@ -78,7 +77,7 @@ func TestClaimCoversTheDeclaredVocabulary(t *testing.T) {
 	}
 }
 
-// declaredPresenceStates returns every string constant declared with the PresenceState
+// declaredPresenceStates returns every string constant declared with the presence.State
 // type in path, including the untyped continuations of a typed const block — which is how
 // Go lets a group share the type written once on its first spec.
 func declaredPresenceStates(t *testing.T, path string) []string {
@@ -104,7 +103,7 @@ func declaredPresenceStates(t *testing.T, path string) []string {
 			}
 			if vs.Type != nil {
 				id, ok := vs.Type.(*ast.Ident)
-				typed = ok && id.Name == "PresenceState"
+				typed = ok && id.Name == "State"
 			}
 			if !typed {
 				continue

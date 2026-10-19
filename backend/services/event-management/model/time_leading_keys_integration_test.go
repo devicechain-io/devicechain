@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -195,7 +195,7 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 	// Through the real writer, in the COMPRESSED range: the first delivery of a new event
 	// adds exactly one row to each table (so the "unchanged" below can see a change), and a
 	// redelivery adds nothing.
-	ev := Event{DeviceToken: "dev-0", EventType: esmodel.Measurement, OccurredTime: older.Add(time.Minute),
+	ev := Event{DeviceToken: "dev-0", EventType: eventtype.Measurement, OccurredTime: older.Add(time.Minute),
 		Source: "lwm2m"}
 	ev.EventId = DeriveEventId("acme", &ev, []byte("temperature=30"))
 	require.False(t, ev.AltId.Valid, "no alternate id: the redelivery is caught by the keys, not the alt-id probe")
@@ -204,7 +204,7 @@ func TestIntegrationTimeLeadingKeysApplyOverCompressedChunks(t *testing.T) {
 			Event: ev, EntryOccurredTime: ev.OccurredTime, Name: "temperature", Value: f64(30)}})
 		require.NoError(t, err)
 		require.NoError(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
-			EventId: ev.EventId, DeviceToken: "dev-0", EventType: esmodel.Measurement,
+			EventId: ev.EventId, DeviceToken: "dev-0", EventType: eventtype.Measurement,
 			OccurredTime: ev.OccurredTime, AnchorType: "customer", AnchorToken: "cust-1"}}))
 	}
 	e0, m0, a0 := count("events"), count("measurement_events"), count("event_anchors")
@@ -721,7 +721,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	// (3) the load-test oracle's shape: a type and a time range, COUNT only.
 	counter.Reset()
 	from, to := seedStart.Add(5*24*time.Hour), seedStart.Add(6*24*time.Hour)
-	_, err = api.Events(ctx, EventSearchCriteria{Pagination: page, EventTypes: []esmodel.EventType{esmodel.Measurement},
+	_, err = api.Events(ctx, EventSearchCriteria{Pagination: page, EventTypes: []eventtype.EventType{eventtype.Measurement},
 		StartTime: &from, EndTime: &to})
 	require.NoError(t, err)
 	scans := explainScans(t, sys, nil, capture(t, counter, "count(*)"))
@@ -789,7 +789,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 		"idx_events_tenant_device_time", "device read COUNT")
 	counter.Reset()
 	res, err = api.Events(ctx, EventSearchCriteria{Pagination: page, DeviceToken: &device,
-		EventTypes: []esmodel.EventType{esmodel.Alert}})
+		EventTypes: []eventtype.EventType{eventtype.Alert}})
 	require.NoError(t, err)
 	require.Len(t, res.Results, 1)
 	requireServedBy(t, sys, explainScans(t, sys, nil, capture(t, counter, "ORDER BY")), "events",

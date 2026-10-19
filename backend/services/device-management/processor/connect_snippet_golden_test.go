@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"os"
 	"strings"
 	"testing"
@@ -218,7 +219,7 @@ func TestConnectSnippetIsAuthorizedAndStoredWhole(t *testing.T) {
 				t.Fatal(err)
 			}
 			stored := 0
-			for _, e := range resolved.(*model.ResolvedMeasurementsPayload).Entries {
+			for _, e := range resolved.(*resolvedevent.ResolvedMeasurementsPayload).Entries {
 				stored += len(e.Entries)
 			}
 			if readings == 0 || stored != readings {

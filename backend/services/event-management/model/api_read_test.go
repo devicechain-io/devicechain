@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -42,7 +42,7 @@ func seedEvent(t *testing.T, api *Api, tenant string, deviceToken string, occurr
 	ctx := core.WithTenant(context.Background(), tenant)
 	ev := &Event{
 		DeviceToken:  deviceToken,
-		EventType:    esmodel.Location,
+		EventType:    eventtype.Location,
 		OccurredTime: occurred,
 		Source:       "test",
 	}

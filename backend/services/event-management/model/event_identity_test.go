@@ -7,17 +7,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 // newIdentityTestApi builds an in-memory sqlite Api carrying the SAME keys production
@@ -48,7 +47,7 @@ func newIdentityTestApi(t *testing.T) *Api {
 func altEvent(device, altId string, occurred time.Time, payload string) Event {
 	ev := Event{
 		DeviceToken:  device,
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: occurred,
 		Source:       "mqtt",
 		AltId:        sql.NullString{String: altId, Valid: altId != ""},
@@ -153,7 +152,7 @@ func TestRedeliveryOfACollidingEventIsStillDeduplicated(t *testing.T) {
 // stops two distinct readings sharing an identity.
 func TestDeriveEventIdIsStableAndContentSensitive(t *testing.T) {
 	occurred := time.Date(2026, 7, 31, 20, 0, 0, 0, time.UTC)
-	base := Event{DeviceToken: "d", EventType: esmodel.Measurement, OccurredTime: occurred,
+	base := Event{DeviceToken: "d", EventType: eventtype.Measurement, OccurredTime: occurred,
 		AltId: sql.NullString{String: "a", Valid: true}}
 	want := DeriveEventId("acme", &base, []byte("p"))
 
@@ -168,7 +167,7 @@ func TestDeriveEventIdIsStableAndContentSensitive(t *testing.T) {
 	assert.NotEqual(t, want, DeriveEventId("acme", &otherDevice, []byte("p")), "device is keyed")
 
 	otherType := base
-	otherType.EventType = esmodel.Alert
+	otherType.EventType = eventtype.Alert
 	assert.NotEqual(t, want, DeriveEventId("acme", &otherType, []byte("p")), "event type is keyed")
 
 	otherTime := base
@@ -202,20 +201,20 @@ func TestDeriveEventIdIsStableAndContentSensitive(t *testing.T) {
 // fix cannot be quietly dropped.
 func TestDeriveEventIdIsOrderSensitiveOverAPayload(t *testing.T) {
 	occurred := time.Date(2026, 7, 31, 20, 0, 0, 0, time.UTC)
-	base := Event{DeviceToken: "d", EventType: esmodel.Measurement, OccurredTime: occurred}
+	base := Event{DeviceToken: "d", EventType: eventtype.Measurement, OccurredTime: occurred}
 
-	ascending := &dmmodel.ResolvedMeasurementsPayload{
-		Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{
+	ascending := &resolvedevent.ResolvedMeasurementsPayload{
+		Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "humidity", Value: "48"},
 				{Name: "temperature", Value: "21.5"},
 			},
 			OccurredTime: occurred,
 		}},
 	}
-	swapped := &dmmodel.ResolvedMeasurementsPayload{
-		Entries: []dmmodel.ResolvedMeasurementsEntry{{
-			Entries: []dmmodel.ResolvedMeasurementEntry{
+	swapped := &resolvedevent.ResolvedMeasurementsPayload{
+		Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "temperature", Value: "21.5"},
 				{Name: "humidity", Value: "48"},
 			},
@@ -245,8 +244,8 @@ func TestDeriveEventIdIsOrderSensitiveOverAPayload(t *testing.T) {
 // device token ending in the delimiter could forge another device's identity.
 func TestDeriveEventIdSeparatesFieldBoundaries(t *testing.T) {
 	occurred := time.Date(2026, 7, 31, 20, 0, 0, 0, time.UTC)
-	a := Event{DeviceToken: "ab", EventType: esmodel.Measurement, OccurredTime: occurred}
-	b := Event{DeviceToken: "a", EventType: esmodel.Measurement, OccurredTime: occurred}
+	a := Event{DeviceToken: "ab", EventType: eventtype.Measurement, OccurredTime: occurred}
+	b := Event{DeviceToken: "a", EventType: eventtype.Measurement, OccurredTime: occurred}
 	assert.NotEqual(t, DeriveEventId("t", &a, []byte("c")), DeriveEventId("t", &b, []byte("bc")),
 		"field boundaries must be unambiguous")
 }

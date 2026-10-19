@@ -25,19 +25,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"sort"
-	"strconv"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"gorm.io/gorm"
+	"os"
+	"sort"
+	"strconv"
+	"testing"
+	"time"
 )
 
 // The fence's callback names, as core/rdb/tenant_fence.go registers them. Stated here
@@ -266,7 +265,7 @@ func BenchmarkFenceCostPersistMeasurementMessage(b *testing.B) {
 				ep, counter, mgr := workers[fence], counters[fence], mgrs[fence]
 				invocation++
 				prefix := fmt.Sprintf("fb-%d-%d", invocation, time.Now().UnixNano())
-				persist := func(ev dmodel.ResolvedEvent) error {
+				persist := func(ev resolvedevent.ResolvedEvent) error {
 					res, err := ep.PersistEvent(ctx, ev)
 					if err != nil {
 						return err
@@ -277,7 +276,7 @@ func BenchmarkFenceCostPersistMeasurementMessage(b *testing.B) {
 					return nil
 				}
 				op := 0
-				next := func() dmodel.ResolvedEvent {
+				next := func() resolvedevent.ResolvedEvent {
 					op++
 					return fenceCostMeasurement(fmt.Sprintf("%s-%d", prefix, op),
 						base.Add(time.Duration(op)*time.Millisecond), c.anchors)
@@ -308,7 +307,7 @@ func BenchmarkFenceCostPersistMeasurementMessage(b *testing.B) {
 				liftOn(b, mgr, probe)
 
 				rtt := medianRTT(b, mgr)
-				events := make([]dmodel.ResolvedEvent, b.N)
+				events := make([]resolvedevent.ResolvedEvent, b.N)
 				for i := range events {
 					events[i] = next()
 				}

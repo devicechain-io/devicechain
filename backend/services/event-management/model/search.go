@@ -7,8 +7,8 @@ import (
 	"database/sql"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -21,7 +21,7 @@ import (
 type EventSearchCriteria struct {
 	rdb.Pagination
 	DeviceToken *string
-	EventTypes  []esmodel.EventType
+	EventTypes  []eventtype.EventType
 	StartTime   *time.Time
 	EndTime     *time.Time
 	AnchorType  *string
@@ -68,7 +68,7 @@ func IsAnchorType(t string) bool {
 type MeasurementAggregationCriteria struct {
 	DeviceToken     *string
 	Name            *string
-	EventTypes      []esmodel.EventType
+	EventTypes      []eventtype.EventType
 	StartTime       *time.Time
 	EndTime         *time.Time
 	AnchorType      *string

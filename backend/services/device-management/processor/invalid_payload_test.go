@@ -6,14 +6,14 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"strings"
 	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -96,7 +96,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUndecodableMessageDeadLetterLo
 	// It still reads as a failure. An undecodable message that stopped saying so would
 	// satisfy every assertion in the test above while being strictly worse than what it
 	// replaced.
-	assert.Equal(suite.T(), uint(dmproto.FailureReason_Invalid), item.event.Reason,
+	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Invalid), item.event.Reason,
 		"the record must still say the message could not be parsed")
 	assert.NotEmpty(suite.T(), item.event.Error, "the record must still carry the decode error")
 	assert.Equal(suite.T(), "tenant1", item.tenant)
@@ -122,7 +122,7 @@ func (suite *InboundEventsProcessorTestSuite) TestUndecodableMessageDeadLetterBo
 	echoed := strings.Repeat("q", 4000) + fixtureCredentialSecret
 	encoded, err := gproto.Marshal(&esproto.PUnresolvedEvent{
 		Device:       "TEST-123",
-		EventType:    int64(esmodel.Location),
+		EventType:    int64(eventtype.Location),
 		OccurredTime: echoed,
 	})
 	require.NoError(suite.T(), err)
@@ -224,6 +224,6 @@ func (suite *InboundEventsProcessorTestSuite) TestResolutionFailureStillDeadLett
 	archived, err := esproto.UnmarshalUnresolvedEvent(item.event.Payload)
 	require.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "TEST-123", archived.Device, "the archived event must still name the device")
-	assert.NotEqual(suite.T(), uint(dmproto.FailureReason_Invalid), item.event.Reason,
+	assert.NotEqual(suite.T(), uint(resolvedevent.FailureReason_Invalid), item.event.Reason,
 		"a resolution failure must not be reported as an unparseable message")
 }

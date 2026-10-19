@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -26,9 +26,9 @@ func TestTheTwoAnchorReadsTogetherCoverEveryDistinctRef(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 7, 6, 20, 0, 0, 0, time.UTC)
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
-		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
-		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"}, // dup target
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"}, // dup target
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -74,7 +74,7 @@ func TestAnchorTargetsPageThroughEveryRefExactlyOnce(t *testing.T) {
 		token := fmt.Sprintf("cust-%04d", i)
 		anchors = append(anchors, &EventAnchor{
 			EventId: anchorEventId(token, occurred), DeviceToken: "device-1",
-			EventType: esmodel.Measurement, OccurredTime: occurred,
+			EventType: eventtype.Measurement, OccurredTime: occurred,
 			AnchorType: "customer", AnchorToken: token,
 		})
 		want["customer|"+token] = true
@@ -133,7 +133,7 @@ func TestDistinctAnchorTenants(t *testing.T) {
 	for _, tenant := range []string{"acme", "globex"} {
 		tctx := core.WithTenant(context.Background(), tenant)
 		if err := api.CreateEventAnchors(tctx, api.RDB.DB(tctx), []*EventAnchor{
-			{EventId: anchorEventId("device-1", occurred), DeviceToken: "device-1", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-1"},
+			{EventId: anchorEventId("device-1", occurred), DeviceToken: "device-1", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-1"},
 		}); err != nil {
 			t.Fatalf("seed %s: %v", tenant, err)
 		}

@@ -7,18 +7,19 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	dmconfig "github.com/devicechain-io/dc-device-management/config"
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
@@ -113,7 +114,7 @@ func (c *presenceChain) resolve(connected bool, session uint64, at time.Time) ([
 }
 
 // apply carries one transition the whole way into the projection and returns the row.
-func (c *presenceChain) apply(connected bool, session uint64, at time.Time) (*model.DeviceState, *dmmodel.ResolvedEvent) {
+func (c *presenceChain) apply(connected bool, session uint64, at time.Time) (*model.DeviceState, *resolvedevent.ResolvedEvent) {
 	c.t.Helper()
 	results, err := c.resolve(connected, session, at)
 	if err != nil {
@@ -122,11 +123,11 @@ func (c *presenceChain) apply(connected bool, session uint64, at time.Time) (*mo
 	if len(results) != 1 {
 		c.t.Fatalf("%s: resolved %d events, want 1", c.producer.name, len(results))
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(results[0].Resolved)
+	encoded, err := resolvedevent.MarshalResolvedEvent(results[0].Resolved)
 	if err != nil {
 		c.t.Fatalf("resolved encode: %v", err)
 	}
-	resolved, err := dmproto.UnmarshalResolvedEvent(encoded)
+	resolved, err := resolvedevent.UnmarshalResolvedEvent(encoded)
 	if err != nil {
 		c.t.Fatalf("resolved decode: %v", err)
 	}
@@ -184,7 +185,7 @@ func TestADisabledDevicesConnectionEndingShowsInItsPresence(t *testing.T) {
 			// Its own data is still refused while it is disabled.
 			now := time.Now().UTC()
 			_, _, err := c.resolver.ResolveEvent(c.ctx, &esmodel.UnresolvedEvent{
-				Source: producer.source, Device: disabledTestDevice, EventType: esmodel.Measurement,
+				Source: producer.source, Device: disabledTestDevice, EventType: eventtype.Measurement,
 				OccurredTime: now, ProcessedTime: now,
 				Payload: &esmodel.UnresolvedMeasurementsPayload{
 					Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"temp": "21.5"}}},

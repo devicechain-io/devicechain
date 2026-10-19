@@ -1,13 +1,25 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package model
+// Package resolvedevent is the wire contract of the resolved-event stream: the envelope
+// device-management publishes once per resolved event, its per-event-type payloads, and the
+// failed-event envelope, with the protobuf codec for each (marshal.go, and resolved_wire.go,
+// the hand-written fast path for the envelope). It lives in core so the consumers of the
+// stream (event-management, device-state, event-processing, notification-management, ...)
+// read it without importing the producer, and so the producer cannot drift from them: both
+// sides compile against this one definition.
+//
+// The generated code (dc-resolved-events.pb.go) shares its protobuf package with
+// device-management's own events file, so no message name, and no byte on the wire,
+// differs from when both lived there. main_wire_golden_test.go holds the bytes of that
+// time against today's marshaller.
+package resolvedevent
 
 import (
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventidentity"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/presence"
 )
 
@@ -157,7 +169,7 @@ type ResolvedAlertsPayload struct {
 }
 
 // Payload with a resolved device presence transition (ADR-067). State is a validated
-// PresenceState (CONNECTED|DISCONNECTED|DEMOTED) — read it through Claim() below and
+// presence.State (CONNECTED|DISCONNECTED|DEMOTED) — read it through Claim() below and
 // never by comparing it to one value, because DEMOTED is not a connectivity claim at all
 // and a comparison answers "is this device up?" for it anyway. SessionId is the parsed
 // producer-supplied monotonic session id (a host-observed connect epoch). The
@@ -188,11 +200,11 @@ type ResolvedStateChangePayload struct {
 // and the caller must dispose of it as one, never guess.
 func (p *ResolvedStateChangePayload) Claim() (presence.Claim, bool) {
 	switch p.State {
-	case string(esmodel.PresenceConnected):
+	case string(presence.StateConnected):
 		return presence.ClaimConnected, true
-	case string(esmodel.PresenceDisconnected):
+	case string(presence.StateDisconnected):
 		return presence.ClaimDisconnected, true
-	case string(esmodel.PresenceDemoted):
+	case string(presence.StateDemoted):
 		return presence.ClaimDemoted, true
 	default:
 		return presence.ClaimUnset, false
@@ -262,7 +274,7 @@ type ResolvedEvent struct {
 	SourceDeviceDisabled bool
 	OccurredTime         time.Time
 	ProcessedTime        time.Time
-	EventType            esmodel.EventType
+	EventType            eventtype.EventType
 	Payload              interface{}
 }
 

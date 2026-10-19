@@ -6,6 +6,7 @@ package processor
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"slices"
 	"strings"
 	"testing"
@@ -134,8 +135,8 @@ func TestKeepingStoredCalculatedValuesFailsParity(t *testing.T) {
 
 // addOnlyWhereAbsent is the rejected design: keep the stored derived entries and append a
 // draft value only for a key with none.
-func addOnlyWhereAbsent(draft model.ProfileResolution, stored []model.ResolvedMeasurementEntry,
-	obs model.CalculationObserver) []model.ResolvedMeasurementEntry {
+func addOnlyWhereAbsent(draft model.ProfileResolution, stored []resolvedevent.ResolvedMeasurementEntry,
+	obs model.CalculationObserver) []resolvedevent.ResolvedMeasurementEntry {
 	have := map[string]bool{}
 	for _, e := range stored {
 		if e.Derived {
@@ -148,7 +149,7 @@ func addOnlyWhereAbsent(draft model.ProfileResolution, stored []model.ResolvedMe
 			out = append(out, e)
 		}
 	}
-	slices.SortFunc(out, func(a, b model.ResolvedMeasurementEntry) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(out, func(a, b resolvedevent.ResolvedMeasurementEntry) int { return strings.Compare(a.Name, b.Name) })
 	return out
 }
 

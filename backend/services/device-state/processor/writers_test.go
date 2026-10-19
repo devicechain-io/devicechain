@@ -7,18 +7,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-device-state/config"
+	"github.com/devicechain-io/dc-device-state/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/prometheus/client_golang/prometheus"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	"github.com/devicechain-io/dc-device-state/config"
-	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // gatedMergeApi holds every merge until gate is closed, and records how many were held at
@@ -85,11 +83,11 @@ func TestTheProjectionRunsTheConfiguredNumberOfWriters(t *testing.T) {
 			// More messages than any row's writers, so the writers are the limit: with fewer,
 			// the default row would measure the message count instead.
 			for i := 0; i < 12; i++ {
-				encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
+				encoded, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 					SourceDeviceToken: fmt.Sprintf("dev-%d", i),
-					EventType:         esmodel.Alert,
+					EventType:         eventtype.Alert,
 					OccurredTime:      time.Date(2026, 9, 20, 12, 0, i, 0, time.UTC),
-					Payload:           &dmmodel.ResolvedAlertsPayload{},
+					Payload:           &resolvedevent.ResolvedAlertsPayload{},
 				})
 				if err != nil {
 					t.Fatalf("marshal: %v", err)

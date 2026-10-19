@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/wirecontract"
 )
@@ -38,13 +40,13 @@ var payloadContracts = map[string]struct {
 	file    string
 	structs map[string]any
 }{
-	model.Measurement.String(): {"measurement-payload.schema.json", map[string]any{
+	eventtype.Measurement.String(): {"measurement-payload.schema.json", map[string]any{
 		"": model.UnresolvedMeasurementsPayload{}, "/$defs/entry": model.UnresolvedMeasurementsEntry{}}},
-	model.Location.String(): {"location-payload.schema.json", map[string]any{
+	eventtype.Location.String(): {"location-payload.schema.json", map[string]any{
 		"": model.UnresolvedLocationsPayload{}, "/$defs/entry": model.UnresolvedLocationEntry{}}},
-	model.Alert.String(): {"alert-payload.schema.json", map[string]any{
+	eventtype.Alert.String(): {"alert-payload.schema.json", map[string]any{
 		"": model.UnresolvedAlertsPayload{}, "/$defs/entry": model.UnresolvedAlertEntry{}}},
-	model.NewRelationship.String(): {"new-relationship-payload.schema.json", map[string]any{
+	eventtype.NewRelationship.String(): {"new-relationship-payload.schema.json", map[string]any{
 		"": model.UnresolvedNewRelationshipPayload{}}},
 }
 
@@ -142,11 +144,11 @@ func TestEventTypeEnumIsWhatTheDecoderAccepts(t *testing.T) {
 // minimalPayload is the smallest payload the decoder accepts for an event type.
 func minimalPayload(eventType string) string {
 	switch eventType {
-	case model.Measurement.String():
+	case eventtype.Measurement.String():
 		return `{"entries":[{"measurements":{"t":"1"}}]}`
-	case model.Location.String():
+	case eventtype.Location.String():
 		return `{"entries":[{"latitude":"1","longitude":"2"}]}`
-	case model.Alert.String():
+	case eventtype.Alert.String():
 		return `{"entries":[{"type":"x"}]}`
 	default:
 		return `{"relationshipType":"r","targetType":"device","target":"d"}`
@@ -203,7 +205,7 @@ func TestNewRelationshipKeysAreTheOnesTheDecoderReads(t *testing.T) {
 		payload[name] = "value-of-" + name
 	}
 	raw, _ := json.Marshal(payload)
-	built, err := decodeType(model.NewRelationship.String(), string(raw))
+	built, err := decodeType(eventtype.NewRelationship.String(), string(raw))
 	if err != nil {
 		t.Fatal(err)
 	}
