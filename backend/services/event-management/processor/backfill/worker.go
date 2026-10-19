@@ -89,6 +89,9 @@ type hooks struct {
 	beforeCommit func(ctx context.Context, tx *gorm.DB) error
 	// afterCommit runs after a batch's transaction committed.
 	afterCommit func(ctx context.Context) error
+	// beforeInsert runs inside a batch's transaction with the derived rows a flush is about to
+	// insert, after the read that found them missing: the window a live write can race.
+	beforeInsert func(ctx context.Context, rows []*model.MeasurementEvent)
 	// afterSkipCheck runs after a window passed its skip checks and before it is worked.
 	afterSkipCheck func(ctx context.Context, db *gorm.DB, w chunkWindow)
 	// refresh replaces the rollup refresh itself.

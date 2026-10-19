@@ -357,7 +357,15 @@ func TestIntegrationCompressionBetweenCheckAndInsertIsMapped(t *testing.T) {
 		}
 		return nil
 	}
-	j := r.runUntilDone("j")
+	// Every pass succeeds: the mapped error is a skipped window, not a failed pass that the
+	// next pass happens to get past because the chunk is compressed by then.
+	for i := 0; i < 50; i++ {
+		require.NoError(t, w.RunOnce(context.Background()), "pass %d", i)
+		if s := r.job("j").Status; s != model.BackfillQueued && s != model.BackfillRunning {
+			break
+		}
+	}
+	j := r.job("j")
 	require.Equal(t, model.BackfillSucceeded, j.Status, "%v", j.Failure)
 	require.True(t, compressed)
 	assert.EqualValues(t, 1, j.WindowsCompressed, "the window that compressed under it is counted compressed")
@@ -716,5 +724,72 @@ func TestIntegrationAnInputRepeatedWithTwoValuesIsAmbiguous(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(3), skips["ambiguous"], "one per selected key of the ambiguous sample: %v", skips)
 	assert.Equal(t, int64(3), j.Samples)
+	assert.Equal(t, j.Written+j.AlreadyPresent, j.Computed)
+}
+
+// A live write that lands between the fill's read and its insert holds the same canonical row,
+// so the insert affects nothing. Those rows are counted present, not written: written is the
+// rows THIS job stored, and computed still reconciles as written + alreadyPresent.
+func TestIntegrationALiveWriteRacingTheInsertCountsAsPresent(t *testing.T) {
+	r := newRig(t, "race")
+	now := time.Now().UTC()
+	r.twoDevices(now)
+	w := r.build()
+	r.newJob("j", now.Add(-72*time.Hour), now)
+	var raced int64
+	w.hooks.beforeInsert = func(ctx context.Context, rows []*model.MeasurementEvent) {
+		if raced > 0 {
+			return
+		}
+		// The first flush's rows are written by "live" on another connection, committed before
+		// the fill's insert runs.
+		n, err := model.InsertDerivedMeasurementRows(r.tdb(), rows)
+		require.NoError(t, err)
+		require.Equal(t, int64(len(rows)), n)
+		raced = n
+	}
+	j := r.runUntilDone("j")
+	require.Equal(t, model.BackfillSucceeded, j.Status, "%v", j.Failure)
+	require.NotZero(t, raced)
+	stored := int64(len(r.derived("d-a", "d-b")))
+	assert.Equal(t, stored-raced, j.Written, "only what the job itself stored is written")
+	assert.Equal(t, raced, j.AlreadyPresent, "the raced rows are present")
+	assert.Equal(t, j.Written+j.AlreadyPresent, j.Computed)
+}
+
+// A derived row stored before the canonical derived identity carries a different payload id
+// than the fill would compute, so the insert's conflict cannot catch it. The read's present
+// check does: the sample already holds the key by name, it is counted present, and no second
+// row is written beside the old one.
+func TestIntegrationAnOldIdDerivedRowIsNotDuplicated(t *testing.T) {
+	r := newRig(t, "oldid")
+	now := time.Now().UTC()
+	t1 := now.Add(-2 * time.Hour).Truncate(time.Second).Add(123456789)
+	r.seed("d", []message{{[]entry{{t1, "voltage", "230.5"}, {t1, "current", "10.25"}}}}, nil, nil)
+	// The old row: the same event, name and instant, under the value-keyed id a raw row has.
+	var parent model.MeasurementEvent
+	require.NoError(t, r.tdb().Where("device_token = ? AND name = ?", "d", "voltage").Take(&parent).Error)
+	cls := uint64(5)
+	old, err := model.MeasurementRequestFor(model.Event{EventId: parent.EventId, DeviceToken: "d",
+		EventType: parent.EventType, OccurredTime: parent.OccurredTime}, t1,
+		model.MeasurementReading{Name: "power", Value: "2362.625", Classifier: &cls})
+	require.NoError(t, err)
+	_, rows, err := model.BuildMeasurementRows([]*model.MeasurementEventCreateRequest{old})
+	require.NoError(t, err)
+	n, err := model.InsertDerivedMeasurementRows(r.tdb(), rows)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), n)
+
+	r.roster.devices = []RosterEntry{device(1, "d", now.Add(-100*24*time.Hour), fptr(2))}
+	r.build()
+	r.newJob("j", now.Add(-72*time.Hour), now)
+	j := r.runUntilDone("j")
+	require.Equal(t, model.BackfillSucceeded, j.Status, "%v", j.Failure)
+	var powers int64
+	require.NoError(t, r.tdb().Model(&model.MeasurementEvent{}).
+		Where("device_token = ? AND name = ?", "d", "power").Count(&powers).Error)
+	assert.Equal(t, int64(1), powers, "the old row is the only power row")
+	assert.Equal(t, int64(1), j.AlreadyPresent, "power is present")
+	assert.Equal(t, int64(2), j.Written, "kw and flag are filled")
 	assert.Equal(t, j.Written+j.AlreadyPresent, j.Computed)
 }

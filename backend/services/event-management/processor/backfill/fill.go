@@ -336,6 +336,9 @@ func (r *jobRun) fillDevice(ctx context.Context, tx *gorm.DB, e RosterEntry, ev 
 		if err != nil {
 			return err
 		}
+		if r.w.hooks.beforeInsert != nil {
+			r.w.hooks.beforeInsert(ctx, rows)
+		}
 		n, err := model.InsertDerivedMeasurementRows(tx, rows)
 		if err != nil {
 			return err
