@@ -6,7 +6,6 @@ package service
 import (
 	"context"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -233,21 +232,6 @@ func TestTheHooksRunInTheGapsBetweenConstructions(t *testing.T) {
 			"user-management's identity manager are built here and would take a nil")
 }
 
-// freePort asks the operating system for a port nothing is listening on.
-//
-// The GraphQL manager's own ephemeral-port sentinel is unexported on purpose, so a test
-// outside that package cannot name it. Binding a real free port is the honest way to drive
-// ExecuteStart here: if the port is taken between the close and the bind, the start fails
-// loudly rather than the test passing over a server that never came up.
-func freePort(t *testing.T) int32 {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	port := l.Addr().(*net.TCPAddr).Port
-	require.NoError(t, l.Close())
-	return int32(port)
-}
-
 // recordingPhases returns callbacks that append to a shared log, so the ORDER of a walk is
 // recorded data rather than something inferred afterwards from the managers' states.
 func recordingPhases(log *[]string, name string) core.LifecycleCallbacks {
@@ -269,7 +253,7 @@ func recordingPhases(log *[]string, name string) core.LifecycleCallbacks {
 //
 // Two real managers is enough to observe direction, which is what makes this testable here
 // despite Managers holding concrete types with no seam for fakes: the broker manager runs
-// against an embedded server, and the GraphQL manager binds a port the OS just handed us
+// against an embedded server, and the GraphQL manager binds an ephemeral port of its own
 // rather than the service's fixed one.
 func TestTheWalkGoesForwardToComeUpAndBackwardToGoDown(t *testing.T) {
 	host, port := startEmbeddedNats(t)
@@ -286,7 +270,7 @@ func TestTheWalkGoesForwardToComeUpAndBackwardToGoDown(t *testing.T) {
 	gql := gqlcore.NewGraphQLManager(ms, recordingPhases(&log, "graphql"),
 		gqlcore.MustParseSchema(probeSchema, &probeResolver{}),
 		map[gqlcore.ContextKey]interface{}{}, ms.Readiness)
-	gql.Port = freePort(t)
+	gql.Port = -1 // the manager binds an ephemeral port itself (its sentinel is unexported); nothing reads the port back
 	require.NoError(t, gql.Initialize(context.Background()))
 
 	svc := FromManagers(ms, Managers{Nats: nats, GraphQL: gql})

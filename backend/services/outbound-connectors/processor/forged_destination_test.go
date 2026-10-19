@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/egress"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/secrets"
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/devicechain-io/dc-outbound-connectors/model"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -99,15 +100,12 @@ func TestForgedUnixConnectorIsInvalidAndNeverDialed(t *testing.T) {
 // broker may be back on the next delivery. Dead-lettering it as `invalid` throws away a
 // dispatch that a retry would have delivered.
 func TestAKafkaBrokerThatIsDownIsRetried(t *testing.T) {
-	// A port that was open a moment ago and is now closed: connection refused.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := ln.Addr().String()
-	require.NoError(t, ln.Close())
+	// An address that refuses connections, held for the test so nothing else can take it.
+	addr := dctest.RefusingAddr(t)
 
 	e, api := newRealPublishExecutor(t, "127.0.0.1/32")
 	ctx := core.WithTenant(context.Background(), "acme")
-	_, err = api.CreateConnector(ctx, &model.ConnectorCreateRequest{
+	_, err := api.CreateConnector(ctx, &model.ConnectorCreateRequest{
 		Token: "k", Type: "kafka", Config: `{"addresses":["` + addr + `"],"topic":"t"}`,
 	})
 	require.NoError(t, err)
@@ -124,10 +122,7 @@ func TestAKafkaBrokerThatIsDownIsRetried(t *testing.T) {
 // with the destination allowed but nothing listening is an ordinary, retryable failure — a
 // classifier that called every publish failure blocked would pass the first half alone.
 func TestABlockedPublishIsTerminalNotRetryable(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-	addr := ln.Addr().String()
-	require.NoError(t, ln.Close())
+	addr := dctest.RefusingAddr(t)
 
 	for _, typ := range []struct{ name, config string }{
 		{"mqtt", `{"urls":["tcp://` + addr + `"],"topic":"t"}`},

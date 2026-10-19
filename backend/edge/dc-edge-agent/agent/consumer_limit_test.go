@@ -84,9 +84,9 @@ func TestStockBrokerStillCapsQoS1Subscriptions(t *testing.T) {
 	if testing.Short() {
 		t.Skip("opens 1,050 JetStream consumers")
 	}
-	port := freePort(t)
-	srv := newCloudBroker(t, port, dctest.JetStreamStoreDir(t))
+	srv := newCloudBroker(t, -1, dctest.JetStreamStoreDir(t))
 	t.Cleanup(srv.Shutdown)
+	port := dctest.MQTTPort(t, srv)
 
 	granted, refused := subscribeQoS1(t, fmt.Sprintf("127.0.0.1:%d", port), "stock", qos1Subscriptions)
 	if granted != 1000 || refused != qos1Subscriptions-1000 {

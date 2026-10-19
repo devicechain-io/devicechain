@@ -13,12 +13,12 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -329,10 +329,10 @@ func TestAHostWithOneRefusedAndOneReachableAddressConnects(t *testing.T) {
 	} else {
 		t.Logf("[::1]:%s is not bindable here (%v); the guard refuses it before connect regardless", ln.port(), err)
 	}
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	// A port that refuses, held for the test: a released probe port could be taken by another
+	// process's listener before the dial below.
+	_, downPort, err := net.SplitHostPort(dctest.RefusingAddr(t))
 	require.NoError(t, err)
-	downPort := strconv.Itoa(closed.Addr().(*net.TCPAddr).Port)
-	require.NoError(t, closed.Close())
 
 	withFakeDNS(t, map[string][]netip.Addr{
 		"dual.test": {netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
