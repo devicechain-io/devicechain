@@ -39,7 +39,8 @@ import (
 //     durable's filter matches. If it is at or below the drain cut, the durable is not drained.
 //     The answer is only taken from a leader that holds the whole cut (its last sequence is at
 //     or above it) and that was the leader both before and after the get.
-//   - A SETTLED CLUSTER. The store and the durable each have a leader, every replica is
+//   - A SETTLED CLUSTER, for the store scan below (a floor at or past the cut needs none).
+//     The store and the durable each have a leader, every replica is
 //     online and current, and as many replicas as configured are reported. A pass that finds
 //     less does not finish and the next pass looks again: finishing late costs duplicates
 //     (both copies of a publish are forwarded meanwhile), finishing early costs loss. The
@@ -89,6 +90,29 @@ func (nmgr *NatsManager) mqttDurableDrained(ctx context.Context, d MqttFailClose
 func (nmgr *NatsManager) mqttDurableDrainedOnce(ctx context.Context, d MqttFailClosedDurable, drainTo uint64) (
 	mqttDrainVerdict, bool, error) {
 	opt := nats.Context(ctx)
+	ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
+	if errors.Is(err, nats.ErrConsumerNotFound) {
+		return mqttDrainVerdict{}, true, nil
+	}
+	if err != nil {
+		return mqttDrainVerdict{}, false, fmt.Errorf("reading the platform durable %s on %s: %w", d.Name, MqttMessageStore, err)
+	}
+	// THE ACK FLOOR IS TRUSTED BEFORE THE CLUSTER IS: a leader that is behind reports it lower,
+	// never higher, so a floor at or past the cut is true whatever state the replicas are in. Asked
+	// after the settled check, a durable fully acked past the cut was held forever by a replica
+	// that never comes back.
+	//
+	// The floor is the consumer leader's in-memory one (nats-server 2.15 consumer.go). Besides
+	// acks, the broker moves it only past sequences no reader of this durable can be handed
+	// any more: ones its leader's own copy of the store no longer holds (checkAckFloor after an
+	// eviction or a catch-up compaction, a purge), and ones terminated at MaxDeliver; or to the
+	// stream's end when a DeliverNew durable is created anew (that loses its predecessor's backlog
+	// at the creation, not here). None of those waits on a settled cluster, so the settled check
+	// never guarded them: deleting such a durable loses nothing it could still have delivered.
+	floor := ci.AckFloor.Stream
+	if floor >= drainTo {
+		return mqttDrainVerdict{drained: true, why: fmt.Sprintf("acked up to %d, at or past the cut %d", floor, drainTo)}, false, nil
+	}
 	before, err := nmgr.js.StreamInfo(MqttMessageStore, opt)
 	if err != nil {
 		return mqttDrainVerdict{}, false, fmt.Errorf("reading %s: %w", MqttMessageStore, err)
@@ -97,19 +121,8 @@ func (nmgr *NatsManager) mqttDurableDrainedOnce(ctx context.Context, d MqttFailC
 	if why := unsettledGroup(before.Cluster, replicas, true); why != "" {
 		return mqttDrainVerdict{unsettled: true, why: MqttMessageStore + ": " + why}, false, nil
 	}
-	ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
-	if errors.Is(err, nats.ErrConsumerNotFound) {
-		return mqttDrainVerdict{}, true, nil
-	}
-	if err != nil {
-		return mqttDrainVerdict{}, false, fmt.Errorf("reading the platform durable %s on %s: %w", d.Name, MqttMessageStore, err)
-	}
 	if why := unsettledGroup(ci.Cluster, consumerReplicas(ci, replicas), true); why != "" {
 		return mqttDrainVerdict{unsettled: true, why: d.Name + ": " + why}, false, nil
-	}
-	floor := ci.AckFloor.Stream
-	if floor >= drainTo {
-		return mqttDrainVerdict{drained: true, why: fmt.Sprintf("acked up to %d, at or past the cut %d", floor, drainTo)}, false, nil
 	}
 	if before.State.LastSeq < drainTo {
 		// A leader whose copy does not reach the cut cannot say what is below it.

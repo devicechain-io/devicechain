@@ -206,3 +206,62 @@ func TestTheWatchExportsEachPlatformDurablesBacklog(t *testing.T) {
 	require.Zero(t, testutil.CollectAndCount(m.durablePending), "a missing store's durables kept their backlog")
 	require.Zero(t, testutil.CollectAndCount(m.durableAckPending), "a missing store's durables kept their backlog")
 }
+
+// 🔴 A POD CLOCK AHEAD OF THE BROKER'S DOES NOT AGE A PENDING STORE. A pod with the setting off
+// gives a store left on the pending subject the gateway's subjects back once it is old enough
+// that no pass can still be finishing it; judged by the pod's clock against the broker's
+// creation time, a pod running minutes ahead would do it in the middle of a pass, and the
+// gateway would then take its copies with no durable interested in them. The age is the
+// broker's: its creation time against its own time stamp.
+//
+// GUARD: kills an age taken from the pod's clock (an hour ahead here, as the fallback also
+// is), whichever way the clock is read.
+func TestAPodClockAheadOfTheBrokerDoesNotAgeAPendingStore(t *testing.T) {
+	fastMqttStoreLookup(t)
+	b := startGuardBroker(t)
+	_, err := b.js.AddStream(&nats.StreamConfig{Name: MqttMessageStore, Subjects: []string{mqttFailClosedPendingSubject},
+		Storage: nats.FileStorage, Retention: nats.InterestPolicy, MaxBytes: fcHotBytes})
+	require.NoError(t, err)
+	off := failClosedManager(t, b.nc, b.js, guardInstance, false)
+	off.mqttClock = func() time.Time { return time.Now().Add(time.Hour) }
+	n := off.Microservice.InstanceConfiguration.Infrastructure.Nats
+
+	age, err := off.mqttStoreAge(context.Background())
+	require.NoError(t, err)
+	require.Less(t, age, mqttFailClosedPendingAbandon, "premise: the broker reports the store as just created")
+	require.NoError(t, off.ReconcileMqttStores(context.Background(), n.MqttStoreMaxBytes, n.MqttQoS2StoreMaxBytes))
+	require.Equal(t, []string{mqttFailClosedPendingSubject}, b.storeInfo().Config.Subjects,
+		"a pod clock an hour ahead handed a store a pass may still be finishing its subjects")
+	off.checkMqttStoreBounds(context.Background(), nil, mqttWatchBounds(n.MqttStoreMaxBytes, n.MqttQoS2StoreMaxBytes))
+	require.Equal(t, []string{mqttFailClosedPendingSubject}, b.storeInfo().Config.Subjects,
+		"the bound watch aged a store by a pod clock an hour ahead")
+}
+
+// brokerAge is the answer's creation time against the answer's own time stamp, never the
+// pod's clock; the pod's clock stands in only when the answer carries no time stamp.
+//
+// GUARD: kills an age measured against the pod's clock when the broker reports one.
+func TestBrokerAgeIsTheAnswersOwnClock(t *testing.T) {
+	b := startGuardBroker(t)
+	stamp := time.Date(2030, 1, 1, 12, 0, 0, 0, time.UTC)
+	reply := func(body string) func(*nats.Msg) {
+		return func(m *nats.Msg) { _ = m.Respond([]byte(body)) }
+	}
+	sub, err := b.nc.Subscribe("test.age.stamped", reply(
+		`{"created":"`+stamp.Add(-90*time.Second).Format(time.RFC3339Nano)+`","ts":"`+stamp.Format(time.RFC3339Nano)+`"}`))
+	require.NoError(t, err)
+	defer sub.Unsubscribe()
+	sub2, err := b.nc.Subscribe("test.age.unstamped", reply(`{"created":"`+stamp.Add(-90*time.Second).Format(time.RFC3339Nano)+`"}`))
+	require.NoError(t, err)
+	defer sub2.Unsubscribe()
+	require.NoError(t, b.nc.Flush(), "the replies are registered before they are asked for")
+	nmgr := failClosedManager(t, b.nc, b.js, guardInstance, false)
+	nmgr.mqttClock = func() time.Time { return stamp.Add(time.Hour) }
+
+	age, err := nmgr.brokerAge(context.Background(), "test.age.stamped", "x")
+	require.NoError(t, err)
+	require.Equal(t, 90*time.Second, age)
+	age, err = nmgr.brokerAge(context.Background(), "test.age.unstamped", "x")
+	require.NoError(t, err)
+	require.Equal(t, time.Hour+90*time.Second, age, "without a time stamp the pod's clock stands in")
+}
