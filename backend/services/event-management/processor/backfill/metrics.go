@@ -10,7 +10,7 @@ import (
 
 // Metrics are the operator's view of backfill. Their labels are bounded: neither a tenant
 // nor a job is ever one (the job read and the logs carry those), and a skip reason is one of
-// calcfield's closed set.
+// calcfield's closed set or skipAmbiguous.
 type Metrics struct {
 	// Pass is the periodic task's own pass metrics.
 	Pass             *core.PeriodicTaskMetrics

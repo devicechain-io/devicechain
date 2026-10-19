@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -476,6 +477,32 @@ func TestIntegrationInertWithNoJobs(t *testing.T) {
 	var n int64
 	require.NoError(t, r.sys().Model(&model.MeasurementEvent{}).Count(&n).Error)
 	assert.Zero(t, n)
+
+	// Another holder of the instance lock (a second replica's worker) makes this one decline the
+	// pass, and a queued job is left exactly as it was: not claimed, not touched.
+	now := time.Now().UTC()
+	r.twoDevices(now)
+	r.newJob("j", now.Add(-72*time.Hour), now)
+	sqldb, err := r.mgr.Database.DB()
+	require.NoError(t, err)
+	holder, err := sqldb.Conn(context.Background())
+	require.NoError(t, err)
+	defer holder.Close()
+	var got bool
+	require.NoError(t, holder.QueryRowContext(context.Background(), "SELECT pg_try_advisory_lock($1)",
+		rdb.AdvisoryLockKey(lockName)).Scan(&got))
+	require.True(t, got)
+	assert.ErrorIs(t, w.RunOnce(context.Background()), core.ErrPassSkipped)
+	j := r.job("j")
+	assert.Equal(t, model.BackfillQueued, j.Status)
+	assert.Zero(t, j.ClaimEpoch)
+	assert.Empty(t, r.derived("d-a", "d-b"))
+
+	// Released, the next pass takes the job.
+	_, err = holder.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", rdb.AdvisoryLockKey(lockName))
+	require.NoError(t, err)
+	require.NoError(t, w.RunOnce(context.Background()))
+	assert.Equal(t, int64(1), r.job("j").ClaimEpoch)
 }
 
 // A roster that cannot be read leaves the job RUNNING and retried; after an hour of it the job
@@ -637,4 +664,57 @@ func TestIntegrationPolicyReachMatchesTheLivePolicy(t *testing.T) {
 		`WHERE proc_name = 'policy_refresh_continuous_aggregate'`).Scan(&startOffset).Error)
 	require.Equal(t, "30 days", startOffset, "the policy reaches back %s", startOffset)
 	assert.Equal(t, 30*24*time.Hour, rollupPolicyReach)
+}
+
+// A message that carried one input twice at one instant with different values stored both rows,
+// and storage cannot say which came first, which is the one live read. The sample is skipped
+// and counted as ambiguous for each selected key, never filled with either value; the same
+// repeat with EQUAL values is no ambiguity and fills. A clean sample beside them still fills.
+func TestIntegrationAnInputRepeatedWithTwoValuesIsAmbiguous(t *testing.T) {
+	r := newRig(t, "ambig")
+	now := time.Now().UTC()
+	t1 := now.Add(-2 * time.Hour).Truncate(time.Second)
+	t2 := now.Add(-3 * time.Hour).Truncate(time.Second)
+	t3 := now.Add(-4 * time.Hour).Truncate(time.Second)
+	r.seed("d", []message{
+		{[]entry{{t1, "voltage", "230"}, {t1, "voltage", "231"}, {t1, "current", "10"}}},
+		{[]entry{{t2, "voltage", "100"}, {t2, "current", "2"}}},
+	}, nil, nil)
+	// Equal values: a second row exists only if something else about it differs, so seed the
+	// repeat with a different classifier through a request of its own.
+	ev := model.Event{EventId: []byte("equal-repeat-event-id-0000000000"), DeviceToken: "d",
+		EventType: esmodel.Measurement, OccurredTime: t3, Source: "mqtt", ProcessedTime: now}
+	var reqs []*model.MeasurementEventCreateRequest
+	for _, x := range []struct {
+		name, value string
+		cls         uint64
+	}{{"voltage", "50", 1}, {"voltage", "50", 99}, {"current", "4", 2}} {
+		cls := x.cls
+		req, err := model.MeasurementRequestFor(ev, t3, model.MeasurementReading{Name: x.name, Value: x.value, Classifier: &cls})
+		require.NoError(t, err)
+		reqs = append(reqs, req)
+	}
+	_, err := r.api.CreateMeasurementEvents(r.ctx(), r.tdb(), reqs)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), r.countRows("d"), "both repeated readings are stored, in both samples")
+
+	r.roster.devices = []RosterEntry{device(1, "d", now.Add(-100*24*time.Hour), fptr(2))}
+	r.build()
+	r.newJob("j", now.Add(-72*time.Hour), now)
+	j := r.runUntilDone("j")
+	require.Equal(t, model.BackfillSucceeded, j.Status, "%v", j.Failure)
+
+	at := func(x time.Time) string { return x.UTC().Format(time.RFC3339Nano) }
+	got := map[string][]string{}
+	for _, x := range r.derived("d") {
+		got[x.At] = append(got[x.At], x.Name)
+	}
+	assert.Empty(t, got[at(t1)], "neither value of the repeated input is used")
+	assert.ElementsMatch(t, []string{"power", "kw", "flag"}, got[at(t2)], "a clean sample fills")
+	assert.ElementsMatch(t, []string{"power", "kw", "flag"}, got[at(t3)], "an equal repeat is no ambiguity")
+	skips, err := j.SkippedCounts()
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), skips["ambiguous"], "one per selected key of the ambiguous sample: %v", skips)
+	assert.Equal(t, int64(3), j.Samples)
+	assert.Equal(t, j.Written+j.AlreadyPresent, j.Computed)
 }

@@ -307,6 +307,10 @@ func (r *jobRun) workWindow(ctx context.Context, entries []RosterEntry, evals []
 	return nil
 }
 
+// skipAmbiguous is the skip reason of a selected key in a sample that holds one of its inputs
+// twice with different values (see evaluate). It is the one reason that is not calcfield's.
+const skipAmbiguous = "ambiguous"
+
 // sampleKey identifies a sample: the readings of one event that share one instant.
 type sampleKey struct {
 	eventId  string
@@ -409,13 +413,34 @@ func (r *jobRun) evaluate(ev *model.PlanEvaluator, e RosterEntry, sample []model
 	local *acc) ([]*model.MeasurementEventCreateRequest, error) {
 	ev.Begin()
 	var present []string
+	ambiguous := false
 	for i := range sample {
 		row := &sample[i]
 		if r.selected[row.Name] {
 			present = append(present, row.Name)
 			continue
 		}
+		// 🔴 ONE INPUT, TWO VALUES AT ONE INSTANT. A message that carried a name twice at an
+		// instant with different values stored both rows (a raw row's identity includes its
+		// value). Live read the FIRST in message order; storage keeps no message order, and the
+		// rows arrive here by payload id, which is a hash. Taking either would write a value
+		// live may never have computed, permanently (fill-only), so the sample is skipped and
+		// counted instead. Rows of a sample come ordered by name, so a repeat is adjacent.
+		if i > 0 && sample[i-1].Name == row.Name && sample[i-1].Value != row.Value {
+			ambiguous = true
+		}
 		ev.Add(row.Name, row.Value)
+	}
+	if ambiguous {
+		for _, k := range r.keys {
+			if containsString(present, k) {
+				local.d.Computed++
+				local.d.AlreadyPresent++
+				continue
+			}
+			local.skips[skipAmbiguous]++
+		}
+		return nil, nil
 	}
 	first := &sample[0]
 	var out []*model.MeasurementEventCreateRequest
