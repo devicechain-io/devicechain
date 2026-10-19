@@ -147,7 +147,7 @@ func TestDerivedMeasurementPayloadPreimageIsPinned(t *testing.T) {
 	assert.NotEqual(t, got, third, "two calculated metrics of one sample are two rows")
 
 	later := *request
-	later.EntryOccurredTime = preimageOccurred.Add(time.Nanosecond)
+	later.EntryOccurredTime = preimageOccurred.Add(time.Microsecond)
 	fourth, err := DeriveMeasurementPayloadId(&later)
 	require.NoError(t, err)
 	assert.NotEqual(t, got, fourth, "two samples of one event are two rows")

@@ -222,3 +222,28 @@ func TestStreamedMeasurementsCarryDistinctPersistedIds(t *testing.T) {
 	assert.Equal(t, want, temp.PayloadId,
 		"a streamed reading must carry the identity its persisted row will have")
 }
+
+// A streamed DERIVED reading is named by the canonical instant (UTC, microseconds), so it
+// carries the id the persisted row has and the id a re-derivation from the stored row gets,
+// for a nanosecond instant and for one with a zone offset.
+func TestStreamedDerivedMeasurementIdIsCanonicalInstant(t *testing.T) {
+	resolved := &dmmodel.ResolvedEvent{
+		SourceDeviceToken: identityDevice, OccurredTime: identityOccurred,
+		EventType: esmodel.Measurement, Source: "mqtt",
+	}
+	for name, at := range map[string]time.Time{
+		"ns":        time.Date(2026, 9, 4, 9, 59, 0, 123456789, time.UTC),
+		"ns+02:00":  time.Date(2026, 9, 4, 11, 59, 0, 123456789, time.FixedZone("", 2*3600)),
+		"canonical": time.Date(2026, 9, 4, 9, 59, 0, 123456000, time.UTC),
+	} {
+		live, err := measurementFromResolved("tenant1", resolved,
+			dmmodel.ResolvedMeasurementsEntry{OccurredTime: at},
+			dmmodel.ResolvedMeasurementEntry{Name: "p", Value: "2.5", Derived: true})
+		require.NoError(t, err, name)
+		reDerived, err := measurementFromResolved("tenant1", resolved,
+			dmmodel.ResolvedMeasurementsEntry{OccurredTime: model.CanonicalEntryInstant(at)},
+			dmmodel.ResolvedMeasurementEntry{Name: "p", Value: "2.5", Derived: true})
+		require.NoError(t, err, name)
+		assert.Equal(t, live.PayloadId, reDerived.PayloadId, name)
+	}
+}
