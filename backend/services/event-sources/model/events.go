@@ -10,23 +10,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/presence"
 )
 
-// EventType and its constants are declared in core/eventtype, where the resolved-event wire
-// contract can reach them; these aliases keep this package the name every event-sources
-// caller already uses.
-type EventType = eventtype.EventType
-
-// Enumeration of event types.
-const (
-	NewRelationship   = eventtype.NewRelationship
-	Location          = eventtype.Location
-	Measurement       = eventtype.Measurement
-	Alert             = eventtype.Alert
-	StateChange       = eventtype.StateChange
-	CommandInvocation = eventtype.CommandInvocation
-	CommandResponse   = eventtype.CommandResponse
-)
-
-var EventTypesByName map[string]EventType
+var EventTypesByName map[string]eventtype.EventType
 
 // Unresolved event details.
 type UnresolvedEvent struct {
@@ -41,7 +25,7 @@ type UnresolvedEvent struct {
 	// broker append time where there is one, else the moment it was decoded. It is
 	// identical on every redelivery of a captured message.
 	ProcessedTime time.Time
-	EventType     EventType
+	EventType     eventtype.EventType
 	Payload       interface{}
 
 	// Credential presented by the connecting device (ADR-014). When set, the
@@ -238,12 +222,12 @@ type UnresolvedStateChangePayload struct {
 
 // Initializer.
 func init() {
-	EventTypesByName = make(map[string]EventType)
-	EventTypesByName[NewRelationship.String()] = NewRelationship
-	EventTypesByName[Location.String()] = Location
-	EventTypesByName[Measurement.String()] = Measurement
-	EventTypesByName[Alert.String()] = Alert
-	EventTypesByName[StateChange.String()] = StateChange
-	EventTypesByName[CommandInvocation.String()] = CommandInvocation
-	EventTypesByName[CommandResponse.String()] = CommandResponse
+	EventTypesByName = make(map[string]eventtype.EventType)
+	EventTypesByName[eventtype.NewRelationship.String()] = eventtype.NewRelationship
+	EventTypesByName[eventtype.Location.String()] = eventtype.Location
+	EventTypesByName[eventtype.Measurement.String()] = eventtype.Measurement
+	EventTypesByName[eventtype.Alert.String()] = eventtype.Alert
+	EventTypesByName[eventtype.StateChange.String()] = eventtype.StateChange
+	EventTypesByName[eventtype.CommandInvocation.String()] = eventtype.CommandInvocation
+	EventTypesByName[eventtype.CommandResponse.String()] = eventtype.CommandResponse
 }

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -123,7 +125,7 @@ func TestTheEmittedDemotionCarriesTheArgumentSourceNotThisService(t *testing.T) 
 	if ev.Device != "mqtt1-dev-000" {
 		t.Errorf("Device = %q, want mqtt1-dev-000", ev.Device)
 	}
-	if ev.EventType != esmodel.StateChange {
+	if ev.EventType != eventtype.StateChange {
 		t.Errorf("EventType = %v, want StateChange", ev.EventType)
 	}
 	if !ev.AuthenticatedTransport {

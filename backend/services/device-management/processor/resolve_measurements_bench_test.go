@@ -15,6 +15,8 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
@@ -65,7 +67,7 @@ func calcBenchProfile(n int) model.ProfileResolution {
 func calcBenchEvent() *esmodel.UnresolvedEvent {
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	return &esmodel.UnresolvedEvent{
-		Source: "bench", Device: "METER-1", EventType: esmodel.Measurement,
+		Source: "bench", Device: "METER-1", EventType: eventtype.Measurement,
 		OccurredTime: at, ProcessedTime: at,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{
 			Measurements: map[string]string{"voltage": "230.5", "current": "12.25", "temp": "81.25", "fan": "0"},

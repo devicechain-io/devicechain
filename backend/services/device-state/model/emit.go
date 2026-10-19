@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -138,7 +140,7 @@ func (e *DemotionEmitter) EmitDemotion(ctx context.Context, source, deviceToken 
 	uev := &esmodel.UnresolvedEvent{
 		Source:        source,
 		Device:        deviceToken,
-		EventType:     esmodel.StateChange,
+		EventType:     eventtype.StateChange,
 		OccurredTime:  occurred,
 		ProcessedTime: e.now().UTC(),
 		// The event is minted by a platform service, not received from a device, so it

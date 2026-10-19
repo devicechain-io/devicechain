@@ -7,8 +7,8 @@ import (
 	"context"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
@@ -81,7 +81,7 @@ func (suite *EventPersistenceProcessorTestSuite) TestProcessingLoopNonEof() {
 }
 
 // Build resolved event with the given payload.
-func buildResolvedEvent(etype esmodel.EventType, payload interface{}) *resolvedevent.ResolvedEvent {
+func buildResolvedEvent(etype eventtype.EventType, payload interface{}) *resolvedevent.ResolvedEvent {
 	altid := "alternateId"
 	return &resolvedevent.ResolvedEvent{
 		Source:            "mysource",
@@ -110,7 +110,7 @@ func buildLocationsEvent() *resolvedevent.ResolvedEvent {
 	loc := &resolvedevent.ResolvedLocationsPayload{
 		Entries: entries,
 	}
-	return buildResolvedEvent(esmodel.Location, loc)
+	return buildResolvedEvent(eventtype.Location, loc)
 }
 
 // Build a measurements event.
@@ -137,7 +137,7 @@ func buildMeasurementsEvent() *resolvedevent.ResolvedEvent {
 	loc := &resolvedevent.ResolvedMeasurementsPayload{
 		Entries: entries,
 	}
-	return buildResolvedEvent(esmodel.Measurement, loc)
+	return buildResolvedEvent(eventtype.Measurement, loc)
 }
 
 // Build an alerts event.
@@ -153,7 +153,7 @@ func buildAlertsEvent() *resolvedevent.ResolvedEvent {
 	alert := &resolvedevent.ResolvedAlertsPayload{
 		Entries: entries,
 	}
-	return buildResolvedEvent(esmodel.Alert, alert)
+	return buildResolvedEvent(eventtype.Alert, alert)
 }
 
 // Build a state change (presence) event. Unlike the others it carries NO AltId — a
@@ -165,7 +165,7 @@ func buildStateChangeEvent() *resolvedevent.ResolvedEvent {
 		Reason:    "lifetime-lapse",
 		SessionId: 42,
 	}
-	ev := buildResolvedEvent(esmodel.StateChange, sc)
+	ev := buildResolvedEvent(eventtype.StateChange, sc)
 	ev.AltId = nil
 	return ev
 }

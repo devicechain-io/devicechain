@@ -14,9 +14,9 @@ import (
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/deadletter"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	nats "github.com/nats-io/nats.go"
@@ -163,7 +163,7 @@ func TestAReplayedDetectionIsStoredOnceAndNeverLettered(t *testing.T) {
 		at := start.Add(time.Duration(i) * 20 * time.Millisecond)
 		ev := &resolvedevent.ResolvedEvent{
 			Source: "http1", SourceDeviceToken: fmt.Sprintf("d%03d", i), ProfileVersionToken: "p@1",
-			OccurredTime: at, ProcessedTime: at, EventType: esmodel.Measurement,
+			OccurredTime: at, ProcessedTime: at, EventType: eventtype.Measurement,
 			Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 				OccurredTime: at, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: "90"}},
 			}}},

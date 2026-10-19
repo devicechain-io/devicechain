@@ -8,7 +8,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"time"
 )
@@ -154,7 +154,7 @@ func (reg *RuleRegistry) Plan(seq uint64, tenant string, ev *resolvedevent.Resol
 	// measurement/heartbeat path (BuildInputs returns nil for it, so a DISCONNECT can't reset an
 	// absence timer). Translating here in Plan — not in the persist loop — means the ADR-053
 	// preview runner, which also calls Plan, previews connectivity rules for free.
-	if ev.EventType == esmodel.StateChange {
+	if ev.EventType == eventtype.StateChange {
 		res.planConnectivity(seq, ev, occurred, scoped)
 		return res
 	}

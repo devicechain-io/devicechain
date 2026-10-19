@@ -19,8 +19,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/jackc/pgx/v5"
@@ -159,7 +159,7 @@ func seedEventStore(t *testing.T, db *gorm.DB, tenants []string, devices, stamps
   FROM unnest(string_to_array(?::text, ',')) AS tn,
        generate_series(0, ?::int - 1) d, generate_series(0, ?::int - 1) g)
 `
-	args := []any{start, step.Seconds(), int(esmodel.Alert), int(esmodel.Measurement),
+	args := []any{start, step.Seconds(), int(eventtype.Alert), int(eventtype.Measurement),
 		strings.Join(tenants, ","), devices, stamps}
 	for table, insert := range map[string]string{
 		"events": `INSERT INTO "event-management".events

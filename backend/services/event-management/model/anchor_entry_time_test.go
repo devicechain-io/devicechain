@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,7 +36,7 @@ func TestAnAnchorSearchFindsEveryReadingOfABatch(t *testing.T) {
 
 	parent := Event{
 		DeviceToken:   "device-4",
-		EventType:     esmodel.Measurement,
+		EventType:     eventtype.Measurement,
 		OccurredTime:  envelope,
 		Source:        "mqtt",
 		ProcessedTime: envelope,
@@ -52,7 +52,7 @@ func TestAnAnchorSearchFindsEveryReadingOfABatch(t *testing.T) {
 	// One anchor for the whole event, stamped at the envelope — the shape the persistence
 	// worker writes.
 	require.NoError(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
-		EventId: parent.EventId, DeviceToken: "device-4", EventType: esmodel.Measurement,
+		EventId: parent.EventId, DeviceToken: "device-4", EventType: eventtype.Measurement,
 		OccurredTime: envelope, AnchorType: "customer", AnchorToken: "cust-3",
 	}}))
 
@@ -84,9 +84,9 @@ func TestAnAnchorSearchStillExcludesUnanchoredEvents(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
 
-	anchored := Event{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, Source: "mqtt"}
+	anchored := Event{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, Source: "mqtt"}
 	anchored.EventId = DeriveEventId("acme", &anchored, nil)
-	other := Event{DeviceToken: "device-9", EventType: esmodel.Measurement, OccurredTime: occurred, Source: "mqtt"}
+	other := Event{DeviceToken: "device-9", EventType: eventtype.Measurement, OccurredTime: occurred, Source: "mqtt"}
 	other.EventId = DeriveEventId("acme", &other, nil)
 
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{
@@ -95,7 +95,7 @@ func TestAnAnchorSearchStillExcludesUnanchoredEvents(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{{
-		EventId: anchored.EventId, DeviceToken: "device-4", EventType: esmodel.Measurement,
+		EventId: anchored.EventId, DeviceToken: "device-4", EventType: eventtype.Measurement,
 		OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3",
 	}}))
 
@@ -120,7 +120,7 @@ func TestACreateRequestWithNoEntryTimeIsRefused(t *testing.T) {
 	api := newPersistenceTestApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
-	parent := Event{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, Source: "mqtt"}
+	parent := Event{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, Source: "mqtt"}
 	parent.EventId = DeriveEventId("acme", &parent, nil)
 
 	_, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx), []*MeasurementEventCreateRequest{

@@ -16,6 +16,7 @@ import (
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/rs/zerolog"
@@ -79,7 +80,7 @@ func locationFixEvent(deviceToken string) *esmodel.UnresolvedEvent {
 	return &esmodel.UnresolvedEvent{
 		Source:    "test-source",
 		Device:    deviceToken,
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload: &esmodel.UnresolvedLocationsPayload{
 			Entries: []esmodel.UnresolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		},
@@ -255,7 +256,7 @@ func TestNonLocationEventDoesNotConsultTheDeclaration(t *testing.T) {
 	measurement := &esmodel.UnresolvedEvent{
 		Source:    "test-source",
 		Device:    "TRACKER-1",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"temp": "42"}}},
 		},

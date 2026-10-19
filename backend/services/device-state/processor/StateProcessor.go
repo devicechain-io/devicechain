@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"github.com/devicechain-io/dc-device-state/config"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -437,9 +437,9 @@ func (sp *StateProcessor) admit(ctx context.Context, msg messaging.Message) (pen
 	// location is a data event like any other, so it is still a liveness heartbeat. A device
 	// that only ever reports its position must not be swept inactive for saying nothing.
 	switch event.EventType {
-	case esmodel.Measurement:
+	case eventtype.Measurement:
 		update.Measurements = measurementInputs(event)
-	case esmodel.Location:
+	case eventtype.Location:
 		update.Locations = locationInputs(event)
 	}
 	return pendingMerge{msg: msg, ctx: msgctx, event: event, update: update, done: done}, true
@@ -550,7 +550,7 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 	}
 
 	// For a measurement event, also advance the per-key latest-value projection.
-	if event.EventType == esmodel.Measurement {
+	if event.EventType == eventtype.Measurement {
 		if err := sp.retryOnConflict(p.ctx, func() error {
 			return sp.Api.MergeLatestMeasurements(p.ctx, u.DeviceToken, u.Measurements)
 		}); err != nil {
@@ -561,7 +561,7 @@ func (sp *StateProcessor) mergeAdmitted(p pendingMerge) {
 
 	// For a location event, also advance the last-known-position projection (in addition
 	// to the device state above: a location is a liveness heartbeat too).
-	if event.EventType == esmodel.Location {
+	if event.EventType == eventtype.Location {
 		if err := sp.retryOnConflict(p.ctx, func() error {
 			return sp.Api.MergeLatestLocations(p.ctx, u.DeviceToken, u.Locations)
 		}); err != nil {
@@ -836,7 +836,7 @@ func (sp *StateProcessor) ExecuteTerminate(context.Context) error {
 // field simply never arrives. A test that rebuilt this mapping itself would agree with
 // whatever the mapping forgot. See TestARegressedSessionSurvivesTheWholeChain.
 func presenceTransitionFor(event *resolvedevent.ResolvedEvent) (*model.PresenceTransition, error) {
-	if event.EventType != esmodel.StateChange {
+	if event.EventType != eventtype.StateChange {
 		return nil, nil
 	}
 	p, ok := event.Payload.(*resolvedevent.ResolvedStateChangePayload)

@@ -5,7 +5,7 @@ package model
 
 import (
 	"encoding/json"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,7 +50,7 @@ const meterRawJSON = `{"Entries":[{"Entries":[` +
 	`"OccurredTime":"2026-10-16T12:00:00Z"}]}`
 
 func meterEvent() *Event {
-	return &Event{DeviceToken: "meter-1", EventType: esmodel.Measurement, OccurredTime: calcOccurred, Source: "lwm2m"}
+	return &Event{DeviceToken: "meter-1", EventType: eventtype.Measurement, OccurredTime: calcOccurred, Source: "lwm2m"}
 }
 
 // (a) A payload with no calculated value hashes to the id it had before the change: the

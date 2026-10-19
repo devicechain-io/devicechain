@@ -18,9 +18,9 @@ import (
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -96,7 +96,7 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 	start, end := at(0).Truncate(time.Hour), at(0).Truncate(time.Hour).Add(time.Hour)
 	buckets, err := api.BucketedMeasurements(ctx, model.MeasurementAggregationCriteria{DeviceToken: &device,
 		Name: &name, StartTime: &start, EndTime: &end, IntervalSeconds: 3600,
-		EventTypes: []esmodel.EventType{esmodel.Measurement}})
+		EventTypes: []eventtype.EventType{eventtype.Measurement}})
 	require.NoError(t, err)
 	require.Len(t, buckets, 1)
 	assert.EqualValues(t, 3, buckets[0].Count)

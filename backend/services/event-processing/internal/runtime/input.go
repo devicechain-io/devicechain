@@ -12,7 +12,7 @@ package runtime
 import (
 	"github.com/devicechain-io/dc-event-processing/internal/detect/predicate"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math"
 	"strconv"
@@ -56,7 +56,7 @@ import (
 // those edges into alarms. So a StateChange feeds exactly one rule kind, by a path that cannot touch
 // an absence timer — which is the whole point of keeping it out of the Input stream.
 func BuildInputs(ev *resolvedevent.ResolvedEvent, occurred time.Time) []predicate.Input {
-	if ev.EventType == esmodel.StateChange {
+	if ev.EventType == eventtype.StateChange {
 		return nil
 	}
 	// Collapse to one anchor per type by taking the LOWEST token, not the first one seen. A device

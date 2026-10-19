@@ -5,7 +5,7 @@ package runtime
 
 import (
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
@@ -18,7 +18,7 @@ func stateChange(tenant, device, profileVersion string, occurred time.Time, stat
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
-		EventType:           esmodel.StateChange,
+		EventType:           eventtype.StateChange,
 		Payload:             &resolvedevent.ResolvedStateChangePayload{State: state, SessionId: session},
 	}
 }

@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -113,7 +113,7 @@ func newColumnarBatch(rng *rand.Rand, base time.Time) *columnarBatch {
 		if rng.Intn(3) == 0 {
 			altId = ptr(fmt.Sprintf("alt-%d-%d", e, rng.Int63()))
 		}
-		parent := func(kind esmodel.EventType) Event {
+		parent := func(kind eventtype.EventType) Event {
 			id := sha256.Sum256([]byte(fmt.Sprintf("%d/%d/%d", e, kind, rng.Int63())))
 			return Event{EventId: id[:], DeviceToken: device, EventType: kind, OccurredTime: at,
 				Source: []string{"mqtt", "", "nats"}[rng.Intn(3)], AltId: rdb.NullStrOf(altId),
@@ -121,7 +121,7 @@ func newColumnarBatch(rng *rand.Rand, base time.Time) *columnarBatch {
 		}
 		switch rng.Intn(3) {
 		case 0:
-			ev := parent(esmodel.Measurement)
+			ev := parent(eventtype.Measurement)
 			var reqs []*MeasurementEventCreateRequest
 			for m := 0; m < 1+rng.Intn(21); m++ {
 				var classifier *uint
@@ -144,7 +144,7 @@ func newColumnarBatch(rng *rand.Rand, base time.Time) *columnarBatch {
 			}
 			b.measurements = append(b.measurements, reqs)
 		case 1:
-			ev := parent(esmodel.Location)
+			ev := parent(eventtype.Location)
 			f := func() *float64 {
 				if rng.Intn(4) == 0 {
 					return nil
@@ -154,14 +154,14 @@ func newColumnarBatch(rng *rand.Rand, base time.Time) *columnarBatch {
 			b.locations = append(b.locations, []*LocationEventCreateRequest{{Event: ev, EntryOccurredTime: at,
 				Latitude: f(), Longitude: f(), Elevation: f(), Accuracy: f(), Speed: f(), Heading: f()}})
 		default:
-			ev := parent(esmodel.Alert)
+			ev := parent(eventtype.Alert)
 			b.alerts = append(b.alerts, []*AlertEventCreateRequest{{Event: ev, EntryOccurredTime: at,
 				Type: "overheat", Level: uint32(rng.Intn(5)), Message: "hot <&>", Source: "rule"}})
 		}
 		var anchors []*EventAnchor
 		for a := 0; a < rng.Intn(3); a++ {
 			anchors = append(anchors, &EventAnchor{EventId: []byte(fmt.Sprintf("anchor-ev-%d", e)),
-				DeviceToken: device, EventType: esmodel.Measurement, OccurredTime: at,
+				DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: at,
 				AnchorType: []string{"customer", "area", "asset"}[a], AnchorToken: fmt.Sprintf("tok-%d", rng.Intn(4))})
 		}
 		b.anchors = append(b.anchors, anchors)
@@ -355,7 +355,7 @@ func TestColumnarWriteRefusesWhatValuesWriteRefuses(t *testing.T) {
 	// numeric(20,8) holds twelve integer digits.
 	for _, bad := range []float64{1e15 + 0.123456789, 1e12, -1e12} {
 		build := func() *EventRows {
-			ev := Event{EventId: []byte(fmt.Sprintf("bad-%v", bad)), DeviceToken: "d", EventType: esmodel.Measurement,
+			ev := Event{EventId: []byte(fmt.Sprintf("bad-%v", bad)), DeviceToken: "d", EventType: eventtype.Measurement,
 				OccurredTime: at, ProcessedTime: at}
 			parents, ms, err := BuildMeasurementRows([]*MeasurementEventCreateRequest{
 				{Event: ev, EntryOccurredTime: at, Name: "ok", Value: ptr(1.0)},
@@ -383,7 +383,7 @@ func TestColumnarWriteRefusesAMismatchedRow(t *testing.T) {
 	db := api.RDB.Database
 	at := time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)
 	build := func() *EventRows {
-		ev := Event{EventId: []byte("mixed"), DeviceToken: "d", EventType: esmodel.Measurement,
+		ev := Event{EventId: []byte("mixed"), DeviceToken: "d", EventType: eventtype.Measurement,
 			OccurredTime: at, ProcessedTime: at}
 		parents, ms, err := BuildMeasurementRows([]*MeasurementEventCreateRequest{
 			{Event: ev, EntryOccurredTime: at, Name: "a", Value: ptr(1.0)},
@@ -412,7 +412,7 @@ func TestColumnarWriteRefusesAMismatchedRow(t *testing.T) {
 func TestColumnarWriteRefusesNoTenant(t *testing.T) {
 	api := newPostgresApi(t, "itcolumnarnotenant")
 	at := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
-	ev := Event{EventId: []byte("orphan"), DeviceToken: "d", EventType: esmodel.Measurement, OccurredTime: at}
+	ev := Event{EventId: []byte("orphan"), DeviceToken: "d", EventType: eventtype.Measurement, OccurredTime: at}
 	parents, ms, err := BuildMeasurementRows([]*MeasurementEventCreateRequest{
 		{Event: ev, EntryOccurredTime: at, Name: "a", Value: ptr(1.0)}})
 	require.NoError(t, err)
@@ -493,7 +493,7 @@ func TestColumnarWriteRefusesAClassifierAboveTheBigintRange(t *testing.T) {
 	at := time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)
 	big := uint(math.MaxInt64) + 5
 	build := func() *EventRows {
-		ev := Event{EventId: []byte("classified"), DeviceToken: "d", EventType: esmodel.Measurement,
+		ev := Event{EventId: []byte("classified"), DeviceToken: "d", EventType: eventtype.Measurement,
 			OccurredTime: at, ProcessedTime: at}
 		parents, ms, err := BuildMeasurementRows([]*MeasurementEventCreateRequest{
 			{Event: ev, EntryOccurredTime: at, Name: "m", Value: ptr(1.0), Classifier: &big}})

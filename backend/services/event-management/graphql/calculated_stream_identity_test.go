@@ -5,7 +5,7 @@ package graphql
 
 import (
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +32,7 @@ func TestAStreamedCalculatedValueCarriesItsPersistedIds(t *testing.T) {
 		return &resolvedevent.ResolvedEvent{
 			SourceDeviceToken: identityDevice,
 			OccurredTime:      identityOccurred,
-			EventType:         esmodel.Measurement,
+			EventType:         eventtype.Measurement,
 			Source:            "mqtt",
 			Payload:           &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{entry}},
 		}, entry
@@ -45,7 +45,7 @@ func TestAStreamedCalculatedValueCarriesItsPersistedIds(t *testing.T) {
 	// The event id is the reading's without its calculated value.
 	rawOnly, _ := resolvedWith(raw)
 	parent := model.Event{DeviceToken: identityDevice, OccurredTime: identityOccurred, Source: "mqtt",
-		EventType: esmodel.Measurement}
+		EventType: eventtype.Measurement}
 	eventId, err := model.DeriveEventIdForPayload("tenant1", &parent, rawOnly.Payload)
 	require.NoError(t, err)
 	assert.Equal(t, eventId, streamed.EventId, "a calculated value must not move the streamed reading's event id")

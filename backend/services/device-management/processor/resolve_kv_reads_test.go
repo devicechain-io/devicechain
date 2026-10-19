@@ -19,6 +19,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
@@ -255,7 +256,7 @@ func (r *resolveRig) resolve(event *esmodel.UnresolvedEvent) *resolvedevent.Reso
 func tempEvent(value string) *esmodel.UnresolvedEvent {
 	return &esmodel.UnresolvedEvent{
 		Device:    "dev",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"temp": value}}},
 		},
@@ -266,7 +267,7 @@ func devLocationEvent() *esmodel.UnresolvedEvent {
 	lat, lon := "33.7490", "-84.3880"
 	return &esmodel.UnresolvedEvent{
 		Device:    "dev",
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload: &esmodel.UnresolvedLocationsPayload{
 			Entries: []esmodel.UnresolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		},

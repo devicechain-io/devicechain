@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -54,7 +55,7 @@ func resolveLocations(t *testing.T, entries ...esmodel.UnresolvedLocationEntry) 
 	event := &esmodel.UnresolvedEvent{
 		Source:       "test-source",
 		Device:       "TEST-123",
-		EventType:    esmodel.Location,
+		EventType:    eventtype.Location,
 		OccurredTime: envelopeTime,
 		Payload:      &esmodel.UnresolvedLocationsPayload{Entries: entries},
 	}
@@ -196,7 +197,7 @@ func TestResolveLocationsRejectsWrongPayloadType(t *testing.T) {
 	event := &esmodel.UnresolvedEvent{
 		Source:    "test-source",
 		Device:    "TEST-123",
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload:   &esmodel.UnresolvedMeasurementsPayload{},
 	}
 	resolved, err := locationResolver().ResolveLocationsEventPayload(context.Background(), nil, nil, event)
