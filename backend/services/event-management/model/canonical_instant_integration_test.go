@@ -15,11 +15,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// What the database does with a sub-microsecond instant it is handed, with no Go-side
+// What the write path does with a sub-microsecond instant it is handed, with no Go-side
 // truncation in front of it. This is the probe behind the S8-0 release note: it decides
 // whether a raw row redelivered across the deploy could be stored at a different
 // occurred_time than the one it already has. The row is inserted through the column-array
 // path directly, bypassing BuildMeasurementRows.
+//
+// The truncation is the DRIVER's, not the server's: pgx encodes a timestamptz parameter in
+// binary as Unix()*1e6 + Nanosecond()/1000 microseconds, so the server never sees the
+// sub-microsecond digits and the result does not depend on the Postgres major. Only the
+// text encoding (the simple query protocol, which the DSN this service builds never
+// selects) hands the server nine digits, and the server ROUNDS those. If this probe ever
+// reads back .000001Z, the protocol changed under it, and raw rows stored before S8-0 no
+// longer match what S8-0 stores.
 func TestIntegrationDatabaseHandlingOfSubMicrosecondInstant(t *testing.T) {
 	api := newPostgresApi(t, "s80probe")
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -34,7 +42,7 @@ func TestIntegrationDatabaseHandlingOfSubMicrosecondInstant(t *testing.T) {
 	require.NoError(t, api.RDB.DB(ctx).Where("name = ?", "temp").First(&got).Error)
 	t.Logf("handed %s, read back %s", at.Format(time.RFC3339Nano), got.OccurredTime.UTC().Format(time.RFC3339Nano))
 	assert.True(t, got.OccurredTime.UTC().Equal(time.Date(2026, 10, 19, 10, 0, 0, 0, time.UTC)),
-		"the database TRUNCATES a .000000999Z instant (rounding would read back .000001Z)")
+		"the write path TRUNCATES a .000000999Z instant (rounding would read back .000001Z)")
 }
 
 // Both arrival orders against the real unique index: a derived value persisted from the
