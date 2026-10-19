@@ -421,8 +421,8 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 // already rejected it upstream. profile is the event's one profile read, the same one
 // validation read.
 //
-// A version with calculated metrics (ADR-082) also has each sample entry's formulas
-// evaluated against that entry's own values and appended as Derived entries, and a value a
+// A version with calculated metrics (ADR-082) also has each sample's formulas
+// evaluated against that sample (the message's entries sharing an instant) and appended as Derived entries, and a value a
 // device sent under a calculated key dropped in favour of the computed one. See
 // model/profile_calculation.go; a version with none pays one compare per event.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
@@ -446,13 +446,17 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		// device never rewrites it.
 		constants = profile.DeviceConstants(device.Metadata)
 	}
+	// Calculated metrics read a SAMPLE, and a sample is every measurement of this message that
+	// shares an instant — not one payload entry. Sparkplug and LwM2M ingest emit one entry per
+	// metric, so a formula over two of them would never see both if each entry were its own
+	// sample. groups holds one open Calculation per distinct instant, in first-seen order.
+	var groups []calcGroup
 	for _, umsentry := range mpayload.Entries {
-		rmentries := make([]model.ResolvedMeasurementEntry, 0)
-		var calc model.Calculation
+		occurred := rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime)
+		rmentries := make([]model.ResolvedMeasurementEntry, 0, len(umsentry.Measurements))
+		var grp *calcGroup
 		if calculated {
-			// Sized for the calculated values too, so appending them does not regrow it.
-			rmentries = make([]model.ResolvedMeasurementEntry, 0, len(umsentry.Measurements)+profile.CalculatedCount())
-			calc = profile.BeginCalculation(constants)
+			grp = findCalcGroup(&groups, occurred, len(rmsentries), profile, constants)
 		}
 		for mxkey, mxvalue := range umsentry.Measurements {
 			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
@@ -494,7 +498,7 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				}
 				if calculated {
 					// The value as the device sent it, parsed once as its declared type.
-					calc.Set(&def, mxvalue)
+					grp.set(&def, mxkey, mxvalue)
 				}
 			} else if f, err := strconv.ParseFloat(mxvalue, 64); err != nil {
 				// Undeclared and non-numeric: a measurement stores in the numeric
@@ -512,15 +516,25 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 			}
 			rmentries = append(rmentries, rmentry)
 		}
-		if calculated {
-			// Computed from THIS sample entry only, under the event's own profile version,
-			// and appended before the sort so a calculated value takes its place in the
-			// canonical order like any other entry. Event identity does not see it
-			// (ResolvedMeasurementsPayload.IdentityView), so the event id stays a function of
-			// what the device sent alone.
-			rmentries = calc.Append(rmentries, &rez.calcObs)
-			calc.Release()
+		rmsentry := model.ResolvedMeasurementsEntry{
+			Entries:      rmentries,
+			OccurredTime: occurred,
 		}
+		rmsentries = append(rmsentries, rmsentry)
+	}
+	// Computed from the SAMPLE (every entry of this message at one instant), under the event's
+	// own profile version, and appended before the sort so a calculated value takes its place
+	// in the canonical order like any other entry. A derived value rides on the FIRST entry of
+	// its sample, so a message of per-metric entries gains them without gaining an entry.
+	// Event identity does not see them (ResolvedMeasurementsPayload.IdentityView), so the event
+	// id stays a function of what the device sent alone.
+	for i := range groups {
+		g := &groups[i]
+		rmsentries[g.first].Entries = g.calc.Append(rmsentries[g.first].Entries, &rez.calcObs)
+		g.calc.Release()
+	}
+	for i := range rmsentries {
+		rmentries := rmsentries[i].Entries
 		// 🔴 SORT BY NAME, AND IT IS LOAD-BEARING — not a tidiness pass.
 		//
 		// The loop above ranges a MAP, and Go randomises map iteration, so without this
@@ -555,14 +569,67 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		slices.SortFunc(rmentries, func(a, b model.ResolvedMeasurementEntry) int {
 			return strings.Compare(a.Name, b.Name)
 		})
-		rmsentry := model.ResolvedMeasurementsEntry{
-			Entries:      rmentries,
-			OccurredTime: rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime),
-		}
-		rmsentries = append(rmsentries, rmsentry)
 	}
 	rmpayload.Entries = rmsentries
 	return rmpayload, nil
+}
+
+// instantKey is a sample's instant as a comparable map key.
+type instantKey struct {
+	sec  int64
+	nsec int
+}
+
+// calcGroup is one open sample: the Calculation for every measurement of a message that shares
+// an instant, and the index (in the resolved entries) of the first entry that carries it,
+// which is where the derived values are appended.
+type calcGroup struct {
+	at    instantKey
+	first int
+	calc  model.Calculation
+	// names is the names already recorded into this sample. Nil until a second entry joins the
+	// group (the common one-entry sample pays nothing); then it holds the first entry's names.
+	names map[string]struct{}
+	// firstNames is the first entry's measured names, kept to seed set.
+	firstNames []string
+}
+
+// findCalcGroup returns the open sample for instant occurred, opening it (as the entry at
+// index idx) if this is the first entry at that instant.
+func findCalcGroup(groups *[]calcGroup, occurred time.Time, idx int, profile model.ProfileResolution,
+	constants []calcfield.Constant) *calcGroup {
+	k := instantKey{sec: occurred.Unix(), nsec: occurred.Nanosecond()}
+	for i := range *groups {
+		if (*groups)[i].at == k {
+			g := &(*groups)[i]
+			if g.names == nil {
+				g.names = make(map[string]struct{}, len(g.firstNames)+4)
+				for _, n := range g.firstNames {
+					g.names[n] = struct{}{}
+				}
+			}
+			return g
+		}
+	}
+	*groups = append(*groups, calcGroup{at: k, first: idx, calc: profile.BeginCalculation(constants)})
+	return &(*groups)[len(*groups)-1]
+}
+
+// set records a measured input into the sample. A name already recorded at this instant keeps
+// its FIRST value, in message order. That is this sample's rule, not storage's: both raw values
+// are still stored (a raw row's identity includes its value), and the preview, which reads stored
+// rows back in payload-id order, can pick the other one. Only a device that sends one metric
+// twice at one instant with two different values sees the difference.
+func (g *calcGroup) set(def *model.ResolvedMetric, name, raw string) {
+	if g.names != nil {
+		if _, dup := g.names[name]; dup {
+			return
+		}
+		g.names[name] = struct{}{}
+	} else {
+		g.firstNames = append(g.firstNames, name)
+	}
+	g.calc.Set(def, raw)
 }
 
 // dropMeasurement logs an unstorable measurement entry that is being discarded
