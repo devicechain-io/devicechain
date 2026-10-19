@@ -558,6 +558,13 @@ var sweepExemptions = map[string]string{
 		"answers only the numbers device metadata holds under them. The metadata itself is swept " +
 		"through devices",
 
+	"device-management.calculatedMetricPlan": "a worker's read of one published VERSION of a profile, and a " +
+		"version number is a guess: an unpublished one is NOT_FOUND by design. The profile it reads is " +
+		"swept through deviceProfiles",
+	"device-management.calculatedBackfillRoster": "a worker's walk of a profile's devices that also " +
+		"takes the constant NAMES a formula reads, the author's choice rather than a stored token. The " +
+		"devices themselves are swept through devices",
+
 	// The two below are exempt because their argument is a GUESS, and a guess that
 	// misses does not fail quietly — `geoFenceSetSnapshot(version:)` on an unknown
 	// version is an error BY DESIGN, so the sweep would report the platform working
