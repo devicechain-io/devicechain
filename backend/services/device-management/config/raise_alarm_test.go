@@ -19,8 +19,8 @@ func TestRaiseAlarmWorkersLoadAndDefault(t *testing.T) {
 
 	cfg = &DeviceManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
-	assert.Equal(t, DefaultRaiseAlarmWorkers, cfg.RaiseAlarm.Workers)
-	assert.Equal(t, DefaultRaiseAlarmWorkers, NewDeviceManagementConfiguration().RaiseAlarm.Workers)
+	assert.Equal(t, 6, cfg.RaiseAlarm.Workers)
+	assert.Equal(t, 6, NewDeviceManagementConfiguration().RaiseAlarm.Workers)
 }
 
 // raiseAlarm.workers is bounded by the relational pool, an out-of-range value stops the service
@@ -49,10 +49,39 @@ func TestRaiseAlarmWorkersAreBounded(t *testing.T) {
 	}
 }
 
-// An unset count is held below a small pool rather than refused, so a pool sized before the
-// setting existed still starts; an explicit count is validated as written.
-func TestRaiseAlarmWorkersDefaultFitsASmallPool(t *testing.T) {
+// An unset count is what the pool has left after the resolvers and the headroom, capped at the
+// default and floored at 1, so the two worker pools never hold the whole pool by default and a
+// pool sized before the setting existed still starts.
+func TestRaiseAlarmWorkersDefaultLeavesHeadroom(t *testing.T) {
+	for _, tc := range []struct {
+		name, doc string
+		want      int
+	}{
+		{"default pool 20, 10 resolvers", ``, 6},
+		{"pool 11, 10 resolvers", `{"rdbConfiguration":{"maxOpenConnections":11}}`, 1},
+		{"pool 8, 3 resolvers", `{"rdbConfiguration":{"maxOpenConnections":8},"resolution":{"workers":3}}`, 1},
+		{"pool 8, 2 resolvers", `{"rdbConfiguration":{"maxOpenConnections":8},"resolution":{"workers":2}}`, 2},
+		{"large pool is capped at the default", `{"rdbConfiguration":{"maxOpenConnections":64}}`, DefaultRaiseAlarmWorkers},
+		{"small pool, 1 resolver", `{"rdbConfiguration":{"maxOpenConnections":3},"resolution":{"workers":1}}`, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &DeviceManagementConfiguration{}
+			require.NoError(t, core.LoadConfiguration([]byte(tc.doc), cfg))
+			assert.Equal(t, tc.want, cfg.RaiseAlarm.Workers)
+			assert.LessOrEqual(t, cfg.Resolution.Workers+cfg.RaiseAlarm.Workers, 20, "never more than the default pool")
+		})
+	}
+}
+
+// An explicit count passes through untouched, whatever the resolvers hold: it is validated on
+// its own against the pool, as it was before the default took headroom into account.
+func TestRaiseAlarmWorkersExplicitIsNotAdjusted(t *testing.T) {
 	cfg := &DeviceManagementConfiguration{}
-	require.NoError(t, core.LoadConfiguration([]byte(`{"rdbConfiguration":{"maxOpenConnections":8},"resolution":{"workers":4}}`), cfg))
+	require.NoError(t, core.LoadConfiguration([]byte(`{"raiseAlarm":{"workers":8}}`), cfg))
+	assert.Equal(t, 8, cfg.RaiseAlarm.Workers)
+	assert.Equal(t, 10, cfg.Resolution.Workers)
+
+	cfg = &DeviceManagementConfiguration{}
+	require.NoError(t, core.LoadConfiguration([]byte(`{"rdbConfiguration":{"maxOpenConnections":8},"raiseAlarm":{"workers":7},"resolution":{"workers":4}}`), cfg))
 	assert.Equal(t, 7, cfg.RaiseAlarm.Workers)
 }

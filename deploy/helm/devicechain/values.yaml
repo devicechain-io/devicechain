@@ -1319,11 +1319,14 @@ functionalAreas:
       # applied to the alarm rows this many at a time; one change is about ten database
       # round trips, so one at a time caps near a hundred a second. On one replica, changes
       # to one alarm keep their order. Each worker holds a pooled connection while it
-      # writes, from the same pool as resolution.workers; the two are bounded separately.
+      # writes, from the same pool as resolution.workers; an explicit count is bounded
+      # separately from it, so choose the two together.
       #   raiseAlarm:
-      #     workers: 8      # 1 to one below rdbConfiguration.maxOpenConnections
-      #                     # (20 unless set); the default is lowered to fit a smaller
-      #                     # pool, an explicit value out of range stops the service.
+      #     workers: 6      # 1 to one below rdbConfiguration.maxOpenConnections
+      #                     # (20 unless set). Unset, it is 8 lowered so that it and
+      #                     # resolution.workers leave 4 connections free (6 with the
+      #                     # default pool), never below 1. An explicit value is checked
+      #                     # on its own: out of range stops the service.
       #
       # What each replica keeps in its own memory of each of the three lookup caches
       # kept per device (a device by its token, its tracked relationships, its group

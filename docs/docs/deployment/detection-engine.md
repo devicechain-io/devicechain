@@ -653,7 +653,7 @@ on many devices at once builds a backlog behind that ceiling.
 
 | Setting (on `device-management`) | Default | What it does |
 |---|---|---|
-| `raiseAlarm.workers` | 8, or one fewer than the database connection pool when that is smaller | How many alarm changes are applied at once, from 1 to one below `rdbConfiguration.maxOpenConnections` (20 unless set). Anything outside that range stops the service at startup, naming the setting. Each worker holds a database connection while it writes, so a value above half the pool is logged. It is read once at startup. |
+| `raiseAlarm.workers` | 8, lowered so that it and `resolution.workers` leave at least 4 connections of the pool free (6 with the default pool of 20), and never below 1 | How many alarm changes are applied at once, from 1 to one below `rdbConfiguration.maxOpenConnections` (20 unless set). Anything outside that range stops the service at startup, naming the setting. Each worker holds a database connection while it writes, so a value above half the pool is logged. An explicit value is checked on its own, not against `resolution.workers`, so choose the two together. The counts in effect are logged at startup. It is read once at startup. |
 
 Within one replica, changes to **one** alarm are applied in the order they arrive, whatever the
 setting; only changes to different alarms overlap. The result never depended on that order: a

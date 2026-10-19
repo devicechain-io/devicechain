@@ -155,6 +155,11 @@ func parseConfiguration() error {
 		return err
 	}
 	Configuration = config
+	log.Info().
+		Int("poolSize", rdb.EffectiveMaxOpenConnections(config.RdbConfiguration)).
+		Int("resolutionWorkers", config.Resolution.Workers).
+		Int("raiseAlarmWorkers", config.RaiseAlarm.Workers).
+		Msg("Database worker counts in effect")
 	return nil
 }
 
