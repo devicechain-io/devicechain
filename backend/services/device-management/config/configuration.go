@@ -307,6 +307,9 @@ type DeviceManagementConfiguration struct {
 	// Resolution sizes the pool that resolves inbound events.
 	Resolution ResolutionConfiguration
 
+	// RaiseAlarm sizes the consumer that applies REACT raise/resolve edges to alarm rows.
+	RaiseAlarm RaiseAlarmConfiguration
+
 	// InMemoryCache sizes what each replica keeps in its own memory of the caches keyed by
 	// device (see DefaultPerDeviceCacheMiB for what that costs).
 	InMemoryCache InMemoryCacheConfiguration
@@ -463,6 +466,40 @@ func (r ResolutionConfiguration) Validate(pool config.MicroserviceDatastoreConfi
 	return rdb.CheckWriterCount("resolution.workers", r.Workers, pool)
 }
 
+// DefaultRaiseAlarmWorkers is how many alarm edges are applied at once when raiseAlarm.workers
+// is not set. See RaiseAlarmConfiguration.Workers for what it is bounded by.
+const DefaultRaiseAlarmWorkers = 8
+
+// RaiseAlarmConfiguration sizes the raise-alarm consumer.
+type RaiseAlarmConfiguration struct {
+	// Workers is how many alarm edges are applied at once. Unset (0) defaults to
+	// DefaultRaiseAlarmWorkers; 1 applies them one after another, as the consumer did before
+	// this setting existed.
+	//
+	// One edge is about ten sequential database round trips, so a single worker applies only as
+	// many edges per second as the round trips allow (about 110 per second against a local
+	// PostgreSQL) while the service sits idle between them. Each worker holds a pooled
+	// connection for the duration of a write transaction, so the count is bounded below the
+	// relational pool by the same check the other writer counts use. Edges for one alarm are
+	// always applied in the order they arrive, whatever the count. A fixed setting, read once at
+	// startup.
+	Workers int
+}
+
+// ApplyDefaults fills the worker count when it is unset. The default is held below the pool the
+// workers draw from, so a deployment that sized a small pool before this setting existed still
+// starts; an explicit count is never adjusted, only validated.
+func (r *RaiseAlarmConfiguration) ApplyDefaults(pool config.MicroserviceDatastoreConfiguration) {
+	if r.Workers == 0 {
+		r.Workers = max(1, min(DefaultRaiseAlarmWorkers, rdb.EffectiveMaxOpenConnections(pool)-1))
+	}
+}
+
+// Validate bounds the worker count against the pool the workers draw from.
+func (r RaiseAlarmConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration) error {
+	return rdb.CheckWriterCount("raiseAlarm.workers", r.Workers, pool)
+}
+
 // Creates the default device management configuration
 func NewDeviceManagementConfiguration() *DeviceManagementConfiguration {
 	cfg := &DeviceManagementConfiguration{
@@ -496,6 +533,7 @@ func (c *DeviceManagementConfiguration) ApplyDefaults() {
 		c.MaxEventFutureSkewSeconds = DefaultMaxEventFutureSkewSeconds
 	}
 	c.Resolution.ApplyDefaults()
+	c.RaiseAlarm.ApplyDefaults(c.RdbConfiguration)
 	c.InMemoryCache.ApplyDefaults()
 }
 
@@ -539,6 +577,9 @@ func (c *DeviceManagementConfiguration) Validate() error {
 			"device's presence permanently", c.MaxEventFutureSkewSeconds)
 	}
 	if err := c.Resolution.Validate(c.RdbConfiguration); err != nil {
+		return err
+	}
+	if err := c.RaiseAlarm.Validate(c.RdbConfiguration); err != nil {
 		return err
 	}
 	if err := c.InMemoryCache.Validate(); err != nil {

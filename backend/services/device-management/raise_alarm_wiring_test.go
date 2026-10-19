@@ -31,7 +31,7 @@ func TestTheRaiseAlarmConsumerResolvesDevicesUncached(t *testing.T) {
 	Api = model.NewApi(&rdb.RdbManager{})
 	CachedApi = model.NewCachedApi(Api, &model.Caches{DeviceByToken: msgtest.NewMemoryKV().NewCache()})
 
-	rc := newRaiseAlarmConsumer(nil, nil)
+	rc := newRaiseAlarmConsumer(nil, nil, 1)
 	got, ok := rc.Api.(*model.Api)
 	require.True(t, ok, "the raise-alarm consumer was given a %T, want the plain *model.Api", rc.Api)
 	require.Same(t, Api, got, "the raise-alarm consumer was given an Api other than this service's")

@@ -141,7 +141,7 @@ func TestTheStopperStopsEachManagerExactlyOnce(t *testing.T) {
 		core.NewNoOpLifecycleCallbacks(), nil, "", 0, processor.NewResolveMetrics(Microservice))
 	require.NoError(t, InboundEventsProcessor.Initialize(context.Background()))
 	RaiseAlarmConsumer = processor.NewRaiseAlarmConsumer(Microservice, nil,
-		core.NewNoOpLifecycleCallbacks(), nil, nil, processor.NewRaiseAlarmMetrics(Microservice))
+		core.NewNoOpLifecycleCallbacks(), nil, nil, processor.NewRaiseAlarmMetrics(Microservice), 1)
 	require.NoError(t, RaiseAlarmConsumer.Initialize(context.Background()))
 	DeviceReportsConsumer = processor.NewDeviceReportsConsumer(Microservice, nil,
 		core.NewNoOpLifecycleCallbacks(), nil, nil, processor.NewDeviceReportsMetrics(Microservice))
