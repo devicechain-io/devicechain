@@ -220,6 +220,23 @@ func locationRequests(event model.Event, payload dmmodel.ResolvedLocationsPayloa
 	return requests, nil
 }
 
+// measurementRequests is locationRequests for a measurement payload: one request per reading of
+// every entry, each mapped by model.MeasurementRequestFor. The conversion of the wire entry to a
+// model.MeasurementReading is a plain Go conversion, so it stops compiling if the two diverge.
+func measurementRequests(event model.Event, payload dmmodel.ResolvedMeasurementsPayload) ([]*model.MeasurementEventCreateRequest, error) {
+	requests := make([]*model.MeasurementEventCreateRequest, 0)
+	for _, mxentry := range payload.Entries {
+		for _, mx := range mxentry.Entries {
+			req, err := model.MeasurementRequestFor(event, mxentry.OccurredTime, model.MeasurementReading(mx))
+			if err != nil {
+				return nil, err
+			}
+			requests = append(requests, req)
+		}
+	}
+	return requests, nil
+}
+
 // alertRequests is locationRequests for an alert payload, which has nothing to parse.
 func alertRequests(event model.Event, payload dmmodel.ResolvedAlertsPayload) []*model.AlertEventCreateRequest {
 	requests := make([]*model.AlertEventCreateRequest, 0, len(payload.Entries))
@@ -264,7 +281,7 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db 
 // (transaction-bound) db handle so they commit all-or-nothing (ADR-022 E5).
 func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, db *gorm.DB, event model.Event,
 	payload dmmodel.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
-	requests, err := model.MeasurementRequestsFor(event, payload)
+	requests, err := measurementRequests(event, payload)
 	if err != nil {
 		return nil, err
 	}

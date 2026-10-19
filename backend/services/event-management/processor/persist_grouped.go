@@ -204,7 +204,7 @@ func buildRows(pevent model.Event, event dmmodel.ResolvedEvent, rows *model.Even
 		if !ok {
 			return errPayloadMismatch("measurement")
 		}
-		requests, rerr := model.MeasurementRequestsFor(pevent, *payload)
+		requests, rerr := measurementRequests(pevent, *payload)
 		if rerr != nil {
 			return rerr
 		}

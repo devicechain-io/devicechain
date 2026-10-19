@@ -236,7 +236,7 @@ func TestDatabaseValueRejectionIsDeterministic(t *testing.T) {
 // backstop for a resolved event that did not pass through them.
 func TestANonFiniteMeasurementIsADeterministicFailure(t *testing.T) {
 	for _, v := range []string{"NaN", "+Inf", "-Inf", "Infinity"} {
-		_, err := model.MeasurementRequestsFor(model.Event{}, dmmodel.ResolvedMeasurementsPayload{
+		_, err := measurementRequests(model.Event{}, dmmodel.ResolvedMeasurementsPayload{
 			Entries: []dmmodel.ResolvedMeasurementsEntry{{Entries: []dmmodel.ResolvedMeasurementEntry{
 				{Name: "temp", Value: v}}}}})
 		if !errors.Is(err, ErrDeterministic) {
