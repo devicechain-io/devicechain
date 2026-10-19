@@ -93,8 +93,8 @@ export async function listMembers(
 // The most pages listAllMembers will read. The server caps a page at 1000, so this is ten
 // thousand members. The server makes the cut, so a view asking for one customer's users
 // reads only those. Reaching the cap is reported (truncated), never answered with a list
-// that silently stops part-way and never thrown: the view shows what it has and says to
-// narrow the cut.
+// that silently stops part-way and never thrown: the view shows what it has and says
+// where the rest can be read.
 const MAX_MEMBER_PAGES = 10;
 
 /** The members matching a filter, and whether more matched than were read. */
@@ -110,8 +110,12 @@ export async function listAllMembers(filter: MemberFilter = {}): Promise<AllMemb
   for (let page = 1; page <= MAX_MEMBER_PAGES; page++) {
     const res = await listMembers({ ...filter, pageNumber: page, pageSize });
     out.push(...res.results);
-    const total = res.pagination.totalRecords ?? out.length;
-    if (out.length >= total || res.results.length < pageSize) return { members: out, truncated: false };
+    // A short page ends the list. Without a total a full page proves nothing, so the read
+    // goes on: defaulting the total to what was read so far would end it after one page and
+    // answer the first thousand as the whole list.
+    const total = res.pagination.totalRecords;
+    const complete = res.results.length < pageSize || (total != null && out.length >= total);
+    if (complete) return { members: out, truncated: false };
   }
   return { members: out, truncated: true };
 }
