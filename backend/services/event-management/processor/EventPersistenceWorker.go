@@ -7,8 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -100,7 +98,7 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 // That is a real gap rather than a naming quibble, and it is recorded here instead
 // of being papered over: the vocabulary is the only thing that told a reader a queue
 // existed to be drained.
-var ErrDeterministic = errors.New("deterministic persistence failure")
+var ErrDeterministic = model.ErrDeterministic
 
 // classifyPersistFailure re-classifies a database error that no redelivery can fix.
 //
@@ -170,16 +168,7 @@ func classifyPersistFailure(err error) error {
 // Parse a (possibly null) string into a float64. A non-numeric value is a
 // deterministic failure (the value can never be stored in the numeric column), so
 // the error is wrapped as such rather than left to retry (unacked) pointlessly.
-func parseNullableFloat64(val *string) (*float64, error) {
-	if val == nil {
-		return nil, nil
-	}
-	parsed, err := strconv.ParseFloat(*val, 64)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %q is not numeric: %v", ErrDeterministic, *val, err)
-	}
-	return &parsed, nil
-}
+func parseNullableFloat64(val *string) (*float64, error) { return model.ParseNullableFloat64(val) }
 
 // errPayloadMismatch is the refusal for a location, measurement or alert event whose
 // payload is not of its type (see writeEvent).
@@ -231,39 +220,18 @@ func locationRequests(event model.Event, payload dmmodel.ResolvedLocationsPayloa
 	return requests, nil
 }
 
-// measurementRequests is locationRequests for a measurement payload: one request per
-// reading of every entry.
+// measurementRequests is locationRequests for a measurement payload: one request per reading of
+// every entry, each mapped by model.MeasurementRequestFor. The conversion of the wire entry to a
+// model.MeasurementReading is a plain Go conversion, so it stops compiling if the two diverge.
 func measurementRequests(event model.Event, payload dmmodel.ResolvedMeasurementsPayload) ([]*model.MeasurementEventCreateRequest, error) {
 	requests := make([]*model.MeasurementEventCreateRequest, 0)
 	for _, mxentry := range payload.Entries {
 		for _, mx := range mxentry.Entries {
-			val := mx.Value
-			fval, err := parseNullableFloat64(&val)
+			req, err := model.MeasurementRequestFor(event, mxentry.OccurredTime, model.MeasurementReading(mx))
 			if err != nil {
 				return nil, err
 			}
-			// NaN and +/-Inf parse, and the payload identity cannot canonicalize them (JSON has
-			// no such number), so the failure used to read as transient and the message was
-			// redelivered until its budget ran out. No delivery can change the bytes.
-			if math.IsNaN(*fval) || math.IsInf(*fval, 0) {
-				return nil, fmt.Errorf("%w: measurement %q: %q is not a finite number",
-					ErrDeterministic, mx.Name, val)
-			}
-			var classifier *uint
-			if mx.Classifier != nil {
-				c := uint(*mx.Classifier)
-				classifier = &c
-			}
-			requests = append(requests, &model.MeasurementEventCreateRequest{
-				Event:             event,
-				EntryOccurredTime: mxentry.OccurredTime,
-				Name:              mx.Name,
-				Value:             fval,
-				Classifier:        classifier,
-				Unit:              mx.Unit,
-				DataType:          mx.DataType,
-				Derived:           mx.Derived,
-			})
+			requests = append(requests, req)
 		}
 	}
 	return requests, nil

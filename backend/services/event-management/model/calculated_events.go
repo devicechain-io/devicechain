@@ -281,24 +281,27 @@ func (api *Api) CalculatedEvents(ctx context.Context, req CalculatedEventsReques
 	return ev.done(), nil
 }
 
-// sampleEvaluator evaluates a formula over samples given one stored row at a time: begin a
-// sample, add its rows, finish it. It is the whole evaluation, apart from the read, so it is
-// tested on literal rows without a database.
+// sampleEvaluator is the preview's evaluation of ONE formula over samples given one stored row
+// at a time: begin a sample, add its rows, finish it. It is the whole evaluation, apart from the
+// read, so it is tested on literal rows without a database. The evaluating is PlanEvaluator's
+// (the formula runs as a one-step plan); this keeps what is the preview's own: the sample list,
+// each sample's recorded inputs, the tally and the response caps.
 type sampleEvaluator struct {
-	formula *calcfield.Formula
-	types   map[string]calcfield.Type
-	sample  *calcfield.Sample
+	eval    *PlanEvaluator
 	skipped map[calcfield.SkipReason]int
 	result  CalculatedEventsResult
 	open    *CalculatedSample
 	values  int // input values recorded across every sample
-	// constants are the device's, shared by every sample of the read.
-	constants []calcfield.Constant
 }
 
 func newSampleEvaluator(f *calcfield.Formula, env *calcfield.Env, types map[string]calcfield.Type,
 	constants []calcfield.Constant) *sampleEvaluator {
-	return &sampleEvaluator{formula: f, types: types, sample: env.Sample(), constants: constants,
+	plan := calcfield.SingleFormulaPlan(env, "", f)
+	pe, err := newPlanEvaluator(plan, []string{""}, types, constants)
+	if err != nil {
+		panic(err) // a one-step plan always has its step
+	}
+	return &sampleEvaluator{eval: pe,
 		skipped: map[calcfield.SkipReason]int{}, result: CalculatedEventsResult{Samples: []CalculatedSample{}}}
 }
 
@@ -322,8 +325,7 @@ func formulaConstants(f *calcfield.Formula, given []CalculatedConstant) ([]calcf
 }
 
 func (e *sampleEvaluator) begin(eventId []byte, at time.Time) {
-	e.sample.Reset()
-	e.sample.UseConstants(e.constants)
+	e.eval.Begin()
 	e.open = &CalculatedSample{OccurredTime: at.UTC(), EventId: eventId, Inputs: []CalculatedInputValue{}}
 }
 
@@ -331,24 +333,17 @@ func (e *sampleEvaluator) begin(eventId []byte, at time.Time) {
 // row with no value (never written by the store, which refuses a non-numeric reading) is left
 // absent, so a formula reading it skips as a missing input.
 func (e *sampleEvaluator) add(name string, v sql.NullFloat64) {
-	t, ok := e.types[name]
-	if !ok || !v.Valid {
+	raw, ok := e.eval.Add(name, v)
+	if !ok {
 		return
 	}
-	for _, in := range e.open.Inputs {
-		if in.Key == name {
-			return
-		}
-	}
-	raw := calcfield.FormatStored(t, v.Float64)
-	_, _ = e.sample.Set(name, raw) // a value that does not parse is recorded on the sample
 	e.open.Inputs = append(e.open.Inputs, CalculatedInputValue{Key: name, Value: raw})
 	e.values++
 }
 
 func (e *sampleEvaluator) finish() {
-	out := e.formula.Eval(e.sample)
-	if out.OK() {
+	out := e.eval.Eval()[0]
+	if out.OK {
 		v := out.Value
 		e.open.Value = &v
 		e.result.Computed++
@@ -371,4 +366,4 @@ func (e *sampleEvaluator) done() *CalculatedEventsResult {
 	return &e.result
 }
 
-func (e *sampleEvaluator) release() { e.sample.Release() }
+func (e *sampleEvaluator) release() { e.eval.Release() }
