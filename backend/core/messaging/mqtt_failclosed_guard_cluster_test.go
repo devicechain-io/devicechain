@@ -66,22 +66,15 @@ func startGuardCluster(t *testing.T) *guardCluster {
 	return gc
 }
 
-// clusterMQTTPorts reads back the MQTT port each server bound. Configure the listener with
-// Port -1, so the server binds a port of the kernel's choosing and keeps it: a port picked
-// beforehand by a probe listener and released is free only until something
-// else binds it, and a cluster's own routes, proxies and dials bind ports in between. A server
-// whose MQTT listener lost that race starts without one ("bind: address already in use"), and
-// its devices' CONNECTs land on whatever took the port: a route listener answers them with
-// "authentication error", which paho reports as "non-CONNACK first packet", and the device can
-// never connect.
+// clusterMQTTPorts reads back the MQTT port each server bound, through dctest.MQTTPort. The
+// listener must be configured with Port -1 (see the cluster fixtures' configure callbacks):
+// a port picked beforehand by a probe listener and released is free only until something
+// else binds it, and a cluster's own routes, proxies and dials bind ports in between.
 func clusterMQTTPorts(t *testing.T, servers []*natsserver.Server) []int {
 	t.Helper()
 	ports := make([]int, len(servers))
 	for i, s := range servers {
-		vz, err := s.Varz(nil)
-		require.NoError(t, err)
-		require.NotZerof(t, vz.MQTT.Port, "server %d reports no MQTT port", i)
-		ports[i] = vz.MQTT.Port
+		ports[i] = dctest.MQTTPort(t, s)
 	}
 	return ports
 }
