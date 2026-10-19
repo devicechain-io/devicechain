@@ -253,3 +253,29 @@ func TestPlanEvaluatorFirstRowWinsAndNullIsAbsent(t *testing.T) {
 	assert.False(t, out.OK)
 	assert.Equal(t, calcfield.SkipMissingInput, out.Skip)
 }
+
+// A skip keeps the evaluation's underlying error, which a backfill reports with the skip; and a
+// stored row of a CALCULATED metric (a backfill reads the keys it computes, to see what is
+// already present) is not an input: it is not taken, and the plan computes that metric itself.
+func TestPlanEvaluatorKeepsTheErrorAndIgnoresCalculatedRows(t *testing.T) {
+	rig := newParityRig(t)
+	ev, err := NewPlanEvaluator(rig.plan, []string{"pf"}, nil)
+	require.NoError(t, err)
+	defer ev.Release()
+
+	ev.Begin()
+	ev.Add("voltage", sql.NullFloat64{Float64: 1, Valid: true})
+	ev.Add("current", sql.NullFloat64{Float64: 0, Valid: true})
+	ev.Add("pf_in", sql.NullFloat64{Float64: 1, Valid: true})
+	_, ok := ev.Add("kva", sql.NullFloat64{Float64: 5, Valid: true})
+	assert.False(t, ok, "kva is calculated, so its stored row is not an input")
+	out := ev.Eval()
+	byKey := map[string]StepOutcome{}
+	for _, o := range out {
+		byKey[o.Key] = o
+	}
+	assert.Equal(t, "0", byKey["kva"].Value, "computed from voltage and current, not the stored 5")
+	pf := byKey["pf"]
+	assert.Equal(t, calcfield.SkipNonFinite, pf.Skip)
+	assert.Error(t, pf.Err, "the skip carries the evaluation's error")
+}
