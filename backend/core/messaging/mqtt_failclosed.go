@@ -317,9 +317,10 @@ func MqttFailClosedDurables(instanceId string) []MqttFailClosedDurable {
 // It is the platform reader's consumer config (natsReader.consumerConfig) with DeliverNew
 // and an explicit replica count. DeliverNew because the durable is created over a store that
 // may already hold messages kept for the gateway's own session consumers, none of them the
-// platform's. The reader over it (NewMqttMessageStoreReader) only ever BINDS to the durable
-// and never creates it, so a released store cannot have a durable recreated on it by a
-// reader's self-heal.
+// platform's. A durable this instance already held, created again, is the exception: it
+// starts at the start of the store (assertMqttFailClosed). The reader over it
+// (NewMqttMessageStoreReader) only ever BINDS to the durable and never creates it, so a
+// released store cannot have a durable recreated on it by a reader's self-heal.
 func MqttFailClosedConsumerConfig(d MqttFailClosedDurable, replicas int) *nats.ConsumerConfig {
 	return &nats.ConsumerConfig{
 		Durable:       d.Name,
@@ -835,23 +836,36 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	if replicas < 1 {
 		replicas = 1
 	}
-	// 🔴 A DURABLE THIS INSTANCE ALREADY HELD, MISSING AGAIN, IS CREATED AT THE STORE'S FIRST
-	// SEQUENCE, NOT AT ITS TAIL. Deleting a consumer from an interest-retention store drops
-	// every copy only that consumer wanted, so usually there is nothing to read back. But a copy
-	// another consumer still holds interest in (a gateway session consumer on the same subject)
-	// stays in the store, and its direct copy was skipped as carried by the store: a DeliverNew
-	// durable starts above it and reports an ack floor at the tail, so the copy is never read
-	// and a finish reads the kind as drained. From the first sequence the copy is delivered; a
-	// duplicate of a copy already read is folded by the store-sequence dedup id, and what the
-	// kind does not want the reader acks and drops. A first creation keeps DeliverNew: the store
-	// may hold messages kept for the gateway's own consumers, none of them the platform's.
-	var startSeq uint64
-	if (marks.owned || marks.released) && info.State.Msgs > 0 {
-		startSeq = info.State.FirstSeq
-	}
+	// 🔴 A DURABLE THIS INSTANCE ALREADY HELD, MISSING AGAIN, IS CREATED AT THE START OF THE
+	// STORE, NOT AT ITS TAIL. Deleting a consumer from an interest-retention store drops every
+	// copy only that consumer wanted, but a copy another consumer still holds interest in stays,
+	// and its direct copy was skipped as carried by the store. The platform makes that case
+	// itself: the events durable is unfiltered (MqttFailClosedDurable.Filter), so it holds every
+	// command response and device report it has not acked yet, and a missing responses or reports
+	// durable leaves its kind's unread copies in the store for as long as the events durable is
+	// behind. A DeliverNew durable starts above them with its ack floor at the tail, so they are
+	// never read and a finish reads the kind as drained.
+	//
+	// DeliverAll, not a start sequence read here: the broker starts it at the first sequence of
+	// the consumer leader's own copy of the store when it creates it, so neither a look that a
+	// lagging replica answered nor a store deleted and created again since the look can put the
+	// start above a copy that is there.
+	//
+	// The cost is duplicates. The re-created durable reads again what its predecessor already
+	// forwarded and the store still holds for another consumer. Each forward carries the
+	// store-sequence dedup id, which folds a repeat only inside the destination stream's duplicate
+	// window (600 s for inbound-events, the broker's 120 s for command-responses and
+	// device-reports); an older one is stored again. Their consumers take repeats as ordinary
+	// at-least-once traffic: a response to a terminal command is ignored, and a stale report
+	// is counted and acked. No persisted record of the predecessor's ack floor exists to start
+	// above, so a duplicate is the price of not losing a PUBACKed copy.
+	//
+	// A first creation keeps DeliverNew: the store may hold messages kept for the gateway's own
+	// consumers, none of them the platform's, whose direct copies were never skipped.
+	fromStart := marks.owned || marks.released
 	createdKind := map[MqttFailClosedKind]bool{}
 	for _, d := range MqttFailClosedDurables(instanceId) {
-		created, absent, err := nmgr.ensureMqttFailClosedDurable(ctx, d, replicas, startSeq)
+		created, absent, err := nmgr.ensureMqttFailClosedDurable(ctx, d, replicas, fromStart)
 		if absent {
 			rep.absentDurables = append(rep.absentDurables, d.Name)
 		}
@@ -1150,21 +1164,20 @@ func conformMqttFailClosedStore(cfg *nats.StreamConfig, maxBytes int64) ([]strin
 // ensureMqttFailClosedDurable creates a platform durable if it is missing and puts its filter
 // back if it has changed, reporting whether it had to create it and whether it is missing
 // still (it was not there and could not be created). A create the cluster refuses for want of
-// resources is retried a few times first (mqttFailClosedInsufficientRetry). A positive startSeq
-// creates a missing durable at that store sequence rather than at the tail.
+// resources is retried a few times first (mqttFailClosedInsufficientRetry). fromStart creates a
+// missing durable at the start of the store (DeliverAll) rather than at its tail.
 //
 // The filter is checked by reading it back, because AddConsumer on an existing durable with
 // a changed filter returns success and keeps the old one
 // (TestAddConsumerSilentlyIgnoresAChangedFilterSubject).
-func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d MqttFailClosedDurable, replicas int, startSeq uint64) (created, absent bool, err error) {
+func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d MqttFailClosedDurable, replicas int, fromStart bool) (created, absent bool, err error) {
 	opt := nats.Context(ctx)
 	ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
 	if errors.Is(err, nats.ErrConsumerNotFound) {
 		cfg := MqttFailClosedConsumerConfig(d, replicas)
 		cfg.AckWait = nmgr.ackWait()
-		if startSeq > 0 {
-			cfg.DeliverPolicy = nats.DeliverByStartSequencePolicy
-			cfg.OptStartSeq = startSeq
+		if fromStart {
+			cfg.DeliverPolicy = nats.DeliverAllPolicy
 		}
 		add := func() error {
 			if err := mqttFenced(ctx); err != nil {
