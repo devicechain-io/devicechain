@@ -55,7 +55,7 @@ func TestRaiseAlarmWorkersAreBounded(t *testing.T) {
 // over the headroom there).
 func TestRaiseAlarmWorkersDefaultLeavesHeadroom(t *testing.T) {
 	for _, tc := range []struct {
-		name, doc string
+		name, doc  string
 		pool, want int
 	}{
 		{"default pool 20, 10 resolvers", ``, 20, 6},
