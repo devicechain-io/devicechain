@@ -1317,8 +1317,9 @@ functionalAreas:
       #
       # Alarm application (default shown). Detection's raise and clear decisions are
       # applied to the alarm rows this many at a time; one change is about ten database
-      # round trips, so one at a time caps near a hundred a second. Changes to one alarm
-      # always keep their order. Each worker holds a pooled connection while it writes.
+      # round trips, so one at a time caps near a hundred a second. On one replica, changes
+      # to one alarm keep their order. Each worker holds a pooled connection while it
+      # writes, from the same pool as resolution.workers; the two are bounded separately.
       #   raiseAlarm:
       #     workers: 8      # 1 to one below rdbConfiguration.maxOpenConnections
       #                     # (20 unless set); the default is lowered to fit a smaller

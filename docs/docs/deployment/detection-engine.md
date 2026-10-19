@@ -655,10 +655,15 @@ on many devices at once builds a backlog behind that ceiling.
 |---|---|---|
 | `raiseAlarm.workers` | 8, or one fewer than the database connection pool when that is smaller | How many alarm changes are applied at once, from 1 to one below `rdbConfiguration.maxOpenConnections` (20 unless set). Anything outside that range stops the service at startup, naming the setting. Each worker holds a database connection while it writes, so a value above half the pool is logged. It is read once at startup. |
 
-Changes to **one** alarm are always applied in the order they arrive, whatever the setting; only
-changes to different alarms overlap. Setting it to 1 applies them one at a time. On a local Docker
-database (a directional figure, not a capacity statement) eight workers applied roughly six times as
-many alarm changes a second as one.
+Within one replica, changes to **one** alarm are applied in the order they arrive, whatever the
+setting; only changes to different alarms overlap. The result never depended on that order: a
+decision that arrives after a newer one for the same rule is ignored, so a redelivered change, or
+one applied by another replica, cannot undo a newer one. Setting it to 1 applies them one at a time.
+
+The connection pool these workers draw from is also used by `resolution.workers` and by the API, and
+each worker count is checked against the pool on its own rather than together, so leave room for
+the other when you raise one. On a local Docker database (a directional figure, not a capacity
+statement) eight workers applied four to seven times as many alarm changes a second as one.
 
 ## What to watch
 

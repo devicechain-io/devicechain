@@ -262,8 +262,8 @@ type alarmStateTuple struct {
 // resolves — then every one of those edges AGAIN, as a broker redelivery would repeat them, and a
 // resolve of rule C that never raised (a resolve ahead of its raise). The first pass is spread
 // round-robin over all alarms. The same devices and alarm keys exist under two tenants, so a
-// lane that keyed on device and key alone, or a worker that lost its tenant, would fold one
-// tenant's edges into the other's. The expected end state is the same for every alarm: ACTIVE at
+// worker that lost its tenant would fold one tenant's edges into the other's. (The lane choice
+// cannot: it decides only which goroutine applies an edge, and the tenant comes from the subject.) The expected end state is the same for every alarm: ACTIVE at
 // CRITICAL (rule B still raising), and the duplicates must not have moved the version of any row
 // past what the first pass wrote.
 func TestRaiseAlarmConcurrencyKeepsOrderingIdempotencyAndTenantScope(t *testing.T) {

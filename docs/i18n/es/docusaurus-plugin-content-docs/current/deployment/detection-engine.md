@@ -718,10 +718,17 @@ detrás de ese tope.
 |---|---|---|
 | `raiseAlarm.workers` | 8, o uno menos que el pool de conexiones a la base de datos si este es menor | Cuántos cambios de alarma se aplican a la vez, de 1 a uno menos que `rdbConfiguration.maxOpenConnections` (20 si no se establece). Cualquier valor fuera de ese rango detiene el servicio al arrancar y nombra el ajuste. Cada trabajador retiene una conexión a la base de datos mientras escribe, por lo que un valor superior a la mitad del pool se registra en el log. Se lee una sola vez al arrancar. |
 
-Los cambios de **una** misma alarma se aplican siempre en el orden en que llegan, sea cual sea el
-ajuste; solo se solapan los cambios de alarmas distintas. Con 1 se aplican de uno en uno. En una
-base de datos local en Docker (una cifra orientativa, no una afirmación de capacidad), ocho
-trabajadores aplicaron aproximadamente seis veces más cambios de alarma por segundo que uno.
+Dentro de una réplica, los cambios de **una** misma alarma se aplican en el orden en que llegan,
+sea cual sea el ajuste; solo se solapan los cambios de alarmas distintas. El resultado nunca
+dependió de ese orden: una decisión que llega después de otra más reciente de la misma regla se
+ignora, así que un cambio reentregado, o aplicado por otra réplica, no puede deshacer uno más
+reciente. Con 1 se aplican de uno en uno.
+
+El pool de conexiones del que toman estos trabajadores también lo usan `resolution.workers` y la API,
+y cada número de trabajadores se comprueba contra el pool por separado, no en conjunto, así que deje
+margen para el otro cuando aumente uno. En una base de datos local en Docker (una cifra orientativa,
+no una afirmación de capacidad), ocho trabajadores aplicaron entre cuatro y siete veces más cambios
+de alarma por segundo que uno.
 
 ## Qué vigilar {#what-to-watch}
 

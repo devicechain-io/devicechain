@@ -503,7 +503,7 @@ func createNatsComponents(nmgr *messaging.NatsManager) error {
 	// actions it could not dispatch; an edge it dispatched successfully could still die
 	// here, with the same consequence — a raise that does not re-emit until the condition
 	// re-breaches, a resolve that strands its alarm.
-	RaiseAlarmConsumer = newRaiseAlarmConsumer(RaiseAlarmReader, deadLetters, Configuration.RaiseAlarm.Workers)
+	RaiseAlarmConsumer = newRaiseAlarmConsumer(RaiseAlarmReader, deadLetters)
 	if err = RaiseAlarmConsumer.Initialize(context.Background()); err != nil {
 		return err
 	}
@@ -556,9 +556,13 @@ func newDeviceReportsConsumer(reader messaging.MessageReader, dead *deadletter.S
 // replica's process memory if the eviction message for the delete was lost (up to
 // inMemoryCache.ttlSeconds), and the edge would then be applied to a device row that is gone. It is one indexed read
 // per rule edge, far off the per-event path, so the database answers it every time.
-func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink, workers int) *processor.RaiseAlarmConsumer {
+//
+// The worker count is read from Configuration here rather than passed in, so the same test
+// sees the setting reach the consumer: a call site handing over a literal would build and run
+// with one lane whatever raiseAlarm.workers says.
+func newRaiseAlarmConsumer(reader messaging.MessageReader, dead *deadletter.Sink) *processor.RaiseAlarmConsumer {
 	return processor.NewRaiseAlarmConsumer(Microservice, reader,
-		core.NewNoOpLifecycleCallbacks(), Api, dead, RaiseAlarmMetrics, workers)
+		core.NewNoOpLifecycleCallbacks(), Api, dead, RaiseAlarmMetrics, Configuration.RaiseAlarm.Workers)
 }
 
 // wireDetectionRuleValidator injects the ADR-044 sync-validation gate onto the shared

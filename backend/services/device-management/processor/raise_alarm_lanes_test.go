@@ -30,6 +30,8 @@ type laneApi struct {
 	overlap  bool // two edges of ONE alarm were applied at the same time
 	cur, max int
 	delay    time.Duration
+	// lateStarts counts applies BEGUN under an already-cancelled context.
+	lateStarts int
 }
 
 func (a *laneApi) DevicesByToken(_ context.Context, tokens []string) ([]*model.Device, error) {
@@ -43,6 +45,9 @@ func (a *laneApi) ApplyAlarmContributorEdge(ctx context.Context, deviceId uint, 
 	tenant, _ := core.TenantFromContext(ctx)
 	id := fmt.Sprintf("%s/%d/%s", tenant, deviceId, alarmKey)
 	a.mu.Lock()
+	if ctx.Err() != nil {
+		a.lateStarts++
+	}
 	a.inflight[id]++
 	if a.inflight[id] > 1 {
 		a.overlap = true
@@ -85,7 +90,8 @@ func (a laneAck) Ack() error { a.n.Add(1); return nil }
 // TestRaiseAlarmLanesKeepEachAlarmsOrder: with eight lanes the edges of different alarms overlap, while
 // the edges of ONE alarm (same tenant, device and key) are applied one at a time, in the order they
 // were read. The severity carries the sequence number so the order is observable, and the same
-// device and key under another tenant is a different alarm.
+// device and key under another tenant is a different alarm (the tenant reaches the Api from the
+// subject, whichever lane applies the edge).
 func TestRaiseAlarmLanesKeepEachAlarmsOrder(t *testing.T) {
 	const devices, keys, perAlarm = 12, 3, 5
 	sevs := []string{"critical", "major", "minor", "warning", "indeterminate"}
@@ -138,6 +144,19 @@ func TestRaiseAlarmLaneIsStablePerAlarm(t *testing.T) {
 		spread[raiseLaneFor(mk("dc.acme.raise-alarm", fmt.Sprintf("d%d", i), "k", "major"), 8)] = true
 	}
 	require.Greater(t, len(spread), 4, "alarms should spread over the lanes")
+	// Each part of the alarm's identity spreads on its own. Hashing on less than all three is
+	// still correct (a coarser lane keeps every alarm's order), but one device with many alarm
+	// keys, or one key raised across many tenants, would then queue on a single lane.
+	spread = map[int]bool{}
+	for i := 0; i < 64; i++ {
+		spread[raiseLaneFor(mk("dc.acme.raise-alarm", "d1", fmt.Sprintf("k%d", i), "major"), 8)] = true
+	}
+	require.Greater(t, len(spread), 4, "one device's alarm keys should spread over the lanes")
+	spread = map[int]bool{}
+	for i := 0; i < 64; i++ {
+		spread[raiseLaneFor(mk(fmt.Sprintf("dc.t%d.raise-alarm", i), "d1", "k", "major"), 8)] = true
+	}
+	require.Greater(t, len(spread), 4, "one device and key under many tenants should spread over the lanes")
 	require.Equal(t, 0, raiseLaneFor(messaging.Message{Value: []byte("not json")}, 8), "poison goes to lane 0 to be dropped")
 }
 
@@ -175,4 +194,30 @@ func TestRaiseAlarmLanesStopLeavesQueuedEdgesUnacked(t *testing.T) {
 	require.Equal(t, applied, after, "an edge was applied after the loop returned")
 	require.Less(t, applied, len(msgs), "the loop should have stopped early")
 	require.LessOrEqual(t, acked.Load(), int64(applied), "an edge that was not applied must not be acked")
+}
+
+// TestRaiseAlarmLanesDoNotStartQueuedEdgesAfterCancel: once shutdown begins, an edge still
+// queued on a lane is skipped, not applied. Against the real store an apply begun under the
+// cancelled context fails on its first query, and on an edge's last delivery that failure is
+// dead-lettered as if the store had refused it. Only the edges already being applied at the
+// cancel (at most one per lane) may finish.
+func TestRaiseAlarmLanesDoNotStartQueuedEdgesAfterCancel(t *testing.T) {
+	var acked atomic.Int64
+	var msgs []messaging.Message
+	for i := 0; i < 400; i++ {
+		b, err := model.MarshalRaiseAlarmRequest(&model.RaiseAlarmRequest{DeviceToken: fmt.Sprintf("dev-%d", i), AlarmKey: "k",
+			RuleID: "r", Edge: model.AlarmEdgeRaised, Severity: "major", OccurredTime: time.Now()})
+		require.NoError(t, err)
+		msgs = append(msgs, messaging.NewConsumedMessage("dc.acme.raise-alarm", b, 1, nil, laneAck{&acked}))
+	}
+	api := &laneApi{applied: map[string][]string{}, inflight: map[string]int{}, delay: 20 * time.Millisecond}
+	ctx, cancel := context.WithCancel(context.Background())
+	rc := &RaiseAlarmConsumer{Api: api, Reader: &lanesReader{msgs: msgs}, Workers: 4}
+	rc.procCtx = ctx
+	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
+	rc.readLoop(ctx)
+
+	api.mu.Lock()
+	defer api.mu.Unlock()
+	require.Less(t, api.lateStarts, rc.Workers, "queued edges were applied after the loop was cancelled")
 }
