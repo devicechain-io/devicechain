@@ -322,6 +322,9 @@ quieres que la fórmula funcione sin `fan`, compruébala con `has()`.
   de tu inquilino.
 - Las unidades no se convierten ni se comprueban. Una fórmula lee sus entradas como números
   simples, y el resultado lleva solo la unidad que declares en la métrica calculada.
+- Un valor calculado se identifica por su lectura, el nombre de su métrica y su instante, no por su
+  valor. Si un mismo mensaje trae dos muestras para el mismo instante, producen una sola fila
+  calculada por nombre de métrica, y se conserva el primer valor escrito.
 
 ## Activar las métricas calculadas {#turning-calculated-metrics-on}
 

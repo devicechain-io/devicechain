@@ -302,6 +302,9 @@ the formula to work without `fan`, test for it with `has()`.
   retention.
 - Units are not converted or checked. A formula reads its inputs as plain numbers, and the result
   carries only the unit you declare on the calculated metric.
+- A calculated value is identified by its reading, its metric name and its instant, not by its
+  value. If one message carries two samples for the same instant, they produce one calculated row
+  per metric name, and the first value written is the one kept.
 
 ## Turning calculated metrics on
 
