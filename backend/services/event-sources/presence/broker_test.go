@@ -39,20 +39,19 @@ const testInstance = "inst-1"
 // broker starts an embedded server and returns it with its MQTT port.
 func broker(t *testing.T) (*natsserver.Server, int) {
 	t.Helper()
-	mqttPort := dctest.FreeTCPPort(t)
 	dir := dctest.JetStreamStoreDir(t)
 	conf := filepath.Join(dir, "nats.conf")
 	require.NoError(t, os.WriteFile(conf, []byte(fmt.Sprintf(`
 listen: "127.0.0.1:-1"
 server_name: "presence-test"
 jetstream { store_dir: %q }
-mqtt { listen: "127.0.0.1:%d" }
+mqtt { listen: "127.0.0.1:-1" }
 accounts {
   APP: { jetstream: enabled, users: [ {user: dc_service, password: svc} ] }
   SYS: { users: [ {user: dc_sys, password: sys} ] }
 }
 system_account: SYS
-`, dir, mqttPort)), 0o600))
+`, dir)), 0o600))
 	opts, err := natsserver.ProcessConfigFile(conf)
 	require.NoError(t, err)
 	opts.NoLog, opts.NoSigs = true, true
@@ -61,7 +60,7 @@ system_account: SYS
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(20*time.Second), "embedded broker not ready")
 	t.Cleanup(srv.Shutdown)
-	return srv, mqttPort
+	return srv, dctest.MQTTPort(t, srv)
 }
 
 // sysConn dials the system account the way the service does.
