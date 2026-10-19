@@ -42,7 +42,7 @@ func listServedTools(t *testing.T) ([]string, []*mcp.Tool) {
 	t.Helper()
 	ctx := context.Background()
 	iss, validator := mustIssuerValidator(t)
-	mcpHandler, _ := New(testResource, "https://as.example.com", validator, NewGraphQLClient())
+	mcpHandler, _ := New(testResource, "https://as.example.com", validator, NewGraphQLClient(), DefaultLimits())
 	ts := httptest.NewServer(mcpHandler)
 	t.Cleanup(ts.Close)
 

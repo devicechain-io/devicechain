@@ -36,7 +36,8 @@ func TestValidate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := &McpConfiguration{ResourceUrl: tc.resource, IssuerUrl: tc.issuer}
+			cfg := NewMcpConfiguration()
+			cfg.ResourceUrl, cfg.IssuerUrl = tc.resource, tc.issuer
 			err := cfg.Validate()
 			if tc.wantErr && err == nil {
 				t.Errorf("expected error, got nil")
@@ -45,5 +46,36 @@ func TestValidate(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateLimits(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*McpConfiguration)
+		wantErr bool
+	}{
+		{"defaults pass", func(*McpConfiguration) {}, false},
+		{"negative batch cap rejected", func(c *McpConfiguration) { c.MaxBatchEntries = -1 }, true},
+		{"negative rate rejected", func(c *McpConfiguration) { c.CallsPerSecond = -1 }, true},
+		{"burst below batch cap rejected", func(c *McpConfiguration) { c.MaxBatchEntries = 50; c.CallsBurst = 49 }, true},
+		{"burst equal to batch cap passes", func(c *McpConfiguration) { c.MaxBatchEntries = 50; c.CallsBurst = 50 }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := NewMcpConfiguration()
+			cfg.ResourceUrl, cfg.IssuerUrl = "https://mcp.example.com", "https://as.example.com"
+			tc.mutate(cfg)
+			if err := cfg.Validate(); (err != nil) != tc.wantErr {
+				t.Errorf("Validate() = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestDefaultsAreApplied(t *testing.T) {
+	cfg := NewMcpConfiguration()
+	if cfg.MaxBatchEntries != 16 || cfg.CallsPerSecond != 20 || cfg.CallsBurst != 40 {
+		t.Errorf("unexpected defaults: %+v", cfg)
 	}
 }
