@@ -32,8 +32,12 @@ func MQTTPort(t testing.TB, srv *natsserver.Server) int {
 	if err != nil {
 		t.Fatalf("read the broker's varz: %v", err)
 	}
-	if vz.MQTT.Port == 0 {
-		t.Fatalf("the broker reports no MQTT port (listener failed to bind?)")
+	// <= 0, not == 0: 0 means MQTT is not configured, and -1 is the UNRESOLVED request
+	// (the server rewrites it to the bound port only once the listener is up). Either one
+	// handed back would have the test dial a port nothing listens on, and a test asserting
+	// a refusal would then pass against the wrong thing.
+	if vz.MQTT.Port <= 0 {
+		t.Fatalf("the broker reports no bound MQTT port (%d): is MQTT configured, and was this called after ReadyForConnections?", vz.MQTT.Port)
 	}
 	return vz.MQTT.Port
 }
