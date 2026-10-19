@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -130,8 +131,10 @@ func TestRateLimitIsPerCallerAndCountsBatchEntries(t *testing.T) {
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status = %d (%s), want 429 once the burst is spent by a batch", resp.StatusCode, raw)
 	}
-	if resp.Header.Get("Retry-After") == "" {
-		t.Error("429 carries no Retry-After")
+	// At 0.001/s one token takes 1,000 s to refill; a Retry-After of 0 (or absent) would
+	// send the client straight back into the same refusal.
+	if ra, err := strconv.Atoi(resp.Header.Get("Retry-After")); err != nil || ra < 1000 {
+		t.Errorf("Retry-After = %q, want the refill interval (>= 1000 s)", resp.Header.Get("Retry-After"))
 	}
 	if code, _ := rpcError(t, raw); code != rpcRateLimited {
 		t.Errorf("code = %d, want %d", code, rpcRateLimited)
@@ -147,5 +150,82 @@ func TestUnauthenticatedCallerGetsTheChallengeNotALimit(t *testing.T) {
 	resp, _ := post(t, ts, "", batchOf(5))
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", resp.StatusCode)
+	}
+}
+
+// The SDK reads a batch with a streaming decoder, which takes the FIRST JSON value in the
+// body and ignores whatever follows it. A strict whole-body parse rejects that body, and
+// if the limiter then charged it as one message, appending one byte after a batch of
+// any size would carry the whole batch past both the cap and the rate limit.
+func TestTrailingDataDoesNotHideABatch(t *testing.T) {
+	ts, tokenFor, hits := limitedServer(t, Limits{MaxBatchEntries: 4, CallsPerSecond: 1000, CallsBurst: 1000})
+	for _, suffix := range []string{" x", "[]", "{}", " ]"} {
+		resp, raw := post(t, ts, tokenFor("a@b.c"), batchOf(5)+suffix)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("suffix %q: status = %d (%s), want 400", suffix, resp.StatusCode, raw)
+			continue
+		}
+		if code, _ := rpcError(t, raw); code != rpcInvalidRequest {
+			t.Errorf("suffix %q: code = %d, want %d", suffix, code, rpcInvalidRequest)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("%d upstream reads ran for batches over the cap, want 0", n)
+	}
+}
+
+// JSON allows whitespace before the value, and the SDK accepts a batch behind it, so the
+// limiter must too or leading whitespace would be a free pass.
+func TestLeadingWhitespaceDoesNotHideABatch(t *testing.T) {
+	ts, tokenFor, hits := limitedServer(t, Limits{MaxBatchEntries: 4, CallsPerSecond: 1000, CallsBurst: 1000})
+	for _, prefix := range []string{" ", "\t", "\r\n", " \n\t "} {
+		resp, raw := post(t, ts, tokenFor("a@b.c"), prefix+batchOf(5))
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(raw, "at most 4") {
+			t.Errorf("prefix %q: status = %d (%s), want the cap's 400", prefix, resp.StatusCode, raw)
+		}
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("%d upstream reads ran for batches over the cap, want 0", n)
+	}
+}
+
+// A body that opens like a batch but cannot be counted is refused here rather than
+// handed on as one message: if this parser and the SDK's ever disagree about where a
+// batch ends, the disagreement must not be the caller's discount.
+func TestUncountableBatchIsRefused(t *testing.T) {
+	ts, tokenFor, hits := limitedServer(t, Limits{MaxBatchEntries: 4, CallsPerSecond: 1000, CallsBurst: 1000})
+	resp, raw := post(t, ts, tokenFor("a@b.c"), `[{"jsonrpc":"2.0","id":1,"method":"tools/call"`)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d (%s), want 400", resp.StatusCode, raw)
+	}
+	if code, _ := rpcError(t, raw); code != rpcInvalidRequest {
+		t.Errorf("code = %d, want %d", code, rpcInvalidRequest)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("%d upstream reads ran, want 0", n)
+	}
+}
+
+// A refused SINGLE request answers with that request's own id, so a client correlating
+// by id can tell which call was refused; null is only for a batch, which has no one id.
+func TestRateLimitedSingleRequestEchoesItsID(t *testing.T) {
+	ts, tokenFor, _ := limitedServer(t, Limits{MaxBatchEntries: 1, CallsPerSecond: 0.001, CallsBurst: 1})
+	tok := tokenFor("a@b.c")
+	single := `{"jsonrpc":"2.0","id":"call-7","method":"tools/call","params":{"name":"list_devices","arguments":{}}}`
+	if resp, raw := post(t, ts, tok, single); resp.StatusCode == http.StatusTooManyRequests {
+		t.Fatalf("the first request was limited: %s", raw)
+	}
+	resp, raw := post(t, ts, tok, single)
+	if resp.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d (%s), want 429", resp.StatusCode, raw)
+	}
+	var out struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		t.Fatalf("not JSON: %q", raw)
+	}
+	if string(out.ID) != `"call-7"` {
+		t.Errorf("id = %s, want \"call-7\"", out.ID)
 	}
 }

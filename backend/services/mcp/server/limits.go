@@ -70,24 +70,21 @@ func limitMessages(next http.Handler, l Limits) http.Handler {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 
-		n := 1
-		if trimmed := bytes.TrimLeft(body, " \t\r\n"); len(trimmed) > 0 && trimmed[0] == '[' {
-			var batch []json.RawMessage
-			// A body that does not parse is left for the SDK to refuse as it always has;
-			// it is charged as one message.
-			if json.Unmarshal(trimmed, &batch) == nil {
-				n = len(batch)
-			}
+		n, id, ok := countMessages(body)
+		if !ok {
+			writeRPCError(w, http.StatusBadRequest, rpcInvalidRequest, nil,
+				"the body opens a JSON-RPC batch that could not be parsed")
+			return
 		}
 		if n > l.MaxBatchEntries {
-			writeRPCError(w, http.StatusBadRequest, rpcInvalidRequest,
+			writeRPCError(w, http.StatusBadRequest, rpcInvalidRequest, nil,
 				fmt.Sprintf("a JSON-RPC batch may carry at most %d messages; this one carries %d. Send them as separate requests.",
 					l.MaxBatchEntries, n))
 			return
 		}
 		if !limiter.AllowN(callerKey(r), n) {
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(l, n)))
-			writeRPCError(w, http.StatusTooManyRequests, rpcRateLimited,
+			writeRPCError(w, http.StatusTooManyRequests, rpcRateLimited, id,
 				"rate limit exceeded for this caller; retry after the interval in Retry-After")
 			return
 		}
@@ -114,14 +111,47 @@ func retryAfterSeconds(l Limits, n int) int {
 	return s
 }
 
-// writeRPCError answers with a JSON-RPC error whose id is null, as the specification
-// requires when the id of the request cannot be determined.
-func writeRPCError(w http.ResponseWriter, status, code int, msg string) {
+// countMessages is how many JSON-RPC messages body carries, as the SDK will see them.
+//
+// A body whose first non-whitespace byte is '[' is a batch. It is read the way the SDK
+// reads it: with a streaming decoder, which takes the FIRST JSON value and ignores what
+// follows. A strict whole-body parse would reject `[...batch...] x`, and charging that
+// as one message would let one trailing byte carry a batch of any size past both the cap
+// and the rate limit, because the SDK still runs every entry. A body that opens a batch
+// but cannot be decoded is reported !ok and refused rather than charged as one: where
+// this parser and the SDK's disagree, the caller must not get the cheaper count.
+//
+// Anything else is one message, and id is its "id" member (matched exactly, as the SDK
+// matches it), so a refusal can answer the request it refuses. A notification, or a
+// body that is not an object, has no id and is answered with null.
+func countMessages(body []byte) (n int, id json.RawMessage, ok bool) {
+	trimmed := bytes.TrimLeft(body, " \t\r\n")
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var batch []json.RawMessage
+		if err := json.NewDecoder(bytes.NewReader(trimmed)).Decode(&batch); err != nil {
+			return 0, nil, false
+		}
+		return len(batch), nil, true
+	}
+	var msg map[string]json.RawMessage
+	if json.Unmarshal(body, &msg) == nil {
+		id = msg["id"]
+	}
+	return 1, id, true
+}
+
+// writeRPCError answers with a JSON-RPC error. id is the refused request's id; it is
+// null (nil) for a batch, or when the id cannot be determined, as the specification
+// requires.
+func writeRPCError(w http.ResponseWriter, status, code int, id json.RawMessage, msg string) {
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"jsonrpc": "2.0",
-		"id":      nil,
+		"id":      id,
 		"error":   map[string]any{"code": code, "message": msg},
 	})
 }
