@@ -72,7 +72,9 @@ suele ser más rápido que esperar una respuesta.
     completo se envía a la cola de mensajes no entregados. Lo mismo ocurre con un valor `NaN`,
     infinito o de magnitud igual o superior a 1.000.000.000.000.
 
-  Declarar la métrica en el perfil, con el tipo de dato correcto, resuelve ambos casos.
+  Declarar la métrica en el perfil, con el tipo de dato correcto, resuelve ambos casos. No sirve
+  para un valor que el almacén no puede guardar: se rechaza en cualquier caso, y declararla solo
+  hace que el evento completo se pierda con él.
 - **Estás consultando un inquilino distinto** de aquel al que reporta el dispositivo.
 
 ## Qué esperar

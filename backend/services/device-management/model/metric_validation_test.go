@@ -33,6 +33,10 @@ func TestValidateMetricValue(t *testing.T) {
 			MaxValue: sql.NullFloat64{Float64: 100, Valid: true}}, "NaN", false},
 		{"double 1e12", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "1e12", false},
 		{"double -1.25e+21", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "-1.25e+21", false},
+		// Twelve nines and eight decimals is the column's largest value, but it is not a float64:
+		// it parses to 1e12, which is what the persister would bind, so it is refused too.
+		{"double 999999999999.99999999", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "999999999999.99999999", false},
+		{"double -999999999999.9998", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "-999999999999.9998", true},
 		{"double 999999999999", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "999999999999", true},
 		{"double 1e-12", &MetricDefinition{MetricKey: "temp", DataType: "DOUBLE"}, "1e-12", true},
 		{"int 1e12", &MetricDefinition{MetricKey: "rpm", DataType: "INT"}, "1000000000000", false},

@@ -230,9 +230,10 @@ func TestDatabaseValueRejectionIsDeterministic(t *testing.T) {
 }
 
 // A measurement that is NaN or infinite parses, but no payload identity can be derived for it,
-// and no delivery can change that: it is deterministic, not a failure to retry. Event-sources'
-// decoders and the validator refuse these too; this is the backstop for the ingest paths that
-// build a payload directly.
+// and no delivery can change that: it is deterministic, not a failure to retry. Every ingest path
+// (the JSON decoder, lwm2m-ingest, sparkplug-ingest) reaches device-management's resolver, whose
+// validator and undeclared-key check refuse these before a resolved event is written; this is the
+// backstop for a resolved event that did not pass through them.
 func TestANonFiniteMeasurementIsADeterministicFailure(t *testing.T) {
 	for _, v := range []string{"NaN", "+Inf", "-Inf", "Infinity"} {
 		_, err := measurementRequests(model.Event{}, dmmodel.ResolvedMeasurementsPayload{

@@ -67,7 +67,9 @@ usually faster than waiting on a reply.
   - A *declared* measurement whose value does not match its declared type is worse: the whole event
     is dead-lettered. So is one that is `NaN`, infinite, or 1,000,000,000,000 or more in magnitude.
 
-  Declaring the metric on the profile, with the right data type, fixes both.
+  Declaring the metric on the profile, with the right data type, fixes both. It does not help a
+  value the store cannot hold: that is refused either way, and declaring it only means the whole
+  event goes with it.
 - **You are looking at a different tenant** than the one the device reports into.
 
 ## What to expect
