@@ -3755,8 +3755,8 @@ Calculated metrics stay off until a tier's `calculatedMetricsPerProfile` is abov
   that sends its own time with up to six fractional digits) keep the same ids. A reading with
   sub-microsecond digits gets a new derived id, which includes every JSON reading that sends no time
   of its own, because the platform dates it at receipt with nanoseconds. If that same reading is
-  stored again after the upgrade, because it was redelivered inside the 600-second window or the
-  device resent a reading from before it, its derived value is stored as a second row. Raw rows are
+  stored again after the upgrade, because event storage was handed it again (it was not yet
+  acknowledged when the pods rolled) or the device resent a reading from before it, its derived value is stored as a second row. Raw rows are
   unaffected, and old rows are not rewritten.
 
 ##### Backfilling history {#v0240-backfill}
@@ -3776,6 +3776,8 @@ are, and it needs nothing to turn on beyond a published profile version that has
 - **It only adds values and is silent.** A stored value is never changed. A backfilled value appears
   in dashboards, history and exports; it does not change a device's latest values, and detection
   rules never see it.
+- **A reading that holds one input twice with different values is skipped as `ambiguous`**, where
+  live calculation reads the first. The job counts every skip by reason.
 - **Compressed history is skipped** in this release (the event store compresses chunks older than 7
   days by default), and the job counts what it skipped.
 - **One worker per instance runs the jobs, at a bounded rate.** `calculatedBackfill.enabled` in the
@@ -3807,13 +3809,13 @@ when the event is resolved.
 | Setting | Was | Now | Restore the old behaviour |
 | --- | --- | --- | --- |
 | `infrastructure.messaging.wireFormat` | `legacy` | `compact` | `legacy` (chart install only; see [Before you upgrade](#v0240-before)) |
-| `event-processing` `derivedPublishing.maxInFlight` | 1 | 32 | Set `1`. Still at most one outstanding detection per device, so each device's detections arrive in order. Publishing again without duplicates holds within the derived-events stream's 30-minute duplicate window. |
+| `event-processing` `derivedPublishing.maxInFlight` (new) | one detection at a time | 32 | Set `1`. Still at most one outstanding detection per device, so each device's detections arrive in order. Publishing again without duplicates holds within the derived-events stream's 30-minute duplicate window. |
 | `device-management` `raiseAlarm.workers` (new, fixed, read at startup) | one change at a time | `max(1, min(8, pool - resolution.workers - 4))`, which is 6 on the default pool of 20 | Set `1` for the old inline path. Changes to one alarm are always applied in order. An explicit value is validated against the connection pool and never adjusted. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (under `functionalAreas.mcp.config`) | no cap | 16, 20 and 40 | Raise them; `callsBurst` may not be below `maxBatchEntries`. |
 | GKE reference module `services_machine_type` (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Set it explicitly. Changing an existing pool's machine type recreates its nodes. |
 
 - **Detection:** detections of different devices are published side by side, up to 32 at a time,
-  instead of waiting for each acknowledgement. On a replicated cluster under a firing-heavy load of
+  instead of waiting for each acknowledgement. On a GKE test cluster under a firing-heavy load of
   about 2,500 detections a second offered, a window of 32 published 2,441 detections a second against
   528 for a window of 1, and the watermark lag was 5.1 s instead of 139 s. The byte budget
   `derivedPublishing.maxBufferedBytes` now counts every prepared payload that is not yet
@@ -3842,7 +3844,7 @@ platform holds the message. The broker's own MQTT message store (`$MQTT_msgs`) i
 discard-new, so a full store refuses a QoS 1 publish (the device gets no PUBACK and resends) instead
 of discarding one it has already acknowledged. `event-sources` forwards from the store, and the store
 is handed between pods safely during a rolling update. A store that is nearly full backs devices off:
-`device-management` refuses new MQTT connections while it is above 80% full and until it is below
+`device-management` refuses new MQTT connections once it is 80% full and until it is below
 60%, which a device sees as CONNACK code 5 (not authorized), so firmware must keep retrying on it. The setting is refused
 on a broker that also serves another instance.
 
@@ -3885,15 +3887,15 @@ usually because the broker has no storage left to reserve it. New metrics:
   ReadWriteOnce store that a second pod would mount is refused before the version is recorded, as
   `--enable-area` already did. The "recorded binding" message no longer names the context twice.
 - **Rule health.** Rule-health fire counters are batched off the detection loop (about 2.6 ms saved
-  per published detection on PostgreSQL), and the detection dashboard gains panels for
-  `detect_rule_stat_write_failures_total` and `detect_rule_stat_admission_contended_total`.
+  per published detection on PostgreSQL), and the detection dashboard gains a panel for
+  `detect_rule_stat_write_failures_total` and the new `detect_rule_stat_admission_contended_total`.
 - **Device ownership.** The times on ownership facts come from the database's clock, and a device
   re-queued repeatedly keeps its place in the backlog, so it can no longer starve.
 - **A fail-closed durable that is created again starts at the store's first sequence,** so a
   consumer that was deleted does not leave acknowledged messages unread (only with `mqttFailClosed`
   on). A repeat is folded by the destination stream's duplicate window and stored again beyond it.
 - **Customer users.** A member limited to some customers sees their Updates list again, and the
-  customer Users tab no longer stops at 10,000 members with an error.
+  customer Users tab beyond 10,000 members shows the first 10,000 with a notice instead of an error.
 - **Building from source.** The C# SDK now builds with the .NET SDK pinned in `global.json` (8.0.425),
   so a locked restore no longer breaks when a runner image moves a patch.
 - **Documentation.** A user-guide chapter on calculated metrics (English, Spanish and Chinese), and

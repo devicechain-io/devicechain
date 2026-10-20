@@ -3908,7 +3908,7 @@ varios a la vez. Qué cambia para alguien:
 - **Se ejecuta una migración en el primer arranque de `event-management`.** Crea la tabla
   `calculated_backfills` y sus índices. No escribe ninguna fila, no reescribe nada y se puede volver a
   ejecutar si se interrumpe. Ningún otro servicio tiene una migración en esta versión.
-- **El bróker se reinicia una vez.** Con `--ha`, de un servidor en uno, cada uno Ready antes de que se
+- **El bróker se reinicia una vez.** Con `--ha`, de un servidor en otro, cada uno Ready antes de que se
   detenga el siguiente; sin `--ha` el único servidor se reinicia y el bróker no está disponible durante
   aproximadamente un minuto. Los dispositivos se vuelven a conectar solos, y una sesión MQTT persistente
   conserva sus suscripciones y los mensajes QoS 1 retenidos para ella. **No reinicies a mano un servidor
@@ -3941,15 +3941,15 @@ servidor se reinicia y el bróker no está disponible durante aproximadamente un
 dispositivos se vuelven a conectar solos, y una sesión MQTT persistente conserva sus suscripciones y
 los mensajes QoS 1 retenidos para ella mientras el dispositivo no estaba.
 
-- **No cambie la replicación del bróker en la misma actualización.** Mientras los servidores se
+- **No cambies la replicación del bróker en la misma actualización.** Mientras los servidores se
   reinician, unos ejecutan `2.14.4` y otros `2.15.1`. NATS 2.15 cambió la forma en que un stream o
   un consumidor cambia su número de réplicas o su ubicación, y solo NATS `2.14.7` y posteriores
   entienden el nuevo mecanismo. Esta actualización parte de `2.14.4`, así que un cambio de réplicas
   o de ubicación iniciado mientras algún servidor todavía lo ejecuta puede quedarse atascado, no
   solo retrasado. Los streams se pueden leer y escribir durante todo el proceso, y crearlos o
-  eliminarlos no se ve afectado. Suba `streamReplicas` o `nats_cluster_replicas` antes o después de
+  eliminarlos no se ve afectado. Sube `streamReplicas` o `nats_cluster_replicas` antes o después de
   esta actualización, no durante.
-- **No reinicie a mano un servidor del bróker mientras avanza la actualización.** La nueva
+- **No reinicies a mano un servidor del bróker mientras avanza la actualización.** La nueva
   configuración llega a todos los servidores a la vez, pero cada servidor pasa a `2.15.1` solo
   cuando le toca. Hasta entonces sigue funcionando con la configuración con la que arrancó, y si se
   reinicia en ese intervalo (a mano, o porque falla su nodo) no puede arrancar con la nueva
@@ -3960,14 +3960,14 @@ los mensajes QoS 1 retenidos para ella mientras el dispositivo no estaba.
   para NATS 2.15 y un servidor 2.14 la rechaza al arrancar, así que un `nats_chart_version` inferior
   a `2.15.0` hace fallar el plan en lugar de dejar el bróker en un bucle de reinicios. Si un
   `terraform.tfvars` junto al estado de infraestructura de la instancia fija `nats_chart_version`,
-  súbalo a `2.15.1` o elimínelo antes de actualizar. Considere el paso a 2.15 como irreversible: NATS
+  súbelo a `2.15.1` o elimínalo antes de actualizar. Considera el paso a 2.15 como irreversible: NATS
   solo admite volver de 2.15 a 2.14.7 o posterior, y la versión anterior ejecuta 2.14.4.
 - **Se levanta el límite de 1.000 consumidores que NATS 2.15 añade a cada stream.** Cada
   suscripción MQTT con QoS 1 o 2 es un consumidor en el stream de mensajes propio del bróker, así que
   con el nuevo valor por defecto se rechazaría la suscripción número 1.001 de ese tipo en toda la
   flota mientras su dispositivo seguía conectado, y ese dispositivo nunca recibiría un comando. Se
   cuentan suscripciones, no dispositivos: un dispositivo con dos suscripciones QoS 1 usa dos. Si
-  instala usted mismo el módulo `nats`, mantenga `jetstream.limits.default_max_consumers` en `-1`.
+  instalas tú mismo el módulo `nats`, mantén `jetstream.limits.default_max_consumers` en `-1`.
 
 Qué mejora:
 
@@ -4023,7 +4023,7 @@ Las métricas calculadas siguen desactivadas hasta que el `calculatedMetricsPerP
   que cambió, sigue sin obtener valor en una fórmula de varias entradas. Si una métrica aparece dos veces
   en un instante, la fórmula lee la primera. Las lecturas LwM2M de un mismo paquete SenML comparten ahora
   un único instante de recepción. La guía de usuario describe
-  [cómo se forma una lectura](../user-guide/calculated-metrics.md).
+  [cómo se forma una lectura](../user-guide/calculated-metrics.md#what-a-calculated-metric-is).
 - **Dos muestras calculadas del mismo nombre en el mismo instante conservan una sola fila almacenada**, la
   primera escrita.
 - **El id de un valor derivado sigue ahora a su instante en UTC con precisión de microsegundo.** Las
@@ -4031,8 +4031,8 @@ Las métricas calculadas siguen desactivadas hasta que el `calculatedMetricsPerP
   que envían su propia hora con hasta seis decimales) conservan los mismos ids. Una lectura con dígitos
   por debajo del microsegundo recibe un id derivado nuevo, lo que incluye toda lectura JSON que no envía
   su propia hora, porque la plataforma le pone la hora de recepción con nanosegundos. Si esa misma lectura
-  se almacena de nuevo tras la actualización, porque se reentregó dentro de la ventana de 600 segundos o
-  el dispositivo reenvió una lectura anterior, su valor derivado se almacena como una segunda fila. Las
+  se almacena de nuevo tras la actualización, porque el almacenamiento de eventos la recibió de nuevo (aún no
+  estaba confirmada cuando los pods se renovaron) o el dispositivo reenvió una lectura anterior, su valor derivado se almacena como una segunda fila. Las
   filas sin procesar no se ven afectadas y las filas antiguas no se reescriben.
 
 ##### Relleno del historial {#v0240-backfill}
@@ -4053,6 +4053,8 @@ perfil que tenga una métrica calculada.
 - **Solo añade valores y es silencioso.** Un valor almacenado nunca cambia. Un valor rellenado aparece en
   paneles, historial y exportaciones; no cambia los últimos valores de un dispositivo y las reglas de
   detección nunca lo ven.
+- **Una lectura que contiene una misma entrada dos veces con valores distintos se omite como
+  `ambiguous`**, mientras que el cálculo en vivo lee la primera. El trabajo cuenta cada omisión por motivo.
 - **El historial comprimido se omite** en esta versión (el almacén de eventos comprime por defecto los
   fragmentos de más de 7 días), y el trabajo cuenta lo que omitió.
 - **Un trabajador por instancia ejecuta los trabajos, a un ritmo acotado.** `calculatedBackfill.enabled`
@@ -4086,13 +4088,13 @@ resolver el evento.
 | Ajuste | Antes | Ahora | Restaurar el comportamiento anterior |
 | --- | --- | --- | --- |
 | `infrastructure.messaging.wireFormat` | `legacy` | `compact` | `legacy` (solo en instalación con el chart; consulta [Antes de actualizar](#v0240-before)) |
-| `event-processing` `derivedPublishing.maxInFlight` | 1 | 32 | Indica `1`. Sigue habiendo como máximo una detección pendiente por dispositivo, así que las detecciones de cada dispositivo llegan en orden. Volver a publicar sin duplicados se mantiene dentro de la ventana de duplicados de 30 minutos del stream de eventos derivados. |
+| `event-processing` `derivedPublishing.maxInFlight` (nuevo) | una detección cada vez | 32 | Indica `1`. Sigue habiendo como máximo una detección pendiente por dispositivo, así que las detecciones de cada dispositivo llegan en orden. Volver a publicar sin duplicados se mantiene dentro de la ventana de duplicados de 30 minutos del stream de eventos derivados. |
 | `device-management` `raiseAlarm.workers` (nuevo, fijo, se lee al arrancar) | un cambio cada vez | `max(1, min(8, pool - resolution.workers - 4))`, es decir, 6 con el pool por defecto de 20 | Indica `1` para la ruta en línea anterior. Los cambios de una misma alarma se aplican siempre en orden. Un valor explícito se valida contra el pool de conexiones y nunca se ajusta. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (en `functionalAreas.mcp.config`) | sin límite | 16, 20 y 40 | Súbelos; `callsBurst` no puede ser menor que `maxBatchEntries`. |
 | `services_machine_type` del módulo de referencia de GKE (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Indícalo explícitamente. Cambiar el tipo de máquina de un grupo existente recrea sus nodos. |
 
 - **Detección:** las detecciones de distintos dispositivos se publican en paralelo, hasta 32 a la vez, en
-  lugar de esperar cada confirmación. En un clúster replicado con una carga de disparos intensa de unas
+  lugar de esperar cada confirmación. En un clúster de pruebas de GKE con una carga de disparos intensa de unas
   2.500 detecciones por segundo ofrecidas, una ventana de 32 publicó 2.441 detecciones por segundo frente a
   528 con una ventana de 1, y el retraso de la marca de agua fue de 5,1 s en lugar de 139 s. El
   presupuesto de bytes `derivedPublishing.maxBufferedBytes` cuenta ahora todas las cargas preparadas que
@@ -4102,7 +4104,7 @@ resolver el evento.
   `raiseAlarm.workers` carriles, y los cambios de una alarma van al mismo carril. En una prueba local con
   8 carriles fueron entre cuatro y siete veces más. El valor por defecto deja libres cuatro conexiones del
   pool junto a los resolvedores; ambos grupos comparten el pool de conexiones, así que dimensiónalos
-  juntos. Consulta la sección «Qué tan rápido se aplican las alarmas» de [la página del motor de detección](./detection-engine.md).
+  juntos. Consulta [Qué tan rápido se aplican las alarmas](./detection-engine.md#how-fast-alarms-are-applied).
 - **MCP:** un lote que supera el tope se rechaza entero (HTTP 400, petición no válida de JSON-RPC, no se
   ejecuta nada), y un llamante que supera la tasa recibe HTTP 429 con `Retry-After`. Un lote de N cuenta
   como N mensajes, y el llamante es el sujeto del token verificado (tenant y correo). Consulta
@@ -4123,7 +4125,7 @@ se declara acotado y con descarte de lo nuevo, de modo que un almacén lleno rec
 (el dispositivo no recibe PUBACK y la reenvía) en lugar de descartar una que ya había confirmado.
 `event-sources` reenvía desde el almacén, y el almacén se traspasa entre pods de forma segura durante una
 actualización progresiva. Un almacén casi lleno aparta a los dispositivos: `device-management` rechaza las
-conexiones MQTT nuevas mientras está por encima del 80 % y hasta que baja del 60 %, lo que un dispositivo
+conexiones MQTT nuevas en cuanto llega al 80 % y hasta que baja del 60 %, lo que un dispositivo
 ve como CONNACK con código 5 (no autorizado), así que el firmware debe seguir reintentando ante él. El
 ajuste se rechaza en un bróker que sirve también a otra instancia.
 
@@ -4169,7 +4171,7 @@ reservarlo. Métricas nuevas: `devicechain_eventsources_mqtt_gateway_stream_unbo
   hacía `--enable-area`. El mensaje «recorded binding» ya no nombra dos veces el contexto.
 - **Salud de las reglas.** Los contadores de disparos de la salud de las reglas se agrupan fuera del bucle
   de detección (unos 2,6 ms ahorrados por detección publicada en PostgreSQL), y el panel de detección
-  gana paneles para `detect_rule_stat_write_failures_total` y
+  gana un panel para `detect_rule_stat_write_failures_total` y la nueva
   `detect_rule_stat_admission_contended_total`.
 - **Propiedad de dispositivos.** Las horas de los hechos de propiedad las da el reloj de la base de datos,
   y un dispositivo que vuelve a ponerse en cola una y otra vez conserva su lugar en la cola, así que ya
@@ -4179,7 +4181,8 @@ reservarlo. Métricas nuevas: `devicechain_eventsources_mqtt_gateway_stream_unbo
   `mqttFailClosed` activado). La ventana de duplicados del stream de destino absorbe una repetición y, más
   allá de ella, se almacena de nuevo.
 - **Usuarios de cliente.** Un miembro limitado a algunos clientes vuelve a ver su lista de Actualizaciones,
-  y la pestaña Usuarios del cliente ya no se detiene con un error al llegar a 10.000 miembros.
+  y la pestaña Usuarios del cliente, con más de 10.000 miembros, muestra los primeros 10.000 con un aviso
+  en lugar de un error.
 - **Compilar desde el código fuente.** El SDK de C# se compila ahora con el SDK de .NET fijado en
   `global.json` (8.0.425), así que una restauración bloqueada ya no se rompe cuando una imagen de runner
   cambia de parche.

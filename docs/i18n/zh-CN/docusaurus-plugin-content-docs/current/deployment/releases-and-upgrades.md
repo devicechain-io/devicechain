@@ -2233,7 +2233,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **派生值的 id 现在跟随其以 UTC 表示、精确到微秒的时刻。** 时刻精确到微秒的读数（所有 Sparkplug 和
   LwM2M 读数，以及自带时间、小数位不超过六位的 JSON 读数）id 不变。带有亚微秒位数的读数会得到新的派生
   id，其中包括所有没有自带时间的 JSON 读数，因为平台会以纳秒精度把接收时刻作为其时间。如果同一条读数
-  在升级后再次被存储，原因是它在 600 秒窗口内被重新投递，或设备重发了升级之前的读数，那么它的派生值
+  在升级后再次被存储，原因是事件存储再次收到了它（滚动更新时它尚未被确认），或设备重发了升级之前的读数，那么它的派生值
   会作为第二行存储。原始行不受影响，旧行也不会被改写。
 
 ##### 回填历史数据 {#v0240-backfill}
@@ -2248,6 +2248,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
   同时只有一个活动作业（排队中或运行中）。
 - **只新增值，且静默进行。** 已存储的值从不改变。回填的值会出现在仪表板、历史和导出中；它不会改变设备
   的最新值，检测规则也永远看不到它。
+- **同一输入在一条读数中出现两次且值不同时，该读数会作为 `ambiguous` 跳过**，而实时计算读取第一个值。
+  作业按原因统计每一次跳过。
 - **本版本会跳过已压缩的历史**（事件存储默认压缩 7 天以前的块），作业会统计被跳过的内容。
 - **每个实例由一个工作进程以受限速率运行作业。** `event-management` 配置中的
   `calculatedBackfill.enabled` 有三种状态。未设置（默认）时，连接池在容纳持久化写入器之余还有空间，
@@ -2272,20 +2274,20 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 | 设置 | 原值 | 现值 | 恢复原有行为 |
 | --- | --- | --- | --- |
 | `infrastructure.messaging.wireFormat` | `legacy` | `compact` | `legacy`（仅限 chart 安装；见[升级之前](#v0240-before)） |
-| `event-processing` 的 `derivedPublishing.maxInFlight` | 1 | 32 | 设为 `1`。每台设备仍最多只有一条未完成的检测结果，因此每台设备的检测结果按顺序到达。无重复的重新发布在派生事件流 30 分钟的去重窗口内成立。 |
+| `event-processing` 的 `derivedPublishing.maxInFlight`（新增） | 一次一条检测结果 | 32 | 设为 `1`。每台设备仍最多只有一条未完成的检测结果，因此每台设备的检测结果按顺序到达。无重复的重新发布在派生事件流 30 分钟的去重窗口内成立。 |
 | `device-management` 的 `raiseAlarm.workers`（新增，固定设置，启动时读取） | 一次一个变更 | `max(1, min(8, pool - resolution.workers - 4))`，默认连接池为 20 时即 6 | 设为 `1` 即恢复原来的串行路径。同一条告警的变更始终按顺序应用。显式给出的值会按连接池校验，绝不会被调整。 |
 | `mcp` 的 `maxBatchEntries`、`callsPerSecond`、`callsBurst`（位于 `functionalAreas.mcp.config`） | 无上限 | 16、20 和 40 | 调高它们；`callsBurst` 不能小于 `maxBatchEntries`。 |
 | GKE 参考模块的 `services_machine_type`（`deploy/gke`） | `n2-custom-4-8192` | `t2d-standard-4` | 显式设置。更改现有节点池的机型会重建其节点。 |
 
-- **检测：** 不同设备的检测结果并行发布，一次最多 32 条，而不再逐条等待确认。在复制集群上，以每秒约
+- **检测：** 不同设备的检测结果并行发布，一次最多 32 条，而不再逐条等待确认。在一个 GKE 测试集群上，以每秒约
   2,500 条检测结果的触发密集型负载测试，窗口为 32 时每秒发布 2,441 条检测结果，窗口为 1 时为 528 条，
   水位线滞后为 5.1 秒，而不是 139 秒。字节预算 `derivedPublishing.maxBufferedBytes` 现在统计每一份
   已准备好但尚未确认的载荷。见[检测引擎页面](./detection-engine.md#configuration)。
 - **告警：** `device-management` 过去在其读取循环中逐个应用 raise-alarm 变更，在本地数据库上无论服务多么
   空闲，每秒也只有大约一百个。现在它在 `raiseAlarm.workers` 条通道上应用，同一条告警的变更进入同一
   条通道。在本地测试中，8 条通道时的速度是原来的四到七倍。默认值会在解析器之外再留出四个连接池连接；
-  两组工作者共用连接池，请一并规划。见检测引擎页面中“告警的应用速度”一节：
-  [检测引擎页面](./detection-engine.md)。
+  两组工作者共用连接池，请一并规划。见
+  [告警的应用速度](./detection-engine.md#how-fast-alarms-are-applied)。
 - **MCP：** 超过上限的批量请求会被整体拒绝（HTTP 400，JSON-RPC 无效请求，不执行任何内容），超过速率的
   调用方会收到带 `Retry-After` 的 HTTP 429。N 条消息的批量按 N 条计，调用方是已验证令牌的主体（租户
   和邮箱）。见 [MCP 服务器的限制](../concepts/mcp.md#limits-and-boundaries)。
@@ -2301,7 +2303,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 除非你设置它，否则什么都不会变。开启后，QoS 1 的 PUBACK 表示平台已持有该消息。代理自己的 MQTT 消息存储
 （`$MQTT_msgs`）被声明为有界且满后丢弃新消息，所以存储写满时会拒绝 QoS 1 发布（设备收不到 PUBACK 并
 重发），而不是丢弃已经确认过的消息。`event-sources` 从存储中转发，滚动更新期间存储也能在 pod 之间安全
-移交。存储接近写满时会让设备退避：存储超过 80% 时，`device-management` 拒绝新的 MQTT 连接，直到降到
+移交。存储接近写满时会让设备退避：存储达到 80% 时，`device-management` 拒绝新的 MQTT 连接，直到降到
 60% 以下，设备看到的是 CONNACK 代码 5（未授权），因此固件必须在遇到它时继续重试。在同时服务另一个实例
 的代理上，该设置会被拒绝。
 
@@ -2338,14 +2340,14 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
   在记录版本之前就会被拒绝，与 `--enable-area` 已有的行为一致。“recorded binding”消息不再重复两次上下文
   名称。
 - **规则健康。** 规则健康的触发计数器改为在检测循环之外批量写入（在 PostgreSQL 上每条已发布的检测结果
-  约节省 2.6 毫秒），检测仪表板新增 `detect_rule_stat_write_failures_total` 和
-  `detect_rule_stat_admission_contended_total` 的面板。
+  约节省 2.6 毫秒），检测仪表板新增一个面板，展示 `detect_rule_stat_write_failures_total` 和新的
+  `detect_rule_stat_admission_contended_total`。
 - **设备所有权。** 所有权事实的时间取自数据库的时钟，反复重新入队的设备在积压队列中保持其位置，因此不会
   再被饿死。
 - **重新创建的故障关闭持久消费者从存储的第一个序号开始，** 因此被删除的消费者不会留下已确认却未读取的
   消息（仅在开启 `mqttFailClosed` 时）。目标流的去重窗口会折叠重复项，超出窗口的重复项会被再次存储。
-- **客户用户。** 受限于部分客户的成员又能看到自己的“更新”列表，客户的“用户”标签页也不再在 10,000 名成员
-  处以错误停止。
+- **客户用户。** 受限于部分客户的成员又能看到自己的“更新”列表，客户的“用户”标签页在成员超过 10,000 名时
+  显示前 10,000 名并给出提示，而不再报错。
 - **从源码构建。** C# SDK 现在使用 `global.json` 中固定的 .NET SDK（8.0.425）构建，因此运行器镜像更换补丁
   版本时，锁定的还原不再失败。
 - **文档。** 新增计算指标的用户指南章节（英文、西班牙文和中文），以及快速入门中的托管选项、MQTT CA 提取

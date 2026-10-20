@@ -17,7 +17,7 @@ Las métricas calculadas están **desactivadas por defecto**. El operador de tu 
 dándole al nivel de tu inquilino un límite mayor que cero. Consulta
 [Activar las métricas calculadas](#turning-calculated-metrics-on).
 
-## Qué es una métrica calculada
+## Qué es una métrica calculada {#what-a-calculated-metric-is}
 
 - Una fórmula lee las métricas de **una lectura**: los valores **medidos** que un dispositivo envía
   juntos en una sola medición, otras métricas **calculadas** del mismo perfil (consulta [Encadenar
