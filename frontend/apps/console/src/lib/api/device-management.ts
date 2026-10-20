@@ -1340,6 +1340,7 @@ const DEVICE_METRIC_VOCABULARY = graphql(`
         minValue
         maxValue
         allowedValues
+        calculated
       }
     }
   }

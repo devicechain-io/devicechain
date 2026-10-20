@@ -67,10 +67,13 @@ describe('DeviceConnectPanel', () => {
 
   it('builds the command from the credential and the published metrics', async () => {
     route([tokenRow], [
-      { metricKey: 'pressure', dataType: 'DOUBLE', unit: null, minValue: 100, maxValue: 200, allowedValues: null },
+      { metricKey: 'pressure', dataType: 'DOUBLE', unit: null, minValue: 100, maxValue: 200, allowedValues: null, calculated: false },
+      // A device-sent value under a calculated key is dropped, so the example omits it.
+      { metricKey: 'pressure_kpa', dataType: 'DOUBLE', unit: null, minValue: 1, maxValue: 2, allowedValues: null, calculated: true },
     ]);
     render(<DeviceConnectPanel deviceToken="dev-1" deviceEnabled />);
     await screen.findByTestId('connect-command');
+    expect(command()).not.toContain('pressure_kpa');
     expect(command()).toContain(`-u 'acme:bearer-abc'`);
     expect(command()).toContain(`-t '<instance-id>/acme/devices/dev-1/events'`);
     expect(command()).toContain('"pressure":"100"');

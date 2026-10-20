@@ -94,6 +94,7 @@ const { COMMANDS } = vi.hoisted(() => ({
 vi.mock('@/lib/api/device-management', () => ({
   getDeviceCommandVocabulary: async () => ({ constrained: true, commands: COMMANDS }),
   listCommandDefinitionsForDevice: async () => [],
+  getDeviceMetricVocabulary: async () => [],
 }));
 
 afterEach(cleanup);

@@ -79,7 +79,9 @@ export function DeviceConnectPanel({ deviceToken, deviceEnabled }: { deviceToken
   }
 
   const chosen = usable.find((c) => c.token === picked) ?? usable[0];
-  const metrics = vocab.data ?? [];
+  // A calculated metric is computed by the platform and a device-sent value under its
+  // key is dropped, so the example a device is told to copy must not include it.
+  const metrics = (vocab.data ?? []).filter((m) => !m.calculated);
   const input: SnippetInput = {
     tenant,
     deviceToken,

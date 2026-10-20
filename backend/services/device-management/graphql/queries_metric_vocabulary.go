@@ -34,6 +34,10 @@ func (r *PublishedMetricResolver) MetricKey() string { return r.M.Key() }
 
 func (r *PublishedMetricResolver) DataType() string { return r.M.DataType() }
 
+// Calculated reports whether the platform computes this metric from a formula, so a
+// picker can mark it and a device-facing example can leave it out.
+func (r *PublishedMetricResolver) Calculated() bool { return r.M.Calculated() }
+
 func (r *PublishedMetricResolver) Unit() *string {
 	if unit, ok := r.M.Unit(); ok {
 		return &unit

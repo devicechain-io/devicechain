@@ -43,6 +43,7 @@ import { Input } from '@/components/ui/input';
 import { FormField } from '@/components/ui/form-field';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { EntityPicker, type EntityKind } from './EntityPicker';
+import { MetricChoices } from './MetricChoices';
 import { commandChoicesService } from './editorServices';
 import { resolveText, useMessageLookup } from './optionWording';
 import {
@@ -504,6 +505,11 @@ function DeviceFields({
       {showMeasurements && (
         <FormField label={t('widgetLabelMeasurements')} description={t('widgetMeasurementsHint')}>
           <MeasurementsInput
+            measurements={selector.measurements}
+            onChange={(m) => onChange({ ...selector, measurements: m })}
+          />
+          <MetricChoices
+            deviceToken={selector.deviceToken}
             measurements={selector.measurements}
             onChange={(m) => onChange({ ...selector, measurements: m })}
           />

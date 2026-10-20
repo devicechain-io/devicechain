@@ -1696,7 +1696,7 @@ export type DeviceMetricVocabularyQueryVariables = Exact<{
 }>;
 
 
-export type DeviceMetricVocabularyQuery = { deviceMetricVocabulary: { metrics: Array<{ metricKey: string, dataType: string, unit: string | null, minValue: number | null, maxValue: number | null, allowedValues: Array<string> | null }> } | null };
+export type DeviceMetricVocabularyQuery = { deviceMetricVocabulary: { metrics: Array<{ metricKey: string, dataType: string, unit: string | null, minValue: number | null, maxValue: number | null, allowedValues: Array<string> | null, calculated: boolean }> } | null };
 
 export type CreateCommandDefinitionMutationVariables = Exact<{
   request?: CommandDefinitionCreateRequest | null | undefined;
@@ -3590,6 +3590,7 @@ export const DeviceMetricVocabularyDocument = new TypedDocumentString(`
       minValue
       maxValue
       allowedValues
+      calculated
     }
   }
 }
