@@ -442,7 +442,7 @@ func deviceFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "device",
 		Token: "d-1",
-		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
+		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {
 			for _, tok := range []string{seededTypeToken, otherTypeToken} {
@@ -510,7 +510,7 @@ func deviceTypeFamily() putest.Family[*Api] {
 	return putest.Family[*Api]{
 		Name:  "deviceType",
 		Token: "dt-1",
-		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
+		Migrate: []any{&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
 			&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
 			&MaintenanceWindow{}},
 		Seed: func(t *testing.T, api *Api, ctx context.Context) {

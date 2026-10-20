@@ -133,6 +133,8 @@ import GuideShot from '@site/src/components/GuideShot';
 
 回滚只改变哪个版本生效，不会改变你的草稿，因此你正在进行的编辑仍然保留。生效版本的 **Roll back** 按钮是灰色的，因为它已经处于生效状态。
 
+每次发布和每次回滚也会记录在配置文件的激活日志中：哪个版本变为生效、何时生效、由谁操作。Versions 选项卡上的 **Published** 列显示的是版本的发布时间；如果之后又回滚到该版本，发布时间并不是它生效的时间，因此请用激活日志来判断某个时刻哪个版本处于生效状态。日志通过 GraphQL API 中设备配置文件的 `activations` 字段读取，按从新到旧排序。它从你升级到引入该功能的版本时开始记录，因此在此之前最后一次发布或回滚的配置文件，没有对应那次变更的条目。请把缺失的条目理解为未知，而不是未生效。
+
 ### 下载 Thing Model {#downloading-a-thing-model}
 
 每个版本行都有一个 **WoT Thing Model** 按钮。它会把该版本下载为 W3C Web of Things 的 Thing Model：这是一个标准的 JSON-LD 文件，把配置文件的指标描述为属性，把命令描述为动作。你可以把它交给理解 Web of Things 的工具。文件以配置文件令牌和版本命名，例如 `bp-thermostat-profile.v2.tm.jsonld`。

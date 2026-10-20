@@ -49,5 +49,6 @@ var (
 		NewIssuedGroupTokensSchema(),
 		NewPendingOwnershipFactsSchema(),
 		NewMetricExpressionSchema(),
+		NewProfileActivationsSchema(),
 	}
 )

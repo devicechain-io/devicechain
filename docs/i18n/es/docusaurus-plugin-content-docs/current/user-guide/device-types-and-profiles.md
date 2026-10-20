@@ -189,6 +189,15 @@ Revertir solo cambia qué versión está activa. No toca tu borrador, así que l
 estabas trabajando siguen ahí. El botón **Revertir** de la versión activa está atenuado, porque ya
 está activa.
 
+Cada publicación y cada reversión también queda registrada en el registro de activaciones del perfil:
+qué versión pasó a estar activa, cuándo y quién lo hizo. La columna **Publicada** de la pestaña
+Versiones muestra cuándo se publicó una versión, que no es cuándo estuvo activa si después se
+revirtió a ella, así que usa el registro para saber qué versión estaba activa en un momento dado. El
+registro se lee con el campo `activations` de un perfil de dispositivo en la API GraphQL, de la más
+reciente a la más antigua. Empieza cuando actualizas a la versión que lo introdujo, así que un perfil
+cuya última publicación o reversión fue anterior no tiene entrada para ese cambio. Interpreta una
+entrada ausente como desconocida, no como inactiva.
+
 ### Descargar un Thing Model
 
 Cada fila de versión tiene un botón **Thing Model de WoT**. Descarga esa versión como un Thing

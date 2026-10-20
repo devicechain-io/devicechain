@@ -31,7 +31,7 @@ func reconcileDoorApi(t *testing.T) *model.Api {
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
 	require.NoError(t, db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
-		&model.DeviceProfileVersion{}, &model.MetricDefinition{}, &model.CommandDefinition{},
+		&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 		&model.DetectionRule{}, &model.DetectionRuleScopeRef{}, &model.EntityAttribute{},
 		&model.EntityGroupMembership{}, &model.EntityGroupFacetRef{}))
 	api := model.NewApi(&rdb.RdbManager{Database: db})

@@ -30,7 +30,7 @@ func newGroupVersionTestApi(t *testing.T) (*Api, context.Context) {
 	if err := db.AutoMigrate(&EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{},
 		&EntityGroupMembership{}, &EntityGroupFacetRef{},
 		&EntityRelationship{}, &PendingOwnershipFact{}, &EntityAttribute{}, &Alarm{},
-		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DetectionRuleScopeRef{}); err != nil {
+		&DetectionRule{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	return NewApi(&rdb.RdbManager{Database: db}), core.WithTenant(context.Background(), "acme")

@@ -35,7 +35,7 @@ func importWireCtx(t *testing.T) context.Context {
 		t.Fatal(err)
 	}
 	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
-		&model.DeviceProfileVersion{}, &model.DeviceCredential{}, &model.ProvisioningProfile{}); err != nil {
+		&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.DeviceCredential{}, &model.ProvisioningProfile{}); err != nil {
 		t.Fatal(err)
 	}
 	api := keyedApi(db)

@@ -35,7 +35,7 @@ func newPublishEmitTestApi(t *testing.T) *Api {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	// PublishDeviceProfile builds a snapshot from every definition list, then writes a version.
-	if err := db.AutoMigrate(&DeviceProfile{}, &DeviceProfileVersion{}, &MetricDefinition{},
+	if err := db.AutoMigrate(&DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{},
 		&CommandDefinition{}, &DetectionRule{}, &DeviceType{}, &DetectionRuleScopeRef{}); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}

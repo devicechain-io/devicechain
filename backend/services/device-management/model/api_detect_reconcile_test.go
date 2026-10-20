@@ -32,7 +32,7 @@ func newReconcileDoorApi(t *testing.T) (*Api, context.Context, *capturePublished
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, rdb.RegisterTenantScoping(db))
-	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
+	require.NoError(t, db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &DetectionRuleScopeRef{},
 		&EntityAttribute{}, &EntityGroupMembership{}, &EntityGroupFacetRef{}))
 	api := NewApi(&rdb.RdbManager{Database: db})

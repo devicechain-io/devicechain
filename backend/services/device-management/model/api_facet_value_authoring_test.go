@@ -64,7 +64,7 @@ func newFacetAuthoringTestApi(t *testing.T) (*Api, context.Context) {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{},
+	if err := db.AutoMigrate(&Device{}, &DeviceType{}, &DeviceProfile{}, &DeviceProfileVersion{}, &DeviceProfileActivation{},
 		&MetricDefinition{}, &CommandDefinition{}, &DetectionRule{}, &EntityAttribute{},
 		&FacetKey{}, &EntityGroup{}, &IssuedGroupToken{}, &EntityGroupVersion{}, &EntityGroupMembership{},
 		&EntityGroupFacetRef{}, &DetectionRuleScopeRef{},
