@@ -34,7 +34,7 @@ export const BACKFILL_POLL_MS = 5000;
 
 const ACTIVE = ['QUEUED', 'RUNNING'];
 
-// Skip reasons a formula reports, plus the two a backfill adds. Anything else is shown as sent.
+// Skip reasons a formula reports, plus the one a backfill adds (ambiguous). Anything else is shown as sent.
 const KNOWN_REASONS = [
   'missing_input',
   'invalid_input',
@@ -45,7 +45,6 @@ const KNOWN_REASONS = [
   'unstorable',
   'eval_error',
   'ambiguous',
-  'unclassified',
 ];
 
 function fmtTime(iso: string): string {

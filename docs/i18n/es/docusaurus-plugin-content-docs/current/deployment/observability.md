@@ -869,7 +869,7 @@ al estado en vivo ni a la detección.
 
 | Ajuste (configuración de `event-management`) | Valor por defecto | Qué hace |
 | --- | --- | --- |
-| `calculatedBackfill.enabled` | sin definir | Tres estados. **Sin definir**: el trabajador se ejecuta cuando el pool de conexiones tiene sitio para él junto a los escritores de persistencia (`persistence.writers` + 1 + 4 conexiones libres deben caber en `tsdbConfiguration.maxOpenConnections`) y se queda apagado, con una advertencia al arrancar que nombra los ajustes, cuando no. **`true`**: pides el trabajador, así que un pool que no puede alojarlo detiene el servicio al arrancar. **`false`**: el trabajador no se ejecuta. Iniciar un relleno se rechaza entonces como no disponible y la consola muestra el control desactivado con el motivo; un trabajo que estaba en curso sigue en curso hasta que se vuelva a activar el trabajador o se cancele el trabajo. |
+| `calculatedBackfill.enabled` | sin definir | Tres estados. **Sin definir**: el trabajador se ejecuta cuando el pool de conexiones tiene sitio para él junto a los escritores de persistencia (`persistence.writers` + 1 + 4 conexiones libres deben caber en `tsdbConfiguration.maxOpenConnections`) y se queda apagado, con una advertencia al arrancar que nombra los ajustes, cuando no. **`true`**: pides el trabajador, así que un pool que no puede alojarlo detiene el servicio al arrancar. **`false`**: el trabajador no se ejecuta. Iniciar un relleno se rechaza entonces como no disponible, con el motivo, y la consola desactiva el control una vez rechazado; un trabajo que estaba en curso sigue en curso hasta que se vuelva a activar el trabajador o se cancele el trabajo. |
 | `calculatedBackfill.rowsPerSecond` | `20000` | El máximo de filas que el trabajador lee más escribe por segundo, entre todos los trabajos, de `1` a `200000`. Este valor por defecto es provisional y no se ha medido en una instancia con carga: en una instancia ocupada empieza bajo y vigila la CPU del almacén de eventos. |
 
 El trabajador mantiene una conexión del pool durante toda su vida. El intervalo de un trabajo (90
@@ -879,12 +879,12 @@ días), el tamaño de lote y la regla de un trabajo activo por inquilino son fij
 | --- | --- |
 | `devicechain_eventmanagement_calc_backfill_rows_written_total` | Filas de mediciones insertadas. |
 | `devicechain_eventmanagement_calc_backfill_samples_total` | Lecturas evaluadas. |
-| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | Valores no calculados, por el motivo de omisión de la fórmula, más `unclassified` y `ambiguous`. |
+| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | Valores no calculados, por el motivo de omisión de la fórmula, más `ambiguous`. |
 | `devicechain_eventmanagement_calc_backfill_windows_skipped_total{why}` | Tramos sin tocar: `compressed`, o `retention` (al alcance de la política de retención). |
 | `devicechain_eventmanagement_calc_backfill_jobs_finished_total{status}` | Trabajos terminados, por estado. |
 | `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | Antigüedad del trabajo en cola o en curso más antiguo; `0` si no hay. Un trabajo atascado la hace crecer sin límite, así que conviene alertar sobre ella. |
 | `devicechain_eventmanagement_calc_backfill_batch_seconds`, `..._rollup_refresh_seconds` | Tiempo para procesar un lote y para refrescar el agregado de mediciones sobre un tramo. |
-| `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | Refrescos que coincidieron con el propio trabajo de política del agregado y se reintentaron.. |
+| `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | Refrescos que coincidieron con el propio trabajo de política del agregado y se reintentaron. |
 
 Cada toma de un trabajo, final de porción y estado final también se registra una vez, con el
 inquilino, el token del trabajo, el perfil, la versión, los recuentos y cualquier fallo.

@@ -650,7 +650,6 @@
   "backfillSkip.unstorable": "el resultado es demasiado grande para almacenarse",
   "backfillSkip.eval_error": "la fórmula no se pudo evaluar",
   "backfillSkip.ambiguous": "la lectura contiene una entrada dos veces con valores distintos, así que no se pudo elegir un único valor",
-  "backfillSkip.unclassified": "no se pudo distinguir el origen de la lectura",
   "backfillCancel": "Cancelar",
   "backfillCancelConfirm": "¿Cancelar el relleno {{token}}? Los valores ya escritos se conservan.",
   "backfillCancelRequested": "Cancelación solicitada",

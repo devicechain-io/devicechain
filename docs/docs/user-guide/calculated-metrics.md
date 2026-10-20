@@ -377,23 +377,26 @@ produces no value](#when-a-formula-produces-no-value), plus:
 | Reason | Meaning |
 | --- | --- |
 | `ambiguous` | One stored reading holds the same input twice with different values, so no single value can be chosen for it. Nothing is written for that reading. |
-| `unclassified` | The reading's source could not be found, so it could not be told how its metrics were grouped. Nothing is written for it. |
 
 The panel also counts stretches of compressed history and stretches beyond retention that were
 skipped. **Cancel** stops a queued job at once and a running job at its next batch; values already
 written stay. A failed job names why; start a new backfill to continue, which skips what is already
 filled.
 
-Sparkplug and LwM2M devices send each metric in an entry of its own, and a calculated metric is
-computed per entry. A formula over two such metrics therefore produces no value, whether live or
-backfilled.
+A backfill groups stored readings exactly as the live computation does: a reading is every
+measurement of one message at the same instant (see [What a calculated metric is](#what-a-calculated-metric-is)). A formula over
+two metrics that a Sparkplug or LwM2M device sends in separate entries is therefore backfilled
+when they share an exact instant, just as it is computed live. It gets no value, live or
+backfilled, when the device timestamps them apart, even by a millisecond, or when the message did
+not carry every input, as with a device that reports only what changed.
 
 ### When the control is disabled
 
 The **Backfill history** button is disabled, and says why beside it, when the profile has nothing
-published, when the active version has no calculated metrics, or when the instance cannot run
-backfills right now (for example, the operator has switched the backfill worker off). It is never
-hidden for those reasons.
+published, or when the active version has no calculated metrics. When the instance cannot run
+backfills (for example, the operator has switched the backfill worker off), starting one is refused
+with the reason, and from then on the button and the dialog stay disabled and say why, until you
+leave the page. It is never hidden for those reasons.
 
 ## Storage and precision
 

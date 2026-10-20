@@ -401,23 +401,27 @@ fórmula no produce valor](#when-a-formula-produces-no-value), más estos:
 | Motivo | Significado |
 | --- | --- |
 | `ambiguous` | Una lectura almacenada contiene la misma entrada dos veces con valores distintos, así que no se puede elegir un único valor. No se escribe nada para esa lectura. |
-| `unclassified` | No se encontró el origen de la lectura, así que no se pudo saber cómo se agruparon sus métricas. No se escribe nada para ella. |
 
 El panel también cuenta los tramos de historial comprimido y los tramos fuera de la retención que se
 omitieron. **Cancelar** detiene de inmediato un trabajo en cola y, en un trabajo en curso, en su
 siguiente lote; los valores ya escritos se conservan. Un trabajo fallido indica por qué; inicia un
 nuevo relleno para continuar, que omite lo ya rellenado.
 
-Los dispositivos Sparkplug y LwM2M envían cada métrica en su propia entrada, y una métrica calculada
-se calcula por entrada. Por eso una fórmula sobre dos de esas métricas no produce valor, ni en vivo
-ni rellenada.
+Un relleno agrupa las lecturas almacenadas exactamente como el cálculo en vivo: una lectura es
+cada medición de un mensaje en el mismo instante (como se describe al principio de esta página). Por
+eso, una fórmula sobre dos métricas que un dispositivo Sparkplug o LwM2M envía en entradas
+separadas se rellena cuando comparten exactamente el mismo instante, igual que se calcula en vivo.
+No obtiene valor, ni en vivo ni rellenada, cuando el dispositivo les pone marcas de tiempo
+distintas, aunque sea por un milisegundo, o cuando el mensaje no trajo todas las entradas, como en
+un dispositivo que solo informa de lo que cambió.
 
 ### Cuando el control está desactivado
 
 El botón **Rellenar historial** está desactivado, y al lado dice por qué, cuando el perfil no tiene
-nada publicado, cuando la versión activa no tiene métricas calculadas o cuando la instancia no puede
-ejecutar rellenos en este momento (por ejemplo, porque el operador ha apagado el trabajador de
-relleno). Por esos motivos nunca se oculta.
+nada publicado o cuando la versión activa no tiene métricas calculadas. Cuando la instancia no puede
+ejecutar rellenos (por ejemplo, porque el operador ha apagado el trabajador de relleno), iniciar uno
+se rechaza con el motivo, y desde entonces el botón y el diálogo quedan desactivados y dicen por qué
+hasta que salgas de la página. Por esos motivos nunca se oculta.
 
 ## Almacenamiento y precisión
 

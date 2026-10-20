@@ -86,23 +86,26 @@ export function BackfillDrawer({
     () => (open && version != null ? getCalculatedMetricPlan(profileToken, version) : Promise.resolve(null)),
     [open, profileToken, version],
   );
-  const calculated = useMemo(() => plan.data?.calculated ?? [], [plan.data]);
+  // useQuery keeps the previous answer while the next loads, and after a failed load. A plan
+  // of another version must not be started with: its keys and range belong to that version.
+  const current = plan.data != null && plan.data.version === version ? plan.data : null;
+  const calculated = useMemo(() => current?.calculated ?? [], [current]);
 
   // The defaults follow the plan of the chosen version: the keys that are new in it, and a range
   // ending where the live path took over.
   useEffect(() => {
-    if (!plan.data) return;
-    const r = defaultBackfillRange(plan.data.activeSince, new Date());
+    if (!current) return;
+    const r = defaultBackfillRange(current.activeSince, new Date());
     setFrom(toLocalInput(r.from));
     setTo(toLocalInput(r.to));
-    setPicked(new Set(plan.data.calculated.filter((m) => m.newInVersion).map((m) => m.key)));
-  }, [plan.data]);
+    setPicked(new Set(current.calculated.filter((m) => m.newInVersion).map((m) => m.key)));
+  }, [current]);
 
   const selected = picked ?? new Set<string>();
   const range = backfillRangeProblem(new Date(from), new Date(to), new Date());
   const deviceTokens = parseDeviceTokens(devices);
   const tooManyDevices = deviceTokens.length > BACKFILL_MAX_DEVICES;
-  const ready = !busy && !unavailable && !!plan.data && selected.size > 0 && range === null;
+  const ready = !busy && !unavailable && current != null && selected.size > 0 && range === null;
 
   const toggle = (key: string, on: boolean) => {
     const next = new Set(selected);
@@ -173,7 +176,7 @@ export function BackfillDrawer({
           <legend className="text-sm font-medium">{t('backfillMetrics')}</legend>
           <HintText size="md">{t('backfillMetricsHint')}</HintText>
           {plan.error && <p className="text-sm text-destructive">{plan.error}</p>}
-          {plan.data && calculated.length === 0 && (
+          {current && calculated.length === 0 && (
             <p className="text-sm text-muted-foreground">{t('backfillNoCalculated')}</p>
           )}
           {calculated.map((m) => (

@@ -32,6 +32,16 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 vi.mock('@/auth/AuthProvider', () => ({ useAuth: () => authState }));
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
 vi.mock('@/components/ui/confirm-dialog', () => ({ useConfirm: () => () => Promise.resolve(true) }));
+// The version picker as a native select, so a test can change the version (Radix's listbox needs
+// pointer APIs jsdom lacks). The props it is handed are the real ones.
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ id, value, onChange, children }: { id?: string; value: string; onChange: (v: string) => void; children: React.ReactNode }) => (
+    <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+      {children}
+    </select>
+  ),
+  SelectItem: ({ value, children }: { value: string; children: React.ReactNode }) => <option value={value}>{children}</option>,
+}));
 
 import { GraphQLRequestError } from '@devicechain/client';
 import { BackfillDrawer } from './BackfillDrawer';
@@ -103,7 +113,10 @@ function install(opts: Install = {}) {
     calls.push({ op, vars });
     switch (op) {
       case 'CalculatedMetricPlan':
-        return Promise.resolve(opts.plan ?? plan);
+        // The plan answers for the version asked, as the server does.
+        return Promise.resolve(
+          opts.plan ?? { calculatedMetricPlan: { ...plan.calculatedMetricPlan, version: vars.version ?? 3 } },
+        );
       case 'DeviceProfileVersions':
         return Promise.resolve({
           deviceProfileVersions: [
@@ -273,6 +286,38 @@ describe('the backfill dialog', () => {
     expect(props.onOpenChange).not.toHaveBeenCalledWith(false);
     expect(props.onUnavailable).not.toHaveBeenCalled();
   });
+  it('does not start with the plan of another version while the chosen one fails to load', async () => {
+    const calls = install();
+    gqlMock.mockImplementation(((orig) => (svc: string, doc: string, vars: Record<string, unknown>) => {
+      if (/query CalculatedMetricPlan/.test(String(doc)) && vars.version === 2) {
+        calls.push({ op: 'CalculatedMetricPlan', vars });
+        return Promise.reject(new GraphQLRequestError('version 2 could not be read', 200, []));
+      }
+      return orig(svc, doc, vars);
+    })(gqlMock.getMockImplementation()!));
+    drawer();
+    await screen.findByRole('option', { name: 'Version 2' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backfill every device' })).toHaveProperty('disabled', false));
+
+    fireEvent.change(screen.getByLabelText('Version'), { target: { value: '2' } });
+    expect(await screen.findByText('version 2 could not be read')).toBeTruthy();
+    // Version 3's keys and range are still held, but they are not version 2's to start with.
+    expect(screen.getByRole('button', { name: 'Backfill every device' })).toHaveProperty('disabled', true);
+    expect(calls.some((c) => c.op === 'StartCalculatedMetricBackfill')).toBe(false);
+  });
+
+  it('tries one device first even with a device list typed: only that one device leaves', async () => {
+    const calls = install();
+    drawer();
+    await screen.findByRole('checkbox', { name: 'power_kw' });
+    fireEvent.change(screen.getByLabelText('Devices (optional)'), { target: { value: 'a, b, c' } });
+    fireEvent.change(screen.getByLabelText('Device token'), { target: { value: 'meter-17' } });
+    const tryOne = screen.getByRole('button', { name: 'Try one device first' });
+    await waitFor(() => expect(tryOne).toHaveProperty('disabled', false));
+    fireEvent.click(tryOne);
+    await waitFor(() => expect(startedWith(calls)).toBeDefined());
+    expect(startedWith(calls)!.deviceTokens).toEqual(['meter-17']);
+  });
 });
 
 describe('the backfill section', () => {
@@ -409,6 +454,72 @@ describe('the backfill jobs panel', () => {
       const before = calls.filter((c) => c.op === 'CalculatedMetricBackfills').length;
       await vi.advanceTimersByTimeAsync(5100);
       await waitFor(() => expect(calls.filter((c) => c.op === 'CalculatedMetricBackfills').length).toBeGreaterThan(before));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('offers cancel on a queued job and on no finished one', async () => {
+    install({
+      jobs: [
+        job({ token: 'bf-q', status: 'QUEUED', progress: null, devicesTotal: null, devicesDone: 0, startedAt: null }),
+        job({ token: 'bf-c', status: 'CANCELLED', finishedAt: '2026-10-11T01:00:00Z' }),
+        job({ token: 'bf-f', status: 'FAILED', failure: 'boom', finishedAt: '2026-10-11T01:00:00Z' }),
+        job({ token: 'bf-s', status: 'SUCCEEDED', progress: 1, finishedAt: '2026-10-11T01:00:00Z' }),
+      ],
+    });
+    render(<BackfillJobs profileToken="meter" canCancel reloadKey={0} />);
+    expect(within(await screen.findByTestId('bf-job-bf-q')).getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    for (const tok of ['bf-c', 'bf-f', 'bf-s']) {
+      expect(within(screen.getByTestId(`bf-job-${tok}`)).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    }
+  });
+
+  it('does not re-read when no job is active', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const calls = install({ jobs: [job({ status: 'SUCCEEDED', progress: 1 }), job({ token: 'bf-0', status: 'CANCELLED' })] });
+      render(<BackfillJobs profileToken="meter" canCancel reloadKey={0} />);
+      await screen.findByTestId('bf-job-bf-1');
+      const before = calls.filter((c) => c.op === 'CalculatedMetricBackfills').length;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(calls.filter((c) => c.op === 'CalculatedMetricBackfills').length).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops re-reading once the active job finishes, and when the panel goes away', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let status = 'RUNNING';
+      const calls = install();
+      gqlMock.mockImplementation(((orig) => (svc: string, doc: string, vars: Record<string, unknown>) => {
+        if (/query CalculatedMetricBackfills/.test(String(doc))) {
+          calls.push({ op: 'CalculatedMetricBackfills', vars });
+          return Promise.resolve({ calculatedMetricBackfills: { nodes: [job({ status })], nextCursor: null } });
+        }
+        return orig(svc, doc, vars);
+      })(gqlMock.getMockImplementation()!));
+      const reads = () => calls.filter((c) => c.op === 'CalculatedMetricBackfills').length;
+      const { unmount } = render(<BackfillJobs profileToken="meter" canCancel reloadKey={0} />);
+      await screen.findByTestId('bf-job-bf-1');
+      status = 'SUCCEEDED';
+      await vi.advanceTimersByTimeAsync(5100);
+      await waitFor(() => expect(screen.getByText('Done')).toBeTruthy());
+      const settled = reads();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(reads()).toBe(settled);
+
+      // A panel with an active job stops asking when it is unmounted.
+      status = 'RUNNING';
+      unmount();
+      const second = render(<BackfillJobs profileToken="meter" canCancel reloadKey={0} />);
+      await screen.findByText('Running');
+      second.unmount();
+      const atUnmount = reads();
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(reads()).toBe(atUnmount);
     } finally {
       vi.useRealTimers();
     }

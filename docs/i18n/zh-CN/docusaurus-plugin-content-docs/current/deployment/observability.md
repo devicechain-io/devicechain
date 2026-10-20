@@ -431,7 +431,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 | 设置（`event-management`） | 默认值 | 作用 |
 | --- | --- | --- |
-| `calculatedBackfill.enabled` | 未设置 | 三种状态。**未设置**：连接池在持久化写入器之外还有余量时（`persistence.writers` + 1 + 4 个空闲连接须能放入 `tsdbConfiguration.maxOpenConnections`）工作进程运行；容量不足时保持关闭，并在启动时给出点名这些设置的警告。**`true`**：你明确要求启用，因此容纳不下的连接池会使服务启动失败。**`false`**：工作进程不运行。此时启动回填会被拒绝并提示不可用，控制台会禁用该控件并说明原因；正在运行的任务保持运行状态，直到重新启用工作进程或取消该任务。 |
+| `calculatedBackfill.enabled` | 未设置 | 三种状态。**未设置**：连接池在持久化写入器之外还有余量时（`persistence.writers` + 1 + 4 个空闲连接须能放入 `tsdbConfiguration.maxOpenConnections`）工作进程运行；容量不足时保持关闭，并在启动时给出点名这些设置的警告。**`true`**：你明确要求启用，因此容纳不下的连接池会使服务启动失败。**`false`**：工作进程不运行。此时启动回填会被拒绝并提示不可用及原因，控制台在被拒绝后会禁用该控件；正在运行的任务保持运行状态，直到重新启用工作进程或取消该任务。 |
 | `calculatedBackfill.rowsPerSecond` | `20000` | 工作进程每秒读取与写入的行数上限，对所有任务合计，范围 `1`–`200000`。该默认值是暂定的，尚未在有负载的实例上测量：繁忙的实例请从较低值开始，并观察事件存储的 CPU。 |
 
 工作进程在其生命周期内占用一个连接池连接。单个任务的跨度（90 天）、批大小以及每个租户同时只有一个活动任务的规则都是固定的。
@@ -440,7 +440,7 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 | --- | --- |
 | `devicechain_eventmanagement_calc_backfill_rows_written_total` | 已插入的测量值行数。 |
 | `devicechain_eventmanagement_calc_backfill_samples_total` | 已评估的上报数。 |
-| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | 未计算的值，按公式的跳过原因统计，另有 `unclassified` 和 `ambiguous`。 |
+| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | 未计算的值，按公式的跳过原因统计，另有 `ambiguous`。 |
 | `devicechain_eventmanagement_calc_backfill_windows_skipped_total{why}` | 未处理的时间段：`compressed`，或 `retention`（处于保留策略的作用范围内）。 |
 | `devicechain_eventmanagement_calc_backfill_jobs_finished_total{status}` | 已结束的任务，按状态统计。 |
 | `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | 最久的排队或运行中任务的存续时间；没有则为 `0`。任务卡住会使它无限增长，请对其设置告警。 |
