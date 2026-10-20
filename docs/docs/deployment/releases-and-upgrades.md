@@ -3601,6 +3601,56 @@ What gets better:
   refusal while the device stayed connected. The limit is lifted there too. Upgrade the agent on any
   site whose devices hold more than 1,000 such subscriptions on its listener between them.
 
+### Next release — a device's event list is served by one index {#next-device-order-index}
+
+The index that serves a device's event list, `idx_events_tenant_device_time`, is replaced by
+`idx_events_tenant_device_order`, which also carries the event id: the tiebreak of the list's order
+(newest first, then event id). Nothing in the API changes. What changes is that the database can now
+answer a device's list in order from this one index. Without the event id the list needed a sort on top
+of the index, and when a device's list was filtered by event type the planner could instead read the
+whole tenant's events newest first and discard the other devices' rows. On TimescaleDB `2.30` that
+second plan was the only one it would choose for such a list: on a test tenant of 100,000 events, a page
+of one device's alerts read all 100,004 of them to return 5 and took 60 milliseconds, against 0.3
+milliseconds on the new index, and the cost grows with the tenant's history. The new index is larger
+than the one it replaces, because every entry carries the 32-byte event id: measured on a million base
+events written in time order, it took 142 MB against 64 MB, and writing those events took about 9%
+longer. Each stored base event still updates the same number of indexes.
+
+- **At the upgrade.** The first start of the new `event-management` builds the index over the base
+  events that are not yet compressed (by default, about the last week), then removes the index it
+  replaces; a device's list always has an index throughout. While it builds, writes of base events
+  wait and reads do not. Measured on a local server, the build took about 2.3 seconds per million rows,
+  about 9.5 seconds at 4,000,000; slower storage can take several times that. The build is bounded to
+  40 seconds once the table is locked. It refuses, changing nothing, when there are more than 4,000,000
+  rows to index or the table has more than 500 chunks. A start that cannot lock the table changes
+  nothing, and the next start tries again. A build that does not finish within the 40 seconds is rolled
+  back and is not tried again, so that a restarting pod does not hold writes on every start: it marks
+  the index it would replace, and every later start stops at once, locking nothing, until the index is
+  built by hand (below) or the marker is cleared with
+  `COMMENT ON INDEX "event-management".idx_events_tenant_device_time IS NULL`. None of these needs a
+  recreate: the error carries the statements that build the index by hand. The previous
+  `event-management` keeps storing events meanwhile.
+- **To build it by hand, at a quiet time.** Run these on the event store's primary, then restart
+  `event-management`, which finds the index and only removes the one it replaces. The first statement
+  removes an unfinished index of the same name that an interrupted build leaves behind, and does
+  nothing when there is none:
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_order;
+  CREATE INDEX idx_events_tenant_device_order
+    ON "event-management".events (tenant_id, device_token, occurred_time DESC, event_id DESC)
+    WITH (timescaledb.transaction_per_chunk);
+  ```
+
+  The build goes one chunk at a time, so a write waits only while the chunk it targets is being
+  indexed. An event held longer than the broker's 60 second acknowledgement wait is delivered again,
+  which is safe. On a busy instance, choose a quiet time.
+- **To avoid the refusal, build the index before you upgrade.** On an instance with more than
+  `4000000` uncompressed base events, run the two statements above first; the previous release works
+  with them, and the upgrade then only removes the old index. To count the base events, use the query
+  under [Check the row count](#v0190-row-count) with `hypertable_name IN ('events')`.
+- Going back to the previous release keeps the new index, and the previous release works with it.
+
 ### v0.23.0 — customer users with scoped access, and an MQTT ingest that loses less {#v0230-upgrade}
 
 `v0.23.0` is an in-place upgrade from `v0.22.0`: `dcctl install` for the cluster, then

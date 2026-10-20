@@ -3869,6 +3869,61 @@ Qué mejora:
   también allí. Actualice el agente en cualquier sitio cuyos dispositivos mantengan entre todos más
   de 1.000 suscripciones de ese tipo en su listener.
 
+### Próxima versión: la lista de eventos de un dispositivo la atiende un solo índice {#next-device-order-index}
+
+El índice que atiende la lista de eventos de un dispositivo, `idx_events_tenant_device_time`, se
+sustituye por `idx_events_tenant_device_order`, que además incluye el identificador del evento: el
+desempate del orden de la lista (primero el más reciente y, a igualdad, el identificador del evento). La
+API no cambia. Lo que cambia es que la base de datos puede responder la lista de un dispositivo, ya
+ordenada, desde este único índice. Sin el identificador del evento la lista necesitaba una ordenación
+sobre el índice y, cuando la lista de un dispositivo se filtraba por tipo de evento, el planificador
+podía optar por leer todos los eventos del inquilino del más reciente al más antiguo y descartar las
+filas de los demás dispositivos. En TimescaleDB `2.30` ese segundo plan era el único que elegía para una
+lista así: en un inquilino de prueba con 100 000 eventos, una página de alertas de un dispositivo leía
+los 100 004 eventos para devolver 5 y tardaba 60 milisegundos, frente a 0,3 milisegundos con el índice
+nuevo, y el coste crece con el historial del inquilino. El índice nuevo es más grande que el que
+sustituye, porque cada entrada incluye el identificador del evento, de 32 bytes: medido sobre un millón
+de eventos base escritos en orden temporal, ocupó 142 MB frente a 64 MB, y escribir esos eventos tardó
+alrededor de un 9 % más. Cada evento base almacenado sigue actualizando el mismo número de índices.
+
+- **Durante la actualización.** El primer arranque del nuevo `event-management` construye el índice
+  sobre los eventos base que aún no están comprimidos (por defecto, aproximadamente la última semana) y
+  después elimina el índice que sustituye; la lista de un dispositivo dispone de un índice en todo
+  momento. Mientras se construye, las escrituras de eventos base esperan y las lecturas no. Medida en
+  un servidor local, la construcción tardó unos 2,3 segundos por millón de filas, unos 9,5 segundos con
+  4 000 000; un almacenamiento más lento puede tardar varias veces más. La construcción está limitada a
+  40 segundos una vez bloqueada la tabla. Se niega, sin cambiar nada, cuando hay más de 4 000 000 de
+  filas que indexar o la tabla tiene más de 500 fragmentos. Un arranque que no puede bloquear la tabla
+  no cambia nada, y el siguiente arranque lo vuelve a intentar. Una construcción que no termina en esos
+  40 segundos se revierte y no se vuelve a intentar, para que un pod que se reinicia no retenga las
+  escrituras en cada arranque: marca el índice que iba a sustituir, y cada arranque posterior se detiene
+  de inmediato, sin bloquear nada, hasta que el índice se construya a mano (más abajo) o se borre la
+  marca con `COMMENT ON INDEX "event-management".idx_events_tenant_device_time IS NULL`. Ninguno de
+  estos casos exige recrear la instancia: el error incluye las sentencias que construyen el índice a
+  mano. El `event-management` anterior sigue almacenando eventos mientras tanto.
+- **Para construirlo a mano, en un momento tranquilo.** Ejecute estas sentencias en el primario del
+  almacén de eventos y reinicie `event-management`, que encuentra el índice y solo elimina el que
+  sustituye. La primera sentencia elimina un índice inacabado del mismo nombre que deja una
+  construcción interrumpida, y no hace nada cuando no hay ninguno:
+
+  ```sql
+  DROP INDEX IF EXISTS "event-management".idx_events_tenant_device_order;
+  CREATE INDEX idx_events_tenant_device_order
+    ON "event-management".events (tenant_id, device_token, occurred_time DESC, event_id DESC)
+    WITH (timescaledb.transaction_per_chunk);
+  ```
+
+  La construcción avanza fragmento a fragmento, de modo que una escritura espera solo mientras se
+  indexa el fragmento al que va dirigida. Un evento retenido más allá de la espera de confirmación de
+  60 segundos del bróker se entrega de nuevo, lo cual es seguro. En una instancia con mucha carga,
+  elija un momento tranquilo.
+- **Para evitar la negativa, construya el índice antes de actualizar.** En una instancia con más de
+  `4000000` de eventos base sin comprimir, ejecute antes las dos sentencias anteriores; la versión
+  anterior funciona con ellas y la actualización solo elimina el índice antiguo. Para contar los eventos
+  base, use la consulta de [Comprobar el número de filas](#v0190-row-count) con
+  `hypertable_name IN ('events')`.
+- Volver a la versión anterior conserva el índice nuevo, y la versión anterior funciona con él.
+
 ### v0.23.0 — usuarios de cliente con acceso acotado, y una ingesta MQTT que pierde menos {#v0230-upgrade}
 
 `v0.23.0` es una actualización en su sitio desde `v0.22.0`: `dcctl install` para el clúster y después

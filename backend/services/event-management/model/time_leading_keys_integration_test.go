@@ -713,7 +713,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	countScans := scansOf(t, sys, explainScans(t, sys, nil, capture(t, counter, "count(*)")), "events")
 	require.NotEmpty(t, countScans, "the tenant COUNT scans no chunk of events")
 	for _, s := range countScans {
-		assert.Truef(t, chunkIndexIs(s.index, "events_pkey") || chunkIndexIs(s.index, tenantDeviceIndex.name),
+		assert.Truef(t, chunkIndexIs(s.index, "events_pkey") || chunkIndexIs(s.index, deviceOrderIndex.name),
 			"events tenant COUNT: %s on %s uses %q", s.node, s.relation, s.index)
 		assert.Contains(t, s.indexCond, "tenant_id", "events tenant COUNT must seek on the tenant")
 	}
@@ -784,9 +784,9 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	deviceData := capture(t, counter, "ORDER BY")
 	deviceCount := capture(t, counter, "count(*)")
 	requireServedBy(t, sys, explainScans(t, sys, nil, deviceData), "events",
-		tenantDeviceIndex.name, "device read")
+		deviceOrderIndex.name, "device read")
 	requireServedBy(t, sys, explainScans(t, sys, nil, deviceCount), "events",
-		tenantDeviceIndex.name, "device read COUNT")
+		deviceOrderIndex.name, "device read COUNT")
 	counter.Reset()
 	res, err = api.Events(ctx, EventSearchCriteria{Pagination: page, DeviceToken: &device,
 		EventTypes: []eventtype.EventType{eventtype.Alert}})
@@ -794,15 +794,29 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	require.Len(t, res.Results, 1)
 	typedData := capture(t, counter, "ORDER BY")
 	requireServedBy(t, sys, explainScans(t, sys, nil, typedData), "events",
-		tenantDeviceIndex.name, "device + type read")
+		deviceOrderIndex.name, "device + type read")
 
-	// Negative control for the check just above, so its pass is the index and not a check
-	// that cannot fail: with the per-device index gone (in the rolled-back transaction) the
-	// same read scans chunks through something else, and the same verdict says no.
+	// Negative controls for the check just above, so its pass is the index and not a check
+	// that cannot fail. (a) With the order-complete index gone (in the rolled-back
+	// transaction) the same read scans chunks through something else, and servedBy says no.
+	// (b) The regression the index exists for: with the PREVIOUS three-column shape in its
+	// place, TimescaleDB 2.30's DeferredChunkAppend walks events_pkey for this page, so the
+	// check must report it as not served by the per-device index. Earlier releases plan the
+	// three-column index with an incremental sort, so (b) is asserted only from 2.30, where
+	// it is the premise of the migration.
 	dropped := scansOf(t, sys, explainScans(t, sys,
-		[]string{`DROP INDEX "event-management".` + tenantDeviceIndex.name}, typedData), "events")
-	require.NotEmpty(t, dropped, "control: the read must still scan chunks of events")
-	assert.False(t, servedBy(dropped, tenantDeviceIndex.name), "control: %v", dropped)
+		[]string{`DROP INDEX "event-management".` + deviceOrderIndex.name}, typedData), "events")
+	require.NotEmpty(t, dropped, "control (a): the read must still scan chunks of events")
+	assert.False(t, servedBy(dropped, deviceOrderIndex.name), "control (a): %v", dropped)
+	if timescaleAtLeast(t, sys, 2, 30) {
+		threeCol := scansOf(t, sys, explainScans(t, sys, []string{
+			`DROP INDEX "event-management".` + deviceOrderIndex.name,
+			`CREATE INDEX ` + deviceOrderIndex.replaces + ` ON "event-management".events (tenant_id, device_token, occurred_time DESC)`,
+		}, typedData), "events")
+		require.NotEmpty(t, threeCol, "control (b): the read must still scan chunks of events")
+		assert.False(t, servedBy(threeCol, deviceOrderIndex.replaces),
+			"control (b): on TimescaleDB 2.30+ the three-column index should lose this page to events_pkey: %v", threeCol)
+	}
 
 	generic := connectInstance(t, inst)
 	for _, s := range []string{`SET enable_seqscan = off`, `SET enable_bitmapscan = off`} {
@@ -811,7 +825,7 @@ func TestIntegrationReadsAreServedByTheTimeLeadingKeys(t *testing.T) {
 	}
 	for what, sql := range map[string]string{"device read (generic)": deviceData, "device COUNT (generic)": deviceCount} {
 		scans := explainGenericScans(t, generic, sql, device, "acme")
-		requireServedBy(t, sys, scans, "events", tenantDeviceIndex.name, what)
+		requireServedBy(t, sys, scans, "events", deviceOrderIndex.name, what)
 	}
 
 	// Unchanged: the measurement_rollups refresh's cross-tenant range.

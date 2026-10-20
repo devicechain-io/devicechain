@@ -56,13 +56,17 @@ type Event struct {
 // own content-derived identity and is unique within (tenant, occurred_time) by
 // construction, so it closes the order.
 //
-// The per-device read is served in time order by idx_events_tenant_device_time
-// (tenant_id, device_token, occurred_time DESC): the fail-closed tenant predicate and the
-// device token are both index conditions, so the COUNT that ListOf issues before the page, and
-// the type-filtered read, visit only this tenant's rows of this device, never another tenant's
-// reuse of the token. The unfiltered page may instead be planned on events_pkey (a statistics
-// choice), checking the device per row: that visits other devices of this tenant, still never
-// another tenant's rows, because that key leads with tenant_id too.
+// The per-device read is served in its whole order by idx_events_tenant_device_order
+// (tenant_id, device_token, occurred_time DESC, event_id DESC): the fail-closed tenant
+// predicate and the device token are both index conditions, so the COUNT that ListOf issues
+// before the page, and the type-filtered read, visit only this tenant's rows of this device,
+// never another tenant's reuse of the token. event_id is in the index so that it gives the
+// page's ORDER BY outright: TimescaleDB 2.30's DeferredChunkAppend builds its per-chunk plans
+// only from paths that already produce the full order, and with the index lacking event_id it
+// walked events_pkey for a type-filtered page, reading every row of the tenant to find a few of
+// the device's. The unfiltered page may still be planned on events_pkey (a statistics choice),
+// checking the device per row: that visits other devices of this tenant, still never another
+// tenant's rows, because that key leads with tenant_id too.
 // An event_type filter is still checked per row, against this device's rows only; the event_id
 // tiebreak sorts within one timestamp. Compressed chunks are segmented by (tenant_id,
 // device_token) and read per device and tenant either way. Neither column is nullable, so no

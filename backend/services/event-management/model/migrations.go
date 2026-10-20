@@ -81,5 +81,9 @@ var (
 		// The calculated-metric backfill job table (see its doc comment). A plain table, no
 		// hypertable work, so it takes no part in the key rebuilds' gates.
 		NewCalculatedBackfillSchema(),
+		// Makes the per-device event index carry the whole order of a device's list, event_id
+		// included, and drops the one it replaces (see its doc comment). Builds, gated like the
+		// other index migrations; every refusal hands the operator the build to run by hand.
+		NewDeviceOrderIndexSchema(),
 	}
 )
