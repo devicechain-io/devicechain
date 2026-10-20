@@ -66,5 +66,12 @@ namespace DeviceChain.Sitepulse.Visuals
         }
 
         public void SetTrackRate(double rate) => fleet.SetTrackRate(Id, (float)rate);
+
+        public bool TryTrackSeconds(out double seconds)
+        {
+            var ok = fleet.TryTrackSeconds(Id, out var t);
+            seconds = t;
+            return ok;
+        }
     }
 }

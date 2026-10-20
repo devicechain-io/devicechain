@@ -809,7 +809,7 @@ namespace DeviceChain.Sitepulse.Tests
             public Timeline Timeline = new Timeline();
             public FakeFactory Factory = new FakeFactory();
             public ReadinessBoard Board;
-            public Dictionary<string, FakeBody> Bodies = new Dictionary<string, FakeBody>();
+            public Dictionary<string, IMachineBody> Bodies = new Dictionary<string, IMachineBody>();
 
             public void Dispose() => Fleet.Shutdown(TimeSpan.FromSeconds(10));
         }
@@ -828,15 +828,20 @@ namespace DeviceChain.Sitepulse.Tests
             foreach (var h in c.Fleet.Hosts)
             {
                 if (h.Simulation.Model.IsPlant) continue;
-                // the machines the tests send places stand on the haul loop (a route is planned over the site's ground, so a machine
-                // has to be on the site); the rest are parked far off, out of every lane
-                var at = h.ExternalId == "SP-HL-0003" ? track[300] : h.ExternalId == "SP-HL-0005" ? track[600] : new TrackPoint(4000 + 100 * i++, 4000, 0, 0);
-                var body = new FakeBody(h.ExternalId, h.Simulation.Model.Kind, at.X, at.Z, at.HeadingDegrees, track);
+                // the trucks the tests send places ride the haul loop, as they do in the scene (their errands run on the site's lanes); the
+                // rest are parked far off, out of every lane
+                IMachineBody body;
+                if (h.ExternalId == "SP-HL-0003" || h.ExternalId == "SP-HL-0005") body = CommandKit.LoopTruck(h.ExternalId);
+                else
+                {
+                    var at = new TrackPoint(4000 + 100 * i++, 4000, 0, 0);
+                    body = new FakeBody(h.ExternalId, h.Simulation.Model.Kind, at.X, at.Z, at.HeadingDegrees, track);
+                }
                 c.Bodies[h.ExternalId] = body;
                 machines.Add((body, h.Simulation.Model));
             }
 
-            c.Director = new TaskDirector(CommandKit.Site, CommandKit.Graph, c.Timeline, machines, c.Fleet.Generation);
+            c.Director = new TaskDirector(CommandKit.Site, CommandKit.Graph, CommandKit.Prepared, c.Timeline, machines, c.Fleet.Generation);
             c.Fleet.Tasks = c.Director;
             return c;
         }
@@ -848,6 +853,8 @@ namespace DeviceChain.Sitepulse.Tests
             {
                 c.Fleet.Pump();
                 c.Director.Step(0.5, 0.5);
+                foreach (var b in c.Bodies.Values)
+                    if (b is TrackBody track) track.Advance(0.5);
                 Thread.Sleep(1);
             }
 

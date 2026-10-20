@@ -63,6 +63,13 @@ namespace DeviceChain.Sitepulse.Tasks
             return false;
         }
 
+        /// <summary>How far into its track's loop the machine is now, in seconds of the track. False when it is not on its track.</summary>
+        bool TryTrackSeconds(out double seconds)
+        {
+            seconds = 0.0;
+            return false;
+        }
+
         /// <summary>A loader's boom is raised (its bucket is over what it is tipping into), so its front is its tyres.</summary>
         bool BoomRaised => false;
 

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using DeviceChain.Sim.Traffic;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
 
@@ -63,7 +64,7 @@ namespace DeviceChain.Sitepulse.Tests
         public double Now;
         long sequence;
 
-        public SceneSim(string fleetJsonPath, SiteGeometry site, RouteGraph graph, double startClock = StartClock)
+        public SceneSim(string fleetJsonPath, SiteGeometry site, RouteGraph graph, PreparedSite prepared, double startClock = StartClock)
         {
             Timeline = new Timeline(() => DateTimeOffset.UnixEpoch.AddSeconds(Now));
             using var doc = JsonDocument.Parse(File.ReadAllText(fleetJsonPath));
@@ -93,7 +94,7 @@ namespace DeviceChain.Sitepulse.Tests
                 machines.Add((body, model));
             }
 
-            Director = new TaskDirector(site, graph, Timeline, machines, 1);
+            Director = new TaskDirector(site, graph, prepared, Timeline, machines, 1);
         }
 
         public TaskRequest Send(string id, string key, string area = null)

@@ -32,7 +32,7 @@ namespace DeviceChain.Sitepulse.Tasks
     {
         public const string Received = "received", Accepted = "accepted", Refused = "refused", Superseded = "superseded",
             Arrived = "arrived", Refuelling = "refuelling", Outcome = "outcome", Returning = "returning", Working = "working",
-            Presenter = "presenter", Reset = "reset", Stalled = "stalled";
+            Presenter = "presenter", Reset = "reset", Stalled = "stalled", Waiting = "waiting";
     }
 
     /// <summary>

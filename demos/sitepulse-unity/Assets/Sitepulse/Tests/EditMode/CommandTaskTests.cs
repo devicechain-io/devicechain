@@ -112,8 +112,9 @@ namespace DeviceChain.Sitepulse.Tests
             var r = new Rig();
             Assert.IsTrue(r.Body.Attached);
             var cmd = r.Send("goto-area", Yard);
-            Assert.IsFalse(r.Body.Attached, "an accepted command takes the machine off its track");
-            Assert.AreEqual(MachineMode.Commanded, r.Controller.Mode);
+            Assert.AreEqual(MachineMode.Commanded, r.Controller.Mode, "an accepted command takes the machine over");
+            r.Run(() => false, 0.25);
+            Assert.IsFalse(r.Body.Attached, "and off its track as it sets off");
             Assert.IsTrue(r.Run(() => cmd.IsComplete), Rows(r));
             Assert.IsTrue(cmd.Completion.Answer().Succeeded, Rows(r));
             Assert.IsTrue(InZone(r, Yard), "success is arrival inside the zone");
@@ -259,25 +260,6 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         // ---- the yield rule
-
-        [Test]
-        public void AMachineYieldsToOneAheadInItsLaneButNotToOneBehindOrBeside()
-        {
-            var site = CommandKit.Site;
-            var me = new FakeBody("A", EquipmentKind.Hauler, 0, 0, 0);          // facing north
-            var ahead = new FakeBody("B", EquipmentKind.Hauler, 0, 5, 0);
-            var behind = new FakeBody("C", EquipmentKind.Hauler, 0, -5, 0);
-            var beside = new FakeBody("D", EquipmentKind.Hauler, 6, 5, 0);
-            var far = new FakeBody("E", EquipmentKind.Hauler, 0, 12, 0);
-            Func<FakeBody[], TaskDirector> make = others => new TaskDirector(site, CommandKit.Graph, new Timeline(),
-                new[] { me }.Concat(others).Select(b => ((IMachineBody)b, new MachineModel(EquipmentKind.Hauler, b.Id))), 1);
-            Assert.IsTrue(make(new[] { ahead }).Blocked("A", 0, 0, 0), "5 m ahead in the lane");
-            Assert.IsFalse(make(new[] { behind }).Blocked("A", 0, 0, 0), "behind is not in the way");
-            Assert.IsFalse(make(new[] { beside }).Blocked("A", 0, 0, 0), "another lane");
-            Assert.IsFalse(make(new[] { far }).Blocked("A", 0, 0, 0), "12 m is beyond the yield distance");
-            Assert.IsTrue(make(new[] { ahead }).Blocked("A", 0, 0, 20), "slightly off the line is still the lane");
-            Assert.IsFalse(make(new[] { ahead }).Blocked("A", 0, 0, 180), "facing away");
-        }
 
         // ---- budgets
 
@@ -553,32 +535,23 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void TwoMachinesShareOneBayInTheOrderTheyReachedTheQueue()
         {
-            var site = CommandKit.Site;
-            var track = CommandKit.Track(0);
-            var a = new FakeBody("A", EquipmentKind.Hauler, track[540].X, track[540].Z, track[540].HeadingDegrees, track);
-            var b = new FakeBody("B", EquipmentKind.Hauler, track[600].X, track[600].Z, track[600].HeadingDegrees, track);
-            var ma = new MachineModel(EquipmentKind.Hauler, "A");
-            var mb = new MachineModel(EquipmentKind.Hauler, "B");
-            ma.Restore(20, 1000);
-            mb.Restore(20, 1000);
-            var tl = new Timeline();
-            var d = new TaskDirector(site, CommandKit.Graph, tl, new[] { ((IMachineBody)a, ma), (b, mb) }, 1);
-            var ra = new TaskRequest("c-a", "goto-refuel", null, 1, 1);
-            var rb = new TaskRequest("c-b", "goto-refuel", null, 1, 1);
-            d.Submit("A", ra);
-            d.Submit("B", rb);
+            // two haul trucks of the live site sent to refuel together: each rides the loop to the bay's exit, and they are served one at a time
+            var sim = new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, CommandKit.Prepared);
+            sim.Models["SP-HL-0002"].Restore(20, 1000);
+            sim.Models["SP-HL-0003"].Restore(20, 1000);
+            var ra = sim.Send("SP-HL-0002", "goto-refuel");
+            var rb = sim.Send("SP-HL-0003", "goto-refuel");
             var order = new List<string>();
             for (var t = 0.0; t < 1500 && !(ra.IsComplete && rb.IsComplete); t += 0.25)
             {
-                ma.Step(0.25, new MachineInput(0, false));
-                mb.Step(0.25, new MachineInput(0, false));
-                d.Step(0.25, 0.25);
-                if (d.Bay.Holder != null && (order.Count == 0 || order[order.Count - 1] != d.Bay.Holder)) order.Add(d.Bay.Holder);
+                sim.Step(0.25);
+                var holder = sim.Director.Bay.Holder;
+                if (holder != null && (order.Count == 0 || order[order.Count - 1] != holder)) order.Add(holder);
             }
 
-            Assert.IsTrue(ra.Completion.Answer().Succeeded, "A: " + ra.Completion.Answer());
-            Assert.IsTrue(rb.Completion.Answer().Succeeded, "B: " + rb.Completion.Answer());
-            Assert.AreEqual(2, order.Count);
+            Assert.IsTrue(ra.Completion.Answer().Succeeded, "SP-HL-0002: " + ra.Completion.Answer() + "\n" + sim.Timeline.Text("SP-HL-0002", 20));
+            Assert.IsTrue(rb.Completion.Answer().Succeeded, "SP-HL-0003: " + rb.Completion.Answer() + "\n" + sim.Timeline.Text("SP-HL-0003", 20));
+            Assert.AreEqual(2, order.Count, string.Join(", ", order));
             Assert.AreNotEqual(order[0], order[1], "one at a time");
         }
 
@@ -659,29 +632,26 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void TheDirectorAnswersEveryRunningTaskOnResetAndRefusesWhatComesAfter()
         {
-            var site = CommandKit.Site;
-            var track = CommandKit.Track(0);
-            var bodies = Enumerable.Range(0, 3).Select(i => (IMachineBody)new FakeBody("M" + i, EquipmentKind.Hauler, track[100 + i * 50].X, track[100 + i * 50].Z, 0, track)).ToList();
-            var d = new TaskDirector(site, CommandKit.Graph, new Timeline(), bodies.Select(b => (b, new MachineModel(EquipmentKind.Hauler, b.Id))), 1);
-            var reqs = bodies.Select((b, i) => new TaskRequest("c" + i, i == 1 ? "goto-refuel" : "goto-area", i == 1 ? null : Yard, 1, 1)).ToList();
-            for (var i = 0; i < reqs.Count; i++) d.Submit("M" + i, reqs[i]);
-            d.Step(1, 1);
-            d.FailAll();
+            var sim = new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, CommandKit.Prepared);
+            var ids = new[] { "SP-HL-0001", "SP-HL-0002", "SP-HL-0003" };
+            var reqs = ids.Select((id, i) => sim.Send(id, i == 1 ? "goto-refuel" : "goto-area", i == 0 ? Yard : i == 2 ? Cut : null)).ToList();
+            foreach (var q in reqs) Assert.IsFalse(q.IsComplete, q.Token + " is running: " + (q.IsComplete ? q.Completion.Answer().ToString() : ""));
+            sim.Step(1.0);
+            sim.Director.FailAll();
             foreach (var q in reqs)
             {
                 Assert.IsTrue(q.IsComplete, q.Token);
                 Assert.AreEqual("simulation reset before completion", q.Completion.Answer().Reason);
             }
 
-            var after = new TaskRequest("late", "goto-area", Yard, 9, 1);
-            d.Submit("M0", after);
+            var after = sim.Send("SP-HL-0001", "goto-area", Yard);
             Assert.AreEqual("simulation reset before completion", after.Completion.Answer().Reason);
         }
 
         [Test]
         public void ACommandForADeviceWithNoControllerAnswersFailedAtOnce()
         {
-            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(), new (IMachineBody, MachineModel)[0], 1);
+            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, CommandKit.Prepared, new Timeline(), new (IMachineBody, MachineModel)[0], 1);
             var q = new TaskRequest("c", "goto-refuel", null, 1, 1);
             d.Submit("SP-PL-0001", q);
             Assert.AreEqual("this device has no task executor in this run", q.Completion.Answer().Reason);
@@ -898,149 +868,8 @@ namespace DeviceChain.Sitepulse.Tests
 
         // ---- the yield rule, and what it must never do
 
-        static TaskDirector YieldWorld(FakeBody[] bodies) => new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(),
-            bodies.Select(b => ((IMachineBody)b, new MachineModel(EquipmentKind.Hauler, b.Id))), 1);
-
-        [Test]
-        public void AMachineYieldsToOneThatIsMovingInItsLaneForAsLongAsItMoves()
-        {
-            var me = new FakeBody("A", EquipmentKind.Hauler, 0, 0, 0);
-            var other = new FakeBody("B", EquipmentKind.Hauler, 0, 5, 0);
-            other.Detach();
-            var d = YieldWorld(new[] { me, other });
-            for (var i = 0; i < 120; i++)
-            {
-                other.Drive(0, i % 2 == 0 ? 5.0 : 6.5, 0, 1.5, 0);   // 3 m/s back and forth, always inside the lane ahead
-                d.Step(0.5, 0.5);
-                Assert.IsTrue(d.Blocked("A", 0, 0, 0), "step " + i);
-            }
-        }
-
-        [Test]
-        public void AMachineWaitsBehindOneThatStandsOnlyAWhileAndThenCarriesOn()
-        {
-            var me = new FakeBody("A", EquipmentKind.Hauler, 0, 0, 0);
-            var other = new FakeBody("B", EquipmentKind.Hauler, 0, 5, 0);
-            var d = YieldWorld(new[] { me, other });
-            var waited = 0.0;
-            var stuck = true;
-            for (var t = 0.0; t < 60.0; t += 0.5)
-            {
-                d.Step(0.5, 0.5);
-                if (!d.Blocked("A", 0, 0, 0)) { stuck = false; break; }
-                waited = t;
-            }
-
-            Assert.IsFalse(stuck, "never deadlocked behind a machine that is not moving");
-            Assert.GreaterOrEqual(waited, TaskDirector.StandingYieldSeconds - 1.5, "it did give way first");
-            Assert.LessOrEqual(waited, TaskDirector.StandingYieldSeconds + 1.5);
-            for (var i = 0; i < 20; i++)
-            {
-                d.Step(0.5, 0.5);
-                Assert.IsFalse(d.Blocked("A", 0, 0, 0), "and once it is past its wait it keeps going");
-            }
-
-            d.Step(0.5, 0.5);
-            Assert.IsFalse(d.Blocked("A", 0, 0, 180), "the wait starts over for the next one");
-        }
-
-        [Test]
-        public void ATruckDrivingToTheYardPastAMachineStandingOnItsRouteStillArrivesAndNeverTouchesIt()
-        {
-            var frames = CommandKit.Track(0);
-            var f = frames[300];
-            var a = new FakeBody("SP-HL-0003", EquipmentKind.Hauler, f.X, f.Z, f.HeadingDegrees, frames);
-            var plan = CommandKit.Graph.Plan(f.X, f.Z, -90, -45, CommandKit.Site.Obstacles, ParkingLot.TravelRadius(EquipmentKind.Hauler));
-            Assert.IsNotNull(plan);
-            plan.PointAt(plan.Length * 0.3, out var px, out var pz, out var ph, out _);
-            // standing in the road lengthwise (across it, with the road no wider than a truck is long, nothing can pass: it would have to wait)
-            var blocker = new FakeBody("SP-HL-0004", EquipmentKind.Hauler, px, pz, ph);
-            var d = YieldWorld(new[] { a, blocker });
-            var cmd = new TaskRequest("c-1", "goto-area", Yard, 1, 1);
-            d.Submit("SP-HL-0003", cmd);
-            var nearest = double.MaxValue;
-            for (var t = 0.0; t < 1500 && !cmd.IsComplete; t += 0.25)
-            {
-                d.Step(0.25, 0.25);
-                nearest = Math.Min(nearest, Footprint.Gap(Footprint.At(a.Kind, a.X, a.Z, a.HeadingDegrees), Footprint.At(blocker.Kind, blocker.X, blocker.Z, blocker.HeadingDegrees)));
-            }
-
-            Assert.IsTrue(cmd.IsComplete, d.Timeline.Text("SP-HL-0003", 20));
-            Assert.IsTrue(cmd.Completion.Answer().Succeeded, d.Timeline.Text("SP-HL-0003", 20));
-            Assert.GreaterOrEqual(nearest, 0.0, "it went round the machine, not through it: nearest " + nearest.ToString("0.00") + " m");
-        }
 
         // ---- rejoining the track: a machine on its routine track follows it blind, so the one that joins has to look
-
-        [Test]
-        public void AMachineHeadingBackToItsTrackWaitsOffTheRoadWhileTrafficIsPassingAndJoinsOnceItHas()
-        {
-            var r = new Rig();
-            var cmd = r.Send("goto-area", Yard);
-            Assert.IsTrue(r.Run(() => cmd.IsComplete));
-            Assert.IsNull(r.Controller.Resume());
-            Assert.IsTrue(r.Body.TryNearestTrackPoint(r.Body.X, r.Body.Z, out var join));
-
-            r.World.TrackBusy = true;
-            r.Run(() => false, 300);
-            Assert.AreEqual(MachineMode.Returning, r.Controller.Mode, "it waits, it does not give up in 5 minutes of a busy road");
-            Assert.IsFalse(r.Body.Attached);
-            Assert.AreEqual(0, r.Body.Attaches);
-            var gap = Math.Sqrt((r.Body.X - join.X) * (r.Body.X - join.X) + (r.Body.Z - join.Z) * (r.Body.Z - join.Z));
-            Assert.Greater(gap, TaskBudgets.RejoinHoldBackMetres - 3.0, "it stopped short of the place it rejoins, not on it");
-            Assert.LessOrEqual(gap, TaskBudgets.RejoinHoldBackMetres + 0.1);
-            Assert.AreEqual(0.0, r.Controller.SpeedMps, 1e-6, "standing");
-
-            r.World.TrackBusy = false;
-            Assert.IsTrue(r.Run(() => r.Controller.Mode == MachineMode.Working, 300));
-            Assert.AreEqual(1, r.Body.Attaches);
-            Assert.AreEqual(join.TrackSeconds, r.Body.LastAttach.Value.TrackSeconds, "at the same place of its track");
-        }
-
-        [Test]
-        public void TheDirectorSaysATrackIsNotClearWhileAMachineIsDrivingNearItOrAnyStandsOnIt()
-        {
-            var track = CommandKit.Track(0);
-            var me = new FakeBody("ME", EquipmentKind.Hauler, track[0].X, track[0].Z, 0, track);
-            var other = new FakeBody("OTHER", EquipmentKind.Hauler, 500, 500);
-            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(),
-                new[] { ((IMachineBody)me, new MachineModel(EquipmentKind.Hauler, "ME")), (other, new MachineModel(EquipmentKind.Hauler, "OTHER")) }, 1);
-            const double X = 100, Z = 100;
-            d.Step(0.5, 0.5);
-            d.Step(0.5, 0.5);
-            Assert.IsTrue(d.TrackClear("ME", X, Z), "a machine far away");
-
-            // it stands 20 m away: parked machines are not driving through
-            Place(other, X + 20, Z);
-            d.Step(0.5, 0.5);
-            d.Step(0.5, 0.5);
-            Assert.IsTrue(d.TrackClear("ME", X, Z), "a machine standing 20 m off is not in the way");
-
-            // it stands where the machine would be set down
-            Place(other, X + 5, Z);
-            d.Step(0.5, 0.5);
-            d.Step(0.5, 0.5);
-            Assert.IsFalse(d.TrackClear("ME", X, Z), "a machine standing within a footprint of the place");
-
-            // it drives past 20 m away, then 30 m away
-            Place(other, X + 20, Z);
-            d.Step(0.5, 0.5);
-            Place(other, X + 20, Z + 3);
-            d.Step(0.5, 0.5);
-            Assert.IsFalse(d.TrackClear("ME", X, Z), "a machine driving 20 m off is about to arrive");
-            Place(other, X + 30, Z);
-            d.Step(0.5, 0.5);
-            Place(other, X + 30, Z + 3);
-            d.Step(0.5, 0.5);
-            Assert.IsTrue(d.TrackClear("ME", X, Z), "once it is past the radius the track is clear");
-            Assert.IsTrue(d.TrackClear("OTHER", X + 30, Z), "a machine is never in its own way");
-        }
-
-        static void Place(FakeBody b, double x, double z)
-        {
-            b.Detach();
-            b.Drive(x, z, 0, 0, 0);
-        }
 
         // ---- reading the feature file
 

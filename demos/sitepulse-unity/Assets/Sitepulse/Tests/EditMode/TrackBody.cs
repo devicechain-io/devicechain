@@ -88,6 +88,12 @@ namespace DeviceChain.Sitepulse.Tests
 
         public void SetTrackRate(double rate) => player.SetRate((float)rate);
 
+        public bool TryTrackSeconds(out double seconds)
+        {
+            seconds = player.TrackSecondsAt(time);
+            return Attached;
+        }
+
         /// <summary>A loader's boom is up (below <see cref="Footprint.LoaderRaisedBoomDegrees"/>) on the frame it is on now.</summary>
         public bool BoomRaised => Kind == EquipmentKind.Loader && Attached && player.SampleAt(time).P1 < Footprint.LoaderRaisedBoomDegrees;
 

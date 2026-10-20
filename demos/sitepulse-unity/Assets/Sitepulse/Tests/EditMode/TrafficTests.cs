@@ -51,213 +51,12 @@ namespace DeviceChain.Sitepulse.Tests
     {
         const double Dt = 0.1;
 
-        sealed class Scene
-        {
-            public readonly TaskDirector Director;
-            public readonly List<TrackBody> Tracks = new List<TrackBody>();
-            public readonly List<IMachineBody> Bodies = new List<IMachineBody>();
-            public readonly Timeline Timeline;
-            public double Now;
-
-            public Scene(params IMachineBody[] bodies)
-            {
-                Timeline = new Timeline(() => DateTimeOffset.UnixEpoch.AddSeconds(Now));
-                foreach (var b in bodies)
-                {
-                    Bodies.Add(b);
-                    if (b is TrackBody t) Tracks.Add(t);
-                }
-
-                Director = new TaskDirector(CommandKit.Site, CommandKit.Graph, Timeline,
-                    bodies.Select(b => (b, new MachineModel(b.Kind, b.Id))), 1);
-            }
-
-            public void Step()
-            {
-                Director.Step(Dt, Dt);
-                foreach (var t in Tracks) t.Advance(Dt);
-                Now += Dt;
-            }
-
-            public double Gap(IMachineBody a, IMachineBody b) => Footprint.Gap(
-                Footprint.At(a.Kind, a.X, a.Z, a.HeadingDegrees, a.BoomRaised), Footprint.At(b.Kind, b.X, b.Z, b.HeadingDegrees, b.BoomRaised));
-        }
-
-        // a hauler on a line along +X: the track is 'length' metres at 'speed', and its machine starts 'start' metres along it
-        static TrackBody HaulerOnALine(string id, double fromX, double speed, double length = 900.0, double start = 0.0, double z = 0.0)
-        {
-            var frames = StraightTrack.Frames(fromX, z, 90, speed, length);
-            return new TrackBody(id, EquipmentKind.Hauler, frames, StraightTrack.FrameSeconds, StraightTrack.PeriodOf(frames), (float)(-start / speed));
-        }
-
-        static FakeBody Standing(string id, double x, double z, double heading = 90, EquipmentKind kind = EquipmentKind.Hauler)
-        {
-            var b = new FakeBody(id, kind, x, z, heading);
-            b.Detach();
-            return b;
-        }
-
-        // ---- a machine on its routine track follows it blind: the director looks for it
-
-        [Test]
-        public void AHaulerOnItsTrackStopsShortOfAMachineStandingAheadOnTheSameRoad()
-        {
-            var hauler = HaulerOnALine("SP-HL-0001", 0, 6.0);
-            var standing = Standing("SP-HL-0006", 250, 0);
-            var s = new Scene(hauler, standing);
-            var nearest = double.MaxValue;
-            for (var i = 0; i < 900; i++)
-            {
-                s.Step();
-                nearest = Math.Min(nearest, s.Gap(hauler, standing));
-            }
-
-            Assert.Greater(nearest, 1.0, "it kept clear of it: nearest " + nearest.ToString("0.00") + " m of air");
-            Assert.Less(hauler.X, 250 - 10.3, "it stopped on its own side of it");
-            Assert.AreEqual(0.0, s.Director.TrackRateOf(hauler.Id), 1e-6, "and stands there, held");
-        }
-
-        [Test]
-        public void AHaulerOnItsTrackFollowsAMachineMovingSlowerOnTheSameRoadAtADistance()
-        {
-            var hauler = HaulerOnALine("SP-HL-0001", 0, 6.0);
-            var ahead = Standing("SP-HL-0006", 70, 0);
-            var s = new Scene(hauler, ahead);
-            var nearest = double.MaxValue;
-            for (var i = 0; i < 1200; i++)
-            {
-                ahead.Drive(ahead.X + 2.0 * Dt, 0, 90, 2.0 * Dt, 0);   // 2 m/s along the road, a quarter of the pace of the track
-                s.Step();
-                nearest = Math.Min(nearest, s.Gap(hauler, ahead));
-            }
-
-            Assert.Greater(nearest, 1.0, "nearest " + nearest.ToString("0.00") + " m");
-            Assert.Less(hauler.X, ahead.X, "it never got past it");
-            Assert.Less(s.Director.SpeedOf(hauler.Id), 3.0, "and by the end it was going at about the pace of the one in front");
-        }
-
-        [Test]
-        public void HaulersQueueBehindAMachineStandingInTheRoadAndNoneOfThemTouchesAnother()
-        {
-            var first = HaulerOnALine("SP-HL-0002", 0, 6.0, start: 120);
-            var second = HaulerOnALine("SP-HL-0003", 0, 6.0, start: 60);
-            var third = HaulerOnALine("SP-HL-0004", 0, 6.0, start: 0);
-            var standing = Standing("SP-HL-0006", 300, 0);
-            var s = new Scene(first, second, third, standing);
-            var all = new IMachineBody[] { first, second, third, standing };
-            var nearest = double.MaxValue;
-            for (var i = 0; i < 1500; i++)
-            {
-                s.Step();
-                for (var a = 0; a < all.Length; a++)
-                    for (var b = a + 1; b < all.Length; b++)
-                        nearest = Math.Min(nearest, s.Gap(all[a], all[b]));
-            }
-
-            Assert.Greater(nearest, 0.5, "nearest " + nearest.ToString("0.00") + " m");
-            Assert.Greater(first.X, second.X, "the order they were in is the order they queue in");
-            Assert.Greater(second.X, third.X);
-        }
-
-        [Test]
-        public void AHaulerGoesOnAtItsOwnPaceWhenNothingIsInItsWay()
-        {
-            var hauler = HaulerOnALine("SP-HL-0001", 0, 6.0);
-            var other = Standing("SP-HL-0006", 300, 40);   // well off its road
-            var s = new Scene(hauler, other);
-            for (var i = 0; i < 300; i++)
-            {
-                s.Step();
-                Assert.AreEqual(1.0, s.Director.TrackRateOf(hauler.Id), 1e-9, "step " + i);
-            }
-
-            Assert.AreEqual(180.0, hauler.X, 0.5, "30 s at 6 m/s");
-        }
-
-        // ---- a machine on an errand goes round what is in its way
-
-        [Test]
-        public void AMachineIsNotPutBackOnItsTrackWhereItsFootprintWouldOverlapOneStandingBeside()
-        {
-            var me = Standing("SP-HL-0001", 0, 0, 0);
-            var ahead = Standing("SP-HL-0002", 0, 10.5, 180);   // 10.5 m between middles: past the old 8 m radius, but 0.2 m of air between a truck's tail and another's nose
-            var s = new Scene(me, ahead);
-            s.Step();
-            s.Step();
-            Assert.IsTrue(s.Director.TrackClear(me.Id, 0, 0), "by its middle alone it looked clear");
-            Assert.IsFalse(s.Director.TrackClearFor(me.Id, EquipmentKind.Hauler, 0, 0, 0), "by the machine it is not");
-            ahead.Drive(0, 20, 180, 0, 0);
-            s.Step();
-            s.Step();
-            Assert.IsTrue(s.Director.TrackClearFor(me.Id, EquipmentKind.Hauler, 0, 0, 0));
-        }
-
-        [Test]
-        public void ACommandWaitsWhileTakingTheMachineOffItsTrackWouldPutWhatItStowsIntoAnother()
-        {
-            var frames = CommandKit.Track(0);
-            var f = frames[300];
-            var loader = new FakeBody("SP-LD-0003", EquipmentKind.Loader, f.X, f.Z, f.HeadingDegrees, frames);
-            var h = f.HeadingDegrees * Math.PI / 180.0;
-            // a truck nose to nose with it, 9 m on: clear while the loader's boom is up, not once its bucket is carried out
-            var truck = new FakeBody("SP-HL-0004", EquipmentKind.Hauler, f.X + 9 * Math.Sin(h), f.Z + 9 * Math.Cos(h), f.HeadingDegrees + 180);
-            var s = new Scene(loader, truck);
-            s.Step();
-            var cmd = new TaskRequest("c-1", "goto-area", "sp-zone-yard", 1, 1);
-            s.Director.Submit(loader.Id, cmd);
-            for (var i = 0; i < 100; i++) s.Step();
-            Assert.AreEqual(0, loader.Detaches, "it went on working: " + s.Timeline.Text(loader.Id, 10));
-            Assert.IsFalse(cmd.IsComplete);
-
-            truck.Detach();
-            truck.Drive(f.X + 60 * Math.Sin(h), f.Z + 60 * Math.Cos(h), 0, 0, 0);   // the truck leaves
-            s.Step();
-            s.Step();
-            Assert.AreEqual(1, loader.Detaches, "and was taken off its track once the place was clear: " + s.Timeline.Text(loader.Id, 10));
-        }
-
-        [Test]
-        public void AMachineBesideOneWorkingInPlaceIsTakenOffItsTrackOnlyWithRoomToTurnRound()
-        {
-            // a hauler and a dozer standing 0.5 m apart (the footprints clear the 0.3 m a stowed machine needs), but a hauler that
-            // set off the other way would swing its tail through the dozer: it waits; with the dozer further off it goes
-            foreach (var (z, detaches) in new[] { (5.1, 0), (25.0, 1) })
-            {
-                var truck = new FakeBody("SP-HL-0004", EquipmentKind.Hauler, 0, 0, 90, CommandKit.Track(0));
-                var dozer = new FakeBody("SP-DZ-0001", EquipmentKind.Dozer, 3, z, 90);
-                var s = new Scene(truck, dozer);
-                s.Step();
-                Assert.Greater(s.Gap(truck, dozer), TaskDirector.DetachClearance, "set up clear enough to be taken off");
-                s.Director.Submit(truck.Id, new TaskRequest("c-1", "goto-area", "sp-zone-yard", 1, 1));
-                for (var i = 0; i < 50; i++) s.Step();
-                Assert.AreEqual(detaches, truck.Detaches, "dozer " + z + " m off: " + s.Timeline.Text(truck.Id, 10));
-            }
-        }
-
-        [Test]
-        public void ACommandThatCannotStartForAMinuteIsAnsweredFailedNotLeftWaiting()
-        {
-            var frames = CommandKit.Track(0);
-            var f = frames[300];
-            var loader = new FakeBody("SP-LD-0003", EquipmentKind.Loader, f.X, f.Z, f.HeadingDegrees, frames);
-            var h = f.HeadingDegrees * Math.PI / 180.0;
-            var truck = new FakeBody("SP-HL-0004", EquipmentKind.Hauler, f.X + 9 * Math.Sin(h), f.Z + 9 * Math.Cos(h), f.HeadingDegrees + 180);
-            var s = new Scene(loader, truck);
-            s.Step();
-            var cmd = new TaskRequest("c-1", "goto-area", "sp-zone-yard", 1, 1);
-            s.Director.Submit(loader.Id, cmd);
-            for (var i = 0; i < (int)((TaskDirector.DeferSeconds + 5) / Dt); i++) s.Step();
-            Assert.IsTrue(cmd.IsComplete);
-            Assert.IsFalse(cmd.Completion.Answer().Succeeded);
-            Assert.AreEqual(0, loader.Detaches);
-        }
-
         // ---- the whole site
 
         static string Overlaps(SceneSim sim) => string.Join("; ", sim.Pairs.Values.Where(p => p.MinGap < 0)
             .OrderBy(p => p.MinGap).Select(p => p.A + "/" + p.B + " " + p.MinGap.ToString("0.00") + " m at " + p.At.ToString("0") + " s"));
 
-        static SceneSim Site(double startClock = SceneSim.StartClock) => new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, startClock);
+        static SceneSim Site(double startClock = SceneSim.StartClock) => new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, CommandKit.Prepared, startClock);
 
         static void Run(SceneSim sim, double seconds, params (double At, string Id, string Key, string Area)[] script)
         {
@@ -275,16 +74,27 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void TheChoreographyIsLeftAloneWhileNothingIsCommanded()
+        public void TheChoreographyRunsAtItsOwnPaceWhileNothingIsCommanded()
         {
+            // the loop as laid out passes every junction box and station on time, so the interlocking holds nobody back for long: each truck
+            // plays its track at its own pace but for moments (the ramp bottom's tightest crossing), and the coupled loader keeps its truck
             var sim = Site();
-            for (var i = 0; i < 3000; i++)
+            var played = sim.Ids.ToDictionary(id => id, id => 0.0);
+            var lowest = sim.Ids.ToDictionary(id => id, id => 1.0);
+            for (var i = 0; i < 6000; i++)
             {
                 sim.Step(Dt);
-                foreach (var id in sim.Ids) Assert.AreEqual(1.0, sim.Director.TrackRateOf(id), 1e-9, id + " at " + sim.Now.ToString("0.0") + " s");
+                foreach (var id in sim.Ids) lowest[id] = Math.Min(lowest[id], sim.Director.TrackRateOf(id));
+            }
+
+            foreach (var id in sim.Ids)
+            {
+                Assert.GreaterOrEqual(sim.Bodies[id].PlayedSeconds, 0.995 * sim.Now, id + " played " + sim.Bodies[id].PlayedSeconds.ToString("0.0") + " of " + sim.Now.ToString("0") + " s");
+                Assert.GreaterOrEqual(lowest[id], 0.5, id + " was never held to a crawl");
             }
 
             Assert.AreEqual("", Overlaps(sim), "the 18 machines as they were laid out");
+            Assert.AreEqual(0, sim.Director.Traffic.Interlocking.Overruns, sim.Director.Traffic.Interlocking.LastOverrun);
         }
 
         [Test]

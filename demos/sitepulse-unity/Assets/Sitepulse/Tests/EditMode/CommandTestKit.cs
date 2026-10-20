@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using DeviceChain.Sim.Traffic;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;
@@ -82,18 +83,41 @@ namespace DeviceChain.Sitepulse.Tests
         }
     }
 
-    /// <summary>A site where nothing is ever in the way, unless a test says so.</summary>
-    internal sealed class OpenWorld : ITaskWorld
+    /// <summary>
+    /// A site where nothing is ever in the way, unless a test says so: the machine's trips are the free trips every machine off the lanes takes
+    /// (<see cref="FreeTrips"/>), held to nothing but the test's flags.
+    /// </summary>
+    internal sealed class OpenWorld : ITaskWorld, IWayKeeper
     {
+        /// <summary>The machine may not drive on from where it is (something sits in its way for good).</summary>
         public bool Block;
-        public bool BayBusy;
-        public bool Blocked(string id, double x, double z, double headingDegrees) => Block;
-        public bool BayClear(string id) => !BayBusy;
-        public bool Occupied(string id, double x, double z) => false;
 
-        /// <summary>Somebody is driving past the place the machine would rejoin its track.</summary>
-        public bool TrackBusy;
-        public bool TrackClear(string id, double x, double z) => !TrackBusy;
+        /// <summary>Something stands in the refuel bay.</summary>
+        public bool BayBusy;
+
+        public readonly ParkingLot Parking = new ParkingLot();
+        readonly FreeTrips trips;
+
+        public OpenWorld(SiteGeometry site = null, RouteGraph graph = null) => trips = new FreeTrips(site ?? CommandKit.Site, graph ?? CommandKit.Graph, Parking);
+
+        public ITrip TripToArea(IMachineBody body, string area, double laneShare, out string refusal) => trips.ToArea(body, area, laneShare, this, null, null, out refusal);
+        public ITrip TripToQueue(IMachineBody body, double laneShare, out string refusal) => trips.ToSpot(body, RouteGraph.QueueSpot, "the refuel queue", laneShare, this, out refusal);
+        public ITrip TripIntoBay(IMachineBody body, out string refusal) => trips.IntoBay(body, this, out refusal);
+        public ITrip TripBack(IMachineBody body, double laneShare, out string refusal) => trips.Back(body, laneShare, this, out refusal);
+        public void Release(string id) => trips.Release(id);
+        public bool BayClear(string id) => !BayBusy;
+
+        public string Check(IMachineBody body, LaneLine line, bool endsStanding) => null;
+
+        public bool MayLeave(string id, out string why)
+        {
+            why = null;
+            return true;
+        }
+
+        public string Begin(IMachineBody body, LaneLine line, bool endsStanding) => null;
+        public double Reach(string id, double s) => Block ? s : double.MaxValue;
+        public void Ended(string id) { }
     }
 
     internal static class CommandKit
@@ -112,6 +136,11 @@ namespace DeviceChain.Sitepulse.Tests
 
         public static RouteGraph Graph => graph ??= RouteGraph.Build(Site, Ground);
 
+        static PreparedSite prepared;
+
+        /// <summary>The site as the interlocking measures it (once: a second or so), for every director a test builds.</summary>
+        public static PreparedSite Prepared => prepared ??= PreparedSite.Measure(TopologyKit.Topology, TopologyKit.World);
+
         static JsonElement Fleet => (fleet ??= JsonDocument.Parse(File.ReadAllText(AssetPath("Data/quarry_fleet_live.json")))).RootElement;
 
         public static int TrackCount => Fleet.GetProperty("tracks").GetArrayLength();
@@ -128,6 +157,27 @@ namespace DeviceChain.Sitepulse.Tests
                 var t = (seconds - m.GetProperty("offset").GetDouble()) % period;
                 if (t < 0) t += period;
                 return frames[(int)Math.Round(t / Fleet.GetProperty("dt").GetDouble()) % frames.Count];
+            }
+
+            throw new ArgumentException("no machine " + id, nameof(id));
+        }
+
+        /// <summary>
+        /// A haul truck of the live choreography on its track (the haul loop), where the fleet has it <paramref name="seconds"/> into the
+        /// choreography: a body that plays the track as the scene's does, for a director to drive (call <see cref="TrackBody.Advance"/> each step).
+        /// </summary>
+        public static TrackBody LoopTruck(string id, double seconds = SceneSim.StartClock)
+        {
+            var dt = (float)Fleet.GetProperty("dt").GetDouble();
+            foreach (var m in Fleet.GetProperty("machines").EnumerateArray())
+            {
+                if (m.GetProperty("id").GetString() != id) continue;
+                var t = Fleet.GetProperty("tracks")[m.GetProperty("track").GetInt32()];
+                var arr = t.GetProperty("data");
+                var data = new float[arr.GetArrayLength()];
+                var k = 0;
+                foreach (var v in arr.EnumerateArray()) data[k++] = (float)v.GetDouble();
+                return new TrackBody(id, EquipmentKind.Hauler, data, dt, (float)t.GetProperty("period").GetDouble(), (float)(m.GetProperty("offset").GetDouble() - seconds));
             }
 
             throw new ArgumentException("no machine " + id, nameof(id));
@@ -153,8 +203,8 @@ namespace DeviceChain.Sitepulse.Tests
         public readonly MachineModel Model;
         public readonly Timeline Timeline = new Timeline();
         public readonly BayReservations Bay = new BayReservations();
-        public readonly ParkingLot Parking = new ParkingLot();
-        public readonly OpenWorld World = new OpenWorld();
+        public readonly ParkingLot Parking;
+        public readonly OpenWorld World;
         public readonly MachineController Controller;
         public double Now;
         long sequence;
@@ -167,7 +217,9 @@ namespace DeviceChain.Sitepulse.Tests
             var start = track != null ? track[300] : new TrackPoint(0, 0, 0, 0);
             Body = new FakeBody(id, kind, x ?? start.X, z ?? start.Z, start.HeadingDegrees, track);
             Model = new MachineModel(kind, id);
-            Controller = new MachineController(Body, Model, site ?? CommandKit.Site, graph ?? CommandKit.Graph, Bay, Parking, Timeline, World);
+            World = new OpenWorld(site, graph);
+            Parking = World.Parking;
+            Controller = new MachineController(Body, Model, Bay, Timeline, World);
         }
 
         public TaskRequest Send(string key, string area = null, string token = null, long? seq = null)

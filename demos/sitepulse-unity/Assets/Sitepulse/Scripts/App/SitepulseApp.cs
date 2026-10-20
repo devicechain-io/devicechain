@@ -13,6 +13,7 @@ using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Replay;
 using DeviceChain.Sitepulse.Simulation;
+using DeviceChain.Sim.Traffic;
 using DeviceChain.Sitepulse.Tasks;
 using DeviceChain.Sitepulse.Visuals;
 using UnityEngine;
@@ -46,6 +47,9 @@ namespace DeviceChain.Sitepulse.App
         [Tooltip("What the fleet plays in Live mode: the six-hauler loop with no scripted refuel, so no machine "
                  + "refuels on a script. Required in Live; it is never replaced by the Choreographed file.")]
         public TextAsset liveChoreography;
+        [Tooltip("The site as the interlocking needs it (lanes, junction boxes, stands, stations): Assets/Sitepulse/Data/quarry_topology.json. "
+                 + "Required in Live: without it no machine is driven, and the task layer says so.")]
+        public TextAsset topology;
         [Tooltip("Editor only, and only when -sitepulse-mode is not on the command line.")]
         [SerializeField] EditorModeOverride editorMode = EditorModeOverride.None;
 
@@ -719,9 +723,19 @@ namespace DeviceChain.Sitepulse.App
             var machines = new List<(IMachineBody, MachineModel)>();
             foreach (var host in plane.Hosts)
                 if (rigs.TryGetValue(host.ExternalId, out var rig)) machines.Add((new FleetBody(fleet, rig), host.Simulation.Model));
+            // the interlocking keeps the machines out of each other's way: it is measured from the topology and the live fleet once, here
+            if (topology == null || liveChoreography == null)
+            {
+                PlatformLog.Error("task layer not started: the Sitepulse App has no site topology (Assets/Sitepulse/Data/quarry_topology.json): run Sitepulse > Quarry > Add Sitepulse App To Scene");
+                return;
+            }
+
+            var measuring = System.Diagnostics.Stopwatch.StartNew();
+            var prepared = PreparedSite.Measure(SiteTopologyReader.Parse(topology.text), new QuarryTrafficWorld(FleetViewReader.Parse(liveChoreography.text)));
+            PlatformLog.Info($"interlocking · {prepared.Conflicts.Count} conflicting cell pairs measured in {measuring.ElapsedMilliseconds} ms");
             timeline = new Timeline();
             timeline.Added += (machine, row) => proofLog.DeviceRow(machine, row.At, row.Kind, row.Text);
-            director = new TaskDirector(site, RouteGraph.Build(site, ground), timeline, machines, plane.Generation);
+            director = new TaskDirector(site, RouteGraph.Build(site, ground), prepared, timeline, machines, plane.Generation);
             plane.Tasks = director;
             // the bay's attendant serves the machine the Refuelling state names, not whoever stands in the bay
             vignette = FindAnyObjectByType<RefuelVignette>();

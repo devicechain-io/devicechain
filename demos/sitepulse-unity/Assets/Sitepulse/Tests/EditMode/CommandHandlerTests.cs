@@ -375,7 +375,7 @@ namespace DeviceChain.Sitepulse.Tests
         {
             var body = new FakeBody("SP-HL-0006", EquipmentKind.Hauler, 0, 0);
             model = new MachineModel(EquipmentKind.Hauler, "SP-HL-0006");
-            return new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(), new[] { ((IMachineBody)body, model) }, 1);
+            return new TaskDirector(CommandKit.Site, CommandKit.Graph, CommandKit.Prepared, new Timeline(), new[] { ((IMachineBody)body, model) }, 1);
         }
 
         [Test]
@@ -428,7 +428,7 @@ namespace DeviceChain.Sitepulse.Tests
             var bodies = new[] { "SP-HL-0001", "SP-HL-0002" }.Select(i => (IMachineBody)new FakeBody(i, EquipmentKind.Hauler, 0, 0)).ToList();
             var models = bodies.ToDictionary(b => b.Id, b => new MachineModel(EquipmentKind.Hauler, b.Id));
             var tl = new Timeline();
-            var d = new TaskDirector(site, CommandKit.Graph, tl, bodies.Select(b => (b, models[b.Id])), 1);
+            var d = new TaskDirector(site, CommandKit.Graph, CommandKit.Prepared, tl, bodies.Select(b => (b, models[b.Id])), 1);
             var pc = new PresenterControls(d, id => models[id], null);
             Assert.AreEqual("SP-HL-0001", pc.Selected);
             pc.Select(1);

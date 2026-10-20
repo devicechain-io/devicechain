@@ -552,10 +552,14 @@ namespace DeviceChain.Sitepulse.EditorTools
             app.liveChoreography = AssetDatabase.LoadAssetAtPath<TextAsset>(LiveChoreographyPath);
             if (app.liveChoreography == null)
                 UnityEngine.Debug.LogWarning($"[sitepulse] {LiveChoreographyPath} does not exist: Live mode will refuse to start until it does and the app is re-wired");
+            app.topology = AssetDatabase.LoadAssetAtPath<TextAsset>(TopologyPath);
+            if (app.topology == null)
+                UnityEngine.Debug.LogWarning($"[sitepulse] {TopologyPath} does not exist: Live mode drives no machine until it does and the app is re-wired");
             EditorUtility.SetDirty(app);
         }
 
         const string LiveChoreographyPath = Root + "Data/quarry_fleet_live.json";
+        const string TopologyPath = Root + "Data/quarry_topology.json";
 
         /// <summary>Adds the app to the open scene without rebuilding it. Safe to re-run.</summary>
         [MenuItem("Sitepulse/Quarry/Add Sitepulse App To Scene")]

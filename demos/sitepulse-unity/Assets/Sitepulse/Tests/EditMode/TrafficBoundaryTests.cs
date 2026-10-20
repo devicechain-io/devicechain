@@ -9,7 +9,7 @@ using UnityEngine;
 namespace DeviceChain.Sitepulse.Tests
 {
     // The interlocking's core is kept free of the quarry so that a second simulation can take it: nothing under Scripts/Tasks/Traffic knows a quarry
-    // type, and nothing reads the topology while the demo runs (S4 describes the site and checks it; the reader has no caller outside the tests).
+    // type. The demo reads the topology in one place: the app, when it builds the task layer.
     public sealed class TrafficBoundaryTests
     {
         static string Scripts => Path.Combine(Application.dataPath, "Sitepulse", "Scripts");
@@ -33,11 +33,11 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void NothingReadsTheTopologyWhileTheDemoRuns()
+        public void TheAppAloneReadsTheTopologyWhenItBuildsTheTaskLayer()
         {
             var callers = Directory.GetFiles(Scripts, "*.cs", SearchOption.AllDirectories)
-                .Where(f => File.ReadAllText(f).Contains("SiteTopologyReader") && Path.GetFileName(f) != "SiteTopologyReader.cs").ToList();
-            CollectionAssert.IsEmpty(callers, "the topology reader is called from: " + string.Join(", ", callers.Select(Path.GetFileName)));
+                .Where(f => File.ReadAllText(f).Contains("SiteTopologyReader") && Path.GetFileName(f) != "SiteTopologyReader.cs").Select(Path.GetFileName).ToList();
+            CollectionAssert.AreEqual(new[] { "SitepulseApp.cs" }, callers, "the topology reader is called from: " + string.Join(", ", callers));
         }
     }
 }

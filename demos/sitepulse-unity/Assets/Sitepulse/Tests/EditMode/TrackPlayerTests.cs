@@ -237,7 +237,7 @@ namespace DeviceChain.Sitepulse.Tests
             var body = HaulerOnTheLoop(out var c);
             var timeline = new Timeline();
             var ctl = new MachineController(body, new DeviceChain.Sitepulse.Simulation.MachineModel(DeviceChain.Sitepulse.Simulation.EquipmentKind.Hauler, body.Id),
-                CommandKit.Site, CommandKit.Graph, new BayReservations(), new ParkingLot(), timeline, new OpenWorld());
+                new BayReservations(), timeline, new OpenWorld());
             var request = new TaskRequest("c-1", "goto-area", "sp-zone-yard", 1, 1);
             ctl.Submit(request);
             double Step() { ctl.Step(0.25, 0.25); body.Advance(0.25); return 0.25; }
