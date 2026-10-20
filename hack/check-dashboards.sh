@@ -237,14 +237,42 @@ if not literals:
 #
 # Types are read from the registration call, `ms.NewHistogramVec("name", ...)`,
 # because the name's type is not recoverable from the name. Test files are skipped:
-# a metric registered only in a test is not exported by any service.
+# a metric registered only in a test is not exported by any service; so are lines
+# that are comments, because a commented-out histogram exports nothing either.
+#
+# 🔴 A NAME CAN BE SEEN UNDER MORE THAN ONE TYPE, so each name keeps the SET of types
+# it was registered as, and a derived suffix is accepted only when that set is
+# exactly the type exporting it. Last-write-wins would let file-walk order decide
+# whether a gauge and a histogram of one name make `_bucket` real.
+#
+# 🔴 THE BARE NAME OF A HISTOGRAM IS ITSELF A DEFECT. It IS a Go literal, so the
+# literal test passes it, but a histogram exports no series under it:
+# `rate(devicechain_x_lat_seconds[5m])` is an empty graph, which is exactly the
+# defect this file exists to catch. So a name registered as a histogram in the area
+# is rejected bare. A SUMMARY's bare name is not: it carries the quantile series
+# ({quantile="0.99"}), so it has samples and stays accepted.
+#
+# The core helpers that assemble names from a prefix are taught here too, by the
+# suffixes core/core/metrics.go and core/core/periodic.go append, so a processing
+# loop's or a periodic task's histogram resolves rather than failing closed. A
+# helper called with anything but a string literal is not seen, and its series fail
+# closed; so do the histograms core/messaging registers for every area that streams.
 DERIVED_SUFFIXES = {
     "histogram": ("_bucket", "_sum", "_count"),
     "summary": ("_sum", "_count"),
 }
 REGISTRATION = re.compile(
     r"\.New(Histogram|Summary|Counter|Gauge)(?:Vec)?\(\s*\"([a-z][a-z0-9_]*)\"")
-kinds = {}  # area directory -> {registered name: histogram|summary|counter|gauge}
+HELPER = re.compile(r"\.(NewProcessorMetrics|NewPeriodicTaskMetrics)\(\s*\"([a-z][a-z0-9_]*)\"")
+HELPER_FAMILIES = {
+    "NewProcessorMetrics": (
+        ("_messages_total", "counter"), ("_duration_seconds", "histogram"), ("_inflight", "gauge")),
+    "NewPeriodicTaskMetrics": (
+        ("_passes_total", "counter"), ("_pass_duration_seconds", "histogram"),
+        ("_last_success_timestamp_seconds", "gauge")),
+}
+COMMENT_LINE = re.compile(r"^[ \t]*//.*$", re.M)
+kinds = {}  # area directory -> {registered name: {histogram|summary|counter|gauge}}
 for dirpath, _dirs, files in os.walk(services_dir):
     rel_parts = os.path.relpath(dirpath, services_dir).split(os.sep)
     area_dir = rel_parts[0]
@@ -254,22 +282,41 @@ for dirpath, _dirs, files in os.walk(services_dir):
         if not fname.endswith(".go") or fname.endswith("_test.go"):
             continue
         with open(os.path.join(dirpath, fname), "rb") as fh:
-            src = fh.read().decode("utf-8", "replace")
+            src = COMMENT_LINE.sub("", fh.read().decode("utf-8", "replace"))
+        area_kinds = kinds.setdefault(area_dir, {})
         for reg in REGISTRATION.finditer(src):
-            kinds.setdefault(area_dir, {})[reg.group(2)] = reg.group(1).lower()
+            area_kinds.setdefault(reg.group(2), set()).add(reg.group(1).lower())
+        for reg in HELPER.finditer(src):
+            for suffix, kind in HELPER_FAMILIES[reg.group(1)]:
+                area_kinds.setdefault(reg.group(2) + suffix, set()).add(kind)
+
+def lookup_areas(area_dir):
+    """area_dir None means any area (a by-name selector spans them all)."""
+    return [area_dir] if area_dir else list(kinds)
+
+def registered(metric, area_dir=None):
+    """Registered by a call read above, including a core helper's assembled names."""
+    return any(metric in kinds.get(a, {}) for a in lookup_areas(area_dir))
 
 def derived_base(metric, area_dir=None):
-    """The registered histogram/summary a derived series belongs to, else None.
-    area_dir None means any area (a by-name selector spans them all)."""
+    """The registered histogram/summary a derived series belongs to, else None."""
     for kind, suffixes in DERIVED_SUFFIXES.items():
         for suffix in suffixes:
             if not metric.endswith(suffix):
                 continue
             base = metric[:-len(suffix)]
-            areas_to_look = [area_dir] if area_dir else list(kinds)
-            if any(kinds.get(a, {}).get(base) == kind for a in areas_to_look):
+            if any(kinds.get(a, {}).get(base) == {kind} for a in lookup_areas(area_dir)):
                 return base
     return None
+
+def bare_histogram(metric, area_dir=None):
+    return any("histogram" in kinds.get(a, {}).get(metric, ()) for a in lookup_areas(area_dir))
+
+BARE_HISTOGRAM = (
+    "    is the bare name of a HISTOGRAM, which exports only _bucket, _sum and _count and\n"
+    "    NO series under its bare name. A panel over it draws an empty graph; an alert over\n"
+    "    it never fires. Use histogram_quantile(q, sum by (le) (rate(<name>_bucket[5m])))\n"
+    "    or rate(<name>_sum[5m]) / rate(<name>_count[5m]).")
 
 series_re = re.compile(r"devicechain_[a-z0-9_]+")
 
@@ -349,7 +396,11 @@ for series in sorted(seen):
             % (series, where, subsystem, ", ".join(sorted(areas)))
         )
         continue
-    if metric not in literals and derived_base(metric, areas[subsystem]) is None:
+    if bare_histogram(metric, areas[subsystem]):
+        problems.append("%s (in %s)\n%s" % (series, where, BARE_HISTOGRAM))
+        continue
+    if (metric not in literals and not registered(metric, areas[subsystem])
+            and derived_base(metric, areas[subsystem]) is None):
         problems.append(
             "%s (in %s) resolves to the metric %r in the %s area, and NO Go source registers\n"
             "    that name. A panel over a series that does not exist draws an empty graph; an\n"
@@ -359,7 +410,11 @@ for series in sorted(seen):
         )
 
 for (form, suffix) in sorted(regex_seen):
-    if suffix not in literals and derived_base(suffix) is None:
+    if bare_histogram(suffix):
+        problems.append("devicechain_%s_%s (in %s)\n%s" % (
+            form, suffix, ", ".join(sorted(regex_seen[(form, suffix)])), BARE_HISTOGRAM))
+        continue
+    if suffix not in literals and not registered(suffix) and derived_base(suffix) is None:
         problems.append(
             "devicechain_%s_%s (in %s) selects every area's %r by name, and NO Go source\n"
             "    registers that name. The selector matches nothing, and an ALERT over it\n"
@@ -640,6 +695,35 @@ func register(ms *Microservice) {
 	ms.NewSummary(
 		"sum_seconds", "A probe summary.")
 	ms.NewGauge("level", "A probe gauge.")
+	ms.NewProcessorMetrics("loop")
+	ms.NewPeriodicTaskMetrics("sweep")
+	// ms.NewHistogramVec("ghost_seconds", "Commented out: exports nothing.", nil, nil)
+	ms.NewGauge("mixed_seconds", "One name, two types.")
+}
+EOF
+  cat >"$gosrc/more_metrics.go" <<'EOF'
+package selftestarea
+
+func registerMore(ms *Microservice) {
+	ms.NewHistogramVec("mixed_seconds", "One name, two types.", nil, nil)
+}
+EOF
+  # A histogram registered only in a test file is exported by no service.
+  cat >"$gosrc/metrics_test.go" <<'EOF'
+package selftestarea
+
+func registerForTest(ms *Microservice) {
+	ms.NewHistogramVec("test_only_seconds", "Registered only by a test.", nil, nil)
+}
+EOF
+  # A SECOND AREA, so the area scoping of a histogram has something to be wrong
+  # about: remote_seconds is a histogram in other-area only.
+  mkdir -p "$work/backend/services/other-area"
+  cat >"$work/backend/services/other-area/metrics.go" <<'EOF'
+package otherarea
+
+func register(ms *Microservice) {
+	ms.NewHistogramVec("remote_seconds", "A histogram in another area.", nil, nil)
 }
 EOF
 
@@ -658,6 +742,9 @@ EOF
         },
         {
           "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
+        },
+        {
+          "expr": "devicechain_selftestarea_sum_seconds{quantile=\"0.99\"} + histogram_quantile(0.5, sum by (le) (rate(devicechain_selftestarea_loop_duration_seconds_bucket[5m]))) + rate(devicechain_selftestarea_loop_messages_total[5m]) + rate(devicechain_selftestarea_sweep_pass_duration_seconds_count[5m])"
         }
       ]
     }
@@ -675,6 +762,10 @@ spec:
             devicechain_instance: dc
         - alert: ProbeByNameFiring
           expr: sum(rate({__name__=~"devicechain_[a-z0-9]+_probe_total", namespace="dc"}[5m])) > 0
+          labels:
+            devicechain_instance: dc
+        - alert: ProbeLatencyByName
+          expr: histogram_quantile(0.99, sum by (le) (rate({__name__=~"devicechain_[a-z0-9]+_lat_seconds_bucket", namespace="dc"}[5m]))) > 1
           labels:
             devicechain_instance: dc
 EOF
@@ -717,9 +808,10 @@ EOF
   # _bucket/_sum/_count of a histogram and _sum/_count of a summary, and Case 0
   # passed over them (the accepted half). Each defect below is planted ALONE
   # into that panel by rewriting ONE series to a name that must not resolve.
-  histcase() { # <from> <to> <description>
-    sed -i "s/$1/$2/" "$dash/probe.json"
-    grep -q "$2" "$dash/probe.json" || fail "the mutation for $3 did not apply"
+  histcase() { # <from> <to> <description> [file; default the dashboard]
+    local f="${4:-$dash/probe.json}"
+    sed -i "s/$1/$2/" "$f"
+    grep -q "$2" "$f" || fail "the mutation for $3 did not apply"
     if check_content "$work" >/dev/null 2>&1; then
       fail "did not flag $3"
     fi
@@ -731,6 +823,15 @@ EOF
   histcase 'devicechain_selftestarea_sum_seconds_sum' 'devicechain_selftestarea_sum_seconds_bucket' '_bucket on a summary'
   histcase 'devicechain_selftestarea_lat_seconds_sum' 'devicechain_selftestarea_probe_total_bucket' '_bucket on a counter'
   histcase 'devicechain_selftestarea_lat_seconds_sum' 'devicechain_selftestarea_level_count' '_count on a gauge'
+  # The bare name of a histogram IS a Go literal, and exports no series at all.
+  histcase 'devicechain_selftestarea_lat_seconds_sum' 'devicechain_selftestarea_lat_seconds' 'the bare name of a histogram'
+  histcase 'loop_duration_seconds_bucket' 'loop_duration_seconds' "the bare name of a core helper's histogram"
+  histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_remote_seconds_count' "_count on another area's histogram"
+  histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_mixed_seconds_count' '_count on a name also registered as a gauge'
+  histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_ghost_seconds_count' '_count on a commented-out histogram'
+  histcase 'devicechain_selftestarea_lat_seconds_count' 'devicechain_selftestarea_test_only_seconds_count' '_count on a histogram registered only in a test file'
+  histcase '_lat_seconds_bucket"' '_lat_seconds"' 'a by-name selector over the bare name of a histogram' "$tmpl/prometheusrule-probe.yaml"
+  histcase '_lat_seconds_bucket"' '_lat_seconds_buckets"' 'a by-name selector with a misspelled histogram suffix' "$tmpl/prometheusrule-probe.yaml"
 
   # Case 3 — A MISSPELLED SERIES IN AN ALERT RULE, alone. Same defect, the far
   # more dangerous half: this one is a rule that can never fire, and promtool
@@ -968,7 +1069,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 24 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 32 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 
