@@ -421,7 +421,7 @@ const (
 // both are read.
 //
 // Formed therefore means, on one poll (formedNow): every server routed to every other
-// one, every server naming the same meta leader, and that leader reporting every other
+// one over its full pool of route connections, every server naming the same meta leader, and that leader reporting every other
 // peer current and online and holding statistics for every server. Then a probe stream
 // is placed at R=len(servers), waited on until its replicas are current, and deleted:
 // the capability the tests need, asked for directly. The two are each enough to hold
@@ -504,7 +504,8 @@ func formedNow(views []serverView) error {
 	return nil
 }
 
-// metaFormed is formedNow without the statistics rule: the full route mesh and a meta
+// metaFormed is formedNow without the statistics rule: the full route mesh (every pooled
+// and dedicated connection to every peer, not only one per peer) and a meta
 // group that agrees on its leader and reports every peer current and online. It returns
 // the leader's view.
 func metaFormed(views []serverView) (*serverView, error) {
