@@ -153,5 +153,44 @@ namespace DeviceChain.Sitepulse.Tests
                 Assert.AreEqual("", Overlaps(sim), "seed " + seed);
             }
         }
+
+        [Test]
+        public void AHaulTruckSentElsewhereWhileOnALaneGoesOnFromWhereItIsAndIsNeverLeftThere([Values(true, false)] bool standFree)
+        {
+            // SP-HL-0006 leaves the loop for the refuel queue, and the moment it is on the queue's lane it is sent to the yard instead. With the
+            // yard's stand free it drives there from where it is (on through the bay's lanes and round). With the stand taken (SP-HL-0001 was sent
+            // there first) the command is refused, and the truck, whose refuel it superseded, must not be left standing on the lane, where its tail
+            // is over the loop's crossing: it drives on, back to work. Either way the other trucks keep going round, and nothing is driven past
+            // the cells it holds.
+            var sim = Site();
+            TaskRequest refuel = null, yard = null;
+            var onLane = -1.0;
+            var others = new[] { "SP-HL-0002", "SP-HL-0003", "SP-HL-0004", "SP-HL-0005" };
+            Dictionary<string, double> playedAt600 = null;
+            for (var t = 0.0; t < 900.0; t += Dt)
+            {
+                if (!standFree && t == 0.0) sim.Send("SP-HL-0001", "goto-area", "sp-zone-yard");
+                if (refuel == null && sim.Now >= 30.0) refuel = sim.Send("SP-HL-0006", "goto-refuel");
+                if (refuel != null && yard == null && !sim.Bodies["SP-HL-0006"].Attached && sim.Director["SP-HL-0006"].Phase == TaskPhase.ToQueue)
+                {
+                    yard = sim.Send("SP-HL-0006", "goto-area", "sp-zone-yard");
+                    onLane = sim.Now;
+                }
+
+                if (playedAt600 == null && sim.Now >= 600.0) playedAt600 = others.ToDictionary(id => id, id => sim.Bodies[id].PlayedSeconds);
+                sim.Step(Dt);
+            }
+
+            var il = sim.Director.Traffic.Interlocking;
+            Assert.Greater(onLane, 0.0, "SP-HL-0006 was sent on while on the queue's lane");
+            Assert.AreEqual("", Overlaps(sim));
+            Assert.AreEqual(0, il.Overruns, il.LastOverrun);
+            Assert.IsTrue(yard.IsComplete, sim.Timeline.Text("SP-HL-0006", 20));
+            Assert.AreEqual(standFree, yard.Completion.Answer().Succeeded, yard.Completion.Answer() + "\n" + sim.Timeline.Text("SP-HL-0006", 20));
+            Assert.AreEqual(standFree ? MachineMode.Parked : MachineMode.Working, sim.Director["SP-HL-0006"].Mode,
+                "SP-HL-0006 " + (standFree ? "stands in the yard" : "is back at work, not standing on the lane") + "\n" + sim.Timeline.Text("SP-HL-0006", 20));
+            foreach (var id in others)
+                Assert.GreaterOrEqual(sim.Bodies[id].PlayedSeconds - playedAt600[id], 150.0, id + " kept going round in the last five minutes (" + sim.Director.Traffic.Explain(id) + ")");
+        }
     }
 }

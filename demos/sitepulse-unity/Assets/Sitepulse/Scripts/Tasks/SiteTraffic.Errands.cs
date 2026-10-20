@@ -92,21 +92,26 @@ namespace DeviceChain.Sitepulse.Tasks
             public int JoinCell = -1;
         }
 
-        // where a truck is, for planning: on the loop at a cell, or on a lane at a cell
-        void Where(Rider r, out string lane, out int cell)
+        // where a truck is, for planning: the cell its pose is in as the interlocking keeps it (on the loop, part-way along a lane, or at the
+        // end of a stand's lane), and on a lane how far into that cell its body is. The interlocking is the one record that is never stale: a
+        // trip given up part-way along a lane leaves the truck there, holding that lane, and the next trip must be planned from there.
+        void Where(Rider r, out string lane, out int cell, out double into)
         {
-            if (r.Trip != null && r.Trip.Driving(out lane, out cell)) return;
-            if (r.Standing != null)
-            {
-                var s = Stand(r.Standing);
-                lane = s.In;
-                cell = topology.Lane(s.In).Cells.Count - 1;
-                return;
-            }
-
-            lane = loop.Id;
-            cell = r.Cell;
+            var pose = interlocking.PoseCell(r.Id);
+            lane = interlocking.Cells.LaneOf(pose);
+            cell = interlocking.Cells.IndexOf(pose);
+            into = 0.0;
+            if (lane == loop.Id) return;
+            // the body's place along the cell (a new route starts where the truck is, never back at the cell's start), short of its end
+            var c = topology.Lane(lane).Cells[cell];
+            var len = c.Length;
+            if (len <= IntoMarginM) return;
+            var f = ((r.Body.X - c.X0) * (c.X1 - c.X0) + (r.Body.Z - c.Z0) * (c.Z1 - c.Z0)) / (len * len);
+            into = Math.Max(0.0, Math.Min(len - IntoMarginM, f * len));
         }
+
+        /// <summary>How far short of the end of its cell a route that starts part-way along one starts at most, metres (a route needs a length).</summary>
+        const double IntoMarginM = 0.05;
 
         /// <summary>
         /// The way from where a truck is to a stand (<paramref name="target"/>), or back onto its track (null): along its lane to the lane's end,
@@ -116,7 +121,7 @@ namespace DeviceChain.Sitepulse.Tasks
         Plan PlanWay(Rider r, StandPlace target)
         {
             var plan = new Plan { Stand = target, EndsOnTrack = target == null };
-            Where(r, out var lane, out var cell);
+            Where(r, out var lane, out var cell, out var into);
             var n = loop.Cells.Count;
             var guard = 0;
             while (guard++ < 16)
@@ -124,7 +129,8 @@ namespace DeviceChain.Sitepulse.Tasks
                 if (lane != loop.Id)
                 {
                     var l = topology.Lane(lane);
-                    AddLane(plan, lane, cell, l.Cells.Count - 1);
+                    AddLane(plan, lane, cell, l.Cells.Count - 1, into);
+                    into = 0.0;
                     // the lane ends at a stand: it is the target, or the truck goes on out of it
                     StandPlace at = null;
                     foreach (var s in topology.Stands)
@@ -168,14 +174,18 @@ namespace DeviceChain.Sitepulse.Tasks
             return null;
         }
 
-        void AddLane(Plan plan, string lane, int from, int to)
+        // a lane's cells from one to another; the route starts <paramref name="into"/> metres along the first (where the truck is), so the
+        // leg's distances run from there and the first cell's start is behind it
+        void AddLane(Plan plan, string lane, int from, int to, double into = 0.0)
         {
             var l = topology.Lane(lane);
             var leg = new Leg { Loop = false, Lane = lane, From = from, To = to, PathStart = plan.Path.Count, Count = to - from + 1 };
             var b = new RouteBuilder();
-            b.Start(l.Cells[from].X0, l.Cells[from].Z0);
+            var first = l.Cells[from];
+            var f = first.Length > 0 ? into / first.Length : 0.0;
+            b.Start(first.X0 + (first.X1 - first.X0) * f, first.Z0 + (first.Z1 - first.Z0) * f);
             leg.Starts = new double[leg.Count + 1];
-            var sum = 0.0;
+            var sum = -into;
             for (var k = from; k <= to; k++)
             {
                 leg.Starts[k - from] = sum;
@@ -352,20 +362,13 @@ namespace DeviceChain.Sitepulse.Tasks
 
             public string Waiting => done ? null : t.interlocking.Has(r.Id) ? t.Explain(r.Id) : null;
 
-            /// <summary>A truck may be left standing only at a stand (and riding its track it is not left at all: it rides on).</summary>
-            public bool MayStandHere => done && !EndsOnTrack;
+            /// <summary>
+            /// A truck may be left standing only at the stand it reached (and riding its track it is not left at all: it rides on). A trip given
+            /// up part-way along a lane is over too, but the truck is still on the lane: it may not stand there.
+            /// </summary>
+            public bool MayStandHere => atStand || (!begun && r.Standing != null);
 
-            /// <summary>Where on a lane the truck is (false while it rides the loop, or before or after the trip).</summary>
-            public bool Driving(out string lane, out int cell)
-            {
-                lane = null;
-                cell = 0;
-                if (done || plan == null || !begun || plan.Legs[leg].Loop) return false;
-                var l = plan.Legs[leg];
-                lane = l.Lane;
-                cell = l.From + t.CellAlong(l, follow.Active ? follow.LineProgress : l.Starts[l.Count]);
-                return true;
-            }
+            bool atStand;
 
             public bool Step(double dt)
             {
@@ -396,13 +399,26 @@ namespace DeviceChain.Sitepulse.Tasks
                     r.OnLoop = false;
                     leg++;
                     StartLane(plan.Legs[leg], r.Body.HeadingDegrees, speed);
+                    // its pose is the exit lane's now (it held it to come this far): a trip given up before the next step is planned from there
+                    var lane = plan.Legs[leg];
+                    if (t.interlocking.HeadIndex(r.Id) >= lane.PathStart) t.interlocking.Move(r.Id, lane.PathStart, 0.0);
                     return false;
                 }
 
                 var arrived = follow.Advance(dt, r.Body, kin, s => s + t.interlocking.Authority(r.Id));
                 var at = arrived ? l.Starts[l.Count] - 1e-6 : follow.LineProgress;
                 var k = t.CellAlong(l, at);
-                t.interlocking.Move(r.Id, l.PathStart + k, at - l.Starts[k]);
+                var idx = (long)l.PathStart + k;
+                var off = at - l.Starts[k];
+                // at the very start of a lane that follows another (through a stand), the truck is still at the end of the cell before it: it
+                // takes the lane's first cell only as it moves into it, never by having been put there
+                if (k == 0 && off <= 0.0 && idx > t.interlocking.HeadIndex(r.Id) && idx > 0)
+                {
+                    idx--;
+                    off = t.interlocking.Cells.Length(plan.Path[(int)idx]);
+                }
+
+                t.interlocking.Move(r.Id, Math.Max(idx, t.interlocking.PoseIndex(r.Id)), off);
                 t.interlocking.SetWant(r.Id, t.LaneWant(follow.Speed));
                 if (!arrived) return false;
 
@@ -431,6 +447,7 @@ namespace DeviceChain.Sitepulse.Tasks
                 // at the stand
                 t.StandAt(r, plan.Stand);
                 done = true;
+                atStand = true;
                 return true;
             }
 
@@ -489,7 +506,7 @@ namespace DeviceChain.Sitepulse.Tasks
             interlocking.SetStanding(r.Id, false);
             r.TripPlan = plan;
             r.LegCells = at;
-            var offset = first.Loop ? OffsetIn(r.Cell, r.Tau) : 0.0;
+            var offset = first.Loop ? OffsetIn(r.Cell, r.Tau) : -first.Starts[0];
             interlocking.Repath(r.Id, plan.Path, false, at, offset, i => TripEta(r, i));
             return true;
         }
@@ -571,10 +588,12 @@ namespace DeviceChain.Sitepulse.Tasks
             if (r.OnLoop) Finish(r);
         }
 
-        // a trip given up on a lane: the truck stops where it is (the controller drives it on, or back)
+        // a trip given up on a lane: the truck stops where it is, still holding its place on the lane (the controller drives it on, or back,
+        // and the next trip is planned from that place: see Where)
         void Stop(Rider r)
         {
             r.Trip = null;
+            r.TripPlan = null;
         }
 
         void StandAt(Rider r, StandPlace stand)
