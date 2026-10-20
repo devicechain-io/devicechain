@@ -342,7 +342,7 @@ func (e *sampleEvaluator) add(name string, v sql.NullFloat64) {
 }
 
 func (e *sampleEvaluator) finish() {
-	out := e.eval.Eval()[0]
+	out := e.eval.Eval()[0] // a one-step plan is applicable to every sample (SingleFormulaPlan)
 	if out.OK {
 		v := out.Value
 		e.open.Value = &v

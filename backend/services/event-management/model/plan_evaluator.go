@@ -46,6 +46,10 @@ type StepOutcome struct {
 	Value string
 	Skip  calcfield.SkipReason
 	Err   error
+	// NotApplicable is a step the sample carries none of the inputs of (Plan.Applicable): it
+	// was not evaluated and is NOT a skip - OK is false and Skip is empty. Callers count it
+	// nowhere, exactly as live resolution reports nothing for it.
+	NotApplicable bool
 }
 
 // NewPlanEvaluator returns an evaluator of the closure of keys over plan. The error is
@@ -115,6 +119,10 @@ func (e *PlanEvaluator) Add(name string, v sql.NullFloat64) (string, bool) {
 // step. The slice is the evaluator's own and is overwritten by the next Eval.
 func (e *PlanEvaluator) Eval() []StepOutcome {
 	for i, idx := range e.steps {
+		if !e.plan.Applicable(e.sample, idx) {
+			e.out[i] = StepOutcome{Key: e.keys[i], NotApplicable: true}
+			continue
+		}
 		r := e.plan.Eval(e.sample, idx)
 		e.out[i] = StepOutcome{Key: e.keys[i], OK: r.OK(), Value: r.Value, Skip: r.Skip, Err: r.Err}
 	}

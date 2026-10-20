@@ -344,3 +344,123 @@ func TestPlanReadsCalculatedMetricsThroughM(t *testing.T) {
 	defer s.Release()
 	assert.Equal(t, "4", run(p, s)["down"].Value)
 }
+
+// A sample that carries none of a formula's measured inputs is not the formula's: Applicable is
+// false and the step is not evaluated. Some of them is applicable (and a skip when one it
+// requires is absent). A chain is applicable on the measured inputs it reads transitively.
+func TestPlanApplicability(t *testing.T) {
+	p, err := NewPlan(planMeasured, append(kwChain(),
+		def("fan_only", "double(fan)", Double),
+		def("guarded", "has(m.pf_in) ? pf_in : 0.0", Double),
+		def("over_guarded", "guarded * device.k", Double),
+	))
+	require.NoError(t, err)
+	require.Empty(t, p.Problems(), "a step that did not compile is applicable vacuously")
+	applicable := func(key string, set map[string]string) bool {
+		s := p.Env().Sample()
+		defer s.Release()
+		for k, v := range set {
+			_, _ = s.Set(k, v)
+		}
+		i, ok := p.StepIndex(key)
+		require.True(t, ok, key)
+		return p.Applicable(s, i)
+	}
+	// Nothing the formula reads is in the sample.
+	assert.False(t, applicable("fan_only", map[string]string{"voltage": "1"}))
+	assert.False(t, applicable("fan_only", nil))
+	assert.True(t, applicable("fan_only", map[string]string{"fan": "1"}))
+	// A value that is present but does not parse is carried: invalid_input is a real signal.
+	assert.True(t, applicable("fan_only", map[string]string{"fan": "x"}))
+	// Some inputs: applicable, and Eval reports the one it lacks.
+	s := p.Env().Sample()
+	defer s.Release()
+	_, _ = s.Set("voltage", "230")
+	i, _ := p.StepIndex("kva")
+	require.True(t, p.Applicable(s, i))
+	assert.Equal(t, SkipMissingInput, p.Eval(s, i).Skip)
+	// A chain is applicable through the measured inputs it reads transitively.
+	assert.False(t, applicable("pf", map[string]string{"fan": "1"}))
+	assert.True(t, applicable("pf", map[string]string{"pf_in": "1"}), "kw reads pf_in, pf reads kw")
+	assert.True(t, applicable("kw", map[string]string{"voltage": "1"}))
+	// A formula that tests every input it reads for presence is evaluated on every sample.
+	assert.True(t, applicable("guarded", nil))
+	// So is one that requires only such a metric (and a device constant, which no sample carries).
+	assert.True(t, applicable("over_guarded", nil))
+}
+
+func BenchmarkApplicable(b *testing.B) {
+	p, err := NewPlan(planMeasured, kwChain())
+	require.NoError(b, err)
+	s := p.Env().Sample()
+	_, _ = s.Set("fan", "1")
+	b.ReportAllocs()
+	for b.Loop() {
+		for i := 0; i < p.Len(); i++ {
+			_ = p.Applicable(s, i)
+		}
+	}
+}
+
+// Applicability is sound: it never withholds a value that evaluating the step would have
+// produced. Every shape of formula, over every subset of the measured inputs (each present,
+// absent or present-but-unparseable), with and without the device constant: a step that is
+// not applicable must be one that evaluation skips, and every step evaluated after it sees the
+// same sample it would have. Gating changes what is COUNTED as a skip, never what is computed.
+func TestApplicabilityNeverWithholdsAValue(t *testing.T) {
+	defs := append(kwChain(),
+		def("fan_only", "double(fan)", Double),
+		def("guarded", "has(m.pf_in) ? pf_in : 0.0", Double),
+		def("guarded_int", "has(m.fan) ? double(int(m.fan)) : 0.0", Double),
+		def("guarded_some", "has(m.pf_in) ? pf_in : voltage", Double),
+		def("guarded_all_sum", "(has(m.pf_in) ? pf_in : 1.0) + (has(m.voltage) ? voltage : 2.0)", Double),
+		def("in_guard", "\"current\" in m ? current : -1.0", Double),
+		def("guarded_constant", "has(m.pf_in) ? pf_in : device.k", Double),
+		def("guarded_or_constant", "has(m.pf_in) ? pf_in : (has(device.k) ? device.k : 3.0)", Double),
+		def("constant_and_input", "device.k * voltage", Double),
+		// Calculated metrics reading the always-evaluated ones above: a value they produce on a
+		// sample with none of their measured inputs is a value, not a sample to withhold.
+		def("over_guarded", "guarded * 2.0", Double),
+		def("over_guarded_chain", "over_guarded + 1.0", Double),
+		def("over_guarded_constant", "guarded_or_constant + 1.0", Double),
+		def("over_guarded_and_input", "guarded + current", Double),
+		def("over_guarded_and_gated", "guarded + kva", Double),
+		def("guarded_over_gated", "has(m.kva) ? kva : guarded", Double),
+	)
+	p, err := NewPlan(planMeasured, defs)
+	require.NoError(t, err)
+	require.Empty(t, p.Problems())
+	keys := []string{"voltage", "current", "pf_in", "fan"}
+	good := map[string]string{"voltage": "230", "current": "10", "pf_in": "0.5", "fan": "2"}
+	for _, consts := range [][]Constant{nil, {NewConstant("k", 4)}} {
+		for mask := 0; mask < 81; mask++ { // 3^4: absent, present, unparseable
+			vals := map[string]string{}
+			for b, m := 0, mask; b < len(keys); b, m = b+1, m/3 {
+				switch m % 3 {
+				case 1:
+					vals[keys[b]] = good[keys[b]]
+				case 2:
+					vals[keys[b]] = "x"
+				}
+			}
+			all, gated := p.Env().Sample(), p.Env().Sample()
+			for k, v := range vals {
+				_, _ = all.Set(k, v)
+				_, _ = gated.Set(k, v)
+			}
+			all.UseConstants(consts)
+			gated.UseConstants(consts)
+			for i := 0; i < p.Len(); i++ {
+				want := p.Eval(all, i)
+				if !p.Applicable(gated, i) {
+					assert.False(t, want.OK(), "%s on %v (constants %v): withheld %q",
+						p.Step(i).Key, vals, consts, want.Value)
+					continue
+				}
+				assert.Equal(t, want, p.Eval(gated, i), "%s on %v", p.Step(i).Key, vals)
+			}
+			all.Release()
+			gated.Release()
+		}
+	}
+}

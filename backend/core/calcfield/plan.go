@@ -59,6 +59,15 @@ type Step struct {
 	feed int
 	// deps are the keys of the calculated metrics the formula reads, sorted.
 	deps []string
+	// carry are the measured Env positions whose presence in a sample makes the step APPLICABLE
+	// to it: the measured inputs the formula names plus, transitively, those of every
+	// calculated metric it reads. Nil when the step is always applicable: it requires no
+	// measured input and no gated calculated metric (see gated), so a sample carrying none of
+	// its inputs can still give it a value.
+	carry []int
+	// measuredIn is the transitive measured inputs whether or not the step is gated on them,
+	// for the steps that read it.
+	measuredIn []int
 }
 
 // Plan is a profile version's calculated metrics, compiled together: the dependency graph
@@ -153,7 +162,57 @@ func NewPlan(measured []Input, calculated []Definition) (*Plan, error) {
 		}
 	}
 	p.steps = topological(steps, at)
+	p.markCarry()
 	return p, nil
+}
+
+// markCarry fills each step's carry set. p.steps is in dependency order, so a step's
+// calculated inputs already have theirs.
+func (p *Plan) markCarry() {
+	byKey := make(map[string]int, len(p.steps))
+	for i := range p.steps {
+		byKey[p.steps[i].Key] = i
+	}
+	for i := range p.steps {
+		st := &p.steps[i]
+		if st.Formula == nil {
+			continue
+		}
+		var in []int
+		for _, j := range st.Formula.inputs {
+			if j < p.env.measured {
+				in = append(in, j)
+			}
+		}
+		for _, k := range st.deps {
+			if d, ok := byKey[k]; ok {
+				in = append(in, p.steps[d].measuredIn...)
+			}
+		}
+		slices.Sort(in)
+		st.measuredIn = slices.Compact(in)
+		if p.gated(st.Formula.required, byKey) {
+			st.carry = st.measuredIn
+		}
+	}
+}
+
+// gated reports whether a step requiring these inputs can produce no value on a sample that
+// carries none of its measured inputs: it requires a measured input, or a calculated metric
+// that is itself gated (absent on such a sample, since its measured inputs are a subset). A
+// step requiring only calculated metrics that are evaluated on every sample (a has()-guarded
+// formula, say) is NOT gated: `guarded * 2.0` over `has(m.a) ? a : 0.0` has a value on a
+// sample without a, and withholding it would lose a row evaluation used to produce.
+func (p *Plan) gated(required []int, byKey map[string]int) bool {
+	for _, j := range required {
+		if j < p.env.measured {
+			return true
+		}
+		if d, ok := byKey[p.env.inputs[j].Key]; ok && p.steps[d].carry != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // markCycles finds every ring of calculated metrics reading each other and disables each
@@ -307,6 +366,26 @@ func topological(steps []Step, at map[string]int) []Step {
 	return out
 }
 
+// Applicable reports whether the i'th step is applicable to s: s carries at least one of the
+// measured metrics the step depends on, directly or through the calculated metrics it reads
+// (a present value that did not parse counts as carried; it is a real signal, and the step
+// reports it as invalid_input). A sample that carries NONE of them is not this formula's: it is
+// not evaluated and not a skip. A step that requires no measured input and no gated calculated
+// metric (every input has()-guarded, or only calculated metrics that are themselves evaluated
+// on every sample) is applicable to every sample. Allocation-free.
+func (p *Plan) Applicable(s *Sample, i int) bool {
+	carry := p.steps[i].carry
+	if len(carry) == 0 {
+		return true
+	}
+	for _, j := range carry {
+		if s.vals[j] != nil || s.bad[j] != SkipNone {
+			return true
+		}
+	}
+	return false
+}
+
 // Env is the environment every formula of the plan reads its samples from.
 func (p *Plan) Env() *Env { return p.env }
 
@@ -387,6 +466,9 @@ func (p *Plan) Eval(s *Sample, i int) Result {
 // whole profile does. The step is not compiled again: it evaluates exactly the Formula it is
 // given, has no dependencies, and writes nothing back to the sample.
 func SingleFormulaPlan(env *Env, key string, f *Formula) *Plan {
+	// No carry set: the caller builds every sample from rows of the formula's own inputs, and a
+	// sample with none of them holding a value lacks every required input, which Eval reports
+	// as missing_input, the outcome the caller shows.
 	return &Plan{env: env, steps: []Step{{Key: key, Formula: f, Depth: 1, feed: -1}}}
 }
 

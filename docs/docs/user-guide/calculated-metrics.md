@@ -301,6 +301,8 @@ default value and no zero. The reasons are:
 | `unstorable` | The result is 1e12 or larger in magnitude, which measurements cannot be stored with. |
 | `eval_error` | Any other failure, such as `math.clamp` with its bounds reversed. |
 
+**A reading that carries none of a formula's inputs is not a skip.** Devices often send their metrics in separate messages (a temperature every second, a battery level once an hour). A formula is evaluated only for a reading that carries at least one of the measured metrics it depends on, directly or through the calculated metrics it reads; a reading with none of them is simply not that formula's reading, and is neither computed nor counted in `calcmetric_skipped_total`. `missing_input` therefore means a reading carried **some** of a formula's inputs and lacked one it requires. A formula that tests every input it reads with `has()`, or whose untested inputs are only calculated metrics that do, is evaluated for every reading as before.
+
 An absent input is noticed whatever the order of the operands. `temp > 80.0 || fan > 1` is skipped
 on a reading with no `fan`, even though a hot reading would make the first half true. If you want
 the formula to work without `fan`, test for it with `has()`.

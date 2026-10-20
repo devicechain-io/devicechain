@@ -44,6 +44,9 @@ func parityProfile() []parityMetric {
 		{key: "pf", dataType: "DOUBLE", expr: "kw / kva", min: &lo, max: &hi},
 		// a guarded read of a chained metric: runs even when kw produced nothing.
 		{key: "kw_or_zero", dataType: "DOUBLE", expr: "has(m.kw) ? kw : 0.0"},
+		// reads only that always-evaluated metric: it has a value on every sample, carrying
+		// any of its transitive inputs or none.
+		{key: "kw_or_zero_pct", dataType: "DOUBLE", expr: "kw_or_zero * 100.0"},
 		{key: "fan_next", dataType: "INT", expr: "fan + 1"},
 		{key: "fan_ratio", dataType: "DOUBLE", expr: "double(fan_next) / double(fan)"},
 		{key: "alarmish", dataType: "BOOLEAN", expr: "door_open && voltage > 200.0"},
@@ -135,7 +138,7 @@ func runStored(ev *PlanEvaluator, stored map[string]float64) (map[string]string,
 	for _, o := range ev.Eval() {
 		if o.OK {
 			vals[o.Key] = o.Value
-		} else {
+		} else if !o.NotApplicable { // live reports nothing for a sample that is not the metric's
 			skipped[o.Key] = o.Skip
 		}
 	}
@@ -151,7 +154,7 @@ func TestPlanEvaluatorMatchesTheLiveResolver(t *testing.T) {
 
 	rnd := rand.New(rand.NewSource(7))
 	pick := func(vals ...float64) float64 { return vals[rnd.Intn(len(vals))] }
-	computed, skipped := 0, 0
+	computed, skipped, notApplicable := 0, 0, 0
 	for n := 0; n < 600; n++ {
 		raw := map[string]string{}
 		stored := map[string]float64{}
@@ -187,10 +190,18 @@ func TestPlanEvaluatorMatchesTheLiveResolver(t *testing.T) {
 		require.Equal(t, liveSkips, gotSkips, "sample %d %v", n, raw)
 		computed += len(gotVals)
 		skipped += len(gotSkips)
+		for _, o := range ev.out {
+			if o.NotApplicable {
+				notApplicable++
+			}
+		}
+		_, ok := gotVals["kw_or_zero_pct"]
+		require.True(t, ok, "sample %d %v: a metric over an always-evaluated one always has a value", n, raw)
 	}
-	// Both outcomes were exercised, or the equality above proves little.
+	// All three outcomes were exercised, or the equality above proves little.
 	assert.Greater(t, computed, 500)
 	assert.Greater(t, skipped, 500)
+	assert.Greater(t, notApplicable, 100)
 }
 
 // The skip REASONS agree too, and a guarded read of a chained metric runs when its dependency
@@ -251,7 +262,37 @@ func TestPlanEvaluatorFirstRowWinsAndNullIsAbsent(t *testing.T) {
 	assert.False(t, ok)
 	out := ev.Eval()[0]
 	assert.False(t, out.OK)
-	assert.Equal(t, calcfield.SkipMissingInput, out.Skip)
+	assert.True(t, out.NotApplicable, "a sample with no value is carrying none of the inputs: not a skip")
+	assert.Empty(t, out.Skip)
+}
+
+// A sample carrying SOME of a formula's inputs is a real partial-input skip; one carrying none
+// of them, directly or through the chain, is not applicable and counts nowhere.
+func TestPlanEvaluatorPartialInputsSkipAndNoInputsDoNot(t *testing.T) {
+	rig := newParityRig(t)
+	ev, err := NewPlanEvaluator(rig.plan, []string{"pf"}, nil)
+	require.NoError(t, err)
+	defer ev.Release()
+	byKey := func() map[string]StepOutcome {
+		m := map[string]StepOutcome{}
+		for _, o := range ev.Eval() {
+			m[o.Key] = o
+		}
+		return m
+	}
+	ev.Begin()
+	ev.Add("voltage", sql.NullFloat64{Float64: 1, Valid: true})
+	o := byKey()
+	assert.Equal(t, calcfield.SkipMissingInput, o["kva"].Skip, "voltage without current")
+	assert.False(t, o["kva"].NotApplicable)
+	assert.Equal(t, calcfield.SkipMissingInput, o["pf"].Skip, "reads kva, which carried voltage")
+
+	ev.Begin()
+	ev.Add("fan", sql.NullFloat64{Float64: 1, Valid: true})
+	for k, out := range byKey() {
+		assert.True(t, out.NotApplicable, k)
+		assert.Empty(t, out.Skip, k)
+	}
 }
 
 // A skip keeps the evaluation's underlying error, which a backfill reports with the skip; and a

@@ -323,6 +323,8 @@ por defecto ni cero. Los motivos son:
 | `unstorable` | El resultado tiene una magnitud de 1e12 o mayor, con la que no se pueden almacenar las mediciones. |
 | `eval_error` | Cualquier otro fallo, como `math.clamp` con sus límites invertidos. |
 
+**Una lectura que no trae ninguna de las entradas de una fórmula no es una omisión.** Los dispositivos suelen enviar sus métricas en mensajes separados (una temperatura cada segundo, el nivel de batería una vez por hora). Una fórmula se evalúa solo para una lectura que trae al menos una de las métricas medidas de las que depende, directamente o a través de las métricas calculadas que lee; una lectura sin ninguna de ellas simplemente no es la lectura de esa fórmula, y ni se calcula ni se cuenta en `calcmetric_skipped_total`. Por eso `missing_input` significa que una lectura traía **algunas** de las entradas de una fórmula y le faltaba una obligatoria. Una fórmula que comprueba con `has()` todas las entradas que lee, o cuyas entradas sin comprobar son solo métricas calculadas que lo hacen, se evalúa para cada lectura como antes.
+
 Una entrada ausente se detecta sea cual sea el orden de los operandos. `temp > 80.0 || fan > 1` se
 omite en una lectura sin `fan`, aunque una lectura caliente hiciera verdadera la primera mitad. Si
 quieres que la fórmula funcione sin `fan`, compruébala con `has()`.
