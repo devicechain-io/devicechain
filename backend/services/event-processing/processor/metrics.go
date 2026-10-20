@@ -528,6 +528,7 @@ func precreated(v *prometheus.CounterVec) *prometheus.CounterVec {
 // something to read before the first increment.
 func droppedPrecreated(v *prometheus.CounterVec) *prometheus.CounterVec {
 	v.WithLabelValues(react.DropUnknownKind)
+	v.WithLabelValues(react.DropInvalidAction)
 	return v
 }
 

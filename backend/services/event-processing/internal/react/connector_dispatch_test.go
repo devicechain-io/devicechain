@@ -418,6 +418,9 @@ func TestConnectorContentKeyMirrorsGate(t *testing.T) {
 		{"distinct guard",
 			rules.Action{Type: rules.ActionHTTPCall, Guard: "hasValue", HTTPCall: &rules.HTTPCallAction{URL: "https://x/y"}},
 			rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{URL: "https://x/y"}}},
+		{"sendCommand differing only in expiresAfter",
+			rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "c", ExpiresAfter: "15m"}},
+			rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: "c"}}},
 	}
 	for _, p := range pairs {
 		t.Run(p.name, func(t *testing.T) {

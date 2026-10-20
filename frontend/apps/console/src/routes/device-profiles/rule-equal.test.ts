@@ -99,3 +99,27 @@ describe('ruleSurvivesRoundTrip', () => {
     expect(ruleSurvivesRoundTrip(stored, '{not json')).toBe(false);
   });
 });
+
+describe('sendCommand expiresAfter', () => {
+  const stored = JSON.stringify({
+    name: 'r',
+    type: 'threshold',
+    severity: 'warning',
+    when: { metric: 'tempC', op: 'gt', threshold: 30 },
+    actions: [{ type: 'sendCommand', sendCommand: { command: 'goHome', expiresAfter: '15m' } }],
+  });
+  it('survives a form parse and rebuild (the form does not strip it)', async () => {
+    const { parseDefinition, rebuildFrom } = await import('./rule-model');
+    const parsed = parseDefinition(stored);
+    expect(parsed).not.toBeNull();
+    const rebuilt = rebuildFrom(parsed!);
+    expect(JSON.parse(rebuilt).actions[0].sendCommand.expiresAfter).toBe('15m');
+    expect(ruleSurvivesRoundTrip(stored, rebuilt)).toBe(true);
+  });
+  it('is not written when absent', async () => {
+    const { parseDefinition, rebuildFrom } = await import('./rule-model');
+    const bare = stored.replace(',"expiresAfter":"15m"', '');
+    const rebuilt = rebuildFrom(parseDefinition(bare)!);
+    expect(JSON.parse(rebuilt).actions[0].sendCommand).not.toHaveProperty('expiresAfter');
+  });
+});

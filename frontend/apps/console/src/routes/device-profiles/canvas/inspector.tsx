@@ -454,6 +454,9 @@ function ActionFields({
           <FormField label={t('inspectorPayloadJsonLabel')} htmlFor="cfg-payload" description={t('inspectorPayloadJsonDescription')}>
             <Textarea id="cfg-payload" value={strVal(config.payload)} onChange={(e) => set({ payload: e.target.value || undefined })} placeholder={t('inspectorPayloadJsonPlaceholder')} />
           </FormField>
+          <FormField label={t('inspectorExpiresAfterLabel')} htmlFor="cfg-expiresafter" description={t('inspectorExpiresAfterDescription')}>
+            <Input id="cfg-expiresafter" value={strVal(config.expiresAfter)} onChange={(e) => set({ expiresAfter: e.target.value || undefined })} placeholder={t('inspectorExpiresAfterPlaceholder')} />
+          </FormField>
         </>
       )}
 

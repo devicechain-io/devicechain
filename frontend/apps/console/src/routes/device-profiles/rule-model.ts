@@ -66,6 +66,9 @@ export interface ActionRow {
   alarmKey: string;
   command: string;
   payload: string;
+  // sendCommand: how long the command may wait for delivery (a duration like "15m"); empty ⇒ the
+  // platform default. Optional so the other action kinds need not carry it.
+  expiresAfter?: string;
   // The per-action REACT guard (slice 9c) — authored on the canvas (a Branch node), not here. The
   // form carries it through UNCHANGED so opening a canvas-authored guarded rule in the form and
   // saving does not silently strip the guard; a guarded row shows a read-only note steering the
@@ -298,6 +301,7 @@ function buildAction(a: ActionRow): Record<string, unknown> {
   if (a.type === 'sendCommand') {
     const sc: Record<string, unknown> = { command: a.command.trim() };
     if (a.payload.trim()) sc.payload = a.payload;
+    if ((a.expiresAfter ?? '').trim()) sc.expiresAfter = a.expiresAfter?.trim();
     return withGuard({ type: 'sendCommand', sendCommand: sc });
   }
   const ra: Record<string, unknown> = {};
@@ -485,6 +489,7 @@ export function parseDefinition(raw: string): ParsedDefinition | null {
       alarmKey: str(ra.alarmKey),
       command: str(sc.command),
       payload: str(sc.payload),
+      expiresAfter: str(sc.expiresAfter) || undefined,
       guard: str(act.guard) || undefined,
     };
   });

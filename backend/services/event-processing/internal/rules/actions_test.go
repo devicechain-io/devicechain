@@ -181,3 +181,29 @@ func TestActionRuleByteIdentity(t *testing.T) {
 		t.Fatalf("round-tripped action rule should compile: %v", err)
 	}
 }
+
+// TestCompileSendCommandExpiresAfter proves the optional expiry is bounded at AUTHORING time and
+// refused (never clamped) outside [MinCommandExpiry, MaxCommandExpiry].
+func TestCompileSendCommandExpiresAfter(t *testing.T) {
+	for _, ok := range []string{"", "1m", "15m", "2h", "168h"} {
+		r := thresholdWith("", Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c", ExpiresAfter: ok}})
+		if _, err := Compile(r, testLimits); err != nil {
+			t.Fatalf("expiresAfter %q should compile: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"59s", "0s", "-5m", "168h1s", "720h", "soon", "15", "15 minutes"} {
+		r := thresholdWith("", Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c", ExpiresAfter: bad}})
+		_, err := Compile(r, testLimits)
+		if err == nil || !strings.Contains(err.Error(), "expiresAfter") {
+			t.Fatalf("expiresAfter %q should be refused naming the field, got %v", bad, err)
+		}
+	}
+	// Two sends that differ only in expiresAfter are ONE dispatch: the dispatcher's idempotency
+	// token leaves the expiry out, so the gate must refuse the pair rather than accept two actions
+	// of which only one could ever be enqueued.
+	short := Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c", ExpiresAfter: "15m"}}
+	long := Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c", ExpiresAfter: "2h"}}
+	if _, err := Compile(thresholdWith("", short, long), testLimits); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("sends differing only in expiresAfter must be refused as duplicates, got %v", err)
+	}
+}

@@ -322,6 +322,11 @@ Todo comando lleva un TTL: el que definas con `expiresAt`, o el predeterminado d
 siete días. Define el tuyo si tus dispositivos no informan resultados y una semana es más de lo que
 el comando sigue siendo útil.
 
+La acción de enviar comando de una regla de detección fija el mismo límite con `expiresAfter` (una
+duración como `15m`, de un minuto a siete días). El `expiresAt` del comando es el momento en que se
+dispara la regla más esa duración, de modo que un comando enviado a un dispositivo desconectado pasa
+a `EXPIRED` en minutos en lugar de esperar toda la semana.
+
 Cancelar un comando registra `CANCELLED`. Hasta hace poco, la cancelación y la expiración del TTL
 compartían el único valor `EXPIRED`, así que los comandos cancelados antes de ese cambio siguen
 figurando como `EXPIRED`. Ambos aparecen en los datos históricos, y nada registró qué filas

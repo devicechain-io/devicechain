@@ -41,7 +41,7 @@ import GuideShot from '@site/src/components/GuideShot';
 - **Enabled**（已启用）用于开启或关闭规则而无需删除。
 - **Scope to an entity group**（限定到实体分组）会把规则限制在某个动态分组的一个已发布版本的成员上。缺失规则和关联规则无法用这种方式限定范围。
 - **Condition**（条件）是规则触发所依据的比较：把指标与某个值或设备属性做结构化比较、一个高级 CEL 表达式，或者对某些类型而言的 **Match every event**（匹配每个事件）。缺失规则和连接状态规则没有条件。
-- **Actions**（动作）是规则触发时发生的事情：**Raise alarm**（触发告警）、**Send command**（发送命令）、**Call a webhook**（调用 Webhook）或 **Publish to a connector**（发布到连接器）。没有动作的规则不会触发告警。区域关联规则不能带有动作。
+- **Actions**（动作）是规则触发时发生的事情：**Raise alarm**（触发告警）、**Send command**（发送命令）、**Call a webhook**（调用 Webhook）或 **Publish to a connector**（发布到连接器）。没有动作的规则不会触发告警。区域关联规则不能带有动作。**Send command** 动作还可以填写可选的 **Expires after**（例如 `15m` 或 `2h`，范围为一分钟到七天），用于限制命令等待设备的时间，从规则触发的那一刻起计算；留空则沿用平台默认的七天。超出该范围或不是时长的值，会在保存规则时被拒绝。
 
 输入时，表单会向编译器询问规则是否有效，并把答案显示在字段下方，例如 **The rule compiles. ✓**（规则编译通过）或编译器给出的错误。再往下是 **Preview against history**（对照历史预览）面板（参见[对照历史预览](#previewing-against-history)），对于会触发告警的规则，还有 **Notifications**（通知）检查。**Create detection rule**（创建检测规则）会把规则保存到配置文件的草稿中。
 

@@ -60,7 +60,8 @@ type thresholdRuleDoc struct {
 			// dressed as an absence assertion. nil means the key was not emitted; a non-nil
 			// pointer to "" means it was emitted empty, which is the case that has no other
 			// alarm anywhere.
-			Payload *string `json:"payload"`
+			Payload      *string `json:"payload"`
+			ExpiresAfter *string `json:"expiresAfter"`
 		} `json:"sendCommand"`
 	} `json:"actions"`
 }
@@ -309,6 +310,18 @@ func TestThresholdAlarmRuleRendersTheCommandActionOnlyWhenACommandIsConfigured(t
 		t.Errorf("sendCommand emitted a payload key (%q). Nothing renders one, and no gate "+
 			"downstream would say so: the publish gate treats an empty payload as absent, so "+
 			"this assertion is the only thing standing behind the claim", *p)
+	}
+
+	// No expiry configured => no expiresAfter key (command-delivery's default TTL applies).
+	if both.Actions[1].SendCommand.ExpiresAfter != nil {
+		t.Errorf("sendCommand emitted expiresAfter without CommandExpiresAfter being set")
+	}
+	withExpiry := decodeThresholdRule(t, ThresholdAlarmRule{
+		Token: "low-fuel", Metric: "fuel_pct", Op: OpLt, Threshold: 15,
+		Severity: SeverityMajor, AlarmKey: "low-fuel", CommandKey: "goto-refuel", CommandExpiresAfter: "15m",
+	}.DefinitionJSON())
+	if e := withExpiry.Actions[1].SendCommand.ExpiresAfter; e == nil || *e != "15m" {
+		t.Errorf("CommandExpiresAfter did not reach the sendCommand action: %v", e)
 	}
 
 	// Without one: exactly the single-action document every existing scenario publishes.

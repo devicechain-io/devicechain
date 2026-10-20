@@ -146,6 +146,8 @@ const (
 	SitepulseGotoAreaParam    = "areaToken"
 	SitepulseRefuelCommandDef = "sp-cmd-refuel"
 	SitepulseRefuelCommandKey = "goto-refuel"
+	// SitepulseRefuelCommandExpiry bounds how long the refuel command may wait for the machine.
+	SitepulseRefuelCommandExpiry = "15m"
 
 	SitepulseRuleToken = "sp-rule-lowfuel"
 	SitepulseAlarmKey  = "low-fuel"
@@ -224,7 +226,10 @@ func sitepulseMachineRules() []DetectionRuleSpec {
 			Severity:   SitepulseSeverity,
 			AlarmKey:   SitepulseAlarmKey,
 			CommandKey: SitepulseRefuelCommandKey,
-			Enabled:    true,
+			// A machine that is offline when the rule fires should not be handed a stale
+			// refuel order a week later.
+			CommandExpiresAfter: SitepulseRefuelCommandExpiry,
+			Enabled:             true,
 		}.Spec(),
 		ThresholdAlarmRule{
 			Token:     SitepulseOverheatRuleToken,

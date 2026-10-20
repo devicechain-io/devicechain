@@ -63,7 +63,11 @@ The parts of the form, from top to bottom:
   Absence and Connectivity rules have no condition.
 - **Actions** is what happens when the rule fires: **Raise alarm**, **Send command**, **Call a
   webhook** or **Publish to a connector**. A rule with no action raises no alarm. Area correlation
-  rules cannot carry actions.
+  rules cannot carry actions. A **Send command** action also takes an optional **Expires after**
+  (for example `15m` or `2h`, from one minute to seven days). It bounds how long the command may
+  wait for the device, counted from the moment the rule fires; leave it empty to keep the platform
+  default of seven days. A value outside that range, or one that is not a duration, is refused when
+  you save the rule.
 
 As you type, the form asks the compiler whether the rule is valid and shows the answer under the
 fields, for example **The rule compiles. ✓** or the compiler's error. Below that sit a **Preview

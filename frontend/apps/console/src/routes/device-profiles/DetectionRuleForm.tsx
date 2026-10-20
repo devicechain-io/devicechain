@@ -1279,6 +1279,18 @@ export function DetectionRuleForm({
                       className="min-h-16 font-mono text-xs"
                     />
                   </FormField>
+                  <FormField
+                    label={t('inspectorExpiresAfterLabel')}
+                    htmlFor={`dr-expires-${i}`}
+                    description={t('inspectorExpiresAfterDescription')}
+                  >
+                    <Input
+                      id={`dr-expires-${i}`}
+                      value={a.expiresAfter ?? ''}
+                      onChange={(e) => setActionAt(i, { expiresAfter: e.target.value })}
+                      placeholder={t('inspectorExpiresAfterPlaceholder')}
+                    />
+                  </FormField>
                 </div>
               )}
             </div>

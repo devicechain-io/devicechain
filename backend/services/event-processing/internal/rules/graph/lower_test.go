@@ -496,6 +496,20 @@ func TestRejects(t *testing.T) {
 			wantNodeID: "act",
 		},
 		{
+			name: "raiseAlarm carries sendCommand's expiresAfter",
+			def: canvas(
+				[]Node{
+					src("s"), th("c", "a"),
+					{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
+						"action": "raiseAlarm", "expiresAfter": "15m",
+					})},
+				},
+				Edge{From: "s:out", To: "c:in"},
+				Edge{From: "c:signal", To: "act:in"},
+			),
+			wantNodeID: "act",
+		},
+		{
 			name: "correlation cannot carry actions",
 			def: canvas(
 				[]Node{
@@ -671,5 +685,33 @@ func TestParseEndpoint(t *testing.T) {
 		if err != nil || n != c.node || p != c.port {
 			t.Errorf("parseEndpoint(%q) = (%q,%q,%v), want (%q,%q,nil)", c.in, n, p, err, c.node, c.port)
 		}
+	}
+}
+
+// TestSendCommandExpiresAfterLowers proves the canvas action node's expiresAfter lands on the
+// compiled rule's sendCommand action, and that an out-of-range value is refused at compile.
+func TestSendCommandExpiresAfterLowers(t *testing.T) {
+	def := func(exp string) CanvasDefinition {
+		return canvas(
+			[]Node{
+				src("s"),
+				{ID: "c", Type: NodeThreshold, Config: cfg(map[string]interface{}{
+					"name": "a",
+					"when": map[string]interface{}{"metric": "tempC", "op": "gt", "threshold": map[string]interface{}{"kind": "literal", "value": 30}},
+				})},
+				{ID: "act", Type: NodeAction, Config: cfg(map[string]interface{}{
+					"action": "sendCommand", "command": "goHome", "expiresAfter": exp,
+				})},
+			},
+			Edge{From: "s:out", To: "c:in"},
+			Edge{From: "c:signal", To: "act:in"},
+		)
+	}
+	lr := compileOne(t, def("15m"))
+	if got := lr.Rule.Actions[0].SendCommand.ExpiresAfter; got != "15m" {
+		t.Fatalf("expiresAfter dropped between canvas and rule: %q", got)
+	}
+	if _, err := Compile(def("10s"), profile, rules.DefaultLimits()); err == nil {
+		t.Fatal("a 10s expiry must be refused")
 	}
 }

@@ -489,6 +489,11 @@ func ActionDedupKey(a Action) string {
 	case ActionRaiseAlarm:
 		return "raiseAlarm|" + alarmKeyIdentity(a.RaiseAlarm) + guardSeg
 	case ActionSendCommand:
+		// ExpiresAfter is deliberately NOT part of the identity: two sends of the same command
+		// and payload that differ only in how long they may wait are the same dispatch, and
+		// react.actionContentKey (the durable idempotency token) leaves it out too, so the
+		// gate must call them duplicates or the dispatcher would collapse one onto the other's
+		// token while the gate reported two actions.
 		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
 	case ActionHTTPCall:
 		h := a.HTTPCall
@@ -621,6 +626,9 @@ func validateAction(ruleID string, i int, a Action) error {
 			// payload-vs-parameter-schema cross-check are NOT done here — see the note on
 			// SendCommandAction — so this is the only payload guard until that lands).
 			return invalid(ruleID, "actions", "action %d command payload must be a JSON object", i)
+		}
+		if _, err := ParseCommandExpiry(a.SendCommand.ExpiresAfter); err != nil {
+			return invalid(ruleID, "actions", "action %d: %v", i, err)
 		}
 	case ActionHTTPCall:
 		return validateHTTPCall(ruleID, i, a.HTTPCall)

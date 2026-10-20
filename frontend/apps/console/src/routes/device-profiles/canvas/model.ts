@@ -167,6 +167,7 @@ export interface ActionConfig {
   // sendCommand
   command?: string;
   payload?: string;
+  expiresAfter?: string;
   // httpCall (ADR-060 Tier 1) — an inline webhook. bodyTemplate/CEL over the derived
   // event; secretRef is an ADR-059 handle (never the cleartext), resolved at dispatch.
   url?: string;

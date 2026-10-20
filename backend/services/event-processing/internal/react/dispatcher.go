@@ -79,6 +79,9 @@ type CommandRequest struct {
 	DeviceToken string
 	Command     string
 	Payload     string
+	// ExpiresAt, when non-zero, is the absolute time after which command-delivery must stop trying to
+	// deliver the command. Zero ⇒ no expiry sent, and command-delivery's default TTL applies.
+	ExpiresAt time.Time
 }
 
 // PermanentRejection is a sink's report that the downstream service DECIDED the request is
@@ -327,15 +330,22 @@ type Metrics interface {
 	// value, and never the rejection code (that is logged, not labelled).
 	RecordPermanentlyRejected(action string)
 	// RecordDropped: one action SKIPPED without being attempted, by a fixed reason enum
-	// (never a tenant, rule or action-type value). Today the one reason is "unknown_kind": the
-	// definition carries an action type no case handles — unreachable for a gate-validated rule,
-	// so any non-zero count means a forged or hand-edited definition (or a build older than the
-	// rule) and must be visible rather than a silent return.
+	// (never a tenant, rule or action-type value): "unknown_kind" (the definition carries an
+	// action type no case handles) or "invalid_action" (a known kind whose stored configuration
+	// the publish gate would refuse). Both are unreachable for a gate-validated rule, so any
+	// non-zero count means a forged or hand-edited definition (or a build older than the rule)
+	// and must be visible rather than a silent return.
 	RecordDropped(reason string)
 }
 
 // DropUnknownKind is the RecordDropped reason for an action whose type no dispatch case handles.
 const DropUnknownKind = "unknown_kind"
+
+// DropInvalidAction is the RecordDropped reason for an action of a known kind whose stored
+// configuration the publish gate would refuse (today: a sendCommand expiresAfter that does not
+// parse or lies outside its bounds). Like DropUnknownKind it is unreachable for a gate-validated
+// rule, so a non-zero count means a definition that never passed the gate.
+const DropInvalidAction = "invalid_action"
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
 // idempotency lives in the deterministic token the command sink dedups on (and the upsert-keyed
@@ -355,6 +365,9 @@ type Dispatcher struct {
 	// disables source-charging (every connector dispatch admitted). See ConnectorRateGate.
 	connectorRate ConnectorRateGate
 	metrics       Metrics
+
+	// now is the clock a command's expiry is measured from. Injectable so a test can pin it.
+	now func() time.Time
 
 	// templates caches a compiled payload-template program per distinct template source (ADR-060),
 	// mirroring the guard cache below: the dispatcher resolves rules.Rule (not a compiled form) fresh
@@ -392,7 +405,7 @@ type Dispatcher struct {
 // is the SOURCE-side outbound egress cost-gate (ADR-060 SD-3); a nil gate disables source-charging
 // (every connector dispatch admitted, metered only by the downstream outbound-connectors egress limiter).
 func NewDispatcher(resolver RuleResolver, commands CommandSink, alarms AlarmSink, connectors ConnectorSink, connectorRate ConnectorRateGate, metrics Metrics) *Dispatcher {
-	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics}
+	return &Dispatcher{resolver: resolver, commands: commands, alarms: alarms, connectors: connectors, connectorRate: connectorRate, metrics: metrics, now: time.Now}
 }
 
 // Dispatch handles one derived event, returning whether the consumer may ack it (Done) or must let
@@ -503,12 +516,26 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 			// same guard to the same bit, so there is nothing a retry would change.
 			return
 		}
+		// A stored rule is re-parsed here because the publish gate is not re-run on decode. An
+		// out-of-range value is dropped (fail closed) rather than sent with no expiry or a clamped one.
+		expiry, err := rules.ParseCommandExpiry(a.SendCommand.ExpiresAfter)
+		if err != nil {
+			log.Error().Err(err).Str("rule", ev.RuleID).
+				Msg("REACT: dropping a sendCommand action with an invalid expiresAfter (malformed/forged rule).")
+			d.metrics.RecordDropped(DropInvalidAction)
+			return
+		}
 		req := CommandRequest{
 			Tenant:      ev.Tenant,
 			Token:       idempotencyToken(ev, a),
 			DeviceToken: ev.Series,
 			Command:     a.SendCommand.Command,
 			Payload:     a.SendCommand.Payload,
+		}
+		if expiry > 0 {
+			// Wall clock at enqueue, deliberately NOT the event's time: the expiry bounds how long
+			// the command waits for delivery, and that wait starts when the command is enqueued.
+			req.ExpiresAt = d.now().Add(expiry)
 		}
 		if err := d.commands.Send(ctx, req); err != nil {
 			var permanent *PermanentRejection

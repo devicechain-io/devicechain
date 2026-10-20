@@ -13,8 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/react"
+	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/svcclient"
@@ -69,7 +72,7 @@ func TestSendClassifiesAPermanentRejection(t *testing.T) {
 	for _, code := range []string{
 		"DEVICE_NOT_FOUND", "COMMAND_NOT_IN_VOCABULARY", "PAYLOAD_SCHEMA_VIOLATION", "DEVICE_DISABLED",
 		"COMMAND_DESTRUCTIVE_REFUSED", "PAYLOAD_NOT_JSON", "METADATA_NOT_JSON", "EXPIRES_AT_INVALID", "TOKEN_IN_USE",
-		"PAYLOAD_TOO_LARGE", "METADATA_TOO_LARGE", "COMMAND_NAME_TOO_LONG",
+		"PAYLOAD_TOO_LARGE", "METADATA_TOO_LARGE", "COMMAND_NAME_TOO_LONG", "WINDOW_AFTER_EXPIRY",
 	} {
 		t.Run(code, func(t *testing.T) {
 			sink, _ := newCommandSink(t, map[string]any{
@@ -184,3 +187,86 @@ func TestSendFailsWhenNeitherArmIsPresent(t *testing.T) {
 			"it must stay retryable")
 	}
 }
+
+// TestRuleExpiryReachesTheWire drives the REAL chain — a decoded rule, the dispatcher, the real
+// svcclient + HTTP transport — and asserts on the createCommand variables command-delivery
+// receives. It fails if expiresAfter is dropped anywhere between the authored rule and the wire.
+func TestRuleExpiryReachesTheWire(t *testing.T) {
+	mint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(auth.ServiceTokenResponse{Token: "svc-token", ExpiresAt: 1 << 40})
+	}))
+	t.Cleanup(mint.Close)
+	var gotVars map[string]any
+	cd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotVars = body.Variables
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"createCommand": map[string]any{
+			"command": map[string]any{"token": "t"}}}})
+	}))
+	t.Cleanup(cd.Close)
+	host, portStr, _ := net.SplitHostPort(mint.Listener.Addr().String())
+	port, _ := strconv.Atoi(portStr)
+	client := svcclient.New(config.UserManagementConfiguration{Hostname: host, Port: uint32(port)},
+		"shh", "event-processing", []string{string(auth.CommandWrite)})
+	sink := NewCommandClient(client, cd.URL)
+
+	dispatch := func(ruleJSON string) map[string]any {
+		t.Helper()
+		gotVars = nil
+		rule, err := rules.Decode([]byte(ruleJSON))
+		if err != nil {
+			t.Fatal(err)
+		}
+		d := react.NewDispatcher(stubResolver{rule}, sink, nil, nil, nil, nopMetrics{})
+		ev := runtime.DerivedEvent{RuleID: rule.ID, Tenant: "acme", Kind: "threshold", Series: "device-1"}
+		if out := d.Dispatch(context.Background(), ev).Outcome; out != react.Done {
+			t.Fatalf("want Done, got %v", out)
+		}
+		req, _ := gotVars["request"].(map[string]any)
+		if req == nil {
+			t.Fatal("no createCommand request reached command-delivery")
+		}
+		return req
+	}
+	ruleWith := func(extra string) string {
+		return `{"id":"acme/p@1/r1","name":"r","type":"threshold","actions":[{"type":"sendCommand","sendCommand":{"command":"goHome"` + extra + `}}]}`
+	}
+
+	before := time.Now()
+	req := dispatch(ruleWith(`,"expiresAfter":"15m"`))
+	after := time.Now()
+	raw, ok := req["expiresAt"].(string)
+	if !ok {
+		t.Fatalf("expiresAt missing from the wire request: %+v", req)
+	}
+	got, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// RFC3339 truncates to the second, so allow one second either side.
+	if got.Before(before.Add(15*time.Minute).Add(-time.Second)) || got.After(after.Add(15*time.Minute)) {
+		t.Fatalf("expiresAt %s is not now+15m (%s..%s)", got, before, after)
+	}
+
+	if _, present := dispatch(ruleWith(``))["expiresAt"]; present {
+		t.Fatal("a rule without expiresAfter must not send expiresAt")
+	}
+}
+
+type stubResolver struct{ rule rules.Rule }
+
+func (s stubResolver) Resolve(context.Context, string) (rules.Rule, bool, error) {
+	return s.rule, true, nil
+}
+
+type nopMetrics struct{}
+
+func (nopMetrics) RecordDispatched(string)          {}
+func (nopMetrics) RecordOrphan()                    {}
+func (nopMetrics) RecordNotEnabled(string)          {}
+func (nopMetrics) RecordConnectorShed(string)       {}
+func (nopMetrics) RecordPermanentlyRejected(string) {}
+func (nopMetrics) RecordDropped(string)             {}
