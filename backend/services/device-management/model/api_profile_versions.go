@@ -271,6 +271,9 @@ func (api *Api) PublishDeviceProfile(ctx context.Context, token string,
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
 		}
+		if err := recordActivation(tx, profile.ID, version.Version, ActivationKindPublish, activeSince, publishedBy); err != nil {
+			return err
+		}
 		// Re-sync this profile's live scope references to the new active version and
 		// reconcile read-model enrollment (ADR-062 S4) — in the SAME transaction as the
 		// active-version change, so a scoped rule is enrolled before its fact arms the engine,
@@ -464,6 +467,9 @@ func (api *Api) RollbackDeviceProfile(ctx context.Context, token string, version
 		// The profile was deleted between the existence check and here.
 		if res.RowsAffected == 0 {
 			return fmt.Errorf("%w: device profile %q", gorm.ErrRecordNotFound, token)
+		}
+		if err := recordActivation(tx, profile.ID, version, ActivationKindRollback, activeSince, configurationActor(ctx)); err != nil {
+			return err
 		}
 		// Re-sync scope references to the rolled-back-to version and reconcile enrollment in
 		// the same transaction as the pointer flip.

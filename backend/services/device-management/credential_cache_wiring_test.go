@@ -34,7 +34,7 @@ import (
 
 // credentialTables is what a credential check reads, plus what seeding a device needs.
 func credentialTables() []any {
-	return []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{},
+	return []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 		&model.DetectionRuleScopeRef{}, &model.DeviceCredential{}}
 }

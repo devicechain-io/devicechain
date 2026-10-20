@@ -34,7 +34,7 @@ func conflictWireCtx(t *testing.T) context.Context {
 	if err := rdb.RegisterTenantScoping(db); err != nil {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
-	if err := db.AutoMigrate(&model.DeviceProfile{}, &model.DeviceProfileVersion{},
+	if err := db.AutoMigrate(&model.DeviceProfile{}, &model.DeviceProfileVersion{}, &model.DeviceProfileActivation{},
 		&model.MetricDefinition{}, &model.CommandDefinition{}, &model.DetectionRule{},
 		&model.DeviceType{}); err != nil {
 		t.Fatalf("migrate: %v", err)

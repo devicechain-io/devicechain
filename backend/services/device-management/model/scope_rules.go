@@ -72,9 +72,10 @@ func (EntityGroup) ScopedBy() rdb.ScopeRule {
 
 // The catalogue: configuration, not device-derived.
 
-func (DeviceType) ScopedBy() rdb.ScopeRule           { return rdb.Catalogue() }
-func (DeviceProfile) ScopedBy() rdb.ScopeRule        { return rdb.Catalogue() }
-func (DeviceProfileVersion) ScopedBy() rdb.ScopeRule { return rdb.Catalogue() }
-func (MetricDefinition) ScopedBy() rdb.ScopeRule     { return rdb.Catalogue() }
-func (CommandDefinition) ScopedBy() rdb.ScopeRule    { return rdb.Catalogue() }
-func (CustomerType) ScopedBy() rdb.ScopeRule         { return rdb.Catalogue() }
+func (DeviceType) ScopedBy() rdb.ScopeRule              { return rdb.Catalogue() }
+func (DeviceProfile) ScopedBy() rdb.ScopeRule           { return rdb.Catalogue() }
+func (DeviceProfileVersion) ScopedBy() rdb.ScopeRule    { return rdb.Catalogue() }
+func (DeviceProfileActivation) ScopedBy() rdb.ScopeRule { return rdb.Catalogue() }
+func (MetricDefinition) ScopedBy() rdb.ScopeRule        { return rdb.Catalogue() }
+func (CommandDefinition) ScopedBy() rdb.ScopeRule       { return rdb.Catalogue() }
+func (CustomerType) ScopedBy() rdb.ScopeRule            { return rdb.Catalogue() }

@@ -14,6 +14,7 @@ ALTER SEQUENCE "device-management".device_claims_id_seq OWNED BY "device-managem
 ALTER SEQUENCE "device-management".device_configuration_revisions_id_seq OWNED BY "device-management".device_configuration_revisions.id;
 ALTER SEQUENCE "device-management".device_configuration_states_id_seq OWNED BY "device-management".device_configuration_states.id;
 ALTER SEQUENCE "device-management".device_credentials_id_seq OWNED BY "device-management".device_credentials.id;
+ALTER SEQUENCE "device-management".device_profile_activations_id_seq OWNED BY "device-management".device_profile_activations.id;
 ALTER SEQUENCE "device-management".device_profile_versions_id_seq OWNED BY "device-management".device_profile_versions.id;
 ALTER SEQUENCE "device-management".device_profiles_id_seq OWNED BY "device-management".device_profiles.id;
 ALTER SEQUENCE "device-management".device_replacements_id_seq OWNED BY "device-management".device_replacements.id;
@@ -93,6 +94,9 @@ ALTER TABLE ONLY "device-management".device_credentials
 ALTER TABLE ONLY "device-management".device_credentials ALTER COLUMN id SET DEFAULT nextval('"device-management".device_credentials_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_management_migrations
  ADD CONSTRAINT device_management_migrations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_profile_activations
+ ADD CONSTRAINT device_profile_activations_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "device-management".device_profile_activations ALTER COLUMN id SET DEFAULT nextval('"device-management".device_profile_activations_id_seq'::regclass);
 ALTER TABLE ONLY "device-management".device_profile_versions
  ADD CONSTRAINT device_profile_versions_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "device-management".device_profile_versions ALTER COLUMN id SET DEFAULT nextval('"device-management".device_profile_versions_id_seq'::regclass);
@@ -209,6 +213,7 @@ CREATE INDEX "idx_device-management_device_credentials_deleted_at" ON "device-ma
 CREATE INDEX "idx_device-management_device_credentials_device_id" ON "device-management".device_credentials USING btree (device_id);
 CREATE INDEX "idx_device-management_device_credentials_tenant_id" ON "device-management".device_credentials USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_credentials_token" ON "device-management".device_credentials USING btree (token);
+CREATE INDEX "idx_device-management_device_profile_activations_tenant_id" ON "device-management".device_profile_activations USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_profile_versions_deleted_at" ON "device-management".device_profile_versions USING btree (deleted_at);
 CREATE INDEX "idx_device-management_device_profile_versions_tenant_id" ON "device-management".device_profile_versions USING btree (tenant_id);
 CREATE INDEX "idx_device-management_device_profiles_category" ON "device-management".device_profiles USING btree (category);
@@ -280,6 +285,7 @@ CREATE INDEX idx_entity_rel_target ON "device-management".entity_relationships U
 CREATE INDEX idx_facet_keys_deleted_at ON "device-management".facet_keys USING btree (deleted_at);
 CREATE INDEX idx_facet_keys_member_type ON "device-management".facet_keys USING btree (member_type);
 CREATE INDEX idx_facet_keys_tenant_id ON "device-management".facet_keys USING btree (tenant_id);
+CREATE INDEX ix_device_profile_activations_profile_id ON "device-management".device_profile_activations USING btree (device_profile_id);
 CREATE INDEX ix_devices_list_order ON "device-management".devices USING btree (tenant_id, created_at DESC, token) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_lookup ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, entity_id) WHERE (deleted_at IS NULL);
 CREATE INDEX ix_entity_attributes_facet_value ON "device-management".entity_attributes USING btree (tenant_id, entity_type, scope, attr_key, value) WHERE (deleted_at IS NULL);
@@ -378,6 +384,12 @@ CREATE SEQUENCE "device-management".device_configuration_states_id_seq
  NO MAXVALUE
  CACHE 1;
 CREATE SEQUENCE "device-management".device_credentials_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "device-management".device_profile_activations_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -731,6 +743,15 @@ CREATE TABLE "device-management".device_credentials (
 );
 CREATE TABLE "device-management".device_management_migrations (
  id character varying(255) NOT NULL
+);
+CREATE TABLE "device-management".device_profile_activations (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ device_profile_id bigint NOT NULL,
+ version integer NOT NULL,
+ kind character varying(16) NOT NULL,
+ activated_at timestamp with time zone NOT NULL,
+ activated_by character varying(256)
 );
 CREATE TABLE "device-management".device_profile_versions (
  id bigint NOT NULL,

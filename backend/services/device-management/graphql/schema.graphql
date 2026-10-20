@@ -249,6 +249,40 @@ type DeviceProfile implements Model & TokenReference & NamedEntity & MetadataEnt
     declaration devices actually see from here, not from the draft fields above.
     """
     activeProfileVersion: DeviceProfileVersion
+    """
+    The profile's activation log, newest first: every time a version became the one devices
+    resolve, by publish or by rollback. Use it to find which version was active at a given
+    time: it is the entry with the latest activatedAt not after that time. The log begins
+    when the platform release that introduced it was installed, so a profile last activated
+    before that has no entry for that activation; treat the absence as unknown, not as
+    inactive. Page with first and after. Requires device:read.
+    """
+    activations(
+        """Maximum number of entries to return, at least 1. Omitted, or above 1000, it is 1000; below 1 is refused."""
+        first: Int
+        """The nextCursor of the previous page. Omit it to start at the newest entry. A malformed cursor fails the request."""
+        after: String
+    ): DeviceProfileActivationPage!
+}
+
+"""One page of a profile's activation log."""
+type DeviceProfileActivationPage {
+    """The entries on this page, newest first."""
+    entries: [DeviceProfileActivation!]!
+    """The cursor to pass as after for the next page; null when this is the last page."""
+    nextCursor: String
+}
+
+"""One moment a profile version became the version devices resolve."""
+type DeviceProfileActivation {
+    """The version that became active."""
+    version: Int!
+    """Why it became active: PUBLISH when the version was just published, ROLLBACK when an earlier version was made active again."""
+    kind: String!
+    """When it became active, as an RFC 3339 timestamp in UTC. For a rollback this is when the rollback happened, not when the version was published."""
+    activatedAt: String!
+    """Who did it: their username, or their email when there is no username. Null when not recorded."""
+    activatedBy: String
 }
 
 """One shared attribute key declared as device-visible configuration on a device profile."""

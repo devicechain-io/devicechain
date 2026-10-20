@@ -75,7 +75,7 @@ func newCountingResolveRig(t *testing.T, scoped bool,
 
 // resolveRigTables are the tables the resolve path reads.
 var resolveRigTables = []any{&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
-	&model.DeviceProfileVersion{}, &model.MetricDefinition{}, &model.CommandDefinition{},
+	&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.MetricDefinition{}, &model.CommandDefinition{},
 	&model.DetectionRule{}, &model.DetectionRuleScopeRef{}, &model.EntityRelationship{},
 	&model.EntityRelationshipType{}, &model.GeoFenceSetVersion{}, &model.EntityGroupFacetRef{},
 	&model.EntityGroupMembership{}, &model.DeviceCredential{}}

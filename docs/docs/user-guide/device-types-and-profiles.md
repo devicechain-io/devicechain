@@ -183,6 +183,14 @@ Rolling back changes only which version is active. It does not change your draft
 you were working on are still there. The active version's **Roll back** button is greyed out,
 because it is already active.
 
+Every publish and every rollback is also recorded in the profile's activation log: which version
+became active, when, and who did it. The **Published** column on the Versions tab shows when a
+version was published, which is not when it was active if it was later rolled back to, so use the
+log to work out which version was active at a given time. The log is read with the `activations`
+field of a device profile in the GraphQL API, newest first. It starts when you upgrade to the
+release that introduced it, so a profile last published or rolled back before then has no entry
+for that change. Treat a missing entry as unknown, not as inactive.
+
 ### Downloading a Thing Model
 
 Each version row has a **WoT Thing Model** button. It downloads that version as a W3C Web of

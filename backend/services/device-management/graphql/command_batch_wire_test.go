@@ -37,7 +37,7 @@ func newBatchWireCtx(t *testing.T) context.Context {
 		t.Fatalf("register tenant scoping: %v", err)
 	}
 	if err := db.AutoMigrate(&model.Device{}, &model.DeviceType{}, &model.DeviceProfile{},
-		&model.DeviceProfileVersion{}, &model.CommandDefinition{}, &model.MetricDefinition{},
+		&model.DeviceProfileVersion{}, &model.DeviceProfileActivation{}, &model.CommandDefinition{}, &model.MetricDefinition{},
 		&model.DetectionRule{}, &model.EntityAttribute{}, &model.EntityGroup{}, &model.IssuedGroupToken{},
 		&model.EntityGroupVersion{}, &model.EntityGroupMembership{}, &model.EntityGroupFacetRef{},
 		&model.DetectionRuleScopeRef{}, &model.EntityRelationship{}, &model.PendingOwnershipFact{},

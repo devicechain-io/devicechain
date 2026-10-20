@@ -5,9 +5,15 @@ package graphql
 
 import (
 	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // ------------------------------
@@ -75,4 +81,78 @@ func (r *DeviceProfileVersionResolver) ConfigurationDeclaration() ([]*Configurat
 		result = append(result, &ConfigurationKeyResolver{M: k})
 	}
 	return result, nil
+}
+
+// Activations reads the profile's activation log, newest first (see
+// model.DeviceProfileActivation). It carries the same authority as reading the profile's
+// versions: catalogue configuration, readable by any device:read member.
+func (r *DeviceProfileResolver) Activations(args struct {
+	First *int32
+	After *string
+}) (*DeviceProfileActivationPageResolver, error) {
+	if err := auth.AuthorizeCatalogue(r.C, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	limit := rdb.MaxPageSize
+	if args.First != nil {
+		if *args.First < 1 {
+			return nil, &model.InvalidArgumentError{Msg: fmt.Sprintf("first must be at least 1, got %d", *args.First)}
+		}
+		limit = int(*args.First)
+	}
+	var after uint64
+	if args.After != nil && *args.After != "" {
+		var err error
+		if after, err = parseCursor(*args.After); err != nil {
+			return nil, err
+		}
+	}
+	rows, next, err := r.S.GetApi(r.C).DeviceProfileActivations(r.C, r.M.Token, uint(after), limit)
+	if err != nil {
+		return nil, err
+	}
+	out := &DeviceProfileActivationPageResolver{}
+	for _, row := range rows {
+		out.entries = append(out.entries, &DeviceProfileActivationResolver{M: *row})
+	}
+	if next != 0 {
+		c := strconv.FormatUint(uint64(next), 10)
+		out.next = &c
+	}
+	return out, nil
+}
+
+// DeviceProfileActivationPageResolver is one page of a profile's activation log.
+type DeviceProfileActivationPageResolver struct {
+	entries []*DeviceProfileActivationResolver
+	next    *string
+}
+
+func (r *DeviceProfileActivationPageResolver) Entries() []*DeviceProfileActivationResolver {
+	if r.entries == nil {
+		return []*DeviceProfileActivationResolver{}
+	}
+	return r.entries
+}
+
+func (r *DeviceProfileActivationPageResolver) NextCursor() *string { return r.next }
+
+// DeviceProfileActivationResolver is one entry of the log.
+type DeviceProfileActivationResolver struct {
+	M model.DeviceProfileActivation
+}
+
+func (r *DeviceProfileActivationResolver) Version() int32 { return r.M.Version }
+
+func (r *DeviceProfileActivationResolver) Kind() string { return strings.ToUpper(r.M.Kind) }
+
+func (r *DeviceProfileActivationResolver) ActivatedAt() string {
+	return r.M.ActivatedAt.UTC().Format(time.RFC3339Nano)
+}
+
+func (r *DeviceProfileActivationResolver) ActivatedBy() *string {
+	if r.M.ActivatedBy == "" {
+		return nil
+	}
+	return &r.M.ActivatedBy
 }

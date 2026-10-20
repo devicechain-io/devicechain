@@ -61,7 +61,7 @@ func TestUpdateDeviceType_ProfileTokenSpecialCases(t *testing.T) {
 	// other, which is why each is pinned where it lives.
 	t.Run("an empty token detaches", func(t *testing.T) {
 		api := newPartialUpdateApi(t, &Device{}, &DeviceType{}, &DeviceProfile{},
-			&DeviceProfileVersion{}, &MetricDefinition{}, &CommandDefinition{},
+			&DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},
 			&DetectionRule{}, &DetectionRuleScopeRef{})
 		ctx := partialUpdateCtx()
 		seedTypeWithProfile(t, api, ctx)
@@ -77,7 +77,7 @@ func TestUpdateDeviceType_ProfileTokenSpecialCases(t *testing.T) {
 
 	t.Run("an unknown token refuses the WHOLE update", func(t *testing.T) {
 		api := newPartialUpdateApi(t, &Device{}, &DeviceType{}, &DeviceProfile{},
-			&DeviceProfileVersion{}, &MetricDefinition{}, &CommandDefinition{},
+			&DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},
 			&DetectionRule{}, &DetectionRuleScopeRef{})
 		ctx := partialUpdateCtx()
 		seedTypeWithProfile(t, api, ctx)
@@ -102,7 +102,7 @@ func TestUpdateDeviceType_ProfileTokenSpecialCases(t *testing.T) {
 	// profile detach whenever the referenced profile has since been deleted.
 	t.Run("an absent token does not re-resolve", func(t *testing.T) {
 		api := newPartialUpdateApi(t, &Device{}, &DeviceType{}, &DeviceProfile{},
-			&DeviceProfileVersion{}, &MetricDefinition{}, &CommandDefinition{},
+			&DeviceProfileVersion{}, &DeviceProfileActivation{}, &MetricDefinition{}, &CommandDefinition{},
 			&DetectionRule{}, &DetectionRuleScopeRef{})
 		ctx := partialUpdateCtx()
 		seedTypeWithProfile(t, api, ctx)
