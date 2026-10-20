@@ -8,6 +8,8 @@ import type {
   EventsQuery,
   CalculatedEventsQuery,
   CalculatedEventsQueryVariables,
+  CalculatedMetricBackfillsQuery,
+  StartCalculatedMetricBackfillMutationVariables,
 } from '@/gql/event-management/graphql';
 
 // Public type derived from the generated operation result so it always reflects
@@ -101,4 +103,87 @@ export type CalculatedEventsResult = CalculatedEventsQuery['calculatedEvents'];
 export async function calculatedEvents(vars: CalculatedEventsQueryVariables): Promise<CalculatedEventsResult> {
   const data = await gql('event-management', CALCULATED_EVENTS, vars);
   return data.calculatedEvents;
+}
+
+// Calculated-metric backfill: fills calculated metrics for stored readings that have none.
+
+export type CalculatedMetricBackfillJob = CalculatedMetricBackfillsQuery['calculatedMetricBackfills']['nodes'][number];
+
+const START_BACKFILL = graphql(`
+  mutation StartCalculatedMetricBackfill($input: CalculatedMetricBackfillInput!) {
+    startCalculatedMetricBackfill(input: $input) {
+      token
+      status
+    }
+  }
+`);
+
+/** Queues a backfill job and returns its token. Throws UNAVAILABLE when the worker is off. */
+export async function startCalculatedMetricBackfill(
+  input: StartCalculatedMetricBackfillMutationVariables['input'],
+): Promise<string> {
+  const data = await gql('event-management', START_BACKFILL, { input });
+  return data.startCalculatedMetricBackfill.token;
+}
+
+const CANCEL_BACKFILL = graphql(`
+  mutation CancelCalculatedMetricBackfill($token: String!) {
+    cancelCalculatedMetricBackfill(token: $token) {
+      token
+      status
+      cancelRequestedAt
+    }
+  }
+`);
+
+export async function cancelCalculatedMetricBackfill(token: string): Promise<void> {
+  await gql('event-management', CANCEL_BACKFILL, { token });
+}
+
+const BACKFILLS = graphql(`
+  query CalculatedMetricBackfills($profileToken: String, $first: Int) {
+    calculatedMetricBackfills(profileToken: $profileToken, first: $first) {
+      nodes {
+        token
+        status
+        profileToken
+        profileVersion
+        metricKeys
+        warnings
+        from
+        to
+        devicesTotal
+        devicesDone
+        progress
+        samples
+        computed
+        written
+        alreadyPresent
+        windowsCompressed
+        windowsBeyondRetention
+        windowsRefreshed
+        skipped {
+          reason
+          count
+        }
+        storedInputPrecision
+        failure
+        createdAt
+        createdBy
+        startedAt
+        finishedAt
+        cancelRequestedAt
+      }
+      nextCursor
+    }
+  }
+`);
+
+/** The newest backfill jobs of a profile, newest first. */
+export async function listCalculatedMetricBackfills(
+  profileToken: string,
+  first = 20,
+): Promise<CalculatedMetricBackfillJob[]> {
+  const data = await gql('event-management', BACKFILLS, { profileToken, first });
+  return data.calculatedMetricBackfills.nodes;
 }

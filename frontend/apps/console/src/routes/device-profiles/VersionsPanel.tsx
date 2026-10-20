@@ -13,13 +13,19 @@
 // say what a published version MEANS for a device — plus the "used by N types"
 // warning, which no other resource has.
 
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { hasAuthority, isScoped } from '@devicechain/client';
+import { useAuth } from '@/auth/AuthProvider';
 import { VersionsPanel as SharedVersionsPanel } from '@/components/VersionsPanel';
+import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
+  getCalculatedMetricPlan,
   listDeviceProfileVersions,
   publishDeviceProfile,
   rollbackDeviceProfile,
 } from '@/lib/api/device-management';
+import { BackfillSection } from './BackfillSection';
 import { ThingModelDownload } from './ThingModelDownload';
 
 // The authority string is a permission name, not user-facing prose, so it is hoisted
@@ -42,8 +48,39 @@ export function VersionsPanel({
   onChanged: () => void;
 }) {
   const { t } = useTranslation(['deviceProfiles']);
+  const { claims } = useAuth();
+  const confirm = useConfirm();
+  const [request, setRequest] = useState<number | null>(null);
+  const handled = useCallback(() => setRequest(null), []);
+  const offersBackfill = !isScoped(claims) && hasAuthority(claims, DEVICE_WRITE);
+
+  // Publishing a version that ADDS a calculated metric offers to fill the history for it, once:
+  // the answer is not remembered, and a version that adds none asks nothing. A failed look at the
+  // plan asks nothing either; the Backfill button is still there.
+  const publish = async (token: string, label?: string, description?: string) => {
+    const version = await publishDeviceProfile(token, label, description);
+    if (offersBackfill) void offerBackfill(token, version);
+    return version;
+  };
+  const offerBackfill = async (token: string, version: number) => {
+    try {
+      const plan = await getCalculatedMetricPlan(token, version);
+      const added = plan.calculated.filter((m) => m.newInVersion).map((m) => m.key);
+      if (added.length === 0) return;
+      const yes = await confirm({
+        title: t('deviceProfiles:backfillPromptTitle'),
+        description: t('deviceProfiles:backfillPromptBody', { count: added.length, keys: added.join(', ') }),
+        confirmLabel: t('deviceProfiles:backfillPromptConfirm'),
+        destructive: false,
+      });
+      if (yes) setRequest(version);
+    } catch {
+      // Not offering is the safe failure.
+    }
+  };
 
   return (
+    <div className="space-y-6">
     <SharedVersionsPanel
       token={profileToken}
       activeVersion={activeVersion}
@@ -60,7 +97,7 @@ export function VersionsPanel({
         rollbackConfirm: (version) => t('deviceProfiles:versionRollbackConfirm', { version }),
       }}
       list={listDeviceProfileVersions}
-      publish={publishDeviceProfile}
+      publish={publish}
       rollback={rollbackDeviceProfile}
       onChanged={onChanged}
       rowAction={(v, versions) => (
@@ -71,5 +108,12 @@ export function VersionsPanel({
         />
       )}
     />
+    <BackfillSection
+      profileToken={profileToken}
+      activeVersion={activeVersion}
+      request={request}
+      onRequestHandled={handled}
+    />
+    </div>
   );
 }

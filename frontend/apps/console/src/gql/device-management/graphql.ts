@@ -1761,6 +1761,14 @@ export type DeleteDetectionRuleMutationVariables = Exact<{
 
 export type DeleteDetectionRuleMutation = { deleteDetectionRule: boolean };
 
+export type CalculatedMetricPlanQueryVariables = Exact<{
+  profileToken: string;
+  version?: number | null | undefined;
+}>;
+
+
+export type CalculatedMetricPlanQuery = { calculatedMetricPlan: { version: number, activeSince: string | null, calculated: Array<{ key: string, unit: string | null, newInVersion: boolean, changedSinceEarlier: boolean }> } };
+
 export type EntityAttributesQueryVariables = Exact<{
   criteria: EntityAttributeSearchCriteria;
 }>;
@@ -3675,6 +3683,20 @@ export const DeleteDetectionRuleDocument = new TypedDocumentString(`
   deleteDetectionRule(token: $token)
 }
     `) as unknown as TypedDocumentString<DeleteDetectionRuleMutation, DeleteDetectionRuleMutationVariables>;
+export const CalculatedMetricPlanDocument = new TypedDocumentString(`
+    query CalculatedMetricPlan($profileToken: String!, $version: Int) {
+  calculatedMetricPlan(profileToken: $profileToken, version: $version) {
+    version
+    activeSince
+    calculated {
+      key
+      unit
+      newInVersion
+      changedSinceEarlier
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<CalculatedMetricPlanQuery, CalculatedMetricPlanQueryVariables>;
 export const EntityAttributesDocument = new TypedDocumentString(`
     query EntityAttributes($criteria: EntityAttributeSearchCriteria!) {
   entityAttributes(criteria: $criteria) {

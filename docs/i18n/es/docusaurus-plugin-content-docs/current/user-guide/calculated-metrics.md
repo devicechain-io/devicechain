@@ -34,13 +34,17 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
   solo lo que cambió (como suelen hacer los nodos Sparkplug) obtiene un valor solo cuando todas las
   entradas llegan juntas. Si la misma métrica aparece dos veces en un instante, la fórmula usa el
   primero de los dos; ambos valores se siguen almacenando tal como se enviaron.
-- El resultado se **calcula una sola vez, cuando llega la lectura**, y se almacena como una medición
-  normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
+- El resultado se **calcula una sola vez, cuando llega la lectura** (o más tarde mediante un
+  [relleno](#backfilling-history), para las lecturas que no tienen valor), y se almacena como una
+  medición normal junto a los valores que envió el dispositivo. Los paneles, el historial, las
   exportaciones, los últimos valores del dispositivo y las reglas de detección la leen como
-  cualquier otra métrica, por su clave.
-- **El historial nunca se reescribe.** Editar una fórmula y publicar el perfil cambia lo que se
-  calcula para las lecturas que lleguen después. Los valores ya almacenados conservan la fórmula
-  que estaba activa cuando se calcularon.
+  cualquier otra métrica, por su clave. Un valor rellenado aparece solo en los paneles, el
+  historial y las exportaciones; no cambia los últimos valores y las reglas de detección nunca
+  lo evalúan.
+- **Los valores almacenados nunca se cambian.** Editar una fórmula y publicar el perfil cambia lo
+  que se calcula para las lecturas que lleguen después; los valores ya almacenados conservan la
+  fórmula que estaba activa cuando se calcularon. Un relleno solo añade valores a lecturas pasadas
+  que no tienen ninguno.
 - Que una métrica sea medida o calculada **se fija al crearla**. Puedes editar la fórmula de una
   métrica calculada, pero no puedes convertir una métrica medida en calculada ni al revés. En ese
   caso, elimínala y crea una nueva.
@@ -301,7 +305,7 @@ Una fórmula se comprueba contra el tipo de datos de la métrica, y las comproba
 Cadenas de texto (salvo como clave en `m["clave"]`), listas, mapas, tiempo y duraciones,
 aleatoriedad, comprensiones, expresiones regulares y cualquier cosa que mire fuera de la lectura.
 
-## Cuando una fórmula no produce valor
+## Cuando una fórmula no produce valor {#when-a-formula-produces-no-value}
 
 Si una fórmula no puede producir un valor para una lectura, esa métrica se **omite** para esa
 lectura. El resto de la lectura se almacena con normalidad y nunca se sustituye nada: no hay valor
@@ -321,6 +325,99 @@ por defecto ni cero. Los motivos son:
 Una entrada ausente se detecta sea cual sea el orden de los operandos. `temp > 80.0 || fan > 1` se
 omite en una lectura sin `fan`, aunque una lectura caliente hiciera verdadera la primera mitad. Si
 quieres que la fórmula funcione sin `fan`, compruébala con `has()`.
+
+## Rellenar el historial {#backfilling-history}
+
+Una métrica calculada se calcula cuando llega una lectura. Las lecturas almacenadas antes de que se
+publicara la versión que la define no tienen valor para ella, y una gráfica de ese tiempo muestra
+un hueco. Un **relleno** calcula la métrica para esas lecturas almacenadas y añade los valores que
+faltan, de modo que las gráficas y las exportaciones del pasado también la muestren.
+
+### Iniciar un relleno
+
+Abre el perfil, elige la pestaña **Versiones** y, en **Rellenar el historial**, elige **Rellenar
+historial**. Iniciar y cancelar un relleno requiere el permiso `device:write`, y un usuario limitado
+a un cliente nunca ve nada de esto. Después de publicar una versión que añade una métrica calculada,
+la consola pregunta una sola vez si quieres rellenar el historial de esa métrica.
+
+1. **Versión.** La versión publicada cuyas fórmulas se usan. Se abre en la versión activa. No se
+   puede rellenar un borrador.
+2. **Métricas a rellenar.** Se seleccionan las métricas **nuevas en la versión elegida** (la versión
+   publicada anterior no las calculaba). También puedes seleccionar una métrica cuya fórmula cambió
+   desde una versión anterior. Se marca, porque entonces el relleno añade valores con la fórmula de
+   esta versión a las lecturas que no tienen ninguno, mientras que las lecturas almacenadas con la
+   fórmula anterior conservan la suya. Una métrica que lee otra métrica calculada que no
+   seleccionaste también recibe una advertencia: esa otra métrica puede contener valores de una
+   fórmula anterior, y los valores nuevos se calcularían a partir de ellos.
+3. **Desde y Hasta.** El intervalo a rellenar. Se abre en los 30 días anteriores a la activación de
+   la versión, que es donde empieza el cálculo en vivo. Un intervalo dura como máximo **90 días**;
+   rellena un historial más largo con varios rellenos.
+4. **Dispositivos.** Opcional. Indica hasta 1000 dispositivos por su token, o déjalo vacío para
+   rellenar todos los dispositivos del perfil.
+
+#### Probar primero con un dispositivo
+
+Antes de rellenar toda una flota, usa **Probar primero con un dispositivo**: escribe el token de un
+dispositivo e inicia. Ejecuta el mismo relleno solo en ese dispositivo. Es seguro ejecutarlo y
+repetirlo, porque un relleno nunca cambia un valor almacenado. Abre la gráfica de ese dispositivo,
+revisa los valores y luego inicia el resto. Los dispositivos ya rellenados se cuentan como que ya
+tenían un valor y no se vuelven a escribir.
+
+### Qué hace un relleno
+
+- **Solo añade valores.** Una lectura que ya tiene un valor para la métrica lo conserva y se cuenta
+  como *ya presente*. Los valores almacenados nunca se cambian.
+- **Lee lo almacenado.** Las entradas son las lecturas almacenadas, que conservan 8 decimales, y las
+  constantes del dispositivo se leen tal como las tiene su metadato cuando el relleno llega a ese
+  dispositivo. Por eso un valor rellenado puede diferir en los últimos dígitos del que se habría
+  calculado al llegar la lectura. El trabajo lo indica ("8 decimal places").
+- **Es silencioso.** Un valor rellenado aparece en paneles, historial y exportaciones. No cambia los
+  últimos valores del dispositivo y las reglas de detección nunca lo ven, así que un relleno no
+  genera ninguna alarma por una lectura pasada.
+- **Las gráficas de rango largo se ponen al día al terminar el trabajo.** Las gráficas que leen
+  datos preagregados (rangos largos) muestran los valores rellenados cuando el trabajo ha
+  actualizado esos datos, lo que hace como último paso.
+- **No llega a antes de que existiera el dispositivo.** Las lecturas con fecha anterior a la
+  creación del dispositivo no se rellenan, de modo que un token reutilizado nunca recibe valores de
+  un dispositivo anterior.
+
+### Límites
+
+| Límite | Valor |
+| --- | --- |
+| Intervalo | Como máximo 90 días, que terminen como tarde ahora. |
+| Retención | El intervalo no puede empezar antes de lo que permite la retención de mediciones de tu inquilino; esa solicitud se rechaza en lugar de acortarse. Los tramos que caducan mientras el trabajo se ejecuta se omiten. |
+| Historial comprimido | El historial que el almacén de eventos ha comprimido (de más de 7 días por defecto) se **omite** en esta versión y se cuenta en el trabajo. |
+| Dispositivos | Hasta 1000 dispositivos indicados, o todos los dispositivos del perfil. |
+| Concurrencia | Un relleno activo (en cola o en curso) por inquilino. Iniciar un segundo se rechaza e indica cuál es el activo. |
+
+### Leer un trabajo
+
+El panel de trabajos lista cada relleno con su estado (en cola, en curso, terminado, cancelado o
+fallido), los dispositivos terminados sobre el total, los valores escritos, las lecturas revisadas y
+cuántas ya tenían valor, y lo que no se calculó, por motivo. Los motivos son los de [Cuando una
+fórmula no produce valor](#when-a-formula-produces-no-value), más estos:
+
+| Motivo | Significado |
+| --- | --- |
+| `ambiguous` | Una lectura almacenada contiene la misma entrada dos veces con valores distintos, así que no se puede elegir un único valor. No se escribe nada para esa lectura. |
+| `unclassified` | No se encontró el origen de la lectura, así que no se pudo saber cómo se agruparon sus métricas. No se escribe nada para ella. |
+
+El panel también cuenta los tramos de historial comprimido y los tramos fuera de la retención que se
+omitieron. **Cancelar** detiene de inmediato un trabajo en cola y, en un trabajo en curso, en su
+siguiente lote; los valores ya escritos se conservan. Un trabajo fallido indica por qué; inicia un
+nuevo relleno para continuar, que omite lo ya rellenado.
+
+Los dispositivos Sparkplug y LwM2M envían cada métrica en su propia entrada, y una métrica calculada
+se calcula por entrada. Por eso una fórmula sobre dos de esas métricas no produce valor, ni en vivo
+ni rellenada.
+
+### Cuando el control está desactivado
+
+El botón **Rellenar historial** está desactivado, y al lado dice por qué, cuando el perfil no tiene
+nada publicado, cuando la versión activa no tiene métricas calculadas o cuando la instancia no puede
+ejecutar rellenos en este momento (por ejemplo, porque el operador ha apagado el trabajador de
+relleno). Por esos motivos nunca se oculta.
 
 ## Almacenamiento y precisión
 

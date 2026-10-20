@@ -31,12 +31,15 @@ tenant's tier a ceiling above zero. See [Turning calculated metrics on](#turning
   Sparkplug nodes usually do) gets a value only when every input arrives together. If the same
   metric appears twice at one instant, the formula uses the first of the two; both values are
   still stored as sent.
-- The result is **computed once, when the reading arrives**, and stored as a normal measurement
-  next to the values the device sent. Dashboards, history, exports, the device's latest values and
-  detection rules all read it like any other metric, by its key.
-- **History is never rewritten.** Editing a formula and publishing the profile changes what is
-  computed for readings that arrive afterwards. Values already stored keep the formula that was
-  active when they were computed.
+- The result is **computed once, when the reading arrives** (or later by a
+  [backfill](#backfilling-history), for readings that have none), and stored as a normal
+  measurement next to the values the device sent. Dashboards, history, exports, the device's
+  latest values and detection rules all read it like any other metric, by its key. A backfilled
+  value appears in dashboards, history and exports only; it does not change latest values and is
+  never evaluated by detection rules.
+- **Stored values are never changed.** Editing a formula and publishing the profile changes what
+  is computed for readings that arrive afterwards; values already stored keep the formula that was
+  active when they were computed. A backfill only adds values to past readings that have none.
 - Whether a metric is measured or calculated is **fixed when you create it**. You can edit a
   calculated metric's formula, but you cannot turn a measured metric into a calculated one or the
   other way round. Delete it and create a new one instead.
@@ -300,6 +303,97 @@ default value and no zero. The reasons are:
 An absent input is noticed whatever the order of the operands. `temp > 80.0 || fan > 1` is skipped
 on a reading with no `fan`, even though a hot reading would make the first half true. If you want
 the formula to work without `fan`, test for it with `has()`.
+
+## Backfilling history {#backfilling-history}
+
+A calculated metric is computed when a reading arrives. Readings stored before the version that
+defines it was published therefore have no value for it, and a chart of that time shows a gap. A
+**backfill** computes the metric for those stored readings and adds the missing values, so charts
+and exports of past time show it too.
+
+### Starting a backfill
+
+Open the profile, choose the **Versions** tab and, under **Backfilling history**, choose **Backfill
+history**. Starting and cancelling a backfill need the `device:write` permission, and a
+customer-scoped user never sees any of this. After you publish a version that adds a calculated
+metric, the console asks once whether to fill the history for it.
+
+1. **Version.** The published version whose formulas are used. It opens on the active version. A
+   draft cannot be backfilled.
+2. **Metrics to fill.** The metrics that are **new in the chosen version** (the previous published
+   version did not calculate them) are selected. You can also select a metric whose formula
+   changed since an earlier version. It is flagged, because the backfill then adds values with this
+   version's formula to readings that have none, while readings stored under the older formula
+   keep theirs. A metric that reads another calculated metric you did not select gets a warning
+   too: that other metric may hold values from an older formula, and the new values would be
+   computed from them.
+3. **From and To.** The range to fill. It opens on the 30 days before the version became active,
+   which is where the live computation takes over. A range is at most **90 days**; fill a longer
+   history in several backfills.
+4. **Devices.** Optional. Name up to 1,000 devices by token, or leave it empty to fill every device
+   of the profile.
+
+#### Try one device first
+
+Before filling a whole fleet, use **Try one device first**: enter one device's token and start. It
+runs the same backfill on that one device. It is safe to run and to repeat, because a backfill
+never changes a value that is stored. Open that device's chart, check the values, then start the
+rest. Devices already filled are counted as already holding a value and are not written again.
+
+### What a backfill does
+
+- **It only adds values.** A reading that already holds a value for the metric keeps it, and is
+  counted as *already present*. Stored values are never changed.
+- **It reads what is stored.** Inputs are the stored readings, which keep 8 decimal places, and the
+  device's constants are read as the device's metadata holds them when the backfill reaches the
+  device. A backfilled value can therefore differ in the last digits from the value that would have
+  been computed when the reading arrived. The job says so ("8 decimal places").
+- **It is silent.** A backfilled value appears in dashboards, history and exports. It does not
+  change the device's latest values, and detection rules never see it, so a backfill raises no
+  alarm for a past reading.
+- **Long-range charts catch up when the job finishes.** Charts that read pre-aggregated data
+  (long ranges) show the filled values once the job has refreshed that data, which it does as its
+  last step.
+- **It does not reach before the device existed.** Readings dated before the device was created
+  are not filled, so a reused token never gets the values of an earlier device.
+
+### Limits
+
+| Limit | Value |
+| --- | --- |
+| Range | At most 90 days, ending no later than now. |
+| Retention | The range cannot start before your tenant's measurement retention allows; such a request is refused rather than shortened. Stretches that age out while the job runs are skipped. |
+| Compressed history | History the event store has compressed (older than 7 days by default) is **skipped** in this release and counted on the job. |
+| Devices | Up to 1,000 named devices, or every device of the profile. |
+| Concurrency | One active (queued or running) backfill per tenant. Starting a second is refused and names the active one. |
+
+### Reading a job
+
+The jobs panel lists each backfill with its status (queued, running, done, cancelled or failed), the
+devices done out of the total, the values written, the readings looked at and how many already had
+a value, and what was not computed, by reason. The reasons are the ones in [When a formula
+produces no value](#when-a-formula-produces-no-value), plus:
+
+| Reason | Meaning |
+| --- | --- |
+| `ambiguous` | One stored reading holds the same input twice with different values, so no single value can be chosen for it. Nothing is written for that reading. |
+| `unclassified` | The reading's source could not be found, so it could not be told how its metrics were grouped. Nothing is written for it. |
+
+The panel also counts stretches of compressed history and stretches beyond retention that were
+skipped. **Cancel** stops a queued job at once and a running job at its next batch; values already
+written stay. A failed job names why; start a new backfill to continue, which skips what is already
+filled.
+
+Sparkplug and LwM2M devices send each metric in an entry of its own, and a calculated metric is
+computed per entry. A formula over two such metrics therefore produces no value, whether live or
+backfilled.
+
+### When the control is disabled
+
+The **Backfill history** button is disabled, and says why beside it, when the profile has nothing
+published, when the active version has no calculated metrics, or when the instance cannot run
+backfills right now (for example, the operator has switched the backfill worker off). It is never
+hidden for those reasons.
 
 ## Storage and precision
 

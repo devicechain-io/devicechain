@@ -425,6 +425,42 @@ kube-state-metrics 本身因节点失效等原因移动期间的重启，只要�
 
 十毫秒等待在[实测吞吐](./bootstrap.md#measured-throughput)六节点云集群发布基准中测量。每秒 3,000 事件时，每存储事件事务数下降 37%（0.126 到 0.080），存储中位数约增加五毫秒，最慢 1% 降低 18%。但同时改变了事件库键和归档压缩、服务 CPU 请求及放置、设备状态写入器、检测 CPU 限制、NATS 请求和内存限制，不能单独归因于等待。五分钟、提供每秒 6,800 事件的运行中，逐事件提交路径占事件管理 CPU 4.8%，每事件 0.050 事务；前一基准、没有等待且服务节点不同的构建为 24%。等待延迟代价大于收益时，设置 `persistence.lingerMillis: 0`。
 
+### 计算指标回填 {#calculated-backfill}
+
+租户的[回填](../user-guide/calculated-metrics.md#backfilling-history)会把计算指标补入已存储的历史数据。它在 `event-management` 中运行：整个实例只有一个工作进程，按租户轮流每次处理一个任务，并限制速率。没有任务时，每十秒只花费一次加锁尝试和两次小查询。回填只写入测量值行，不向消息代理发布任何内容，也不会影响实时状态或检测。
+
+| 设置（`event-management`） | 默认值 | 作用 |
+| --- | --- | --- |
+| `calculatedBackfill.enabled` | 未设置 | 三种状态。**未设置**：连接池在持久化写入器之外还有余量时（`persistence.writers` + 1 + 4 个空闲连接须能放入 `tsdbConfiguration.maxOpenConnections`）工作进程运行；容量不足时保持关闭，并在启动时给出点名这些设置的警告。**`true`**：你明确要求启用，因此容纳不下的连接池会使服务启动失败。**`false`**：工作进程不运行。此时启动回填会被拒绝并提示不可用，控制台会禁用该控件并说明原因；正在运行的任务保持运行状态，直到重新启用工作进程或取消该任务。 |
+| `calculatedBackfill.rowsPerSecond` | `20000` | 工作进程每秒读取与写入的行数上限，对所有任务合计，范围 `1`–`200000`。该默认值是暂定的，尚未在有负载的实例上测量：繁忙的实例请从较低值开始，并观察事件存储的 CPU。 |
+
+工作进程在其生命周期内占用一个连接池连接。单个任务的跨度（90 天）、批大小以及每个租户同时只有一个活动任务的规则都是固定的。
+
+| 指标 | 含义 |
+| --- | --- |
+| `devicechain_eventmanagement_calc_backfill_rows_written_total` | 已插入的测量值行数。 |
+| `devicechain_eventmanagement_calc_backfill_samples_total` | 已评估的上报数。 |
+| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | 未计算的值，按公式的跳过原因统计，另有 `unclassified` 和 `ambiguous`。 |
+| `devicechain_eventmanagement_calc_backfill_windows_skipped_total{why}` | 未处理的时间段：`compressed`，或 `retention`（处于保留策略的作用范围内）。 |
+| `devicechain_eventmanagement_calc_backfill_jobs_finished_total{status}` | 已结束的任务，按状态统计。 |
+| `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | 最久的排队或运行中任务的存续时间；没有则为 `0`。任务卡住会使它无限增长，请对其设置告警。 |
+| `devicechain_eventmanagement_calc_backfill_batch_seconds`、`..._rollup_refresh_seconds` | 处理一批的耗时，以及对一个时间段刷新测量值汇总的耗时。 |
+| `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | 与汇总自身的策略任务冲突并被重试的刷新次数。 |
+
+每次领取任务、每个时间片结束和最终状态也都会记录一行日志，包含租户、任务令牌、配置文件、版本、计数和失败原因（如有）。
+
+#### 停止回填 {#calculated-backfill-stop}
+
+要停止**所有**排队和运行中的回填，请连接事件存储数据库并运行：
+
+```sql
+UPDATE "event-management".calculated_backfills
+   SET cancel_requested_at = now()
+ WHERE status IN ('QUEUED', 'RUNNING');
+```
+
+加上 `AND tenant_id = '<tenant>'` 即只停止某个租户的任务。工作进程会在下一次提交时发现，每个任务在一个批次内以 `CANCELLED` 结束。已写入的行会保留；尚未被工作进程领取的排队任务会在工作进程下次运行时同样结束。要停止工作进程本身，请设置 `calculatedBackfill.enabled: false` 并重启 `event-management`。
+
 ### 设备实时状态 {#live-state-projection}
 
 设备状态服务从同一流维护连接、活动、最新读数和最近位置，并同样批量合并。每个写入器获取等待事件至上限，在一个事务合并。已有状态设备按每租户每批一条语句写入，不是逐设备；首次设备单独创建。提交后才确认。批内同设备多个事件，与逐条合并结果完全一致。读数或位置只有严格更新时才替换，旧或同时间不会覆盖；时间按数据库微秒精度比较。某租户部分拒绝时，只将其事件逐条重合并，仅拒绝事件重试，其他租户一并提交。连接丢失等非租户原因失败时，全部逐条重合并。
