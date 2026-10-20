@@ -12,7 +12,7 @@ namespace DeviceChain.Sitepulse.Tasks
     {
         /// <summary>On its routine track.</summary>
         Working,
-        /// <summary>Off its track, running a command.</summary>
+        /// <summary>Running a command (it may still be riding its track to where it leaves it).</summary>
         Commanded,
         /// <summary>Off its track, driving back to it.</summary>
         Returning,
@@ -24,57 +24,29 @@ namespace DeviceChain.Sitepulse.Tasks
 
     public enum TaskPhase { None, ToDestination, ToQueue, WaitingForBay, EnteringBay, Refuelling }
 
-    /// <summary>What a machine's controller asks of the rest of the site.</summary>
+    /// <summary>
+    /// What a machine's controller asks of the rest of the site: the trips that take it where its commands send it (planned and held to the
+    /// site's traffic by the site, see <see cref="ITrip"/>), the place it stands at, and whether the refuel bay is clear.
+    /// </summary>
     public interface ITaskWorld
     {
-        /// <summary>Another machine's footprint is within the yield distance ahead of this one, in its lane.</summary>
-        bool Blocked(string id, double x, double z, double headingDegrees);
+        /// <summary>A trip to a place of zone <paramref name="area"/> the machine may stand at, or null with the reason (no such zone, no free place, no way there).</summary>
+        ITrip TripToArea(IMachineBody body, string area, double laneShare, out string refusal);
+
+        /// <summary>A trip to the refuel queue, or null with the reason.</summary>
+        ITrip TripToQueue(IMachineBody body, double laneShare, out string refusal);
+
+        /// <summary>The drive from the queue into the bay, or null with the reason.</summary>
+        ITrip TripIntoBay(IMachineBody body, out string refusal);
+
+        /// <summary>A trip back onto the machine's own track, or null with the reason.</summary>
+        ITrip TripBack(IMachineBody body, double laneShare, out string refusal);
+
+        /// <summary>The machine no longer stands where it was sent: the place it held (a parking slot, a stand) is given back.</summary>
+        void Release(string id);
 
         /// <summary>Nothing but <paramref name="id"/> is standing in the refuel bay.</summary>
         bool BayClear(string id);
-
-        /// <summary>Something other than <paramref name="id"/> stands within parking-clear distance of the point.</summary>
-        bool Occupied(string id, double x, double z);
-
-        /// <summary>
-        /// A machine may rejoin its track at the point: no other machine is driving near it (a machine on its routine track does not
-        /// look for anyone, so the one that joins must) and none stands where the machine would be set down.
-        /// </summary>
-        bool TrackClear(string id, double x, double z);
-
-        /// <summary>
-        /// As <see cref="TrackClear"/>, for the whole of a machine of this kind put down there facing that way: its footprint, not just its
-        /// middle, has the room. The default asks only the middle.
-        /// </summary>
-        bool TrackClearFor(string id, EquipmentKind kind, double x, double z, double headingDegrees) => TrackClear(id, x, z);
-
-        /// <summary>
-        /// What a machine driving a route should do about the machines near its way: stop for one it would meet, and which side of its
-        /// line to take to pass one that stands (or comes the other way) on it. <paramref name="s"/> is how far along the lane
-        /// <paramref name="line"/> it is, <paramref name="swerve"/> how far it is to the right of that lane now. The default asks nothing of anyone.
-        /// </summary>
-        SteerAdvice Steer(string id, EquipmentKind kind, LaneLine line, double s, double speed, double swerve) => default;
-
-        /// <summary>The machine standing at this pose, instead of where it is, would touch another machine that it is not already touching and moving away from.</summary>
-        bool WouldTouch(string id, EquipmentKind kind, double x, double z, double headingDegrees) => false;
-    }
-
-    /// <summary>
-    /// A machine driving a route is told whether to stop, how far to the right of its lane to be (negative: to the left), and
-    /// whether to back up along the route instead, when it has stood facing something it can neither pass nor wait out.
-    /// </summary>
-    public readonly struct SteerAdvice
-    {
-        public SteerAdvice(bool stop, double lateral, bool reverse = false)
-        {
-            Stop = stop;
-            Lateral = lateral;
-            Reverse = reverse;
-        }
-
-        public bool Stop { get; }
-        public double Lateral { get; }
-        public bool Reverse { get; }
     }
 
     /// <summary>The budgets a command's local execution is held to (design 4.3), in simulation time with a wall-clock hard cap.</summary>
@@ -85,62 +57,46 @@ namespace DeviceChain.Sitepulse.Tasks
         public const double BayWaitSeconds = 120.0, RefuelWallCapSeconds = 900.0;
         public const double ReturnWallCapSeconds = 600.0;
 
-        /// <summary>
-        /// A machine heading back to its track stops this far (metres) short of the place it rejoins while that place is not clear, so
-        /// it never waits on the road itself; the radii of "not clear" are the director's (<see cref="TaskDirector.RejoinMovingRadius"/>).
-        /// </summary>
-        public const double RejoinHoldBackMetres = 16.0;
-
         /// <summary>The longest any one command can be held, for the handler's own last-resort answer.</summary>
         public const double LongestWallCapSeconds = RefuelWallCapSeconds;
     }
 
     /// <summary>
-    /// One machine's task layer. A command arrives (already validated), the arbiter says whether it wins,
-    /// and the machine leaves its routine track and drives it: <c>goto-area</c> to a free parking slot of a
-    /// zone, where it stays; <c>goto-refuel</c> to the queue, into the bay when it is its turn, through the
-    /// Refuelling service, and then back to its own track. Every command ends with an answer and a reason:
-    /// carried out, refused, superseded, out of fuel, over budget or reset.
+    /// One machine's task layer. A command arrives (already validated), the arbiter says whether it wins, and the machine is driven by a trip
+    /// the site plans (<see cref="ITaskWorld"/>): <c>goto-area</c> to a place of a zone it may stand at, where it stays; <c>goto-refuel</c> to
+    /// the queue, into the bay when it is its turn, through the Refuelling service, and then back to its own track. Every command ends with an
+    /// answer and a reason: carried out, refused, superseded, out of fuel, over budget or reset.
     ///
-    /// Main thread only, no network and no scene types: the body, the world and the clock are handed in, so
-    /// the whole of it runs in an EditMode test. The only way this class changes the tank is
-    /// <see cref="RefuelService"/>, and it only does so in <see cref="TaskPhase.Refuelling"/>.
+    /// Main thread only, no network and no scene types: the body, the world and the clock are handed in, so the whole of it runs in an
+    /// EditMode test. The only way this class changes the tank is <see cref="RefuelService"/>, and it only does so in
+    /// <see cref="TaskPhase.Refuelling"/>.
     /// </summary>
     public sealed class MachineController
     {
         readonly string id;
         readonly MachineModel model;
         readonly IMachineBody body;
-        readonly SiteGeometry site;
-        readonly RouteGraph graph;
         readonly BayReservations bay;
-        readonly ParkingLot parking;
         readonly Timeline timeline;
         readonly ITaskWorld world;
         readonly TaskArbiter arbiter = new TaskArbiter();
-        readonly RouteFollower follow = new RouteFollower();
-        readonly Kinematics kin;
 
         TaskRequest active;
         RefuelService service;
-        ParkingSlot? slot;
-        TrackPoint returnPoint;
+        ITrip trip;
+        string waitingSaid;
         double elapsedSim, elapsedWall, budgetSim, capWall, bayWait, returnWall;
-        bool reset;
+        bool reset, returnOverdueSaid;
         bool wasAtBay;   // the task that just ended was at or in the bay (or its queue): a machine left standing there drives out
 
-        public MachineController(IMachineBody body, MachineModel model, SiteGeometry site, RouteGraph graph, BayReservations bay, ParkingLot parking, Timeline timeline, ITaskWorld world)
+        public MachineController(IMachineBody body, MachineModel model, BayReservations bay, Timeline timeline, ITaskWorld world)
         {
             this.body = body ?? throw new ArgumentNullException(nameof(body));
             this.model = model ?? throw new ArgumentNullException(nameof(model));
-            this.site = site ?? throw new ArgumentNullException(nameof(site));
-            this.graph = graph ?? throw new ArgumentNullException(nameof(graph));
             this.bay = bay ?? throw new ArgumentNullException(nameof(bay));
-            this.parking = parking ?? throw new ArgumentNullException(nameof(parking));
             this.timeline = timeline ?? throw new ArgumentNullException(nameof(timeline));
             this.world = world ?? throw new ArgumentNullException(nameof(world));
             id = body.Id;
-            kin = Kinematics.For(body.Kind);
             Mode = body.Attached ? MachineMode.Working : MachineMode.Parked;
         }
 
@@ -148,27 +104,19 @@ namespace DeviceChain.Sitepulse.Tasks
         public MachineMode Mode { get; private set; }
         public TaskPhase Phase { get; private set; }
         public TaskRequest Running => active;
-        public double SpeedMps => follow.Speed;
+        public double SpeedMps => trip != null ? trip.Speed : 0.0;
 
         /// <summary>
-        /// How much of its lane's offset this machine takes on the routes it drives (0 the road's own line, 1 its lane; see
+        /// How much of its lane's offset this machine takes on the free routes it drives (0 the road's own line, 1 its lane; see
         /// <see cref="LaneLine"/>). It is the machine's own: the seam for a machine alone on a road to drift toward the middle of it.
         /// </summary>
-        public double LaneShare
-        {
-            get => follow.LaneShare;
-            set => follow.LaneShare = value;
-        }
+        public double LaneShare { get; set; } = 1.0;
 
         /// <summary>The route the machine is driving now (to a destination, to the queue, into the bay, back to its track); null when it is not driving one.</summary>
-        public Route CurrentRoute => follow.Route;
+        public Route CurrentRoute => Mode == MachineMode.Commanded || Mode == MachineMode.Returning ? trip?.Route : null;
 
-        /// <summary>The lane the machine drives along <see cref="CurrentRoute"/>, how far along it, and how far to the right of it (to pass something).</summary>
-        public LaneLine CurrentLine => follow.Line;
-
-        public double RouteProgress => follow.LineProgress;
-
-        public double RouteLateral => follow.Swerve;
+        /// <summary>What the machine is waiting for while its trip is held, in words (null when it is not held).</summary>
+        public string Waiting => trip?.Waiting;
 
         /// <summary>The bay is held or waited for by this machine.</summary>
         public bool WantsBay => Phase == TaskPhase.WaitingForBay || Phase == TaskPhase.EnteringBay || Phase == TaskPhase.Refuelling;
@@ -179,7 +127,7 @@ namespace DeviceChain.Sitepulse.Tasks
         public const int TokenTail = 10;
 
         // the END of a token is what tells two commands apart (they share a long prefix)
-        static string Short(string token) => token == null ? "?" : token.Length > TokenTail ? "\u2026" + token.Substring(token.Length - TokenTail) : token;
+        static string Short(string token) => token == null ? "?" : token.Length > TokenTail ? "…" + token.Substring(token.Length - TokenTail) : token;
 
         /// <summary>One line on what the machine is doing, for the timeline panel's header.</summary>
         public string Status()
@@ -243,21 +191,14 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
-            // off the ground the routes are graded over there is no slope to read, only a guess: nothing is planned from there
-            if (!graph.OnSite(body.X, body.Z))
-            {
-                Refuse(request, OutsideSite(body.X, body.Z));
-                return;
-            }
-
             if (request.Key == CommandKeys.GotoArea) BeginArea(request);
             else if (request.Key == CommandKeys.GotoRefuel) BeginRefuel(request);
             else Refuse(request, "unknown command " + request.Key);
         }
 
-        // A refused command never took the machine over, so it changes nothing about what the machine is doing: a
-        // truck driving back to its track keeps driving, a parked one keeps its slot. The one exception is the
-        // command it superseded a moment ago: that one's task is already gone, and the machine is left to stand down.
+        // A refused command never took the machine over, so it changes nothing about what the machine is doing: a truck driving back to its
+        // track keeps driving, a parked one keeps its place. The one exception is the command it superseded a moment ago: that one's task is
+        // already gone, and the machine is left to stand down.
         void Refuse(TaskRequest request, string reason)
         {
             timeline.Add(id, TimelineKinds.Refused, reason);
@@ -266,112 +207,62 @@ namespace DeviceChain.Sitepulse.Tasks
             if (Mode == MachineMode.Commanded && active == null) Stand();
         }
 
-        /// <summary>No task is running and none will: a machine that was at the bay drives out of it, any other stops where it is.</summary>
+        /// <summary>No task is running and none will: a machine that was at the bay, on a lane where it may not stand, or still on its track goes back to work; any other stops where it is.</summary>
         void Stand()
         {
-            parking.Release(id);
-            slot = null;
-            if (wasAtBay)
+            var where = trip;
+            if (wasAtBay || (where != null && !where.MayStandHere) || body.Attached)
             {
                 wasAtBay = false;
                 StartReturn();
                 return;
             }
 
+            world.Release(id);
+            trip = null;
             Mode = MachineMode.Parked;
         }
 
-        void TakeOver(TaskRequest request, Route route, double shownMetres, double eta, double budget, double cap, string label)
+        void TakeOver(TaskRequest request, ITrip next, double budget, double cap, string label)
         {
-            if (body.Attached) body.Detach();
             wasAtBay = false;
             active = request;
             Mode = MachineMode.Commanded;
             elapsedSim = elapsedWall = bayWait = 0;
             budgetSim = budget;
             capWall = cap;
-            follow.Start(route, body.HeadingDegrees);
-            timeline.Add(id, TimelineKinds.Accepted, label + ": route " + F0(shownMetres) + " m, ETA " + F0(eta) + " s");
+            trip = next;
+            waitingSaid = null;
+            timeline.Add(id, TimelineKinds.Accepted, label + ": route " + F0(next.Metres) + " m, ETA " + F0(next.EtaSeconds) + " s");
         }
 
         void BeginArea(TaskRequest request)
         {
-            if (!site.TryZone(request.Area, out var zone))
+            var next = world.TripToArea(body, request.Area, LaneShare, out var refusal);
+            if (next == null)
             {
-                Refuse(request, "no scene geometry for area " + request.Area);
+                Refuse(request, refusal);
                 return;
             }
 
-            var before = slot;
-            // nearest the site's parking spot first, when the zone holds one; otherwise nearest the machine
-            var gateX = body.X;
-            var gateZ = body.Z;
-            if (site.Spots.TryGetValue(SiteGeometry.ParkingSpot, out var park) && zone.Contains(park.X, park.Z))
-            {
-                gateX = park.X;
-                gateZ = park.Z;
-            }
-
-            // a slot is offered only when a machine can drive to it with its whole footprint clear of everything standing on the site
-            var footprint = ParkingLot.FootprintRadius(body.Kind);
-            var unreachable = new System.Collections.Generic.List<(double X, double Z)>();
-            ParkingSlot? claimed = null;
-            Route route = null;
-            while (true)
-            {
-                claimed = parking.Claim(id, zone, gateX, gateZ,
-                    (x, z) => world.Occupied(id, x, z) || unreachable.Exists(u => Math.Abs(u.X - x) < 1e-6 && Math.Abs(u.Z - z) < 1e-6),
-                    ParkingLot.Margin(body.Kind), site.Obstacles, footprint);
-                if (claimed == null) break;
-                route = graph.Plan(body.X, body.Z, claimed.Value.X, claimed.Value.Z, site.Obstacles, ParkingLot.TravelRadius(body.Kind));
-                if (route != null) break;
-                unreachable.Add((claimed.Value.X, claimed.Value.Z));
-            }
-
-            if (claimed == null)
-            {
-                parking.Release(id);
-                if (before.HasValue) parking.Hold(id, before.Value);
-                Refuse(request, unreachable.Count > 0 ? NoRoute(request.Area) : "no free parking slot in " + request.Area);
-                return;
-            }
-
-            slot = claimed;
-            var eta = route.Eta(kin.Cruise);
+            var eta = next.EtaSeconds;
             Phase = TaskPhase.ToDestination;
-            TakeOver(request, route, route.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds, TaskBudgets.AreaWallCapSeconds, request.Area);
+            TakeOver(request, next, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds, TaskBudgets.AreaWallCapSeconds, request.Area);
         }
-
-        static string OutsideSite(double x, double z) =>
-            "the machine is outside the site at (" + F0(x) + ", " + F0(z) + "): no route is planned over ground the site does not hold";
-
-        // a refusal that says why: the planner drops every stretch over the grade limit, so a place only a steeper way leads to has no route
-        static string NoRoute(string where) =>
-            "no drivable route to " + where + " (a route stays within a " + Grade.MaxPct.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + " % grade and clear of obstacles)";
 
         void BeginRefuel(TaskRequest request)
         {
-            if (!site.Spots.TryGetValue(RouteGraph.QueueSpot, out var queue) || !site.Spots.TryGetValue(RouteGraph.BaySpot, out var bayAt))
+            var next = world.TripToQueue(body, LaneShare, out var refusal);
+            if (next == null)
             {
-                Refuse(request, "this site has no refuel bay");
+                Refuse(request, refusal);
                 return;
             }
 
-            var route = graph.Plan(body.X, body.Z, queue.X, queue.Z);
-            if (route == null)
-            {
-                Refuse(request, NoRoute("the refuel queue"));
-                return;
-            }
-
-            parking.Release(id);
-            slot = null;
-            var into = Route.Straight(queue.X, queue.Z, bayAt.X, bayAt.Z, SpeedModel.BayApproachFactor);
-            var eta = route.Eta(kin.Cruise) + into.Eta(kin.Cruise);
+            var eta = next.EtaSeconds;
             Phase = TaskPhase.ToQueue;
             // the budget is for the DRIVING; the wait in line has its own limit and the service takes as long as it takes
-            TakeOver(request, route, route.Length + into.Length, eta, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds,
-                TaskBudgets.RefuelWallCapSeconds, "refuel bay");
+            TakeOver(request, next, TaskBudgets.EtaFactor * eta + TaskBudgets.AreaSlackSeconds, TaskBudgets.RefuelWallCapSeconds, "refuel bay");
         }
 
         // ---------------------------------------------------------------- time passes
@@ -400,17 +291,15 @@ namespace DeviceChain.Sitepulse.Tasks
             }
         }
 
-        /// <summary>Stands still (braking if it is moving) because the track it is heading for is not clear.</summary>
-        void Hold(double dt)
+        // drives the trip one step, and says in the timeline what it is held for when that changes
+        bool Drive(double dt)
         {
-            if (follow.Active) follow.Advance(dt, body, kin, (x, z, h) => true, Advise, Touches);
+            var arrived = trip.Step(dt);
+            var why = arrived ? null : trip.Waiting;
+            if (why != null && why != waitingSaid) timeline.Add(id, TimelineKinds.Waiting, why);
+            waitingSaid = why ?? waitingSaid;
+            return arrived;
         }
-
-        SteerAdvice Advise(LaneLine lane, double at, double speed, double swerve) => world.Steer(id, body.Kind, lane, at, speed, swerve);
-
-        bool Drive(double dt) => follow.Advance(dt, body, kin, (x, z, h) => world.Blocked(id, x, z, h), Advise, Touches);
-
-        bool Touches(double x, double z, double heading) => world.WouldTouch(id, body.Kind, x, z, heading);
 
         void StepTask(double simDt, double wallDt)
         {
@@ -433,13 +322,13 @@ namespace DeviceChain.Sitepulse.Tasks
             elapsedWall += wallDt;
             if (elapsedWall > capWall)
             {
-                Fail("budget exceeded: " + F0(capWall) + " s wall-clock cap while " + PhaseWords(), false);
+                Fail("budget exceeded: " + F0(capWall) + " s wall-clock cap while " + PhaseWords() + WaitingWords(), false);
                 return;
             }
 
             if (elapsedSim > budgetSim)
             {
-                Fail("budget exceeded: " + F0(budgetSim) + " s of simulation time while " + PhaseWords(), false);
+                Fail("budget exceeded: " + F0(budgetSim) + " s of simulation time while " + PhaseWords() + WaitingWords(), false);
                 return;
             }
 
@@ -453,8 +342,8 @@ namespace DeviceChain.Sitepulse.Tasks
             {
                 case TaskPhase.ToDestination:
                     if (!Drive(simDt)) return;
-                    timeline.Add(id, TimelineKinds.Arrived, active.Area + ": parked at slot " + (slot.HasValue ? (slot.Value.Index + 1).ToString(CultureInfo.InvariantCulture) : "?"));
-                    Succeed(null, MachineMode.Parked, TaskPhase.None, keepSlot: true);
+                    timeline.Add(id, TimelineKinds.Arrived, active.Area + ": parked at " + trip.Place);
+                    Succeed(null, MachineMode.Parked, TaskPhase.None, keepPlace: true);
                     break;
                 case TaskPhase.ToQueue:
                     if (!Drive(simDt)) return;
@@ -467,8 +356,15 @@ namespace DeviceChain.Sitepulse.Tasks
                     bayWait += simDt;
                     if (bay.TryGrant(id, world.BayClear(id)))
                     {
-                        var bayAt = site.Spots[RouteGraph.BaySpot];
-                        follow.Start(Route.Straight(body.X, body.Z, bayAt.X, bayAt.Z, SpeedModel.BayApproachFactor), body.HeadingDegrees);
+                        var next = world.TripIntoBay(body, out var refusal);
+                        if (next == null)
+                        {
+                            Fail(refusal, false);
+                            return;
+                        }
+
+                        trip = next;
+                        waitingSaid = null;
                         Phase = TaskPhase.EnteringBay;
                         timeline.Add(id, TimelineKinds.Arrived, "bay granted after " + F0(bayWait) + " s in line");
                     }
@@ -489,7 +385,7 @@ namespace DeviceChain.Sitepulse.Tasks
                     if (!service.Done) return;
                     var from = service.StartPct;
                     timeline.Add(id, TimelineKinds.Refuelling, "service finished: " + F1(from) + "% -> " + F1(model.FuelPct) + "%");
-                    Succeed("refuelled " + F1(from) + "% to " + F1(model.FuelPct) + "%", MachineMode.Parked, TaskPhase.None, keepSlot: false);
+                    Succeed("refuelled " + F1(from) + "% to " + F1(model.FuelPct) + "%", MachineMode.Parked, TaskPhase.None, keepPlace: false);
                     StartReturn();
                     break;
             }
@@ -508,21 +404,18 @@ namespace DeviceChain.Sitepulse.Tasks
             }
         }
 
-        void Succeed(string note, MachineMode next, TaskPhase phase, bool keepSlot)
+        // a budget that ran out while the machine was held says what held it
+        string WaitingWords() => waitingSaid != null ? " (" + waitingSaid + ")" : "";
+
+        void Succeed(string note, MachineMode next, TaskPhase phase, bool keepPlace)
         {
             var request = active;
             timeline.Add(id, TimelineKinds.Outcome, "SUCCESS" + (note != null ? ": " + note : ""));
-            ReleaseTask();
-            if (!keepSlot)
-            {
-                parking.Release(id);
-                slot = null;
-            }
-
+            ReleaseTask(abandon: false);
+            if (!keepPlace) world.Release(id);
             active = null;
             Mode = next;
             Phase = phase;
-            follow.Clear();
             arbiter.Finished(request);
             request.Complete(TaskResult.Ok(note));
         }
@@ -531,69 +424,64 @@ namespace DeviceChain.Sitepulse.Tasks
         {
             var request = active;
             var atBay = WantsBay;
+            var where = trip;
             timeline.Add(id, TimelineKinds.Outcome, (answeredElsewhere ? "DROPPED: " : "FAILED: ") + reason);
             ReleaseTask();
-            parking.Release(id);
-            slot = null;
             active = null;
             Phase = TaskPhase.None;
-            follow.Clear();
             Mode = stalled ? MachineMode.Stalled : MachineMode.Parked;
             if (stalled) timeline.Add(id, TimelineKinds.Stalled, "out of fuel: stopped where it stood");
             arbiter.Finished(request);
             request.Complete(TaskResult.Fail(reason));
             wasAtBay = false;
-            // a machine that fails at the bay or in its queue drives out: it never stays parked where the next one must stand
-            if (!stalled && atBay) StartReturn();
+            if (stalled)
+            {
+                world.Release(id);
+                return;
+            }
+
+            // a machine that fails at the bay or in its queue drives out: it never stays parked where the next one must stand; and one on a
+            // lane, or still riding its track, is never left there either: it goes back to work
+            if (atBay || (where != null && !where.MayStandHere) || body.Attached) StartReturn();
+            else world.Release(id);
         }
 
-        /// <summary>Gives back what a task held: the bay and the service. (Parking is kept or dropped by the caller.)</summary>
-        void ReleaseTask()
+        /// <summary>Gives back what a task held: the bay, the service and the trip (the machine stands where it is, or drives on: see <see cref="ITrip.Abandon"/>).</summary>
+        void ReleaseTask(bool abandon = true)
         {
             if (Phase == TaskPhase.Refuelling && service != null && !service.Done)
                 timeline.Add(id, TimelineKinds.Refuelling, "service stopped at " + F1(model.FuelPct) + "% fuel");
             wasAtBay = WantsBay;
             bay.Release(id);
             service = null;
-            follow.Clear();
+            if (abandon && trip != null) trip.Abandon();
             active = null;
             Phase = TaskPhase.None;
         }
 
         // ---------------------------------------------------------------- back to work
 
-        /// <summary>Drives to the nearest point of the machine's own track and puts it back on it.</summary>
+        /// <summary>Drives back to the machine's own track and puts it back on it.</summary>
         void StartReturn()
         {
-            parking.Release(id);
-            slot = null;
-            if (!body.TryNearestTrackPoint(body.X, body.Z, out var point))
+            world.Release(id);
+            var next = world.TripBack(body, LaneShare, out var refusal);
+            if (next == null)
             {
+                trip = null;
                 Mode = MachineMode.Parked;
-                timeline.Add(id, TimelineKinds.Returning, "no track of its own to return to");
+                timeline.Add(id, TimelineKinds.Returning, refusal);
                 return;
             }
 
-            if (!graph.OnSite(body.X, body.Z))
-            {
-                Mode = MachineMode.Parked;
-                timeline.Add(id, TimelineKinds.Returning, OutsideSite(body.X, body.Z));
-                return;
-            }
-
-            var route = graph.Plan(body.X, body.Z, point.X, point.Z);
-            if (route == null)
-            {
-                Mode = MachineMode.Parked;
-                timeline.Add(id, TimelineKinds.Returning, "no route back to its track");
-                return;
-            }
-
-            returnPoint = point;
+            trip = next;
             returnWall = 0;
+            returnOverdueSaid = false;
+            waitingSaid = null;
             Mode = MachineMode.Returning;
-            follow.Start(route, body.HeadingDegrees);
-            timeline.Add(id, TimelineKinds.Returning, "back to work: route " + F0(route.Length) + " m, ETA " + F0(route.Eta(kin.Cruise)) + " s");
+            // a machine still on its track (a command given up before it left) has no way back to say
+            if (!body.Attached || next.Metres > 0.0)
+                timeline.Add(id, TimelineKinds.Returning, "back to work: route " + F0(next.Metres) + " m, ETA " + F0(next.EtaSeconds) + " s");
         }
 
         void StepReturn(double simDt, double wallDt)
@@ -601,44 +489,37 @@ namespace DeviceChain.Sitepulse.Tasks
             returnWall += wallDt;
             if (returnWall > TaskBudgets.ReturnWallCapSeconds)
             {
-                follow.Clear();
-                Mode = MachineMode.Parked;
-                timeline.Add(id, TimelineKinds.Returning, "could not get back to its track in " + F0(TaskBudgets.ReturnWallCapSeconds) + " s: parked");
-                return;
+                // a machine that may stand where it is gives up and parks; one on a lane never does (it would be in everyone's way): it says so once
+                if (trip.MayStandHere)
+                {
+                    trip.Abandon();
+                    trip = null;
+                    Mode = MachineMode.Parked;
+                    timeline.Add(id, TimelineKinds.Returning, "could not get back to its track in " + F0(TaskBudgets.ReturnWallCapSeconds) + " s: parked" + WaitingWords());
+                    return;
+                }
+
+                if (!returnOverdueSaid)
+                {
+                    returnOverdueSaid = true;
+                    timeline.Add(id, TimelineKinds.Returning, "still on its way back after " + F0(TaskBudgets.ReturnWallCapSeconds) + " s" + WaitingWords());
+                }
             }
 
             if (model.FuelPct <= 0.0)
             {
-                follow.Clear();
+                trip.Abandon();
+                trip = null;
                 Mode = MachineMode.Stalled;
                 timeline.Add(id, TimelineKinds.Stalled, "out of fuel: stopped where it stood");
                 return;
             }
 
-            if (follow.Active)
-            {
-                // the machines on their routine tracks follow them blind: the machine that rejoins one has to look, and wait off the road
-                var toRejoin = Math.Sqrt((returnPoint.X - body.X) * (returnPoint.X - body.X) + (returnPoint.Z - body.Z) * (returnPoint.Z - body.Z));
-                if (toRejoin <= TaskBudgets.RejoinHoldBackMetres && !world.TrackClearFor(id, body.Kind, returnPoint.X, returnPoint.Z, returnPoint.HeadingDegrees))
-                {
-                    Hold(simDt);
-                    return;
-                }
-
-                Drive(simDt);
-                return;
-            }
-
-            if (!world.TrackClearFor(id, body.Kind, returnPoint.X, returnPoint.Z, returnPoint.HeadingDegrees))
-            {
-                Hold(simDt);
-                return;
-            }
-
-            if (!follow.Align(simDt, body, kin, returnPoint.HeadingDegrees, Touches)) return;
-            body.Attach(returnPoint);
+            var wasOnTrack = body.Attached;
+            if (!Drive(simDt)) return;
+            trip = null;
             Mode = MachineMode.Working;
-            timeline.Add(id, TimelineKinds.Working, "back on its track");
+            if (!wasOnTrack) timeline.Add(id, TimelineKinds.Working, "back on its track");
         }
 
         /// <summary>The presenter's Resume work: a parked machine drives back to its track. Anything else is said, not done.</summary>
@@ -671,8 +552,7 @@ namespace DeviceChain.Sitepulse.Tasks
             var request = active;
             timeline.Add(id, TimelineKinds.Reset, reason);
             ReleaseTask();
-            parking.Release(id);
-            slot = null;
+            world.Release(id);
             arbiter.Finished(request);
             Mode = MachineMode.Parked;
             wasAtBay = false;

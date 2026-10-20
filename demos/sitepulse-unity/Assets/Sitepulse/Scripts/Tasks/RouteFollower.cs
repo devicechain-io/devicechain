@@ -38,25 +38,15 @@ namespace DeviceChain.Sitepulse.Tasks
     /// <summary>
     /// Drives a body along a <see cref="Route"/>, keeping to the lane the road gives the way it is going (see <see cref="LaneLine"/>):
     /// the line is followed exactly in position, speed follows the surface, slope and the corner ahead and eases in to the end, and
-    /// the heading turns toward the path at the machine's own yaw rate (so a sharp turn slows it). While something is in its
-    /// way (<c>blocked</c>) the target speed is zero. Told by <c>advise</c> (see <see cref="SteerAdvice"/>) it also swerves to the side of
-    /// its lane to pass what stands in it, backs up along the line when it is stuck, and takes no step that would touch another machine.
+    /// the heading turns toward the path at the machine's own yaw rate (so a sharp turn slows it). How far along its line it may go is
+    /// someone else's to say (<c>reach</c>: the interlocking's authority); it brakes so as to stop short of it, and never passes it.
     /// </summary>
     internal sealed class RouteFollower
     {
         const double Lookahead = 2.0, ArriveWithin = 0.05, CreepSpeed = 0.3, SteerLimit = 25.0;
 
-        /// <summary>The most a machine moves sideways for each metre it moves forward (a gentle swerve, not a sidestep).</summary>
-        public const double SwerveMetresPerMetre = 0.35;
-
-        /// <summary>How fast (m/s) a machine goes while it swerves round something on its line.</summary>
-        public const double SwerveSpeed = 2.5;
-
-        /// <summary>How fast (m/s) a machine backs up along its route.</summary>
-        public const double ReverseSpeed = 1.5;
-
-        /// <summary>The last stretch of a route, in metres, driven on its line: a machine arrives where the route ends.</summary>
-        public const double OnLineMetres = 12.0;
+        /// <summary>A machine held short of its reach stops this far (metres) before it.</summary>
+        public const double StopShortMetres = 0.3;
 
         Route route;
         LaneLine line;
@@ -74,8 +64,8 @@ namespace DeviceChain.Sitepulse.Tasks
         /// </summary>
         public double LaneShare { get; set; } = 1.0;
 
-        /// <summary>How far to the right of the route's own line the machine is now (negative: to the left, in its lane, or further to pass something).</summary>
-        public double Lateral => route == null ? 0.0 : line.LateralAt(s) + Swerve;
+        /// <summary>How far to the right of the route's own line the machine is now (negative: to the left, in its lane).</summary>
+        public double Lateral => route == null ? 0.0 : line.LateralAt(s);
 
         /// <summary>How far along the route's own line the machine is now, in metres (the line it drives is not the same length: see <see cref="LaneLine"/>).</summary>
         public double Progress => route == null ? 0.0 : line.CentrelineAt(s);
@@ -86,16 +76,22 @@ namespace DeviceChain.Sitepulse.Tasks
         /// <summary>How far along <see cref="Line"/> the machine is, in metres.</summary>
         public double LineProgress => s;
 
-        /// <summary>How far to the right of its lane the machine is driving (negative: left), to pass what stands in it.</summary>
-        public double Swerve { get; private set; }
-
-        public void Start(Route r, double headingDegrees)
+        /// <summary>Starts a route from its beginning; a machine already moving keeps its speed (it carries on, it does not stop to turn onto it).</summary>
+        public void Start(Route r, double headingDegrees, double laneShare)
         {
             route = r;
-            line = r == null ? null : LaneLine.Build(r, LaneShare);
+            line = r == null ? null : LaneLine.Build(r, laneShare);
             s = 0;
-            Swerve = 0;
             HeadingDegrees = headingDegrees;
+        }
+
+        public void Start(Route r, double headingDegrees) => Start(r, headingDegrees, LaneShare);
+
+        /// <summary>Starts a route at a speed already reached (a truck leaving its track at speed onto a lane).</summary>
+        public void StartMoving(Route r, double headingDegrees, double speed)
+        {
+            Start(r, headingDegrees, 0.0);
+            Speed = Math.Max(0.0, speed);
         }
 
         public void Clear()
@@ -103,7 +99,6 @@ namespace DeviceChain.Sitepulse.Tasks
             route = null;
             line = null;
             Speed = 0;
-            Swerve = 0;
         }
 
         public void Stop() => Speed = 0;
@@ -124,8 +119,11 @@ namespace DeviceChain.Sitepulse.Tasks
             oz = z - Math.Sin(h) * right;
         }
 
-        /// <summary>Moves the body one step. True when it has reached the end of the route.</summary>
-        public bool Advance(double dt, IMachineBody body, Kinematics k, Func<double, double, double, bool> blocked, Func<LaneLine, double, double, double, SteerAdvice> advise = null, Func<double, double, double, bool> touches = null)
+        /// <summary>
+        /// Moves the body one step. True when it has reached the end of the route. <paramref name="reach"/> says how far along the line (metres
+        /// from its start) the machine may go now; without it the way is open to the end.
+        /// </summary>
+        public bool Advance(double dt, IMachineBody body, Kinematics k, Func<double, double> reach = null)
         {
             if (route == null) return true;
             if (route.Legs == 0)
@@ -136,69 +134,29 @@ namespace DeviceChain.Sitepulse.Tasks
             }
 
             var remaining = line.Length - s;
-            line.PointAt(s, out var px, out var pz, out _, out var leg);
+            var limit = reach == null ? line.Length : Math.Min(line.Length, Math.Max(s, reach(s)));
             line.PointAt(Math.Min(line.Length, s + Lookahead), out _, out _, out var look, out _);
+            line.PointAt(s, out _, out _, out _, out var leg);
 
-            var advice = advise != null ? advise(line, s, Speed, Swerve) : default;
-            var headingBefore = HeadingDegrees;
             var err = Delta(look, HeadingDegrees);
-            // a machine told to stand does not swing its length round where it stands, into whatever it is standing by
-            var turn = advice.Stop && Speed < 0.05 && !advice.Reverse ? 0.0 : Math.Min(Math.Abs(err), k.YawRate * dt);
+            var turn = Math.Min(Math.Abs(err), k.YawRate * dt);
             HeadingDegrees = SiteDefinition.Canonical(HeadingDegrees + Math.Sign(err) * turn);
             var left = Math.Abs(Delta(look, HeadingDegrees));
             var align = left >= 90.0 ? 0.2 : Math.Max(0.2, Math.Cos(left * Math.PI / 180.0));
 
             var target = route.SpeedOnLeg(leg, k.Cruise) * align;
             target = Math.Min(target, Math.Sqrt(2.0 * k.Decel * Math.Max(0.0, remaining)) + CreepSpeed);
-            var goal = remaining <= OnLineMetres ? 0.0 : advice.Lateral;
-            if (advice.Reverse && s > 0.0)
-            {
-                Speed = 0;
-                var back = Math.Min(ReverseSpeed * dt, s);
-                var swerveBefore = Swerve;
-                s -= back;
-                Swerve += Math.Max(-SwerveMetresPerMetre * back, Math.Min(SwerveMetresPerMetre * back, goal - Swerve));
-                line.PointAt(s, out var rx, out var rz, out var rh, out _);
-                Beside(rx, rz, rh, Swerve, out var bkx, out var bkz);
-                if (touches != null && touches(bkx, bkz, HeadingDegrees))
-                {
-                    s += back;
-                    Swerve = swerveBefore;
-                    return false;
-                }
-
-                body.Drive(bkx, bkz, HeadingDegrees, -back, 0.0);
-                return false;
-            }
-
-            // beside the lane while the machine is on its way to the side of it, and where it is going to be: the legacy lane rule asks about that
-            Beside(px, pz, HeadingDegrees, Swerve, out var bx, out var bz);
-            var swerving = !advice.Stop && Math.Abs(goal - Swerve) > 0.05;
-            if (swerving) target = Math.Min(target, SwerveSpeed);
-            if (advice.Stop || (!swerving && blocked != null && blocked(bx, bz, HeadingDegrees))) target = 0;
+            // held short of the end of the route: brake for it as for the end, and stop short of it
+            if (limit < line.Length) target = Math.Min(target, Math.Sqrt(2.0 * k.Decel * Math.Max(0.0, limit - s - StopShortMetres)));
 
             var dv = target - Speed;
             Speed += Math.Max(-k.Decel * dt, Math.Min(k.Accel * dt, dv));
             if (Speed < 0) Speed = 0;
 
-            var ds = Math.Min(Speed * dt, remaining);
-            var sBefore = s;
-            var swerveWas = Swerve;
+            var ds = Math.Max(0.0, Math.Min(Speed * dt, limit - s));
+            if (ds < Speed * dt && limit < line.Length) Speed = ds / Math.Max(dt, 1e-9);
             s += ds;
-            var sideways = SwerveMetresPerMetre * ds;
-            Swerve += Math.Max(-sideways, Math.Min(sideways, goal - Swerve));
-            line.PointAt(s, out var x, out var z, out var lineHeading, out _);
-            if (Swerve != 0.0) Beside(x, z, lineHeading, Swerve, out x, out z);
-
-            // the last word: a step that would put the machine into another is not taken
-            if (touches != null && touches(x, z, HeadingDegrees))
-            {
-                s = sBefore;
-                Swerve = swerveWas;
-                HeadingDegrees = headingBefore;
-                Speed = 0;
-                return false;
-            }
+            line.PointAt(s, out var x, out var z, out _, out _);
 
             var steer = Math.Max(-SteerLimit, Math.Min(SteerLimit, err));
             body.Drive(x, z, HeadingDegrees, ds, steer);
@@ -211,14 +169,11 @@ namespace DeviceChain.Sitepulse.Tasks
         }
 
         /// <summary>Turns in place toward a heading (at most <paramref name="dt"/> of the yaw rate). True when within a few degrees.</summary>
-        public bool Align(double dt, IMachineBody body, Kinematics k, double toDegrees, Func<double, double, double, bool> touches = null)
+        public bool Align(double dt, IMachineBody body, Kinematics k, double toDegrees)
         {
             var err = Delta(toDegrees, HeadingDegrees);
             var turn = Math.Min(Math.Abs(err), k.YawRate * dt);
-            var turned = SiteDefinition.Canonical(HeadingDegrees + Math.Sign(err) * turn);
-            // it does not swing its length round into what it stands beside
-            if (touches != null && touches(body.X, body.Z, turned)) return false;
-            HeadingDegrees = turned;
+            HeadingDegrees = SiteDefinition.Canonical(HeadingDegrees + Math.Sign(err) * turn);
             body.Drive(body.X, body.Z, HeadingDegrees, 0, Math.Max(-SteerLimit, Math.Min(SteerLimit, err)));
             return Math.Abs(Delta(toDegrees, HeadingDegrees)) < 3.0;
         }

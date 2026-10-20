@@ -143,7 +143,7 @@ namespace DeviceChain.Sitepulse.Tests
         {
             var bodies = new[] { "SP-HL-0001", "SP-HL-0003" }.Select(i => (IMachineBody)new FakeBody(i, EquipmentKind.Hauler, 0, 0)).ToList();
             var models = bodies.ToDictionary(b => b.Id, b => new MachineModel(EquipmentKind.Hauler, b.Id));
-            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(), bodies.Select(b => (b, models[b.Id])), 1);
+            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, CommandKit.Prepared, new Timeline(), bodies.Select(b => (b, models[b.Id])), 1);
             var pc = new PresenterControls(d, id => models[id], null);
             Assert.IsNull(pc.PrepareTyreLeak("SP-XX-0001"));
             Assert.IsNotNull(pc.PrepareTyreLeak("SP-HL-0003"));
@@ -206,25 +206,23 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void TheDirectorAnnouncesARouteWhenItStartsAndAnotherWhenItEndsAndNothingBetween()
         {
-            var body = new FakeBody("SP-HL-0003", EquipmentKind.Hauler, CommandKit.Track(0)[300].X, CommandKit.Track(0)[300].Z, 0, CommandKit.Track(0));
-            var model = new MachineModel(EquipmentKind.Hauler, "SP-HL-0003");
-            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(), new[] { ((IMachineBody)body, model) }, 1);
+            var sim = new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, CommandKit.Prepared);
             var events = new List<(string id, Route route)>();
-            d.RouteChanged += (id, r) => events.Add((id, r));
+            sim.Director.RouteChanged += (id, r) => events.Add((id, r));
 
-            var req = new TaskRequest("c-1", "goto-area", "sp-zone-yard", 1, 1);
-            d.Submit("SP-HL-0003", req);
+            var req = sim.Send("SP-HL-0003", "goto-area", "sp-zone-yard");
             Assert.AreEqual(0, events.Count, "nothing is announced until the director steps");
-            d.Step(0.25, 0.25);
+            sim.Step(0.25);
             Assert.AreEqual(1, events.Count);
             Assert.IsNotNull(events[0].route);
             Assert.AreEqual("SP-HL-0003", events[0].id);
-            d.Step(0.25, 0.25);
+            sim.Step(0.25);
             Assert.AreEqual(1, events.Count, "driving along the same route announces nothing");
 
-            for (var t = 0; t < 8000 && !req.IsComplete; t++) d.Step(0.25, 0.25);
+            for (var t = 0; t < 8000 && !req.IsComplete; t++) sim.Step(0.25);
             Assert.IsTrue(req.IsComplete);
-            d.Step(0.25, 0.25);
+            Assert.IsTrue(req.Completion.Answer().Succeeded, sim.Timeline.Text("SP-HL-0003", 20));
+            sim.Step(0.25);
             Assert.AreEqual(2, events.Count);
             Assert.IsNull(events[1].route, "stopped driving it");
         }
@@ -232,14 +230,14 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void ARefuelAnnouncesTheDriveToTheQueueTheApproachToTheBayAndTheWayBack()
         {
-            var body = new FakeBody("SP-HL-0003", EquipmentKind.Hauler, CommandKit.Track(0)[300].X, CommandKit.Track(0)[300].Z, 0, CommandKit.Track(0));
-            var model = new MachineModel(EquipmentKind.Hauler, "SP-HL-0003");
-            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(), new[] { ((IMachineBody)body, model) }, 1);
+            var sim = new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, CommandKit.Prepared);
             var events = new List<Route>();
-            d.RouteChanged += (id, r) => events.Add(r);
-            d.Submit("SP-HL-0003", new TaskRequest("c-1", "goto-refuel", null, 1, 1));
-            for (var t = 0; t < 12000 && !(d["SP-HL-0003"].Mode == MachineMode.Working && events.Count > 2); t++) d.Step(0.25, 0.25);
-            Assert.AreEqual(MachineMode.Working, d["SP-HL-0003"].Mode, "back at work");
+            sim.Director.RouteChanged += (id, r) => { if (id == "SP-HL-0003") events.Add(r); };
+            sim.Models["SP-HL-0003"].Restore(20, 1000);
+            sim.Send("SP-HL-0003", "goto-refuel");
+            var d = sim.Director;
+            for (var t = 0; t < 12000 && !(d["SP-HL-0003"].Mode == MachineMode.Working && events.Count > 2); t++) sim.Step(0.25);
+            Assert.AreEqual(MachineMode.Working, d["SP-HL-0003"].Mode, "back at work: " + sim.Timeline.Text("SP-HL-0003", 20));
             var started = events.Count(r => r != null);
             Assert.AreEqual(3, started, "the queue, the bay and the way back");
             for (var i = 1; i < events.Count; i++) Assert.AreNotEqual(events[i - 1] == null, events[i] == null, "starts and ends alternate");

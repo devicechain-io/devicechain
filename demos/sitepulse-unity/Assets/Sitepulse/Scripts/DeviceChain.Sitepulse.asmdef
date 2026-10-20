@@ -5,7 +5,8 @@
         "Unity.RenderPipelines.Core.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.InputSystem",
-        "DeviceChain.DemoIntro"
+        "DeviceChain.DemoIntro",
+        "DeviceChain.Sim.Traffic"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

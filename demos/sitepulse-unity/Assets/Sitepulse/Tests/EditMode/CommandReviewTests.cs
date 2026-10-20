@@ -66,33 +66,28 @@ namespace DeviceChain.Sitepulse.Tests
         [Test]
         public void AFailureInTheBayDrivesTheTruckOutSoTheNextOneIsServed()
         {
-            var track = CommandKit.Track(0);
-            var a = new FakeBody("A", EquipmentKind.Hauler, track[540].X, track[540].Z, track[540].HeadingDegrees, track);
-            var b = new FakeBody("B", EquipmentKind.Hauler, track[600].X, track[600].Z, track[600].HeadingDegrees, track);
-            var ma = new MachineModel(EquipmentKind.Hauler, "A");
-            var mb = new MachineModel(EquipmentKind.Hauler, "B");
-            ma.Restore(20, 1000);
-            mb.Restore(20, 1000);
-            var d = new TaskDirector(CommandKit.Site, CommandKit.Graph, new Timeline(), new[] { ((IMachineBody)a, ma), (b, mb) }, 1);
-            var ra = new TaskRequest("c-a", "goto-refuel", null, 1, 1);
-            d.Submit("A", ra);
-            for (var t = 0.0; t < 1500 && d.Servicing != "A"; t += 0.25) d.Step(0.25, 0.25);
-            Assert.AreEqual("A", d.Servicing);
+            var sim = new SceneSim(CommandKit.AssetPath("Data/quarry_fleet_live.json"), CommandKit.Site, CommandKit.Graph, CommandKit.Prepared);
+            const string A = "SP-HL-0002", B = "SP-HL-0003";
+            sim.Models[A].Restore(20, 1000);
+            sim.Models[B].Restore(20, 1000);
+            var d = sim.Director;
+            var ra = sim.Send(A, "goto-refuel");
+            for (var t = 0.0; t < 1500 && d.Servicing != A; t += 0.25) sim.Step(0.25);
+            Assert.AreEqual(A, d.Servicing, sim.Timeline.Text(A, 20));
 
             // the real clock runs out while the service runs (simulation time stands still)
             for (var i = 0; i < 200 && !ra.IsComplete; i++) d.Step(0.0, 10.0);
             Assert.IsTrue(ra.IsComplete);
             StringAssert.Contains("wall-clock cap", ra.Completion.Answer().Reason);
-            Assert.AreEqual(MachineMode.Returning, d["A"].Mode, "the truck leaves the bay");
+            Assert.AreEqual(MachineMode.Returning, d[A].Mode, "the truck leaves the bay");
             Assert.IsNull(d.Bay.Holder);
 
-            var rb = new TaskRequest("c-b", "goto-refuel", null, 2, 1);
-            d.Submit("B", rb);
-            for (var t = 0.0; t < 1500 && !rb.IsComplete; t += 0.25) d.Step(0.25, 0.25);
+            var rb = sim.Send(B, "goto-refuel");
+            for (var t = 0.0; t < 1500 && !rb.IsComplete; t += 0.25) sim.Step(0.25);
             Assert.IsTrue(rb.IsComplete);
-            Assert.IsTrue(rb.Completion.Answer().Succeeded, "the next truck is served: " + rb.Completion.Answer());
-            for (var t = 0.0; t < 600 && d["A"].Mode != MachineMode.Working; t += 0.25) d.Step(0.25, 0.25);
-            Assert.AreEqual(MachineMode.Working, d["A"].Mode, "and the first is back on its track");
+            Assert.IsTrue(rb.Completion.Answer().Succeeded, "the next truck is served: " + rb.Completion.Answer() + "\n" + sim.Timeline.Text(B, 20));
+            for (var t = 0.0; t < 600 && d[A].Mode != MachineMode.Working; t += 0.25) sim.Step(0.25);
+            Assert.AreEqual(MachineMode.Working, d[A].Mode, "and the first is back on its track: " + sim.Timeline.Text(A, 20));
         }
 
         // ---- a refusal changes nothing about what the machine is doing

@@ -294,6 +294,16 @@ namespace DeviceChain.Sitepulse.Visuals
             return true;
         }
 
+        /// <summary>How far into its loop the machine's track has it now, in seconds. False when it is off its track.</summary>
+        public bool TryTrackSeconds(string id, out float seconds)
+        {
+            seconds = 0f;
+            var u = Find(id);
+            if (u == null || u.detached || data == null) return false;
+            seconds = u.player.TrackSecondsAt(time);
+            return true;
+        }
+
         /// <summary>Puts a detached machine on the ground at a place, facing a way, having moved <paramref name="distance"/> metres (wheels turn by it).</summary>
         public void Drive(string id, float x, float z, float heading, float distance, float steer)
         {

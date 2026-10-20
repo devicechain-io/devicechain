@@ -308,7 +308,7 @@ namespace DeviceChain.Sitepulse.Tests
             var timeline = new Timeline();
             var body = new FakeBody("SP-HL-0006", EquipmentKind.Hauler, 0, 0);
             var model = new MachineModel(EquipmentKind.Hauler, "SP-HL-0006");
-            var director = new TaskDirector(CommandKit.Site, CommandKit.Graph, timeline, new[] { ((IMachineBody)body, model) }, 1);
+            var director = new TaskDirector(CommandKit.Site, CommandKit.Graph, CommandKit.Prepared, timeline, new[] { ((IMachineBody)body, model) }, 1);
             var presenter = new PresenterControls(director, id => model, () => null);
             var disk = new FlakyDisk();
             var rec = StartFailing(new LiveRecorderWorld { Presenter = presenter }, disk);

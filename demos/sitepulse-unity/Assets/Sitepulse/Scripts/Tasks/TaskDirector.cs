@@ -3,41 +3,32 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Sim.Traffic;
 using DeviceChain.Sitepulse.Simulation;
 
 namespace DeviceChain.Sitepulse.Tasks
 {
     /// <summary>
-    /// Every machine's task layer and the site they share: the route network, the one refuel bay, the
-    /// parking, the timeline, and the yield rule (stop while another machine's footprint is within
-    /// <see cref="YieldDistance"/> metres ahead in the same lane). Commands reach it through
-    /// <see cref="ITaskSink"/>; the app steps it once a frame, before the scene's own choreography moves the
-    /// machines that are still on their tracks.
+    /// Every machine's task layer and the site they share: the interlocking that keeps them out of each other's way (<see cref="SiteTraffic"/>),
+    /// the route network, the one refuel bay, the parking, and the timeline. Commands reach it through <see cref="ITaskSink"/>; the app steps it
+    /// once a frame, before the scene's own choreography moves the machines that are still on their tracks.
     ///
-    /// A command for a machine that has no controller (the plant, an unknown device) is answered failed on
-    /// the spot, and a command that arrives after <see cref="FailAll"/> is too: nothing is ever left
-    /// waiting for an answer that will not come.
+    /// The haul trucks ride the loop under the interlocking, and their errands run on the site's lanes: to an exit at speed, up a stand's lane,
+    /// and back onto the loop through a merge. Every other machine works in its own area, and an errand of one is a free route that must stay
+    /// off the lanes altogether (<see cref="OffLaneWay"/>), or it is refused with the reason. Nothing waits on a guess about where anything will be.
+    ///
+    /// A command for a machine that has no controller (the plant, an unknown device) is answered failed on the spot, and a command that arrives
+    /// after <see cref="FailAll"/> is too: nothing is ever left waiting for an answer that will not come.
     /// </summary>
-    public sealed partial class TaskDirector : ITaskSink, ITaskWorld
+    public sealed class TaskDirector : ITaskSink, ITaskWorld
     {
-        public const double YieldDistance = 8.0, LaneHalfWidth = 3.0, BayClearRadius = 5.0;
-
-        /// <summary>
-        /// A machine rejoining its track waits while another that is driving is within <see cref="RejoinMovingRadius"/> metres of the place it
-        /// would rejoin at (a truck on its routine track follows the track blind, and a machine set down on one in step with it travels
-        /// through it), or another of any kind is within <see cref="RejoinStandingRadius"/> of it (a hauler's footprint).
-        /// </summary>
-        public const double RejoinMovingRadius = 24.0, RejoinStandingRadius = 8.0;
+        public const double BayClearRadius = 5.0;
 
         /// <summary>A machine slower than this (m/s) is standing.</summary>
         public const double StandingSpeed = 0.2;
 
-        /// <summary>How long a machine waits behind one that stands in its lane before it carries on past it, in simulation seconds.</summary>
-        public const double StandingYieldSeconds = 10.0;
-
         readonly Dictionary<string, (double X, double Z)> lastSeen = new Dictionary<string, (double X, double Z)>(StringComparer.Ordinal);
         readonly Dictionary<string, double> speeds = new Dictionary<string, double>(StringComparer.Ordinal);
-        readonly Dictionary<string, double> waitingSince = new Dictionary<string, double>(StringComparer.Ordinal);
         double now;
 
         readonly Dictionary<string, MachineController> controllers = new Dictionary<string, MachineController>(StringComparer.Ordinal);
@@ -46,22 +37,37 @@ namespace DeviceChain.Sitepulse.Tasks
         readonly SiteGeometry site;
         readonly BayReservations bay = new BayReservations();
         readonly ParkingLot parking = new ParkingLot();
+        readonly FreeTrips free;
+        readonly SiteTraffic traffic;
+        readonly OffLaneWay offLane;
+        readonly Dictionary<string, Polygon> workAreas = new Dictionary<string, Polygon>(StringComparer.Ordinal);
         readonly int generation;
         bool reset;
 
-        public TaskDirector(SiteGeometry site, RouteGraph graph, Timeline timeline, IEnumerable<(IMachineBody body, MachineModel model)> machines, int generation)
+        public TaskDirector(SiteGeometry site, RouteGraph graph, PreparedSite prepared, Timeline timeline, IEnumerable<(IMachineBody body, MachineModel model)> machines, int generation)
         {
             this.site = site ?? throw new ArgumentNullException(nameof(site));
             Graph = graph ?? throw new ArgumentNullException(nameof(graph));
             Timeline = timeline ?? throw new ArgumentNullException(nameof(timeline));
+            if (prepared == null) throw new ArgumentNullException(nameof(prepared), "the task layer runs under the interlocking: it needs the measured site");
             this.generation = generation;
+            free = new FreeTrips(site, graph, parking);
+            traffic = new SiteTraffic(prepared);
+            foreach (var w in prepared.Topology.WorkAreas) workAreas[w.Machine] = w.Polygon;
+            offLane = new OffLaneWay(prepared, Working, Standing);
+
             foreach (var (body, model) in machines)
             {
                 if (model.IsPlant) continue;
                 bodies[body.Id] = body;
                 order.Add(body.Id);
-                controllers[body.Id] = new MachineController(body, model, site, graph, bay, parking, timeline, this);
+                controllers[body.Id] = new MachineController(body, model, bay, timeline, this);
+                if (body.Kind == EquipmentKind.Hauler && body.Attached && body.TryTrackSeconds(out _)) traffic.AddLoopTruck(body);
             }
+
+            foreach (var id in order)
+                foreach (var st in prepared.Topology.Stations)
+                    if (st.Partner != null && st.Partner.Machine == id && bodies[id].Attached) traffic.AddPartner(bodies[id]);
         }
 
         public RouteGraph Graph { get; }
@@ -69,10 +75,16 @@ namespace DeviceChain.Sitepulse.Tasks
         public BayReservations Bay => bay;
         public IReadOnlyList<string> Machines => order;
 
+        /// <summary>The interlocking over the site's machines and lanes.</summary>
+        public SiteTraffic Traffic => traffic;
+
         public MachineController this[string id] => controllers[id];
 
         /// <summary>How fast the machine has been going since the last step, wherever the motion came from; 0 until it has been seen to move.</summary>
         public double SpeedOf(string id) => speeds.TryGetValue(id, out var v) ? v : 0.0;
+
+        /// <summary>How fast the machine's routine track is playing, from 0 (held) to 1 (its own pace). 1 for a machine the interlocking does not hold back.</summary>
+        public double TrackRateOf(string id) => traffic.RateOf(id);
 
         /// <summary>
         /// Raised, after a step, when a machine starts driving a route (the route), changes to another, or stops driving (null). The route
@@ -98,42 +110,7 @@ namespace DeviceChain.Sitepulse.Tasks
                 return;
             }
 
-            // a machine taken off its track stows its implements where it stands, and what that covers must not be where something else is:
-            // the command waits (the machine goes on working) until the place is clear
-            if (bodies[externalId].Attached && !DetachClear(externalId))
-            {
-                Timeline.Add(externalId, TimelineKinds.Received, request.Key + (request.Area != null ? " " + request.Area : "") + ": waiting for the way to clear");
-                deferred.Add((externalId, request, now));
-                return;
-            }
-
             c.Submit(request);
-        }
-
-        /// <summary>How long (simulation seconds) a command waits for a clear place to take the machine off its track before it is answered failed.</summary>
-        public const double DeferSeconds = 60.0;
-
-        readonly List<(string Id, TaskRequest Request, double Since)> deferred = new List<(string Id, TaskRequest Request, double Since)>();
-
-        void ReleaseDeferred()
-        {
-            for (var i = 0; i < deferred.Count; i++)
-            {
-                var (id, request, since) = deferred[i];
-                if (request.IsComplete || DetachClear(id) || now - since > DeferSeconds)
-                {
-                    deferred.RemoveAt(i--);
-                    if (request.IsComplete) continue;
-                    if (!DetachClear(id))
-                    {
-                        Timeline.Add(id, TimelineKinds.Refused, "its place was not clear for " + (int)DeferSeconds + " s");
-                        request.Complete(TaskResult.Fail("the machine could not be taken off its track: something stood too close"));
-                        continue;
-                    }
-
-                    controllers[id].Submit(request);
-                }
-            }
         }
 
         public void Refused(string externalId, string text) => Timeline.Add(externalId, TimelineKinds.Refused, text);
@@ -153,9 +130,8 @@ namespace DeviceChain.Sitepulse.Tasks
             }
 
             now += simDt;
-            Observe();
-            ReleaseDeferred();
-            StepTracks(simDt);
+            // the interlocking first: every machine's way for this step is settled before any of them is driven
+            traffic.Step(now, simDt);
 
             // a bay held by a machine that is no longer in the middle of refuelling is not held
             var holder = bay.Holder;
@@ -184,8 +160,6 @@ namespace DeviceChain.Sitepulse.Tasks
         {
             reset = true;
             var answered = 0;
-            foreach (var (_, request, _) in deferred) answered += request.Complete(TaskResult.Fail(reason)) ? 1 : 0;
-            deferred.Clear();
             foreach (var id in order) answered += controllers[id].FailAll(reason);
             return answered;
         }
@@ -203,77 +177,33 @@ namespace DeviceChain.Sitepulse.Tasks
             }
         }
 
-        // ---------------------------------------------------------------- the world, as the controllers see it
+        // ---------------------------------------------------------------- the trips, as the controllers ask for them
 
-        /// <summary>
-        /// Another machine's footprint is within <see cref="YieldDistance"/> ahead in the lane. A machine that is moving is
-        /// always yielded to. One that is standing (parked, serviced, stalled, waiting its turn) is yielded to for at most
-        /// <see cref="StandingYieldSeconds"/>: after that the machine behind carries on, so nothing waits forever
-        /// behind a machine that is not going anywhere. (A machine nothing has been seen to do yet counts as moving.)
-        /// </summary>
-        public bool Blocked(string id, double x, double z, double headingDegrees)
+        bool OnLanes(IMachineBody body) => traffic.IsLoopTruck(body.Id);
+
+        public ITrip TripToArea(IMachineBody body, string area, double laneShare, out string refusal) =>
+            OnLanes(body) ? traffic.HaulToZone(body.Id, area, out refusal)
+                : free.ToArea(body, area, laneShare, offLane, (x, z) => Occupied(body.Id, x, z, ParkingLot.ClearRadius), Avoid(body.Id), out refusal);
+
+        public ITrip TripToQueue(IMachineBody body, double laneShare, out string refusal) =>
+            OnLanes(body) ? traffic.HaulToQueue(body.Id, out refusal) : free.ToSpot(body, RouteGraph.QueueSpot, "the refuel queue", laneShare, offLane, out refusal);
+
+        public ITrip TripIntoBay(IMachineBody body, out string refusal) =>
+            OnLanes(body) ? traffic.HaulIntoBay(body.Id, out refusal) : free.IntoBay(body, offLane, out refusal);
+
+        public ITrip TripBack(IMachineBody body, double laneShare, out string refusal) =>
+            OnLanes(body) ? traffic.HaulBack(body.Id, out refusal) : free.Back(body, laneShare, offLane, out refusal);
+
+        public void Release(string id)
         {
-            var h = headingDegrees * Math.PI / 180.0;
-            double fx = Math.Sin(h), fz = Math.Cos(h);
-            var moving = false;
-            var standing = false;
-            foreach (var kv in bodies)
-            {
-                if (kv.Key == id) continue;
-                var dx = kv.Value.X - x;
-                var dz = kv.Value.Z - z;
-                var ahead = dx * fx + dz * fz;
-                if (ahead <= 0 || ahead > YieldDistance) continue;
-                var across = Math.Abs(dx * fz - dz * fx);
-                if (across >= LaneHalfWidth) continue;
-                if (!speeds.TryGetValue(kv.Key, out var v) || v >= StandingSpeed) moving = true;
-                else standing = true;
-            }
-
-            if (moving)
-            {
-                waitingSince.Remove(id);
-                return true;
-            }
-
-            if (!standing)
-            {
-                waitingSince.Remove(id);
-                return false;
-            }
-
-            if (!waitingSince.TryGetValue(id, out var since))
-            {
-                waitingSince[id] = now;
-                return true;
-            }
-
-            return now - since < StandingYieldSeconds;
+            free.Release(id);
+            traffic.ReleaseStand(id);
         }
 
         public bool BayClear(string id)
         {
             if (!site.Spots.TryGetValue(RouteGraph.BaySpot, out var at)) return true;
             return !Occupied(id, at.X, at.Z, BayClearRadius);
-        }
-
-        public bool Occupied(string id, double x, double z) => Occupied(id, x, z, ParkingLot.ClearRadius);
-
-        public bool TrackClear(string id, double x, double z)
-        {
-            foreach (var kv in bodies)
-            {
-                if (kv.Key == id) continue;
-                var dx = kv.Value.X - x;
-                var dz = kv.Value.Z - z;
-                var d2 = dx * dx + dz * dz;
-                if (d2 < RejoinStandingRadius * RejoinStandingRadius) return false;
-                // a machine nothing has been seen to do yet counts as moving
-                var moving = !speeds.TryGetValue(kv.Key, out var v) || v >= StandingSpeed;
-                if (moving && d2 < RejoinMovingRadius * RejoinMovingRadius) return false;
-            }
-
-            return true;
         }
 
         bool Occupied(string id, double x, double z, double radius)
@@ -287,6 +217,37 @@ namespace DeviceChain.Sitepulse.Tasks
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// What a free route's planner keeps clear of besides the site's own outlines: every machine standing off its track, and the ground every
+        /// other machine at work on its track covers (its work area, as the circle round it). <see cref="OffLaneWay"/> checks the whole route.
+        /// </summary>
+        IReadOnlyList<Obstacle> Avoid(string id)
+        {
+            var list = new List<Obstacle>(site.Obstacles);
+            foreach (var (machine, x, z, r) in Standing(id)) list.Add(Obstacle.Capsule(machine, x, z, x, z, r));
+            foreach (var (machine, area) in Working(id))
+            {
+                Geometry.CenterRadius(new[] { area }, out var cx, out var cz, out var r);
+                list.Add(Obstacle.Capsule(machine + " at work", cx, cz, cx, cz, r));
+            }
+
+            return list;
+        }
+
+        // every other machine at work on its track, and the area it works
+        IEnumerable<(string Machine, Polygon Area)> Working(string id)
+        {
+            foreach (var kv in bodies)
+                if (kv.Key != id && kv.Value.Attached && workAreas.TryGetValue(kv.Key, out var area)) yield return (kv.Key, area);
+        }
+
+        // every other machine standing off its track: where, and the circle it may cover facing any way
+        IEnumerable<(string Machine, double X, double Z, double Radius)> Standing(string id)
+        {
+            foreach (var kv in bodies)
+                if (kv.Key != id && !kv.Value.Attached) yield return (kv.Key, kv.Value.X, kv.Value.Z, ParkingLot.FootprintRadius(kv.Value.Kind));
         }
     }
 }
