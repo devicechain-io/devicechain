@@ -83,14 +83,14 @@ function useStillHeld(
   batchToken: string,
   { enabled = true, reloadKey = 0 }: { enabled?: boolean; reloadKey?: number } = {},
 ): { held: number | null; checking: boolean } {
-  const { data, loading, error } = useQuery(
+  const { current, loading } = useQuery(
     () =>
       enabled
         ? countBatchCommands({ batchToken, statuses: STILL_HELD_STATUSES })
         : Promise.resolve(null),
     [batchToken, enabled, reloadKey],
   );
-  return { held: !loading && error == null ? data : null, checking: loading };
+  return { held: current ?? null, checking: loading };
 }
 
 export interface BatchCancelState {

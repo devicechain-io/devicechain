@@ -86,9 +86,9 @@ export function BackfillDrawer({
     () => (open && version != null ? getCalculatedMetricPlan(profileToken, version) : Promise.resolve(null)),
     [open, profileToken, version],
   );
-  // useQuery keeps the previous answer while the next loads, and after a failed load. A plan
-  // of another version must not be started with: its keys and range belong to that version.
-  const current = plan.data != null && plan.data.version === version ? plan.data : null;
+  // `current` is the plan of THIS version only (never the previous version's, nor one that failed):
+  // its keys and range are what a backfill starts with.
+  const current = plan.current ?? null;
   const calculated = useMemo(() => current?.calculated ?? [], [current]);
 
   // The defaults follow the plan of the chosen version: the keys that are new in it, and a range

@@ -64,7 +64,7 @@ export function BackfillSection({
     [scoped, canWrite, canRead],
   );
   // available: false always carries a reason; the fallback only keeps a blank one from reading as available.
-  const probed = availability.data && !availability.data.available ? (availability.data.reason || t('backfillUnavailableNoReason')) : null;
+  const probed = availability.current && !availability.current.available ? (availability.current.reason || t('backfillUnavailableNoReason')) : null;
   const unavailable = probed ?? refused;
 
   useEffect(() => {
@@ -76,12 +76,12 @@ export function BackfillSection({
 
   if (scoped) return null;
 
-  const hasCalculated = (plan.data?.calculated.length ?? 0) > 0;
+  const hasCalculated = (plan.current?.calculated.length ?? 0) > 0;
   const reason = unavailable
     ? t('backfillUnavailable', { reason: unavailable })
     : activeVersion == null
       ? t('backfillNeedsVersion')
-      : plan.data && !hasCalculated
+      : plan.current && !hasCalculated
         ? t('backfillNoCalculated')
         : null;
 

@@ -79,7 +79,7 @@ export function DeviceAssignmentPanel({ deviceToken }: { deviceToken: string }) 
   );
 
   // The selectable targets for the chosen type; reloads when the type changes.
-  const { data: targets, loading: targetsLoading } = useQuery(() => loadTargets(targetType), [targetType]);
+  const { current: targets, loading: targetsLoading } = useQuery(() => loadTargets(targetType), [targetType]);
 
   // Switching target type clears any half-made selection for the previous type.
   const changeType = (t: AssignmentTargetType) => {

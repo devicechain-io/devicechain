@@ -166,7 +166,7 @@ export default function TenantDetailPage() {
           // area. A guard inside the panel would have to sit above every hook to
           // do the same, and would still have constructed the request.
           <AreaGate area={AREA.aiInferenceAdmin}>
-            <TenantAiModelsPanel tenant={tenant} />
+            <TenantAiModelsPanel key={tenant.token} tenant={tenant} />
           </AreaGate>
         }
         // Only while a deletion is running. On an active tenant the tab would be an empty

@@ -74,7 +74,7 @@ export default function DeviceDetailPage() {
   const updates = useUpdateAccess();
 
   const [version, reload] = useReload();
-  const { data: device, loading, error } = useQuery(() => getDevice(token), [version]);
+  const { data: device, loading, error } = useQuery(() => getDevice(token), [token, version]);
 
   if (loading) {
     return (

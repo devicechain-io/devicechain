@@ -328,7 +328,7 @@ function PreviewPanel({
     [family, debounced],
   );
 
-  const result = preview.data;
+  const result = preview.current ?? null;
   const members: GroupMember[] = result?.members?.results ?? [];
   const total = result?.members?.pagination.totalRecords ?? 0;
   // The user has edited faster than the debounce: the shown count/validity is for the

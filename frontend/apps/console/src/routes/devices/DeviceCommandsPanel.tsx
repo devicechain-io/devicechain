@@ -93,7 +93,7 @@ export function DeviceCommandsPanel({ deviceToken }: { deviceToken: string }) {
   // Loaded separately from the history so a vocabulary failure degrades the form
   // rather than blanking the panel.
   const {
-    data: vocabulary,
+    current: vocabulary,
     loading: vocabularyLoading,
     error: vocabularyError,
   } = useQuery(() => getDeviceCommandVocabulary(deviceToken), [deviceToken]);

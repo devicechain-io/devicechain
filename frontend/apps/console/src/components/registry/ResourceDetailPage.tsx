@@ -26,6 +26,14 @@ import { hasAuthority } from '@devicechain/client';
 // (e.g. device state + events). Delete surfaces the backend message (including a
 // referential-integrity refusal) and only navigates away on success.
 export function ResourceDetailPage<T>({ resource }: { resource: RegistryResource<T> }) {
+  // Keyed by the route token: useQuery keeps the previous entity's data while a new key loads,
+  // and every tab below (forms, facet values, memberships, properties) acts on the entity it
+  // is handed. A different entity must remount them, not re-seed them from the last one.
+  const { token } = useParams<{ token: string }>();
+  return <ResourceDetail key={token} resource={resource} />;
+}
+
+function ResourceDetail<T>({ resource }: { resource: RegistryResource<T> }) {
   const { t } = useTranslation(['entities', 'common']);
   const { claims } = useAuth();
   // Resolve one of this family's noun-bearing strings by its fixed suffix.

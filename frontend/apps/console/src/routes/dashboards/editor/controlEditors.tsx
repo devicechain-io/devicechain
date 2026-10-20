@@ -106,7 +106,7 @@ function CommandEditor({ options, setOptions, services }: ControlEditorProps) {
   const deviceToken = services.deviceToken;
   const lookup = services.commandChoices;
   const commandName = optionString(options, KEY_COMMAND_NAME);
-  const { data, loading, error } = useQuery(
+  const { current: data, loading, error } = useQuery(
     async () => {
       if (!deviceToken || !lookup) return { selectable: [], draftOnly: [], constrained: false };
       return lookup(deviceToken);
