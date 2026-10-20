@@ -540,7 +540,7 @@ instance configuration sets how those messages are encoded:
 
 | Value | Encoding |
 | --- | --- |
-| `compact` | **The default from the release after `v0.23.0`.** Each time as a count of nanoseconds and each device credential's seal in binary. About a third smaller per message, which means less broker disk, network and retention used per event. |
+| `compact` | **The default from `v0.24.0`.** Each time as a count of nanoseconds and each device credential's seal in binary. About a third smaller per message, which means less broker disk, network and retention used per event. |
 | `legacy` | Each time as text and each seal in its text form, byte for byte what `v0.22.0` and earlier wrote. `v0.23.0` writes it by default. |
 
 Anything else, including `Compact`, is refused: the service does not start, and its log names
@@ -3576,7 +3576,94 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 Nothing needs doing.
 
-### Next release — the broker moves to NATS 2.15 {#next-nats-215}
+### v0.24.0 — calculated metrics you can author, and an event path that carries more {#v0240-upgrade}
+
+`v0.24.0` is an in-place upgrade from `v0.23.0`: `dcctl install` for the cluster, then
+`dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install`
+the settings the cluster was installed with, such as `--ha` and `--database-node-selector`, as well as
+the new `--version`. **It cannot be reached in place from `v0.22.0` or earlier: upgrade to `v0.23.0`
+first.** Its one migration adds a table to `event-management` and rewrites no existing row (see
+[During the upgrade](#v0240-during)). Coming from `v0.22.0` or earlier, read the
+[`v0.23.0` notes](#v0230-upgrade) as well; they apply to any upgrade that crosses that release.
+
+This release makes calculated metrics something you author and fill in yourself: a checked formula
+editor, per-device constants, formulas that read other calculated metrics, previews, and a
+**backfill** that computes a metric for readings stored before it existed. The rest is about an
+event path that carries more: events are written in a smaller form by default, detections are
+published side by side, and alarm changes are applied several at a time. What changes for somebody:
+
+- **Upgrade through `v0.23.0`.** Events are now written in the `compact` form by default, which
+  `v0.22.0` and earlier cannot read. See [The event wire format](#event-wire-format).
+- **The broker restarts once, onto NATS 2.15.1.** See
+  [The broker moves to NATS 2.15](#v0240-nats).
+- **A migration in `event-management`** adds the table that holds backfill jobs. See
+  [During the upgrade](#v0240-during).
+- **`device` is a reserved name in calculated-metric formulas.** See
+  [Calculated metrics](#v0240-calculated-metrics).
+- **A calculated value's id changes for a JSON reading that sends no time of its own.** See
+  [Calculated metrics](#v0240-calculated-metrics).
+- **A numeric measurement that is NaN, infinite or too large is refused.** See
+  [Measurements](#v0240-measurements).
+- **Defaults moved:** the detection engine publishes 32 detections at a time, `device-management`
+  applies alarm changes on several lanes, the MCP endpoint caps a batch and limits each caller, and
+  the GKE reference module's services pool is a different machine type. See
+  [Defaults that changed](#v0240-defaults).
+
+#### Before you upgrade {#v0240-before}
+
+1. **Coming from `v0.22.0` or earlier: stop and upgrade to `v0.23.0` first.** `v0.22.0` and earlier
+   read only the `legacy` wire form. A pod on one of them drops a `compact` message, or sets it aside
+   as failed in `device-management`, so a rolling upgrade straight to `v0.24.0` loses the events
+   written while old and new pods run side by side. Upgrade every instance to `v0.23.0`, wait until
+   every pod runs it, then upgrade to `v0.24.0`. On a chart install (not `dcctl`) you may instead set
+   `infrastructure.messaging.wireFormat: legacy` for the upgrade and remove it once every pod has
+   rolled. `dcctl` has no option to set it.
+2. **If a `terraform.tfvars` beside the instance's infrastructure state pins `nats_chart_version`,
+   raise it to `2.15.1` or remove it.** A NATS chart older than `2.15.0` is refused when the plan is
+   made.
+3. **Do not change the broker's replication (`streamReplicas`, `nats_cluster_replicas`) in the same
+   upgrade.** While the servers restart, some run `2.14.4` and some `2.15.1`, and a replica or
+   placement change started in that window can be left stuck. Make it before or after. See
+   [The broker moves to NATS 2.15](#v0240-nats).
+4. **If a published calculated-metric formula reads a measured metric whose key is `device` as a bare
+   identifier, rewrite it** as `double(m["device"])` (or the conversion for its type) before you
+   upgrade. After the upgrade such a formula no longer compiles, so it produces no value on any
+   reading. Calculated metrics are off until a tier's `calculatedMetricsPerProfile` is above 0, so
+   this affects only tiers where you already raised it.
+5. **If you installed the `nats` module yourself, keep `jetstream.limits.default_max_consumers` at
+   `-1`.** NATS 2.15 otherwise caps every stream at 1,000 consumers, and the 1,001st QoS 1 or 2 MQTT
+   subscription is refused while its device stays connected.
+
+#### During the upgrade {#v0240-during}
+
+- **One migration runs on `event-management`'s first start.** It creates the
+  `calculated_backfills` table and its indexes. It writes no row, rewrites nothing and can be run
+  again if it is interrupted. No other service has a migration in this release.
+- **The broker restarts once.** Under `--ha`, one server at a time, each Ready before the next
+  stops; without `--ha` the single server restarts and the broker is unavailable for about a minute.
+  Devices reconnect on their own, and a persistent MQTT session keeps its subscriptions and the QoS 1
+  messages held for it. **Do not restart a broker server by hand while it rolls.** See
+  [The broker moves to NATS 2.15](#v0240-nats).
+- **Services start writing `compact` events as they roll.** Pods of `v0.23.0` read both forms, so a
+  rolling update between the two releases is safe.
+- **A derived value stored by a pod of the old release and one stored by a pod of the new release
+  can carry different ids** for a reading that has sub-microsecond digits in its instant. See
+  [Calculated metrics](#v0240-calculated-metrics).
+
+Going back to `v0.23.0` after the upgrade reads the same database. The `calculated_backfills` table
+stays in place, unused, and a backfill that was queued or running is not continued. Going back to
+`v0.22.0` or earlier needs `legacy` set first and every `compact` message drained from the streams
+(see [The event wire format](#event-wire-format)).
+
+#### After the upgrade {#v0240-after}
+
+- **Nothing is required.** Every new setting has a default.
+- **The broker move is one-way.** NATS supports going back from 2.15 only to 2.14.7 or later, and the
+  previous release runs 2.14.4.
+- **Keep `metrics.enabled` and `metrics.alerts` on** (both are by default) to install the new
+  `MqttGatewayStreamUnbounded` alert.
+
+##### The broker moves to NATS 2.15 {#v0240-nats}
 
 The instance's message broker moves from NATS `2.14.4` to `2.15.1` (the official `nats` chart, same
 version). `dcctl upgrade` applies it, and the broker restarts once: under `--ha` its servers restart
@@ -3627,6 +3714,190 @@ What gets better:
   had the same 1,000-consumer limit, answering a site's 1,001st QoS 1 or 2 subscription with a
   refusal while the device stayed connected. The limit is lifted there too. Upgrade the agent on any
   site whose devices hold more than 1,000 such subscriptions on its listener between them.
+
+##### Calculated metrics {#v0240-calculated-metrics}
+
+Calculated metrics stay off until a tier's `calculatedMetricsPerProfile` is above 0 (set in
+`v0.23.0`). New in this release, wherever they are on:
+
+- **Authoring in the console.** The device profile's Metrics tab has a **Kind** switch (Measured or
+  Calculated) and a checked **Formula** editor. The draft is compiled by the same compiler the
+  publish gate and the resolver use, and shows its cost against the ceiling of 100. The
+  [user guide](../user-guide/calculated-metrics.md) has a chapter on it.
+- **Per-device numeric constants.** `device.calibration` or `device["ct-ratio"]` read a number from
+  the device's metadata. Only a JSON number counts; a string, boolean, null, object or list is
+  present but unusable and is never coerced. **`device` is now a reserved name**: a measured metric
+  keyed `device` is read as `m["device"]`, with its type conversion. A published formula that read
+  such a metric as a bare identifier no longer compiles; it produces no value on any reading, is
+  counted as `eval_error` in `devicechain_devicemanagement_calcmetric_skipped_total`, and is
+  reported in the `device-management` log. A value the device sends under that calculated metric's
+  key is still dropped.
+- **Chaining.** A formula may read another calculated metric, up to four deep. A ring (`a -> b -> a`)
+  or a chain deeper than four is refused at publish, naming the chain.
+- **Previews.** `previewRule` accepts the draft profile's metrics and re-derives calculated values
+  under the draft, and a **Try it on recent history** panel in the console evaluates a draft formula
+  over a device's stored readings.
+- **Backfill.** A job that computes a calculated metric for readings stored before its version was
+  published, and writes the values that are missing. See [Backfilling history](#v0240-backfill).
+- **Metrics from Sparkplug and LwM2M devices now compute.** A device that sends one metric per entry
+  (Sparkplug, LwM2M, or a JSON batch) used to skip every multi-input formula as `missing_input`,
+  because each entry was its own reading. A reading is now every measurement of one message that
+  carries the same exact instant, so `power = voltage * current` computes when the two share an
+  instant. Sparkplug and LwM2M stamp to the millisecond, so a node that stamps each metric on its own
+  (values a few milliseconds apart), or reports only what changed, still gets no value for a formula
+  over several inputs. If one metric appears twice at one instant, the formula reads the first.
+  LwM2M readings of one SenML pack now share one receipt instant. The user guide describes
+  [how a reading is formed](../user-guide/calculated-metrics.md#what-a-calculated-metric-is).
+- **Two calculated samples of the same name at the same instant keep one stored row**, the first
+  written.
+- **The id of a derived value now follows its instant in UTC at microsecond precision.** Readings
+  whose instant is exact to the microsecond (every Sparkplug and LwM2M reading, and a JSON reading
+  that sends its own time with up to six fractional digits) keep the same ids. A reading with
+  sub-microsecond digits gets a new derived id, which includes every JSON reading that sends no time
+  of its own, because the platform dates it at receipt with nanoseconds. If that same reading is
+  stored again after the upgrade, because it was redelivered inside the 600-second window or the
+  device resent a reading from before it, its derived value is stored as a second row. Raw rows are
+  unaffected, and old rows are not rewritten.
+
+##### Backfilling history {#v0240-backfill}
+
+A backfill fills a calculated metric into the history stored before the version that defines it was
+published, so charts and exports of past time show it. It is available wherever calculated metrics
+are, and it needs nothing to turn on beyond a published profile version that has a calculated metric.
+
+- **Starting and cancelling a backfill need `device:write`; reading and listing jobs need
+  `event:read`.** A customer-scoped caller is refused by all four operations. The console starts one
+  from the profile's Versions tab and offers it once after you publish a version that adds a
+  calculated metric.
+- **A job is bounded.** At most 90 days per job, ending no later than now, over one profile's
+  published version, for up to 1,000 named devices or every device of the profile. A range older than
+  retention allows is refused rather than shortened. One job is active (queued or running) per
+  tenant.
+- **It only adds values and is silent.** A stored value is never changed. A backfilled value appears
+  in dashboards, history and exports; it does not change a device's latest values, and detection
+  rules never see it.
+- **Compressed history is skipped** in this release (the event store compresses chunks older than 7
+  days by default), and the job counts what it skipped.
+- **One worker per instance runs the jobs, at a bounded rate.** `calculatedBackfill.enabled` in the
+  `event-management` configuration has three states. Unset, the default, the worker runs when the
+  connection pool has room for it beside the persistence writers and stays off, with a startup
+  warning naming the settings, when it does not, so an instance tuned before this release starts as
+  it did. `true` stops the service at startup if the pool cannot hold the worker. `false` turns the
+  worker off, and starting a backfill is then refused as unavailable with the reason.
+  `calculatedBackfill.rowsPerSecond` defaults to 20000, from 1 to 200000, and the default is
+  provisional. See [Calculated-metric backfill](./observability.md#calculated-backfill), which also
+  lists the metrics and the SQL that cancels a stuck job, and the user guide's
+  [Backfilling history](../user-guide/calculated-metrics.md#backfilling-history).
+
+##### Measurements: NaN, infinity and huge values are refused {#v0240-measurements}
+
+A numeric measurement that is NaN, infinite, or 1,000,000,000,000 or more in magnitude is now refused
+when the event is resolved.
+
+- For a metric **declared on the profile**, the whole event is rejected as invalid. Before, a value
+  of 1e12 or more was already lost from history (the column refused it); it is now also kept out of
+  live state and rule evaluation, and NaN no longer slips past a metric's Min and Max.
+- For an **undeclared key**, only that one value is dropped, with a warning in the `device-management`
+  log. Before, the whole event failed to store.
+- A NaN or infinite value no longer makes event storage retry the message for about five minutes
+  (five deliveries) and then report it as a downstream failure.
+
+##### Defaults that changed {#v0240-defaults}
+
+| Setting | Was | Now | Restore the old behaviour |
+| --- | --- | --- | --- |
+| `infrastructure.messaging.wireFormat` | `legacy` | `compact` | `legacy` (chart install only; see [Before you upgrade](#v0240-before)) |
+| `event-processing` `derivedPublishing.maxInFlight` | 1 | 32 | Set `1`. Still at most one outstanding detection per device, so each device's detections arrive in order. Publishing again without duplicates holds within the derived-events stream's 30-minute duplicate window. |
+| `device-management` `raiseAlarm.workers` (new, fixed, read at startup) | one change at a time | `max(1, min(8, pool - resolution.workers - 4))`, which is 6 on the default pool of 20 | Set `1` for the old inline path. Changes to one alarm are always applied in order. An explicit value is validated against the connection pool and never adjusted. |
+| `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (under `functionalAreas.mcp.config`) | no cap | 16, 20 and 40 | Raise them; `callsBurst` may not be below `maxBatchEntries`. |
+| GKE reference module `services_machine_type` (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Set it explicitly. Changing an existing pool's machine type recreates its nodes. |
+
+- **Detection:** detections of different devices are published side by side, up to 32 at a time,
+  instead of waiting for each acknowledgement. On a replicated cluster under a firing-heavy load of
+  about 2,500 detections a second offered, a window of 32 published 2,441 detections a second against
+  528 for a window of 1, and the watermark lag was 5.1 s instead of 139 s. The byte budget
+  `derivedPublishing.maxBufferedBytes` now counts every prepared payload that is not yet
+  acknowledged. See [the detection engine page](./detection-engine.md#configuration).
+- **Alarms:** `device-management` used to apply each raise-alarm change in its read loop, about a
+  hundred a second on a local database however idle the service was. It now applies them on
+  `raiseAlarm.workers` lanes, and changes for one alarm go to the same lane. In a local test
+  with 8 lanes that was four to seven times as many. The default leaves four pooled connections free beside
+  the resolvers; both pools share the connection pool, so size them together. See
+  [How fast alarms are applied](./detection-engine.md#how-fast-alarms-are-applied).
+- **MCP:** a batch over the cap is refused whole (HTTP 400, JSON-RPC invalid request, nothing runs),
+  and a caller over the rate gets HTTP 429 with `Retry-After`. A batch of N counts as N messages, and
+  the caller is the verified token's subject (tenant and email). See
+  [the MCP server's limits](../concepts/mcp.md#limits-and-boundaries).
+- **GKE:** on a 3+3 HA install, T2D services nodes persisted about 18% more events a second (about
+  17,200 against 14,500 and 14,700, offered 18,000 over HTTP), and the MQTT QoS 1 acknowledgement p99
+  at 9,000 events a second was 38 ms against 578 and 171 ms. The fallback `n2d-custom-4-8192` equals
+  the N2 shape within noise and is about 13% cheaper per node. `T2D_CPUS` is its own quota, and not
+  every zone offers T2D (`us-east4-a`, `-b` and `-c` do). The database pool stays `n2-standard-4`.
+
+##### MQTT fail-closed acknowledgement {#v0240-mqtt-failclosed}
+
+`infrastructure.nats.mqttFailClosed` is accepted by the configuration (`v0.23.0` refused it) and
+**remains off by default**: nothing changes unless you set it. With it on, a QoS 1 PUBACK means the
+platform holds the message. The broker's own MQTT message store (`$MQTT_msgs`) is declared bounded and
+discard-new, so a full store refuses a QoS 1 publish (the device gets no PUBACK and resends) instead
+of discarding one it has already acknowledged. `event-sources` forwards from the store, and the store
+is handed between pods safely during a rolling update. A store that is nearly full backs devices off:
+`device-management` refuses new MQTT connections while it is above 80% full and until it is below
+60%, which a device sees as CONNACK code 5 (not authorized), so firmware must keep retrying on it. The setting is refused
+on a broker that also serves another instance.
+
+Limits, described on the [observability](./observability.md#mqtt-fail-closed) and
+[transport matrix](../reference/transport-matrix.md) pages: QoS 0 is never stored; a broker crash
+with a large backlog is not covered; PUBACKs are slower with it on (p99 336 ms at 6,000 events a
+second in one test, against 35 ms with it off); and memory headroom near 10,000 events a second is
+thin in both modes, so raise `nats_memory_limit` if a server is OOM-killed.
+
+##### The MQTT gateway's streams are bounded on a new install {#v0240-gateway-streams}
+
+On a fresh `v0.22.0` or `v0.23.0` install, the MQTT gateway's `$MQTT_msgs`, `$MQTT_out` and
+`$MQTT_qos2in` streams were created by the broker with no size limit when the first MQTT device
+connected, and stayed unbounded until `event-sources` restarted. An unbounded `$MQTT_msgs` can fill
+the broker's volume. Every `event-sources` pod now checks these streams every 30 seconds and sets the
+ceiling, so on an existing, running instance they are bounded as soon as the new pods start. A new
+alert, `MqttGatewayStreamUnbounded` (warning, 10 minutes), fires when the ceiling could not be set,
+usually because the broker has no storage left to reserve it. New metrics:
+`devicechain_eventsources_mqtt_gateway_stream_unbounded{stream}` and
+`devicechain_eventsources_mqtt_gateway_stream_bounded_late_total{stream}`.
+
+#### What else changed {#v0240-what-changed}
+
+##### Known limitations {#v0240-known-limitations}
+
+- **Carried from `v0.23.0`:** with `mqttFailClosed` off, a change of the MQTT capture stream's leader
+  under heavy load can lose acknowledged QoS 1 events without counting them
+  (`JetStreamCaptureLeaderChanged` warns). The documented MQTT ceiling is about 6,000 events a second
+  on three 4-vCPU nodes, bound by the broker.
+- **A broker crash with a large backlog is not covered by `mqttFailClosed`.** In one load test at
+  9,000 QoS 1 events a second, before the store's reader was made faster, two of the three NATS
+  servers ran out of memory and about a third of the acknowledged events never reached the event
+  store. Where they were lost has not been established. The setting is opt-in and off by default.
+- **Backfill skips compressed history,** and its default rate (`rowsPerSecond`) has not been measured
+  on a loaded instance.
+
+##### Also in this release {#v0240-also}
+
+- **`dcctl upgrade` checks the object-store mount before it records the new version.** A
+  ReadWriteOnce store that a second pod would mount is refused before the version is recorded, as
+  `--enable-area` already did. The "recorded binding" message no longer names the context twice.
+- **Rule health.** Rule-health fire counters are batched off the detection loop (about 2.6 ms saved
+  per published detection on PostgreSQL), and the detection dashboard gains panels for
+  `detect_rule_stat_write_failures_total` and `detect_rule_stat_admission_contended_total`.
+- **Device ownership.** The times on ownership facts come from the database's clock, and a device
+  re-queued repeatedly keeps its place in the backlog, so it can no longer starve.
+- **A fail-closed durable that is created again starts at the store's first sequence,** so a
+  consumer that was deleted does not leave acknowledged messages unread (only with `mqttFailClosed`
+  on). A repeat is folded by the destination stream's duplicate window and stored again beyond it.
+- **Customer users.** A member limited to some customers sees their Updates list again, and the
+  customer Users tab no longer stops at 10,000 members with an error.
+- **Building from source.** The C# SDK now builds with the .NET SDK pinned in `global.json` (8.0.425),
+  so a locked restore no longer breaks when a runner image moves a patch.
+- **Documentation.** A user-guide chapter on calculated metrics (English, Spanish and Chinese), and
+  the quickstart's escrow options, MQTT CA extraction and local TLS testing.
 
 ### v0.23.0 — customer users with scoped access, and an MQTT ingest that loses less {#v0230-upgrade}
 
