@@ -12,7 +12,7 @@ import { useQuery } from '@/lib/hooks/use-query';
 // sits BESIDE the free-text field rather than replacing it: a device may report a key its
 // profile never declared, and the vocabulary is only what the published version knows.
 //
-// A failed or empty lookup renders nothing. The text field above stays the authority; this
+// A failed, pending or empty lookup renders nothing. The text field above stays the authority; this
 // is a convenience, and an error banner under a field that still works would be noise.
 export function MetricChoices({
   deviceToken,
@@ -28,7 +28,10 @@ export function MetricChoices({
     () => (deviceToken ? getDeviceMetricVocabulary(deviceToken) : Promise.resolve(null)),
     [deviceToken],
   );
-  const metrics = vocab.data ?? [];
+  // useQuery keeps the previous result while a new device loads and after a failed
+  // lookup, so data alone could still be the PREVIOUS device's list. Showing it would
+  // offer, and let a click write, keys the bound device may not declare.
+  const metrics = vocab.loading || vocab.error ? [] : (vocab.data ?? []);
   if (metrics.length === 0) return null;
 
   const toggle = (key: string) =>

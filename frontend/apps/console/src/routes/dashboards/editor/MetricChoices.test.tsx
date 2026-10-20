@@ -6,6 +6,7 @@
 import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GraphQLRequestError } from '@devicechain/client';
 
 const { gqlMock } = vi.hoisted(() => ({ gqlMock: vi.fn() }));
 vi.mock('@devicechain/client', async (importOriginal) => {
@@ -53,5 +54,38 @@ describe('MetricChoices', () => {
     rerender(<MetricChoices deviceToken="ghost" measurements={[]} onChange={vi.fn()} />);
     await waitFor(() => expect(gqlMock).toHaveBeenCalledTimes(1));
     expect(container.querySelector('ul')).toBeNull();
+  });
+});
+
+// useQuery keeps its previous data while reloading and after an error, so without a guard
+// a rebound widget would keep offering the PREVIOUS device's keys.
+describe('MetricChoices never offers another device’s metrics', () => {
+  const vocabOf = (...keys: string[]) => ({
+    deviceMetricVocabulary: { metrics: keys.map((k) => metric(k, false)) },
+  });
+
+  it('drops the previous device list when the next lookup fails', async () => {
+    gqlMock.mockResolvedValueOnce(vocabOf('volts'));
+    const { rerender } = render(<MetricChoices deviceToken="dev-a" measurements={[]} onChange={vi.fn()} />);
+    await screen.findByRole('button', { name: /volts/ });
+
+    gqlMock.mockRejectedValueOnce(new GraphQLRequestError('FORBIDDEN', 200));
+    rerender(<MetricChoices deviceToken="dev-b" measurements={[]} onChange={vi.fn()} />);
+    await waitFor(() => expect(gqlMock).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByRole('button', { name: /volts/ })).toBeNull();
+  });
+
+  it('does not offer the previous device list while the next one loads', async () => {
+    gqlMock.mockResolvedValueOnce(vocabOf('volts'));
+    const { rerender } = render(<MetricChoices deviceToken="dev-a" measurements={[]} onChange={vi.fn()} />);
+    await screen.findByRole('button', { name: /volts/ });
+
+    let release: (v: unknown) => void = () => {};
+    gqlMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    rerender(<MetricChoices deviceToken="dev-b" measurements={[]} onChange={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /volts/ })).toBeNull();
+    release(vocabOf('amps'));
+    await screen.findByRole('button', { name: /amps/ });
   });
 });
