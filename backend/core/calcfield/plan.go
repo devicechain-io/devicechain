@@ -466,15 +466,10 @@ func (p *Plan) Eval(s *Sample, i int) Result {
 // whole profile does. The step is not compiled again: it evaluates exactly the Formula it is
 // given, has no dependencies, and writes nothing back to the sample.
 func SingleFormulaPlan(env *Env, key string, f *Formula) *Plan {
-	st := Step{Key: key, Formula: f, Depth: 1, feed: -1}
-	if len(f.required) > 0 {
-		for _, j := range f.inputs {
-			if j < env.measured {
-				st.carry = append(st.carry, j)
-			}
-		}
-	}
-	return &Plan{env: env, steps: []Step{st}}
+	// No carry set: the caller builds every sample from rows of the formula's own inputs, and a
+	// sample with none of them holding a value lacks every required input, which Eval reports
+	// as missing_input, the outcome the caller shows.
+	return &Plan{env: env, steps: []Step{{Key: key, Formula: f, Depth: 1, feed: -1}}}
 }
 
 // StepIndex is the position, in evaluation order, of the calculated metric key, for Eval.

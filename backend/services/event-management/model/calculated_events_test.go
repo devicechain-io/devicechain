@@ -242,11 +242,19 @@ func TestSampleEvaluatorOnLiteralRows(t *testing.T) {
 	ev.add("a", sql.NullFloat64{Float64: 1, Valid: true})
 	ev.add("b", sql.NullFloat64{})
 	ev.finish()
+	// A sample whose every row has no value carries none of the inputs. Live resolution would
+	// not count it, but the preview lists it, so it shows as what it is: missing_input.
+	ev.begin([]byte("e3"), calcAt)
+	ev.add("a", sql.NullFloat64{})
+	ev.add("b", sql.NullFloat64{})
+	ev.finish()
 	res := ev.done()
-	require.Len(t, res.Samples, 2)
+	require.Len(t, res.Samples, 3)
 	assert.Equal(t, "3", *res.Samples[0].Value)
 	assert.Equal(t, []CalculatedInputValue{{"a", "1"}, {"b", "2"}}, res.Samples[0].Inputs)
 	assert.Equal(t, string(calcfield.SkipMissingInput), *res.Samples[1].SkippedReason)
+	require.NotNil(t, res.Samples[2].SkippedReason)
+	assert.Equal(t, string(calcfield.SkipMissingInput), *res.Samples[2].SkippedReason)
 }
 
 // The span is bounded before any query runs. The api has no measurement table, so a request
