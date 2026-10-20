@@ -5,8 +5,8 @@ go 1.26.6
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.9
-	github.com/aws/aws-sdk-go-v2/service/sns v1.47.2
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.1
+	github.com/aws/aws-sdk-go-v2/service/sns v1.47.5
+	github.com/aws/aws-sdk-go-v2/service/sqs v1.52.4
 	github.com/devicechain-io/dc-event-processing v0.0.1
 	github.com/devicechain-io/dc-microservice v0.0.1
 	github.com/eclipse/paho.mqtt.golang v1.5.1
@@ -15,13 +15,13 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/graph-gophers/graphql-go v1.10.2
 	github.com/nats-io/nats-server/v2 v2.15.1
-	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_golang v1.25.0
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
-	github.com/twmb/franz-go v1.22.1
+	github.com/twmb/franz-go v1.22.2
 	github.com/twmb/franz-go/pkg/kfake v0.0.0-20260915001422-21ef8a4103bb
-	github.com/twmb/franz-go/pkg/kmsg v1.14.0
-	golang.org/x/net v0.60.0
+	github.com/twmb/franz-go/pkg/kmsg v1.15.0
+	golang.org/x/net v0.61.0
 	gorm.io/datatypes v1.2.7
 	gorm.io/gorm v1.31.2
 )
@@ -48,7 +48,7 @@ require (
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
-	github.com/klauspost/compress v1.20.1 // indirect
+	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -59,10 +59,10 @@ require (
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.30 // indirect
+	github.com/pierrec/lz4/v4 v4.1.33 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
-	github.com/prometheus/common v0.70.1 // indirect
-	github.com/prometheus/procfs v0.21.1 // indirect
+	github.com/prometheus/common v0.72.0 // indirect
+	github.com/prometheus/procfs v0.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
