@@ -14,7 +14,8 @@ import { installChunkReload } from '@/lib/chunkReload';
 import App from './App';
 // Initializes the shared i18next instance (ADR-066) as a side effect, before any
 // component renders — react-i18next reads it through context/useTranslation.
-import '@/i18n/config';
+import i18n, { i18nReady } from '@/i18n/config';
+import { LoadingState } from '@/components/ui/loading-state';
 import '@fontsource-variable/inter';
 import './index.css';
 
@@ -26,7 +27,13 @@ if (window.location.pathname === SSO_COMPLETE_PATH) captureSsoReturn();
 // A page chunk named by a previous deploy's index.html is gone after an upgrade: reload once.
 installChunkReload(window);
 
-createRoot(document.getElementById('root')!).render(
+const root = createRoot(document.getElementById('root')!);
+
+// English is bundled, so its first paint needs nothing. Another language's catalogs are fetched
+// on demand: hold the real app back until they are in, so a Spanish operator never sees English
+// flash first. i18nReady never rejects (a failed load falls back to English).
+if (!i18n.hasLoadedNamespace('common')) root.render(<LoadingState />);
+void i18nReady.then(() => root.render(
   <StrictMode>
     <ThemeProvider defaultTheme="dark">
       <ToastProvider>
@@ -44,4 +51,4 @@ createRoot(document.getElementById('root')!).render(
       </ToastProvider>
     </ThemeProvider>
   </StrictMode>,
-);
+));

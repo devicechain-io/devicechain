@@ -15,6 +15,7 @@
 
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
+import type { BackendModule } from 'i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
 import enCommon from './locales/en/common.json';
@@ -49,37 +50,6 @@ import enEntities from './locales/en/entities.json';
 import enVersions from './locales/en/versions.json';
 import enUpdates from './locales/en/updates.json';
 
-import esCommon from './locales/es/common.json';
-import esLogin from './locales/es/login.json';
-import esNav from './locales/es/nav.json';
-import esUserMenu from './locales/es/userMenu.json';
-import esTheme from './locales/es/theme.json';
-import esDevices from './locales/es/devices.json';
-import esAlarms from './locales/es/alarms.json';
-import esDashboards from './locales/es/dashboards.json';
-import esDeviceProfiles from './locales/es/deviceProfiles.json';
-import esTenants from './locales/es/tenants.json';
-import esTiers from './locales/es/tiers.json';
-import esConnectors from './locales/es/connectors.json';
-import esCommandBatches from './locales/es/commandBatches.json';
-import esUpdateSigners from './locales/es/updateSigners.json';
-import esBranding from './locales/es/branding.json';
-import esBasemap from './locales/es/basemap.json';
-import esLocale from './locales/es/locale.json';
-import esBrowse from './locales/es/browse.json';
-import esFacets from './locales/es/facets.json';
-import esAudit from './locales/es/audit.json';
-import esIdentities from './locales/es/identities.json';
-import esRoles from './locales/es/roles.json';
-import esMembers from './locales/es/members.json';
-import esAiProviders from './locales/es/aiProviders.json';
-import esIdentityProviders from './locales/es/identityProviders.json';
-import esAiPackaging from './locales/es/aiPackaging.json';
-import esAdminSettings from './locales/es/adminSettings.json';
-import esAdminAudit from './locales/es/adminAudit.json';
-import esEntities from './locales/es/entities.json';
-import esVersions from './locales/es/versions.json';
-import esUpdates from './locales/es/updates.json';
 
 export interface Locale {
   /** BCP-47 code; also the ./locales/<code>/ directory name and the i18next lng. */
@@ -167,11 +137,10 @@ export const NAMESPACES = [
   'members',
 ] as const;
 
-// Catalogs are bundled statically: the corpus is still small enough that a
-// build-time import is simplest and has no loading state (hence useSuspense:false
-// below). The full corpus (sub-workstream b) switches to lazy per-namespace
-// loading so a screen pays only for its own catalog — NAMESPACES is the seam.
-const resources = {
+// English — the fallback — is bundled and synchronous, so the first paint in English needs no
+// extra request and `t()` works the instant this module has run. Every OTHER locale is loaded on
+// demand (see LOADERS): a Spanish operator pays for the Spanish catalogs, an English one never does.
+const enResources = {
   en: {
     common: enCommon,
     login: enLogin,
@@ -205,46 +174,59 @@ const resources = {
     updates: enUpdates,
     members: enMembers,
   },
-  es: {
-    common: esCommon,
-    login: esLogin,
-    nav: esNav,
-    userMenu: esUserMenu,
-    theme: esTheme,
-    devices: esDevices,
-    alarms: esAlarms,
-    dashboards: esDashboards,
-    deviceProfiles: esDeviceProfiles,
-    tenants: esTenants,
-    tiers: esTiers,
-    connectors: esConnectors,
-    commandBatches: esCommandBatches,
-    updateSigners: esUpdateSigners,
-    branding: esBranding,
-    basemap: esBasemap,
-    locale: esLocale,
-    browse: esBrowse,
-    facets: esFacets,
-    audit: esAudit,
-    identities: esIdentities,
-    roles: esRoles,
-    aiProviders: esAiProviders,
-    identityProviders: esIdentityProviders,
-    aiPackaging: esAiPackaging,
-    adminSettings: esAdminSettings,
-    adminAudit: esAdminAudit,
-    entities: esEntities,
-    versions: esVersions,
-    updates: esUpdates,
-    members: esMembers,
-  },
 } as const;
 
-void i18n
+/**
+ * On-demand catalogs, one dynamic import (one chunk) per non-default locale. Adding a locale is
+ * a `locales/<code>/index.ts` that default-exports `{ [namespace]: catalog }` plus a line here.
+ */
+const LOADERS: Record<string, () => Promise<{ default: Record<string, Record<string, string>> }>> = {
+  es: () => import('./locales/es'),
+};
+
+/**
+ * A minimal i18next backend over LOADERS. i18next asks for one (language, namespace) at a time;
+ * the locale's chunk is imported once (the module cache makes the later calls free) and the
+ * namespace is read out of it. A language with no loader answers an error, never an empty bundle,
+ * so a missing catalog is loud rather than a silent render of raw keys.
+ */
+const lazyCatalogs: BackendModule = {
+  type: 'backend',
+  init() {},
+  read(language, namespace, callback) {
+    const load = LOADERS[language];
+    if (!load) {
+      callback(new Error(`no catalog for locale "${language}"`), null);
+      return;
+    }
+    load().then(
+      (m) => {
+        const catalog = m.default[namespace];
+        if (catalog) callback(null, catalog);
+        else callback(new Error(`no "${namespace}" catalog for locale "${language}"`), null);
+      },
+      (err: unknown) => callback(err instanceof Error ? err : new Error(String(err)), null),
+    );
+  },
+};
+
+/**
+ * Resolves once the catalogs for the language in effect are loaded (immediately for English).
+ * main.tsx holds the first render on it, so a Spanish operator never sees English flash first;
+ * a failed load (offline, a purged chunk) resolves anyway and the app renders in the English
+ * fallback rather than not at all.
+ */
+export const i18nReady = i18n
   .use(LanguageDetector)
   .use(initReactI18next)
+  .use(lazyCatalogs)
   .init({
-    resources,
+    resources: enResources,
+    // Only English is in the bundle; every other locale's namespaces come through the
+    // backend below. Without this, giving `resources` at all would mean "nothing to load".
+    partialBundledLanguages: true,
+    // es-MX loads the es catalog, not a (non-existent) es-MX one.
+    load: 'languageOnly',
     fallbackLng: DEFAULT_LOCALE,
     supportedLngs: SUPPORTED_LOCALES.map((l) => l.code),
     // Fall a region variant back onto its base language ("es-MX" -> "es") rather
@@ -277,12 +259,14 @@ void i18n
       caches: [],
     },
     react: {
-      // Resources are bundled (no async load), so a Suspense boundary would only
-      // add a needless fallback flash. When (b) moves to lazy catalogs, turn this
-      // on and wrap the app in <Suspense>.
+      // Left off on purpose: a Suspense boundary per component would flash a fallback on every
+      // namespace read. The one load that matters, the language in effect at startup, is awaited
+      // once at the root via i18nReady; a runtime switch awaits changeLanguage, which only
+      // switches once the new catalogs are in.
       useSuspense: false,
     },
-  });
+  })
+  .catch(() => undefined);
 
 /**
  * Keep `<html lang>` in step with the language actually in effect.
@@ -296,9 +280,9 @@ void i18n
  *
  * 🔴 TWO OBLIGATIONS, NOT ONE, and they are separate on purpose. The listener covers
  * every LATER change (the switcher, the tenant default, the revert on leaving a tenant).
- * The direct call covers the language i18next resolved INSIDE `init()` — with catalogs
- * bundled that resolution is synchronous and its `languageChanged` fires on the line
- * above, BEFORE this listener exists, so a user who lands on Spanish from their browser
+ * The direct call covers the language i18next resolved INSIDE `init()` — when the
+ * catalogs are already in hand (English, or a locale a test preloaded) that resolution is
+ * synchronous and its `languageChanged` fires BEFORE this listener exists, so a user who lands on Spanish from their browser
  * and never touches the switcher is served entirely by the direct call. Deleting either
  * one leaves the other looking sufficient; documentLanguage.test.ts exists because a
  * test that only ever asserts after a `changeLanguage` cannot tell them apart.
@@ -316,6 +300,16 @@ i18n.on('languageChanged', syncDocumentLanguage);
 syncDocumentLanguage();
 
 /**
+ * Run a language change whose catalogs may still be loading. changeLanguage only switches once
+ * they are in, and rejects if a load fails (offline, a purged chunk) — in which case the
+ * language stays as it was, which is the right outcome, so the rejection is not an error to
+ * surface from a fire-and-forget caller.
+ */
+function switchLanguage(change: Promise<unknown>): void {
+  change.catch(() => undefined);
+}
+
+/**
  * Persist an explicit user locale choice and switch to it. The switcher calls
  * this; it is the ONLY writer of LOCALE_STORAGE_KEY, which is what lets
  * `applyTenantDefaultLocale` treat that key as an unambiguous "user has chosen"
@@ -324,7 +318,7 @@ syncDocumentLanguage();
 export function setUserLocale(code: string): void {
   if (!SUPPORTED_LOCALES.some((l) => l.code === code)) return;
   localStorage.setItem(LOCALE_STORAGE_KEY, code);
-  void i18n.changeLanguage(code);
+  switchLanguage(i18n.changeLanguage(code));
 }
 
 /**
@@ -356,7 +350,7 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
   const chosen = localStorage.getItem(LOCALE_STORAGE_KEY);
   if (chosen && isShippedLocale(chosen)) return;
   if (!isShippedLocale(locale)) return; // never select a locale that would render raw keys
-  void i18n.changeLanguage(locale);
+  switchLanguage(i18n.changeLanguage(locale));
 }
 
 /**
@@ -397,8 +391,8 @@ export function applyTenantDefaultLocale(locale: string | null | undefined): voi
  * the same tag, and asked it with its own second copy of the old hand-rolled fold.
  */
 export function isShippedLocale(tag: string): boolean {
-  // services.languageUtils exists once init() has run, and init is synchronous here
-  // (catalogs are bundled, no async backend). Guarded anyway, and fail-CLOSED: an
+  // services.languageUtils exists once init() has run, and the services are
+  // built synchronously inside it, before any catalog loads. Guarded anyway, and fail-CLOSED: an
   // unanswerable question must not select a language.
   const utils = i18n.services?.languageUtils;
   return utils ? utils.isSupportedCode(tag) : false;
@@ -419,7 +413,7 @@ export function isShippedLocale(tag: string): boolean {
  * otherwise English.
  */
 export function resetToDetectedLocale(): void {
-  void i18n.changeLanguage();
+  switchLanguage(i18n.changeLanguage());
 }
 
 export default i18n;
