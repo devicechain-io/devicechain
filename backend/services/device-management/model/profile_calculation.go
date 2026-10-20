@@ -281,7 +281,8 @@ type CalculationObserver interface {
 // ALL absent from the sample is not applicable to it: nothing is evaluated and nothing is
 // reported, because that is a device sending its inputs in separate messages, not a failure.
 // A sample carrying some of the inputs but not one the formula requires is a skip
-// (missing_input), as is a formula that requires no measured input at all (device constants only).
+// (missing_input). A formula that requires no measured input and no such gated calculated
+// metric (every input has()-guarded) is evaluated on every sample, as before.
 //
 // A formula that reads another calculated metric reads the value this appended for it — the
 // string the resolved event carries, parsed as the metric's declared type — and, when that metric

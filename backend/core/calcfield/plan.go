@@ -61,8 +61,9 @@ type Step struct {
 	deps []string
 	// carry are the measured Env positions whose presence in a sample makes the step APPLICABLE
 	// to it: the measured inputs the formula names plus, transitively, those of every
-	// calculated metric it reads. Nil when the step is always applicable: it has no input it
-	// requires, or reads no measured metric at all (a constants-only formula).
+	// calculated metric it reads. Nil when the step is always applicable: it requires no
+	// measured input and no gated calculated metric (see gated), so a sample carrying none of
+	// its inputs can still give it a value.
 	carry []int
 	// measuredIn is the transitive measured inputs whether or not the step is gated on them,
 	// for the steps that read it.
@@ -190,10 +191,28 @@ func (p *Plan) markCarry() {
 		}
 		slices.Sort(in)
 		st.measuredIn = slices.Compact(in)
-		if len(st.Formula.required) > 0 {
+		if p.gated(st.Formula.required, byKey) {
 			st.carry = st.measuredIn
 		}
 	}
+}
+
+// gated reports whether a step requiring these inputs can produce no value on a sample that
+// carries none of its measured inputs: it requires a measured input, or a calculated metric
+// that is itself gated (absent on such a sample, since its measured inputs are a subset). A
+// step requiring only calculated metrics that are evaluated on every sample (a has()-guarded
+// formula, say) is NOT gated: `guarded * 2.0` over `has(m.a) ? a : 0.0` has a value on a
+// sample without a, and withholding it would lose a row evaluation used to produce.
+func (p *Plan) gated(required []int, byKey map[string]int) bool {
+	for _, j := range required {
+		if j < p.env.measured {
+			return true
+		}
+		if d, ok := byKey[p.env.inputs[j].Key]; ok && p.steps[d].carry != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // markCycles finds every ring of calculated metrics reading each other and disables each
@@ -351,8 +370,9 @@ func topological(steps []Step, at map[string]int) []Step {
 // measured metrics the step depends on, directly or through the calculated metrics it reads
 // (a present value that did not parse counts as carried; it is a real signal, and the step
 // reports it as invalid_input). A sample that carries NONE of them is not this formula's: it is
-// not evaluated and not a skip. A step that requires no input, or reads no measured metric (a
-// formula over device constants alone), is applicable to every sample. Allocation-free.
+// not evaluated and not a skip. A step that requires no measured input and no gated calculated
+// metric (every input has()-guarded, or only calculated metrics that are themselves evaluated
+// on every sample) is applicable to every sample. Allocation-free.
 func (p *Plan) Applicable(s *Sample, i int) bool {
 	carry := p.steps[i].carry
 	if len(carry) == 0 {
