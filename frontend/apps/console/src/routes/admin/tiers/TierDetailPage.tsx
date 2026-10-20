@@ -21,7 +21,16 @@ import { TierAiModelsPanel } from '@/routes/admin/tiers/TierAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
 import { CopyToken } from '@/components/ui/copy-token';
 
+// Keyed by the route: the entity is found in a list that does not reload when only the
+// token changes, and the form below seeds its fields from the tier it is first handed.
+// Without the key, moving straight from one tier to another kept the first one's draft,
+// and a save wrote it to the second.
 export default function TierDetailPage() {
+  const { token } = useParams<{ token: string }>();
+  return <TierDetail key={token} />;
+}
+
+function TierDetail() {
   const { t } = useTranslation('tiers');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');

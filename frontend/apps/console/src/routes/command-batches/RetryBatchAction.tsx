@@ -104,25 +104,28 @@ function RetryBatchPanelBody({ batch, reloadKey }: { batch: CommandBatch; reload
     [batch.token, reloadKey],
   );
 
+  // `current`, not `data`: the retry is built FROM these rows, so after a reload (a cancel
+  // changes which commands are unsuccessful) the form must not offer the previous answer, nor
+  // keep offering it after the reload failed.
   const candidates = useMemo(
     () =>
-      unsuccessful.data
-        ? buildCandidates(unsuccessful.data.commands, batch.refusals, batch.refusalCounts)
+      unsuccessful.current
+        ? buildCandidates(unsuccessful.current.commands, batch.refusals, batch.refusalCounts)
         : [],
-    [unsuccessful.data, batch.refusals, batch.refusalCounts],
+    [unsuccessful.current, batch.refusals, batch.refusalCounts],
   );
 
-  if (unsuccessful.loading && !unsuccessful.data) {
-    return (
-      <SectionPanel title={t('retryTitle')}>
-        <LoadingState description={t('retryLoading')} />
-      </SectionPanel>
-    );
-  }
-  if (unsuccessful.error && !unsuccessful.data) {
+  if (unsuccessful.error) {
     return (
       <SectionPanel title={t('retryTitle')}>
         <ErrorState description={unsuccessful.error} />
+      </SectionPanel>
+    );
+  }
+  if (!unsuccessful.current) {
+    return (
+      <SectionPanel title={t('retryTitle')}>
+        <LoadingState description={t('retryLoading')} />
       </SectionPanel>
     );
   }
@@ -133,8 +136,8 @@ function RetryBatchPanelBody({ batch, reloadKey }: { batch: CommandBatch; reload
       key={candidates.map((c) => c.deviceToken).join('|')}
       batch={batch}
       candidates={candidates}
-      truncated={unsuccessful.data?.truncated ?? false}
-      inFlight={inFlight.data ?? null}
+      truncated={unsuccessful.current.truncated}
+      inFlight={inFlight.current ?? null}
       onRetried={(token) => navigate(`/command-batches/${encodeURIComponent(token)}`)}
     />
   );
