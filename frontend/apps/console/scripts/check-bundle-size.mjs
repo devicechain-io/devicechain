@@ -13,7 +13,8 @@
 // accidental top-level import of a heavy page or library does not. Once the headroom is spent a
 // raise is DELIBERATE: the measured need plus a small stated margin, with the measurement and the
 // reason in the commit that raises it -- never `--measure` pasted in to make a red build green. A
-// change that SHRINKS the initial load lowers the budget in the same commit.
+// change that SHRINKS the initial load lowers the budget in the same commit, and the gate holds
+// that side too: a budget more than SLACK (10 %) above the measurement fails the build.
 //
 // The build also checks WHERE the bytes are, not only how many: see "The lazy boundaries" below.
 //
@@ -73,6 +74,9 @@ export function measure(dist) {
   return { initial, total };
 }
 
+// How far a budget may sit above the measurement before it stops gating anything.
+export const SLACK = 0.1;
+
 // check returns a list of problems (empty = pass).
 export function check(measured, budget) {
   const problems = [];
@@ -81,6 +85,19 @@ export function check(measured, budget) {
   }
   if (measured.total > budget.maxTotal) {
     problems.push(`total is ${measured.total} B gzip, over the budget of ${budget.maxTotal} B`);
+  }
+  // The other side: a budget far above what the build measures gates nothing, whether it was
+  // raised past need or left behind by a saving. Either way the headroom is spent silently by the
+  // next change, so a budget more than SLACK above the measurement fails until it is re-measured.
+  for (const [name, got, max] of [
+    ['maxInitial', measured.initial, budget.maxInitial],
+    ['maxTotal', measured.total, budget.maxTotal],
+  ]) {
+    if (max > got * (1 + SLACK)) {
+      problems.push(
+        `${name} ${max} B is more than ${SLACK * 100} % above the measured ${got} B: lower it (--measure prints one)`,
+      );
+    }
   }
   return problems;
 }

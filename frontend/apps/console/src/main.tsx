@@ -10,6 +10,7 @@ import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { AuthProvider } from '@/auth/AuthProvider';
 import { AreaCapabilityProvider } from '@/lib/capabilities';
 import { SSO_COMPLETE_PATH, captureSsoReturn } from '@/lib/sso';
+import { installChunkReload } from '@/lib/chunkReload';
 import App from './App';
 // Initializes the shared i18next instance (ADR-066) as a side effect, before any
 // component renders — react-i18next reads it through context/useTranslation.
@@ -21,6 +22,9 @@ import './index.css';
 // address bar (and stop the page sending a Referer) before the router reads the location
 // or anything renders; the completion page picks the captured code up from lib/sso.
 if (window.location.pathname === SSO_COMPLETE_PATH) captureSsoReturn();
+
+// A page chunk named by a previous deploy's index.html is gone after an upgrade: reload once.
+installChunkReload(window);
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

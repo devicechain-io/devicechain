@@ -9,7 +9,7 @@
 import '@/i18n/config';
 import { cleanup, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const claims = vi.hoisted(() => ({
   value: { tenant: 'oem', username: 'ann', roles: [], authorities: ['*'], typ: 'access', scopeAnchors: [] as string[] },
@@ -55,6 +55,13 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 });
 
 import App from '@/App';
+
+// The registry families load lazily, and the first import of their module graph can take longer
+// than a findBy waits when the whole suite runs at once. Which route renders is the question
+// here, not how long the chunk takes, so the module is loaded before any test asks.
+beforeAll(async () => {
+  await import('@/routes/RegistryRoute');
+}, 60_000);
 
 afterEach(cleanup);
 
