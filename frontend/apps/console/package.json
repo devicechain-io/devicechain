@@ -7,7 +7,7 @@
     "predev": "node ../../scripts/build-packages.mjs",
     "dev": "vite",
     "prebuild": "node ../../scripts/build-packages.mjs",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-bundle-size.mjs",
     "preview": "vite preview",
     "pretypecheck": "node ../../scripts/build-packages.mjs",
     "typecheck": "tsc --noEmit",
