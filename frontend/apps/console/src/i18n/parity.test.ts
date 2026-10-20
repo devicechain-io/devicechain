@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { NAMESPACES, SUPPORTED_LOCALES } from './config';
+import i18n, { DEFAULT_LOCALE, NAMESPACES, SUPPORTED_LOCALES } from './config';
+import esCatalogs from './locales/es';
 
 // The locale JSON as it sits ON DISK, which is what a translator edits and what a reviewer
 // reads in a diff. Going through the registry in config.ts instead would test the imports
@@ -96,5 +97,37 @@ describe('locale parity', () => {
     const unregistered = [...onDisk].filter((ns) => !registered.has(ns));
     expect(unregistered, 'these namespace files exist but are not in NAMESPACES, so nothing ' +
       'can load them').toEqual([]);
+  });
+});
+
+/**
+ * 🔴 THE FILES ARE NOT WHAT SHIPS — the registries are. English is bundled through the
+ * `enResources` map in config.ts and Spanish through the one-module index in locales/es/index.ts,
+ * each a hand-written list of imports. A namespace left out of either (or wired to the wrong
+ * file) passes every parity check above, because those read the disk. What it does instead:
+ *  - missing from the es index: that screen silently renders in ENGLISH for a Spanish operator
+ *    (the backend answers an error, i18next falls back) — no raw keys, nothing logged;
+ *  - missing from the English bundle: i18next goes to the backend for it, which has no English
+ *    loader, and the screen renders raw KEY NAMES for everyone.
+ */
+describe('the shipped registries carry every namespace', () => {
+  const sorted = (xs: Iterable<string>) => [...xs].sort();
+
+  it('the English bundle registers every namespace, each wired to its own file', () => {
+    for (const ns of NAMESPACES) {
+      expect(i18n.hasResourceBundle(DEFAULT_LOCALE, ns), `en/${ns} is not bundled`).toBe(true);
+      expect(i18n.getResourceBundle(DEFAULT_LOCALE, ns), `en/${ns} is wired to another file`).toEqual(
+        bundle(DEFAULT_LOCALE, ns),
+      );
+    }
+  });
+
+  it('the Spanish chunk carries exactly the namespaces, each wired to its own file', () => {
+    expect(sorted(Object.keys(esCatalogs))).toEqual(sorted(NAMESPACES));
+    for (const ns of NAMESPACES) {
+      expect((esCatalogs as Record<string, unknown>)[ns], `es/${ns} is wired to another file`).toEqual(
+        bundle('es', ns),
+      );
+    }
   });
 });

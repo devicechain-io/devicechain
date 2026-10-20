@@ -18,6 +18,8 @@ import { initReactI18next } from 'react-i18next';
 import type { BackendModule } from 'i18next';
 import LanguageDetector from 'i18next-browser-languagedetector';
 
+import { LOADERS } from './catalogLoaders';
+
 import enCommon from './locales/en/common.json';
 import enLogin from './locales/en/login.json';
 import enNav from './locales/en/nav.json';
@@ -139,7 +141,8 @@ export const NAMESPACES = [
 
 // English — the fallback — is bundled and synchronous, so the first paint in English needs no
 // extra request and `t()` works the instant this module has run. Every OTHER locale is loaded on
-// demand (see LOADERS): a Spanish operator pays for the Spanish catalogs, an English one never does.
+// demand (see catalogLoaders.ts): a Spanish operator pays for the Spanish catalogs, an English
+// one never does.
 const enResources = {
   en: {
     common: enCommon,
@@ -177,16 +180,8 @@ const enResources = {
 } as const;
 
 /**
- * On-demand catalogs, one dynamic import (one chunk) per non-default locale. Adding a locale is
- * a `locales/<code>/index.ts` that default-exports `{ [namespace]: catalog }` plus a line here.
- */
-const LOADERS: Record<string, () => Promise<{ default: Record<string, Record<string, string>> }>> = {
-  es: () => import('./locales/es'),
-};
-
-/**
- * A minimal i18next backend over LOADERS. i18next asks for one (language, namespace) at a time;
- * the locale's chunk is imported once (the module cache makes the later calls free) and the
+ * A minimal i18next backend over LOADERS (catalogLoaders.ts). i18next asks for one
+ * (language, namespace) at a time; the locale's chunk is imported once (the module cache makes the later calls free) and the
  * namespace is read out of it. A language with no loader answers an error, never an empty bundle,
  * so a missing catalog is loud rather than a silent render of raw keys.
  */
@@ -201,7 +196,10 @@ const lazyCatalogs: BackendModule = {
     }
     load().then(
       (m) => {
-        const catalog = m.default[namespace];
+        // `m` is undefined when chunkReload claimed a failed chunk (see catalogLoaders.ts).
+        // Every path must reach the callback: a throw here would leave i18next waiting on this
+        // namespace forever, and i18nReady — and the console's first render — with it.
+        const catalog = m?.default[namespace];
         if (catalog) callback(null, catalog);
         else callback(new Error(`no "${namespace}" catalog for locale "${language}"`), null);
       },
@@ -301,9 +299,11 @@ syncDocumentLanguage();
 
 /**
  * Run a language change whose catalogs may still be loading. changeLanguage only switches once
- * they are in, and rejects if a load fails (offline, a purged chunk) — in which case the
- * language stays as it was, which is the right outcome, so the rejection is not an error to
- * surface from a fire-and-forget caller.
+ * they are in. A failed load (offline, a purged chunk) does not reject it: i18next completes the
+ * switch with nothing to show, `resolvedLanguage` stays on the English fallback (what is
+ * actually rendered, and what `<html lang>` and the switcher read), and the failed namespaces are
+ * not retried until the page reloads. The catch is for anything else, so a fire-and-forget
+ * caller never leaves an unhandled rejection behind.
  */
 function switchLanguage(change: Promise<unknown>): void {
   change.catch(() => undefined);

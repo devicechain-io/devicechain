@@ -15,7 +15,7 @@ import App from './App';
 // Initializes the shared i18next instance (ADR-066) as a side effect, before any
 // component renders — react-i18next reads it through context/useTranslation.
 import i18n, { i18nReady } from '@/i18n/config';
-import { LoadingState } from '@/components/ui/loading-state';
+import { Spinner } from '@/components/ui/spinner';
 import '@fontsource-variable/inter';
 import './index.css';
 
@@ -31,8 +31,16 @@ const root = createRoot(document.getElementById('root')!);
 
 // English is bundled, so its first paint needs nothing. Another language's catalogs are fetched
 // on demand: hold the real app back until they are in, so a Spanish operator never sees English
-// flash first. i18nReady never rejects (a failed load falls back to English).
-if (!i18n.hasLoadedNamespace('common')) root.render(<LoadingState />);
+// flash first. i18nReady never rejects (a failed load falls back to English). The placeholder is a
+// bare spinner, not LoadingState: it shows before any catalog is in, so its "Loading..." would be
+// English on exactly the screens this wait exists to keep English off.
+if (!i18n.hasLoadedNamespace('common')) {
+  root.render(
+    <div className="flex h-screen items-center justify-center" aria-busy="true" data-testid="i18n-loading">
+      <Spinner size="md" />
+    </div>,
+  );
+}
 void i18nReady.then(() => root.render(
   <StrictMode>
     <ThemeProvider defaultTheme="dark">

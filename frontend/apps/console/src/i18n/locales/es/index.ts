@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The Spanish catalogs as ONE module, so the bundler emits them as one on-demand chunk (see
-// loadCatalog in ../config.ts) instead of folding ~70 kB gzip into the first download.
+// ../catalogLoaders.ts) instead of folding ~70 kB gzip into the first download.
 
 import esCommon from './common.json';
 import esLogin from './login.json';
