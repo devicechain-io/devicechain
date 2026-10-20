@@ -2144,6 +2144,69 @@
      "sort": "desc"
     }
    }
+  },
+  {
+   "id": 40,
+   "type": "timeseries",
+   "title": "Rule-health write failures and contention",
+   "description": "Background batch writes (one tenant's transaction) that failed or timed out and were discarded, and admissions that had to wait for the writer to swap or settle a batch. Failures mean the console's fire counts fall short (see the discarded panel); contention is a constant-time wait, never a database call. Both should sit at zero.",
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 113
+   },
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${datasource}"
+   },
+   "targets": [
+    {
+     "refId": "A",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_rule_stat_write_failures_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "write failures"
+    },
+    {
+     "refId": "B",
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${datasource}"
+     },
+     "expr": "sum(rate(devicechain_eventprocessing_detect_rule_stat_admission_contended_total{namespace=\"$namespace\"}[5m]))",
+     "legendFormat": "admission waits"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 30,
+      "showPoints": "never",
+      "spanNulls": true
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   }
   }
  ]
 }

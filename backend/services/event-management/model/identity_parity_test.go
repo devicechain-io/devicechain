@@ -7,13 +7,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math/rand"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
 // legacyDeriveEventIdForPayload is DeriveEventIdForPayload as it was when it type-switched on
@@ -23,9 +23,9 @@ import (
 // one event two ids, and a redelivery of it would store twice.
 func legacyDeriveEventIdForPayload(tenantId string, event *Event, payload any) ([]byte, error) {
 	switch p := payload.(type) {
-	case *dmmodel.ResolvedMeasurementsPayload:
+	case *resolvedevent.ResolvedMeasurementsPayload:
 		payload = p.IdentityView()
-	case dmmodel.ResolvedMeasurementsPayload:
+	case resolvedevent.ResolvedMeasurementsPayload:
 		payload = p.IdentityView()
 	}
 	encoded, err := json.Marshal(payload)
@@ -43,15 +43,15 @@ func parityStrPtr(r *rand.Rand) *string {
 	return &s
 }
 
-func parityMeasurements(r *rand.Rand) *dmmodel.ResolvedMeasurementsPayload {
-	p := &dmmodel.ResolvedMeasurementsPayload{}
+func parityMeasurements(r *rand.Rand) *resolvedevent.ResolvedMeasurementsPayload {
+	p := &resolvedevent.ResolvedMeasurementsPayload{}
 	if r.Intn(10) == 0 {
 		return p // no samples at all
 	}
 	for i := 0; i < 1+r.Intn(4); i++ {
-		sample := dmmodel.ResolvedMeasurementsEntry{OccurredTime: time.Unix(1_700_000_000+int64(r.Intn(1e6)), int64(r.Intn(1e9))).UTC()}
+		sample := resolvedevent.ResolvedMeasurementsEntry{OccurredTime: time.Unix(1_700_000_000+int64(r.Intn(1e6)), int64(r.Intn(1e9))).UTC()}
 		for j := 0; j < r.Intn(5); j++ {
-			e := dmmodel.ResolvedMeasurementEntry{
+			e := resolvedevent.ResolvedMeasurementEntry{
 				Name:     fmt.Sprintf("m%d", r.Intn(20)),
 				Value:    fmt.Sprintf("%g", r.NormFloat64()*100),
 				Unit:     parityStrPtr(r),
@@ -79,21 +79,21 @@ func parityCorpus() []any {
 	lat, lon := "51.5", "-0.12"
 	corpus := []any{
 		nil,
-		(*dmmodel.ResolvedMeasurementsPayload)(nil),
-		(*dmmodel.ResolvedLocationsPayload)(nil),
-		(*dmmodel.ResolvedAlertsPayload)(nil),
-		(*dmmodel.ResolvedStateChangePayload)(nil),
-		(*dmmodel.ResolvedNewRelationshipPayload)(nil),
-		dmmodel.ResolvedMeasurementsPayload{},
-		&dmmodel.ResolvedMeasurementsPayload{},
-		&dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{{Latitude: &lat, Longitude: &lon, OccurredTime: at}}},
-		dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{{Latitude: &lat, OccurredTime: at}}},
-		&dmmodel.ResolvedAlertsPayload{Entries: []dmmodel.ResolvedAlertEntry{{Type: "t", Level: 2, Message: "m", Source: "s", OccurredTime: at}}},
-		dmmodel.ResolvedAlertsPayload{},
-		&dmmodel.ResolvedStateChangePayload{State: string(esmodel.PresenceConnected), Reason: "r"},
-		dmmodel.ResolvedStateChangePayload{State: string(esmodel.PresenceDemoted)},
-		&dmmodel.ResolvedNewRelationshipPayload{RelationshipTypeId: 3, TargetType: &tt, TargetId: &tid},
-		dmmodel.ResolvedNewRelationshipPayload{RelationshipTypeId: 3},
+		(*resolvedevent.ResolvedMeasurementsPayload)(nil),
+		(*resolvedevent.ResolvedLocationsPayload)(nil),
+		(*resolvedevent.ResolvedAlertsPayload)(nil),
+		(*resolvedevent.ResolvedStateChangePayload)(nil),
+		(*resolvedevent.ResolvedNewRelationshipPayload)(nil),
+		resolvedevent.ResolvedMeasurementsPayload{},
+		&resolvedevent.ResolvedMeasurementsPayload{},
+		&resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{{Latitude: &lat, Longitude: &lon, OccurredTime: at}}},
+		resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{{Latitude: &lat, OccurredTime: at}}},
+		&resolvedevent.ResolvedAlertsPayload{Entries: []resolvedevent.ResolvedAlertEntry{{Type: "t", Level: 2, Message: "m", Source: "s", OccurredTime: at}}},
+		resolvedevent.ResolvedAlertsPayload{},
+		&resolvedevent.ResolvedStateChangePayload{State: string(presence.StateConnected), Reason: "r"},
+		resolvedevent.ResolvedStateChangePayload{State: string(presence.StateDemoted)},
+		&resolvedevent.ResolvedNewRelationshipPayload{RelationshipTypeId: 3, TargetType: &tt, TargetId: &tid},
+		resolvedevent.ResolvedNewRelationshipPayload{RelationshipTypeId: 3},
 		"a string",
 		42,
 		map[string]any{"k": "v"},
@@ -105,7 +105,7 @@ func parityCorpus() []any {
 		if i%50 == 0 {
 			// Wrapped: the view is not taken through a container, before or after.
 			corpus = append(corpus, []any{p}, map[string]any{"p": p}, struct {
-				P *dmmodel.ResolvedMeasurementsPayload
+				P *resolvedevent.ResolvedMeasurementsPayload
 			}{p})
 		}
 	}
@@ -119,7 +119,7 @@ func TestEventIdForPayloadMatchesTheTypeSwitchItReplaced(t *testing.T) {
 	derivedSeen, rawSeen := 0, 0
 	for i, payload := range corpus {
 		for _, alt := range []*string{nil, ptrStr(""), ptrStr("a-1")} {
-			ev := &Event{DeviceToken: "dev-1", EventType: esmodel.Measurement,
+			ev := &Event{DeviceToken: "dev-1", EventType: eventtype.Measurement,
 				OccurredTime: time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC), AltId: rdb.NullStrOf(alt)}
 			want, werr := legacyDeriveEventIdForPayload("acme", ev, payload)
 			got, gerr := DeriveEventIdForPayload("acme", ev, payload)
@@ -130,7 +130,7 @@ func TestEventIdForPayloadMatchesTheTypeSwitchItReplaced(t *testing.T) {
 				t.Fatalf("corpus[%d] %T: event id moved\nlegacy %x\nnow    %x", i, payload, want, got)
 			}
 		}
-		if p, ok := payload.(*dmmodel.ResolvedMeasurementsPayload); ok && p != nil {
+		if p, ok := payload.(*resolvedevent.ResolvedMeasurementsPayload); ok && p != nil {
 			if p.IdentityView() != p {
 				derivedSeen++
 			} else {

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/stretchr/testify/require"
@@ -31,15 +33,15 @@ func referenceDecode(jd *JsonDecoder, payload []byte, receivedAt time.Time) (*mo
 	}
 	var built interface{}
 	switch event.EventType {
-	case model.NewRelationship:
+	case eventtype.NewRelationship:
 		built, err = jd.BuildNewRelationshipPayload(jevent)
-	case model.Location:
+	case eventtype.Location:
 		built, err = jd.BuildLocationsPayload(jevent)
-	case model.Measurement:
+	case eventtype.Measurement:
 		built, err = jd.BuildMeasurementsPayload(jevent)
-	case model.Alert:
+	case eventtype.Alert:
 		built, err = jd.BuildAlertsPayload(jevent)
-	case model.StateChange:
+	case eventtype.StateChange:
 		return nil, nil, fmt.Errorf("state-change (presence) events are platform-produced and not accepted from device ingest")
 	default:
 		return nil, nil, fmt.Errorf("unhandled event type: %s", jevent.EventType)

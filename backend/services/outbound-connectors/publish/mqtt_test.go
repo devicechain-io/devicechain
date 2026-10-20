@@ -13,12 +13,12 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
+	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -329,10 +329,11 @@ func TestAHostWithOneRefusedAndOneReachableAddressConnects(t *testing.T) {
 	} else {
 		t.Logf("[::1]:%s is not bindable here (%v); the guard refuses it before connect regardless", ln.port(), err)
 	}
-	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	// A port that refuses, held for the test: a released probe port could be taken by another
+	// process's listener before the dial below.
+	_, downPort, err := net.SplitHostPort(dctest.RefusingAddr(t))
 	require.NoError(t, err)
-	downPort := strconv.Itoa(closed.Addr().(*net.TCPAddr).Port)
-	require.NoError(t, closed.Close())
+	dctest.RequireRefusing(t, "127.0.0.1:"+downPort)
 
 	withFakeDNS(t, map[string][]netip.Addr{
 		"dual.test": {netip.MustParseAddr("127.0.0.1"), netip.MustParseAddr("::1")},
@@ -349,6 +350,14 @@ func TestAHostWithOneRefusedAndOneReachableAddressConnects(t *testing.T) {
 	err = s.Send(sendCtx(t, 3*time.Second), mqttTarget(t, "tcp://dual.test:"+downPort), []byte("x"), "k")
 	require.Error(t, err)
 	assert.False(t, isBlocked(err), "one refused and one down address is not blocked: %v", err)
+	// The client reports the other address's refusal and the dual-address dial flattens its
+	// error, so the errno of the down address is only visible on the dial itself, which is
+	// the path Send takes.
+	dialCtx, cancel := context.WithCancelCause(sendCtx(t, 3*time.Second))
+	defer cancel(nil)
+	_, derr := s.dial(&dialLog{ctx: dialCtx, cancel: cancel})(dialCtx, "tcp", "127.0.0.1:"+downPort)
+	assert.True(t, dctest.IsRefused(derr), "the down address must be refused, not merely failing: %v", derr)
+	assert.False(t, isBlocked(derr))
 
 	// Both addresses refused: blocked.
 	err = NewSender(nil).Send(sendCtx(t, 3*time.Second), mqttTarget(t, "tcp://dual.test:"+ln.port()), []byte("x"), "k")

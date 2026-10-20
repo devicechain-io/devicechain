@@ -5,17 +5,15 @@ package preview
 
 import (
 	"context"
+	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"io"
 	"strings"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
-	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 var base = time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
@@ -57,19 +55,19 @@ func (o *fakeOpener) NewReplayReaderFromTime(_ string, start time.Time) (messagi
 // carrying one metric reading, occurred at the given time, at stream sequence seq.
 func msg(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string, occurred time.Time) messaging.Message {
 	t.Helper()
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "http1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		EventType:           eventtype.Measurement,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}
@@ -239,19 +237,19 @@ func TestPreviewScanCap(t *testing.T) {
 func batchMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metric, value string,
 	uploadedAt, sampledAt time.Time) messaging.Message {
 	t.Helper()
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "http1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        uploadedAt,
 		ProcessedTime:       uploadedAt,
-		EventType:           esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		EventType:           eventtype.Measurement,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: sampledAt,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: metric, Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: metric, Value: value}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

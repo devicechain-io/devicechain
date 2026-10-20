@@ -6,6 +6,7 @@ package model
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
@@ -35,7 +36,7 @@ func calcTestDefs() []*MetricDefinition {
 }
 
 // evaluate runs a resolution's formulas against one sample, as the resolver does.
-func evaluate(r ProfileResolution, values map[string]string) ([]ResolvedMeasurementEntry, *recordingObserver) {
+func evaluate(r ProfileResolution, values map[string]string) ([]resolvedevent.ResolvedMeasurementEntry, *recordingObserver) {
 	obs := &recordingObserver{}
 	calc := r.BeginCalculation(nil)
 	defer calc.Release()

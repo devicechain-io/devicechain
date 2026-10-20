@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math"
 	"slices"
 	"strconv"
@@ -16,7 +18,6 @@ import (
 
 	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -25,6 +26,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/proto"
 	"github.com/google/uuid"
@@ -134,7 +136,7 @@ func (p EventTimePolicy) boundEntry(entry *time.Time, envelope, processed time.T
 // Results of event resolution process.
 type EventResolutionResults struct {
 	Device   *model.Device
-	Resolved *model.ResolvedEvent
+	Resolved *resolvedevent.ResolvedEvent
 }
 
 // Create a new event resolver.
@@ -179,13 +181,13 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 // the device, rather than being dropped (ADR-013 addendum 2026-07-01). The source
 // device travels as its token (ADR-044): the numeric row id stays inside
 // device-management and never reaches event-management / device-state.
-func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []model.ResolvedAnchor,
-	memberships []model.GroupRef, event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
+func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []resolvedevent.ResolvedAnchor,
+	memberships []resolvedevent.GroupRef, event *esmodel.UnresolvedEvent, rezPayload interface{}, scope *model.ProfileScope) *EventResolutionResults {
 	externalId := ""
 	if device.ExternalId.Valid {
 		externalId = device.ExternalId.String
 	}
-	resolved := &model.ResolvedEvent{
+	resolved := &resolvedevent.ResolvedEvent{
 		Source:              event.Source,
 		AltId:               event.AltId,
 		SourceDeviceToken:   device.Token,
@@ -214,7 +216,7 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 	// line that stops the stamp spreading to every event type, and it is guarded by a test
 	// that anchors a location event carrying a version against sibling event types that
 	// must not — an assertion on the absence alone would pass for the wrong reasons.
-	if event.EventType == esmodel.Location {
+	if event.EventType == eventtype.Location {
 		resolved.FenceSetVersion = scope.FenceSetVersion
 	}
 	return &EventResolutionResults{Device: device, Resolved: resolved}
@@ -236,7 +238,7 @@ func (rez *EventResolver) MergeToResolveEvent(device *model.Device, anchors []mo
 // not in a region because an area it is tracked to is. Access scopes are enrolled through
 // the same read-model, so the same gate covers them: a tenant with neither pays nothing.
 func (rez *EventResolver) unionMemberships(ctx context.Context, api model.DeviceManagementApi,
-	targets []model.MembershipTarget) ([]model.GroupRef, []model.ResolvedAnchor, error) {
+	targets []model.MembershipTarget) ([]resolvedevent.GroupRef, []resolvedevent.ResolvedAnchor, error) {
 	// Pay-nothing short-circuit (ADR-062 Decision 7): a tenant with no rule-scoped group
 	// does zero per-target reads — one cached EXISTS check gates the whole union.
 	any, err := api.AnyScopedGroups(ctx)
@@ -252,8 +254,8 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 		version int32
 	}
 	seen := make(map[mkey]struct{})
-	out := make([]model.GroupRef, 0)
-	var access []model.ResolvedAnchor
+	out := make([]resolvedevent.GroupRef, 0)
+	var access []resolvedevent.ResolvedAnchor
 	for i, t := range targets {
 		ms, err := api.MembershipsForEntity(ctx, t.Type, t.Id)
 		if err != nil {
@@ -261,14 +263,14 @@ func (rez *EventResolver) unionMemberships(ctx context.Context, api model.Device
 		}
 		for _, m := range ms {
 			if i == 0 && m.AccessScope && t.Type == string(entity.TypeDevice) {
-				access = append(access, model.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken})
+				access = append(access, resolvedevent.ResolvedAnchor{AnchorType: auth.AnchorKindGroup, AnchorToken: m.GroupToken})
 			}
 			k := mkey{m.GroupToken, m.SelectorVersion}
 			if _, dup := seen[k]; dup {
 				continue
 			}
 			seen[k] = struct{}{}
-			out = append(out, model.GroupRef{GroupToken: m.GroupToken, Version: m.SelectorVersion})
+			out = append(out, resolvedevent.GroupRef{GroupToken: m.GroupToken, Version: m.SelectorVersion})
 		}
 	}
 	return out, access, nil
@@ -288,7 +290,7 @@ func (rez *EventResolver) resolveProfile(ctx context.Context, api model.DeviceMa
 	device *model.Device) (model.ProfileResolution, uint, error) {
 	res, err := api.ProfileResolutionByDeviceType(ctx, device.DeviceTypeId)
 	if err != nil {
-		return model.ProfileResolution{}, uint(dmproto.FailureReason_ApiCallFailed), fmt.Errorf("could not resolve device profile: %w", err)
+		return model.ProfileResolution{}, uint(resolvedevent.FailureReason_ApiCallFailed), fmt.Errorf("could not resolve device profile: %w", err)
 	}
 	return res, 0, nil
 }
@@ -308,7 +310,7 @@ func (rez *EventResolver) CreateNewEntityRelationship(ctx context.Context, devic
 	}
 	created, err := rez.Api.CreateEntityRelationship(ctx, create)
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 	return created, 0, nil
 }
@@ -318,7 +320,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	device *model.Device, event *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
 	relcreate, ok := event.Payload.(*esmodel.UnresolvedNewRelationshipPayload)
 	if !ok {
-		return nil, uint(dmproto.FailureReason_Invalid), errors.New("new relationship payload was not of expected type")
+		return nil, uint(resolvedevent.FailureReason_Invalid), errors.New("new relationship payload was not of expected type")
 	}
 
 	// Resolve everything fallible BEFORE creating the relationship — the scope AND the
@@ -358,7 +360,7 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	}
 
 	// Convert to resolved payload with the uniform (type, id) target.
-	payload := &model.ResolvedNewRelationshipPayload{
+	payload := &resolvedevent.ResolvedNewRelationshipPayload{
 		RelationshipTypeId: uint64(created.RelationshipTypeId),
 		TargetType:         &created.TargetType,
 		TargetId:           proto.NullUint64Of(&created.TargetId),
@@ -371,8 +373,8 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 	// in the history, and in the live view until the ownership fact arrived — visible to
 	// the new target alone, and denied to the device's other owners (ADR-081).
 	anchors := existing
-	newAnchor := model.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
-	if !slices.ContainsFunc(anchors, func(a model.ResolvedAnchor) bool {
+	newAnchor := resolvedevent.ResolvedAnchor{AnchorType: created.TargetType, AnchorToken: created.TargetToken, RelationshipId: created.ID}
+	if !slices.ContainsFunc(anchors, func(a resolvedevent.ResolvedAnchor) bool {
 		return a.AnchorType == newAnchor.AnchorType && a.AnchorToken == newAnchor.AnchorToken
 	}) {
 		anchors = append(anchors, newAnchor)
@@ -387,10 +389,10 @@ func (rez *EventResolver) HandleNewRelationshipEvent(ctx context.Context,
 func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, device *model.Device,
 	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	if lpayload, ok := event.Payload.(*esmodel.UnresolvedLocationsPayload); ok {
-		rlpayload := &model.ResolvedLocationsPayload{}
-		rlentries := make([]model.ResolvedLocationEntry, 0)
+		rlpayload := &resolvedevent.ResolvedLocationsPayload{}
+		rlentries := make([]resolvedevent.ResolvedLocationEntry, 0)
 		for _, ulentry := range lpayload.Entries {
-			rlentry := model.ResolvedLocationEntry{
+			rlentry := resolvedevent.ResolvedLocationEntry{
 				Latitude:     ulentry.Latitude,
 				Longitude:    ulentry.Longitude,
 				Elevation:    ulentry.Elevation,
@@ -421,8 +423,8 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 // already rejected it upstream. profile is the event's one profile read, the same one
 // validation read.
 //
-// A version with calculated metrics (ADR-082) also has each sample entry's formulas
-// evaluated against that entry's own values and appended as Derived entries, and a value a
+// A version with calculated metrics (ADR-082) also has each sample's formulas
+// evaluated against that sample (the message's entries sharing an instant) and appended as Derived entries, and a value a
 // device sent under a calculated key dropped in favour of the computed one. See
 // model/profile_calculation.go; a version with none pays one compare per event.
 func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, device *model.Device,
@@ -431,8 +433,8 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 	if !ok {
 		return nil, fmt.Errorf("can not resolve measurements payload. invalid unresolved payload type")
 	}
-	rmpayload := &model.ResolvedMeasurementsPayload{}
-	rmsentries := make([]model.ResolvedMeasurementsEntry, 0)
+	rmpayload := &resolvedevent.ResolvedMeasurementsPayload{}
+	rmsentries := make([]resolvedevent.ResolvedMeasurementsEntry, 0)
 	// Calculated metrics (ADR-082). A version with none — every profile without formulas —
 	// pays this one compare per event and nothing else: no sample is taken, no value parsed.
 	calculated := profile.CalculatedCount() > 0
@@ -446,16 +448,20 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		// device never rewrites it.
 		constants = profile.DeviceConstants(device.Metadata)
 	}
+	// Calculated metrics read a SAMPLE, and a sample is every measurement of this message that
+	// shares an instant — not one payload entry. Sparkplug and LwM2M ingest emit one entry per
+	// metric, so a formula over two of them would never see both if each entry were its own
+	// sample. groups holds one open Calculation per distinct instant, in first-seen order.
+	var groups []calcGroup
 	for _, umsentry := range mpayload.Entries {
-		rmentries := make([]model.ResolvedMeasurementEntry, 0)
-		var calc model.Calculation
+		occurred := rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime)
+		rmentries := make([]resolvedevent.ResolvedMeasurementEntry, 0, len(umsentry.Measurements))
+		var grp *calcGroup
 		if calculated {
-			// Sized for the calculated values too, so appending them does not regrow it.
-			rmentries = make([]model.ResolvedMeasurementEntry, 0, len(umsentry.Measurements)+profile.CalculatedCount())
-			calc = profile.BeginCalculation(constants)
+			grp = findCalcGroup(&groups, occurred, len(rmsentries), profile, constants)
 		}
 		for mxkey, mxvalue := range umsentry.Measurements {
-			rmentry := model.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
+			rmentry := resolvedevent.ResolvedMeasurementEntry{Name: mxkey, Value: mxvalue}
 			if def, declared := profile.Metric(mxkey); declared {
 				if def.Calculated() {
 					// A device-sent value under a calculated key: the computed value is
@@ -494,9 +500,9 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				}
 				if calculated {
 					// The value as the device sent it, parsed once as its declared type.
-					calc.Set(&def, mxvalue)
+					grp.set(&def, mxkey, mxvalue)
 				}
-			} else if _, err := strconv.ParseFloat(mxvalue, 64); err != nil {
+			} else if f, err := strconv.ParseFloat(mxvalue, 64); err != nil {
 				// Undeclared and non-numeric: a measurement stores in the numeric
 				// column, so this value cannot be persisted. Undeclared keys are
 				// best-effort (ADR-016 lenient additive typing), so drop just this
@@ -504,18 +510,33 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 				// valid numeric siblings. Declare it as a metric to persist it.
 				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and non-numeric")
 				continue
+			} else if err := model.CheckStorableMeasurement(f); err != nil {
+				// Numeric but not storable: NaN, +/-Inf, or beyond decimal(20,8). Dropped like
+				// the non-numeric case, so a lenient key costs only its own entry.
+				dropMeasurement(device.Token, mxkey, mxvalue, "undeclared and not storable: "+err.Error())
+				continue
 			}
 			rmentries = append(rmentries, rmentry)
 		}
-		if calculated {
-			// Computed from THIS sample entry only, under the event's own profile version,
-			// and appended before the sort so a calculated value takes its place in the
-			// canonical order like any other entry. Event identity does not see it
-			// (ResolvedMeasurementsPayload.IdentityView), so the event id stays a function of
-			// what the device sent alone.
-			rmentries = calc.Append(rmentries, &rez.calcObs)
-			calc.Release()
+		rmsentry := resolvedevent.ResolvedMeasurementsEntry{
+			Entries:      rmentries,
+			OccurredTime: occurred,
 		}
+		rmsentries = append(rmsentries, rmsentry)
+	}
+	// Computed from the SAMPLE (every entry of this message at one instant), under the event's
+	// own profile version, and appended before the sort so a calculated value takes its place
+	// in the canonical order like any other entry. A derived value rides on the FIRST entry of
+	// its sample, so a message of per-metric entries gains them without gaining an entry.
+	// Event identity does not see them (ResolvedMeasurementsPayload.IdentityView), so the event
+	// id stays a function of what the device sent alone.
+	for i := range groups {
+		g := &groups[i]
+		rmsentries[g.first].Entries = g.calc.Append(rmsentries[g.first].Entries, &rez.calcObs)
+		g.calc.Release()
+	}
+	for i := range rmsentries {
+		rmentries := rmsentries[i].Entries
 		// 🔴 SORT BY NAME, AND IT IS LOAD-BEARING — not a tidiness pass.
 		//
 		// The loop above ranges a MAP, and Go randomises map iteration, so without this
@@ -547,17 +568,70 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		// two resolutions. That is harmless for identity — neither reaches DeriveEventId,
 		// which hashes the payload alone — but it means "the resolved event replays
 		// byte-identically" is NOT a property this establishes.
-		slices.SortFunc(rmentries, func(a, b model.ResolvedMeasurementEntry) int {
+		slices.SortFunc(rmentries, func(a, b resolvedevent.ResolvedMeasurementEntry) int {
 			return strings.Compare(a.Name, b.Name)
 		})
-		rmsentry := model.ResolvedMeasurementsEntry{
-			Entries:      rmentries,
-			OccurredTime: rez.eventTime.boundEntry(umsentry.OccurredTime, event.OccurredTime, event.ProcessedTime),
-		}
-		rmsentries = append(rmsentries, rmsentry)
 	}
 	rmpayload.Entries = rmsentries
 	return rmpayload, nil
+}
+
+// instantKey is a sample's instant as a comparable map key.
+type instantKey struct {
+	sec  int64
+	nsec int
+}
+
+// calcGroup is one open sample: the Calculation for every measurement of a message that shares
+// an instant, and the index (in the resolved entries) of the first entry that carries it,
+// which is where the derived values are appended.
+type calcGroup struct {
+	at    instantKey
+	first int
+	calc  model.Calculation
+	// names is the names already recorded into this sample. Nil until a second entry joins the
+	// group (the common one-entry sample pays nothing); then it holds the first entry's names.
+	names map[string]struct{}
+	// firstNames is the first entry's measured names, kept to seed set.
+	firstNames []string
+}
+
+// findCalcGroup returns the open sample for instant occurred, opening it (as the entry at
+// index idx) if this is the first entry at that instant.
+func findCalcGroup(groups *[]calcGroup, occurred time.Time, idx int, profile model.ProfileResolution,
+	constants []calcfield.Constant) *calcGroup {
+	k := instantKey{sec: occurred.Unix(), nsec: occurred.Nanosecond()}
+	for i := range *groups {
+		if (*groups)[i].at == k {
+			g := &(*groups)[i]
+			if g.names == nil {
+				g.names = make(map[string]struct{}, len(g.firstNames)+4)
+				for _, n := range g.firstNames {
+					g.names[n] = struct{}{}
+				}
+			}
+			return g
+		}
+	}
+	*groups = append(*groups, calcGroup{at: k, first: idx, calc: profile.BeginCalculation(constants)})
+	return &(*groups)[len(*groups)-1]
+}
+
+// set records a measured input into the sample. A name already recorded at this instant keeps
+// its FIRST value, in message order. That is this sample's rule, not storage's: both raw values
+// are still stored (a raw row's identity includes its value), and the preview, which reads stored
+// rows back in payload-id order, can pick the other one. Only a device that sends one metric
+// twice at one instant with two different values sees the difference.
+func (g *calcGroup) set(def *model.ResolvedMetric, name, raw string) {
+	if g.names != nil {
+		if _, dup := g.names[name]; dup {
+			return
+		}
+		g.names[name] = struct{}{}
+	} else {
+		g.firstNames = append(g.firstNames, name)
+	}
+	g.calc.Set(def, raw)
 }
 
 // dropMeasurement logs an unstorable measurement entry that is being discarded
@@ -588,10 +662,10 @@ func normalizeBool(value string) string {
 func (rez *EventResolver) ResolveAlertsEventPayload(ctx context.Context, device *model.Device,
 	relation *model.EntityRelationship, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	if apayload, ok := event.Payload.(*esmodel.UnresolvedAlertsPayload); ok {
-		rapayload := &model.ResolvedAlertsPayload{}
-		raentries := make([]model.ResolvedAlertEntry, 0)
+		rapayload := &resolvedevent.ResolvedAlertsPayload{}
+		raentries := make([]resolvedevent.ResolvedAlertEntry, 0)
 		for _, uaentry := range apayload.Entries {
-			raentry := model.ResolvedAlertEntry{
+			raentry := resolvedevent.ResolvedAlertEntry{
 				Type:         uaentry.Type,
 				Level:        uaentry.Level,
 				Message:      uaentry.Message,
@@ -617,7 +691,7 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 		return nil, fmt.Errorf("can not resolve state-change payload. invalid unresolved payload type")
 	}
 	switch payload.State {
-	case esmodel.PresenceConnected, esmodel.PresenceDisconnected, esmodel.PresenceDemoted:
+	case presence.StateConnected, presence.StateDisconnected, presence.StateDemoted:
 	default:
 		return nil, fmt.Errorf("invalid presence state %q in state-change event", payload.State)
 	}
@@ -647,7 +721,7 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 	// guard written to stop rows freezing. The blast radius is bounded by the same equality
 	// that makes it work, since a zero-session demotion can reach nothing else, and an
 	// INFERRED row is refused on the stamp instead.
-	if payload.State == esmodel.PresenceDemoted {
+	if payload.State == presence.StateDemoted {
 		if expectedSessionId != 0 {
 			return nil, fmt.Errorf("state-change event carries expected session id %d on a demotion; a demotion is already matched against the stored session", expectedSessionId)
 		}
@@ -672,7 +746,7 @@ func (rez *EventResolver) ResolveStateChangeEventPayload(ctx context.Context, de
 			return nil, fmt.Errorf("state-change event demotes with no occurred time; a demotion is applied only when it is newer than the row it releases")
 		}
 	}
-	return &model.ResolvedStateChangePayload{
+	return &resolvedevent.ResolvedStateChangePayload{
 		State:             string(payload.State),
 		Reason:            payload.Reason,
 		ExpectedSessionId: expectedSessionId,
@@ -711,13 +785,13 @@ func parseSessionId(raw, field string) (uint64, error) {
 func (rez *EventResolver) ResolveEventPayload(ctx context.Context, device *model.Device,
 	profile model.ProfileResolution, event *esmodel.UnresolvedEvent) (interface{}, error) {
 	switch event.EventType {
-	case esmodel.Location:
+	case eventtype.Location:
 		return rez.ResolveLocationsEventPayload(ctx, device, nil, event)
-	case esmodel.Measurement:
+	case eventtype.Measurement:
 		return rez.ResolveMeasurementsEventPayload(ctx, device, profile, event)
-	case esmodel.Alert:
+	case eventtype.Alert:
 		return rez.ResolveAlertsEventPayload(ctx, device, nil, event)
-	case esmodel.StateChange:
+	case eventtype.StateChange:
 		return rez.ResolveStateChangeEventPayload(ctx, device, nil, event)
 	default:
 		return nil, fmt.Errorf("unable to handle resolution for payload type: %s", event.EventType.String())
@@ -753,7 +827,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	// its type's profile, ADR-016/ADR-045): a non-conforming value routes the whole event to the dead-letter
 	// path rather than persisting bad data. Only a measurement reads the definitions;
 	// every other event type uses the read for its scope alone.
-	if event.EventType == esmodel.Measurement {
+	if event.EventType == eventtype.Measurement {
 		if reason, err := validateMeasurements(res, event); err != nil {
 			return nil, reason, err
 		}
@@ -762,7 +836,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	// Resolve the payload once — it does not depend on the anchors.
 	resolved, err := rez.ResolveEventPayload(ctx, device, res, event)
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 
 	// Denormalize the full set of the device's tracked relationships as anchors, and the
@@ -781,7 +855,7 @@ func (rez *EventResolver) HandleStandardEvent(ctx context.Context,
 	// return value: it observes, it never gates. Note it does not appear next to the
 	// measurement validation above, which CAN fail the event — putting it there would
 	// invite the next reader to give it the same power.
-	if event.EventType == esmodel.Location {
+	if event.EventType == eventtype.Location {
 		rez.warnIfLocationUndeclared(ctx, device, &scope)
 	}
 
@@ -861,16 +935,16 @@ func (rez *EventResolver) warnIfLocationUndeclared(ctx context.Context,
 // relationship. Every anchor is denormalized onto the event (ADR-013 addendum
 // 2026-07-01), so a device assigned to several targets is queryable by each.
 func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceManagementApi,
-	device *model.Device) ([]model.ResolvedAnchor, []model.GroupRef, uint, error) {
+	device *model.Device) ([]resolvedevent.ResolvedAnchor, []resolvedevent.GroupRef, uint, error) {
 	// A device's tracked-relationship set is denormalized in full onto every event, so
 	// this genuinely needs all rows. TrackedRelationshipsForDevice is the named full-set
 	// read (ADR-029); the search criteria this used to assemble — and the flag it set on
 	// their pagination to lift the LIMIT — are both gone.
 	drels, err := api.TrackedRelationshipsForDevice(ctx, device.ID)
 	if err != nil {
-		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
-	anchors := make([]model.ResolvedAnchor, 0, len(drels.Results))
+	anchors := make([]resolvedevent.ResolvedAnchor, 0, len(drels.Results))
 	// The membership stamp (ADR-062) is the union over the device itself and every
 	// emitted anchor: a device-facet rule matches on the device's memberships, a
 	// geographic rule ("arid areas") matches on an area anchor's.
@@ -887,7 +961,7 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceMan
 				Msg("Skipping anchor with empty target token (relationship predates the ADR-044 denormalization; recreate it)")
 			continue
 		}
-		anchors = append(anchors, model.ResolvedAnchor{
+		anchors = append(anchors, resolvedevent.ResolvedAnchor{
 			AnchorType:     r.TargetType,
 			AnchorToken:    r.TargetToken,
 			RelationshipId: r.ID,
@@ -896,14 +970,14 @@ func (rez *EventResolver) deviceAnchors(ctx context.Context, api model.DeviceMan
 	}
 	memberships, access, err := rez.unionMemberships(ctx, api, targets)
 	if err != nil {
-		return nil, nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 	// The access scopes the device is in are anchors too (ADR-081): an event written while
 	// the device is in "north" is visible to a member scoped to group:north, as one written
 	// while it is assigned to acme is to a member scoped to customer:acme. They carry no
 	// relationship. A tracked edge from the device to the same group already anchored it.
 	for _, a := range access {
-		if !slices.ContainsFunc(anchors, func(x model.ResolvedAnchor) bool {
+		if !slices.ContainsFunc(anchors, func(x resolvedevent.ResolvedAnchor) bool {
 			return x.AnchorType == a.AnchorType && x.AnchorToken == a.AnchorToken
 		}) {
 			anchors = append(anchors, a)
@@ -931,7 +1005,7 @@ func validateMeasurements(profile model.ProfileResolution, event *esmodel.Unreso
 	for _, entry := range payload.Entries {
 		for name, value := range entry.Measurements {
 			if verr := profile.ValidateMeasurement(name, value); verr != nil {
-				return uint(dmproto.FailureReason_Invalid), verr
+				return uint(resolvedevent.FailureReason_Invalid), verr
 			}
 		}
 	}
@@ -942,12 +1016,12 @@ func validateMeasurements(profile model.ProfileResolution, event *esmodel.Unreso
 func (rez *EventResolver) HandleEvent(ctx context.Context,
 	device *model.Device, unresolved *esmodel.UnresolvedEvent) ([]EventResolutionResults, uint, error) {
 	switch unresolved.EventType {
-	case esmodel.NewRelationship:
+	case eventtype.NewRelationship:
 		return rez.HandleNewRelationshipEvent(ctx, device, unresolved)
-	case esmodel.Location, esmodel.Measurement, esmodel.Alert, esmodel.StateChange:
+	case eventtype.Location, eventtype.Measurement, eventtype.Alert, eventtype.StateChange:
 		return rez.HandleStandardEvent(ctx, device, unresolved)
 	default:
-		return nil, uint(dmproto.FailureReason_Invalid), fmt.Errorf("unhandled event type: %s", unresolved.EventType.String())
+		return nil, uint(resolvedevent.FailureReason_Invalid), fmt.Errorf("unhandled event type: %s", unresolved.EventType.String())
 	}
 }
 
@@ -1044,7 +1118,7 @@ func transportAuthenticatedBypass(unrez *esmodel.UnresolvedEvent) bool {
 		return false
 	}
 	switch unrez.EventType {
-	case esmodel.Measurement, esmodel.StateChange:
+	case eventtype.Measurement, eventtype.StateChange:
 		return true
 	default:
 		return false
@@ -1067,28 +1141,28 @@ func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.Unre
 	if rez.AuthMode != config.AuthModeDisabled {
 		presented, perr := rez.presentedCredential(ctx, unrez)
 		if perr != nil {
-			return nil, uint(dmproto.FailureReason_Unauthenticated), perr
+			return nil, uint(resolvedevent.FailureReason_Unauthenticated), perr
 		}
 		if presented != nil {
 			device, err := rez.Api.AuthenticateDevice(ctx, presented, time.Now())
 			if err != nil {
-				return nil, uint(dmproto.FailureReason_Unauthenticated), err
+				return nil, uint(resolvedevent.FailureReason_Unauthenticated), err
 			}
 			if unrez.Device != "" && unrez.Device != device.Token {
-				return nil, uint(dmproto.FailureReason_Unauthenticated),
+				return nil, uint(resolvedevent.FailureReason_Unauthenticated),
 					fmt.Errorf("event device token %q does not match authenticated device %q", unrez.Device, device.Token)
 			}
 			return device, 0, nil
 		}
 		if rez.AuthMode == config.AuthModeRequired && !transportAuthenticatedBypass(unrez) {
-			return nil, uint(dmproto.FailureReason_Unauthenticated),
+			return nil, uint(resolvedevent.FailureReason_Unauthenticated),
 				errors.New("device authentication required but no credential was presented")
 		}
 	}
 
 	matches, err := rez.Api.DevicesByToken(ctx, []string{unrez.Device})
 	if err != nil {
-		return nil, uint(dmproto.FailureReason_ApiCallFailed), err
+		return nil, uint(resolvedevent.FailureReason_ApiCallFailed), err
 	}
 	if len(matches) == 0 {
 		// A missing token is DevicesByToken returning ([], nil): gorm's Find reports
@@ -1098,7 +1172,7 @@ func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.Unre
 		// and the resolver nil-derefs — which JetStream then crash-loops on
 		// redelivery. Returning an error routes it to the designed retry-then-
 		// dead-letter path (Process loop: a not-yet-registered device may appear).
-		return nil, uint(dmproto.FailureReason_DeviceNotFound),
+		return nil, uint(resolvedevent.FailureReason_DeviceNotFound),
 			fmt.Errorf("event device token %q is not registered", unrez.Device)
 	}
 	return matches[0], 0, nil
@@ -1119,7 +1193,7 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 		if rez.eventTime.TooOld != nil && errors.Is(err, eventtime.ErrTooOld) {
 			rez.eventTime.TooOld.Inc()
 		}
-		return nil, uint(dmproto.FailureReason_Invalid), err
+		return nil, uint(resolvedevent.FailureReason_Invalid), err
 	}
 	device, reason, err := rez.resolveDevice(ctx, unrez)
 	if err != nil {
@@ -1157,7 +1231,7 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 	// truth. The event is marked SourceDeviceDisabled, so detection, which acts on the
 	// device's behalf, skips it: a disabled device still raises no alarm.
 	if device.IsDisabled() {
-		if unrez.EventType == esmodel.StateChange {
+		if unrez.EventType == eventtype.StateChange {
 			results, reason, err := rez.HandleEvent(ctx, device, unrez)
 			for _, r := range results {
 				if r.Resolved != nil {
@@ -1169,7 +1243,7 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 		if rez.deviceDisabled != nil {
 			rez.deviceDisabled.Inc()
 		}
-		return nil, uint(dmproto.FailureReason_DeviceDisabled),
+		return nil, uint(resolvedevent.FailureReason_DeviceDisabled),
 			fmt.Errorf("%w: event for device %q refused", model.ErrDeviceDisabled, device.Token)
 	}
 	return rez.HandleEvent(ctx, device, unrez)

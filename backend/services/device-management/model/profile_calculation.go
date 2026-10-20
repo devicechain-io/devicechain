@@ -5,6 +5,7 @@ package model
 
 import (
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"slices"
 	"sort"
 
@@ -23,7 +24,8 @@ import (
 //
 // 🔴 NO STATE, AND THAT IS A RED LINE. Nothing here, and nothing the resolver does with it,
 // keeps a value between samples, devices or events: a formula is a pure function of ONE
-// sample entry and of the profile version named on the event. A request for "the previous
+// sample (every measurement of one message at one instant) and of the profile version named
+// on the event. A request for "the previous
 // reading", "since the last value" or "the other message" is a request for a windowed
 // derivation stage in event-processing, never for a cache here — a cache would make the
 // stored value depend on which replica resolved the event and in what order, which is
@@ -224,7 +226,7 @@ func (r ProfileResolution) ConstantKeys() []string {
 	return slices.Clone(r.calc.constKeys)
 }
 
-// Calculation is one sample entry's evaluation of a version's calculated metrics: take one
+// Calculation is one sample's evaluation of a version's calculated metrics: take one
 // with BeginCalculation, Set each measured value the entry carries, Append the computed
 // values, Release it. It is not safe for concurrent use; one resolver uses one at a time.
 //
@@ -280,7 +282,7 @@ type CalculationObserver interface {
 // produced none, finds it absent: it skips as missing_input unless it guards the read with
 // has(). So a chain's values are a function of the sample alone, whatever the order they are
 // appended in, and the Recalculate of a draft computes the same ones.
-func (c Calculation) Append(dst []ResolvedMeasurementEntry, obs CalculationObserver) []ResolvedMeasurementEntry {
+func (c Calculation) Append(dst []resolvedevent.ResolvedMeasurementEntry, obs CalculationObserver) []resolvedevent.ResolvedMeasurementEntry {
 	if c.plan == nil {
 		return dst
 	}
@@ -304,7 +306,7 @@ func (c Calculation) Append(dst []ResolvedMeasurementEntry, obs CalculationObser
 		// The entry's own copies of the stamp, in one allocation: an entry travels to every
 		// consumer, so it must never point into the shared plan.
 		st := &derivedStamp{classifier: cf.classifier, dataType: cf.dataType}
-		entry := ResolvedMeasurementEntry{Name: cf.key, Value: out.Value, Classifier: &st.classifier,
+		entry := resolvedevent.ResolvedMeasurementEntry{Name: cf.key, Value: out.Value, Classifier: &st.classifier,
 			DataType: &st.dataType, Derived: true}
 		if cf.unit != nil {
 			st.unit = *cf.unit

@@ -1382,6 +1382,85 @@ type DeviceConstantsEntry {
     constants: [DeviceConstant!]!
 }
 
+"""One measured metric a calculated metric's formula may read."""
+type CalculatedMetricPlanInput {
+    """The metric's key."""
+    key: String!
+    """The metric's data type: DOUBLE, INT or BOOLEAN."""
+    dataType: String!
+}
+
+"""One calculated metric of a published profile version."""
+type CalculatedMetricPlanMetric {
+    """The metric's key."""
+    key: String!
+    """The formula source, a CEL expression over the version's other metrics."""
+    expression: String!
+    """The declared result type: DOUBLE, INT or BOOLEAN."""
+    dataType: String!
+    """The inclusive lower bound a computed value must meet, if the definition has one."""
+    minValue: Float
+    """The inclusive upper bound a computed value must meet, if the definition has one."""
+    maxValue: Float
+    """The unit stamped on computed values, if the definition has one."""
+    unit: String
+    """The metric definition's id, stamped on every value of it as its classifier."""
+    classifier: Float!
+    """
+    True when the previous published version did not calculate this key (a first
+    calculation, or one reinstated after a version without it).
+    """
+    newInVersion: Boolean!
+    """
+    True when an earlier published version calculated this key under a different
+    expression, data type or bounds, so values computed then differ from what this
+    version's formula gives.
+    """
+    changedSinceEarlier: Boolean!
+}
+
+"""The calculated metrics of one published profile version, as the live resolver runs them."""
+type CalculatedMetricPlan {
+    """The version's token, profileToken@version."""
+    versionToken: String!
+    """The version number."""
+    version: Int!
+    """When the version became active; null unless it is the profile's active version."""
+    activeSince: String
+    """The measured metrics the formulas may read, in declaration order."""
+    measured: [CalculatedMetricPlanInput!]!
+    """
+    The calculated metrics in the order the resolver evaluates them: a formula follows the
+    ones it reads, and by key otherwise. A metric whose data type no formula can produce
+    comes last, by key.
+    """
+    calculated: [CalculatedMetricPlanMetric!]!
+    """The device constants the formulas read together, sorted and distinct."""
+    constantKeys: [String!]!
+}
+
+"""One device of the profile a backfill walks."""
+type CalculatedBackfillRosterEntry {
+    """The device's id, the cursor's unit."""
+    deviceId: String!
+    """The device's token."""
+    deviceToken: String!
+    """When the device was created, RFC 3339 in UTC."""
+    createdAt: String!
+    """The requested constant names the device's metadata holds; empty when it holds none."""
+    constants: [DeviceConstant!]!
+}
+
+"""One page of the devices a calculated-metric backfill walks."""
+type CalculatedBackfillRosterPage {
+    """The devices on this page, in device order."""
+    entries: [CalculatedBackfillRosterEntry!]!
+    """The cursor to pass as afterId for the next page; null when the walk is complete."""
+    nextCursor: String
+    """How many devices the whole walk covers; set on the first page only, null after."""
+    total: Float
+}
+
 """One page of device constants."""
 type DeviceConstantsPage {
     """The devices on this page that hold at least one requested name."""
@@ -3498,6 +3577,43 @@ type Query {
         limit: Int!
     ): DeviceConstantsPage!
     """
+    Describes the calculated metrics of one PUBLISHED version of a profile: the measured
+    metrics its formulas may read, each calculated metric with its formula, type, bounds
+    and unit in the order the live resolver evaluates them, and the device constants they
+    read. It is read out of the same compiled plan the resolver runs, so a caller that
+    compiles it gets that plan. A draft is not a version: an unknown profile, a profile
+    never published and a version never published are NOT_FOUND. A plan that cannot be
+    built is an error, never an empty answer. Requires device:read; customer-scoped
+    callers are refused.
+    """
+    calculatedMetricPlan(
+        """The token of the profile."""
+        profileToken: String!
+        """The published version number; omit for the active version."""
+        version: Int
+    ): CalculatedMetricPlan!
+    """
+    One page of EVERY device whose type adopts the profile, in device order, each with
+    when it was created and the numbers its metadata holds under the requested names (a
+    device holding none is still listed). Pass the previous page's nextCursor as afterId and
+    stop when it is null. deviceTokens narrows the walk to those devices, and a token that
+    is not a device of the profile is refused with INVALID_VALUE, naming it. A limit outside
+    1..500, more than 32 constant names or more than 1000 device tokens is refused with
+    INVALID_VALUE. Requires device:read; customer-scoped callers are refused.
+    """
+    calculatedBackfillRoster(
+        """The token of the profile whose devices are walked."""
+        profileToken: String!
+        """The constant names to read, at most 32, each 1 to 64 bytes."""
+        constantKeys: [String!]!
+        """Only these devices, at most 1000; omit for every device of the profile."""
+        deviceTokens: [String!]
+        """The nextCursor of the previous page; omit for the first page."""
+        afterId: String
+        """Page size, 1 to 500."""
+        limit: Int!
+    ): CalculatedBackfillRosterPage!
+    """
     One page of the tokens of the devices an operator has disabled, in device order. Pass the
     previous page's nextCursor as afterId and stop when it is null; a limit outside 1..1000 is
     refused. command-delivery walks it at startup and every few minutes to correct its record of
@@ -3586,7 +3702,8 @@ type Query {
     # Find entity groups by unique id.
     entityGroupsById(ids: [ID!]!): [EntityGroup!]!
     # Find entity groups by unique token. Answered to a member whose access is limited to part
-    # of the tenant too, with only the groups its scope names; their members and versions stay refused.
+    # of the tenant too, with only the groups its scope names, of which it reads the token and
+    # name: description, metadata, selector, members and versions are refused.
     entityGroupsByToken(tokens: [String!]!): [EntityGroup!]!
     # List entity groups that meet criteria (optionally by member family / mode).
     entityGroups(criteria: EntityGroupSearchCriteria!): EntityGroupSearchResults!

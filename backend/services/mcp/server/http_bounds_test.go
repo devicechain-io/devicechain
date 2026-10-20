@@ -73,7 +73,7 @@ func boundedServer(t *testing.T, upstreamURL string) (*httptest.Server, string) 
 	t.Helper()
 	iss, validator := mustIssuerValidator(t)
 	mux := http.NewServeMux()
-	Routes(mux, testResource, "https://as.example.com", validator, testClient(upstreamURL))
+	Routes(mux, testResource, "https://as.example.com", validator, testClient(upstreamURL), DefaultLimits())
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	tok, err := iss.IssueOAuthAccess("acme", "a@b.c", []string{"viewer"}, []string{"device:read"},

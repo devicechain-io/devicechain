@@ -9,7 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ invite: vi.fn() }));
+const h = vi.hoisted(() => ({ invite: vi.fn(), truncated: { value: false } }));
 
 vi.mock('@/auth/AuthProvider', () => ({
   useAuth: () => ({ claims: { username: 'boss@oem.example', authorities: ['*'], scopeAnchors: [] } }),
@@ -37,14 +37,15 @@ vi.mock('@/lib/api/members', async (orig) => ({
   ...(await orig<typeof import('@/lib/api/members')>()),
   // The server makes the cut by scope anchor; the fake does the same so the panel is shown
   // only what a real answer would hold.
-  listAllMembers: vi.fn(async (filter?: { scopeAnchor?: { kind: string; token: string } }) =>
-    [
+  listAllMembers: vi.fn(async (filter?: { scopeAnchor?: { kind: string; token: string } }) => ({
+    truncated: h.truncated.value,
+    members: [
       member('staff@oem.example', []),
       member('ann@acme.example', ['acme']),
       member('both@example.com', ['globex', 'acme']),
       member('gus@globex.example', ['globex']),
     ].filter((m) => m.scope.some((a) => a.kind === filter?.scopeAnchor?.kind && a.token === filter?.scopeAnchor?.token)),
-  ),
+  })),
   listTenantRoles: vi.fn(async () => [
     { token: 'viewer', name: 'Viewer', description: null, authorities: ['device:read'], owner: 'INSTANCE' },
   ]),
@@ -57,6 +58,21 @@ import { CustomerUsersPanel } from './CustomerUsersPanel';
 afterEach(cleanup);
 
 describe("a customer's Users tab", () => {
+  it('says so, and still lists what it read, when more users matched than the console reads', async () => {
+    h.truncated.value = true;
+    try {
+      render(
+        <MemoryRouter>
+          <CustomerUsersPanel customerToken="acme" />
+        </MemoryRouter>,
+      );
+      expect(await screen.findByText('ann@acme.example')).toBeTruthy();
+      expect(screen.getByTestId('users-truncated').textContent).toMatch(/first 2 users/);
+    } finally {
+      h.truncated.value = false;
+    }
+  });
+
   it('lists the members limited to this customer and nobody else', async () => {
     render(
       <MemoryRouter>

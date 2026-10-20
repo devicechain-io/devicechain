@@ -174,10 +174,9 @@ func mqttConnect(conn net.Conn, clientID string) error {
 // that listener's port.
 func startMQTTBroker(t *testing.T) (*natsserver.Server, int) {
 	t.Helper()
-	mqttPort := FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, ServerName: "mqtt-front",
-		StoreDir: JetStreamStoreDir(t), MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		StoreDir: JetStreamStoreDir(t), MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +186,7 @@ func startMQTTBroker(t *testing.T) (*natsserver.Server, int) {
 		t.Fatal("embedded nats server not ready")
 	}
 	t.Cleanup(srv.Shutdown)
-	return srv, mqttPort
+	return srv, MQTTPort(t, srv)
 }
 
 // connectMQTT opens an MQTT session for clientID on port and waits for its CONNACK.

@@ -18,6 +18,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/processor"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -37,7 +38,7 @@ func TestTheInboundMessageCarriesTheDedupIDItsSourceNamed(t *testing.T) {
 	initializeMetrics()
 
 	event := func() *model.UnresolvedEvent {
-		return &model.UnresolvedEvent{Device: "sensor-001", EventType: model.Measurement, AuthenticatedTransport: true}
+		return &model.UnresolvedEvent{Device: "sensor-001", EventType: eventtype.Measurement, AuthenticatedTransport: true}
 	}
 	ctx, msg, ok := inboundEventMessage("gw", "acme", event(), &model.UnresolvedMeasurementsPayload{},
 		processor.DedupID("acme", 4242))

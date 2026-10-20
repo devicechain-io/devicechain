@@ -6,13 +6,13 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -78,12 +78,12 @@ func TestTheAgeRefusalIsCountedOnceAndReadsNoDevice(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		age        time.Duration
-		wantReason dmproto.FailureReason
+		wantReason resolvedevent.FailureReason
 		wantCount  float64
 		readsAny   bool
 	}{
-		{"one second past the limit", eventtime.MaxAge + time.Second, dmproto.FailureReason_Invalid, 1, false},
-		{"exactly at the limit", eventtime.MaxAge, dmproto.FailureReason_DeviceNotFound, 0, true},
+		{"one second past the limit", eventtime.MaxAge + time.Second, resolvedevent.FailureReason_Invalid, 1, false},
+		{"exactly at the limit", eventtime.MaxAge, resolvedevent.FailureReason_DeviceNotFound, 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := new(dmtest.MockApi)
@@ -125,7 +125,7 @@ func (suite *InboundEventsProcessorTestSuite) TestAnEventDatedBeforeTheAgeLimitI
 
 	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
-	assert.Equal(suite.T(), uint(dmproto.FailureReason_Invalid), item.event.Reason)
+	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Invalid), item.event.Reason)
 	assert.True(suite.T(), strings.Contains(item.event.Error, "366 days"), "the reason names the limit: %q", item.event.Error)
 	suite.API.AssertNotCalled(suite.T(), "DevicesByToken", mock.Anything, mock.Anything)
 	assert.Equal(suite.T(), 1.0, counterValue(suite, reg, tooOldMetric), "the refusal is counted once")

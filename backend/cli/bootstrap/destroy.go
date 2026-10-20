@@ -219,11 +219,20 @@ func destroyedLine(instance, cluster, leftDatabase, leftArchive string, withoutS
 // containers kept running. Nothing in that output distinguished a real teardown from a
 // no-op. So every path below names the cluster it is about to act on and says how it knows
 // — and the guess says out loud that it is a guess.
+// recordedWhere names where an instance is recorded without saying the context twice:
+// describe() already reads "(context X)" when no cluster name is recorded.
+func recordedWhere(b ClusterBinding) string {
+	if b.Cluster == "" {
+		return "cluster " + b.describe()
+	}
+	return fmt.Sprintf("cluster %s (context %s)", b.Cluster, b.KubeContext)
+}
+
 func announceBinding(binding ClusterBinding, source BindingSource, instance string) {
 	switch source {
 	case BindingFromRecord:
-		fmt.Println(color.WhiteString("Instance %s is recorded in cluster %s (context %s).",
-			color.GreenString(instance), color.GreenString(binding.describe()), binding.KubeContext))
+		fmt.Println(color.WhiteString("Instance %s is recorded in %s.",
+			color.GreenString(instance), color.GreenString(recordedWhere(binding))))
 	case BindingFromFlag:
 		fmt.Println(color.WhiteString("Targeting context %s, as given.", color.GreenString(binding.KubeContext)))
 	case BindingConflict:

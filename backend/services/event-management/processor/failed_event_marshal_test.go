@@ -6,16 +6,13 @@ package processor
 import (
 	"context"
 	"errors"
-	"testing"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	dmtest "github.com/devicechain-io/dc-device-management/test"
 	emtest "github.com/devicechain-io/dc-event-management/test"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/test/msgtest"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 // The two ways an event-management failure is reported to the failed-events subject
@@ -59,12 +56,12 @@ func newFailedEventProcessor(t *testing.T) (*EventPersistenceProcessor, *recordi
 	t.Helper()
 	failed := &recordingWriter{}
 	eproc := NewEventPersistenceProcessor(
-		dmtest.DeviceManagementMicroservice,
+		emtest.EventManagementMicroservice,
 		new(msgtest.MockMessageReader),
 		failed,
 		core.NewNoOpLifecycleCallbacks(),
 		new(emtest.MockApi),
-		NewPersistMetrics(dmtest.DeviceManagementMicroservice))
+		NewPersistMetrics(emtest.EventManagementMicroservice))
 	require.NoError(t, eproc.Initialize(context.Background()))
 	return eproc, failed
 }
@@ -73,7 +70,7 @@ func newFailedEventProcessor(t *testing.T) (*EventPersistenceProcessor, *recordi
 func failedItemForTest() failedItem {
 	return failedItem{
 		tenant: "tenant1",
-		event: *dmodel.NewFailedEvent(uint(dmproto.FailureReason_Invalid), "event-management",
+		event: *resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), "event-management",
 			"message could not be parsed", errors.New("boom"), []byte("payload")),
 		correlationId: "corr-1",
 	}
@@ -85,7 +82,7 @@ func TestUnmarshalableFailedEventPublishesNothing(t *testing.T) {
 	eproc, failed := newFailedEventProcessor(t)
 
 	original := marshalFailedEvent
-	marshalFailedEvent = func(*dmodel.FailedEvent) ([]byte, error) {
+	marshalFailedEvent = func(*resolvedevent.FailedEvent) ([]byte, error) {
 		return nil, errors.New("encoder refused the event")
 	}
 	t.Cleanup(func() { marshalFailedEvent = original })
@@ -114,7 +111,7 @@ func TestEncodableFailedEventIsPublishedWithItsPayload(t *testing.T) {
 	sent := failed.messages[0]
 	require.NotEmpty(t, sent.Value, "a published failure must carry a decodable body")
 
-	decoded, err := dmproto.UnmarshalFailedEvent(sent.Value)
+	decoded, err := resolvedevent.UnmarshalFailedEvent(sent.Value)
 	require.NoError(t, err, "what is published must decode as a failed event")
 	require.Equal(t, "message could not be parsed", decoded.Message)
 }

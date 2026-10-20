@@ -540,7 +540,7 @@ puede adelantarse una marca de tiempo, y el retraso acota cuánto espera el moto
 | `ruleHealth.maxBatchRows` | 256 | Máximo de reglas que lleva una escritura de un inquilino, de 1 a 4096; un inquilino con más pendientes se escribe en varias transacciones. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | Cuánto puede tardar la escritura de un inquilino, de 100 a 60000. Una escritura que falla o agota el tiempo se descarta, no se reintenta. |
 | `derivedPublishing.maxInFlight` | 32 | Cuántas detecciones puede tener a la vez un punto de control esperando la confirmación del bus de mensajes, de 1 a 1024. Con 1, cada una se confirma antes de enviar la siguiente. Por encima de 1, las detecciones de dispositivos distintos se publican en paralelo, nunca más de una por dispositivo a la vez. Véase más abajo. |
-| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones en espera, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
+| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes que pueden ocupar juntas esas detecciones mientras esperan su publicación, incluidas las que se conservan para reintentar tras un intento fallido, de 65536 a 268435456 (256 MiB). Una sola detección más grande se publica sola. |
 
 Cada ajuste de `ruleHealth` y de `derivedPublishing` es opcional; si se indica, debe estar dentro de
 su rango (incluido el cero) o el servicio no arranca.
@@ -704,6 +704,31 @@ la memoria más rápido. Solo las dos primeras tienen techos por inquilino; el m
 temporizadores se reporta como un total de toda la instancia, porque atribuirlo a un inquilino
 exigiría recorrerlo entero en cada punto de control.
 :::
+
+### Qué tan rápido se aplican las alarmas
+
+La detección decide que una alarma debe activarse o cerrarse; el área `device-management` aplica
+después cada una de esas decisiones a la propia alarma, y lo hace varias a la vez. Un cambio de
+alarma cuesta aproximadamente diez viajes de ida y vuelta a la base de datos, así que aplicarlos de
+uno en uno alcanza un tope de unos cien por segundo en una base de datos local por mucho que el
+servicio esté ocioso, y una regla que se dispara en muchos dispositivos a la vez acumula una cola
+detrás de ese tope.
+
+| Ajuste (en `device-management`) | Valor por defecto | Qué hace |
+|---|---|---|
+| `raiseAlarm.workers` | 8, reducido para que este y `resolution.workers` dejen libres al menos 4 conexiones del pool (6 con el pool predeterminado de 20), y nunca menos de 1 | Cuántos cambios de alarma se aplican a la vez, de 1 a uno menos que `rdbConfiguration.maxOpenConnections` (20 si no se establece). Cualquier valor fuera de ese rango detiene el servicio al arrancar y nombra el ajuste. Cada trabajador retiene una conexión a la base de datos mientras escribe, por lo que un valor superior a la mitad del pool se registra en el log. Un valor explícito se comprueba por separado, no frente a `resolution.workers`, así que elija ambos a la vez. Los valores en vigor se registran al arrancar. Se lee una sola vez al arrancar. |
+
+Dentro de una réplica, los cambios de **una** misma alarma se aplican en el orden en que llegan,
+sea cual sea el ajuste; solo se solapan los cambios de alarmas distintas. El resultado nunca
+dependió de ese orden: una decisión que llega después de otra más reciente de la misma regla se
+ignora, así que un cambio reentregado, o aplicado por otra réplica, no puede deshacer uno más
+reciente. Con 1 se aplican de uno en uno.
+
+El pool de conexiones del que toman estos trabajadores también lo usan `resolution.workers` y la API,
+y cada número de trabajadores se comprueba contra el pool por separado, no en conjunto, así que deje
+margen para el otro cuando aumente uno. En una base de datos local en Docker (una cifra orientativa,
+no una afirmación de capacidad), ocho trabajadores aplicaron entre cuatro y siete veces más cambios
+de alarma por segundo que uno.
 
 ## Qué vigilar {#what-to-watch}
 

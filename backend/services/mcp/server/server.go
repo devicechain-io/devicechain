@@ -59,6 +59,7 @@ func bounds(maxBodyBytes int64, stream bool) core.RequestBounds {
 //   - issuer is the Authorization Server that issues tokens for it.
 //   - validator is the late-bound JWKS validator (nil until the readiness gate opens).
 //   - gql reaches the per-area GraphQL endpoints the tools read through.
+//   - limits bounds batch size and per-caller call rate (limits.go).
 //
 // gql is a PARAMETER rather than something this function builds, and that is what makes
 // a tool call testable end to end. Every assertion about what a tool RETURNS used to be
@@ -70,7 +71,7 @@ func bounds(maxBodyBytes int64, stream bool) core.RequestBounds {
 // Routes' business, not the caller's — the paths are load-bearing (they have to match
 // what the ingress delivers and what the 401 challenge advertises), and leaving them to
 // each caller is how the endpoint came to be served at a path nothing published.
-func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient) (mcpHandler, metadataHandler http.Handler) {
+func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *GraphQLClient, limits Limits) (mcpHandler, metadataHandler http.Handler) {
 	// The catalog of risk declarations is not needed here: it is published on each tool's
 	// own listing at registration, so nothing at runtime consults it, and it is dropped
 	// rather than stashed on a field nobody reads. The ratchet gets its copy by calling
@@ -91,7 +92,9 @@ func New(resourceID, issuer string, validator func() *coreauth.Validator, gql *G
 			ResourceMetadataURL: metadataURL(resourceID),
 			Scopes:              []string{coreauth.ScopeReadOnly},
 		},
-	)(core.BufferBody(streamable, maxRequestBodyBytes))
+	)(core.BufferBody(limitMessages(streamable, limits), maxRequestBodyBytes))
+	// limitMessages sits inside the buffering because it reads the body, and inside the
+	// bearer check because it keys on the verified subject.
 	// The body is buffered INSIDE the bearer check, so a caller with no valid token is
 	// refused before any of it is held in memory. The deadlines go outside it, in
 	// Routes, so that caller still cannot stall the connection.
@@ -267,8 +270,8 @@ func metadataURL(resourceID string) string {
 // The probe and metrics handlers main.go adds are more specific patterns, so
 // ServeMux still routes them ahead of this catch-all.
 func Routes(mux *http.ServeMux, resourceID, issuer string, validator func() *coreauth.Validator,
-	gql *GraphQLClient) {
-	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql)
+	gql *GraphQLClient, limits Limits) {
+	mcpHandler, metadataHandler := New(resourceID, issuer, validator, gql, limits)
 
 	// Every handler here runs with a body-delivery deadline and an execution deadline;
 	// without them only the server's header timeout applies, and a client that stalls

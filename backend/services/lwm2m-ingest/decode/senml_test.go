@@ -293,3 +293,15 @@ func TestASmallPackSkipsNothing(t *testing.T) {
 	require.Len(t, samples, 2)
 	assert.Equal(t, Skips{}, skips)
 }
+
+// Records of one pack with no absolute time are all dated at ONE receipt instant, even when the
+// clock moves while the pack is decoded: the shared instant is what makes them one sample.
+func TestUntimedRecordsOfOnePackShareOneReceiptInstant(t *testing.T) {
+	tick := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { tick = tick.Add(time.Millisecond); return tick }
+	out, _, err := Samples(message.AppSenmlJSON, []byte(`[{"bn":"/3305/0/","n":"5800","v":230},{"n":"5805","v":2},{"n":"5700","v":1,"t":-5}]`), clock)
+	require.NoError(t, err)
+	require.Len(t, out, 3)
+	assert.Equal(t, out[0].Time, out[1].Time)
+	assert.Equal(t, out[0].Time, out[2].Time)
+}

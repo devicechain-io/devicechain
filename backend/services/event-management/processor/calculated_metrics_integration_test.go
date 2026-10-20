@@ -12,14 +12,15 @@ package processor
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,7 +96,7 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 	start, end := at(0).Truncate(time.Hour), at(0).Truncate(time.Hour).Add(time.Hour)
 	buckets, err := api.BucketedMeasurements(ctx, model.MeasurementAggregationCriteria{DeviceToken: &device,
 		Name: &name, StartTime: &start, EndTime: &end, IntervalSeconds: 3600,
-		EventTypes: []esmodel.EventType{esmodel.Measurement}})
+		EventTypes: []eventtype.EventType{eventtype.Measurement}})
 	require.NoError(t, err)
 	require.Len(t, buckets, 1)
 	assert.EqualValues(t, 3, buckets[0].Count)
@@ -106,7 +107,7 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 	// evaluator did NOT skip is refused by the column, and takes its reading's raw values
 	// with it. That is what the unstorable skip prevents.
 	forged := resolveAt(t, v1, map[string]string{"voltage": "1", "current": "2"}, at(4))
-	entries := forged.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[0].Entries
+	entries := forged.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries
 	for i := range entries {
 		if entries[i].Derived {
 			entries[i].Value = "1e+13"
@@ -117,12 +118,12 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 }
 
 // resolveAt is resolveOverTheWire for a reading at a chosen instant.
-func resolveAt(t *testing.T, profile dmmodel.ProfileResolution, readings map[string]string, at time.Time) dmmodel.ResolvedEvent {
+func resolveAt(t *testing.T, profile dmmodel.ProfileResolution, readings map[string]string, at time.Time) resolvedevent.ResolvedEvent {
 	t.Helper()
 	ev := resolveOverTheWire(t, profile, readings, eventtime.WireCompact)
 	ev.OccurredTime, ev.ProcessedTime = at, at
-	for i := range ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries {
-		ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[i].OccurredTime = at
+	for i := range ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries {
+		ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[i].OccurredTime = at
 	}
 	return ev
 }

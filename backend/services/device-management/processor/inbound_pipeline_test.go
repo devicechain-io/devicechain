@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"io"
 	"net/url"
 	"strconv"
@@ -15,12 +16,11 @@ import (
 	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -149,11 +149,11 @@ func gateSource(nmgr *messaging.NatsManager, i int, seq uint64, log *ackLog) mes
 // gateEvent is a resolved event whose device token names i, so a stored copy says which
 // submission it was.
 func gateEvent(i int) EventResolutionResults {
-	return EventResolutionResults{Resolved: &dmodel.ResolvedEvent{
+	return EventResolutionResults{Resolved: &resolvedevent.ResolvedEvent{
 		Source:            "gate",
 		SourceDeviceToken: fmt.Sprintf("dev-%d", i),
-		EventType:         esmodel.Measurement,
-		Payload:           &dmodel.ResolvedMeasurementsPayload{},
+		EventType:         eventtype.Measurement,
+		Payload:           &resolvedevent.ResolvedMeasurementsPayload{},
 		OccurredTime:      time.Now(),
 		ProcessedTime:     time.Now(),
 	}}
@@ -421,7 +421,7 @@ func TestResolvedEventsReachTheStreamInSubmissionOrder(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stream sequence %d: %v", seq, err)
 		}
-		ev, err := proto.UnmarshalResolvedEvent(raw.Data)
+		ev, err := resolvedevent.UnmarshalResolvedEvent(raw.Data)
 		if err != nil {
 			t.Fatalf("stream sequence %d: %v", seq, err)
 		}

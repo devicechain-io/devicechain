@@ -72,7 +72,7 @@ except by refusing an ack.
 Resolution happens in device-management, not here.
 `backend/services/device-management/processor/event_resolver.go:703` drains inbound events, derives
 the tenant from the subject and fails closed if it cannot (`:720-725`), and produces a
-`ResolvedEvent` (`backend/services/device-management/model/events.go:89-122`) carrying: the source
+`ResolvedEvent` (the shared wire contract, `backend/core/resolvedevent/events.go:220-279`) carrying: the source
 device token (by token, never a row id), the anchors from the relationship graph, the
 `ProfileVersionToken` in the form `{profileToken}@{version}`, the occurred and processed times, the
 event type, the payload — and `ScopeMemberships`, the dynamic-group stamp described in §8.

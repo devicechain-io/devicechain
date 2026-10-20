@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
@@ -197,7 +200,7 @@ func TestEmitterProducesResolverReadableEvent(t *testing.T) {
 	require.NoError(t, err, "the emitted bytes must round-trip through the resolver's decoder")
 	assert.Equal(t, "dev-1", ev.Device)
 	assert.Equal(t, "sparkplug:h1", ev.Source)
-	assert.Equal(t, esmodel.Measurement, ev.EventType)
+	assert.Equal(t, eventtype.Measurement, ev.EventType)
 	assert.Nil(t, ev.AltId, "AltId must be nil so event-management's dedup index does not collapse distinct messages")
 	assert.False(t, ev.ProcessedTime.IsZero(), "ProcessedTime must be a real time, not the zero value")
 	assert.False(t, ev.OccurredTime.IsZero())
@@ -257,12 +260,12 @@ func TestEmitPresenceProducesResolverReadableStateChange(t *testing.T) {
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
 	require.NoError(t, err)
-	assert.Equal(t, esmodel.StateChange, ev.EventType)
+	assert.Equal(t, eventtype.StateChange, ev.EventType)
 	assert.Equal(t, "dev-1", ev.Device)
 	assert.False(t, ev.ProcessedTime.IsZero())
 	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
 	require.True(t, ok)
-	assert.Equal(t, esmodel.PresenceDisconnected, p.State)
+	assert.Equal(t, presence.StateDisconnected, p.State)
 	assert.Equal(t, "ndeath-will", p.Reason)
 	assert.Equal(t, "1799000000123456789", p.SessionId, "SessionId rides the wire as a string with full precision")
 
@@ -295,11 +298,11 @@ func TestEmitPresenceDemotionProducesResolverReadableStateChange(t *testing.T) {
 
 	ev, err := esproto.UnmarshalUnresolvedEvent(w.msgs[0].Value)
 	require.NoError(t, err)
-	assert.Equal(t, esmodel.StateChange, ev.EventType)
+	assert.Equal(t, eventtype.StateChange, ev.EventType)
 	assert.Equal(t, "mqtt1", ev.Source, "the demotion must be attributed to the RELEASING source")
 	p, ok := ev.Payload.(*esmodel.UnresolvedStateChangePayload)
 	require.True(t, ok)
-	assert.Equal(t, esmodel.PresenceDemoted, p.State)
+	assert.Equal(t, presence.StateDemoted, p.State)
 	assert.Equal(t, "presence tap disabled", p.Reason)
 	assert.Equal(t, "1799000000123456789", p.SessionId,
 		"a demotion must NAME the session it releases; the projection matches on it")

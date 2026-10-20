@@ -1315,6 +1315,19 @@ functionalAreas:
       #                     # adds a pull without a second copy of the caches. Raise it
       #                     # only when resolvers sit idle while the consumer lags.
       #
+      # Alarm application (default shown). Detection's raise and clear decisions are
+      # applied to the alarm rows this many at a time; one change is about ten database
+      # round trips, so one at a time caps near a hundred a second. On one replica, changes
+      # to one alarm keep their order. Each worker holds a pooled connection while it
+      # writes, from the same pool as resolution.workers; an explicit count is bounded
+      # separately from it, so choose the two together.
+      #   raiseAlarm:
+      #     workers: 6      # 1 to one below rdbConfiguration.maxOpenConnections
+      #                     # (20 unless set). Unset, it is 8 lowered so that it and
+      #                     # resolution.workers leave 4 connections free (6 with the
+      #                     # default pool), never below 1. An explicit value is checked
+      #                     # on its own: out of range stops the service.
+      #
       # What each replica keeps in its own memory of each of the three lookup caches
       # kept per device (a device by its token, its tracked relationships, its group
       # memberships), per cache (defaults shown). An entry costs about 290 bytes for a
@@ -1624,6 +1637,23 @@ functionalAreas:
     #                         # events/s per replica every event still commits
     #                         # alone, up to this much later. 0 commits only what is
     #                         # already waiting, which adds no latency.
+    #
+    # Calculated-metric backfill worker (defaults shown). It fills calculated metrics into
+    # stored history for jobs a tenant creates; with no job it costs one lock attempt and
+    # two small queries every ten seconds. One worker runs for the whole instance and holds
+    # ONE pooled connection, so it needs persistence.writers + 1 + 4 spare connections to
+    # fit the pool. Left unset, it runs when they fit and stays off (with a startup warning
+    # naming the settings) when they do not; set to true, a pool that cannot hold it stops
+    # the service at startup.
+    #   config:
+    #     calculatedBackfill:
+    #       enabled:              # unset (the default), true, or false. false stops the
+    #                             # worker; a running job stays RUNNING.
+    #                             # To stop jobs cleanly instead, set cancel_requested_at on
+    #                             # "event-management".calculated_backfills rows that are
+    #                             # QUEUED or RUNNING: each ends CANCELLED within one batch.
+    #       rowsPerSecond: 20000  # rows read plus written per second, 1 to 200000. A
+    #                             # provisional rate, not yet measured on a loaded instance.
   device-state:
     # CPU LIMIT raised from the 500m default. On GKE (3 x n2-standard-8, SSD
     # persistent disks, --ha, v0.18.0, shipped defaults) this service was throttled in

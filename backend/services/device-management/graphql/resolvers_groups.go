@@ -50,8 +50,14 @@ func (r *EntityGroupResolver) Name() *string {
 	return util.NullStr(r.M.Name)
 }
 
-func (r *EntityGroupResolver) Description() *string {
-	return util.NullStr(r.M.Description)
+// Description is the operator's free text about the group, which can say anything the metadata
+// can. A scoped caller reads the group's token and name only (ADR-081), so it is refused here
+// the way metadata and the selector are.
+func (r *EntityGroupResolver) Description(ctx context.Context) (*string, error) {
+	if err := refuseScopedDefinition(ctx); err != nil {
+		return nil, err
+	}
+	return util.NullStr(r.M.Description), nil
 }
 
 func (r *EntityGroupResolver) ImageUrl() *string {

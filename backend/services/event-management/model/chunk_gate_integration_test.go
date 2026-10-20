@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -64,7 +64,7 @@ func backdateEvents(t *testing.T, db *gorm.DB, table string, from, n int, step t
 	}
 	src := `WITH src AS (SELECT g, TIMESTAMPTZ '2026-07-01' - g * make_interval(secs => ?::double precision) AS ts
 		FROM generate_series(?::int, ?::int) g) `
-	require.NoErrorf(t, db.Exec(src+insert, step.Seconds(), from, from+n-1, int(esmodel.Measurement)).Error, "backdate %s", table)
+	require.NoErrorf(t, db.Exec(src+insert, step.Seconds(), from, from+n-1, int(eventtype.Measurement)).Error, "backdate %s", table)
 }
 
 // chunkCount reads how many chunks table has, through the public view (not the catalog

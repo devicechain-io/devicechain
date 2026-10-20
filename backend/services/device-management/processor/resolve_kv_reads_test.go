@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"reflect"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	putest "github.com/devicechain-io/dc-microservice/rdb/partialupdatetest"
@@ -239,7 +241,7 @@ func (r *resolveRig) statements() []string {
 	return append([]string(nil), r.sql...)
 }
 
-func (r *resolveRig) resolve(event *esmodel.UnresolvedEvent) *model.ResolvedEvent {
+func (r *resolveRig) resolve(event *esmodel.UnresolvedEvent) *resolvedevent.ResolvedEvent {
 	r.t.Helper()
 	results, reason, err := r.rez.ResolveEvent(r.ctx, event)
 	if err != nil || reason != 0 {
@@ -254,7 +256,7 @@ func (r *resolveRig) resolve(event *esmodel.UnresolvedEvent) *model.ResolvedEven
 func tempEvent(value string) *esmodel.UnresolvedEvent {
 	return &esmodel.UnresolvedEvent{
 		Device:    "dev",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: map[string]string{"temp": value}}},
 		},
@@ -265,7 +267,7 @@ func devLocationEvent() *esmodel.UnresolvedEvent {
 	lat, lon := "33.7490", "-84.3880"
 	return &esmodel.UnresolvedEvent{
 		Device:    "dev",
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload: &esmodel.UnresolvedLocationsPayload{
 			Entries: []esmodel.UnresolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		},
@@ -273,9 +275,9 @@ func devLocationEvent() *esmodel.UnresolvedEvent {
 }
 
 // stampedUnit returns the unit stamped on the event's single measurement, or "" if none.
-func stampedUnit(t testing.TB, resolved *model.ResolvedEvent) string {
+func stampedUnit(t testing.TB, resolved *resolvedevent.ResolvedEvent) string {
 	t.Helper()
-	payload, ok := resolved.Payload.(*model.ResolvedMeasurementsPayload)
+	payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 	if !ok || len(payload.Entries) != 1 || len(payload.Entries[0].Entries) != 1 {
 		t.Fatalf("resolved payload is not one measurement: %#v", resolved.Payload)
 	}

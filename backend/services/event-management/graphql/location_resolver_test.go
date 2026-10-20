@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/graph-gophers/graphql-go/ast"
 	"github.com/stretchr/testify/assert"
@@ -63,7 +63,7 @@ func locationFixture() model.LocationEvent {
 		// fixture without one would exercise the failure path instead of the read.
 		PayloadId:    fixturePayloadId,
 		DeviceToken:  "gps-tracker-7",
-		EventType:    esmodel.Location,
+		EventType:    eventtype.Location,
 		OccurredTime: fixtureOccurred,
 		Latitude:     sql.NullFloat64{Float64: fixtureLatitude, Valid: true},
 		Longitude:    sql.NullFloat64{Float64: fixtureLongitude, Valid: true},
@@ -127,7 +127,7 @@ func TestLocationEventNullFieldsResolveToNil(t *testing.T) {
 	// ignoring Valid would hand back 0 rather than nil.
 	r := newLocationResolver(model.LocationEvent{
 		DeviceToken:  "gps-tracker-7",
-		EventType:    esmodel.Location,
+		EventType:    eventtype.Location,
 		OccurredTime: fixtureOccurred,
 		Latitude:     sql.NullFloat64{Valid: false},
 		Longitude:    sql.NullFloat64{Valid: false},
@@ -168,7 +168,7 @@ func TestLocationEventNonNumericAccessors(t *testing.T) {
 	r := newLocationResolver(locationFixture())
 
 	assert.Equal(t, "gps-tracker-7", r.DeviceToken(), "DeviceToken() must return the device token")
-	assert.Equal(t, int32(esmodel.Location), r.EventType(), "EventType() must return the location event type")
+	assert.Equal(t, int32(eventtype.Location), r.EventType(), "EventType() must return the location event type")
 
 	occurred := r.OccurredTime()
 	require.NotNil(t, occurred, "OccurredTime() must not be nil for a real timestamp")

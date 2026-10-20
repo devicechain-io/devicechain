@@ -8,17 +8,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"testing"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/eventtime"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,22 +48,22 @@ func calcProfile(version, formula string) dmmodel.ProfileResolution {
 // resolveOverTheWire resolves one reading (no alternate id, the shape LwM2M and Sparkplug
 // produce) under profile and returns it as the historian decodes it from format.
 func resolveOverTheWire(t testing.TB, profile dmmodel.ProfileResolution, readings map[string]string,
-	format eventtime.WireFormat) dmmodel.ResolvedEvent {
+	format eventtime.WireFormat) resolvedevent.ResolvedEvent {
 	t.Helper()
 	rez := dmprocessor.NewEventResolver(1, nil, "", dmprocessor.EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	device := &dmmodel.Device{Model: gorm.Model{ID: 1}, TokenReference: rdb.TokenReference{Token: "meter-1"}}
-	unresolved := &esmodel.UnresolvedEvent{Source: "lwm2m", Device: "meter-1", EventType: esmodel.Measurement,
+	unresolved := &esmodel.UnresolvedEvent{Source: "lwm2m", Device: "meter-1", EventType: eventtype.Measurement,
 		OccurredTime: calcAt, ProcessedTime: calcAt,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{{Measurements: readings}}}}
 	payload, err := rez.ResolveMeasurementsEventPayload(context.Background(), device, profile, unresolved)
 	require.NoError(t, err)
 	scope := profile.Scope()
-	resolved := &dmmodel.ResolvedEvent{Source: "lwm2m", SourceDeviceToken: "meter-1", EventType: esmodel.Measurement,
+	resolved := &resolvedevent.ResolvedEvent{Source: "lwm2m", SourceDeviceToken: "meter-1", EventType: eventtype.Measurement,
 		OccurredTime: calcAt, ProcessedTime: calcAt, DeviceTypeToken: scope.DeviceTypeToken,
 		ProfileVersionToken: scope.ProfileVersionToken, Payload: payload}
-	encoded, err := dmproto.MarshalResolvedEventAs(resolved, format)
+	encoded, err := resolvedevent.MarshalResolvedEventAs(resolved, format)
 	require.NoError(t, err)
-	decoded, err := dmproto.UnmarshalResolvedEvent(encoded)
+	decoded, err := resolvedevent.UnmarshalResolvedEvent(encoded)
 	require.NoError(t, err)
 	return *decoded
 }
@@ -85,7 +86,7 @@ func TestACalculatedValueIsStoredOnceAcrossAFormulaChange(t *testing.T) {
 			require.Equal(t, "2823.625", derivedValue(t, second, "power_kw"),
 				"precondition: the two copies carry different calculated values")
 
-			for _, ev := range []dmmodel.ResolvedEvent{first, second, first} {
+			for _, ev := range []resolvedevent.ResolvedEvent{first, second, first} {
 				_, err := ep.PersistEvent(ctx, ev)
 				require.NoError(t, err)
 			}
@@ -113,8 +114,8 @@ func TestACalculatedValueIsStoredOnceAcrossAFormulaChange(t *testing.T) {
 		ctx := core.WithTenant(context.Background(), "acme")
 		for _, formula := range []string{"voltage * current / 1000", "voltage * current"} {
 			ev := resolveOverTheWire(t, calcProfile("v", formula), meterReading, eventtime.WireCompact)
-			for i := range ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[0].Entries {
-				ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[0].Entries[i].Derived = false
+			for i := range ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries {
+				ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[i].Derived = false
 			}
 			_, err := ep.PersistEvent(ctx, ev)
 			require.NoError(t, err)
@@ -129,9 +130,9 @@ func TestACalculatedValueIsStoredOnceAcrossAFormulaChange(t *testing.T) {
 
 // derivedValue is the calculated value of key on a resolved reading, failing when it is
 // absent or not flagged Derived.
-func derivedValue(t testing.TB, ev dmmodel.ResolvedEvent, key string) string {
+func derivedValue(t testing.TB, ev resolvedevent.ResolvedEvent, key string) string {
 	t.Helper()
-	for _, mx := range ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[0].Entries {
+	for _, mx := range ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries {
 		if mx.Name == key {
 			require.True(t, mx.Derived, "%s is not flagged Derived after the wire", key)
 			return mx.Value
@@ -154,7 +155,7 @@ func TestAFormulaFreeReadingKeepsItsEventIdThroughTheResolver(t *testing.T) {
 		`{"Name":"current","Value":"12.25","Classifier":2,"Unit":"A","DataType":"DOUBLE"},` +
 		`{"Name":"voltage","Value":"230.5","Classifier":1,"Unit":"V","DataType":"DOUBLE"}],` +
 		`"OccurredTime":"2026-10-16T12:00:00Z"}]}`
-	parent := &model.Event{DeviceToken: "meter-1", EventType: esmodel.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
+	parent := &model.Event{DeviceToken: "meter-1", EventType: eventtype.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
 	want := model.DeriveEventId("acme", parent, []byte(literal))
 	for _, format := range []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact} {
 		ev := resolveOverTheWire(t, profile, meterReading, format)
@@ -177,15 +178,15 @@ func TestAFormulaFreeReadingKeepsItsEventIdThroughTheResolver(t *testing.T) {
 func TestOneSampleResolvesToOneIdAndOneCalculatedValue(t *testing.T) {
 	profile := calcProfileFour()
 	reading := map[string]string{"voltage": "230.123456789", "current": "12.987654321", "temp": "81.3", "fan": "0"}
-	parent := &model.Event{DeviceToken: "meter-1", EventType: esmodel.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
+	parent := &model.Event{DeviceToken: "meter-1", EventType: eventtype.Measurement, OccurredTime: calcAt, Source: "lwm2m"}
 	formats := []eventtime.WireFormat{eventtime.WireLegacy, eventtime.WireCompact}
 
-	run := func(i int, format func(dmmodel.ResolvedMeasurementEntry) string) (string, string) {
+	run := func(i int, format func(resolvedevent.ResolvedMeasurementEntry) string) (string, string) {
 		ev := resolveOverTheWire(t, profile, reading, formats[i%2])
 		id, err := model.DeriveEventIdForPayload("acme", parent, ev.Payload)
 		require.NoError(t, err)
 		var derived []string
-		for _, mx := range ev.Payload.(*dmmodel.ResolvedMeasurementsPayload).Entries[0].Entries {
+		for _, mx := range ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries {
 			if mx.Derived {
 				derived = append(derived, mx.Name+"="+format(mx))
 			}
@@ -195,7 +196,7 @@ func TestOneSampleResolvesToOneIdAndOneCalculatedValue(t *testing.T) {
 		require.NoError(t, err)
 		return fmt.Sprintf("%x", id), string(b)
 	}
-	asStored := func(mx dmmodel.ResolvedMeasurementEntry) string { return mx.Value }
+	asStored := func(mx resolvedevent.ResolvedMeasurementEntry) string { return mx.Value }
 
 	ids, values := map[string]int{}, map[string]int{}
 	for i := 0; i < 1000; i++ {
@@ -211,7 +212,7 @@ func TestOneSampleResolvesToOneIdAndOneCalculatedValue(t *testing.T) {
 	// id stays one — so the check above can see a wobble, and the id is not what sees it.
 	ids, values = map[string]int{}, map[string]int{}
 	for i := 0; i < 30; i++ {
-		unstable := func(mx dmmodel.ResolvedMeasurementEntry) string {
+		unstable := func(mx resolvedevent.ResolvedMeasurementEntry) string {
 			f, err := strconv.ParseFloat(mx.Value, 64)
 			require.NoError(t, err)
 			return strconv.FormatFloat(f, 'f', 6+i%3, 64)

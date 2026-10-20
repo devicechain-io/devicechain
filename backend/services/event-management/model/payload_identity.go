@@ -61,6 +61,21 @@ func DeriveLocationPayloadId(request *LocationEventCreateRequest) ([]byte, error
 	return DerivePayloadId(request.EventId, entry), nil
 }
 
+// CanonicalEntryInstant is the one definition of a measurement row's instant as the
+// system stores and identifies it: UTC, truncated to the microseconds a timestamptz holds.
+//
+// TRUNCATE, NEVER ROUND, AND NEVER LEAVE IT TO THE DRIVER. Live, a reading's instant is
+// nanosecond-precise and may carry a zone offset; what is stored (and read back by anything
+// that re-derives a row, such as a history backfill) is microseconds. A preimage hashed from
+// the live value and one hashed from the stored value are then different strings for the
+// same reading, so one sample could hold two derived rows. Both the derived payload id and
+// the stored occurred_time go through this function, so the id a row has when it is built
+// is the id recomputed from what was stored. The raw payload id deliberately does NOT: raw
+// ids are never recomputed, and changing them would make a redelivered raw row insert again.
+func CanonicalEntryInstant(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Microsecond)
+}
+
 // DeriveMeasurementPayloadId computes the payload_id of one measurement row from its
 // parent event and the reading's own content.
 //
@@ -74,7 +89,10 @@ func DeriveLocationPayloadId(request *LocationEventCreateRequest) ([]byte, error
 // formula that computed it, and the formula can change between two copies of one reading (a
 // profile published between a device's resend and its original). Keyed on its value, the
 // second copy would store a second row; keyed on (event, name, instant), the first value
-// written for a reading is the one kept and nothing can add another. The raw branch below is
+// written for a reading is the one kept and nothing can add another. The instant is the
+// CanonicalEntryInstant (UTC, microseconds), so the id is reproducible from the stored row.
+// A row stored before that change with a sub-microsecond or non-UTC instant holds the old
+// id; redelivered after the deploy, it inserts once more. The raw branch below is
 // untouched, and a raw row's id is exactly what it always was.
 func DeriveMeasurementPayloadId(request *MeasurementEventCreateRequest) ([]byte, error) {
 	if request.Derived {
@@ -82,7 +100,7 @@ func DeriveMeasurementPayloadId(request *MeasurementEventCreateRequest) ([]byte,
 			Kind     string
 			Name     string
 			Occurred time.Time
-		}{"derived", request.Name, request.EntryOccurredTime})
+		}{"derived", request.Name, CanonicalEntryInstant(request.EntryOccurredTime)})
 		if err != nil {
 			return nil, fmt.Errorf("canonicalizing a derived MeasurementEvent for its payload identity: %w", err)
 		}

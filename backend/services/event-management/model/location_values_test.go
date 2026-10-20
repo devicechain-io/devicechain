@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -54,7 +54,7 @@ func newEventTablesApi(t *testing.T) *Api {
 
 // eventOfType builds a base event of the given type whose identity is derived exactly
 // as the ingest path derives it, so distinct content yields distinct parents.
-func eventOfType(tenant, device string, kind esmodel.EventType, occurred time.Time, payload string) Event {
+func eventOfType(tenant, device string, kind eventtype.EventType, occurred time.Time, payload string) Event {
 	ev := Event{
 		DeviceToken:  device,
 		EventType:    kind,
@@ -99,7 +99,7 @@ func TestLocationEventRoundTripsEveryFixFieldWithItsOwnValue(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 8, 1, 10, 15, 30, 0, time.UTC)
 
-	ev := eventOfType("acme", "device-1", esmodel.Location, occurred, "fix-1")
+	ev := eventOfType("acme", "device-1", eventtype.Location, occurred, "fix-1")
 	created, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx),
 		[]*LocationEventCreateRequest{atlanta.request(ev)})
 	require.NoError(t, err, "the fix must persist")
@@ -139,7 +139,7 @@ func TestLocationEventOmittedFixFieldsReadBackAsNullNotZero(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 8, 1, 10, 15, 30, 0, time.UTC)
 
-	ev := eventOfType("acme", "device-1", esmodel.Location, occurred, "bare-fix")
+	ev := eventOfType("acme", "device-1", eventtype.Location, occurred, "bare-fix")
 	_, err := api.CreateLocationEvents(ctx, api.RDB.DB(ctx), []*LocationEventCreateRequest{{
 		Event:             ev,
 		EntryOccurredTime: ev.OccurredTime,
@@ -198,7 +198,7 @@ func locationPayloadIdOf(t *testing.T, api *Api, ctx context.Context, req *Locat
 // the field under test.
 func TestLocationPayloadIdDiscriminatesOnEveryFixField(t *testing.T) {
 	occurred := time.Date(2026, 8, 1, 10, 15, 30, 0, time.UTC)
-	ev := eventOfType("acme", "device-1", esmodel.Location, occurred, "fix-batch")
+	ev := eventOfType("acme", "device-1", eventtype.Location, occurred, "fix-batch")
 
 	for _, c := range []struct {
 		field string
@@ -236,7 +236,7 @@ func TestLocationPayloadIdIsStableForAnIdenticalFix(t *testing.T) {
 	api := newEventTablesApi(t)
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 8, 1, 10, 15, 30, 0, time.UTC)
-	ev := eventOfType("acme", "device-1", esmodel.Location, occurred, "fix-batch")
+	ev := eventOfType("acme", "device-1", eventtype.Location, occurred, "fix-batch")
 
 	first := locationPayloadIdOf(t, api, ctx, atlanta.request(ev))
 	second := locationPayloadIdOf(t, api, ctx, atlanta.request(ev))

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -40,7 +40,7 @@ func newCalculatedTestApi(t *testing.T) *Api {
 func seedReading(t *testing.T, api *Api, tenant, device, event string, at time.Time, name string, v float64) {
 	t.Helper()
 	row := &MeasurementEvent{EventId: []byte(event), PayloadId: []byte(event + "/" + name + "/" + at.String()),
-		DeviceToken: device, EventType: esmodel.Measurement, OccurredTime: at, Name: name,
+		DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: at, Name: name,
 		Value: sql.NullFloat64{Float64: v, Valid: true}}
 	require.NoError(t, api.RDB.DB(core.WithTenant(context.Background(), tenant)).Create(row).Error)
 }

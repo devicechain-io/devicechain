@@ -7,7 +7,7 @@ import (
 	"database/sql"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -36,7 +36,7 @@ type Event struct {
 	rdb.TenantScoped
 	EventId       []byte `gorm:"not null"`
 	DeviceToken   string `gorm:"type:varchar(128)"`
-	EventType     esmodel.EventType
+	EventType     eventtype.EventType
 	OccurredTime  time.Time
 	Source        string
 	AltId         sql.NullString
@@ -81,12 +81,12 @@ func (Event) DefaultOrder() string {
 // more anchor rows.
 type EventAnchor struct {
 	rdb.TenantScoped
-	EventId      []byte            `gorm:"not null"`
-	DeviceToken  string            `gorm:"type:varchar(128);not null"`
-	EventType    esmodel.EventType `gorm:"not null"`
-	OccurredTime time.Time         `gorm:"not null"`
-	AnchorType   string            `gorm:"not null"`
-	AnchorToken  string            `gorm:"type:varchar(128);not null"`
+	EventId      []byte              `gorm:"not null"`
+	DeviceToken  string              `gorm:"type:varchar(128);not null"`
+	EventType    eventtype.EventType `gorm:"not null"`
+	OccurredTime time.Time           `gorm:"not null"`
+	AnchorType   string              `gorm:"not null"`
+	AnchorToken  string              `gorm:"type:varchar(128);not null"`
 }
 
 // The three payload tables (location/measurement/alert) are hypertables in their
@@ -110,10 +110,10 @@ type LocationEvent struct {
 	// base event's key cannot cover payload rows, so without it a redelivery of an
 	// event carrying no alternateId — which is every event lwm2m-ingest and
 	// sparkplug-ingest produce — left one envelope owning N copies of its own rows.
-	PayloadId    []byte            `gorm:"not null"`
-	DeviceToken  string            `gorm:"type:varchar(128);not null"`
-	EventType    esmodel.EventType `gorm:"not null"`
-	OccurredTime time.Time         `gorm:"not null"`
+	PayloadId    []byte              `gorm:"not null"`
+	DeviceToken  string              `gorm:"type:varchar(128);not null"`
+	EventType    eventtype.EventType `gorm:"not null"`
+	OccurredTime time.Time           `gorm:"not null"`
 	// Latitude/Longitude are degrees, so 8 fractional digits (~1.1mm) with just
 	// enough integer room for ±90 / ±180. Elevation is metres, not degrees: it
 	// needs integer range (mountains, aircraft, orbit), not sub-degree precision —
@@ -200,12 +200,12 @@ type MeasurementEvent struct {
 	// base event's key cannot cover payload rows, so without it a redelivery of an
 	// event carrying no alternateId — which is every event lwm2m-ingest and
 	// sparkplug-ingest produce — left one envelope owning N copies of its own rows.
-	PayloadId    []byte            `gorm:"not null"`
-	DeviceToken  string            `gorm:"type:varchar(128);not null"`
-	EventType    esmodel.EventType `gorm:"not null"`
-	OccurredTime time.Time         `gorm:"not null"`
-	Name         string            `gorm:"not null"`
-	Value        sql.NullFloat64   `gorm:"type:decimal(20,8);"`
+	PayloadId    []byte              `gorm:"not null"`
+	DeviceToken  string              `gorm:"type:varchar(128);not null"`
+	EventType    eventtype.EventType `gorm:"not null"`
+	OccurredTime time.Time           `gorm:"not null"`
+	Name         string              `gorm:"not null"`
+	Value        sql.NullFloat64     `gorm:"type:decimal(20,8);"`
 	Classifier   *uint
 	// Unit is unbounded text to match the source MetricDefinition.Unit (an unbounded
 	// column with no length validation) — a bound here could reject a long unit at
@@ -253,7 +253,7 @@ type MeasurementEventCreateRequest struct {
 type MeasurementRollup struct {
 	rdb.TenantScoped
 	DeviceToken string `gorm:"type:varchar(128)"`
-	EventType   esmodel.EventType
+	EventType   eventtype.EventType
 	Name        string
 	Bucket      time.Time
 	SumValue    sql.NullFloat64
@@ -275,12 +275,12 @@ type AlertEvent struct {
 	// base event's key cannot cover payload rows, so without it a redelivery of an
 	// event carrying no alternateId — which is every event lwm2m-ingest and
 	// sparkplug-ingest produce — left one envelope owning N copies of its own rows.
-	PayloadId    []byte            `gorm:"not null"`
-	DeviceToken  string            `gorm:"type:varchar(128);not null"`
-	EventType    esmodel.EventType `gorm:"not null"`
-	OccurredTime time.Time         `gorm:"not null"`
-	Type         string            `gorm:"not null"`
-	Level        uint32            `gorm:"not null"`
+	PayloadId    []byte              `gorm:"not null"`
+	DeviceToken  string              `gorm:"type:varchar(128);not null"`
+	EventType    eventtype.EventType `gorm:"not null"`
+	OccurredTime time.Time           `gorm:"not null"`
+	Type         string              `gorm:"not null"`
+	Level        uint32              `gorm:"not null"`
 	Message      string
 	Source       string
 }
@@ -329,11 +329,11 @@ type StateChangeEvent struct {
 	// (device_token, event_type, occurred_time) join, which could not identify a
 	// parent uniquely — two distinct events sharing that tuple made this row's
 	// parentage ambiguous, and it silently resolved to whichever envelope won.
-	EventId      []byte            `gorm:"not null"`
-	DeviceToken  string            `gorm:"type:varchar(128);not null"`
-	EventType    esmodel.EventType `gorm:"not null"`
-	OccurredTime time.Time         `gorm:"not null"`
-	State        string            `gorm:"type:varchar(16);not null"`
+	EventId      []byte              `gorm:"not null"`
+	DeviceToken  string              `gorm:"type:varchar(128);not null"`
+	EventType    eventtype.EventType `gorm:"not null"`
+	OccurredTime time.Time           `gorm:"not null"`
+	State        string              `gorm:"type:varchar(16);not null"`
 	Reason       string
 	SessionId    uint64 `gorm:"not null;default:0"`
 }

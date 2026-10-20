@@ -6,12 +6,11 @@ package processor
 import (
 	"context"
 	"errors"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-dashboard-management/model"
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/messaging"
@@ -27,7 +26,7 @@ func (s *stubAck) Ack() error { s.acked++; return nil }
 
 func deleted(t *testing.T, subject string, kind entity.Type, token string, at time.Time, delivered int, ack *stubAck) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalEntityDeletedEvent(&dmodel.EntityDeletedEvent{EntityType: kind, EntityId: 9,
+	b, err := entityevent.MarshalEntityDeletedEvent(&entityevent.EntityDeletedEvent{EntityType: kind, EntityId: 9,
 		EntityToken: token, DeletedTime: at})
 	require.NoError(t, err)
 	return messaging.NewConsumedMessage(subject, b, delivered, nil, ack)

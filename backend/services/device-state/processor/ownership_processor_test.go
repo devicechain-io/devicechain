@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
@@ -112,14 +113,14 @@ func TestOwnershipFactDispositions(t *testing.T) {
 func TestAResolvedEventCarriesItsOwnersStamp(t *testing.T) {
 	occurred := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	received := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
-	got := ownersOf(&dmmodel.ResolvedEvent{OccurredTime: occurred, ProcessedTime: received, Anchors: []dmmodel.ResolvedAnchor{
+	got := ownersOf(&resolvedevent.ResolvedEvent{OccurredTime: occurred, ProcessedTime: received, Anchors: []resolvedevent.ResolvedAnchor{
 		{AnchorType: "customer", AnchorToken: "acme"}, {AnchorType: "area", AnchorToken: "north"},
 		{AnchorType: "", AnchorToken: "orphan"}, {AnchorType: "customer", AnchorToken: ""},
 	}})
 	require.Equal(t, []string{"customer:acme", "area:north"}, got.Anchors)
 	require.True(t, got.At.Equal(received), "precedence is the receipt time, got %v", got.At)
 
-	none := ownersOf(&dmmodel.ResolvedEvent{OccurredTime: occurred, ProcessedTime: received})
+	none := ownersOf(&resolvedevent.ResolvedEvent{OccurredTime: occurred, ProcessedTime: received})
 	require.NotNil(t, none.Anchors, "owned by nobody is a stamp, not an absent one")
 	require.Empty(t, none.Anchors)
 	require.True(t, none.At.Equal(received))

@@ -5,12 +5,7 @@ package processor
 
 import (
 	"context"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-device-state/model"
 	"github.com/devicechain-io/dc-event-sources/adapter"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
@@ -18,8 +13,11 @@ import (
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
+	"testing"
+	"time"
 )
 
 // captureWriter stands in for the durable stream, keeping the encoded message so the
@@ -118,7 +116,7 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	}
 
 	// --- 4. device-management proto round trip ---
-	encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
+	encoded, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: device,
 		EventType:         unresolved.EventType,
@@ -129,7 +127,7 @@ func TestARegressedSessionSurvivesTheWholeChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolved encode failed: %v", err)
 	}
-	resolved, err := dmproto.UnmarshalResolvedEvent(encoded)
+	resolved, err := resolvedevent.UnmarshalResolvedEvent(encoded)
 	if err != nil {
 		t.Fatalf("resolved decode failed: %v", err)
 	}

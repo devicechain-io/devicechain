@@ -4,22 +4,21 @@
 package runtime
 
 import (
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"math"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 )
 
 // BuildInput extracts the device, anchors (lowest token per type), occurred time, and numeric
 // measurements; non-numeric and non-finite readings are skipped (ADR-016 numeric-only).
 func TestBuildInputMeasurements(t *testing.T) {
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: "d1",
 		OccurredTime:      base,
-		Anchors: []dmmodel.ResolvedAnchor{
+		Anchors: []resolvedevent.ResolvedAnchor{
 			// Deliberately ANTI-SORTED: two anchors of one type, the higher token first. The
 			// collapse takes the lowest token per type, so this must yield zone-a. Listing
 			// zone-a first would make first-wins and lowest-wins agree, and the assertion
@@ -28,9 +27,9 @@ func TestBuildInputMeasurements(t *testing.T) {
 			{AnchorType: "area", AnchorToken: "zone-a"},
 			{AnchorType: "gateway", AnchorToken: "gw-1"},
 		},
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: base,
-			Entries: []dmmodel.ResolvedMeasurementEntry{
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
 				{Name: "temperature", Value: "90.5"},
 				{Name: "label", Value: "hot"}, // non-numeric: skipped
 				{Name: "bad", Value: "NaN"},   // non-finite: skipped
@@ -74,7 +73,7 @@ func TestBuildInputMeasurements(t *testing.T) {
 // A non-measurement resolved event carries no metrics — one heartbeat input with nil M
 // (still a heartbeat for an absence rule, but matches no metric-gated rule).
 func TestBuildInputsNonMeasurement(t *testing.T) {
-	ev := &dmmodel.ResolvedEvent{SourceDeviceToken: "d1", Payload: nil}
+	ev := &resolvedevent.ResolvedEvent{SourceDeviceToken: "d1", Payload: nil}
 	inputs := BuildInputs(ev, time.Time{})
 	if len(inputs) != 1 || inputs[0].M != nil {
 		t.Fatalf("non-measurement event should have one nil-M input; got %+v", inputs)
@@ -90,12 +89,12 @@ func TestBuildInputsBatchedSamples(t *testing.T) {
 	// the envelope's alone, so an implementation that flattened the batch onto the message
 	// time — which is what this did before — fails rather than passing by coincidence.
 	first := base.Add(-time.Minute)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: "d1",
 		OccurredTime:      base,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{
-			{OccurredTime: first, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "120"}}},
-			{OccurredTime: base, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temp", Value: "80"}}},
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{
+			{OccurredTime: first, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: "120"}}},
+			{OccurredTime: base, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: "80"}}},
 		}},
 	}
 	inputs := BuildInputs(ev, base)
@@ -129,11 +128,11 @@ func TestBuildInputsBatchedLocationFixes(t *testing.T) {
 	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
 	first := base.Add(-2 * time.Minute)
 	lat, lon := "33.749", "-84.388"
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: "d1",
 		OccurredTime:      base,
-		EventType:         esmodel.Location,
-		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+		EventType:         eventtype.Location,
+		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &lat, Longitude: &lon, OccurredTime: first},
 			{Latitude: &lat, Longitude: &lon, OccurredTime: base},
 		}},

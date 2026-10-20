@@ -269,7 +269,7 @@ func consumerWithDeadLetters(t *testing.T, api model.DeviceManagementApi, dead *
 	t.Helper()
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
 	rc := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
-		deadletter.NewProducer(ms).NewSink(dead), NewRaiseAlarmMetrics(ms))
+		deadletter.NewProducer(ms).NewSink(dead), NewRaiseAlarmMetrics(ms), 1)
 	if err := rc.Initialize(context.Background()); err != nil {
 		t.Fatalf("initializing the consumer: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestARaiseAlarmEdgeForADeletedTenantIsDroppedNotLettered(t *testing.T) {
 	ms := &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
 	ms.UseMetricsRegistry(reg)
 	rc := NewRaiseAlarmConsumer(ms, nil, core.NewNoOpLifecycleCallbacks(), api,
-		deadletter.NewProducer(ms).NewSink(dead), NewRaiseAlarmMetrics(ms))
+		deadletter.NewProducer(ms).NewSink(dead), NewRaiseAlarmMetrics(ms), 1)
 	if err := rc.Initialize(context.Background()); err != nil {
 		t.Fatalf("initializing the consumer: %v", err)
 	}

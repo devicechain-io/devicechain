@@ -155,6 +155,7 @@ Some limits are decisions and some are bounds of the current implementation. Eac
 - Results are paged at 25 by default and 100 at most, and a multi-device lookup takes at most 50 tokens per call. An agent surveying a large fleet pages through it.
 - The server reads at most 8 MiB from any single downstream response. That bounds what it fetches from the platform's own APIs; it is not a limit it advertises to the agent.
 - A session idles out after 30 minutes.
+- A JSON-RPC batch carries at most 16 messages, and each caller (the token's user) may send 20 messages a second, with a burst of 40; a batch of N counts as N. A batch over the cap is refused whole with a JSON-RPC error (nothing in it runs), and a caller over the rate gets HTTP 429 with a `Retry-After` header. Set `maxBatchEntries`, `callsPerSecond` and `callsBurst` under `functionalAreas.mcp.config` to change them; `callsBurst` may not be below `maxBatchEntries`, and an invalid value stops the service at startup.
 
 **Enabling the service is not enough to use it.** There are two independent switches. Turning on only the first is the common way to end up with a server that answers but cannot be reached:
 

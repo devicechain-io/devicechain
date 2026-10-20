@@ -83,7 +83,7 @@ export type RoleOwner =
 export type ScopeAnchorInput = {
   /** What the anchor names. */
   kind: ScopeAnchorKind;
-  /** Token of the customer the anchor names. */
+  /** Token of the customer or group the anchor names. */
   token: string;
 };
 

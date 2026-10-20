@@ -44,15 +44,15 @@ func TestOnlyOnePodConnectsToAnExternalBroker(t *testing.T) {
 		Configuration, EventSources, Microservice, NatsManager = savedConfig, savedSources, savedMs, savedNats
 	})
 
-	mqttPort := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, ServerName: "owner-wiring",
-		StoreDir: dctest.JetStreamStoreDir(t), MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		StoreDir: dctest.JetStreamStoreDir(t), MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(15*time.Second))
 	t.Cleanup(srv.Shutdown)
+	mqttPort := dctest.MQTTPort(t, srv)
 	u, err := url.Parse(srv.ClientURL())
 	require.NoError(t, err)
 	natsPort, err := strconv.Atoi(u.Port())
