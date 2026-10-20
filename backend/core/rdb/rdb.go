@@ -374,6 +374,56 @@ func (rdb *RdbManager) TryAdvisoryLock(ctx context.Context, key int64, fn func()
 	return true, fn()
 }
 
+// TryAdvisoryLockSession is TryAdvisoryLock for work that must live and die with the lock: it
+// hands fn a gorm handle whose EVERY statement, and every transaction begun on it, runs on the
+// one pinned connection that holds the lock.
+//
+// 🔴 THAT IS THE POINT AND THE COST. A session lock is released when its connection ends. Work
+// run on OTHER pooled connections outlives it: after a failover or a terminated backend a
+// replica can take the lock while the old holder, still writing on a fresh pool connection,
+// carries on, and two workers then run one job. Work on the lock's own connection fails when
+// the lock does. The cost is that fn is serial — one statement at a time on one connection —
+// and that the pool gives up that connection for as long as fn runs.
+//
+// The handle keeps every callback the manager's database has (tenant scope, erasure fence,
+// audit), so it enforces what any handle does. What it does not have is the fence read's
+// per-transaction memo, which wraps the pool and not a bare connection; a transaction on this
+// handle reads the fence on each write instead of once, which is slower and never wrong.
+//
+// fn must not use the handle after it returns. Session settings fn makes (SET statement_timeout)
+// persist on the connection, so it must undo them before it returns: the connection goes back
+// to the pool.
+func (rdb *RdbManager) TryAdvisoryLockSession(ctx context.Context, key int64, fn func(db *gorm.DB) error) (bool, error) {
+	sqldb, err := rdb.Database.DB()
+	if err != nil {
+		return false, err
+	}
+	conn, err := sqldb.Conn(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close()
+
+	var acquired bool
+	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", key).Scan(&acquired); err != nil {
+		return false, fmt.Errorf("try advisory lock: %w", err)
+	}
+	if !acquired {
+		return false, nil
+	}
+	defer func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", key); err != nil {
+			log.Warn().Err(err).Msg("Failed to release advisory lock; it clears when the session ends.")
+		}
+	}()
+
+	pinned := rdb.Database.Session(&gorm.Session{NewDB: true, Context: ctx})
+	pinned.Statement.ConnPool = conn
+	return true, fn(pinned)
+}
+
 // Start component.
 func (rdb *RdbManager) Start(ctx context.Context) error {
 	return rdb.lifecycle.Start(ctx)
