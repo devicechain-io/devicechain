@@ -10,7 +10,6 @@ package model
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -169,11 +168,8 @@ type planNode struct {
 
 func walkAnalyzedPlan(t *testing.T, raw []byte) []planNode {
 	t.Helper()
-	var top []struct {
-		Plan map[string]any `json:"Plan"`
-	}
-	require.NoError(t, json.Unmarshal(raw, &top))
-	require.NotEmpty(t, top)
+	root, err := parsePlanRoot(raw)
+	require.NoError(t, err)
 	var out []planNode
 	var walk func(n map[string]any)
 	walk = func(n map[string]any) {
@@ -194,7 +190,7 @@ func walkAnalyzedPlan(t *testing.T, raw []byte) []planNode {
 			}
 		}
 	}
-	walk(top[0].Plan)
+	walk(root)
 	return out
 }
 
@@ -310,7 +306,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 		t.Helper()
 		nodes := explainAnalyzeEvents(t, sys, nil, stmt)
 		for _, n := range nodes {
-			assert.Truef(t, chunkIndexIs(n.index, "idx_events_tenant_device_time"), "%s: %s on %s uses %q",
+			assert.Truef(t, chunkIndexIs(n.index, tenantDeviceIndex.name), "%s: %s on %s uses %q",
 				what, n.node, n.relation, n.index)
 			assert.Containsf(t, n.indexCond, "tenant_id", "%s: the tenant is an index condition (%s)", what, n.indexCond)
 			assert.Containsf(t, n.indexCond, "device_token", "%s: the device is an index condition (%s)", what, n.indexCond)
@@ -328,16 +324,20 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	seek("device + type page", typedData, 4)
 
 	// Negative control: with the OLD index shape the same measurement sees globex's rows
-	// discarded by the filter and no tenant in the index condition — so the zero above is
+	// discarded by the filter and no node seeking on tenant and device together — so the zero above is
 	// the index, not a check that cannot see.
-	old := []string{`DROP INDEX "event-management".idx_events_tenant_device_time`,
+	old := []string{`DROP INDEX "event-management".` + tenantDeviceIndex.name,
 		`CREATE INDEX events_device_token_occurred_time_idx ON "event-management".events (device_token, occurred_time DESC)`}
 	for what, stmt := range map[string]string{"COUNT": count, "type-filtered page": typedData} {
 		nodes := explainAnalyzeEvents(t, sys, old, stmt)
 		removed, rows := sumRemoved(nodes)
 		assert.Greaterf(t, removed+rows, int64(5), "on the tenant-less index the %s visits the other tenant's rows", what)
 		for _, n := range nodes {
-			assert.NotContains(t, n.indexCond, "tenant_id", "the old index cannot seek on the tenant")
+			// Nothing here can seek on the tenant AND the device at once: the tenant-less index
+			// has no tenant, and a read that falls back to the primary key (as TimescaleDB 2.30's
+			// DeferredChunkAppend does for the type-filtered page) has no device.
+			assert.Falsef(t, strings.Contains(n.indexCond, "tenant_id") && strings.Contains(n.indexCond, "device_token"),
+				"without the tenant-led device index nothing seeks on tenant and device together: %s", n.indexCond)
 		}
 	}
 
@@ -348,16 +348,8 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 		require.NoError(t, err)
 	}
 	for what, sql := range map[string]string{"device + type read (generic)": typedData, "device COUNT (generic)": count} {
-		param := strings.ReplaceAll(strings.ReplaceAll(sql, "'"+device+"'", "$1"), "'acme'", "$2")
-		require.Contains(t, param, "$1")
-		require.Contains(t, param, "$2")
-		results, err := generic.PgConn().Exec(context.Background(), `EXPLAIN (FORMAT JSON, GENERIC_PLAN) `+param).ReadAll()
-		require.NoError(t, err, what)
-		require.Len(t, results, 1)
-		require.Len(t, results[0].Rows, 1)
-		scans, err := planIndexScans(results[0].Rows[0][0])
-		require.NoError(t, err)
-		requireServedBy(t, sys, scans, "events", "idx_events_tenant_device_time", what)
+		scans := explainGenericScans(t, generic, sql, device, "acme")
+		requireServedBy(t, sys, scans, "events", tenantDeviceIndex.name, what)
 		for _, s := range scansOf(t, sys, scans, "events") {
 			assert.Contains(t, s.indexCond, "tenant_id", what)
 		}
@@ -413,7 +405,7 @@ func TestIntegrationAnalyticsDeviceQueryUsesTheTenantLedIndex(t *testing.T) {
 		`EXPLAIN (FORMAT JSON) SELECT * FROM analytics.events WHERE device_token = 'device-1'`).Scan(&plan))
 	scans, err := planIndexScans(plan)
 	require.NoError(t, err)
-	requireServedBy(t, sys, scans, "events", "idx_events_tenant_device_time", "BI device query")
+	requireServedBy(t, sys, scans, "events", tenantDeviceIndex.name, "BI device query")
 	for _, s := range scansOf(t, sys, scans, "events") {
 		assert.Contains(t, s.indexCond, "tenant_id", "the reader's tenant is an index condition")
 		assert.Contains(t, s.indexCond, "device_token")

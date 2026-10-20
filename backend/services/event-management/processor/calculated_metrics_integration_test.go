@@ -11,6 +11,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
@@ -22,6 +23,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/eventtime"
 	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,9 +91,20 @@ func TestCalculatedMetricsOnPostgres(t *testing.T) {
 	assert.Equal(t, 3.47839506, power[at(1)], "the first copy's value, rounded to the column's 8 decimals")
 	assert.Equal(t, 1e10, power[at(2)])
 
-	// The hourly rollup groups it by name like any measurement.
-	require.NoError(t, mgr.DB(core.WithSystemContext(context.Background())).
-		Exec(`CALL refresh_continuous_aggregate('"event-management".measurement_rollups', NULL, NULL)`).Error)
+	// The hourly rollup groups it by name like any measurement. A refresh that meets the
+	// aggregate policy's own background refresh fails with lock_not_available (55P03) instead
+	// of waiting (see backfill's refreshWindow), so it is retried a bounded number of times.
+	var refreshErr error
+	for try := 0; try < 20; try++ {
+		refreshErr = mgr.DB(core.WithSystemContext(context.Background())).
+			Exec(`CALL refresh_continuous_aggregate('"event-management".measurement_rollups', NULL, NULL)`).Error
+		var pgErr *pgconn.PgError
+		if refreshErr == nil || !errors.As(refreshErr, &pgErr) || pgErr.Code != "55P03" {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	require.NoError(t, refreshErr)
 	name := "power_kw"
 	start, end := at(0).Truncate(time.Hour), at(0).Truncate(time.Hour).Add(time.Hour)
 	buckets, err := api.BucketedMeasurements(ctx, model.MeasurementAggregationCriteria{DeviceToken: &device,
