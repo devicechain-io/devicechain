@@ -24,7 +24,16 @@ const SCOPE_LABEL_KEY: Record<'system' | 'tenant', string> = {
   tenant: 'scopeTenant',
 };
 
+// Keyed by the route: the entity is found in a list that does not reload when only the
+// token changes, and the form below seeds its fields from the role it is first handed.
+// Without the key, moving straight from one role to another kept the first one's draft,
+// and a save wrote it to the second.
 export default function RoleDetailPage() {
+  const { scope, token } = useParams<{ scope: string; token: string }>();
+  return <RoleDetail key={`${scope}/${token}`} />;
+}
+
+function RoleDetail() {
   const { t } = useTranslation('roles');
   const { scope: rawScope, token: rawToken } = useParams<{ scope: string; token: string }>();
   const scope = (rawScope ?? '') as 'system' | 'tenant';

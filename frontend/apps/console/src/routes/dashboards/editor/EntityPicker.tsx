@@ -85,7 +85,7 @@ export function EntityPicker({
   placeholder?: string;
 }) {
   const { t } = useTranslation(['dashboards', 'common']);
-  const { data, loading, error } = useQuery(() => loadEntities(kind), [kind]);
+  const { current, error, loading } = useQuery(() => loadEntities(kind), [kind]);
   // A hand-edited/imported definition (opaque JSON, ADR-039) can carry an out-of-union
   // targetType; loadEntities already degrades it to an empty list rather than throwing
   // (see entity-lister.ts). Fall back to the device copy so the picker renders instead
@@ -96,7 +96,7 @@ export function EntityPicker({
     // While a new kind loads, useQuery keeps the PREVIOUS kind's data — surfacing
     // it would let a fast click store a wrong-kind token (e.g. a customer token as
     // an `area` binding). Show nothing but the current value until the fetch lands.
-    const rows = loading ? [] : (data ?? []);
+    const rows = current ?? [];
     const opts: ComboboxOption[] = rows.map((e) => ({
       value: e.token,
       label: e.name || e.token,
@@ -108,7 +108,7 @@ export function EntityPicker({
       opts.unshift({ value, label: value });
     }
     return opts;
-  }, [data, loading, value]);
+  }, [current, value]);
 
   return (
     <Combobox

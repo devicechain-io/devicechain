@@ -28,10 +28,10 @@ export function MetricChoices({
     () => (deviceToken ? getDeviceMetricVocabulary(deviceToken) : Promise.resolve(null)),
     [deviceToken],
   );
-  // useQuery keeps the previous result while a new device loads and after a failed
-  // lookup, so data alone could still be the PREVIOUS device's list. Showing it would
-  // offer, and let a click write, keys the bound device may not declare.
-  const metrics = vocab.loading || vocab.error ? [] : (vocab.data ?? []);
+  // `current`, not `data`: data may still be the PREVIOUS device's list (while a new device
+  // loads, after a failed lookup, and in the render before the new load starts). Showing it
+  // would offer, and let a click write, keys the bound device may not declare.
+  const metrics = vocab.current ?? [];
   if (metrics.length === 0) return null;
 
   const toggle = (key: string) =>

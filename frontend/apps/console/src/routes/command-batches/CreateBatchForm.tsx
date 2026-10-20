@@ -179,7 +179,7 @@ export function CreateBatchForm({ onFired }: { onFired: (batch: CreatedCommandBa
   const typeAgainst = typeAgainstTouched ? typeAgainstChoice : targetKind === 'devices' ? (target.tokens[0] ?? '') : '';
 
   const {
-    data: choices,
+    current: choices,
     loading: vocabularyLoading,
     error: vocabularyError,
   } = useQuery(async () => {

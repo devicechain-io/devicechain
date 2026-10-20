@@ -125,7 +125,7 @@ export function AssetPropertiesPanel({
   const [reloadKey] = useReload();
   const typeToken = asset.assetType?.token ?? '';
 
-  const { data, loading, error } = useQuery(
+  const { current: data, loading, error } = useQuery(
     () => (typeToken ? getActiveAssetTypeVersion(typeToken) : Promise.resolve(null)),
     [typeToken, reloadKey],
   );

@@ -23,7 +23,16 @@ import { TenantDeletionPanel } from './TenantDeletionPanel';
 import { TenantAiModelsPanel } from '@/routes/admin/tenants/TenantAiModelsPanel';
 import { TierPill } from '@/components/tiers/TierPill';
 
+// Keyed by the route: the entity is found in a list that does not reload when only the
+// token changes, and the form below seeds its fields from the tenant it is first handed.
+// Without the key, moving straight from one tenant to another kept the first one's draft,
+// and a save wrote it to the second.
 export default function TenantDetailPage() {
+  const { token } = useParams<{ token: string }>();
+  return <TenantDetail key={token} />;
+}
+
+function TenantDetail() {
   const { t } = useTranslation('tenants');
   const { token: rawToken } = useParams<{ token: string }>();
   const token = decodeURIComponent(rawToken ?? '');
@@ -166,7 +175,7 @@ export default function TenantDetailPage() {
           // area. A guard inside the panel would have to sit above every hook to
           // do the same, and would still have constructed the request.
           <AreaGate area={AREA.aiInferenceAdmin}>
-            <TenantAiModelsPanel tenant={tenant} />
+            <TenantAiModelsPanel key={tenant.token} tenant={tenant} />
           </AreaGate>
         }
         // Only while a deletion is running. On an active tenant the tab would be an empty
