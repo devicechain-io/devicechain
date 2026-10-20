@@ -1,66 +1,69 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ReactNode } from 'react';
+import { lazy } from 'react';
 import { Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
-import { isScoped, type Area } from '@devicechain/client';
+import { isScoped } from '@devicechain/client';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/auth/AuthProvider';
 import { LoadingState } from '@/components/ui/loading-state';
 import LoginPage from '@/routes/Login';
-import LoginSsoCompletePage from '@/routes/LoginSsoComplete';
 import AppLayout from '@/routes/AppLayout';
 import Dashboard from '@/routes/Dashboard';
-import DevicesPage from '@/routes/devices/DevicesPage';
-import DeviceDetailPage from '@/routes/devices/DeviceDetailPage';
-import DashboardsPage from '@/routes/dashboards/DashboardsPage';
-import DashboardDetailPage from '@/routes/dashboards/DashboardDetailPage';
-import AlarmsPage from '@/routes/alarms/AlarmsPage';
 import { AreaGate } from '@/components/AreaUnavailable';
+import { RouteSuspense } from '@/components/RouteSuspense';
 import { AREA } from '@/lib/capabilities';
-import SignersPage from '@/routes/updates/SignersPage';
-import CommandBatchesPage from '@/routes/command-batches/CommandBatchesPage';
-import CommandBatchDetailPage from '@/routes/command-batches/CommandBatchDetailPage';
-import ArtifactsPage from '@/routes/updates/ArtifactsPage';
-import ArtifactDetailPage from '@/routes/updates/ArtifactDetailPage';
-import ConnectorsPage from '@/routes/connectors/ConnectorsPage';
-import ConnectorDetailPage from '@/routes/connectors/ConnectorDetailPage';
-import AiProvidersPage from '@/routes/admin/ai-providers/AiProvidersPage';
-import AiProviderDetailPage from '@/routes/admin/ai-providers/AiProviderDetailPage';
-import AiPackagingPage from '@/routes/admin/ai-packaging/AiPackagingPage';
-import AuditPage from '@/routes/audit/AuditPage';
-import FacetKeysPage from '@/routes/facets/FacetKeysPage';
-import BrowsePage from '@/routes/browse/BrowsePage';
-import BrandingPage from '@/routes/BrandingPage';
-import BasemapPage from '@/routes/BasemapPage';
-import LocalePage from '@/routes/LocalePage';
-import { ResourceListPage, ResourceDetailPage } from '@/components/registry';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
-import AdminProtectedRoute from '@/routes/admin/AdminProtectedRoute';
-import AdminLayout from '@/routes/admin/AdminLayout';
-import AdminTenantsPage from '@/routes/admin/TenantsPage';
-import AdminNewTenantPage from '@/routes/admin/tenants/NewTenantPage';
-import AdminDeletionsPage from '@/routes/admin/DeletionsPage';
-import AdminTenantDetailPage from '@/routes/admin/tenants/TenantDetailPage';
-import AdminTiersPage from '@/routes/admin/TiersPage';
-import AdminNewTierPage from '@/routes/admin/tiers/NewTierPage';
-import AdminTierDetailPage from '@/routes/admin/tiers/TierDetailPage';
-import AdminIdentitiesPage from '@/routes/admin/IdentitiesPage';
-import AdminNewIdentityPage from '@/routes/admin/identities/NewIdentityPage';
-import AdminIdentityDetailPage from '@/routes/admin/identities/IdentityDetailPage';
-import AdminRolesPage from '@/routes/admin/RolesPage';
-import AdminAuditPage from '@/routes/admin/AuditPage';
-import AdminNewRolePage from '@/routes/admin/roles/NewRolePage';
-import AdminRoleDetailPage from '@/routes/admin/roles/RoleDetailPage';
-import AdminSettingsPage from '@/routes/admin/settings/SettingsPage';
-import AdminIdentityProvidersPage from '@/routes/admin/identity-providers/IdentityProvidersPage';
-import AdminIdentityProviderDetailPage from '@/routes/admin/identity-providers/IdentityProviderDetailPage';
-import { REGISTRY_RESOURCES } from '@/routes/resources';
 import { scopedRouteAllowed } from '@/lib/scope';
-import MembersPage from '@/routes/members/MembersPage';
-import RolesPage from '@/routes/roles/RolesPage';
-import RoleDetailPage from '@/routes/roles/RoleDetailPage';
-import AcceptInvitationPage from '@/routes/AcceptInvitation';
+
+// Route-level code splitting: every page except the sign-in, the layout and the landing page loads
+// on first visit, so the first download carries only what those three need.
+const LoginSsoCompletePage = lazy(() => import('@/routes/LoginSsoComplete'));
+const DevicesPage = lazy(() => import('@/routes/devices/DevicesPage'));
+const DeviceDetailPage = lazy(() => import('@/routes/devices/DeviceDetailPage'));
+const DashboardsPage = lazy(() => import('@/routes/dashboards/DashboardsPage'));
+const DashboardDetailPage = lazy(() => import('@/routes/dashboards/DashboardDetailPage'));
+const AlarmsPage = lazy(() => import('@/routes/alarms/AlarmsPage'));
+const SignersPage = lazy(() => import('@/routes/updates/SignersPage'));
+const CommandBatchesPage = lazy(() => import('@/routes/command-batches/CommandBatchesPage'));
+const CommandBatchDetailPage = lazy(() => import('@/routes/command-batches/CommandBatchDetailPage'));
+const ArtifactsPage = lazy(() => import('@/routes/updates/ArtifactsPage'));
+const ArtifactDetailPage = lazy(() => import('@/routes/updates/ArtifactDetailPage'));
+const ConnectorsPage = lazy(() => import('@/routes/connectors/ConnectorsPage'));
+const ConnectorDetailPage = lazy(() => import('@/routes/connectors/ConnectorDetailPage'));
+const AiProvidersPage = lazy(() => import('@/routes/admin/ai-providers/AiProvidersPage'));
+const AiProviderDetailPage = lazy(() => import('@/routes/admin/ai-providers/AiProviderDetailPage'));
+const AiPackagingPage = lazy(() => import('@/routes/admin/ai-packaging/AiPackagingPage'));
+const AuditPage = lazy(() => import('@/routes/audit/AuditPage'));
+const FacetKeysPage = lazy(() => import('@/routes/facets/FacetKeysPage'));
+const BrowsePage = lazy(() => import('@/routes/browse/BrowsePage'));
+const BrandingPage = lazy(() => import('@/routes/BrandingPage'));
+const BasemapPage = lazy(() => import('@/routes/BasemapPage'));
+const LocalePage = lazy(() => import('@/routes/LocalePage'));
+const AdminProtectedRoute = lazy(() => import('@/routes/admin/AdminProtectedRoute'));
+const AdminLayout = lazy(() => import('@/routes/admin/AdminLayout'));
+const AdminTenantsPage = lazy(() => import('@/routes/admin/TenantsPage'));
+const AdminNewTenantPage = lazy(() => import('@/routes/admin/tenants/NewTenantPage'));
+const AdminDeletionsPage = lazy(() => import('@/routes/admin/DeletionsPage'));
+const AdminTenantDetailPage = lazy(() => import('@/routes/admin/tenants/TenantDetailPage'));
+const AdminTiersPage = lazy(() => import('@/routes/admin/TiersPage'));
+const AdminNewTierPage = lazy(() => import('@/routes/admin/tiers/NewTierPage'));
+const AdminTierDetailPage = lazy(() => import('@/routes/admin/tiers/TierDetailPage'));
+const AdminIdentitiesPage = lazy(() => import('@/routes/admin/IdentitiesPage'));
+const AdminNewIdentityPage = lazy(() => import('@/routes/admin/identities/NewIdentityPage'));
+const AdminIdentityDetailPage = lazy(() => import('@/routes/admin/identities/IdentityDetailPage'));
+const AdminRolesPage = lazy(() => import('@/routes/admin/RolesPage'));
+const AdminAuditPage = lazy(() => import('@/routes/admin/AuditPage'));
+const AdminNewRolePage = lazy(() => import('@/routes/admin/roles/NewRolePage'));
+const AdminRoleDetailPage = lazy(() => import('@/routes/admin/roles/RoleDetailPage'));
+const AdminSettingsPage = lazy(() => import('@/routes/admin/settings/SettingsPage'));
+const AdminIdentityProvidersPage = lazy(() => import('@/routes/admin/identity-providers/IdentityProvidersPage'));
+const AdminIdentityProviderDetailPage = lazy(() => import('@/routes/admin/identity-providers/IdentityProviderDetailPage'));
+const MembersPage = lazy(() => import('@/routes/members/MembersPage'));
+const RolesPage = lazy(() => import('@/routes/roles/RolesPage'));
+const RoleDetailPage = lazy(() => import('@/routes/roles/RoleDetailPage'));
+const RegistryRoute = lazy(() => import('@/routes/RegistryRoute'));
+const AcceptInvitationPage = lazy(() => import('@/routes/AcceptInvitation'));
 
 
 function ProtectedRoute() {
@@ -87,15 +90,10 @@ function ProtectedRoute() {
   return <Outlet />;
 }
 
-// gated wraps a registry page in its area's gate when the resource names an area a profile
-// can leave out.
-function gated(area: Area | undefined, page: ReactNode): ReactNode {
-  return area ? <AreaGate area={area}>{page}</AreaGate> : page;
-}
-
 export default function App() {
   return (
     <ErrorBoundary>
+      <RouteSuspense>
       <Routes>
       <Route path="/login" element={<LoginPage />} />
       {/* Where the identity provider's callback sends the browser back with a one-time code. */}
@@ -136,22 +134,11 @@ export default function App() {
           <Route path="roles" element={<RolesPage />} />
           <Route path="roles/new" element={<RoleDetailPage />} />
           <Route path="roles/:token" element={<RoleDetailPage />} />
-          {/* Every registry list/detail renders through the one generic page
-              component, so React reuses the instance across routes. Key each
-              element by its resource's base path to force a fresh mount on
-              switch — otherwise the previous resource's data bleeds through. */}
-          {REGISTRY_RESOURCES.flatMap((r) => [
-            <Route
-              key={`${r.basePath}-list`}
-              path={r.basePath.slice(1)}
-              element={gated(r.area, <ResourceListPage key={r.basePath} resource={r} />)}
-            />,
-            <Route
-              key={`${r.basePath}-detail`}
-              path={`${r.basePath.slice(1)}/:token`}
-              element={gated(r.area, <ResourceDetailPage key={r.basePath} resource={r} />)}
-            />,
-          ])}
+          {/* Every registry family (device types, assets, areas, ...) renders through the one
+              generic list/detail page. They are resolved inside one lazily loaded module so the
+              resource definitions, their forms and their GraphQL documents stay out of the first
+              download; a path that is none of them goes home, as the catch-all below does. */}
+          <Route path="*" element={<RegistryRoute />} />
         </Route>
       </Route>
 
@@ -187,6 +174,7 @@ export default function App() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </RouteSuspense>
     </ErrorBoundary>
   );
 }

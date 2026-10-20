@@ -9,6 +9,7 @@ import { TenantChip } from '@/routes/TenantChip';
 import { TenantProvider } from '@/auth/TenantProvider';
 import { CurrentUserProvider } from '@/auth/CurrentUserProvider';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { RouteSuspense } from '@/components/RouteSuspense';
 import { BackLink } from '@/routes/common';
 
 // Title-case a route segment: "device-types" -> "Device Types". Fallback for a
@@ -91,7 +92,9 @@ export default function AppLayout() {
             <div data-shot="page" className="app-gradient flex min-h-0 flex-1 flex-col">
               {/* Key the boundary by route so a page crash auto-clears on navigation. */}
               <ErrorBoundary key={pathname}>
-                <Outlet />
+                <RouteSuspense>
+                  <Outlet />
+                </RouteSuspense>
               </ErrorBoundary>
             </div>
           </SidebarInset>

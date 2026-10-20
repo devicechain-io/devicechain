@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { AdminSidebar } from '@/routes/admin/AdminSidebar';
 import { ErrorBoundary } from '@/components/ui/error-boundary';
+import { RouteSuspense } from '@/components/RouteSuspense';
 import { BackLink } from '@/routes/common';
 
 // Each admin section maps to a `nav` catalog key (ADR-066) so the top bar localizes.
@@ -65,7 +66,9 @@ export default function AdminLayout() {
         </header>
         <div data-shot="page" className="app-gradient flex min-h-0 flex-1 flex-col">
           <ErrorBoundary key={pathname}>
-            <Outlet />
+            <RouteSuspense>
+              <Outlet />
+            </RouteSuspense>
           </ErrorBoundary>
         </div>
       </SidebarInset>
