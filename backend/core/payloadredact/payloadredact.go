@@ -36,8 +36,13 @@ const Marker = "[redacted]"
 // device decoder would accept as credentialSecret is a spelling this redacts. The device
 // envelope's own field is credentialSecret; the rest are names a device or gateway commonly
 // uses for the same thing.
+//
+// credentialid is here because the id is not always an identifier: for an ACCESS_TOKEN
+// credential the id IS the bearer token, and for MQTT_BASIC it is the login name. Neither is
+// needed to diagnose a decode failure, and credentialType (which is kept) says which kind the
+// device presented.
 var credentialKeys = []string{
-	"credentialsecret", "credential", "credentials",
+	"credentialid", "credentialsecret", "credential", "credentials",
 	"secret", "clientsecret",
 	"password", "passwd", "pwd", "pass", "passphrase",
 	"token", "accesstoken", "refreshtoken", "authtoken",

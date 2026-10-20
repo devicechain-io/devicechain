@@ -36,7 +36,7 @@ func TestRedactHyphenAndExtraKeyNames(t *testing.T) {
 		require.NotContains(t, out, secret, key)
 		require.Contains(t, out, Marker, key)
 	}
-	out := string(Redact([]byte(`{"credential-secret":"`+secret+`","credentialId":"keep"}`), 0))
+	out := string(Redact([]byte(`{"credential-secret":"`+secret+`","credentialType":"keep"}`), 0))
 	require.NotContains(t, out, secret)
-	require.Contains(t, out, `"credentialId":"keep"`)
+	require.Contains(t, out, `"credentialType":"keep"`)
 }

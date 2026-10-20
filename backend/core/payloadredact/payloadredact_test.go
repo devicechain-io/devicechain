@@ -18,7 +18,8 @@ func TestRedactReplacesCredentialValuesAtAnyDepthAndKeepsTheRest(t *testing.T) {
 		`"payload":{"entries":[{"name":"t","value":21.5,"password":"` + secret + `"}],"credential_secret":"` + secret + `"}}`
 	out := string(Redact([]byte(in), 0))
 	require.NotContains(t, out, secret)
-	for _, want := range []string{`"device":"d1"`, `"credentialId":"c1"`, `"n":1.50`, `"name":"t"`, `"value":21.5`,
+	require.NotContains(t, out, `"c1"`)
+	for _, want := range []string{`"device":"d1"`, `"credentialId":"` + Marker + `"`, `"n":1.50`, `"name":"t"`, `"value":21.5`,
 		`"CredentialSecret":"` + Marker + `"`, `"password":"` + Marker + `"`, `"credential_secret":"` + Marker + `"`} {
 		require.Contains(t, out, want)
 	}
