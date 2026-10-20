@@ -48,6 +48,7 @@ CONSOLE_URL = os.environ.get("SP_CONSOLE_URL", "http://localhost")
 BOARD_TOKEN = "sp-dashboard"
 DEVICE = v.DEVICE  # the device's external id, as the player's log and the board's cards name it
 DEVICE_TOKEN = "sp-hauler-03"  # its token, which is what the console's device list and the alarm table's originator show
+EMPTY_HISTORY = "No commands have been issued to this device yet."  # the Commands panel before its first command
 AREA = v.AREA
 COMMAND_LABEL = "Go To Area"
 WIDTH, HEIGHT = 1920, 1080
@@ -390,6 +391,10 @@ class Console:
         try:
             p.goto(self.url("/login"))
             p.fill("#email", self.email)
+            # the sign-in asks for the email first (it decides between a password and SSO), and only then for the password
+            if not p.is_visible("#password"):
+                p.click("button[type=submit]")
+                p.wait_for_selector("#password", state="visible", timeout=15000)
             p.fill("#password", self.password)
             p.click("button[type=submit]")
             p.wait_for_url(lambda u: "/login" not in u, timeout=30000)
@@ -513,15 +518,16 @@ def shoot_board(con):
 def shoot_drill(con):
     """S18: click the tyre alarm's originator so the Machine gauges follow it."""
     p = con.page
-    row = p.locator("tr", has_text="tyre-pressure-low").filter(has_text=DEVICE).first
+    # the active-alarm table names the originator by its token, not its external id
+    row = p.locator("tr", has_text="tyre-pressure-low").filter(has_text=DEVICE_TOKEN).first
     try:
         row.wait_for(timeout=15000)
     except Exception:  # noqa: BLE001
         raise CaptureError("the board shows no tyre-pressure-low alarm row for " + DEVICE_TOKEN)
-    link = row.get_by_role("button", name=DEVICE)
+    link = row.get_by_text(DEVICE_TOKEN, exact=True).first
     with con.record("s18") as clip:
         con.hold(1.5)
-        con.point_click(link, clip, f"clicked {DEVICE} (the originator) in the tyre-pressure-low alarm row of the active-alarm table")
+        con.point_click(link, clip, f"clicked {DEVICE_TOKEN} (the originator) in the tyre-pressure-low alarm row of the active-alarm table")
         con.hold(S18_SECONDS - 1.5)
 
 
@@ -551,7 +557,8 @@ def open_watch(con):
     w = con.ctx.new_page()
     w.goto(con.url("/devices/" + DEVICE_TOKEN))
     w.get_by_role("tab", name="Commands").click()
-    w.locator("tbody tr").first.wait_for(timeout=15000)
+    # a device nothing has been sent to yet has no history table at all, only the empty-state line
+    w.locator("tbody tr").or_(w.get_by_text(EMPTY_HISTORY)).first.wait_for(timeout=15000)
     return w
 
 
