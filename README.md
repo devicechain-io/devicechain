@@ -8,7 +8,7 @@
 **An open-source, self-hosted IoT platform for collecting device telemetry, detecting conditions in it and sending commands back, on Kubernetes.**
 
 <p align="center">
-  <a href="https://devicechain.io/#see-it-run"><img src="branding/media/sitepulse-loop.webp" width="720" alt="A haul truck in a 3D quarry: its telemetry arrives over MQTT, a low-fuel rule fires, a refuel command is sent, the truck drives to the fuel bay, and the command completes."></a>
+  <a href="https://devicechain.io/#see-it-run"><img src="branding/media/sitepulse-loop.webp" width="720" alt="A haul truck in a 3D quarry: its telemetry arrives over MQTT, a low-fuel rule fires, a refuel command is sent, the truck heads for the fuel bay as two other trucks pass each other on their own lanes of the two-way haul road, it refuels, and the command completes."></a>
   <br>
   <sub>Sitepulse, a simulated quarry whose machines are real devices on a real DeviceChain instance: a truck's fuel drops low, a rule raises an alarm and sends it to refuel, and the truck reports the command done. Rendered from a recorded run.</sub>
 </p>

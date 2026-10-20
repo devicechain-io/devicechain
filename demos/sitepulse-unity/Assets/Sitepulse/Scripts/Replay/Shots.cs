@@ -394,6 +394,12 @@ namespace DeviceChain.Sitepulse.Replay
         /// <summary>A measurement drawn first on the selected machine's card (<c>"featured": "tyre_pressure_kpa"</c>), alarm or none.</summary>
         public string Featured { get; set; }
 
+        /// <summary>
+        /// The most cards the shot draws at once (<c>"maxCards": 1</c>), 1 to 6; null leaves the data layer's own limit. The selected machine
+        /// comes first, so a shot with one protagonist can say it carries that machine's card alone.
+        /// </summary>
+        public int? MaxCards { get; set; }
+
         /// <summary>Card size relative to a 1080-pixel-high frame; a portrait frame is 1920 high, so its cards are drawn smaller.</summary>
         public float CardScale { get; set; } = 1f;
 
@@ -504,7 +510,7 @@ namespace DeviceChain.Sitepulse.Replay
         static readonly HashSet<string> ShotFields = new HashSet<string>
         {
             "name", "startEvent", "offset", "duration", "preroll", "aspect", "width", "height", "camera", "focus",
-            "cards", "cardStagger", "cardScale", "drawer", "panel", "route", "zoneLabels", "chips", "featured",
+            "cards", "cardStagger", "cardScale", "maxCards", "drawer", "panel", "route", "zoneLabels", "chips", "featured",
         };
 
         // a shot file that asks for one of these is told why it cannot have it
@@ -571,6 +577,13 @@ namespace DeviceChain.Sitepulse.Replay
             {
                 shot.CardScale = (float)JsonIo.Num(s, "cardScale", 1.0);
                 if (shot.CardScale < 0.4f || shot.CardScale > 2f) throw new ShotException(where + ": \"cardScale\" is 0.4 to 2");
+            }
+
+            if (s.TryGetProperty("maxCards", out var mc))
+            {
+                if (mc.ValueKind != JsonValueKind.Number || !mc.TryGetInt32(out var max) || max < 1 || max > 6)
+                    throw new ShotException(where + ": \"maxCards\" is a whole number from 1 to 6");
+                shot.MaxCards = max;
             }
 
             shot.Featured = JsonIo.Str(s, "featured");

@@ -398,7 +398,8 @@ shot (it needs ffmpeg and says so when it is missing).
 **What a shot may ask the data layer for.** Besides `focus` (the selected machine) a shot says what is drawn, with the flags
 `cards` (`false`, or a list of machine ids whose cards show, one more each `cardStagger` seconds), `drawer` (`true`,
 `"full"`), `panel`, `route`, `zoneLabels` (`true`, or the seconds into the shot they fade in), `featured` (a measurement
-drawn first on the selected card), `cardScale` and `chips`. The **proof drawer** lists what happened to the selected
+drawn first on the selected card), `cardScale`, `maxCards` (the most cards drawn at once, 1 to 6; the selected machine's
+comes first, so `1` keeps a one-protagonist shot to that machine's card) and `chips`. The **proof drawer** lists what happened to the selected
 machine, each row with its time (UTC) and who says so: the platform (a sample below a rule's line, an alarm changing state,
 a command changing state), the device (its own timeline), the presenter. It draws only what happened: a state the observer
 never saw has no row, and a device's SUCCESS is never drawn as the platform's SUCCESSFUL. The rows of one command read in the order
@@ -420,7 +421,7 @@ device to be observed, saying which one is not every 10 seconds, and otherwise e
 the low-fuel cycle on SP-HL-0006, the puncture on SP-HL-0003, then the operator's `goto-area sp-zone-yard` to SP-HL-0003,
 which you send from the console or, with `--unattended`, `tools/video_take.py operator` sends). The shots are
 `tools/shots/sitepulse-video.json` (every Unity shot of the script, 16:9), `sitepulse-video-9x16.json` (the portrait cut)
-and `sitepulse-website-loop.json` (a 25 s seamless loop for the website).
+and `sitepulse-website-loop.json` (a 26 s seamless loop for the website).
 
 **The console shots.** With `--unattended`, the operator's part is done through the console's own UI by a headless browser
 (`tools/console_capture.py`, one-time install with `tools/console-recorder-setup.sh`: a venv holding Playwright and its Chromium, no sudo),

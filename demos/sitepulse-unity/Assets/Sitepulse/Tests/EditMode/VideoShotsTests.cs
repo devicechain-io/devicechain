@@ -149,6 +149,7 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.IsEmpty(s.Chips);
             Assert.IsNull(s.Featured);
             Assert.AreEqual(1f, s.CardScale);
+            Assert.IsNull(s.MaxCards);
         }
 
         [Test]
@@ -163,6 +164,8 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(0f, s.ZoneLabelsDelay);
             Assert.AreEqual("tyre_pressure_kpa", s.Featured);
             Assert.AreEqual(0.8f, s.CardScale, 1e-6);
+            Assert.AreEqual(1, One(@"""maxCards"":1,").MaxCards);
+            Assert.AreEqual(6, One(@"""maxCards"":6,").MaxCards);
             Assert.AreEqual(DrawerMode.Full, One(@"""drawer"":""full"",").Layers.Drawer);
             Assert.AreEqual(DrawerMode.Side, One(@"""drawer"":""side"",").Layers.Drawer);
             Assert.AreEqual(DrawerMode.Off, One(@"""drawer"":false,").Layers.Drawer);
@@ -213,6 +216,10 @@ namespace DeviceChain.Sitepulse.Tests
             StringAssert.Contains("not an equipment measurement key", Refusal(@"""featured"":""throughput_tph"","));
             StringAssert.Contains("\"cardStagger\" is 0 to 30", Refusal(@"""cardStagger"":99,"));
             StringAssert.Contains("\"cardScale\" is 0.4 to 2", Refusal(@"""cardScale"":5,"));
+            StringAssert.Contains("\"maxCards\" is a whole number from 1 to 6", Refusal(@"""maxCards"":0,"));
+            StringAssert.Contains("\"maxCards\" is a whole number from 1 to 6", Refusal(@"""maxCards"":7,"));
+            StringAssert.Contains("\"maxCards\" is a whole number from 1 to 6", Refusal(@"""maxCards"":1.5,"));
+            StringAssert.Contains("\"maxCards\" is a whole number from 1 to 6", Refusal(@"""maxCards"":""one"","));
         }
 
         [Test]
@@ -657,7 +664,7 @@ namespace DeviceChain.Sitepulse.Tests
         public void TheLoopIsAboutHalfAMinuteOfSixteenByNineWithNoDialogJustFourChips()
         {
             var shots = Loop;
-            Assert.AreEqual(27.0, shots.Sum(s => s.Duration), 1e-9);
+            Assert.AreEqual(26.2, shots.Sum(s => s.Duration), 1e-9);
             Assert.IsTrue(shots.All(s => s.Width == 1920 && s.Height == 1080));
             var chips = shots.SelectMany(s => s.Chips).Select(c => c.Text).ToArray();
             CollectionAssert.AreEqual(new[] { "Telemetry over MQTT", "Rule fires: low fuel", "Command sent", "Command SUCCESSFUL" }, chips);
@@ -749,6 +756,14 @@ namespace DeviceChain.Sitepulse.Tests
             var plan = ShotPlanner.Plan(Load("sitepulse-website-loop.json"), take.Data);
             Assert.IsFalse(take.Data.Header.AnyAccelerated(0, take.Data.Duration), "the take ran on the real clock, so no shot needs the accelerated caption");
             Assert.IsTrue(plan.All(p => p.Shot.Layers.Cards && p.Shot.Layers.Route));
+        }
+
+        [Test]
+        public void EveryCutOfTheLoopDrawsTheFeaturedTrucksCardAlone()
+        {
+            var shots = Loop;
+            Assert.IsTrue(shots.All(s => s.MaxCards == 1), "one machine's story: the selected truck's card, no other");
+            Assert.IsTrue(shots.All(s => s.Selected == "SP-HL-0006"), "and that one card is the protagonist's");
         }
 
         // ---- a recording that lacks what the take should have produced
