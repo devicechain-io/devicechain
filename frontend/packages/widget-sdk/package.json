@@ -53,7 +53,7 @@
   "peerDependencies": {
     "@devicechain/dashboards": "0.0.0-dev",
     "echarts": "^6.0.0",
-    "react": "^19.3.1"
+    "react": "^19.3.0"
   },
   "devDependencies": {
     "@devicechain/dashboards": "0.0.0-dev",

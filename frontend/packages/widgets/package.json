@@ -57,9 +57,9 @@
     "@devicechain/dashboards": "0.0.0-dev",
     "@devicechain/widget-sdk": "0.0.0-dev",
     "echarts": "^6.0.0",
-    "maplibre-gl": "^6.14.0",
-    "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "maplibre-gl": "^6.13.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@devicechain/client": "0.0.0-dev",
