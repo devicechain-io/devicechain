@@ -168,7 +168,7 @@ func newDmWorld(t *testing.T) *dmWorld {
 	}
 	singleConnection(t, db)
 	if err := db.AutoMigrate(&dmmodel.Device{}, &dmmodel.DeviceType{}, &dmmodel.DeviceProfile{},
-		&dmmodel.DeviceProfileVersion{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
+		&dmmodel.DeviceProfileVersion{}, &dmmodel.DeviceProfileActivation{}, &dmmodel.MetricDefinition{}, &dmmodel.CommandDefinition{},
 		&dmmodel.DetectionRule{}, &dmmodel.DetectionRuleScopeRef{}, &dmmodel.EntityAttribute{},
 		&dmmodel.EntityGroupMembership{}, &dmmodel.EntityGroupFacetRef{}, &dmmodel.EntityRelationship{},
 		&dmmodel.EntityRelationshipType{}, &dmmodel.Alarm{}, &dmmodel.DeviceCredential{}, &dmmodel.DeviceReplacement{},

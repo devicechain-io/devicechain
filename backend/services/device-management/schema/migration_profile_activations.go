@@ -35,7 +35,10 @@ type deviceProfileActivation struct {
 	ID       uint   `gorm:"primarykey"`
 	TenantId string `gorm:"index;not null;size:128"`
 
-	// The composite serves the only read: one profile's log, newest first, by keyset on id.
+	// Serves the only read: one profile's log, newest first, by keyset on id. It is a single
+	// column on purpose, not (device_profile_id, id): a profile gains an entry per human publish
+	// or rollback, so the rows one profile matches are few and the sort over them is free;
+	// measured on PostgreSQL 16, the composite plans the same bitmap scan and sort.
 	DeviceProfileId uint  `gorm:"not null;index:ix_device_profile_activations_profile_id,priority:1"`
 	Version         int32 `gorm:"not null"`
 
