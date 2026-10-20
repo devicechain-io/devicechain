@@ -660,10 +660,16 @@ func TestIntegrationIndexTrimFailsAtOnceOnAnythingButABusyTable(t *testing.T) {
 	assert.Contains(t, hypertableIndexes(t, sys, "events"), "events_pkey")
 }
 
-// explainScans EXPLAINs one statement with sequential and bitmap scans disabled — so the
-// plan names the index the planner prefers among the indexes, which is the question —
-// and returns its relation scans. Everything runs in a transaction that is rolled back,
-// so a negative control's DROP INDEX inside prepare never lands.
+// explainScans EXPLAINs (ANALYZE) one statement with sequential and bitmap scans disabled -- so
+// the plan names the index the planner prefers among the indexes, which is the question --
+// and returns the relation scans it executed. Everything runs in a transaction that is rolled
+// back, so a negative control's DROP INDEX inside prepare never lands, and a DELETE under it
+// deletes nothing that stays.
+//
+// It ANALYZEs because it must: TimescaleDB 2.30 reads an ordered LIMIT through a
+// DeferredChunkAppend node that plans each chunk when the read RUNS, so a plain EXPLAIN of it
+// names no chunk and no index at all. ANALYZE is also the stronger question -- which index was
+// actually used, not which was planned -- and on 2.28 it names the same scans as before.
 func explainScans(t *testing.T, db *gorm.DB, prepare []string, stmt string, args ...any) []planScan {
 	t.Helper()
 	var scans []planScan
@@ -674,7 +680,7 @@ func explainScans(t *testing.T, db *gorm.DB, prepare []string, stmt string, args
 			}
 		}
 		var plan string
-		if err := tx.Raw(`EXPLAIN (FORMAT JSON) `+stmt, args...).Row().Scan(&plan); err != nil {
+		if err := tx.Raw(`EXPLAIN (ANALYZE, FORMAT JSON) `+stmt, args...).Row().Scan(&plan); err != nil {
 			return err
 		}
 		var err error
@@ -689,6 +695,38 @@ func explainScans(t *testing.T, db *gorm.DB, prepare []string, stmt string, args
 }
 
 var errRollbackExplain = fmt.Errorf("rollback after explain")
+
+var genericPlanSeq int
+
+// explainGenericScans plans sql GENERICALLY, as a prepared statement is after five executions,
+// with device and tenant (the two literals the callers inline) bound as $1 and $2, and returns
+// the scans the generic plan executed. It prepares and EXECUTEs under EXPLAIN (ANALYZE) instead
+// of using EXPLAIN (GENERIC_PLAN), which cannot run the read: TimescaleDB 2.30's
+// DeferredChunkAppend plans its chunks only when the read runs, so a GENERIC_PLAN of an ordered
+// LIMIT read names no chunk. conn's session carries whatever planner settings the caller set.
+func explainGenericScans(t *testing.T, conn *pgx.Conn, sql, device, tenant string) []planScan {
+	t.Helper()
+	param := strings.ReplaceAll(strings.ReplaceAll(sql, "'"+device+"'", "$1"), "'"+tenant+"'", "$2")
+	require.Contains(t, param, "$1", "the device literal must be in the statement: %s", sql)
+	require.Contains(t, param, "$2", "the tenant literal must be in the statement: %s", sql)
+	ctx := context.Background()
+	genericPlanSeq++
+	name := fmt.Sprintf("genplan%d", genericPlanSeq)
+	quote := func(v string) string { return "'" + strings.ReplaceAll(v, "'", "''") + "'" }
+	for _, s := range []string{`SET plan_cache_mode = force_generic_plan`, `PREPARE ` + name + ` AS ` + param} {
+		_, err := conn.Exec(ctx, s)
+		require.NoError(t, err, s)
+	}
+	defer func() { _, _ = conn.Exec(ctx, `DEALLOCATE `+name) }()
+	results, err := conn.PgConn().Exec(ctx, fmt.Sprintf(`EXPLAIN (ANALYZE, FORMAT JSON) EXECUTE %s(%s, %s)`,
+		name, quote(device), quote(tenant))).ReadAll()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Len(t, results[0].Rows, 1)
+	scans, err := planIndexScans(results[0].Rows[0][0])
+	require.NoError(t, err)
+	return scans
+}
 
 // scansOf keeps the scans of one hypertable's chunks (and the hypertable itself).
 func scansOf(t *testing.T, db *gorm.DB, scans []planScan, table string) []planScan {
@@ -714,10 +752,28 @@ func requireServedBy(t *testing.T, db *gorm.DB, scans []planScan, table, wantInd
 	t.Helper()
 	own := scansOf(t, db, scans, table)
 	require.NotEmptyf(t, own, "%s: the plan scans no chunk of %s — nothing to check (%v)", what, table, scans)
+	if servedBy(own, wantIndex) {
+		return
+	}
 	for _, s := range own {
 		assert.Truef(t, chunkIndexIs(s.index, wantIndex), "%s: %s on %s uses %q, want %s",
 			what, s.node, s.relation, s.index, wantIndex)
 	}
+}
+
+// servedBy is requireServedBy's verdict as a value, so a negative control can show that the
+// SAME verdict rejects a bad plan: true only when there is at least one scan and every one
+// uses wantIndex. own is already narrowed to one table (scansOf).
+func servedBy(own []planScan, wantIndex string) bool {
+	if len(own) == 0 {
+		return false
+	}
+	for _, s := range own {
+		if !chunkIndexIs(s.index, wantIndex) {
+			return false
+		}
+	}
+	return true
 }
 
 // capture returns the recorded statement that contains want (the data query's ORDER BY,

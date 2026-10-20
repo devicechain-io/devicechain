@@ -4,6 +4,7 @@
 package model
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -22,17 +23,92 @@ type planScan struct {
 	indexCond string
 }
 
+// parsePlanRoot returns the root plan node of EXPLAIN (FORMAT JSON) output, with every child
+// plan reachable under a "Plans" array.
+//
+// It does not use json.Unmarshal into a map, and that is the point. TimescaleDB 2.30's
+// DeferredChunkAppend (used for an ordered LIMIT read of a hypertable) renders the chunks it
+// visited as one "Plan" member EACH, repeated inside the node, instead of as a "Plans" array.
+// A map keeps only the LAST of a repeated key, so the walk silently saw one chunk of three --
+// or, for a plain EXPLAIN, none, because that node plans its chunks only when the read runs --
+// and "the plan scans no chunk" read like a finding about the index. Repeated "Plan" members
+// of a nested node are collected, in order, into "Plans". The wrapper object's own single
+// "Plan" is the root and is left alone.
+func parsePlanRoot(explainJSON []byte) (map[string]any, error) {
+	dec := json.NewDecoder(bytes.NewReader(explainJSON))
+	top, err := decodePlanValue(dec, 0)
+	if err != nil {
+		return nil, fmt.Errorf("parse EXPLAIN JSON: %w", err)
+	}
+	arr, ok := top.([]any)
+	if !ok || len(arr) == 0 {
+		return nil, fmt.Errorf("EXPLAIN JSON carries no plan")
+	}
+	wrapper, ok := arr[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("EXPLAIN JSON carries no plan")
+	}
+	root, ok := wrapper["Plan"].(map[string]any)
+	if !ok || root == nil {
+		return nil, fmt.Errorf("EXPLAIN JSON carries no plan")
+	}
+	return root, nil
+}
+
+// decodePlanValue reads one JSON value. depth counts enclosing objects: the wrapper object
+// ({"Plan": ..., "Planning Time": ...}) is depth 1, plan nodes are deeper.
+func decodePlanValue(dec *json.Decoder, depth int) (any, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, isDelim := tok.(json.Delim)
+	if !isDelim {
+		return tok, nil
+	}
+	switch delim {
+	case '[':
+		out := []any{}
+		for dec.More() {
+			v, err := decodePlanValue(dec, depth)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, v)
+		}
+		_, err := dec.Token() // ]
+		return out, err
+	case '{':
+		out := map[string]any{}
+		for dec.More() {
+			keyTok, err := dec.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, _ := keyTok.(string)
+			v, err := decodePlanValue(dec, depth+1)
+			if err != nil {
+				return nil, err
+			}
+			if key == "Plan" && depth >= 2 {
+				children, _ := out["Plans"].([]any)
+				out["Plans"] = append(children, v)
+				continue
+			}
+			out[key] = v
+		}
+		_, err := dec.Token() // }
+		return out, err
+	}
+	return nil, fmt.Errorf("unexpected delimiter %v", delim)
+}
+
 // planIndexScans walks EXPLAIN (FORMAT JSON) output through every "Plans" level and
 // returns each node that scans a relation. Compare its index with chunkIndexIs.
 func planIndexScans(explainJSON []byte) ([]planScan, error) {
-	var top []struct {
-		Plan map[string]any `json:"Plan"`
-	}
-	if err := json.Unmarshal(explainJSON, &top); err != nil {
-		return nil, fmt.Errorf("parse EXPLAIN JSON: %w", err)
-	}
-	if len(top) == 0 || top[0].Plan == nil {
-		return nil, fmt.Errorf("EXPLAIN JSON carries no plan")
+	root, err := parsePlanRoot(explainJSON)
+	if err != nil {
+		return nil, err
 	}
 	var scans []planScan
 	var walk func(n map[string]any)
@@ -60,7 +136,7 @@ func planIndexScans(explainJSON []byte) ([]planScan, error) {
 			}
 		}
 	}
-	walk(top[0].Plan)
+	walk(root)
 	return scans, nil
 }
 
@@ -126,6 +202,40 @@ func TestPlanIndexScans(t *testing.T) {
 
 	_, err = planIndexScans([]byte(`[]`))
 	assert.Error(t, err, "an empty EXPLAIN must not read as a plan with no scans")
+}
+
+// TestPlanIndexScansDeferredChunkAppend: TimescaleDB 2.30 renders the chunks a DeferredChunkAppend
+// visited as repeated "Plan" members of the node, not a "Plans" array. Every one must be seen,
+// in order: a decoder that keeps the last of a repeated key sees one chunk of three.
+func TestPlanIndexScansDeferredChunkAppend(t *testing.T) {
+	fixture := []byte(`[{"Plan": {
+		"Node Type": "Limit",
+		"Plans": [{
+			"Node Type": "Custom Scan", "Custom Plan Provider": "DeferredChunkAppend", "Relation Name": "events",
+			"Chunks Visited": 3,
+			"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Index Scan", "Relation Name": "_hyper_1_3_chunk",
+				"Index Name": "3_events_pkey", "Index Cond": "((tenant_id)::text = 'a'::text)"}]},
+			"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Index Scan", "Relation Name": "_hyper_1_2_chunk",
+				"Index Name": "2_events_pkey"}]},
+			"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Index Scan", "Relation Name": "_hyper_1_1_chunk",
+				"Index Name": "1_events_pkey"}]}
+		}]
+	}, "Planning Time": 0.1}]`)
+	scans, err := planIndexScans(fixture)
+	require.NoError(t, err)
+	require.Len(t, scans, 3, "every visited chunk, not the last one only")
+	assert.Equal(t, []string{"_hyper_1_3_chunk", "_hyper_1_2_chunk", "_hyper_1_1_chunk"},
+		[]string{scans[0].relation, scans[1].relation, scans[2].relation})
+	assert.Equal(t, "((tenant_id)::text = 'a'::text)", scans[0].indexCond)
+
+	// A plain EXPLAIN of the same node names no chunk at all: the node plans them when the
+	// read runs. Callers that need the chunks must EXPLAIN ANALYZE; this is the shape they get
+	// otherwise, and it must read as "no scans", never as a plan with a scan.
+	plain := []byte(`[{"Plan": {"Node Type": "Limit", "Plans": [{"Node Type": "Custom Scan",
+		"Custom Plan Provider": "DeferredChunkAppend", "Relation Name": "events"}]}}]`)
+	scans, err = planIndexScans(plain)
+	require.NoError(t, err)
+	assert.Empty(t, scans)
 }
 
 func TestChunkIndexIs(t *testing.T) {

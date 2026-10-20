@@ -216,6 +216,13 @@ for m in "${modules[@]}"; do
     # resolver panic it catches, 20 frame lines each) spends the whole cap before the failing
     # package's output begins — which is how a red integration job once named no test at all.
     printf '%s\n' "$out" | grep -E '^\s*--- FAIL' | sed -n '1,40p'
+    # Then each failure's OWN message: the indented lines go test prints under a `--- FAIL`
+    # (the t.Error/testify block), without stack frames. The capped dump below still begins with
+    # whatever a passing package printed first, so without this a red job named its failing
+    # test but not why it failed (#1803: TestCalculatedMetricsOnPostgres, message nowhere).
+    printf '%s\n' "$out" | awk '/^[[:space:]]*--- FAIL/ { on = 1; print; next }
+      on && /^[[:space:]]/ && !/^[[:space:]]+\/.*\.go:[0-9]+/ { print; next }
+      { on = 0 }' | sed -n '1,80p'
     printf '%s\n' "$out" | grep -E '^--- FAIL|_test\.go:[0-9]+:|^panic|^\s+/.*\.go:[0-9]+' | sed -n '1,60p'
   fi
   # 🔴 THE GUARD. A module whose tests all failed to MATCH, or whose build tag was mistyped,
