@@ -119,6 +119,20 @@ func (r *CalculatedMetricPlanMetricResolver) NameSharedWithOtherProfiles() bool 
 	return r.M.NameSharedWithOtherProfiles
 }
 
+// Inputs, MeasuredInputs and Constants are null for a metric that cannot run in the version.
+func (r *CalculatedMetricPlanMetricResolver) Inputs() *[]string { return nilOrList(r.M.Inputs) }
+func (r *CalculatedMetricPlanMetricResolver) MeasuredInputs() *[]string {
+	return nilOrList(r.M.MeasuredInputs)
+}
+func (r *CalculatedMetricPlanMetricResolver) Constants() *[]string { return nilOrList(r.M.Constants) }
+
+func nilOrList(v []string) *[]string {
+	if v == nil {
+		return nil
+	}
+	return &v
+}
+
 // CalculatedBackfillRosterPageResolver exposes one page of the roster.
 type CalculatedBackfillRosterPageResolver struct {
 	M model.BackfillRosterPage

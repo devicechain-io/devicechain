@@ -316,20 +316,21 @@ The block is **counted from stored readings**. A calculated value is stored like
 | Status | Meaning |
 | --- | --- |
 | **Computing** | Values were stored for the metric in the window. |
+| **Unconfirmed** | Values were stored under the metric's key, but another profile also declares a metric with that key, so they may all be that profile's (see below). |
 | **Not computing** | The inputs have stored readings in the window and no value was stored for the metric. Use **Why?** to find out. |
 | **No input readings** | Neither the metric nor its inputs have readings in the window, so there was nothing to compute from. |
-| **Inputs unknown** | The formula no longer compiles against the profile's current definitions (for example a metric it reads was deleted from the draft), so its inputs cannot be read. Counts for the metric are not shown. |
+| **Inputs unknown** | The active version's formula cannot run on this release (it does not compile, or its data type cannot be calculated), so it computes nothing and its inputs cannot be read. Counts for the metric are not shown. |
 
 Things to know when reading the counts:
 
-- **Counts start when the version became active.** A reading stored earlier cannot have been computed by this version, so it is left out, and the line above the table says since when. If the platform has no activation time on record for the version (it was activated before activations were logged), the line says so and the counts are not limited this way, so they can include readings from before the version was active.
+- **Counts start when the version became active.** A reading stored earlier cannot have been computed by this version, so it is left out, and the line above the table says since when. For a version activated before activation times were recorded, the time is read from the profile's version history; it can be earlier than the true activation, never later, so the counts can include a few readings from just before it.
 - **Separate messages are fine.** A device that sends one metric every second and another once an hour is not "skipping" the formula on the seconds it does not send the second one. The block never compares against the number of messages, only values stored against input readings.
 - **Counts are by when the reading occurred**, so a burst of old readings forwarded late lands in the hours it describes. They reach back only as far as your tenant's measurement retention.
 - **A name shared with another profile.** If another profile of the tenant also declares a metric with the same key, the counts include that profile's readings and cannot show this formula is working. The row says so; use **Why?** on a device of this profile instead.
 
 ### Asking why {#asking-why}
 
-**Why?** opens the same "Try it on recent history" view used while authoring, for the metric's active formula. Enter the token of a device that reports the formula's inputs and run it: it evaluates the formula over that device's stored readings and tallies, by reason, the readings that produced no value (see [When a formula produces no value](#when-a-formula-produces-no-value)). Nothing is stored.
+**Why?** opens the same "Try it on recent history" view used while authoring, for the metric's formula in the active version, with the inputs that version reads (the draft may differ). Enter the token of a device that reports the formula's inputs and run it: it evaluates the formula over that device's stored readings and tallies, by reason, the readings that produced no value (see [When a formula produces no value](#when-a-formula-produces-no-value)). Nothing is stored.
 
 ## Backfilling history {#backfilling-history}
 

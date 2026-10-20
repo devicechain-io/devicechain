@@ -48,7 +48,8 @@ func strPtr(s string) *string { return &s }
 const planQuery = `query($p: String!) { calculatedMetricPlan(profileToken: $p) {
 	versionToken version activeSince constantKeys
 	measured { key dataType }
-	calculated { key expression dataType classifier newInVersion changedSinceEarlier nameSharedWithOtherProfiles } } }`
+	calculated { key expression dataType classifier newInVersion changedSinceEarlier nameSharedWithOtherProfiles
+		inputs measuredInputs constants } } }`
 
 const rosterQuery = `query($p: String!, $k: [String!]!, $l: Int!) { calculatedBackfillRoster(profileToken: $p, constantKeys: $k, limit: $l) {
 	nextCursor total entries { deviceId deviceToken createdAt constants { key number } } } }`
@@ -81,6 +82,10 @@ func TestBackfillDoorsAreServedToDeviceReadOnly(t *testing.T) {
 	require.Len(t, calc, 1)
 	assert.Equal(t, "power", calc[0].(map[string]any)["key"])
 	assert.Equal(t, true, calc[0].(map[string]any)["newInVersion"])
+	// What the formula reads, as the version compiled it.
+	assert.Equal(t, []any{"voltage"}, calc[0].(map[string]any)["inputs"])
+	assert.Equal(t, []any{"voltage"}, calc[0].(map[string]any)["measuredInputs"])
+	assert.Equal(t, []any{"gain"}, calc[0].(map[string]any)["constants"])
 
 	roster := serve(t, withAuthorities(acme, auth.DeviceRead), rosterQuery,
 		map[string]any{"p": "prof", "k": []any{"gain"}, "l": 10})

@@ -1562,8 +1562,14 @@ const CALCULATED_METRIC_PLAN = graphql(`
         newInVersion
         changedSinceEarlier
         nameSharedWithOtherProfiles
+        inputs
+        measuredInputs
+        constants
       }
-      constantKeys
+      measured {
+        key
+        dataType
+      }
     }
   }
 `);
@@ -1577,29 +1583,4 @@ export async function getCalculatedMetricPlan(
 ): Promise<CalculatedMetricPlanResult> {
   const data = await gql('device-management', CALCULATED_METRIC_PLAN, { profileToken, version });
   return data.calculatedMetricPlan;
-}
-
-const DEVICE_PROFILE_LATEST_ACTIVATION = graphql(`
-  query DeviceProfileLatestActivation($tokens: [String!]!) {
-    deviceProfilesByToken(tokens: $tokens) {
-      activations(first: 1) {
-        entries {
-          version
-          kind
-          activatedAt
-        }
-      }
-    }
-  }
-`);
-
-export type ProfileActivation = { version: number; kind: string; activatedAt: string };
-
-/**
- * The newest entry of a profile's activation log, or null when the log holds none (a profile last
- * activated before the log began). Absence means unknown, not inactive.
- */
-export async function getLatestActivation(profileToken: string): Promise<ProfileActivation | null> {
-  const data = await gql('device-management', DEVICE_PROFILE_LATEST_ACTIVATION, { tokens: [profileToken] });
-  return data.deviceProfilesByToken[0]?.activations.entries[0] ?? null;
 }

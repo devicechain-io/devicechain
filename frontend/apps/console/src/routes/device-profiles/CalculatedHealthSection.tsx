@@ -46,8 +46,9 @@ import {
 const DEVICE_READ = 'device:read';
 const EVENT_READ = 'event:read';
 
-const STATUS_VARIANT: Record<HealthStatus, 'success' | 'destructive' | 'secondary'> = {
+const STATUS_VARIANT: Record<HealthStatus, 'success' | 'destructive' | 'secondary' | 'warning'> = {
   computing: 'success',
+  unconfirmed: 'warning',
   not_computing: 'destructive',
   no_input_readings: 'secondary',
 };
@@ -139,6 +140,7 @@ export function CalculatedHealthSection({
             inputs={asked.directInputs}
             constants={asked.constants}
             skipLabel={(reason) => skipLabel(t, reason)}
+            inputTypes={asked.inputTypes}
           />
         )}
       </FormDrawer>
@@ -149,7 +151,7 @@ export function CalculatedHealthSection({
 function MetricRow({ metric, hours, onWhy }: { metric: MetricHealth; hours: HealthWindow; onWhy: () => void }) {
   const { t } = useTranslation('deviceProfiles');
   const c: WindowCounts | null = metric.windows[hours];
-  const status = c ? statusOf(c) : 'unknown';
+  const status = c ? statusOf(c, metric.nameShared) : 'unknown';
   const variant = status === 'unknown' ? 'secondary' : STATUS_VARIANT[status];
   return (
     <DataTableRow data-testid={`calc-health-row-${metric.key}`}>

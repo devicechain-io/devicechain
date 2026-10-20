@@ -338,20 +338,21 @@ El bloque se **cuenta a partir de las lecturas almacenadas**. Un valor calculado
 | Estado | Significado |
 | --- | --- |
 | **Calculando** | Se almacenaron valores de la métrica en la ventana. |
+| **Sin confirmar** | Se almacenaron valores con la clave de la métrica, pero otro perfil también declara una métrica con esa clave, así que podrían ser todos de ese perfil (ver más abajo). |
 | **No se calcula** | Las entradas tienen lecturas almacenadas en la ventana y no se almacenó ningún valor de la métrica. Usa **¿Por qué?** para averiguarlo. |
 | **Sin lecturas de entrada** | Ni la métrica ni sus entradas tienen lecturas en la ventana, así que no había de dónde calcular. |
-| **Entradas desconocidas** | La fórmula ya no compila con las definiciones actuales del perfil (por ejemplo, se eliminó del borrador una métrica que lee), así que no se pueden leer sus entradas. No se muestran recuentos de la métrica. |
+| **Entradas desconocidas** | La fórmula de la versión activa no puede ejecutarse en esta versión de la plataforma (no compila, o su tipo de datos no se puede calcular), así que no calcula nada y no se pueden leer sus entradas. No se muestran recuentos de la métrica. |
 
 Qué tener en cuenta al leer los recuentos:
 
-- **Los recuentos empiezan cuando la versión se activó.** Una lectura almacenada antes no pudo calcularla esta versión, así que se excluye, y la línea sobre la tabla indica desde cuándo. Si la plataforma no tiene registrada la hora de activación de la versión (se activó antes de que se registraran las activaciones), la línea lo dice y los recuentos no se limitan así, por lo que pueden incluir lecturas anteriores a la activación.
+- **Los recuentos empiezan cuando la versión se activó.** Una lectura almacenada antes no pudo calcularla esta versión, así que se excluye, y la línea sobre la tabla indica desde cuándo. Para una versión activada antes de que se registraran las horas de activación, la hora se lee del historial de versiones del perfil; puede ser anterior a la activación real, nunca posterior, así que los recuentos pueden incluir algunas lecturas de justo antes.
 - **Los mensajes separados no son un problema.** Un dispositivo que envía una métrica cada segundo y otra cada hora no está "omitiendo" la fórmula en los segundos en que no envía la segunda. El bloque nunca compara con el número de mensajes, solo valores almacenados con lecturas de entrada.
 - **Los recuentos son por el momento en que ocurrió la lectura**, así que una ráfaga de lecturas antiguas reenviadas tarde cae en las horas que describe. Solo llegan hasta donde alcance la retención de mediciones de tu tenant.
 - **Un nombre compartido con otro perfil.** Si otro perfil del tenant también declara una métrica con la misma clave, los recuentos incluyen las lecturas de ese perfil y no demuestran que esta fórmula funcione. La fila lo indica; usa **¿Por qué?** en un dispositivo de este perfil.
 
 ### Preguntar por qué {#asking-why}
 
-**¿Por qué?** abre la misma vista "Probar con el historial reciente" que se usa al crear, con la fórmula activa de la métrica. Introduce el token de un dispositivo que informe las entradas de la fórmula y ejecútala: evalúa la fórmula sobre las lecturas almacenadas de ese dispositivo y cuenta, por motivo, las lecturas que no produjeron valor (consulta [Cuando una fórmula no produce valor](#when-a-formula-produces-no-value)). No se almacena nada.
+**¿Por qué?** abre la misma vista "Probar con el historial reciente" que se usa al crear, con la fórmula de la métrica en la versión activa y las entradas que esa versión lee (el borrador puede ser distinto). Introduce el token de un dispositivo que informe las entradas de la fórmula y ejecútala: evalúa la fórmula sobre las lecturas almacenadas de ese dispositivo y cuenta, por motivo, las lecturas que no produjeron valor (consulta [Cuando una fórmula no produce valor](#when-a-formula-produces-no-value)). No se almacena nada.
 
 ## Rellenar el historial {#backfilling-history}
 

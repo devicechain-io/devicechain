@@ -15,11 +15,7 @@
 // stored before that cannot have been computed by it), and reach back only as far as the tenant's
 // measurement retention.
 
-import {
-  getCalculatedMetricPlan,
-  getLatestActivation,
-  testMetricFormula,
-} from '@/lib/api/device-management';
+import { getCalculatedMetricPlan } from '@/lib/api/device-management';
 import { getHourlyCounts, type HourlyCount } from '@/lib/api/event-management';
 
 export const HOUR_MS = 3_600_000;
@@ -28,8 +24,12 @@ export const HOUR_MS = 3_600_000;
 export const HEALTH_WINDOWS = [24, 168] as const;
 export type HealthWindow = (typeof HEALTH_WINDOWS)[number];
 
-/** Not computing: inputs were stored and no value was. No input readings: nothing to compute from. */
-export type HealthStatus = 'not_computing' | 'computing' | 'no_input_readings';
+/**
+ * Not computing: inputs were stored and no value was. No input readings: nothing to compute from.
+ * Unconfirmed: values are stored under the metric's name, but another profile declares the same
+ * name, so they may all be that profile's and the count cannot show THIS formula is working.
+ */
+export type HealthStatus = 'not_computing' | 'computing' | 'unconfirmed' | 'no_input_readings';
 
 export interface WindowCounts {
   /** Values stored under the metric's own key. */
@@ -49,17 +49,19 @@ export interface MetricHealth {
   unit: string | null;
   /** Another live profile declares a metric of this name, so its readings are in the counts. */
   nameShared: boolean;
-  /** The metrics the formula reads directly, as the server compiled it; null when it could not be compiled. */
+  /** The metrics the formula reads directly, as the active version compiles it; null when it cannot run there. */
   directInputs: string[] | null;
-  /** The device constants the formula reads. */
+  /** The device constants the formula reads, through its whole chain. */
   constants: string[];
+  /** The data type of every metric the formula may read, from the active version. */
+  inputTypes: Record<string, string>;
   /** Keyed by window hours. Null counts when the inputs are unknown. */
   windows: Record<HealthWindow, WindowCounts | null>;
 }
 
 export interface CalcHealth {
   version: number;
-  /** When the active version became active, per the activation log; null when the log has no entry for it. */
+  /** When the active version became active, as the profile records it; null when the server gave none. */
   activeSince: Date | null;
   metrics: MetricHealth[];
 }
@@ -98,9 +100,14 @@ export function windowCounts(
   };
 }
 
-/** Values computed beat everything else; otherwise the inputs decide between broken and idle. */
-export function statusOf(c: WindowCounts): HealthStatus {
-  if (c.computed > 0) return 'computing';
+/**
+ * Values computed beat everything else, unless the name is shared: then they are not evidence
+ * about this formula, and reading them as healthy is the one false "Computing" the counts allow.
+ * Otherwise the inputs decide between broken and idle. No values under a shared name is still
+ * Not computing: no profile produced any.
+ */
+export function statusOf(c: WindowCounts, nameShared: boolean): HealthStatus {
+  if (c.computed > 0) return nameShared ? 'unconfirmed' : 'computing';
   return c.inputTotal > 0 ? 'not_computing' : 'no_input_readings';
 }
 
@@ -121,44 +128,30 @@ export async function loadCalcHealth(profileToken: string, now: Date): Promise<C
   const plan = await getCalculatedMetricPlan(profileToken);
   if (plan.calculated.length === 0) return null;
 
-  // The latest entry of the log is the version that is active now. An entry for another version
-  // (the log and the profile disagree) is no evidence about this one, so it is treated as absent.
-  const latest = await getLatestActivation(profileToken);
-  const activeSince = latest && latest.version === plan.version ? new Date(latest.activatedAt) : null;
-  const floor = activeSince && !Number.isNaN(activeSince.getTime()) ? activeSince : null;
+  // The instant the profile records for its active version: the one the activation log carries
+  // for it, and for a version activated before the log began, the platform's own reading of its
+  // version rows (never later than the true activation, so no value it computed is excluded).
+  const since = plan.activeSince ? new Date(plan.activeSince) : null;
+  const floor = since && !Number.isNaN(since.getTime()) ? since : null;
 
-  // The server's own compiler says which measured metrics each formula reads, through the
-  // calculated metrics it chains. It checks against the profile's current definitions, so a
-  // formula the draft has since diverged from reports no inputs rather than guessing them.
-  const compiled = await Promise.all(
-    plan.calculated.map((m) =>
-      testMetricFormula({
-        profileToken,
-        expression: m.expression,
-        dataType: m.dataType,
-        metricKey: m.key,
-        minValue: m.minValue,
-        maxValue: m.maxValue,
-        sample: [],
-      }).catch(() => null),
-    ),
-  );
-
+  // What each formula reads comes from the ACTIVE version as the server compiles it, through
+  // the calculated metrics it chains: the draft may have renamed or removed an input since.
   const names = new Set<string>();
-  plan.calculated.forEach((m, i) => {
+  for (const m of plan.calculated) {
     names.add(m.key);
-    const c = compiled[i];
-    if (c && !c.compileError) c.measuredInputs.forEach((k) => names.add(k));
-  });
+    m.measuredInputs?.forEach((k) => names.add(k));
+  }
   const widest = Math.max(...HEALTH_WINDOWS) * HOUR_MS;
   let start = new Date(now.getTime() - widest);
   if (floor && floor > start) start = floor;
   const counts = await fetchAll([...names], start);
 
-  const metrics = plan.calculated.map((m, i): MetricHealth => {
-    const c = compiled[i];
-    const ok = c != null && !c.compileError;
-    const measured = ok ? c.measuredInputs : null;
+  const inputTypes: Record<string, string> = {};
+  for (const m of plan.measured) inputTypes[m.key] = m.dataType;
+  for (const m of plan.calculated) inputTypes[m.key] = m.dataType;
+
+  const metrics = plan.calculated.map((m): MetricHealth => {
+    const measured = m.measuredInputs ?? null;
     const windows = Object.fromEntries(
       HEALTH_WINDOWS.map((h) => [h, measured ? windowCounts(counts, m.key, measured, h, now, floor) : null]),
     ) as Record<HealthWindow, WindowCounts | null>;
@@ -170,8 +163,9 @@ export async function loadCalcHealth(profileToken: string, now: Date): Promise<C
       maxValue: m.maxValue ?? null,
       unit: m.unit ?? null,
       nameShared: m.nameSharedWithOtherProfiles,
-      directInputs: ok ? c.inputs : null,
-      constants: ok ? c.constants : [],
+      directInputs: m.inputs ?? null,
+      constants: m.constants ?? [],
+      inputTypes,
       windows,
     };
   });
