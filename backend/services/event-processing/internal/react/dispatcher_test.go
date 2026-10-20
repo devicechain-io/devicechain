@@ -484,8 +484,18 @@ func TestDispatchSendCommandExpiry(t *testing.T) {
 	if len(sink.sent) != 1 || !sink.sent[0].ExpiresAt.IsZero() {
 		t.Fatalf("absent expiresAfter must send no expiry, got %+v", sink.sent)
 	}
-	sink, _ = run("30s")
+	m := newFakeMetrics()
+	sink = &fakeSink{}
+	r := sendCmdRule("setMode", "")
+	r.Actions[0].SendCommand.ExpiresAfter = "30s"
+	d := NewDispatcher(fakeResolver{rule: r, found: true}, sink, nil, nil, nil, m)
+	if out := d.Dispatch(context.Background(), evt()).Outcome; out != Done {
+		t.Fatalf("an invalid stored expiry is a drop, not a retry: %v", out)
+	}
 	if len(sink.attempted) != 0 {
 		t.Fatalf("an out-of-range stored expiry must be dropped, not sent: %+v", sink.attempted)
+	}
+	if m.dropped[DropInvalidAction] != 1 {
+		t.Fatalf("an invalid stored expiry must be counted as dropped: %+v", m.dropped)
 	}
 }

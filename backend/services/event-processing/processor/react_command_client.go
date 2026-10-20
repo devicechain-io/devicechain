@@ -57,6 +57,12 @@ var permanentRejectionCodes = map[string]bool{
 	// A disabled device accepts no command while it stays disabled, and a rule firing at a
 	// quarantined device would otherwise spend its whole retry budget on each detection.
 	string(dmmodel.RejectDeviceDisabled): true,
+	// The device type's next maintenance window opens only after the command's expiresAt. A REACT
+	// command carries an expiresAt only when its rule sets expiresAfter, and the author's bound
+	// is measured from the enqueue, so a later retry could only enqueue a command past the wait
+	// the rule allowed. Dropping it is the honest verdict; retrying spends the redelivery budget
+	// and then poison-drops it as if command-delivery were down.
+	string(dmmodel.RejectWindowAfterExpiry): true,
 	// A raw Factory Reset is refused identically every time; the rule would otherwise retry it.
 	string(dmmodel.RejectCommandDestructiveRefused): true,
 	// Answered by command-delivery itself, on the request as written.

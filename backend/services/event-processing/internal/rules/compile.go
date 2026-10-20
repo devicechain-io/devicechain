@@ -489,7 +489,12 @@ func ActionDedupKey(a Action) string {
 	case ActionRaiseAlarm:
 		return "raiseAlarm|" + alarmKeyIdentity(a.RaiseAlarm) + guardSeg
 	case ActionSendCommand:
-		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + "|" + a.SendCommand.ExpiresAfter + guardSeg
+		// ExpiresAfter is deliberately NOT part of the identity: two sends of the same command
+		// and payload that differ only in how long they may wait are the same dispatch, and
+		// react.actionContentKey (the durable idempotency token) leaves it out too, so the
+		// gate must call them duplicates or the dispatcher would collapse one onto the other's
+		// token while the gate reported two actions.
+		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
 	case ActionHTTPCall:
 		h := a.HTTPCall
 		// URL + method + body template + secret handle + a stable header serialization identify the

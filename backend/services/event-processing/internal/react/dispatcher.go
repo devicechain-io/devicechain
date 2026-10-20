@@ -330,15 +330,22 @@ type Metrics interface {
 	// value, and never the rejection code (that is logged, not labelled).
 	RecordPermanentlyRejected(action string)
 	// RecordDropped: one action SKIPPED without being attempted, by a fixed reason enum
-	// (never a tenant, rule or action-type value). Today the one reason is "unknown_kind": the
-	// definition carries an action type no case handles — unreachable for a gate-validated rule,
-	// so any non-zero count means a forged or hand-edited definition (or a build older than the
-	// rule) and must be visible rather than a silent return.
+	// (never a tenant, rule or action-type value): "unknown_kind" (the definition carries an
+	// action type no case handles) or "invalid_action" (a known kind whose stored configuration
+	// the publish gate would refuse). Both are unreachable for a gate-validated rule, so any
+	// non-zero count means a forged or hand-edited definition (or a build older than the rule)
+	// and must be visible rather than a silent return.
 	RecordDropped(reason string)
 }
 
 // DropUnknownKind is the RecordDropped reason for an action whose type no dispatch case handles.
 const DropUnknownKind = "unknown_kind"
+
+// DropInvalidAction is the RecordDropped reason for an action of a known kind whose stored
+// configuration the publish gate would refuse (today: a sendCommand expiresAfter that does not
+// parse or lies outside its bounds). Like DropUnknownKind it is unreachable for a gate-validated
+// rule, so a non-zero count means a definition that never passed the gate.
+const DropInvalidAction = "invalid_action"
 
 // Dispatcher turns a derived event into its authored actions. It holds no per-detection state —
 // idempotency lives in the deterministic token the command sink dedups on (and the upsert-keyed
@@ -515,6 +522,7 @@ func (d *Dispatcher) dispatchAction(ctx context.Context, ev runtime.DerivedEvent
 		if err != nil {
 			log.Error().Err(err).Str("rule", ev.RuleID).
 				Msg("REACT: dropping a sendCommand action with an invalid expiresAfter (malformed/forged rule).")
+			d.metrics.RecordDropped(DropInvalidAction)
 			return
 		}
 		req := CommandRequest{

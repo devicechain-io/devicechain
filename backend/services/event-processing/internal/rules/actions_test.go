@@ -198,4 +198,12 @@ func TestCompileSendCommandExpiresAfter(t *testing.T) {
 			t.Fatalf("expiresAfter %q should be refused naming the field, got %v", bad, err)
 		}
 	}
+	// Two sends that differ only in expiresAfter are ONE dispatch: the dispatcher's idempotency
+	// token leaves the expiry out, so the gate must refuse the pair rather than accept two actions
+	// of which only one could ever be enqueued.
+	short := Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c", ExpiresAfter: "15m"}}
+	long := Action{Type: ActionSendCommand, SendCommand: &SendCommandAction{Command: "c", ExpiresAfter: "2h"}}
+	if _, err := Compile(thresholdWith("", short, long), testLimits); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("sends differing only in expiresAfter must be refused as duplicates, got %v", err)
+	}
 }
