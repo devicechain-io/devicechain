@@ -313,7 +313,63 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.Less(bThrough, 40.0, "within the stream, not after it ran dry: " + bThrough);
         }
 
+        [Test]
+        public void AYoungerRequestThatConflictsWithAnOlderOneWaitsEvenWhenItCouldBeGranted()
+        {
+            // A asks first for the narrows, but cannot have it: the cell beyond, where it would stand, is under D's shadow, and D stands. B asks
+            // later from the other end, and nothing is in its way; first come first served keeps B back all the same (the two conflict)
+            var il = Narrows().Build();
+            var d = Put(il, "D", "a", 46.0);    // posed in a[23]: its shadow covers a[20..22]
+            d.Halted = true;
+            il.SetStanding("D", true);
+            var a = Put(il, "A", "a", 12.0);
+            var now = 0.0;
+            Assert.IsTrue(Run(il, ref now, 10, () => il.Requesting("A") != null, d, a));
+            var b = Put(il, "B", "b", 12.0);
+            Run(il, ref now, 10, null, d, a, b);
+            Assert.AreEqual("narrows", il.Requesting("B"), "B still asks: " + Why(il, "B"));
+            Assert.IsFalse(il.HasReserved("B", Cell(il, "b", 10)), "and has none of the narrows");
+            StringAssert.Contains("after A", il.Explain("B"));
+        }
+
+        [Test]
+        public void WhileTheOldestRequestWaitsNobodyOutsideItTakesTheGroundItAsksFor()
+        {
+            // A waits for the narrows (C stands in it from the other end). Lane x crosses the cell beyond the narrows that A's way through ends
+            // in: X, coming up x, would take that crossing cell by cell (it is no section) and keep it from A; R5 holds X short of it instead
+            var il = Narrows().Lane("x", 30, 40, -20, 0, 1).Conflict("a", 20, "x", 10).Build();
+            var c = Put(il, "C", "b", 30.0);    // in the narrows from the b end, granted in place, and standing
+            c.Halted = true;
+            var a = Put(il, "A", "a", 12.0);
+            var now = 0.0;
+            Assert.IsTrue(Run(il, ref now, 10, () => il.Requesting("A") != null, c, a));
+            var x = Put(il, "X", "x", 0.0);
+            Run(il, ref now, 15, null, c, a, x);
+            Assert.Less(x.S, 10 * CellM, "X stopped short of the crossing: at " + x.S + " m");
+            StringAssert.Contains("held back for A", il.WaitingFor("X") ?? "");
+        }
+
         // ---- R7: stations
+
+        [Test]
+        public void AStationOfCapacityOneAdmitsTheNextOnlyOnceTheOneInItIsThrough()
+        {
+            // a headway (1 s) far shorter than the time through the core (20 m at 4 m/s, 5 s): it is the capacity that keeps the second out of
+            // the core until the first is through it, not the headway
+            var il = new SiteBuilder().Lane("east", 80, 0, 0, 1, 0).Station("st", "east", 20, 29, 30, 34, 1, 1.0).Build();
+            var first = Put(il, "first", "east", 30.0);
+            var second = Put(il, "second", "east", 16.0);
+            var now = 0.0;
+            var entries = new Dictionary<string, double>();
+            Run(il, ref now, 60, () =>
+            {
+                foreach (var (id, entered, at) in il.Members("st"))
+                    if (entered && !entries.ContainsKey(id)) entries[id] = at;
+                return first.Done && second.Done;
+            }, first, second);
+            Assert.AreEqual(2, entries.Count, string.Join(", ", entries));
+            Assert.GreaterOrEqual(entries["second"] - entries["first"], 4.5, "the second entered once the first was (all but a step) through the core, not a headway after it");
+        }
 
         [Test]
         public void AStationAdmitsNoMoreThanItsCapacityAndKeepsItsHeadway()
