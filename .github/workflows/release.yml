@@ -805,7 +805,7 @@ jobs:
       # verification below can gate publication. Verifying after `release` would
       # only tell us the broken release is already public.
       - name: goreleaser build (verification target)
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           version: "~> v2"
           args: build --clean --single-target
@@ -892,7 +892,7 @@ jobs:
           fi
 
       - name: goreleaser release
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           version: "~> v2"
           args: release --clean --release-header=${{ runner.temp }}/release-header.md
@@ -949,7 +949,7 @@ jobs:
         run: hack/go-mod-download.sh backend/edge/dc-edge-agent
 
       - name: goreleaser build (archives + checksums, no publish)
-        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7
         with:
           version: "~> v2"
           args: release --clean
