@@ -26,6 +26,7 @@ import {
   rollbackDeviceProfile,
 } from '@/lib/api/device-management';
 import { BackfillSection } from './BackfillSection';
+import { CalculatedHealthSection } from './CalculatedHealthSection';
 import { ThingModelDownload } from './ThingModelDownload';
 
 // The authority string is a permission name, not user-facing prose, so it is hoisted
@@ -108,6 +109,7 @@ export function VersionsPanel({
         />
       )}
     />
+    <CalculatedHealthSection profileToken={profileToken} activeVersion={activeVersion} />
     <BackfillSection
       profileToken={profileToken}
       activeVersion={activeVersion}

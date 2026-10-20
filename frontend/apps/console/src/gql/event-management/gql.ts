@@ -21,6 +21,7 @@ type Documents = {
     "\n  query CalculatedMetricBackfillAvailability {\n    calculatedMetricBackfillAvailability {\n      available\n      reason\n    }\n  }\n": typeof types.CalculatedMetricBackfillAvailabilityDocument,
     "\n  mutation CancelCalculatedMetricBackfill($token: String!) {\n    cancelCalculatedMetricBackfill(token: $token) {\n      token\n      status\n      cancelRequestedAt\n    }\n  }\n": typeof types.CancelCalculatedMetricBackfillDocument,
     "\n  query CalculatedMetricBackfills($profileToken: String, $first: Int) {\n    calculatedMetricBackfills(profileToken: $profileToken, first: $first) {\n      nodes {\n        token\n        status\n        profileToken\n        profileVersion\n        metricKeys\n        warnings\n        from\n        to\n        devicesTotal\n        devicesDone\n        progress\n        samples\n        computed\n        written\n        alreadyPresent\n        windowsCompressed\n        windowsBeyondRetention\n        windowsRefreshed\n        skipped {\n          reason\n          count\n        }\n        storedInputPrecision\n        failure\n        createdAt\n        createdBy\n        startedAt\n        finishedAt\n        cancelRequestedAt\n      }\n      nextCursor\n    }\n  }\n": typeof types.CalculatedMetricBackfillsDocument,
+    "\n  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {\n    bucketedMeasurements(criteria: $criteria) {\n      bucketStart\n      count\n    }\n  }\n": typeof types.HourlyMeasurementCountsDocument,
 };
 const documents: Documents = {
     "\n  query Events($criteria: EventSearchCriteria!) {\n    events(criteria: $criteria) {\n      results {\n        id\n        deviceToken\n        eventType\n        occurredTime\n        source\n      }\n      pagination {\n        totalRecords\n      }\n    }\n  }\n": types.EventsDocument,
@@ -29,6 +30,7 @@ const documents: Documents = {
     "\n  query CalculatedMetricBackfillAvailability {\n    calculatedMetricBackfillAvailability {\n      available\n      reason\n    }\n  }\n": types.CalculatedMetricBackfillAvailabilityDocument,
     "\n  mutation CancelCalculatedMetricBackfill($token: String!) {\n    cancelCalculatedMetricBackfill(token: $token) {\n      token\n      status\n      cancelRequestedAt\n    }\n  }\n": types.CancelCalculatedMetricBackfillDocument,
     "\n  query CalculatedMetricBackfills($profileToken: String, $first: Int) {\n    calculatedMetricBackfills(profileToken: $profileToken, first: $first) {\n      nodes {\n        token\n        status\n        profileToken\n        profileVersion\n        metricKeys\n        warnings\n        from\n        to\n        devicesTotal\n        devicesDone\n        progress\n        samples\n        computed\n        written\n        alreadyPresent\n        windowsCompressed\n        windowsBeyondRetention\n        windowsRefreshed\n        skipped {\n          reason\n          count\n        }\n        storedInputPrecision\n        failure\n        createdAt\n        createdBy\n        startedAt\n        finishedAt\n        cancelRequestedAt\n      }\n      nextCursor\n    }\n  }\n": types.CalculatedMetricBackfillsDocument,
+    "\n  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {\n    bucketedMeasurements(criteria: $criteria) {\n      bucketStart\n      count\n    }\n  }\n": types.HourlyMeasurementCountsDocument,
 };
 
 /**
@@ -55,6 +57,10 @@ export function graphql(source: "\n  mutation CancelCalculatedMetricBackfill($to
  * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
  */
 export function graphql(source: "\n  query CalculatedMetricBackfills($profileToken: String, $first: Int) {\n    calculatedMetricBackfills(profileToken: $profileToken, first: $first) {\n      nodes {\n        token\n        status\n        profileToken\n        profileVersion\n        metricKeys\n        warnings\n        from\n        to\n        devicesTotal\n        devicesDone\n        progress\n        samples\n        computed\n        written\n        alreadyPresent\n        windowsCompressed\n        windowsBeyondRetention\n        windowsRefreshed\n        skipped {\n          reason\n          count\n        }\n        storedInputPrecision\n        failure\n        createdAt\n        createdBy\n        startedAt\n        finishedAt\n        cancelRequestedAt\n      }\n      nextCursor\n    }\n  }\n"): typeof import('./graphql').CalculatedMetricBackfillsDocument;
+/**
+ * The graphql function is used to parse GraphQL queries into a document that can be used by GraphQL clients.
+ */
+export function graphql(source: "\n  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {\n    bucketedMeasurements(criteria: $criteria) {\n      bucketStart\n      count\n    }\n  }\n"): typeof import('./graphql').HourlyMeasurementCountsDocument;
 
 
 export function graphql(source: string) {

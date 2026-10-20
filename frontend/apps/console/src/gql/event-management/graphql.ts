@@ -96,6 +96,51 @@ export type EventSearchCriteria = {
   startTime?: string | null | undefined;
 };
 
+/**
+ * Filters for a server-side, time-bucketed measurement aggregation. The device, event type, time
+ * range and anchor filters work as in EventSearchCriteria, with an added filter on measurement
+ * name. startTime is required; a range that would produce more than 10,000 buckets, or a
+ * result of more than 50,000 rows (one per bucket per measurement name), is refused with
+ * LIMIT_EXCEEDED, so narrow the range, filter on a name or widen intervalSeconds.
+ */
+export type MeasurementAggregationCriteria = {
+  /**
+   * Only measurements recorded against this entity. Anchored aggregations are computed from the
+   * individual readings.
+   */
+  anchor?: EventAnchor | null | undefined;
+  /** Only measurements from this device. */
+  deviceToken?: string | null | undefined;
+  /**
+   * Only readings that occurred at or before this instant, as an RFC 3339 timestamp. Omit to use
+   * the current time. Must not be before startTime. When the aggregation is served from one-minute summaries (see intervalSeconds)
+   * the bound is applied at whole-minute granularity, so readings later in the same minute are
+   * included.
+   */
+  endTime?: string | null | undefined;
+  /**
+   * Only readings whose event type is in this list, as integers. An empty list applies no type
+   * filter.
+   */
+  eventTypes?: Array<number> | null | undefined;
+  /**
+   * Width of each time bucket in seconds; must be 1 or more (smaller is an error). A width that
+   * is a multiple of 60 without an anchor filter is normally served from pre-computed one-minute
+   * summaries (an operator setting can turn that off); any other width is computed from the
+   * individual readings. Bucket boundaries are fixed instants shared by every query of the same width, not aligned to startTime.
+   */
+  intervalSeconds: number;
+  /** Only measurements with this name. Omit to aggregate every measurement name separately. */
+  name?: string | null | undefined;
+  /**
+   * Only readings that occurred at or after this instant, as an RFC 3339 timestamp. Required;
+   * omitting it is an error. When the aggregation is served from one-minute summaries (see intervalSeconds)
+   * the bound is applied at whole-minute granularity, so readings earlier in the same minute are
+   * included.
+   */
+  startTime?: string | null | undefined;
+};
+
 export type EventsQueryVariables = Exact<{
   criteria: EventSearchCriteria;
 }>;
@@ -144,6 +189,13 @@ export type CalculatedMetricBackfillsQueryVariables = Exact<{
 
 
 export type CalculatedMetricBackfillsQuery = { calculatedMetricBackfills: { nextCursor: string | null, nodes: Array<{ token: string, status: CalculatedMetricBackfillStatus, profileToken: string, profileVersion: number, metricKeys: Array<string>, warnings: Array<string>, from: string, to: string, devicesTotal: number | null, devicesDone: number, progress: number | null, samples: number, computed: number, written: number, alreadyPresent: number, windowsCompressed: number, windowsBeyondRetention: number, windowsRefreshed: number, storedInputPrecision: string, failure: string | null, createdAt: string, createdBy: string | null, startedAt: string | null, finishedAt: string | null, cancelRequestedAt: string | null, skipped: Array<{ reason: string, count: number }> }> } };
+
+export type HourlyMeasurementCountsQueryVariables = Exact<{
+  criteria: MeasurementAggregationCriteria;
+}>;
+
+
+export type HourlyMeasurementCountsQuery = { bucketedMeasurements: Array<{ bucketStart: string, count: number }> };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -275,3 +327,11 @@ export const CalculatedMetricBackfillsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CalculatedMetricBackfillsQuery, CalculatedMetricBackfillsQueryVariables>;
+export const HourlyMeasurementCountsDocument = new TypedDocumentString(`
+    query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {
+  bucketedMeasurements(criteria: $criteria) {
+    bucketStart
+    count
+  }
+}
+    `) as unknown as TypedDocumentString<HourlyMeasurementCountsQuery, HourlyMeasurementCountsQueryVariables>;

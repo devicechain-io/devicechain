@@ -1767,7 +1767,14 @@ export type CalculatedMetricPlanQueryVariables = Exact<{
 }>;
 
 
-export type CalculatedMetricPlanQuery = { calculatedMetricPlan: { version: number, activeSince: string | null, calculated: Array<{ key: string, unit: string | null, newInVersion: boolean, changedSinceEarlier: boolean }> } };
+export type CalculatedMetricPlanQuery = { calculatedMetricPlan: { version: number, activeSince: string | null, constantKeys: Array<string>, calculated: Array<{ key: string, unit: string | null, expression: string, dataType: string, minValue: number | null, maxValue: number | null, newInVersion: boolean, changedSinceEarlier: boolean, nameSharedWithOtherProfiles: boolean }> } };
+
+export type DeviceProfileLatestActivationQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceProfileLatestActivationQuery = { deviceProfilesByToken: Array<{ activations: { entries: Array<{ version: number, kind: string, activatedAt: string }> } }> };
 
 export type EntityAttributesQueryVariables = Exact<{
   criteria: EntityAttributeSearchCriteria;
@@ -3692,12 +3699,31 @@ export const CalculatedMetricPlanDocument = new TypedDocumentString(`
     calculated {
       key
       unit
+      expression
+      dataType
+      minValue
+      maxValue
       newInVersion
       changedSinceEarlier
+      nameSharedWithOtherProfiles
     }
+    constantKeys
   }
 }
     `) as unknown as TypedDocumentString<CalculatedMetricPlanQuery, CalculatedMetricPlanQueryVariables>;
+export const DeviceProfileLatestActivationDocument = new TypedDocumentString(`
+    query DeviceProfileLatestActivation($tokens: [String!]!) {
+  deviceProfilesByToken(tokens: $tokens) {
+    activations(first: 1) {
+      entries {
+        version
+        kind
+        activatedAt
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProfileLatestActivationQuery, DeviceProfileLatestActivationQueryVariables>;
 export const EntityAttributesDocument = new TypedDocumentString(`
     query EntityAttributes($criteria: EntityAttributeSearchCriteria!) {
   entityAttributes(criteria: $criteria) {

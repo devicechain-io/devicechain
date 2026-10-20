@@ -329,6 +329,30 @@ Una entrada ausente se detecta sea cual sea el orden de los operandos. `temp > 8
 omite en una lectura sin `fan`, aunque una lectura caliente hiciera verdadera la primera mitad. Si
 quieres que la fórmula funcione sin `fan`, compruébala con `has()`.
 
+## Comprobar que una métrica se está calculando {#checking-that-a-metric-is-computed}
+
+Una fórmula puede compilar, publicarse y aun así no producir nunca un valor, por ejemplo cuando sus entradas llegan con un nombre distinto del que lee. En la pestaña **Versiones** del perfil, el bloque **Métricas calculadas en uso** muestra, para cada métrica calculada de la versión **activa**, si se están almacenando valores. Es para el personal con acceso de lectura a dispositivos y eventos; un usuario limitado a clientes no lo ve, porque los recuentos abarcan todo el tenant. Una versión sustituida no tiene bloque, porque ningún dispositivo la resuelve.
+
+El bloque se **cuenta a partir de las lecturas almacenadas**. Un valor calculado se almacena como cualquier lectura, así que para cada métrica compara cuántos valores se almacenaron con su clave con cuántas lecturas tienen sus entradas (las métricas medidas que lee la fórmula, también a través de las métricas calculadas que encadena). Elige **Últimas 24 h** o **Últimas 168 h** (7 días) para cambiar la ventana. No se muestrea ni se estima nada.
+
+| Estado | Significado |
+| --- | --- |
+| **Calculando** | Se almacenaron valores de la métrica en la ventana. |
+| **No se calcula** | Las entradas tienen lecturas almacenadas en la ventana y no se almacenó ningún valor de la métrica. Usa **¿Por qué?** para averiguarlo. |
+| **Sin lecturas de entrada** | Ni la métrica ni sus entradas tienen lecturas en la ventana, así que no había de dónde calcular. |
+| **Entradas desconocidas** | La fórmula ya no compila con las definiciones actuales del perfil (por ejemplo, se eliminó del borrador una métrica que lee), así que no se pueden leer sus entradas. No se muestran recuentos de la métrica. |
+
+Qué tener en cuenta al leer los recuentos:
+
+- **Los recuentos empiezan cuando la versión se activó.** Una lectura almacenada antes no pudo calcularla esta versión, así que se excluye, y la línea sobre la tabla indica desde cuándo. Si la plataforma no tiene registrada la hora de activación de la versión (se activó antes de que se registraran las activaciones), la línea lo dice y los recuentos no se limitan así, por lo que pueden incluir lecturas anteriores a la activación.
+- **Los mensajes separados no son un problema.** Un dispositivo que envía una métrica cada segundo y otra cada hora no está "omitiendo" la fórmula en los segundos en que no envía la segunda. El bloque nunca compara con el número de mensajes, solo valores almacenados con lecturas de entrada.
+- **Los recuentos son por el momento en que ocurrió la lectura**, así que una ráfaga de lecturas antiguas reenviadas tarde cae en las horas que describe. Solo llegan hasta donde alcance la retención de mediciones de tu tenant.
+- **Un nombre compartido con otro perfil.** Si otro perfil del tenant también declara una métrica con la misma clave, los recuentos incluyen las lecturas de ese perfil y no demuestran que esta fórmula funcione. La fila lo indica; usa **¿Por qué?** en un dispositivo de este perfil.
+
+### Preguntar por qué {#asking-why}
+
+**¿Por qué?** abre la misma vista "Probar con el historial reciente" que se usa al crear, con la fórmula activa de la métrica. Introduce el token de un dispositivo que informe las entradas de la fórmula y ejecútala: evalúa la fórmula sobre las lecturas almacenadas de ese dispositivo y cuenta, por motivo, las lecturas que no produjeron valor (consulta [Cuando una fórmula no produce valor](#when-a-formula-produces-no-value)). No se almacena nada.
+
 ## Rellenar el historial {#backfilling-history}
 
 Una métrica calculada se calcula cuando llega una lectura. Las lecturas almacenadas antes de que se
