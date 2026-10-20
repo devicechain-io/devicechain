@@ -462,3 +462,30 @@ func TestDispatchUnknownActionKindIsCountedNotSilent(t *testing.T) {
 		t.Fatalf("an unknown action kind must be counted as dropped: %+v", m.dropped)
 	}
 }
+
+// TestDispatchSendCommandExpiry proves the dispatcher stamps ExpiresAt = enqueue-time wall clock +
+// expiresAfter, sends none when the field is absent, and drops (never clamps or sends unbounded)
+// a stored rule whose value is out of range.
+func TestDispatchSendCommandExpiry(t *testing.T) {
+	pinned := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	run := func(expiresAfter string) (*fakeSink, Result) {
+		sink := &fakeSink{}
+		r := sendCmdRule("setMode", "")
+		r.Actions[0].SendCommand.ExpiresAfter = expiresAfter
+		d := NewDispatcher(fakeResolver{rule: r, found: true}, sink, nil, nil, nil, newFakeMetrics())
+		d.now = func() time.Time { return pinned }
+		return sink, d.Dispatch(context.Background(), evt())
+	}
+	sink, _ := run("15m")
+	if len(sink.sent) != 1 || !sink.sent[0].ExpiresAt.Equal(pinned.Add(15*time.Minute)) {
+		t.Fatalf("want ExpiresAt = now+15m, got %+v", sink.sent)
+	}
+	sink, _ = run("")
+	if len(sink.sent) != 1 || !sink.sent[0].ExpiresAt.IsZero() {
+		t.Fatalf("absent expiresAfter must send no expiry, got %+v", sink.sent)
+	}
+	sink, _ = run("30s")
+	if len(sink.attempted) != 0 {
+		t.Fatalf("an out-of-range stored expiry must be dropped, not sent: %+v", sink.attempted)
+	}
+}

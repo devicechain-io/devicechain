@@ -61,7 +61,7 @@ No other identifiers exist in either. Prefer the structured "when" over raw CEL 
 
 Actions — each entry is { "type": "<raiseAlarm|sendCommand|httpCall|publish>", "<variant>": {...}, "guard": "<optional CEL>" } with exactly the matching variant object:
 - raiseAlarm: { "type": "raiseAlarm", "raiseAlarm": { "alarmKey": "<key>" } } — REQUIRES a severity on the rule.
-- sendCommand: { "type": "sendCommand", "sendCommand": { "command": "<commandKey>", "payload": "<optional JSON string>" } }.
+- sendCommand: { "type": "sendCommand", "sendCommand": { "command": "<commandKey>", "payload": "<optional JSON string>", "expiresAfter": "<optional duration 1m-168h, e.g. 15m>" } }.
 - httpCall and publish exist but prefer raiseAlarm/sendCommand unless the user explicitly asks to call a webhook or publish to a connector.
 
 Output rules:

@@ -83,7 +83,7 @@ interface WireCondition {
 interface WireAction {
   type?: string;
   raiseAlarm?: { alarmKey?: string; alarmKeyTemplate?: string };
-  sendCommand?: { command?: string; payload?: string };
+  sendCommand?: { command?: string; payload?: string; expiresAfter?: string };
   // ADR-060 outbound actions.
   httpCall?: {
     url?: string;
@@ -201,6 +201,7 @@ function actionConfig(a: WireAction): ActionConfig | null {
   if (a.type === 'sendCommand') {
     const cfg: ActionConfig = { action: 'sendCommand', command: a.sendCommand?.command ?? '' };
     if (a.sendCommand?.payload) cfg.payload = a.sendCommand.payload;
+    if (a.sendCommand?.expiresAfter) cfg.expiresAfter = a.sendCommand.expiresAfter;
     return cfg;
   }
   if (a.type === 'httpCall') {

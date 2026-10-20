@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-processing/internal/react"
@@ -119,6 +120,9 @@ func (c *commandClient) Send(ctx context.Context, req react.CommandRequest) erro
 	}
 	if req.Payload != "" {
 		request["payload"] = req.Payload
+	}
+	if !req.ExpiresAt.IsZero() {
+		request["expiresAt"] = req.ExpiresAt.UTC().Format(time.RFC3339)
 	}
 	vars := map[string]any{"request": request}
 	var out struct {

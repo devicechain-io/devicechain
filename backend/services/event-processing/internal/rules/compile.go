@@ -489,7 +489,7 @@ func ActionDedupKey(a Action) string {
 	case ActionRaiseAlarm:
 		return "raiseAlarm|" + alarmKeyIdentity(a.RaiseAlarm) + guardSeg
 	case ActionSendCommand:
-		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + guardSeg
+		return "sendCommand|" + a.SendCommand.Command + "|" + a.SendCommand.Payload + "|" + a.SendCommand.ExpiresAfter + guardSeg
 	case ActionHTTPCall:
 		h := a.HTTPCall
 		// URL + method + body template + secret handle + a stable header serialization identify the
@@ -621,6 +621,9 @@ func validateAction(ruleID string, i int, a Action) error {
 			// payload-vs-parameter-schema cross-check are NOT done here — see the note on
 			// SendCommandAction — so this is the only payload guard until that lands).
 			return invalid(ruleID, "actions", "action %d command payload must be a JSON object", i)
+		}
+		if _, err := ParseCommandExpiry(a.SendCommand.ExpiresAfter); err != nil {
+			return invalid(ruleID, "actions", "action %d: %v", i, err)
 		}
 	case ActionHTTPCall:
 		return validateHTTPCall(ruleID, i, a.HTTPCall)

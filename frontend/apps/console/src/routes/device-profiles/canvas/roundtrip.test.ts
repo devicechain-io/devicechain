@@ -266,3 +266,17 @@ describe('the synthesis fixtures shared with the Go lowering', () => {
     },
   );
 });
+
+describe('sendCommand expiresAfter on the canvas', () => {
+  it('opens onto the action node config', () => {
+    const def = JSON.stringify({
+      name: 'x',
+      type: 'threshold',
+      severity: 'warning',
+      when: { metric: 'tempC', op: 'gt', threshold: 30 },
+      actions: [{ type: 'sendCommand', sendCommand: { command: 'cool', expiresAfter: '15m' } }],
+    });
+    const { graph } = graphFromDefinition(def, P);
+    expect(nodeById(graph!.nodes, 'action-0000').config).toEqual({ action: 'sendCommand', command: 'cool', expiresAfter: '15m' });
+  });
+});

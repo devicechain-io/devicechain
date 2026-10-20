@@ -368,6 +368,8 @@ type actionConfig struct {
 	// sendCommand
 	Command string `json:"command,omitempty"`
 	Payload string `json:"payload,omitempty"`
+	// ExpiresAfter is sendCommand's optional delivery-wait bound (rules.SendCommandAction.ExpiresAfter).
+	ExpiresAfter string `json:"expiresAfter,omitempty"`
 	// httpCall (ADR-060 Tier 1) — inline webhook config, no registered resource.
 	URL          string            `json:"url,omitempty"`
 	Method       string            `json:"method,omitempty"`
@@ -395,15 +397,15 @@ func (c actionConfig) checkVariant() error {
 	foreign := func() bool {
 		switch rules.ActionType(c.Action) {
 		case rules.ActionRaiseAlarm:
-			return set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
+			return set(c.Command) || set(c.Payload) || set(c.ExpiresAfter) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
 				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
 		case rules.ActionSendCommand:
 			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.URL) || set(c.Method) || len(c.Headers) > 0 ||
 				set(c.BodyTemplate) || set(c.SecretRef) || set(c.ConnectorRef) || set(c.PayloadTemplate) || c.TimeoutMs != 0
 		case rules.ActionHTTPCall:
-			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.ConnectorRef) || set(c.PayloadTemplate)
+			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.ExpiresAfter) || set(c.ConnectorRef) || set(c.PayloadTemplate)
 		case rules.ActionPublish:
-			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.URL) || set(c.Method) ||
+			return set(c.AlarmKey) || set(c.AlarmKeyTemplate) || set(c.Command) || set(c.Payload) || set(c.ExpiresAfter) || set(c.URL) || set(c.Method) ||
 				len(c.Headers) > 0 || set(c.BodyTemplate) || set(c.SecretRef)
 		default:
 			return false // unknown action: buildAction's default returns the "unknown action" error
@@ -434,7 +436,7 @@ func buildAction(n Node) (rules.Action, error) {
 		return rules.Action{Type: rules.ActionRaiseAlarm, RaiseAlarm: &rules.RaiseAlarmAction{
 			AlarmKey: c.AlarmKey, AlarmKeyTemplate: c.AlarmKeyTemplate}}, nil
 	case rules.ActionSendCommand:
-		return rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: c.Command, Payload: c.Payload}}, nil
+		return rules.Action{Type: rules.ActionSendCommand, SendCommand: &rules.SendCommandAction{Command: c.Command, Payload: c.Payload, ExpiresAfter: c.ExpiresAfter}}, nil
 	case rules.ActionHTTPCall:
 		return rules.Action{Type: rules.ActionHTTPCall, HTTPCall: &rules.HTTPCallAction{
 			URL:          c.URL,

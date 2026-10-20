@@ -69,7 +69,11 @@ Las partes del formulario, de arriba abajo:
   condición.
 - **Acciones** es lo que ocurre cuando la regla se dispara: **Generar alarma**, **Enviar comando**,
   **Llamar a un webhook** o **Publicar en un conector**. Una regla sin acciones no genera ninguna
-  alarma. Las reglas de correlación de áreas no admiten acciones.
+  alarma. Las reglas de correlación de áreas no admiten acciones. Una acción **Enviar comando** admite además un
+  campo opcional **Caduca tras** (por ejemplo `15m` o `2h`, de un minuto a siete días). Acota cuánto
+  tiempo puede esperar el comando al dispositivo, contado desde el momento en que se dispara la regla;
+  déjalo vacío para conservar el valor predeterminado de la plataforma, siete días. Un valor fuera de
+  ese rango, o que no sea una duración, se rechaza al guardar la regla.
 
 Mientras escribes, el formulario pregunta al compilador si la regla es válida y muestra la respuesta
 bajo los campos, por ejemplo **La regla compila. ✓** o el error del compilador. Debajo aparecen un

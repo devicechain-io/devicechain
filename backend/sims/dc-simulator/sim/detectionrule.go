@@ -139,6 +139,12 @@ type ThresholdAlarmRule struct {
 	// anywhere objects to, and the argument-free case would look configured. Render the key
 	// only when there is an object to put in it, exactly as CommandKey gates its own action.
 	CommandKey string
+	// CommandExpiresAfter optionally bounds how long the chained command may wait for the
+	// device (a Go duration such as "15m"; event-processing accepts 1m to 168h and refuses
+	// anything else at publish). Empty renders no key, so the command keeps command-delivery's
+	// 7-day default TTL. Meaningless without CommandKey. A command sent to an offline machine
+	// otherwise sits SENT for a week.
+	CommandExpiresAfter string
 	// Enabled gates the rule at publish AND at load. A disabled rule is inert by design
 	// (the publish gate does not submit it and the liveness check does not require it),
 	// which also means it is published UNCHECKED — so a scenario parking one is
@@ -184,9 +190,15 @@ func (r ThresholdAlarmRule) DefinitionJSON() string {
 		},
 	}
 	if r.CommandKey != "" {
+		send := map[string]any{"command": r.CommandKey}
+		// Rendered only when set, exactly as the payload rule above: an empty expiresAfter
+		// would be a key the single-action byte-compared fixtures never had.
+		if r.CommandExpiresAfter != "" {
+			send["expiresAfter"] = r.CommandExpiresAfter
+		}
 		actions = append(actions, map[string]any{
 			"type":                actionTypeSendCommand,
-			actionTypeSendCommand: map[string]any{"command": r.CommandKey},
+			actionTypeSendCommand: send,
 		})
 	}
 

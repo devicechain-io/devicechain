@@ -310,6 +310,11 @@ Every command carries a TTL: one you set with `expiresAt`, or the platform defau
 Set your own if your devices do not report outcomes and a week is longer than the command stays
 useful.
 
+A detection rule's send-command action sets the same limit with `expiresAfter` (a duration such as
+`15m`, from one minute to seven days). The command's `expiresAt` is the moment the rule fires plus
+that duration, so a command sent to a device that is offline lapses to `EXPIRED` after minutes
+instead of waiting out the week.
+
 Cancelling a command records `CANCELLED`. Until recently, cancellation and TTL expiry shared the
 single value `EXPIRED`, so commands cancelled before that change still read as `EXPIRED`. Both
 appear in historical data, and nothing recorded which `EXPIRED` rows came from a cancel, so they

@@ -294,6 +294,36 @@ type SendCommandAction struct {
 	// canvas emit different key orders, so it is immune to the whitespace/key-order skew above —
 	// but any comparison that is added on the RAW bytes instead would not be.
 	Payload string `json:"payload,omitempty"`
+	// ExpiresAfter bounds how long the command may wait for delivery, as a Go duration string
+	// ("15m", "2h"). Optional: absent ⇒ command-delivery's platform default TTL (7 days) applies,
+	// unchanged. When set it must lie in [MinCommandExpiry, MaxCommandExpiry]; an unparseable or
+	// out-of-range value is REFUSED at authoring time, never clamped. The command's absolute
+	// expiry is the wall clock at the moment REACT enqueues it plus this duration.
+	ExpiresAfter string `json:"expiresAfter,omitempty"`
+}
+
+// MinCommandExpiry and MaxCommandExpiry bound SendCommandAction.ExpiresAfter. The ceiling is
+// command-delivery's default command TTL (168h): a rule may shorten the wait but never outlive
+// what the platform would have granted anyway.
+const (
+	MinCommandExpiry = time.Minute
+	MaxCommandExpiry = 168 * time.Hour
+)
+
+// ParseCommandExpiry parses and bounds an ExpiresAfter string. Empty ⇒ (0, nil), meaning "no
+// expiry set". Any non-empty value outside [MinCommandExpiry, MaxCommandExpiry] is an error.
+func ParseCommandExpiry(s string) (time.Duration, error) {
+	if s == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("expiresAfter %q is not a duration like \"15m\" or \"2h\"", s)
+	}
+	if d < MinCommandExpiry || d > MaxCommandExpiry {
+		return 0, fmt.Errorf("expiresAfter %q must be between %s and %s", s, MinCommandExpiry, MaxCommandExpiry)
+	}
+	return d, nil
 }
 
 // HTTPCallAction posts a CEL-shaped payload to an external HTTP endpoint (ADR-060 Tier 1). The
