@@ -6,17 +6,15 @@ package graphql
 import (
 	"context"
 	"database/sql"
-	"strconv"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/rs/zerolog/log"
+	"strconv"
 )
 
 // MeasurementStream streams measurement events to the subscriber as they resolve
@@ -57,12 +55,12 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 	go func() {
 		defer close(out)
 		for msg := range live {
-			resolved, err := dmproto.UnmarshalResolvedEvent(msg.Value)
+			resolved, err := resolvedevent.UnmarshalResolvedEvent(msg.Value)
 			if err != nil {
 				log.Debug().Err(err).Msg("subscription: skipping undecodable resolved event")
 				continue
 			}
-			if resolved.EventType != esmodel.Measurement {
+			if resolved.EventType != eventtype.Measurement {
 				continue
 			}
 			if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {
@@ -71,7 +69,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 			if !inScope(scope, resolved) {
 				continue
 			}
-			payload, ok := resolved.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+			payload, ok := resolved.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 			if !ok {
 				continue
 			}
@@ -101,7 +99,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 // scope: always for an unscoped caller, and for a scoped one only when one of the event's
 // anchors is in the scope. An event with no anchors (an unassigned device) matches no
 // scope, as its stored rows match none.
-func inScope(scope auth.Scope, resolved *dmmodel.ResolvedEvent) bool {
+func inScope(scope auth.Scope, resolved *resolvedevent.ResolvedEvent) bool {
 	if !scope.IsScoped() {
 		return true
 	}
@@ -142,9 +140,9 @@ func inScope(scope auth.Scope, resolved *dmmodel.ResolvedEvent) bool {
 // It returns an error rather than a half-identified row, and the caller drops that reading
 // with a log line instead of failing the whole subscription: one unencodable reading must
 // not tear down a live chart that is otherwise working.
-func measurementFromResolved(tenant string, e *dmmodel.ResolvedEvent,
-	entry dmmodel.ResolvedMeasurementsEntry,
-	mx dmmodel.ResolvedMeasurementEntry) (model.MeasurementEvent, error) {
+func measurementFromResolved(tenant string, e *resolvedevent.ResolvedEvent,
+	entry resolvedevent.ResolvedMeasurementsEntry,
+	mx resolvedevent.ResolvedMeasurementEntry) (model.MeasurementEvent, error) {
 	me := model.MeasurementEvent{
 		DeviceToken:  e.SourceDeviceToken,
 		EventType:    e.EventType,

@@ -490,7 +490,7 @@ far a timestamp may run *ahead*, lateness bounds how long the engine waits for o
 | `ruleHealth.maxBatchRows` | 256 | Most rules one tenant's write carries, from 1 to 4096; a tenant with more waiting is written in several transactions. |
 | `ruleHealth.writeTimeoutMillis` | 2000 | How long one tenant's write may take, from 100 to 60000. A write that fails or times out is dropped, not retried. |
 | `derivedPublishing.maxInFlight` | 32 | How many detections a checkpoint may have waiting for the message bus to acknowledge them at once, from 1 to 1024. Detections of different devices are published side by side, never more than one per device at a time. At 1, each is acknowledged before the next is sent. See below. |
-| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes those waiting detections may hold together, from 65536 to 268435456 (256 MiB). A single detection larger than this is published on its own. |
+| `derivedPublishing.maxBufferedBytes` | 4194304 | Bytes those detections may hold together while they wait to be published, counting ones kept for a retry after a failed attempt, from 65536 to 268435456 (256 MiB). A single detection larger than this is published on its own. |
 
 Each `ruleHealth` and `derivedPublishing` setting is optional; one that is given must be inside its
 range (zero included) or the service refuses to start.
@@ -642,6 +642,28 @@ The second and third exist because the first is flat in exactly the cases that e
 fastest. Only the first two have per-tenant ceilings; the timer heap is reported as an instance-wide
 total, because attributing it to a tenant would mean walking the whole heap on every checkpoint.
 :::
+
+### How fast alarms are applied
+
+Detection decides that an alarm should be raised or cleared; the `device-management` area then
+applies each of those decisions to the alarm itself, and it does so several at a time. One alarm
+change costs roughly ten round trips to the database, so applying them one after another tops out
+at about a hundred a second on a local database however idle the service is, and a rule that fires
+on many devices at once builds a backlog behind that ceiling.
+
+| Setting (on `device-management`) | Default | What it does |
+|---|---|---|
+| `raiseAlarm.workers` | 8, lowered so that it and `resolution.workers` leave at least 4 connections of the pool free (6 with the default pool of 20), and never below 1 | How many alarm changes are applied at once, from 1 to one below `rdbConfiguration.maxOpenConnections` (20 unless set). Anything outside that range stops the service at startup, naming the setting. Each worker holds a database connection while it writes, so a value above half the pool is logged. An explicit value is checked on its own, not against `resolution.workers`, so choose the two together. The counts in effect are logged at startup. It is read once at startup. |
+
+Within one replica, changes to **one** alarm are applied in the order they arrive, whatever the
+setting; only changes to different alarms overlap. The result never depended on that order: a
+decision that arrives after a newer one for the same rule is ignored, so a redelivered change, or
+one applied by another replica, cannot undo a newer one. Setting it to 1 applies them one at a time.
+
+The connection pool these workers draw from is also used by `resolution.workers` and by the API, and
+each worker count is checked against the pool on its own rather than together, so leave room for
+the other when you raise one. On a local Docker database (a directional figure, not a capacity
+statement) eight workers applied four to seven times as many alarm changes a second as one.
 
 ## What to watch
 

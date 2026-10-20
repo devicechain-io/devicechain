@@ -155,6 +155,7 @@ Algunos límites son decisiones y otros son cotas de la implementación actual. 
 - Los resultados se paginan de 25 en 25 por defecto y 100 como máximo, y una consulta de varios dispositivos admite como mucho 50 tokens por llamada. Un agente que examine una flota grande la recorre por páginas.
 - El servidor lee como máximo 8 MiB de cualquier respuesta descendente. Eso acota lo que obtiene de las propias APIs de la plataforma; no es un límite que anuncie al agente.
 - Una sesión caduca por inactividad a los 30 minutos.
+- Un lote JSON-RPC lleva como máximo 16 mensajes, y cada llamador (el usuario del token) puede enviar 20 mensajes por segundo, con una ráfaga de 40; un lote de N cuenta como N. Un lote que supera el tope se rechaza completo con un error JSON-RPC (nada de lo que contiene se ejecuta), y un llamador que supera la tasa recibe HTTP 429 con una cabecera `Retry-After`. Para cambiarlos, defina `maxBatchEntries`, `callsPerSecond` y `callsBurst` en `functionalAreas.mcp.config`; `callsBurst` no puede ser menor que `maxBatchEntries`, y un valor no válido detiene el servicio al arrancar.
 
 **Habilitar el servicio no basta para poder usarlo.** Hay dos interruptores independientes. Activar solo el primero es la forma habitual de acabar con un servidor que responde pero al que no se puede llegar:
 

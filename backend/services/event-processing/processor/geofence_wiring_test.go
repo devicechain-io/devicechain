@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
 	"sync"
 	"testing"
@@ -15,14 +16,13 @@ import (
 	dmgraphql "github.com/devicechain-io/dc-device-management/graphql"
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	dmprocessor "github.com/devicechain-io/dc-device-management/processor"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	dccore "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -359,22 +359,22 @@ func locatedMsg(t *testing.T, seq uint64, tenant, device, profileVersion string,
 	occurred := testBase.Add(time.Duration(seq) * time.Second)
 	lonS := strconv.FormatFloat(lon, 'f', -1, 64)
 	latS := strconv.FormatFloat(lat, 'f', -1, 64)
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "mqtt1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
-		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			// A resolved entry always carries its own time (resolution fills it from the envelope when
 			// the device sent none), and detection reads it: left zero, a threshold rule would see a
 			// reading two thousand years behind the frontier.
 			{OccurredTime: occurred, Latitude: &latS, Longitude: &lonS},
 		}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}
@@ -857,17 +857,17 @@ func TestPreviewResolvesAVersionTheProjectionDoesNotHold(t *testing.T) {
 // ── helpers shared by the miss/preview tests ─────────────────────────────────────────────────
 
 // locatedEvent builds a resolved LOCATION event stamped with a fence-set version, carrying one fix.
-func locatedEvent(t *testing.T, device, profileVersion string, fenceSetVersion int32, lon, lat float64) *dmmodel.ResolvedEvent {
+func locatedEvent(t *testing.T, device, profileVersion string, fenceSetVersion int32, lon, lat float64) *resolvedevent.ResolvedEvent {
 	t.Helper()
 	lonS := strconv.FormatFloat(lon, 'f', -1, 64)
 	latS := strconv.FormatFloat(lat, 'f', -1, 64)
-	return &dmmodel.ResolvedEvent{
+	return &resolvedevent.ResolvedEvent{
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        testBase,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
-		Payload: &dmmodel.ResolvedLocationsPayload{Entries: []dmmodel.ResolvedLocationEntry{
+		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{OccurredTime: testBase, Latitude: &latS, Longitude: &lonS}, // see locatedMsg
 		}},
 	}

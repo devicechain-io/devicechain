@@ -29,6 +29,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
+	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
+	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-event-processing/internal/runtime"
+	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/prometheus/client_golang/prometheus"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"hash/fnv"
 	"reflect"
 	"strconv"
@@ -37,22 +51,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
-	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
-	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
-	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	"github.com/devicechain-io/dc-event-processing/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/devicechain-io/dc-microservice/rdb"
-	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
-	"github.com/prometheus/client_golang/prometheus"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
 
 // outputBase is the event time of stream sequence 0. Sequence s occurs at outputBase + s ms, so
@@ -139,15 +137,15 @@ func (fx outputFixture) messages(tb testing.TB, n int, log *outputLog) []messagi
 		if fx.high(fx.sample(i)) {
 			value = outputHigh
 		}
-		ev := &dmmodel.ResolvedEvent{
+		ev := &resolvedevent.ResolvedEvent{
 			Source: "http1", SourceDeviceToken: fx.device(i), ProfileVersionToken: "p@1",
-			OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
-			Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+			OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.Measurement,
+			Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 				OccurredTime: occurred,
-				Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
+				Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
 			}}},
 		}
-		b, err := dmproto.MarshalResolvedEvent(ev)
+		b, err := resolvedevent.MarshalResolvedEvent(ev)
 		if err != nil {
 			tb.Fatalf("marshal fixture event: %v", err)
 		}

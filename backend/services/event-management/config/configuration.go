@@ -93,6 +93,94 @@ type EventManagementConfiguration struct {
 	// Persistence sizes the event writers: how many run, and how many events each
 	// commits in one transaction.
 	Persistence PersistenceConfiguration
+
+	// CalculatedBackfill governs the worker that fills calculated metrics into stored
+	// history (ADR-082). It is a FIXED setting, read once at startup.
+	CalculatedBackfill CalculatedBackfillConfiguration
+}
+
+// Calculated-metric backfill (ADR-082). Only two settings are the operator's; the batch size,
+// the time slice, the span cap and the rest are constants of the worker, because nothing has
+// measured a reason to change them.
+const (
+	// DefaultBackfillRowsPerSecond is the rate the worker reads and writes at when
+	// calculatedBackfill.rowsPerSecond is not set. It is provisional: it is a guess at what the
+	// live write path can spare, and a long backfill on a populated instance is what measures it.
+	DefaultBackfillRowsPerSecond = 20000
+	// MaxBackfillRowsPerSecond bounds the setting above.
+	MaxBackfillRowsPerSecond = 200000
+	// BackfillPoolConnections is what the worker holds out of the pool: ONE connection, which
+	// carries its advisory lock, its batch transactions and its rollup refreshes.
+	BackfillPoolConnections = 1
+	// PoolHeadroom is how many pooled connections the writers and the backfill worker leave
+	// to everything else that draws on the pool: GraphQL reads and the anchor sweep.
+	PoolHeadroom = 4
+)
+
+// CalculatedBackfillConfiguration sizes and switches the backfill worker.
+type CalculatedBackfillConfiguration struct {
+	// Enabled switches the worker, in three states:
+	//
+	//   - unset (nil), the default: the worker runs when the pool has room for it beside the
+	//     persistence writers and PoolHeadroom, and is left off — with a startup warning naming
+	//     the settings — when it has not. An instance whose writers and pool were tuned before
+	//     the worker existed therefore starts exactly as it did, rather than being refused for
+	//     a connection budget it never agreed to;
+	//   - true: the operator asked for the worker, so a pool that cannot hold it stops the
+	//     service at startup naming the settings;
+	//   - false: the worker does not run. This is the operator's instance-wide lever (a running
+	//     job stays RUNNING until it is turned on again or cancelled).
+	//
+	// With no job the worker costs one lock attempt and one query every ten seconds.
+	Enabled *bool
+
+	// RowsPerSecond is the most rows the worker reads plus writes in a second, across every
+	// job. Unset (0) defaults to DefaultBackfillRowsPerSecond; the bound is
+	// MaxBackfillRowsPerSecond.
+	RowsPerSecond int
+}
+
+// ApplyDefaults fills what is unset. Enabled stays as written: unset and true decide
+// differently when the pool is short (see Enabled), so the default is not a value.
+func (b *CalculatedBackfillConfiguration) ApplyDefaults() {
+	if b.RowsPerSecond == 0 {
+		b.RowsPerSecond = DefaultBackfillRowsPerSecond
+	}
+}
+
+// Runs reports whether the worker runs beside these writers on this pool and, when it does
+// not, why, in words for the startup log. It is the one decision; Validate refuses only the
+// case where the operator asked for the worker and Runs says it cannot.
+func (b CalculatedBackfillConfiguration) Runs(pool config.MicroserviceDatastoreConfiguration,
+	persistence PersistenceConfiguration) (bool, string) {
+	if b.Enabled != nil && !*b.Enabled {
+		return false, "calculatedBackfill.enabled is false"
+	}
+	if need, have := persistence.Writers+BackfillPoolConnections+PoolHeadroom, rdb.EffectiveMaxOpenConnections(pool); need > have {
+		return false, fmt.Sprintf("persistence.writers (%d) + the backfill worker (%d) + %d spare connections is %d, "+
+			"but the connection pool holds %d; raise tsdbConfiguration.maxOpenConnections or lower "+
+			"persistence.writers to run it, or set calculatedBackfill.enabled to false to say it stays off",
+			persistence.Writers, BackfillPoolConnections, PoolHeadroom, need, have)
+	}
+	return true, ""
+}
+
+// Validate refuses a rate nobody can mean and, when the operator set enabled to true, a pool
+// too small to hold the worker beside the persistence writers and PoolHeadroom. pool is the
+// event store's datastore configuration, persistence the writers that draw from the same pool.
+func (b CalculatedBackfillConfiguration) Validate(pool config.MicroserviceDatastoreConfiguration,
+	persistence PersistenceConfiguration) error {
+	if b.RowsPerSecond < 1 || b.RowsPerSecond > MaxBackfillRowsPerSecond {
+		return fmt.Errorf("calculatedBackfill.rowsPerSecond must be between 1 and %d, got %d",
+			MaxBackfillRowsPerSecond, b.RowsPerSecond)
+	}
+	if b.Enabled == nil || !*b.Enabled {
+		return nil
+	}
+	if ok, why := b.Runs(pool, persistence); !ok {
+		return fmt.Errorf("calculatedBackfill.enabled is true, but %s", why)
+	}
+	return nil
 }
 
 // PersistenceConfiguration sizes the writers that persist resolved events. Each writer
@@ -244,6 +332,7 @@ func (c *EventManagementConfiguration) ApplyDefaults() {
 		c.Lifecycle.CompressAfterDays = &d
 	}
 	c.Persistence.ApplyDefaults()
+	c.CalculatedBackfill.ApplyDefaults()
 }
 
 // Validate is the ADR-022 decision-1 validation hook for this service. It rejects
@@ -282,5 +371,8 @@ func (c *EventManagementConfiguration) Validate() error {
 		return fmt.Errorf("lifecycle.locationRetentionDays cannot be negative, got %d",
 			*c.Lifecycle.LocationRetentionDays)
 	}
-	return c.Persistence.Validate(c.TsdbConfiguration)
+	if err := c.Persistence.Validate(c.TsdbConfiguration); err != nil {
+		return err
+	}
+	return c.CalculatedBackfill.Validate(c.TsdbConfiguration, c.Persistence)
 }

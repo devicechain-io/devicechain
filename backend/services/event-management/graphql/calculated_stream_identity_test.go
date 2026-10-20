@@ -4,14 +4,13 @@
 package graphql
 
 import (
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 // A calculated value on the live stream carries the identity its persisted row gets: the
@@ -23,19 +22,19 @@ import (
 func TestAStreamedCalculatedValueCarriesItsPersistedIds(t *testing.T) {
 	sample := time.Date(2026, 10, 16, 11, 59, 0, 0, time.UTC)
 	classifier, unit, dataType := uint64(5), "kW", "DOUBLE"
-	raw := dmmodel.ResolvedMeasurementEntry{Name: "voltage", Value: "230.5"}
-	derived := func(value string) dmmodel.ResolvedMeasurementEntry {
-		return dmmodel.ResolvedMeasurementEntry{Name: "power_kw", Value: value, Classifier: &classifier,
+	raw := resolvedevent.ResolvedMeasurementEntry{Name: "voltage", Value: "230.5"}
+	derived := func(value string) resolvedevent.ResolvedMeasurementEntry {
+		return resolvedevent.ResolvedMeasurementEntry{Name: "power_kw", Value: value, Classifier: &classifier,
 			Unit: &unit, DataType: &dataType, Derived: true}
 	}
-	resolvedWith := func(entries ...dmmodel.ResolvedMeasurementEntry) (*dmmodel.ResolvedEvent, dmmodel.ResolvedMeasurementsEntry) {
-		entry := dmmodel.ResolvedMeasurementsEntry{Entries: entries, OccurredTime: sample}
-		return &dmmodel.ResolvedEvent{
+	resolvedWith := func(entries ...resolvedevent.ResolvedMeasurementEntry) (*resolvedevent.ResolvedEvent, resolvedevent.ResolvedMeasurementsEntry) {
+		entry := resolvedevent.ResolvedMeasurementsEntry{Entries: entries, OccurredTime: sample}
+		return &resolvedevent.ResolvedEvent{
 			SourceDeviceToken: identityDevice,
 			OccurredTime:      identityOccurred,
-			EventType:         esmodel.Measurement,
+			EventType:         eventtype.Measurement,
 			Source:            "mqtt",
-			Payload:           &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{entry}},
+			Payload:           &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{entry}},
 		}, entry
 	}
 
@@ -46,7 +45,7 @@ func TestAStreamedCalculatedValueCarriesItsPersistedIds(t *testing.T) {
 	// The event id is the reading's without its calculated value.
 	rawOnly, _ := resolvedWith(raw)
 	parent := model.Event{DeviceToken: identityDevice, OccurredTime: identityOccurred, Source: "mqtt",
-		EventType: esmodel.Measurement}
+		EventType: eventtype.Measurement}
 	eventId, err := model.DeriveEventIdForPayload("tenant1", &parent, rawOnly.Payload)
 	require.NoError(t, err)
 	assert.Equal(t, eventId, streamed.EventId, "a calculated value must not move the streamed reading's event id")

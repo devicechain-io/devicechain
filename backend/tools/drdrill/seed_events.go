@@ -14,7 +14,7 @@ import (
 	"time"
 
 	emodel "github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
@@ -234,7 +234,7 @@ device's rows first, or drill a fresh instance`, o.device, receipt.Tenant, exist
 	receipt.Events = &EventSeed{
 		Tenant:            receipt.Tenant,
 		DeviceToken:       o.device,
-		EventType:         int(esmodel.Measurement),
+		EventType:         int(eventtype.Measurement),
 		Name:              o.name,
 		Start:             start.Format(time.RFC3339),
 		End:               end.Format(time.RFC3339),
@@ -406,11 +406,11 @@ func insertMeasurement(ctx context.Context, db *gorm.DB, tenant, device, name st
 		return fmt.Errorf("deriving the identity for the measurement at %s: %w", at.Format(time.RFC3339), err)
 	}
 	if err := db.WithContext(ctx).Exec(insertParentEventSQL,
-		tenant, eventId, device, int64(esmodel.Measurement), at).Error; err != nil {
+		tenant, eventId, device, int64(eventtype.Measurement), at).Error; err != nil {
 		return fmt.Errorf("inserting the parent event at %s: %w", at.Format(time.RFC3339), err)
 	}
 	if err := db.WithContext(ctx).Exec(insertMeasurementSQL,
-		tenant, eventId, payloadId, device, int64(esmodel.Measurement), at, name, value).Error; err != nil {
+		tenant, eventId, payloadId, device, int64(eventtype.Measurement), at, name, value).Error; err != nil {
 		return fmt.Errorf("inserting the measurement at %s: %w", at.Format(time.RFC3339), err)
 	}
 	return nil
@@ -436,7 +436,7 @@ func insertMeasurement(ctx context.Context, db *gorm.DB, tenant, device, name st
 func measurementIdentity(tenant, device, name string, at time.Time, value float64) ([]byte, []byte, error) {
 	event := &emodel.Event{
 		DeviceToken:  device,
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: at,
 	}
 	entry, err := json.Marshal(struct {

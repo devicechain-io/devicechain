@@ -52,16 +52,16 @@ func fcWiringBrokerWith(t *testing.T, on, gateway bool) (nats.JetStreamContext, 
 		MqttMessageStore, StoreSource = savedStore, savedStoreSource
 	})
 
-	mqttPort := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
 		StoreDir: dctest.JetStreamStoreDir(t),
-		MQTT:     natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		MQTT:     natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(10*time.Second))
 	t.Cleanup(srv.Shutdown)
+	mqttPort := dctest.MQTTPort(t, srv)
 	u, err := url.Parse(srv.ClientURL())
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())

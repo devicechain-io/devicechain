@@ -5,12 +5,14 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -43,19 +45,19 @@ func timedLocationEvent(envelope, processed time.Time, fixTimes ...*time.Time) *
 	return &esmodel.UnresolvedEvent{
 		Source:        "test",
 		Device:        "TEST-123",
-		EventType:     esmodel.Location,
+		EventType:     eventtype.Location,
 		OccurredTime:  envelope,
 		ProcessedTime: processed,
 		Payload:       &esmodel.UnresolvedLocationsPayload{Entries: entries},
 	}
 }
 
-func resolveFixes(t *testing.T, rez *EventResolver, event *esmodel.UnresolvedEvent) []model.ResolvedLocationEntry {
+func resolveFixes(t *testing.T, rez *EventResolver, event *esmodel.UnresolvedEvent) []resolvedevent.ResolvedLocationEntry {
 	t.Helper()
 	resolved, err := rez.ResolveLocationsEventPayload(context.Background(), nil, nil, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedLocationsPayload)
-	require.True(t, ok, "expected *model.ResolvedLocationsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedLocationsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedLocationsPayload, got %T", resolved)
 	return payload.Entries
 }
 
@@ -180,7 +182,7 @@ func TestAMeasurementBatchKeepsEachSamplesOwnInstant(t *testing.T) {
 	first := processed.Add(-90 * time.Second)
 
 	event := &esmodel.UnresolvedEvent{
-		Source: "test", Device: "TEST-123", EventType: esmodel.Measurement,
+		Source: "test", Device: "TEST-123", EventType: eventtype.Measurement,
 		OccurredTime: envelope, ProcessedTime: processed,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 			{OccurredTime: &first, Measurements: map[string]string{"temperature": "21.5"}},
@@ -190,8 +192,8 @@ func TestAMeasurementBatchKeepsEachSamplesOwnInstant(t *testing.T) {
 	resolved, err := resolverWithMetricDefs(t, 5*time.Minute).
 		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedMeasurementsPayload)
-	require.True(t, ok, "expected *model.ResolvedMeasurementsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedMeasurementsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedMeasurementsPayload, got %T", resolved)
 	require.Len(t, payload.Entries, 2)
 
 	assert.True(t, payload.Entries[0].OccurredTime.Equal(first),
@@ -207,7 +209,7 @@ func TestAMeasurementSampleTimeIsBounded(t *testing.T) {
 	poisoned := processed.Add(72 * time.Hour)
 
 	event := &esmodel.UnresolvedEvent{
-		Source: "test", Device: "TEST-123", EventType: esmodel.Measurement,
+		Source: "test", Device: "TEST-123", EventType: eventtype.Measurement,
 		OccurredTime: processed, ProcessedTime: processed,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: []esmodel.UnresolvedMeasurementsEntry{
 			{OccurredTime: &poisoned, Measurements: map[string]string{"temperature": "21.5"}},
@@ -216,7 +218,7 @@ func TestAMeasurementSampleTimeIsBounded(t *testing.T) {
 	resolved, err := resolverWithMetricDefs(t, skew).
 		ResolveMeasurementsEventPayload(context.Background(), deviceWithToken("TEST-123"), model.ProfileResolution{}, event)
 	require.NoError(t, err)
-	payload := resolved.(*model.ResolvedMeasurementsPayload)
+	payload := resolved.(*resolvedevent.ResolvedMeasurementsPayload)
 	require.Len(t, payload.Entries, 1)
 	assert.True(t, payload.Entries[0].OccurredTime.Equal(processed.Add(skew)),
 		"a poisoned sample time must be replaced with the ceiling: got %v", payload.Entries[0].OccurredTime)
@@ -229,7 +231,7 @@ func TestAnAlertBatchKeepsEachEntrysOwnInstant(t *testing.T) {
 
 	rez, _ := boundedResolver(5 * time.Minute)
 	event := &esmodel.UnresolvedEvent{
-		Source: "test", Device: "TEST-123", EventType: esmodel.Alert,
+		Source: "test", Device: "TEST-123", EventType: eventtype.Alert,
 		OccurredTime: envelope, ProcessedTime: processed,
 		Payload: &esmodel.UnresolvedAlertsPayload{Entries: []esmodel.UnresolvedAlertEntry{
 			{OccurredTime: &raised, Type: "SENSOR_FAULT", Level: 3, Message: "probe A open circuit"},
@@ -238,8 +240,8 @@ func TestAnAlertBatchKeepsEachEntrysOwnInstant(t *testing.T) {
 	}
 	resolved, err := rez.ResolveAlertsEventPayload(context.Background(), nil, nil, event)
 	require.NoError(t, err)
-	payload, ok := resolved.(*model.ResolvedAlertsPayload)
-	require.True(t, ok, "expected *model.ResolvedAlertsPayload, got %T", resolved)
+	payload, ok := resolved.(*resolvedevent.ResolvedAlertsPayload)
+	require.True(t, ok, "expected *resolvedevent.ResolvedAlertsPayload, got %T", resolved)
 	require.Len(t, payload.Entries, 2)
 
 	assert.True(t, payload.Entries[0].OccurredTime.Equal(raised),

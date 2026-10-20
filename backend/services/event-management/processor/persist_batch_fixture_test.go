@@ -7,18 +7,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-event-management/model"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"github.com/jackc/pgx/v5/pgconn"
+	"gorm.io/gorm"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	"github.com/devicechain-io/dc-event-management/model"
-	"github.com/devicechain-io/dc-microservice/messaging"
-	"github.com/jackc/pgx/v5/pgconn"
-	"gorm.io/gorm"
 )
 
 // The fixture the batching tests share: a REAL model.Api over the fenced sqlite database
@@ -169,7 +167,7 @@ func (l *ackLog) waitFor(t *testing.T, n int, within time.Duration) {
 // one message out by device), with one anchor. withAltId false gives it no alternate id,
 // so its content-derived event id and the ON CONFLICT arbiters are the only thing that
 // dedupe it — the path a redelivery of such an event actually takes.
-func batchEvent(i int, withAltId bool, t0 time.Time) dmodel.ResolvedEvent {
+func batchEvent(i int, withAltId bool, t0 time.Time) resolvedevent.ResolvedEvent {
 	ev := fenceCostMeasurement(fmt.Sprintf("alt-%d", i), t0.Add(time.Duration(i)*time.Millisecond), 1)
 	ev.SourceDeviceToken = fmt.Sprintf("dev-%d", i)
 	if !withAltId {
@@ -180,9 +178,9 @@ func batchEvent(i int, withAltId bool, t0 time.Time) dmodel.ResolvedEvent {
 
 // consumed wraps a resolved event as a message consumed from tenant's subject, with the
 // given delivery count and an ack that records idx in log.
-func consumed(t testing.TB, log *ackLog, idx int, tenant string, delivered int, ev dmodel.ResolvedEvent) messaging.Message {
+func consumed(t testing.TB, log *ackLog, idx int, tenant string, delivered int, ev resolvedevent.ResolvedEvent) messaging.Message {
 	t.Helper()
-	bytes, err := dmproto.MarshalResolvedEvent(&ev)
+	bytes, err := resolvedevent.MarshalResolvedEvent(&ev)
 	if err != nil {
 		t.Fatalf("marshal a resolved event: %v", err)
 	}

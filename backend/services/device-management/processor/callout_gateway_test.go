@@ -57,8 +57,6 @@ import (
 func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout time.Duration) (*natsserver.Server, int) {
 	t.Helper()
 
-	mqttPort := dctest.FreeTCPPort(t)
-
 	// The service login is a bcrypt hash, as deployed, but at the minimum cost
 	// rather than the minted one. The server checks it before answering the
 	// CONNECT, and at the deployed cost under the race detector on a busy CI
@@ -80,7 +78,7 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 		port: -1
 		server_name: "callout-e2e"
 		jetstream { store_dir: %q }
-		mqtt { host: "127.0.0.1", port: %d }
+		mqtt { host: "127.0.0.1", port: -1 }
 		system_account: SYS
 		accounts {
 		  APP { jetstream: enabled, users: [{user: %q, password: %q}] }
@@ -90,7 +88,7 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 		  timeout: %v
 		  auth_callout { issuer: %q, auth_users: [%q], account: "APP" }
 		}
-	`, filepath.Join(dir, "js"), mqttPort,
+	`, filepath.Join(dir, "js"),
 		natsauth.ServiceUser, string(serviceHash),
 		authTimeout.Seconds(),
 		creds.IssuerPublic, natsauth.ServiceUser)
@@ -112,7 +110,7 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 		t.Fatal("embedded nats server not ready")
 	}
 	t.Cleanup(srv.Shutdown)
-	return srv, mqttPort
+	return srv, dctest.MQTTPort(t, srv)
 }
 
 // startCalloutBroker is startCalloutServer plus the service connection the responder

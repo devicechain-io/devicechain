@@ -58,12 +58,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"io"
 	"sort"
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-microservice/calcfield"
@@ -249,7 +249,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 		if !ok || subjectTenant != tenant {
 			continue
 		}
-		event, derr := dmproto.UnmarshalResolvedEvent(msg.Value)
+		event, derr := resolvedevent.UnmarshalResolvedEvent(msg.Value)
 		if derr != nil {
 			continue // a corrupt payload is skipped, never fails the whole preview
 		}
@@ -403,7 +403,7 @@ func Run(ctx context.Context, opener ReplayOpener, suffix string, reg *runtime.R
 // samples' own times, or the envelope's time twice for an event that batches nothing.
 // Both bounds come from times the resolver already decided and bounded — nothing here
 // re-derives one.
-func occurredSpan(event *dmmodel.ResolvedEvent) (time.Time, time.Time) {
+func occurredSpan(event *resolvedevent.ResolvedEvent) (time.Time, time.Time) {
 	first, last := event.OccurredTime, event.OccurredTime
 	observe := func(at time.Time) {
 		if at.Before(first) {
@@ -414,15 +414,15 @@ func occurredSpan(event *dmmodel.ResolvedEvent) (time.Time, time.Time) {
 		}
 	}
 	switch payload := event.Payload.(type) {
-	case *dmmodel.ResolvedMeasurementsPayload:
+	case *resolvedevent.ResolvedMeasurementsPayload:
 		for _, entry := range payload.Entries {
 			observe(entry.OccurredTime)
 		}
-	case *dmmodel.ResolvedLocationsPayload:
+	case *resolvedevent.ResolvedLocationsPayload:
 		for _, entry := range payload.Entries {
 			observe(entry.OccurredTime)
 		}
-	case *dmmodel.ResolvedAlertsPayload:
+	case *resolvedevent.ResolvedAlertsPayload:
 		for _, entry := range payload.Entries {
 			observe(entry.OccurredTime)
 		}
@@ -434,9 +434,9 @@ func occurredSpan(event *dmmodel.ResolvedEvent) (time.Time, time.Time) {
 // value sharing nothing writable with the one decoded off the stream: the payload and every
 // sample's entry slice are new. A non-measurement event is returned as it is — no formula
 // reads a location or an alert.
-func recalculated(event *dmmodel.ResolvedEvent, draft dmmodel.ProfileResolution, constants []calcfield.Constant,
-	stats *Stats) *dmmodel.ResolvedEvent {
-	payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+func recalculated(event *resolvedevent.ResolvedEvent, draft dmmodel.ProfileResolution, constants []calcfield.Constant,
+	stats *Stats) *resolvedevent.ResolvedEvent {
+	payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 	if !ok {
 		return event
 	}
@@ -446,21 +446,21 @@ func recalculated(event *dmmodel.ResolvedEvent, draft dmmodel.ProfileResolution,
 		return event
 	}
 	obs := skipCounter{stats: stats}
-	samples := make([]dmmodel.ResolvedMeasurementsEntry, len(payload.Entries))
+	samples := make([]resolvedevent.ResolvedMeasurementsEntry, len(payload.Entries))
 	for i, sample := range payload.Entries {
-		samples[i] = dmmodel.ResolvedMeasurementsEntry{
+		samples[i] = resolvedevent.ResolvedMeasurementsEntry{
 			Entries:      draft.Recalculate(sample.Entries, constants, obs),
 			OccurredTime: sample.OccurredTime,
 		}
 	}
 	stats.RecalculatedSamples += len(samples)
 	cp := *event
-	cp.Payload = &dmmodel.ResolvedMeasurementsPayload{Entries: samples}
+	cp.Payload = &resolvedevent.ResolvedMeasurementsPayload{Entries: samples}
 	return &cp
 }
 
 // carriesDerived reports whether any sample of payload holds a calculated value.
-func carriesDerived(payload *dmmodel.ResolvedMeasurementsPayload) bool {
+func carriesDerived(payload *resolvedevent.ResolvedMeasurementsPayload) bool {
 	for _, sample := range payload.Entries {
 		for _, e := range sample.Entries {
 			if e.Derived {

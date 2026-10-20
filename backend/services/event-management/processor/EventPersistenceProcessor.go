@@ -6,18 +6,16 @@ package processor
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"sync"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	"github.com/devicechain-io/dc-device-management/proto"
 	emconfig "github.com/devicechain-io/dc-event-management/config"
 	emmodel "github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
+	"strconv"
+	"sync"
+	"time"
 )
 
 const (
@@ -36,7 +34,7 @@ const (
 // event can be stamped with the same id for end-to-end tracing.
 type failedItem struct {
 	tenant        string
-	event         dmodel.FailedEvent
+	event         resolvedevent.FailedEvent
 	correlationId string
 }
 
@@ -180,7 +178,7 @@ func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.Mess
 }
 
 // marshalFailedEvent encodes a failed event for publication. It is a variable rather
-// than a direct call to proto.MarshalFailedEvent so its FAILURE can be exercised.
+// than a direct call to resolvedevent.MarshalFailedEvent so its FAILURE can be exercised.
 //
 // 🔴 THE BRANCH IT FEEDS IS OTHERWISE UNREACHABLE, WHICH IS HOW A BUG LIVED IN IT.
 // PFailedEvent carries only scalars, so proto.Marshal has nothing to reject and the
@@ -189,7 +187,7 @@ func NewEventPersistenceProcessor(ms *core.Microservice, resolved messaging.Mess
 // message with a nil Value; nothing could have caught that, because nothing could make
 // the marshal fail. The seam is one line and it turns the branch's behaviour into a
 // property the suite asserts rather than one a reviewer has to take on trust.
-var marshalFailedEvent = proto.MarshalFailedEvent
+var marshalFailedEvent = resolvedevent.MarshalFailedEvent
 
 // Handle case where event failed to process.
 func (eproc *EventPersistenceProcessor) ProcessFailedEvent(ctx context.Context) bool {
@@ -237,20 +235,20 @@ func (eproc *EventPersistenceProcessor) OnInvalidEvent(err error, msg messaging.
 		log.Warn().Msg(fmt.Sprintf("Dropping invalid event with no parseable tenant in subject %q", msg.Subject))
 		return
 	}
-	failed := dmodel.NewFailedEvent(uint(proto.FailureReason_Invalid), eproc.Microservice.FunctionalArea,
+	failed := resolvedevent.NewFailedEvent(uint(resolvedevent.FailureReason_Invalid), eproc.Microservice.FunctionalArea,
 		"message could not be parsed", err, msg.Value)
 	eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: msg.CorrelationID()}
 }
 
 // Called when a message can not be persisted. The inbound correlation id (E15)
 // is threaded through from the worker so the emitted failed event carries it.
-func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event dmodel.ResolvedEvent, perr error, correlationId string) {
+func (eproc *EventPersistenceProcessor) OnFailedEvent(tenant string, reason uint, event resolvedevent.ResolvedEvent, perr error, correlationId string) {
 	// Marshal event message to protobuf.
-	bytes, err := proto.MarshalResolvedEvent(&event)
+	bytes, err := resolvedevent.MarshalResolvedEvent(&event)
 	if err != nil {
 		log.Error().Err(err).Msg("unable to marshal resolved event to protobuf")
 	} else {
-		failed := dmodel.NewFailedEvent(reason, eproc.Microservice.FunctionalArea,
+		failed := resolvedevent.NewFailedEvent(reason, eproc.Microservice.FunctionalArea,
 			"event could not be processed", perr, bytes)
 		eproc.failed <- failedItem{tenant: tenant, event: *failed, correlationId: correlationId}
 	}

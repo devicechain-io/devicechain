@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -32,7 +33,7 @@ func calibratedPower() model.ProfileResolution {
 		"voltage * current / 1000 * device.calibration"))
 }
 
-func value(t *testing.T, p *model.ResolvedMeasurementsPayload, sample int, name string) (string, bool) {
+func value(t *testing.T, p *resolvedevent.ResolvedMeasurementsPayload, sample int, name string) (string, bool) {
 	t.Helper()
 	for _, e := range p.Entries[sample].Entries {
 		if e.Name == name {

@@ -25,6 +25,8 @@ import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { formatTime } from '@/lib/utils';
 import { signerStateLabel, updateStateLabel } from '@/lib/enumLabel';
+import { useAuth } from '@/auth/AuthProvider';
+import { isScoped } from '@devicechain/client';
 import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, useReload } from '@/routes/common';
 import {
@@ -129,13 +131,22 @@ export function DeviceUpdatesPanel({
   const [version, reload] = useReload();
   const [pageNumber, setPageNumber] = useState(1);
 
+  // A member limited to part of the tenant reads its devices' assignments but not who made
+  // them; asking for that field would fail the whole list.
+  const { claims } = useAuth();
+  const scoped = isScoped(claims);
+
   const current = useQuery(
-    () => listDeviceUpdateAssignments({ deviceToken, currentOnly: true, pageNumber: 1, pageSize: CURRENT_PAGE_SIZE }),
-    [deviceToken, version],
+    () =>
+      listDeviceUpdateAssignments(
+        { deviceToken, currentOnly: true, pageNumber: 1, pageSize: CURRENT_PAGE_SIZE },
+        { scoped },
+      ),
+    [deviceToken, version, scoped],
   );
   const history = useQuery(
-    () => listDeviceUpdateAssignments({ deviceToken, pageNumber, pageSize: HISTORY_PAGE_SIZE }),
-    [deviceToken, pageNumber, version],
+    () => listDeviceUpdateAssignments({ deviceToken, pageNumber, pageSize: HISTORY_PAGE_SIZE }, { scoped }),
+    [deviceToken, pageNumber, version, scoped],
   );
 
   const afterChange = () => {

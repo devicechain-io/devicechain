@@ -6,8 +6,11 @@ package proto
 import (
 	"bytes"
 	"encoding/hex"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/credential"
@@ -50,14 +53,14 @@ func goldenInboundEvents() map[string]*model.UnresolvedEvent {
 	e2 := time.Date(2026, 10, 16, 4, 30, 14, 1, goldenZone(-5))
 	return map[string]*model.UnresolvedEvent{
 		"token measurement": {Source: "http", Device: "devicepulse-00001", OccurredTime: occ, ProcessedTime: proc,
-			EventType: model.Measurement, CredentialType: gsp("ACCESS_TOKEN"), SealedCredentialId: credential.SealedFromText(mainTokenSealText),
+			EventType: eventtype.Measurement, CredentialType: gsp("ACCESS_TOKEN"), SealedCredentialId: credential.SealedFromText(mainTokenSealText),
 			Payload: &model.UnresolvedMeasurementsPayload{Entries: []model.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"temp": "21.5"}, OccurredTime: gtp(e1)},
 				{Measurements: map[string]string{"hum": "40"}},
 				{Measurements: map[string]string{"temp": "22"}, OccurredTime: gtp(e2)},
 			}}},
 		"password location": {Source: "mqtt", AltId: gsp("alt-1"), Device: "sensor-9", Relationship: gsp("rel"),
-			OccurredTime: occ, ProcessedTime: proc, EventType: model.Location,
+			OccurredTime: occ, ProcessedTime: proc, EventType: eventtype.Location,
 			CredentialType: gsp("MQTT_BASIC"), CredentialId: gsp("sensor-9"), SealedCredentialSecret: credential.SealedFromText(mainPasswordSealText),
 			Payload: &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{
 				{Latitude: gsp("45.5"), Longitude: gsp("-73.6"), Elevation: gsp("10"), OccurredTime: gtp(e2)},
@@ -65,15 +68,15 @@ func goldenInboundEvents() map[string]*model.UnresolvedEvent {
 			}}},
 		"alert out of range": {Source: "http", Device: "d-1",
 			OccurredTime: time.Date(1500, 1, 2, 3, 4, 5, 6, time.UTC), ProcessedTime: time.Date(9999, 12, 31, 23, 59, 59, 999999999, goldenZone(-5)),
-			EventType: model.Alert, AuthenticatedTransport: true,
+			EventType: eventtype.Alert, AuthenticatedTransport: true,
 			Payload: &model.UnresolvedAlertsPayload{Entries: []model.UnresolvedAlertEntry{
 				{Type: "FAULT", Level: 3, Message: "m", Source: "s", OccurredTime: gtp(time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC))},
 				{Type: "EPOCH", OccurredTime: gtp(time.Unix(0, 0))},
 				{Type: "PRE", OccurredTime: gtp(time.Unix(-1, 999999999))},
 			}}},
-		"presence zero time": {Source: "lwm2m", Device: "d-2", EventType: model.StateChange, AuthenticatedTransport: true,
-			Payload: &model.UnresolvedStateChangePayload{State: model.PresenceConnected, Reason: "reg", SessionId: "7", OccurredTime: gsp("2026-10-16T09:30:15Z")}},
-		"relationship": {Source: "http", Device: "d-3", OccurredTime: proc.In(goldenZone(-5)), ProcessedTime: proc, EventType: model.NewRelationship,
+		"presence zero time": {Source: "lwm2m", Device: "d-2", EventType: eventtype.StateChange, AuthenticatedTransport: true,
+			Payload: &model.UnresolvedStateChangePayload{State: presence.StateConnected, Reason: "reg", SessionId: "7", OccurredTime: gsp("2026-10-16T09:30:15Z")}},
+		"relationship": {Source: "http", Device: "d-3", OccurredTime: proc.In(goldenZone(-5)), ProcessedTime: proc, EventType: eventtype.NewRelationship,
 			Payload: &model.UnresolvedNewRelationshipPayload{RelationshipType: "contains", TargetType: "device", Target: "d-4"}},
 	}
 }
@@ -208,7 +211,7 @@ func TestInboundInstantsRoundTripInBothFormats(t *testing.T) {
 		} {
 			entryAt := at.Add(-3)
 			ev := &model.UnresolvedEvent{Source: "s", Device: "d", OccurredTime: at, ProcessedTime: at.Add(7),
-				EventType: model.Alert,
+				EventType: eventtype.Alert,
 				Payload: &model.UnresolvedAlertsPayload{Entries: []model.UnresolvedAlertEntry{
 					{Type: "t", OccurredTime: &entryAt}}}}
 			encoded, err := MarshalUnresolvedEventAs(ev, format)

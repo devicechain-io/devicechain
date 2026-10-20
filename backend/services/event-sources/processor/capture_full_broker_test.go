@@ -65,14 +65,14 @@ func TestAFullCaptureStreamNeverRefusesTheMqttDevice(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			mqttPort := dctest.FreeTCPPort(t)
 			srv, err := natsserver.NewServer(&natsserver.Options{Host: "127.0.0.1", Port: -1, JetStream: true,
 				StoreDir: dctest.JetStreamStoreDir(t), ServerName: "capture-full",
-				MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort}})
+				MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1}})
 			require.NoError(t, err)
 			go srv.Start()
 			require.True(t, srv.ReadyForConnections(15*time.Second), "embedded nats server not ready")
 			t.Cleanup(srv.Shutdown)
+			mqttPort := dctest.MQTTPort(t, srv)
 			nc, err := nats.Connect(srv.ClientURL())
 			require.NoError(t, err)
 			t.Cleanup(nc.Close)

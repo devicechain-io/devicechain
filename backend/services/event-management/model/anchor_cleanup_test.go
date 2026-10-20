@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -22,9 +22,9 @@ func TestDeleteAnchorsForEntity(t *testing.T) {
 	occurred := time.Date(2026, 7, 6, 20, 0, 0, 0, time.UTC)
 
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
-		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
-		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -65,11 +65,11 @@ func TestDeleteAnchorsForEntity_DeviceAsTarget(t *testing.T) {
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
 		// Device 7 (a gateway) tracks device 4 (a sensor): device 7's events anchor
 		// to device 4 as a target.
-		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "device", AnchorToken: "device-4"},
+		{EventId: anchorEventId("device-7", occurred), DeviceToken: "device-7", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "device", AnchorToken: "device-4"},
 		// Device 4's own event anchored to its customer.
-		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-4", occurred), DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 		// An unrelated device's anchor that must survive.
-		{EventId: anchorEventId("device-9", occurred), DeviceToken: "device-9", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{EventId: anchorEventId("device-9", occurred), DeviceToken: "device-9", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestDeleteAnchorsForEntity_TenantScoped(t *testing.T) {
 	api := newPersistenceTestApi(t)
 	acme := core.WithTenant(context.Background(), "acme")
 	if err := api.CreateEventAnchors(acme, api.RDB.DB(acme), []*EventAnchor{
-		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: time.Now().UTC(), AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: time.Now().UTC(), AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -117,8 +117,8 @@ func TestDeleteAnchorsForEntity_BoundedByBefore(t *testing.T) {
 	newEvent := deletedAt.Add(time.Hour)  // a reused-token device's telemetry
 
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceToken: "gw-1", EventType: esmodel.Measurement, OccurredTime: oldEvent, AnchorType: "customer", AnchorToken: "cust-3"},
-		{DeviceToken: "gw-1", EventType: esmodel.Measurement, OccurredTime: newEvent, AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: oldEvent, AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "gw-1", EventType: eventtype.Measurement, OccurredTime: newEvent, AnchorType: "customer", AnchorToken: "cust-3"},
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -139,6 +139,6 @@ func TestDeleteAnchorsForEntity_BoundedByBefore(t *testing.T) {
 // production (where event_id encodes the device). Before the anchor set had an identity
 // these fixtures could omit it; now omitting it makes two devices' anchors collide.
 func anchorEventId(device string, occurred time.Time) []byte {
-	ev := Event{DeviceToken: device, EventType: esmodel.Measurement, OccurredTime: occurred}
+	ev := Event{DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: occurred}
 	return DeriveEventId("acme", &ev, nil)
 }

@@ -6,15 +6,13 @@ package processor
 import (
 	"context"
 	"encoding/json"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
+	"testing"
+	"time"
 )
 
 // pending wraps detections as buffered, unstamped pending detections, for the tests that seed
@@ -54,19 +52,19 @@ func (w *derivedCapture) HandleResponse(error) {}
 // time and broker append time are each chosen by the test.
 func stampedMsg(t *testing.T, seq uint64, device, value string, occurred, processed, appended time.Time) messaging.Message {
 	t.Helper()
-	ev := &dmmodel.ResolvedEvent{
+	ev := &resolvedevent.ResolvedEvent{
 		Source:              "http1",
 		SourceDeviceToken:   device,
 		ProfileVersionToken: "p@1",
 		OccurredTime:        occurred,
 		ProcessedTime:       processed,
-		EventType:           esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		EventType:           eventtype.Measurement,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
 		}}},
 	}
-	b, err := dmproto.MarshalResolvedEvent(ev)
+	b, err := resolvedevent.MarshalResolvedEvent(ev)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}

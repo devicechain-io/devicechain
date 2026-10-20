@@ -6,19 +6,17 @@ package processor
 import (
 	"context"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
 
-	nats "github.com/nats-io/nats.go"
-	"github.com/stretchr/testify/require"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
+	nats "github.com/nats-io/nats.go"
+	"github.com/stretchr/testify/require"
 )
 
 // stealingOpener opens the real replay reader, and after afterReads messages have been read
@@ -94,14 +92,14 @@ func TestTermBuildReplayWithLostDeliveriesMatchesACleanReplay(t *testing.T) {
 		// Every event breaches the threshold, so every one fires: a replay that skips even
 		// one changes the detection count, not just the engine state.
 		value := "90"
-		ev := &dmmodel.ResolvedEvent{
+		ev := &resolvedevent.ResolvedEvent{
 			Source: "http1", SourceDeviceToken: fmt.Sprintf("d%03d", i), ProfileVersionToken: "p@1",
-			OccurredTime: at, ProcessedTime: at, EventType: esmodel.Measurement,
-			Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
-				OccurredTime: at, Entries: []dmmodel.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
+			OccurredTime: at, ProcessedTime: at, EventType: eventtype.Measurement,
+			Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
+				OccurredTime: at, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temperature", Value: value}},
 			}}},
 		}
-		body, err := dmproto.MarshalResolvedEvent(ev)
+		body, err := resolvedevent.MarshalResolvedEvent(ev)
 		require.NoError(t, err)
 		_, err = js.Publish(messaging.ScopedSubject(b.instance, "acme", streams.ResolvedEvents), body)
 		require.NoError(t, err)

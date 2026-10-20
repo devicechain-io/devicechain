@@ -1,0 +1,245 @@
+// Copyright The DeviceChain Authors
+// SPDX-License-Identifier: Apache-2.0
+
+syntax="proto3";
+
+option go_package = "github.com/devicechain-io/dc-microservice/resolvedevent;resolvedevent";
+
+package io.devicechain.devicemanagement;
+
+// The resolved-event wire contract: the envelope device-management publishes once per resolved
+// event, the failed-event envelope, and the per-event-type payloads. It lives in core so a
+// consumer of the stream (event-management, device-state, event-processing, ...) does not have
+// to import the producer to read it. The protobuf package is unchanged from when this was
+// device-management's single events file, so every message's full name, and so its wire
+// bytes, is exactly what it was.
+
+/**
+ * Enumeration of failure reasons.
+ */
+enum FailureReason {
+    Unknown = 0; // Failed for unknown reason
+    Invalid = 1; // Event was not able to be parsed
+    ApiCallFailed = 2; // API call required for resolution failed
+    DeviceNotFound = 3; // Device token could not be resolved to a device
+    Unauthenticated = 4; // Presented device credential was missing or invalid (ADR-014)
+    DeviceDisabled = 5; // The device was resolved, but an operator has disabled it
+}
+
+/**
+ * Event that could not be processed.
+ */
+message PFailedEvent {
+    FailureReason reason = 1;
+    string service = 2;
+    string message = 3;
+    string error = 4;
+    bytes payload = 5;
+}
+
+/**
+ * A single resolved anchor: one of the device's tracked relationships at event
+ * time, denormalized so the event is queryable by that (type, token) dimension
+ * (ADR-013/044). The target is addressed by its stable per-tenant token, not a
+ * device-management row id, so the reference stays valid across the service seam.
+ * A device with several tracked relationships yields several anchors.
+ */
+message PResolvedAnchor {
+	string anchor_type = 1;
+	string anchor_token = 2;
+	uint64 relationship_id = 3;
+}
+
+/**
+ * One rule-scoped dynamic-group version an event belongs to (ADR-062): the group's
+ * per-tenant token and the frozen selector version the membership was computed
+ * against. Carried on the resolved event so the DETECT engine's scope check is a set
+ * test on the replayed bytes (replay-correct by construction).
+ */
+message PScopeMembership {
+	string group_token = 1;
+	int32 version = 2;
+}
+
+/**
+ * Event that was successfully resolved. It carries the full set of the device's
+ * tracked-relationship anchors (empty when the device is unassigned). The source
+ * device is addressed by its token (ADR-044): the numeric row id never crosses the
+ * seam to event-management / device-state.
+ *
+ * device_type_token and profile_version_token denormalize the device's rule-scoping
+ * identity at resolve time (ADR-051): the device-type token and a
+ * "{profileToken}@{version}" token naming the active PUBLISHED profile version
+ * (ADR-045) whose rules apply. event-processing's DETECT engine selects which
+ * rules apply to an event from these tokens without a graph read back into
+ * device-management. profile_version_token is empty when the type has no profile
+ * or the profile is unpublished (no active version) — the device has no resolvable
+ * rules, the same limiting case as an unclassified measurement.
+ */
+ message PResolvedEvent {
+	// Field numbers 5 and 6 previously held target_type/target_id (removed in #134
+	// when the anchor set replaced the single target); reserved so they are never
+	// re-decoded from a retained/replayed pre-#134 message on this durable stream.
+	reserved 5, 6;
+	reserved "target_type", "target_id";
+	string source = 1;
+	optional string alt_id = 2;
+	string source_device_token = 3;
+	repeated PResolvedAnchor anchors = 4;
+    // The two envelope instants, each in exactly ONE of two forms, as on the inbound event:
+    // occurred / processed (17 / 18) as nanoseconds since the Unix epoch, or, for an instant
+    // that count cannot hold (before 1677 or after 2262) and for every message written
+    // before the numeric form existed, these RFC 3339 strings at full precision. A reader
+    // takes the number when it is present and the string otherwise.
+    string occurred_time = 7;
+    string processed_time = 8;
+    int64 event_type = 9;
+    bytes payload = 10;
+	optional string device_type_token = 11;
+	optional string profile_version_token = 12;
+	// The rule-scoped dynamic-group versions the device + its anchors belong to
+	// (ADR-062), stamped at resolve time; empty when no rule references such a group.
+	repeated PScopeMembership scope_memberships = 13;
+	// external_id denormalizes the reporting device's external id (ADR-049) at resolve
+	// time so the device-state presence projection can key a device by its transport-
+	// native identity without a hop back into device-management; empty when unset.
+	optional string external_id = 14;
+	// fence_set_version is the tenant's active geofence-set version at resolve time
+	// (ADR-078), naming the frozen snapshot of the fences that were live when the
+	// position was reported — so containment is replay-correct by construction rather
+	// than re-evaluated against whatever fences exist at replay time.
+	//
+	// 🔴 STAMPED ON LOCATION EVENTS ONLY: nothing but a position can enter a fence, so
+	// any other event type carries 0 here. A plain (non-optional) int32 is deliberate —
+	// 0 is a real answer meaning "this tenant had never created a fence", it is what
+	// every other event type must carry, and proto3 omits it from the wire, so there is
+	// nothing for an `optional` presence bit to distinguish.
+	int32 fence_set_version = 15;
+	// source_device_disabled is true when the reporting device was disabled when the event
+	// was resolved. Only a presence transition (a state change) is ever resolved for a
+	// disabled device: the platform's own transports produce it about a connection the
+	// platform holds, so it still reaches the presence projection and the history. Every
+	// other event from a disabled device is refused before it is resolved. A consumer that
+	// acts on the device's behalf, such as detection, skips an event that carries it.
+	bool source_device_disabled = 16;
+	// The envelope instants as nanoseconds since the Unix epoch (see occurred_time, 7).
+	// optional so an instant of exactly the epoch is still written: absence means the instant
+	// is in the string form. Field numbers from 16 on take a two-byte tag, so each costs ten
+	// bytes on the wire against the string form's thirty-two.
+	optional sfixed64 occurred = 17;
+	optional sfixed64 processed = 18;
+}
+
+/**
+ * Payload for resolved new relationship request. The target is a uniform
+ * (type, id) reference (ADR-013).
+ */
+ message PResolvedNewRelationshipPayload {
+	uint64 relationship_type_id = 1;
+    optional string target_type = 2;
+    optional uint64 target_id = 3;
+}
+
+/**
+ * Single location entry for a location payload.
+ */
+ message PResolvedLocationEntry {
+    optional string latitude = 1;
+    optional string longitude = 2;
+    optional string elevation = 3;
+    optional string occurred_time = 4;
+    optional string accuracy = 5;
+    optional string speed = 6;
+    optional string heading = 7;
+    // The sample's own instant as nanoseconds since the Unix epoch. A resolved entry always
+    // carries its time, in exactly one form: this one, or occurred_time as an RFC 3339
+    // string for an instant this count cannot hold. Neither present: a message written
+    // before per-sample times existed, which decodes at the envelope's time.
+    optional sfixed64 occurred = 8;
+}
+
+/**
+ * Payload for a location event.
+ */
+message PResolvedLocationsPayload {
+    repeated PResolvedLocationEntry entries = 1;
+}
+
+/**
+ * Single measurement entry for a measurement payload. unit and data_type are
+ * denormalized from the bound metric definition at resolve time (ADR-016) — as of
+ * the profile's active PUBLISHED version, alongside the classifier — so the stored
+ * measurement is self-describing on read without a cross-service hop back into
+ * device-management, and stays consistent for historical rows across a later
+ * republish. Both are absent for an undeclared (unbound) measurement.
+ */
+ message PResolvedMeasurementEntry {
+    string name = 1;
+    string value = 2;
+    optional uint64 classifier = 3;
+    optional string unit = 4;
+    optional string data_type = 5;
+    // A calculated metric's value (ADR-082): computed at resolve from the other entries of
+    // the same sample, never sent by the device. Implicit presence, so a raw entry is
+    // written exactly as before the field existed, and a message written before it decodes
+    // with every entry raw.
+    bool derived = 6;
+}
+
+/**
+ * Single measurement entry for a measurement payload.
+ */
+message PResolvedMeasurementsEntry {
+    repeated PResolvedMeasurementEntry measurements = 1;
+    optional string occurred_time = 2;
+    // The sample's own instant as nanoseconds since the Unix epoch. A resolved entry always
+    // carries its time, in exactly one form: this one, or occurred_time as an RFC 3339
+    // string for an instant this count cannot hold. Neither present: a message written
+    // before per-sample times existed, which decodes at the envelope's time.
+    optional sfixed64 occurred = 3;
+}
+
+/**
+ * Payload for a measurement event.
+ */
+message PResolvedMeasurementsPayload {
+    repeated PResolvedMeasurementsEntry entries = 1;
+}
+
+/**
+ * Single alert entry for an alerts payload.
+ */
+message PResolvedAlertEntry {
+    string type = 1;
+    uint32 level = 2;
+    string message = 3;
+    string source = 4;
+    optional string occurred_time = 5;
+    // The sample's own instant as nanoseconds since the Unix epoch. A resolved entry always
+    // carries its time, in exactly one form: this one, or occurred_time as an RFC 3339
+    // string for an instant this count cannot hold. Neither present: a message written
+    // before per-sample times existed, which decodes at the envelope's time.
+    optional sfixed64 occurred = 6;
+}
+
+/**
+ * Payload for an alert event.
+ */
+message PResolvedAlertsPayload {
+    repeated PResolvedAlertEntry entries = 1;
+}
+
+/**
+ * Payload for a resolved device presence state-change event (ADR-067). Distinct
+ * from PAlarmStateChangeEvent (ADR-041), which is an alarm transition envelope.
+ */
+message PResolvedStateChangePayload {
+    string state = 1;
+    string reason = 2;
+    uint64 session_id = 3;
+    optional string occurred_time = 4;
+    // Parsed compare-and-set precondition on the projection's stored session; zero when
+    // the producer made no claim. Appended as a NEW field number so an event already on
+    // the resolved-events stream, written before this field existed, still decodes.
+    uint64 expected_session_id = 5;
+}

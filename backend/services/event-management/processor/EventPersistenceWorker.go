@@ -7,16 +7,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
@@ -28,7 +27,7 @@ type EventPersistenceWorker struct {
 	Api         model.EventManagementApi
 	Unpersisted <-chan messaging.Message
 	Invalid     func(error, messaging.Message)
-	Failed      func(string, uint, dmmodel.ResolvedEvent, error, string)
+	Failed      func(string, uint, resolvedevent.ResolvedEvent, error, string)
 
 	// MaxBatch is the most messages this worker commits in one transaction. 1 or less —
 	// the zero value included, so a worker built by literal keeps the per-message path —
@@ -69,7 +68,7 @@ type EventPersistenceResults struct {
 func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 	unpersisted <-chan messaging.Message,
 	invalid func(error, messaging.Message),
-	failed func(string, uint, dmmodel.ResolvedEvent, error, string),
+	failed func(string, uint, resolvedevent.ResolvedEvent, error, string),
 	metrics *PersistMetrics) *EventPersistenceWorker {
 	return &EventPersistenceWorker{
 		WorkerId:    workerId,
@@ -99,7 +98,7 @@ func NewEventPersistenceWorker(workerId int, api model.EventManagementApi,
 // That is a real gap rather than a naming quibble, and it is recorded here instead
 // of being papered over: the vocabulary is the only thing that told a reader a queue
 // existed to be drained.
-var ErrDeterministic = errors.New("deterministic persistence failure")
+var ErrDeterministic = model.ErrDeterministic
 
 // classifyPersistFailure re-classifies a database error that no redelivery can fix.
 //
@@ -169,16 +168,7 @@ func classifyPersistFailure(err error) error {
 // Parse a (possibly null) string into a float64. A non-numeric value is a
 // deterministic failure (the value can never be stored in the numeric column), so
 // the error is wrapped as such rather than left to retry (unacked) pointlessly.
-func parseNullableFloat64(val *string) (*float64, error) {
-	if val == nil {
-		return nil, nil
-	}
-	parsed, err := strconv.ParseFloat(*val, 64)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %q is not numeric: %v", ErrDeterministic, *val, err)
-	}
-	return &parsed, nil
-}
+func parseNullableFloat64(val *string) (*float64, error) { return model.ParseNullableFloat64(val) }
 
 // errPayloadMismatch is the refusal for a location, measurement or alert event whose
 // payload is not of its type (see writeEvent).
@@ -189,7 +179,7 @@ func errPayloadMismatch(kind string) error {
 // locationRequests maps a location payload to one create request per entry, each under
 // the message's base event. A value that is not a number is refused as deterministic.
 // It is the one mapping, shared by the per-message path and the grouped batch write.
-func locationRequests(event model.Event, payload dmmodel.ResolvedLocationsPayload) ([]*model.LocationEventCreateRequest, error) {
+func locationRequests(event model.Event, payload resolvedevent.ResolvedLocationsPayload) ([]*model.LocationEventCreateRequest, error) {
 	requests := make([]*model.LocationEventCreateRequest, 0, len(payload.Entries))
 	for _, location := range payload.Entries {
 		lat, err := parseNullableFloat64(location.Latitude)
@@ -230,39 +220,25 @@ func locationRequests(event model.Event, payload dmmodel.ResolvedLocationsPayloa
 	return requests, nil
 }
 
-// measurementRequests is locationRequests for a measurement payload: one request per
-// reading of every entry.
-func measurementRequests(event model.Event, payload dmmodel.ResolvedMeasurementsPayload) ([]*model.MeasurementEventCreateRequest, error) {
+// measurementRequests is locationRequests for a measurement payload: one request per reading of
+// every entry, each mapped by model.MeasurementRequestFor. The conversion of the wire entry to a
+// model.MeasurementReading is a plain Go conversion, so it stops compiling if the two diverge.
+func measurementRequests(event model.Event, payload resolvedevent.ResolvedMeasurementsPayload) ([]*model.MeasurementEventCreateRequest, error) {
 	requests := make([]*model.MeasurementEventCreateRequest, 0)
 	for _, mxentry := range payload.Entries {
 		for _, mx := range mxentry.Entries {
-			val := mx.Value
-			fval, err := parseNullableFloat64(&val)
+			req, err := model.MeasurementRequestFor(event, mxentry.OccurredTime, model.MeasurementReading(mx))
 			if err != nil {
 				return nil, err
 			}
-			var classifier *uint
-			if mx.Classifier != nil {
-				c := uint(*mx.Classifier)
-				classifier = &c
-			}
-			requests = append(requests, &model.MeasurementEventCreateRequest{
-				Event:             event,
-				EntryOccurredTime: mxentry.OccurredTime,
-				Name:              mx.Name,
-				Value:             fval,
-				Classifier:        classifier,
-				Unit:              mx.Unit,
-				DataType:          mx.DataType,
-				Derived:           mx.Derived,
-			})
+			requests = append(requests, req)
 		}
 	}
 	return requests, nil
 }
 
 // alertRequests is locationRequests for an alert payload, which has nothing to parse.
-func alertRequests(event model.Event, payload dmmodel.ResolvedAlertsPayload) []*model.AlertEventCreateRequest {
+func alertRequests(event model.Event, payload resolvedevent.ResolvedAlertsPayload) []*model.AlertEventCreateRequest {
 	requests := make([]*model.AlertEventCreateRequest, 0, len(payload.Entries))
 	for _, alert := range payload.Entries {
 		requests = append(requests, &model.AlertEventCreateRequest{
@@ -281,7 +257,7 @@ func alertRequests(event model.Event, payload dmmodel.ResolvedAlertsPayload) []*
 // rows are inserted as a single batch on the supplied (transaction-bound) db
 // handle so they commit all-or-nothing (ADR-022 E5).
 func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db *gorm.DB, event model.Event,
-	payload dmmodel.ResolvedLocationsPayload) (*EventPersistenceResults, error) {
+	payload resolvedevent.ResolvedLocationsPayload) (*EventPersistenceResults, error) {
 	requests, err := locationRequests(event, payload)
 	if err != nil {
 		return nil, err
@@ -304,7 +280,7 @@ func (ep *EventPersistenceWorker) PersistLocationEvents(ctx context.Context, db 
 // measurement rows are inserted as a single batch on the supplied
 // (transaction-bound) db handle so they commit all-or-nothing (ADR-022 E5).
 func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, db *gorm.DB, event model.Event,
-	payload dmmodel.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
+	payload resolvedevent.ResolvedMeasurementsPayload) (*EventPersistenceResults, error) {
 	requests, err := measurementRequests(event, payload)
 	if err != nil {
 		return nil, err
@@ -327,7 +303,7 @@ func (ep *EventPersistenceWorker) PersistMeasurementEvents(ctx context.Context, 
 // inserted as a single batch on the supplied (transaction-bound) db handle so
 // they commit all-or-nothing (ADR-022 E5).
 func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *gorm.DB, event model.Event,
-	payload dmmodel.ResolvedAlertsPayload) (*EventPersistenceResults, error) {
+	payload resolvedevent.ResolvedAlertsPayload) (*EventPersistenceResults, error) {
 	created, err := ep.Api.CreateAlertEvents(ctx, db, alertRequests(event, payload))
 	if err != nil {
 		return nil, err
@@ -349,7 +325,7 @@ func (ep *EventPersistenceWorker) PersistAlertEvents(ctx context.Context, db *go
 // base-event dedup does not engage). The live authoritative presence is written
 // separately by device-state's projection; this is the queryable timeline.
 func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, db *gorm.DB, event model.Event,
-	payload dmmodel.ResolvedStateChangePayload) (*EventPersistenceResults, error) {
+	payload resolvedevent.ResolvedStateChangePayload) (*EventPersistenceResults, error) {
 	created, affected, err := ep.Api.CreateStateChangeEvents(ctx, db, []*model.StateChangeEventCreateRequest{{
 		Event:     event,
 		State:     payload.State,
@@ -372,7 +348,7 @@ func (ep *EventPersistenceWorker) PersistStateChangeEvents(ctx context.Context, 
 // relationship anchors (ADR-013) are stored as a set of event_anchors rows alongside the
 // base event, so the same reading is queryable by each of the device's assignment
 // dimensions.
-func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
+func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event resolvedevent.ResolvedEvent) (*EventPersistenceResults, error) {
 	pevent, err := ep.baseEvent(ctx, event)
 	if err != nil {
 		return nil, err
@@ -397,7 +373,7 @@ func (ep *EventPersistenceWorker) PersistEvent(ctx context.Context, event dmmode
 
 // baseEvent derives a message's base event row, including its content-derived identity,
 // under the tenant in ctx.
-func (ep *EventPersistenceWorker) baseEvent(ctx context.Context, event dmmodel.ResolvedEvent) (model.Event, error) {
+func (ep *EventPersistenceWorker) baseEvent(ctx context.Context, event resolvedevent.ResolvedEvent) (model.Event, error) {
 	pevent := model.Event{
 		DeviceToken:   event.SourceDeviceToken,
 		OccurredTime:  event.OccurredTime,
@@ -438,7 +414,7 @@ func (ep *EventPersistenceWorker) baseEvent(ctx context.Context, event dmmodel.R
 // insert carries an ON CONFLICT DO NOTHING arbiter, so replaying a message — a
 // redelivery, or a batch that rolled back and is written again — adds nothing twice.
 func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, pevent model.Event,
-	event dmmodel.ResolvedEvent) (*EventPersistenceResults, error) {
+	event resolvedevent.ResolvedEvent) (*EventPersistenceResults, error) {
 	var results *EventPersistenceResults
 	err := func() error {
 		// Idempotent ingestion: a redelivered resolved event carrying an
@@ -469,30 +445,30 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 		// first delivery, with the right reason attached.
 		var perr error
 		switch event.EventType {
-		case esmodel.Location:
-			payload, ok := event.Payload.(*dmmodel.ResolvedLocationsPayload)
+		case eventtype.Location:
+			payload, ok := event.Payload.(*resolvedevent.ResolvedLocationsPayload)
 			if !ok {
 				return errPayloadMismatch("location")
 			}
 			results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
-		case esmodel.Measurement:
-			payload, ok := event.Payload.(*dmmodel.ResolvedMeasurementsPayload)
+		case eventtype.Measurement:
+			payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 			if !ok {
 				return errPayloadMismatch("measurement")
 			}
 			results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
-		case esmodel.Alert:
-			payload, ok := event.Payload.(*dmmodel.ResolvedAlertsPayload)
+		case eventtype.Alert:
+			payload, ok := event.Payload.(*resolvedevent.ResolvedAlertsPayload)
 			if !ok {
 				return errPayloadMismatch("alert")
 			}
 			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
-		case esmodel.StateChange:
+		case eventtype.StateChange:
 			// ADR-067 presence history (S3): persist the connect/disconnect edge to the
 			// append-only state_change_events hypertable, then fall through to
 			// persistEventAnchors like every other event type. The live authoritative
 			// presence is device-state's projection; this is the queryable timeline.
-			payload, ok := event.Payload.(*dmmodel.ResolvedStateChangePayload)
+			payload, ok := event.Payload.(*resolvedevent.ResolvedStateChangePayload)
 			if !ok {
 				return fmt.Errorf("%w: non-state-change payload in state change event", ErrDeterministic)
 			}
@@ -527,7 +503,7 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 // event is queryable by each of the device's tracked-relationship dimensions. An
 // unassigned event carries no anchors and writes nothing.
 func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *gorm.DB,
-	eventId []byte, event dmmodel.ResolvedEvent) error {
+	eventId []byte, event resolvedevent.ResolvedEvent) error {
 	if len(event.Anchors) == 0 {
 		return nil
 	}
@@ -542,7 +518,7 @@ func (ep *EventPersistenceWorker) persistEventAnchors(ctx context.Context, db *g
 // anchor to its event on (occurred_time, event_id), so an anchor stamped at any other
 // instant — a reading's, or the time it was written — would make its event vanish from
 // that read. TestAnAnchorFilteredEventIsFoundThroughTheWriter pins it.
-func anchorRows(eventId []byte, event dmmodel.ResolvedEvent) []*model.EventAnchor {
+func anchorRows(eventId []byte, event resolvedevent.ResolvedEvent) []*model.EventAnchor {
 	anchors := make([]*model.EventAnchor, 0, len(event.Anchors))
 	for _, a := range event.Anchors {
 		anchors = append(anchors, &model.EventAnchor{

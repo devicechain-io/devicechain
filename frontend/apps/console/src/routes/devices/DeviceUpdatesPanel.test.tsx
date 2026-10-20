@@ -13,7 +13,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GraphQLRequestError } from '@devicechain/client';
 
-const { gqlMock, toastMock, confirmMock } = vi.hoisted(() => ({
+const { gqlMock, toastMock, confirmMock, authState } = vi.hoisted(() => ({
+  authState: { scopeAnchors: [] as string[] },
   gqlMock: vi.fn(),
   toastMock: vi.fn(),
   confirmMock: vi.fn(),
@@ -23,6 +24,9 @@ vi.mock('@devicechain/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@devicechain/client')>();
   return { ...actual, gql: (...args: unknown[]) => gqlMock(...args) };
 });
+vi.mock('@/auth/AuthProvider', () => ({
+  useAuth: () => ({ claims: { username: 'u', authorities: [], scopeAnchors: authState.scopeAnchors } }),
+}));
 vi.mock('@/components/ui/toast', () => ({ useToast: () => ({ toast: toastMock }) }));
 vi.mock('@/components/ui/confirm-dialog', () => ({ useConfirm: () => confirmMock }));
 
@@ -33,6 +37,7 @@ beforeEach(() => {
   gqlMock.mockReset();
   toastMock.mockReset();
   confirmMock.mockReset();
+  authState.scopeAnchors = [];
 });
 
 const artifact = (over: Record<string, unknown> = {}) => ({
@@ -130,6 +135,25 @@ const renderPanel = (over: Partial<{ deviceEnabled: boolean; canWrite: boolean }
   render(<DeviceUpdatesPanel deviceToken="dev-1" deviceEnabled canWrite {...over} />);
 
 const SIGNER = { token: 'sg-1', name: 'release key', keyId: 'abcd1234', algorithm: 'ED25519', state: 'ACTIVE' };
+
+describe('a member limited to part of the tenant', () => {
+  it('reads the assignments without the field the server refuses them, and still shows them', async () => {
+    authState.scopeAnchors = ['customer:acme'];
+    serve({ current: [assignment()], signer: SIGNER });
+    renderPanel({ canWrite: false });
+    expect(await screen.findByTestId('current-assignment')).toBeTruthy();
+    const reads = callsTo('query DeviceUpdateAssignments');
+    expect(reads.length).toBeGreaterThan(0);
+    for (const c of reads) expect(String(c[1])).not.toMatch(/actor/);
+  });
+
+  it('keeps asking for the actor when the caller is not limited', async () => {
+    serve({ current: [assignment()], signer: SIGNER });
+    renderPanel();
+    await screen.findByTestId('current-assignment');
+    for (const c of callsTo('query DeviceUpdateAssignments')) expect(String(c[1])).toMatch(/actor/);
+  });
+});
 
 describe('current assignment', () => {
   it('shows the artifact, trust, state, progress and the pinned signer', async () => {

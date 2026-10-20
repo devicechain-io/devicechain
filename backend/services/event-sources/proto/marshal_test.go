@@ -4,8 +4,11 @@
 package proto
 
 import (
+	"github.com/devicechain-io/dc-microservice/presence"
 	"testing"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
 
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/eventtime"
@@ -22,7 +25,7 @@ func TestMarshalRoundTripCarriesCredential(t *testing.T) {
 		Device:                 "TEST-123",
 		OccurredTime:           time.Now().UTC().Truncate(time.Second),
 		ProcessedTime:          time.Now().UTC().Truncate(time.Second),
-		EventType:              model.Location,
+		EventType:              eventtype.Location,
 		Payload:                &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 		CredentialType:         strptr(string("MQTT_BASIC")),
 		CredentialId:           strptr("device-user"),
@@ -52,7 +55,7 @@ func TestMarshalRefusesAnUnsealedCredentialSecret(t *testing.T) {
 		Device:           "TEST-123",
 		OccurredTime:     time.Now().UTC(),
 		ProcessedTime:    time.Now().UTC(),
-		EventType:        model.Location,
+		EventType:        eventtype.Location,
 		Payload:          &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 		CredentialType:   strptr("MQTT_BASIC"),
 		CredentialId:     strptr("device-user"),
@@ -71,7 +74,7 @@ func TestMarshalRoundTripWithoutCredential(t *testing.T) {
 		Device:        "TEST-123",
 		OccurredTime:  time.Now().UTC().Truncate(time.Second),
 		ProcessedTime: time.Now().UTC().Truncate(time.Second),
-		EventType:     model.Location,
+		EventType:     eventtype.Location,
 		Payload:       &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 	}
 
@@ -100,7 +103,7 @@ func TestMarshalUnresolvedEventCarriesSubSecondTimestamps(t *testing.T) {
 		Device:        "TEST-123",
 		OccurredTime:  occurred,
 		ProcessedTime: processed,
-		EventType:     model.Location,
+		EventType:     eventtype.Location,
 		Payload:       &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 	}
 
@@ -124,8 +127,8 @@ func TestMarshalRoundTripCarriesAuthenticatedTransport(t *testing.T) {
 			Device:                 "lw-dev-1",
 			OccurredTime:           time.Now().UTC().Truncate(time.Second),
 			ProcessedTime:          time.Now().UTC().Truncate(time.Second),
-			EventType:              model.StateChange,
-			Payload:                &model.UnresolvedStateChangePayload{State: model.PresenceConnected, SessionId: "1"},
+			EventType:              eventtype.StateChange,
+			Payload:                &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
 			AuthenticatedTransport: marked,
 		}
 		bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
@@ -144,7 +147,7 @@ func TestMarshalRefusesAnUnsealedAccessToken(t *testing.T) {
 		Device:         "TEST-123",
 		OccurredTime:   time.Now().UTC(),
 		ProcessedTime:  time.Now().UTC(),
-		EventType:      model.Location,
+		EventType:      eventtype.Location,
 		Payload:        &model.UnresolvedLocationsPayload{Entries: []model.UnresolvedLocationEntry{}},
 		CredentialType: strptr("ACCESS_TOKEN"),
 		CredentialId:   strptr("tok-as-sent"),

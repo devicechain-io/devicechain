@@ -179,7 +179,9 @@ var (
 	// holds against up to 30 s of skew through a failed pass, and 60 s without one. The release
 	// grace (60 s, judged against a release time another pod may have written) holds against up
 	// to 45 s before it comes within mqttStoreViewTTL. The lock and the from-mark settle are
-	// timed by the broker, not by a pod, and take no skew.
+	// timed by the broker, not by a pod, and take no skew; so is the age of a store a pass created
+	// and never finished, which a pod with the setting off judges before it gives the store the
+	// gateway's subjects back (mqttStoreAge).
 	//
 	// Beyond those bounds the pods hand the store back and forth: one with another wanted
 	// state reads a live holder's heartbeat as stale and takes the store over, and the holder
@@ -315,9 +317,10 @@ func MqttFailClosedDurables(instanceId string) []MqttFailClosedDurable {
 // It is the platform reader's consumer config (natsReader.consumerConfig) with DeliverNew
 // and an explicit replica count. DeliverNew because the durable is created over a store that
 // may already hold messages kept for the gateway's own session consumers, none of them the
-// platform's. The reader over it (NewMqttMessageStoreReader) only ever BINDS to the durable
-// and never creates it, so a released store cannot have a durable recreated on it by a
-// reader's self-heal.
+// platform's. A durable this instance already held, created again, is the exception: it
+// starts at the start of the store (assertMqttFailClosed). The reader over it
+// (NewMqttMessageStoreReader) only ever BINDS to the durable and never creates it, so a
+// released store cannot have a durable recreated on it by a reader's self-heal.
 func MqttFailClosedConsumerConfig(d MqttFailClosedDurable, replicas int) *nats.ConsumerConfig {
 	return &nats.ConsumerConfig{
 		Durable:       d.Name,
@@ -823,9 +826,9 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	if err != nil {
 		return rep, err
 	}
-	// A store this pass created is counted once, as "store": the subjects it was created with
-	// are this pass's own, not a change made out of band.
-	if countRepairs && !takeOver && !rep.createdStore {
+	// A store this pass created is never counted here: a missing store has no mark of this
+	// instance, so creating one is a take-over, and it is counted once, as "store", above.
+	if countRepairs && !takeOver {
 		rep.repaired = append(rep.repaired, repaired...)
 	}
 
@@ -833,9 +836,36 @@ func (nmgr *NatsManager) assertMqttFailClosed(ctx context.Context, info *nats.St
 	if replicas < 1 {
 		replicas = 1
 	}
+	// 🔴 A DURABLE THIS INSTANCE ALREADY HELD, MISSING AGAIN, IS CREATED AT THE START OF THE
+	// STORE, NOT AT ITS TAIL. Deleting a consumer from an interest-retention store drops every
+	// copy only that consumer wanted, but a copy another consumer still holds interest in stays,
+	// and its direct copy was skipped as carried by the store. The platform makes that case
+	// itself: the events durable is unfiltered (MqttFailClosedDurable.Filter), so it holds every
+	// command response and device report it has not acked yet, and a missing responses or reports
+	// durable leaves its kind's unread copies in the store for as long as the events durable is
+	// behind. A DeliverNew durable starts above them with its ack floor at the tail, so they are
+	// never read and a finish reads the kind as drained.
+	//
+	// DeliverAll, not a start sequence read here: the broker starts it at the first sequence of
+	// the consumer leader's own copy of the store when it creates it, so neither a look that a
+	// lagging replica answered nor a store deleted and created again since the look can put the
+	// start above a copy that is there.
+	//
+	// The cost is duplicates. The re-created durable reads again what its predecessor already
+	// forwarded and the store still holds for another consumer. Each forward carries the
+	// store-sequence dedup id, which folds a repeat only inside the destination stream's duplicate
+	// window (600 s for inbound-events, the broker's 120 s for command-responses and
+	// device-reports); an older one is stored again. Their consumers take repeats as ordinary
+	// at-least-once traffic: a response to a terminal command is ignored, and a stale report
+	// is counted and acked. No persisted record of the predecessor's ack floor exists to start
+	// above, so a duplicate is the price of not losing a PUBACKed copy.
+	//
+	// A first creation keeps DeliverNew: the store may hold messages kept for the gateway's own
+	// consumers, none of them the platform's, whose direct copies were never skipped.
+	fromStart := marks.owned || marks.released
 	createdKind := map[MqttFailClosedKind]bool{}
 	for _, d := range MqttFailClosedDurables(instanceId) {
-		created, absent, err := nmgr.ensureMqttFailClosedDurable(ctx, d, replicas)
+		created, absent, err := nmgr.ensureMqttFailClosedDurable(ctx, d, replicas, fromStart)
 		if absent {
 			rep.absentDurables = append(rep.absentDurables, d.Name)
 		}
@@ -1048,11 +1078,18 @@ func isTransientRaise(err error) bool {
 // ConsumerInfo does not decode that time stamp, so this is a raw API request. On a broker that
 // does not report one, the pod's clock stands in for it.
 func (nmgr *NatsManager) mqttDurableAge(ctx context.Context, name string) (time.Duration, error) {
+	return nmgr.brokerAge(ctx, "$JS.API.CONSUMER.INFO."+MqttMessageStore+"."+name, "the platform durable "+name+" on "+MqttMessageStore)
+}
+
+// brokerAge is how long the object a JetStream info request describes has existed, by the
+// broker's clock: the "created" of its answer against the answer's own "ts". what names the
+// object in an error.
+func (nmgr *NatsManager) brokerAge(ctx context.Context, subject, what string) (time.Duration, error) {
 	rctx, cancel := context.WithTimeout(ctx, mqttFailClosedRequestTimeout)
 	defer cancel()
-	msg, err := nmgr.nc.RequestWithContext(rctx, "$JS.API.CONSUMER.INFO."+MqttMessageStore+"."+name, nil)
+	msg, err := nmgr.nc.RequestWithContext(rctx, subject, nil)
 	if err != nil {
-		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %w", name, MqttMessageStore, err)
+		return 0, fmt.Errorf("reading the age of %s: %w", what, err)
 	}
 	var resp struct {
 		Error   *jsAPIError `json:"error"`
@@ -1060,11 +1097,10 @@ func (nmgr *NatsManager) mqttDurableAge(ctx context.Context, name string) (time.
 		Now     time.Time   `json:"ts"`
 	}
 	if err := json.Unmarshal(msg.Data, &resp); err != nil {
-		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %w", name, MqttMessageStore, err)
+		return 0, fmt.Errorf("reading the age of %s: %w", what, err)
 	}
 	if resp.Error != nil {
-		return 0, fmt.Errorf("reading the age of the platform durable %s on %s: %s", name, MqttMessageStore,
-			resp.Error.Description)
+		return 0, fmt.Errorf("reading the age of %s: %s", what, resp.Error.Description)
 	}
 	if resp.Created.IsZero() {
 		// No creation time: the age cannot be shown, so it is not old enough.
@@ -1128,17 +1164,21 @@ func conformMqttFailClosedStore(cfg *nats.StreamConfig, maxBytes int64) ([]strin
 // ensureMqttFailClosedDurable creates a platform durable if it is missing and puts its filter
 // back if it has changed, reporting whether it had to create it and whether it is missing
 // still (it was not there and could not be created). A create the cluster refuses for want of
-// resources is retried a few times first (mqttFailClosedInsufficientRetry).
+// resources is retried a few times first (mqttFailClosedInsufficientRetry). fromStart creates a
+// missing durable at the start of the store (DeliverAll) rather than at its tail.
 //
 // The filter is checked by reading it back, because AddConsumer on an existing durable with
 // a changed filter returns success and keeps the old one
 // (TestAddConsumerSilentlyIgnoresAChangedFilterSubject).
-func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d MqttFailClosedDurable, replicas int) (created, absent bool, err error) {
+func (nmgr *NatsManager) ensureMqttFailClosedDurable(ctx context.Context, d MqttFailClosedDurable, replicas int, fromStart bool) (created, absent bool, err error) {
 	opt := nats.Context(ctx)
 	ci, err := nmgr.js.ConsumerInfo(MqttMessageStore, d.Name, opt)
 	if errors.Is(err, nats.ErrConsumerNotFound) {
 		cfg := MqttFailClosedConsumerConfig(d, replicas)
 		cfg.AckWait = nmgr.ackWait()
+		if fromStart {
+			cfg.DeliverPolicy = nats.DeliverAllPolicy
+		}
 		add := func() error {
 			if err := mqttFenced(ctx); err != nil {
 				return err
@@ -1252,8 +1292,7 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 			return rep, err
 		}
 		if why != "" {
-			log.Debug().Str("stream", MqttMessageStore).Str("why", why).
-				Msg("Not recording the drain cut of the released MQTT message store yet")
+			nmgr.noteFinishHeld("Not recording the drain cut of the released MQTT message store yet", why)
 			return rep, nil
 		}
 		info = settled
@@ -1290,11 +1329,18 @@ func (nmgr *NatsManager) finishMqttFailClosed(ctx context.Context, info *nats.St
 			// Not drained, or the cluster cannot say: below the cut, the store copies it holds
 			// may be the only copies of what a pod with the setting on skipped. The next pass
 			// looks again.
-			log.Debug().Str("durable", d.Name).Bool("unsettled", v.unsettled).Str("why", v.why).
-				Msg("A platform durable of the released MQTT message store is not drained yet; it stays")
+			if v.unsettled {
+				nmgr.noteFinishHeld("A platform durable of the released MQTT message store cannot be shown drained: "+
+					d.Name, v.why)
+			} else {
+				nmgr.mqttFinish.clear()
+				log.Debug().Str("durable", d.Name).Str("why", v.why).
+					Msg("A platform durable of the released MQTT message store is not drained yet; it stays")
+			}
 			return rep, nil
 		}
 	}
+	nmgr.mqttFinish.clear()
 	for _, d := range durables {
 		if err := mqttFenced(ctx); err != nil {
 			return rep, err

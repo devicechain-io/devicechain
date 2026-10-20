@@ -50,7 +50,7 @@ import (
 func servedToolSession(t *testing.T, upstreamURL string) (*mcp.ClientSession, string) {
 	t.Helper()
 	iss, validator := mustIssuerValidator(t)
-	mcpHandler, _ := New(testResource, "https://as.example.com", validator, testClient(upstreamURL))
+	mcpHandler, _ := New(testResource, "https://as.example.com", validator, testClient(upstreamURL), DefaultLimits())
 	ts := httptest.NewServer(mcpHandler)
 	t.Cleanup(ts.Close)
 

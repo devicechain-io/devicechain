@@ -5,24 +5,12 @@ package model
 
 import (
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/presence"
 )
 
-type EventType int64
-
-// Enumeration of event types.
-//
-//go:generate stringer -type=EventType
-const (
-	NewRelationship EventType = iota
-	Location
-	Measurement
-	Alert
-	StateChange
-	CommandInvocation
-	CommandResponse
-)
-
-var EventTypesByName map[string]EventType
+var EventTypesByName map[string]eventtype.EventType
 
 // Unresolved event details.
 type UnresolvedEvent struct {
@@ -37,7 +25,7 @@ type UnresolvedEvent struct {
 	// broker append time where there is one, else the moment it was decoded. It is
 	// identical on every redelivery of a captured message.
 	ProcessedTime time.Time
-	EventType     EventType
+	EventType     eventtype.EventType
 	Payload       interface{}
 
 	// Credential presented by the connecting device (ADR-014). When set, the
@@ -213,24 +201,6 @@ type UnresolvedAlertsPayload struct {
 	Entries []UnresolvedAlertEntry `json:"entries"`
 }
 
-// Presence state carried by a StateChange event (ADR-067). A closed enum, and NOT
-// purely a connectivity vocabulary: CONNECTED and DISCONNECTED are claims about the
-// device, while DEMOTED is a claim about the SOURCE — it says the source is releasing
-// custody and asserting nothing whatsoever about whether the device is up or down.
-//
-// 🔴 The distinction is load-bearing downstream. Both consumers used to derive
-// connectivity by string-comparing to CONNECTED, which reads every other value —
-// including one that means "no claim" — as a death. That is why the mapping onto a
-// presence.Claim is a single TOTAL function that reports its own failure
-// (ResolvedStateChangePayload.Claim) rather than a comparison repeated per consumer.
-type PresenceState string
-
-const (
-	PresenceConnected    PresenceState = "CONNECTED"
-	PresenceDisconnected PresenceState = "DISCONNECTED"
-	PresenceDemoted      PresenceState = "DEMOTED"
-)
-
 // Payload for a transport-level device presence transition (ADR-067). SessionId
 // is a producer-supplied monotonic session id (a host-observed connect epoch, not
 // e.g. a raw Sparkplug bdSeq). It rides the wire as a string so an epoch-sized
@@ -238,7 +208,7 @@ const (
 // resolver parses it to a uint64. Reason is descriptive metadata only, never an
 // ordering or authorization input.
 type UnresolvedStateChangePayload struct {
-	State  PresenceState
+	State  presence.State
 	Reason string
 	// ExpectedSessionId is a compare-and-set precondition on the projection's stored
 	// session, empty when the producer makes no claim (every transport advisory). It is
@@ -252,12 +222,12 @@ type UnresolvedStateChangePayload struct {
 
 // Initializer.
 func init() {
-	EventTypesByName = make(map[string]EventType)
-	EventTypesByName[NewRelationship.String()] = NewRelationship
-	EventTypesByName[Location.String()] = Location
-	EventTypesByName[Measurement.String()] = Measurement
-	EventTypesByName[Alert.String()] = Alert
-	EventTypesByName[StateChange.String()] = StateChange
-	EventTypesByName[CommandInvocation.String()] = CommandInvocation
-	EventTypesByName[CommandResponse.String()] = CommandResponse
+	EventTypesByName = make(map[string]eventtype.EventType)
+	EventTypesByName[eventtype.NewRelationship.String()] = eventtype.NewRelationship
+	EventTypesByName[eventtype.Location.String()] = eventtype.Location
+	EventTypesByName[eventtype.Measurement.String()] = eventtype.Measurement
+	EventTypesByName[eventtype.Alert.String()] = eventtype.Alert
+	EventTypesByName[eventtype.StateChange.String()] = eventtype.StateChange
+	EventTypesByName[eventtype.CommandInvocation.String()] = eventtype.CommandInvocation
+	EventTypesByName[eventtype.CommandResponse.String()] = eventtype.CommandResponse
 }

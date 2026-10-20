@@ -7,13 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"sync"
-	"sync/atomic"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	"github.com/devicechain-io/dc-event-processing/internal/rulehealth"
@@ -21,7 +14,12 @@ import (
 	"github.com/devicechain-io/dc-event-processing/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/rs/zerolog/log"
+	"io"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // persistRetryBackoffBase is the first pause when a fact projection cannot be written,
@@ -593,7 +591,7 @@ type ResolvedEventsProcessor struct {
 	procCtx context.Context
 	// decodeResolved replaces the protobuf decode of a resolved event. Nil in production; a
 	// test sets it to count decodes and prove the sequence guard runs first.
-	decodeResolved func([]byte) (*dmmodel.ResolvedEvent, error)
+	decodeResolved func([]byte) (*resolvedevent.ResolvedEvent, error)
 	procCancel     context.CancelFunc
 	readerWG       sync.WaitGroup
 
@@ -1857,7 +1855,7 @@ func (rp *ResolvedEventsProcessor) applyResolved(msg messaging.Message) bool {
 	}
 	decode := rp.decodeResolved
 	if decode == nil {
-		decode = dmproto.UnmarshalResolvedEvent
+		decode = resolvedevent.UnmarshalResolvedEvent
 	}
 	event, err := decode(msg.Value)
 	if err != nil {
@@ -1983,7 +1981,7 @@ type pendingDetection struct {
 // 🔴 NEVER the event's OccurredTime, and never a detection's At: both are DEVICE time, and REACT's
 // outbound gate meters on this value — a tenant that chooses the time it is metered on can mint
 // tokens (core.TenantRateLimiter.AllowAt).
-func triggerTime(msg messaging.Message, ev *dmmodel.ResolvedEvent) time.Time {
+func triggerTime(msg messaging.Message, ev *resolvedevent.ResolvedEvent) time.Time {
 	processed := time.Time{}
 	if ev != nil {
 		processed = ev.ProcessedTime

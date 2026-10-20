@@ -5,15 +5,14 @@ package processor
 
 import (
 	"context"
-	"sync/atomic"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
 	nats "github.com/nats-io/nats.go"
 	"github.com/stretchr/testify/require"
+	"sync/atomic"
+	"testing"
+	"time"
 )
 
 // pendingProbe is a backlog probe that reports a fixed pending count and counts how often it
@@ -35,7 +34,7 @@ func (p *pendingProbe) Backlog(context.Context) (uint64, uint64, error) {
 // arms nothing would make the parked half pass at the pending-work check, whatever the gap
 // check did.
 func TestIdleAdvanceStaysOffWhileParkedOnAGap(t *testing.T) {
-	arid := []dmmodel.GroupRef{{GroupToken: "arid-areas", Version: 1}}
+	arid := []resolvedevent.GroupRef{{GroupToken: "arid-areas", Version: 1}}
 	g := newGapRigWith(t, &flakyRanger{failOpens: 100}, scopedDurationReg(t))
 	g.rp.cfg.IdleAdvanceGuard = time.Nanosecond
 	g.rp.cfg.CheckpointInterval = time.Nanosecond

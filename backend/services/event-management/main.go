@@ -12,6 +12,7 @@ import (
 	"github.com/devicechain-io/dc-event-management/graphql"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-event-management/processor"
+	"github.com/devicechain-io/dc-event-management/processor/backfill"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
@@ -51,6 +52,11 @@ var (
 	EntityAnchorReconciler *processor.EntityAnchorReconciler
 
 	AnchorSweep *processor.AnchorReconciliationSweep
+
+	// BackfillMetrics is built once in the initialize phase, like PersistMetrics, and
+	// BackfillWorker is the calculated-metric backfill worker, nil when it is switched off.
+	BackfillMetrics *backfill.Metrics
+	BackfillWorker  *backfill.Worker
 )
 
 func main() {
@@ -97,6 +103,7 @@ func parseConfiguration() error {
 // what makes this the safe half; messaging.NewNatsManager carries the reasoning.
 func buildMetrics() {
 	PersistMetrics = processor.NewPersistMetrics(Microservice)
+	BackfillMetrics = backfill.NewMetrics(Microservice)
 }
 
 // newEventPersistenceProcessor assembles the persistence processor from this service's
@@ -177,6 +184,50 @@ func wireAnchorSweep(ctx context.Context) error {
 	log.Info().Str("deviceManagement", dmURL).Int("intervalSeconds", interval).
 		Msg("Anchor reconciliation sweep enabled (ADR-044 decision 3).")
 	return nil
+}
+
+// wireBackfill builds the calculated-metric backfill worker (ADR-082), unless it is off: the
+// operator switched it off, or left it unset on a pool with no room for it
+// (CalculatedBackfillConfiguration.Runs). It is inert until a job exists: a pass is one lock attempt and one query.
+//
+// Its device-management client is its own, built here and not inside wireAnchorSweep's branch,
+// because that one exists only when the sweep is on. It holds device:read and nothing else: the
+// roster door is all the worker reads, and it acts for no user.
+//
+// With no device-management endpoint or service secret the worker still runs, with no roster:
+// it leaves a job it finds alone and says so, rather than failing a job for a deployment gap.
+func wireBackfill(ctx context.Context) error {
+	bc := Configuration.CalculatedBackfill
+	if run, why := bc.Runs(Configuration.TsdbConfiguration, Configuration.Persistence); !run {
+		// Validate already refused the one case that is an error (enabled: true on a pool too
+		// small for it). What reaches here is an operator's false, or an unset switch on a pool
+		// tuned before the worker existed, which is left off rather than refused; the second
+		// is a warning because nothing else says the worker is not running.
+		ev := log.Warn()
+		if bc.Enabled != nil {
+			ev = log.Info()
+		}
+		ev.Str("reason", why).Msg("Calculated-metric backfill worker is not running.")
+		return nil
+	}
+	var roster backfill.Roster
+	infra := Microservice.InstanceConfiguration.Infrastructure
+	if infra.ServiceAuth.Secret != "" && infra.DeviceManagement.Hostname != "" && infra.DeviceManagement.Port != 0 &&
+		infra.UserManagement.Hostname != "" && infra.UserManagement.Port != 0 {
+		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-management",
+			[]string{string(auth.DeviceRead)})
+		roster = backfill.NewGraphQLRoster(client,
+			fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+	} else {
+		log.Warn().Msg("Service secret, device-management or user-management endpoint not configured — " +
+			"calculated-metric backfill has no roster, and will leave any job it finds waiting.")
+	}
+	BackfillWorker = backfill.NewWorker(Microservice, RdbManager, roster, backfill.Config{
+		RowsPerSecond: bc.RowsPerSecond,
+		ChunkInterval: time.Duration(Configuration.Lifecycle.ChunkIntervalHours) * time.Hour,
+		RetentionDays: Configuration.Lifecycle.RetentionDays,
+	}, BackfillMetrics, core.NewNoOpLifecycleCallbacks())
+	return BackfillWorker.Initialize(ctx)
 }
 
 // Called after microservice has been initialized.
@@ -277,7 +328,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 			// Build the reconciliation sweep (ADR-044 decision 3), the backstop for
 			// entity-deletion events missed by the primary consumer. It needs the Api and
 			// nothing else, which is what makes this the right side of the sequence for it.
-			return wireAnchorSweep(ctx)
+			if err := wireAnchorSweep(ctx); err != nil {
+				return err
+			}
+			return wireBackfill(ctx)
 		},
 		Nats: &service.NatsSpec{OnCreate: createNatsComponents},
 		GraphQL: &service.GraphQLSpec{
@@ -336,11 +390,26 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		}
 	}
 
+	// Start the backfill worker, if it is on.
+	if BackfillWorker != nil {
+		if err := BackfillWorker.Start(ctx); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
 // Called before microservice has been stopped.
 func beforeMicroserviceStopped(ctx context.Context) error {
+	// Stop the backfill worker first: it holds a pooled connection and an advisory lock, and
+	// a pass in flight rolls its batch back and stops at the next statement.
+	if BackfillWorker != nil {
+		if err := BackfillWorker.Stop(ctx); err != nil {
+			return err
+		}
+	}
+
 	// Stop the reconciliation sweep, if running.
 	if AnchorSweep != nil {
 		if err := AnchorSweep.Stop(ctx); err != nil {

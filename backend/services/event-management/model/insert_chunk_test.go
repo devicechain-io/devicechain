@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -96,7 +96,7 @@ func rowsPerInsert(t *testing.T, api *Api, ctx context.Context, model any) int {
 func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	at := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
-	parent := Event{EventId: []byte("parent"), DeviceToken: "d1", EventType: esmodel.Measurement,
+	parent := Event{EventId: []byte("parent"), DeviceToken: "d1", EventType: eventtype.Measurement,
 		OccurredTime: at, Source: "mqtt", ProcessedTime: at}
 	unit, dataType, classifier := "C", "float", uint(3)
 
@@ -106,7 +106,7 @@ func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 		for i := range out {
 			out[i] = parent
 			out[i].EventId = []byte(fmt.Sprintf("e%06d", i))
-			out[i].EventType = esmodel.StateChange
+			out[i].EventType = eventtype.StateChange
 		}
 		return out
 	}
@@ -170,7 +170,7 @@ func TestEveryEventStoreInsertFitsTheDriversLimit(t *testing.T) {
 				anchors := make([]*EventAnchor, n)
 				for i := range anchors {
 					anchors[i] = &EventAnchor{EventId: parent.EventId, DeviceToken: "d1",
-						EventType: esmodel.Measurement, OccurredTime: at, AnchorType: "area",
+						EventType: eventtype.Measurement, OccurredTime: at, AnchorType: "area",
 						AnchorToken: fmt.Sprintf("a%06d", i)}
 				}
 				return api.CreateEventAnchors(ctx, db, anchors)

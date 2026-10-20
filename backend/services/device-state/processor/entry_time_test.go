@@ -5,15 +5,13 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-device-state/model"
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/core"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // The live projections stamp each reading at the SAMPLE's instant, not the message's.
@@ -38,22 +36,22 @@ func measurementMessage(t *testing.T, deviceToken string, envelope time.Time,
 		value string
 	}) messaging.Message {
 	t.Helper()
-	entries := make([]dmmodel.ResolvedMeasurementsEntry, 0, len(samples))
+	entries := make([]resolvedevent.ResolvedMeasurementsEntry, 0, len(samples))
 	for _, s := range samples {
-		entries = append(entries, dmmodel.ResolvedMeasurementsEntry{
+		entries = append(entries, resolvedevent.ResolvedMeasurementsEntry{
 			OccurredTime: s.at,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: s.name, Value: s.value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: s.name, Value: s.value}},
 		})
 	}
-	event := &dmmodel.ResolvedEvent{
+	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		OccurredTime:      envelope,
 		ProcessedTime:     envelope,
-		Payload:           &dmmodel.ResolvedMeasurementsPayload{Entries: entries},
+		Payload:           &resolvedevent.ResolvedMeasurementsPayload{Entries: entries},
 	}
-	encoded, err := dmproto.MarshalResolvedEvent(event)
+	encoded, err := resolvedevent.MarshalResolvedEvent(event)
 	if err != nil {
 		t.Fatalf("marshal resolved event: %v", err)
 	}
@@ -141,7 +139,7 @@ func TestLatestLocationKeepsTheFixesInstant(t *testing.T) {
 	fixTaken := envelope.Add(-2 * time.Minute)
 
 	sp.mergeOne(context.Background(), locationMessage(t, "rover-02", envelope,
-		[]dmmodel.ResolvedLocationEntry{{
+		[]resolvedevent.ResolvedLocationEntry{{
 			Latitude: str("33.749"), Longitude: str("-84.388"), OccurredTime: fixTaken,
 		}}))
 
