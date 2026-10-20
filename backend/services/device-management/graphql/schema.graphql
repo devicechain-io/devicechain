@@ -944,6 +944,8 @@ type PublishedMetric {
     maxValue: Float
     """The only values accepted, or null when any value of the type is accepted."""
     allowedValues: [String!]
+    """True when the platform computes this metric from a formula over the device's other readings, so a device never reports it. A dashboard offers it like any other metric."""
+    calculated: Boolean!
 }
 
 # Represents a typed command declared on a device profile (ADR-043/ADR-045). parameterSchema

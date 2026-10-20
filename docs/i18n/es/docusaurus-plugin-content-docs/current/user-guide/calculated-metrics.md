@@ -50,6 +50,7 @@ dándole al nivel de tu inquilino un límite mayor que cero. Consulta
   caso, elimínala y crea una nueva.
 - Un dispositivo no puede sobrescribir un valor calculado. Si un dispositivo envía un valor con la
   clave de una métrica calculada, ese valor se descarta y se conserva el calculado.
+- Al enlazar un widget de panel a un dispositivo, el campo **Mediciones** del widget lista las métricas que declara el perfil publicado del dispositivo y marca las calculadas con la insignia **Calculada**. Selecciona una métrica para añadirla al widget o quitarla. Sigues pudiendo escribir cualquier clave a mano.
 
 ## Crear una métrica calculada
 

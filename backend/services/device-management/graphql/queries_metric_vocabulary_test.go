@@ -53,3 +53,23 @@ func TestPublishedMetricResolverExposesWhatIngestChecks(t *testing.T) {
 			bare.Unit(), bare.MinValue(), bare.MaxValue(), bare.AllowedValues())
 	}
 }
+
+// A calculated metric is computed by the platform, so the vocabulary must say so: a
+// picker marks it, and a device-facing example leaves it out (a device-sent value under
+// its key is dropped at resolve).
+func TestPublishedMetricResolverReportsCalculated(t *testing.T) {
+	res := model.NewProfileResolution(model.ProfileScope{}, []*model.MetricDefinition{
+		{MetricKey: "volts", DataType: string(model.MetricDouble)},
+		{MetricKey: "double_volts", DataType: string(model.MetricDouble),
+			Expression: sql.NullString{String: "volts * 2.0", Valid: true}},
+	})
+	metrics := []model.ResolvedMetric{res.MetricAt(0), res.MetricAt(1)}
+	got := (&DeviceMetricVocabularyResolver{M: model.MetricVocabulary{DeviceExists: true, Metrics: metrics}}).Metrics()
+	byKey := map[string]bool{}
+	for _, m := range got {
+		byKey[m.MetricKey()] = m.Calculated()
+	}
+	if byKey["volts"] || !byKey["double_volts"] {
+		t.Fatalf("calculated flags = %v, want volts=false double_volts=true", byKey)
+	}
+}

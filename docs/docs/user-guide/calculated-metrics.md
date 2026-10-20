@@ -45,6 +45,7 @@ tenant's tier a ceiling above zero. See [Turning calculated metrics on](#turning
   other way round. Delete it and create a new one instead.
 - A device cannot overwrite a calculated value. If a device sends a value under the key of a
   calculated metric, the device's value is dropped and the computed one is kept.
+- When you bind a dashboard widget to a device, the widget's **Measurements** field lists the metrics the device's published profile declares, and marks calculated ones with a **Calculated** badge. Select a metric to add or remove it from the widget. You can still type any key by hand.
 
 ## Authoring a calculated metric
 
