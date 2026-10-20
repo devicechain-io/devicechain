@@ -421,7 +421,7 @@ const (
 // both are read.
 //
 // Formed therefore means, on one poll (formedNow): every server routed to every other
-// one, every server naming the same meta leader, and that leader reporting every other
+// one over its full pool of route connections, every server naming the same meta leader, and that leader reporting every other
 // peer current and online and holding statistics for every server. Then a probe stream
 // is placed at R=len(servers), waited on until its replicas are current, and deleted:
 // the capability the tests need, asked for directly. The two are each enough to hold
@@ -463,6 +463,7 @@ func awaitFormed(servers []*natsserver.Server, within time.Duration, check func(
 type serverView struct {
 	name       string
 	remotes    int    // servers it has a route to
+	routes     int    // route connections it holds, all pooled and dedicated ones to all peers
 	metaLeader string // the meta leader it names; "" while it knows none
 	// Filled only on the meta leader.
 	replicas   []*natsserver.PeerInfo // the meta group's other peers
@@ -470,7 +471,7 @@ type serverView struct {
 }
 
 func viewOf(srv *natsserver.Server) serverView {
-	v := serverView{name: srv.Name(), remotes: srv.NumRemotes()}
+	v := serverView{name: srv.Name(), remotes: srv.NumRemotes(), routes: srv.NumRoutes()}
 	if jsz, err := srv.Jsz(&natsserver.JSzOptions{}); err == nil && jsz.Meta != nil {
 		v.metaLeader = jsz.Meta.Leader
 		v.replicas = jsz.Meta.Replicas
@@ -503,7 +504,8 @@ func formedNow(views []serverView) error {
 	return nil
 }
 
-// metaFormed is formedNow without the statistics rule: the full route mesh and a meta
+// metaFormed is formedNow without the statistics rule: the full route mesh (every pooled
+// and dedicated connection to every peer, not only one per peer) and a meta
 // group that agrees on its leader and reports every peer current and online. It returns
 // the leader's view.
 func metaFormed(views []serverView) (*serverView, error) {
@@ -511,6 +513,14 @@ func metaFormed(views []serverView) (*serverView, error) {
 	for _, v := range views {
 		if v.remotes != want {
 			return nil, fmt.Errorf("%s is routed to %d of %d other servers", v.name, v.remotes, want)
+		}
+		if v.routes != want*routeConnsPerPeer {
+			// NumRemotes counts a peer from its first connection, so a mesh whose routes were just
+			// cut reads fully routed while part of a pool is still being re-dialled. A reply sent
+			// over a connection not yet back is dropped, and the client waits out its deadline for
+			// a stream that was in fact created.
+			return nil, fmt.Errorf("%s holds %d of %d route connections, so a peer's pool is still being re-made",
+				v.name, v.routes, want*routeConnsPerPeer)
 		}
 	}
 	leader := views[0].metaLeader

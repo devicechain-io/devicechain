@@ -131,15 +131,15 @@ func severThenAwaitThenPlace(t *testing.T, check func([]serverView) error) {
 func TestFormedNowNamesWhatIsMissing(t *testing.T) {
 	formed := func() []serverView {
 		return []serverView{
-			{name: "n1", remotes: 2, metaLeader: "n1",
+			{name: "n1", remotes: 2, routes: 8, metaLeader: "n1",
 				replicas: []*natsserver.PeerInfo{
 					{Name: "n2", Current: true},
 					{Name: "n3", Current: true},
 				},
 				statsPeers: []string{"n1", "n2", "n3"},
 			},
-			{name: "n2", remotes: 2, metaLeader: "n1"},
-			{name: "n3", remotes: 2, metaLeader: "n1"},
+			{name: "n2", remotes: 2, routes: 8, metaLeader: "n1"},
+			{name: "n3", remotes: 2, routes: 8, metaLeader: "n1"},
 		}
 	}
 	cases := []struct {
@@ -149,6 +149,7 @@ func TestFormedNowNamesWhatIsMissing(t *testing.T) {
 	}{
 		{"formed", func([]serverView) {}, ""},
 		{"short mesh", func(v []serverView) { v[2].remotes = 1 }, "n3 is routed to 1 of 2 other servers"},
+		{"short pool", func(v []serverView) { v[2].routes = 7 }, "n3 holds 7 of 8 route connections"},
 		{"no leader", func(v []serverView) { v[1].metaLeader = "" }, "n2 knows no meta leader"},
 		{"split", func(v []serverView) { v[2].metaLeader = "n2" }, `n3 names "n2"`},
 		{"leader absent", func(v []serverView) {
