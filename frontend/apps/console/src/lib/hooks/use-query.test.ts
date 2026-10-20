@@ -106,9 +106,9 @@ describe('useQuery data vs current', () => {
       },
       { initialProps: { k: 'a' } },
     );
-    await waitFor(() => expect(seen.at(-1)?.current).toBe('A'));
+    await waitFor(() => expect(seen[seen.length - 1]?.current).toBe('A'));
     rerender({ k: 'b' });
-    await waitFor(() => expect(seen.at(-1)?.current).toBe('B'));
+    await waitFor(() => expect(seen[seen.length - 1]?.current).toBe('B'));
     const underB = seen.filter((s) => s.k === 'b');
     expect(underB.length).toBeGreaterThan(1);
     expect(underB.some((s) => s.current === 'A')).toBe(false);
