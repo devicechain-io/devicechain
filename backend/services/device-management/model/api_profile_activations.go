@@ -27,13 +27,13 @@ func recordActivation(tx *gorm.DB, profileId uint, version int32, kind string, a
 
 // DeviceProfileActivations reads a profile's activation log, newest first, one keyset page
 // at a time. afterId is the ID of the last entry of the previous page (0 starts at the
-// newest); limit is clamped to [1, rdb.MaxPageSize]. The second result is the cursor for the
+// newest), taken as the uint64 the cursor parses to so no caller narrows it; limit is clamped to [1, rdb.MaxPageSize]. The second result is the cursor for the
 // next page, 0 when this page was the last.
 //
 // The order is the log's own (ID), which is the order the activations committed in, not
 // ActivatedAt: two replicas moving one profile at once can store the earlier instant in the
 // later commit (see nextActivationInstant).
-func (api *Api) DeviceProfileActivations(ctx context.Context, token string, afterId uint, limit int) ([]*DeviceProfileActivation, uint, error) {
+func (api *Api) DeviceProfileActivations(ctx context.Context, token string, afterId uint64, limit int) ([]*DeviceProfileActivation, uint64, error) {
 	if limit < 1 {
 		return nil, 0, &InvalidArgumentError{Msg: fmt.Sprintf("first must be at least 1, got %d", limit)}
 	}
@@ -53,10 +53,10 @@ func (api *Api) DeviceProfileActivations(ctx context.Context, token string, afte
 	if err := q.Order("id DESC").Limit(limit + 1).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
-	var next uint
+	var next uint64
 	if len(rows) > limit {
 		rows = rows[:limit]
-		next = rows[limit-1].ID
+		next = uint64(rows[limit-1].ID)
 	}
 	return rows, next, nil
 }

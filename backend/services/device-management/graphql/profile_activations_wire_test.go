@@ -5,6 +5,7 @@ package graphql
 
 import (
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -64,4 +65,13 @@ func TestProfileActivationsField(t *testing.T) {
 
 	_, err = field(setToken(mk("other", auth.DeviceRead)), nil, nil)
 	assert.Error(t, err, "another tenant has no such profile")
+}
+
+// activatedAt is documented as UTC, so an instant held in another zone is rendered in UTC, not
+// with its offset.
+func TestProfileActivationInstantIsRenderedInUTC(t *testing.T) {
+	zone := time.FixedZone("UTC+5", 5*60*60)
+	at := time.Date(2026, 10, 20, 17, 30, 0, 123456000, zone)
+	r := &DeviceProfileActivationResolver{M: model.DeviceProfileActivation{ActivatedAt: at}}
+	assert.Equal(t, "2026-10-20T12:30:00.123456Z", r.ActivatedAt())
 }

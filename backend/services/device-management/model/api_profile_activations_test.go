@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -95,7 +96,7 @@ func TestActivationsPageByKeysetNewestFirst(t *testing.T) {
 	}
 
 	var seen []int32
-	var after uint
+	var after uint64
 	pages := 0
 	for {
 		rows, next, err := api.DeviceProfileActivations(ctx, "prof", after, 2)
@@ -158,4 +159,66 @@ func TestDeletingAProfileRemovesItsActivations(t *testing.T) {
 	require.NoError(t, api.RDB.DB(ctx).Model(&DeviceProfileActivation{}).Count(&n).Error)
 	require.EqualValues(t, 1, n)
 	require.Len(t, activationsOf(t, api, ctx, "kept"), 1)
+}
+
+// A publish's entry carries the very instant stored as the version's publish time, not a second
+// clock reading: for a version that was published and never rolled back to, the two must agree.
+func TestPublishActivationIsTheVersionsPublishInstant(t *testing.T) {
+	api, ctx := configTestApi(t)
+	seedProfileWithRule(t, api, ctx, "prof", "r1", false)
+	var versions []*DeviceProfileVersion
+	for i := 0; i < 3; i++ {
+		v, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "alice")
+		require.NoError(t, err)
+		versions = append(versions, v)
+	}
+	got := activationsOf(t, api, ctx, "prof")
+	require.Len(t, got, 3)
+	for i, v := range versions {
+		e := got[len(got)-1-i]
+		require.Equal(t, v.Version, e.Version)
+		require.True(t, v.CreatedAt.Equal(e.ActivatedAt), "version %d: published %v, activated %v",
+			v.Version, v.CreatedAt, e.ActivatedAt)
+	}
+}
+
+// The read carries the tenant predicate itself rather than relying on the profile id alone to
+// keep tenants apart: a row in another tenant naming this profile's id is never returned.
+func TestActivationsReadNeverCrossesTenantsEvenOnASharedProfileId(t *testing.T) {
+	api, ctx := configTestApi(t)
+	p := seedProfileWithRule(t, api, ctx, "prof", "r1", false)
+	_, err := api.PublishDeviceProfile(ctx, "prof", nil, nil, "alice")
+	require.NoError(t, err)
+
+	stray := &DeviceProfileActivation{DeviceProfileId: p.ID, Version: 9, Kind: ActivationKindPublish,
+		ActivatedAt: time.Now().UTC(), ActivatedBy: "mallory"}
+	stray.TenantId = "beta"
+	require.NoError(t, api.RDB.Database.WithContext(core.WithSystemContext(context.Background())).Create(stray).Error)
+
+	got := activationsOf(t, api, ctx, "prof")
+	require.Len(t, got, 1)
+	require.Equal(t, "alice", got[0].ActivatedBy)
+}
+
+// A page asked for above the cap is served at the cap, not passed through to the query, and the
+// cursor it returns continues where the capped page stopped.
+func TestActivationsPageAboveTheCapIsCapped(t *testing.T) {
+	api, ctx := configTestApi(t)
+	p := seedProfileWithRule(t, api, ctx, "prof", "r1", false)
+	total := rdb.MaxPageSize + 5
+	rows := make([]*DeviceProfileActivation, 0, total)
+	for i := 0; i < total; i++ {
+		rows = append(rows, &DeviceProfileActivation{DeviceProfileId: p.ID, Version: int32(i + 1),
+			Kind: ActivationKindPublish, ActivatedAt: time.Now().UTC()})
+	}
+	require.NoError(t, api.RDB.DB(ctx).CreateInBatches(rows, 200).Error)
+
+	page, next, err := api.DeviceProfileActivations(ctx, "prof", 0, total*2)
+	require.NoError(t, err)
+	require.Len(t, page, rdb.MaxPageSize)
+	require.NotZero(t, next)
+	rest, last, err := api.DeviceProfileActivations(ctx, "prof", next, total*2)
+	require.NoError(t, err)
+	require.Len(t, rest, 5)
+	require.Zero(t, last)
 }

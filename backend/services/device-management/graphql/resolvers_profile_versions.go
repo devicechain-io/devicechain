@@ -107,7 +107,7 @@ func (r *DeviceProfileResolver) Activations(args struct {
 			return nil, err
 		}
 	}
-	rows, next, err := r.S.GetApi(r.C).DeviceProfileActivations(r.C, r.M.Token, uint(after), limit)
+	rows, next, err := r.S.GetApi(r.C).DeviceProfileActivations(r.C, r.M.Token, after, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (r *DeviceProfileResolver) Activations(args struct {
 		out.entries = append(out.entries, &DeviceProfileActivationResolver{M: *row})
 	}
 	if next != 0 {
-		c := strconv.FormatUint(uint64(next), 10)
+		c := strconv.FormatUint(next, 10)
 		out.next = &c
 	}
 	return out, nil
