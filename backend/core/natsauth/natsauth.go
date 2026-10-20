@@ -37,6 +37,27 @@ const AppAccount = "APP"
 // bypass the device callout and get the account's full permissions.
 const ServiceUser = "dc_service"
 
+// ServicePublishDeny is the publish DENY the broker holds the shared service login to: the
+// device-events namespace, "{instance}.{tenant}.devices.{device}.events" and the gateway's
+// "$MQTT.msgs." form of it. Only a device writes there, through the grant DevicePermissions
+// mints, so a subject in this namespace is what makes an event broker-asserted. A holder of
+// the service login could otherwise publish one for any device and have it taken as the
+// device's own.
+//
+// It is the one namespace the platform never writes: the messaging writer refuses the
+// device-events shape outright. The device-scoped streams a service DOES publish to
+// (command-responses and device-reports forwarded out of the MQTT store, desired state,
+// device commands) are deliberately not here.
+//
+// The instance and tenant tokens are wildcards: a broker serves one instance, and a deny
+// that did not cover every tenant would be a hole with a name on it. The infrastructure
+// module renders the same two subjects into the broker's static user (a test holds the two in
+// step).
+func ServicePublishDeny() []string {
+	events := messaging.DeviceEventsWildcard("*")
+	return []string{events, messaging.MqttMsgsSubject(events)}
+}
+
 // SystemAccount is the NATS system account — where the broker publishes its own
 // connection advisories ($SYS.ACCOUNT.<acct>.CONNECT / .DISCONNECT) and serves its
 // monitoring requests ($SYS.REQ.SERVER.PING.CONNZ). It is set as `system_account`

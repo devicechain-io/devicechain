@@ -737,6 +737,14 @@ func DeviceEventsWildcard(instanceId string) string {
 	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentDevices, SegmentEvents)
 }
 
+// MqttMsgsSubject is the subject the broker's MQTT gateway stores a QoS 1 publish under
+// when the publish is addressed to subject: the gateway's own "$MQTT.msgs." prefix in front
+// of it. A permission that names a device subject must name this form too, because a client
+// that may publish to "$MQTT.msgs.{subject}" reaches the same stream and the same readers.
+func MqttMsgsSubject(subject string) string {
+	return mqttMsgsSubjectPrefix + subject
+}
+
 // SubjectToMqttTopic maps a NATS subject (or subject pattern) to the MQTT topic
 // the NATS MQTT gateway exposes it as: "." becomes "/", and the NATS wildcards
 // "*" and ">" become their MQTT equivalents "+" and "#".
