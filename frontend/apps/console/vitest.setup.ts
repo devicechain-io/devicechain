@@ -94,3 +94,15 @@ if (typeof Element !== 'undefined') {
   Element.prototype.releasePointerCapture ??= () => {};
   Element.prototype.scrollIntoView ??= () => {};
 }
+
+// Tests keep every catalog resident and synchronous. In production only English is bundled and the
+// other locales load on demand (src/i18n/config.ts); here the Spanish namespaces are registered up
+// front so `changeLanguage('es')` has nothing to fetch and the suites that switch language assert
+// synchronously, exactly as they did when every catalog was bundled. Dynamic imports, not static
+// ones: config.ts reads localStorage while initializing, so it has to run after the storage
+// install above (static imports are hoisted above it).
+{
+  const { default: i18n } = await import('@/i18n/config');
+  const { default: es } = await import('@/i18n/locales/es');
+  for (const [ns, catalog] of Object.entries(es)) i18n.addResourceBundle('es', ns, catalog, true, true);
+}
