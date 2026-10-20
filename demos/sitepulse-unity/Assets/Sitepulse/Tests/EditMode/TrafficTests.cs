@@ -192,5 +192,31 @@ namespace DeviceChain.Sitepulse.Tests
             foreach (var id in others)
                 Assert.GreaterOrEqual(sim.Bodies[id].PlayedSeconds - playedAt600[id], 150.0, id + " kept going round in the last five minutes (" + sim.Director.Traffic.Explain(id) + ")");
         }
+
+        [Test]
+        public void AHaulTruckWhoseCommandTheSessionAnswersWhileItIsOnALaneDrivesOnBackToWork()
+        {
+            // the session answers SP-HL-0006's refuel itself while the truck is on the queue's lane (the platform gave up on it): the task is
+            // over, but the truck is on a lane, where it may not stand, so it drives on, back to its track
+            var sim = Site();
+            TaskRequest refuel = null;
+            var answeredAt = -1.0;
+            for (var t = 0.0; t < 900.0; t += Dt)
+            {
+                if (refuel == null && sim.Now >= 30.0) refuel = sim.Send("SP-HL-0006", "goto-refuel");
+                if (refuel != null && answeredAt < 0 && !sim.Bodies["SP-HL-0006"].Attached && sim.Director["SP-HL-0006"].Phase == TaskPhase.ToQueue)
+                {
+                    refuel.Complete(TaskResult.Fail("expired by the session"));
+                    answeredAt = sim.Now;
+                }
+
+                sim.Step(Dt);
+            }
+
+            Assert.Greater(answeredAt, 0.0, "the refuel was answered while SP-HL-0006 was on the queue's lane");
+            Assert.AreEqual("", Overlaps(sim));
+            Assert.AreEqual(MachineMode.Working, sim.Director["SP-HL-0006"].Mode, "back at work, not standing on the lane\n" + sim.Timeline.Text("SP-HL-0006", 20));
+            Assert.AreEqual(0, sim.Director.Traffic.Interlocking.Overruns, sim.Director.Traffic.Interlocking.LastOverrun);
+        }
     }
 }
