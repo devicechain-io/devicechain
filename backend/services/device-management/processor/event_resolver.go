@@ -409,6 +409,30 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 	return nil, fmt.Errorf("can not resolve locations payload. invalid unresolved payload type")
 }
 
+// deviceConstants reads the device constants a version's formulas use. The device a
+// credential authenticated is the narrow row of the credential lookup, which does not read
+// metadata (so a miss costs the same however much a device stores), and metadata is where
+// the constants live. When the formulas read any and the record in hand carries none, the
+// device is read by token through the cached lookup the token path uses, which a device edit
+// evicts. A version whose formulas read no constant never reads it.
+func (rez *EventResolver) deviceConstants(ctx context.Context, device *model.Device,
+	profile model.ProfileResolution) ([]calcfield.Constant, error) {
+	if len(profile.ConstantKeys()) == 0 {
+		return nil, nil
+	}
+	metadata := device.Metadata
+	if metadata == nil {
+		matches, err := rez.Api.DevicesByToken(ctx, []string{device.Token})
+		if err != nil {
+			return nil, fmt.Errorf("reading the metadata of device %q for its calculated metrics: %w", device.Token, err)
+		}
+		if len(matches) == 1 && matches[0] != nil {
+			metadata = matches[0].Metadata
+		}
+	}
+	return profile.DeviceConstants(metadata), nil
+}
+
 // Resolve a measurements event payload. Each measurement is bound to its metric
 // definition (ADR-016): the classifier FK plus the denormalized unit + data type
 // make the stored value self-describing on read (no cross-service hop back to the
@@ -446,7 +470,11 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 		// and nil, with the metadata untouched, for a version whose formulas read none. Each
 		// computed value is frozen with the constants as they are now: a later edit to the
 		// device never rewrites it.
-		constants = profile.DeviceConstants(device.Metadata)
+		var err error
+		constants, err = rez.deviceConstants(ctx, device, profile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Calculated metrics read a SAMPLE, and a sample is every measurement of this message that
 	// shares an instant — not one payload entry. Sparkplug and LwM2M ingest emit one entry per
