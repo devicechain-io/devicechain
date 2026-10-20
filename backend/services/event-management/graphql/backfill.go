@@ -133,6 +133,28 @@ func (r *SchemaResolver) CalculatedMetricBackfills(ctx context.Context, args str
 	return &CalculatedMetricBackfillConnectionResolver{M: page}, nil
 }
 
+// CalculatedMetricBackfillAvailability reports whether this instance can run a backfill, from
+// the same decision a start is refused by (model.Api.BackfillAvailability).
+func (r *SchemaResolver) CalculatedMetricBackfillAvailability(ctx context.Context) (*CalculatedMetricBackfillAvailabilityResolver, error) {
+	if err := auth.Authorize(ctx, auth.EventRead); err != nil {
+		return nil, err
+	}
+	return &CalculatedMetricBackfillAvailabilityResolver{U: r.GetApi(ctx).BackfillAvailability()}, nil
+}
+
+// CalculatedMetricBackfillAvailabilityResolver resolves CalculatedMetricBackfillAvailability; U is
+// nil when a backfill can run.
+type CalculatedMetricBackfillAvailabilityResolver struct{ U *model.BackfillUnavailable }
+
+func (r *CalculatedMetricBackfillAvailabilityResolver) Available() bool { return r.U == nil }
+
+func (r *CalculatedMetricBackfillAvailabilityResolver) Reason() *string {
+	if r.U == nil {
+		return nil
+	}
+	return &r.U.Reason
+}
+
 // callerName is who a job is attributed to.
 func callerName(ctx context.Context) string {
 	if claims, ok := auth.ClaimsFromContext(ctx); ok {

@@ -104,25 +104,37 @@ func invalid(format string, args ...any) error {
 	return integrity.NewRefusal(integrity.ClassInvalid, fmt.Sprintf(format, args...))
 }
 
-// StartBackfill validates a request, freezes the plan it names and queues the job. The caller has
-// authorized the principal; createdBy is its name. Nothing is queued unless every check passes,
-// and an instance whose worker does not run refuses the request instead of queueing a job that
-// nothing would run.
-func (a *Api) StartBackfill(ctx context.Context, req StartBackfillRequest, createdBy string) (*CalculatedBackfill, error) {
+// BackfillAvailability is the one decision about whether this instance can run a backfill at
+// all: nil when it can, a *BackfillUnavailable naming why when it cannot. StartBackfill refuses
+// with exactly this error, and the availability query reports exactly its reason, so the console
+// can disable the control up front with the words a refused start would have carried.
+func (a *Api) BackfillAvailability() *BackfillUnavailable {
 	rt := a.Backfill
 	if rt == nil {
-		return nil, &BackfillUnavailable{Reason: "this instance has no backfill configuration"}
+		return &BackfillUnavailable{Reason: "this instance has no backfill configuration"}
 	}
 	if !rt.Runs {
 		reason := rt.WhyNot
 		if reason == "" {
 			reason = "the worker is not running on this instance"
 		}
-		return nil, &BackfillUnavailable{Reason: "the backfill worker is not running: " + reason}
+		return &BackfillUnavailable{Reason: "the backfill worker is not running: " + reason}
 	}
 	if rt.Plans == nil {
-		return nil, &BackfillUnavailable{Reason: "device-management is not configured, so the profile's plan cannot be read"}
+		return &BackfillUnavailable{Reason: "device-management is not configured, so the profile's plan cannot be read"}
 	}
+	return nil
+}
+
+// StartBackfill validates a request, freezes the plan it names and queues the job. The caller has
+// authorized the principal; createdBy is its name. Nothing is queued unless every check passes,
+// and an instance whose worker does not run refuses the request instead of queueing a job that
+// nothing would run.
+func (a *Api) StartBackfill(ctx context.Context, req StartBackfillRequest, createdBy string) (*CalculatedBackfill, error) {
+	if unavailable := a.BackfillAvailability(); unavailable != nil {
+		return nil, unavailable
+	}
+	rt := a.Backfill
 	tenant, ok := core.TenantFromContext(ctx)
 	if !ok || tenant == "" {
 		return nil, errors.New("no tenant in the request context")

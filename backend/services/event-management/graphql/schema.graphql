@@ -530,6 +530,14 @@ type CalculatedMetricBackfill {
     cancelRequestedAt: String
 }
 
+"""Whether this instance can run a calculated-metric backfill."""
+type CalculatedMetricBackfillAvailability {
+    """True when a start is not refused for the instance's own state."""
+    available: Boolean!
+    """Why backfill is unavailable, for a person to read; null when available."""
+    reason: String
+}
+
 """One page of backfill jobs, newest first."""
 type CalculatedMetricBackfillConnection {
     """The jobs on this page."""
@@ -658,6 +666,16 @@ type Query {
         """End of the range by occurred time, as an RFC 3339 timestamp; after from, by at most 7 days."""
         to: String!
     ): CalculatedEventsResult!
+    """
+    Whether this instance can run a calculated-metric backfill at all, so a client can disable
+    its backfill control up front instead of learning from a refused start. available is false
+    when the backfill worker is switched off, its pool is too small to run, or device-management
+    is not configured; reason then says why, in the same words a refused start carries in
+    UNAVAILABLE. It answers for the instance, not the tenant: a true answer does not promise a
+    start will be accepted (a range, a metric or an already-active job can still refuse it).
+    Requires event:read; customer-scoped callers are refused with FORBIDDEN.
+    """
+    calculatedMetricBackfillAvailability: CalculatedMetricBackfillAvailability!
     """
     One calculated-metric backfill job of the tenant. Null when the tenant has none with that
     token. Requires event:read; customer-scoped callers are refused with FORBIDDEN.

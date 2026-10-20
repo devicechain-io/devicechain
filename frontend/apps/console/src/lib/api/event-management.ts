@@ -126,6 +126,26 @@ export async function startCalculatedMetricBackfill(
   return data.startCalculatedMetricBackfill.token;
 }
 
+const BACKFILL_AVAILABILITY = graphql(`
+  query CalculatedMetricBackfillAvailability {
+    calculatedMetricBackfillAvailability {
+      available
+      reason
+    }
+  }
+`);
+
+/**
+ * Whether this instance can run a backfill at all. When it cannot, reason is the same text a
+ * refused start (UNAVAILABLE) would carry. Asked once, up front, so the control can be disabled
+ * before anyone presses it.
+ */
+export async function getCalculatedMetricBackfillAvailability(): Promise<{ available: boolean; reason: string | null }> {
+  const data = await gql('event-management', BACKFILL_AVAILABILITY, {});
+  const a = data.calculatedMetricBackfillAvailability;
+  return { available: a.available, reason: a.reason ?? null };
+}
+
 const CANCEL_BACKFILL = graphql(`
   mutation CancelCalculatedMetricBackfill($token: String!) {
     cancelCalculatedMetricBackfill(token: $token) {

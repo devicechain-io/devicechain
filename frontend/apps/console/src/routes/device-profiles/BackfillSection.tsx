@@ -8,8 +8,9 @@
 // not the start and cancel controls.
 //
 // The start button is DISABLED, never hidden, when there is nothing to fill or the server has said
-// it cannot run a job (UNAVAILABLE, remembered here until the page is left), and the reason is
-// written beside it.
+// it cannot run a job, and the reason is written beside it. The instance is asked once when the
+// section mounts (calculatedMetricBackfillAvailability, no polling); when that read is refused or
+// fails, the first UNAVAILABLE from a start is remembered here until the page is left instead.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -20,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { HintText } from '@/components/ui/hint-text';
 import { useQuery } from '@/lib/hooks/use-query';
 import { getCalculatedMetricPlan } from '@/lib/api/device-management';
+import { getCalculatedMetricBackfillAvailability } from '@/lib/api/event-management';
 import { BackfillDrawer } from './BackfillDrawer';
 import { BackfillJobs } from './BackfillJobs';
 
@@ -45,7 +47,7 @@ export function BackfillSection({
   const canRead = hasAuthority(claims, EVENT_READ);
   const [open, setOpen] = useState(false);
   const [initial, setInitial] = useState<number | null>(null);
-  const [unavailable, setUnavailable] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
   // Whether the active version calculates anything at all decides if there is something to fill.
@@ -53,6 +55,16 @@ export function BackfillSection({
     () => (!scoped && activeVersion != null ? getCalculatedMetricPlan(profileToken) : Promise.resolve(null)),
     [scoped, profileToken, activeVersion],
   );
+
+  // The same decision a start is refused by, read up front. Needs event:read; without it, or when
+  // the read fails, the remembered refusal below is the only signal.
+  const availability = useQuery(
+    () => (!scoped && canRead ? getCalculatedMetricBackfillAvailability() : Promise.resolve(null)),
+    [scoped, canRead],
+  );
+  // available: false always carries a reason; the fallback only keeps a blank one from reading as available.
+  const probed = availability.data && !availability.data.available ? (availability.data.reason || t('backfillUnavailableNoReason')) : null;
+  const unavailable = probed ?? refused;
 
   useEffect(() => {
     if (request == null) return;
@@ -110,7 +122,7 @@ export function BackfillSection({
           open={open}
           onOpenChange={setOpen}
           unavailable={unavailable}
-          onUnavailable={setUnavailable}
+          onUnavailable={setRefused}
           onStarted={() => setReloadKey((n) => n + 1)}
         />
       )}

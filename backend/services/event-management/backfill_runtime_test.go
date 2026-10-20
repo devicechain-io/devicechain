@@ -66,3 +66,42 @@ func TestBackfillRuntimeCarriesTheRetention(t *testing.T) {
 	assert.Equal(t, 45, rt.RetentionDays)
 	assert.Equal(t, 12*time.Hour, rt.ChunkInterval)
 }
+
+// The availability probe and a refused start speak from ONE function (Api.BackfillAvailability):
+// for every configuration document, the probe's reason is byte-for-byte the reason the start is
+// refused with, and a runtime the probe calls available is one a start gets past the gate of.
+func TestAvailabilityProbeAndStartShareOneDecision(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name, doc string
+		reason    string // a fragment; empty means available
+	}{
+		{"defaults run it", `{}`, ""},
+		{"disabled", `{"CalculatedBackfill":{"Enabled":false}}`, "calculatedBackfill.enabled is false"},
+		{"pool too small", `{"Persistence":{"Writers":16}}`, "persistence.writers (16)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.EventManagementConfiguration{}
+			require.NoError(t, core.LoadConfiguration([]byte(tc.doc), cfg))
+			rt := newBackfillRuntime(cfg)
+			rt.Now = func() time.Time { return now }
+			rt.Plans = nil
+			api := &model.Api{Backfill: rt}
+
+			probe := api.BackfillAvailability()
+			_, err := api.StartBackfill(core.WithTenant(context.Background(), "acme"),
+				model.StartBackfillRequest{ProfileToken: "meter", From: now.Add(-48 * time.Hour), To: now.Add(-time.Hour)}, "")
+			var un *model.BackfillUnavailable
+			require.ErrorAs(t, err, &un)
+			if tc.reason == "" {
+				// Plans is nil here, so the start stops at the one gate the probe also names.
+				require.NotNil(t, probe)
+				assert.Contains(t, probe.Reason, "device-management is not configured")
+			} else {
+				require.NotNil(t, probe)
+				assert.Contains(t, probe.Reason, tc.reason)
+			}
+			assert.Equal(t, un.Reason, probe.Reason, "one function: the start's refusal IS the probe's reason")
+		})
+	}
+}

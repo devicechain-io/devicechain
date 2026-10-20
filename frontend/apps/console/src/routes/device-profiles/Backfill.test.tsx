@@ -102,6 +102,8 @@ interface Install {
   jobs?: unknown[];
   start?: () => Promise<unknown>;
   plan?: unknown;
+  /** What calculatedMetricBackfillAvailability answers; a rejection stands for a failed read. */
+  availability?: { available: boolean; reason: string | null } | Error;
 }
 
 // Answers by operation name, so a changed document is noticed by name rather than by position.
@@ -124,6 +126,12 @@ function install(opts: Install = {}) {
             { version: 2, label: null, publishedAt: '2026-09-01T00:00:00Z', publishedBy: 'a' },
           ],
         });
+      case 'CalculatedMetricBackfillAvailability':
+        return opts.availability instanceof Error
+          ? Promise.reject(opts.availability)
+          : Promise.resolve({
+              calculatedMetricBackfillAvailability: opts.availability ?? { available: true, reason: null },
+            });
       case 'CalculatedMetricBackfills':
         return Promise.resolve({ calculatedMetricBackfills: { nodes: opts.jobs ?? [], nextCursor: null } });
       case 'StartCalculatedMetricBackfill':
@@ -360,6 +368,43 @@ describe('the backfill section', () => {
     await waitFor(() => expect(handled).toHaveBeenCalledTimes(1));
     await screen.findByRole('checkbox', { name: 'power_kw' });
     expect(calls.some((c) => c.op === 'CalculatedMetricPlan' && c.vars.version === 2)).toBe(true);
+  });
+
+  it('disables the button up front, with the instance reason, when the probe says unavailable', async () => {
+    const calls = install({
+      availability: { available: false, reason: 'the backfill worker is not running: calculatedBackfill.enabled is false' },
+    });
+    render(<BackfillSection profileToken="meter" activeVersion={3} request={null} onRequestHandled={() => {}} />);
+    const why = await screen.findByTestId('backfill-disabled-reason');
+    expect(why.textContent).toContain('Backfill is not available right now: the backfill worker is not running');
+    expect(screen.getByRole('button', { name: 'Backfill history' })).toHaveProperty('disabled', true);
+    expect(calls.filter((c) => c.op === 'CalculatedMetricBackfillAvailability')).toHaveLength(1);
+    expect(calls.some((c) => c.op === 'StartCalculatedMetricBackfill')).toBe(false);
+  });
+
+  it('leaves the button enabled when the probe says available, asking once', async () => {
+    const calls = install();
+    render(<BackfillSection profileToken="meter" activeVersion={3} request={null} onRequestHandled={() => {}} />);
+    const open = await screen.findByRole('button', { name: 'Backfill history' });
+    await waitFor(() => expect(open).toHaveProperty('disabled', false));
+    expect(screen.queryByTestId('backfill-disabled-reason')).toBeNull();
+    expect(calls.filter((c) => c.op === 'CalculatedMetricBackfillAvailability')).toHaveLength(1);
+  });
+
+  it('falls back to remembering UNAVAILABLE from a start when the probe read fails', async () => {
+    install({
+      availability: new Error('boom'),
+      start: () =>
+        Promise.reject(new GraphQLRequestError('worker off', 200, [{ message: 'x', extensions: { code: 'UNAVAILABLE' } }])),
+    });
+    render(<BackfillSection profileToken="meter" activeVersion={3} request={null} onRequestHandled={() => {}} />);
+    const open = await screen.findByRole('button', { name: 'Backfill history' });
+    await waitFor(() => expect(open).toHaveProperty('disabled', false));
+    fireEvent.click(open);
+    await screen.findByRole('checkbox', { name: 'power_kw' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Backfill every device' })).toHaveProperty('disabled', false));
+    fireEvent.click(screen.getByRole('button', { name: 'Backfill every device' }));
+    await waitFor(() => expect(screen.getAllByText(/Backfill is not available right now: worker off/).length).toBeGreaterThan(0));
   });
 
   it('remembers UNAVAILABLE after a failed start and disables the button with the reason', async () => {
