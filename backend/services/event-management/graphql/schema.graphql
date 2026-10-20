@@ -534,7 +534,11 @@ type CalculatedMetricBackfill {
 type CalculatedMetricBackfillAvailability {
     """True when a start is not refused for the instance's own state."""
     available: Boolean!
-    """Why backfill is unavailable, for a person to read; null when available."""
+    """
+    Why backfill is unavailable, for a person to read; null when available. It names the lever
+    (the worker is switched off, or the event store has no connection to spare for it) and never
+    the instance's settings or sizing, which are in the service's startup log.
+    """
     reason: String
 }
 

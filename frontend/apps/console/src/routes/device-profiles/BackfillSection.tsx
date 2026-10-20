@@ -56,11 +56,12 @@ export function BackfillSection({
     [scoped, profileToken, activeVersion],
   );
 
-  // The same decision a start is refused by, read up front. Needs event:read; without it, or when
-  // the read fails, the remembered refusal below is the only signal.
+  // The same decision a start is refused by, read up front, and only for a caller who can start
+  // one: nobody else sees the control it disables. Needs event:read; without it, or when the read
+  // fails, the remembered refusal below is the only signal.
   const availability = useQuery(
-    () => (!scoped && canRead ? getCalculatedMetricBackfillAvailability() : Promise.resolve(null)),
-    [scoped, canRead],
+    () => (!scoped && canWrite && canRead ? getCalculatedMetricBackfillAvailability() : Promise.resolve(null)),
+    [scoped, canWrite, canRead],
   );
   // available: false always carries a reason; the fallback only keeps a blank one from reading as available.
   const probed = availability.data && !availability.data.available ? (availability.data.reason || t('backfillUnavailableNoReason')) : null;

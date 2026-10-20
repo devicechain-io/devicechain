@@ -141,7 +141,7 @@ const BACKFILL_AVAILABILITY = graphql(`
  * before anyone presses it.
  */
 export async function getCalculatedMetricBackfillAvailability(): Promise<{ available: boolean; reason: string | null }> {
-  const data = await gql('event-management', BACKFILL_AVAILABILITY, {});
+  const data = await gql('event-management', BACKFILL_AVAILABILITY);
   const a = data.calculatedMetricBackfillAvailability;
   return { available: a.available, reason: a.reason ?? null };
 }

@@ -149,20 +149,26 @@ func (b *CalculatedBackfillConfiguration) ApplyDefaults() {
 }
 
 // Runs reports whether the worker runs beside these writers on this pool and, when it does
-// not, why, in words for the startup log. It is the one decision; Validate refuses only the
-// case where the operator asked for the worker and Runs says it cannot.
+// not, why, twice over for two readers. why is for the startup log and the operator: it names
+// the settings and the instance's numbers. public is for a tenant's caller, who is told the
+// backfill is unavailable through the API: it names the lever (switched off, or no room on the
+// pool) and nothing of the instance's sizing, which is not the tenant's to see or to change.
+// It is the one decision; Validate refuses only the case where the operator asked for the
+// worker and Runs says it cannot.
 func (b CalculatedBackfillConfiguration) Runs(pool config.MicroserviceDatastoreConfiguration,
-	persistence PersistenceConfiguration) (bool, string) {
+	persistence PersistenceConfiguration) (run bool, why, public string) {
 	if b.Enabled != nil && !*b.Enabled {
-		return false, "calculatedBackfill.enabled is false"
+		return false, "calculatedBackfill.enabled is false", "the operator has switched it off on this instance"
 	}
 	if need, have := persistence.Writers+BackfillPoolConnections+PoolHeadroom, rdb.EffectiveMaxOpenConnections(pool); need > have {
-		return false, fmt.Sprintf("persistence.writers (%d) + the backfill worker (%d) + %d spare connections is %d, "+
+		why = fmt.Sprintf("persistence.writers (%d) + the backfill worker (%d) + %d spare connections is %d, "+
 			"but the connection pool holds %d; raise tsdbConfiguration.maxOpenConnections or lower "+
 			"persistence.writers to run it, or set calculatedBackfill.enabled to false to say it stays off",
 			persistence.Writers, BackfillPoolConnections, PoolHeadroom, need, have)
+		return false, why, "this instance's event store has no connection to spare for it; " +
+			"its operator's startup log names the settings to change"
 	}
-	return true, ""
+	return true, "", ""
 }
 
 // Validate refuses a rate nobody can mean and, when the operator set enabled to true, a pool
@@ -177,7 +183,7 @@ func (b CalculatedBackfillConfiguration) Validate(pool config.MicroserviceDatast
 	if b.Enabled == nil || !*b.Enabled {
 		return nil
 	}
-	if ok, why := b.Runs(pool, persistence); !ok {
+	if ok, why, _ := b.Runs(pool, persistence); !ok {
 		return fmt.Errorf("calculatedBackfill.enabled is true, but %s", why)
 	}
 	return nil

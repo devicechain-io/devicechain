@@ -408,7 +408,7 @@ describe('the backfill section', () => {
   });
 
   it('remembers UNAVAILABLE after a failed start and disables the button with the reason', async () => {
-    install({
+    const calls = install({
       start: () =>
         Promise.reject(new GraphQLRequestError('worker off', 200, [{ message: 'x', extensions: { code: 'UNAVAILABLE' } }])),
     });
@@ -421,6 +421,26 @@ describe('the backfill section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Backfill every device' }));
     await waitFor(() => expect(screen.getAllByText(/Backfill is not available right now: worker off/).length).toBeGreaterThan(0));
     expect(screen.getByRole('button', { name: 'Backfill every device' })).toHaveProperty("disabled", true);
+    // A refusal is remembered, not a reason to ask again: the instance is asked once, on mount.
+    expect(calls.filter((c) => c.op === 'CalculatedMetricBackfillAvailability')).toHaveLength(1);
+  });
+
+  it('does not ask whether backfill can run a caller who cannot start one', async () => {
+    authState.claims = claims(['device:read', 'event:read']);
+    const calls = install({ jobs: [job()], availability: { available: false, reason: 'off' } });
+    render(<BackfillSection profileToken="meter" activeVersion={3} request={null} onRequestHandled={() => {}} />);
+    expect(await screen.findByTestId('bf-job-bf-1')).toBeTruthy();
+    expect(calls.some((c) => c.op === 'CalculatedMetricBackfillAvailability')).toBe(false);
+    expect(screen.queryByTestId('backfill-disabled-reason')).toBeNull();
+  });
+
+  it('does not ask a caller without event:read', async () => {
+    authState.claims = claims(['device:write', 'device:read']);
+    const calls = install({ availability: { available: false, reason: 'off' } });
+    render(<BackfillSection profileToken="meter" activeVersion={3} request={null} onRequestHandled={() => {}} />);
+    const open = await screen.findByRole('button', { name: 'Backfill history' });
+    await waitFor(() => expect(open).toHaveProperty('disabled', false));
+    expect(calls.some((c) => c.op === 'CalculatedMetricBackfillAvailability')).toBe(false);
   });
 });
 

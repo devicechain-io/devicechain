@@ -151,7 +151,7 @@ func TestBackfillAvailabilityProbe(t *testing.T) {
 	}{
 		{"no runtime", nil},
 		{"disabled", &model.BackfillRuntime{Runs: false, WhyNot: "calculatedBackfill.enabled is false", Plans: &wirePlans{}}},
-		{"pool too small", &model.BackfillRuntime{Runs: false, WhyNot: "persistence.writers (16) + the backfill worker (1) + 4 spare connections is 21", Plans: &wirePlans{}}},
+		{"pool too small", &model.BackfillRuntime{Runs: false, WhyNot: "this instance's event store has no connection to spare for it", Plans: &wirePlans{}}},
 		{"no reason given", &model.BackfillRuntime{Runs: false, Plans: &wirePlans{}}},
 		{"no device-management", &model.BackfillRuntime{Runs: true}},
 	} {

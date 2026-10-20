@@ -71,7 +71,9 @@ type BackfillPlanSource interface {
 // answers every start UNAVAILABLE.
 type BackfillRuntime struct {
 	// Runs is whether the worker runs on this instance (CalculatedBackfillConfiguration.Runs), and
-	// WhyNot says why not in words for the caller when it does not.
+	// WhyNot says why not in words for the caller when it does not. The caller is any tenant user
+	// with event:read (the availability query), so WhyNot names the lever and never the
+	// instance's settings or sizing; those go to the startup log.
 	Runs   bool
 	WhyNot string
 	// Plans is nil when device-management is not configured; a start then is UNAVAILABLE.
