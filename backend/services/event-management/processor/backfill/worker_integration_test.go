@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/assert"
@@ -691,7 +691,7 @@ func TestIntegrationAnInputRepeatedWithTwoValuesIsAmbiguous(t *testing.T) {
 	// Equal values: a second row exists only if something else about it differs, so seed the
 	// repeat with a different classifier through a request of its own.
 	ev := model.Event{EventId: []byte("equal-repeat-event-id-0000000000"), DeviceToken: "d",
-		EventType: esmodel.Measurement, OccurredTime: t3, Source: "mqtt", ProcessedTime: now}
+		EventType: eventtype.Measurement, OccurredTime: t3, Source: "mqtt", ProcessedTime: now}
 	var reqs []*model.MeasurementEventCreateRequest
 	for _, x := range []struct {
 		name, value string

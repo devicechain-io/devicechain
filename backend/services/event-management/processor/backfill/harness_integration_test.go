@@ -26,10 +26,10 @@ import (
 	"time"
 
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -221,7 +221,7 @@ func (r *rig) seed(device string, msgs []message, live *liveOracle, md *datatype
 	for n, m := range msgs {
 		first := m.entries[0].at
 		sum := sha256.Sum256([]byte(fmt.Sprintf("%s|%d|%d", device, n, first.UnixNano())))
-		ev := model.Event{EventId: sum[:], DeviceToken: device, EventType: esmodel.Measurement,
+		ev := model.Event{EventId: sum[:], DeviceToken: device, EventType: eventtype.Measurement,
 			OccurredTime: first, Source: "mqtt", ProcessedTime: time.Now().UTC()}
 		var reqs []*model.MeasurementEventCreateRequest
 		byInstant := map[time.Time]map[string]string{}
