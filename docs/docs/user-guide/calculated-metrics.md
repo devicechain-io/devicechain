@@ -394,9 +394,10 @@ not carry every input, as with a device that reports only what changed.
 
 The **Backfill history** button is disabled, and says why beside it, when the profile has nothing
 published, or when the active version has no calculated metrics. When the instance cannot run
-backfills (for example, the operator has switched the backfill worker off), starting one is refused
-with the reason, and from then on the button and the dialog stay disabled and say why, until you
-leave the page. It is never hidden for those reasons.
+backfills (for example, the operator has switched the backfill worker off), the console asks the
+instance when the page opens, and the button and the dialog are disabled from the start, saying
+why. If that question could not be answered and a start is refused instead, they become disabled
+and say why from then on, until you leave the page. It is never hidden for those reasons.
 
 ## Storage and precision
 
