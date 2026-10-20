@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
@@ -124,6 +125,70 @@ func TestPlanDoorDescribesThePlanTheResolverCompiles(t *testing.T) {
 			assert.Nil(t, m.MaxValue)
 		}
 	}
+}
+
+// Each metric carries what its formula reads in THIS version: the keys it reads directly, the
+// measured metrics it is computed from through its whole chain, and the chain's constants. A
+// draft that has since renamed an input does not move the published answer.
+func TestPlanDoorListsEachMetricsInputsFromTheVersion(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("current", "DOUBLE", "")
+	f.metric("temp", "DOUBLE", "")
+	f.metric("kw", "DOUBLE", "power / 1000.0 * device.gain")
+	f.metric("power", "DOUBLE", "voltage * current * device.scale")
+	f.metric("hot", "BOOLEAN", "temp > 80.0")
+	require.NoError(t, f.publish())
+	// The draft diverges: hot now reads current. The published version still reads temp.
+	f.setExpression("hot", "current > 80.0")
+
+	got, err := f.api.CalculatedMetricPlan(f.ctx, "meter", nil)
+	require.NoError(t, err)
+	type reads struct{ inputs, measured, constants []string }
+	byKey := map[string]reads{}
+	for _, m := range got.Calculated {
+		byKey[m.Key] = reads{m.Inputs, m.MeasuredInputs, m.Constants}
+	}
+	assert.Equal(t, reads{[]string{"power"}, []string{"voltage", "current"}, []string{"gain", "scale"}}, byKey["kw"],
+		"through the chain: power's inputs and constants are kw's")
+	assert.Equal(t, reads{[]string{"voltage", "current"}, []string{"voltage", "current"}, []string{"scale"}}, byKey["power"])
+	assert.Equal(t, reads{[]string{"temp"}, []string{"temp"}, []string{}}, byKey["hot"], "the version's formula, not the draft's")
+}
+
+// A metric that cannot run in the version (its published formula does not compile under this
+// build) computes from nothing, so its inputs are unknown (nil), never an empty list that would
+// read as "a formula over no readings".
+func TestPlanDoorReportsNoInputsForAMetricThatCannotRun(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("x", "DOUBLE", "")
+	f.metric("a", "DOUBLE", "x * 2.0")
+	f.metric("b", "DOUBLE", "x + 1.0")
+	require.NoError(t, f.publish())
+	var profile DeviceProfile
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("token = ?", "meter").First(&profile).Error)
+	var row DeviceProfileVersion
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("device_profile_id = ? AND version = 1", profile.ID).First(&row).Error)
+	tampered := strings.Replace(string(row.Snapshot), "x + 1.0", "x +", 1)
+	require.NotEqual(t, string(row.Snapshot), tampered, "the fixture found the expression to break")
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceProfileVersion{}).Where("id = ?", row.ID).
+		Update("snapshot", datatypes.JSON(tampered)).Error)
+
+	got, err := f.api.CalculatedMetricPlan(f.ctx, "meter", nil)
+	require.NoError(t, err)
+	seen := 0
+	for _, m := range got.Calculated {
+		switch m.Key {
+		case "a":
+			seen++
+			assert.Equal(t, []string{"x"}, m.MeasuredInputs)
+		case "b":
+			seen++
+			assert.Nil(t, m.Inputs)
+			assert.Nil(t, m.MeasuredInputs)
+			assert.Nil(t, m.Constants)
+		}
+	}
+	assert.Equal(t, 2, seen)
 }
 
 // A version with no calculated metric has an empty plan, not an error and not nil lists.

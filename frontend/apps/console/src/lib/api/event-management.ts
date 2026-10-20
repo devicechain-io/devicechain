@@ -207,3 +207,26 @@ export async function listCalculatedMetricBackfills(
   const data = await gql('event-management', BACKFILLS, { profileToken, first });
   return data.calculatedMetricBackfills.nodes;
 }
+
+// ── Hourly reading counts ─────────────────────────────────────────────────
+// How many stored readings carry one metric name per hour, tenant-wide. Served from the
+// one-minute rollups, so the start bound is honoured to the minute.
+
+const HOURLY_COUNTS = graphql(`
+  query HourlyMeasurementCounts($criteria: MeasurementAggregationCriteria!) {
+    bucketedMeasurements(criteria: $criteria) {
+      bucketStart
+      count
+    }
+  }
+`);
+
+export type HourlyCount = { bucketStart: string; count: number };
+
+/** Hourly counts of readings named `name`, from `startTime` (inclusive, to the minute) up to now. */
+export async function getHourlyCounts(name: string, startTime: Date): Promise<HourlyCount[]> {
+  const data = await gql('event-management', HOURLY_COUNTS, {
+    criteria: { name, startTime: startTime.toISOString(), intervalSeconds: 3600 },
+  });
+  return data.bucketedMeasurements;
+}

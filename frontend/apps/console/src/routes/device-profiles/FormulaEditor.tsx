@@ -244,6 +244,6 @@ export function FormulaEditor({
   );
 }
 
-function skipLabel(t: (key: string) => string, reason: string): string {
+export function skipLabel(t: (key: string) => string, reason: string): string {
   return SKIP_REASONS.includes(reason) ? t(`formulaSkip.${reason}`) : reason;
 }

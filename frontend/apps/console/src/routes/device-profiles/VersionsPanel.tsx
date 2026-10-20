@@ -26,6 +26,7 @@ import {
   rollbackDeviceProfile,
 } from '@/lib/api/device-management';
 import { BackfillSection } from './BackfillSection';
+import { CalculatedHealthSection } from './CalculatedHealthSection';
 import { ThingModelDownload } from './ThingModelDownload';
 
 // The authority string is a permission name, not user-facing prose, so it is hoisted
@@ -107,6 +108,13 @@ export function VersionsPanel({
           latest={versions[0]?.version ?? v.version}
         />
       )}
+    />
+    {/* Keyed by what it describes: a profile switch or a new active version starts it empty
+        rather than showing the previous answer (useQuery's sticky data) under the new heading. */}
+    <CalculatedHealthSection
+      key={`${profileToken}@${activeVersion ?? ''}`}
+      profileToken={profileToken}
+      activeVersion={activeVersion}
     />
     <BackfillSection
       profileToken={profileToken}

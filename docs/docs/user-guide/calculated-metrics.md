@@ -307,6 +307,31 @@ An absent input is noticed whatever the order of the operands. `temp > 80.0 || f
 on a reading with no `fan`, even though a hot reading would make the first half true. If you want
 the formula to work without `fan`, test for it with `has()`.
 
+## Checking that a metric is being computed {#checking-that-a-metric-is-computed}
+
+A formula can compile, publish and still never produce a value, for example when its inputs arrive under a different name than the one it reads. On the profile's **Versions** tab, the **Calculated metrics in use** block shows, for each calculated metric of the **active** version, whether values are being stored for it. It is for staff with read access to devices and events; a customer-scoped user does not see it, because the counts are tenant-wide. A superseded version has no block, because no device resolves it.
+
+The block is **counted from stored readings**. A calculated value is stored like any reading, so for each metric it compares how many values were stored under the metric's key with how many readings its inputs have (the measured metrics the formula reads, including through the calculated metrics it chains). Pick **Last 24 h** or **Last 168 h** (7 days) to change the window. Nothing is sampled or estimated.
+
+| Status | Meaning |
+| --- | --- |
+| **Computing** | Values were stored for the metric in the window. |
+| **Unconfirmed** | Values were stored under the metric's key, but another profile also declares a metric with that key, so they may all be that profile's (see below). |
+| **Not computing** | The inputs have stored readings in the window and no value was stored for the metric. Use **Why?** to find out. |
+| **No input readings** | Neither the metric nor its inputs have readings in the window, so there was nothing to compute from. |
+| **Inputs unknown** | The active version's formula cannot run on this release (it does not compile, or its data type cannot be calculated), so it computes nothing and its inputs cannot be read. Counts for the metric are not shown. |
+
+Things to know when reading the counts:
+
+- **Counts start when the version became active.** A reading stored earlier cannot have been computed by this version, so it is left out, and the line above the table says since when. For a version activated before activation times were recorded, the time is read from the profile's version history; it can be earlier than the true activation, never later, so the counts can include a few readings from just before it.
+- **Separate messages are fine.** A device that sends one metric every second and another once an hour is not "skipping" the formula on the seconds it does not send the second one. The block never compares against the number of messages, only values stored against input readings.
+- **Counts are by when the reading occurred**, so a burst of old readings forwarded late lands in the hours it describes. They reach back only as far as your tenant's measurement retention.
+- **A name shared with another profile.** If another profile of the tenant also declares a metric with the same key, the counts include that profile's readings and cannot show this formula is working. The row says so; use **Why?** on a device of this profile instead.
+
+### Asking why {#asking-why}
+
+**Why?** opens the same "Try it on recent history" view used while authoring, for the metric's formula in the active version, with the inputs that version reads (the draft may differ). Enter the token of a device that reports the formula's inputs and run it: it evaluates the formula over that device's stored readings and tallies, by reason, the readings that produced no value (see [When a formula produces no value](#when-a-formula-produces-no-value)). Nothing is stored.
+
 ## Backfilling history {#backfilling-history}
 
 A calculated metric is computed when a reading arrives. Readings stored before the version that

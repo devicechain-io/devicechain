@@ -6,6 +6,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -61,6 +62,15 @@ type CalculatedPlanMetric struct {
 	// answer is "possibly": when the scan cannot be completed (past its bound, or another
 	// profile's snapshot does not parse) it is true.
 	NameSharedWithOtherProfiles bool
+	// Inputs are the metric keys the formula reads directly (measured or calculated), as the
+	// version's plan compiled it. MeasuredInputs are the measured metrics it reads through its
+	// whole chain, in the version's measured order: the readings it is computed from. Constants
+	// are the device constants its whole chain reads, sorted and distinct. All three are nil for
+	// a metric that cannot run in this version (it does not compile here, or its data type no
+	// formula can produce), which computes from nothing; empty is a formula that reads none.
+	Inputs         []string
+	MeasuredInputs []string
+	Constants      []string
 }
 
 // CalculatedMetricPlan is one published profile version's calculated metrics.
@@ -111,8 +121,22 @@ func (r ProfileResolution) planDescription() ([]CalculatedPlanInput, []Calculate
 		return out
 	}
 	calculated := make([]CalculatedPlanMetric, 0, len(r.calc.metas)+len(r.calc.untyped))
-	for _, meta := range r.calc.metas {
-		calculated = append(calculated, describe(meta))
+	plan := r.calc.plan
+	for i, meta := range r.calc.metas {
+		out := describe(meta)
+		// metas follow the plan's steps one for one (buildCalcPlan), so step i is this metric.
+		if f := plan.Step(i).Formula; f != nil && plan.Step(i).Key == meta.key {
+			upstream := upstreamFormulas(plan, f)
+			out.Inputs = append([]string{}, f.InputKeys()...)
+			out.MeasuredInputs = measuredInputsOf(plan, f, upstream)
+			out.Constants = append([]string{}, f.ConstantKeys()...)
+			for _, u := range upstream {
+				out.Constants = append(out.Constants, u.ConstantKeys()...)
+			}
+			sort.Strings(out.Constants)
+			out.Constants = slices.Compact(out.Constants)
+		}
+		calculated = append(calculated, out)
 	}
 	for _, meta := range r.calc.untyped {
 		calculated = append(calculated, describe(meta))

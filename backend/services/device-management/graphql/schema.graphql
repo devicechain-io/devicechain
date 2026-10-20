@@ -1461,6 +1461,22 @@ type CalculatedMetricPlanMetric {
     more candidate versions than its bound, or another profile's version that could not be read.
     """
     nameSharedWithOtherProfiles: Boolean!
+    """
+    The metric keys the formula reads directly, measured or calculated, as this version
+    compiles it. Null when the metric cannot run in this version (its formula does not
+    compile here, or no formula can produce its data type), so it computes from nothing.
+    """
+    inputs: [String!]
+    """
+    The measured metrics the formula's value is computed from, including those read through
+    the calculated metrics it reads, in the order of measured. Null exactly when inputs is.
+    """
+    measuredInputs: [String!]
+    """
+    The device constants the formula reads, including through the calculated metrics it reads,
+    sorted and distinct. Null exactly when inputs is.
+    """
+    constants: [String!]
 }
 
 """The calculated metrics of one published profile version, as the live resolver runs them."""

@@ -47,6 +47,7 @@ export function FormulaHistory({
   inputs,
   constants,
   skipLabel,
+  inputTypes,
 }: {
   profileToken: string;
   expression: string;
@@ -58,6 +59,12 @@ export function FormulaHistory({
   /** The device constants the formula reads (`device.name`), read from the device's metadata. */
   constants: string[];
   skipLabel: (reason: string) => string;
+  /**
+   * The data type of each metric the formula may read, when the caller holds the version the
+   * formula belongs to. Omitted, the types are the profile's draft metrics', which is right for
+   * the draft formula being written and wrong for a published one the draft has diverged from.
+   */
+  inputTypes?: Record<string, string>;
 }) {
   const { t } = useTranslation('deviceProfiles');
   const [deviceToken, setDeviceToken] = useState('');
@@ -79,8 +86,9 @@ export function FormulaHistory({
       // The inputs' types come from the profile's draft metrics: the formula compiled against
       // them, so each key it reads is a metric there. A calculated one is read from the value
       // stored for it at resolve, like a measured one.
-      const metrics = await listMetricDefinitions(profileToken);
-      const types = new Map(metrics.map((m) => [m.metricKey, m.dataType]));
+      const types = inputTypes
+        ? new Map(Object.entries(inputTypes))
+        : new Map((await listMetricDefinitions(profileToken)).map((m) => [m.metricKey, m.dataType]));
       // A formula that reads device constants is run with THIS device's constants as its metadata
       // holds them now (the server holds no device records, so the console reads them).
       const held = constants.length > 0 ? await deviceConstants(deviceToken.trim(), constants) : [];

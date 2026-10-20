@@ -1767,7 +1767,7 @@ export type CalculatedMetricPlanQueryVariables = Exact<{
 }>;
 
 
-export type CalculatedMetricPlanQuery = { calculatedMetricPlan: { version: number, activeSince: string | null, calculated: Array<{ key: string, unit: string | null, newInVersion: boolean, changedSinceEarlier: boolean }> } };
+export type CalculatedMetricPlanQuery = { calculatedMetricPlan: { version: number, activeSince: string | null, calculated: Array<{ key: string, unit: string | null, expression: string, dataType: string, minValue: number | null, maxValue: number | null, newInVersion: boolean, changedSinceEarlier: boolean, nameSharedWithOtherProfiles: boolean, inputs: Array<string> | null, measuredInputs: Array<string> | null, constants: Array<string> | null }>, measured: Array<{ key: string, dataType: string }> } };
 
 export type EntityAttributesQueryVariables = Exact<{
   criteria: EntityAttributeSearchCriteria;
@@ -3692,8 +3692,20 @@ export const CalculatedMetricPlanDocument = new TypedDocumentString(`
     calculated {
       key
       unit
+      expression
+      dataType
+      minValue
+      maxValue
       newInVersion
       changedSinceEarlier
+      nameSharedWithOtherProfiles
+      inputs
+      measuredInputs
+      constants
+    }
+    measured {
+      key
+      dataType
     }
   }
 }

@@ -1555,8 +1555,20 @@ const CALCULATED_METRIC_PLAN = graphql(`
       calculated {
         key
         unit
+        expression
+        dataType
+        minValue
+        maxValue
         newInVersion
         changedSinceEarlier
+        nameSharedWithOtherProfiles
+        inputs
+        measuredInputs
+        constants
+      }
+      measured {
+        key
+        dataType
       }
     }
   }
