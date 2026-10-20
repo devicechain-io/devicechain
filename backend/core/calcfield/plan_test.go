@@ -344,3 +344,61 @@ func TestPlanReadsCalculatedMetricsThroughM(t *testing.T) {
 	defer s.Release()
 	assert.Equal(t, "4", run(p, s)["down"].Value)
 }
+
+// A sample that carries none of a formula's measured inputs is not the formula's: Applicable is
+// false and the step is not evaluated. Some of them is applicable (and a skip when one it
+// requires is absent). A chain is applicable on the measured inputs it reads transitively.
+func TestPlanApplicability(t *testing.T) {
+	p, err := NewPlan(planMeasured, append(kwChain(),
+		def("fan_only", "double(fan)", Double),
+		def("guarded", "has(m.fan) ? double(m.fan) : 0.0", Double),
+		def("constant_only", "device.k * 2.0", Double),
+		def("literal", "1.0", Double),
+	))
+	require.NoError(t, err)
+	applicable := func(key string, set map[string]string) bool {
+		s := p.Env().Sample()
+		defer s.Release()
+		for k, v := range set {
+			_, _ = s.Set(k, v)
+		}
+		i, ok := p.StepIndex(key)
+		require.True(t, ok, key)
+		return p.Applicable(s, i)
+	}
+	// Nothing the formula reads is in the sample.
+	assert.False(t, applicable("fan_only", map[string]string{"voltage": "1"}))
+	assert.False(t, applicable("fan_only", nil))
+	assert.True(t, applicable("fan_only", map[string]string{"fan": "1"}))
+	// A value that is present but does not parse is carried: invalid_input is a real signal.
+	assert.True(t, applicable("fan_only", map[string]string{"fan": "x"}))
+	// Some inputs: applicable, and Eval reports the one it lacks.
+	s := p.Env().Sample()
+	defer s.Release()
+	_, _ = s.Set("voltage", "230")
+	i, _ := p.StepIndex("kva")
+	require.True(t, p.Applicable(s, i))
+	assert.Equal(t, SkipMissingInput, p.Eval(s, i).Skip)
+	// A chain is applicable through the measured inputs it reads transitively.
+	assert.False(t, applicable("pf", map[string]string{"fan": "1"}))
+	assert.True(t, applicable("pf", map[string]string{"pf_in": "1"}), "kw reads pf_in, pf reads kw")
+	assert.True(t, applicable("kw", map[string]string{"voltage": "1"}))
+	// A formula that tests every input it reads for presence is evaluated on every sample.
+	assert.True(t, applicable("guarded", nil))
+	// Device constants and literals are not inputs a sample carries: unchanged, always evaluated.
+	assert.True(t, applicable("constant_only", nil))
+	assert.True(t, applicable("literal", nil))
+}
+
+func BenchmarkApplicable(b *testing.B) {
+	p, err := NewPlan(planMeasured, kwChain())
+	require.NoError(b, err)
+	s := p.Env().Sample()
+	_, _ = s.Set("fan", "1")
+	b.ReportAllocs()
+	for b.Loop() {
+		for i := 0; i < p.Len(); i++ {
+			_ = p.Applicable(s, i)
+		}
+	}
+}

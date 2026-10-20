@@ -215,3 +215,34 @@ func TestAPublishedCycleAndAnOverlongChainSkipLoudly(t *testing.T) {
 	assert.Equal(t, []string{"c1*", "c2*", "c3*", "c4*", "ok*", "voltage"}, names(got.Entries[0].Entries))
 	assert.EqualValues(t, 3, metrics.skips(calcfield.SkipEvalError), "a, b and c5")
 }
+
+// Inputs that arrive in separate messages: a sample that carries NONE of a formula's inputs is
+// not the formula's, so it is neither evaluated nor counted as a skip. A sample carrying some
+// of them but not one it requires is still a missing_input.
+func TestASampleWithNoneOfTheInputsIsNotASkip(t *testing.T) {
+	profile := model.NewProfileResolution(model.ProfileScope{ProfileVersionToken: "meter@na"}, []*model.MetricDefinition{
+		measured(1, "temp", model.MetricDouble, ""),
+		measured(2, "battery", model.MetricDouble, ""),
+		measured(3, "voltage", model.MetricDouble, ""),
+		measured(4, "current", model.MetricDouble, ""),
+		calculatedDef(10, "battery_pct", model.MetricDouble, "%", "battery * 100.0"),
+		calculatedDef(11, "temp_f", model.MetricDouble, "", "temp * 1.8 + 32.0"),
+		calculatedDef(12, "power", model.MetricDouble, "", "voltage * current"),
+		calculatedDef(13, "power_x2", model.MetricDouble, "", "power * 2.0"), // a chain over power
+	})
+	metrics := testCalcMetrics()
+	// 3,599 temp-only messages: battery_pct, power and power_x2 are not applicable to them.
+	for i := 0; i < 3; i++ {
+		got := resolveSamples(t, profile, metrics, map[string]string{"temp": "20"})
+		assert.Equal(t, "68", chainValues(t, got)["temp_f"])
+	}
+	assert.Zero(t, metrics.skips(calcfield.SkipMissingInput), "inputs in other messages are not a failure")
+	assert.EqualValues(t, 3, testutil.ToFloat64(metrics.evaluations), "and the others were not even evaluated")
+
+	// battery alone computes; voltage without current is a real partial-input skip, and so is the
+	// chain through it (power_x2 carries voltage transitively).
+	resolveSamples(t, profile, metrics, map[string]string{"battery": "0.5"})
+	assert.Zero(t, metrics.skips(calcfield.SkipMissingInput))
+	resolveSamples(t, profile, metrics, map[string]string{"voltage": "230"})
+	assert.EqualValues(t, 2, metrics.skips(calcfield.SkipMissingInput), "power, and power_x2 through it")
+}

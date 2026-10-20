@@ -343,6 +343,12 @@ func (e *sampleEvaluator) add(name string, v sql.NullFloat64) {
 
 func (e *sampleEvaluator) finish() {
 	out := e.eval.Eval()[0]
+	if out.NotApplicable {
+		// A previewed sample is built from rows of the formula's own inputs, so it carries one
+		// unless every row had no value (never written by the store). The sample is still the
+		// user's to see, and it holds nothing the formula needs: a missing input.
+		out.Skip = calcfield.SkipMissingInput
+	}
 	if out.OK {
 		v := out.Value
 		e.open.Value = &v

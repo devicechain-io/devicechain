@@ -59,6 +59,14 @@ type Step struct {
 	feed int
 	// deps are the keys of the calculated metrics the formula reads, sorted.
 	deps []string
+	// carry are the measured Env positions whose presence in a sample makes the step APPLICABLE
+	// to it: the measured inputs the formula names plus, transitively, those of every
+	// calculated metric it reads. Nil when the step is always applicable: it has no input it
+	// requires, or reads no measured metric at all (a constants-only formula).
+	carry []int
+	// measuredIn is the transitive measured inputs whether or not the step is gated on them,
+	// for the steps that read it.
+	measuredIn []int
 }
 
 // Plan is a profile version's calculated metrics, compiled together: the dependency graph
@@ -153,7 +161,39 @@ func NewPlan(measured []Input, calculated []Definition) (*Plan, error) {
 		}
 	}
 	p.steps = topological(steps, at)
+	p.markCarry()
 	return p, nil
+}
+
+// markCarry fills each step's carry set. p.steps is in dependency order, so a step's
+// calculated inputs already have theirs.
+func (p *Plan) markCarry() {
+	byKey := make(map[string]int, len(p.steps))
+	for i := range p.steps {
+		byKey[p.steps[i].Key] = i
+	}
+	for i := range p.steps {
+		st := &p.steps[i]
+		if st.Formula == nil {
+			continue
+		}
+		var in []int
+		for _, j := range st.Formula.inputs {
+			if j < p.env.measured {
+				in = append(in, j)
+			}
+		}
+		for _, k := range st.deps {
+			if d, ok := byKey[k]; ok {
+				in = append(in, p.steps[d].measuredIn...)
+			}
+		}
+		slices.Sort(in)
+		st.measuredIn = slices.Compact(in)
+		if len(st.Formula.required) > 0 {
+			st.carry = st.measuredIn
+		}
+	}
 }
 
 // markCycles finds every ring of calculated metrics reading each other and disables each
@@ -307,6 +347,25 @@ func topological(steps []Step, at map[string]int) []Step {
 	return out
 }
 
+// Applicable reports whether the i'th step is applicable to s: s carries at least one of the
+// measured metrics the step depends on, directly or through the calculated metrics it reads
+// (a present value that did not parse counts as carried; it is a real signal, and the step
+// reports it as invalid_input). A sample that carries NONE of them is not this formula's: it is
+// not evaluated and not a skip. A step that requires no input, or reads no measured metric (a
+// formula over device constants alone), is applicable to every sample. Allocation-free.
+func (p *Plan) Applicable(s *Sample, i int) bool {
+	carry := p.steps[i].carry
+	if len(carry) == 0 {
+		return true
+	}
+	for _, j := range carry {
+		if s.vals[j] != nil || s.bad[j] != SkipNone {
+			return true
+		}
+	}
+	return false
+}
+
 // Env is the environment every formula of the plan reads its samples from.
 func (p *Plan) Env() *Env { return p.env }
 
@@ -387,7 +446,15 @@ func (p *Plan) Eval(s *Sample, i int) Result {
 // whole profile does. The step is not compiled again: it evaluates exactly the Formula it is
 // given, has no dependencies, and writes nothing back to the sample.
 func SingleFormulaPlan(env *Env, key string, f *Formula) *Plan {
-	return &Plan{env: env, steps: []Step{{Key: key, Formula: f, Depth: 1, feed: -1}}}
+	st := Step{Key: key, Formula: f, Depth: 1, feed: -1}
+	if len(f.required) > 0 {
+		for _, j := range f.inputs {
+			if j < env.measured {
+				st.carry = append(st.carry, j)
+			}
+		}
+	}
+	return &Plan{env: env, steps: []Step{st}}
 }
 
 // StepIndex is the position, in evaluation order, of the calculated metric key, for Eval.

@@ -277,6 +277,12 @@ type CalculationObserver interface {
 // been. A metric that produced nothing is reported to obs and appends nothing: one missing
 // value, never a plausible one and never a failed reading.
 //
+// A metric whose measured inputs (directly, or through the calculated metrics it reads) are
+// ALL absent from the sample is not applicable to it: nothing is evaluated and nothing is
+// reported, because that is a device sending its inputs in separate messages, not a failure.
+// A sample carrying some of the inputs but not one the formula requires is a skip
+// (missing_input), as is a formula that requires no measured input at all (device constants only).
+//
 // A formula that reads another calculated metric reads the value this appended for it — the
 // string the resolved event carries, parsed as the metric's declared type — and, when that metric
 // produced none, finds it absent: it skips as missing_input unless it guards the read with
@@ -298,6 +304,9 @@ func (c Calculation) Append(dst []resolvedevent.ResolvedMeasurementEntry, obs Ca
 	}
 	for i := range c.plan.metas {
 		cf := &c.plan.metas[i]
+		if !c.plan.plan.Applicable(c.sample, i) {
+			continue // the sample carries none of this formula's inputs: not its sample, not a skip
+		}
 		out := c.plan.plan.Eval(c.sample, i)
 		if !out.OK() {
 			obs.Skipped(cf.key, out.Skip, out.Err)

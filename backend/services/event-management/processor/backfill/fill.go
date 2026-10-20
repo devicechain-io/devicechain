@@ -456,6 +456,9 @@ func (r *jobRun) evaluate(ev *model.PlanEvaluator, e RosterEntry, sample []model
 			local.d.AlreadyPresent++
 			continue
 		}
+		if o.NotApplicable {
+			continue // the sample carries none of this metric's inputs: not its sample, not a skip
+		}
 		if !o.OK {
 			reason := string(o.Skip)
 			if reason == "" {

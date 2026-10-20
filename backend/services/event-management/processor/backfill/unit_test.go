@@ -5,6 +5,7 @@ package backfill
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -294,4 +295,39 @@ func TestGraphQLRosterRefusesWhatItCannotRead(t *testing.T) {
 		_, err := NewGraphQLRoster(client, srv.URL).Page(context.Background(), "acme", "meter", nil, nil, 0, 1)
 		assert.Error(t, err, name)
 	}
+}
+
+// A stored sample that carries none of a metric's inputs is not its sample: the backfill counts
+// it as no skip, exactly as live resolution reports nothing for it. One that carries some of
+// the inputs is a real missing_input.
+func TestEvaluateDoesNotCountSamplesThatCarryNoneOfTheInputs(t *testing.T) {
+	doc := &model.CalculatedPlanDoc{
+		Measured: []model.CalculatedPlanInput{{Key: "temp", DataType: "DOUBLE"}, {Key: "battery", DataType: "DOUBLE"},
+			{Key: "voltage", DataType: "DOUBLE"}, {Key: "current", DataType: "DOUBLE"}},
+		Calculated: []model.CalculatedPlanMetric{
+			{Key: "battery_pct", Expression: "battery * 100.0", DataType: "DOUBLE"},
+			{Key: "power", Expression: "voltage * current", DataType: "DOUBLE"},
+		},
+	}
+	plan, err := doc.Compile()
+	require.NoError(t, err)
+	keys := []string{"battery_pct", "power"}
+	ev, err := model.NewPlanEvaluator(plan, keys, nil)
+	require.NoError(t, err)
+	defer ev.Release()
+	r := &jobRun{doc: doc, plan: plan, keys: keys, selected: map[string]bool{"battery_pct": true, "power": true}}
+	at := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	row := func(name string, v float64) model.MeasurementEvent {
+		return model.MeasurementEvent{EventId: []byte("e"), DeviceToken: "d", OccurredTime: at, Name: name,
+			Value: sql.NullFloat64{Float64: v, Valid: true}}
+	}
+	local := newAcc()
+	// temp only: neither metric reads it.
+	_, err = r.evaluate(ev, RosterEntry{Token: "d"}, []model.MeasurementEvent{row("temp", 20)}, local)
+	require.NoError(t, err)
+	assert.Empty(t, local.skips)
+	// voltage without current: a real partial-input skip, for power only.
+	_, err = r.evaluate(ev, RosterEntry{Token: "d"}, []model.MeasurementEvent{row("voltage", 230)}, local)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]int64{"missing_input": 1}, local.skips)
 }

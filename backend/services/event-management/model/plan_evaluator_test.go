@@ -135,7 +135,7 @@ func runStored(ev *PlanEvaluator, stored map[string]float64) (map[string]string,
 	for _, o := range ev.Eval() {
 		if o.OK {
 			vals[o.Key] = o.Value
-		} else {
+		} else if !o.NotApplicable { // live reports nothing for a sample that is not the metric's
 			skipped[o.Key] = o.Skip
 		}
 	}
@@ -251,7 +251,37 @@ func TestPlanEvaluatorFirstRowWinsAndNullIsAbsent(t *testing.T) {
 	assert.False(t, ok)
 	out := ev.Eval()[0]
 	assert.False(t, out.OK)
-	assert.Equal(t, calcfield.SkipMissingInput, out.Skip)
+	assert.True(t, out.NotApplicable, "a sample with no value is carrying none of the inputs: not a skip")
+	assert.Empty(t, out.Skip)
+}
+
+// A sample carrying SOME of a formula's inputs is a real partial-input skip; one carrying none
+// of them, directly or through the chain, is not applicable and counts nowhere.
+func TestPlanEvaluatorPartialInputsSkipAndNoInputsDoNot(t *testing.T) {
+	rig := newParityRig(t)
+	ev, err := NewPlanEvaluator(rig.plan, []string{"pf"}, nil)
+	require.NoError(t, err)
+	defer ev.Release()
+	byKey := func() map[string]StepOutcome {
+		m := map[string]StepOutcome{}
+		for _, o := range ev.Eval() {
+			m[o.Key] = o
+		}
+		return m
+	}
+	ev.Begin()
+	ev.Add("voltage", sql.NullFloat64{Float64: 1, Valid: true})
+	o := byKey()
+	assert.Equal(t, calcfield.SkipMissingInput, o["kva"].Skip, "voltage without current")
+	assert.False(t, o["kva"].NotApplicable)
+	assert.Equal(t, calcfield.SkipMissingInput, o["pf"].Skip, "reads kva, which carried voltage")
+
+	ev.Begin()
+	ev.Add("fan", sql.NullFloat64{Float64: 1, Valid: true})
+	for k, out := range byKey() {
+		assert.True(t, out.NotApplicable, k)
+		assert.Empty(t, out.Skip, k)
+	}
 }
 
 // A skip keeps the evaluation's underlying error, which a backfill reports with the skip; and a
