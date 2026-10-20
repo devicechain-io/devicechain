@@ -63,17 +63,6 @@ func resolveSamples(t *testing.T, profile model.ProfileResolution, metrics *Calc
 	return resolveSamplesFor(t, device, profile, metrics, samples...)
 }
 
-// deviceByTokenApi answers the by-token lookup with one device: the re-read a device with no
-// metadata in hand triggers when its profile's formulas read device constants.
-type deviceByTokenApi struct {
-	model.DeviceManagementApi
-	device *model.Device
-}
-
-func (a deviceByTokenApi) DevicesByToken(context.Context, []string) ([]*model.Device, error) {
-	return []*model.Device{a.device}, nil
-}
-
 // resolveSamplesFor is resolveSamples for a given device record, whose metadata carries the
 // per-device constants.
 func resolveSamplesFor(t *testing.T, device *model.Device, profile model.ProfileResolution, metrics *CalcMetrics,
@@ -81,7 +70,6 @@ func resolveSamplesFor(t *testing.T, device *model.Device, profile model.Profile
 	t.Helper()
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	rez.calcObs.metrics = metrics
-	rez.Api = deviceByTokenApi{device: device}
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	entries := make([]esmodel.UnresolvedMeasurementsEntry, len(samples))
 	for i, s := range samples {

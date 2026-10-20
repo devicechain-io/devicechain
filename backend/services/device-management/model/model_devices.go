@@ -255,6 +255,22 @@ type Device struct {
 	//
 	// Nullable with no default, for the reason migration_device_disabled.go records.
 	DisabledAt sql.NullTime
+
+	// metadataUnread marks a row read WITHOUT its metadata column: the narrow credential
+	// lookups' (authDeviceFields, connectDeviceFields). On such a row a nil Metadata means
+	// "not read", not "none stored". The event resolver once took a credential-authenticated
+	// device's (always nil) Metadata for its stored constants, so every formula reading
+	// `device.<key>` was missing_input on every credentialed event. Unexported, so neither
+	// gorm nor JSON sees it; the zero value is "read", which every full read and every
+	// decoded cache entry is. See MetadataRead.
+	metadataUnread bool
+}
+
+// MetadataRead reports whether the row's Metadata is what the device stores. It is false
+// for a row from a narrow credential lookup, whose metadata column was never read: a
+// caller that needs the metadata reads the device in full (DevicesByToken) instead.
+func (d *Device) MetadataRead() bool {
+	return d != nil && !d.metadataUnread
 }
 
 // IsDisabled reports whether an operator has disabled the device.
