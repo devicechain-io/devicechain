@@ -397,6 +397,9 @@ namespace DeviceChain.Sim.Traffic
         /// <summary>The swept ground of cell k of a lane (which need not be one of the topology's), as the checks measure it.</summary>
         public List<Polygon> CellSwept(Lane lane, int k) => Swept(CellPoses(lane, k));
 
+        /// <summary>The swept ground of cell k of one of the topology's lanes, measured once and kept (what <see cref="Conflicts"/> measured).</summary>
+        public IReadOnlyList<Polygon> SweptOf(Lane lane, int k) => GroupsOf(lane)[k].Boxes;
+
         CellGroup[] GroupsOf(Lane lane)
         {
             if (groups.TryGetValue(lane.Id, out var cached)) return cached;

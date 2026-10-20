@@ -171,6 +171,20 @@ namespace DeviceChain.Sim.Traffic
             radius = Math.Sqrt(r2);
         }
 
+        /// <summary>How far (x, z) is from a convex polygon whose corners run counter-clockwise: 0 in or on it.</summary>
+        public static double PointDistance(Polygon poly, double x, double z)
+        {
+            if (InPolygon(poly, x, z)) return 0.0;
+            var best = double.MaxValue;
+            for (var i = 0; i < poly.Count; i++)
+            {
+                var j = (i + 1) % poly.Count;
+                best = Math.Min(best, PointSegment(x, z, poly.X[i], poly.Z[i], poly.X[j], poly.Z[j]));
+            }
+
+            return best;
+        }
+
         /// <summary>Whether (x, z) lies in or on a convex polygon whose corners run counter-clockwise.</summary>
         public static bool InPolygon(Polygon poly, double x, double z)
         {
