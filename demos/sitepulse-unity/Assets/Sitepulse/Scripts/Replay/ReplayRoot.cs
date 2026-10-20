@@ -53,6 +53,7 @@ namespace DeviceChain.Sitepulse.Replay
         ReplayReadingSource source;
         QuarryFleetPreview fleet;
         IotOverlay overlay;
+        int overlayMaxCards; // the data layer's own card limit, put back for a shot that sets none
         IReplayScreen screen;
         RecordingData data;
         string recordingPath;
@@ -94,6 +95,7 @@ namespace DeviceChain.Sitepulse.Replay
             inputs = given ?? throw new ArgumentNullException(nameof(given));
             fleet = given.Fleet;
             overlay = given.Overlay;
+            overlayMaxCards = overlay != null ? overlay.maxCards : 4;
             screen = given.Screen;
             composition = ReplayComposition.For(given.Options);
             if (composition.Hud != (screen != null)) throw new InvalidOperationException("a render is given no screen, and an interactive replay is given one");
@@ -437,6 +439,7 @@ namespace DeviceChain.Sitepulse.Replay
             overlay.ShotTime = t;
             overlay.Featured = shot.Featured;
             overlay.cardScale = shot.CardScale;
+            overlay.maxCards = shot.MaxCards ?? overlayMaxCards;
             overlay.SafeInsets = shot.Height > shot.Width ? new Vector2(PortraitSafeTop, PortraitSafeBottom) : Vector2.zero;
         }
 

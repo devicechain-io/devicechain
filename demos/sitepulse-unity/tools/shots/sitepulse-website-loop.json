@@ -1,5 +1,5 @@
 {
-  "description": "A 27 s seamless loop for the website, 16:9, no dialog: telemetry, the low-fuel rule firing and the command going out, the truck rerouting, driving to the refuel bay, refuelling, the command succeeding, the truck back at work. Seven cuts of ONE recorded cycle on SP-HL-0006 that run forward in recorded time and never overlap (the file is \"continuous\", and the planner refuses a cut that starts before the previous one ends); the waits between them are cut, not sped up, because the scene's clock is real time. Wide establishing and crane views of the site alternate with closer follows and an orbit, the loop opens and closes on the same wide pose, and chips are rendered into the frames, each starting when its recorded event did. Disclose it as a replay of a recorded live run, cut for length (render.json carries the run and the date). Join the seven shot directories in order; a half-second cross-dissolve at the loop point blends wide to wide.",
+  "description": "A 26 s seamless loop for the website, 16:9, no dialog: telemetry, the low-fuel rule firing and the command going out, the truck rerouting, two haul trucks passing on their own lanes of the two-way haul road while it heads for the refuel bay, refuelling, the command succeeding, the truck back at work. Seven cuts of ONE recorded cycle on SP-HL-0006 that run forward in recorded time and never overlap (the file is \"continuous\", and the planner refuses a cut that starts before the previous one ends); the waits between them are cut, not sped up, because the scene's clock is real time. Wide establishing and crane views of the site alternate with closer follows and an orbit, the loop opens and closes on the same wide pose, and chips are rendered into the frames, each starting when its recorded event did. Every cut draws the featured truck's card alone (\"maxCards\": 1), so the loop tells one machine's story. Disclose it as a replay of a recorded live run, cut for length (render.json carries the run and the date). Join the seven shot directories in order; a half-second cross-dissolve at the loop point blends wide to wide.",
   "fps": 30,
   "continuous": true,
   "shots": [
@@ -49,7 +49,8 @@
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     },
     {
       "name": "loop-2-rule-fires-and-command",
@@ -97,7 +98,8 @@
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     },
     {
       "name": "loop-3-reroute-wide",
@@ -138,31 +140,50 @@
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     },
     {
-      "name": "loop-4-on-the-way",
+      "name": "loop-4-two-way-haul-road",
       "startEvent": {
         "kind": "timeline",
         "device": "SP-HL-0006",
         "rowKind": "accepted",
         "contains": "refuel bay"
       },
-      "offset": 37.0,
-      "duration": 4.0,
+      "offset": 33.6,
+      "duration": 3.2,
       "camera": {
-        "rig": "follow",
-        "target": "SP-HL-0006",
-        "back": 26,
-        "up": 9,
-        "side": 14,
-        "fov": 40,
-        "lookHeight": 2.0
+        "rig": "fixed",
+        "pos": [
+          96,
+          36,
+          -30
+        ],
+        "lookAt": [
+          54,
+          -2,
+          6
+        ],
+        "fov": 48,
+        "to": {
+          "pos": [
+            92.2,
+            33.4,
+            -26.2
+          ],
+          "lookAt": [
+            54,
+            -2,
+            6
+          ]
+        }
       },
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     },
     {
       "name": "loop-5-refuel-wide",
@@ -187,7 +208,8 @@
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     },
     {
       "name": "loop-6-success",
@@ -224,7 +246,8 @@
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     },
     {
       "name": "loop-7-back-to-work-wide",
@@ -265,7 +288,8 @@
       "focus": "SP-HL-0006",
       "cards": true,
       "route": true,
-      "featured": "fuel_pct"
+      "featured": "fuel_pct",
+      "maxCards": 1
     }
   ]
 }
