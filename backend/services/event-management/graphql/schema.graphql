@@ -693,9 +693,11 @@ type Mutation {
     readings that have no value for them, and writes the missing values. It never changes a
     value that is already stored. The job runs in the background; read it with
     calculatedMetricBackfill. Requires device:write; customer-scoped callers are refused with
-    FORBIDDEN. Refusals: INVALID_VALUE for a range that is empty, in the future, longer than 90
-    days or older than retention allows (it is refused, never shortened), for a metric the version
-    does not calculate or whose formula cannot run, for more than 1000 devices and for a device
+    FORBIDDEN. Refusals: INVALID_VALUE for a from or to that is not an RFC 3339 timestamp, an
+    empty profileToken or a version below 1, for a range that is empty, in the future, longer than
+    90 days or older than retention allows (it is refused, never shortened), for a metric the
+    version does not calculate or whose formula cannot run, for omitted metricKeys when no metric
+    is new in the version, for more than 1000 devices or an empty device token, and for a device
     that is not of the profile; NOT_FOUND for an unknown profile or an unpublished version; CONFLICT,
     naming the active job, when the tenant already has one; UNAVAILABLE when the backfill worker is
     switched off or cannot run on this instance, or device-management cannot be reached.

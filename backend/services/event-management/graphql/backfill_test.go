@@ -141,7 +141,7 @@ func TestBackfillCountersAreFloatsPastTwoToTheThirtyFirst(t *testing.T) {
 		j.Samples, j.Computed, j.Written, j.AlreadyPresent = big, big+1, big+2, big+3
 		j.WindowsCompressed, j.WindowsBeyondRetention, j.WindowsRefreshed = big+4, big+5, big+6
 		j.DevicesDone, j.DevicesTotal = big, &total
-		j.Skipped = json.RawMessage(`{"missing_input":5000000007,"ambiguous":3}`)
+		j.Skipped = json.RawMessage(`{"missing_input":5000000007,"ambiguous":3,"out_of_range":0}`)
 	})
 	resp := execAs(t, api, "t1", nil, []string{string(auth.EventRead)}, `{ calculatedMetricBackfill(token: "j1") {
 		samples computed written alreadyPresent windowsCompressed windowsBeyondRetention windowsRefreshed
@@ -179,7 +179,7 @@ func TestBackfillCountersAreFloatsPastTwoToTheThirtyFirst(t *testing.T) {
 	assert.Equal(t, []string{"w"}, j.Warnings)
 	assert.Equal(t, 1, j.ProfileVersion)
 	assert.Equal(t, "RUNNING", j.Status)
-	require.Len(t, j.Skipped, 2)
+	require.Len(t, j.Skipped, 2, "a reason with no count is not listed")
 	assert.Equal(t, "ambiguous", j.Skipped[0].Reason, "per reason, in reason order, ambiguous included")
 	assert.EqualValues(t, 3, j.Skipped[0].Count)
 	assert.EqualValues(t, 5000000007, j.Skipped[1].Count)

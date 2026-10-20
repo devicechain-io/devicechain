@@ -8,6 +8,7 @@ package model
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/devicechain-io/dc-microservice/conflict"
@@ -189,4 +190,47 @@ func TestIntegrationListOrderingPagingAndIsolation(t *testing.T) {
 
 	_, err = api.GetBackfill(tenantCtx("acme"), other.Token)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+// Two starts at once: nothing in StartBackfill checks for an active job before it inserts, so the
+// partial unique index is the only arbiter. Exactly one start wins, and every loser is a CONFLICT
+// naming the winner, never a raw unique violation (which would answer as an internal error).
+func TestIntegrationConcurrentStartsOneWinsTheRestConflict(t *testing.T) {
+	mgr := newBackfillManager(t, "its82bconcurrent")
+	api := &Api{RDB: mgr, Backfill: newRuntime(&fakePlans{doc: cleanPlan()})}
+	const n = 8
+	type result struct {
+		job *CalculatedBackfill
+		err error
+	}
+	results := make(chan result, n)
+	gate := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-gate
+			job, err := startAs(t, api, "acme")
+			results <- result{job, err}
+		}()
+	}
+	close(gate)
+	wg.Wait()
+	close(results)
+	var winners []*CalculatedBackfill
+	var losers []error
+	for r := range results {
+		if r.err == nil {
+			winners = append(winners, r.job)
+			continue
+		}
+		losers = append(losers, r.err)
+	}
+	require.Len(t, winners, 1, "exactly one start wins: %v", losers)
+	require.Len(t, losers, n-1)
+	for _, err := range losers {
+		assert.True(t, conflict.Is(err), "a loser is a CONFLICT, not an internal error: %v", err)
+		assert.Contains(t, err.Error(), winners[0].Token, "naming the job that won")
+	}
 }

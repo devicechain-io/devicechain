@@ -159,6 +159,14 @@ func TestBackfillRangeBoundaries(t *testing.T) {
 	assert.Error(t, rt.checkRange(floor.Add(-time.Nanosecond), floor.Add(time.Hour)), "a nanosecond below it")
 	rt.RetentionDays = 0
 	assert.NoError(t, rt.checkRange(clock.Add(-89*day), clock.Add(-day)), "retention off keeps everything")
+
+	most := make([]string, MaxBackfillDevices)
+	for i := range most {
+		most[i] = fmt.Sprintf("d%d", i)
+	}
+	got, err := checkDeviceTokens(most)
+	require.NoError(t, err, "exactly the most devices a job takes")
+	assert.Len(t, got, MaxBackfillDevices)
 }
 
 func TestStartBackfillNeedsAProfileAndAVersionThatExist(t *testing.T) {
