@@ -858,6 +858,54 @@ transacciones por evento, frente al 24% en la prueba anterior, con la compilaci�
 y en otros nodos de servicios. Si cuesta más latencia de la que ahorra, indique
 `persistence.lingerMillis: 0`.
 
+### Relleno de métricas calculadas {#calculated-backfill}
+
+El [relleno](../user-guide/calculated-metrics.md#backfilling-history) de un inquilino completa
+métricas calculadas en el historial almacenado. Se ejecuta en `event-management`: un único
+trabajador para toda la instancia, que toma un trabajo cada vez por turnos entre inquilinos, a un
+ritmo acotado. Sin trabajos cuesta un intento de bloqueo y dos consultas pequeñas cada diez
+segundos. Un relleno solo escribe filas de mediciones. No publica nada en el broker y nunca llega
+al estado en vivo ni a la detección.
+
+| Ajuste (configuración de `event-management`) | Valor por defecto | Qué hace |
+| --- | --- | --- |
+| `calculatedBackfill.enabled` | sin definir | Tres estados. **Sin definir**: el trabajador se ejecuta cuando el pool de conexiones tiene sitio para él junto a los escritores de persistencia (`persistence.writers` + 1 + 4 conexiones libres deben caber en `tsdbConfiguration.maxOpenConnections`) y se queda apagado, con una advertencia al arrancar que nombra los ajustes, cuando no. **`true`**: pides el trabajador, así que un pool que no puede alojarlo detiene el servicio al arrancar. **`false`**: el trabajador no se ejecuta. Iniciar un relleno se rechaza entonces como no disponible, con el motivo, y la consola desactiva el control una vez rechazado; un trabajo que estaba en curso sigue en curso hasta que se vuelva a activar el trabajador o se cancele el trabajo. |
+| `calculatedBackfill.rowsPerSecond` | `20000` | El máximo de filas que el trabajador lee más escribe por segundo, entre todos los trabajos, de `1` a `200000`. Este valor por defecto es provisional y no se ha medido en una instancia con carga: en una instancia ocupada empieza bajo y vigila la CPU del almacén de eventos. |
+
+El trabajador mantiene una conexión del pool durante toda su vida. El intervalo de un trabajo (90
+días), el tamaño de lote y la regla de un trabajo activo por inquilino son fijos.
+
+| Métrica | Qué indica |
+| --- | --- |
+| `devicechain_eventmanagement_calc_backfill_rows_written_total` | Filas de mediciones insertadas. |
+| `devicechain_eventmanagement_calc_backfill_samples_total` | Lecturas evaluadas. |
+| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | Valores no calculados, por el motivo de omisión de la fórmula, más `ambiguous`. |
+| `devicechain_eventmanagement_calc_backfill_windows_skipped_total{why}` | Tramos sin tocar: `compressed`, o `retention` (al alcance de la política de retención). |
+| `devicechain_eventmanagement_calc_backfill_jobs_finished_total{status}` | Trabajos terminados, por estado. |
+| `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | Antigüedad del trabajo en cola o en curso más antiguo; `0` si no hay. Un trabajo atascado la hace crecer sin límite, así que conviene alertar sobre ella. |
+| `devicechain_eventmanagement_calc_backfill_batch_seconds`, `..._rollup_refresh_seconds` | Tiempo para procesar un lote y para refrescar el agregado de mediciones sobre un tramo. |
+| `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | Refrescos que coincidieron con el propio trabajo de política del agregado y se reintentaron. |
+
+Cada toma de un trabajo, final de porción y estado final también se registra una vez, con el
+inquilino, el token del trabajo, el perfil, la versión, los recuentos y cualquier fallo.
+
+#### Detener un relleno {#calculated-backfill-stop}
+
+Para detener **todos** los rellenos en cola y en curso, conéctese a la base de datos del almacén de
+eventos y ejecute:
+
+```sql
+UPDATE "event-management".calculated_backfills
+   SET cancel_requested_at = now()
+ WHERE status IN ('QUEUED', 'RUNNING');
+```
+
+Añada `AND tenant_id = '<tenant>'` para detener solo los de un inquilino. El trabajador lo advierte
+en su siguiente confirmación y cada trabajo termina como `CANCELLED` en un lote. Las filas ya
+escritas se conservan, y un trabajo en cola que ningún trabajador ha tomado termina igual cuando el
+trabajador se ejecuta de nuevo. Para detener el propio trabajador, defina
+`calculatedBackfill.enabled: false` y reinicie `event-management`.
+
 ### Estado en vivo de los dispositivos {#live-state-projection}
 
 `device-state` mantiene el estado en vivo de cada dispositivo (conectividad, actividad, últimas

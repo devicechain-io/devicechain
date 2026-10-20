@@ -21,6 +21,7 @@ import type {
   DeviceProfilesQuery,
   DeviceProfileByTokenQuery,
   DeviceProfileVersionsQuery,
+  CalculatedMetricPlanQuery,
   DeviceProfileCreateRequest,
   DeviceProfileUpdateRequest,
   MetricDefinitionsQuery,
@@ -1543,4 +1544,30 @@ const DELETE_DETECTION_RULE = graphql(`
 export async function deleteDetectionRule(token: string): Promise<boolean> {
   const data = await gql('device-management', DELETE_DETECTION_RULE, { token });
   return data.deleteDetectionRule;
+}
+
+const CALCULATED_METRIC_PLAN = graphql(`
+  query CalculatedMetricPlan($profileToken: String!, $version: Int) {
+    calculatedMetricPlan(profileToken: $profileToken, version: $version) {
+      version
+      activeSince
+      calculated {
+        key
+        unit
+        newInVersion
+        changedSinceEarlier
+      }
+    }
+  }
+`);
+
+export type CalculatedMetricPlanResult = CalculatedMetricPlanQuery['calculatedMetricPlan'];
+
+/** The calculated metrics of a published profile version (the active one when `version` is omitted). */
+export async function getCalculatedMetricPlan(
+  profileToken: string,
+  version?: number,
+): Promise<CalculatedMetricPlanResult> {
+  const data = await gql('device-management', CALCULATED_METRIC_PLAN, { profileToken, version });
+  return data.calculatedMetricPlan;
 }

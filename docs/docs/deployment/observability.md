@@ -821,6 +821,51 @@ run at 6,800 events per second offered, the path that commits one event at a tim
 on the build before the wait and on different service nodes. If it costs more latency than it
 saves, set `persistence.lingerMillis: 0`.
 
+### Calculated-metric backfill {#calculated-backfill}
+
+A tenant's [backfill](../user-guide/calculated-metrics.md#backfilling-history) fills calculated
+metrics into stored history. It runs in `event-management`: one worker for the whole instance, taking
+one job at a time in turn across tenants, at a bounded rate. With no job it costs one lock attempt
+and two small queries every ten seconds. A backfill writes only measurement rows. It publishes
+nothing to the broker and never reaches live state or detection.
+
+| Setting (`event-management` config) | Default | What it does |
+| --- | --- | --- |
+| `calculatedBackfill.enabled` | unset | Three states. **Unset**: the worker runs when the connection pool has room for it beside the persistence writers (`persistence.writers` + 1 + 4 spare connections must fit in `tsdbConfiguration.maxOpenConnections`), and stays off, with a startup warning naming the settings, when it does not. **`true`**: you asked for the worker, so a pool that cannot hold it stops the service at startup. **`false`**: the worker does not run. Starting a backfill is then refused as unavailable, with the reason, and the console disables the control once it has been refused; a job that was running stays running until the worker is turned on again or the job is cancelled. |
+| `calculatedBackfill.rowsPerSecond` | `20000` | The most rows the worker reads plus writes in a second, across every job, from `1` to `200000`. This default is provisional and has not been measured on a loaded instance: start low on a busy instance and watch the event store's CPU. |
+
+The worker holds one pooled connection for its lifetime. The span of one job (90 days), the batch
+size and the one-active-job-per-tenant rule are fixed.
+
+| Metric | What it tells you |
+| --- | --- |
+| `devicechain_eventmanagement_calc_backfill_rows_written_total` | Measurement rows inserted. |
+| `devicechain_eventmanagement_calc_backfill_samples_total` | Readings evaluated. |
+| `devicechain_eventmanagement_calc_backfill_skipped_total{reason}` | Values not computed, by the formula's skip reason, plus `ambiguous`. |
+| `devicechain_eventmanagement_calc_backfill_windows_skipped_total{why}` | Stretches left untouched: `compressed`, or `retention` (within reach of the retention policy). |
+| `devicechain_eventmanagement_calc_backfill_jobs_finished_total{status}` | Jobs that ended, by status. |
+| `devicechain_eventmanagement_calc_backfill_oldest_active_job_age_seconds` | Age of the oldest queued or running job; `0` when none. A job that is stuck makes it grow without bound, so alert on it. |
+| `devicechain_eventmanagement_calc_backfill_batch_seconds`, `..._rollup_refresh_seconds` | Time to process one batch, and to refresh the measurement rollup over one stretch. |
+| `devicechain_eventmanagement_calc_backfill_rollup_refresh_conflicts_total` | Refreshes that met the rollup's own policy job and were retried. |
+
+Each claim, slice end and final status is also logged once, with the tenant, job token, profile,
+version, counts and any failure.
+
+#### Stopping a backfill {#calculated-backfill-stop}
+
+To stop **every** queued and running backfill, connect to the event store database and run:
+
+```sql
+UPDATE "event-management".calculated_backfills
+   SET cancel_requested_at = now()
+ WHERE status IN ('QUEUED', 'RUNNING');
+```
+
+Add `AND tenant_id = '<tenant>'` to stop one tenant's. The worker notices at its next commit, and
+each job ends `CANCELLED` within one batch. Rows already written stay, and a queued job that no
+worker has taken ends the same way once the worker next runs. To stop the worker itself, set
+`calculatedBackfill.enabled: false` and restart `event-management`.
+
 ### Live device state {#live-state-projection}
 
 `device-state` keeps each device's live state (connectivity, activity, latest readings and last

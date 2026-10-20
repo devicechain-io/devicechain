@@ -20,6 +20,43 @@ export type CalculatedInput = {
   key: string;
 };
 
+/** What to fill. */
+export type CalculatedMetricBackfillInput = {
+  /** Only these devices, at most 1000; omit to fill every device of the profile. */
+  deviceTokens?: Array<string> | null | undefined;
+  /** Start of the range, an RFC 3339 timestamp. Not older than retention allows. */
+  from: string;
+  /**
+   * The calculated metrics to fill. Omit to fill the metrics that are new in the version, those
+   * its previous published version did not calculate; a version with none then needs them named.
+   * A metric whose formula changed since an earlier version may be named, and is flagged in
+   * warnings.
+   */
+  metricKeys?: Array<string> | null | undefined;
+  /** The token of the device profile. */
+  profileToken: string;
+  /** End of the range, an RFC 3339 timestamp, not in the future; after from, by at most 90 days. */
+  to: string;
+  /** The published version to fill; omit for the active version. A draft is not a version. */
+  version?: number | null | undefined;
+};
+
+/**
+ * Where a calculated-metric backfill job stands. QUEUED and RUNNING are active; a tenant may have
+ * one active job. SUCCEEDED, CANCELLED and FAILED are final.
+ */
+export type CalculatedMetricBackfillStatus =
+  /** Cancelled. Rows already written stay. */
+  | 'CANCELLED'
+  /** Stopped on an error, named in failure. Rows already written stay; start a new job to resume. */
+  | 'FAILED'
+  /** Accepted and waiting for the worker. */
+  | 'QUEUED'
+  /** The worker is filling it. */
+  | 'RUNNING'
+  /** Every device and window was filled or skipped, and the rollup was refreshed. */
+  | 'SUCCEEDED';
+
 /** A relationship anchor to filter events by: events recorded against this entity. */
 export type EventAnchor = {
   /** Token of the entity, unique within the tenant. */
@@ -80,6 +117,28 @@ export type CalculatedEventsQueryVariables = Exact<{
 
 
 export type CalculatedEventsQuery = { calculatedEvents: { computed: number, inputDecimalPlaces: number, samples: Array<{ occurredTime: string, eventId: string, value: string | null, skippedReason: string | null, inputs: Array<{ key: string, value: string }> }>, skipped: Array<{ reason: string, count: number }> } };
+
+export type StartCalculatedMetricBackfillMutationVariables = Exact<{
+  input: CalculatedMetricBackfillInput;
+}>;
+
+
+export type StartCalculatedMetricBackfillMutation = { startCalculatedMetricBackfill: { token: string, status: CalculatedMetricBackfillStatus } };
+
+export type CancelCalculatedMetricBackfillMutationVariables = Exact<{
+  token: string;
+}>;
+
+
+export type CancelCalculatedMetricBackfillMutation = { cancelCalculatedMetricBackfill: { token: string, status: CalculatedMetricBackfillStatus, cancelRequestedAt: string | null } };
+
+export type CalculatedMetricBackfillsQueryVariables = Exact<{
+  profileToken?: string | null | undefined;
+  first?: number | null | undefined;
+}>;
+
+
+export type CalculatedMetricBackfillsQuery = { calculatedMetricBackfills: { nextCursor: string | null, nodes: Array<{ token: string, status: CalculatedMetricBackfillStatus, profileToken: string, profileVersion: number, metricKeys: Array<string>, warnings: Array<string>, from: string, to: string, devicesTotal: number | null, devicesDone: number, progress: number | null, samples: number, computed: number, written: number, alreadyPresent: number, windowsCompressed: number, windowsBeyondRetention: number, windowsRefreshed: number, storedInputPrecision: string, failure: string | null, createdAt: string, createdBy: string | null, startedAt: string | null, finishedAt: string | null, cancelRequestedAt: string | null, skipped: Array<{ reason: string, count: number }> }> } };
 
 export class TypedDocumentString<TResult, TVariables>
   extends String
@@ -148,3 +207,58 @@ export const CalculatedEventsDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<CalculatedEventsQuery, CalculatedEventsQueryVariables>;
+export const StartCalculatedMetricBackfillDocument = new TypedDocumentString(`
+    mutation StartCalculatedMetricBackfill($input: CalculatedMetricBackfillInput!) {
+  startCalculatedMetricBackfill(input: $input) {
+    token
+    status
+  }
+}
+    `) as unknown as TypedDocumentString<StartCalculatedMetricBackfillMutation, StartCalculatedMetricBackfillMutationVariables>;
+export const CancelCalculatedMetricBackfillDocument = new TypedDocumentString(`
+    mutation CancelCalculatedMetricBackfill($token: String!) {
+  cancelCalculatedMetricBackfill(token: $token) {
+    token
+    status
+    cancelRequestedAt
+  }
+}
+    `) as unknown as TypedDocumentString<CancelCalculatedMetricBackfillMutation, CancelCalculatedMetricBackfillMutationVariables>;
+export const CalculatedMetricBackfillsDocument = new TypedDocumentString(`
+    query CalculatedMetricBackfills($profileToken: String, $first: Int) {
+  calculatedMetricBackfills(profileToken: $profileToken, first: $first) {
+    nodes {
+      token
+      status
+      profileToken
+      profileVersion
+      metricKeys
+      warnings
+      from
+      to
+      devicesTotal
+      devicesDone
+      progress
+      samples
+      computed
+      written
+      alreadyPresent
+      windowsCompressed
+      windowsBeyondRetention
+      windowsRefreshed
+      skipped {
+        reason
+        count
+      }
+      storedInputPrecision
+      failure
+      createdAt
+      createdBy
+      startedAt
+      finishedAt
+      cancelRequestedAt
+    }
+    nextCursor
+  }
+}
+    `) as unknown as TypedDocumentString<CalculatedMetricBackfillsQuery, CalculatedMetricBackfillsQueryVariables>;
