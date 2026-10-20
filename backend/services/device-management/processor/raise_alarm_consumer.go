@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"sync"
 
 	"github.com/devicechain-io/dc-device-management/model"
@@ -28,12 +29,20 @@ import (
 // alarm-events→notification flow (ADR-041/017) as before, now cleared by edge integration rather than
 // the retired measurement evaluator's per-sample re-evaluation.
 //
-// It is a dedicated consumer (alarm edges must not share a failure fate with any other pipeline) and
-// needs no dead-letter path: a request that repeatedly fails to apply is dropped after the redelivery
-// cap. Volume is low (one per rule edge), so it processes inline in the read loop rather than behind a
-// worker pool. An at-least-once, out-of-order redelivery is safe: the contributor reduction ignores a
-// stale edge and lets a resolve win a raise at an equal event time (RaiseAlarmRequest.OccurredTime), so
-// any order re-derives one deterministic alarm state.
+// It is a dedicated consumer (alarm edges must not share a failure fate with any other pipeline). An
+// at-least-once, out-of-order redelivery is safe: the contributor reduction ignores a stale edge and
+// lets a resolve win a raise at an equal event time (RaiseAlarmRequest.OccurredTime), so any order
+// re-derives one deterministic alarm state.
+//
+// THROUGHPUT IS DATABASE ROUND TRIPS, NOT CPU. One edge is about ten sequential round trips (the
+// device lookup and its preload, the alarm lookup, a write transaction with its audit row), and the
+// service is idle between them: measured against a real PostgreSQL the process used 17% of one core
+// at ~110 edges/s. So the read loop fans out to Workers lanes (config raiseAlarm.workers) rather
+// than applying inline. The lane is chosen by hashing (tenant, device, alarm key), so every edge for
+// ONE alarm goes to the same lane and is applied in the order it was read; edges for different
+// alarms overlap. Correctness never depended on that order (the fold is order-independent, and the
+// CAS retries a conflict); keeping it means a single replica does not manufacture the reordering
+// the fold exists to absorb. With Workers below 2 the loop applies inline, as before.
 //
 // SOLE ALARM-RAISE PATH: since the 6d cutover (ADR-057) deleted the measurement-driven evaluator, this
 // is the only RAISER of the (device, alarmKey) alarm row — there is no peer to double-raise or
@@ -46,6 +55,10 @@ type RaiseAlarmConsumer struct {
 	Microservice *core.Microservice
 	Reader       messaging.MessageReader
 	Api          model.DeviceManagementApi
+
+	// Workers is how many edges are applied at once (lanes). Below 2 the read loop applies
+	// inline. See the type comment for how an alarm's edges stay ordered.
+	Workers int
 
 	// RaiseAlarmMetrics is EMBEDDED BY VALUE, and built ONCE in the initialize phase
 	// rather than here. The consumer itself is constructed inside the NATS manager's
@@ -121,11 +134,12 @@ func NewRaiseAlarmMetrics(ms *core.Microservice) RaiseAlarmMetrics {
 // start.
 func NewRaiseAlarmConsumer(ms *core.Microservice, reader messaging.MessageReader,
 	callbacks core.LifecycleCallbacks, api model.DeviceManagementApi,
-	dead *deadletter.Sink, metrics RaiseAlarmMetrics) *RaiseAlarmConsumer {
+	dead *deadletter.Sink, metrics RaiseAlarmMetrics, workers int) *RaiseAlarmConsumer {
 	rc := &RaiseAlarmConsumer{
 		Microservice:      ms,
 		Reader:            reader,
 		Api:               api,
+		Workers:           workers,
 		RaiseAlarmMetrics: metrics,
 		dead:              dead,
 	}
@@ -165,12 +179,70 @@ func (rc *RaiseAlarmConsumer) ExecuteStart(ctx context.Context) error {
 // pacer has already ended the process, because a restart is the remedy for most of what gets
 // a read loop into that state, and a pod that reports ready while raising no alarms is not.
 func (rc *RaiseAlarmConsumer) readLoop(ctx context.Context) {
+	if rc.Workers < 2 {
+		messaging.RunConsumer(ctx, rc.Reader, rc.pacer(), func(msg messaging.Message) bool {
+			rc.handle(ctx, msg)
+			// handle never ends the loop of its own accord; the shutdown it used to report here
+			// is caught by RunConsumer's check before the next read.
+			return true
+		})
+		return
+	}
+
+	lanes := make([]chan messaging.Message, rc.Workers)
+	var laneWG sync.WaitGroup
+	for i := range lanes {
+		lanes[i] = make(chan messaging.Message, raiseLaneDepth)
+		laneWG.Add(1)
+		go func(lane <-chan messaging.Message) {
+			defer laneWG.Done()
+			for msg := range lane {
+				// Once shutdown has begun a queued edge is left UNACKED, which is what a
+				// transient failure does anyway: the broker redelivers it to the next owner of
+				// the durable, and the fold absorbs the repeat.
+				if ctx.Err() != nil {
+					continue
+				}
+				rc.handle(ctx, msg)
+			}
+		}(lanes[i])
+	}
 	messaging.RunConsumer(ctx, rc.Reader, rc.pacer(), func(msg messaging.Message) bool {
-		rc.handle(ctx, msg)
-		// handle never ends the loop of its own accord; the shutdown it used to report here
-		// is caught by RunConsumer's check before the next read.
-		return true
+		select {
+		case lanes[raiseLaneFor(msg, len(lanes))] <- msg:
+			return true
+		case <-ctx.Done():
+			return false
+		}
 	})
+	// The read loop is the lanes' only sender, so closing here cannot race a send. Waiting
+	// keeps the promise ExecuteStop makes: nothing is being applied once it returns.
+	for _, lane := range lanes {
+		close(lane)
+	}
+	laneWG.Wait()
+}
+
+// raiseLaneDepth is how many edges may wait behind the one a lane is applying. Small on purpose:
+// the queue exists to keep a lane busy across a read, not to hold a backlog, and every queued
+// edge is an unacked delivery counting against the consumer's AckWait.
+const raiseLaneDepth = 4
+
+// raiseLaneFor picks the lane for a message: a stable hash of (subject, device, alarm key), so
+// all edges for one alarm of one tenant share a lane. A message that does not decode lands on
+// lane 0, where handle drops it as the poison it is.
+func raiseLaneFor(msg messaging.Message, lanes int) int {
+	req, err := model.UnmarshalRaiseAlarmRequest(msg.Value)
+	if err != nil {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(msg.Subject))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(req.DeviceToken))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(req.AlarmKey))
+	return int(h.Sum32() % uint32(lanes))
 }
 
 // handle applies one raise-alarm request and acks or leaves it unacked. A no-tenant subject, an

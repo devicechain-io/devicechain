@@ -5,12 +5,15 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/presence"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 
 	"github.com/devicechain-io/dc-device-management/config"
 	dmodel "github.com/devicechain-io/dc-device-management/model"
 	dmtest "github.com/devicechain-io/dc-device-management/test"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 )
 
 // These tests cover the geofence stamp (ADR-078): the tenant's active fence-set version
@@ -42,7 +45,7 @@ func locationEvent() *esmodel.UnresolvedEvent {
 	lat, lon := "33.7490", "-84.3880"
 	return &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Location,
+		EventType: eventtype.Location,
 		Payload: &esmodel.UnresolvedLocationsPayload{
 			Entries: []esmodel.UnresolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		},
@@ -50,7 +53,7 @@ func locationEvent() *esmodel.UnresolvedEvent {
 }
 
 // resolveOne runs one event through the standard-event path and returns the resolved event.
-func resolveOne(t *testing.T, api *dmtest.MockApi, event *esmodel.UnresolvedEvent) *dmodel.ResolvedEvent {
+func resolveOne(t *testing.T, api *dmtest.MockApi, event *esmodel.UnresolvedEvent) *resolvedevent.ResolvedEvent {
 	t.Helper()
 	rez := NewEventResolver(1, api, config.AuthModeOptional, EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	device := deviceWithToken("TEST-123")
@@ -131,7 +134,7 @@ func TestNonLocationEventsCarryNoFenceSetVersion(t *testing.T) {
 
 	measurement := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Measurement,
+		EventType: eventtype.Measurement,
 		Payload: &esmodel.UnresolvedMeasurementsPayload{
 			Entries: []esmodel.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"temperature": "42"}},
@@ -140,16 +143,16 @@ func TestNonLocationEventsCarryNoFenceSetVersion(t *testing.T) {
 	}
 	alert := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.Alert,
+		EventType: eventtype.Alert,
 		Payload: &esmodel.UnresolvedAlertsPayload{
 			Entries: []esmodel.UnresolvedAlertEntry{{Type: "overheat", Level: 1, Message: "hot"}},
 		},
 	}
 	stateChange := &esmodel.UnresolvedEvent{
 		Device:    "TEST-123",
-		EventType: esmodel.StateChange,
+		EventType: eventtype.StateChange,
 		Payload: &esmodel.UnresolvedStateChangePayload{
-			State: esmodel.PresenceConnected, SessionId: "12345",
+			State: presence.StateConnected, SessionId: "12345",
 		},
 	}
 

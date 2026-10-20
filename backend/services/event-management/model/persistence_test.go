@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -74,7 +74,7 @@ func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
 	ctx := core.WithTenant(context.Background(), "acme")
 	occurred := time.Date(2026, 7, 1, 20, 0, 0, 0, time.UTC)
 
-	parent := Event{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, Source: "http1"}
+	parent := Event{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, Source: "http1"}
 	if _, err := api.CreateMeasurementEvents(ctx, api.RDB.DB(ctx),
 		[]*MeasurementEventCreateRequest{{Event: parent,
 			EntryOccurredTime: parent.OccurredTime, Name: "temperature", Value: f64(21.5)}}); err != nil {
@@ -82,8 +82,8 @@ func TestMeasurementsQueryableByEachAnchor(t *testing.T) {
 	}
 	// The device is assigned to a customer AND an area: one anchor row per target.
 	if err := api.CreateEventAnchors(ctx, api.RDB.DB(ctx), []*EventAnchor{
-		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
-		{DeviceToken: "device-4", EventType: esmodel.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
+		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "customer", AnchorToken: "cust-3"},
+		{DeviceToken: "device-4", EventType: eventtype.Measurement, OccurredTime: occurred, AnchorType: "area", AnchorToken: "area-9"},
 	}); err != nil {
 		t.Fatalf("CreateEventAnchors: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 
 	parent := Event{
 		DeviceToken:   "device-4",
-		EventType:     esmodel.Measurement,
+		EventType:     eventtype.Measurement,
 		OccurredTime:  occurred,
 		Source:        "http1",
 		ProcessedTime: occurred,
@@ -153,7 +153,7 @@ func TestCreateMeasurementEventsWritesParentAndChildren(t *testing.T) {
 		t.Fatalf("expected 2 measurement rows, got %d", len(children))
 	}
 	for _, c := range children {
-		if c.DeviceToken != "device-4" || c.EventType != esmodel.Measurement {
+		if c.DeviceToken != "device-4" || c.EventType != eventtype.Measurement {
 			t.Fatalf("child fk columns do not match parent: %+v", c)
 		}
 	}

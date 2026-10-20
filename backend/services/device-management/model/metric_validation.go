@@ -6,6 +6,7 @@ package model
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -143,6 +144,9 @@ func ValidateMetricValue(def *ResolvedMetric, value string) error {
 		if err != nil {
 			return fmt.Errorf("metric %q: %q is not a valid %s", def.m.MetricKey, value, def.m.DataType)
 		}
+		if err := CheckStorableMeasurement(f); err != nil {
+			return fmt.Errorf("metric %q: %q: %w", def.m.MetricKey, value, err)
+		}
 		if err := checkBounds(def, f); err != nil {
 			return err
 		}
@@ -150,6 +154,9 @@ func ValidateMetricValue(def *ResolvedMetric, value string) error {
 		i, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return fmt.Errorf("metric %q: %q is not a valid %s", def.m.MetricKey, value, def.m.DataType)
+		}
+		if err := CheckStorableMeasurement(float64(i)); err != nil {
+			return fmt.Errorf("metric %q: %q: %w", def.m.MetricKey, value, err)
 		}
 		if err := checkBounds(def, float64(i)); err != nil {
 			return err
@@ -166,6 +173,23 @@ func ValidateMetricValue(def *ResolvedMetric, value string) error {
 		return nil
 	}
 	return checkEnum(def, value)
+}
+
+// CheckStorableMeasurement refuses a numeric measurement value the event store cannot hold:
+// NaN or +/-Inf, and a magnitude of calcfield.StoredMagnitude or more (the column is
+// decimal(20,8)). ParseFloat accepts "NaN" and "Inf", and NaN fails every comparison, so
+// without this a declared Min/Max would pass it. Refusing here is the same outcome the
+// store would reach later, but for one event instead of after three extra transactions,
+// and NaN would not be refused by the store at all: the column takes it, and it then
+// poisons every average and rollup over its bucket.
+func CheckStorableMeasurement(f float64) error {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return fmt.Errorf("is not a finite number")
+	}
+	if math.Abs(f) >= storedMeasurementMagnitude {
+		return fmt.Errorf("is beyond the storable range (magnitude must be below %g)", storedMeasurementMagnitude)
+	}
+	return nil
 }
 
 // checkBounds enforces the optional MinValue/MaxValue numeric bounds.

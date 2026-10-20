@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/entityevent"
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/entity"
@@ -161,7 +162,7 @@ func (api *Api) deleteEdgeEntity(ctx context.Context, etype entity.Type, model i
 	// event-management's anchor reconciliation sweep, and event-processing's reconcile of
 	// its device roster and threshold attributes — so a publish failure is logged, not
 	// surfaced.
-	api.emitEntityDeleted(ctx, &EntityDeletedEvent{
+	api.emitEntityDeleted(ctx, &entityevent.EntityDeletedEvent{
 		EntityType:  etype,
 		EntityId:    id,
 		EntityToken: token,

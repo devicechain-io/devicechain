@@ -198,6 +198,15 @@ func precheckAreaChange(ctx context.Context, st *State) error {
 	return nil
 }
 
+// precheckUpgradeMount is precheckAreaChange for a plain upgrade: the same refusal, asked of
+// the area set the new chart will render over the declaration, before the version is recorded.
+func precheckUpgradeMount(ctx context.Context, st *State) error {
+	if err := checkObjectStoreMountable(ctx, st); err != nil {
+		return fmt.Errorf("upgrading instance %q: %w. Nothing has been changed", st.Instance, err)
+	}
+	return nil
+}
+
 // sayAreaChange is the opening line of an enable-area run: what was asked, and what it
 // means here.
 func sayAreaChange(st *State) {

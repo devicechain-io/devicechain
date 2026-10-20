@@ -593,3 +593,66 @@ func TestAReleasedReplicatedStoreFinishesUnderSteadyLoad(t *testing.T) {
 	t.Logf("published %d, read %d during the check", published.Load(), read.Load())
 	require.True(t, rep.finished, "a released replicated store under steady traffic never finished")
 }
+
+// A durable that has acked everything up to the drain cut is drained whatever the replicas
+// are doing: the ack floor a lagging leader reports can only be LOWER than the truth, so a
+// floor at or past the cut needs no settled cluster. Asked after the settled check, as it was,
+// a replica that never comes back held the durable forever. The store scan for a durable whose
+// floor is still below the cut keeps needing a settled cluster.
+//
+// GUARD: kills a verdict that checks the cluster before the ack floor, and one that drops the
+// settled check from the store scan.
+func TestADurableAckedPastTheCutIsDrainedWithAReplicaDown(t *testing.T) {
+	fastMqttStoreLookup(t)
+	dc := startDrainCluster(t)
+	clock := newFcClock()
+	on := dc.manager(true, dc.js, clock)
+	_, err := on.ReconcileMqttFailClosed(context.Background())
+	require.NoError(t, err)
+	ev := fcDurable(t, guardInstance, MqttFailClosedEvents)
+	r := newDrainReader(t, dc.js, ev)
+	acked := dc.publish(0, 3_000)
+
+	s, keep := dc.quietServer()
+	dc.keepOff(s, keep)
+	off := dc.manager(false, dc.js, clock)
+	clock.advance(mqttFailClosedLeaseTTL)
+	rep, err := off.checkMqttFailClosed(context.Background(), nil)
+	require.NoError(t, err)
+	require.True(t, rep.released, "premise: the store was released")
+	clock.advance(mqttFailClosedReleaseGrace)
+	// The first pass after the grace records the cut; nothing has been read, so it does not finish.
+	rep, err = off.checkMqttFailClosed(context.Background(), nil)
+	require.NoError(t, err)
+	require.False(t, rep.finished, "premise: nothing was read, so the release cannot finish")
+	si, err := dc.js.StreamInfo(MqttMessageStore)
+	require.NoError(t, err)
+	cut := off.marksOf(si).drainTo
+	require.NotZero(t, cut, "premise: the drain cut was recorded")
+
+	r.readAll(acked, time.Minute)
+	require.Zero(t, r.unread(acked), "premise: everything was read")
+	dc.servers[s].Shutdown()
+	require.Eventually(t, func() bool {
+		si, err := dc.js.StreamInfo(MqttMessageStore)
+		return err == nil && unsettledGroup(si.Cluster, 3, true) != ""
+	}, 60*time.Second, 250*time.Millisecond, "premise: the store reports the replica gone")
+
+	require.Eventually(t, func() bool {
+		v, absent, err := off.mqttDurableDrained(context.Background(), ev, cut)
+		return err == nil && !absent && v.drained
+	}, 30*time.Second, 250*time.Millisecond, "a durable acked past the cut was held by a replica that is down")
+
+	// The control: a durable whose floor is still below the cut falls to the store scan, which
+	// still wants every replica.
+	for _, d := range MqttFailClosedDurables(guardInstance) {
+		ci, err := dc.js.ConsumerInfo(MqttMessageStore, d.Name)
+		require.NoError(t, err)
+		if ci.AckFloor.Stream >= cut {
+			continue
+		}
+		v, _, err := off.mqttDurableDrained(context.Background(), d, cut)
+		require.NoError(t, err)
+		require.Truef(t, v.unsettled && !v.drained, "the %s durable's store scan ran with a replica down: %+v", d.Kind, v)
+	}
+}

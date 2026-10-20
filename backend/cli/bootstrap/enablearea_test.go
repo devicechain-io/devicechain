@@ -490,3 +490,128 @@ func TestAddingLwm2mDayTwoIsSaid(t *testing.T) {
 		t.Errorf("notes = %q, want one about the pre-shared keys", notes)
 	}
 }
+
+// 🔴 A PLAIN UPGRADE ASKS THE SAME QUESTION BEFORE IT RECORDS ANYTHING. A new chart over an
+// instance whose declaration already carries update-management, on a cluster dcctl was only
+// pointed at with a ReadWriteOnce store, is refused by the chart at the Helm step: after
+// recordUpgradedVersion has written a version that never happened.
+func TestUpgradeRefusesAnAreaSetTheObjectStoreCannotMountBeforeRecording(t *testing.T) {
+	inst := readyGuide()
+	inst.Spec.Managed = false
+	inst.Spec.ExtraFunctionalAreas = []string{"update-management"}
+	inst.Spec.ObjectStore = &dcv1beta1.ObjectStoreSpec{Backend: dcv1beta1.ObjectStoreFilesystem, Size: "1Gi"}
+	st := &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}}); err != nil {
+		t.Fatal(err)
+	}
+	err := precheckUpgradeMount(t.Context(), st)
+	if err == nil || !strings.Contains(err.Error(), "ReadWriteOnce") || !strings.Contains(err.Error(), "Nothing has been changed") {
+		t.Fatalf("a plain upgrade onto an unmountable area set was let through: %v", err)
+	}
+
+	// The control: the same instance with a store that can be shared.
+	inst.Spec.ObjectStore.AccessMode = "ReadWriteMany"
+	st = &State{Instance: "guide", Provider: "local", Values: maps.Clone(compactState(false).Values)}
+	if err := applyUpgradeDeclaration(st, inst, UpgradeOptions{Options: Options{Instance: "guide"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := precheckUpgradeMount(t.Context(), st); err != nil {
+		t.Errorf("a ReadWriteMany store was refused on a plain upgrade: %v", err)
+	}
+}
+
+// Upgrade must make that check before the version is recorded, and must act on its answer.
+// Held by the source, as above, because Upgrade itself needs a cluster: hydrateUpgradeState
+// reads the operator, the declaration and the credentials back before the branch is reached.
+//
+// Order alone is not enough. A call whose error is dropped (`_ = precheckUpgradeMount(...)`),
+// or one nested under a further condition (`if opts.DryRun {...}`), still comes first in the
+// source and refuses nothing. So the call must be the init of an `if err != nil` that
+// returns, standing directly in the plain-upgrade branch of `if st.AreaChange != nil`.
+func TestTheUpgradeMountPrecheckPrecedesTheRecordedVersion(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "upgrade.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var upgrade *ast.FuncDecl
+	for _, d := range file.Decls {
+		if fn, ok := d.(*ast.FuncDecl); ok && fn.Recv == nil && fn.Name.Name == "Upgrade" {
+			upgrade = fn
+		}
+	}
+	if upgrade == nil {
+		t.Fatal("upgrade.go declares no Upgrade; this test is looking at the wrong thing")
+	}
+	callsNamed := func(n ast.Node, name string) (pos []token.Pos) {
+		ast.Inspect(n, func(n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); ok {
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == name {
+					pos = append(pos, call.Pos())
+				}
+			}
+			return true
+		})
+		return pos
+	}
+	records := callsNamed(upgrade.Body, "recordUpgradedVersion")
+	if len(records) == 0 {
+		t.Fatal("Upgrade no longer calls recordUpgradedVersion; this test is looking at the wrong thing")
+	}
+
+	// The branch: the first `if st.AreaChange != nil { ... } else { <plain upgrade> }` at the top level.
+	var plain *ast.BlockStmt
+	for _, stmt := range upgrade.Body.List {
+		ifs, ok := stmt.(*ast.IfStmt)
+		if !ok {
+			continue
+		}
+		if c, ok := ifs.Cond.(*ast.BinaryExpr); ok && c.Op == token.NEQ {
+			if sel, ok := c.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "AreaChange" && plain == nil {
+				plain, _ = ifs.Else.(*ast.BlockStmt)
+			}
+		}
+	}
+	if plain == nil {
+		t.Fatal("Upgrade has no plain-upgrade branch (the else of `if st.AreaChange != nil`); this test is looking at the wrong thing")
+	}
+
+	var guard *ast.IfStmt
+	for _, stmt := range plain.List {
+		ifs, ok := stmt.(*ast.IfStmt)
+		if !ok || ifs.Init == nil || len(callsNamed(ifs.Init, "precheckUpgradeMount")) == 0 {
+			continue
+		}
+		guard = ifs
+	}
+	if guard == nil {
+		t.Fatalf("the plain-upgrade branch does not refuse on precheckUpgradeMount directly "+
+			"(`if err := precheckUpgradeMount(ctx, st); err != nil { return err }`); calls found anywhere in Upgrade: %d",
+			len(callsNamed(upgrade.Body, "precheckUpgradeMount")))
+	}
+	assign, ok := guard.Init.(*ast.AssignStmt)
+	cond, cok := guard.Cond.(*ast.BinaryExpr)
+	if !ok || len(assign.Lhs) != 1 || !cok || cond.Op != token.NEQ {
+		t.Fatalf("the precheck at %s is not `if err := ...; err != nil`", fset.Position(guard.Pos()))
+	}
+	lhs, lok := assign.Lhs[0].(*ast.Ident)
+	cx, xok := cond.X.(*ast.Ident)
+	if !lok || !xok || lhs.Name != cx.Name {
+		t.Fatalf("the precheck at %s tests something other than its own error", fset.Position(guard.Pos()))
+	}
+	returns := false
+	for _, s := range guard.Body.List {
+		if r, ok := s.(*ast.ReturnStmt); ok && len(r.Results) == 1 {
+			if id, ok := r.Results[0].(*ast.Ident); ok && id.Name == lhs.Name {
+				returns = true
+			}
+		}
+	}
+	if !returns {
+		t.Fatalf("the precheck at %s does not return its refusal", fset.Position(guard.Pos()))
+	}
+	if guard.Pos() > records[0] {
+		t.Errorf("Upgrade refuses on precheckUpgradeMount (%s) after recordUpgradedVersion (%s)",
+			fset.Position(guard.Pos()), fset.Position(records[0]))
+	}
+}

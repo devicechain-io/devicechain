@@ -5,23 +5,21 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
 	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
-	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
 // presenceAt is a resolved presence transition at stream sequence seq, marked as a disabled
 // device's when disabled is set.
 func presenceAt(t *testing.T, seq uint64, ack *fakeAck, occurred time.Time, disabled bool) messaging.Message {
 	t.Helper()
-	b, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
+	b, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: "dev-1", OccurredTime: occurred, ProcessedTime: occurred,
-		EventType: esmodel.StateChange, SourceDeviceDisabled: disabled,
-		Payload: &dmmodel.ResolvedStateChangePayload{State: "DISCONNECTED", SessionId: 9},
+		EventType: eventtype.StateChange, SourceDeviceDisabled: disabled,
+		Payload: &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", SessionId: 9},
 	})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

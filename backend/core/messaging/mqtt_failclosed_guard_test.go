@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"testing"
@@ -125,8 +126,8 @@ func startGuardBroker(t *testing.T) *guardBroker {
 	b := &guardBroker{
 		t:        t,
 		storeDir: dctest.JetStreamStoreDir(t),
-		natsPort: dctest.FreeTCPPort(t),
-		mqttPort: dctest.FreeTCPPort(t),
+		natsPort: -1,
+		mqttPort: -1,
 	}
 	b.start()
 	t.Cleanup(b.stop)
@@ -147,6 +148,11 @@ func (b *guardBroker) start() {
 	go srv.Start()
 	require.True(b.t, srv.ReadyForConnections(15*time.Second), "the test broker never became ready")
 	b.srv = srv
+	// The first start binds both ports itself (-1); read them back so a restart can come
+	// back on the SAME ports, which is the point of restart(). That rebind is the one place
+	// a released port is reused, and it has to be: the clients under test reconnect to it.
+	b.natsPort = srv.Addr().(*net.TCPAddr).Port
+	b.mqttPort = dctest.MQTTPort(b.t, srv)
 	nc, err := nats.Connect(srv.ClientURL())
 	require.NoError(b.t, err)
 	js, err := nc.JetStream()

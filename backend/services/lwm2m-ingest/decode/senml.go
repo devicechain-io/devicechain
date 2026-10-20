@@ -136,6 +136,11 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, Sk
 		baseVersion = senmlVersion
 		skips       Skips
 	)
+	// ONE receipt instant for the whole pack. Read per record, the clock could tick between two
+	// records of one Notify and date them a millisecond apart, which splits them into separate
+	// samples downstream: a calculated metric over both would then silently not compute.
+	receipt := now()
+	packNow := func() time.Time { return receipt }
 	out := make([]adapter.Sample, 0, len(records))
 	for i := range records {
 		r := &records[i]
@@ -183,7 +188,7 @@ func decodeSenmlJSON(payload []byte, now func() time.Time) ([]adapter.Sample, Sk
 		out = append(out, adapter.Sample{
 			Name:  name,
 			Value: value,
-			Time:  resolveTimeMs(baseTime, r.Time, now),
+			Time:  resolveTimeMs(baseTime, r.Time, packNow),
 		})
 	}
 	return out, skips, nil

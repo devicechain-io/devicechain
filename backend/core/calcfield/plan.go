@@ -381,3 +381,74 @@ func (p *Plan) Eval(s *Sample, i int) Result {
 	}
 	return r
 }
+
+// SingleFormulaPlan wraps one already-compiled formula as a one-step Plan over env, so a caller
+// that holds a Formula (a draft being previewed) evaluates it through the same Plan.Eval as a
+// whole profile does. The step is not compiled again: it evaluates exactly the Formula it is
+// given, has no dependencies, and writes nothing back to the sample.
+func SingleFormulaPlan(env *Env, key string, f *Formula) *Plan {
+	return &Plan{env: env, steps: []Step{{Key: key, Formula: f, Depth: 1, feed: -1}}}
+}
+
+// StepIndex is the position, in evaluation order, of the calculated metric key, for Eval.
+func (p *Plan) StepIndex(key string) (int, bool) {
+	for i := range p.steps {
+		if p.steps[i].Key == key {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// Closure returns keys together with every calculated metric they read, directly or through
+// others, in evaluation order (a metric follows everything it reads) with each key once. It is
+// what must be evaluated to compute keys correctly: evaluating the keys alone would feed a
+// chained metric an absent input.
+//
+// It refuses, naming the metric, a key the plan does not have and any metric in the closure
+// that cannot run (it does not compile, is in a cycle, or ends a chain deeper than
+// MaxChainDepth): a closure with a broken member would compute a plausible-looking value from a
+// missing input. Cycles cannot reach the walk (NewPlan removes every ring's edges); the visited
+// set bounds it regardless.
+func (p *Plan) Closure(keys []string) ([]string, error) {
+	need := make(map[string]struct{}, len(keys))
+	var visit func(key, reader string) error
+	visit = func(key, reader string) error {
+		if _, ok := need[key]; ok {
+			return nil
+		}
+		i, ok := p.StepIndex(key)
+		if !ok {
+			if reader == "" {
+				return fmt.Errorf("calculated metric %q is not in the plan", key)
+			}
+			return fmt.Errorf("calculated metric %q reads %q, which is not in the plan", reader, key)
+		}
+		st := &p.steps[i]
+		if st.Formula == nil {
+			if reader != "" {
+				return fmt.Errorf("calculated metric %q reads %q, which cannot run: %w", reader, key, st.Err)
+			}
+			return fmt.Errorf("calculated metric %q cannot run: %w", key, st.Err)
+		}
+		need[key] = struct{}{}
+		for _, d := range st.deps {
+			if err := visit(d, key); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, k := range keys {
+		if err := visit(k, ""); err != nil {
+			return nil, err
+		}
+	}
+	out := make([]string, 0, len(need))
+	for i := range p.steps {
+		if _, ok := need[p.steps[i].Key]; ok {
+			out = append(out, p.steps[i].Key)
+		}
+	}
+	return out, nil
+}

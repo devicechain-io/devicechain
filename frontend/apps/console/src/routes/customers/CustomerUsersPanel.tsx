@@ -35,7 +35,7 @@ export function CustomerUsersPanel({ customerToken }: { customerToken: string })
     () => listAllMembers({ scopeAnchor: customerAnchor(customerToken) }),
     [version, customerToken],
   );
-  const members = data ?? [];
+  const members = data?.members ?? [];
   const names = useScopeNames(members.flatMap((m) => scopeRefs(m.scope)));
 
   return (
@@ -67,14 +67,21 @@ export function CustomerUsersPanel({ customerToken }: { customerToken: string })
       ) : members.length === 0 ? (
         <EmptyState description={t('customerUsersEmpty')} />
       ) : (
-        <MemberTable
-          members={members}
-          names={names}
-          canWrite={canWrite}
-          self={claims?.username ?? ''}
-          onEdit={(m) => setSheet(editMode(m))}
-          onChanged={reload}
-        />
+        <>
+          {data?.truncated && (
+            <p role="status" className="text-sm text-muted-foreground" data-testid="users-truncated">
+              {t('customerUsersTruncated', { count: members.length })}
+            </p>
+          )}
+          <MemberTable
+            members={members}
+            names={names}
+            canWrite={canWrite}
+            self={claims?.username ?? ''}
+            onEdit={(m) => setSheet(editMode(m))}
+            onChanged={reload}
+          />
+        </>
       )}
     </div>
   );

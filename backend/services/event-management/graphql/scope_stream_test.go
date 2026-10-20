@@ -7,27 +7,25 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http/httptest"
-	"net/url"
-	"strconv"
-	"strings"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	"github.com/gorilla/websocket"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
 )
 
 // The live measurement stream under a scoped caller (customer users). The stream reads
@@ -77,23 +75,23 @@ func startStreamFixture(t *testing.T) *streamFixture {
 func (f *streamFixture) publishReading(t *testing.T, device, anchor, name, value string) {
 	t.Helper()
 	// An empty anchor is an UNASSIGNED device: the event carries no anchors at all.
-	var anchors []dmmodel.ResolvedAnchor
+	var anchors []resolvedevent.ResolvedAnchor
 	if anchor != "" {
 		kind, token, ok := strings.Cut(anchor, ":")
 		require.True(t, ok)
-		anchors = []dmmodel.ResolvedAnchor{{AnchorType: kind, AnchorToken: token, RelationshipId: 1}}
+		anchors = []resolvedevent.ResolvedAnchor{{AnchorType: kind, AnchorToken: token, RelationshipId: 1}}
 	}
 	now := time.Now().UTC().Truncate(time.Millisecond)
-	encoded, err := dmproto.MarshalResolvedEvent(&dmmodel.ResolvedEvent{
+	encoded, err := resolvedevent.MarshalResolvedEvent(&resolvedevent.ResolvedEvent{
 		Source:            "mqtt",
 		SourceDeviceToken: device,
 		Anchors:           anchors,
 		OccurredTime:      now,
 		ProcessedTime:     now,
-		EventType:         esmodel.Measurement,
-		Payload: &dmmodel.ResolvedMeasurementsPayload{Entries: []dmmodel.ResolvedMeasurementsEntry{{
+		EventType:         eventtype.Measurement,
+		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: now,
-			Entries:      []dmmodel.ResolvedMeasurementEntry{{Name: name, Value: value}},
+			Entries:      []resolvedevent.ResolvedMeasurementEntry{{Name: name, Value: value}},
 		}}},
 	})
 	require.NoError(t, err)

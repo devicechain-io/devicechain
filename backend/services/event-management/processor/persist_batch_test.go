@@ -8,22 +8,20 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
-	"net"
-	"sync"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	emconfig "github.com/devicechain-io/dc-event-management/config"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/prometheus/client_golang/prometheus"
 	"gorm.io/gorm"
+	"net"
+	"sync"
+	"testing"
+	"time"
 )
 
 // Batched persistence, by VALUE: how many transactions a set of messages takes, which
@@ -70,7 +68,7 @@ func newBatchRig(t *testing.T, maxBatch int) *batchRig {
 		defer r.mu.Unlock()
 		r.invalid++
 	}
-	ep.Failed = func(tenant string, reason uint, ev dmodel.ResolvedEvent, _ error, _ string) {
+	ep.Failed = func(tenant string, reason uint, ev resolvedevent.ResolvedEvent, _ error, _ string) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		r.failures = append(r.failures, failure{tenant: tenant, reason: reason, device: ev.SourceDeviceToken})
@@ -163,7 +161,7 @@ func (r *batchRig) messages(t *testing.T, n int, tenant string, withAltId bool) 
 func poisoned(t *testing.T, log *ackLog, i int, tenant string) messaging.Message {
 	t.Helper()
 	ev := batchEvent(i, true, batchT0)
-	ev.Payload.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value = "not-a-number"
+	ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value = "not-a-number"
 	return consumed(t, log, i, tenant, 1, ev)
 }
 
@@ -297,7 +295,7 @@ func TestARefusedMessageDoesNotFailItsBatchMates(t *testing.T) {
 			}
 			var want []failure
 			if tc.poison {
-				want = []failure{{tenant: fenceCostTenant, reason: uint(dmproto.FailureReason_Invalid), device: "dev-3"}}
+				want = []failure{{tenant: fenceCostTenant, reason: uint(resolvedevent.FailureReason_Invalid), device: "dev-3"}}
 			}
 			if got := r.reported(); len(got) != len(want) || (len(want) == 1 && got[0] != want[0]) {
 				t.Errorf("reported %+v; want %+v", got, want)
@@ -328,7 +326,7 @@ func TestAMessageRefusedPartWayLeavesNoRowsAndItsBatchMatesAreStored(t *testing.
 		}
 	}
 	if got := r.reported(); len(got) != 1 || got[0].device != "dev-3" ||
-		got[0].reason != uint(dmproto.FailureReason_Invalid) {
+		got[0].reason != uint(resolvedevent.FailureReason_Invalid) {
 		t.Errorf("reported %+v; want dev-3 as invalid", got)
 	}
 	if got := len(r.acks.acked()); got != 8 {

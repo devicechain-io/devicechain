@@ -27,17 +27,15 @@ package processor
 import (
 	"context"
 	"fmt"
-	"sync"
-	"testing"
-	"time"
-
-	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	"github.com/devicechain-io/dc-event-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/rs/zerolog"
+	"sync"
+	"testing"
+	"time"
 )
 
 // pgBatchRig is a batching worker over the real server, with what it reports recorded.
@@ -58,7 +56,7 @@ func newPgBatchRig(t *testing.T, instance string, maxBatch int) *pgBatchRig {
 	r := &pgBatchRig{api: api, mgr: mgr, acks: &ackLog{api: api}}
 	r.ep = &EventPersistenceWorker{Api: api, MaxBatch: maxBatch,
 		Invalid: func(err error, _ messaging.Message) { t.Errorf("unexpected invalid message: %v", err) },
-		Failed: func(tenant string, reason uint, ev dmodel.ResolvedEvent, _ error, _ string) {
+		Failed: func(tenant string, reason uint, ev resolvedevent.ResolvedEvent, _ error, _ string) {
 			r.mu.Lock()
 			defer r.mu.Unlock()
 			r.failures = append(r.failures, failure{tenant: tenant, reason: reason, device: ev.SourceDeviceToken})
@@ -104,7 +102,7 @@ func TestAValueTheServerRefusesInABatchOnPostgres(t *testing.T) {
 		ev := batchEvent(i, true, base)
 		if i == 3 {
 			// numeric(20,8) holds 12 integer digits; this parses and overflows at the INSERT.
-			ev.Payload.(*dmodel.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value = "1e13"
+			ev.Payload.(*resolvedevent.ResolvedMeasurementsPayload).Entries[0].Entries[0].Value = "1e13"
 		}
 		msgs = append(msgs, consumed(t, r.acks, i, tenant, 1, ev))
 	}
@@ -120,7 +118,7 @@ func TestAValueTheServerRefusesInABatchOnPostgres(t *testing.T) {
 		t.Errorf("the refused message left %d event rows; want none", got)
 	}
 	if len(r.failures) != 1 || r.failures[0].device != "dev-3" ||
-		r.failures[0].reason != uint(dmproto.FailureReason_Invalid) {
+		r.failures[0].reason != uint(resolvedevent.FailureReason_Invalid) {
 		t.Errorf("reported %+v; want dev-3 as invalid", r.failures)
 	}
 	if got := len(r.acks.acked()); got != 8 {
@@ -364,7 +362,7 @@ func BenchmarkPersistBatch(b *testing.B) {
 			newWorker := func(ch <-chan messaging.Message) *EventPersistenceWorker {
 				return &EventPersistenceWorker{Api: api, Unpersisted: ch, MaxBatch: batch,
 					Invalid: func(err error, _ messaging.Message) { failed.Store("invalid", err) },
-					Failed: func(_ string, _ uint, _ dmodel.ResolvedEvent, err error, _ string) {
+					Failed: func(_ string, _ uint, _ resolvedevent.ResolvedEvent, err error, _ string) {
 						failed.Store("failed", err)
 					}}
 			}

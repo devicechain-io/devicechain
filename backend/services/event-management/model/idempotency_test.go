@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -46,7 +46,7 @@ func seedAltEvent(t *testing.T, api *Api, tenant, altId string, occurred time.Ti
 	ctx := core.WithTenant(context.Background(), tenant)
 	ev := &Event{
 		DeviceToken:  "device-100",
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 		OccurredTime: occurred,
 		Source:       "test",
 		AltId:        sql.NullString{String: altId, Valid: true},
@@ -104,7 +104,7 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 	// A second row with the same (tenant, alt_id, occurred_time) is rejected.
 	seedAltEvent(t, api, "A", "evt-1", occurred)
 	ctxA := core.WithTenant(context.Background(), "A")
-	dup := &Event{DeviceToken: "device-100", EventType: esmodel.Alert, OccurredTime: occurred, Source: "dup",
+	dup := &Event{DeviceToken: "device-100", EventType: eventtype.Alert, OccurredTime: occurred, Source: "dup",
 		AltId: sql.NullString{String: "evt-1", Valid: true}}
 	if err := api.RDB.DB(ctxA).Create(dup).Error; err == nil {
 		t.Fatal("expected the partial unique index to reject a duplicate alternateId")
@@ -112,7 +112,7 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 
 	// The same alt_id and instant from ANOTHER device of the tenant is a different message,
 	// not a redelivery, and is stored.
-	other := &Event{DeviceToken: "device-101", EventType: esmodel.Alert, OccurredTime: occurred, Source: "other",
+	other := &Event{DeviceToken: "device-101", EventType: eventtype.Alert, OccurredTime: occurred, Source: "other",
 		AltId: sql.NullString{String: "evt-1", Valid: true}}
 	if err := api.RDB.DB(ctxA).Create(other).Error; err != nil {
 		t.Fatalf("another device's event with the same alternateId must be stored: %v", err)
@@ -122,7 +122,7 @@ func TestAltIdUniqueIndexBackstop(t *testing.T) {
 	// the key), and two events with no alt_id never collide.
 	seedAltEvent(t, api, "B", "evt-1", occurred)
 	for i := 0; i < 2; i++ {
-		ev := &Event{DeviceToken: "device-200", EventType: esmodel.Location, OccurredTime: occurred, Source: "no-alt"}
+		ev := &Event{DeviceToken: "device-200", EventType: eventtype.Location, OccurredTime: occurred, Source: "no-alt"}
 		if err := api.RDB.DB(ctxA).Create(ev).Error; err != nil {
 			t.Fatalf("event without an alternateId must not be constrained: %v", err)
 		}

@@ -22,10 +22,9 @@ import (
 // gateway's own lazily-created streams exist (or not) exactly as in a cluster.
 func mqttGatewayBroker(t *testing.T) (nmgr *NatsManager, mqttURL string) {
 	t.Helper()
-	port := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, StoreDir: dctest.JetStreamStoreDir(t),
-		MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: port},
+		MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
@@ -36,7 +35,7 @@ func mqttGatewayBroker(t *testing.T) (nmgr *NatsManager, mqttURL string) {
 	t.Cleanup(nc.Close)
 	js, err := nc.JetStream()
 	require.NoError(t, err)
-	return failClosedManager(t, nc, js, guardInstance, false), fmt.Sprintf("tcp://127.0.0.1:%d", port)
+	return failClosedManager(t, nc, js, guardInstance, false), fmt.Sprintf("tcp://127.0.0.1:%d", dctest.MQTTPort(t, srv))
 }
 
 // connectMqttDevice makes the gateway create its streams, as the first device does.

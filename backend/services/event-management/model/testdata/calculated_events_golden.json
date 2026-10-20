@@ -1,0 +1,534 @@
+{
+ "boolean_guard": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:01:20Z",
+    "EventId": "aQ==",
+    "Inputs": [
+     {
+      "Key": "on",
+      "Value": "1"
+     },
+     {
+      "Key": "v",
+      "Value": "3"
+     }
+    ],
+    "Value": "1",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:30Z",
+    "EventId": "ag==",
+    "Inputs": [
+     {
+      "Key": "on",
+      "Value": "0"
+     },
+     {
+      "Key": "v",
+      "Value": "3"
+     }
+    ],
+    "Value": "0",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:40Z",
+    "EventId": "aw==",
+    "Inputs": [
+     {
+      "Key": "v",
+      "Value": "3"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   }
+  ],
+  "Computed": 2,
+  "Skipped": [
+   {
+    "Reason": "missing_input",
+    "Count": 1
+   }
+  ]
+ },
+ "empty_range": {
+  "Samples": [],
+  "Computed": 0,
+  "Skipped": []
+ },
+ "int_result": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:40Z",
+    "EventId": "ZQ==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "2"
+     }
+    ],
+    "Value": "3",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:50Z",
+    "EventId": "Zg==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "0"
+     }
+    ],
+    "Value": "1",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:00Z",
+    "EventId": "Zw==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "1"
+     }
+    ],
+    "Value": "2",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:10Z",
+    "EventId": "aA==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "1.5"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "invalid_input"
+   }
+  ],
+  "Computed": 3,
+  "Skipped": [
+   {
+    "Reason": "invalid_input",
+    "Count": 1
+   }
+  ]
+ },
+ "power": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:00Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "10"
+     },
+     {
+      "Key": "voltage",
+      "Value": "230"
+     }
+    ],
+    "Value": "2.3",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:05Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "2"
+     },
+     {
+      "Key": "voltage",
+      "Value": "100"
+     }
+    ],
+    "Value": "0.2",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:10Z",
+    "EventId": "Yg==",
+    "Inputs": [
+     {
+      "Key": "voltage",
+      "Value": "240"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   }
+  ],
+  "Computed": 2,
+  "Skipped": [
+   {
+    "Reason": "missing_input",
+    "Count": 1
+   }
+  ]
+ },
+ "power_constant": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:00Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "10"
+     },
+     {
+      "Key": "voltage",
+      "Value": "230"
+     }
+    ],
+    "Value": "4.6",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:05Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "2"
+     },
+     {
+      "Key": "voltage",
+      "Value": "100"
+     }
+    ],
+    "Value": "0.4",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:10Z",
+    "EventId": "Yg==",
+    "Inputs": [
+     {
+      "Key": "voltage",
+      "Value": "240"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   }
+  ],
+  "Computed": 2,
+  "Skipped": [
+   {
+    "Reason": "missing_input",
+    "Count": 1
+   }
+  ]
+ },
+ "power_constant_absent": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:00Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "10"
+     },
+     {
+      "Key": "voltage",
+      "Value": "230"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:05Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "2"
+     },
+     {
+      "Key": "voltage",
+      "Value": "100"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:10Z",
+    "EventId": "Yg==",
+    "Inputs": [
+     {
+      "Key": "voltage",
+      "Value": "240"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   }
+  ],
+  "Computed": 0,
+  "Skipped": [
+   {
+    "Reason": "missing_input",
+    "Count": 3
+   }
+  ]
+ },
+ "power_constant_garbage": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:00Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "10"
+     },
+     {
+      "Key": "voltage",
+      "Value": "230"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "invalid_input"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:05Z",
+    "EventId": "YQ==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "2"
+     },
+     {
+      "Key": "voltage",
+      "Value": "100"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "invalid_input"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:10Z",
+    "EventId": "Yg==",
+    "Inputs": [
+     {
+      "Key": "voltage",
+      "Value": "240"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "missing_input"
+   }
+  ],
+  "Computed": 0,
+  "Skipped": [
+   {
+    "Reason": "missing_input",
+    "Count": 1
+   },
+   {
+    "Reason": "invalid_input",
+    "Count": 2
+   }
+  ]
+ },
+ "power_overflow": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:30Z",
+    "EventId": "ZA==",
+    "Inputs": [
+     {
+      "Key": "current",
+      "Value": "1e+12"
+     },
+     {
+      "Key": "voltage",
+      "Value": "1e+12"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "unstorable"
+   }
+  ],
+  "Computed": 0,
+  "Skipped": [
+   {
+    "Reason": "unstorable",
+    "Count": 1
+   }
+  ]
+ },
+ "ratio_max": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:40Z",
+    "EventId": "ZQ==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "2"
+     },
+     {
+      "Key": "v",
+      "Value": "10"
+     }
+    ],
+    "Value": "5",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:50Z",
+    "EventId": "Zg==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "0"
+     },
+     {
+      "Key": "v",
+      "Value": "10"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "non_finite"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:00Z",
+    "EventId": "Zw==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "1"
+     },
+     {
+      "Key": "v",
+      "Value": "1000"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "range"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:10Z",
+    "EventId": "aA==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "1.5"
+     },
+     {
+      "Key": "v",
+      "Value": "1"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "invalid_input"
+   }
+  ],
+  "Computed": 1,
+  "Skipped": [
+   {
+    "Reason": "invalid_input",
+    "Count": 1
+   },
+   {
+    "Reason": "non_finite",
+    "Count": 1
+   },
+   {
+    "Reason": "range",
+    "Count": 1
+   }
+  ]
+ },
+ "ratio_min": {
+  "Samples": [
+   {
+    "OccurredTime": "2026-10-16T12:00:40Z",
+    "EventId": "ZQ==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "2"
+     },
+     {
+      "Key": "v",
+      "Value": "10"
+     }
+    ],
+    "Value": "5",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:00:50Z",
+    "EventId": "Zg==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "0"
+     },
+     {
+      "Key": "v",
+      "Value": "10"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "non_finite"
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:00Z",
+    "EventId": "Zw==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "1"
+     },
+     {
+      "Key": "v",
+      "Value": "1000"
+     }
+    ],
+    "Value": "1000",
+    "SkippedReason": null
+   },
+   {
+    "OccurredTime": "2026-10-16T12:01:10Z",
+    "EventId": "aA==",
+    "Inputs": [
+     {
+      "Key": "n",
+      "Value": "1.5"
+     },
+     {
+      "Key": "v",
+      "Value": "1"
+     }
+    ],
+    "Value": null,
+    "SkippedReason": "invalid_input"
+   }
+  ],
+  "Computed": 2,
+  "Skipped": [
+   {
+    "Reason": "invalid_input",
+    "Count": 1
+   },
+   {
+    "Reason": "non_finite",
+    "Count": 1
+   }
+  ]
+ }
+}

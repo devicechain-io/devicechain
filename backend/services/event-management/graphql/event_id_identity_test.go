@@ -5,15 +5,14 @@ package graphql
 
 import (
 	"database/sql"
-	"testing"
-	"time"
-
-	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	gql "github.com/graph-gophers/graphql-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"testing"
+	"time"
 )
 
 // `id` is declared `ID!` on all four event types, and until this file existed it did not
@@ -59,9 +58,9 @@ func TestMeasurementEventIdsAreUniqueWithinOneSample(t *testing.T) {
 	shared := []byte{0xaa, 0xbb}
 	rows := []model.MeasurementEvent{
 		{EventId: shared, PayloadId: []byte{0x01}, DeviceToken: identityDevice,
-			EventType: esmodel.Measurement, OccurredTime: identityOccurred, Name: "temp"},
+			EventType: eventtype.Measurement, OccurredTime: identityOccurred, Name: "temp"},
 		{EventId: shared, PayloadId: []byte{0x02}, DeviceToken: identityDevice,
-			EventType: esmodel.Measurement, OccurredTime: identityOccurred, Name: "humidity"},
+			EventType: eventtype.Measurement, OccurredTime: identityOccurred, Name: "humidity"},
 	}
 
 	// The control that makes the assertion mean something: the two rows really are
@@ -89,10 +88,10 @@ func TestLocationEventIdsAreUniqueWithinOneBatch(t *testing.T) {
 	shared := []byte{0xaa, 0xbb}
 	rows := []model.LocationEvent{
 		{EventId: shared, PayloadId: []byte{0x01}, DeviceToken: identityDevice,
-			EventType: esmodel.Location, OccurredTime: identityOccurred,
+			EventType: eventtype.Location, OccurredTime: identityOccurred,
 			Latitude: sql.NullFloat64{Float64: 33.749, Valid: true}},
 		{EventId: shared, PayloadId: []byte{0x02}, DeviceToken: identityDevice,
-			EventType: esmodel.Location, OccurredTime: identityOccurred,
+			EventType: eventtype.Location, OccurredTime: identityOccurred,
 			Latitude: sql.NullFloat64{Float64: 33.750, Valid: true}},
 	}
 	require.Equal(t, rows[0].OccurredTime, rows[1].OccurredTime,
@@ -114,10 +113,10 @@ func TestAlertEventIdsAreUniqueWithinOneBatch(t *testing.T) {
 	shared := []byte{0xaa, 0xbb}
 	rows := []model.AlertEvent{
 		{EventId: shared, PayloadId: []byte{0x01}, DeviceToken: identityDevice,
-			EventType: esmodel.Alert, OccurredTime: identityOccurred,
+			EventType: eventtype.Alert, OccurredTime: identityOccurred,
 			Type: "SENSOR_FAULT", Message: "probe A unresponsive"},
 		{EventId: shared, PayloadId: []byte{0x02}, DeviceToken: identityDevice,
-			EventType: esmodel.Alert, OccurredTime: identityOccurred,
+			EventType: eventtype.Alert, OccurredTime: identityOccurred,
 			Type: "SENSOR_FAULT", Message: "probe B unresponsive"},
 	}
 	require.Equal(t, rows[0].Type, rows[1].Type,
@@ -140,9 +139,9 @@ func TestAlertEventIdsAreUniqueWithinOneBatch(t *testing.T) {
 func TestBaseEventIdsAreUniqueWhenTheNaturalKeyCollides(t *testing.T) {
 	rows := []model.Event{
 		{EventId: []byte{0x01}, DeviceToken: identityDevice,
-			EventType: esmodel.Measurement, OccurredTime: identityOccurred, Source: "mqtt"},
+			EventType: eventtype.Measurement, OccurredTime: identityOccurred, Source: "mqtt"},
 		{EventId: []byte{0x02}, DeviceToken: identityDevice,
-			EventType: esmodel.Measurement, OccurredTime: identityOccurred, Source: "mqtt"},
+			EventType: eventtype.Measurement, OccurredTime: identityOccurred, Source: "mqtt"},
 	}
 	require.Equal(t, rows[0].OccurredTime, rows[1].OccurredTime,
 		"the fixture must collide under the old key or it proves nothing")
@@ -164,7 +163,7 @@ func TestBaseEventIdsAreUniqueWhenTheNaturalKeyCollides(t *testing.T) {
 func TestPayloadRowsAreNotAddressedByTheirEventId(t *testing.T) {
 	shared := []byte{0xaa, 0xbb}
 	row := model.MeasurementEvent{EventId: shared, PayloadId: []byte{0x01},
-		DeviceToken: identityDevice, EventType: esmodel.Measurement, OccurredTime: identityOccurred}
+		DeviceToken: identityDevice, EventType: eventtype.Measurement, OccurredTime: identityOccurred}
 
 	id, err := (&MeasurementEventResolver{M: row}).Id()
 	require.NoError(t, err)
@@ -178,19 +177,19 @@ func TestPayloadRowsAreNotAddressedByTheirEventId(t *testing.T) {
 // two properties are what make the streamed `ID!` real rather than well-formed.
 func TestStreamedMeasurementsCarryDistinctPersistedIds(t *testing.T) {
 	sample := time.Date(2026, 9, 4, 9, 59, 0, 0, time.UTC)
-	resolved := &dmmodel.ResolvedEvent{
+	resolved := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: identityDevice,
 		OccurredTime:      identityOccurred,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		Source:            "mqtt",
 	}
-	entry := dmmodel.ResolvedMeasurementsEntry{OccurredTime: sample}
+	entry := resolvedevent.ResolvedMeasurementsEntry{OccurredTime: sample}
 
 	temp, err := measurementFromResolved("tenant1", resolved, entry,
-		dmmodel.ResolvedMeasurementEntry{Name: "temp", Value: "21.5"})
+		resolvedevent.ResolvedMeasurementEntry{Name: "temp", Value: "21.5"})
 	require.NoError(t, err)
 	humidity, err := measurementFromResolved("tenant1", resolved, entry,
-		dmmodel.ResolvedMeasurementEntry{Name: "humidity", Value: "48"})
+		resolvedevent.ResolvedMeasurementEntry{Name: "humidity", Value: "48"})
 	require.NoError(t, err)
 
 	assertIdsAreUniqueAcrossTheSet(t, []func() (gql.ID, error){
@@ -206,7 +205,7 @@ func TestStreamedMeasurementsCarryDistinctPersistedIds(t *testing.T) {
 		DeviceToken:  identityDevice,
 		OccurredTime: identityOccurred,
 		Source:       "mqtt",
-		EventType:    esmodel.Measurement,
+		EventType:    eventtype.Measurement,
 	}
 	eventId, err := model.DeriveEventIdForPayload("tenant1", &parent, resolved.Payload)
 	require.NoError(t, err)
@@ -221,4 +220,29 @@ func TestStreamedMeasurementsCarryDistinctPersistedIds(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, want, temp.PayloadId,
 		"a streamed reading must carry the identity its persisted row will have")
+}
+
+// A streamed DERIVED reading is named by the canonical instant (UTC, microseconds), so it
+// carries the id the persisted row has and the id a re-derivation from the stored row gets,
+// for a nanosecond instant and for one with a zone offset.
+func TestStreamedDerivedMeasurementIdIsCanonicalInstant(t *testing.T) {
+	resolved := &resolvedevent.ResolvedEvent{
+		SourceDeviceToken: identityDevice, OccurredTime: identityOccurred,
+		EventType: eventtype.Measurement, Source: "mqtt",
+	}
+	for name, at := range map[string]time.Time{
+		"ns":        time.Date(2026, 9, 4, 9, 59, 0, 123456789, time.UTC),
+		"ns+02:00":  time.Date(2026, 9, 4, 11, 59, 0, 123456789, time.FixedZone("", 2*3600)),
+		"canonical": time.Date(2026, 9, 4, 9, 59, 0, 123456000, time.UTC),
+	} {
+		live, err := measurementFromResolved("tenant1", resolved,
+			resolvedevent.ResolvedMeasurementsEntry{OccurredTime: at},
+			resolvedevent.ResolvedMeasurementEntry{Name: "p", Value: "2.5", Derived: true})
+		require.NoError(t, err, name)
+		reDerived, err := measurementFromResolved("tenant1", resolved,
+			resolvedevent.ResolvedMeasurementsEntry{OccurredTime: model.CanonicalEntryInstant(at)},
+			resolvedevent.ResolvedMeasurementEntry{Name: "p", Value: "2.5", Derived: true})
+		require.NoError(t, err, name)
+		assert.Equal(t, live.PayloadId, reDerived.PayloadId, name)
+	}
 }

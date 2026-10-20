@@ -6,6 +6,7 @@ package main
 import (
 	"testing"
 
+	"github.com/devicechain-io/dc-device-management/config"
 	"github.com/devicechain-io/dc-device-management/model"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -23,16 +24,43 @@ import (
 // A processor test builds the consumer itself, so only this can see which Api the service
 // hands it.
 func TestTheRaiseAlarmConsumerResolvesDevicesUncached(t *testing.T) {
-	savedMs, savedApi, savedCached, savedMetrics := Microservice, Api, CachedApi, RaiseAlarmMetrics
-	t.Cleanup(func() { Microservice, Api, CachedApi, RaiseAlarmMetrics = savedMs, savedApi, savedCached, savedMetrics })
+	savedMs, savedApi, savedCached, savedMetrics, savedCfg := Microservice, Api, CachedApi, RaiseAlarmMetrics, Configuration
+	t.Cleanup(func() {
+		Microservice, Api, CachedApi, RaiseAlarmMetrics, Configuration = savedMs, savedApi, savedCached, savedMetrics, savedCfg
+	})
 
 	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Api = model.NewApi(&rdb.RdbManager{})
 	CachedApi = model.NewCachedApi(Api, &model.Caches{DeviceByToken: msgtest.NewMemoryKV().NewCache()})
 
+	Configuration = config.NewDeviceManagementConfiguration()
 	rc := newRaiseAlarmConsumer(nil, nil)
 	got, ok := rc.Api.(*model.Api)
 	require.True(t, ok, "the raise-alarm consumer was given a %T, want the plain *model.Api", rc.Api)
 	require.Same(t, Api, got, "the raise-alarm consumer was given an Api other than this service's")
+}
+
+// The consumer this service builds gets raiseAlarm.workers as configured. A count that did
+// not reach it would leave the service applying edges one at a time while its configuration
+// says otherwise, and every test below the call site would still pass.
+func TestTheRaiseAlarmConsumerGetsTheConfiguredWorkers(t *testing.T) {
+	savedMs, savedApi, savedMetrics, savedCfg := Microservice, Api, RaiseAlarmMetrics, Configuration
+	t.Cleanup(func() {
+		Microservice, Api, RaiseAlarmMetrics, Configuration = savedMs, savedApi, savedMetrics, savedCfg
+	})
+
+	Microservice = &core.Microservice{InstanceId: "test", FunctionalArea: "device-management"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	Api = model.NewApi(&rdb.RdbManager{})
+	for _, n := range []int{1, 3, config.DefaultRaiseAlarmWorkers} {
+		Configuration = config.NewDeviceManagementConfiguration()
+		Configuration.RaiseAlarm.Workers = n
+		require.Equal(t, n, newRaiseAlarmConsumer(nil, nil).Workers)
+	}
+
+	// An unset count reaches the consumer as the default derived from the pool, not the cap.
+	Configuration = config.NewDeviceManagementConfiguration()
+	require.Equal(t, 6, Configuration.RaiseAlarm.Workers)
+	require.Equal(t, Configuration.RaiseAlarm.Workers, newRaiseAlarmConsumer(nil, nil).Workers)
 }

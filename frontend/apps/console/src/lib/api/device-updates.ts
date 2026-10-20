@@ -19,8 +19,13 @@ import type {
   UpdateAssignmentSearchCriteria,
 } from '@/gql/update-management/graphql';
 
-export type DeviceUpdateAssignment = DeviceUpdateAssignmentsQuery['updateAssignments']['results'][number];
-export type DeviceUpdateAssignmentPage = DeviceUpdateAssignmentsQuery['updateAssignments'];
+type FullAssignment = DeviceUpdateAssignmentsQuery['updateAssignments']['results'][number];
+/** `actor` is absent for a member limited to part of the tenant: the server refuses that field to them. */
+export type DeviceUpdateAssignment = Omit<FullAssignment, 'actor'> & { actor?: string | null };
+export type DeviceUpdateAssignmentPage = {
+  results: DeviceUpdateAssignment[];
+  pagination: DeviceUpdateAssignmentsQuery['updateAssignments']['pagination'];
+};
 export type AssignmentSigner = NonNullable<
   NonNullable<AssignmentSignerQuery['updateAssignment']>['signedBy']
 >;
@@ -76,6 +81,59 @@ const DEVICE_UPDATE_ASSIGNMENTS = graphql(`
   }
 `);
 
+// The same read without `actor` (who made the assignment): the server answers that field with an
+// error for a member limited to part of the tenant, and GraphQL then fails the whole operation,
+// so a customer user would lose the list to a field the panel shows only as a nicety.
+const DEVICE_UPDATE_ASSIGNMENTS_SCOPED = graphql(`
+  query DeviceUpdateAssignmentsScoped($criteria: UpdateAssignmentSearchCriteria!) {
+    updateAssignments(criteria: $criteria) {
+      results {
+        id
+        createdAt
+        token
+        deviceToken
+        component
+        artifact {
+          id
+          token
+          kind
+          name
+          version
+          component
+          trustStatus
+          state
+        }
+        supersededAt
+        current
+        attempt {
+          token
+          state
+          targetVersion
+          requiresReboot
+          lastReportAt
+          progress {
+            bytes
+            total
+          }
+          failure {
+            stage
+            code
+            detail
+            platform
+          }
+          cancelRequested
+          reconciled
+        }
+      }
+      pagination {
+        pageStart
+        pageEnd
+        totalRecords
+      }
+    }
+  }
+`);
+
 const ASSIGNMENT_SIGNER = graphql(`
   query AssignmentSigner($token: String!) {
     updateAssignment(token: $token) {
@@ -93,7 +151,12 @@ const ASSIGNMENT_SIGNER = graphql(`
 
 export async function listDeviceUpdateAssignments(
   criteria: UpdateAssignmentSearchCriteria,
+  opts: { scoped?: boolean } = {},
 ): Promise<DeviceUpdateAssignmentPage> {
+  if (opts.scoped) {
+    const scoped = await gql('update-management', DEVICE_UPDATE_ASSIGNMENTS_SCOPED, { criteria });
+    return scoped.updateAssignments;
+  }
   const data = await gql('update-management', DEVICE_UPDATE_ASSIGNMENTS, { criteria });
   return data.updateAssignments;
 }

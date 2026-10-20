@@ -53,6 +53,11 @@ func TestTheCanaryObservesItsOwnConnect(t *testing.T) {
 //
 // Without this test, a canary that returned nil unconditionally would pass the healthy
 // case above and alarm on nothing, forever.
+//
+// The first probe, made while the watch is still up, is the positive control: the same
+// canary reaches the same broker and is observed. Without it, a canary that could not
+// connect at all (a wrong port, a refused login) fails the probe below just as well, and
+// this test would pass without ever reaching the state it is about.
 func TestTheCanaryFailsWhenNothingIsWatching(t *testing.T) {
 	srv, mqttPort := broker(t)
 	nc := sysConn(t, srv)
@@ -60,11 +65,13 @@ func TestTheCanaryFailsWhenNothingIsWatching(t *testing.T) {
 
 	stop, err := c.Watch(nc)
 	require.NoError(t, err)
+	require.NoError(t, c.Probe(t.Context()), "control: the canary was not observed while the watch was up")
+	require.Equal(t, 1.0, counter(t, observed))
 	stop() // the subscription is gone; the broker still publishes, nobody is listening
 
 	err = c.Probe(t.Context())
 	require.Error(t, err, "the canary reported success with no subscription at all")
-	require.Equal(t, 0.0, counter(t, observed))
+	require.Equal(t, 1.0, counter(t, observed), "only the control probe may count as observed")
 	require.Equal(t, 1.0, counter(t, missed), "a failed probe must be counted, not just returned")
 }
 

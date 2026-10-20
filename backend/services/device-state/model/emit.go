@@ -7,10 +7,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/devicechain-io/dc-microservice/presence"
 	"hash/fnv"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/eventtype"
 
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
@@ -137,7 +140,7 @@ func (e *DemotionEmitter) EmitDemotion(ctx context.Context, source, deviceToken 
 	uev := &esmodel.UnresolvedEvent{
 		Source:        source,
 		Device:        deviceToken,
-		EventType:     esmodel.StateChange,
+		EventType:     eventtype.StateChange,
 		OccurredTime:  occurred,
 		ProcessedTime: e.now().UTC(),
 		// The event is minted by a platform service, not received from a device, so it
@@ -148,7 +151,7 @@ func (e *DemotionEmitter) EmitDemotion(ctx context.Context, source, deviceToken 
 		// StateChange, which is what stops this trust from widening later.
 		AuthenticatedTransport: true,
 		Payload: &esmodel.UnresolvedStateChangePayload{
-			State:  esmodel.PresenceDemoted,
+			State:  presence.StateDemoted,
 			Reason: reason,
 			// EMPTY, and the resolver REFUSES a demotion that sets it. A compare-and-set
 			// precondition on a demotion is incoherent by construction: acceptsDemotion

@@ -94,15 +94,15 @@ type spRig struct {
 // inbound-events stream and makes an unread consumer's backlog close the gate.
 func newSpRig(t *testing.T, window int, streamMaxMsgs int64) *spRig {
 	t.Helper()
-	mqttPort := dctest.FreeTCPPort(t)
 	srv, err := natsserver.NewServer(&natsserver.Options{
 		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true, ServerName: "sp-async",
-		StoreDir: dctest.JetStreamStoreDir(t), MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: mqttPort},
+		StoreDir: dctest.JetStreamStoreDir(t), MQTT: natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
 	go srv.Start()
 	require.True(t, srv.ReadyForConnections(15*time.Second), "embedded nats server not ready")
 	t.Cleanup(srv.Shutdown)
+	mqttPort := dctest.MQTTPort(t, srv)
 	u, err := url.Parse(srv.ClientURL())
 	require.NoError(t, err)
 	port, err := strconv.Atoi(u.Port())

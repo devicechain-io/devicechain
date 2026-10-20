@@ -5,13 +5,14 @@ package processor
 
 import (
 	"context"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strings"
 	"time"
 
 	dmodel "github.com/devicechain-io/dc-device-management/model"
-	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -109,7 +110,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDeadLetteredEventStillReportsT
 	readAndHandleOne(suite.IP, context.Background())
 	item := awaitFailed(suite)
 
-	assert.Equal(suite.T(), uint(dmproto.FailureReason_Unauthenticated), item.event.Reason,
+	assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Unauthenticated), item.event.Reason,
 		"the record must still say the event was refused for failing authentication")
 	assert.NotEmpty(suite.T(), item.event.Error, "the record must still carry the reason it failed")
 	assert.Equal(suite.T(), "tenant1", item.tenant)
@@ -118,7 +119,7 @@ func (suite *InboundEventsProcessorTestSuite) TestDeadLetteredEventStillReportsT
 	require.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "TEST-123", archived.Device, "the archived event must still name the device")
 	assert.Equal(suite.T(), "mysource", archived.Source, "the archived event must still name the source")
-	assert.Equal(suite.T(), esmodel.Location, archived.EventType, "the archived event must still carry its type")
+	assert.Equal(suite.T(), eventtype.Location, archived.EventType, "the archived event must still carry its type")
 	assert.NotNil(suite.T(), archived.Payload, "the archived event must still carry the payload being debugged")
 }
 

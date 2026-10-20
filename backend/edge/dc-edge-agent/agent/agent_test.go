@@ -62,9 +62,11 @@ func newAgentLog(t *testing.T, cfg config.Configuration, w io.Writer) *Agent {
 	return a
 }
 
-// freePort reserves an ephemeral port and releases it, returning the number. A brief
-// TOCTOU window exists before the caller binds it; acceptable in tests, and the
-// embedded MQTT gateway has no ephemeral-port accessor to use instead.
+// freePort reserves an ephemeral port and releases it, returning the number. It is for
+// the AGENT's own MQTT listener only: the agent validates local.listenPort to 1..65535, so
+// it cannot be asked to bind an ephemeral port itself, and a brief window exists before it
+// binds this one. The cloud broker has no such limit; it binds its own port and the test
+// reads it back (newCloudBroker with -1, then dctest.MQTTPort).
 func freePort(t *testing.T) int {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -77,10 +79,11 @@ func freePort(t *testing.T) int {
 }
 
 // newCloudBroker stands in for the cloud Instance's broker: an embedded nats-server
-// with the MQTT gateway on mqttPort, so the agent's uplink can publish to it and a
-// subscriber can assert receipt. It returns the server so a test can stop/restart it;
-// it does NOT auto-register cleanup — the caller owns the lifecycle. storeDir is passed
-// in so a restart on the same port reuses the store.
+// with the MQTT gateway on mqttPort (-1 binds one of the kernel's choosing: read it back
+// with dctest.MQTTPort), so the agent's uplink can publish to it and a subscriber can
+// assert receipt. It returns the server so a test can stop/restart it; it does NOT
+// auto-register cleanup — the caller owns the lifecycle. storeDir is passed in so a
+// restart on the same port reuses the store.
 func newCloudBroker(t *testing.T, mqttPort int, storeDir string) *natsserver.Server {
 	t.Helper()
 	srv, err := natsserver.NewServer(&natsserver.Options{
@@ -101,11 +104,12 @@ func newCloudBroker(t *testing.T, mqttPort int, storeDir string) *natsserver.Ser
 }
 
 // startCloudBroker is the auto-cleaned convenience wrapper for tests that only need a
-// broker running for the whole test.
-func startCloudBroker(t *testing.T, mqttPort int) {
+// broker running for the whole test. It returns the MQTT port the broker bound.
+func startCloudBroker(t *testing.T) int {
 	t.Helper()
-	srv := newCloudBroker(t, mqttPort, dctest.JetStreamStoreDir(t))
+	srv := newCloudBroker(t, -1, dctest.JetStreamStoreDir(t))
 	t.Cleanup(srv.Shutdown)
+	return dctest.MQTTPort(t, srv)
 }
 
 func mqttConnect(t *testing.T, addr, clientID string) mqtt.Client {
@@ -246,8 +250,7 @@ func cloudSubscribe(t *testing.T, cloudAddr, clientID string, sink chan<- mqtt.M
 // fields, E2's stamping is a no-op and the payload is byte-identical (which also pins
 // that device-set values are never rewritten).
 func TestBridgeForwardsDeviceTransparently(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 
 	agentPort := freePort(t)
@@ -297,8 +300,7 @@ func TestBridgeForwardsDeviceTransparently(t *testing.T) {
 // own payload fields survive. altId is minted in the edge: namespace; occurredTime is a
 // valid timestamp.
 func TestStampsIdempotencyWhenDeviceOmitsThem(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 
 	agentPort := freePort(t)
@@ -353,8 +355,7 @@ func TestStampsIdempotencyWhenDeviceOmitsThem(t *testing.T) {
 // (the mid-batch-drop case the Connected() pause cannot otherwise produce), then lets
 // the redelivery through.
 func TestForwardFailureLeavesEventBufferedWithStableKey(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort) // real cloud up so the uplink is Connected() and the drain runs
+	cloudPort := startCloudBroker(t) // real cloud up so the uplink is Connected() and the drain runs
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 
 	var mu sync.Mutex
@@ -443,9 +444,9 @@ func TestForwardFailureLeavesEventBufferedWithStableKey(t *testing.T) {
 // the cloud — the buffered event must survive both the outage and the restart and drain
 // exactly once. A never-severed run would not exercise the buffer at all.
 func TestBuffersAcrossOutageAndRestart(t *testing.T) {
-	cloudPort := freePort(t)
 	cloudStore := dctest.JetStreamStoreDir(t)
-	srv := newCloudBroker(t, cloudPort, cloudStore)
+	srv := newCloudBroker(t, -1, cloudStore)
+	cloudPort := dctest.MQTTPort(t, srv) // read back; the restart below reuses it
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 	cloudURL := fmt.Sprintf("tcp://%s", cloudAddr)
 
@@ -520,8 +521,7 @@ func TestBuffersAcrossOutageAndRestart(t *testing.T) {
 // Boot #1 fails the forward (event stays buffered) and captures its minted key; boot #2
 // on the same store redelivers it, succeeds, and captures the key again. They must match.
 func TestMintedKeyIsStableAcrossRestart(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort) // up throughout so both agents' uplinks are Connected()
+	cloudPort := startCloudBroker(t) // up throughout so both agents' uplinks are Connected()
 	cloudURL := fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)
 	storeDir := dctest.JetStreamStoreDir(t) // shared across the restart
 
@@ -802,8 +802,7 @@ func TestLoadOrSeedAckedCountClampsAndSeeds(t *testing.T) {
 // reads 0 — NOT the drained history counted as phantom drops. (Mutating the seed to a
 // constant 0 makes this report the whole drained history as drops.)
 func TestAckedCountSeedsFromDrainedStoreOnMigration(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	cloudURL := fmt.Sprintf("tcp://127.0.0.1:%d", cloudPort)
 	storeDir := dctest.JetStreamStoreDir(t)
 	const n = 5
@@ -849,8 +848,7 @@ func TestAckedCountSeedsFromDrainedStoreOnMigration(t *testing.T) {
 // serves the expected Prometheus metric family names and a 200 /healthz once the agent is
 // up. (The endpoint binds an ephemeral loopback port via the test harness override.)
 func TestMetricsAndHealthEndpoint(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	agentPort := freePort(t)
 	a := startAgent(t, config.Configuration{
 		InstanceId: "test",
@@ -946,8 +944,7 @@ func TestClientPortUnboundMqttOnly(t *testing.T) {
 // than the agent forwards is not silently dropped without trace — the mismatch is
 // counted so a config typo is visible.
 func TestInstanceMismatchIsCounted(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 
 	agentPort := freePort(t)
 	a := startAgent(t, config.Configuration{
@@ -978,8 +975,7 @@ func TestLocalAuthGatesLocalMqtt(t *testing.T) {
 	const user, pass = "edge", "s3cret-xyz"
 	t.Setenv("DC_EDGE_LOCAL_PASSWORD", pass)
 
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 
 	agentPort := freePort(t)
@@ -1063,8 +1059,7 @@ func TestLocalAuthMissingSecretFailsClosed(t *testing.T) {
 // (deterministic — it precedes close(a.ready), which runReady waited on) AND exports
 // local_auth_enabled 0. Deleting the WARN, or defaulting the listener closed, fails this.
 func TestLocalAuthOpenByDefaultWarns(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	agentPort := freePort(t)
 	buf := &syncBuffer{}
 	a := newAgentLog(t, config.Configuration{
@@ -1151,8 +1146,7 @@ func TestStoreDirPermsHardened(t *testing.T) {
 // bits (hardened) and every identity token must be owner-only (0600). Removing the
 // hardening call in Run leaves the store world-traversable and fails this.
 func TestStoreArtifactsArePrivate(t *testing.T) {
-	cloudPort := freePort(t)
-	startCloudBroker(t, cloudPort)
+	cloudPort := startCloudBroker(t)
 	storeDir := dctest.JetStreamStoreDir(t)
 	if err := os.Chmod(storeDir, 0o755); err != nil { // the mkdir -p / volume default
 		t.Fatalf("chmod storeDir: %v", err)
@@ -1188,9 +1182,9 @@ func TestStoreArtifactsArePrivate(t *testing.T) {
 // backoff reset passes the whole suite. The device supplies both idempotency fields so
 // the post-reconnect payload is byte-identical.
 func TestUplinkReconnectsAndResumesForwarding(t *testing.T) {
-	cloudPort := freePort(t)
 	cloudStore := dctest.JetStreamStoreDir(t)
-	srv := newCloudBroker(t, cloudPort, cloudStore)
+	srv := newCloudBroker(t, -1, cloudStore)
+	cloudPort := dctest.MQTTPort(t, srv) // read back; the restart below reuses it
 	cloudAddr := fmt.Sprintf("127.0.0.1:%d", cloudPort)
 
 	agentPort := freePort(t)

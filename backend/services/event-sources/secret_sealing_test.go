@@ -8,6 +8,8 @@ import (
 	"context"
 	"testing"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
@@ -31,7 +33,7 @@ func sealingFixture(t *testing.T) *credential.SecretTransit {
 
 func presentingEvent(secret string) *model.UnresolvedEvent {
 	s, id, ty := secret, "sensor-001", "MQTT_BASIC"
-	return &model.UnresolvedEvent{Device: "sensor-001", EventType: model.Measurement,
+	return &model.UnresolvedEvent{Device: "sensor-001", EventType: eventtype.Measurement,
 		CredentialType: &ty, CredentialId: &id, CredentialSecret: &s}
 }
 
@@ -120,7 +122,7 @@ func TestTheServiceRefusesToInitializeWithoutARootKey(t *testing.T) {
 
 func presentingToken(token string) *model.UnresolvedEvent {
 	ty := "ACCESS_TOKEN"
-	return &model.UnresolvedEvent{Device: "sensor-001", EventType: model.Measurement,
+	return &model.UnresolvedEvent{Device: "sensor-001", EventType: eventtype.Measurement,
 		CredentialType: &ty, CredentialId: &token}
 }
 
