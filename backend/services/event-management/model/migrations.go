@@ -78,5 +78,8 @@ var (
 		// Scopes the alternate-id idempotency key to the device (see its doc comment). Builds a
 		// unique index under the key rebuild's gates and drops the tenant-wide one it replaces.
 		NewDeviceAltIdKeySchema(),
+		// The calculated-metric backfill job table (see its doc comment). A plain table, no
+		// hypertable work, so it takes no part in the key rebuilds' gates.
+		NewCalculatedBackfillSchema(),
 	}
 )

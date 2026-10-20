@@ -13,6 +13,7 @@ import (
 	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ func resolveEntries(t *testing.T, profile model.ProfileResolution, entries ...es
 	rez := NewEventResolver(1, nil, "", EventTimePolicy{}, nil, nil, nil, nil, nil, nil)
 	rez.calcObs.metrics = testCalcMetrics()
 	at := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	event := &esmodel.UnresolvedEvent{Source: "test", Device: "meter-1", EventType: esmodel.Measurement,
+	event := &esmodel.UnresolvedEvent{Source: "test", Device: "meter-1", EventType: eventtype.Measurement,
 		OccurredTime: at, ProcessedTime: at.Add(time.Hour),
 		Payload: &esmodel.UnresolvedMeasurementsPayload{Entries: entries}}
 	out, err := rez.ResolveMeasurementsEventPayload(core.WithTenant(context.Background(), "acme"), device, profile, event)

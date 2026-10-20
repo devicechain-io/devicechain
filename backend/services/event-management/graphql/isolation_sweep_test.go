@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
@@ -42,17 +42,17 @@ func TestIsolationSweep(t *testing.T) {
 	at := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	for _, owner := range []string{"acme", "globex"} {
 		device := owner + "-pump"
-		event := model.Event{DeviceToken: device, EventType: esmodel.Measurement, OccurredTime: at,
+		event := model.Event{DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: at,
 			ProcessedTime: at, Source: "mqtt"}
 		event.EventId = model.DeriveEventId(tenant, &event, nil)
 		require.NoError(t, db.WithContext(write).Create(&event).Error)
 		require.NoError(t, db.WithContext(write).Create(&model.EventAnchor{EventId: event.EventId,
-			DeviceToken: device, EventType: esmodel.Measurement, OccurredTime: at,
+			DeviceToken: device, EventType: eventtype.Measurement, OccurredTime: at,
 			AnchorType: "customer", AnchorToken: owner}).Error)
 		// A reading, so the draft-formula preview (calculatedEvents) has a sample to evaluate:
 		// globex's must be as invisible to acme's member as a missing device's.
 		require.NoError(t, db.WithContext(write).Create(&model.MeasurementEvent{EventId: event.EventId,
-			PayloadId: []byte(owner + "-temp"), DeviceToken: device, EventType: esmodel.Measurement,
+			PayloadId: []byte(owner + "-temp"), DeviceToken: device, EventType: eventtype.Measurement,
 			OccurredTime: at, Name: "temp", Value: sql.NullFloat64{Float64: 21.5, Valid: true}}).Error)
 	}
 

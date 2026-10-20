@@ -7,9 +7,9 @@ import (
 	"context"
 	"database/sql"
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -60,7 +60,7 @@ func (r *SchemaResolver) MeasurementStream(ctx context.Context, args struct {
 				log.Debug().Err(err).Msg("subscription: skipping undecodable resolved event")
 				continue
 			}
-			if resolved.EventType != esmodel.Measurement {
+			if resolved.EventType != eventtype.Measurement {
 				continue
 			}
 			if args.DeviceToken != nil && resolved.SourceDeviceToken != *args.DeviceToken {

@@ -1,7 +1,11 @@
 ALTER SEQUENCE "event-management".audit_events_id_seq OWNED BY "event-management".audit_events.id;
+ALTER SEQUENCE "event-management".calculated_backfills_id_seq OWNED BY "event-management".calculated_backfills.id;
 ALTER TABLE ONLY "event-management".audit_events
  ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".audit_events ALTER COLUMN id SET DEFAULT nextval('"event-management".audit_events_id_seq'::regclass);
+ALTER TABLE ONLY "event-management".calculated_backfills
+ ADD CONSTRAINT calculated_backfills_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY "event-management".calculated_backfills ALTER COLUMN id SET DEFAULT nextval('"event-management".calculated_backfills_id_seq'::regclass);
 ALTER TABLE ONLY "event-management".event_management_migrations
  ADD CONSTRAINT event_management_migrations_pkey PRIMARY KEY (id);
 ALTER TABLE ONLY "event-management".events
@@ -18,6 +22,8 @@ CREATE FUNCTION analytics.reader_tenant() RETURNS text
  END
  $$;
 CREATE INDEX idx_audit_tenant_time ON "event-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_calculated_backfills_status_updated ON "event-management".calculated_backfills USING btree (status, updated_at);
+CREATE INDEX idx_calculated_backfills_tenant_profile ON "event-management".calculated_backfills USING btree (tenant_id, profile_token, created_at DESC);
 CREATE INDEX idx_event_anchors_lookup ON "event-management".event_anchors USING btree (tenant_id, anchor_type, anchor_token, occurred_time DESC);
 CREATE INDEX idx_events_tenant_device_time ON "event-management".events USING btree (tenant_id, device_token, occurred_time DESC);
 CREATE INDEX idx_measurement_tenant_device_name_time ON "event-management".measurement_events USING btree (tenant_id, device_token, name, occurred_time DESC);
@@ -25,6 +31,12 @@ CREATE INDEX measurement_events_occurred_time_idx ON "event-management".measurem
 CREATE SCHEMA "event-management";
 CREATE SCHEMA analytics;
 CREATE SEQUENCE "event-management".audit_events_id_seq
+ START WITH 1
+ INCREMENT BY 1
+ NO MINVALUE
+ NO MAXVALUE
+ CACHE 1;
+CREATE SEQUENCE "event-management".calculated_backfills_id_seq
  START WITH 1
  INCREMENT BY 1
  NO MINVALUE
@@ -53,6 +65,45 @@ CREATE TABLE "event-management".audit_events (
  entity_pk text,
  entity_label text,
  rows_affected bigint
+);
+CREATE TABLE "event-management".calculated_backfills (
+ id bigint NOT NULL,
+ tenant_id character varying(128) NOT NULL,
+ token text NOT NULL,
+ profile_token text NOT NULL,
+ profile_version_token text NOT NULL,
+ profile_version bigint NOT NULL,
+ metric_keys jsonb NOT NULL,
+ plan jsonb NOT NULL,
+ warnings jsonb DEFAULT '[]'::jsonb NOT NULL,
+ device_filter jsonb,
+ range_from timestamp with time zone NOT NULL,
+ range_to timestamp with time zone NOT NULL,
+ status text NOT NULL,
+ claim_epoch bigint DEFAULT 0 NOT NULL,
+ phase text DEFAULT 'FILL'::text NOT NULL,
+ roster_after_id bigint DEFAULT 0 NOT NULL,
+ cursor_window timestamp with time zone,
+ refresh_cursor timestamp with time zone,
+ devices_total bigint,
+ devices_done bigint DEFAULT 0 NOT NULL,
+ samples bigint DEFAULT 0 NOT NULL,
+ computed bigint DEFAULT 0 NOT NULL,
+ written bigint DEFAULT 0 NOT NULL,
+ already_present bigint DEFAULT 0 NOT NULL,
+ windows_compressed bigint DEFAULT 0 NOT NULL,
+ windows_beyond_retention bigint DEFAULT 0 NOT NULL,
+ windows_refreshed bigint DEFAULT 0 NOT NULL,
+ skipped jsonb DEFAULT '{}'::jsonb NOT NULL,
+ failure text,
+ created_by text,
+ created_at timestamp with time zone NOT NULL,
+ updated_at timestamp with time zone NOT NULL,
+ started_at timestamp with time zone,
+ finished_at timestamp with time zone,
+ cancel_requested_at timestamp with time zone,
+ CONSTRAINT chk_calculated_backfills_phase CHECK ((phase = ANY (ARRAY['FILL'::text, 'REFRESH'::text]))),
+ CONSTRAINT chk_calculated_backfills_status CHECK ((status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text, 'SUCCEEDED'::text, 'CANCELLED'::text, 'FAILED'::text])))
 );
 CREATE TABLE "event-management".event_anchors (
  tenant_id character varying(128) NOT NULL,
@@ -120,6 +171,8 @@ CREATE TABLE "event-management".state_change_events (
  session_id bigint DEFAULT 0 NOT NULL
 );
 CREATE UNIQUE INDEX idx_events_tenant_device_alt_id ON "event-management".events USING btree (tenant_id, device_token, alt_id, occurred_time) WHERE (alt_id IS NOT NULL);
+CREATE UNIQUE INDEX uix_calculated_backfills_tenant_active ON "event-management".calculated_backfills USING btree (tenant_id) WHERE (status = ANY (ARRAY['QUEUED'::text, 'RUNNING'::text]));
+CREATE UNIQUE INDEX uix_calculated_backfills_tenant_token ON "event-management".calculated_backfills USING btree (tenant_id, token);
 CREATE UNIQUE INDEX uq_alert_events_idem ON "event-management".alert_events USING btree (tenant_id, occurred_time, payload_id);
 CREATE UNIQUE INDEX uq_event_anchors_idem ON "event-management".event_anchors USING btree (tenant_id, occurred_time, event_id, anchor_type, anchor_token);
 CREATE UNIQUE INDEX uq_location_events_idem ON "event-management".location_events USING btree (tenant_id, occurred_time, payload_id);

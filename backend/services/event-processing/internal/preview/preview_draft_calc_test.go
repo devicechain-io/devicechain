@@ -16,7 +16,7 @@ import (
 	dmmodel "github.com/devicechain-io/dc-device-management/model"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"gorm.io/gorm"
 )
@@ -35,7 +35,7 @@ func storedMsg(t *testing.T, seq uint64, tenant, temp, heat string, occurred tim
 	}
 	ev := &resolvedevent.ResolvedEvent{
 		Source: "mqtt", SourceDeviceToken: "d1", ProfileVersionToken: "p@1",
-		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.Measurement,
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred, Entries: entries,
 		}}},

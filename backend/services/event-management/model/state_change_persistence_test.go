@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -54,7 +54,7 @@ func scReq(device string, occurred time.Time, state string, session uint64) *Sta
 	return &StateChangeEventCreateRequest{
 		Event: Event{
 			DeviceToken:  device,
-			EventType:    esmodel.StateChange,
+			EventType:    eventtype.StateChange,
 			OccurredTime: occurred,
 			Source:       "lwm2m",
 		},

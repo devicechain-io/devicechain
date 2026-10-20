@@ -6,8 +6,8 @@ package processor
 import (
 	"context"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"testing"
@@ -46,7 +46,7 @@ func measurementMessage(t *testing.T, deviceToken string, envelope time.Time,
 	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: deviceToken,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		OccurredTime:      envelope,
 		ProcessedTime:     envelope,
 		Payload:           &resolvedevent.ResolvedMeasurementsPayload{Entries: entries},

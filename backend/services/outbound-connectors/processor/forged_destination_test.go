@@ -102,6 +102,9 @@ func TestForgedUnixConnectorIsInvalidAndNeverDialed(t *testing.T) {
 func TestAKafkaBrokerThatIsDownIsRetried(t *testing.T) {
 	// An address that refuses connections, held for the test so nothing else can take it.
 	addr := dctest.RefusingAddr(t)
+	// The Kafka client retries a refused dial until the deadline, so the errno does not
+	// reach the result: pin the fixture instead.
+	dctest.RequireRefusing(t, addr)
 
 	e, api := newRealPublishExecutor(t, "127.0.0.1/32")
 	ctx := core.WithTenant(context.Background(), "acme")
@@ -123,6 +126,7 @@ func TestAKafkaBrokerThatIsDownIsRetried(t *testing.T) {
 // classifier that called every publish failure blocked would pass the first half alone.
 func TestABlockedPublishIsTerminalNotRetryable(t *testing.T) {
 	addr := dctest.RefusingAddr(t)
+	dctest.RequireRefusing(t, addr)
 
 	for _, typ := range []struct{ name, config string }{
 		{"mqtt", `{"urls":["tcp://` + addr + `"],"topic":"t"}`},
@@ -142,6 +146,10 @@ func TestABlockedPublishIsTerminalNotRetryable(t *testing.T) {
 			res = down.Execute(ctx, publishReq("c"))
 			assert.Equal(t, outcomeRetry, res.outcome, "err: %v", res.err)
 			assert.True(t, res.retryable)
+			if typ.name == "mqtt" {
+				// The MQTT client keeps the errno; the Kafka client does not (see above).
+				assert.True(t, dctest.IsRefused(res.err), "want connection refused: %v", res.err)
+			}
 		})
 	}
 }

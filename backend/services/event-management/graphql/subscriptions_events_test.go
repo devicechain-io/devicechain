@@ -4,7 +4,7 @@
 package graphql
 
 import (
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +27,7 @@ func TestMeasurementFromResolved(t *testing.T) {
 	resolved := &resolvedevent.ResolvedEvent{
 		SourceDeviceToken: "device-4",
 		OccurredTime:      envelope,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 	}
 	entry := resolvedevent.ResolvedMeasurementsEntry{OccurredTime: sample}
 
@@ -39,7 +39,7 @@ func TestMeasurementFromResolved(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "device-4", me.DeviceToken)
-	assert.Equal(t, esmodel.Measurement, me.EventType)
+	assert.Equal(t, eventtype.Measurement, me.EventType)
 	assert.Equal(t, sample, me.OccurredTime,
 		"a streamed reading must carry the SAMPLE's instant, which is what the historian stores for it")
 	assert.Equal(t, "temperature", me.Name)

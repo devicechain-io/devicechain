@@ -20,9 +20,9 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	dccore "github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -365,7 +365,7 @@ func locatedMsg(t *testing.T, seq uint64, tenant, device, profileVersion string,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			// A resolved entry always carries its own time (resolution fills it from the envelope when
@@ -865,7 +865,7 @@ func locatedEvent(t *testing.T, device, profileVersion string, fenceSetVersion i
 		SourceDeviceToken:   device,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        testBase,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{OccurredTime: testBase, Latitude: &latS, Longitude: &lonS}, // see locatedMsg

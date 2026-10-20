@@ -9,8 +9,8 @@ import (
 	"fmt"
 	"github.com/devicechain-io/dc-event-management/model"
 	emtest "github.com/devicechain-io/dc-event-management/test"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stretchr/testify/mock"
@@ -19,24 +19,24 @@ import (
 
 // Matching payloads for the four event types PersistEvent type-asserts. Built fresh
 // per case so a test can not mutate another's fixture.
-func matchingPayloadFor(etype esmodel.EventType) interface{} {
+func matchingPayloadFor(etype eventtype.EventType) interface{} {
 	switch etype {
-	case esmodel.Location:
+	case eventtype.Location:
 		lat, lon := "33.7490", "-84.3880"
 		return &resolvedevent.ResolvedLocationsPayload{
 			Entries: []resolvedevent.ResolvedLocationEntry{{Latitude: &lat, Longitude: &lon}},
 		}
-	case esmodel.Measurement:
+	case eventtype.Measurement:
 		return &resolvedevent.ResolvedMeasurementsPayload{
 			Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 				Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: "101.5"}},
 			}},
 		}
-	case esmodel.Alert:
+	case eventtype.Alert:
 		return &resolvedevent.ResolvedAlertsPayload{
 			Entries: []resolvedevent.ResolvedAlertEntry{{Type: "engine.overheat", Level: 3, Message: "hot", Source: "ecu"}},
 		}
-	case esmodel.StateChange:
+	case eventtype.StateChange:
 		return &resolvedevent.ResolvedStateChangePayload{State: "DISCONNECTED", Reason: "lifetime-lapse", SessionId: 42}
 	}
 	return nil
@@ -70,28 +70,28 @@ func TestPayloadTypeMismatchIsDeterministic(t *testing.T) {
 		name string
 		// etype is the declared event type; wrongPayload is a payload of a DIFFERENT
 		// concrete type, chosen so the case's assertion fails.
-		etype        esmodel.EventType
+		etype        eventtype.EventType
 		wrongPayload interface{}
 	}{
 		{
 			name:         "location event carrying a measurements payload",
-			etype:        esmodel.Location,
-			wrongPayload: matchingPayloadFor(esmodel.Measurement),
+			etype:        eventtype.Location,
+			wrongPayload: matchingPayloadFor(eventtype.Measurement),
 		},
 		{
 			name:         "measurement event carrying a locations payload",
-			etype:        esmodel.Measurement,
-			wrongPayload: matchingPayloadFor(esmodel.Location),
+			etype:        eventtype.Measurement,
+			wrongPayload: matchingPayloadFor(eventtype.Location),
 		},
 		{
 			name:         "alert event carrying a state change payload",
-			etype:        esmodel.Alert,
-			wrongPayload: matchingPayloadFor(esmodel.StateChange),
+			etype:        eventtype.Alert,
+			wrongPayload: matchingPayloadFor(eventtype.StateChange),
 		},
 		{
 			name:         "state change event carrying an alerts payload",
-			etype:        esmodel.StateChange,
-			wrongPayload: matchingPayloadFor(esmodel.Alert),
+			etype:        eventtype.StateChange,
+			wrongPayload: matchingPayloadFor(eventtype.Alert),
 		},
 	}
 
@@ -122,8 +122,8 @@ func TestPayloadTypeMismatchIsDeterministic(t *testing.T) {
 // The assertion is deliberately narrow — not "must succeed", which would pin unrelated
 // persistence behaviour — but "must not be a deterministic failure".
 func TestMatchingPayloadIsNotDeterministicFailure(t *testing.T) {
-	for _, etype := range []esmodel.EventType{
-		esmodel.Location, esmodel.Measurement, esmodel.Alert, esmodel.StateChange,
+	for _, etype := range []eventtype.EventType{
+		eventtype.Location, eventtype.Measurement, eventtype.Alert, eventtype.StateChange,
 	} {
 		t.Run(etype.String(), func(t *testing.T) {
 			worker := &EventPersistenceWorker{Api: persistingMockApi()}

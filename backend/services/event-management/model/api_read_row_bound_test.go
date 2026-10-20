@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/glebarez/sqlite"
@@ -40,7 +40,7 @@ func seedNames(t *testing.T, api *Api, tenant string, at time.Time, names ...str
 	for i, n := range names {
 		row := &MeasurementEvent{
 			EventId: []byte(fmt.Sprintf("e-%s-%d-%d", n, i, at.UnixNano())), PayloadId: []byte(fmt.Sprintf("p-%s-%d-%d", n, i, at.UnixNano())),
-			DeviceToken: "d1", EventType: esmodel.Measurement, OccurredTime: at, Name: n,
+			DeviceToken: "d1", EventType: eventtype.Measurement, OccurredTime: at, Name: n,
 			Value: sql.NullFloat64{Float64: 1, Valid: true},
 		}
 		require.NoError(t, api.RDB.DB(ctx).Create(row).Error)
@@ -51,7 +51,7 @@ func seedRollupNames(t *testing.T, api *Api, tenant string, at time.Time, names 
 	t.Helper()
 	ctx := core.WithTenant(context.Background(), tenant)
 	for _, n := range names {
-		row := &MeasurementRollup{DeviceToken: "d1", EventType: esmodel.Measurement, Name: n, Bucket: at, CountValue: 1}
+		row := &MeasurementRollup{DeviceToken: "d1", EventType: eventtype.Measurement, Name: n, Bucket: at, CountValue: 1}
 		require.NoError(t, api.RDB.DB(ctx).Create(row).Error)
 	}
 }
@@ -120,7 +120,7 @@ func TestBucketedMeasurementsCountsOnlyNamesInScope(t *testing.T) {
 	seedNames(t, api, "B", time.Now().Add(-time.Minute), "b1", "b2")
 	ctx := core.WithTenant(context.Background(), "A")
 	other := &MeasurementEvent{EventId: []byte("o"), PayloadId: []byte("o"), DeviceToken: "d2",
-		EventType: esmodel.Measurement, OccurredTime: time.Now().Add(-time.Minute), Name: "other"}
+		EventType: eventtype.Measurement, OccurredTime: time.Now().Add(-time.Minute), Name: "other"}
 	require.NoError(t, api.RDB.DB(ctx).Create(other).Error)
 
 	criteria, _, err := boundBucketedRange(rowRead(9000, 1, nil), time.Now())
@@ -222,7 +222,7 @@ func TestDistinctMeasurementNamesRollupScope(t *testing.T) {
 	seedRollupNames(t, api, "A", inRange, "r1", "r2", "r3")
 	seedRollupNames(t, api, "A", time.Now().Add(-72*time.Hour).Truncate(time.Minute), "old1", "old2")
 	seedRollupNames(t, api, "B", inRange, "b1", "b2")
-	other := &MeasurementRollup{DeviceToken: "d2", EventType: esmodel.Measurement, Name: "other", Bucket: inRange, CountValue: 1}
+	other := &MeasurementRollup{DeviceToken: "d2", EventType: eventtype.Measurement, Name: "other", Bucket: inRange, CountValue: 1}
 	require.NoError(t, api.RDB.DB(ctx).Create(other).Error)
 
 	criteria, _, err := boundBucketedRange(rowRead(24*60, 60, nil), time.Now())
@@ -240,12 +240,12 @@ func TestDistinctMeasurementNamesRawEventTypes(t *testing.T) {
 	at := time.Now().Add(-time.Minute)
 	seedNames(t, api, "A", at, "m1", "m2")
 	other := &MeasurementEvent{EventId: []byte("x"), PayloadId: []byte("x"), DeviceToken: "d1",
-		EventType: esmodel.Alert, OccurredTime: at, Name: "elsewhere"}
+		EventType: eventtype.Alert, OccurredTime: at, Name: "elsewhere"}
 	require.NoError(t, api.RDB.DB(ctx).Create(other).Error)
 
 	criteria, _, err := boundBucketedRange(rowRead(3600, 1, nil), time.Now())
 	require.NoError(t, err)
-	criteria.EventTypes = []esmodel.EventType{esmodel.Measurement}
+	criteria.EventTypes = []eventtype.EventType{eventtype.Measurement}
 	n, err := api.distinctMeasurementNames(ctx, criteria, false, 100)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), n)

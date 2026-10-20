@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -119,7 +119,7 @@ func TestEventIdForPayloadMatchesTheTypeSwitchItReplaced(t *testing.T) {
 	derivedSeen, rawSeen := 0, 0
 	for i, payload := range corpus {
 		for _, alt := range []*string{nil, ptrStr(""), ptrStr("a-1")} {
-			ev := &Event{DeviceToken: "dev-1", EventType: esmodel.Measurement,
+			ev := &Event{DeviceToken: "dev-1", EventType: eventtype.Measurement,
 				OccurredTime: time.Date(2026, 10, 17, 9, 0, 0, 0, time.UTC), AltId: rdb.NullStrOf(alt)}
 			want, werr := legacyDeriveEventIdForPayload("acme", ev, payload)
 			got, gerr := DeriveEventIdForPayload("acme", ev, payload)

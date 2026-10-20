@@ -9,7 +9,7 @@ import (
 	detectcore "github.com/devicechain-io/dc-event-processing/internal/detect/core"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"sync"
@@ -52,7 +52,7 @@ func measuredMsg(t *testing.T, seq uint64, tenant, device, profileVersion, metri
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Measurement,
+		EventType:           eventtype.Measurement,
 		// The entry carries its own instant, as the resolver always stamps one: the engine places a
 		// sample by it, so a zero here would be a reading from the year 1.
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
@@ -188,7 +188,7 @@ func measuredMsgScoped(t *testing.T, seq uint64, tenant, device, profileVersion,
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Measurement,
+		EventType:           eventtype.Measurement,
 		ScopeMemberships:    refs,
 		// The entry carries its own instant, as the resolver always stamps one: the engine places a
 		// sample by it, so a zero here would be a reading from the year 1.

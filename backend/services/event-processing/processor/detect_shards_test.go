@@ -11,8 +11,8 @@ import (
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/prometheus/client_golang/prometheus"
@@ -166,7 +166,7 @@ func shardedMessage(t *testing.T, seq uint64) messaging.Message {
 	occurred := testBase.Add(time.Duration(seq) * time.Second)
 	ev := &resolvedevent.ResolvedEvent{
 		Source: "http1", SourceDeviceToken: dev, ProfileVersionToken: "p@1",
-		OccurredTime: occurred, ProcessedTime: occurred, EventType: esmodel.Measurement,
+		OccurredTime: occurred, ProcessedTime: occurred, EventType: eventtype.Measurement,
 		ScopeMemberships: refs,
 		Anchors:          []resolvedevent.ResolvedAnchor{{AnchorType: "area", AnchorToken: fmt.Sprintf("zone-%d", n%3)}},
 		Payload: &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{

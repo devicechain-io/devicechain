@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/rdbtest"
 	gormigrate "github.com/go-gormigrate/gormigrate/v2"
@@ -107,23 +107,23 @@ func recordPeriod(t *testing.T, api *model.Api, device, anchorToken string, at t
 	t.Helper()
 	ctx := core.WithTenant(context.Background(), ownershipTenant)
 	db := api.RDB.DB(ctx)
-	parent := func(kind esmodel.EventType, when time.Time) model.Event {
+	parent := func(kind eventtype.EventType, when time.Time) model.Event {
 		e := model.Event{DeviceToken: device, EventType: kind, OccurredTime: when, ProcessedTime: when, Source: "mqtt"}
 		e.EventId = model.DeriveEventId(ownershipTenant, &e, []byte(anchorToken))
 		return e
 	}
-	m := parent(esmodel.Measurement, at)
+	m := parent(eventtype.Measurement, at)
 	_, err := api.CreateMeasurementEvents(ctx, db, []*model.MeasurementEventCreateRequest{
 		{Event: m, EntryOccurredTime: at.Add(-30 * time.Second), Name: "temperature", Value: fp(base)},
 		{Event: m, EntryOccurredTime: at, Name: "temperature", Value: fp(2 * base)},
 	})
 	require.NoError(t, err)
-	l := parent(esmodel.Location, at.Add(time.Minute))
+	l := parent(eventtype.Location, at.Add(time.Minute))
 	_, err = api.CreateLocationEvents(ctx, db, []*model.LocationEventCreateRequest{
 		{Event: l, EntryOccurredTime: l.OccurredTime, Latitude: fp(base), Longitude: fp(base)},
 	})
 	require.NoError(t, err)
-	a := parent(esmodel.Alert, at.Add(2*time.Minute))
+	a := parent(eventtype.Alert, at.Add(2*time.Minute))
 	_, err = api.CreateAlertEvents(ctx, db, []*model.AlertEventCreateRequest{
 		{Event: a, EntryOccurredTime: a.OccurredTime, Type: "door", Level: 1, Message: anchorToken + "-alert", Source: "device"},
 	})

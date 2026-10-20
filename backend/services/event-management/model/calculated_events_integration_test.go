@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/calcfield"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/limit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,7 +77,7 @@ func TestIntegrationCalculatedEventsAgreesWithResolveOnStorableInputs(t *testing
 	at := calcAt
 	write := func(i int, reading map[string]string) {
 		id := sha256.Sum256([]byte(fmt.Sprint("calc-it-", i)))
-		ev := Event{EventId: id[:], DeviceToken: "meter-1", EventType: esmodel.Measurement,
+		ev := Event{EventId: id[:], DeviceToken: "meter-1", EventType: eventtype.Measurement,
 			OccurredTime: at.Add(time.Duration(i) * time.Second), ProcessedTime: at, Source: "mqtt"}
 		var reqs []*MeasurementEventCreateRequest
 		for k, raw := range reading {
@@ -148,7 +148,7 @@ func TestIntegrationCalculatedEventsSevenDayWindowAtScale(t *testing.T) {
 			SELECT 'acme', decode(md5(?::text || g), 'hex'), decode(md5(?::text || g || n), 'hex'), ?, ?,
 				?::timestamptz + g * (? * interval '1 second'), n, (g % 1000) / 10.0
 			FROM generate_series(0, ? - 1) g, unnest(ARRAY['voltage', 'current']) n`,
-			device, device, device, esmodel.Measurement, start, every.Seconds(), samples).Error)
+			device, device, device, eventtype.Measurement, start, every.Seconds(), samples).Error)
 	}
 	began := time.Now()
 	month := 30 * 24 * time.Hour

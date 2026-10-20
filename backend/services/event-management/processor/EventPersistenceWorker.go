@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -445,25 +445,25 @@ func (ep *EventPersistenceWorker) writeEvent(ctx context.Context, tx *gorm.DB, p
 		// first delivery, with the right reason attached.
 		var perr error
 		switch event.EventType {
-		case esmodel.Location:
+		case eventtype.Location:
 			payload, ok := event.Payload.(*resolvedevent.ResolvedLocationsPayload)
 			if !ok {
 				return errPayloadMismatch("location")
 			}
 			results, perr = ep.PersistLocationEvents(ctx, tx, pevent, *payload)
-		case esmodel.Measurement:
+		case eventtype.Measurement:
 			payload, ok := event.Payload.(*resolvedevent.ResolvedMeasurementsPayload)
 			if !ok {
 				return errPayloadMismatch("measurement")
 			}
 			results, perr = ep.PersistMeasurementEvents(ctx, tx, pevent, *payload)
-		case esmodel.Alert:
+		case eventtype.Alert:
 			payload, ok := event.Payload.(*resolvedevent.ResolvedAlertsPayload)
 			if !ok {
 				return errPayloadMismatch("alert")
 			}
 			results, perr = ep.PersistAlertEvents(ctx, tx, pevent, *payload)
-		case esmodel.StateChange:
+		case eventtype.StateChange:
 			// ADR-067 presence history (S3): persist the connect/disconnect edge to the
 			// append-only state_change_events hypertable, then fall through to
 			// persistEventAnchors like every other event type. The live authoritative

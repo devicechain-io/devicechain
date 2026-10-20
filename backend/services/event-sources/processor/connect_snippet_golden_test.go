@@ -16,6 +16,7 @@ import (
 
 	"github.com/devicechain-io/dc-event-sources/config"
 	"github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 )
 
@@ -164,7 +165,7 @@ func checkSnippetEvent(t *testing.T, c snippetCase, event *model.UnresolvedEvent
 	if event.Device != c.Input.DeviceToken {
 		t.Errorf("event device = %q, want %q", event.Device, c.Input.DeviceToken)
 	}
-	if event.EventType != model.Measurement {
+	if event.EventType != eventtype.Measurement {
 		t.Errorf("event type = %v, want Measurement", event.EventType)
 	}
 	if event.CredentialType == nil || *event.CredentialType != c.Input.Credential.CredentialType {

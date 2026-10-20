@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/eventtype"
+
 	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/eventtime"
@@ -137,7 +139,7 @@ func TestAnInboundMessageWithNoInstantIsRefused(t *testing.T) {
 		"no occurred":  {SourceId: "s", Device: "d", Processed: &nanos},
 		"no processed": {SourceId: "s", Device: "d", Occurred: &nanos},
 	} {
-		pb.EventType = int64(model.NewRelationship)
+		pb.EventType = int64(eventtype.NewRelationship)
 		raw, err := proto.Marshal(pb)
 		require.NoError(t, err, name)
 		_, err = UnmarshalUnresolvedEvent(raw)
@@ -157,7 +159,7 @@ func TestInboundInstantsRoundTripToTheNanosecond(t *testing.T) {
 	} {
 		entryAt := at.Add(-3)
 		ev := &model.UnresolvedEvent{Source: "s", Device: "d", OccurredTime: at, ProcessedTime: at.Add(7),
-			EventType: model.Measurement,
+			EventType: eventtype.Measurement,
 			Payload: &model.UnresolvedMeasurementsPayload{Entries: []model.UnresolvedMeasurementsEntry{
 				{Measurements: map[string]string{"a": "1"}, OccurredTime: &entryAt}}}}
 		encoded, err := MarshalUnresolvedEventAs(ev, eventtime.WireCompact)

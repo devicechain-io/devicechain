@@ -28,10 +28,10 @@ import (
 	dmproto "github.com/devicechain-io/dc-device-management/proto"
 	dsgraphql "github.com/devicechain-io/dc-device-state/graphql"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	gqlcore "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
@@ -100,7 +100,7 @@ func asViewer(ctx context.Context, anchors ...string) context.Context {
 
 // ownedEvent is a resolved event exactly as device-management publishes it: a measurement
 // and a position for device, resolved at processed with the device's owners as anchors.
-func ownedEvent(t *testing.T, device string, kind esmodel.EventType, occurred, processed time.Time,
+func ownedEvent(t *testing.T, device string, kind eventtype.EventType, occurred, processed time.Time,
 	value string, owners ...string) messaging.Message {
 	t.Helper()
 	anchors := make([]resolvedevent.ResolvedAnchor, 0, len(owners))
@@ -117,10 +117,10 @@ func ownedEvent(t *testing.T, device string, kind esmodel.EventType, occurred, p
 		ProcessedTime:     processed,
 	}
 	switch kind {
-	case esmodel.Measurement:
+	case eventtype.Measurement:
 		event.Payload = &resolvedevent.ResolvedMeasurementsPayload{Entries: []resolvedevent.ResolvedMeasurementsEntry{{
 			OccurredTime: occurred, Entries: []resolvedevent.ResolvedMeasurementEntry{{Name: "temp", Value: value}}}}}
-	case esmodel.Location:
+	case eventtype.Location:
 		event.Payload = &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{{
 			OccurredTime: occurred, Latitude: str(value), Longitude: str("-87.5")}}}
 	}
@@ -231,9 +231,9 @@ func nothing() sees {
 func TestReassignmentMovesLiveStateBetweenCustomers(t *testing.T) {
 	sp, op, ctx := scopeFixture(t)
 	t0 := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Measurement, t0, t0.Add(time.Second), "21.5", scopeAcmeAnchor))
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Location, t0, t0.Add(time.Second), "41.5", scopeAcmeAnchor))
-	sp.mergeOne(context.Background(), ownedEvent(t, "valve-9", esmodel.Measurement, t0, t0.Add(time.Second), "3", scopeGlobexAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Measurement, t0, t0.Add(time.Second), "21.5", scopeAcmeAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Location, t0, t0.Add(time.Second), "41.5", scopeAcmeAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "valve-9", eventtype.Measurement, t0, t0.Add(time.Second), "3", scopeGlobexAnchor))
 
 	pump := sees{ByToken: []string{"pump-1"}, Searched: []string{"pump-1"},
 		Temp: map[string]float64{"pump-1": 21.5}, Lat: map[string]float64{"pump-1": 41.5}}
@@ -266,11 +266,11 @@ func TestALateEventResolvedBeforeTheMoveDoesNotHandTheDeviceBack(t *testing.T) {
 	sp, op, ctx := scopeFixture(t)
 	t0 := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
 	moved := t0.Add(time.Minute)
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Measurement, t0, t0, "1", scopeAcmeAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Measurement, t0, t0, "1", scopeAcmeAnchor))
 	op.handle(context.Background(), ownershipFact(t, "pump-1", moved, scopeGlobexAnchor))
 
 	// Received (and so resolved) half a minute before the move, delivered after its fact.
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Measurement, t0.Add(30*time.Second),
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Measurement, t0.Add(30*time.Second),
 		t0.Add(30*time.Second), "2", scopeAcmeAnchor))
 	require.Equal(t, nothing(), liveView(t, asViewer(ctx, scopeAcmeAnchor), "pump-1"),
 		"an event resolved before the move must not restore the old owner")
@@ -280,13 +280,13 @@ func TestALateEventResolvedBeforeTheMoveDoesNotHandTheDeviceBack(t *testing.T) {
 	// Received just AFTER the move, inside the settle window, but resolved from a cache that
 	// had not yet dropped the old owner (or stamped by a pod whose clock runs ahead): it must
 	// not hand the device back either.
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Measurement, moved.Add(10*time.Second),
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Measurement, moved.Add(10*time.Second),
 		moved.Add(10*time.Second), "2", scopeAcmeAnchor))
 	require.Equal(t, nothing(), liveView(t, asViewer(ctx, scopeAcmeAnchor), "pump-1"),
 		"an event received inside the settle window must not restore the old owner")
 
 	// The same through the batch path, which folds and writes in SQL.
-	sp.mergeBatch(context.Background(), []pendingMerge{admitted(t, sp, ownedEvent(t, "pump-1", esmodel.Measurement,
+	sp.mergeBatch(context.Background(), []pendingMerge{admitted(t, sp, ownedEvent(t, "pump-1", eventtype.Measurement,
 		t0.Add(40*time.Second), t0.Add(40*time.Second), "3", scopeAcmeAnchor))})
 	require.Equal(t, nothing(), liveView(t, asViewer(ctx, scopeAcmeAnchor), "pump-1"),
 		"the batch path must apply the same ordering")
@@ -305,7 +305,7 @@ func TestALateEventResolvedBeforeTheMoveDoesNotHandTheDeviceBack(t *testing.T) {
 	// applied fact repairs the stamp on its own. Here the device was sold to Globex and the
 	// fact never arrived.
 	repairedAt := moved.Add(2 * time.Hour)
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Measurement, repairedAt, repairedAt, "4", scopeGlobexAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Measurement, repairedAt, repairedAt, "4", scopeGlobexAnchor))
 	require.Equal(t, nothing(), liveView(t, asViewer(ctx, scopeAcmeAnchor), "pump-1"))
 	require.Equal(t, map[string]float64{"pump-1": 4}, liveView(t, asViewer(ctx, scopeGlobexAnchor), "pump-1").Temp)
 }
@@ -316,8 +316,8 @@ func TestALateEventResolvedBeforeTheMoveDoesNotHandTheDeviceBack(t *testing.T) {
 func TestUnownedAndForeignStateIsInvisibleToScopedMembers(t *testing.T) {
 	sp, op, ctx := scopeFixture(t)
 	t0 := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Measurement, t0, t0, "1", scopeAcmeAnchor))
-	sp.mergeOne(context.Background(), ownedEvent(t, "loose-1", esmodel.Measurement, t0, t0, "1"))
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Measurement, t0, t0, "1", scopeAcmeAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "loose-1", eventtype.Measurement, t0, t0, "1"))
 	op.handle(context.Background(), ownershipFact(t, "pump-2", t0, scopeAcmeAnchor)) // no row: nothing to stamp
 
 	require.Equal(t, []string{"loose-1", "pump-1"}, liveView(t, asViewer(ctx), "pump-1", "loose-1").ByToken)
@@ -337,7 +337,7 @@ func TestUnownedAndForeignStateIsInvisibleToScopedMembers(t *testing.T) {
 func TestScopedViewerWithoutLocationReadSeesNoPosition(t *testing.T) {
 	sp, _, ctx := scopeFixture(t)
 	t0 := time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
-	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", esmodel.Location, t0, t0, "41.5", scopeAcmeAnchor))
+	sp.mergeOne(context.Background(), ownedEvent(t, "pump-1", eventtype.Location, t0, t0, "41.5", scopeAcmeAnchor))
 	member := auth.WithClaims(ctx, &auth.Claims{TokenType: auth.TokenTypeAccess,
 		Authorities: []string{string(auth.StateRead), string(auth.DeviceRead), string(auth.EventRead)}, ScopeAnchors: []string{scopeAcmeAnchor}})
 	schema := gqlcore.MustParseSchema(dsgraphql.SchemaContent, &dsgraphql.SchemaResolver{})

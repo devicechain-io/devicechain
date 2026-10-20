@@ -10,7 +10,7 @@ import (
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
 	"github.com/devicechain-io/dc-event-processing/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
@@ -279,7 +279,7 @@ func resolvedBytes(t *testing.T, occurred time.Time) []byte {
 		SourceDeviceToken: "dev-1",
 		OccurredTime:      occurred,
 		ProcessedTime:     occurred,
-		EventType:         esmodel.Measurement,
+		EventType:         eventtype.Measurement,
 		Payload:           &resolvedevent.ResolvedMeasurementsPayload{},
 	}
 	b, err := resolvedevent.MarshalResolvedEvent(ev)

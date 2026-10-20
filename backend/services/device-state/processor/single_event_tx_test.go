@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/devicechain-io/dc-device-state/model"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -54,7 +54,7 @@ func stateChange(t *testing.T, device, state string, session uint64, at time.Tim
 	event := &resolvedevent.ResolvedEvent{
 		Source:            mqttTestSource,
 		SourceDeviceToken: device,
-		EventType:         esmodel.StateChange,
+		EventType:         eventtype.StateChange,
 		OccurredTime:      at,
 		ProcessedTime:     at,
 		Payload:           &resolvedevent.ResolvedStateChangePayload{State: state, SessionId: session},

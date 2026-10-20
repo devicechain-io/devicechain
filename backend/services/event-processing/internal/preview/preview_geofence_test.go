@@ -10,7 +10,7 @@ import (
 	"github.com/devicechain-io/dc-event-processing/internal/geofence"
 	rules0 "github.com/devicechain-io/dc-event-processing/internal/rules"
 	"github.com/devicechain-io/dc-event-processing/internal/runtime"
-	esmodel "github.com/devicechain-io/dc-event-sources/model"
+	"github.com/devicechain-io/dc-microservice/eventtype"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/resolvedevent"
 	"strconv"
@@ -63,7 +63,7 @@ func locMsg(t *testing.T, seq uint64, tenant, device, profileVersion string, fen
 		ProfileVersionToken: profileVersion,
 		OccurredTime:        occurred,
 		ProcessedTime:       occurred,
-		EventType:           esmodel.Location,
+		EventType:           eventtype.Location,
 		FenceSetVersion:     fenceSetVersion,
 		Payload: &resolvedevent.ResolvedLocationsPayload{Entries: []resolvedevent.ResolvedLocationEntry{
 			{Latitude: &latS, Longitude: &lonS, OccurredTime: occurred},
