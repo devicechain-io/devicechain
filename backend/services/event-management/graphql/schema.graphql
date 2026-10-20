@@ -436,6 +436,129 @@ type CalculatedEventsResult {
     inputDecimalPlaces: Int!
 }
 
+"""
+Where a calculated-metric backfill job stands. QUEUED and RUNNING are active; a tenant may have
+one active job. SUCCEEDED, CANCELLED and FAILED are final.
+"""
+enum CalculatedMetricBackfillStatus {
+    """Accepted and waiting for the worker."""
+    QUEUED
+    """The worker is filling it."""
+    RUNNING
+    """Every device and window was filled or skipped, and the rollup was refreshed."""
+    SUCCEEDED
+    """Cancelled. Rows already written stay."""
+    CANCELLED
+    """Stopped on an error, named in failure. Rows already written stay; start a new job to resume."""
+    FAILED
+}
+
+"""How many (sample, metric) pairs a backfill skipped for one reason."""
+type CalculatedMetricBackfillSkipCount {
+    """
+    The reason: a formula skip reason as in CalculatedSample.skippedReason, or `ambiguous` when a
+    sample holds one of the formula's inputs twice with different values, so no single value can
+    be chosen for it.
+    """
+    reason: String!
+    """How many pairs were skipped for it. A Float, because a long job overflows a 32-bit Int."""
+    count: Float!
+}
+
+"""
+One calculated-metric backfill: a job that computes the metrics a published profile version
+defines for stored readings that have no value for them, and writes the missing values. It never
+changes a value that is already stored. Every counter is a Float, because a long job overflows a
+32-bit Int, and every counter is exact across restarts.
+"""
+type CalculatedMetricBackfill {
+    """The job's token, unique within the tenant."""
+    token: String!
+    """Where the job stands."""
+    status: CalculatedMetricBackfillStatus!
+    """The token of the device profile whose version is filled."""
+    profileToken: String!
+    """The published version number whose formulas are filled."""
+    profileVersion: Int!
+    """The metrics being filled."""
+    metricKeys: [String!]!
+    """
+    Notes about what the fill will and will not do, given when the job was accepted: a metric
+    whose formula differs from an earlier version's, or one that reads an unselected metric that
+    may be stored under an earlier formula.
+    """
+    warnings: [String!]!
+    """Start of the filled range, an RFC 3339 timestamp in UTC."""
+    from: String!
+    """End of the filled range, an RFC 3339 timestamp in UTC."""
+    to: String!
+    """How many devices the job covers; null until the first device page has been read."""
+    devicesTotal: Float
+    """How many devices are finished."""
+    devicesDone: Float!
+    """Devices done as a fraction of devicesTotal, 0 to 1; null while devicesTotal is unknown."""
+    progress: Float
+    """Samples evaluated: the readings of one event at one instant."""
+    samples: Float!
+    """Pairs of a sample and a metric that produced a value or already held one."""
+    computed: Float!
+    """Rows written."""
+    written: Float!
+    """Pairs whose row already existed, so nothing was written."""
+    alreadyPresent: Float!
+    """Device-batch and chunk-window pairs skipped because the chunk is compressed."""
+    windowsCompressed: Float!
+    """Device-batch and chunk-window pairs skipped because retention may drop the chunk."""
+    windowsBeyondRetention: Float!
+    """Windows whose rollup was refreshed."""
+    windowsRefreshed: Float!
+    """Pairs that produced no value, by reason; only reasons that occurred are listed."""
+    skipped: [CalculatedMetricBackfillSkipCount!]!
+    """What the fill read: stored readings keep a fixed number of decimal places, so a value here can differ from one computed when the reading arrived."""
+    storedInputPrecision: String!
+    """Why the job failed; null otherwise."""
+    failure: String
+    """When the job was accepted, an RFC 3339 timestamp in UTC."""
+    createdAt: String!
+    """Who started it."""
+    createdBy: String
+    """When the worker first took it; null while QUEUED."""
+    startedAt: String
+    """When it reached a final status; null while active."""
+    finishedAt: String
+    """When a cancel was requested of a running job; null otherwise."""
+    cancelRequestedAt: String
+}
+
+"""One page of backfill jobs, newest first."""
+type CalculatedMetricBackfillConnection {
+    """The jobs on this page."""
+    nodes: [CalculatedMetricBackfill!]!
+    """The cursor to pass as after for the next page; null on the last page."""
+    nextCursor: String
+}
+
+"""What to fill."""
+input CalculatedMetricBackfillInput {
+    """The token of the device profile."""
+    profileToken: String!
+    """The published version to fill; omit for the active version. A draft is not a version."""
+    version: Int
+    """
+    The calculated metrics to fill. Omit to fill the metrics that are new in the version, those
+    its previous published version did not calculate; a version with none then needs them named.
+    A metric whose formula changed since an earlier version may be named, and is flagged in
+    warnings.
+    """
+    metricKeys: [String!]
+    """Start of the range, an RFC 3339 timestamp. Not older than retention allows."""
+    from: String!
+    """End of the range, an RFC 3339 timestamp, not in the future; after from, by at most 90 days."""
+    to: String!
+    """Only these devices, at most 1000; omit to fill every device of the profile."""
+    deviceTokens: [String!]
+}
+
 # Contains queries executed against model.
 type Query {
     """
@@ -535,15 +658,62 @@ type Query {
         """End of the range by occurred time, as an RFC 3339 timestamp; after from, by at most 7 days."""
         to: String!
     ): CalculatedEventsResult!
+    """
+    One calculated-metric backfill job of the tenant. Null when the tenant has none with that
+    token. Requires event:read; customer-scoped callers are refused with FORBIDDEN.
+    """
+    calculatedMetricBackfill(
+        """The job's token."""
+        token: String!
+    ): CalculatedMetricBackfill
+    """
+    The tenant's calculated-metric backfill jobs, newest first, a page at a time. Requires
+    event:read; customer-scoped callers are refused with FORBIDDEN. A first outside 1..100 or an
+    after that was not given by this list is refused with INVALID_VALUE.
+    """
+    calculatedMetricBackfills(
+        """Only the jobs of this profile."""
+        profileToken: String
+        """Only jobs in one of these statuses."""
+        statuses: [CalculatedMetricBackfillStatus!]
+        """Page size, 1 to 100; defaults to 25."""
+        first: Int
+        """The nextCursor of the previous page; omit for the first page."""
+        after: String
+    ): CalculatedMetricBackfillConnection!
 }
 
-# Events are written by the persistence pipeline, not via the API.
+"""
+Writes of this service. Readings are written by the ingest pipeline; the only thing the API
+writes is a backfill job.
+"""
 type Mutation {
     """
-    Placeholder that does nothing and always returns null. This service has no mutations: events
-    are written by the ingest pipeline, not through the API.
+    Starts a backfill: computes the calculated metrics of a published profile version for stored
+    readings that have no value for them, and writes the missing values. It never changes a
+    value that is already stored. The job runs in the background; read it with
+    calculatedMetricBackfill. Requires device:write; customer-scoped callers are refused with
+    FORBIDDEN. Refusals: INVALID_VALUE for a range that is empty, in the future, longer than 90
+    days or older than retention allows (it is refused, never shortened), for a metric the version
+    does not calculate or whose formula cannot run, for more than 1000 devices and for a device
+    that is not of the profile; NOT_FOUND for an unknown profile or an unpublished version; CONFLICT,
+    naming the active job, when the tenant already has one; UNAVAILABLE when the backfill worker is
+    switched off or cannot run on this instance, or device-management cannot be reached.
     """
-    _empty: Boolean
+    startCalculatedMetricBackfill(
+        """The profile, version, metrics, range and devices to fill."""
+        input: CalculatedMetricBackfillInput!
+    ): CalculatedMetricBackfill!
+    """
+    Cancels a backfill. A queued job is cancelled at once; a running job stops at its next commit,
+    so its status reads RUNNING with cancelRequestedAt set until then. Rows already written stay.
+    Requires device:write; customer-scoped callers are refused with FORBIDDEN. NOT_FOUND for a
+    token the tenant has no job for; CONFLICT when the job already finished.
+    """
+    cancelCalculatedMetricBackfill(
+        """The token of the job to cancel."""
+        token: String!
+    ): CalculatedMetricBackfill!
 }
 
 # Live event streams (ADR-037). Each field pushes events to the subscriber as

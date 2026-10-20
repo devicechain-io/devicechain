@@ -23,6 +23,10 @@ type Api struct {
 	// raw hypertable instead of the measurement_rollups continuous aggregate (ADR-026
 	// kill-switch, set from config in main). The zero value keeps the rollup path on.
 	RollupReadsDisabled bool
+
+	// Backfill is what the calculated-metric backfill API checks a request against (ADR-082).
+	// Nil until main builds it; every start is then UNAVAILABLE.
+	Backfill *BackfillRuntime
 }
 
 // Create a new API instance.

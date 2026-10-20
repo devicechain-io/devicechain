@@ -33,9 +33,3 @@ func (s *SchemaResolver) GetApi(ctx context.Context) *model.Api {
 func (s *SchemaResolver) GetNats(ctx context.Context) *messaging.NatsManager {
 	return ctx.Value(gqlcore.ContextNatsKey).(*messaging.NatsManager)
 }
-
-// Placeholder resolver for the empty Mutation type (events are written by the
-// persistence pipeline, not via the API).
-func (s *SchemaResolver) Empty() *bool {
-	return nil
-}
