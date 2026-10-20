@@ -419,9 +419,11 @@ un dispositivo que solo informa de lo que cambió.
 
 El botón **Rellenar historial** está desactivado, y al lado dice por qué, cuando el perfil no tiene
 nada publicado o cuando la versión activa no tiene métricas calculadas. Cuando la instancia no puede
-ejecutar rellenos (por ejemplo, porque el operador ha apagado el trabajador de relleno), iniciar uno
-se rechaza con el motivo, y desde entonces el botón y el diálogo quedan desactivados y dicen por qué
-hasta que salgas de la página. Por esos motivos nunca se oculta.
+ejecutar rellenos (por ejemplo, porque el operador ha apagado el trabajador de relleno), la consola
+pregunta a la instancia al abrir la página, y el botón y el diálogo quedan desactivados desde el
+principio, diciendo por qué. Si esa pregunta no pudo responderse y un inicio se rechaza, quedan
+desactivados y dicen por qué desde entonces, hasta que salgas de la página. Por esos motivos nunca
+se oculta.
 
 ## Almacenamiento y precisión
 

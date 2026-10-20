@@ -64,6 +64,7 @@ const (
 	cancelDoc = `mutation { cancelCalculatedMetricBackfill(token: "j1") { token } }`
 	readDoc   = `{ calculatedMetricBackfill(token: "j1") { token status } }`
 	listDoc   = `{ calculatedMetricBackfills { nodes { token } } }`
+	availDoc  = `{ calculatedMetricBackfillAvailability { available reason } }`
 )
 
 func startVars() map[string]any {
@@ -88,6 +89,7 @@ func TestBackfillAuthorityMatrix(t *testing.T) {
 		{"cancel", cancelDoc, nil, write},
 		{"read", readDoc, nil, read},
 		{"list", listDoc, nil, read},
+		{"availability", availDoc, nil, read},
 	}
 	for _, op := range ops {
 		t.Run(op.name, func(t *testing.T) {

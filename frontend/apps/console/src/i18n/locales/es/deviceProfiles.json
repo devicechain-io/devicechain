@@ -590,6 +590,7 @@
   "backfillNeedsVersion": "Publica primero una versión: un relleno completa las métricas calculadas de una versión publicada.",
   "backfillNoCalculated": "Esta versión no tiene métricas calculadas que rellenar.",
   "backfillUnavailable": "El relleno no está disponible ahora mismo: {{reason}}",
+  "backfillUnavailableNoReason": "no se indicó ningún motivo",
   "backfillTitle": "Rellenar historial",
   "backfillDescription": "Calcula las métricas calculadas de las lecturas ya almacenadas. Los valores que existen se conservan; solo se añaden los que faltan.",
   "backfillVersion": "Versión",

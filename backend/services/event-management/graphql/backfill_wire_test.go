@@ -115,6 +115,7 @@ func TestBackfillScopedCallerIsRefusedBeforeTheStore(t *testing.T) {
 		{"cancel", cancelDoc, nil},
 		{"read", readDoc, nil},
 		{"list", listDoc, nil},
+		{"availability", availDoc, nil},
 	} {
 		t.Run(op.name, func(t *testing.T) {
 			resp := execAs(t, api, "t1", []string{"customer:acme"},
@@ -123,4 +124,57 @@ func TestBackfillScopedCallerIsRefusedBeforeTheStore(t *testing.T) {
 			assert.ErrorIs(t, resp.Errors[0].ResolverError, auth.ErrScopeUnsupported, resp.Errors[0].Message)
 		})
 	}
+}
+
+// The availability probe answers on the wire with the SAME decision a start is refused by: for
+// each runtime the probe's reason equals the message-bearing reason of the refused start, and the
+// runtime that can run answers available with a null reason.
+func TestBackfillAvailabilityProbe(t *testing.T) {
+	read := []string{string(auth.EventRead)}
+	write := []string{string(auth.DeviceWrite)}
+	probe := func(t *testing.T, api *model.Api) (bool, *string) {
+		t.Helper()
+		resp := execAs(t, api, "t1", nil, read, availDoc, nil)
+		require.Empty(t, resp.Errors)
+		var out struct {
+			A struct {
+				Available bool
+				Reason    *string
+			} `json:"calculatedMetricBackfillAvailability"`
+		}
+		require.NoError(t, json.Unmarshal(resp.Data, &out))
+		return out.A.Available, out.A.Reason
+	}
+	for _, tc := range []struct {
+		name string
+		rt   *model.BackfillRuntime
+	}{
+		{"no runtime", nil},
+		{"disabled", &model.BackfillRuntime{Runs: false, WhyNot: "calculatedBackfill.enabled is false", Plans: &wirePlans{}}},
+		{"pool too small", &model.BackfillRuntime{Runs: false, WhyNot: "this instance's event store has no connection to spare for it", Plans: &wirePlans{}}},
+		{"no reason given", &model.BackfillRuntime{Runs: false, Plans: &wirePlans{}}},
+		{"no device-management", &model.BackfillRuntime{Runs: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api, _ := newBackfillApi(t)
+			api.Backfill = tc.rt
+			avail, reason := probe(t, api)
+			assert.False(t, avail)
+			require.NotNil(t, reason)
+
+			resp := execAs(t, api, "t1", nil, write, startDoc, startVars())
+			require.NotEmpty(t, resp.Errors)
+			assert.Equal(t, model.CodeUnavailable, resp.Errors[0].Extensions["code"])
+			var un *model.BackfillUnavailable
+			require.ErrorAs(t, resp.Errors[0].ResolverError, &un)
+			assert.Equal(t, un.Reason, *reason, "the probe and a refused start give the same reason")
+		})
+	}
+	t.Run("runs", func(t *testing.T) {
+		api, _ := newBackfillApi(t)
+		api.Backfill = &model.BackfillRuntime{Runs: true, Plans: &wirePlans{}}
+		avail, reason := probe(t, api)
+		assert.True(t, avail)
+		assert.Nil(t, reason)
+	})
 }

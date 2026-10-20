@@ -125,6 +125,11 @@ export type StartCalculatedMetricBackfillMutationVariables = Exact<{
 
 export type StartCalculatedMetricBackfillMutation = { startCalculatedMetricBackfill: { token: string, status: CalculatedMetricBackfillStatus } };
 
+export type CalculatedMetricBackfillAvailabilityQueryVariables = Exact<{ [key: string]: never; }>;
+
+
+export type CalculatedMetricBackfillAvailabilityQuery = { calculatedMetricBackfillAvailability: { available: boolean, reason: string | null } };
+
 export type CancelCalculatedMetricBackfillMutationVariables = Exact<{
   token: string;
 }>;
@@ -215,6 +220,14 @@ export const StartCalculatedMetricBackfillDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<StartCalculatedMetricBackfillMutation, StartCalculatedMetricBackfillMutationVariables>;
+export const CalculatedMetricBackfillAvailabilityDocument = new TypedDocumentString(`
+    query CalculatedMetricBackfillAvailability {
+  calculatedMetricBackfillAvailability {
+    available
+    reason
+  }
+}
+    `) as unknown as TypedDocumentString<CalculatedMetricBackfillAvailabilityQuery, CalculatedMetricBackfillAvailabilityQueryVariables>;
 export const CancelCalculatedMetricBackfillDocument = new TypedDocumentString(`
     mutation CancelCalculatedMetricBackfill($token: String!) {
   cancelCalculatedMetricBackfill(token: $token) {

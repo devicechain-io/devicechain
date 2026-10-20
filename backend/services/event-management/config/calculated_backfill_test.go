@@ -16,7 +16,7 @@ func TestBackfillDefaults(t *testing.T) {
 	cfg := &EventManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(``), cfg))
 	assert.Nil(t, cfg.CalculatedBackfill.Enabled, "unset stays unset: it decides differently from true")
-	run, why := cfg.CalculatedBackfill.Runs(cfg.TsdbConfiguration, cfg.Persistence)
+	run, why, _ := cfg.CalculatedBackfill.Runs(cfg.TsdbConfiguration, cfg.Persistence)
 	assert.True(t, run, "the worker runs on the defaults: %s", why)
 	assert.Equal(t, DefaultBackfillRowsPerSecond, cfg.CalculatedBackfill.RowsPerSecond)
 }
@@ -24,7 +24,7 @@ func TestBackfillDefaults(t *testing.T) {
 func TestBackfillCanBeSwitchedOffAndRated(t *testing.T) {
 	cfg := &EventManagementConfiguration{}
 	require.NoError(t, core.LoadConfiguration([]byte(`{"CalculatedBackfill":{"Enabled":false,"RowsPerSecond":500}}`), cfg))
-	run, why := cfg.CalculatedBackfill.Runs(cfg.TsdbConfiguration, cfg.Persistence)
+	run, why, _ := cfg.CalculatedBackfill.Runs(cfg.TsdbConfiguration, cfg.Persistence)
 	assert.False(t, run)
 	assert.Contains(t, why, "calculatedBackfill.enabled is false")
 	assert.Equal(t, 500, cfg.CalculatedBackfill.RowsPerSecond)
@@ -64,7 +64,8 @@ func TestBackfillMustFitThePoolBesideTheWriters(t *testing.T) {
 	runs := func(doc string) (bool, string) {
 		cfg, err := load(doc)
 		require.NoError(t, err, doc)
-		return cfg.CalculatedBackfill.Runs(cfg.TsdbConfiguration, cfg.Persistence)
+		run, why, _ := cfg.CalculatedBackfill.Runs(cfg.TsdbConfiguration, cfg.Persistence)
+		return run, why
 	}
 	// The defaults (10 writers, a pool of 20) leave room: 10 + 1 + 4 = 15.
 	run, _ := runs(``)
@@ -118,7 +119,7 @@ func TestBackfillValidateOnAHandBuiltValue(t *testing.T) {
 	unset := CalculatedBackfillConfiguration{RowsPerSecond: 100}
 	assert.NoError(t, unset.Validate(mscfg.MicroserviceDatastoreConfiguration{MaxOpenConnections: 14},
 		PersistenceConfiguration{Writers: 10}), "unset is not refused for the pool")
-	run, _ := unset.Runs(mscfg.MicroserviceDatastoreConfiguration{MaxOpenConnections: 14}, PersistenceConfiguration{Writers: 10})
+	run, _, _ := unset.Runs(mscfg.MicroserviceDatastoreConfiguration{MaxOpenConnections: 14}, PersistenceConfiguration{Writers: 10})
 	assert.False(t, run, "...but does not run on it")
 	assert.Error(t, CalculatedBackfillConfiguration{}.Validate(mscfg.MicroserviceDatastoreConfiguration{},
 		PersistenceConfiguration{Writers: 1}), "a rate of zero is not a rate")

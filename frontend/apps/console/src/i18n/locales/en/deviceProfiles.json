@@ -590,6 +590,7 @@
   "backfillNeedsVersion": "Publish a version first: a backfill fills the calculated metrics of a published version.",
   "backfillNoCalculated": "This version has no calculated metrics to fill.",
   "backfillUnavailable": "Backfill is not available right now: {{reason}}",
+  "backfillUnavailableNoReason": "no reason was given",
   "backfillTitle": "Backfill history",
   "backfillDescription": "Compute calculated metrics for readings that are already stored. Values that exist are kept; only missing ones are added.",
   "backfillVersion": "Version",
