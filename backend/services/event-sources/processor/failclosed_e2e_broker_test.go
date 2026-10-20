@@ -464,7 +464,12 @@ func TestEveryPubackedMessageReachesInboundEventsExactlyOnce(t *testing.T) {
 		si, err := js.StreamInfo(messaging.MqttMessageStore)
 		return err == nil && si.Created.After(before.Created) && si.Config.Discard == nats.DiscardNew
 	}, 10*time.Second, 50*time.Millisecond, "the watch never created the store again")
-	time.Sleep(500 * time.Millisecond) // the pass after the re-creation reads the from marks; the capture reader's look refreshes
+	// The pass after the re-creation records the from marks, and the capture reader skips no
+	// direct copy until a look at the store shows them: a publish before then reaches
+	// inbound-events twice (the store copy and the direct copy), which the design accepts when
+	// it is unsure. Wait on that look, not on a delay a loaded runner outruns.
+	require.Eventually(t, func() bool { return podA.nmgr.MqttStoreSkipsDirectCopiesForTesting(t) },
+		30*time.Second, 50*time.Millisecond, "the pass after the re-creation never recorded the from marks")
 	recreated := e2eIds("recreated", 10)
 	dev.publishAcked(recreated...)
 	for _, id := range recreated {

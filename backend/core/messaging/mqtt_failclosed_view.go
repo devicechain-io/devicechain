@@ -256,3 +256,28 @@ func carriesDirectCopies(suffix string) bool {
 	}
 	return false
 }
+
+// MqttStoreSkipsDirectCopiesForTesting takes a new look at the store and reports whether a
+// reader of this manager would now skip the direct copy of a QoS 1 publish for every one of
+// the platform's direct streams: the store is there, held fail-closed by this instance, and
+// carries a from mark for each stream, so each direct copy above its mark has a store copy a
+// durable holds. Until it reports true a publish is forwarded twice (the store copy, and the
+// direct copy nothing skips), which is the cost of being unsure and not a fault, so a test
+// that asserts a publish arrives once waits for this instead of a delay. Production never
+// calls it.
+func (nmgr *NatsManager) MqttStoreSkipsDirectCopiesForTesting(tb interface{ Helper() }) bool {
+	tb.Helper()
+	v := nmgr.mqttView()
+	v.refreshMu.Lock()
+	defer v.refreshMu.Unlock()
+	s, err := v.look()
+	if err != nil || !s.present || !s.owned {
+		return false
+	}
+	for _, suffix := range mqttFailClosedDirectSuffix {
+		if _, ok := s.from[suffix]; !ok {
+			return false
+		}
+	}
+	return true
+}
