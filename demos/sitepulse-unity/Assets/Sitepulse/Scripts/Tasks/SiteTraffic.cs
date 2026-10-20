@@ -205,11 +205,8 @@ namespace DeviceChain.Sitepulse.Tasks
             if (r.TripPlan == null) return AbsoluteIndex(r);
             var l = r.TripPlan.Legs[r.Trip.CurrentLeg];
             // never past the leg's last cell: a clock that rounds a hair past the exit is at the exit (it comes off its track there)
-            return l.PathStart + Math.Min(l.Count - 1, Along(r, l));
+            return l.PathStart + Math.Min(l.Count - 1, r.LegCells);
         }
-
-        // how many cells into its loop leg a rider is
-        static int Along(Rider r, Leg l) => r.LegCells;
 
         // seconds of its track until the end of what a rider holds, while that is on the loop it rides
         double HeldTime(Rider r)
@@ -230,7 +227,7 @@ namespace DeviceChain.Sitepulse.Tasks
             if (r.TripPlan == null) return double.MaxValue;
             var l = r.TripPlan.Legs[r.Trip.CurrentLeg];
             if (!l.Loop) return double.MaxValue;
-            var along = Along(r, l);
+            var along = r.LegCells;
             if (along >= l.Count) return 0.0;
             if (along < l.Count - 1) return double.MaxValue;
             var end = (l.To + 1) % loop.Cells.Count;

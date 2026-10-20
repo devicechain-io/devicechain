@@ -14,8 +14,8 @@ namespace DeviceChain.Sitepulse.Tasks
     /// once a frame, before the scene's own choreography moves the machines that are still on their tracks.
     ///
     /// The haul trucks ride the loop under the interlocking, and their errands run on the site's lanes: to an exit at speed, up a stand's lane,
-    /// and back onto the loop through a merge. Every other machine works in its own area, and an errand of one is a free route whose way over
-    /// the lanes the interlocking grants. Nothing waits on a guess about where anything will be.
+    /// and back onto the loop through a merge. Every other machine works in its own area, and an errand of one is a free route that must stay
+    /// off the lanes altogether (<see cref="OffLaneWay"/>), or it is refused with the reason. Nothing waits on a guess about where anything will be.
     ///
     /// A command for a machine that has no controller (the plant, an unknown device) is answered failed on the spot, and a command that arrives
     /// after <see cref="FailAll"/> is too: nothing is ever left waiting for an answer that will not come.

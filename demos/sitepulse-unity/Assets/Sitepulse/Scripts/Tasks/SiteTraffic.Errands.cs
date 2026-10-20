@@ -489,8 +489,11 @@ namespace DeviceChain.Sitepulse.Tasks
             return k;
         }
 
-        // how far ahead a truck driven on a lane holds: what it needs to stop from its speed, and two cells more
-        double LaneWant(double speed) => speed * speed / (2.0 * BrakeMps2) + StopShortM + 2.0 * topology.CellM + 4.0;
+        /// <summary>How much further than it needs to stop in (and two cells) a truck driven on a lane holds, metres: it never brakes for a cell it would get.</summary>
+        const double LaneMarginM = 4.0;
+
+        // how far ahead a truck driven on a lane holds: what it needs to stop from its speed, two cells more and a margin
+        double LaneWant(double speed) => speed * speed / (2.0 * BrakeMps2) + StopShortM + 2.0 * topology.CellM + LaneMarginM;
 
         // a trip begins: the truck's way through the interlocking is the trip's path from where it is. It was planned a step ago at most, from
         // where it was then; riding its track it may have gone on a cell or two since, which the path's first leg already holds. False when
@@ -515,7 +518,7 @@ namespace DeviceChain.Sitepulse.Tasks
         bool AtLegEnd(Rider r, Leg l)
         {
             if (!r.OnLoop) return true;
-            var along = Along(r, l);
+            var along = r.LegCells;
             if (along >= l.Count) return true;
             if (along < l.Count - 1) return false;
             var end = (l.To + 1) % loop.Cells.Count;

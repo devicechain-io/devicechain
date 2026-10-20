@@ -341,24 +341,4 @@ namespace DeviceChain.Sitepulse.Tasks
             return refusal != null ? null : new FreeTrip(body, route, () => graph.Plan(body.X, body.Z, point.X, point.Z), laneShare, keeper, "its track", false, point);
         }
     }
-
-    /// <summary>A keeper with nobody else to keep clear of: every free route is admitted, at any time (a site with no one else on it).</summary>
-    public sealed class OpenWay : IWayKeeper
-    {
-        public static readonly OpenWay Instance = new OpenWay();
-
-        public string Check(IMachineBody body, LaneLine line, bool endsStanding) => null;
-
-        public bool MayLeave(string id, out string why)
-        {
-            why = null;
-            return true;
-        }
-
-        public string Begin(IMachineBody body, LaneLine line, bool endsStanding) => null;
-
-        public double Reach(string id, double s) => double.MaxValue;
-
-        public void Ended(string id) { }
-    }
 }
