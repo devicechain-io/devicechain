@@ -181,6 +181,38 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual("", Faults(sim), "seed " + seed);
         }
 
+        // ---- commands on top of commands
+
+        [Test]
+        public void CommandsThatSupersedeEachOtherEveryFewSecondsNeverStrandATruck([Values(1, 2, 3, 4, 5, 101, 120)] int seed)
+        {
+            // a haul truck every five to thirty-five seconds, to the refuel bay or to any zone: most land on a truck already on an errand, so
+            // trips are given up wherever the truck is (riding to its exit, part-way along a lane, in the queue, in the bay) and the next one is
+            // planned from there. None may leave a truck standing on a lane, and once the commands stop and parked trucks are put back to work,
+            // every truck must be going round again
+            var sim = Site();
+            var rnd = new Random(seed);
+            var zones = new[] { "sp-zone-cut", "sp-zone-fill", "sp-zone-yard" };
+            var script = new List<(double, string, string, string)>();
+            for (var t = 20.0; t < 900.0; t += 5 + rnd.NextDouble() * 30)
+            {
+                var id = "SP-HL-000" + (1 + rnd.Next(6));
+                script.Add(rnd.NextDouble() < 0.5 ? (t, id, "goto-refuel", (string)null) : (t, id, "goto-area", zones[rnd.Next(3)]));
+            }
+
+            var w = Run(sim, 1800.0, script, resumeAfter: 30.0, markAfter: 1350.0);
+            Assert.AreEqual("", Overlaps(sim), "seed " + seed);
+            foreach (var (id, request, at) in w.Commands)
+                Assert.IsTrue(request.IsComplete, "seed " + seed + ": " + id + " sent at " + at.ToString("0") + " s is answered\n" + sim.Timeline.Text(id, 20));
+            foreach (var id in w.Laps.Keys)
+            {
+                Assert.AreEqual(MachineMode.Working, sim.Director[id].Mode, "seed " + seed + ": " + id + " is back at work\n" + Story(sim, w) + "\n" + sim.Timeline.Text(id, 20));
+                Assert.GreaterOrEqual(w.LapsAfter[id], 1, "seed " + seed + ": " + id + " was going round again at the end\n" + Story(sim, w));
+            }
+
+            Assert.AreEqual("", Faults(sim), "seed " + seed);
+        }
+
         // ---- anything sent anywhere
 
         [Test]
