@@ -114,6 +114,27 @@ func moveStreamLeader(t *testing.T, nmgr *NatsManager, stream, server string) {
 	}
 }
 
+// waitWriterTarget waits up to 15 s for the writer's stream target to name server. The wait is
+// the same as before; what changed is that a timeout says WHERE the target and the stream's
+// leader were, which tells a missed advisory (target stale, leader moved) from a dial that
+// failed (target on the manager's own connection) from a leader that never settled.
+func waitWriterTarget(t *testing.T, nmgr *NatsManager, ow *orderedWriter, stream, server string) {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for ow.target.Load().server != server {
+		if time.Now().After(deadline) {
+			leader, peers := "?", -1
+			if info, err := nmgr.js.StreamInfo(stream); err == nil {
+				leader, peers = leaderOfStream(info), currentPeers(info)
+			}
+			t.Fatalf("timed out waiting for the writer's target to be %s: target is %q (nil conn: the manager's own), "+
+				"stream leader is %q with %d current peers", server, ow.target.Load().server,
+				leader, peers)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // moveConsumerLeader elects server as the durable's leader and waits until every peer is current.
 func moveConsumerLeader(t *testing.T, nmgr *NatsManager, d durableRef, server string) {
 	t.Helper()
@@ -237,9 +258,7 @@ func TestOrderedWriterPublishesWithoutARouteHop(t *testing.T) {
 	wOn := newOrdered(t, on, 512)
 	moveStreamLeader(t, on, stream, leader)
 	ow := wOn.(*orderedWriter)
-	waitWithin(t, 15*time.Second, "the writer's target to be the leader", func() bool {
-		return ow.target.Load().server == leader
-	})
+	waitWriterTarget(t, on, ow, stream, leader)
 	publishAcked(t, wOn, "warm-on", 10) // the first submission moves the writer
 	atA, atB = clientFramesAtA(t, servers, wOn, "on", n)
 	t.Logf("affinity on: client frames at A %d, in-messages at B %d", atA, atB)
@@ -476,10 +495,12 @@ func TestWriterFallsBackWhenItsLeaderConnectionCloses(t *testing.T) {
 	nmgr := affinityManager(t, servers[0], uniqueArea("affinity-fallback"), false, true, nil)
 	w := newOrdered(t, nmgr, 64)
 	ow := w.(*orderedWriter)
+	// The stream accepts a publish before it is moved, as the mid-window test does: a move
+	// started while the stream is still settling from its creation is the one a missed
+	// leader-elected advisory (and no sampler, here) turns into a 15 s wait for nothing.
+	waitUntilPublishable(t, nmgr)
 	moveStreamLeader(t, nmgr, stream, leader)
-	waitWithin(t, 15*time.Second, "the writer's target to be the leader", func() bool {
-		return ow.target.Load().server == leader
-	})
+	waitWriterTarget(t, nmgr, ow, stream, leader)
 	publishAcked(t, w, "before", 10)
 	lc := ow.conn.Load()
 	if lc == nil {
@@ -517,9 +538,7 @@ func TestOrderedWriterSurvivesLeaderMoveMidWindow(t *testing.T) {
 	ow := w.(*orderedWriter)
 	waitUntilPublishable(t, nmgr)
 	moveStreamLeader(t, nmgr, stream, first)
-	waitWithin(t, 15*time.Second, "the writer's target to be the first leader", func() bool {
-		return ow.target.Load().server == first
-	})
+	waitWriterTarget(t, nmgr, ow, stream, first)
 
 	out := newOutcomes()
 	var wg sync.WaitGroup
@@ -537,11 +556,17 @@ func TestOrderedWriterSurvivesLeaderMoveMidWindow(t *testing.T) {
 	if got := out.waitCount(n, 60*time.Second); got != n {
 		t.Fatalf("%d of %d publishes were reported", got, n)
 	}
-	waitWithin(t, 5*time.Second, "the writer to publish on the new leader", func() bool {
+	onSecond := func() bool {
 		w.Publish(orderedCtx(), Message{Value: []byte("probe")}, func(error) {})
 		lc := ow.conn.Load()
 		return lc != nil && lc.ConnectedServerName() == second
-	})
+	}
+	for deadline := time.Now().Add(5 * time.Second); !onSecond(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for the writer to publish on the new leader %s: its stream target is %q, "+
+				"it is in a failure episode: %v", second, ow.target.Load().server, ow.inEpisode.Load())
+		}
+	}
 	t.Logf("writer on the new leader %s after the election", time.Since(moved))
 
 	// Every acknowledged publish once, in submission order.
