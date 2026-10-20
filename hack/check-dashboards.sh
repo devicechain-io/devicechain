@@ -224,6 +224,53 @@ if not literals:
         "  which is as broken as passing everything." % go_root
     )
 
+# 🔴 A HISTOGRAM EXPOSES MORE SERIES THAN IT IS REGISTERED UNDER. Registering
+# `detect_rule_stat_write_seconds` as a histogram exports `_bucket`, `_sum` and
+# `_count` and NO series under the bare name, so a latency panel can only ever name
+# a derived series -- which no Go literal spells. The literal test above therefore
+# rejected every latency panel. The way out is NOT to loosen the suffix match: a
+# suffix is accepted only when its base is registered, IN THAT AREA, as the type
+# that exports it. `_bucket` on a counter or a gauge is a typo that draws an empty
+# graph, and `_buckets` is one on any type; both stay rejected.
+#
+#   histogram -> _bucket, _sum, _count        summary -> _sum, _count (no _bucket)
+#
+# Types are read from the registration call, `ms.NewHistogramVec("name", ...)`,
+# because the name's type is not recoverable from the name. Test files are skipped:
+# a metric registered only in a test is not exported by any service.
+DERIVED_SUFFIXES = {
+    "histogram": ("_bucket", "_sum", "_count"),
+    "summary": ("_sum", "_count"),
+}
+REGISTRATION = re.compile(
+    r"\.New(Histogram|Summary|Counter|Gauge)(?:Vec)?\(\s*\"([a-z][a-z0-9_]*)\"")
+kinds = {}  # area directory -> {registered name: histogram|summary|counter|gauge}
+for dirpath, _dirs, files in os.walk(services_dir):
+    rel_parts = os.path.relpath(dirpath, services_dir).split(os.sep)
+    area_dir = rel_parts[0]
+    if area_dir == ".":
+        continue
+    for fname in files:
+        if not fname.endswith(".go") or fname.endswith("_test.go"):
+            continue
+        with open(os.path.join(dirpath, fname), "rb") as fh:
+            src = fh.read().decode("utf-8", "replace")
+        for reg in REGISTRATION.finditer(src):
+            kinds.setdefault(area_dir, {})[reg.group(2)] = reg.group(1).lower()
+
+def derived_base(metric, area_dir=None):
+    """The registered histogram/summary a derived series belongs to, else None.
+    area_dir None means any area (a by-name selector spans them all)."""
+    for kind, suffixes in DERIVED_SUFFIXES.items():
+        for suffix in suffixes:
+            if not metric.endswith(suffix):
+                continue
+            base = metric[:-len(suffix)]
+            areas_to_look = [area_dir] if area_dir else list(kinds)
+            if any(kinds.get(a, {}).get(base) == kind for a in areas_to_look):
+                return base
+    return None
+
 series_re = re.compile(r"devicechain_[a-z0-9_]+")
 
 # 🔴 THE RESOLVER TRUNCATES, SO IT HAS TO CHECK WHAT IT TRUNCATED. series_re stops at
@@ -302,7 +349,7 @@ for series in sorted(seen):
             % (series, where, subsystem, ", ".join(sorted(areas)))
         )
         continue
-    if metric not in literals:
+    if metric not in literals and derived_base(metric, areas[subsystem]) is None:
         problems.append(
             "%s (in %s) resolves to the metric %r in the %s area, and NO Go source registers\n"
             "    that name. A panel over a series that does not exist draws an empty graph; an\n"
@@ -312,7 +359,7 @@ for series in sorted(seen):
         )
 
 for (form, suffix) in sorted(regex_seen):
-    if suffix not in literals:
+    if suffix not in literals and derived_base(suffix) is None:
         problems.append(
             "devicechain_%s_%s (in %s) selects every area's %r by name, and NO Go source\n"
             "    registers that name. The selector matches nothing, and an ALERT over it\n"
@@ -589,6 +636,10 @@ package selftestarea
 func register(ms *Microservice) {
 	ms.NewCounter("probe_total", "A probe counter.")
 	ms.NewCounter("other_probe_total", "A second probe counter.")
+	ms.NewHistogramVec("lat_seconds", "A probe histogram.", nil, nil)
+	ms.NewSummary(
+		"sum_seconds", "A probe summary.")
+	ms.NewGauge("level", "A probe gauge.")
 }
 EOF
 
@@ -604,6 +655,9 @@ EOF
       "targets": [
         {
           "expr": "sum(rate(devicechain_selftestarea_probe_total{namespace=\"$namespace\"}[5m]))"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(devicechain_selftestarea_lat_seconds_bucket[5m]))) / (sum(rate(devicechain_selftestarea_lat_seconds_sum[5m])) / sum(rate(devicechain_selftestarea_lat_seconds_count[5m]))) + rate(devicechain_selftestarea_sum_seconds_sum[5m]) + rate(devicechain_selftestarea_sum_seconds_count[5m])"
         }
       ]
     }
@@ -658,6 +712,25 @@ EOF
   fi
   restore
   echo "  ok: a misspelled series in a dashboard is caught"
+
+  # Cases 2h — HISTOGRAM-DERIVED SERIES. The clean fixture above already names
+  # _bucket/_sum/_count of a histogram and _sum/_count of a summary, and Case 0
+  # passed over them (the accepted half). Each defect below is planted ALONE
+  # into that panel by rewriting ONE series to a name that must not resolve.
+  histcase() { # <from> <to> <description>
+    sed -i "s/$1/$2/" "$dash/probe.json"
+    grep -q "$2" "$dash/probe.json" || fail "the mutation for $3 did not apply"
+    if check_content "$work" >/dev/null 2>&1; then
+      fail "did not flag $3"
+    fi
+    restore
+    echo "  ok: $3 is caught"
+  }
+  histcase 'lat_seconds_bucket' 'lat_seconds_buckets' 'a misspelled histogram suffix (_buckets)'
+  histcase 'lat_seconds_bucket' 'lat_secnds_bucket' 'a histogram suffix on a base that is not registered'
+  histcase 'devicechain_selftestarea_sum_seconds_sum' 'devicechain_selftestarea_sum_seconds_bucket' '_bucket on a summary'
+  histcase 'devicechain_selftestarea_lat_seconds_sum' 'devicechain_selftestarea_probe_total_bucket' '_bucket on a counter'
+  histcase 'devicechain_selftestarea_lat_seconds_sum' 'devicechain_selftestarea_level_count' '_count on a gauge'
 
   # Case 3 — A MISSPELLED SERIES IN AN ALERT RULE, alone. Same defect, the far
   # more dangerous half: this one is a rule that can never fire, and promtool
@@ -895,7 +968,7 @@ FIXTURE
   rm -f "$chart/dashboards/unscoped-board.json"
   echo "  ok: a dashboard with no namespace variable is refused by the template"
 
-  echo "self-test passed: 19 defects, each planted alone, each caught; a clean tree and chart pass"
+  echo "self-test passed: 24 defects, each planted alone, each caught; a clean tree and chart pass"
   exit 0
 fi
 
