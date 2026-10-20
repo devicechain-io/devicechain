@@ -186,6 +186,18 @@ func wireAnchorSweep(ctx context.Context) error {
 	return nil
 }
 
+// newBackfillRuntime is what the backfill API checks a request against: whether the worker runs on
+// this instance (CalculatedBackfillConfiguration.Runs, the one decision, so the API and the worker
+// cannot disagree) and the retention a range must respect. Plans is set when the worker is wired.
+func newBackfillRuntime(c *config.EventManagementConfiguration) *model.BackfillRuntime {
+	run, why := c.CalculatedBackfill.Runs(c.TsdbConfiguration, c.Persistence)
+	return &model.BackfillRuntime{
+		Runs: run, WhyNot: why,
+		RetentionDays: c.Lifecycle.RetentionDays,
+		ChunkInterval: time.Duration(c.Lifecycle.ChunkIntervalHours) * time.Hour,
+	}
+}
+
 // wireBackfill builds the calculated-metric backfill worker (ADR-082), unless it is off: the
 // operator switched it off, or left it unset on a pool with no room for it
 // (CalculatedBackfillConfiguration.Runs). It is inert until a job exists: a pass is one lock attempt and one query.
@@ -198,7 +210,12 @@ func wireAnchorSweep(ctx context.Context) error {
 // it leaves a job it finds alone and says so, rather than failing a job for a deployment gap.
 func wireBackfill(ctx context.Context) error {
 	bc := Configuration.CalculatedBackfill
-	if run, why := bc.Runs(Configuration.TsdbConfiguration, Configuration.Persistence); !run {
+	rt := newBackfillRuntime(Configuration)
+	// The API is told whether the worker runs, and why not, so a start is refused with that
+	// reason instead of queueing a job nothing would run.
+	Api.Backfill = rt
+	if !rt.Runs {
+		why := rt.WhyNot
 		// Validate already refused the one case that is an error (enabled: true on a pool too
 		// small for it). What reaches here is an operator's false, or an unset switch on a pool
 		// tuned before the worker existed, which is left off rather than refused; the second
@@ -216,11 +233,13 @@ func wireBackfill(ctx context.Context) error {
 		infra.UserManagement.Hostname != "" && infra.UserManagement.Port != 0 {
 		client := svcclient.New(infra.UserManagement, infra.ServiceAuth.Secret, "event-management",
 			[]string{string(auth.DeviceRead)})
-		roster = backfill.NewGraphQLRoster(client,
-			fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port))
+		url := fmt.Sprintf("http://%s:%d/graphql", infra.DeviceManagement.Hostname, infra.DeviceManagement.Port)
+		roster = backfill.NewGraphQLRoster(client, url)
+		rt.Plans = backfill.NewGraphQLPlanSource(client, url)
 	} else {
 		log.Warn().Msg("Service secret, device-management or user-management endpoint not configured — " +
-			"calculated-metric backfill has no roster, and will leave any job it finds waiting.")
+			"calculated-metric backfill has no roster, and will leave any job it finds waiting; " +
+			"starting a backfill is refused as unavailable.")
 	}
 	BackfillWorker = backfill.NewWorker(Microservice, RdbManager, roster, backfill.Config{
 		RowsPerSecond: bc.RowsPerSecond,
