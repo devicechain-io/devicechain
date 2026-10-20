@@ -449,3 +449,163 @@ func TestRosterLeavesOutDeletedDevicesAndTypes(t *testing.T) {
 		assert.Equal(t, "INVALID_VALUE", codeOf(err), "%s: %v", tok, err)
 	}
 }
+
+// otherProfile creates a profile in ctx's tenant with the given metrics (an expression of "" is
+// measured) and publishes it when publish is set.
+func (f *calcFixture) otherProfile(ctx context.Context, token string, publish bool, metrics map[string]string) {
+	f.t.Helper()
+	p := &DeviceProfile{}
+	p.Token = token
+	require.NoError(f.t, f.api.RDB.DB(ctx).Create(p).Error)
+	for key, expr := range metrics {
+		req := &MetricDefinitionCreateRequest{Token: token + "-" + key, DeviceProfileToken: token, MetricKey: key, DataType: "DOUBLE"}
+		if expr != "" {
+			e := expr
+			req.Expression = &e
+		}
+		_, err := f.api.CreateMetricDefinition(ctx, req)
+		require.NoError(f.t, err)
+	}
+	if publish {
+		_, err := f.api.PublishDeviceProfile(ctx, token, nil, nil, "tester")
+		require.NoError(f.t, err)
+	}
+}
+
+func sharedFlags(t *testing.T, f *calcFixture) map[string]bool {
+	t.Helper()
+	got, err := f.api.CalculatedMetricPlan(f.ctx, "meter", nil)
+	require.NoError(t, err)
+	out := map[string]bool{}
+	for _, c := range got.Calculated {
+		out[c.Key] = c.NameSharedWithOtherProfiles
+	}
+	return out
+}
+
+// A calculated metric's name is flagged when another profile of the tenant has a metric of that
+// key in its ACTIVE version, measured or calculated; the profile's own other versions, a draft
+// profile, a superseded version of another profile and another tenant's profile do not count.
+func TestPlanDoorFlagsNamesSharedWithOtherProfiles(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	for _, k := range []string{"a_measured", "b_calculated", "c_own", "d_draft", "e_superseded", "f_foreign", "g_unique", "h_pct%_"} {
+		f.metric(k, "DOUBLE", "voltage * 2.0")
+	}
+	require.NoError(t, f.publish())
+	// The profile's own earlier version carries c_own too: a second version, same keys.
+	require.NoError(t, f.publish())
+
+	f.otherProfile(f.ctx, "other-measured", true, map[string]string{"a_measured": ""})
+	f.otherProfile(f.ctx, "other-calc", true, map[string]string{"voltage": "", "b_calculated": "voltage * 3.0"})
+	f.otherProfile(f.ctx, "other-draft", false, map[string]string{"d_draft": ""})
+	// Superseded: v1 declared e_superseded, the active v2 does not.
+	f.otherProfile(f.ctx, "other-moved", true, map[string]string{"e_superseded": ""})
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("metric_key = ?", "e_superseded").Delete(&MetricDefinition{}).Error)
+	_, err := f.api.PublishDeviceProfile(f.ctx, "other-moved", nil, nil, "tester")
+	require.NoError(t, err)
+	// Another tenant's profile.
+	foreign := core.WithTenant(context.Background(), "globex")
+	f.otherProfile(foreign, "foreign", true, map[string]string{"f_foreign": ""})
+
+	got := sharedFlags(t, f)
+	assert.Equal(t, map[string]bool{
+		"a_measured": true, "b_calculated": true, "c_own": false, "d_draft": false,
+		"e_superseded": false, "f_foreign": false, "g_unique": false, "h_pct%_": false,
+	}, got)
+}
+
+// LIKE wildcards in a key do not make a lookalike key count. An unescaped wildcard could only
+// over-select, which the exact check absorbs, so this pins the answer, not the escaping: the
+// escaping is the pre-filter's selectivity (a key with a backslash skips the pre-filter).
+func TestPlanDoorSharedNameWildcardsAreLiteral(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("h_pct%_", "DOUBLE", "voltage * 2.0")
+	require.NoError(t, f.publish())
+	f.otherProfile(f.ctx, "other", true, map[string]string{"hXpctYZ": ""})
+	assert.False(t, sharedFlags(t, f)["h_pct%_"])
+	f.otherProfile(f.ctx, "other2", true, map[string]string{"h_pct%_": ""})
+	assert.True(t, sharedFlags(t, f)["h_pct%_"])
+}
+
+// Another profile's active snapshot that does not parse does not fail the plan request (the
+// backfill worker reads the same door): every metric answers on the warning side instead.
+func TestPlanDoorSharedNameUnparseableOtherSnapshotWarnsAll(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("k_one", "DOUBLE", "voltage * 2.0")
+	f.metric("k_two", "DOUBLE", "voltage * 3.0")
+	require.NoError(t, f.publish())
+	assert.Equal(t, map[string]bool{"k_one": false, "k_two": false}, sharedFlags(t, f))
+
+	f.otherProfile(f.ctx, "corrupt", true, map[string]string{"unrelated": ""})
+	var other DeviceProfile
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("token = ?", "corrupt").First(&other).Error)
+	// Valid JSON (the column accepts it) whose metrics do not decode, mentioning k_one so the
+	// pre-filter selects it.
+	require.NoError(t, f.api.RDB.DB(f.ctx).Model(&DeviceProfileVersion{}).
+		Where("device_profile_id = ?", other.ID).
+		Update("snapshot", datatypes.JSON(`{"metrics":"k_one"}`)).Error)
+
+	assert.Equal(t, map[string]bool{"k_one": true, "k_two": true}, sharedFlags(t, f))
+}
+
+// insertActiveVersions adds n other profiles in ctx's tenant, each with an active version whose
+// snapshot is text: inserted directly, so a bound-sized population costs one batch.
+func (f *calcFixture) insertActiveVersions(n int, prefix, snapshot string) {
+	f.t.Helper()
+	db := f.api.RDB.DB(f.ctx)
+	for i := 0; i < n; i++ {
+		p := &DeviceProfile{}
+		p.Token = fmt.Sprintf("%s-%d", prefix, i)
+		require.NoError(f.t, db.Create(p).Error)
+		require.NoError(f.t, db.Create(&DeviceProfileVersion{DeviceProfileId: p.ID, Version: 1,
+			Snapshot: datatypes.JSON(snapshot)}).Error)
+		require.NoError(f.t, db.Model(p).Update("active_version", 1).Error)
+	}
+}
+
+// Past MaxSharedNameScanVersions candidates every metric is reported shared; at exactly the bound
+// the exact check still decides.
+func TestPlanDoorSharedNameBound(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("k_one", "DOUBLE", "voltage * 2.0")
+	require.NoError(t, f.publish())
+	// Each snapshot mentions k_one (so the pre-filter selects it) but declares no such metric.
+	snap := `{"metrics":[{"key":"elsewhere"}],"commands":[],"rules":[],"note":"k_one"}`
+	f.insertActiveVersions(MaxSharedNameScanVersions, "cand", snap)
+	assert.False(t, sharedFlags(t, f)["k_one"], "at the bound the exact check decides")
+	f.insertActiveVersions(1, "over", snap)
+	assert.True(t, sharedFlags(t, f)["k_one"], "past the bound the answer is the warning side")
+}
+
+// A key the JSON encoder spells escaped is not missed by the text pre-filter: it skips the
+// pre-filter and the exact check on the parsed snapshot decides.
+func TestPlanDoorSharedNameEscapedKey(t *testing.T) {
+	assert.False(t, jsonVerbatim("a<b"))
+	assert.False(t, jsonVerbatim(`a"b`))
+	assert.False(t, jsonVerbatim("a b"))
+	assert.True(t, jsonVerbatim("ünïcode_key"))
+
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("a&b", "DOUBLE", "voltage * 2.0")
+	f.metric("k_one", "DOUBLE", "voltage * 2.0")
+	require.NoError(t, f.publish())
+	f.otherProfile(f.ctx, "other", true, map[string]string{"a&b": ""})
+	assert.Equal(t, map[string]bool{"a&b": true, "k_one": false}, sharedFlags(t, f))
+}
+
+// A deleted profile's active version produces no readings, so it does not mark a name shared.
+func TestPlanDoorSharedNameIgnoresDeletedProfiles(t *testing.T) {
+	f := backfillFixture(t)
+	f.metric("voltage", "DOUBLE", "")
+	f.metric("k_one", "DOUBLE", "voltage * 2.0")
+	require.NoError(t, f.publish())
+	f.otherProfile(f.ctx, "gone", true, map[string]string{"k_one": ""})
+	assert.True(t, sharedFlags(t, f)["k_one"])
+	require.NoError(t, f.api.RDB.DB(f.ctx).Where("token = ?", "gone").Delete(&DeviceProfile{}).Error)
+	assert.False(t, sharedFlags(t, f)["k_one"])
+}

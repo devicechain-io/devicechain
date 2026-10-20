@@ -115,6 +115,10 @@ func (r *CalculatedMetricPlanMetricResolver) ChangedSinceEarlier() bool {
 	return r.M.ChangedSinceEarlier
 }
 
+func (r *CalculatedMetricPlanMetricResolver) NameSharedWithOtherProfiles() bool {
+	return r.M.NameSharedWithOtherProfiles
+}
+
 // CalculatedBackfillRosterPageResolver exposes one page of the roster.
 type CalculatedBackfillRosterPageResolver struct {
 	M model.BackfillRosterPage

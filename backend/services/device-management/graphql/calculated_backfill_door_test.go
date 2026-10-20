@@ -48,7 +48,7 @@ func strPtr(s string) *string { return &s }
 const planQuery = `query($p: String!) { calculatedMetricPlan(profileToken: $p) {
 	versionToken version activeSince constantKeys
 	measured { key dataType }
-	calculated { key expression dataType classifier newInVersion changedSinceEarlier } } }`
+	calculated { key expression dataType classifier newInVersion changedSinceEarlier nameSharedWithOtherProfiles } } }`
 
 const rosterQuery = `query($p: String!, $k: [String!]!, $l: Int!) { calculatedBackfillRoster(profileToken: $p, constantKeys: $k, limit: $l) {
 	nextCursor total entries { deviceId deviceToken createdAt constants { key number } } } }`

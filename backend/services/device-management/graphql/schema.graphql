@@ -1419,6 +1419,14 @@ type CalculatedMetricPlanMetric {
     version's formula gives.
     """
     changedSinceEarlier: Boolean!
+    """
+    True when another device profile of the tenant declares a metric (measured or
+    calculated) with this key in its active version. Tenant-wide readings counted by
+    metric name then include that profile's readings, so a count under this name
+    cannot show this formula is working. Also true when the check could not be completed:
+    more candidate versions than its bound, or another profile's version that could not be read.
+    """
+    nameSharedWithOtherProfiles: Boolean!
 }
 
 """The calculated metrics of one published profile version, as the live resolver runs them."""
