@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/devicechain-io/dc-microservice/calcfield"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 )
 
@@ -57,7 +58,8 @@ type CalculatedPlanMetric struct {
 	ChangedSinceEarlier bool
 	// NameSharedWithOtherProfiles is true when another device profile of the same tenant
 	// declares a metric (measured or calculated) with this key in its ACTIVE version. The
-	// answer is "possibly": when the scan cannot be completed within its bound it is true.
+	// answer is "possibly": when the scan cannot be completed (past its bound, or another
+	// profile's snapshot does not parse) it is true.
 	NameSharedWithOtherProfiles bool
 }
 
@@ -272,7 +274,10 @@ func (api *Api) flagSharedMetricNames(ctx context.Context, profileId uint, calcu
 		clauses = append(clauses, `CAST(device_profile_versions.snapshot AS TEXT) LIKE ? ESCAPE '\'`)
 		args = append(args, "%"+likeEscaper.Replace(c.Key)+"%")
 	}
-	var rows []struct{ Snapshot []byte }
+	var rows []struct {
+		Token    string
+		Snapshot []byte
+	}
 	err := api.RDB.DB(ctx).Model(&DeviceProfileVersion{}).
 		// The tenant equality makes the joined table tenant-safe by the query itself
 		// (hack/check-raw-joins.sh).
@@ -282,7 +287,7 @@ func (api *Api) flagSharedMetricNames(ctx context.Context, profileId uint, calcu
 			"AND device_profiles.active_version = device_profile_versions.version").
 		Where("device_profile_versions.device_profile_id <> ?", profileId).
 		Where("("+strings.Join(clauses, " OR ")+")", args...).
-		Select("device_profile_versions.snapshot AS snapshot").
+		Select("device_profiles.token AS token, device_profile_versions.snapshot AS snapshot").
 		Limit(MaxSharedNameScanVersions + 1).
 		Scan(&rows).Error
 	if err != nil {
@@ -290,19 +295,23 @@ func (api *Api) flagSharedMetricNames(ctx context.Context, profileId uint, calcu
 	}
 	shared := map[string]bool{}
 	if len(rows) > MaxSharedNameScanVersions {
-		for k := range keys {
-			shared[k] = true
+		markAllShared(calculated)
+		return nil
+	}
+	for _, r := range rows {
+		snap, err := parseProfileSnapshot(r.Snapshot)
+		if err != nil {
+			// ANOTHER profile's snapshot is not this request's to fail on: the same door serves
+			// the backfill worker, and one corrupt unrelated profile must not stop it. The flag
+			// is advisory, so an unreadable candidate answers on the warning side, like the bound.
+			log.Warn().Err(err).Str("profile", r.Token).
+				Msg("An active profile version does not parse; reporting every calculated metric name as shared.")
+			markAllShared(calculated)
+			return nil
 		}
-	} else {
-		for _, r := range rows {
-			snap, err := parseProfileSnapshot(r.Snapshot)
-			if err != nil {
-				return fmt.Errorf("an active profile version does not parse: %w", err)
-			}
-			for _, m := range snap.Metrics {
-				if keys[m.MetricKey] {
-					shared[m.MetricKey] = true
-				}
+		for _, m := range snap.Metrics {
+			if keys[m.MetricKey] {
+				shared[m.MetricKey] = true
 			}
 		}
 	}
@@ -310,6 +319,13 @@ func (api *Api) flagSharedMetricNames(ctx context.Context, profileId uint, calcu
 		calculated[i].NameSharedWithOtherProfiles = shared[calculated[i].Key]
 	}
 	return nil
+}
+
+// markAllShared answers NameSharedWithOtherProfiles on the warning side for every metric.
+func markAllShared(calculated []CalculatedPlanMetric) {
+	for i := range calculated {
+		calculated[i].NameSharedWithOtherProfiles = true
+	}
 }
 
 // jsonVerbatim reports whether JSON encodes s as itself, so it appears in a snapshot's text unchanged.
