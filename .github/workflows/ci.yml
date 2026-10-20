@@ -1147,13 +1147,17 @@ jobs:
           MDIFF_CONTAINER: dc-mdiff-next
         run: hack/migration-diff.sh verify
 
-      # NOT run here yet: the services' integration suites (hack/integration-tests.sh).
-      # On 2.30 two of event-management's plan-shape tests fail. 2.30 plans a device
-      # read through a new DeferredChunkAppend node, whose EXPLAIN JSON repeats a
-      # "Plan" key per chunk instead of using a "Plans" array, and in that plan the
-      # chunks are walked by the primary key rather than the tenant-led device index.
-      # That is a finding for the pin bump, not a catalog read. Add the step once it
-      # is settled.
+      # event-management's integration suite on the next image: it owns the hypertables, the
+      # startup migrations over them and the plan-shape tests, which is where a TimescaleDB
+      # upgrade bites first. 2.30's DeferredChunkAppend made a device's type-filtered events
+      # page walk the tenant's primary key (reading every row of the tenant to return a few) and
+      # nothing here could see it while this job ran only verify. The other modules' suites have
+      # not been run on 2.30; widen DC_IT_MODULES once they have.
+      - name: event-management integration suite (TimescaleDB 2.30.2, PostgreSQL 16)
+        env:
+          DC_IT_IMAGE: timescale/timescaledb:latest-pg16@sha256:6f139d56042989bd35f50ba5986e492cd32e35cc6778c50be2659add298dc09f
+          DC_IT_MODULES: backend/services/event-management
+        run: hack/integration-tests.sh
 
   # ---------------------------------------------------------------------------
   # License header check (backend only, per CLAUDE.md).

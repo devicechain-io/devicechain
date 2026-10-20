@@ -776,6 +776,17 @@ func servedBy(own []planScan, wantIndex string) bool {
 	return true
 }
 
+// timescaleAtLeast reports whether the server's TimescaleDB extension is at least major.minor.
+func timescaleAtLeast(t *testing.T, db *gorm.DB, major, minor int) bool {
+	t.Helper()
+	var v string
+	require.NoError(t, db.Raw(`SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'`).Scan(&v).Error)
+	var gotMajor, gotMinor int
+	_, err := fmt.Sscanf(v, "%d.%d", &gotMajor, &gotMinor)
+	require.NoError(t, err, "TimescaleDB version %q", v)
+	return gotMajor > major || (gotMajor == major && gotMinor >= minor)
+}
+
 // capture returns the recorded statement that contains want (the data query's ORDER BY,
 // or the COUNT), failing if there is not exactly one.
 func capture(t *testing.T, c *rdbtest.StatementCounter, want string) string {

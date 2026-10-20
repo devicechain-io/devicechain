@@ -190,6 +190,25 @@ if [ ${#modules[@]} -eq 0 ]; then
   exit 1
 fi
 
+# DC_IT_MODULES narrows the run to the named modules (repository-relative paths, space
+# separated), AFTER discovery and its cross-check, so the discovery guard above still runs in
+# full. It exists for the "TimescaleDB next" CI job, which runs one module's suite against the
+# next image. Every name must be a discovered integration module: a misspelt or moved path
+# fails here rather than narrowing the run to nothing.
+if [ -n "${DC_IT_MODULES:-}" ]; then
+  selected=()
+  for want in $DC_IT_MODULES; do
+    hit=""
+    for m in "${modules[@]}"; do
+      [ "${m#"$PWD"/}" = "$want" ] && hit=$m
+    done
+    [ -n "$hit" ] || { echo "DC_IT_MODULES names $want, which is not an integration-tagged module of the workspace"; exit 1; }
+    selected+=("$hit")
+  done
+  modules=("${selected[@]}")
+  echo "DC_IT_MODULES: running ${#modules[@]} module(s): $DC_IT_MODULES"
+fi
+
 rc=0
 for m in "${modules[@]}"; do
   name=${m#"$PWD"/}

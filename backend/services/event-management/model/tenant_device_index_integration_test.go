@@ -43,25 +43,29 @@ var eventStoreIndexes = func() map[string]map[string]string {
 }()
 
 // storeIndexesFor is eventStoreIndexes as the database in hand should carry it: the chain
-// through the per-device index leaves the tenant-wide alternate-id key, and the device-scoped
-// migration after it swaps that one index for the device-scoped key. Both are the final set
-// of the migration under test, so the check follows whichever the database has reached.
+// through the per-device index leaves the tenant-wide alternate-id key, the device-scoped
+// migration after it swaps that one index for the device-scoped key, and the device-order
+// migration after that swaps the per-device index for the one carrying event_id. Each is the
+// final set of the migration under test, so the check follows whichever the database has
+// reached.
 func storeIndexesFor(t *testing.T, db *gorm.DB) map[string]map[string]string {
 	t.Helper()
-	if !hasIndex(t, db, deviceAltIdKey.name) {
-		return eventStoreIndexes
-	}
 	out := map[string]map[string]string{}
 	for table, idx := range eventStoreIndexes {
 		out[table] = idx
 	}
 	events := map[string]string{}
 	for name, def := range eventStoreIndexes["events"] {
-		if name != deviceAltIdKey.replaces {
-			events[name] = def
-		}
+		events[name] = def
 	}
-	events[deviceAltIdKey.name] = newAltIdIndexDef
+	if hasIndex(t, db, deviceAltIdKey.name) {
+		delete(events, deviceAltIdKey.replaces)
+		events[deviceAltIdKey.name] = newAltIdIndexDef
+	}
+	if hasIndex(t, db, deviceOrderIndex.name) {
+		delete(events, deviceOrderIndex.replaces)
+		events[deviceOrderIndex.name] = deviceOrderIndex.def
+	}
 	out["events"] = events
 	return out
 }
@@ -306,7 +310,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 		t.Helper()
 		nodes := explainAnalyzeEvents(t, sys, nil, stmt)
 		for _, n := range nodes {
-			assert.Truef(t, chunkIndexIs(n.index, tenantDeviceIndex.name), "%s: %s on %s uses %q",
+			assert.Truef(t, chunkIndexIs(n.index, deviceOrderIndex.name), "%s: %s on %s uses %q",
 				what, n.node, n.relation, n.index)
 			assert.Containsf(t, n.indexCond, "tenant_id", "%s: the tenant is an index condition (%s)", what, n.indexCond)
 			assert.Containsf(t, n.indexCond, "device_token", "%s: the device is an index condition (%s)", what, n.indexCond)
@@ -326,7 +330,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	// Negative control: with the OLD index shape the same measurement sees globex's rows
 	// discarded by the filter and no node seeking on tenant and device together — so the zero above is
 	// the index, not a check that cannot see.
-	old := []string{`DROP INDEX "event-management".` + tenantDeviceIndex.name,
+	old := []string{`DROP INDEX "event-management".` + deviceOrderIndex.name,
 		`CREATE INDEX events_device_token_occurred_time_idx ON "event-management".events (device_token, occurred_time DESC)`}
 	for what, stmt := range map[string]string{"COUNT": count, "type-filtered page": typedData} {
 		nodes := explainAnalyzeEvents(t, sys, old, stmt)
@@ -349,7 +353,7 @@ func TestIntegrationDeviceReadIsSeekedByTenant(t *testing.T) {
 	}
 	for what, sql := range map[string]string{"device + type read (generic)": typedData, "device COUNT (generic)": count} {
 		scans := explainGenericScans(t, generic, sql, device, "acme")
-		requireServedBy(t, sys, scans, "events", tenantDeviceIndex.name, what)
+		requireServedBy(t, sys, scans, "events", deviceOrderIndex.name, what)
 		for _, s := range scansOf(t, sys, scans, "events") {
 			assert.Contains(t, s.indexCond, "tenant_id", what)
 		}
@@ -405,7 +409,7 @@ func TestIntegrationAnalyticsDeviceQueryUsesTheTenantLedIndex(t *testing.T) {
 		`EXPLAIN (FORMAT JSON) SELECT * FROM analytics.events WHERE device_token = 'device-1'`).Scan(&plan))
 	scans, err := planIndexScans(plan)
 	require.NoError(t, err)
-	requireServedBy(t, sys, scans, "events", tenantDeviceIndex.name, "BI device query")
+	requireServedBy(t, sys, scans, "events", deviceOrderIndex.name, "BI device query")
 	for _, s := range scansOf(t, sys, scans, "events") {
 		assert.Contains(t, s.indexCond, "tenant_id", "the reader's tenant is an index condition")
 		assert.Contains(t, s.indexCond, "device_token")
@@ -690,7 +694,9 @@ func TestIntegrationDeviceIndexRefusesAShapeItDidNotWrite(t *testing.T) {
 // a drop-only start that ignores both bounds (a start the gates would refuse, finishes).
 func TestIntegrationDeviceIndexRerunAndManualBuildBeforeUpgrade(t *testing.T) {
 	inst := freshInstance(t, "ittdirerun")
-	mgr := newPostgresManager(t, inst)
+	// Through this migration only: the full chain ends with the device-order index, which
+	// replaces the one this test re-runs the migration over.
+	mgr := newPostgresManagerWith(t, inst, migrationsThrough(t, tdiID()))
 	sys := systemDB(mgr)
 	twoChunkSeed(t, sys)
 	built := deviceIndexOID(t, sys, tenantDeviceIndex.name)
