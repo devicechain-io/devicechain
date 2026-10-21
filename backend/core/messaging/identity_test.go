@@ -182,6 +182,18 @@ func TestUserManagementRefusesToStartWithoutItsLoginOrAccount(t *testing.T) {
 		require.ErrorIs(t, err, ErrBrokerUnreachable)
 		require.Contains(t, err.Error(), "identity account")
 	})
+
+	t.Run("an account with the login but no JetStream is a refusal at connect", func(t *testing.T) {
+		// The login authenticates, so only the JetStream probe can catch this at start; without it the
+		// service would come up and fail later, on the first bucket, with an error that names neither.
+		noJS := startAccountsBroker(t, fmt.Sprintf(
+			"IDENTITY: { users: [ {user: dc_identity, password: %s} ] }", idIdentityPassword))
+		nmgr := identityManager(t, noJS, true, asPassword(idIdentityPassword))
+		err := nmgr.ExecuteInitialize(t.Context())
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "has no usable JetStream")
+		require.Nil(t, nmgr.nc, "a failed initialize must not leave a half-built manager")
+	})
 }
 
 // The instance without the account (no broker authentication, or a broker built before it) keeps
