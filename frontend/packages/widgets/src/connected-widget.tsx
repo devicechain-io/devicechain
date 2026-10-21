@@ -37,7 +37,7 @@ import {
 import { isForbiddenError } from '@devicechain/client';
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementWindow, membersMode } from './binding-policy';
+import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementWindow, membersMode, wantsEventMarkers } from './binding-policy';
 import { useHeld } from './use-held';
 import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
@@ -56,6 +56,7 @@ import { WidgetContainment, useReportRejection } from './widget-containment';
 import { lazyChunk } from './widgets/lazy-chunk';
 import type { AggregateFeedProps } from './aggregate-feed';
 import type { GroupedAlarmProps } from './widgets/alarm-grouped';
+import type { EventMarkersFeedProps } from './event-markers-feed';
 import type { FleetFeedProps } from './fleet-feed';
 import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 
@@ -303,10 +304,18 @@ function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, in
   if (data.error) return <WidgetErrorFrame widget={widget} error={data.error} />;
   return (
     <WidgetFreshnessProvider freshness={freshness}>
-      <Component widget={widget} data={data} actions={actions} />
+      {wantsEventMarkers(descriptor, widget) ? (
+        <EventMarkersFeed hub={hub} widget={widget} descriptor={descriptor} data={data} Component={Component} actions={actions} />
+      ) : (
+        <Component widget={widget} data={data} actions={actions} />
+      )}
     </WidgetFreshnessProvider>
   );
 }
+
+// The event-marker feed (alarms and commands on a chart) is its own chunk, like the feeds below: a
+// board whose charts have the markers off never downloads it.
+const EventMarkersFeed = lazyChunk<typeof import('./event-markers-feed')>(() => import('./event-markers-feed')).component<never, EventMarkersFeedProps>('default');
 
 // The aggregate feed is its own chunk (aggregate-feed.tsx): a board without an aggregate widget
 // never downloads it. Nothing renders until it arrives, and a chunk that fails to load is thrown to

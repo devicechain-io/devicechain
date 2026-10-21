@@ -90,6 +90,9 @@ const LEGACY_LABEL: Record<string, string> = {
   sparkline: 'widgetLabelSparkline',
   show: 'widgetLabelFleetShow',
   deviceType: 'widgetLabelAlarmSeverityType',
+  // Appended with the timeseries chart's event markers.
+  markAlarms: 'widgetLabelMarkAlarms',
+  markCommands: 'widgetLabelMarkCommands',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -136,6 +139,8 @@ const LEGACY_HINT: Record<string, string | null> = {
   sparkline: 'widgetHintSparkline',
   show: 'widgetHintFleetShow',
   deviceType: 'widgetHintAlarmSeverityType',
+  markAlarms: 'widgetHintMarkAlarms',
+  markCommands: 'widgetHintMarkCommands',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {

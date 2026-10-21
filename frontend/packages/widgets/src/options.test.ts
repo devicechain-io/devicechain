@@ -104,6 +104,10 @@ const SHARED_SOURCES = [
   'fleet-feed.tsx',
   // The aggregate feed reads the stat card's `sparkline`, to ask for the trend's buckets.
   'aggregate-feed.tsx',
+  // The chart's event markers: binding-policy decides whether they are wanted, and the feed reads
+  // which channels (alarms, commands) to draw.
+  'binding-policy.ts',
+  'event-markers-feed.tsx',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
@@ -124,6 +128,9 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   selectionTarget: ['alarm-table', 'entity-selector'],
   // aggregate-feed.tsx asks for the trend's buckets when the stat card is set to draw one.
   sparkline: ['stat-card'],
+  // binding-policy.ts and event-markers-feed.tsx read which markers the timeseries chart draws.
+  markAlarms: ['timeseries-chart'],
+  markCommands: ['timeseries-chart'],
 };
 
 // The option keys a widget's BINDING POLICY references (window, page size, alarm filters).

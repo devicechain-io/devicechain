@@ -41,7 +41,7 @@ The command slider and toggle show what was last sent to the device, with that c
 
 | Widget | Channel | Shows |
 |---|---|---|
-| **Time-series chart** | telemetry | one or more measurement series over the dashboard's time range, or over a span of its own |
+| **Time-series chart** | telemetry | one or more measurement series over the dashboard's time range, or over a span of its own; optionally marked with the device's alarms (a band from raise to clear, colored by severity) and the commands sent to it |
 | **Gauge** | telemetry | a single latest value against a range / thresholds |
 | **Latest-value card** | telemetry | a single current reading with its timestamp |
 | **Table** | telemetry | the latest reading of each measurement of one device |

@@ -30,18 +30,23 @@ import {
 import { buildLineOption, EChart, loadChartEngine, useChartTheme } from '@devicechain/widget-sdk/echarts';
 
 import { builtinWidgetDescriptors } from '../builtin-descriptors';
+import type { EventMarkersView } from '../event-markers-types';
 
-export function TimeSeriesChart({ widget, data }: WidgetProps) {
+// `markers` is supplied by the event-marker feed (a chart with markAlarms / markCommands on) and by
+// nothing else; without it the chart is drawn exactly as it always was.
+type TimeSeriesProps = WidgetProps & { markers?: EventMarkersView };
+
+export function TimeSeriesChart({ widget, data, markers }: TimeSeriesProps) {
   return (
     <WidgetFrame title={optString(widget.options, 'title')} flush>
-      <TimeSeriesBody widget={widget} data={data} />
+      <TimeSeriesBody widget={widget} data={data} markers={markers} />
     </WidgetFrame>
   );
 }
 
 // Rendered INSIDE the frame: the widget scale is the frame's content column, which is only in
 // context below the frame.
-function TimeSeriesBody({ widget, data }: WidgetProps) {
+function TimeSeriesBody({ widget, data, markers }: TimeSeriesProps) {
   const theme = useChartTheme();
   const { size, scale } = useWidgetScale();
 
@@ -49,15 +54,23 @@ function TimeSeriesBody({ widget, data }: WidgetProps) {
   const unit = optString(widget.options, 'unit');
   const precision = optNumber(widget.options, 'precision');
   const thresholds = useMemo(() => optThresholds(widget.options, 'thresholds'), [widget.options]);
-  const option = useMemo(
-    () => buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale, gaps: data.gaps }, size),
-    [data.samples, data.gaps, theme, measurements, unit, precision, thresholds, scale, size],
-  );
+  const option = useMemo(() => {
+    const base = buildLineOption(data.samples, theme, { measurements, unit, precision, thresholds, scale, gaps: data.gaps }, size);
+    return markers ? markers.decorate(base, size) : base;
+  }, [data.samples, data.gaps, theme, measurements, unit, precision, thresholds, scale, size, markers]);
 
-  return (
+  const chart = (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       <EChart option={option} />
       <SpanBadge widget={widget} data={data} />
+    </div>
+  );
+  if (!markers) return chart;
+  // The list and notes sit UNDER the chart, never over it: the chart gives up their height.
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }}>
+      <div style={{ flex: 1, minHeight: 0 }}>{chart}</div>
+      {markers.footer}
     </div>
   );
 }
