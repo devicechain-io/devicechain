@@ -482,8 +482,8 @@ func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 	}
 	// And the board spends the whole screen: the fleet table takes the rows the rest leave.
 	fleet := widgetByID(t, def, "sp-fleet").Layout["base"]
-	if fleet.Row+fleet.Rows != foldRows || fleet.Rows != 5 || fleet.Cols != 12 {
-		t.Errorf("fleet table = %+v, want the full width over the last 5 rows (rows 8-12)", fleet)
+	if fleet.Row+fleet.Rows != foldRows || fleet.Rows != 5 || fleet.Cols != 8 {
+		t.Errorf("fleet table = %+v, want eight columns over the last 5 rows (rows 8-12), beside the trends column", fleet)
 	}
 	// The plant's throughput is the board's headline: its band is three rows, so the figure is
 	// fitted to a body that a subject line, an age footer and a caption leave room in.
@@ -537,5 +537,25 @@ func TestSitepulseBoardCarriesTheFleetAwareWidgets(t *testing.T) {
 	const want = `[{"level":"major","value":0},{"level":"normal","value":15}]`
 	if got := asJSON(t, count.Options["thresholds"]); got != want {
 		t.Errorf("low-fuel count thresholds = %s, want %s", got, want)
+	}
+}
+
+// The engine temperature history of the selected machine sits beside the fleet table, with its
+// alarms and commands marked. The alarm-severity breakdown is deliberately absent (see the board comment).
+func TestSitepulseBoardCarriesTheEngineTrendChart(t *testing.T) {
+	def := sitepulseBoard(t, sitepulseManifest(t))
+
+	chart := widgetByID(t, def, "sp-engine-trend")
+	if chart.Type != "timeseries-chart" || chart.Options["markAlarms"] != true || chart.Options["markCommands"] != true {
+		t.Errorf("trend chart = %s %v, want a timeseries-chart marking alarms and commands", chart.Type, chart.Options)
+	}
+	if _, ok := chart.Options["windowSeconds"]; ok {
+		t.Errorf("trend chart sets windowSeconds %v, want the board's range", chart.Options["windowSeconds"])
+	}
+	if chart.Datasource == nil || chart.Datasource.Slot != "selectedMachine" || !equalStrings(chart.Datasource.Measurements, []string{SitepulseEngineTempKey}) {
+		t.Errorf("trend chart datasource = %+v, want the selected machine's engine temperature", chart.Datasource)
+	}
+	if b := chart.Layout["base"]; b.Row != 8 || b.Rows != 5 || b.Col != 8 || b.Cols != 4 {
+		t.Errorf("trend chart = %+v, want 4x5 at column 8, row 8", b)
 	}
 }

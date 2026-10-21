@@ -26,7 +26,8 @@ import (
 //	            selector and the engine gauge
 //	rows 5-7    the alarm table (a tab per kind of machine), the map (a marker click selects the
 //	            machine) and the tyre gauge
-//	rows 8-12   the fleet table
+//	rows 8-12   the fleet table (seven columns), and beside it the selected machine's engine
+//	            temperature history with its alarms and commands marked
 //
 // 🔴 THE FLEET IS ONE TABLE, NOT A TANK PER MACHINE. The fleet-table widget draws one row per
 // device of the site anchor and one column per measurement, each cell that DEVICE's own latest
@@ -154,6 +155,13 @@ const (
 	sitepulseMidRows       = 3
 	sitepulseFleetRow      = sitepulseKPIRows + sitepulseMidRows
 	sitepulseFleetRows     = sitepulseFoldRows - sitepulseFleetRow
+
+	// The fleet table gives up its right-hand columns (it stays five rows tall, so it shows as many
+	// machines) to the engine temperature history of the selected machine, with its alarms and
+	// commands marked on the line. Eight columns still hold the table's device name and four
+	// measurements as a table; at six it turns into one card per machine and shows three.
+	sitepulseFleetCols = 8
+	sitepulseTrendCols = dashboardGridColumns - sitepulseFleetCols
 
 	// The fleet table pages at 20 devices: the 18 machines and the crusher plant fit one page.
 	// A longer fleet pages.
@@ -297,7 +305,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// broken one. The board-replay harness does not re-time a run's samples to the present. The
 	// lag rule (`ageLagSeconds`, above) is measured between readings instead, so it marks the
 	// machine that went quiet in both places and nothing else.
-	fleet := buildFleetTableWidget("sp-fleet", box{0, dashboardGridColumns, sitepulseFleetRow, sitepulseFleetRows},
+	fleet := buildFleetTableWidget("sp-fleet", box{0, sitepulseFleetCols, sitepulseFleetRow, sitepulseFleetRows},
 		widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{SitepulseFuelKey, SitepulseEngineTempKey, SitepulsePayloadKey, SitepulseTyreKey}},
 		"Fleet",
 		[]map[string]any{
@@ -339,6 +347,16 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions")
 	siteMap.Options["selectionTarget"] = sitepulseSlotMachine
 
+	// The engine temperature of the SELECTED machine over the board's range, with its alarms drawn
+	// as spans (raise to clear) and the commands sent to it as ticks. The overheat rule's edge is
+	// the line's threshold, so a span opens where the line crosses it. A recording carries no
+	// commands, and the chart says so rather than drawing none silently.
+	trend := buildTimeSeriesChartWidget("sp-engine-trend", box{sitepulseFleetCols, sitepulseTrendCols, sitepulseFleetRow, sitepulseFleetRows},
+		onMachine(SitepulseEngineTempKey), "Engine temp history")
+	delete(trend.Options, "windowSeconds") // the board's range, as the stat cards
+	trend.Options["markAlarms"] = true
+	trend.Options["markCommands"] = true
+
 	widgets := []dashboardWidget{
 		buildAlarmCountWidget("sp-alarms-critical", stateTile(0), onSite, "Critical alarms", AlarmSeverityCriticalWire),
 		buildAlarmCountWidget("sp-alarms-major", stateTile(1), onSite, "Major alarms", AlarmSeverityMajorWire),
@@ -360,6 +378,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 			dashboardThreshold{Value: 0, Level: SitepulseTyreSeverity},
 			dashboardThreshold{Value: SitepulseTyrePressureThreshold, Level: "normal"}),
 		fleet,
+		trend,
 	}
 
 	def := dashboardDefinition{
