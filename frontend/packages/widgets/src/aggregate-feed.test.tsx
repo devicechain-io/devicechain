@@ -486,3 +486,51 @@ describe('after the live feed was interrupted', () => {
     expect(figure()).toContain('90');
   });
 });
+
+describe('a stat card set to draw its trend', () => {
+  const buckets = [
+    bucket({ bucketStart: '2026-10-14T11:00:00Z', min: 10, max: 20, sum: 150, count: 10 }),
+    bucket({ bucketStart: '2026-10-14T11:10:00Z', min: 12, max: 40, sum: 250, count: 10 }),
+  ];
+
+  it('reads the same window in the span’s chart buckets, and the figure is the same number', async () => {
+    const plain = makeHub(() => buckets);
+    mount(widget(), plain.hub, live(3600));
+    await settle();
+    const plainFigure = figure();
+    cleanup();
+
+    const f = makeHub(() => buckets);
+    mount(widget({ sparkline: true }), f.hub, live(3600));
+    await settle();
+    expect(f.read).toHaveBeenCalledTimes(1);
+    const [, window] = f.read.mock.calls[0];
+    const [, plainWindow] = plain.read.mock.calls[0];
+    expect({ ...window, intervalSeconds: 0 }).toEqual({ ...plainWindow, intervalSeconds: 0 });
+    expect(plainWindow.intervalSeconds).toBe(3600);
+    expect(window.intervalSeconds).toBe(60);
+    expect(figure()).toBe(plainFigure);
+    expect(figure()).toBe('40');
+  });
+
+  it('asks for no finer buckets when the sparkline is off', async () => {
+    const f = makeHub(() => buckets);
+    mount(widget({ sparkline: false }), f.hub, live(3600));
+    await settle();
+    expect(f.read.mock.calls[0][1].intervalSeconds).toBe(3600);
+  });
+
+  it('reads again when the sparkline is switched on or off, rather than showing the other read', async () => {
+    const f = makeHub(() => buckets);
+    const view = mount(widget(), f.hub, live(3600));
+    await settle();
+    view.rerender(
+      <WidgetTimeRangeProvider range={live(3600)}>
+        <ConnectedWidget widget={widget({ sparkline: true })} hub={f.hub} />
+      </WidgetTimeRangeProvider>,
+    );
+    await settle();
+    expect(f.read).toHaveBeenCalledTimes(2);
+    expect(f.read.mock.calls[1][1].intervalSeconds).toBe(60);
+  });
+});

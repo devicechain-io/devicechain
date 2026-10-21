@@ -114,7 +114,7 @@ una lectura en cualquier banda que no sea la normal toma el color de esa banda.
 
 Una tarjeta de estadística muestra una cifra sobre el intervalo de tiempo del panel, con la
 estadística y el intervalo que abarca, por ejemplo «Máximo · 1h». Una tarjeta con su propio **Intervalo
-de tiempo** lo conserva, como *Average, last 5 min* arriba.
+de tiempo** lo conserva, como *Average, last 5 min* arriba. Activa **Mostrar tendencia** y la tarjeta dibuja bajo la cifra la tendencia de la medición durante el mismo intervalo, de modo que «¿está subiendo?» se responde en la propia tarjeta. La línea es siempre del color neutro, sea cual sea la banda de la cifra, y se omite cuando la tarjeta es demasiado pequeña para mantener legible la cifra.
 
 <GuideShot id="dashboard-bar-pie" alt="Dos gráficos de barras con las últimas lecturas de temperatura, humedad y batería de wl-sensor-01: Latest readings, con barras verticales en el orden de la fuente de datos, y Largest first, con barras horizontales de mayor a menor. Debajo, dos gráficos circulares de las mismas lecturas." />
 
@@ -127,6 +127,8 @@ barra por** más abajo). Dibuja columnas en un widget ancho y filas en uno alto.
 La tabla de flota muestra una fila por dispositivo de un grupo y una columna por medición. Haz clic en
 el encabezado de una columna para ordenar por ella. Sus ajustes se describen en
 [Configurar un widget](#configurar-un-widget).
+
+Una tarjeta de recuento de flota pone una cifra sobre esa tabla: cuántos dispositivos de un grupo requieren atención (*3 de 21*) o, sencillamente, cuántos dispositivos tiene el grupo. Sus ajustes se describen en [Configurar un widget](#configurar-un-widget).
 
 ## Editar en el lienzo
 
@@ -196,7 +198,7 @@ solo cambia el borrador. Los espectadores no ven nada nuevo hasta que publicas u
 
 | Grupo | Widgets |
 |---|---|
-| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso, Tarjeta de estadística, Gráfico de barras, Gráfico circular, Tabla de flota |
+| Telemetría | Gráfico de series temporales, Tarjeta de último valor, Indicador, Tabla, Indicador lineal, Indicador de nivel, Batería, Luz de estado, Barras de señal, Brújula, Anillo de progreso, Tarjeta de estadística, Gráfico de barras, Gráfico circular, Tabla de flota, Recuento de flota |
 | Estático | Etiqueta, Imagen |
 | Alarmas | Tabla de alarmas, Contador de alarmas |
 | Control | Botón de comando, Control deslizante de comando, Interruptor de comando |
@@ -224,7 +226,7 @@ Los ajustes dependen del widget. Los más comunes:
   **Estrategia** decide si sigue al **Primer miembro** del principal o a un miembro que tú eliges
   (**Selección manual**).
 - **Fuente de datos** elige el dispositivo o la entidad que lee el widget. En un widget que sigue a
-  un principal, explica que el widget lo sigue. Solo la tabla de flota y un gráfico de barras con una
+  un principal, explica que el widget lo sigue. Solo la tabla de flota, el recuento de flota y un gráfico de barras con una
   barra por dispositivo pueden leer un grupo de dispositivos; cualquier otro widget de telemetría
   muestra un solo dispositivo y, vinculado a un grupo, lo indica en lugar de mezclar las lecturas de
   varios dispositivos.
@@ -239,11 +241,14 @@ Los ajustes dependen del widget. Los más comunes:
   tiempo** fija la tarjeta a un intervalo propio. La tarjeta dice por qué no tiene cifra (la fuente
   de datos no puede calcular agregados, la lectura falló o no hubo lecturas en el intervalo) en lugar
   de mostrar un número que no pudo calcular. El número de lecturas de un intervalo sin ninguna es 0.
+- **Mostrar tendencia** (tarjeta de estadística): desactivado por defecto. Activado, la tarjeta dibuja la tendencia de la medición durante su intervalo en una línea fina y neutra bajo la cifra, con un punto por cada cubo del gráfico del intervalo, para la estadística que muestra la tarjeta (la tarjeta del último valor dibuja los promedios de los cubos). Un hueco en las lecturas es un hueco en la línea, un solo punto es un punto, y un intervalo sin lecturas no dibuja nada. La cifra es el mismo número con o sin ella.
 - **Orden** (gráfico de barras, gráfico circular): las mediciones en el orden en que las lista la
   fuente de datos, o de menor a mayor o de mayor a menor. Una medición que aún no ha informado va
   la última. El gráfico de barras dibuja columnas en un widget ancho y filas en uno alto.
 - **Una barra por** (gráfico de barras): *Medición* (el valor predeterminado) dibuja una barra por cada medición de un dispositivo. *Dispositivo* dibuja una barra por cada dispositivo del grupo al que está vinculado el widget, para la **Medición** que elija, por lo que la fuente de datos debe ser un grupo de dispositivos. Un grupo demasiado grande se recorta a sus primeras barras en el orden elegido, y el gráfico indica «Mostrando N de M dispositivos».
 - **Tabla de flota**: una fila por dispositivo del grupo al que está vinculado el widget y una columna por cada medición que selecciona la fuente de datos. **Columnas** da un encabezado, unidad y precisión por medición; **Umbrales** colorean las celdas de la columna de una medición (la banda normal conserva el color de la tabla); **Obsoleto tras** marca como obsoleta una lectura más antigua que esos segundos, y sin él la tabla solo muestra la antigüedad de cada lectura. **Mostrar antigüedad con retraso** muestra la antigüedad de una lectura solo cuando es al menos esos segundos más antigua que la lectura más reciente de la tabla (o está obsoleta), de modo que una flota que informa cada pocos segundos mantiene una línea por fila y el dispositivo que dejó de informar destaca; el pie del widget sigue mostrando la antigüedad de la lectura más reciente. Haga clic en el encabezado de una columna, o púlselo con el teclado, para ordenar; **Ordenar por** y **Mayor primero** fijan el orden inicial, y los dispositivos sin valor en la columna ordenada quedan siempre al final. **Dispositivos por página** pagina una flota larga. **Ranura de destino** convierte el nombre del dispositivo en un enlace que selecciona ese dispositivo en los widgets vinculados a la ranura. En un tablero estrecho la tabla pasa a una tarjeta por dispositivo. Una celda sin número explica por qué: *sin datos en el rango*, *no informa esta medición* (el dispositivo informa otras mediciones pero nunca esta) o *no se pudo leer*. La tabla lee los primeros 500 dispositivos de un grupo e indica «Mostrando 500 de N dispositivos» cuando el grupo es mayor. Sigue el rango de tiempo del tablero, y un tablero en pausa la detiene.
+
+- **Recuento de flota**: una cifra para un grupo de dispositivos, vinculada como la tabla de flota. **Contar** elige qué cuenta. *Dispositivos que requieren atención* (por defecto) cuenta los dispositivos cuya última lectura de la **Medición** está en una banda anormal de los **Umbrales** de la tarjeta y la muestra como *3 de 21*, con el nombre de la banda cuando todos los dispositivos señalados están en la misma banda con etiqueta (una banda llamada *Low* se lee «Low») y, si no, «requieren atención». La cifra toma el color de la peor banda entre los señalados; sin ninguno señalado, o con una flota en su banda normal, conserva el color de texto habitual, de modo que una flota sana se ve tranquila. Un dispositivo sin lectura de la medición no está sano ni señalado: se cuenta aparte, como «2 sin informar» cuando no envió nada en el intervalo y como «1 sin leer» cuando sus lecturas no se pudieron cargar. Mientras las lecturas del grupo aún se cargan, la tarjeta no muestra ninguna cifra en lugar de una parcial. *Dispositivos* muestra cuántos dispositivos tiene el grupo, informen lo que informen. **Intervalo de tiempo** funciona como en la tabla de flota; **Obsoleto tras** se aplica a la lectura más reciente del grupo, como en las demás tarjetas. Un grupo mayor de los 500 dispositivos leídos indica «Mostrando 500 de N dispositivos», y el recuento de atención abarca los dispositivos mostrados.
 
 Los problemas con las opciones de un widget, como una opción que no lee, una obligatoria vacía o un
 valor fuera de rango, se enumeran en **Historial de versiones**. **Publicar versión** sigue

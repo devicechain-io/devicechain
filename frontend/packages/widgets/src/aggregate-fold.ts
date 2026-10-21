@@ -12,7 +12,13 @@
 // readings but lacks a field the aggregate needs is therefore a loud failure here, never a
 // quiet substitution.
 
-import { bucketSecondsFor, type HistoryWindow, type MeasurementAggregate, type MeasurementBucket } from '@devicechain/dashboards';
+import {
+  bucketSecondsFor,
+  type AggregateTrendPoint,
+  type HistoryWindow,
+  type MeasurementAggregate,
+  type MeasurementBucket,
+} from '@devicechain/dashboards';
 
 export class AggregateFieldsError extends Error {
   constructor(message: string) {
@@ -46,6 +52,34 @@ export function aggregateBuckets(buckets: readonly MeasurementBucket[]): Record<
       a.max = Math.max(a.max, max);
       a.avg = a.sum / a.count;
     }
+  }
+  return out;
+}
+
+// aggregateSeries lays the same buckets out as a trend: per measurement name, one point per bucket
+// that holds readings, oldest first. Buckets of several devices at one instant merge exactly as
+// aggregateBuckets merges them. Call it only on buckets aggregateBuckets accepted (it does not
+// re-validate), so a bucket that cannot be trusted has already failed the read.
+export function aggregateSeries(buckets: readonly MeasurementBucket[]): Record<string, AggregateTrendPoint[]> {
+  const byName = new Map<string, Map<string, AggregateTrendPoint>>();
+  for (const b of buckets) {
+    if (!b.count || b.min == null || b.max == null || b.sum == null) continue;
+    let points = byName.get(b.name);
+    if (!points) byName.set(b.name, (points = new Map()));
+    const at = points.get(b.bucketStart);
+    if (!at) {
+      points.set(b.bucketStart, { bucketStart: b.bucketStart, count: b.count, min: b.min, max: b.max, sum: b.sum, avg: b.sum / b.count });
+    } else {
+      at.count += b.count;
+      at.sum += b.sum;
+      at.min = Math.min(at.min, b.min);
+      at.max = Math.max(at.max, b.max);
+      at.avg = at.sum / at.count;
+    }
+  }
+  const out: Record<string, AggregateTrendPoint[]> = {};
+  for (const [name, points] of byName) {
+    out[name] = [...points.values()].sort((a, b) => Date.parse(a.bucketStart) - Date.parse(b.bucketStart));
   }
   return out;
 }
@@ -85,7 +119,11 @@ export interface AggregateWindow {
 // measurement ask the same question at the same moment, and the hub answers them with one read.
 // One bucket wide: the card needs only the totals, so the store returns one or two rows per
 // measurement rather than a chart's worth.
-export function aggregateWindow(spanSeconds: number, at: number): AggregateWindow {
+//
+// `bucketSeconds` asks for the window in finer buckets (a trend needs a point per bucket); the
+// totals fold identically from any number of buckets, so the figure is the same either way. Unset
+// the window is one bucket wide, as above.
+export function aggregateWindow(spanSeconds: number, at: number, bucketSeconds?: number): AggregateWindow {
   const end = Math.floor(at / MINUTE_MS) * MINUTE_MS;
   const start = Math.ceil((end - spanSeconds * 1000) / MINUTE_MS) * MINUTE_MS;
   const covered = (end - start) / 1000;
@@ -93,7 +131,7 @@ export function aggregateWindow(spanSeconds: number, at: number): AggregateWindo
     window: {
       startTime: new Date(start).toISOString(),
       endTime: new Date(end - 1).toISOString(),
-      intervalSeconds: Math.max(60, covered),
+      intervalSeconds: Math.max(60, bucketSeconds === undefined ? covered : Math.min(covered, bucketSeconds)),
     },
     spanSeconds: covered,
   };

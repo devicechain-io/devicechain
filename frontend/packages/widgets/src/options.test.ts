@@ -79,6 +79,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'bar-chart': 'widgets/bar-chart.tsx',
   'pie-chart': 'widgets/pie-chart.tsx',
   'fleet-table': 'widgets/fleet-table.tsx',
+  'fleet-count': 'widgets/fleet-count.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -100,6 +101,8 @@ const SHARED_SOURCES = [
   // The fleet feed reads the per-device bar chart's `measurement` (what its seed must find) and
   // the title of the pane it shows a one-device widget bound to a group.
   'fleet-feed.tsx',
+  // The aggregate feed reads the stat card's `sparkline`, to ask for the trend's buckets.
+  'aggregate-feed.tsx',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
@@ -113,11 +116,13 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
   // The fleet feed reads it for the bar chart's one bar per device.
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart'],
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart', 'fleet-count'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive, and editor-clipboard.ts to carry it
   // across a paste.
   selectionTarget: ['alarm-table', 'entity-selector'],
+  // aggregate-feed.tsx asks for the trend's buckets when the stat card is set to draw one.
+  sparkline: ['stat-card'],
 };
 
 // The option keys a widget's BINDING POLICY references (window, page size, alarm filters).
@@ -403,6 +408,7 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     unit: 'C',
     precision: 1,
     thresholds: [{ value: 90, level: 'major' }],
+    sparkline: true,
     windowSeconds: 3600,
   },
   'bar-chart': { title: 'Readings', groupBy: 'device', measurement: 'temp_c', unit: 'C', precision: 1, sort: 'descending' },
@@ -417,6 +423,14 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     sortDescending: true,
     pageSize: 25,
     selectionTarget: 'machine',
+    windowSeconds: 3600,
+  },
+  'fleet-count': {
+    title: 'Low fuel',
+    show: 'attention',
+    measurement: 'fuel',
+    thresholds: [{ value: 0, level: 'critical', label: 'Low' }, { value: 15, level: 'normal' }],
+    staleAfterSeconds: 300,
     windowSeconds: 3600,
   },
 };

@@ -8,7 +8,7 @@
 
 import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-sdk';
 
-import { barChartWidget, fleetTableWidget, pieChartWidget, statCardWidget } from './widgets/aggregate-lazy';
+import { barChartWidget, fleetCountWidget, fleetTableWidget, pieChartWidget, statCardWidget } from './widgets/aggregate-lazy';
 import { alarmCountWidget, alarmTableWidget } from './widgets/alarm-lazy';
 import { commandButtonWidget, commandSliderWidget, commandToggleWidget } from './widgets/control-lazy';
 import { entitySelectorWidget } from './widgets/selection-lazy';
@@ -54,6 +54,7 @@ export const builtinWidgetDefinitions = [
   barChartWidget,
   pieChartWidget,
   fleetTableWidget,
+  fleetCountWidget,
 ] as const;
 
 // A fresh, sealed registry holding exactly the built-ins. Every call returns an independent
