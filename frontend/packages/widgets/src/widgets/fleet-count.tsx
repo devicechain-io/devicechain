@@ -9,7 +9,8 @@
 //     of the card's thresholds (fleet-count-model.ts). The figure takes the colour of the worst
 //     level among them; with none flagged (0 of N, or a fleet in its normal band) it keeps the
 //     foreground, so a healthy fleet is calm;
-//   - a device with no reading is counted apart ("2 not reporting"), never as healthy;
+//   - a device with no reading is counted apart ("2 not reporting", or "1 could not be read" when
+//     its read failed), never as healthy; while any member is still loading there is no figure;
 //   - a group larger than the feed reads says so ("Showing 500 of 812 devices") instead of
 //     presenting the subset as the fleet;
 //   - DEVICES shows the group's size, taken from the roster rather than from the readings.
@@ -66,19 +67,27 @@ export function FleetCount({ widget, data }: WidgetProps) {
   // Zero devices is a count, and the answer to "how many": 0. Attention over no devices has no
   // "N" to be a share of, so it says there are none, as the fleet table does.
   if (!showDevices && fleet.members.length === 0) return empty(strings.noMembers);
+  // A count over the members read so far would be an undercount that looks like an answer.
+  if (counted && counted.pending > 0) return empty(strings.loading);
 
   const figure = showDevices ? String(fleet.total) : String(counted!.flagged);
   const unit = showDevices ? undefined : strings.countOf(counted!.members);
   const color = counted ? levelColor(severity, counted.worst) : undefined;
   const caption = showDevices ? strings.devices : counted!.flagged > 0 ? (counted!.label ?? strings.needAttention) : strings.needAttention;
   const notes: string[] = [];
-  if (counted && counted.reporting < counted.members) notes.push(strings.notReporting(counted.members - counted.reporting));
-  if (fleet.truncated) notes.push(strings.truncated(fleet.members.length, fleet.total));
+  if (counted) {
+    const silent = counted.members - counted.reporting - counted.unread;
+    if (silent > 0) notes.push(strings.notReporting(silent));
+    if (counted.unread > 0) notes.push(strings.notRead(counted.unread));
+    // The device count is the roster's own total, exact past the page; only the attention count
+    // is taken from the members read, so only it says it covers part of the fleet.
+    if (fleet.truncated) notes.push(strings.truncated(fleet.members.length, fleet.total));
+  }
 
   return (
     <WidgetFrame title={title}>
       {({ size, scale }) => {
-        const room = Math.round(CAPTION_ROOM_PX * scale) * (1 + (notes.length > 0 ? 1 : 0));
+        const room = Math.round(CAPTION_ROOM_PX * scale) * (1 + notes.length);
         const fit = { width: size.width, height: Math.max(Math.round(FIT_MIN_FONT_PX * scale), size.height - room) };
         return (
           <div

@@ -272,9 +272,11 @@ The settings depend on the widget. Common ones:
   labelled *Low* reads "Low") and otherwise "need attention". The number takes the color of the
   worst band among the flagged devices; with none flagged, or a fleet in its normal band, it stays
   the ordinary text color, so a healthy fleet is calm. A device with no reading of the measurement
-  is neither healthy nor flagged: it is counted apart ("2 not reporting"). *Devices* shows how
-  many devices the group holds, whatever they report. **Stale after** and **Time span** work as
-  for the fleet table. A group larger than the 500 devices read says "Showing 500 of N devices",
+  is neither healthy nor flagged: it is counted apart, as "2 not reporting" when it sent nothing
+  in the span and as "1 could not be read" when its readings failed to load. While the group's
+  readings are still loading, the card shows no number rather than a partial one. *Devices* shows
+  how many devices the group holds, whatever they report. **Time span** works as for the fleet
+  table; **Stale after** applies to the newest reading in the group, as on other cards. A group larger than the 500 devices read says "Showing 500 of N devices",
   and the attention count covers the devices shown.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or

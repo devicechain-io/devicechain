@@ -166,6 +166,38 @@ describe('the attention count', () => {
     expect(s.notes).toEqual(['1 not reporting']);
   });
 
+  it('has no figure while any member is still loading: a partial count is an undercount', () => {
+    sizedAt(300, 300);
+    const s = show(fleet([member('a', 5), member('b', undefined, { seed: 'pending' }), member('c', 50)]));
+    expect(s.empty).toBe('Loading');
+    expect(s.figure).toBeUndefined();
+  });
+
+  it('says a device whose read failed or did not load could not be read, not that it is silent', () => {
+    sizedAt(300, 300);
+    const s = show(
+      fleet([
+        member('a', 5),
+        member('b', undefined, { seed: 'failed' }),
+        member('c', undefined, { observed: ['fuel'], unread: ['fuel'] }),
+        member('d'),
+      ]),
+    );
+    expect(s.figure).toBe('1of 4');
+    expect(s.notes).toEqual(['1 not reporting', '2 could not be read']);
+  });
+
+  it('leaves the figure room for every note it shows', () => {
+    sizedAt(300, 120);
+    const one = show(fleet([member('a', 5), member('b')]));
+    const oneFit = one.container.querySelector<HTMLElement>('[data-level-readout]')?.style.fontSize;
+    cleanup();
+    const two = show(fleet([member('a', 5), member('b')], { total: 812, truncated: true }));
+    expect(two.notes).toHaveLength(2);
+    const twoFit = two.container.querySelector<HTMLElement>('[data-level-readout]')?.style.fontSize;
+    expect(parseFloat(twoFit ?? '0')).toBeLessThan(parseFloat(oneFit ?? '0'));
+  });
+
   it('says so when the group is larger than the feed reads, and counts what it has', () => {
     sizedAt(300, 300);
     const s = show(fleet([member('a', 5), member('b', 50)], { total: 812, truncated: true }));
@@ -219,6 +251,8 @@ describe('the device count', () => {
     sizedAt(300, 300);
     const s = show(fleet([member('a', 5)], { total: 812, truncated: true }), { show: 'devices' });
     expect(s.figure).toBe('812');
+    // The figure is exact past the page, so nothing says it covers part of the fleet.
+    expect(s.notes).toEqual([]);
   });
 
   it('is 0 for an empty group: a count, not an empty state', () => {

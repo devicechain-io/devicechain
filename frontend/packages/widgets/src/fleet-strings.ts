@@ -36,6 +36,7 @@ export interface FleetStrings {
   needAttention: string;
   devices: string;
   notReporting: (n: number) => string;
+  notRead: (n: number) => string;
   // "Showing 500 of 812 devices": a fleet past what is read must say so.
   truncated: (shown: number, total: number) => string;
   range: (from: number, to: number, of: number) => string;
@@ -68,6 +69,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     needAttention: 'need attention',
     devices: 'devices',
     notReporting: (n) => `${n} not reporting`,
+    notRead: (n) => `${n} could not be read`,
     truncated: (shown, total) => `Showing ${shown} of ${total} devices`,
     range: (from, to, of) => `${from}–${to} of ${of}`,
     previous: 'Previous page',
@@ -97,6 +99,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     needAttention: 'requieren atención',
     devices: 'dispositivos',
     notReporting: (n) => `${n} sin informar`,
+    notRead: (n) => `${n} sin leer`,
     truncated: (shown, total) => `Mostrando ${shown} de ${total} dispositivos`,
     range: (from, to, of) => `${from}–${to} de ${of}`,
     previous: 'Página anterior',

@@ -104,6 +104,13 @@ describe('a stat card with the sparkline on', () => {
     expect(on.strip?.getAttribute('aria-label')).toBe('Average trend over the last 1h');
   });
 
+  it('names a latest-reading card’s strip for what it draws: the bucket averages', () => {
+    sizedAt(300, 300);
+    const latest = { temperature: { id: 's', deviceToken: 'd', eventType: 0, occurredTime: '2026-10-14T11:59:00Z', name: 'temperature', value: 21, classifier: null } };
+    const { container } = render(<StatCard widget={widget({ stat: 'last', sparkline: true })} data={{ aggregates: ready(SERIES), latest, error: null } as never} />);
+    expect(container.querySelector('[data-sparkline]')?.getAttribute('aria-label')).toBe('Average trend over the last 1h');
+  });
+
   it('stays neutral when the figure is in an abnormal band', () => {
     sizedAt(300, 300);
     const on = show({ stat: 'avg', sparkline: true, thresholds: [{ value: 0, level: 'critical' }] }, ready(SERIES));

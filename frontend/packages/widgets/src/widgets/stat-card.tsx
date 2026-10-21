@@ -15,7 +15,6 @@
 
 import { useMemo } from 'react';
 
-
 import { bucketSecondsFor, spanLabel, type AggregateStreamState } from '@devicechain/dashboards';
 import {
   bandAt,
@@ -125,7 +124,8 @@ export function StatCard({ widget, data }: WidgetProps<AggregateStreamState>) {
                 points={points}
                 height={sparkHeight}
                 bucketSeconds={bucketSecondsFor(data.aggregates.spanSeconds)}
-                label={strings.trend(strings.stats[reading.stat], spanLabel(data.aggregates.spanSeconds))}
+                // The latest reading has no per-bucket counterpart; its strip is the bucket averages.
+                label={strings.trend(strings.stats[reading.stat === 'last' ? 'avg' : reading.stat], spanLabel(data.aggregates.spanSeconds))}
               />
             ) : null}
             <div
