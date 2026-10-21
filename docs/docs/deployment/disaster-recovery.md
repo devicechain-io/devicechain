@@ -234,7 +234,8 @@ decrypted. You are asked for the artifact's passphrase, or you can supply it wit
 `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`.
 
 The broker's credentials are not in the escrow and do not need to be. The rebuilt instance mints
-new ones, including the keys of the device authentication callout, and gives them to the broker
+new ones, including the keys of the device authentication callout and the login for the broker's
+identity account, and gives them to the broker
 and the services in the same run. Devices do not hold any of them: they sign in with their own
 credentials, which come back with the database.
 
@@ -439,7 +440,10 @@ and keeps every one of these:
 A version change cannot become a credential change. The one thing it can create is a credential that
 did not exist: the first upgrade of an instance built before the device authentication callout was
 encrypted mints that callout's encryption key, stores it with the issuer seed in the instance's
-callout Secret, and never replaces it afterwards.
+callout Secret, and never replaces it afterwards. The same goes for the login of the broker's identity
+account, which holds the sign-in state: it is minted once, stored in a Secret only `user-management`
+mounts, and kept from then on. Sign-in state is not restored from a backup, so everyone signs in again
+after a rebuild.
 
 ### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
 

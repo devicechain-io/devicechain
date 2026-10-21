@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 )
 
@@ -100,6 +101,7 @@ type fakeMetrics struct {
 	contended           int64
 	batches, failures   int
 	written             int64
+	flushPasses         []error // one per interval-tick flush, as RuleStatFlushPass filed it
 }
 
 func newFakeMetrics() *fakeMetrics { return &fakeMetrics{discarded: map[DropReason]int64{}} }
@@ -128,6 +130,17 @@ func (m *fakeMetrics) RuleStatBatch(_ int, _ int64, _ time.Duration, failed bool
 }
 func (m *fakeMetrics) RuleStatWritten(n int64)                   { m.mu.Lock(); m.written += n; m.mu.Unlock() }
 func (m *fakeMetrics) RuleStatPending(int, int64, time.Duration) {}
+func (m *fakeMetrics) RuleStatFlushPass(_ context.Context, err error, _ time.Time) {
+	m.mu.Lock()
+	m.flushPasses = append(m.flushPasses, err)
+	m.mu.Unlock()
+}
+
+func (m *fakeMetrics) passes() []error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]error(nil), m.flushPasses...)
+}
 
 // totals is what was admitted, written, and discarded AFTER admission: a fire refused at the
 // door (full, overflow, closed) was never admitted, so it is not in either side of
@@ -623,6 +636,62 @@ func TestThePeriodicFlushWrites(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("nothing was written within 100 flush intervals")
 	}
+}
+
+// The interval tick files each flush as a maintenance pass, with the outcome core.PassResult
+// gives it: nil for a flush that wrote everything, a plain failure when the store refused every
+// tenant. It goes through the worker's ticker (the caller), not flushOnce, so a worker that
+// stopped filing -- or stopped flushing -- fails here.
+func TestTheIntervalFlushFilesItsPass(t *testing.T) {
+	cfg := testConfig()
+	cfg.FlushInterval = MinFlushInterval
+
+	t.Run("a flush that wrote everything is a clean pass", func(t *testing.T) {
+		s := &fakeStore{}
+		m := newFakeMetrics()
+		a := newAcc(t, s, cfg, m)
+		fire(a, "acme", "a", t0, "raised")
+		deadline := time.Now().Add(5 * time.Second)
+		for len(s.snapshot()) == 0 || len(m.passes()) == 0 {
+			if time.Now().After(deadline) {
+				t.Fatalf("no pass filed (writes=%d passes=%d)", len(s.snapshot()), len(m.passes()))
+			}
+			time.Sleep(time.Millisecond)
+		}
+		for _, err := range m.passes() {
+			if err != nil {
+				t.Fatalf("a flush that wrote everything was filed as %v", err)
+			}
+		}
+	})
+
+	t.Run("a store that refuses every tenant is a failed pass", func(t *testing.T) {
+		boom := errors.New("boom")
+		s := &fakeStore{fail: map[string]error{"a": boom, "b": boom}}
+		m := newFakeMetrics()
+		a := newAcc(t, s, cfg, m)
+		fire(a, "a", "x", t0, "raised")
+		fire(a, "b", "x", t0, "raised")
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			var failed error
+			for _, err := range m.passes() {
+				if err != nil {
+					failed = err
+				}
+			}
+			if failed != nil {
+				if errors.Is(failed, core.ErrPassPartial) {
+					t.Fatalf("every tenant failed, but the pass was filed as partial: %v", failed)
+				}
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("a flush the store refused entirely was never filed as a failure")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
 }
 
 func TestConfigValidation(t *testing.T) {

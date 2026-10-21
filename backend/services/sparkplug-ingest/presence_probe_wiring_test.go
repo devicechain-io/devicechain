@@ -4,6 +4,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -59,6 +61,7 @@ func TestProbeMetricsPrecreateBothTriggers(t *testing.T) {
 	m := buildMetrics()
 	require.NotNil(t, m.PresenceProbes)
 	require.NotNil(t, m.PresenceProbeDisconnects)
+	require.NotNil(t, m.PresenceProbePass, "the periodic probe files its passes on the shared series")
 	// Counted BEFORE anything reads a child: WithLabelValues creates the child it names, so
 	// a count taken after the reads below would find both children whether or not the
 	// service created them.
@@ -92,4 +95,29 @@ func TestProbeCountersAreExportedUnderTheirOwnNames(t *testing.T) {
 	}
 	assert.Equal(t, float64(2), got["devicechain_sparkplugingest_presence_probes_total"])
 	assert.Equal(t, float64(5), got["devicechain_sparkplugingest_presence_probe_disconnects_total"])
+}
+
+// The periodic probe's pass series is exported under its documented task name. The host
+// tests build their own PeriodicTaskMetrics, so nothing else binds buildMetrics' field to the
+// name the operator documentation lists.
+func TestThePresenceProbePassIsExportedUnderItsDocumentedName(t *testing.T) {
+	registry := newTestMicroservice(t)
+	m := buildMetrics()
+	m.PresenceProbePass.RecordPass(context.Background(), errors.New("device-state unreachable"), time.Now(), "presence-probe")
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	var failed float64
+	for _, f := range families {
+		if f.GetName() != "devicechain_sparkplugingest_presence_probe_passes_total" {
+			continue
+		}
+		for _, mm := range f.GetMetric() {
+			for _, l := range mm.GetLabel() {
+				if l.GetName() == "outcome" && l.GetValue() == "failed" {
+					failed = mm.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	assert.Equal(t, float64(1), failed, "presence_probe_passes_total{outcome=failed} did not record the pass")
 }

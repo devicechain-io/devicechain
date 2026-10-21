@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/rules"
+	"github.com/devicechain-io/dc-microservice/resolvedevent"
 )
 
 // benchRules returns n realistic rules for one profile, cycling through the shapes the authoring
@@ -60,5 +61,48 @@ func BenchmarkPredicateEval(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// batchEvent builds a resolved measurement event carrying `samples` batched samples (a
+// store-and-forward upload), each reporting temperature and humidity.
+func batchEvent(device, profileVersion string, base time.Time, samples int) *resolvedevent.ResolvedEvent {
+	entries := make([]resolvedevent.ResolvedMeasurementsEntry, 0, samples)
+	for i := 0; i < samples; i++ {
+		entries = append(entries, resolvedevent.ResolvedMeasurementsEntry{
+			OccurredTime: base.Add(time.Duration(i) * time.Second),
+			Entries: []resolvedevent.ResolvedMeasurementEntry{
+				{Name: "temperature", Value: "90"}, {Name: "humidity", Value: "70"},
+			},
+		})
+	}
+	return &resolvedevent.ResolvedEvent{
+		SourceDeviceToken:   device,
+		ProfileVersionToken: profileVersion,
+		OccurredTime:        base,
+		Payload:             &resolvedevent.ResolvedMeasurementsPayload{Entries: entries},
+	}
+}
+
+// BenchmarkPlanShapes measures one Plan call across rules per profile x samples per event, the two
+// axes the per-event planning cost scales with. ns/op and allocs/op are per EVENT.
+func BenchmarkPlanShapes(b *testing.B) {
+	base := time.Date(2026, 7, 9, 12, 0, 0, 0, time.UTC)
+	attr := map[string]float64{"other": 1}
+	for _, n := range []int{1, 10, 50} {
+		for _, k := range []int{1, 8, 32} {
+			b.Run(fmt.Sprintf("rules=%d/samples=%d", n, k), func(b *testing.B) {
+				reg := NewRuleRegistry(benchRules(b, n))
+				ev := batchEvent("d1", "p@1", base, k)
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					res := reg.Plan(uint64(i), "acme", ev, base, attr, nil)
+					if len(res.Events) == 0 || res.EvalErrors != 0 {
+						b.Fatalf("unexpected plan: %d events, %d errors", len(res.Events), res.EvalErrors)
+					}
+				}
+			})
+		}
 	}
 }

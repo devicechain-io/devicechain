@@ -72,7 +72,7 @@ func TestTheCanaryKeepsProbingWhileAReconcileIsWEDGED(t *testing.T) {
 
 	// A reconcile interval long enough that only the FIRST (immediate) pass runs, so the
 	// wedge is a wedge rather than a queue of passes.
-	runPresenceLoops(ctx, rt, runner, canary, time.Hour, 5*time.Millisecond)
+	runPresenceLoops(ctx, rt, runner, canary, time.Hour, 5*time.Millisecond, presenceLoopMetrics{})
 
 	select {
 	case <-runner.entered:
@@ -113,7 +113,7 @@ func TestShutdownWaitsForBOTHLoops(t *testing.T) {
 	canary := &countingProber{}
 	rt := &presenceRuntime{stopped: make(chan struct{})}
 
-	runPresenceLoops(ctx, rt, runner, canary, time.Millisecond, time.Millisecond)
+	runPresenceLoops(ctx, rt, runner, canary, time.Millisecond, time.Millisecond, presenceLoopMetrics{})
 	<-runner.entered
 
 	// The reconcile pass is parked inside Run. Cancelling must end BOTH loops, and
@@ -141,7 +141,7 @@ func TestTheLoopsRunWithNoCanary(t *testing.T) {
 	runner := &blockingRunner{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	rt := &presenceRuntime{stopped: make(chan struct{})}
 
-	runPresenceLoops(ctx, rt, runner, nil, time.Millisecond, time.Millisecond)
+	runPresenceLoops(ctx, rt, runner, nil, time.Millisecond, time.Millisecond, presenceLoopMetrics{})
 
 	select {
 	case <-runner.entered:

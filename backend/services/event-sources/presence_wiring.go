@@ -345,7 +345,8 @@ func startBrokerPresence(ctx context.Context) {
 	if canary != nil {
 		probe = canary
 	}
-	go runPresenceLoops(runCtx, rt, reconciler, probe, cfg.ReconcileInterval(), cfg.CanaryInterval())
+	go runPresenceLoops(runCtx, rt, reconciler, probe, cfg.ReconcileInterval(), cfg.CanaryInterval(),
+		PresenceLoopTaskMetrics)
 	// Armed LAST: from here a close nobody asked for is a fault. See sysConnGuard.
 	guard.arm(conn)
 	brokerPresence = rt
@@ -650,12 +651,12 @@ func attachCommandWake(tap *presence.Tap, infra config.InfrastructureConfigurati
 // that has to drive THIS function, not the two it calls. Testing the callees would pass
 // just as happily against a version that put both back on one select.
 func runPresenceLoops(ctx context.Context, rt *presenceRuntime, r reconcileRunner,
-	c prober, reconcileInterval, canaryInterval time.Duration) {
+	c prober, reconcileInterval, canaryInterval time.Duration, metrics presenceLoopMetrics) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runReconcileLoop(ctx, r, reconcileInterval)
+		runReconcileLoop(ctx, r, reconcileInterval, metrics.reconcile)
 	}()
 	if c != nil {
 		// A nil canary means no observer is subscribed, so a probe could only ever report
@@ -663,7 +664,7 @@ func runPresenceLoops(ctx context.Context, rt *presenceRuntime, r reconcileRunne
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			runCanaryLoop(ctx, c, canaryInterval)
+			runCanaryLoop(ctx, c, canaryInterval, metrics.canary)
 		}()
 	}
 	// 🔑 A CHANNEL CLOSED BEHIND THE WAIT, NOT THE WaitGroup ITSELF. stopBrokerPresence
@@ -688,16 +689,36 @@ type prober interface {
 	Probe(ctx context.Context) error
 }
 
+// presenceLoopMetrics are the two loops' pass signals. Either may be nil (a test that does
+// not read them): a nil *core.PeriodicTaskMetrics still classifies and logs.
+type presenceLoopMetrics struct {
+	reconcile *core.PeriodicTaskMetrics
+	canary    *core.PeriodicTaskMetrics
+}
+
+// newPresenceLoopMetrics builds both loops' signals under their documented task names. It is
+// the ONE place a name is bound to a loop: the service and the tests both build through it,
+// so the pair travels as one value and cannot be handed to each other's loop at a call site.
+func newPresenceLoopMetrics(ms *core.Microservice) presenceLoopMetrics {
+	return presenceLoopMetrics{
+		reconcile: ms.NewPeriodicTaskMetrics("presence_reconcile"),
+		canary:    ms.NewPeriodicTaskMetrics("presence_canary"),
+	}
+}
+
 // runReconcileLoop repairs the projection against the broker on its own schedule.
-func runReconcileLoop(ctx context.Context, r reconcileRunner, interval time.Duration) {
+//
+// 🔑 RecordPass REPLACES THE `&& ctx.Err() == nil` GUARD THIS LOOP CARRIED INLINE: a pass
+// cut short by shutdown is classified cancelled, which is not a fault, and the pass is filed
+// on the same series every other maintenance pass uses.
+func runReconcileLoop(ctx context.Context, r reconcileRunner, interval time.Duration,
+	metrics *core.PeriodicTaskMetrics) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	runOnce := func() {
-		if err := r.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Error().Err(err).Msg("Broker presence reconciliation failed; devices whose transitions " +
-				"were missed stay as the projection last recorded them until the next pass.")
-		}
+		started := time.Now()
+		metrics.RecordPass(ctx, r.Run(ctx), started, "presence-reconcile")
 	}
 	runOnce()
 
@@ -712,7 +733,8 @@ func runReconcileLoop(ctx context.Context, r reconcileRunner, interval time.Dura
 }
 
 // runCanaryLoop proves the advisory subscription is still being read.
-func runCanaryLoop(ctx context.Context, c prober, interval time.Duration) {
+func runCanaryLoop(ctx context.Context, c prober, interval time.Duration,
+	metrics *core.PeriodicTaskMetrics) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -721,9 +743,8 @@ func runCanaryLoop(ctx context.Context, c prober, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := c.Probe(ctx); err != nil && ctx.Err() == nil {
-				log.Error().Err(err).Msg("Broker presence canary probe failed.")
-			}
+			started := time.Now()
+			metrics.RecordPass(ctx, c.Probe(ctx), started, "presence-canary")
 		}
 	}
 }
@@ -1038,6 +1059,10 @@ var (
 	PresenceCanaryMissCounter  prometheus.Counter
 	// PresenceDemoteTaskMetrics are the demote drain's pass signals.
 	PresenceDemoteTaskMetrics *core.PeriodicTaskMetrics
+	// PresenceLoopTaskMetrics are the repair pass's and the canary probe's. Both loops are
+	// abandonable goroutines owned by the tap runtime, so neither can adopt
+	// core.PeriodicTask; they file through the same RecordPass.
+	PresenceLoopTaskMetrics presenceLoopMetrics
 
 	CommandWakeRequestedCounter prometheus.Counter
 	CommandWakeDroppedCounter   prometheus.Counter
@@ -1059,6 +1084,7 @@ func initializePresenceMetrics() {
 	// but it is a fixed-cadence maintenance pass and an operator asks the same question of
 	// it. Built here, in the initialize phase, like every other collector in this file.
 	PresenceDemoteTaskMetrics = Microservice.NewPeriodicTaskMetrics("presence_demote")
+	PresenceLoopTaskMetrics = newPresenceLoopMetrics(Microservice)
 	PresenceEmittedCounter = Microservice.NewCounterVec(
 		"presence_events_total",
 		"Broker-asserted presence transitions emitted, by state",

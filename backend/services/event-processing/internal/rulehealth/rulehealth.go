@@ -61,6 +61,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/model"
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 )
@@ -114,6 +115,10 @@ type Metrics interface {
 	// RuleStatPending reports the pending set: distinct keys and accounted bytes across the
 	// active, detached and in-flight entries, and the age of the oldest pending admission.
 	RuleStatPending(keys int, bytes int64, oldest time.Duration)
+	// RuleStatFlushPass files one interval flush as a maintenance pass: the context it ran
+	// under (what tells a stop from a fault), the error core.PassResult made of its tenants,
+	// and when it started.
+	RuleStatFlushPass(ctx context.Context, err error, started time.Time)
 }
 
 // Config bounds the accumulator. Validate states the limits.
@@ -526,7 +531,11 @@ func (a *Accumulator) run() {
 			a.discardAll()
 			return
 		case <-ticker.C:
-			a.flushOnce(a.base)
+			started := time.Now()
+			err := a.flushOnce(a.base)
+			if a.m != nil {
+				a.m.RuleStatFlushPass(a.base, err, started)
+			}
 		case <-a.ready:
 			a.flushOnce(a.base)
 		}
@@ -561,11 +570,15 @@ func (a *Accumulator) discardAll() {
 // flushOnce detaches the active generation and writes it, one tenant at a time. It is the only
 // place a generation is detached, and it does not return while any of it is unwritten, so a
 // key's updates reach the store in the order they were admitted.
-func (a *Accumulator) flushOnce(ctx context.Context) {
+//
+// It returns the pass's outcome as core.PassResult states it: nil when every tenant written (or
+// nothing was pending) succeeded, a failure when the store refused all of them, partial when it
+// refused some. Only the interval tick files it.
+func (a *Accumulator) flushOnce(ctx context.Context) error {
 	a.mu.Lock()
 	if a.active.keys == 0 && a.queued.keys == 0 {
 		a.mu.Unlock()
-		return
+		return nil
 	}
 	if a.queued.keys == 0 { // constant time: the maps are swapped, not copied
 		a.queued, a.active = a.active, newGeneration()
@@ -578,13 +591,14 @@ func (a *Accumulator) flushOnce(ctx context.Context) {
 	tenants := a.queued.tenants
 	a.mu.Unlock()
 
-	var failed int
+	var visited, failed int
 	var firstErr error
 	for tenant, ts := range tenants { // any order: tenants never share a row
 		f := a.take(ctx, tenant, ts)
 		if f == nil {
 			continue
 		}
+		visited++
 		if err := a.writeTenant(f); err != nil {
 			failed++
 			if firstErr == nil {
@@ -602,6 +616,7 @@ func (a *Accumulator) flushOnce(ctx context.Context) {
 			Msg("Rule-health fire counters could not be written for some tenants and were discarded, not " +
 				"retried; detection is unaffected, but the console's fire counts are short by what they held.")
 	}
+	return core.PassResult(visited, failed, firstErr)
 }
 
 // take moves one detached tenant set into flight, or returns nil when a purge has already

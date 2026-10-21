@@ -236,6 +236,10 @@ func helmInstall(ctx context.Context, st *State) error {
 	if err := writeCalloutSecret(ctx, typed, st); err != nil {
 		return err
 	}
+	// ...and the identity-account login, which only user-management mounts.
+	if err := writeIdentitySecret(ctx, typed, st); err != nil {
+		return err
+	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
@@ -382,6 +386,11 @@ func helmValues(st *State) map[string]interface{} {
 		if sysPw := st.Values["natsSysPassword"]; sysPw != "" {
 			auth["sysUser"] = natsauth.SysUser
 			auth["sysPassword"] = sysPw
+		}
+		// The FLAG that the broker has the identity account, not its password (that is in a Secret only
+		// user-management mounts). user-management refuses to start without the login once this is set.
+		if st.Values[identityEnabledValue] == "true" {
+			auth["identityAccount"] = true
 		}
 		natsVals["auth"] = auth
 	}

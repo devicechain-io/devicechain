@@ -433,6 +433,23 @@ Lo que ve una instancia en marcha:
   se reinicia se reconectan solos, en segundos con `--ha`; sin `--ha` el bróker no está disponible
   el minuto habitual. Si el segundo paso falla, los dispositivos siguen conectando, y ejecutar
   `dcctl upgrade` de nuevo lo termina.
+- **Todos inician sesión una vez más, y el estado de inicio de sesión pasa a una cuenta propia.** Los
+  tokens de actualización, los códigos de autorización OAuth, los registros de inicio de sesión único
+  y la limitación de intentos vivían en la cuenta NATS que comparten todos los servicios, donde
+  cualquier credencial de servicio podía leerlos o copiarlos a un stream propio. `dcctl upgrade` crea
+  una credencial nueva y un Secret llamado `dci-<instancia>-identity` que guarda su contraseña y se
+  monta solo en `user-management`. El bróker recibe una cuenta `IDENTITY` aparte, a la que solo esa
+  credencial puede entrar y que no comparte nada con la otra cuenta. Los buckets antiguos se
+  **eliminan, no se copian**: sus tokens eran legibles por todos los servicios, así que trasladarlos
+  mantendría viva la exposición. Todas las sesiones anteriores a la actualización terminan: las
+  personas vuelven a iniciar sesión en la consola y los paneles, y los clientes MCP y OAuth vuelven a
+  autorizar. Los tokens de acceso ya emitidos siguen funcionando hasta que caducan, 15 minutos por
+  defecto. Mientras `user-management` se actualiza, un inicio de sesión o una renovación de token que
+  llegue a un pod que aún ejecuta la versión anterior puede fallar con un error durante unos segundos;
+  al reintentarlo funciona. Nada se pierde en silencio: `user-management` registra los buckets que eliminó la primera
+  vez que arranca, y `dcctl upgrade` lo indica al terminar. El bróker se reinicia una vez, servidor a
+  servidor con `--ha`, para añadir la cuenta. `user-management` se niega a arrancar si la instancia
+  dice que la cuenta existe y falta su contraseña, en lugar de recurrir a la cuenta compartida.
 - **El almacén de eventos se reinicia cuando cambian sus pods**, por ejemplo por una imagen o una
   ubicación nuevas. Un cambio solo de ajustes se recarga sin reinicio. Con `--ha` se reinician
   primero las réplicas en espera y después el rol primario pasa a una de ellas. Sin `--ha` se

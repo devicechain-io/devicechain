@@ -166,7 +166,7 @@ func VerifyReplication(ctx context.Context, opts HaVerifyOptions) (replication.R
 	if err != nil {
 		return rep, err
 	}
-	exp := messaging.ReplicationExpectation(opts.InstanceId, declared, areas)
+	exp := messaging.ReplicationExpectationFor(opts.InstanceId, declared, areas, cfg.Infrastructure.Nats.Auth.IdentityAccount)
 
 	// One collect+verify attempt, over a connection and a pod listing that are
 	// re-read each time: a settling cluster is one where the pods are also still

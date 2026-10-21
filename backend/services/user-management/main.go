@@ -107,6 +107,10 @@ func parseConfiguration() error {
 	return nil
 }
 
+// envIdentityPassword is the environment variable the chart projects the identity Secret into,
+// in this service alone (deploy/helm/devicechain/templates/deployment.yaml).
+const envIdentityPassword = "DC_NATS_IDENTITY_PASSWORD"
+
 // Called after microservice has been initialized.
 func afterMicroserviceInitialized(ctx context.Context) error {
 	// Parse configuration.
@@ -170,6 +174,10 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	// are never lettered: a letter the store runs out of deliveries on is counted as LOST on
 	// this service's dead_letter_lost_total instead. The manager refuses to start without it.
 	NatsManager.RecordMaxDeliveries(deadletter.MaxDeliveryRecorder(deadletter.NewProducer(Microservice)))
+	// The sign-in buckets live in the broker's identity account, reached with a login only this
+	// service holds (a Secret only this Deployment mounts). The manager refuses to start when the
+	// instance says the account exists and this is empty.
+	NatsManager.UseIdentityLogin(os.Getenv(envIdentityPassword))
 	if err := NatsManager.Initialize(ctx); err != nil {
 		return err
 	}
@@ -227,6 +235,19 @@ func afterMicroserviceInitialized(ctx context.Context) error {
 	attemptsKV, err := NatsManager.CredentialAttemptStore()
 	if err != nil {
 		return err
+	}
+	// Only now that every bucket is open in the identity account: delete the copies an earlier
+	// release left in the shared account. Their tokens were readable by every service login, so
+	// they are not carried over; everyone signs in once more. See RetireSharedIdentityBuckets.
+	retired, err := NatsManager.RetireSharedIdentityBuckets()
+	if err != nil {
+		return err
+	}
+	if len(retired) > 0 {
+		log.Warn().Strs("buckets", retired).
+			Msg("Deleted the sign-in buckets an earlier release kept in the shared NATS account. Their tokens " +
+				"were readable by every service login, so they were not carried over: every refresh token, " +
+				"OAuth code and single sign-on record issued before this upgrade is gone, and users sign in once more")
 	}
 	credentials, err := credential.NewChecker(attemptsKV, identity.CredentialPolicies,
 		credential.WithCounter(Microservice.NewCounterVec("credential_checks_total",
