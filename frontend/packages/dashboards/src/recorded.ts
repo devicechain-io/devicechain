@@ -484,6 +484,7 @@ export class RecordedDataSource implements WidgetDataSource {
   private readonly index: Indexed;
   private readonly startMs: number;
   private readonly devices: ReadonlySet<string>;
+  private readonly kinds: ReadonlyMap<string, string>;
   private readonly subs = new Set<Subscription>();
   private readonly unlisten: () => void;
   private cursor: number;
@@ -503,6 +504,7 @@ export class RecordedDataSource implements WidgetDataSource {
     this.shiftMs = shift;
     this.startMs = Date.parse(rec.startedAtUtc);
     this.devices = new Set(rec.devices.map((d) => d.token));
+    this.kinds = new Map(rec.devices.map((d) => [d.token, d.kind]));
     this.unlisten = clock.subscribe((ev) => this.onClock(ev));
   }
 
@@ -688,10 +690,13 @@ export class RecordedDataSource implements WidgetDataSource {
   // other surface of the board (a gauge's subject line, the machine selector, an alarm's
   // originator) names a device by its token. Labelling the table's rows by external id made one
   // machine "SP-HL-0003" in the table and "sp-hauler-03" in the alarm beside it.
+  //
+  // A member's `deviceType` is its recorded KIND ("Hauler"), the key declaredMetrics answers by:
+  // a recording names no device-type tokens, and nothing but the declarations reads it.
   subscribeMembers(datasource: DatasourceSelector, sink: MemberSink): () => void {
-    let members: Array<{ token: string; name: string | null }>;
+    let members: Array<{ token: string; name: string | null; deviceType: string }>;
     try {
-      members = this.resolve(datasource).map((g) => ({ token: g.deviceToken, name: null }));
+      members = this.resolve(datasource).map((g) => ({ token: g.deviceToken, name: null, deviceType: this.kinds.get(g.deviceToken) as string }));
     } catch (err) {
       return this.failLater(err, sink);
     }
@@ -707,6 +712,15 @@ export class RecordedDataSource implements WidgetDataSource {
       off();
       stop?.();
     };
+  }
+
+  // What a kind's profile declares, as the recording carries it (recording.ts, `declaredMetrics`),
+  // or null when it does not say: a recording made before it carried declarations, or a kind it
+  // has no entry for. Null is "unknown", which the fleet widgets read as declared -- never as
+  // absent, so an old recording shows "no data in range" rather than a confident "does not report".
+  async declaredMetrics(kind: string): Promise<readonly string[] | null> {
+    const declared = this.rec.declaredMetrics;
+    return declared && Object.prototype.hasOwnProperty.call(declared, kind) ? declared[kind] : null;
   }
 
   // Each device's seed comes from the recording itself, with no read to make: its newest reading per

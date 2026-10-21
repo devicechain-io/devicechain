@@ -176,6 +176,7 @@ func build(ctx context.Context, args []string) error {
 	}
 	m := sim.NewSitepulse(hs.Seed, sim.Load{}).Manifest()
 	o.Devices = m.Expand(m.Seed)
+	o.Declared = recording.DeclaredByType(m)
 
 	rec, rep, err := recording.Build(ctx, &recording.GraphQLPlatform{Session: s, EventURL: eventMgmtGraphQL(hs)}, o)
 	if err != nil {
