@@ -70,9 +70,12 @@ func declaredFor(u catalogUse) bool {
 // role the catalog declares for a service is one its code actually uses.
 //
 // The first half is what the manager enforces at start (messaging, catalog.go), checked here
-// without starting anything: no service test runs a deployed manager, so a call on a path no
-// test reaches would otherwise be found by the pod that crash-loops. The second half is the
-// one the manager CANNOT see: a declared writer that never writes is a grant to nothing, and
+// without starting anything. Each service's TestStartsUnderItsDeclaredCatalog
+// (catalog_boot_test.go) starts that service's real wiring under a deployed manager, but only
+// on the paths a test reaches; this scan also sees a call on a path no test reaches, which
+// would otherwise be found by the pod that crash-loops. It is blind to the reader MODE
+// (durable and ack-floor both count as "read"); only the boot tests hold that. The second
+// half is the one the manager CANNOT see: a declared writer that never writes is a grant to nothing, and
 // the first thing generated from the declaration would hand it out.
 func TestEveryServiceUseIsDeclaredAndEveryDeclaredRoleIsUsed(t *testing.T) {
 	root := workspaceRoot(t)
