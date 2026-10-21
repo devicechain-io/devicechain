@@ -482,6 +482,42 @@ None of those outcomes fails the upgrade. An escrow problem is about a future di
 upgrade in front of it is about the running instance. And an operator who cannot upgrade will work
 around the check rather than fix it.
 
+## Replacing the root key {#replace-root-key}
+
+The root key cannot be rotated in place in this version. There is no command that swaps in a new key
+and re-encrypts what the old one protected. To replace the root key, you recreate the instance.
+
+Three things depend on the key:
+
+- **Every secret the instance stores.** Each is sealed under the root key: connector credentials,
+  SMTP passwords, AI provider keys and the like.
+- **The token-signing key.** It is sealed under the root key too, so the key decides whether anyone
+  can sign in.
+- **Device MQTT password digests.** The instance derives the key that digests those passwords from
+  the root key. The digests are one-way, so they cannot be carried over to a new key.
+
+If you think the root key may have been exposed:
+
+1. Take the backups and exports you need first. `dcctl destroy` removes the instance's database, so
+   its data goes with it. Backups of the old instance stay readable only with the old escrow
+   artifact, so keep that too.
+2. Move the old escrow artifact aside. Bootstrap will not overwrite one.
+3. Run [`dcctl destroy`](./bootstrap.md#destroy), then [`dcctl bootstrap`](./bootstrap.md) again.
+   With no `--restore-root-key`, the new instance mints a root key of its own and writes a new
+   escrow artifact.
+4. Enrol your devices again. The new instance has none of the old one's devices or MQTT passwords.
+5. Rotate the credentials the old instance stored, at the system that issued them: SMTP and
+   webhook credentials, broker and cloud credentials used by connectors, and AI provider keys.
+   Anyone holding the old root key and a copy of the old database could read them, so enter new
+   ones in the new instance.
+
+Keep the escrow artifact safe. The [disaster-recovery restore](#recover) reads the root key from it,
+and it is the only way to read an old instance's backups. Anyone who holds the artifact and its
+passphrase holds the root key, so store the two apart.
+
+In-place rotation is planned for after the first stable release. It needs every secret re-encrypted
+under a new key version, and a key version recorded with each device password digest.
+
 ## After `dcctl destroy` {#after-destroy}
 
 `dcctl destroy` removes the instance — its Helm release, its NATS broker and event store, its

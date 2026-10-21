@@ -513,6 +513,47 @@ desastre futuro, mientras que la actualización que tienes delante trata de la i
 funcionamiento. Y un operador que no puede actualizar rodeará la comprobación en lugar de
 arreglarla.
 
+## Sustituir la clave raíz {#replace-root-key}
+
+En esta versión la clave raíz no se puede rotar in situ. No existe ningún comando que instale una
+clave nueva y vuelva a cifrar lo que protegía la anterior. Para sustituir la clave raíz, se recrea la
+instancia.
+
+Tres cosas dependen de la clave:
+
+- **Todos los secretos que guarda la instancia.** Cada uno está sellado bajo la clave raíz:
+  credenciales de conectores, contraseñas SMTP, claves de proveedores de IA y similares.
+- **La clave de firma de tokens.** También está sellada bajo la clave raíz, así que la clave decide
+  si alguien puede iniciar sesión.
+- **Los resúmenes de las contraseñas MQTT de los dispositivos.** La instancia deriva de la clave
+  raíz la clave con la que calcula esos resúmenes. Los resúmenes son de un solo sentido, así que no
+  se pueden trasladar a una clave nueva.
+
+Si crees que la clave raíz pudo quedar expuesta:
+
+1. Haz antes las copias de seguridad y exportaciones que necesites. `dcctl destroy` elimina la base
+   de datos de la instancia, y sus datos se van con ella. Las copias de seguridad de la instancia
+   anterior solo se pueden leer con el artefacto de depósito anterior, así que conserva también ese.
+2. Aparta el artefacto de depósito anterior. Bootstrap no sobrescribe uno existente.
+3. Ejecuta [`dcctl destroy`](./bootstrap.md#destroy) y después [`dcctl bootstrap`](./bootstrap.md) de
+   nuevo. Sin `--restore-root-key`, la instancia nueva genera una clave raíz propia y escribe un
+   artefacto de depósito nuevo.
+4. Vuelve a registrar tus dispositivos. La instancia nueva no tiene los dispositivos ni las
+   contraseñas MQTT de la anterior.
+5. Rota las credenciales que guardaba la instancia anterior, en el sistema que las emitió:
+   credenciales SMTP y de webhooks, credenciales de brokers y de nube usadas por los conectores, y
+   claves de proveedores de IA. Quien tenga la clave raíz anterior y una copia de la base de datos
+   anterior podría leerlas, así que introduce otras nuevas en la instancia nueva.
+
+Guarda el artefacto de depósito en un lugar seguro. La [restauración de recuperación ante
+desastres](#recover) lee de él la clave raíz, y es la única forma de leer las copias de seguridad de
+una instancia anterior. Quien tenga el artefacto y su frase de contraseña tiene la clave raíz, así
+que guárdalos por separado.
+
+La rotación in situ está prevista para después de la primera versión estable. Requiere volver a
+cifrar todos los secretos bajo una nueva versión de clave, y registrar una versión de clave junto a
+cada resumen de contraseña de dispositivo.
+
 ## Después de `dcctl destroy` {#after-destroy}
 
 `dcctl destroy` elimina la instancia —su release de Helm, su broker NATS y su almacén de eventos,
