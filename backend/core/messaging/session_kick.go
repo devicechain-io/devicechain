@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	nats "github.com/nats-io/nats.go"
@@ -70,8 +71,28 @@ func SessionKickSubject(instanceId string) string {
 // ended. Tokens are device tokens, not client ids: the responder knows how a device's
 // session is named on the broker.
 type SessionKickRequest struct {
-	Tenant string   `json:"tenant"`
+	Tenant string `json:"tenant"`
+	// Reason is why the sessions are being ended, one of the SessionKick* reasons. The
+	// responder logs it with every session it ends, so a kick is attributable after the fact:
+	// the system-account login can end ANY connection on the broker, and a log that says only
+	// "ended 3 sessions" would not let anyone tell a revocation from a misuse.
+	Reason string   `json:"reason"`
 	Tokens []string `json:"tokens"`
+}
+
+// The reasons a session kick may carry. A closed set, refused otherwise, so the log the
+// responder writes is a vocabulary and not free text from the wire.
+const (
+	SessionKickCredentialChanged = "credential-changed"
+	SessionKickCredentialDeleted = "credential-deleted"
+	SessionKickDeviceDisabled    = "device-disabled"
+	SessionKickDeviceDeleted     = "device-deleted"
+	SessionKickDeviceReplaced    = "device-replaced"
+)
+
+var sessionKickReasons = []string{
+	SessionKickCredentialChanged, SessionKickCredentialDeleted,
+	SessionKickDeviceDisabled, SessionKickDeviceDeleted, SessionKickDeviceReplaced,
 }
 
 // SessionKickReply is the responder's answer. OK is true only when every server of the
@@ -94,6 +115,9 @@ var ErrSessionKickUnavailable = errors.New("the device's live broker sessions co
 func ValidateSessionKick(req SessionKickRequest) error {
 	if err := core.ValidateToken(req.Tenant); err != nil {
 		return fmt.Errorf("session kick names an invalid tenant: %w", err)
+	}
+	if !slices.Contains(sessionKickReasons, req.Reason) {
+		return fmt.Errorf("session kick gives no known reason (%q)", req.Reason)
 	}
 	if len(req.Tokens) == 0 || len(req.Tokens) > MaxSessionKickTokens {
 		return fmt.Errorf("session kick names %d devices, want 1 to %d", len(req.Tokens), MaxSessionKickTokens)
@@ -129,8 +153,8 @@ func NewSessionKickRequester(nc *nats.Conn, instanceId string) *SessionKickReque
 // KickDeviceSessions ends every live session of the given devices of tenant, retrying a
 // failed attempt, and returns nil ONLY on a confirmed reply. Any other outcome is an error
 // wrapping ErrSessionKickUnavailable: nothing here ever reports success it did not observe.
-func (r *SessionKickRequester) KickDeviceSessions(ctx context.Context, tenant string, tokens []string) error {
-	req := SessionKickRequest{Tenant: tenant, Tokens: tokens}
+func (r *SessionKickRequester) KickDeviceSessions(ctx context.Context, tenant, reason string, tokens []string) error {
+	req := SessionKickRequest{Tenant: tenant, Reason: reason, Tokens: tokens}
 	if err := ValidateSessionKick(req); err != nil {
 		return err
 	}

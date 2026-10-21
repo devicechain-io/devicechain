@@ -7,9 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
+
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entityevent"
-	"time"
+	"github.com/devicechain-io/dc-microservice/messaging"
 
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/integrity"
@@ -334,7 +336,7 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		if tenant == "" {
 			tenant, _ = core.TenantFromContext(ctx)
 		}
-		if kerr := api.endDeviceSessions(ctx, tenant, token); kerr != nil {
+		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickDeviceDeleted, token); kerr != nil {
 			return deleted, kerr
 		}
 	}
@@ -366,7 +368,7 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 			errs = append(errs, fmt.Errorf("%w: could not name the devices whose sessions to end: %v", ErrSessionsNotEnded, terr))
 			continue
 		}
-		if kerr := api.endDeviceSessions(ctx, tenant, tokens...); kerr != nil {
+		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickCredentialDeleted, tokens...); kerr != nil {
 			errs = append(errs, kerr)
 		}
 	}

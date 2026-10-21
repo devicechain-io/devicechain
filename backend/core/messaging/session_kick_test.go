@@ -53,22 +53,22 @@ func TestKickDeviceSessionsSucceedsOnlyOnAConfirmedReply(t *testing.T) {
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 	require.NoError(t, nc.Flush())
 
-	require.NoError(t, quick(nc).KickDeviceSessions(context.Background(), "acme", []string{"d1", "d2"}))
-	require.Equal(t, SessionKickRequest{Tenant: "acme", Tokens: []string{"d1", "d2"}}, got)
+	require.NoError(t, quick(nc).KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDisabled, []string{"d1", "d2"}))
+	require.Equal(t, SessionKickRequest{Tenant: "acme", Reason: SessionKickDeviceDisabled, Tokens: []string{"d1", "d2"}}, got)
 
 	answer.Store(SessionKickReply{OK: false, Error: "only 1 of 2 servers answered"})
-	err = quick(nc).KickDeviceSessions(context.Background(), "acme", []string{"d1"})
+	err = quick(nc).KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDisabled, []string{"d1"})
 	require.ErrorIs(t, err, ErrSessionKickUnavailable)
 	require.Contains(t, err.Error(), "only 1 of 2 servers answered")
 
 	// An OK:false with no reason is still a failure.
 	answer.Store(SessionKickReply{})
-	require.ErrorIs(t, quick(nc).KickDeviceSessions(context.Background(), "acme", []string{"d1"}), ErrSessionKickUnavailable)
+	require.ErrorIs(t, quick(nc).KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDisabled, []string{"d1"}), ErrSessionKickUnavailable)
 }
 
 func TestKickDeviceSessionsFailsWhenNobodyAnswers(t *testing.T) {
 	nc := kickTestConn(t)
-	err := quick(nc).KickDeviceSessions(context.Background(), "acme", []string{"d1"})
+	err := quick(nc).KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDisabled, []string{"d1"})
 	require.ErrorIs(t, err, ErrSessionKickUnavailable)
 	require.Contains(t, err.Error(), "no service is answering")
 }
@@ -87,14 +87,14 @@ func TestKickDeviceSessionsRetriesAFailedAttempt(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = sub.Unsubscribe() })
 	require.NoError(t, nc.Flush())
-	require.NoError(t, quick(nc).KickDeviceSessions(context.Background(), "acme", []string{"d1"}))
+	require.NoError(t, quick(nc).KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDisabled, []string{"d1"}))
 	require.EqualValues(t, 3, calls.Load())
 
 	// One attempt fewer than it takes is a failure, not a hang.
 	calls.Store(0)
 	r := quick(nc)
 	r.Attempts = 2
-	require.ErrorIs(t, r.KickDeviceSessions(context.Background(), "acme", []string{"d1"}), ErrSessionKickUnavailable)
+	require.ErrorIs(t, r.KickDeviceSessions(context.Background(), "acme", SessionKickDeviceDisabled, []string{"d1"}), ErrSessionKickUnavailable)
 }
 
 func TestKickDeviceSessionsRefusesAMalformedRequestWithoutSendingIt(t *testing.T) {
@@ -107,13 +107,15 @@ func TestKickDeviceSessionsRefusesAMalformedRequestWithoutSendingIt(t *testing.T
 
 	r := quick(nc)
 	for name, c := range map[string]struct {
-		tenant string
-		tokens []string
+		tenant, reason string
+		tokens         []string
 	}{
-		"no tenant": {"", []string{"d1"}}, "no devices": {"acme", nil},
-		"a wildcard token": {"acme", []string{"d.*"}}, "a bad tenant": {"a.b", []string{"d1"}},
+		"no tenant": {"", SessionKickDeviceDisabled, []string{"d1"}}, "no devices": {"acme", SessionKickDeviceDisabled, nil},
+		"a wildcard token": {"acme", SessionKickDeviceDisabled, []string{"d.*"}},
+		"a bad tenant":     {"a.b", SessionKickDeviceDisabled, []string{"d1"}},
+		"no reason":        {"acme", "", []string{"d1"}}, "an unknown reason": {"acme", "because", []string{"d1"}},
 	} {
-		require.Error(t, r.KickDeviceSessions(context.Background(), c.tenant, c.tokens), name)
+		require.Error(t, r.KickDeviceSessions(context.Background(), c.tenant, c.reason, c.tokens), name)
 	}
 	require.Zero(t, calls.Load())
 }

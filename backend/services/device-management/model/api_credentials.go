@@ -14,6 +14,7 @@ import (
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
 	"github.com/devicechain-io/dc-microservice/limit"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/sqlnull"
 	"gorm.io/gorm"
@@ -281,7 +282,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// re-asks on every update, so repeating the disable after a failed kick is the retry.
 	if authorityChanged := !updated.Enabled || request.CredentialType.Set || request.CredentialId.Set ||
 		request.CredentialValue.Set || request.ExpiresAt.Set || repoint; authorityChanged {
-		if kerr := api.endDeviceSessions(ctx, updated.TenantId, currentDeviceToken, repointTo); kerr != nil {
+		if kerr := api.endDeviceSessions(ctx, updated.TenantId, messaging.SessionKickCredentialChanged, currentDeviceToken, repointTo); kerr != nil {
 			return updated, kerr
 		}
 	}

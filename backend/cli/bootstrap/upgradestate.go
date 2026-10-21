@@ -159,6 +159,9 @@ func hydrateUpgradeState(
 				"or destroy the instance and build it again", opts.Instance)
 	}
 	applyDeployedInfrastructure(st, deployed)
+	if err := refuseNoSystemLogin(opts.Instance, st); err != nil {
+		return nil, err
+	}
 
 	// 3. THE SECRETS.
 	//
@@ -317,6 +320,26 @@ func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfigurati
 	st.Values["natsSysPassword"] = nats.Auth.SysPassword
 	st.Values["serviceAuthSecret"] = deployed.Infrastructure.ServiceAuth.Secret
 	st.Values["secretsRootKey"] = deployed.Infrastructure.Secrets.RootKey
+}
+
+// refuseNoSystemLogin refuses an upgrade of an instance whose broker runs the device auth
+// callout but whose configuration carries no system-account login.
+//
+// 🔴 THE LOGIN STOPPED BEING OPTIONAL. It used to be read only by the broker-presence tap, so
+// its absence turned a feature off and an upgrade kept it that way (settleUpgradeInfraInputs
+// mints nothing). event-sources now also ends a revoked device's broker session through it,
+// and refuses to start without it wherever the callout runs: upgrading such an instance would
+// roll an event-sources that crash-loops, and stop ingest. Bootstrap has minted the login for
+// every instance since the presence tap, so this names a pre-tap instance, which is a
+// recreate.
+func refuseNoSystemLogin(instance string, st *State) error {
+	if st.Values["natsCalloutIssuerSeed"] == "" || st.Values["natsSysPassword"] != "" {
+		return nil
+	}
+	return fmt.Errorf("instance %q authenticates devices through the broker's auth callout, but its "+
+		"configuration carries no NATS system-account login, which this release's event-sources needs to "+
+		"end a revoked device's broker session (it would refuse to start). Nothing has been changed. "+
+		"Destroy the instance and bootstrap it again", instance)
 }
 
 // ingressHostFor settles the host an instance is exposed on.

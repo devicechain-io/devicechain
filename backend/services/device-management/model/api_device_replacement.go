@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -216,7 +217,7 @@ func (api *Api) ReplaceDevice(ctx context.Context, request *DeviceReplaceRequest
 	api.evictDeviceCredentials(ctx, device.TenantId, device.ID)
 	// The unit taken out of service held a session on its old credentials: end it, so the
 	// replacement hardware is the only thing that is that device.
-	kickErr := api.endDeviceSessions(ctx, device.TenantId, device.Token)
+	kickErr := api.endDeviceSessions(ctx, device.TenantId, messaging.SessionKickDeviceReplaced, device.Token)
 
 	// Attach the device the record points at, AFTER the transaction so no write can
 	// go through the association. The row is created with the association omitted —

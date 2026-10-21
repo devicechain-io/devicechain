@@ -351,7 +351,9 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	// configuration carries no system-account password would be handed a freshly generated
 	// one here (CredentialsFromDeployed fills the gap for a bootstrap). Without it the
 	// module renders SYS with no users, which is what such an instance runs today, so it
-	// is kept that way rather than given a credential nobody asked this verb for.
+	// is kept that way rather than given a credential nobody asked this verb for. Only an
+	// instance with no device callout gets this far without one: one WITH the callout is
+	// refused earlier (refuseNoSystemLogin), because its event-sources cannot start without it.
 	if st.Values["natsSysPassword"] == "" {
 		creds.SysPassword, creds.SysPasswordBcrypt = "", ""
 	}

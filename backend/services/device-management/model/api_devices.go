@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -749,7 +750,7 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// leaves it disabled, so repeating a disable whose kick failed is the retry. Enabling it, or
 	// editing an enabled device, ends nothing.
 	if updated.DisabledAt.Valid {
-		if kerr := api.endDeviceSessions(ctx, updated.TenantId, updated.Token); kerr != nil {
+		if kerr := api.endDeviceSessions(ctx, updated.TenantId, messaging.SessionKickDeviceDisabled, updated.Token); kerr != nil {
 			return updated, kerr
 		}
 	}

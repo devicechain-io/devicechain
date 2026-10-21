@@ -106,7 +106,7 @@ func TestARequestOnTheWireEndsTheDevicesRealSession(t *testing.T) {
 	requester.Attempts, requester.Backoff, requester.AttemptTimeout = 2, 10*time.Millisecond, 3*time.Second
 
 	// Before the service listens: nobody answers, and that is an ERROR.
-	err := requester.KickDeviceSessions(context.Background(), "acme", []string{"sensor-001"})
+	err := requester.KickDeviceSessions(context.Background(), "acme", messaging.SessionKickDeviceDisabled, []string{"sensor-001"})
 	require.ErrorIs(t, err, messaging.ErrSessionKickUnavailable)
 	require.Contains(t, err.Error(), "no service is answering")
 
@@ -114,13 +114,13 @@ func TestARequestOnTheWireEndsTheDevicesRealSession(t *testing.T) {
 
 	victim := device(t, mqttPort, "inst-1:acme:sensor-001")
 	bystander := device(t, mqttPort, "inst-1:acme:sensor-002")
-	require.NoError(t, requester.KickDeviceSessions(context.Background(), "acme", []string{"sensor-001"}))
+	require.NoError(t, requester.KickDeviceSessions(context.Background(), "acme", messaging.SessionKickDeviceDisabled, []string{"sensor-001"}))
 	require.Eventually(t, func() bool { return !victim.IsConnected() }, 10*time.Second, 25*time.Millisecond,
 		"the device's session was not ended")
 	require.True(t, bystander.IsConnected(), "another device's session was ended")
 
 	// A device with no session is a confirmed success, not an error.
-	require.NoError(t, requester.KickDeviceSessions(context.Background(), "acme", []string{"sensor-404"}))
+	require.NoError(t, requester.KickDeviceSessions(context.Background(), "acme", messaging.SessionKickDeviceDisabled, []string{"sensor-404"}))
 }
 
 // A malformed request is answered with a reason, never dropped (a dropped one reads as a
@@ -136,19 +136,24 @@ func TestAMalformedKickRequestIsAnsweredNotDropped(t *testing.T) {
 	require.NotContains(t, string(msg.Data), `"ok":true`)
 }
 
-// FAIL CLOSED AT START. A service that ingests the platform broker and has no system-account
-// login cannot end a session, so it does not start; one with no platform-broker source has no
-// sessions to end and may.
+// FAIL CLOSED AT START. Where the broker runs the device auth callout, device-management asks
+// this service to end sessions, so without a system-account login it does not start, whether
+// or not it reads a platform-broker source (a device holds a session for its commands too). A
+// broker with no callout (auth off) mints no sessions of ours, and the service starts.
 func TestTheServiceRefusesToStartWithoutTheLoginThatEndsSessions(t *testing.T) {
 	cfg, _ := kickBroker(t)
 	cfg.Auth.SysUser, cfg.Auth.SysPassword = "", ""
+	cfg.Auth.CalloutIssuerSeed = "SAcalloutseedplaceholder"
 
+	for _, gateway := range []string{"mqtt1", ""} {
+		withKickService(t, cfg, gateway)
+		err := startSessionKickOn(context.Background(), func() *nats.Conn { return nil })
+		require.ErrorIs(t, err, errNoSystemLoginForSessionKick, "gateway source %q", gateway)
+	}
+
+	cfg.Auth.CalloutIssuerSeed = ""
 	withKickService(t, cfg, "mqtt1")
-	err := startSessionKickOn(context.Background(), func() *nats.Conn { return nil })
-	require.ErrorIs(t, err, errNoSystemLoginForSessionKick)
-
-	withKickService(t, cfg, "")
 	require.NoError(t, startSessionKickOn(context.Background(), func() *nats.Conn { return nil }),
-		"an instance with no platform-broker source has no sessions of its own")
+		"a broker with no device callout has no sessions of ours, even with a platform-broker source")
 	require.Nil(t, sessionKick)
 }

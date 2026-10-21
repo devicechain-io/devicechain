@@ -340,8 +340,8 @@ type natsSessionKicker struct {
 	instanceId string
 }
 
-func (k natsSessionKicker) KickDeviceSessions(ctx context.Context, tenant string, deviceTokens []string) error {
-	return messaging.NewSessionKickRequester(k.nmgr.Conn(), k.instanceId).KickDeviceSessions(ctx, tenant, deviceTokens)
+func (k natsSessionKicker) KickDeviceSessions(ctx context.Context, tenant, reason string, deviceTokens []string) error {
+	return messaging.NewSessionKickRequester(k.nmgr.Conn(), k.instanceId).KickDeviceSessions(ctx, tenant, reason, deviceTokens)
 }
 
 // createPublishWriters builds the resolved and failed events writers, each with the

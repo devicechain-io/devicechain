@@ -68,7 +68,7 @@ func TestTheServiceWiresSessionKicksOnlyWhereTheMqttCalloutRuns(t *testing.T) {
 
 		disable(t, ctx, api)
 		mu.Lock()
-		require.Equal(t, []messaging.SessionKickRequest{{Tenant: "acme", Tokens: []string{"dev"}}}, got)
+		require.Equal(t, []messaging.SessionKickRequest{{Tenant: "acme", Reason: messaging.SessionKickCredentialChanged, Tokens: []string{"dev"}}}, got)
 		reply = messaging.SessionKickReply{OK: false, Error: "only 1 of 2 broker servers answered"}
 		mu.Unlock()
 
@@ -101,9 +101,9 @@ func TestTheServiceWiresSessionKicksOnlyWhereTheMqttCalloutRuns(t *testing.T) {
 // retry schedule inside a test.
 type fastRetries struct{ model.SessionKicker }
 
-func (f fastRetries) KickDeviceSessions(ctx context.Context, tenant string, tokens []string) error {
+func (f fastRetries) KickDeviceSessions(ctx context.Context, tenant, reason string, tokens []string) error {
 	k := f.SessionKicker.(natsSessionKicker)
 	r := messaging.NewSessionKickRequester(k.nmgr.Conn(), k.instanceId)
 	r.Attempts, r.Backoff, r.AttemptTimeout = 2, 10*time.Millisecond, 2*time.Second
-	return r.KickDeviceSessions(ctx, tenant, tokens)
+	return r.KickDeviceSessions(ctx, tenant, reason, tokens)
 }

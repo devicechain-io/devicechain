@@ -6,6 +6,7 @@ package processor
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -177,6 +178,52 @@ func TestOnlyTheCaptureSourceAssertsTheBroker(t *testing.T) {
 	src, err := os.ReadFile("gateway_jetstream.go")
 	require.NoError(t, err)
 	require.Contains(t, string(src), "assertedByCaptureBroker(msg)")
+}
+
+// THE SAME GUARD, ACROSS THE WORKSPACE. brokerAssertion keeps the mark private to this
+// package, but the field it sets, model.UnresolvedEvent.BrokerAsserted, is exported, and every
+// ingest service (HTTP, Sparkplug, LwM2M, the edge agent) builds UnresolvedEvents. Any of them
+// setting it would hand the resolver a credential-free event it trusts for every type. So the
+// only writes allowed anywhere in backend/ are the mark itself and the proto round trip.
+func TestNothingOutsideTheMarkWritesBrokerAsserted(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	allowed := map[string]bool{
+		filepath.Join("services", "event-sources", "processor", "broker_assertion.go"): true,
+		filepath.Join("services", "event-sources", "proto", "marshal.go"):              true,
+	}
+	write := regexp.MustCompile(`BrokerAsserted\s*(:[^=]|=[^=])`)
+	scanned, sawMark := 0, false
+	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" || strings.HasPrefix(d.Name(), ".") && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, ".pb.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		require.NoError(t, err)
+		src, err := os.ReadFile(path)
+		require.NoError(t, err)
+		scanned++
+		if !write.Match(src) {
+			return nil
+		}
+		if allowed[rel] {
+			sawMark = sawMark || strings.HasSuffix(rel, "broker_assertion.go")
+			return nil
+		}
+		t.Errorf("%s writes BrokerAsserted: only the capture source's mark may", rel)
+		return nil
+	}))
+	require.Greater(t, scanned, 500, "the walk must have covered the workspace, not an empty directory")
+	require.True(t, sawMark, "the mark itself must be found, or the pattern matches nothing")
 }
 
 // A device controls the bytes a decoder parses, so no decoder may be able to mark an event

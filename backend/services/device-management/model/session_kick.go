@@ -10,6 +10,7 @@ import (
 	"slices"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/rs/zerolog/log"
 )
 
 // SessionKicker ends the live broker sessions of devices whose authority has been withdrawn.
@@ -24,7 +25,7 @@ import (
 // An implementation returns nil ONLY when it observed the sessions ended (or none open). It is
 // nil on an Api whose instance runs no MQTT auth callout, where there are no sessions of ours.
 type SessionKicker interface {
-	KickDeviceSessions(ctx context.Context, tenant string, deviceTokens []string) error
+	KickDeviceSessions(ctx context.Context, tenant, reason string, deviceTokens []string) error
 }
 
 // ErrSessionsNotEnded is returned by a write that committed but could not confirm the affected
@@ -36,9 +37,10 @@ var ErrSessionsNotEnded = errors.New("the change was saved, but the device's liv
 	"repeat the operation to try again")
 
 // endDeviceSessions asks the wired SessionKicker to end the sessions of the given devices of
-// tenant, after the write that withdrew their authority has committed. No kicker wired is a
-// no-op; no tokens is a no-op; a failure is ErrSessionsNotEnded wrapping the cause.
-func (api *Api) endDeviceSessions(ctx context.Context, tenant string, deviceTokens ...string) error {
+// tenant, after the write that withdrew their authority has committed. reason is one of the
+// messaging.SessionKick* reasons, carried to the responder and logged on both sides. No kicker
+// wired is a no-op; no tokens is a no-op; a failure is ErrSessionsNotEnded wrapping the cause.
+func (api *Api) endDeviceSessions(ctx context.Context, tenant, reason string, deviceTokens ...string) error {
 	if api.SessionKicker == nil {
 		return nil
 	}
@@ -55,9 +57,13 @@ func (api *Api) endDeviceSessions(ctx context.Context, tenant string, deviceToke
 		// A kick names a tenant; without one nothing can be found. Loud, never a quiet success.
 		return fmt.Errorf("%w: the change named no tenant", ErrSessionsNotEnded)
 	}
-	if err := api.SessionKicker.KickDeviceSessions(ctx, tenant, tokens); err != nil {
+	if err := api.SessionKicker.KickDeviceSessions(ctx, tenant, reason, tokens); err != nil {
+		log.Warn().Err(err).Str("tenant", tenant).Str("reason", reason).Strs("devices", tokens).
+			Msg("A device's authority was withdrawn, but its live broker sessions could not be confirmed ended.")
 		return fmt.Errorf("%w (%v)", ErrSessionsNotEnded, err)
 	}
+	log.Info().Str("tenant", tenant).Str("reason", reason).Strs("devices", tokens).
+		Msg("Ended the live broker sessions of devices whose authority was withdrawn.")
 	return nil
 }
 

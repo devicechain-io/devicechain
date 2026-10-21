@@ -27,15 +27,15 @@ import (
 // service already holds for the broker-presence tap; device-management, which knows when a
 // credential changes, asks this service over a request/reply subject and learns the answer.
 //
-// 🔴 THIS SERVICE REFUSES TO START WITHOUT THE LOGIN WHEN IT INGESTS THE PLATFORM BROKER. With
+// 🔴 THIS SERVICE REFUSES TO START WITHOUT THE LOGIN WHEN THE BROKER RUNS THE DEVICE CALLOUT. With
 // no way to end a session, a revocation could only be reported as not carried out, and a
 // platform whose revocations all fail is worse than one that says up front it cannot run. The
-// instance bring-up always mints the login; an instance without a platform-broker source has
-// no sessions of ours and may go without.
+// instance bring-up always mints the login; a broker with no device callout has no sessions of
+// ours and may go without.
 
 // errNoSystemLoginForSessionKick is the startup refusal.
-var errNoSystemLoginForSessionKick = errors.New("this service ingests the platform MQTT broker, whose device " +
-	"sessions it must be able to end when a credential is revoked or a device is disabled, but no NATS " +
+var errNoSystemLoginForSessionKick = errors.New("the platform MQTT broker authenticates devices through the auth " +
+	"callout, and this service must be able to end their sessions when a credential is revoked or a device is disabled, but no NATS " +
 	"system-account login is configured (infrastructure.nats.auth.sysUser and sysPassword); re-run the " +
 	"bring-up to mint one")
 
@@ -62,13 +62,20 @@ func startSessionKick(ctx context.Context) error {
 // a test supplies without building a broker manager.
 func startSessionKickOn(ctx context.Context, dataConn func() *nats.Conn) error {
 	infra := Microservice.InstanceConfiguration.Infrastructure
-	required := GatewaySourceId != ""
+	// Required exactly where device-management asks (it wires its kicker on the same
+	// condition): an instance whose broker runs the device auth callout mints device sessions,
+	// whether or not this service reads a platform-broker source (a device holds a session for
+	// its commands too). Keyed on the source instead, a broker with auth OFF (no callout, no
+	// system login) would refuse to start this service for sessions that are not ours to end,
+	// and a callout instance with no platform-broker source would leave every revocation
+	// unanswered.
+	required := infra.Nats.Auth.CalloutIssuerSeed != ""
 	if infra.Nats.Auth.SysUser == "" || infra.Nats.Auth.SysPassword == "" {
 		if required {
 			return errNoSystemLoginForSessionKick
 		}
 		log.Info().Msg("No NATS system-account credential is configured, so this service cannot end device " +
-			"broker sessions on request. It ingests no platform broker, so it has none to end.")
+			"broker sessions on request. The broker runs no device auth callout, so there are none of ours to end.")
 		return nil
 	}
 	conn, err := dialSystemAccount(ctx, infra.Nats, systemAccountConnectWait, nil)
@@ -120,13 +127,16 @@ func answerSessionKick(msg *nats.Msg, r presence.Requester, instance string, gat
 	defer cancel()
 	kicked, err := presence.KickDevices(ctx, r, instance, req.Tenant, req.Tokens, gather)
 	if err != nil {
-		// Logged without the device tokens' sessions' details beyond counts: tokens are not secrets,
-		// but the error text is the broker's own.
-		log.Warn().Err(err).Str("tenant", req.Tenant).Int("devices", len(req.Tokens)).Int("kicked", kicked).
-			Msg("Could not confirm a device's broker sessions ended.")
+		log.Warn().Err(err).Str("tenant", req.Tenant).Str("reason", req.Reason).Strs("devices", req.Tokens).
+			Int("kicked", kicked).Msg("Could not confirm a device's broker sessions ended.")
 		reply(messaging.SessionKickReply{Kicked: kicked, Error: err.Error()})
 		return
 	}
+	// THE AUDIT LINE. The system-account login can end any connection on the broker, so every
+	// session this ends is logged with whom it was for and why: tokens are not secrets, and
+	// the reason is a closed vocabulary (messaging.ValidateSessionKick), not text off the wire.
+	log.Info().Str("tenant", req.Tenant).Str("reason", req.Reason).Strs("devices", req.Tokens).
+		Int("kicked", kicked).Msg("Ended device broker sessions on request.")
 	reply(messaging.SessionKickReply{OK: true, Kicked: kicked})
 }
 

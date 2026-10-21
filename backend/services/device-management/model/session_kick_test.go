@@ -11,6 +11,7 @@ import (
 
 	"github.com/devicechain-io/dc-microservice/core"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 )
@@ -22,12 +23,12 @@ type recordingKicker struct {
 }
 
 type kickCall struct {
-	tenant string
-	tokens []string
+	tenant, reason string
+	tokens         []string
 }
 
-func (k *recordingKicker) KickDeviceSessions(_ context.Context, tenant string, tokens []string) error {
-	k.calls = append(k.calls, kickCall{tenant, append([]string(nil), tokens...)})
+func (k *recordingKicker) KickDeviceSessions(_ context.Context, tenant, reason string, tokens []string) error {
+	k.calls = append(k.calls, kickCall{tenant, reason, append([]string(nil), tokens...)})
 	return k.err
 }
 
@@ -47,7 +48,7 @@ func TestDisablingACredentialKicksTheDevicesSessions(t *testing.T) {
 	api, ctx, k := kickFixture(t)
 	_, err := api.UpdateDeviceCredential(ctx, "c-1", &DeviceCredentialUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
 	require.NoError(t, err)
-	require.Equal(t, []kickCall{{partialUpdateTenant, []string{"dev"}}}, k.calls)
+	require.Equal(t, []kickCall{{partialUpdateTenant, messaging.SessionKickCredentialChanged, []string{"dev"}}}, k.calls)
 }
 
 func TestRotatingACredentialsSecretKicksTheDevicesSessions(t *testing.T) {
@@ -74,7 +75,7 @@ func TestDeletingACredentialKicksTheDevicesSessions(t *testing.T) {
 	deleted, err := api.DeleteDeviceCredential(ctx, "c-1")
 	require.NoError(t, err)
 	require.True(t, deleted)
-	require.Equal(t, []kickCall{{partialUpdateTenant, []string{"dev"}}}, k.calls)
+	require.Equal(t, []kickCall{{partialUpdateTenant, messaging.SessionKickCredentialDeleted, []string{"dev"}}}, k.calls)
 
 	k.calls = nil
 	deleted, err = api.DeleteDeviceCredential(ctx, "c-1")
@@ -91,7 +92,7 @@ func TestDisablingADeviceKicksItAndEditingOrEnablingItDoesNot(t *testing.T) {
 
 	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(false)})
 	require.NoError(t, err)
-	require.Equal(t, []kickCall{{partialUpdateTenant, []string{"dev"}}}, k.calls)
+	require.Equal(t, []kickCall{{partialUpdateTenant, messaging.SessionKickDeviceDisabled, []string{"dev"}}}, k.calls)
 
 	k.calls = nil
 	_, err = api.UpdateDevice(ctx, "dev", &DeviceUpdateRequest{Enabled: dcgraphql.OptionalBoolOf(true)})
@@ -111,7 +112,7 @@ func TestDeletingADeviceKicksItsSessions(t *testing.T) {
 	deleted, err := api.DeleteDevice(ctx, "dev-1")
 	require.NoError(t, err)
 	require.True(t, deleted)
-	require.Equal(t, []kickCall{{"acme", []string{"dev-1"}}}, k.calls)
+	require.Equal(t, []kickCall{{"acme", messaging.SessionKickDeviceDeleted, []string{"dev-1"}}}, k.calls)
 
 	k.err = errors.New("no responder")
 	require.NoError(t, api.RDB.DB(ctx).Create(&Device{TokenReference: rdb.TokenReference{Token: "dev-2"}}).Error)
