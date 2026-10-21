@@ -52,6 +52,41 @@ el panel tras pedirte confirmación. La eliminación no se puede deshacer.
 Los nombres de medición de las plantillas, como `temperature` y `humidity`, son ejemplos. Cámbialos
 en el editor por los que informan tus dispositivos.
 
+## Crear un panel a partir de un tipo de dispositivo {#from-a-device-type}
+
+En la pestaña **Perfil** de un tipo de dispositivo, **Crear panel** genera un panel inicial a partir de
+lo que declara el perfil, para llegar a un panel útil en un minuto en lugar de colocar widgets uno a
+uno. El botón requiere el permiso de escritura de paneles y no se ofrece a un miembro limitado a una
+parte del inquilino.
+
+1. Elige **Crear panel**. El panel lateral lee el perfil y muestra una **Vista previa del diseño**.
+2. Dale al panel un nombre y un token. Bajo la vista previa, las notas indican cuántas tarjetas,
+   gráficos y botones tendrá y qué se dejó fuera.
+3. Elige **Crear borrador y abrir el editor**. El panel se crea como borrador, nunca publicado, y se
+   abre en el editor.
+
+El panel usa solo los widgets que ya puedes añadir a mano:
+
+- un **selector de dispositivo**, con la ranura apuntando a un dispositivo de este tipo cuando existe
+  uno. El selector lista los dispositivos del inquilino, no solo los de este tipo, así que elige un
+  dispositivo del tipo para el que creaste el panel;
+- una **tarjeta de último valor** por cada medición declarada, en el orden del perfil y con su unidad.
+  Una métrica calculada también recibe tarjeta, marcada **Calculada** en el título, y se lee como las demás;
+- un **gráfico** de las primeras mediciones numéricas y una **tabla de alarmas** del dispositivo seleccionado;
+- un **botón de comando** por cada comando declarado que es seguro enviar desde un panel. Los comandos
+  declarados disruptivos o destructivos, o de impacto desconocido, no reciben botón; una nota en el
+  panel indica cuántos se omitieron.
+
+Un perfil puede declarar decenas de mediciones. El panel muestra las primeras doce como tarjetas y una
+nota en el panel indica cuántas se omitieron; añade el resto en el editor. Un perfil que no declara
+mediciones se rechaza con una explicación, porque no hay nada con qué construir.
+
+El panel lateral lee la versión publicada activa del perfil a través de uno de los dispositivos del
+tipo, que es contra lo que la plataforma comprueba lecturas y comandos. Un tipo sin dispositivos aún, o
+un perfil que nunca se publicó, se lee de su borrador, y el panel lateral lo indica; una medición que
+nombre el borrador puede no aceptarse hasta publicar el perfil. Los perfiles no declaran bandas de
+severidad, así que las tarjetas no las llevan; añádelas en el editor.
+
 ## Importar un panel
 
 **Importar panel** crea un panel nuevo a partir del JSON exportado de otro panel o de otro inquilino.
