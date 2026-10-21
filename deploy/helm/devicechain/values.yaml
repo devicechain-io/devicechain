@@ -104,6 +104,15 @@ instance:
   # callout has none. When the instance configuration says the broker runs one,
   # device-management refuses to start without the seeds rather than serve nothing.
   calloutSecret: ""
+  # The Secret holding the password for the broker's IDENTITY account (key `password`),
+  # mounted into user-management ALONE as DC_NATS_IDENTITY_PASSWORD. That account holds
+  # the sign-in buckets (refresh tokens, OAuth and single sign-on codes) where no other
+  # service login can read, mirror or capture them. Empty means `dci-<id>-identity`, the
+  # Secret `dcctl` writes. Optional at the pod: an instance whose broker has no such
+  # account has none. When the instance configuration says the account exists,
+  # user-management refuses to start without it rather than keep the buckets in the
+  # shared account.
+  identitySecret: ""
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.
@@ -308,6 +317,11 @@ instance:
           # The curve key (X...) the broker encrypts each callout request to. Empty
           # means the callout is not encrypted.
           calloutXKeyPublic: ""
+          # True when the broker has the IDENTITY account and user-management must keep
+          # its sign-in buckets there. The password is NOT here: it is in the Secret named
+          # by instance.identitySecret, mounted into user-management alone. false (the
+          # default) keeps the buckets in the shared account, as every instance before it did.
+          identityAccount: false
           # The SEPARATE system-account login, read only by event-sources' broker
           # presence tap: the system account is where the broker publishes its own
           # connection advisories, and a connection there sees every account's traffic —

@@ -291,6 +291,20 @@ spec:
                   optional: true
             {{- end }}
             {{- end }}
+            {{- /* The password for the broker's IDENTITY account, from the instance's own identity
+            Secret (devicechain.identitySecret) into user-management and NO OTHER AREA. That
+            account holds the sign-in buckets, and this password is the only way into it, so
+            a second mounter would undo the account. OPTIONAL at the pod so an instance whose
+            broker has no such account starts; the service itself refuses to start when its
+            configuration says the account exists and this is empty. */}}
+            {{- if eq $area "user-management" }}
+            - name: DC_NATS_IDENTITY_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devicechain.identitySecret" $root | quote }}
+                  key: password
+                  optional: true
+            {{- end }}
             {{/* Per-area extra environment, passed through verbatim as core-v1
             EnvVar entries. This is how a Secret is projected into an env var:
             sparkplug-ingest reads each per-tenant broker password from the env var

@@ -407,6 +407,20 @@ What a running instance sees:
   reconnect on their own, within seconds under `--ha`; without `--ha` the broker is unavailable for
   the usual minute. If the second step fails, devices keep connecting, and running
   `dcctl upgrade` again finishes it.
+- **Everyone signs in once more, and the sign-in state moves to an account of its own.** Refresh
+  tokens, OAuth authorization codes, single sign-on records and the sign-in throttle used to live in
+  the NATS account every service shares, where any service login could read them or copy them into a
+  stream of its own. `dcctl upgrade` creates a new login and a Secret named `dci-<instance>-identity`
+  that holds its password and is mounted into `user-management` only. The broker gets a separate
+  `IDENTITY` account that only that login can enter and that shares nothing with the other account.
+  The old buckets are **deleted, not copied**: their tokens were readable by every service, so
+  carrying them over would keep the exposure alive. Every session from before the upgrade ends, so
+  people sign in again in the console and dashboards, and MCP and OAuth clients authorize again.
+  Access tokens already issued keep working until they expire, 15 minutes by default. Nothing is lost
+  silently: `user-management` logs the buckets it deleted the first time it starts, and `dcctl
+  upgrade` says so when it finishes. The broker restarts once, one server at a time under `--ha`, to
+  add the account. `user-management` refuses to start if the instance says the account exists and its
+  password is missing, rather than fall back to the shared account.
 - **The event store restarts when its pods change**, for example for a new image or placement.
   A settings-only change reloads without a restart. Under `--ha` the standbys restart first, then
   the primary role switches to one of them. Without `--ha` the one instance restarts and

@@ -248,6 +248,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		creds, err = brokerCredentialsFromRunning(ctx, st,
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.CalloutXKeySeed,
+			deployed.Infrastructure.Nats.Auth.IdentityPassword,
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
@@ -278,7 +279,8 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// through to the mint below, loudly. Post-adoption a wrong mint converges on the
 			// broker's next roll; a refused run does not converge on anything.
 			reused, rerr := brokerCredentialsFromRunning(ctx, st,
-				localRecord.IssuerSeed, localRecord.XKeySeed, localRecord.ServicePassword, localRecord.SysPassword)
+				localRecord.IssuerSeed, localRecord.XKeySeed, localRecord.IdentityPassword,
+				localRecord.ServicePassword, localRecord.SysPassword)
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
@@ -332,12 +334,13 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 				"a real run would reuse it if the instance itself is not yet deployed")
 		}
 	} else if err := storeBrokerRecord(st.Instance, brokerRecord{
-		Instance:        st.Instance,
-		Written:         time.Now().UTC(),
-		IssuerSeed:      creds.IssuerSeed,
-		XKeySeed:        creds.XKeySeed,
-		ServicePassword: creds.ServicePassword,
-		SysPassword:     creds.SysPassword,
+		Instance:         st.Instance,
+		Written:          time.Now().UTC(),
+		IssuerSeed:       creds.IssuerSeed,
+		XKeySeed:         creds.XKeySeed,
+		IdentityPassword: creds.IdentityPassword,
+		ServicePassword:  creds.ServicePassword,
+		SysPassword:      creds.SysPassword,
 	}); err != nil {
 		return fail("recording the broker credentials before the broker is configured", err)
 	}

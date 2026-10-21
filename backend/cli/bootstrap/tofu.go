@@ -685,6 +685,11 @@ func infraVars(st *State) []string {
 		if h := st.Values["natsSysPasswordBcrypt"]; h != "" {
 			vars = append(vars, "nats_sys_password_bcrypt="+h)
 		}
+		// The identity account's login, which holds user-management's sign-in buckets apart from
+		// every other service. Omitted when none was minted: the module then renders no account.
+		if h := st.Values["natsIdentityPasswordBcrypt"]; h != "" && st.Values[identityEnabledValue] == "true" {
+			vars = append(vars, "nats_identity_password_bcrypt="+h)
+		}
 	}
 	return vars
 }
