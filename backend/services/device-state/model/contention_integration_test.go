@@ -13,6 +13,12 @@
 //	DC_CONTENTION=1 DC_IT_PGPORT=$PORT go test -tags integration -run TestProjectionContention \
 //	  -count=1 -v -p 1 ./model/
 //
+// Knobs (defaults in brackets): DC_CONTENTION_EVENTS [30000], _WRITERS [10], _BATCH [32],
+// _FLEET [10000], _REPS [3]. It prints one row per shape x mode x rep and PASSES whatever the
+// numbers are: read events/s shared against keyed for the same shape and rep, with lock% (samples
+// with a session in a Lock wait) and p99ms (batch latency) as the why. The deadlocks and refused
+// columns are reported, not asserted, so a passing run is no evidence that either was 0.
+//
 // The two modes drive the SAME writers (DefaultProjectionWriters, each merging up to
 // DefaultProjectionMaxBatch events) through the real MergeProjectionBatch:
 //
