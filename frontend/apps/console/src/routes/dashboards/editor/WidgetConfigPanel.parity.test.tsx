@@ -189,11 +189,19 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   groupBy: 'widgetPlaceholderDefault',
 };
 
-// An option that post-dates the legacy editor AND reuses a key the legacy tables already word for a
-// different widget (the bar chart's `groupBy`): the tables are keyed by option name, so they cannot
-// word it. WidgetConfigPanel.alarmTypeTabs.test.tsx owns this one's wording and controls.
-const POST_LEGACY: Partial<Record<WidgetType, readonly string[]>> = {
-  'alarm-table': ['groupBy'],
+// Options added to a built-in's panel after the cutover that reuse a key the tables above already
+// word for a DIFFERENT widget, so the name-keyed tables cannot word them. Each is held to its own
+// wording here, per widget type, exactly as a legacy option is held to the tables: a deliberate
+// addition to the panel, written down. The alarm table's `groupBy` (none | deviceType) shares its
+// name with the bar chart's (measurement | device) and nothing else.
+const LABEL_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
+  'alarm-table': { groupBy: 'widgetLabelAlarmGroupBy' },
+};
+const HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
+  'alarm-table': { groupBy: 'widgetHintAlarmGroupBy' },
+};
+const ENUM_VALUE_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
+  'alarm-table': { 'groupBy:none': 'widgetAlarmGroupByNone', 'groupBy:deviceType': 'widgetAlarmGroupByDeviceType' },
 };
 
 const LEGACY_CUSTOM: Record<string, 'command' | 'slot'> = {
@@ -273,10 +281,9 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
       // A list option post-dates the legacy editor, so there is no legacy wording to match;
       // WidgetConfigPanel.list.test.tsx owns its controls and their text.
       if (spec.kind === 'list') continue;
-      if (POST_LEGACY[type]?.includes(key)) continue;
       const field = screen.getByTestId(`widget-option-field-${key}`);
-      const hint = LEGACY_HINT_OVERRIDES[type]?.[key] ?? LEGACY_HINT[key];
-      const expected = [tr(LEGACY_LABEL[key])];
+      const hint = HINT_OVERRIDES[type]?.[key] ?? LEGACY_HINT_OVERRIDES[type]?.[key] ?? LEGACY_HINT[key];
+      const expected = [tr(LABEL_OVERRIDES[type]?.[key] ?? LEGACY_LABEL[key])];
       if (spec.kind === 'enum') expected.push(tr(LEGACY_ENUM_PLACEHOLDER[key]));
       if (hint) expected.push(tr(hint));
       expect(residue(field.textContent ?? '', expected), `${type}.${key}`).toBe('');
@@ -286,9 +293,9 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
   it('labels each enum choice with the same message', () => {
     for (const [key, spec] of Object.entries(descriptor.options)) {
       if (spec.kind !== 'enum') continue;
-      if (POST_LEGACY[type]?.includes(key)) continue;
       for (const value of spec.values) {
-        expect(enumChoiceLabel(spec, value, lookup), `${type}.${key}:${value}`).toBe(tr(LEGACY_ENUM_VALUE[`${key}:${value}`]));
+        const id = ENUM_VALUE_OVERRIDES[type]?.[`${key}:${value}`] ?? LEGACY_ENUM_VALUE[`${key}:${value}`];
+        expect(enumChoiceLabel(spec, value, lookup), `${type}.${key}:${value}`).toBe(tr(id));
       }
       expect(enumPlaceholder(spec as EnumOptionSpec, lookup, i18n.getFixedT(null, 'dashboards'))).toBe(
         tr(LEGACY_ENUM_PLACEHOLDER[key]),

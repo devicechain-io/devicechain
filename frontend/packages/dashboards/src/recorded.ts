@@ -744,6 +744,13 @@ export class RecordedDataSource implements WidgetDataSource {
     let scope: Set<string> | null = null; // null = tenant-wide (no datasource)
     try {
       if (!this.rec.channels.alarms) throw new NotInRecordingError('alarms');
+      // A recording carries no device types, so it can neither filter nor count by one. Refused
+      // rather than answered with every alarm, or with no type at all, either of which would read
+      // as a real answer. (Resolving rows' types, enrichDeviceType, leaves them unresolved: an
+      // unknown type is a state a row already has.)
+      if (subscription.deviceType !== undefined || subscription.countByDeviceType) {
+        throw new NotInRecordingError('alarms', 'device types');
+      }
       if (subscription.datasource) {
         scope = new Set(this.resolve(subscription.datasource).map((g) => g.deviceToken));
       }

@@ -169,10 +169,27 @@ describe('SyntheticDataSource.subscribeAlarms', () => {
     expect(types).toEqual(new Set(['thermostat', 'sensor', 'gateway', undefined]));
 
     const sensors = collectAlarms();
-    src.subscribeAlarms({ pageSize: 50, deviceType: 'sensor' }, sensors.sink);
+    src.subscribeAlarms({ pageSize: 50, deviceType: 'sensor', enrichDeviceType: true }, sensors.sink);
     expect(sensors.snapshots[0].alarms.length).toBeGreaterThan(0);
     expect(sensors.snapshots[0].alarms.every((a) => a.deviceType?.token === 'sensor')).toBe(true);
     expect(sensors.snapshots[0].total).toBe(sensors.snapshots[0].alarms.length);
+  });
+
+  it('counts by device type as the live count read does, agreeing with each type’s filtered total', () => {
+    const src = new SyntheticDataSource();
+    const counted = collectAlarms();
+    src.subscribeAlarms({ pageSize: 1, state: 'ACTIVE', countByDeviceType: true }, counted.sink);
+    const snap = counted.snapshots[0];
+    expect(snap.alarms).toEqual([]);
+    expect(snap.typeCounts!.length).toBeGreaterThan(0);
+    const byType = new Map<string, number>();
+    for (const c of snap.typeCounts!) byType.set(c.deviceType.token, (byType.get(c.deviceType.token) ?? 0) + c.count);
+    for (const [token, n] of byType) {
+      const rows = collectAlarms();
+      src.subscribeAlarms({ pageSize: 50, state: 'ACTIVE', deviceType: token }, rows.sink);
+      expect(rows.snapshots[0].total).toBe(n);
+    }
+    expect(snap.total).toBe([...byType.values()].reduce((x, y) => x + y, 0));
   });
 
   // The preview must show authors exactly what production can: a field the live query

@@ -50,5 +50,6 @@ var (
 		NewPendingOwnershipFactsSchema(),
 		NewMetricExpressionSchema(),
 		NewProfileActivationsSchema(),
+		NewDeviceTypeIndexSchema(),
 	}
 )

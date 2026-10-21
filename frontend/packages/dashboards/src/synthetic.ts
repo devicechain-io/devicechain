@@ -29,6 +29,7 @@ import type {
 import type {
   AlarmDeviceType,
   AlarmRow,
+  AlarmTypeCount,
   CommandRow,
   DatasourceSelector,
   LocationSample,
@@ -226,7 +227,7 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
   // a device. Re-emits on the same cadence with advancing raised times so the table
   // looks live. Returns whole snapshots, matching the live hub's contract.
   subscribeAlarms(subscription: AlarmSubscription, sink: AlarmStreamSink): () => void {
-    const typed = subscription.enrichDeviceType === true || subscription.deviceType !== undefined;
+    const typed = subscription.enrichDeviceType === true;
     const matches = SYNTHETIC_ALARMS.filter(
       (a) =>
         (subscription.deviceType === undefined ||
@@ -257,6 +258,20 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           ...(typed ? withType(a.originatorToken) : {}),
         };
       });
+      if (subscription.countByDeviceType) {
+        // The live hub's count read, over the same filtered set: per (type, severity).
+        const counts = new Map<string, AlarmTypeCount>();
+        for (const r of rows) {
+          const deviceType = SYNTHETIC_DEVICE_TYPES[r.originatorToken ?? ''];
+          if (!deviceType) continue;
+          const key = `${deviceType.token}/${r.severity}`;
+          const prior = counts.get(key);
+          counts.set(key, { deviceType, severity: r.severity, count: (prior?.count ?? 0) + 1 });
+        }
+        const typeCounts = [...counts.values()];
+        sink.next({ alarms: [], total: typeCounts.reduce((n, c) => n + c.count, 0), typeCounts });
+        return;
+      }
       sink.next({ alarms: rows.slice(0, subscription.pageSize), total: rows.length });
     };
 

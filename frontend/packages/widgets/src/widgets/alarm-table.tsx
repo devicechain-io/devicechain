@@ -164,7 +164,6 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
             tabs={tabs}
             selected={dropped ? null : selectedType}
             onSelect={typeTabs.select}
-            truncated={typeTabs.truncated}
             idBase={idBase}
           />
         ) : null}

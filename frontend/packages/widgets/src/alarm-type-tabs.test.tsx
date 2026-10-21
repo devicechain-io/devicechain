@@ -10,6 +10,7 @@ import type {
   AlarmSnapshot,
   AlarmStreamSink,
   AlarmSubscription,
+  AlarmTypeCount,
   AlarmTypeTab,
   DashboardHub,
   WidgetInstance,
@@ -84,7 +85,7 @@ function stateWith(
     total: 1,
     loading: false,
     error: null,
-    typeTabs: { tabs, selected, select, loading: false, truncated: false },
+    typeTabs: { tabs, selected, select, loading: false },
     ...over,
   };
 }
@@ -146,13 +147,6 @@ describe('the tab strip', () => {
     const badge = within(screen.getByRole('tab', { name: /Sensor/ })).getByTestId('alarm-tab-badge');
     expect(badge.getAttribute('aria-label')).toBe('2 active alarms, worst Indeterminate');
     expect(stripe(within(badge).getByTestId('alarm-tab-badge-dot'))).toBe('hsl(var(--muted-foreground))');
-  });
-
-  it('marks a capped summary: the count is a lower bound', () => {
-    const data = stateWith(TABS);
-    data.typeTabs = { ...data.typeTabs!, truncated: true };
-    render(<AlarmTable widget={widget()} data={data} />);
-    expect(screen.getAllByTestId('alarm-tab-badge')[0].textContent).toBe('3+');
   });
 
   it('wires tabs to the panel with ARIA, and a roving tabindex', () => {
@@ -266,6 +260,16 @@ const ALL_ACTIVE = [
   row('s1', 'sensor', 'Sensor', 'INDETERMINATE'),
 ];
 
+// The count read's answer for a set of rows: one entry per (type, severity).
+function countsOf(rows: AlarmRow[]): AlarmSnapshot {
+  const m = new Map<string, AlarmTypeCount>();
+  for (const r of rows) {
+    const key = `${r.deviceType!.token}/${r.severity}`;
+    m.set(key, { deviceType: r.deviceType!, severity: r.severity, count: (m.get(key)?.count ?? 0) + 1 });
+  }
+  return { alarms: [], total: rows.length, typeCounts: [...m.values()] };
+}
+
 function fakeHub() {
   const subs: Array<{ sub: AlarmSubscription; sink: AlarmStreamSink; disposed: boolean }> = [];
   const hub = {
@@ -280,8 +284,8 @@ function fakeHub() {
     isDatasourceSupported: async () => true,
   } as unknown as DashboardHub;
   const live = () => subs.filter((s) => !s.disposed);
-  const summary = () => live().find((s) => s.sub.pageSize === 500)!;
-  const rows = () => live().find((s) => s.sub.pageSize !== 500)!;
+  const summary = () => live().find((s) => s.sub.countByDeviceType === true)!;
+  const rows = () => live().find((s) => s.sub.countByDeviceType !== true)!;
   const emit = (entry: { sink: AlarmStreamSink }, snapshot: AlarmSnapshot) => act(() => entry.sink.next(snapshot));
   return { hub, subs, live, summary, rows, emit };
 }
@@ -296,12 +300,13 @@ async function mount(options: Record<string, unknown> = {}) {
 }
 
 describe('connected', () => {
-  it('reads ONE summary of the active alarms plus the selected tab’s rows, never a stream per tab', async () => {
+  it('reads ONE count of the active alarms plus the selected tab’s rows, never a stream per tab', async () => {
     const f = await mount();
     expect(f.live()).toHaveLength(2);
-    expect(f.summary().sub).toMatchObject({ state: 'ACTIVE', enrichDeviceType: true });
+    expect(f.summary().sub).toMatchObject({ state: 'ACTIVE', countByDeviceType: true });
     expect(f.rows().sub.deviceType).toBeUndefined();
-    await f.emit(f.summary(), { alarms: ALL_ACTIVE, total: 3 });
+    expect(f.rows().sub.enrichDeviceType).toBe(true);
+    await f.emit(f.summary(), countsOf(ALL_ACTIVE));
     await f.emit(f.rows(), { alarms: ALL_ACTIVE, total: 3 });
     expect(screen.getAllByRole('tab')).toHaveLength(3);
     // Most alarming type first: Thermostat (critical) before Sensor (indeterminate).
@@ -310,7 +315,7 @@ describe('connected', () => {
 
   it('loads only the chosen tab’s rows, when it is chosen', async () => {
     const f = await mount();
-    await f.emit(f.summary(), { alarms: ALL_ACTIVE, total: 3 });
+    await f.emit(f.summary(), countsOf(ALL_ACTIVE));
     await f.emit(f.rows(), { alarms: ALL_ACTIVE, total: 3 });
     const before = f.subs.length;
 
@@ -328,18 +333,62 @@ describe('connected', () => {
 
   it('keeps the selected tab when the data refreshes', async () => {
     const f = await mount();
-    await f.emit(f.summary(), { alarms: ALL_ACTIVE, total: 3 });
+    await f.emit(f.summary(), countsOf(ALL_ACTIVE));
     fireEvent.click(screen.getByRole('tab', { name: /Sensor/ }));
     await f.emit(f.rows(), { alarms: [ALL_ACTIVE[2]], total: 1 });
 
     // A poll lands on both streams, and the sensor's last alarm clears.
-    await f.emit(f.summary(), { alarms: ALL_ACTIVE.slice(0, 2), total: 2 });
+    await f.emit(f.summary(), countsOf(ALL_ACTIVE.slice(0, 2)));
     await f.emit(f.rows(), { alarms: [], total: 0 });
 
     const selected = screen.getAllByRole('tab').find((t) => t.getAttribute('aria-selected') === 'true')!;
     expect(selected.textContent).toContain('Sensor');
     // Still there at a zero count (no badge), under its name rather than its token.
     expect(within(selected).queryByTestId('alarm-tab-badge')).toBeNull();
+  });
+
+  it('badges each tab with the exact server count and the worst severity across its severities', async () => {
+    const f = await mount();
+    await f.emit(f.summary(), {
+      alarms: [],
+      total: 2405,
+      typeCounts: [
+        { deviceType: { token: 'thermostat', name: 'Thermostat' }, severity: 'MINOR', count: 2400 },
+        { deviceType: { token: 'thermostat', name: 'Thermostat' }, severity: 'MAJOR', count: 5 },
+      ],
+    });
+    const badge = within(screen.getByRole('tab', { name: /Thermostat/ })).getByTestId('alarm-tab-badge');
+    expect(badge.textContent).toBe('2405');
+    expect(badge.getAttribute('aria-label')).toBe('2405 active alarms, worst Major');
+  });
+
+  it('draws no strip and filters nothing when the source cannot count by type', async () => {
+    const f = await mount();
+    // A source that ignored countByDeviceType: rows, no typeCounts.
+    await f.emit(f.summary(), { alarms: ALL_ACTIVE, total: 3 });
+    await f.emit(f.rows(), { alarms: ALL_ACTIVE, total: 3 });
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(f.rows().sub.deviceType).toBeUndefined();
+    expect(screen.getByText('key-t1')).toBeTruthy();
+  });
+
+  it('drops a selected tab’s filter when the counts stop arriving, rather than filter to a hidden tab', async () => {
+    const f = await mount();
+    await f.emit(f.summary(), countsOf(ALL_ACTIVE));
+    fireEvent.click(screen.getByRole('tab', { name: /Sensor/ }));
+    expect(f.rows().sub.deviceType).toBe('sensor');
+    // The source's next answer carries no counts.
+    await f.emit(f.summary(), { alarms: [], total: 0 });
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(f.rows().sub.deviceType).toBeUndefined();
+  });
+
+  it('draws no strip when the count read fails (a recording cannot count by type)', async () => {
+    const f = await mount();
+    await act(() => f.summary().sink.error?.(new Error('Not in this recording: device types')));
+    await f.emit(f.rows(), { alarms: ALL_ACTIVE, total: 3 });
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.getByText('key-s1')).toBeTruthy();
   });
 
   it('renders no strip, and one stream, when the option is off', async () => {

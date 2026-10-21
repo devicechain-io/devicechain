@@ -67,6 +67,7 @@ export type {
   LocationSelection,
   AlarmRow,
   AlarmDeviceType,
+  AlarmTypeCount,
   CommandRow,
   CommandParameter,
   CommandParamDataType,

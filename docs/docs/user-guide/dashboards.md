@@ -244,8 +244,9 @@ The settings depend on the widget. Common ones:
   when you choose it. On **All** the table adds a **Device type** column, which a type's own tab
   leaves out. Your tab stays selected when the data refreshes. The strip scrolls sideways on a
   narrow screen; use the left and right arrow keys, **Home** and **End** to move between tabs, and
-  **Enter** or **Space** to choose one. The counts cover the newest 500 active alarms, and show "+"
-  past that. **Device type tabs** (alarm table, with *Device type* grouping) lists device type
+  **Enter** or **Space** to choose one. The counts are exact, however many alarms the scope holds.
+  A viewer limited to some customers gets tabs only for the devices they can see, and an alarm on a
+  device they can no longer see appears under **All** only. **Device type tabs** (alarm table, with *Device type* grouping) lists device type
   tokens to show as tabs, in that order, instead of every type that has an alarm; a type not listed
   appears under **All** only.
 - **Fleet table**: one row per device of the group the widget is bound to and one column per

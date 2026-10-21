@@ -1,14 +1,15 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The alarm channel's device-type enrichment and filter (the alarm table's type tabs): the type of
-// each row's originator is resolved with ONE batched read, remembered across polls, and a type
-// filter narrows the rows inside the hub, because the alarms query has no device facet.
+// The alarm channel's device-type enrichment, filter and counts (the alarm table's type tabs): the
+// type of each row's originator is resolved with ONE batched read, remembered across polls; the type
+// filter and the per-type counts are device-management's (the alarms query's deviceType facet and
+// alarmCountsByDeviceType), so neither is capped by what the hub happens to read.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DashboardHub, type AlarmSnapshot, type DeviceResolver } from './hub';
-import type { AlarmRow } from './types';
+import type { AlarmRow, DatasourceSelector } from './types';
 
 const h = vi.hoisted(() => ({ gql: vi.fn() }));
 
@@ -130,60 +131,94 @@ describe('alarm rows with their device type', () => {
   });
 });
 
+const countReads = () => h.gql.mock.calls.filter((c) => String(c[1]).includes('alarmCountsByDeviceType'));
+const scopedHub = () =>
+  new DashboardHub({ resolver: { devicesForAnchor: async () => ['therm-1', 'sens-1'], deviceExists: async () => true } });
+const ANCHOR: DatasourceSelector = { kind: 'anchor', anchor: { targetType: 'area', targetToken: 'a', relationship: 'in' }, measurements: [] };
+
 describe('the device-type filter', () => {
-  it('keeps only that type’s alarms, and reports the matches as the total', async () => {
-    serve([row('a', 'therm-1'), row('b', 'sens-1'), row('c', 'therm-2')]);
-    const { snaps, dispose } = read({ pageSize: 50, deviceType: 'thermostat' });
+  it('is sent to device-management, and its page and total are the server’s', async () => {
+    serve([row('a', 'therm-1'), row('c', 'therm-2')], 4321);
+    const { snaps, dispose } = read({ pageSize: 10, deviceType: 'thermostat' });
     await settle();
+    expect(alarmReads()).toHaveLength(1);
+    expect(alarmReads()[0][2]).toMatchObject({ criteria: { pageNumber: 1, pageSize: 10, deviceType: 'thermostat' } });
     expect(snaps[0].alarms.map((a) => a.token)).toEqual(['a', 'c']);
-    expect(snaps[0].total).toBe(2);
+    // No cap: the total is the server's match count, however large.
+    expect(snaps[0].total).toBe(4321);
     dispose();
   });
 
-  it('pages through the matching alarms to find the type, up to its scan cap', async () => {
-    const all = Array.from({ length: 1100 }, (_, i) => row(`r${i}`, i % 2 ? 'therm-1' : 'sens-1'));
-    serve(all);
-    const { snaps, dispose } = read({ pageSize: 10, deviceType: 'thermostat' });
+  it('sends no deviceType facet when the subscription has none (negative control)', async () => {
+    serve([row('a', 'therm-1')]);
+    const { dispose } = read({ pageSize: 10 });
     await settle();
-    // 500-row pages: three reads cover 1100 alarms, none beyond the total.
-    expect(alarmReads()).toHaveLength(3);
-    expect(snaps[0].total).toBe(550);
-    expect(snaps[0].alarms).toHaveLength(10);
+    expect(alarmReads()[0][2]).toMatchObject({ criteria: { deviceType: null } });
     dispose();
   });
 
-  it('stops at the scan cap rather than paging an unbounded alarm history', async () => {
-    const all = Array.from({ length: 5000 }, (_, i) => row(`r${i}`, 'therm-1'));
-    serve(all);
-    const { snaps, dispose } = read({ pageSize: 10, deviceType: 'thermostat' });
+  it('applies to each of a scoped widget’s originator reads', async () => {
+    h.gql.mockImplementation(async () => page([]));
+    const snaps: AlarmSnapshot[] = [];
+    const dispose = scopedHub().subscribeAlarms({ datasource: ANCHOR, pageSize: 50, deviceType: 'sensor' }, { next: (s) => snaps.push(s) });
     await settle();
-    expect(alarmReads()).toHaveLength(4);
-    expect(snaps[0].total).toBe(2000);
+    expect(alarmReads().map((c) => (c[2] as { criteria: Record<string, unknown> }).criteria)).toEqual([
+      expect.objectContaining({ originatorType: 'device', originator: 'therm-1', deviceType: 'sensor' }),
+      expect.objectContaining({ originatorType: 'device', originator: 'sens-1', deviceType: 'sensor' }),
+    ]);
+    expect(snaps).toHaveLength(1);
     dispose();
   });
+});
 
-  it('applies to a scoped widget’s merged rows too', async () => {
-    const scoped = new DashboardHub({
-      resolver: { devicesForAnchor: async () => ['therm-1', 'sens-1'], deviceExists: async () => true },
-    });
-    h.gql.mockImplementation(async (_a: string, doc: string, vars: Record<string, unknown>) => {
-      if (String(doc).includes('devicesByToken')) {
-        return { devicesByToken: (vars.tokens as string[]).map((t) => ({ token: t, deviceType: TYPES[t] })) };
+describe('the per-type counts', () => {
+  const T = { token: 'thermostat', name: 'Thermostat' };
+  const S = { token: 'sensor', name: 'Sensor' };
+
+  it('are ONE grouped read tenant-wide, reading no alarm rows', async () => {
+    h.gql.mockImplementation(async (_a: string, doc: string) => {
+      if (String(doc).includes('alarmCountsByDeviceType')) {
+        return { alarmCountsByDeviceType: [{ deviceType: T, severity: 'MAJOR', count: 3000 }, { deviceType: S, severity: 'MINOR', count: 2 }] };
       }
-      const device = (vars.criteria as { originator: string }).originator;
-      return page([row(`alarm-${device}`, device)]);
+      throw new Error(`unexpected read ${String(doc)}`);
+    });
+    const { snaps, dispose } = read({ pageSize: 1, state: 'ACTIVE', countByDeviceType: true });
+    await settle();
+    expect(countReads()).toHaveLength(1);
+    expect(countReads()[0][2]).toEqual({
+      criteria: { state: 'ACTIVE', severity: null, acknowledged: null, originatorType: null, originator: null },
+    });
+    expect(alarmReads().filter((c) => !String(c[1]).includes('alarmCountsByDeviceType'))).toHaveLength(0);
+    expect(snaps[0]).toEqual({
+      alarms: [],
+      total: 3002,
+      typeCounts: [
+        { deviceType: T, severity: 'MAJOR', count: 3000 },
+        { deviceType: S, severity: 'MINOR', count: 2 },
+      ],
+    });
+    dispose();
+  });
+
+  it('sum a scoped widget’s per-originator counts by type and severity', async () => {
+    h.gql.mockImplementation(async (_a: string, _doc: string, vars: Record<string, unknown>) => {
+      const o = (vars.criteria as { originator: string }).originator;
+      return {
+        alarmCountsByDeviceType:
+          o === 'therm-1'
+            ? [{ deviceType: T, severity: 'MAJOR', count: 2 }]
+            : [{ deviceType: T, severity: 'MAJOR', count: 1 }, { deviceType: S, severity: 'CRITICAL', count: 4 }],
+      };
     });
     const snaps: AlarmSnapshot[] = [];
-    const dispose = scoped.subscribeAlarms(
-      {
-        datasource: { kind: 'anchor', anchor: { targetType: 'area', targetToken: 'a', relationship: 'in' }, measurements: [] },
-        pageSize: 50,
-        deviceType: 'sensor',
-      },
-      { next: (s) => snaps.push(s) },
-    );
+    const dispose = scopedHub().subscribeAlarms({ datasource: ANCHOR, pageSize: 1, countByDeviceType: true }, { next: (s) => snaps.push(s) });
     await settle();
-    expect(snaps[0].alarms.map((a) => a.token)).toEqual(['alarm-sens-1']);
+    expect(countReads()).toHaveLength(2);
+    expect(snaps[0].typeCounts).toEqual([
+      { deviceType: T, severity: 'MAJOR', count: 3 },
+      { deviceType: S, severity: 'CRITICAL', count: 4 },
+    ]);
+    expect(snaps[0].total).toBe(7);
     dispose();
   });
 });

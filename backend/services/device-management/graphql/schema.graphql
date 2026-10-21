@@ -1656,6 +1656,29 @@ input AlarmSearchCriteria {
     severity: String
     acknowledged: Boolean
     alarmKey: String
+    # Only alarms raised on a device of this type, by the type's token; an unknown token finds
+    # nothing. A member whose access is limited to some customers matches only the devices its
+    # scope owns, so an alarm it sees on a device it no longer owns is under no type.
+    deviceType: String
+}
+
+# Criteria for counting alarms by device type. The facets are those of AlarmSearchCriteria
+# (without paging, and without deviceType, which is the grouping) and AND together.
+input AlarmCountCriteria {
+    originatorType: String
+    originator: String
+    state: String
+    severity: String
+    acknowledged: Boolean
+    alarmKey: String
+}
+
+# How many matching alarms are raised on devices of one type at one severity. A type with
+# alarms at several severities has one entry per severity.
+type AlarmDeviceTypeCount {
+    deviceType: DeviceType!
+    severity: String!
+    count: Int!
 }
 
 # Search results returned from an alarm query.
@@ -3713,6 +3736,10 @@ type Query {
     alarmsByToken(tokens: [String!]!): [Alarm!]!
     # List raised alarms that meet criteria.
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
+    # Alarms matching the criteria, counted per originating device type and severity in one
+    # read, for a view that groups alarms by type. Only alarms on devices the caller can read
+    # are counted; a type's count equals the total of alarms(criteria) filtered to it.
+    alarmCountsByDeviceType(criteria: AlarmCountCriteria!): [AlarmDeviceTypeCount!]!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the audit journal (ADR-019); tenant-scoped, newest first.

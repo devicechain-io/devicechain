@@ -26,7 +26,6 @@ export interface AlarmTypeTabsProps {
   tabs: readonly AlarmTypeTab[];
   selected: string | null;
   onSelect: (token: string | null) => void;
-  truncated: boolean;
   // Ids the strip and its panel share, so each tab names the panel and the panel names its tab.
   idBase: string;
 }
@@ -51,7 +50,7 @@ const tabStyle = (active: boolean): CSSProperties => ({
 export const tabDomId = (idBase: string, token: string | null): string => `${idBase}-tab-${token ?? ''}`;
 export const panelDomId = (idBase: string): string => `${idBase}-panel`;
 
-export function AlarmTypeTabsStrip({ tabs, selected, onSelect, truncated, idBase }: AlarmTypeTabsProps) {
+export function AlarmTypeTabsStrip({ tabs, selected, onSelect, idBase }: AlarmTypeTabsProps) {
   const strings = alarmStrings();
   const severity = useSeverityColors();
   const refs = useRef(new Map<string | null, HTMLButtonElement>());
@@ -105,7 +104,7 @@ export function AlarmTypeTabsStrip({ tabs, selected, onSelect, truncated, idBase
           >
             {token === null ? strings.all : (tab?.name ?? token)}
             {tab && tab.active > 0 ? (
-              <Badge tab={tab} truncated={truncated} colors={severity} strings={strings} />
+              <Badge tab={tab} colors={severity} strings={strings} />
             ) : null}
           </button>
         );
@@ -116,12 +115,10 @@ export function AlarmTypeTabsStrip({ tabs, selected, onSelect, truncated, idBase
 
 function Badge({
   tab,
-  truncated,
   colors,
   strings,
 }: {
   tab: AlarmTypeTab;
-  truncated: boolean;
   colors: ReturnType<typeof useSeverityColors>;
   strings: AlarmStrings;
 }) {
@@ -131,7 +128,6 @@ function Badge({
       data-testid="alarm-tab-badge"
       role="img"
       aria-label={strings.activeBadge(tab.active, strings.severity[worst] ?? worst)}
-      title={truncated ? strings.countsTruncated : undefined}
       style={{
         display: 'inline-flex',
         alignItems: 'center',
@@ -147,10 +143,7 @@ function Badge({
         aria-hidden="true"
         style={{ width: 8, height: 8, borderRadius: '50%', background: severityColor(colors, worst), flexShrink: 0 }}
       />
-      <span aria-hidden="true">
-        {tab.active}
-        {truncated ? '+' : ''}
-      </span>
+      <span aria-hidden="true">{tab.active}</span>
     </span>
   );
 }

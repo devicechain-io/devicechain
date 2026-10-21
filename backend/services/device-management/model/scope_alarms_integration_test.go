@@ -203,3 +203,42 @@ func TestScopedDevicesOnPostgres(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all.Results, 2, "the unscoped control")
 }
+
+// TestScopedAlarmCountsByDeviceType: a scoped member's per-type count and type-filtered search
+// cover exactly the alarms it can see, and agree with each other; the operator sees both.
+func TestScopedAlarmCountsByDeviceType(t *testing.T) {
+	r := newScopeAlarmRig(t)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	r.raise(t, "acme-pump", "acme-hot", t0)
+	r.raise(t, "globex-pump", "globex-hot", t0)
+
+	pump := "pump"
+	count := func(ctx context.Context) int {
+		found, err := r.api.AlarmCountsByDeviceType(ctx, AlarmCountCriteria{})
+		require.NoError(t, err)
+		n := 0
+		for _, c := range found {
+			require.Equal(t, "pump", c.DeviceType.Token)
+			n += c.Count
+		}
+		return n
+	}
+	search := func(ctx context.Context) []string {
+		found, err := r.api.Alarms(ctx, AlarmSearchCriteria{DeviceType: &pump})
+		require.NoError(t, err)
+		keys := []string{}
+		for _, a := range found.Results {
+			keys = append(keys, a.AlarmKey)
+		}
+		sort.Strings(keys)
+		return keys
+	}
+	acme := r.member("customer:acme")
+	require.Equal(t, 1, count(acme))
+	require.Equal(t, []string{"acme-hot"}, search(acme))
+	require.Equal(t, 0, count(r.member("group:acme")))
+	require.Empty(t, search(r.member("group:acme")))
+	// Negative control: the operator counts and finds both.
+	require.Equal(t, 2, count(r.operator))
+	require.Equal(t, []string{"acme-hot", "globex-hot"}, search(r.operator))
+}

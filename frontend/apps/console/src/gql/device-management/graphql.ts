@@ -7,6 +7,7 @@ import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 export type AlarmSearchCriteria = {
   acknowledged?: boolean | null | undefined;
   alarmKey?: string | null | undefined;
+  deviceType?: string | null | undefined;
   originator?: string | null | undefined;
   originatorType?: string | null | undefined;
   pageNumber: number;

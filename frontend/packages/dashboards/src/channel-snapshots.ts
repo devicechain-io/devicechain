@@ -6,7 +6,7 @@
 // channel) rather than beside the React hooks that happen to produce them — a headless
 // validator, the SDK and the built-in widgets all read the same declarations.
 
-import type { AlarmRow, CommandRow, LocationSample, MeasurementSample } from './types';
+import type { AlarmRow, AlarmTypeCount, CommandRow, LocationSample, MeasurementSample } from './types';
 
 export interface MeasurementStreamState {
   // The most recent sample per measurement name (drives cards, gauges, tables).
@@ -71,6 +71,8 @@ export interface AlarmStreamState {
   // and the mode is on). `alarms`/`total` above are then the SELECTED tab's rows; this carries the
   // tab strip around them.
   typeTabs?: AlarmTypeTabs;
+  // Present only on a stream subscribed with countByDeviceType, from a source that counts by type.
+  typeCounts?: AlarmTypeCount[];
 }
 
 // One device type among the active alarms in a widget's scope: how many are active, and the worst
@@ -83,15 +85,14 @@ export interface AlarmTypeTab {
 }
 
 // The tab strip of an alarm widget that groups by device type. `tabs` is every type present among
-// the ACTIVE alarms of the scope, from one summary read (never a read per tab). `selected` is the
-// token of the tab whose rows `alarms` holds, or null for All; `select` changes it. `truncated` is
-// true when the summary read was capped, so the counts are lower bounds.
+// the ACTIVE alarms of the scope, from one grouped count read (never a read per tab). `selected` is the
+// token of the tab whose rows `alarms` holds, or null for All; `select` changes it. The counts are
+// device-management's own, exact however many alarms the scope holds.
 export interface AlarmTypeTabs {
   tabs: AlarmTypeTab[];
   selected: string | null;
   select: (token: string | null) => void;
   loading: boolean;
-  truncated: boolean;
 }
 
 // The state a command widget renders from: the resolved target device (null = unbound,

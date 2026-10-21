@@ -18,6 +18,7 @@ import {
   ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
   ALARM_DEVICE_TYPES,
+  ALARM_TYPE_COUNTS,
   ALARMS_QUERY,
   CLEAR_ALARM,
   type AlarmSearchCriteriaInput,
@@ -39,6 +40,7 @@ import {
 import type {
   AlarmDeviceType,
   AlarmRow,
+  AlarmTypeCount,
   AnchorTarget,
   CommandRow,
   DatasourceSelector,
@@ -68,10 +70,6 @@ function randomToken(): string {
 // re-query.
 const ALARM_RECONCILE_DEBOUNCE_MS = 800;
 const ALARM_POLL_MS = 30_000;
-// A device-type filter reads the matching alarms in pages of this size, up to this many rows, and
-// narrows them in the hub (the alarms query has no device facet).
-const ALARM_TYPE_SCAN_PAGE = 500;
-const ALARM_TYPE_SCAN_ROWS = 2000;
 // devicesByToken takes at most 1000 tokens.
 const ALARM_DEVICE_TYPES_CHUNK = 1000;
 
@@ -153,10 +151,13 @@ export interface AlarmSubscription {
   // Resolve each row's originating device type (AlarmRow.deviceType) with one batched read per
   // reconcile. Off by default: an alarm table that does not group by type pays nothing.
   enrichDeviceType?: boolean;
-  // Keep only alarms whose originating device has this device-type TOKEN (implies enrichDeviceType).
-  // Applied by the hub over at most ALARM_TYPE_FILTER_SCAN rows -- the alarms query filters on
-  // nothing about the device -- so `total` is the match count within that scan.
+  // Keep only alarms whose originating device has this device-type TOKEN.
+  // Filtered by device-management, so `total` is the exact match count.
   deviceType?: string;
+  // Read the per-type counts of the matching alarms instead of the alarms: the snapshot then has no
+  // rows, `typeCounts` is set, and `total` is their sum. A source that cannot count by type leaves
+  // `typeCounts` unset (or fails the stream); it never answers with counts it did not make.
+  countByDeviceType?: boolean;
 }
 
 // A full alarm snapshot: the current rows (newest first, capped to pageSize) and the
@@ -164,7 +165,10 @@ export interface AlarmSubscription {
 export interface AlarmSnapshot {
   alarms: AlarmRow[];
   total: number;
+  // Only for a subscription with countByDeviceType: one entry per (device type, severity) present.
+  typeCounts?: AlarmTypeCount[];
 }
+
 
 export interface AlarmStreamSink {
   next: (snapshot: AlarmSnapshot) => void;
@@ -702,56 +706,53 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     tokens: string[],
     tenantWide: boolean,
   ): Promise<AlarmSnapshot> {
-    const filtering = sub.deviceType !== undefined;
-    const wantType = filtering || sub.enrichDeviceType === true;
-    // The alarms query cannot filter on the originating device, so a type filter reads a bigger
-    // window of the matching alarms and narrows it here. Without one, the page is the subscription's.
-    const pageSize = filtering ? ALARM_TYPE_SCAN_PAGE : sub.pageSize;
-    const base = {
-      pageNumber: 1, // the alarms query paginates 1-based
-      pageSize,
+    const filters = {
       state: sub.state ?? null,
       severity: sub.severity ?? null,
       acknowledged: sub.acknowledged ?? null,
     } satisfies Partial<AlarmSearchCriteriaInput>;
+    const originators: Array<{ originatorType: string | null; originator: string | null }> = tenantWide
+      ? [{ originatorType: null, originator: null }]
+      : tokens.map((token) => ({ originatorType: 'device', originator: token }));
 
-    let rows: AlarmRow[];
-    let total = 0;
-    if (tenantWide) {
-      const first = await gql(DEVICE_AREA, ALARMS_QUERY, {
-        criteria: { ...base, originatorType: null, originator: null },
-      });
-      rows = first.alarms.results;
-      total = first.alarms.pagination.totalRecords;
-      for (let page = 2; filtering && rows.length < total && rows.length < ALARM_TYPE_SCAN_ROWS; page++) {
-        const next = await gql(DEVICE_AREA, ALARMS_QUERY, {
-          criteria: { ...base, pageNumber: page, originatorType: null, originator: null },
-        });
-        if (next.alarms.results.length === 0) break;
-        rows = rows.concat(next.alarms.results);
-      }
-    } else {
+    if (sub.countByDeviceType) {
+      // One grouped read per originator query (one tenant-wide), summed by (type, severity).
       const pages = await Promise.all(
-        tokens.map((token) =>
-          gql(DEVICE_AREA, ALARMS_QUERY, {
-            criteria: { ...base, originatorType: 'device', originator: token },
-          }),
-        ),
+        originators.map((o) => gql(DEVICE_AREA, ALARM_TYPE_COUNTS, { criteria: { ...filters, ...o } })),
       );
-      const byToken = new Map<string, AlarmRow>();
+      const merged = new Map<string, AlarmTypeCount>();
       for (const page of pages) {
-        total += page.alarms.pagination.totalRecords;
-        for (const row of page.alarms.results) byToken.set(row.token, row);
+        for (const c of page.alarmCountsByDeviceType) {
+          const key = `${c.deviceType.token}\u0000${c.severity}`;
+          const prior = merged.get(key);
+          merged.set(key, prior ? { ...prior, count: prior.count + c.count } : { ...c, deviceType: { ...c.deviceType } });
+        }
       }
-      rows = [...byToken.values()].sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''));
+      const typeCounts = [...merged.values()];
+      return { alarms: [], total: typeCounts.reduce((n, c) => n + c.count, 0), typeCounts };
     }
 
-    if (wantType) rows = await this.withDeviceTypes(rows);
-    if (filtering) {
-      rows = rows.filter((r) => r.deviceType?.token === sub.deviceType);
-      total = rows.length;
+    // The type filter is device-management's, so a page is the subscription's either way.
+    const base = {
+      pageNumber: 1, // the alarms query paginates 1-based
+      pageSize: sub.pageSize,
+      ...filters,
+      deviceType: sub.deviceType ?? null,
+    } satisfies Partial<AlarmSearchCriteriaInput>;
+    const pages = await Promise.all(
+      originators.map((o) => gql(DEVICE_AREA, ALARMS_QUERY, { criteria: { ...base, ...o } })),
+    );
+    const byToken = new Map<string, AlarmRow>();
+    let total = 0;
+    for (const page of pages) {
+      total += page.alarms.pagination.totalRecords;
+      for (const row of page.alarms.results) byToken.set(row.token, row);
     }
-    return { alarms: rows.slice(0, sub.pageSize), total };
+    let alarms = [...byToken.values()]
+      .sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''))
+      .slice(0, sub.pageSize);
+    if (sub.enrichDeviceType === true) alarms = await this.withDeviceTypes(alarms);
+    return { alarms, total };
   }
 
   // Each device's type, for the lifetime of the hub: a device's type is fixed for a viewing session,

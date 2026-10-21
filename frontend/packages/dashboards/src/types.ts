@@ -690,6 +690,13 @@ export interface AlarmDeviceType {
   name: string | null;
 }
 
+// How many matching alarms are on devices of one type at one severity (a type-count read).
+export interface AlarmTypeCount {
+  deviceType: AlarmDeviceType;
+  severity: string;
+  count: number;
+}
+
 // ---- Locations (location channel) -------------------------------------------
 
 // A device's position as a map widget sees it. Mirrors device-state's LatestLocation

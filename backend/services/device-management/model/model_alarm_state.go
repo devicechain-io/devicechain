@@ -128,6 +128,31 @@ type AlarmSearchCriteria struct {
 	Severity       *string
 	Acknowledged   *bool
 	AlarmKey       *string
+	// DeviceType restricts to alarms raised on a device of this type, by the type's token. An
+	// unknown token finds nothing, as an unknown originator does. Which devices count is the
+	// caller's own device read: a member whose access is limited to some customers reaches only
+	// the devices its scope owns, so an alarm it can see on a device it no longer owns is under no
+	// type (see AlarmCountsByDeviceType, which classifies by the same read).
+	DeviceType *string
+}
+
+// Criteria for counting alarms by their originating device's type. The facets are the alarm
+// search's (minus paging and the type itself, which is the grouping) and AND together.
+type AlarmCountCriteria struct {
+	OriginatorType *string
+	Originator     *string
+	State          *string
+	Severity       *string
+	Acknowledged   *bool
+	AlarmKey       *string
+}
+
+// AlarmDeviceTypeCount is how many matching alarms are raised on devices of one type at one
+// severity. A caller folds the severities of a type into its total and its worst.
+type AlarmDeviceTypeCount struct {
+	DeviceType *DeviceType
+	Severity   string
+	Count      int
 }
 
 // Results for an alarm search.

@@ -16,8 +16,6 @@ export interface AlarmStrings {
   deviceType: string;
   // A tab's badge, spoken: "3 active alarms, worst Critical".
   activeBadge: (count: number, worst: string) => string;
-  // The summary behind the badges was capped; counts are lower bounds.
-  countsTruncated: string;
   // The severity words for the badge description.
   severity: Record<string, string>;
 }
@@ -28,7 +26,6 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     all: 'All',
     deviceType: 'Device type',
     activeBadge: (n, worst) => `${n} active ${n === 1 ? 'alarm' : 'alarms'}, worst ${worst}`,
-    countsTruncated: 'Counts cover the newest active alarms only',
     severity: { CRITICAL: 'Critical', MAJOR: 'Major', MINOR: 'Minor', WARNING: 'Warning', INDETERMINATE: 'Indeterminate' },
   },
   es: {
@@ -36,7 +33,6 @@ export const ALARM_STRINGS: Record<'en' | 'es', AlarmStrings> = {
     all: 'Todas',
     deviceType: 'Tipo de dispositivo',
     activeBadge: (n, worst) => `${n} ${n === 1 ? 'alarma activa' : 'alarmas activas'}, la peor: ${worst}`,
-    countsTruncated: 'Los recuentos cubren solo las alarmas activas más recientes',
     severity: { CRITICAL: 'Crítica', MAJOR: 'Mayor', MINOR: 'Menor', WARNING: 'Advertencia', INDETERMINATE: 'Indeterminada' },
   },
 };

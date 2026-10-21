@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"gorm.io/gorm"
 )
@@ -34,48 +35,100 @@ func (api *Api) AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, e
 	return found, nil
 }
 
-// Search for alarms that meet criteria. An Originator token, when supplied, is
-// resolved to its id against the entity-type registry (an OriginatorType is then
-// required so the registry knows which type to resolve against); an unresolvable
-// originator yields an empty result rather than an error.
-func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error) {
+// alarmFacets are the filters an alarm search and an alarm count share.
+type alarmFacets struct {
+	originatorType *string
+	originator     *string
+	state          *string
+	severity       *string
+	acknowledged   *bool
+	alarmKey       *string
+}
+
+// resolve turns the facets into a filter. An Originator token, when supplied, is resolved to
+// its id against the entity-type registry (an OriginatorType is then required so the registry
+// knows which type to resolve against). ok is false when the originator names nothing, which the
+// caller answers with an empty result rather than an error.
+func (f alarmFacets) resolve(ctx context.Context, api *Api) (filter func(*gorm.DB) *gorm.DB, ok bool, err error) {
 	var originatorId *uint
-	if criteria.Originator != nil {
-		if criteria.OriginatorType == nil {
-			return nil, errors.New("originatorType is required when filtering by originator")
+	if f.originator != nil {
+		if f.originatorType == nil {
+			return nil, false, errors.New("originatorType is required when filtering by originator")
 		}
-		id, err := api.ResolveEntityToken(ctx, *criteria.OriginatorType, *criteria.Originator)
+		id, err := api.ResolveEntityToken(ctx, *f.originatorType, *f.originator)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return &AlarmSearchResults{
-					Results:    make([]Alarm, 0),
-					Pagination: rdb.SearchResultsPagination{},
-				}, nil
+				return nil, false, nil
 			}
-			return nil, err
+			return nil, false, err
 		}
 		originatorId = &id
+	}
+	return func(result *gorm.DB) *gorm.DB {
+		if f.originatorType != nil {
+			result = result.Where("alarms.originator_type = ?", *f.originatorType)
+		}
+		if originatorId != nil {
+			result = result.Where("alarms.originator_id = ?", *originatorId)
+		}
+		if f.state != nil {
+			result = result.Where("alarms.state = ?", *f.state)
+		}
+		if f.severity != nil {
+			result = result.Where("alarms.severity = ?", *f.severity)
+		}
+		if f.acknowledged != nil {
+			result = result.Where("alarms.acknowledged = ?", *f.acknowledged)
+		}
+		if f.alarmKey != nil {
+			result = result.Where("alarms.alarm_key = ?", *f.alarmKey)
+		}
+		return result
+	}, true, nil
+}
+
+// alarmDevices is the ONE device read that both the device-type filter of an alarm search and
+// the per-type alarm count classify alarms by, so a type's count and the rows its filter returns
+// can never disagree about which alarms belong to it. It is an ordinary read of the caller's
+// devices, built through gorm, so the tenant predicate and — for a member whose access is limited
+// to some customers — the device scope rule apply to it: a scoped caller classifies only the
+// devices its scope currently owns.
+func (api *Api) alarmDevices(ctx context.Context) *gorm.DB {
+	return api.RDB.DB(ctx).Model(&Device{})
+}
+
+// Search for alarms that meet criteria. An unresolvable originator or device type yields an
+// empty result rather than an error.
+func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error) {
+	empty := &AlarmSearchResults{Results: make([]Alarm, 0), Pagination: rdb.SearchResultsPagination{}}
+	filter, ok, err := alarmFacets{
+		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
+		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
+	}.resolve(ctx, api)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return empty, nil
+	}
+	var deviceTypeId *uint
+	if criteria.DeviceType != nil {
+		types, err := api.DeviceTypesByToken(ctx, []string{*criteria.DeviceType})
+		if err != nil {
+			return nil, err
+		}
+		if len(types) == 0 {
+			return empty, nil
+		}
+		deviceTypeId = &types[0].ID
 	}
 
 	results := make([]Alarm, 0)
 	db, pag := api.RDB.ListOf(ctx, &Alarm{}, func(result *gorm.DB) *gorm.DB {
-		if criteria.OriginatorType != nil {
-			result = result.Where("originator_type = ?", *criteria.OriginatorType)
-		}
-		if originatorId != nil {
-			result = result.Where("originator_id = ?", *originatorId)
-		}
-		if criteria.State != nil {
-			result = result.Where("state = ?", *criteria.State)
-		}
-		if criteria.Severity != nil {
-			result = result.Where("severity = ?", *criteria.Severity)
-		}
-		if criteria.Acknowledged != nil {
-			result = result.Where("acknowledged = ?", *criteria.Acknowledged)
-		}
-		if criteria.AlarmKey != nil {
-			result = result.Where("alarm_key = ?", *criteria.AlarmKey)
+		result = filter(result)
+		if deviceTypeId != nil {
+			result = result.Where("alarms.originator_type = ? AND alarms.originator_id IN (?)",
+				string(entity.TypeDevice), api.alarmDevices(ctx).Select("devices.id").Where("devices.device_type_id = ?", *deviceTypeId))
 		}
 		// No .Order() here: the deterministic newest-cycle-first order this search
 		// needs is Alarm.DefaultOrder(), which ListOf injects for every paged read of
@@ -88,6 +141,66 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 		return nil, db.Error
 	}
 	return &AlarmSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// AlarmCountsByDeviceType counts the alarms matching criteria per originating device type and
+// severity, in one grouped read — the summary an alarm view grouped by type badges its tabs from,
+// without reading the alarms themselves. Only alarms raised on a device the caller can read are
+// counted, by the same device read the search's DeviceType filter uses (alarmDevices), so for every
+// type the count equals the total of the search filtered to it. Ordered by type id, then severity.
+func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCountCriteria) ([]AlarmDeviceTypeCount, error) {
+	filter, ok, err := alarmFacets{
+		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
+		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
+	}.resolve(ctx, api)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AlarmDeviceTypeCount, 0)
+	if !ok {
+		return out, nil
+	}
+	type grouped struct {
+		DeviceTypeId uint
+		Severity     string
+		Count        int
+	}
+	var rows []grouped
+	q := api.RDB.DB(ctx).Model(&Alarm{}).
+		Select("d.device_type_id AS device_type_id, alarms.severity AS severity, COUNT(*) AS count").
+		Joins("JOIN (?) AS d ON d.id = alarms.originator_id", api.alarmDevices(ctx).Select("devices.id", "devices.device_type_id")).
+		Where("alarms.originator_type = ?", string(entity.TypeDevice))
+	if err := filter(q).Group("d.device_type_id, alarms.severity").
+		Order("d.device_type_id, alarms.severity").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return out, nil
+	}
+	ids := make([]uint, 0, len(rows))
+	seen := map[uint]bool{}
+	for _, r := range rows {
+		if !seen[r.DeviceTypeId] {
+			seen[r.DeviceTypeId] = true
+			ids = append(ids, r.DeviceTypeId)
+		}
+	}
+	types, err := api.DeviceTypesById(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	byId := make(map[uint]*DeviceType, len(types))
+	for _, t := range types {
+		byId[t.ID] = t
+	}
+	for _, r := range rows {
+		// A device's type cannot be deleted while devices use it, so a missing type is a row
+		// whose type vanished between the two reads; it is left out rather than shown nameless.
+		if t, found := byId[r.DeviceTypeId]; found {
+			out = append(out, AlarmDeviceTypeCount{DeviceType: t, Severity: r.Severity, Count: r.Count})
+		}
+	}
+	return out, nil
 }
 
 // AcknowledgeAlarm records an operator acknowledgment of the alarm named by token.

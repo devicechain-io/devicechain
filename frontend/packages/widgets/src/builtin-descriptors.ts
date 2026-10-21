@@ -551,16 +551,16 @@ export const builtinWidgetDescriptors = {
         helpId: 'widgetHintAlarmGroupBy',
         valueLabelIds: { none: 'widgetAlarmGroupByNone', deviceType: 'widgetAlarmGroupByDeviceType' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'deviceType shows a tab per device type, each with an active-alarm badge.',
+        doc: 'deviceType: a tab per device type.',
       },
       deviceTypes: {
         kind: 'list',
         maxItems: 24,
         labelId: 'widgetLabelAlarmDeviceTypes',
         helpId: 'widgetHintAlarmDeviceTypes',
-        doc: 'With deviceType grouping: the types to tab, in order, by token. Unset tabs every type with an active alarm.',
+        doc: 'Types to tab, in order; unset tabs all.',
         item: {
-          token: { kind: 'string', labelId: 'widgetLabelAlarmDeviceTypeToken', doc: 'Device type token.' },
+          token: { kind: 'string', labelId: 'widgetLabelAlarmDeviceTypeToken', doc: 'Type token.' },
         },
       },
       maxRows: {
