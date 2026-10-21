@@ -64,6 +64,8 @@ type shedLetterer struct {
 	unlettered  map[string]map[string]int // tenant → action kind → count
 	windowStart time.Time
 	now         func() time.Time
+	// window is the summary cadence; shedSummaryWindow unless a test shortens it.
+	window time.Duration
 }
 
 // newShedLetterer builds the letterer over the service's dead-letter sink. A nil sink (the test
@@ -77,6 +79,7 @@ func newShedLetterer(dead *deadletter.Sink, b ShedLetterBudget, m *ReactMetrics)
 		unlettered:  map[string]map[string]int{},
 		windowStart: time.Now().UTC(),
 		now:         func() time.Time { return time.Now().UTC() },
+		window:      shedSummaryWindow,
 	}
 }
 
@@ -151,14 +154,16 @@ func (s *shedLetterer) letter(ctx context.Context, msg messaging.Message, ev run
 
 // run summarises the over-budget sheds every shedSummaryWindow until ctx is done.
 func (s *shedLetterer) run(ctx context.Context) {
-	t := time.NewTicker(shedSummaryWindow)
+	t := time.NewTicker(s.window)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			s.flush(ctx)
+			started := time.Now()
+			err := s.flush(ctx)
+			s.metrics.recordShedSummaryPass(ctx, err, started)
 		}
 	}
 }
@@ -167,7 +172,11 @@ func (s *shedLetterer) run(ctx context.Context) {
 // closed, then starts a new window. The letter is not about one consumed message, so it goes
 // through Write, and its kind is the derived-events stream's own declaration — the same kind
 // the individual letters carry — so no second place decides it.
-func (s *shedLetterer) flush(ctx context.Context) {
+//
+// It returns what the pass should be filed as: nil when every summary was written (or there was
+// nothing to write), core.PassResult's failure when letters were lost. The stop-time flush
+// ignores it; only the periodic run files a pass.
+func (s *shedLetterer) flush(ctx context.Context) error {
 	s.mu.Lock()
 	counts := s.unlettered
 	start, end := s.windowStart, s.now()
@@ -175,7 +184,7 @@ func (s *shedLetterer) flush(ctx context.Context) {
 	s.windowStart = end
 	s.mu.Unlock()
 	if len(counts) == 0 || s.dead == nil {
-		return
+		return nil
 	}
 	tenants := make([]string, 0, len(counts))
 	for tenant := range counts {
@@ -183,6 +192,8 @@ func (s *shedLetterer) flush(ctx context.Context) {
 	}
 	sort.Strings(tenants)
 	kind := deadletter.Kind(streams.DeadLetterKindFor(streams.DerivedEvents))
+	var failed int
+	var lastErr error
 	for _, tenant := range tenants {
 		byKind := counts[tenant]
 		err := s.dead.Write(core.WithTenant(ctx, tenant), deadletter.Envelope{
@@ -197,6 +208,9 @@ func (s *shedLetterer) flush(ctx context.Context) {
 		if err != nil {
 			log.Error().Err(err).Str("tenant", tenant).
 				Msg("LOST the summary dead letter for over-budget shed connector actions.")
+			failed++
+			lastErr = err
 		}
 	}
+	return core.PassResult(len(tenants), failed, lastErr)
 }

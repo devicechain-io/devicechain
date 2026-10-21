@@ -1245,9 +1245,12 @@ reconciliador o un planificador. Cada una exporta tres series con el nombre de s
 | notification-management | `retention_sweep`, `escalation_scheduler` |
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
-| event-sources | `presence_demote` |
+| event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+| event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
+| lwm2m-ingest | `tenant_sweep` |
+| sparkplug-ingest | `presence_probe` |
 
 Por ejemplo, el coordinador de eliminación de inquilinos de user-management exporta
 `devicechain_usermanagement_tenant_purge_passes_total`.

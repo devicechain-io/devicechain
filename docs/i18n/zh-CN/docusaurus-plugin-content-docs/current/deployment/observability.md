@@ -586,9 +586,12 @@ UPDATE "event-management".calculated_backfills
 | notification-management | `retention_sweep`, `escalation_scheduler` |
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
-| event-sources | `presence_demote` |
+| event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+| event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
+| lwm2m-ingest | `tenant_sweep` |
+| sparkplug-ingest | `presence_probe` |
 
 例如用户管理租户删除协调器导出 `devicechain_usermanagement_tenant_purge_passes_total`。
 

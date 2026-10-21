@@ -1180,9 +1180,12 @@ exports three series under its own service's name, `devicechain_<area>_<task>_â€
 | notification-management | `retention_sweep`, `escalation_scheduler` |
 | event-management | `anchor_sweep` |
 | device-state | `inactivity_sweep` |
-| event-sources | `presence_demote` |
+| event-sources | `presence_demote`, `presence_reconcile`, `presence_canary` |
 | device-management | `ownership_drain` |
 | command-delivery | `command_sweep`, `hold_reconcile`, `stranded_reconcile` |
+| event-processing | `detect_tick`, `rule_health_flush`, `shed_summary` |
+| lwm2m-ingest | `tenant_sweep` |
+| sparkplug-ingest | `presence_probe` |
 
 For example, user-management's tenant-deletion coordinator exports
 `devicechain_usermanagement_tenant_purge_passes_total`.

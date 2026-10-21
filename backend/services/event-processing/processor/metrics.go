@@ -4,6 +4,7 @@
 package processor
 
 import (
+	"context"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/react"
@@ -30,6 +31,10 @@ import (
 // It is first-classed instead as the consumerPending/consumerAckPending gauges below,
 // read from the resolved-events durable's broker-reported backlog.
 type DetectMetrics struct {
+	// tickPass and ruleStatFlushPass file the loop's tick arm and the rule-health interval
+	// flush on the shared maintenance-pass series (duration, outcome, last success).
+	tickPass            *core.PeriodicTaskMetrics
+	ruleStatFlushPass   *core.PeriodicTaskMetrics
 	checkpointsTotal    prometheus.Counter
 	eventsAppliedTotal  prometheus.Counter
 	appliedStreamSeq    prometheus.Gauge
@@ -197,6 +202,8 @@ var waitBuckets = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01,
 // failed one does — and MustRegister panics on the first duplicate.
 func NewDetectMetrics(ms *core.Microservice) *DetectMetrics {
 	m := &DetectMetrics{
+		tickPass:            ms.NewPeriodicTaskMetrics("detect_tick"),
+		ruleStatFlushPass:   ms.NewPeriodicTaskMetrics("rule_health_flush"),
 		checkpointsTotal:    ms.NewCounter("detect_checkpoints_total", "Committed DETECT snapshot checkpoints."),
 		eventsAppliedTotal:  ms.NewCounter("detect_events_applied_total", "Resolved events fed into the DETECT engine."),
 		appliedStreamSeq:    ms.NewGauge("detect_applied_stream_seq", "Highest JetStream stream sequence captured in the committed snapshot."),
@@ -465,6 +472,8 @@ func (m *DetectMetrics) recordSupersededFrontierDropped() {
 // Every recorder is nil-safe so a dispatcher built
 // without a Microservice (unit tests) runs unmeasured.
 type ReactMetrics struct {
+	// shedSummaryPass files each shed-summary window's flush (duration, outcome, last success).
+	shedSummaryPass     *core.PeriodicTaskMetrics
 	dispatched          *prometheus.CounterVec
 	notEnabled          *prometheus.CounterVec
 	connectorShed       *prometheus.CounterVec
@@ -501,6 +510,7 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		return nil
 	}
 	return &ReactMetrics{
+		shedSummaryPass:     ms.NewPeriodicTaskMetrics("shed_summary"),
 		dispatched:          ms.NewCounterVec("react_actions_dispatched_total", "REACT actions handed to their sink, by action type (includes idempotent replays).", []string{"action"}),
 		notEnabled:          ms.NewCounterVec("react_actions_not_enabled_total", "REACT actions recognized but dropped because this deployment has no sink for them, by action type: sendCommand without command-delivery configured, or httpCall/publish without outbound connectors enabled. The alarm sink is always wired, so raiseAlarm/clearAlarm should never appear here.", []string{"action"}),
 		connectorShed:       ms.NewCounterVec("react_connector_egress_shed_total", "Connector dispatch ATTEMPTS (httpCall/publish) shed at the source for being over the tenant's outbound egress quota (ADR-060 SD-3). Per-attempt: a sibling-failure redelivery may shed then later admit the same action, so this is not a count of permanently-dropped actions.", []string{"action"}),
@@ -513,6 +523,14 @@ func NewReactMetrics(ms *core.Microservice) *ReactMetrics {
 		shedUnlettered:      precreated(ms.NewCounterVec("react_connector_shed_unlettered_total", "Connector actions (httpCall/publish) shed at the source past the tenant's or the service's dead-letter budget, so counted and summarised in one letter per tenant per minute rather than recorded individually, by action type.", []string{"action"})),
 		clockFallback:       core.NewRateClockFallbacks(ms),
 	}
+}
+
+// recordShedSummaryPass files one shed-summary flush. Nil-safe.
+func (m *ReactMetrics) recordShedSummaryPass(ctx context.Context, err error, started time.Time) {
+	if m == nil {
+		return
+	}
+	m.shedSummaryPass.RecordPass(ctx, err, started, "shed-summary")
 }
 
 // precreated creates the vec's children for both connector actions at 0, so an alert over the
@@ -935,6 +953,28 @@ func boolGauge(b bool) float64 {
 		return 1
 	}
 	return 0
+}
+
+// recordTickPass files one pass of the single-writer loop's tick arm (idle-advance, interval
+// checkpoint, budget and lag sampling, rechecks, reconcile launches). Nil-safe.
+//
+// The arm has no error to report -- a failed checkpoint is handled and counted where it
+// happens -- so the outcomes are complete, or cancelled when shutdown caught the tick; what
+// the series adds is the arm's duration and a last-success stamp that stops moving when the
+// loop does.
+func (m *DetectMetrics) recordTickPass(ctx context.Context, started time.Time) {
+	if m == nil {
+		return
+	}
+	m.tickPass.RecordPass(ctx, nil, started, "detect-tick")
+}
+
+// RuleStatFlushPass files one interval flush of the rule-health accumulator.
+func (m *DetectMetrics) RuleStatFlushPass(ctx context.Context, err error, started time.Time) {
+	if m == nil {
+		return
+	}
+	m.ruleStatFlushPass.RecordPass(ctx, err, started, "rule-health-flush")
 }
 
 // The rulehealth.Metrics implementation. Nil-safe, like every recorder here.

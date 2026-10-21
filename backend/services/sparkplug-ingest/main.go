@@ -246,6 +246,7 @@ func buildMetrics() host.Metrics {
 			"Liveness probes that reached a verdict, by trigger: connect (the failover reconciliation run once per broker session) or periodic (one slot of the re-check that visits every node once per presence.probeSeconds on a steady session). "+
 				"A probe asks every asserted device that has gone quiet to rebirth and declares the ones that do not answer DISCONNECTED. A flat periodic series on a connected Host means the probe is not running.",
 			[]string{"trigger"})),
+		PresenceProbePass: Microservice.NewPeriodicTaskMetrics("presence_probe"),
 		PresenceProbeDisconnects: probePrecreated(Microservice.NewCounterVec("presence_probe_disconnects_total",
 			"Asserted devices a liveness probe declared DISCONNECTED for not answering a rebirth inside the probe window, by trigger (connect or periodic). Near zero in a healthy fleet; a standing periodic rate means death certificates are being lost.",
 			[]string{"trigger"})),

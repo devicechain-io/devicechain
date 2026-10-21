@@ -59,6 +59,7 @@ func TestProbeMetricsPrecreateBothTriggers(t *testing.T) {
 	m := buildMetrics()
 	require.NotNil(t, m.PresenceProbes)
 	require.NotNil(t, m.PresenceProbeDisconnects)
+	require.NotNil(t, m.PresenceProbePass, "the periodic probe files its passes on the shared series")
 	// Counted BEFORE anything reads a child: WithLabelValues creates the child it names, so
 	// a count taken after the reads below would find both children whether or not the
 	// service created them.

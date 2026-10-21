@@ -1705,6 +1705,7 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.checkpoint(rp.pctx())
 			}
 		case <-ticker.C:
+			tickStarted := time.Now()
 			rp.phases.enter(phaseControl)
 			rp.phases.flush()
 			// Read the clock through cfg.Clock (not the ticker's wall-clock value) so every
@@ -1767,6 +1768,7 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.startFactReconcile()
 				rp.lastFactReconcile = now
 			}
+			rp.metrics.recordTickPass(rp.pctx(), tickStarted)
 		}
 	}
 }
