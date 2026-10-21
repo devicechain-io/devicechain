@@ -98,6 +98,37 @@ Along the top:
 Widgets that carry actions, such as acknowledging an alarm or sending a command, work here too. The
 platform checks each action against your own permissions.
 
+### Choosing a device, and sharing a link {#sharing-a-link}
+
+Where a board has a slot that widgets follow (a **Target slot** on a map, a fleet table or an alarm
+table, or an entity selector), choosing a device re-points the widgets bound to that slot. On a map,
+click a marker, or tab to it and press Enter, to choose that device; set the map's **Target slot**
+in the editor to turn this on. Without one, a marker is only a mark.
+
+The address in your browser always reproduces what you are looking at. Choosing a device adds
+`bind.<slot>=<device token>` to it, for example:
+
+```text
+/dashboards/pump-station?bind.machine=hauler-7
+```
+
+Copy the address and send it, and whoever opens it sees the board with that device chosen. The
+`<slot>` is the slot's name as it appears in the editor, and the value is the device's token. Several
+slots can be set in one link by repeating the parameter.
+
+A link is checked with the permissions of the person who opens it, never those of the person who
+sent it. If the device does not exist, or exists but is outside what you are allowed to see, the
+page says so instead of showing the board, and offers **Open the board without it**, which opens
+the board on its own default device. Both cases read the same on purpose: the platform does not
+confirm that a device you may not see exists. A link that names a slot the board does not have, or
+something that is not a device token, is refused the same way. So is a link that names the same
+slot twice, and one that names a slot whose device follows another slot, since the board would show the device it derives rather than the one in the link. If the check
+itself could not be completed, for example because the connection dropped, you can **Try again**.
+
+Choosing a device replaces the address rather than adding a history entry, so **Back** leaves the
+board instead of stepping through every device you clicked. The same link works in the /dash viewer;
+see [Linking to a board with a device chosen](/user-guide/viewing-dashboards-in-dash#linking-to-a-device).
+
 ### What the widgets look like
 
 The test tenant's *Widget Lab* dashboard holds one of every built-in widget. Further down the page:

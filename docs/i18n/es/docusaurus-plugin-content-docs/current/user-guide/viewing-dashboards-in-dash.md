@@ -127,6 +127,7 @@ panel adecuado en el modo adecuado:
 | `density` | `compact`, `comfortable` o `wall` | Escala el texto y el espaciado del panel: `compact` lo reduce y `wall` lo amplía, para una pantalla que se lee desde el otro lado de una sala. Sustituye la densidad con la que se guardó el panel. |
 | `range` | `15m`, `1h`, `6h`, `24h` o `7d` | Abre el panel con ese intervalo de tiempo en lugar del propio del panel. |
 | `paused` | `1` | Abre el panel congelado en el momento en que carga, con la insignia **En pausa** visible. Cualquier otro valor lo abre en vivo. |
+| `bind.<slot>` | un token de dispositivo | Abre el panel con ese dispositivo elegido para el slot. Consulta [Enlazar a un panel con un dispositivo elegido](#linking-to-a-device). |
 
 Si un parámetro lleva un valor que el visor no reconoce, se ignora, y los demás parámetros se siguen
 aplicando.
@@ -139,6 +140,32 @@ pero un panel abierto con `paused=1` muestra igualmente su insignia **En pausa**
 conexión, de modo que una pantalla mural congelada lo dice.
 
 <GuideShot id="dash-kiosk" alt="El panel Widget Lab en modo quiosco: sin cabecera, un indicador En vivo en la esquina superior izquierda, un botón de pantalla completa en la esquina superior derecha, y debajo la tarjeta de título y los mismos widgets en vivo." />
+
+## Enlazar a un panel con un dispositivo elegido {#linking-to-a-device}
+
+Un enlace también puede abrir un panel con un dispositivo ya elegido, nombrando el slot del panel y el
+token del dispositivo:
+
+```text
+/dash/?dashboard=<token>&bind.machine=hauler-7
+```
+
+Repite `bind.<slot>` por cada slot que quieras fijar. El `<slot>` es el nombre del slot que le dio el
+autor del panel. El visor muestra el panel solo después de comprobar, con tus propios permisos, que
+cada dispositivo del enlace existe y es uno que puedes ver. Si no, muestra el motivo en lugar del
+panel: un dispositivo que no existe y uno que no puedes ver se leen igual, de modo que un enlace no
+sirve para averiguar qué dispositivos existen. **Abrir el panel sin él** abre entonces el panel con su
+dispositivo predeterminado. Un enlace que nombra un slot que el panel no tiene, o algo que no es un
+token de dispositivo, se rechaza del mismo modo. También se rechaza un enlace que nombra el mismo slot dos veces, y uno que nombra un slot cuyo
+dispositivo sigue a otro slot, porque el panel mostraría el dispositivo que deduce y no el del enlace.
+
+Elegir un dispositivo en el panel (hacer clic en un marcador de un mapa, en una fila de una tabla de
+flota o en un selector) actualiza la dirección en el sitio, sin añadir entradas al historial del
+navegador, de modo que la dirección de la barra es siempre un enlace a lo que se ve en pantalla. Al
+volver **Atrás** o **Adelante** a una dirección que nombra otro dispositivo, se elige ese dispositivo.
+**Cambiar**, que vuelve al formulario de carga, quita de la dirección los dispositivos elegidos. El
+mismo enlace funciona en la consola, en `/dashboards/<token>?bind.<slot>=<token del dispositivo>`;
+consulta [Elegir un dispositivo y compartir un enlace](/user-guide/dashboards#sharing-a-link).
 
 ## Mantener la sesión
 

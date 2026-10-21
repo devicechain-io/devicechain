@@ -684,9 +684,12 @@ export const builtinWidgetDescriptors = {
         control: 'basemap',
         doc: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
       },
+      // Optional and additive: unset, a marker is only a mark. Set, clicking a marker re-points
+      // that slot at the device, exactly as a fleet-table row does.
+      selectionTarget: SELECTION_TARGET,
     },
     defaults: { title: 'Map' },
-    interactions: {},
+    interactions: { selection: true },
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
   }),
 
