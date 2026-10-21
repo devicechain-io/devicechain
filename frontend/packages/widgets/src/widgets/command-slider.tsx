@@ -100,6 +100,19 @@ export function CommandSlider({ widget, data, actions }: WidgetProps<CommandStre
   const captionId = useId();
   const hintId = useId();
 
+  // 🔴 A STAGED STEPPER VALUE DOES NOT OUTLIVE A NEWER COMMAND. The stepper keeps a value staged
+  // until Send (a slider's lasts only as long as the drag), so it can sit on a wall display while
+  // someone else sends this command. It was chosen relative to the value that was current then; a
+  // Send after that would quietly overwrite the newer one. A new last-sent command discards it, and
+  // the readout returns to what was actually sent. The control's own send clears the draft before
+  // its command appears, so this never fires on it.
+  const lastToken = last?.token;
+  useEffect(() => {
+    if (!stepper || draftRef.current === null) return;
+    draftRef.current = null;
+    setDraftState(null);
+  }, [lastToken, stepper]);
+
   // A pointer pressed on the slider whose release has not been seen. A release anywhere but on
   // the slider, a cancel or a lost capture while it is set discards the staged value.
   const pressed = useRef(false);

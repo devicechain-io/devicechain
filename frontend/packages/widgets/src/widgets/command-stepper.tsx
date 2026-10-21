@@ -9,7 +9,10 @@
 // once. A command that steps a setpoint or a rate is acted on by the device, and a held-down or
 // double-tapped button must not become a burst of commands. The explicit Send is also where a
 // disruptive command is chosen on purpose (the platform then holds it for the maintenance window).
-// Escape discards a staged value. Focus moving to the Send button does NOT discard it.
+// Escape discards a staged value. Focus moving to the Send button does NOT discard it, and nor
+// does focus leaving the widget: on a touch wall a tap elsewhere is not a decision, and a browser
+// that never focuses a tapped button (Safari) would blur the value on every tap of − or +. What does
+// discard it is a newer command than the one it was staged against (command-slider.tsx).
 
 import type { KeyboardEvent, ReactNode } from 'react';
 
@@ -139,8 +142,8 @@ export function StepperBody({
           aria-label={label}
           aria-valuemin={range.min}
           aria-valuemax={range.max}
-          aria-valuenow={shown}
-          aria-valuetext={text}
+          aria-valuenow={known ? shown : undefined}
+          aria-valuetext={known ? text : sender.strings.noValue}
           aria-describedby={`${hintId} ${captionId}${sender.readOnlyReason ? ` ${readOnlyId(captionId)}` : ''}`}
           aria-disabled={inert || undefined}
           aria-busy={busy || undefined}

@@ -523,6 +523,56 @@ describe('command-slider, stepper mode', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/min and max/);
     expect(screen.queryByRole('spinbutton')).toBeNull();
   });
+
+  it('sends a whole number for an INT parameter, whatever the authored step', () => {
+    const send = makeSend();
+    const schema = JSON.stringify([{ name: 'level', dataType: 'INT', required: true, minValue: 0, maxValue: 10 }]);
+    render(
+      <CommandSlider
+        widget={widget('command-slider', { commandName: 'dim', parameterSchema: schema, parameter: 'level', mode: 'stepper', step: 0.5 })}
+        data={state()}
+        actions={actionsWith(send)}
+      />,
+    );
+    press('up');
+    expect(num()).toBe(1);
+    press('send');
+    expect(send).toHaveBeenCalledWith('therm-1', 'dim', '{"level":1}');
+  });
+
+  it('says there is no value, rather than announcing the minimum, before anything was sent', () => {
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith()} />);
+    expect(spin().textContent).toBe('—');
+    expect(spin().getAttribute('aria-valuenow')).toBeNull();
+    expect(spin().getAttribute('aria-valuetext')).toBe('no value');
+    press('up');
+    expect(spin().getAttribute('aria-valuetext')).toBe('16 C');
+  });
+
+  it('keeps Send in the tab order, and the − / + out of it (the arrows on the value are their keys)', () => {
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith()} />);
+    const at = (w: string) => document.querySelector(`[data-step="${w}"]`)!;
+    expect(at('send').getAttribute('tabindex')).toBeNull();
+    expect(at('send').tagName).toBe('BUTTON');
+    expect(at('up').getAttribute('tabindex')).toBe('-1');
+    expect(spin().getAttribute('tabindex')).toBe('0');
+  });
+
+  it('discards a staged value when a newer command arrives, so a stale Send cannot overwrite it', () => {
+    const send = makeSend();
+    const { rerender } = render(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL' })])} actions={actionsWith(send)} />);
+    press('up');
+    expect(num()).toBe(22);
+    // A status update on the same command is not a newer command: the staged value stays.
+    rerender(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL', respondedTime: '2026-07-06T12:00:05Z' })])} actions={actionsWith(send)} />);
+    expect(spin().getAttribute('data-staged')).toBe('true');
+    const newer = row({ token: 'c-2', status: 'QUEUED', queuedTime: '2026-07-06T12:01:00Z', payload: JSON.stringify({ target: 30, mode: 'auto' }) });
+    rerender(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL' }), newer])} actions={actionsWith(send)} />);
+    expect(spin().getAttribute('data-staged')).toBeNull();
+    expect(num()).toBe(30);
+    press('send');
+    expect(send).not.toHaveBeenCalled();
+  });
 });
 
 describe('command-toggle', () => {
