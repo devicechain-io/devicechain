@@ -132,7 +132,7 @@ validates stored options against the schema, and the console generates its setti
 
 A `list` option stores an array of small objects, such as a widget's thresholds. It declares an
 `item` object whose fields are `string`, `number`, `boolean` or `enum` specs (a field can be
-`required`, and a list cannot be nested), and an optional `maxItems`. A stored entry with a field the
+`required`, and a list cannot be nested), an optional `maxItems`, and `ordered: true` when the order of the entries means something (the settings form then offers move up and move down on each row). A stored entry with a field the
 `item` does not declare is rejected, and the settings form renders one row per entry with one control
 per field. The built-in `thresholds` option, which most built-in telemetry widgets carry, is one: each
 entry names a severity (`normal`, `warning`, `minor`, `major` or `critical`), never a color, so the
@@ -197,6 +197,7 @@ The console implements the controls listed in `HOST_OPTION_CONTROLS`, exported b
 | --- | --- |
 | `command-vocabulary` | Picks one of the bound device's commands and writes its key, label and parameters together. |
 | `slot-target` | Picks one of the dashboard's slots. |
+| `device-type` | Picks a device type from the tenant's catalogue and stores its token. On a string option or a string field of a list item. |
 | `basemap` | Marks the raster map tile source and its attribution. |
 
 A control the console does not implement, including every namespaced one, gets the generic field.

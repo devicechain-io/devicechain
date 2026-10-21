@@ -99,7 +99,7 @@ export const tankLevelWidget = defineWidget({
 
 选项有 `kind`（`string`、`number`、`boolean`、`enum` 或 `list`）和一句 `doc` 说明。数字可声明 `min`、`max` 和 `integer`。枚举声明其 `values`。字符串可声明 `format: 'json'`，要求其值能解析为 JSON。`required` 标记一个缺失就会让组件无内容可显示的选项；空字符串视为缺失。宿主会依据模式校验已存储的选项，控制台也据此生成设置表单。
 
-`list` 选项存储一个由小对象组成的数组，例如组件的阈值。它声明一个 `item` 对象，其字段为 `string`、`number`、`boolean` 或 `enum` 规格（字段可以是 `required`，列表不能嵌套），以及可选的 `maxItems`。存储的条目若含有 `item` 未声明的字段，则会被拒绝；设置表单为每个条目渲染一行，每个字段一个控件。大多数内置遥测组件都带有的 `thresholds` 选项就是这样一个列表：每个条目指明一个严重级别（`normal`、`warning`、`minor`、`major` 或 `critical`），而不是颜色，因此由主题决定它在浅色和深色下的外观。只有异常级别才有颜色：处于 `normal` 区间的值与没有阈值时完全相同，因此正常读数永远不会被着色。
+`list` 选项存储一个由小对象组成的数组，例如组件的阈值。它声明一个 `item` 对象，其字段为 `string`、`number`、`boolean` 或 `enum` 规格（字段可以是 `required`，列表不能嵌套），可选的 `maxItems`，以及在条目顺序有意义时使用的 `ordered: true`（设置表单随后会为每一行提供上移和下移）。存储的条目若含有 `item` 未声明的字段，则会被拒绝；设置表单为每个条目渲染一行，每个字段一个控件。大多数内置遥测组件都带有的 `thresholds` 选项就是这样一个列表：每个条目指明一个严重级别（`normal`、`warning`、`minor`、`major` 或 `critical`），而不是颜色，因此由主题决定它在浅色和深色下的外观。只有异常级别才有颜色：处于 `normal` 区间的值与没有阈值时完全相同，因此正常读数永远不会被着色。
 
 `optThresholds`、`bandAt` 和 `thresholdBands` 可在你自己的组件中读取同一选项，`useSeverityColors` 则给出主题中每个异常级别的颜色。
 
@@ -144,6 +144,7 @@ options: {
 | --- | --- |
 | `command-vocabulary` | 从所绑定设备的命令中选择一个，并一起写入其键、标签和参数。 |
 | `slot-target` | 从仪表板的槽位中选择一个。 |
+| `device-type` | 从租户目录中选择一个设备类型并保存其令牌。可用于字符串选项或列表项的字符串字段。 |
 | `basemap` | 标记栅格地图瓦片源及其署名。 |
 
 控制台未实现的控件（包括所有带命名空间的控件）使用通用字段。若要为你的选项提供专属的编辑体验，请提供一个编辑器。

@@ -563,10 +563,11 @@ export const builtinWidgetDescriptors = {
       deviceTypes: {
         kind: 'list',
         maxItems: 24,
+        ordered: true,
         labelId: 'widgetLabelAlarmDeviceTypes',
         helpId: 'widgetHintAlarmDeviceTypes',
         item: {
-          token: { kind: 'string', labelId: 'widgetLabelAlarmDeviceTypeToken' },
+          token: { kind: 'string', control: 'device-type', labelId: 'widgetLabelAlarmDeviceTypeToken' },
         },
       },
       maxRows: {
@@ -639,6 +640,7 @@ export const builtinWidgetDescriptors = {
       acknowledged: ALARM_ACKNOWLEDGED,
       deviceType: {
         kind: 'string',
+        control: 'device-type',
         labelId: 'widgetLabelAlarmSeverityType',
         helpId: 'widgetHintAlarmSeverityType',
       },

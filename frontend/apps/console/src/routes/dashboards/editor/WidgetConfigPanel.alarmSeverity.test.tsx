@@ -7,16 +7,40 @@
 
 import '@/i18n/config';
 import i18n from '@/i18n/config';
-import { cleanup, fireEvent, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateOptions, type KnownWidgetInstance, type ResolvedWidgetInstance } from '@devicechain/dashboards';
 import { WIDGET_OPTIONS } from '@devicechain/widgets';
 
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+
+// The device-type catalogue the pickers read. The real EntityPicker and Combobox run on top of it.
+const { listDeviceTypes } = vi.hoisted(() => ({ listDeviceTypes: vi.fn() }));
+vi.mock('@/lib/api/device-management', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/device-management')>()),
+  listDeviceTypes,
+  listDevices: vi.fn().mockResolvedValue({ results: [] }),
+}));
+const CATALOGUE = [
+  { token: 'thermostat', name: 'Thermostat' },
+  { token: 'sensor', name: 'Sensor' },
+  { token: 'pump', name: 'Pump' },
+];
+beforeEach(() => {
+  listDeviceTypes.mockReset();
+  listDeviceTypes.mockResolvedValue({ results: CATALOGUE, pagination: { totalRecords: CATALOGUE.length } });
+});
+
+// Open the picker inside `scope` and choose the option for `token`.
+async function pickType(scope: HTMLElement, token: string, label: string) {
+  fireEvent.click(scope.querySelector('button')!);
+  await waitFor(() => expect(document.querySelector(`[data-shot-value="${token}"]`)).toBeTruthy());
+  fireEvent.click(document.querySelector(`[data-shot-value="${token}"]`)!);
+  await waitFor(() => expect(scope.textContent).toContain(label));
+}
 
 afterEach(cleanup);
 
@@ -58,10 +82,11 @@ describe('the alarm severity breakdown in the settings panel', () => {
     expect(field(container, 'severity')).toBeNull();
   });
 
-  it('writes the device type, and reads it back', () => {
+  it('writes the device type TOKEN from a picker that shows names, and reads it back', async () => {
     store.options = undefined;
     const first = render(<Harness />);
-    fireEvent.change(field(first.container, 'deviceType')!.querySelector('input')!, { target: { value: 'thermostat' } });
+    expect(field(first.container, 'deviceType')!.querySelector('input')).toBeNull();
+    await pickType(field(first.container, 'deviceType')!, 'thermostat', 'Thermostat');
     expect(stored()?.deviceType).toBe('thermostat');
 
     // What the editor wrote is a valid options bag for the widget...
@@ -71,7 +96,16 @@ describe('the alarm severity breakdown in the settings panel', () => {
     // ...and a fresh panel opened on it shows exactly it.
     first.unmount();
     const second = render(<Harness initial={written} />);
-    expect(field(second.container, 'deviceType')!.querySelector('input')!.value).toBe('thermostat');
+    await waitFor(() => expect(field(second.container, 'deviceType')!.textContent).toContain('Thermostat'));
+  });
+
+  it('shows a stored token the catalogue no longer holds as unknown, and keeps it until removed', async () => {
+    store.options = undefined;
+    const { container } = render(<Harness initial={{ deviceType: 'retired-kind', state: 'ACTIVE' }} />);
+    await waitFor(() => expect(field(container, 'deviceType')!.textContent).toContain('unknown type retired-kind'));
+    expect(stored()).toBeUndefined(); // viewing changed nothing
+    fireEvent.click(field(container, 'deviceType')!.querySelector('[aria-label="Clear"]')!);
+    expect(stored()?.deviceType).toBeUndefined();
   });
 
   it('refuses a severity filter, which it does not read', () => {
@@ -84,6 +118,7 @@ describe('the alarm severity breakdown in the settings panel', () => {
     try {
       const { container } = render(<Harness />);
       expect(field(container, 'deviceType')?.textContent).toContain('Tipo de dispositivo');
+      await waitFor(() => expect(field(container, 'deviceType')?.textContent).toContain('Seleccionar tipo de dispositivo'));
       expect(field(container, 'deviceType')?.textContent).toContain('Cuenta solo las alarmas');
     } finally {
       await i18n.changeLanguage('en');

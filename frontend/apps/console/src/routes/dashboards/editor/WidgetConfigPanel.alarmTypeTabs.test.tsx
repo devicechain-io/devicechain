@@ -9,14 +9,38 @@ import '@/i18n/config';
 import i18n from '@/i18n/config';
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateOptions, type KnownWidgetInstance, type ResolvedWidgetInstance } from '@devicechain/dashboards';
 import { WIDGET_OPTIONS } from '@devicechain/widgets';
 
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+
+// The device-type catalogue the pickers read. The real EntityPicker and Combobox run on top of it.
+const { listDeviceTypes } = vi.hoisted(() => ({ listDeviceTypes: vi.fn() }));
+vi.mock('@/lib/api/device-management', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/device-management')>()),
+  listDeviceTypes,
+  listDevices: vi.fn().mockResolvedValue({ results: [] }),
+}));
+const CATALOGUE = [
+  { token: 'thermostat', name: 'Thermostat' },
+  { token: 'sensor', name: 'Sensor' },
+  { token: 'pump', name: 'Pump' },
+];
+beforeEach(() => {
+  listDeviceTypes.mockReset();
+  listDeviceTypes.mockResolvedValue({ results: CATALOGUE, pagination: { totalRecords: CATALOGUE.length } });
+});
+
+// Open the picker inside `scope` and choose the option for `token`.
+async function pickType(scope: HTMLElement, token: string, label: string) {
+  fireEvent.click(scope.querySelector('button')!);
+  await waitFor(() => expect(document.querySelector(`[data-shot-value="${token}"]`)).toBeTruthy());
+  fireEvent.click(document.querySelector(`[data-shot-value="${token}"]`)!);
+  await waitFor(() => expect(scope.textContent).toContain(label));
+}
 
 afterEach(cleanup);
 
@@ -48,7 +72,10 @@ function Harness({ initial }: { initial?: Record<string, unknown> }) {
 
 const field = (root: HTMLElement, key: string) => root.querySelector<HTMLElement>(`[data-testid="widget-option-field-${key}"]`)!;
 const cell = (root: HTMLElement, row: number) =>
-  root.querySelector<HTMLInputElement>(`[data-testid="list-cell-deviceTypes-${row}-token"] input`)!;
+  root.querySelector<HTMLElement>(`[data-testid="list-cell-deviceTypes-${row}-token"]`)!;
+const addRow = (root: HTMLElement) => fireEvent.click(root.querySelector('[data-testid="list-add-deviceTypes"]')!);
+const rowButton = (root: HTMLElement, name: string) =>
+  root.querySelector<HTMLButtonElement>(`[data-testid="widget-option-field-deviceTypes"] button[aria-label="${name}"]`)!;
 
 async function pickGroupBy(root: HTMLElement, label: string) {
   fireEvent.click(field(root, 'groupBy').querySelector('button')!);
@@ -77,10 +104,10 @@ describe('the alarm table’s device-type tabs in the settings panel', () => {
     await pickGroupBy(first.container, 'Device type');
     expect(stored()?.groupBy).toBe('deviceType');
 
-    fireEvent.click(first.container.querySelector('[data-testid="list-add-deviceTypes"]')!);
-    fireEvent.change(cell(first.container, 0), { target: { value: 'thermostat' } });
-    fireEvent.click(first.container.querySelector('[data-testid="list-add-deviceTypes"]')!);
-    fireEvent.change(cell(first.container, 1), { target: { value: 'sensor' } });
+    addRow(first.container);
+    await pickType(cell(first.container, 0), 'thermostat', 'Thermostat');
+    addRow(first.container);
+    await pickType(cell(first.container, 1), 'sensor', 'Sensor');
     expect(stored()?.deviceTypes).toEqual([{ token: 'thermostat' }, { token: 'sensor' }]);
 
     // What the editor wrote is a valid options bag for the widget...
@@ -91,8 +118,40 @@ describe('the alarm table’s device-type tabs in the settings panel', () => {
     first.unmount();
     const second = render(<Harness initial={written} />);
     expect(field(second.container, 'groupBy').textContent).toContain('Device type');
-    expect(cell(second.container, 0).value).toBe('thermostat');
-    expect(cell(second.container, 1).value).toBe('sensor');
+    await waitFor(() => expect(cell(second.container, 0).textContent).toContain('Thermostat'));
+    expect(cell(second.container, 1).textContent).toContain('Sensor');
+  });
+
+  it('reorders with move up / move down, never past either end', () => {
+    store.options = undefined;
+    const { container } = render(
+      <Harness initial={{ groupBy: 'deviceType', deviceTypes: [{ token: 'a' }, { token: 'b' }, { token: 'c' }] }} />,
+    );
+    expect(rowButton(container, 'Move row 1 up').disabled).toBe(true);
+    expect(rowButton(container, 'Move row 3 down').disabled).toBe(true);
+    fireEvent.click(rowButton(container, 'Move row 3 up'));
+    expect(stored()?.deviceTypes).toEqual([{ token: 'a' }, { token: 'c' }, { token: 'b' }]);
+    fireEvent.click(rowButton(container, 'Move row 1 down'));
+    expect(stored()?.deviceTypes).toEqual([{ token: 'c' }, { token: 'a' }, { token: 'b' }]);
+  });
+
+  it('removes a row, and drops the option when the last one goes', () => {
+    store.options = undefined;
+    const { container } = render(<Harness initial={{ deviceTypes: [{ token: 'a' }, { token: 'b' }] }} />);
+    fireEvent.click(rowButton(container, 'Remove row 1'));
+    expect(stored()?.deviceTypes).toEqual([{ token: 'b' }]);
+    fireEvent.click(rowButton(container, 'Remove row 1'));
+    expect(stored()?.deviceTypes).toBeUndefined();
+  });
+
+  it('shows a stored token the catalogue lacks as unknown, with a remove action, never dropping it', async () => {
+    store.options = undefined;
+    const { container } = render(<Harness initial={{ deviceTypes: [{ token: 'thermostat' }, { token: 'gone' }] }} />);
+    await waitFor(() => expect(cell(container, 1).textContent).toContain('unknown type gone'));
+    expect(cell(container, 0).textContent).toContain('Thermostat');
+    expect(stored()).toBeUndefined();
+    fireEvent.click(rowButton(container, 'Remove row 2'));
+    expect(stored()?.deviceTypes).toEqual([{ token: 'thermostat' }]);
   });
 
   it('switches back to one table by choosing One table, keeping the pinned list for later', async () => {
