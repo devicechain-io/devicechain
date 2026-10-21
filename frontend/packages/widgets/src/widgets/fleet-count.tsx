@@ -11,6 +11,11 @@
 //     foreground, so a healthy fleet is calm;
 //   - a device with no reading is counted apart ("2 not reporting", or "1 could not be read" when
 //     its read failed), never as healthy; while any member is still loading there is no figure;
+//   - a device whose profile does not declare the measurement is not in the "of N" at all, and is
+//     noted apart ("1 does not report this"): a plant in a fuel count is outside the question,
+//     which "not reporting" would misstate. A declared measurement the device is silent on (a dead
+//     probe, a live heartbeat) stays in N as not reporting; so does a device whose profile could
+//     not be read;
 //   - a group larger than the feed reads says so ("Showing 500 of 812 devices") instead of
 //     presenting the subset as the fleet;
 //   - DEVICES shows the group's size, taken from the roster rather than from the readings.
@@ -69,6 +74,12 @@ export function FleetCount({ widget, data }: WidgetProps) {
   if (!showDevices && fleet.members.length === 0) return empty(strings.noMembers);
   // A count over the members read so far would be an undercount that looks like an answer.
   if (counted && counted.pending > 0) return empty(strings.loading);
+  // No member's profile declares this measurement: there is no "N" here either. Over a
+  // truncated group only the members read were asked, so the message says so rather than speaking
+  // for devices past the page.
+  if (counted && counted.members === 0) {
+    return empty(fleet.truncated ? strings.noneMeasuredShown(fleet.members.length, fleet.total) : strings.noneMeasured);
+  }
 
   const figure = showDevices ? String(fleet.total) : String(counted!.flagged);
   const unit = showDevices ? undefined : strings.countOf(counted!.members);
@@ -79,6 +90,7 @@ export function FleetCount({ widget, data }: WidgetProps) {
     const silent = counted.members - counted.reporting - counted.unread;
     if (silent > 0) notes.push(strings.notReporting(silent));
     if (counted.unread > 0) notes.push(strings.notRead(counted.unread));
+    if (counted.notMeasured > 0) notes.push(strings.notMeasured(counted.notMeasured));
     // The device count is the roster's own total, exact past the page; only the attention count
     // is taken from the members read, so only it says it covers part of the fleet.
     if (fleet.truncated) notes.push(strings.truncated(fleet.members.length, fleet.total));

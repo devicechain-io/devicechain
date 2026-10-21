@@ -7,7 +7,7 @@
 // dark, must render with no clipped or overflowing text and no widget on top of another.
 // The checks are in readability.ts; this file drives them and holds the ratchet.
 //
-// The assertion is the gate. Each run also saves a full-page screenshot of every board it
+// The assertion is the gate. Each run also saves a whole-board screenshot of every board it
 // measured under test-results/readability/, as an ADVISORY artifact: nothing compares it with a
 // baseline and nothing fails on it. It is there for a reviewer to look at.
 
@@ -104,9 +104,20 @@ async function measure(page: Page, board: string, width: number, theme: string) 
   }
   expect(result.widgets.length, `${board}: every widget in the definition is on the page`).toBe(Number(state.gateWidgets));
 
+  // The whole board in one frame, taken by growing the viewport to the page's height rather than
+  // with `fullPage`. Chromium's beyond-the-viewport capture repaints some layers at the wrong
+  // scale -- big fitted numerals, gauge and map canvases drawn about twice their size and cropped
+  // by their tiles -- while the DOM, the measurements above and an on-screen frame are all
+  // correct. It did so in most runs of the 1920 px Sitepulse board, so the advisory image showed
+  // a defect the board does not have. The page lays the board out at its natural height, so a
+  // viewport that tall changes no widget's box.
+  const height = await page.evaluate(() => document.documentElement.scrollHeight);
+  if (height > HEIGHT) {
+    await page.setViewportSize({ width, height });
+    await page.evaluate(() => new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))));
+  }
   await page.screenshot({
     path: path.join(test.info().project.outputDir, 'readability', `${board.replace('/', '-')}-${width}-${theme}.png`),
-    fullPage: true,
   });
   return result;
 }

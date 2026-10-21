@@ -117,6 +117,10 @@ export interface DeviceResolver {
   // the resolver reads). Optional: a resolver without it yields tokens only, and a fleet widget then
   // labels rows by token and cannot report a truncated anchor.
   anchorMembers?(anchor: AnchorTarget): Promise<{ members: MemberRef[]; total: number }>;
+  // The measurement names the ACTIVE profile version of a device type declares (calculated metrics
+  // included), or null when it declares nothing to consult. Rejects when the read fails. Optional:
+  // a resolver without it leaves every member's declaration unknown.
+  declaredMetrics?(deviceType: string): Promise<string[] | null>;
 }
 
 // WidgetStreamSink receives live samples for one widget, across every device its
@@ -389,6 +393,11 @@ export interface WidgetDataSource {
     onSeed: (deviceToken: string, seed: MemberSeed | null, failure?: SeedFailure) => void,
     cancelled?: () => boolean,
   ): Promise<void>;
+  // The measurement names a device TYPE's active profile version declares: what separates "does not
+  // report this" (the profile never declares it) from "not reporting" (it does, and the device is
+  // silent). `null` when it cannot say -- no published profile, no way to look, or the lookup
+  // failed -- and an unknown declaration is read as declared, never as absent. Optional like the above.
+  declaredMetrics?(deviceType: string): Promise<readonly string[] | null>;
 }
 
 // One widget's interest in a device stream: the measurement names it wants (an
@@ -522,6 +531,25 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     const groups = await this.resolveDevices(datasource);
     const members = groups.map((g) => ({ token: g.deviceToken, name: null }));
     return { roster: { members, total: members.length, unbound: datasource.kind === 'unbound' }, names };
+  }
+
+  // One read per distinct device type, whoever asks and however many devices have it. A settled
+  // answer (names, or null for "no published profile") is kept for the session; a failed read is
+  // not, so a later ask tries again, and that ask is answered null meanwhile.
+  private readonly declared = new Map<string, Promise<readonly string[] | null>>();
+
+  declaredMetrics(deviceType: string): Promise<readonly string[] | null> {
+    const read = this.resolver.declaredMetrics;
+    if (!read) return Promise.resolve(null);
+    let pending = this.declared.get(deviceType);
+    if (!pending) {
+      pending = read.call(this.resolver, deviceType).catch(() => {
+        this.declared.delete(deviceType);
+        return null;
+      });
+      this.declared.set(deviceType, pending);
+    }
+    return pending;
   }
 
   // The hub-wide cap on in-flight member seed reads, and the reads currently in flight (so a second

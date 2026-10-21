@@ -35,7 +35,7 @@ export interface MeasurementStreamState {
 // One device of a fleet, as a fleet widget sees it. `seed` is where its history read stands, and
 // is what separates the empty states: a reading is a reading wherever it came from, but the lack
 // of one means "still loading" until the seed has settled, and only then "no data in range" (the
-// device sent nothing in the span) or "does not report this" (it sent other measurements).
+// device sent nothing in the span) or "does not report this" (its profile does not declare it).
 export interface FleetMember {
   token: string;
   // The device's name, when the source knows it; the widget falls back to the token.
@@ -48,6 +48,13 @@ export interface FleetMember {
   // Names it reported in the span whose newest reading was not loaded (MemberSeed.unread): "not
   // loaded", never "no data in range".
   unread?: string[];
+  // The measurement names its device type's ACTIVE profile version declares (calculated metrics
+  // included). A measurement not in it is one the device does not report ("does not report this");
+  // one in it that the device has not sent is one it is silent on ("not reporting"). Absent while
+  // the declaration is unknown -- not looked up yet, or the lookup failed, or the type has no
+  // published profile -- and unknown is read as declared: a device is never left out of a count
+  // on a guess.
+  declared?: string[];
 }
 
 // The members a fleet widget draws. `total` is the size of the anchor; `members` holds at most the

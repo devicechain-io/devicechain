@@ -12,7 +12,7 @@ import { DashboardHub, type DeviceResolver } from './hub';
 import { MEMBER_SEED_CONCURRENCY, type MemberBucketCriteria, type MemberRoster, type MemberSeed, type MemberSeedPlan } from './members';
 import { GraphQLRequestError } from '@devicechain/client';
 
-import { BUCKETED_MEASUREMENTS, CUSTOMER_DEVICES, DEVICE_NAMES, DEVICES_FOR_ANCHOR } from './queries';
+import { BUCKETED_MEASUREMENTS, CUSTOMER_DEVICES, DECLARED_METRICS, DEVICE_NAMES, DEVICES_FOR_ANCHOR } from './queries';
 import { ANCHOR_PAGE_SIZE, createDeviceResolver } from './resolver';
 import type { DatasourceSelector, MeasurementSample } from './types';
 
@@ -63,7 +63,7 @@ function backend(n: number, total = n, failFor?: (token: string) => unknown) {
       };
     }
     if (doc === DEVICE_NAMES) {
-      return { devicesByToken: (vars.tokens as string[]).map((token) => ({ token, name: `Machine ${token.slice(2)}` })) };
+      return { devicesByToken: (vars.tokens as string[]).map((token) => ({ token, name: `Machine ${token.slice(2)}`, deviceType: { token: 'pump' } })) };
     }
     if (doc === BUCKETED_MEASUREMENTS) {
       const err = failFor?.(vars.criteria.deviceToken);
@@ -99,7 +99,7 @@ describe('the roster', () => {
     await flush();
     expect(rosters).toHaveLength(1);
     expect(rosters[0].members).toHaveLength(40);
-    expect(rosters[0].members[0]).toEqual({ token: 'd-001', name: 'Machine 001' });
+    expect(rosters[0].members[0]).toEqual({ token: 'd-001', name: 'Machine 001', deviceType: 'pump' });
     expect(rosters[0].unbound).toBe(false);
     expect(countOf(DEVICES_FOR_ANCHOR)).toBe(1);
     expect(countOf(DEVICE_NAMES)).toBe(1);
@@ -374,8 +374,8 @@ describe('the read each anchor kind takes', () => {
         return {
           customerDevices: {
             results: [
-              { token: 'd-001', name: 'Pump one' },
-              { token: 'd-002', name: null },
+              { token: 'd-001', name: 'Pump one', deviceType: { token: 'pump' } },
+              { token: 'd-002', name: null, deviceType: null },
             ],
             pagination: { totalRecords: 7 },
           },
@@ -387,8 +387,8 @@ describe('the read each anchor kind takes', () => {
     newHub().subscribeMembers(CUSTOMER, { roster: (r) => (roster = r), next: () => {} });
     await flush();
     expect(roster!.members).toEqual([
-      { token: 'd-001', name: 'Pump one' },
-      { token: 'd-002', name: null },
+      { token: 'd-001', name: 'Pump one', deviceType: 'pump' },
+      { token: 'd-002', name: null, deviceType: null },
     ]);
     expect(roster!.total).toBe(7);
     const call = h.gql.mock.calls.find((c) => c[1] === CUSTOMER_DEVICES)!;
@@ -409,6 +409,108 @@ describe('the read each anchor kind takes', () => {
     await flush();
     expect(countOf(DEVICES_FOR_ANCHOR)).toBe(2);
     expect(countOf(CUSTOMER_DEVICES)).toBe(0);
+  });
+});
+
+// What a device type's ACTIVE profile declares: read once per type, for any number of devices and
+// widgets, and never able to take a roster down. A viewer limited to some customers makes the same
+// read (device types and profile versions are catalogue reads open to any member), and if it is
+// refused anyway the answer is "unknown", which the fleet widgets read as declared.
+describe('declaredMetrics', () => {
+  const declares = (types: Record<string, Array<{ metricKey: string }> | null | 'no-profile'>) =>
+    h.gql.mockImplementation(async (_area: string, doc: unknown, vars: any) => {
+      if (doc !== DECLARED_METRICS) throw new Error('unexpected query');
+      return {
+        deviceTypesByToken: (vars.tokens as string[])
+          .filter((t) => t in types)
+          .map((token) => {
+            const m = types[token];
+            return { token, profile: m === 'no-profile' ? null : { activeProfileVersion: m ? { metrics: m } : null } };
+          }),
+      };
+    });
+
+  it('reads the metric names of the type active profile version, calculated ones included', async () => {
+    declares({ tank: [{ metricKey: 'fuel' }, { metricKey: 'fuel_pct' }] });
+    expect(await newHub().declaredMetrics('tank')).toEqual(['fuel', 'fuel_pct']);
+    const call = h.gql.mock.calls[0];
+    expect(call[0]).toBe('device-management');
+    expect(call[2]).toEqual({ tokens: ['tank'] });
+  });
+
+  it('is null where the type has nothing published to say: no profile, never published, or not found', async () => {
+    declares({ bare: 'no-profile', draft: null });
+    const hub = newHub();
+    expect(await hub.declaredMetrics('bare')).toBeNull();
+    expect(await hub.declaredMetrics('draft')).toBeNull();
+    expect(await hub.declaredMetrics('missing')).toBeNull();
+  });
+
+  it('asks once per distinct type, however many devices and widgets want it', async () => {
+    declares({ tank: [{ metricKey: 'fuel' }], crusher: [{ metricKey: 'throughput' }] });
+    const hub = newHub();
+    const asked = await Promise.all(['tank', 'crusher', 'tank', 'tank', 'crusher'].map((t) => hub.declaredMetrics(t)));
+    await hub.declaredMetrics('tank');
+    expect(asked[0]).toEqual(['fuel']);
+    expect(asked[1]).toEqual(['throughput']);
+    // Both types asked in one tick go in ONE read, and each is asked once.
+    expect(countOf(DECLARED_METRICS)).toBe(1);
+    expect(h.gql.mock.calls[0][2]).toEqual({ tokens: ['tank', 'crusher'] });
+  });
+
+  it('reads a board of many types in one request per hundred types, not one per type', async () => {
+    const many = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`t${i}`, [{ metricKey: `m${i}` }]]));
+    declares(many);
+    const hub = newHub();
+    const asked = await Promise.all(Object.keys(many).map((t) => hub.declaredMetrics(t)));
+    expect(asked[149]).toEqual(['m149']);
+    expect(countOf(DECLARED_METRICS)).toBe(2);
+  });
+
+  it('is null for a published version that declares no metric: an undeclared measurement is still accepted', async () => {
+    declares({ open: [] });
+    expect(await newHub().declaredMetrics('open')).toBeNull();
+  });
+
+  it('is null when the read fails, not a rejection, and asks again next time rather than keeping the failure', async () => {
+    h.gql.mockRejectedValueOnce(new Error('profile read failed'));
+    declares({ tank: [{ metricKey: 'fuel' }] });
+    const hub = newHub();
+    expect(await hub.declaredMetrics('tank')).toBeNull();
+    expect(await hub.declaredMetrics('tank')).toEqual(['fuel']);
+  });
+
+  it('is null for a viewer the read is refused to: unknown, never an exclusion', async () => {
+    h.gql.mockRejectedValue({ forbidden: true });
+    expect(await newHub().declaredMetrics('tank')).toBeNull();
+  });
+
+  it('is null from a resolver that cannot look a type up', async () => {
+    const hub = new DashboardHub({ resolver: { devicesForAnchor: async () => [], deviceExists: async () => true } });
+    expect(await hub.declaredMetrics('tank')).toBeNull();
+    expect(h.gql).not.toHaveBeenCalled();
+  });
+
+  it('reads a customer-scoped roster and the profiles of its types through the same two reads', async () => {
+    h.gql.mockImplementation(async (_area: string, doc: unknown, vars: any) => {
+      if (doc === CUSTOMER_DEVICES) {
+        return { customerDevices: { results: [{ token: 'd-001', name: 'Tank', deviceType: { token: 'tank' } }], pagination: { totalRecords: 1 } } };
+      }
+      if (doc === DECLARED_METRICS) {
+        return { deviceTypesByToken: [{ token: vars.tokens[0], profile: { activeProfileVersion: { metrics: [{ metricKey: 'fuel' }] } } }] };
+      }
+      throw new Error('unexpected query');
+    });
+    const hub = newHub();
+    let roster: MemberRoster | undefined;
+    hub.subscribeMembers(
+      { kind: 'anchor', anchor: { relationship: 'assigned', targetType: 'customer', targetToken: 'acme' }, measurements: ['fuel'] },
+      { roster: (r) => (roster = r), next: () => {} },
+    );
+    await flush();
+    expect(roster!.members[0].deviceType).toBe('tank');
+    expect(await hub.declaredMetrics(roster!.members[0].deviceType!)).toEqual(['fuel']);
+    expect(countOf(DEVICE_NAMES)).toBe(0);
   });
 });
 

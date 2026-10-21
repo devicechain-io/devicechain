@@ -31,10 +31,12 @@ import type { DeviceResolver } from './hub';
 import type { MemberRef } from './members';
 import {
   CUSTOMER_DEVICES,
+  DECLARED_METRICS,
   DEVICES_BY_TOKEN,
   DEVICES_FOR_ANCHOR,
   DEVICE_NAMES,
   type CustomerDevicesResult,
+  type DeclaredMetricsResult,
   type DeviceNamesResult,
   type DevicesByTokenResult,
   type EntityRelationshipsResult,
@@ -51,7 +53,12 @@ interface AnchorPage {
   tokens: string[];
   total: number;
   names?: Map<string, string | null>;
+  // Their device type tokens, from the same read as `names`.
+  types?: Map<string, string | null>;
 }
+
+// The most device types one declaration read asks for.
+const DECLARED_BATCH_SIZE = 100;
 
 // A server that reports no total is taken at its word: the page is the fleet.
 const trueSize = (reported: number | null | undefined, page: number) => Math.max(reported ?? page, page);
@@ -71,6 +78,7 @@ function readAnchorPage(anchor: AnchorTarget): Promise<AnchorPage> {
         tokens: rows.map((d) => d.token),
         total: trueSize(r.customerDevices.pagination?.totalRecords, rows.length),
         names: new Map(rows.map((d) => [d.token, d.name])),
+        types: new Map(rows.map((d) => [d.token, d.deviceType?.token ?? null])),
       };
     });
   }
@@ -96,6 +104,10 @@ export function createDeviceResolver(): DeviceResolver {
   // dashboard bind the same device, and a device's existence is stable for a viewing
   // session (a delete mid-session is rare and the next mount re-checks).
   const existsCache = new Map<string, Promise<boolean>>();
+
+  // The device types asked for declarations in the current tick, and who is waiting on each.
+  type DeclaredWaiter = { resolve: (names: string[] | null) => void; reject: (err: unknown) => void };
+  let declaredBatch: Map<string, DeclaredWaiter[]> | null = null;
 
   function anchorKey(anchor: AnchorTarget): string {
     return `${anchor.relationship}|${anchor.targetType}|${anchor.targetToken}`;
@@ -130,17 +142,21 @@ export function createDeviceResolver(): DeviceResolver {
       let pending = memberCache.get(key);
       if (!pending) {
         pending = anchorPage(anchor)
-          .then(async ({ tokens, total, names: listed }) => {
+          .then(async ({ tokens, total, names: listed, types: listedTypes }) => {
             const names = listed ?? new Map<string, string | null>();
+            const types = listedTypes ?? new Map<string, string | null>();
             if (!listed && tokens.length > 0) {
               try {
                 const r: DeviceNamesResult = await gql('device-management', DEVICE_NAMES, { tokens });
-                for (const d of r.devicesByToken) names.set(d.token, d.name);
+                for (const d of r.devicesByToken) {
+                  names.set(d.token, d.name);
+                  types.set(d.token, d.deviceType?.token ?? null);
+                }
               } catch {
-                // labelled by token
+                // labelled by token, and of no known type
               }
             }
-            return { members: tokens.map((token) => ({ token, name: names.get(token) ?? null })), total };
+            return { members: tokens.map((token) => ({ token, name: names.get(token) ?? null, deviceType: types.get(token) ?? null })), total };
           })
           .catch((err) => {
             memberCache.delete(key);
@@ -149,6 +165,44 @@ export function createDeviceResolver(): DeviceResolver {
         memberCache.set(key, pending);
       }
       return pending;
+    },
+
+    // The names a device type's active profile version declares, or null when it has nothing to
+    // say: no profile, never published, not found, or a published version that declares no metric
+    // at all (an undeclared measurement is still accepted, so an empty declaration rules nothing
+    // out). A failed read rejects: the caller treats that as unknown too, and does not cache it.
+    // Every type asked in the same tick goes in ONE read, so a board of many types costs one
+    // request rather than one per type.
+    declaredMetrics(deviceType: string): Promise<string[] | null> {
+      return new Promise((resolve, reject) => {
+        let batch = declaredBatch;
+        if (!batch) {
+          batch = declaredBatch = new Map();
+          queueMicrotask(() => {
+            const asked = declaredBatch!;
+            declaredBatch = null;
+            const tokens = [...asked.keys()];
+            for (let i = 0; i < tokens.length; i += DECLARED_BATCH_SIZE) {
+              const chunk = tokens.slice(i, i + DECLARED_BATCH_SIZE);
+              gql('device-management', DECLARED_METRICS, { tokens: chunk }).then(
+                (r: DeclaredMetricsResult) => {
+                  for (const token of chunk) {
+                    const version = r.deviceTypesByToken.find((t) => t.token === token)?.profile?.activeProfileVersion;
+                    const names = version && version.metrics.length > 0 ? version.metrics.map((m) => m.metricKey) : null;
+                    for (const w of asked.get(token)!) w.resolve(names);
+                  }
+                },
+                (err: unknown) => {
+                  for (const token of chunk) for (const w of asked.get(token)!) w.reject(err);
+                },
+              );
+            }
+          });
+        }
+        const waiting = batch.get(deviceType) ?? [];
+        waiting.push({ resolve, reject });
+        batch.set(deviceType, waiting);
+      });
     },
 
     // deviceExists caches only a POSITIVE result (a live device is stable for the

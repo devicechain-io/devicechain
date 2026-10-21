@@ -13,6 +13,9 @@
 //     question; what is read is fleet-seed.ts's plan (the last few minutes first, the span only for
 //     what that left empty). The window is the widget's pinned span, else the board's, ending at the
 //     freeze instant while paused;
+//   - what each device's profile DECLARES is read once per distinct device type (hub.declaredMetrics),
+//     and is what tells "does not report this" from "not reporting". A lookup that fails or has not
+//     landed leaves the declaration unknown, which counts the device as declared;
 //   - paused, live readings queue (newest per device and measurement) and merge on resume, so the
 //     table on screen does not move under a "Paused" badge;
 //   - a change of span re-reads the seeds; a reading older than the span is no longer shown;
@@ -61,11 +64,13 @@ interface Store {
   roster: MemberRoster | null;
   live: Map<string, Map<string, MeasurementSample>>;
   seeds: Map<string, MemberSeed | 'failed'>;
+  // What each device type declares, by type token, as the lookups settle.
+  declared: Map<string, readonly string[] | null>;
   forbidden: boolean;
   error: unknown | null;
 }
 
-const emptyStore = (key: string | null): Store => ({ key, roster: null, live: new Map(), seeds: new Map(), forbidden: false, error: null });
+const emptyStore = (key: string | null): Store => ({ key, roster: null, live: new Map(), seeds: new Map(), declared: new Map(), forbidden: false, error: null });
 
 function record(into: Map<string, Map<string, MeasurementSample>>, sample: MeasurementSample): void {
   let byName = into.get(sample.deviceToken);
@@ -235,6 +240,30 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub, supported, dsKey, rosterKey, spanSeconds, pausedAt, namesKey, resumes]);
 
+  // The declarations: one lookup per distinct device type in the roster, however many devices share it.
+  useEffect(() => {
+    const s = store.current;
+    if (!supported || !s.roster || rosterKey === null || !hub.declaredMetrics) return;
+    const types = [...new Set(s.roster.members.map((m) => m.deviceType).filter((t): t is string => !!t))].filter((t) => !s.declared.has(t));
+    let cancelled = false;
+    for (const type of types) {
+      hub.declaredMetrics(type).then(
+        (names) => {
+          if (cancelled) return;
+          s.declared.set(type, names);
+          schedule();
+        },
+        () => {
+          // Unknown stays unknown: the members are counted as declared.
+        },
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hub, supported, dsKey, rosterKey]);
+
   // A reading ages out of the span with no event to say so.
   useEffect(() => {
     if (pausedAt !== undefined) return;
@@ -249,6 +278,7 @@ function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: 
       roster: s.roster,
       seeds: s.seeds,
       live: s.live,
+      declared: s.declared,
       since: (pausedAt ?? now()) - spanSeconds * 1000,
       forbidden: s.forbidden,
     });

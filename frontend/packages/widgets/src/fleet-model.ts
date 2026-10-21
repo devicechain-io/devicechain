@@ -45,6 +45,10 @@ export interface FleetInputs {
   roster: MemberRoster | null;
   seeds: ReadonlyMap<string, MemberSeed | 'failed'>;
   live: ReadonlyMap<string, ReadonlyMap<string, MeasurementSample>>;
+  // What each device type's active profile declares, by type token; null is a settled "nothing to
+  // consult". A type absent from it is not looked up yet. Either way its members' declaration is
+  // unknown, which cellFor reads as declared.
+  declared?: ReadonlyMap<string, readonly string[] | null>;
   // The start of the span (epoch ms): a reading older than this is not "in range".
   since: number;
   forbidden: boolean;
@@ -91,6 +95,7 @@ export function buildFleet(i: FleetInputs): FleetState {
       const best = newer(seeded?.latest[name], live?.get(name));
       if (best && inRange(best, best === seeded?.latest[name] ? seedSince : i.since)) latest[name] = best;
     }
+    const declared = ref.deviceType ? i.declared?.get(ref.deviceType) : undefined;
     const observed = new Set<string>(seeded?.observed ?? []);
     for (const name of Object.keys(latest)) observed.add(name);
     return {
@@ -99,6 +104,7 @@ export function buildFleet(i: FleetInputs): FleetState {
       latest,
       seed: seed === undefined ? 'pending' : seed === 'failed' ? 'failed' : 'ready',
       observed: [...observed],
+      ...(declared ? { declared: [...declared] } : {}),
       // A live reading of an unread name is its value: cellFor looks at `latest` first.
       ...(seeded?.unread?.length ? { unread: seeded.unread } : {}),
     };
@@ -126,12 +132,17 @@ export function newestMemberTime(fleet: FleetState): number | undefined {
 // ---- Cells -------------------------------------------------------------------
 
 // What one (device, measurement) cell holds, and when it holds nothing, why.
+//
+// "Does not report this" is decided by what the device's profile DECLARES, never by what it has
+// sent: a sensor whose probe died while its heartbeat keeps arriving has sent other measurements
+// and not this one, and is exactly the device an operator needs to hear about. A device whose
+// declaration is not known (see FleetMember.declared) is taken to declare it.
 export type Cell =
   | { kind: 'value'; sample: MeasurementSample; value: number }
   | { kind: 'loading' }
   // The device's history read failed and no live reading has arrived since.
   | { kind: 'failed' }
-  // The device reported other measurements in the span, but never this one.
+  // The device's active profile does not declare this measurement: it is not one the device reports.
   | { kind: 'not-reported' }
   // The device reported this in the span, but its newest reading was not loaded (MemberSeed.unread).
   | { kind: 'unread' }
@@ -143,10 +154,11 @@ export function cellFor(member: FleetMember, measurement: string): Cell {
   if (sample && typeof sample.value === 'number' && Number.isFinite(sample.value)) {
     return { kind: 'value', sample, value: sample.value };
   }
+  if (member.declared && !member.declared.includes(measurement)) return { kind: 'not-reported' };
   if (member.seed === 'pending') return { kind: 'loading' };
   if (member.seed === 'failed') return { kind: 'failed' };
   if (member.unread?.includes(measurement)) return { kind: 'unread' };
-  return member.observed.length > 0 && !member.observed.includes(measurement) ? { kind: 'not-reported' } : { kind: 'no-data' };
+  return { kind: 'no-data' };
 }
 
 // The columns: the measurements the datasource names, in that order; with none named, every

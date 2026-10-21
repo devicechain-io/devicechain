@@ -251,7 +251,7 @@ describe('ages only where a reading lags the fleet (ageLagSeconds)', () => {
 describe('explained empty cells', () => {
   const state = fleet([
     member('quiet', 'Quiet', {}, { observed: [] }),
-    member('partial', 'Partial', { humidity: 40 }),
+    member('partial', 'Partial', { humidity: 40 }, { declared: ['humidity'] }),
     member('loading', 'Loading', {}, { seed: 'pending' }),
     member('failed', 'Failed', {}, { seed: 'failed' }),
   ]);
@@ -261,10 +261,22 @@ describe('explained empty cells', () => {
     expect(cell(container, 'quiet', 'temperature').textContent).toBe('no data in range');
   });
 
-  it('says "does not report this" for a device that reported other measurements', () => {
+  it('says "does not report this" for a device whose profile does not declare the measurement', () => {
     const { container } = show(state);
     expect(cell(container, 'partial', 'temperature').textContent).toBe('does not report this');
     expect(cell(container, 'partial', 'humidity').textContent).toContain('40');
+  });
+
+  it('says "no data in range", not "does not report this", for a declared measurement a live device has sent nothing of', () => {
+    // A dead temperature probe beside a heartbeat that keeps arriving: the profile declares both.
+    const probe = member('probe', 'Probe', { humidity: 40 }, { declared: ['temperature', 'humidity'] });
+    const { container } = show(fleet([probe]));
+    expect(cell(container, 'probe', 'temperature').textContent).toBe('no data in range');
+  });
+
+  it('says "no data in range" for every device whose declaration is not known, whatever it has sent', () => {
+    const { container } = show(fleet([member('unknown', 'Unknown', { humidity: 40 })]));
+    expect(cell(container, 'unknown', 'temperature').textContent).toBe('no data in range');
   });
 
   it('says "not loaded", never "no data in range", for a reported measurement whose newest reading was not read', () => {

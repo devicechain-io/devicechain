@@ -166,8 +166,22 @@ describe('cellFor: why a cell is empty', () => {
     expect(cellFor(member({}), 'temperature').kind).toBe('no-data');
   });
 
-  it('is "does not report this" for a device that reported other measurements but not this one', () => {
-    expect(cellFor(member({ observed: ['humidity'] }), 'temperature').kind).toBe('not-reported');
+  it('is "does not report this" for a device whose profile does not declare the measurement', () => {
+    expect(cellFor(member({ observed: ['humidity'], declared: ['humidity'] }), 'temperature').kind).toBe('not-reported');
+    expect(cellFor(member({ observed: [], declared: ['humidity'] }), 'temperature').kind).toBe('not-reported');
+  });
+
+  it('is "no data" for a declared measurement the device has sent other readings without: a dead probe, a live heartbeat', () => {
+    expect(cellFor(member({ observed: ['battery'], declared: ['temperature', 'battery'] }), 'temperature').kind).toBe('no-data');
+  });
+
+  it('reads an unknown declaration as declared', () => {
+    expect(cellFor(member({ observed: ['humidity'] }), 'temperature').kind).toBe('no-data');
+  });
+
+  it('shows a reading the profile does not declare: a reading is a reading', () => {
+    const latest = { temperature: s('a', 'temperature', 3) };
+    expect(cellFor(member({ latest, declared: ['humidity'] }), 'temperature').kind).toBe('value');
   });
 
   it('shows a live reading even while the seed is pending or failed', () => {
