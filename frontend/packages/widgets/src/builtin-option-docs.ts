@@ -54,6 +54,8 @@ export const OPTION_DOCS: Readonly<Record<string, string>> = {
   tileUrl: "Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to inherit the tenant's basemap; setting one overrides it for this board only.",
   attribution: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
   style: 'A plain bar (default) or a thermometer: a vertical tube with a bulb. A thermometer is always vertical.',
+  markAlarms: 'Mark this device’s alarms on the chart, from raise to clear.',
+  markCommands: 'Mark the commands sent to this device on the chart.',
   orientation: 'Direction of a bar: horizontal (default) or vertical. Ignored by a thermometer.',
   readout: 'What the readout shows: the value with its unit (default) or the percent of the scale.',
   onAt: 'For an on/off signal: the lamp is lit at or above this value and dark below it. Unset keeps the lamp lit while a value is present, coloured by its threshold band.',

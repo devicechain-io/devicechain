@@ -294,15 +294,13 @@ const MARK_ALARMS = {
   kind: 'boolean',
   labelId: 'widgetLabelMarkAlarms',
   helpId: 'widgetHintMarkAlarms',
-  doc: 'Mark this device’s alarms on the chart, from raise to clear.',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const MARK_COMMANDS = {
   kind: 'boolean',
   labelId: 'widgetLabelMarkCommands',
   helpId: 'widgetHintMarkCommands',
-  doc: 'Mark the commands sent to this device on the chart.',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const WINDOW_SECONDS = {
   kind: 'number',
