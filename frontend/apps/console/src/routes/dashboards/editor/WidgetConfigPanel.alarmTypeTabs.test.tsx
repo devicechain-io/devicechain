@@ -35,11 +35,18 @@ beforeEach(() => {
 });
 
 // Open the picker inside `scope` and choose the option for `token`.
+// Opened only once the picker's catalogue has loaded, and the option is found and clicked in ONE
+// step: opened mid-load, the list re-rendered under the test between finding the option and
+// clicking it, and the click landed on nothing (intermittently).
 async function pickType(scope: HTMLElement, token: string, label: string) {
+  await waitFor(() => expect(scope.textContent).not.toContain('Loading'));
   fireEvent.click(scope.querySelector('button')!);
-  await waitFor(() => expect(document.querySelector(`[data-shot-value="${token}"]`)).toBeTruthy());
-  fireEvent.click(document.querySelector(`[data-shot-value="${token}"]`)!);
-  await waitFor(() => expect(scope.textContent).toContain(label));
+  await waitFor(() => {
+    const option = document.querySelector<HTMLElement>(`[data-shot-value="${token}"]`);
+    expect(option).toBeTruthy();
+    fireEvent.click(option!);
+    expect(scope.textContent).toContain(label);
+  });
 }
 
 afterEach(cleanup);
@@ -133,6 +140,21 @@ describe('the alarm table’s device-type tabs in the settings panel', () => {
     expect(stored()?.deviceTypes).toEqual([{ token: 'a' }, { token: 'c' }, { token: 'b' }]);
     fireEvent.click(rowButton(container, 'Move row 1 down'));
     expect(stored()?.deviceTypes).toEqual([{ token: 'c' }, { token: 'a' }, { token: 'b' }]);
+  });
+
+  it('keeps keyboard focus on the moved row, switching arrows when it reaches an end', async () => {
+    store.options = undefined;
+    const { container } = render(<Harness initial={{ deviceTypes: [{ token: 'a' }, { token: 'b' }, { token: 'c' }] }} />);
+    const down1 = rowButton(container, 'Move row 1 down');
+    down1.focus();
+    fireEvent.click(down1);
+    expect(stored()?.deviceTypes).toEqual([{ token: 'b' }, { token: 'a' }, { token: 'c' }]);
+    // The moved entry is now row 2, and focus went with it: pressing again moves the SAME entry.
+    await waitFor(() => expect(document.activeElement).toBe(rowButton(container, 'Move row 2 down')));
+    fireEvent.click(document.activeElement as HTMLElement);
+    expect(stored()?.deviceTypes).toEqual([{ token: 'b' }, { token: 'c' }, { token: 'a' }]);
+    // At the bottom its down arrow is disabled, so focus lands on its up arrow, not on the page.
+    await waitFor(() => expect(document.activeElement).toBe(rowButton(container, 'Move row 3 up')));
   });
 
   it('removes a row, and drops the option when the last one goes', () => {

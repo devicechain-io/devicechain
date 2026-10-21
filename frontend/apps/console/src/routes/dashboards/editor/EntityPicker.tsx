@@ -11,7 +11,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
-import { listDevices, listDeviceTypes } from '@/lib/api/device-management';
+import { getDeviceType, listDevices, listDeviceTypes } from '@/lib/api/device-management';
 import { listCustomers } from '@/lib/api/customers';
 import { listAreas } from '@/lib/api/areas';
 import { listAssets } from '@/lib/api/assets';
@@ -123,6 +123,16 @@ export function EntityPicker({
   // of crashing on `t(undefined.select)`.
   const kindKeys = KIND_KEYS[kind] ?? KIND_KEYS.device;
 
+  // A stored device-type token the first page does not hold is looked up BY TOKEN, so a tenant with
+  // more types than one page still sees its name — or learns, from that answer, that it is gone.
+  // Only for a truncated read: a read that held every row has already answered.
+  const offPage =
+    kind === 'deviceType' && value && current?.truncated && !current.rows.some((r) => r.token === value) ? value : '';
+  const byToken = useQuery(
+    () => (offPage ? getDeviceType(offPage).then((found) => ({ found })) : Promise.resolve(null)),
+    [offPage],
+  );
+
   const options = useMemo<ComboboxOption[]>(() => {
     // While a new kind loads, useQuery keeps the PREVIOUS kind's data — surfacing
     // it would let a fast click store a wrong-kind token (e.g. a customer token as
@@ -136,13 +146,19 @@ export function EntityPicker({
     // Keep a currently-bound token selectable even if it isn't in the loaded page
     // (or its entity was since removed) — otherwise editing would silently drop it.
     if (value && !opts.some((o) => o.value === value)) {
-      // Name it unknown only on an ANSWER (`current`, never the sticky `data`) that held every
-      // row: a loading, failed or truncated read proves nothing about this token.
-      const unknown = kindKeys.unknown && current && !current.truncated ? t(kindKeys.unknown, { token: value }) : value;
-      opts.unshift({ value, label: unknown });
+      // Name it unknown only on an ANSWER (`current`, never the sticky `data`): a read that held
+      // every row, or the by-token lookup of an off-page token. A loading or failed read proves
+      // nothing about this token, so it shows bare until one of those answers lands.
+      const lookedUp = offPage === value ? byToken.current : undefined;
+      if (lookedUp?.found) {
+        opts.unshift({ value, label: lookedUp.found.name || value, description: lookedUp.found.name ? value : undefined });
+      } else {
+        const absent = current !== undefined && (!current.truncated || (lookedUp != null && lookedUp.found === null));
+        opts.unshift({ value, label: kindKeys.unknown && absent ? t(kindKeys.unknown, { token: value }) : value });
+      }
     }
     return opts;
-  }, [current, value, kindKeys, t]);
+  }, [current, value, kindKeys, t, offPage, byToken.current]);
 
   return (
     <Combobox

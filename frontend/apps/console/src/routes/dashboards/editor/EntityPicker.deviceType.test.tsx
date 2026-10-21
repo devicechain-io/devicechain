@@ -8,10 +8,11 @@ import '@/i18n/config';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { listDeviceTypes } = vi.hoisted(() => ({ listDeviceTypes: vi.fn() }));
+const { listDeviceTypes, getDeviceType } = vi.hoisted(() => ({ listDeviceTypes: vi.fn(), getDeviceType: vi.fn() }));
 vi.mock('@/lib/api/device-management', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api/device-management')>()),
   listDeviceTypes,
+  getDeviceType,
   listDevices: vi.fn(),
 }));
 
@@ -20,6 +21,8 @@ import { EntityPicker } from './EntityPicker';
 afterEach(cleanup);
 beforeEach(() => {
   listDeviceTypes.mockReset();
+  getDeviceType.mockReset();
+  getDeviceType.mockRejectedValue(new Error('getDeviceType not stubbed for this test'));
   listDeviceTypes.mockResolvedValue({
     results: [
       { token: 'thermostat', name: 'Thermostat' },
@@ -89,13 +92,47 @@ describe('EntityPicker kind="deviceType"', () => {
     expect(optionTokens()).toContain('retired');
   });
 
-  it('does not call a token unknown when only the first page was read', async () => {
+  it('resolves a stored token beyond the first page by token, and names it', async () => {
     listDeviceTypes.mockResolvedValue({ results: [{ token: 'a', name: 'A' }], pagination: { totalRecords: 500 } });
+    getDeviceType.mockResolvedValue({ token: 'on-page-two', name: 'Chiller' });
     render(<EntityPicker kind="deviceType" value="on-page-two" onChange={vi.fn()} />);
-    await waitFor(() => expect(listDeviceTypes).toHaveBeenCalled());
+    await waitFor(() => expect(trigger().textContent).toContain('Chiller'));
+    expect(getDeviceType).toHaveBeenCalledWith('on-page-two');
+    open();
+    expect(optionTokens()).toContain('on-page-two');
+  });
+
+  it('calls an off-page token unknown once the by-token lookup finds nothing', async () => {
+    listDeviceTypes.mockResolvedValue({ results: [{ token: 'a', name: 'A' }], pagination: { totalRecords: 500 } });
+    getDeviceType.mockResolvedValue(null);
+    render(<EntityPicker kind="deviceType" value="gone" onChange={vi.fn()} />);
+    await waitFor(() => expect(trigger().textContent).toContain('unknown type gone'));
+  });
+
+  it('does not call an off-page token unknown while its lookup is in flight or failed', async () => {
+    listDeviceTypes.mockResolvedValue({ results: [{ token: 'a', name: 'A' }], pagination: { totalRecords: 500 } });
+    let settle!: (v: unknown) => void;
+    getDeviceType.mockReturnValue(new Promise((r) => (settle = r)));
+    render(<EntityPicker kind="deviceType" value="on-page-two" onChange={vi.fn()} />);
+    await waitFor(() => expect(getDeviceType).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 20));
     expect(trigger().textContent).toContain('on-page-two');
     expect(trigger().textContent).not.toContain('unknown');
+    cleanup();
+
+    getDeviceType.mockRejectedValue(new Error('boom'));
+    render(<EntityPicker kind="deviceType" value="on-page-two" onChange={vi.fn()} />);
+    await waitFor(() => expect(getDeviceType).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(trigger().textContent).toContain('on-page-two');
+    expect(trigger().textContent).not.toContain('unknown');
+    settle(null);
+  });
+
+  it('does not look up a token the page already holds, nor any token when the page was whole', async () => {
+    render(<EntityPicker kind="deviceType" value="retired" onChange={vi.fn()} />);
+    await waitFor(() => expect(trigger().textContent).toContain('unknown type retired'));
+    expect(getDeviceType).not.toHaveBeenCalled();
   });
 
   it('does not call a token unknown when the read failed', async () => {

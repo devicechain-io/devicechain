@@ -257,6 +257,11 @@ function checkOptionsAt(options: Record<string, unknown>, prefix: string, requir
         if (spec.maxItems !== undefined && (typeof spec.maxItems !== 'number' || !Number.isInteger(spec.maxItems) || spec.maxItems < 1)) {
           add(`${at}.maxItems`, 'maxItems must be a whole number of at least 1');
         }
+        // A non-boolean `ordered` ("yes", 1) would be read as truthy by one host and ignored by
+        // another; refuse it so every host sees the same list.
+        if (spec.ordered !== undefined && typeof spec.ordered !== 'boolean') {
+          add(`${at}.ordered`, 'ordered must be true or false');
+        }
         if (!isRecord(spec.item) || Object.keys(spec.item).length === 0) {
           add(`${at}.item`, 'a list option needs an item object declaring at least one field');
           sound = false;

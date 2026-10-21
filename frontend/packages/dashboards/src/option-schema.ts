@@ -108,8 +108,8 @@ export interface ListOptionSpec extends OptionSpecBase {
   item: Readonly<Record<string, ListItemFieldSpec>>;
   maxItems?: number;
   // The ORDER of the entries means something (tab order, say), so an editor offers move up /
-  // move down on each. Absent, a list is a set the editor need not let the author reorder.
-  ordered?: true;
+  // move down on each. Absent or false, a list is a set the editor need not let the author reorder.
+  ordered?: boolean;
 }
 
 export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec | ListOptionSpec;

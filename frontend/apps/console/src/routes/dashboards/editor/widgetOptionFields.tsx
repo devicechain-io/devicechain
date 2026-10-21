@@ -40,7 +40,7 @@ import {
 } from '@devicechain/dashboards';
 import type { WidgetEditorServices } from '@devicechain/widget-sdk';
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -276,10 +276,24 @@ function ListField({
 
   // An empty list drops the key (applyOptionPatch), so removing the last row unsets the option.
   const write = (next: Row[]) => ctx.setOptions({ [option]: next });
+  // Rows are keyed by position, so after a move the focused button would stay where it was and act
+  // on the row that slid INTO that place. Focus follows the moved row instead: the same arrow on
+  // its new position, or the other one when it has reached an end and that arrow is disabled.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [moved, setMoved] = useState<{ to: number; dir: 'up' | 'down' } | null>(null);
+  useEffect(() => {
+    if (!moved) return;
+    const at = (d: 'up' | 'down') =>
+      listRef.current?.querySelector<HTMLButtonElement>(`[data-testid="list-${d}-${option}-${moved.to}"]`);
+    const same = at(moved.dir);
+    (same && !same.disabled ? same : at(moved.dir === 'up' ? 'down' : 'up'))?.focus();
+    setMoved(null);
+  }, [moved, option]);
   const move = (from: number, to: number) => {
     const next = [...rows];
     [next[from], next[to]] = [next[to], next[from]];
     write(next);
+    setMoved({ to, dir: to < from ? 'up' : 'down' });
   };
   const setCell = (index: number, field: string, value: unknown) =>
     write(
@@ -294,7 +308,7 @@ function ListField({
 
   return (
     <FormField label={label} description={hint}>
-      <div className="flex flex-col gap-2">
+      <div ref={listRef} className="flex flex-col gap-2">
         {rows.length > 0 && (
           // Visible column headings: a row of bare controls (a number, a select, a text box)
           // says nothing about which is which to a sighted author. Each cell also carries its
@@ -341,6 +355,7 @@ function ListField({
             {spec.ordered && (
               <>
                 <IconButton
+                  data-testid={`list-up-${option}-${index}`}
                   label={t('widgetListMoveUp', { n: index + 1 })}
                   disabled={index === 0}
                   onClick={() => move(index, index - 1)}
@@ -348,6 +363,7 @@ function ListField({
                   <ArrowUp className="size-4" />
                 </IconButton>
                 <IconButton
+                  data-testid={`list-down-${option}-${index}`}
                   label={t('widgetListMoveDown', { n: index + 1 })}
                   disabled={index === rows.length - 1}
                   onClick={() => move(index, index + 1)}
