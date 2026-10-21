@@ -63,6 +63,17 @@ describe('validateWidgetDescriptor', () => {
     expect(pathsOf({ ...valid(), id: 'a/b/c' })).toEqual(['id']);
   });
 
+  it('requires an option doc of an extension, and of nothing built in (path options.<key>.doc)', () => {
+    const undocumented = { title: { kind: 'string' }, window: OPTIONS.window, min: OPTIONS.min, max: OPTIONS.max };
+    expect(pathsOf({ ...valid(), options: undocumented })).toEqual(['options.title.doc']);
+    // A built-in is documented in the widgets package's table, so its runtime descriptor may omit it.
+    expect(issuesOf({ ...valid(), id: 'gauge', options: undocumented })).toEqual([]);
+    // Present, a doc must still be a string -- on a built-in too.
+    expect(pathsOf({ ...valid(), id: 'gauge', options: { ...undocumented, title: { kind: 'string', doc: 7 } } })).toEqual([
+      'options.title.doc',
+    ]);
+  });
+
   it('accepts freshness: true on a measurement widget, and rejects anything else (path freshness)', () => {
     expect(issuesOf({ ...valid(), freshness: true })).toEqual([]);
     expect(pathsOf({ ...valid(), freshness: false })).toEqual(['freshness']);

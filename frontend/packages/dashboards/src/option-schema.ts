@@ -30,7 +30,10 @@
 // generated dashboard carrying `"url": ""` validate clean and render nothing.
 interface OptionSpecBase {
   // What the option does. Short: this feeds the config panel's help text and the
-  // published "available widgets" page.
+  // published "available widgets" page. Required, and present on every descriptor a package
+  // publishes. The one exception is not a type: @devicechain/widgets's render-only definitions
+  // (`builtinWidgetDefinitionsWithoutDocs`) omit it so a host that only renders boards never
+  // downloads prose it never shows, which is why the validator excuses a BUILT-IN id's missing doc.
   doc: string;
   required?: true;
   // Portable default text for the option's label and help. A host that cannot translate

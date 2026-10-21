@@ -25,9 +25,12 @@ func TestCommandWidgetTypesAreTheDescriptorsThatSendCommands(t *testing.T) {
 		t.Fatalf("read %s: %v (if the descriptors moved, re-point this check rather than "+
 			"deleting it)", descriptors, err)
 	}
-	// Each descriptor is one `defineWidgetDescriptor({ id: '<type>', ... })` block; a block runs
-	// to the next one, so the interaction flag inside it belongs to that type.
-	starts := regexp.MustCompile(`defineWidgetDescriptor\(\{\s*id:\s*'([^']+)'`).FindAllSubmatchIndex(source, -1)
+	// Each descriptor is one `define…Descriptor({ id: '<type>', ... })` block; a block runs to the
+	// next one, so the interaction flag inside it belongs to that type. The built-ins are declared
+	// through defineRuntimeDescriptor (the doc-free form; their option docs live in
+	// builtin-option-docs.ts), the public defineWidgetDescriptor is what an extension uses, and
+	// either spelling opens a block -- a rename of the helper must not empty the parse.
+	starts := regexp.MustCompile(`define(?:Runtime|Widget)Descriptor\(\{\s*id:\s*'([^']+)'`).FindAllSubmatchIndex(source, -1)
 	var all, sending []string
 	for i, m := range starts {
 		end := len(source)

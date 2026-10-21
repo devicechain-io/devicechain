@@ -170,6 +170,44 @@ export function checkShape(dist, boundaries) {
   return problems;
 }
 
+// ---- Code that must not be in the build AT ALL -----------------------------
+//
+// The lazy boundaries above name a chunk the code moved to. Some code has no chunk in this app
+// because nothing here needs it: it must be absent from EVERY file of dist/, initial or not. The
+// reach control is the same idea one step back -- each marker must still exist in the package that
+// owns it (so the absence is not over a string that was reworded), and that file is named here.
+//
+// The built-ins' option docs: the runtime descriptors carry none; the public, documented ones are a
+// pure call in @devicechain/widgets that a host importing neither drops. A doc creeping back
+// into a runtime descriptor, or a host reaching for the documented form, puts the whole table in
+// the first download -- ~2 KB gzip, growing with every widget -- while the size budget alone would
+// call it ordinary growth.
+export function absentBoundaries() {
+  return [
+    {
+      what: 'the built-in option docs',
+      reach: path.resolve(here, '../../../packages/widgets/dist/index.js'),
+      markers: ['Blank hides the frame heading.', 'Low end of the gauge scale.'],
+    },
+  ];
+}
+
+// checkAbsent returns a list of problems (empty = pass).
+export function checkAbsent(dist, boundaries) {
+  const problems = [];
+  const js = walk(dist).filter((f) => f.endsWith('.js'));
+  const text = js.map((f) => [f, readFileSync(f, 'utf8')]);
+  for (const { what, reach, markers } of boundaries) {
+    const owner = readFileSync(reach, 'utf8');
+    for (const marker of markers) {
+      if (!owner.includes(marker)) problems.push(`${what}: ${path.basename(reach)} no longer holds ${JSON.stringify(marker)}, so its absence below proves nothing`);
+      const found = text.filter(([, t]) => t.includes(marker)).map(([f]) => path.basename(f));
+      if (found.length > 0) problems.push(`${what}: in the build (${found.join(', ')} holds ${JSON.stringify(marker)})`);
+    }
+  }
+  return problems;
+}
+
 function main() {
   const dist = path.resolve(here, '../dist');
   const budgetFile = path.resolve(here, '../size-budget.json');
@@ -184,7 +222,7 @@ function main() {
     console.log(JSON.stringify({ ...budget, maxInitial: up(measured.initial), maxTotal: up(measured.total) }, null, 2));
     return;
   }
-  const problems = [...check(measured, budget), ...checkShape(dist, lazyBoundaries())];
+  const problems = [...check(measured, budget), ...checkShape(dist, lazyBoundaries()), ...checkAbsent(dist, absentBoundaries())];
   if (problems.length > 0) {
     for (const p of problems) console.error(`bundle size gate: ${p}`);
     process.exit(1);

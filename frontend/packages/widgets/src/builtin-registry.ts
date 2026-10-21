@@ -5,6 +5,10 @@
 // (descriptor + component) through the SAME public `defineWidget` a third-party package uses
 // -- there is no privileged internal path and no id-keyed component table; this module only
 // lists them, in the catalog's order.
+//
+// These are the RUNTIME registrations: their descriptors carry no option `doc`. The package
+// publishes them as `builtinWidgetDefinitionsWithoutDocs`; its `builtinWidgetDefinitions` and
+// `createBuiltinWidgetRegistry` are the documented forms (documented-descriptors.ts).
 
 import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-sdk';
 

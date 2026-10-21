@@ -130,7 +130,9 @@ function collectDescriptorIssues(d: unknown, id: string): DescriptorIssue[] {
   const channel = CHANNELS.find((c) => c === d.channel);
   if (!channel) add('channel', `channel must be one of ${CHANNELS.join(', ')}, got ${JSON.stringify(d.channel)}`);
 
-  const specs = checkOptions(d.options, add);
+  // A built-in is documented in the widgets package's own table (see its builtin-option-docs.ts), not on
+  // the descriptor the renderer loads, so only an extension's descriptor must carry its option docs.
+  const specs = checkOptions(d.options, !isBuiltinWidgetId(d.id), add);
   const constraints = checkConstraints(d.constraints, specs, add);
 
   if (specs) checkDefaults(d.defaults, specs, constraints, typeof d.id === 'string' ? d.id : id, add);
@@ -191,18 +193,18 @@ function jsonOnly(value: unknown, path: string, add: Add, ancestors: Set<object>
 
 // Returns the schema when it is structurally sound enough to check references and defaults
 // against, else undefined (the faults are already reported).
-function checkOptions(options: unknown, add: Add): WidgetOptionSpecs | undefined {
+function checkOptions(options: unknown, requireDoc: boolean, add: Add): WidgetOptionSpecs | undefined {
   if (!isRecord(options)) {
     add('options', 'options must be an object mapping option keys to specs');
     return undefined;
   }
-  return checkOptionsAt(options, 'options.', add) ? (options as unknown as WidgetOptionSpecs) : undefined;
+  return checkOptionsAt(options, 'options.', requireDoc, add) ? (options as unknown as WidgetOptionSpecs) : undefined;
 }
 
 // Checks a table of option specs, reporting each fault under `prefix` + key. True when the table
 // is structurally sound. The same rules judge a list option's item fields (prefix
 // `options.<key>.item.`), so a field cannot be declared more loosely than an option.
-function checkOptionsAt(options: Record<string, unknown>, prefix: string, add: Add): boolean {
+function checkOptionsAt(options: Record<string, unknown>, prefix: string, requireDoc: boolean, add: Add): boolean {
   let sound = true;
   for (const [key, spec] of Object.entries(options)) {
     const at = `${prefix}${key}`;
@@ -211,7 +213,7 @@ function checkOptionsAt(options: Record<string, unknown>, prefix: string, add: A
       sound = false;
       continue;
     }
-    if (typeof spec.doc !== 'string') {
+    if (typeof spec.doc !== 'string' && (requireDoc || spec.doc !== undefined)) {
       add(`${at}.doc`, 'doc must be a string');
     }
     for (const text of ['label', 'help', 'labelId', 'helpId', 'placeholder', 'placeholderId'] as const) {
@@ -271,7 +273,7 @@ function checkOptionsAt(options: Record<string, unknown>, prefix: string, add: A
           sound = false;
           break;
         }
-        if (!checkOptionsAt(flat, `${at}.item.`, add)) sound = false;
+        if (!checkOptionsAt(flat, `${at}.item.`, requireDoc, add)) sound = false;
         break;
       }
       default:

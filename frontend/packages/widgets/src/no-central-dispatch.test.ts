@@ -26,13 +26,16 @@ import { describe, expect, it } from 'vitest';
 const SRC = dirname(fileURLToPath(import.meta.url));
 const ROOTS = [SRC, join(SRC, '..', '..', 'widget-sdk', 'src')];
 
-// Files that legitimately name a built-in id. builtin-descriptors.ts declares them.
-const DECLARES_IDS = ['builtin-descriptors.ts'];
+// Files that legitimately name a built-in id. builtin-descriptors.ts declares them; builtin-option-docs.ts
+// is the same descriptor DATA kept apart (a widget's option wording where it differs from the shared
+// one), looked up by the id of the descriptor being documented and never branched on.
+const DECLARES_IDS = ['builtin-descriptors.ts', 'builtin-option-docs.ts'];
 
 // The only id-keyed tables that may exist, and only as READ-ONLY views derived from the
 // descriptors. No other source may mention them: a renderer reaching for one is dispatch.
+// documented-descriptors.ts builds the PUBLISHED (documented) WIDGET_OPTIONS, a view like options.ts's.
 const DERIVED_VIEWS = /\b(WIDGET_CHANNEL|WIDGET_BINDS_DATASOURCE|WIDGET_OPTIONS|WIDGET_TYPES|WIDGET_CONSTRAINTS)\b/;
-const VIEW_HOLDERS = ['registry.ts', 'options.ts', 'index.ts'];
+const VIEW_HOLDERS = ['registry.ts', 'options.ts', 'index.ts', 'documented-descriptors.ts'];
 
 // The removed per-channel component tables must not come back in any form.
 const COMPONENT_TABLES = /\b(?:ALARM_|CONTROL_|SELECTION_|LOCATION_)?WIDGET_REGISTRY\b/;

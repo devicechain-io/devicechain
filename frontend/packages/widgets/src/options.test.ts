@@ -265,14 +265,6 @@ describe('WIDGET_OPTIONS', () => {
       expect(sorted(Object.keys(WIDGET_OPTIONS[type])), type).toEqual(read);
     }
   });
-
-  it('gives every option a non-empty doc string', () => {
-    for (const [type, specs] of Object.entries(WIDGET_OPTIONS)) {
-      for (const [key, spec] of Object.entries(specs)) {
-        expect(spec.doc.length, `${type}.${key} has no doc`).toBeGreaterThan(0);
-      }
-    }
-  });
 });
 
 // ---- Compile-time contract ---------------------------------------------------
