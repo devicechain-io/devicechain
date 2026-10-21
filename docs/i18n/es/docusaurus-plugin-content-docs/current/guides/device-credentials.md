@@ -32,7 +32,7 @@ Por eso, toda consulta que devuelve una credencial requiere **`device:write`**, 
 
 ## Cómo presenta un dispositivo una credencial
 
-Las credenciales viajan en el cuerpo del evento, sobre cualquier transporte (consulta [Conexión de un dispositivo](./connecting-a-device.md)):
+Por HTTP, la credencial viaja en el cuerpo del evento (consulta [Conexión de un dispositivo](./connecting-a-device.md)). Por MQTT autentica la conexión y el cuerpo del evento no lleva ninguna: un evento en el broker MQTT de la plataforma que incluya `credentialType`, `credentialId` o `credentialSecret` se rechaza. La forma HTTP es:
 
 ```json
 {
@@ -44,7 +44,7 @@ Las credenciales viajan en el cuerpo del evento, sobre cualquier transporte (con
 }
 ```
 
-`MQTT_BASIC` lleva además `"credentialSecret": "<password>"`.
+`MQTT_BASIC` lleva además `"credentialSecret": "<password>"`. Son campos solo de HTTP.
 
 La plataforma resuelve la credencial al dispositivo que la posee y la verifica. La verificación respeta la **expiración** de la credencial, y **deshabilitar** una credencial la revoca. El modo de autenticación de dispositivos de la instancia decide con qué rigor se aplica:
 

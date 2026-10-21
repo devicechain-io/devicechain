@@ -55,7 +55,7 @@ Todo evento entrante, sobre cualquier transporte, es un objeto JSON:
 
 - `device` — el token estable del dispositivo.
 - `eventType` — `Measurement`, `Location` o `Alert` (también `NewRelationship`).
-- `credentialType` / `credentialId` — la credencial que presenta el dispositivo. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera una credencial.
+- `credentialType` / `credentialId` — la credencial que presenta el dispositivo **por HTTP**. `MQTT_BASIC` además lleva `credentialSecret`. Omítelos solo cuando el modo de autenticación de dispositivo de la instancia esté configurado como `disabled` u `optional`. El valor predeterminado es `required`, así que se espera que un evento HTTP lleve una credencial. **Por MQTT, omite los tres**: el broker ya autenticó al dispositivo al conectarse, y un evento en el broker MQTT de la plataforma que lleve cualquiera de ellos se rechaza (consulta la [Referencia del protocolo de dispositivos](../reference/device-protocol.md#rejections-at-the-door)).
 - `payload` — su forma depende de `eventType`, y todas las formas son `{ "entries": [ … ] }`. Consulta a continuación.
 
 Cada campo, con su tipo y si es obligatorio, incluidos los opcionales `altId` y `relationship`, está en la [Referencia del protocolo de dispositivo](../reference/device-protocol.md#device-event), junto con esquemas JSON con los que puedes validar lo que emite el firmware.
@@ -205,10 +205,10 @@ mosquitto_pub \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/devices/sensor-001/events" \
-  -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
+  -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-La credencial autentica la conexión (broker) y el evento (pipeline). El host TLS, el origen de la CA y la exposición del puerto dependen de cómo se despliegue la instancia; consulta [Despliegue](../deployment/kubernetes-operator.md).
+La credencial autentica la conexión. El broker ya sabe de qué dispositivo viene cada publicación, así que el evento no lleva credencial; uno que la lleve se rechaza. El host TLS, el origen de la CA y la exposición del puerto dependen de cómo se despliegue la instancia; consulta [Despliegue](../deployment/kubernetes-operator.md).
 
 El broker habla TLS, así que `--cafile` necesita el certificado de la CA de la instancia. En una instalación kind local está en el Secret `dc-nats-tls` del namespace de la instancia, bajo la clave `ca.crt`. Guárdalo como `instance-ca.crt` con un comando (sustituye el id de tu instancia tras el prefijo `dci-`):
 

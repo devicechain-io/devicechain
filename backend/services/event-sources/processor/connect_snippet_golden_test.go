@@ -160,7 +160,7 @@ func fillInstance(s string) string {
 
 // checkSnippetEvent asserts a decoded event is the device's own Measurement, carrying the
 // credential the snippet was built for, with at least one reading.
-func checkSnippetEvent(t *testing.T, c snippetCase, event *model.UnresolvedEvent, built interface{}) {
+func checkSnippetEvent(t *testing.T, c snippetCase, viaMqtt bool, event *model.UnresolvedEvent, built interface{}) {
 	t.Helper()
 	if event.Device != c.Input.DeviceToken {
 		t.Errorf("event device = %q, want %q", event.Device, c.Input.DeviceToken)
@@ -168,6 +168,22 @@ func checkSnippetEvent(t *testing.T, c snippetCase, event *model.UnresolvedEvent
 	if event.EventType != eventtype.Measurement {
 		t.Errorf("event type = %v, want Measurement", event.EventType)
 	}
+	if viaMqtt {
+		// The platform MQTT broker authenticated the connection (-u/-P) and the capture source
+		// REFUSES a body that carries a credential, so the MQTT snippet's body carries none.
+		if credentialInBody(event) {
+			t.Error("the MQTT snippet's body carries a credential member, which the platform broker refuses")
+		}
+	} else {
+		checkSnippetCredential(t, c, event)
+	}
+	checkSnippetPayload(t, built)
+}
+
+// checkSnippetCredential holds the HTTP snippet to presenting the credential in the body, the
+// only authentication that transport has.
+func checkSnippetCredential(t *testing.T, c snippetCase, event *model.UnresolvedEvent) {
+	t.Helper()
 	if event.CredentialType == nil || *event.CredentialType != c.Input.Credential.CredentialType {
 		t.Errorf("credential type = %v, want %q", event.CredentialType, c.Input.Credential.CredentialType)
 	}
@@ -180,6 +196,10 @@ func checkSnippetEvent(t *testing.T, c snippetCase, event *model.UnresolvedEvent
 	if wantSecret := c.Input.Credential.CredentialType == "MQTT_BASIC"; hasSecret != wantSecret {
 		t.Errorf("credential secret present = %t, want %t", hasSecret, wantSecret)
 	}
+}
+
+func checkSnippetPayload(t *testing.T, built interface{}) {
+	t.Helper()
 	payload, ok := built.(*model.UnresolvedMeasurementsPayload)
 	if !ok {
 		t.Fatalf("payload is %T", built)
@@ -251,7 +271,7 @@ func TestConnectSnippetCurlIsAcceptedByHttpIngest(t *testing.T) {
 			if gotTenant != c.Input.Tenant {
 				t.Errorf("tenant = %q, want %q", gotTenant, c.Input.Tenant)
 			}
-			checkSnippetEvent(t, c, gotEvent, gotPayload)
+			checkSnippetEvent(t, c, false, gotEvent, gotPayload)
 		})
 	}
 }
@@ -293,7 +313,7 @@ func TestConnectSnippetMqttPublishesTheDevicesOwnEvent(t *testing.T) {
 			if got := deviceFromTopic(topic); got != event.Device {
 				t.Errorf("topic names %q, body names %q", got, event.Device)
 			}
-			checkSnippetEvent(t, c, event, built)
+			checkSnippetEvent(t, c, true, event, built)
 		})
 	}
 }

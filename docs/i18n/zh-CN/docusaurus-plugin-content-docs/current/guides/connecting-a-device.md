@@ -55,7 +55,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 
 - `device`：设备的稳定令牌。
 - `eventType`：`Measurement`、`Location` 或 `Alert`（也支持 `NewRelationship`）。
-- `credentialType` / `credentialId`：设备提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此需要凭据。
+- `credentialType` / `credentialId`：设备**通过 HTTP** 提供的凭据。`MQTT_BASIC` 还需要 `credentialSecret`。只有实例的设备认证模式设为 `disabled` 或 `optional` 时才可省略。默认值是 `required`，因此 HTTP 事件需要携带凭据。**通过 MQTT 时，这三个字段都不要带**：设备连接时消息代理已完成认证，平台 MQTT 消息代理上携带其中任何一个的事件都会被拒绝（参见[设备协议参考](../reference/device-protocol.md#rejections-at-the-door)）。
 - `payload`：结构取决于 `eventType`，所有结构都是 `{ "entries": [ … ] }`。见下文。
 
 每个字段的类型及是否必填（包括可选的 `altId` 和 `relationship`）见[设备协议参考](../reference/device-protocol.md#device-event)，其中还提供可用于校验固件输出的 JSON Schema。
@@ -205,10 +205,10 @@ mosquitto_pub \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/devices/sensor-001/events" \
-  -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
+  -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-凭据会认证连接（消息代理）和事件（流水线）。TLS 主机、CA 来源及端口暴露方式取决于实例部署；参见[部署](../deployment/kubernetes-operator.md)。
+凭据用于认证连接。消息代理由此知道每条发布来自哪台设备，因此事件本身不携带凭据；携带凭据的事件会被拒绝。TLS 主机、CA 来源及端口暴露方式取决于实例部署；参见[部署](../deployment/kubernetes-operator.md)。
 
 代理使用 TLS，因此 `--cafile` 需要实例的 CA 证书。在本地 kind 安装中，它位于实例命名空间的 `dc-nats-tls` Secret 里，键为 `ca.crt`。用一条命令将其保存为 `instance-ca.crt`（把 `dci-` 前缀后的实例 ID 换成你自己的）：
 

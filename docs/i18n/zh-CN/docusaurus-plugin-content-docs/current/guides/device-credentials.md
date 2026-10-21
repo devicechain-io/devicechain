@@ -32,7 +32,7 @@ title: 设备凭据
 
 ## 设备如何提交凭据 {#how-a-device-presents-a-credential}
 
-任何传输都在事件体中携带凭据（参见[连接设备](./connecting-a-device.md)）：
+通过 HTTP 时，凭据在事件体中携带（参见[连接设备](./connecting-a-device.md)）。通过 MQTT 时，凭据用于认证连接，事件体不携带任何凭据：平台 MQTT 消息代理上包含 `credentialType`、`credentialId` 或 `credentialSecret` 的事件会被拒绝。HTTP 的形式是：
 
 ```json
 {
@@ -44,7 +44,7 @@ title: 设备凭据
 }
 ```
 
-`MQTT_BASIC` 还携带 `"credentialSecret": "<password>"`。
+`MQTT_BASIC` 还携带 `"credentialSecret": "<password>"`。这些字段仅用于 HTTP。
 
 平台将凭据解析到所属设备并验证。验证遵守凭据**有效期**，**禁用**凭据即撤销。实例设备认证模式决定执行严格程度：
 

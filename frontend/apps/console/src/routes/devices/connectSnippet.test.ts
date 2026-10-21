@@ -125,6 +125,20 @@ describe('secrets', () => {
     expect(mqttCommand(base)).toContain(`-P ${shellQuote(PLACEHOLDER.password)}`);
   });
 
+  // The platform MQTT broker refuses an event whose body carries a credential, so the MQTT
+  // snippet authenticates the connection (-u/-P) and its body names none of the three members.
+  it('puts no credential in the MQTT body, for either credential type', () => {
+    for (const credential of [base.credential, { credentialType: 'ACCESS_TOKEN' as const, credentialId: 'tok' }]) {
+      const body = JSON.parse(eventBody({ ...base, credential }, 'mqtt')) as Record<string, unknown>;
+      expect(body).not.toHaveProperty('credentialType');
+      expect(body).not.toHaveProperty('credentialId');
+      expect(body).not.toHaveProperty('credentialSecret');
+      const command = mqttCommand({ ...base, credential });
+      expect(command).not.toContain('credentialSecret');
+      expect(command).not.toContain('credentialId');
+    }
+  });
+
   it('sends no password for an access token', () => {
     const tok: SnippetInput = { ...base, credential: { credentialType: 'ACCESS_TOKEN', credentialId: 'tok' } };
     expect(JSON.parse(eventBody(tok))).not.toHaveProperty('credentialSecret');
