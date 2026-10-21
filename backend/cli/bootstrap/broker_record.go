@@ -77,11 +77,15 @@ const brokerRecordFile = "broker-credentials.json"
 // a second thing that can disagree. The shape leaves room for the secret-store root key to
 // join later — it has the same window under --no-escrow — without a format change.
 type brokerRecord struct {
-	Instance        string    `json:"instance"`
-	Written         time.Time `json:"written"`
-	IssuerSeed      string    `json:"issuerSeed"`
-	ServicePassword string    `json:"servicePassword"`
-	SysPassword     string    `json:"sysPassword"`
+	Instance   string    `json:"instance"`
+	Written    time.Time `json:"written"`
+	IssuerSeed string    `json:"issuerSeed"`
+	// XKeySeed is the callout's curve seed. Optional on read, unlike the three secrets around
+	// it: a record written before the xkey existed is a valid record, and the absence reads as
+	// "introduce one", which is the one thing a missing credential may mean here.
+	XKeySeed        string `json:"xkeySeed,omitempty"`
+	ServicePassword string `json:"servicePassword"`
+	SysPassword     string `json:"sysPassword"`
 }
 
 // brokerRecordPathFor resolves the record's path. A seam so tests never touch a real

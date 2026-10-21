@@ -366,6 +366,16 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		return err
 	}
 
+	// The services now run a responder that opens the broker's encrypted callout requests, so a
+	// broker that was held back from encrypting is applied again, this time with the key. The
+	// reconnects this causes are the broker's ordinary rolling restart: the responder reads both
+	// forms throughout. See upgradexkey.go.
+	if infra != nil && xkeyPending(st) {
+		if err := enableCalloutEncryption(ctx, st, typed, dyn); err != nil {
+			return err
+		}
+	}
+
 	if st.AreaChange != nil {
 		fmt.Println(color.HiGreenString("\nAreas enabled."))
 		sayAreaChangeDone(st)

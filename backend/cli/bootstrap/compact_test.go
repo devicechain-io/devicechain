@@ -43,11 +43,12 @@ func compactState(compactOn bool) *State {
 			// SAME nats map: without it that map is empty when the merge happens, and
 			// the difference between merging and assigning — which decides whether an
 			// instance gets its ceilings or its credentials — becomes unobservable.
-			"natsTlsEnabled":         "true",
-			"natsCA":                 "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-			"natsCalloutIssuerSeed":  "SUAtestseedvaluefortestingonly",
-			"natsServicePassword":    "test-service-password",
-			"natsServicePasswordEnc": "unused",
+			"natsTlsEnabled":          "true",
+			"natsCA":                  "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+			"natsCalloutIssuerSeed":   "SUAtestseedvaluefortestingonly",
+			"natsCalloutIssuerPublic": "AtestissuerpublicvaluefortestingONLY",
+			"natsServicePassword":     "test-service-password",
+			"natsServicePasswordEnc":  "unused",
 		},
 	}
 }
@@ -120,7 +121,7 @@ func TestCompactLowersTheCeilingsAServiceReads(t *testing.T) {
 	// was written first. Both halves are checked here because losing either is
 	// silent: no credentials means a service that never reaches the broker, and no
 	// ceilings means a full-size instance on a compact volume.
-	if n.Auth.CalloutIssuerSeed == "" || n.Auth.Password == "" {
+	if n.Auth.CalloutIssuerPublic == "" || n.Auth.Password == "" {
 		t.Error("--compact overwrote the broker credentials instead of merging into " +
 			"them: no service in this instance can authenticate to NATS")
 	}

@@ -15,6 +15,8 @@
 //
 //	NATS_CALLOUT_ISSUER_PUBLIC='A...'      # server-config auth_callout.issuer (public)
 //	NATS_CALLOUT_ISSUER_SEED='SA...'       # the device-management responder signs with this
+//	NATS_CALLOUT_XKEY_PUBLIC='X...'        # server-config auth_callout.xkey (public)
+//	NATS_CALLOUT_XKEY_SEED='SX...'         # the responder opens the broker's encrypted requests with this
 //	NATS_SERVICE_PASSWORD='...'            # PLAINTEXT dc_service login → services (helm Secret)
 //	NATS_SERVICE_PASSWORD_BCRYPT='$2a$...' # bcrypt hash of the same → broker config (tofu)
 //
@@ -39,6 +41,8 @@ func main() {
 	}
 	fmt.Printf("NATS_CALLOUT_ISSUER_PUBLIC='%s'\n", c.IssuerPublic)
 	fmt.Printf("NATS_CALLOUT_ISSUER_SEED='%s'\n", c.IssuerSeed)
+	fmt.Printf("NATS_CALLOUT_XKEY_PUBLIC='%s'\n", c.XKeyPublic)
+	fmt.Printf("NATS_CALLOUT_XKEY_SEED='%s'\n", c.XKeySeed)
 	fmt.Printf("NATS_SERVICE_PASSWORD='%s'\n", c.ServicePassword)
 	fmt.Printf("NATS_SERVICE_PASSWORD_BCRYPT='%s'\n", c.ServicePasswordBcrypt)
 }

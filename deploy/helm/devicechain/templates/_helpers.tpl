@@ -181,6 +181,21 @@ holds the two together.
 {{- .Values.instance.superuserSecret | default (printf "dci-%s-superuser" .Values.instance.id) -}}
 {{- end -}}
 
+{{/*
+The Secret holding the device auth callout's SEEDS (keys `issuerSeed` and `xkeySeed`),
+projected as DC_CALLOUT_ISSUER_SEED / DC_CALLOUT_XKEY_SEED into device-management and no
+other area. dcctl writes it under this default name; instance.calloutSecret overrides it for
+an install that manages the Secret itself.
+
+It is a Secret of its own, and not a key in the instance document, because that document is
+mounted by every pod: a seed there is readable by every service. The name is spelled in Go too
+(calloutSecretName in backend/cli/bootstrap/calloutsecret.go); TestTheChartReadsTheCalloutSecretDcctlWrites
+holds the two together.
+*/}}
+{{- define "devicechain.calloutSecret" -}}
+{{- .Values.instance.calloutSecret | default (printf "dci-%s-callout" .Values.instance.id) -}}
+{{- end -}}
+
 {{/* The per-service config ConfigMap name. */}}
 {{- define "devicechain.microserviceConfigMap" -}}
 {{- printf "dct-%s-config" .Values.instance.id -}}

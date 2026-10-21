@@ -231,6 +231,11 @@ func helmInstall(ctx context.Context, st *State) error {
 		return err
 	}
 	withObjectStoreCredentialsDigest(vals, digest)
+	// The callout's seeds, before the release and beside the document: only device-management
+	// mounts this Secret, and its pods project it at container start.
+	if err := writeCalloutSecret(ctx, typed, st); err != nil {
+		return err
+	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
@@ -344,8 +349,8 @@ func newHelmUpgrade(cfg *action.Configuration, namespace string) *action.Upgrade
 // restatement of it.
 func helmValues(st *State) map[string]interface{} {
 	// Thread the broker-auth material into the instance config (ADR-025): the CA +
-	// TLS flag, plus the shared service credential every service presents and the
-	// callout issuer seed device-management signs with. Built as one nats map and
+	// TLS flag, plus the shared service credential every service presents and the PUBLIC
+	// halves of the callout's keys (the seeds go to a Secret of their own). Built as one nats map and
 	// deep-merged over the chart's instance.config defaults (hostname/port/
 	// persistence are preserved).
 	natsVals := map[string]interface{}{}
@@ -356,10 +361,19 @@ func helmValues(st *State) map[string]interface{} {
 		}
 	}
 	if seed := st.Values["natsCalloutIssuerSeed"]; seed != "" {
+		// Only the PUBLIC halves of the callout's keys go in the document every service reads.
+		// The seeds are written to a Secret of their own that only device-management mounts
+		// (writeCalloutSecret): a seed here would let any pod sign a device grant or open a
+		// device's CONNECT credentials.
 		auth := map[string]interface{}{
-			"user":              natsauth.ServiceUser,
-			"password":          st.Values["natsServicePassword"],
-			"calloutIssuerSeed": seed,
+			"user":     natsauth.ServiceUser,
+			"password": st.Values["natsServicePassword"],
+		}
+		if pub := st.Values["natsCalloutIssuerPublic"]; pub != "" {
+			auth["calloutIssuerPublic"] = pub
+		}
+		if pub := st.Values["natsCalloutXKeyPublic"]; pub != "" {
+			auth["calloutXKeyPublic"] = pub
 		}
 		// The system-account login, written only when one was minted. Its ABSENCE is
 		// the off switch for the broker-presence tap (see NatsAuthConfiguration), so

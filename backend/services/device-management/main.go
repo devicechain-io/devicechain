@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/devicechain-io/dc-device-management/config"
@@ -326,7 +327,7 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// credential that opened them, so a withdrawn credential or a disabled device must also
 	// END its sessions (model.SessionKicker). Without the callout there are no sessions of
 	// ours to end, and the kicker stays nil.
-	if nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed != "" {
+	if nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutEnabled() {
 		api.SessionKicker = natsSessionKicker{nmgr: nmgr, instanceId: nmgr.Microservice.InstanceId}
 	}
 	return api, cached, nil
@@ -871,7 +872,11 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	// (ADR-025): it authenticates every device connect at the broker against the
 	// device credential store. Absent an issuer seed the broker isn't running callout,
 	// so there is nothing to serve.
-	if seed := Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed; seed != "" {
+	seeds, err := resolveCalloutSeeds(Microservice.InstanceConfiguration.Infrastructure.Nats.Auth, os.Getenv)
+	if err != nil {
+		return err
+	}
+	if seeds.Enabled {
 		// The ADR-077 gate: a deleted tenant's devices hold credentials that still
 		// resolve (nothing cascades a delete to the credential store), so without this
 		// the fleet reconnects on its own backoff and keeps writing into data being
@@ -893,9 +898,16 @@ func afterMicroserviceStarted(ctx context.Context) error {
 		fenced := func(ctx context.Context, tenant string) error {
 			return rdb.CheckTenantFence(ctx, RdbManager.Database, tenant)
 		}
-		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, creds, seed, Microservice.InstanceId, gate, fenced)
+		CalloutResponder, err = processor.NewCalloutResponder(NatsManager.Conn(), CachedApi, creds, seeds.IssuerSeed, Microservice.InstanceId, gate, fenced)
 		if err != nil {
 			return err
+		}
+		// The broker encrypts each authorization request to the responder's curve key when it is
+		// configured with one; the seed to open them was checked against that key above.
+		if seeds.XKeySeed != "" {
+			if _, err = CalloutResponder.WithRequestEncryption(seeds.XKeySeed, seeds.XKeyPublic); err != nil {
+				return err
+			}
 		}
 		// The back-off ahead of overflow: with the fail-closed MQTT acknowledgement on, a full
 		// message store closes the connections it refuses, and their reconnects would land here.

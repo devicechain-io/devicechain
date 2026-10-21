@@ -421,6 +421,18 @@ Lo que ve una instancia en marcha:
   nodo no tiene sitio para las nuevas solicitudes del servidor, este queda en `Pending`: con
   `--ha` los otros dos siguen atendiendo, pero sin `--ha` el bróker sigue **caído** hasta que haya
   sitio, y la actualización falla tras hasta 15 minutos diciéndolo.
+- **La devolución de llamada de autenticación de dispositivos va cifrada y sus claves cambian de
+  sitio.** La contraseña de un dispositivo cruzaba el bróker en claro hacia cualquier servicio que
+  escuchara. `dcctl upgrade` crea un Secret llamado `dci-<instancia>-callout` con la semilla de
+  firma de la devolución de llamada y una nueva semilla de cifrado, montado solo en
+  `device-management`; la configuración de la instancia conserva únicamente sus mitades públicas. La
+  primera actualización que lo hace aplica el bróker en dos pasos para que los dispositivos sigan
+  conectando: primero se despliegan los servicios con un respondedor que lee solicitudes cifradas y
+  sin cifrar, y solo después se vuelve a aplicar el bróker con el cifrado activado. Ese segundo paso
+  es un reinicio progresivo más de los servidores NATS. Los dispositivos conectados al servidor que
+  se reinicia se reconectan solos, en segundos con `--ha`; sin `--ha` el bróker no está disponible
+  el minuto habitual. Si el segundo paso falla, los dispositivos siguen conectando, y ejecutar
+  `dcctl upgrade` de nuevo lo termina.
 - **El almacén de eventos se reinicia cuando cambian sus pods**, por ejemplo por una imagen o una
   ubicación nuevas. Un cambio solo de ajustes se recarga sin reinicio. Con `--ha` se reinician
   primero las réplicas en espera y después el rol primario pasa a una de ellas. Sin `--ha` se

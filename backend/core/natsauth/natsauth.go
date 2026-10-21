@@ -168,6 +168,12 @@ type Credentials struct {
 	// IssuerSeed is the account nkey seed (SA...) the callout responder signs
 	// device user JWTs with. Secret.
 	IssuerSeed string
+	// XKeyPublic / XKeySeed are the callout's curve key pair. The public key goes in the
+	// server config's auth_callout.xkey, so the broker encrypts every authorization request
+	// (it carries the device's CONNECT password) to it; the seed is held only by the callout
+	// responder and opens them. See xkey.go.
+	XKeyPublic string
+	XKeySeed   string
 	// ServicePassword is the plaintext password for the shared ServiceUser static
 	// login, presented by every internal service. Secret — goes into the instance
 	// config Secret, NOT the broker ConfigMap.
@@ -221,7 +227,7 @@ func GenerateCredentials() (Credentials, error) {
 		ServicePasswordBcrypt: string(hash),
 		SysPassword:           sysPw,
 		SysPasswordBcrypt:     sysHash,
-	}, nil
+	}.WithXKey("")
 }
 
 // generateSysPassword mints the system-account login and its hash together, the

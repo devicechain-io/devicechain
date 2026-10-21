@@ -233,6 +233,11 @@ The instance keeps the key its secrets were encrypted with, so the rows recovere
 decrypted. You are asked for the artifact's passphrase, or you can supply it with
 `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`.
 
+The broker's credentials are not in the escrow and do not need to be. The rebuilt instance mints
+new ones, including the keys of the device authentication callout, and gives them to the broker
+and the services in the same run. Devices do not hold any of them: they sign in with their own
+credentials, which come back with the database.
+
 `dcctl bootstrap` refuses to do it any other way; this is the first of the two checks described
 [above](#root-key). Before it writes anything, it asks the recovered store what it already holds
 under that instance's name, and a run with no `--restore-root-key` stops, naming the flag.
@@ -431,7 +436,10 @@ and keeps every one of these:
 - where monitoring and in-cluster backups are enabled, the Grafana admin password and the
   object-store credentials.
 
-A version change cannot become a credential change.
+A version change cannot become a credential change. The one thing it can create is a credential that
+did not exist: the first upgrade of an instance built before the device authentication callout was
+encrypted mints that callout's encryption key, stores it with the issuer seed in the instance's
+callout Secret, and never replaces it afterwards.
 
 ### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
 

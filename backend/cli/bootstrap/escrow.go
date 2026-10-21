@@ -177,6 +177,12 @@ var (
 	// than shipped to the broker.
 	lookupDeployedBrokerHashes = DeployedBrokerHashes
 
+	// lookupDeployedBrokerXKey is the broker's counterpart for auth_callout.xkey: the curve key
+	// its RUNNING configuration encrypts callout requests to, or "". Same weak contract as the
+	// hashes (every problem answers "nothing"), and the safe direction: "nothing" defers the
+	// encryption to a later step of the same run, it never skips it.
+	lookupDeployedBrokerXKey = DeployedBrokerXKey
+
 	// readDeployedBrokerRecord / storeBrokerRecord are the local bridge across the
 	// render→Helm gap (steps 6 and 8 today) — see broker_record.go for why it exists
 	// and why it is a file.
@@ -627,9 +633,18 @@ func syncDir(dir string) {
 // stopping for rather than guessing past.
 // brokerHashPair matches one `"password": "<bcrypt>", "user": "<name>"` pair in the
 // broker's rendered config. The chart writes the account users as JSON objects with
-// the keys in this order, which is what makes a targeted match viable — but see
+// their keys SORTED, which is what makes a targeted match viable — but see
 // DeployedBrokerHashes for why being wrong about that is survivable.
-var brokerHashPair = regexp.MustCompile(`"password":\s*"(\$2[aby]\$[^"]+)",\s*"user":\s*"([^"]+)"`)
+//
+// 🔴 SORTED MEANS `permissions` SITS BETWEEN THE TWO. Both logins carry permissions (the
+// service login's publish deny, the system login's allow lists), so a pattern that wants
+// `user` straight after `password` matched neither: every hash read back as absent, was
+// minted afresh with a new salt, changed the ConfigMap's checksum and rolled the broker on
+// every upgrade and every bootstrap re-run. The optional group skips one permissions
+// object, nested up to the depth the chart renders (permissions → publish → allow/deny).
+var brokerHashPair = regexp.MustCompile(`"password":\s*"(\$2[aby]\$[^"]+)",\s*` +
+	`(?:"permissions":\s*\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\},\s*)?` +
+	`"user":\s*"([^"]+)"`)
 
 // DeployedBrokerHashes reads the bcrypt password hashes the RUNNING broker is
 // configured with, so a bootstrap re-run can keep them rather than minting
@@ -696,6 +711,12 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 	if err != nil {
 		return nil, err
 	}
+	return deployedInstanceConfigVia(ctx, typed, instanceId)
+}
+
+// deployedInstanceConfigVia is DeployedInstanceConfig against a given client, so what it
+// overlays and what it refuses can be exercised without a cluster.
+func deployedInstanceConfigVia(ctx context.Context, typed kubernetes.Interface, instanceId string) (*config.InstanceConfiguration, error) {
 	name := fmt.Sprintf("dci-%s-config", instanceId)
 	// 🔴 THE NAMESPACE COMES THROUGH InstanceNamespace; THE SECRET NAME DOES NOT. Both are
 	// built from the instance id and they are not the same string — the `dci-` above is the
@@ -719,7 +740,23 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 		sec, err := typed.CoreV1().Secrets(candidate).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err == nil:
-			return parseDeployedConfig(sec.Data["instance"], instanceId, name)
+			cfg, err := parseDeployedConfig(sec.Data["instance"], instanceId, name)
+			if err != nil {
+				return nil, err
+			}
+			// The callout's seeds live in a Secret of their own now, so this view of the running
+			// instance overlays them: every caller that asks what the instance runs on (the
+			// reuse paths, the upgrade) gets the seeds from where they are, with the document's own
+			// copy as the fallback for an instance written before the split.
+			issuer, xkey, err := readCalloutSeeds(ctx, typed, candidate, instanceId)
+			if err != nil {
+				return nil, err
+			}
+			if issuer != "" {
+				cfg.Infrastructure.Nats.Auth.CalloutIssuerSeed = issuer
+			}
+			cfg.Infrastructure.Nats.Auth.CalloutXKeySeed = xkey
+			return cfg, nil
 		case apierrors.IsNotFound(err):
 			continue
 		default:

@@ -252,6 +252,11 @@ lugar de acuñarse. La instancia conserva la clave con la que se cifraron sus se
 filas recuperadas en el paso 1 pueden descifrarse. Se te pedirá la frase de contraseña del
 artefacto, o puedes proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`.
 
+Las credenciales del broker no están en el depósito y no necesitan estarlo. La instancia
+reconstruida acuña unas nuevas, incluidas las claves del callout de autenticación de dispositivos,
+y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
+ninguna de ellas: inician sesión con sus propias credenciales, que vuelven con la base de datos.
+
 `dcctl bootstrap` se niega a hacerlo de otra manera; es la primera de las dos comprobaciones
 descritas [arriba](#root-key). Antes de escribir nada, le pregunta al almacén recuperado qué
 contiene ya bajo el nombre de esa instancia, y una ejecución sin `--restore-root-key` se detiene y
@@ -458,7 +463,11 @@ leer y conserva todos estos:
 - cuando el monitoreo y las copias de seguridad dentro del clúster están habilitados, la contraseña
   de administrador de Grafana y las credenciales del almacén de objetos.
 
-Un cambio de versión no puede convertirse en un cambio de credenciales.
+Un cambio de versión no puede convertirse en un cambio de credenciales. Lo único que puede crear es
+una credencial que no existía: la primera actualización de una instancia construida antes de que se
+cifrara la devolución de llamada de autenticación de dispositivos acuña la clave de cifrado de esa
+devolución, la guarda junto con la semilla del emisor en el Secret de la instancia para ella, y no
+la reemplaza nunca después.
 
 ### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
 

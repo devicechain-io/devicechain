@@ -24,9 +24,17 @@ import (
 // over a live instance, a bootstrap resuming from this machine's record, and an
 // upgrade applying the instance's infrastructure — so they cannot come to read the
 // hashes from different places.
-func brokerCredentialsFromRunning(ctx context.Context, st *State, seed, password, sysPassword string) (natsauth.Credentials, error) {
-	return natsauth.CredentialsFromDeployed(seed, password, sysPassword,
+//
+// xkeySeed is the callout's curve seed if the instance already has one. An empty one is
+// MINTED, not refused: the xkey is an introduced credential (see calloutsecret.go), absent from
+// the starting state of any instance that predates it, and minting it replaces nothing.
+func brokerCredentialsFromRunning(ctx context.Context, st *State, seed, xkeySeed, password, sysPassword string) (natsauth.Credentials, error) {
+	creds, err := natsauth.CredentialsFromDeployed(seed, password, sysPassword,
 		lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName))
+	if err != nil {
+		return natsauth.Credentials{}, err
+	}
+	return creds.WithXKey(xkeySeed)
 }
 
 // setBrokerCredentialValues is where the broker's credentials enter the values both
@@ -35,6 +43,9 @@ func brokerCredentialsFromRunning(ctx context.Context, st *State, seed, password
 func setBrokerCredentialValues(st *State, creds natsauth.Credentials) {
 	st.Values["natsCalloutIssuerPublic"] = creds.IssuerPublic
 	st.Values["natsCalloutIssuerSeed"] = creds.IssuerSeed
+	st.Values["natsCalloutXKeyPublic"] = creds.XKeyPublic
+	st.Values[brokerXKeyValue] = creds.XKeyPublic
+	st.Values["natsCalloutXKeySeed"] = creds.XKeySeed
 	st.Values["natsServicePassword"] = creds.ServicePassword
 	st.Values["natsServicePasswordBcrypt"] = creds.ServicePasswordBcrypt
 	st.Values["natsSysPassword"] = creds.SysPassword

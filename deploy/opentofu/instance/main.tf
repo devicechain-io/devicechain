@@ -18,6 +18,7 @@ module "nats" {
   reject_qos2_publish      = var.nats_mqtt_reject_qos2_publish
   enable_auth              = var.nats_enable_auth
   callout_issuer_public    = var.nats_callout_issuer_public
+  callout_xkey_public      = var.nats_callout_xkey_public
   service_password_bcrypt  = var.nats_service_password_bcrypt
   sys_password_bcrypt      = var.nats_sys_password_bcrypt
   mqtt_node_port           = var.nats_mqtt_node_port

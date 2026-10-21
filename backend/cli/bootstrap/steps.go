@@ -247,6 +247,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		// if it verifies against the plaintext below.
 		creds, err = brokerCredentialsFromRunning(ctx, st,
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
+			deployed.Infrastructure.Nats.Auth.CalloutXKeySeed,
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
@@ -277,7 +278,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// through to the mint below, loudly. Post-adoption a wrong mint converges on the
 			// broker's next roll; a refused run does not converge on anything.
 			reused, rerr := brokerCredentialsFromRunning(ctx, st,
-				localRecord.IssuerSeed, localRecord.ServicePassword, localRecord.SysPassword)
+				localRecord.IssuerSeed, localRecord.XKeySeed, localRecord.ServicePassword, localRecord.SysPassword)
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
@@ -293,6 +294,14 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		}
 	}
 	setBrokerCredentialValues(st, creds)
+	// A LIVE instance whose broker does not encrypt its callout yet keeps it that way for this run:
+	// the responder must be rolled onto a build that can open encrypted requests first, and the
+	// pipeline applies the broker before the services. `dcctl upgrade` orders that correctly.
+	if deployed != nil && withholdXKeyFromBroker(ctx, st) {
+		notes = append(notes, "this instance's broker is not encrypting its device auth callout yet; "+
+			"this run leaves it so, because the services roll after the broker here. "+
+			"Run `dcctl upgrade` to enable it in the order that does not interrupt device connects")
+	}
 
 	// RECORD THEM BEFORE ANYTHING CONSUMES THEM — the same placement, and the same
 	// reasoning, as the root-key escrow write further down: the value of the artifact is
@@ -326,6 +335,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		Instance:        st.Instance,
 		Written:         time.Now().UTC(),
 		IssuerSeed:      creds.IssuerSeed,
+		XKeySeed:        creds.XKeySeed,
 		ServicePassword: creds.ServicePassword,
 		SysPassword:     creds.SysPassword,
 	}); err != nil {

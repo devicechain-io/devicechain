@@ -84,7 +84,7 @@ func TestTheCredentialsLeaveTheHelmValuesAndStayInTheDocument(t *testing.T) {
 	}
 	for _, key := range []string{
 		"secretsRootKey", "serviceAuthSecret", "natsServicePassword",
-		"natsSysPassword", "natsCalloutIssuerSeed",
+		"natsSysPassword",
 	} {
 		secret := st.Values[key]
 		if strings.Contains(string(encoded), secret) {
@@ -95,6 +95,18 @@ func TestTheCredentialsLeaveTheHelmValuesAndStayInTheDocument(t *testing.T) {
 			t.Errorf("the composed document does not carry %s, so the services would not "+
 				"receive it at all", key)
 		}
+	}
+
+	// The callout's seed is the exception that proves the rule: it must be in NEITHER, because
+	// the document is mounted by every pod and the seed has exactly one reader. Its public half
+	// is not secret and is in the document.
+	seed := st.Values["natsCalloutIssuerSeed"]
+	if strings.Contains(string(encoded), seed) || strings.Contains(string(doc), seed) {
+		t.Error("the callout issuer seed reached the install values or the instance document, which " +
+			"every service mounts; it belongs in the callout Secret that only device-management mounts")
+	}
+	if !strings.Contains(string(doc), st.Values["natsCalloutIssuerPublic"]) {
+		t.Error("the instance document does not record the callout issuer's public key")
 	}
 }
 
