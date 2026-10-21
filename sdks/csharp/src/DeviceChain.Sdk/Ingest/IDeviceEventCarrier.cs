@@ -12,24 +12,26 @@ namespace DeviceChain.Sdk.Ingest;
 /// </summary>
 /// <remarks>
 /// <para>
-/// 🔑 THE SPLIT IS "WHO BUILDS THE BODY" vs "WHO MOVES IT", AND IT IS LOAD-BEARING RATHER THAN
-/// TIDY. The HTTP ingress and the MQTT gateway decode the SAME <c>JsonEvent</c> shape, so the
-/// bytes must be identical on both — only the carrier differs. Letting each transport build its
-/// own body is how the two drift, and the drift would be invisible: both would still look like
-/// valid events.
-/// </para>
-/// <para>
-/// 🔴 AND THE BODY MUST CARRY ITS OWN CREDENTIALS ON BOTH CARRIERS. It is tempting to assume MQTT
-/// can omit them, since the connection is already authenticated at the broker — but the flag that
-/// lets a transport-authenticated event skip in-body credentials is set only by the LwM2M and
-/// Sparkplug adapters. The device-plane gateway never stamps it, so under the default
-/// <c>deviceAuthMode: required</c> an MQTT publish without <c>credentialType</c>/<c>credentialId</c>
-/// in the body is rejected. "Identical payload, different carrier" is therefore a requirement, not
-/// a convenience.
+/// 🔴 WHETHER THE BODY CARRIES A CREDENTIAL IS THE CARRIER'S DECLARATION, NOT A GUESS. The two
+/// wires differ here on purpose. HTTP and an external broker authenticate nothing at the
+/// transport, so the body must present <c>credentialType</c>/<c>credentialId</c>. The PLATFORM
+/// MQTT broker authenticates the CONNECT and asserts the device from the topic, and it REFUSES any
+/// event whose body carries a credential field (the broker has already written that body to a
+/// stream before any platform code can look at it, so a secret in it is a secret at rest in
+/// plaintext). Everything else in the body stays identical across carriers.
+/// See <see cref="CarriesBodyCredential"/>.
 /// </para>
 /// </remarks>
 public interface IDeviceEventCarrier
 {
+    /// <summary>
+    /// True when this carrier's wire authenticates the device only through the event body (HTTP,
+    /// an external broker), so the body must carry <c>credentialType</c>/<c>credentialId</c>. False
+    /// for the platform MQTT broker, which authenticated the connection and refuses a body that
+    /// carries one. Implementations return a constant: the answer is a property of the wire.
+    /// </summary>
+    bool CarriesBodyCredential { get; }
+
     /// <summary>
     /// Delivers one serialized event on behalf of <paramref name="deviceToken"/>.
     /// </summary>

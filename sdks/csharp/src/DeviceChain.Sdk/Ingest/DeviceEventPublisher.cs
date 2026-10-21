@@ -20,7 +20,9 @@ namespace DeviceChain.Sdk.Ingest;
 /// — exactly as a real device does (ADR-025/048): the device authenticates by presenting its
 /// credential IN the body (credentialType + credentialId, ADR-014), not a Bearer header. This is
 /// the emit leg an interactive twin uses (contract §3c). The ingress accepts into the pipeline
-/// asynchronously and returns 202.
+/// asynchronously and returns 202. Over the platform MQTT carrier the body carries NO credential
+/// (the broker authenticated the connection and refuses a body that names one); the carrier's
+/// <see cref="IDeviceEventCarrier.CarriesBodyCredential"/> decides.
 /// </summary>
 public sealed class DeviceEventPublisher
 {
@@ -97,9 +99,12 @@ public sealed class DeviceEventPublisher
             {
                 Entries = { new MeasurementEntry { Measurements = values, OccurredTime = now } },
             },
-            CredentialType = AccessTokenCredential,
-            CredentialId = credentialId,
         };
+        if (_carrier.CarriesBodyCredential)
+        {
+            evt.CredentialType = AccessTokenCredential;
+            evt.CredentialId = credentialId;
+        }
         return SendAsync(deviceToken, evt, SdkJson.Default.MeasurementEvent, cancellationToken);
     }
 
@@ -155,9 +160,12 @@ public sealed class DeviceEventPublisher
                     },
                 },
             },
-            CredentialType = AccessTokenCredential,
-            CredentialId = credentialId,
         };
+        if (_carrier.CarriesBodyCredential)
+        {
+            evt.CredentialType = AccessTokenCredential;
+            evt.CredentialId = credentialId;
+        }
         return SendAsync(deviceToken, evt, SdkJson.Default.LocationEvent, cancellationToken);
     }
 

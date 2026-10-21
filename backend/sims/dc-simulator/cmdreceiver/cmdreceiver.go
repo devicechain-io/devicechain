@@ -476,12 +476,19 @@ func (r *Receiver) respond(ds *deviceState, commandToken, dispatchNonce string) 
 	r.recordResponse(ds, r.publishResponse(ds, commandToken, dispatchNonce))
 }
 
+// responsePayload builds the body of one command response. It carries NO credential and must
+// not: this is published over the platform MQTT broker, which authenticated the CONNECT and
+// asserts the device from the subject (a test builds it and inspects the keys).
+func responsePayload(commandToken, dispatchNonce string) ([]byte, error) {
+	return json.Marshal(responseEnvelope{
+		CommandToken: commandToken, Success: true, DispatchNonce: dispatchNonce})
+}
+
 // publishResponse marshals and publishes one response, returning the first failure
 // or nil once the broker has ACKED it. A timeout is a failure: an unacked QoS-1
 // publish is not a delivered response.
 func (r *Receiver) publishResponse(ds *deviceState, commandToken, dispatchNonce string) error {
-	payload, err := json.Marshal(responseEnvelope{
-		CommandToken: commandToken, Success: true, DispatchNonce: dispatchNonce})
+	payload, err := responsePayload(commandToken, dispatchNonce)
 	if err != nil {
 		return err
 	}

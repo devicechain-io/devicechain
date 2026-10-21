@@ -528,3 +528,20 @@ func TestSubscribeGivesTheClaimBackWhenTheConnectTimesOut(t *testing.T) {
 	r.mu.Unlock()
 	assert.False(t, stranded)
 }
+
+// The simulator's MQTT leg is the platform broker, which authenticated the CONNECT and refuses
+// a body that names a credential. Build the payload and inspect its keys, rather than grepping
+// the source for a field name.
+func TestResponsePayloadCarriesNoCredential(t *testing.T) {
+	payload, err := responsePayload("cmd-1", "nonce-1")
+	require.NoError(t, err)
+
+	var members map[string]any
+	require.NoError(t, json.Unmarshal(payload, &members))
+	for _, field := range []string{"credentialType", "credentialId", "credentialSecret"} {
+		for key := range members {
+			assert.NotEqual(t, strings.ToLower(field), strings.ToLower(key), "the MQTT response body carries %q", key)
+		}
+	}
+	assert.Equal(t, "cmd-1", members["commandToken"])
+}

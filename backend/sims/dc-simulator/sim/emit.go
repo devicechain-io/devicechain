@@ -395,6 +395,32 @@ func eventTimestamp() string {
 	return time.Now().UTC().Truncate(time.Microsecond).Format(time.RFC3339Nano)
 }
 
+// httpEventBody builds the body the simulator POSTs to the HTTP ingress.
+//
+// 🔴 THE CREDENTIAL IS IN THE BODY BECAUSE THIS IS HTTP, AND ONLY BECAUSE OF THAT. HTTP has no
+// transport authentication, so the body is the only thing that authenticates the event. The
+// platform MQTT broker is the opposite: it authenticates the CONNECT and REFUSES an event whose
+// body carries a credential, so a future MQTT emit path must not reuse this builder. The
+// simulator emits no events over MQTT today (its MQTT leg carries command responses, which
+// have no credential), and a test pins both halves.
+func httpEventBody(d DeviceInstance, eventType, occurredTime string, payload map[string]interface{}) ([]byte, error) {
+	credType := credentialTypeAccessToken
+	credId := d.CredentialId
+
+	body, err := json.Marshal(processor.JsonEvent{
+		Device:         d.Token,
+		EventType:      eventType,
+		OccurredTime:   &occurredTime,
+		Payload:        payload,
+		CredentialType: &credType,
+		CredentialId:   &credId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal event: %w", err)
+	}
+	return body, nil
+}
+
 // postEvent is the wire tail every emitter shares: it wraps payload in the
 // JsonEvent envelope for device d, POSTs it to the real device-plane HTTP ingress
 // route a physical device uses (no sim-only backdoor), authenticated by the
@@ -418,20 +444,9 @@ func eventTimestamp() string {
 // on one reading, which is exactly the kind of difference nobody notices.
 func postEvent(ctx context.Context, rt *Runtime, d DeviceInstance,
 	eventType, occurredTime string, payload map[string]interface{}) error {
-	credType := credentialTypeAccessToken
-	credId := d.CredentialId
-
-	jevent := processor.JsonEvent{
-		Device:         d.Token,
-		EventType:      eventType,
-		OccurredTime:   &occurredTime,
-		Payload:        payload,
-		CredentialType: &credType,
-		CredentialId:   &credId,
-	}
-	body, err := json.Marshal(jevent)
+	body, err := httpEventBody(d, eventType, occurredTime, payload)
 	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
+		return err
 	}
 
 	url := fmt.Sprintf("%s/%s/%s/events", strings.TrimRight(rt.Endpoints.Ingress, "/"), rt.InstanceId, rt.Tenant)

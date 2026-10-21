@@ -264,9 +264,9 @@ public sealed class MqttDeviceSession : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// The body is passed in already serialized because it must be byte-identical to what the HTTP
-    /// carrier posts — the gateway decodes the same shape either way, and (unlike the transport-
-    /// authenticated adapters) it does not stamp events as transport-authenticated, so the body
-    /// must still carry its own credential fields.
+    /// carrier posts — the gateway decodes the same shape either way. On THIS wire the body must
+    /// carry NO credential field: the broker authenticated the connection and asserts the device
+    /// from the topic, and the platform refuses an event whose body names a credential.
     /// </remarks>
     public async Task PublishEventAsync(byte[] jsonEvent, CancellationToken cancellationToken)
     {

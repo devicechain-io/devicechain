@@ -116,7 +116,8 @@ because the WebGL path was learned the expensive way.
   > IL2CPP.
 
 - A provisioned device, and its **credential id**. The session needs `instanceId`, `tenant`,
-  `deviceToken`, `credentialId` — nothing else.
+  `deviceToken`, `credentialId` — nothing else. The credential id is the CONNECT login only; the SDK
+  puts no credential in the event body over MQTT (the platform refuses one).
 - Unity 6 (the version `VERIFICATION.md` records) with **IL2CPP** and the platform module for your
   target. Mono will *not* answer the question this page exists to ask.
 

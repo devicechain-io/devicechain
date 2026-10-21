@@ -20,6 +20,9 @@ namespace DeviceChain.Sdk.Ingest;
 /// </remarks>
 public sealed class HttpDeviceEventCarrier : IDeviceEventCarrier
 {
+    /// <inheritdoc />
+    public bool CarriesBodyCredential => true;
+
     private readonly IHttpTransport _transport;
     private readonly Uri _ingressOrigin;
     private readonly string _instanceId;
@@ -98,6 +101,10 @@ public sealed class HttpDeviceEventCarrier : IDeviceEventCarrier
 /// </remarks>
 public sealed class MqttDeviceEventCarrier : IDeviceEventCarrier
 {
+    /// <inheritdoc />
+    /// <remarks>False: the platform broker authenticated the CONNECT and refuses a body credential.</remarks>
+    public bool CarriesBodyCredential => false;
+
     private readonly MqttDeviceSession _session;
     private readonly string _deviceToken;
 

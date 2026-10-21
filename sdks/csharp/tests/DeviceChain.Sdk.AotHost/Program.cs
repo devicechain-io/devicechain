@@ -181,6 +181,8 @@ public static class Program
     {
         public byte[]? LastBody { get; private set; }
 
+        public bool CarriesBodyCredential => true;
+
         public Task SendAsync(string deviceToken, byte[] jsonEvent, CancellationToken cancellationToken)
         {
             LastBody = jsonEvent;

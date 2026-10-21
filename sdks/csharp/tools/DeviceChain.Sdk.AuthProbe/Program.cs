@@ -30,11 +30,10 @@
 //                SUBACK reason code >= 0x80, which MQTTnet returns rather than throws -- the
 //                #668 class of dead-but-healthy-looking subscription. The SDK checks it; this
 //                confirms the check passes against a real grant rather than a permissive fake.
-//   3 PUBLISH    one measurement, PUBACKed. Carries the credential IN THE BODY, which the device
-//                plane requires: the MQTT gateway never stamps `authenticatedTransport`, so under
-//                the default `deviceAuthMode: required` a publish without credentialType and
-//                credentialId is rejected. "Identical payload, different carrier" is a
-//                requirement here, not a convenience.
+//   3 PUBLISH    one measurement, PUBACKed. Carries NO credential in the body: the broker
+//                authenticated the CONNECT and asserts the device from the topic, and the platform
+//                REFUSES an MQTT event whose body names a credential (the broker has already
+//                stored the body before any platform code runs).
 //   4 COMMAND    the platform's own REACT sendCommand arrives and is answered. This is the only
 //                stage that depends on the instance having a DETECT rule for the metric, so its
 //                absence is reported as a distinct outcome rather than a failure.
@@ -231,7 +230,7 @@ internal static class Program
         Console.WriteLine("        the auth callout accepted a real credential presented by this SDK");
         Console.WriteLine();
 
-        Console.WriteLine($"[3/4] PUBLISH   {Metric} = {LowFuelPercent.ToString(CultureInfo.InvariantCulture)}, credential in the body");
+        Console.WriteLine($"[3/4] PUBLISH   {Metric} = {LowFuelPercent.ToString(CultureInfo.InvariantCulture)}, no credential in the body");
         var publisher = new DeviceEventPublisher(new MqttDeviceEventCarrier(session, deviceToken));
         try
         {
