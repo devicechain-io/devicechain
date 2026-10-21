@@ -123,9 +123,10 @@ func TestFailedDecodeKeepsNoCredentialFromOddlyPlacedOrDuplicatedFields(t *testi
 		"nested": `{"device":"d","occurredTime":"not-a-time","payload":{"credentialId":"` + fixtureToken + `",` +
 			`"inner":[{"credentialSecret":"` + fixtureSecret + `"}]}}`,
 		"case and separator": `{"device":"d","occurredTime":"not-a-time","Credential_ID":"` + fixtureToken + `","CREDENTIAL-SECRET":"` + fixtureSecret + `"}`,
-		"escaped key":        `{"device":"d","occurredTime":"not-a-time","credentialId":"` + fixtureToken + `"}`,
-		"first of many":      `{"credentialId":"` + fixtureToken + `","credentialSecret":"` + fixtureSecret + `","device":"d","occurredTime":"not-a-time"}`,
-		"non-string id":      `{"device":"d","occurredTime":"not-a-time","credentialId":{"v":"` + fixtureToken + `"}}`,
+		// I is 'I': the decoder reads this key as credentialId, so the redactor must too.
+		"escaped key":   `{"device":"d","occurredTime":"not-a-time","credentialId":"` + fixtureToken + `"}`,
+		"first of many": `{"credentialId":"` + fixtureToken + `","credentialSecret":"` + fixtureSecret + `","device":"d","occurredTime":"not-a-time"}`,
+		"non-string id": `{"device":"d","occurredTime":"not-a-time","credentialId":{"v":"` + fixtureToken + `"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			requireAbsent(t, routeFailedDecode(t, body), fixtureToken, fixtureSecret)
