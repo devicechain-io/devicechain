@@ -363,13 +363,45 @@ type NatsAuthConfiguration struct {
 	// stays inferred, which is exactly the behaviour of the release before this one.
 	SysUser     string
 	SysPassword string
-	// CalloutIssuerSeed is the account nkey seed the device-management auth-callout
-	// responder signs device user JWTs with. Only device-management consumes it; it
-	// is carried in every service's instance config for provisioning simplicity
-	// (all services already share the instance config's secrets — a trusted-
-	// boundary tradeoff to revisit if per-service isolation is needed). Empty
-	// elsewhere and when the callout is disabled.
+	// CalloutIssuerPublic and CalloutXKeyPublic are the PUBLIC halves of the device auth
+	// callout's two keys: the account nkey its user JWTs are signed with, and the curve key the
+	// broker encrypts each authorization request to. Neither is secret, so both ride in the
+	// instance config every service reads; they answer "does this broker run the callout" and
+	// "is it encrypted" for the services that must know (event-sources keys its session-kick
+	// requirement on the first).
+	//
+	// 🔴 THE SEEDS ARE NOT HERE. They live in a Secret of their own, mounted into
+	// device-management alone (DC_CALLOUT_ISSUER_SEED, DC_CALLOUT_XKEY_SEED), so no other pod
+	// can sign a device grant or open a device's CONNECT credentials. device-management checks
+	// each seed against the public key recorded here and refuses to start on a missing or
+	// mismatched one.
+	CalloutIssuerPublic string
+	CalloutXKeyPublic   string
+	// CalloutIssuerSeed is the account nkey seed, as releases before the seeds got their own
+	// Secret wrote it into this document.
+	//
+	// Deprecated: read ONLY by dcctl, to carry the seed into the callout Secret when it upgrades
+	// such an instance. Nothing writes it now and no service reads it as a seed: a document that
+	// still carries one makes device-management refuse to start unless the Secret supplies the
+	// seeds too, so a half-migrated instance is loud rather than quietly served from the wrong
+	// place.
+	//
+	// dcctl also uses this field, and CalloutXKeySeed, as the VIEW it builds of a running
+	// instance: DeployedInstanceConfig overlays what the callout Secret holds, so every caller
+	// that asks "what is this instance running on" gets the seeds from where they now live.
+	// That view is never marshalled back into a document.
 	CalloutIssuerSeed string
+	// CalloutXKeySeed is the curve seed that opens the broker's encrypted callout requests. It
+	// exists only in dcctl's view of a running instance (see CalloutIssuerSeed) and is never
+	// written to the document.
+	CalloutXKeySeed string
+}
+
+// CalloutEnabled reports whether the broker runs the device auth callout. It is keyed on the
+// public issuer key, with the deprecated seed as the fallback for a document written before the
+// split.
+func (a NatsAuthConfiguration) CalloutEnabled() bool {
+	return a.CalloutIssuerPublic != "" || a.CalloutIssuerSeed != ""
 }
 
 // NatsTlsConfiguration controls client-side TLS to the NATS broker (ADR-025).

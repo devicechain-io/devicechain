@@ -458,7 +458,11 @@ leer y conserva todos estos:
 - cuando el monitoreo y las copias de seguridad dentro del clúster están habilitados, la contraseña
   de administrador de Grafana y las credenciales del almacén de objetos.
 
-Un cambio de versión no puede convertirse en un cambio de credenciales.
+Un cambio de versión no puede convertirse en un cambio de credenciales. Lo único que puede crear es
+una credencial que no existía: la primera actualización de una instancia construida antes de que se
+cifrara la devolución de llamada de autenticación de dispositivos acuña la clave de cifrado de esa
+devolución, la guarda junto con la semilla del emisor en el Secret de la instancia para ella, y no
+la reemplaza nunca después.
 
 ### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
 

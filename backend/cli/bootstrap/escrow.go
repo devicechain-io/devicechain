@@ -177,6 +177,12 @@ var (
 	// than shipped to the broker.
 	lookupDeployedBrokerHashes = DeployedBrokerHashes
 
+	// lookupDeployedBrokerXKey is the broker's counterpart for auth_callout.xkey: the curve key
+	// its RUNNING configuration encrypts callout requests to, or "". Same weak contract as the
+	// hashes (every problem answers "nothing"), and the safe direction: "nothing" defers the
+	// encryption to a later step of the same run, it never skips it.
+	lookupDeployedBrokerXKey = DeployedBrokerXKey
+
 	// readDeployedBrokerRecord / storeBrokerRecord are the local bridge across the
 	// render→Helm gap (steps 6 and 8 today) — see broker_record.go for why it exists
 	// and why it is a file.
@@ -696,6 +702,12 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 	if err != nil {
 		return nil, err
 	}
+	return deployedInstanceConfigVia(ctx, typed, instanceId)
+}
+
+// deployedInstanceConfigVia is DeployedInstanceConfig against a given client, so what it
+// overlays and what it refuses can be exercised without a cluster.
+func deployedInstanceConfigVia(ctx context.Context, typed kubernetes.Interface, instanceId string) (*config.InstanceConfiguration, error) {
 	name := fmt.Sprintf("dci-%s-config", instanceId)
 	// 🔴 THE NAMESPACE COMES THROUGH InstanceNamespace; THE SECRET NAME DOES NOT. Both are
 	// built from the instance id and they are not the same string — the `dci-` above is the
@@ -719,7 +731,23 @@ func DeployedInstanceConfig(ctx context.Context, kubeContext, instanceId string)
 		sec, err := typed.CoreV1().Secrets(candidate).Get(ctx, name, metav1.GetOptions{})
 		switch {
 		case err == nil:
-			return parseDeployedConfig(sec.Data["instance"], instanceId, name)
+			cfg, err := parseDeployedConfig(sec.Data["instance"], instanceId, name)
+			if err != nil {
+				return nil, err
+			}
+			// The callout's seeds live in a Secret of their own now, so this view of the running
+			// instance overlays them: every caller that asks what the instance runs on (the
+			// reuse paths, the upgrade) gets the seeds from where they are, with the document's own
+			// copy as the fallback for an instance written before the split.
+			issuer, xkey, err := readCalloutSeeds(ctx, typed, candidate, instanceId)
+			if err != nil {
+				return nil, err
+			}
+			if issuer != "" {
+				cfg.Infrastructure.Nats.Auth.CalloutIssuerSeed = issuer
+			}
+			cfg.Infrastructure.Nats.Auth.CalloutXKeySeed = xkey
+			return cfg, nil
 		case apierrors.IsNotFound(err):
 			continue
 		default:

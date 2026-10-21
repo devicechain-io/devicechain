@@ -99,6 +99,10 @@
           "type": "string",
           "description": "Name of the Secret holding the superuser's seed password under key `password`, projected into user-management as DC_SUPERUSER_PASSWORD and read only to seed an empty identity table. Empty means dci-<id>-superuser, the Secret dcctl bootstrap generates per instance. There is no default password: an install made without dcctl must create this Secret before user-management first starts, or it refuses to seed the superuser."
         },
+        "calloutSecret": {
+          "type": "string",
+          "description": "Name of the Secret holding the device auth callout's seeds (keys issuerSeed and xkeySeed), projected into device-management ALONE as DC_CALLOUT_ISSUER_SEED and DC_CALLOUT_XKEY_SEED. Empty means dci-<id>-callout, the Secret dcctl writes. The pod reference is optional, so an instance with no callout starts; when the instance configuration says the broker runs one, device-management refuses to start without the seeds."
+        },
         "config": {
           "type": "object",
           "description": "The instance configuration document (infrastructure, persistence, per-service settings), written into the dci-<id>-config Secret. The chart validates only the envelope; each service validates its own part at startup. Under existingSecret this block is not the mounted document, but templates still read its defaults; restate the ports in networkPolicy.externalConfigPorts and the broker host in metrics.natsBrokerHost."

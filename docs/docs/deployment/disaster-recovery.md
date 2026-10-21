@@ -431,7 +431,10 @@ and keeps every one of these:
 - where monitoring and in-cluster backups are enabled, the Grafana admin password and the
   object-store credentials.
 
-A version change cannot become a credential change.
+A version change cannot become a credential change. The one thing it can create is a credential that
+did not exist: the first upgrade of an instance built before the device authentication callout was
+encrypted mints that callout's encryption key, stores it with the issuer seed in the instance's
+callout Secret, and never replaces it afterwards.
 
 ### Finishing a bootstrap that failed partway {#resuming-a-bootstrap}
 

@@ -956,6 +956,9 @@ func withDeployedInstance(t *testing.T, cfg *config.InstanceConfiguration, err e
 	// broker — and which exercises the fallback, so the tests below assert against a
 	// re-run that had to hash for itself unless they say otherwise.
 	withDeployedBrokerHashes(t, natsauth.DeployedHashes{})
+	// And the broker's callout xkey, asked of a LIVE instance's broker by the same re-run. Defaults
+	// to "the broker is not encrypting", the answer for every instance built before the key.
+	withDeployedBrokerXKey(t, "")
 	// And the FOURTH read, which is a FILE rather than a cluster call and is the more
 	// dangerous of the two for exactly that reason.
 	//
@@ -1017,6 +1020,14 @@ func withDeployedBrokerHashes(t *testing.T, h natsauth.DeployedHashes) {
 	lookupDeployedBrokerHashes = func(context.Context, string, string, string) natsauth.DeployedHashes {
 		return h
 	}
+}
+
+// withDeployedBrokerXKey stubs the curve key the running broker's config encrypts its callout to.
+func withDeployedBrokerXKey(t *testing.T, key string) {
+	t.Helper()
+	orig := lookupDeployedBrokerXKey
+	t.Cleanup(func() { lookupDeployedBrokerXKey = orig })
+	lookupDeployedBrokerXKey = func(context.Context, string, string, string) string { return key }
 }
 
 // withArchiveState stubs what the instance's event store is currently archiving under.

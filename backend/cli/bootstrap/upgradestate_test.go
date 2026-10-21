@@ -12,6 +12,7 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-microservice/config"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -26,6 +27,15 @@ import (
 // here; adding one and putting it in this list is a decision somebody had to write
 // down.
 var natsAuthIdentityFields = map[string]bool{"User": true, "SysUser": true}
+
+// The callout's two SEEDS are carried too, but not in the document: they travel in the Secret
+// only device-management mounts, and the test below holds both halves of that: they reach it,
+// and they do not reach the document every service reads.
+var natsAuthSecretFields = map[string]bool{"CalloutIssuerSeed": true, "CalloutXKeySeed": true}
+
+// CalloutXKeyPublic is DERIVED from the xkey seed it belongs to, never carried on its own: a
+// public key that disagrees with its seed is a broker encrypting to a key nothing can open.
+var natsAuthDerivedFields = map[string]bool{"CalloutXKeyPublic": true}
 
 // 🔴 A CREDENTIAL THE HYDRATION DROPS DOES NOT FAIL — IT RENDERS A VALID DOCUMENT
 // WITH SOMETHING MISSING FROM IT. helmValues simply omits the block, the services
@@ -50,9 +60,19 @@ func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
 			auth.Field(i).SetString("sentinel-nats-" + authType.Field(i).Name)
 		}
 	}
+	// The seeds must be real ones (the hydration derives keys from them), so they are minted and
+	// stood in for the sentinels.
+	minted, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed = minted.IssuerSeed
+	deployed.Infrastructure.Nats.Auth.CalloutXKeySeed = minted.XKeySeed
 
 	st := &State{Instance: testInstance, Values: map[string]string{}}
-	applyDeployedInfrastructure(st, deployed)
+	if err := applyDeployedInfrastructure(st, deployed); err != nil {
+		t.Fatalf("hydrating: %v", err)
+	}
 
 	// Rendered the way the release actually renders it, rather than checked against
 	// st.Values: a value carried into State and never read by helmValues has not
@@ -71,14 +91,36 @@ func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
 	}
 	for i := 0; i < auth.NumField(); i++ {
 		name := authType.Field(i).Name
-		if auth.Field(i).Kind() != reflect.String || natsAuthIdentityFields[name] {
+		if auth.Field(i).Kind() != reflect.String || natsAuthIdentityFields[name] || natsAuthDerivedFields[name] {
 			continue
+		}
+		if natsAuthSecretFields[name] {
+			continue // held below
 		}
 		if !strings.Contains(got, "sentinel-nats-"+name) {
 			t.Errorf("the broker's %s did not survive the hydration: an upgrade would roll "+
 				"every service onto a configuration missing it, and nothing would report an "+
 				"error", name)
 		}
+	}
+
+	// The seeds: in the callout Secret, and nowhere in the document every service reads.
+	spec, ok := calloutSecret(st)
+	if !ok {
+		t.Fatal("an instance with a device callout writes no callout Secret")
+	}
+	if spec.Data[calloutSecretKeyIssuer] != minted.IssuerSeed || spec.Data[calloutSecretKeyXKey] != minted.XKeySeed {
+		t.Errorf("the hydrated seeds did not reach the callout Secret: %v", spec.Data)
+	}
+	for _, seed := range []string{minted.IssuerSeed, minted.XKeySeed} {
+		if strings.Contains(got, seed) {
+			t.Error("a callout SEED reached the values the instance document is composed from, " +
+				"which every service mounts")
+		}
+	}
+	// The derived key is the one the seed owns, and it is what the document records.
+	if !strings.Contains(got, minted.XKeyPublic) {
+		t.Error("the document does not record the public key derived from the xkey seed")
 	}
 }
 
@@ -87,10 +129,16 @@ func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
 // pointed at a listener that does not speak it.
 func TestAnInstanceWithoutBrokerTLSIsNotGivenSome(t *testing.T) {
 	deployed := &config.InstanceConfiguration{}
-	deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed = "seed"
+	minted, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed = minted.IssuerSeed
 
 	st := &State{Instance: testInstance, Values: map[string]string{}}
-	applyDeployedInfrastructure(st, deployed)
+	if err := applyDeployedInfrastructure(st, deployed); err != nil {
+		t.Fatal(err)
+	}
 
 	if st.Values["natsTlsEnabled"] == "true" {
 		t.Error("TLS was switched on for an instance whose configuration has it off")

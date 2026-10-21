@@ -333,6 +333,10 @@ func waitForBrokerRollout(ctx context.Context, typed kubernetes.Interface, ns st
 // otherwise, and sizes volumes from the roots' defaults — and every one of those defaults
 // is a reconfiguration of a running instance rather than a failure.
 func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
+	// The notes describe THIS settle's findings. The upgrade settles twice when it holds the callout
+	// key back from the broker, and a note carried over from the first would tell the operator the
+	// second apply leaves the broker as it is while it is the apply that turns the key on.
+	st.InfraNotes = nil
 	// The broker's authority, as the services hold it (applyDeployedInfrastructure).
 	if st.Values["natsCA"] == "" {
 		return fmt.Errorf("instance %q runs a configuration that carries no broker certificate "+
@@ -342,7 +346,7 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	}
 	// Its logins, with the hashes the broker already holds.
 	creds, err := brokerCredentialsFromRunning(ctx, st, st.Values["natsCalloutIssuerSeed"],
-		st.Values["natsServicePassword"], st.Values["natsSysPassword"])
+		st.Values["natsCalloutXKeySeed"], st.Values["natsServicePassword"], st.Values["natsSysPassword"])
 	if err != nil {
 		return fmt.Errorf("reusing instance %q's broker logins for its broker's configuration: %w. "+
 			"Nothing has been changed", st.Instance, err)
@@ -358,6 +362,13 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 		creds.SysPassword, creds.SysPasswordBcrypt = "", ""
 	}
 	setBrokerCredentialValues(st, creds)
+	// 🔴 A BROKER THAT DOES NOT ENCRYPT ITS CALLOUT YET IS NOT TOLD TO IN THIS APPLY: the services
+	// have not rolled onto a responder that can read it. See withholdXKeyFromBroker; the second apply
+	// (enableCalloutEncryption) follows the service rollout.
+	if withholdXKeyFromBroker(ctx, st) {
+		st.InfraNotes = append(st.InfraNotes, "the broker will start encrypting its device auth callout "+
+			"after the services have rolled onto a responder that can read it; this apply leaves it as it is")
+	}
 
 	// The archive path the event store owns: the live one, always. See resolveArchivePath.
 	live, err := readLiveArchiveState(ctx, st.KubeContext, st.Instance)

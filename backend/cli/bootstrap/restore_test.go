@@ -493,6 +493,7 @@ func TestArchivePathFailsOnAnUnreadableArchiverSpec(t *testing.T) {
 func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 	archiveBefore := reflect.ValueOf(readLiveArchiveState).Pointer()
 	hashesBefore := reflect.ValueOf(lookupDeployedBrokerHashes).Pointer()
+	xkeyBefore := reflect.ValueOf(lookupDeployedBrokerXKey).Pointer()
 	recordReadBefore := reflect.ValueOf(readDeployedBrokerRecord).Pointer()
 	recordStoreBefore := reflect.ValueOf(storeBrokerRecord).Pointer()
 	credentialsBefore := reflect.ValueOf(settleCredentials).Pointer()
@@ -513,6 +514,11 @@ func TestDeployedInstanceStubCoversEveryOutsideRead(t *testing.T) {
 		t.Fatal("withDeployedInstance no longer stubs lookupDeployedBrokerHashes, so every test " +
 			"driving stepRenderConfig now reads the broker's ConfigMap from the environment's cluster. " +
 			"Restore the withDeployedBrokerHashes call in withDeployedInstance.")
+	}
+	if reflect.ValueOf(lookupDeployedBrokerXKey).Pointer() == xkeyBefore {
+		t.Fatal("withDeployedInstance no longer stubs lookupDeployedBrokerXKey, so every test driving " +
+			"stepRenderConfig over a live instance reads the broker's ConfigMap from the environment's " +
+			"cluster. Restore the withDeployedBrokerXKey call in withDeployedInstance.")
 	}
 	// 🔴 THE FOURTH AND FIFTH ARE A FILE, WHICH IS WHY THE TEST'S NAME NO LONGER SAYS
 	// "CLUSTER". Every test here runs with Instance "prod", so unstubbed these resolve

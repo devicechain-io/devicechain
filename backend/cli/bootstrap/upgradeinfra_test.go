@@ -82,9 +82,14 @@ func imagesOf(n int, image string) []string {
 func stubUpgradeReads(t *testing.T, live clusterArchiveState, infra liveInfra, hashes natsauth.DeployedHashes) {
 	t.Helper()
 	prevArchive, prevSingle, prevInfra, prevHashes := readLiveArchiveState, readClusterSingletons, readLiveInfra, lookupDeployedBrokerHashes
+	prevXKey := lookupDeployedBrokerXKey
 	t.Cleanup(func() {
 		readLiveArchiveState, readClusterSingletons, readLiveInfra, lookupDeployedBrokerHashes = prevArchive, prevSingle, prevInfra, prevHashes
+		lookupDeployedBrokerXKey = prevXKey
 	})
+	// A broker that is not encrypting its callout yet, which is what every instance built before the
+	// xkey runs. The upgrade's xkey tests set their own.
+	lookupDeployedBrokerXKey = func(context.Context, string, string, string) string { return "" }
 	readLiveArchiveState = func(context.Context, string, string) (clusterArchiveState, error) { return live, nil }
 	readClusterSingletons = func(context.Context, string, string, string) (clusterSingletons, error) {
 		return clusterSingletons{}, nil

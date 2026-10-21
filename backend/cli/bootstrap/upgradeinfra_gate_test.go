@@ -195,8 +195,11 @@ func TestSettleLetsAnUnfinishedBrokerRollThrough(t *testing.T) {
 		t.Fatalf("an upgrade re-run over a broker whose roll did not finish was refused, so the "+
 			"documented remedy (raise nats_memory_limit, run the upgrade again) cannot be applied: %v", err)
 	}
-	if len(st.InfraNotes) != 1 || !strings.Contains(st.InfraNotes[0], "last roll did not finish") ||
-		!strings.Contains(st.InfraNotes[0], "dc-nats-2 Running") {
+	said := false
+	for _, n := range st.InfraNotes {
+		said = said || (strings.Contains(n, "last roll did not finish") && strings.Contains(n, "dc-nats-2 Running"))
+	}
+	if !said {
 		t.Errorf("letting an unfinished roll through is not said, with the server that is stuck: %q", st.InfraNotes)
 	}
 }

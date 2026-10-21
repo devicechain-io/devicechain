@@ -69,7 +69,7 @@ func startSessionKickOn(ctx context.Context, dataConn func() *nats.Conn) error {
 	// system login) would refuse to start this service for sessions that are not ours to end,
 	// and a callout instance with no platform-broker source would leave every revocation
 	// unanswered.
-	required := infra.Nats.Auth.CalloutIssuerSeed != ""
+	required := infra.Nats.Auth.CalloutEnabled()
 	if infra.Nats.Auth.SysUser == "" || infra.Nats.Auth.SysPassword == "" {
 		if required {
 			return errNoSystemLoginForSessionKick

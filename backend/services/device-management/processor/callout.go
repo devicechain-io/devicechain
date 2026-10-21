@@ -68,6 +68,9 @@ type CalloutResponder struct {
 	conn       *nats.Conn
 	api        model.DeviceManagementApi
 	issuerSeed string
+	// xkey opens the broker-sealed requests and seals the replies; nil on a broker that does
+	// not encrypt its callout. See WithRequestEncryption.
+	xkey       *natsauth.XKeyCodec
 	instanceId string
 	ttl        time.Duration
 	now        func() time.Time
@@ -92,6 +95,9 @@ type CalloutResponder struct {
 	// reached. While it is down EVERY password connect is refused, so a line per
 	// connect would be one per device in a reconnecting fleet.
 	unavailableLog rateLimitedLog
+	// plaintextLog rate-limits the warning for a request that arrived unencrypted while an
+	// xkey is configured.
+	plaintextLog rateLimitedLog
 	// misconfiguredLog rate-limits the warning for a stored credential that can never
 	// authenticate. A restore next to the wrong root key makes that EVERY MQTT_BASIC
 	// device, each reconnecting on its own backoff; the counter sees every one.
@@ -146,6 +152,10 @@ const (
 type CalloutMetrics struct {
 	InFlight    prometheus.Gauge
 	RefusedBusy prometheus.Counter
+	// PlaintextRequests counts requests answered while an xkey is configured but the request
+	// arrived unencrypted. It is expected to be nonzero only across the broker roll that turns
+	// encryption on; a standing nonzero rate means the broker is not sealing its requests.
+	PlaintextRequests prometheus.Counter
 }
 
 // NewCalloutMetrics registers the callout's metrics on the microservice.
@@ -155,6 +165,8 @@ func NewCalloutMetrics(ms *core.Microservice) *CalloutMetrics {
 			"Device auth-callout requests being authorized right now."),
 		RefusedBusy: ms.NewCounter("callout_refused_busy_total",
 			"Device auth-callout requests refused with the generic denial because the in-flight bound was reached."),
+		PlaintextRequests: ms.NewCounter("callout_plaintext_requests_total",
+			"Device auth-callout requests that arrived unencrypted although an xkey is configured (expected only across the broker roll that enables encryption)."),
 	}
 }
 
@@ -174,6 +186,73 @@ func (c *CalloutResponder) Configure(maxInFlight int, lookupTimeout, stopWait ti
 	if metrics != nil {
 		c.metrics = metrics
 	}
+}
+
+// WithRequestEncryption makes the responder open broker-sealed requests and seal its replies
+// with the curve seed. It is the other half of the broker's auth_callout.xkey: the broker
+// encrypts each authorization request (which carries the device's CONNECT password) to the
+// public key of this seed, so only this responder can read it. Call it before Start.
+//
+// It refuses a seed that is not a curve seed, and a seed whose public key is not wantPublic when
+// that is given: a Secret from another instance, or the issuer seed in the wrong key, would
+// otherwise start cleanly and then fail to open a single request.
+//
+// 🔴 PLAINTEXT IS STILL ANSWERED, deliberately and only for the roll. A request without the
+// server's xkey header is answered as before (and counted, and logged). That is what lets this
+// responder be rolled out BEFORE the broker is told to encrypt, so the broker roll never meets
+// a responder that cannot read it. It costs nothing at rest: a plaintext request carries nothing
+// that is not already in the sender's hands, and an eavesdropper gains nothing from one it can
+// only fabricate.
+func (c *CalloutResponder) WithRequestEncryption(seed, wantPublic string) (*CalloutResponder, error) {
+	codec, err := natsauth.NewXKeyCodec(seed)
+	if err != nil {
+		return nil, err
+	}
+	if wantPublic != "" {
+		got, err := codec.Public()
+		if err != nil {
+			return nil, err
+		}
+		if got != wantPublic {
+			return nil, errXKeyMismatch
+		}
+	}
+	c.xkey = codec
+	return c, nil
+}
+
+// errXKeyMismatch is WithRequestEncryption's refusal of a seed that is not the key the broker
+// was configured with.
+var errXKeyMismatch = errors.New("the callout xkey seed does not match the public key the broker " +
+	"is configured to encrypt to; the Secret and the instance configuration came from different mints")
+
+// openRequest returns the plaintext authorization request in msg, and the server curve key to
+// seal the reply to ("" when the request was not encrypted). ok is false when the request cannot
+// be read at all; the broker times that connect out.
+func (c *CalloutResponder) openRequest(msg *nats.Msg) (data []byte, replyTo string, ok bool) {
+	serverKey := msg.Header.Get(natsauth.AuthRequestXKeyHeader)
+	if serverKey == "" {
+		if c.xkey != nil {
+			if c.metrics != nil && c.metrics.PlaintextRequests != nil {
+				c.metrics.PlaintextRequests.Inc()
+			}
+			if allow, held := c.plaintextLog.allow(c.now()); allow {
+				log.Warn().Int("alsoHeld", held).Msg("Auth-callout answered an UNENCRYPTED request although an " +
+					"xkey is configured. Expected only while the broker rolls onto auth_callout.xkey.")
+			}
+		}
+		return msg.Data, "", true
+	}
+	if c.xkey == nil {
+		log.Warn().Msg("Dropping an encrypted auth-callout request: no xkey seed is configured here.")
+		return nil, "", false
+	}
+	plain, err := c.xkey.Open(msg.Data, serverKey)
+	if err != nil {
+		log.Warn().Err(err).Msg("Dropping an auth-callout request that could not be decrypted.")
+		return nil, "", false
+	}
+	return plain, serverKey, true
 }
 
 // WithStoreBackoff makes the responder refuse every device connect, at once and before any
@@ -373,12 +452,16 @@ func (c *CalloutResponder) refuseBusy(msg *nats.Msg) {
 
 // refuseAtOnce answers a request with the generic denial without authorizing it.
 func (c *CalloutResponder) refuseAtOnce(msg *nats.Msg) {
-	reqClaims, err := jwt.DecodeAuthorizationRequestClaims(string(msg.Data))
+	data, sealTo, ok := c.openRequest(msg)
+	if !ok {
+		return
+	}
+	reqClaims, err := jwt.DecodeAuthorizationRequestClaims(string(data))
 	if err != nil || reqClaims.AuthorizationRequest.UserNkey == "" {
 		return
 	}
 	req := reqClaims.AuthorizationRequest
-	c.respond(msg, req.Server.ID, req.UserNkey, "", genericAuthFailure)
+	c.respond(msg, sealTo, req.Server.ID, req.UserNkey, "", genericAuthFailure)
 }
 
 // Stop tears down the subscription, then waits up to stopWait for requests still being
@@ -411,7 +494,11 @@ func (c *CalloutResponder) Stop() error {
 // handle processes one authorization request: decode, decide, and reply with a
 // scoped user JWT or a denial.
 func (c *CalloutResponder) handle(msg *nats.Msg) {
-	reqClaims, err := jwt.DecodeAuthorizationRequestClaims(string(msg.Data))
+	data, sealTo, ok := c.openRequest(msg)
+	if !ok {
+		return
+	}
+	reqClaims, err := jwt.DecodeAuthorizationRequestClaims(string(data))
 	if err != nil {
 		// A malformed request can't be attributed to a user nkey/server; drop it
 		// (the connection times out server-side) rather than sign a bogus reply.
@@ -428,7 +515,7 @@ func (c *CalloutResponder) handle(msg *nats.Msg) {
 		return
 	}
 	userJWT, errMsg := c.authorize(req)
-	c.respond(msg, req.Server.ID, req.UserNkey, userJWT, errMsg)
+	c.respond(msg, sealTo, req.Server.ID, req.UserNkey, userJWT, errMsg)
 }
 
 // authorize resolves a decoded request to either a signed user JWT (grant) or a
@@ -699,13 +786,22 @@ func (c *CalloutResponder) logAuthFailure(tenant string, err error) {
 
 // respond signs and publishes the authorization response. Exactly one of userJWT
 // / errMsg is non-empty.
-func (c *CalloutResponder) respond(msg *nats.Msg, serverID, userNkey, userJWT, errMsg string) {
+func (c *CalloutResponder) respond(msg *nats.Msg, sealTo, serverID, userNkey, userJWT, errMsg string) {
 	resp, err := natsauth.EncodeAuthResponse(c.issuerSeed, serverID, userNkey, userJWT, errMsg)
 	if err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to encode a response.")
 		return
 	}
-	if err := c.conn.Publish(msg.Reply, []byte(resp)); err != nil {
+	out := []byte(resp)
+	// An encrypted request is answered encrypted. The broker would also accept a plaintext reply,
+	// but the reply names the grant a device was given, which is no one else's business.
+	if sealTo != "" {
+		if out, err = c.xkey.Seal(out, sealTo); err != nil {
+			log.Error().Err(err).Msg("Auth-callout failed to encrypt a response.")
+			return
+		}
+	}
+	if err := c.conn.Publish(msg.Reply, out); err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to publish a response.")
 	}
 }

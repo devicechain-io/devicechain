@@ -143,7 +143,7 @@ func TestAMalformedKickRequestIsAnsweredNotDropped(t *testing.T) {
 func TestTheServiceRefusesToStartWithoutTheLoginThatEndsSessions(t *testing.T) {
 	cfg, _ := kickBroker(t)
 	cfg.Auth.SysUser, cfg.Auth.SysPassword = "", ""
-	cfg.Auth.CalloutIssuerSeed = "SAcalloutseedplaceholder"
+	cfg.Auth.CalloutIssuerPublic = "AcalloutissuerpublicPlaceholder"
 
 	for _, gateway := range []string{"mqtt1", ""} {
 		withKickService(t, cfg, gateway)
@@ -151,7 +151,7 @@ func TestTheServiceRefusesToStartWithoutTheLoginThatEndsSessions(t *testing.T) {
 		require.ErrorIs(t, err, errNoSystemLoginForSessionKick, "gateway source %q", gateway)
 	}
 
-	cfg.Auth.CalloutIssuerSeed = ""
+	cfg.Auth.CalloutIssuerPublic = ""
 	withKickService(t, cfg, "mqtt1")
 	require.NoError(t, startSessionKickOn(context.Background(), func() *nats.Conn { return nil }),
 		"a broker with no device callout has no sessions of ours, even with a platform-broker source")

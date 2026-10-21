@@ -273,6 +273,30 @@ variable "callout_issuer_public" {
   default     = ""
 }
 
+variable "callout_xkey_public" {
+  description = <<-EOT
+    Public curve key (X...) the broker ENCRYPTS every auth-callout request to
+    (auth_callout.xkey). The request carries the connecting device's CONNECT username
+    and password; without this it crosses $SYS.REQ.USER.AUTH in plaintext, readable by
+    any login in the APP account that can subscribe there or capture the subject into a
+    stream. Only the responder (device-management) holds the matching seed.
+
+    EMPTY (the default) leaves the callout unencrypted, which is what every instance
+    before this variable ran, and is what an upgrade passes for the first apply: the
+    responder is rolled onto a build that can open encrypted requests BEFORE the broker is
+    told to send them, so the broker roll never meets a responder that cannot read it.
+
+    auth_callout cannot be hot-reloaded: changing this rolls the broker.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.callout_xkey_public == "" || can(regex("^X[A-Z2-7]{55}$", var.callout_xkey_public))
+    error_message = "callout_xkey_public must be a curve public key (X followed by 55 base32 characters) or empty; the bring-up mints it."
+  }
+}
+
 variable "service_password_bcrypt" {
   description = "BCRYPT HASH ($2a$...) of the shared static `dc_service` password. It is what lands in the broker config; nats-server bcrypt-compares the plaintext each service presents. The plaintext is never rendered here. Required when enable_auth is true. Sensitive."
   type        = string
@@ -675,11 +699,16 @@ locals {
       # works, and only the one service presenting the unlisted login is refused. It
       # then logs once and disables its feature, so the symptom is a capability quietly
       # missing rather than anything failing.
-      auth_callout = {
+      #
+      # xkey is the responder's CURVE public key: with it the broker seals each request
+      # to the responder and the device's CONNECT password never crosses the subject in
+      # the clear. It is merged in only when set, so an empty value renders the block
+      # exactly as before (an `xkey: ""` would be a different config, not an absent one).
+      auth_callout = merge({
         issuer     = var.callout_issuer_public
         auth_users = [local.service_user, local.sys_user]
         account    = "APP"
-      }
+      }, var.callout_xkey_public == "" ? {} : { xkey = var.callout_xkey_public })
     }
   }
   tls_secret_name       = "${var.release_name}-tls"
@@ -1187,6 +1216,13 @@ resource "helm_release" "nats" {
     precondition {
       condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password_bcrypt != "")
       error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password_bcrypt (mint them via dcctl / the genauth helper)."
+    }
+
+    # An xkey without the callout it encrypts is a config the broker would carry for nothing,
+    # and the operator reading it would believe device credentials were protected.
+    precondition {
+      condition     = var.callout_xkey_public == "" || var.enable_auth
+      error_message = "nats callout_xkey_public is set but enable_auth is false: there is no auth callout to encrypt."
     }
 
     # Refuse the contradiction rather than silently picking a winner. ha=true with

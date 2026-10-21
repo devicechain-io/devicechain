@@ -396,6 +396,17 @@ What a running instance sees:
   made meanwhile are refused. If the node has no room for the server's new requests, the server
   stays `Pending`: under `--ha` the other two keep serving, but without `--ha` the broker stays
   **down** until there is room, and the upgrade fails after up to 15 minutes saying so.
+- **The device authentication callout is encrypted, and its keys move.** A device's password used to
+  cross the broker in the clear to any service that listened for it. `dcctl upgrade` creates a
+  Secret named `dci-<instance>-callout` that holds the callout's signing seed and a new encryption
+  seed and is mounted into `device-management` only; the instance configuration keeps just their
+  public halves. The first upgrade that does this applies the broker in two steps so devices keep
+  connecting: the services roll first onto a responder that reads both encrypted and unencrypted
+  requests, and only then is the broker applied again with encryption on. That second step is one
+  more rolling restart of the NATS servers. Devices connected through the server that restarts
+  reconnect on their own, within seconds under `--ha`; without `--ha` the broker is unavailable for
+  the usual minute. If the second step fails, devices keep connecting, and running
+  `dcctl upgrade` again finishes it.
 - **The event store restarts when its pods change**, for example for a new image or placement.
   A settings-only change reloads without a restart. Under `--ha` the standbys restart first, then
   the primary role switches to one of them. Without `--ha` the one instance restarts and

@@ -96,6 +96,14 @@ instance:
   # There is no default password: an install made without dcctl must create this
   # Secret before user-management first starts, or it refuses to seed.
   superuserSecret: ""
+  # The Secret holding the device auth callout's SEEDS, mounted into device-management
+  # ALONE: key `issuerSeed` (the account seed grants are signed with) and key `xkeySeed`
+  # (the curve seed that opens the broker's encrypted requests), projected as
+  # DC_CALLOUT_ISSUER_SEED and DC_CALLOUT_XKEY_SEED. Empty means `dci-<id>-callout`,
+  # the Secret `dcctl` writes. Optional at the pod: an instance whose broker runs no
+  # callout has none. When the instance configuration says the broker runs one,
+  # device-management refuses to start without the seeds rather than serve nothing.
+  calloutSecret: ""
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.
@@ -284,13 +292,22 @@ instance:
           ca: ""
         # Broker authentication (ADR-025). When the NATS module has auth callout
         # enabled, the bring-up threads the shared service credential here so every
-        # service authenticates, plus (device-management only) the callout issuer
-        # seed. Empty = the broker requires no auth. Kept in lockstep with the
-        # broker: enabling one without the other locks every service out.
+        # service authenticates, plus the PUBLIC halves of the device callout's keys.
+        # Empty = the broker requires no auth. Kept in lockstep with the broker:
+        # enabling one without the other locks every service out.
+        #
+        # The callout's SEEDS are not in this document. They live in the Secret named
+        # by instance.calloutSecret, which only device-management mounts, so no other
+        # pod can sign a device grant or read a device's CONNECT credentials.
         auth:
           user: ""
           password: ""
-          calloutIssuerSeed: ""
+          # The account nkey (A...) the callout signs device grants with; non-empty
+          # means the broker runs the device auth callout.
+          calloutIssuerPublic: ""
+          # The curve key (X...) the broker encrypts each callout request to. Empty
+          # means the callout is not encrypted.
+          calloutXKeyPublic: ""
           # The SEPARATE system-account login, read only by event-sources' broker
           # presence tap: the system account is where the broker publishes its own
           # connection advisories, and a connection there sees every account's traffic —

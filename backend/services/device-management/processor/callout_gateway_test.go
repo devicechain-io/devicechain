@@ -56,6 +56,17 @@ import (
 // five seconds to the suite.
 func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout time.Duration) (*natsserver.Server, int) {
 	t.Helper()
+	return startCalloutServerEncrypted(t, creds, authTimeout, "")
+}
+
+// startCalloutServerEncrypted is startCalloutServer with auth_callout.xkey set to xkeyPublic
+// ("" leaves the callout unencrypted, as every release before the xkey ran it).
+func startCalloutServerEncrypted(t *testing.T, creds natsauth.Credentials, authTimeout time.Duration, xkeyPublic string) (*natsserver.Server, int) {
+	t.Helper()
+	xkey := ""
+	if xkeyPublic != "" {
+		xkey = fmt.Sprintf("xkey: %q,", xkeyPublic)
+	}
 
 	// The service login is a bcrypt hash, as deployed, but at the minimum cost
 	// rather than the minted one. The server checks it before answering the
@@ -86,12 +97,12 @@ func startCalloutServer(t *testing.T, creds natsauth.Credentials, authTimeout ti
 		}
 		authorization {
 		  timeout: %v
-		  auth_callout { issuer: %q, auth_users: [%q], account: "APP" }
+		  auth_callout { issuer: %q, %s auth_users: [%q], account: "APP" }
 		}
 	`, filepath.Join(dir, "js"),
 		natsauth.ServiceUser, string(serviceHash),
 		authTimeout.Seconds(),
-		creds.IssuerPublic, natsauth.ServiceUser)
+		creds.IssuerPublic, xkey, natsauth.ServiceUser)
 	if err := os.WriteFile(conf, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}

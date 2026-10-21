@@ -269,7 +269,8 @@ dcctl secrets escrow show ~/backups/my-instance-rootkey.escrow
 - 服务间认证秘密；
 - 启用监控和集群内备份时的 Grafana 管理员密码和对象存储凭据。
 
-版本变更不能变成凭据变更。
+版本变更不能变成凭据变更。它唯一能创建的是此前不存在的凭据：在设备认证回调加密之前构建的实例，首次升级时会生成该回调的加密密钥，
+与签发者种子一起保存在实例的回调 Secret 中，此后永不替换。
 
 ### 完成中途失败的 bootstrap {#resuming-a-bootstrap}
 

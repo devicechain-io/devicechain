@@ -158,7 +158,9 @@ func hydrateUpgradeState(
 				"finished — there is no running instance here to upgrade. Complete the bootstrap, "+
 				"or destroy the instance and build it again", opts.Instance)
 	}
-	applyDeployedInfrastructure(st, deployed)
+	if err := applyDeployedInfrastructure(st, deployed); err != nil {
+		return nil, fmt.Errorf("reading instance %q's broker credentials: %w", opts.Instance, err)
+	}
 	if err := refuseNoSystemLogin(opts.Instance, st); err != nil {
 		return nil, err
 	}
@@ -309,17 +311,20 @@ func applyUpgradeDeclaration(st *State, inst *dcv1beta1.Instance, opts UpgradeOp
 // The system-account password is the sharp one: its ABSENCE is the off switch for the
 // broker-presence tap, so a value that fails to come across here does not fail, it
 // silently turns a feature off.
-func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfiguration) {
+func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfiguration) error {
 	nats := deployed.Infrastructure.Nats
 	if nats.Tls.Enabled {
 		st.Values["natsTlsEnabled"] = "true"
 		st.Values["natsCA"] = nats.Tls.Ca
 	}
 	st.Values["natsCalloutIssuerSeed"] = nats.Auth.CalloutIssuerSeed
+	st.Values["natsCalloutXKeySeed"] = nats.Auth.CalloutXKeySeed
+	st.Values["natsCalloutIssuerPublic"] = nats.Auth.CalloutIssuerPublic
 	st.Values["natsServicePassword"] = nats.Auth.Password
 	st.Values["natsSysPassword"] = nats.Auth.SysPassword
 	st.Values["serviceAuthSecret"] = deployed.Infrastructure.ServiceAuth.Secret
 	st.Values["secretsRootKey"] = deployed.Infrastructure.Secrets.RootKey
+	return introduceCalloutXKey(st)
 }
 
 // refuseNoSystemLogin refuses an upgrade of an instance whose broker runs the device auth

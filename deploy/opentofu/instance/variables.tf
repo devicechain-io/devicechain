@@ -239,6 +239,12 @@ variable "nats_callout_issuer_public" {
   default     = ""
 }
 
+variable "nats_callout_xkey_public" {
+  description = "Public curve key (X...) the broker encrypts its auth-callout requests to, so a device's CONNECT password never crosses the callout subject in plaintext. Minted by the bring-up; the matching seed is held only by device-management. Empty leaves the callout unencrypted (an upgrade passes empty for its first apply, then the key once the responder can read it)."
+  type        = string
+  default     = ""
+}
+
 variable "nats_service_password_bcrypt" {
   description = "BCRYPT HASH ($2a$...) of the shared `dc_service` password, placed in the broker config (the plaintext goes only into the services' instance-config Secret; the broker bcrypt-compares). Minted by the bring-up; required when nats_enable_auth is true. Sensitive."
   type        = string

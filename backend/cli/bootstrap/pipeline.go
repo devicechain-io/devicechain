@@ -263,6 +263,10 @@ type State struct {
 	// InfraNotes are what an upgrade's settle found worth saying with the plan — a broker
 	// roll an earlier run left unfinished, which this apply replaces. Empty on a bootstrap.
 	InfraNotes []string
+	// XKeyServicesReady is set by an upgrade once the services have rolled onto a build that
+	// can open the broker's encrypted callout requests, which is the point at which the broker
+	// may be told to send them. See withholdXKeyFromBroker.
+	XKeyServicesReady bool
 	// CarriedRestoreVars re-pass the recovery source of an event store that was
 	// restored, read from the instance root's own state by an upgrade, so its Cluster's
 	// spec.bootstrap is not re-rendered as an empty initdb. Nil on a bootstrap.

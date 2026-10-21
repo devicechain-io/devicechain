@@ -672,6 +672,12 @@ func infraVars(st *State) []string {
 			"nats_callout_issuer_public="+pub,
 			"nats_service_password_bcrypt="+st.Values["natsServicePasswordBcrypt"],
 		)
+		// The curve key the broker encrypts each callout request to. Absent while an upgrade is
+		// still rolling the responder onto a build that can open them (withholdXKeyFromBroker);
+		// the broker then keeps sending plaintext, and a later apply turns encryption on.
+		if x := st.Values[brokerXKeyValue]; x != "" {
+			vars = append(vars, "nats_callout_xkey_public="+x)
+		}
 		// The system-account login's hash. Passed separately from the service one
 		// because the broker places them in different accounts, and omitted entirely
 		// when no system password was minted — the module then renders SYS with no
