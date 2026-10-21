@@ -148,6 +148,16 @@ counters are per-process. `GET /healthz` → `200` when up and healthy, else `50
   the per-event payload credential (ADR-014) — so a forged local connection cannot forge
   attributed events. Enabling auth on a live site is a breaking change for connected
   devices; sequence it (see [RUNBOOK.md](RUNBOOK.md#4-secure)).
+- **The uplink cannot publish to the platform MQTT broker's authenticated listener.** The
+  agent forwards each child event verbatim, body credential included, and the platform
+  broker authenticates the CONNECT and asserts the device from the topic: it refuses an
+  event whose body carries `credentialType`/`credentialId`/`credentialSecret`. The agent
+  does NOT strip them: on an unauthenticated listener they are the only attribution, and
+  removing them would forward events no one can attribute. This is on top of the existing
+  gateway-identity gap (a device login may publish only its own device's topics, and the
+  broker acknowledges a violation as success), so the uplink to an auth-enabled platform
+  broker is unsupported until the edge gateway identity work lands; it is not an exemption
+  the platform grants.
 - **The plain NATS client port is unbound** (`DontListen`) so the MQTT gateway is the
   only exposed surface — this is enforced and tested, not incidental.
 - **A config `instanceId` typo forwards nothing.** The agent only captures/forwards

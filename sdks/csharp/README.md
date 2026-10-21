@@ -23,7 +23,7 @@ and the library builds with `TreatWarningsAsErrors` + `IsAotCompatible`. It mult
 | Auth state machine | `Auth.AuthSession` | `login → selectTenant → refresh` (ADR-033), with proactive near-expiry refresh; the `TokenProvider` a client plugs in |
 | GraphQL over HTTP | `GraphQlClient` | typed query/mutate against `/api/{area}/graphql`; caller supplies its own `JsonTypeInfo` (AOT-safe) |
 | Live subscriptions | `Subscriptions.GraphQlWsClient` | `graphql-transport-ws`, one multiplexed socket per area; token in `connection_init` |
-| Device-plane emit | `Ingest.DeviceEventPublisher` | Measurement + Location over `POST /{instanceId}/{tenant}/events` or MQTT (the `JsonEvent` shape, in-body credential per ADR-014/025) |
+| Device-plane emit | `Ingest.DeviceEventPublisher` | Measurement + Location over `POST /{instanceId}/{tenant}/events` or MQTT (the `JsonEvent` shape; HTTP carries the credential in the body, platform MQTT carries none: the broker authenticated the connection and refuses a body credential, see `IDeviceEventCarrier.CarriesBodyCredential`) |
 | Transport seam | `Transport.IHttpTransport` / `Transport.IWebSocketFactory` | pluggable HTTP + WebSocket, so the SDK runs where `HttpClient`/`ClientWebSocket` don't (Unity WebGL) |
 | Facade | `DeviceChainClient` | wires all of the above against one origin |
 

@@ -18,8 +18,9 @@ namespace DeviceChain.Sitepulse.DevicePlane
     /// <summary>
     /// A device's link over the SDK's <see cref="MqttDeviceSession"/>, publishing through the SDK's
     /// own <see cref="DeviceEventPublisher"/> over the session's carrier (no hand-written framing).
-    /// The credential id goes into the session options and into the event body the SDK builds, and
-    /// nowhere else: it is never formatted into a string here.
+    /// The credential id goes into the session options (the CONNECT login) and nowhere else: the event
+    /// body carries NO credential on the platform MQTT broker, which refuses one. It is never
+    /// formatted into a string here.
     /// </summary>
     public sealed class SdkDeviceLink : IDeviceLink
     {

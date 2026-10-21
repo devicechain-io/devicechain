@@ -38,7 +38,7 @@ public class DeviceEventCarrierTests
     // the untrue half was the half being tested. A fake that stands in for the subject measures the
     // fixture.
     [Fact]
-    public async Task TheBytesThatReachTheMqttWireAreIdenticalToTheHttpBody()
+    public async Task TheMqttWireIsTheHttpBodyMinusTheCredential()
     {
         var occurred = new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero);
         var metrics = new Dictionary<string, double> { ["fuelPct"] = 12.5, ["engineTempC"] = 91 };
@@ -58,14 +58,9 @@ public class DeviceEventCarrierTests
             .EmitMeasurementsAsync("sensor-001", "cred-1", metrics, occurred);
 
         var onTheWire = Assert.Single(connection.Published).Payload;
-        Assert.Equal(overHttp, onTheWire);
+        AssertHttpCarriesTheCredentialAndMqttDoesNot(overHttp, onTheWire);
 
-        // And the body must still carry its own credentials on the MQTT wire: the device-plane
-        // gateway does not stamp events as transport-authenticated (only the LwM2M and Sparkplug
-        // adapters do), so a body without them is rejected under the default deviceAuthMode.
         using var document = JsonDocument.Parse(onTheWire);
-        Assert.Equal("ACCESS_TOKEN", document.RootElement.GetProperty("credentialType").GetString());
-        Assert.Equal("cred-1", document.RootElement.GetProperty("credentialId").GetString());
         Assert.Equal("sensor-001", document.RootElement.GetProperty("device").GetString());
     }
 
@@ -74,7 +69,7 @@ public class DeviceEventCarrierTests
     // type is exactly how that stops being true — a second serialize-and-send path would satisfy
     // the measurement test above forever while quietly diverging here.
     [Fact]
-    public async Task TheLocationBytesThatReachTheMqttWireAreIdenticalToTheHttpBody()
+    public async Task TheLocationMqttWireIsTheHttpBodyMinusTheCredential()
     {
         var occurred = new DateTimeOffset(2026, 8, 7, 12, 0, 0, TimeSpan.Zero);
         var fix = new LocationFix(33.74912345, -84.38812345) { Elevation = 320.53, Heading = 271.53 };
@@ -94,12 +89,10 @@ public class DeviceEventCarrierTests
             .EmitLocationAsync("sensor-001", "cred-1", fix, occurred);
 
         var onTheWire = Assert.Single(connection.Published).Payload;
-        Assert.Equal(overHttp, onTheWire);
+        AssertHttpCarriesTheCredentialAndMqttDoesNot(overHttp, onTheWire);
 
         using var document = JsonDocument.Parse(onTheWire);
         Assert.Equal("Location", document.RootElement.GetProperty("eventType").GetString());
-        Assert.Equal("ACCESS_TOKEN", document.RootElement.GetProperty("credentialType").GetString());
-        Assert.Equal("cred-1", document.RootElement.GetProperty("credentialId").GetString());
         // And the unreported optionals are absent on the MQTT wire too, not zeroed by a second path.
         JsonElement entry = document.RootElement.GetProperty("payload").GetProperty("entries")[0];
         Assert.False(entry.TryGetProperty("accuracy", out _));
@@ -160,9 +153,68 @@ public class DeviceEventCarrierTests
             () => carrier.SendAsync("sensor-001", Encoding.UTF8.GetBytes("{}"), CancellationToken.None));
     }
 
+    // The declaration itself is pinned, because the publisher's whole behaviour hangs on it.
+    [Fact]
+    public async Task TheCarriersDeclareWhetherTheirWireTakesABodyCredential()
+    {
+        Assert.True(new HttpDeviceEventCarrier(
+            new HttpClientTransport(new HttpClient(new StubHandler((_, _) => (HttpStatusCode.Accepted, "")))),
+            new Uri("https://ingress.local"), "inst", "acme").CarriesBodyCredential);
+
+        await using var session = new MqttDeviceSession(
+            new MqttSessionOptions(new Uri("tcp://127.0.0.1:1883"), "inst", "acme", "sensor-001", "cred-1"),
+            new SingleConnectionFactory(new RecordingConnection()));
+        Assert.False(new MqttDeviceEventCarrier(session, "sensor-001").CarriesBodyCredential);
+    }
+
+    // An explicit carrier that declares a body credential gets one (an external-broker carrier is
+    // the case), and one that declares none gets none: the publisher follows the declaration.
+    [Fact]
+    public async Task ThePublisherFollowsTheCarriersDeclaration()
+    {
+        var withCred = new CapturingCarrier();
+        await new DeviceEventPublisher(withCred).EmitMeasurementsAsync(
+            "sensor-001", "cred-1", new Dictionary<string, double> { ["a"] = 1 });
+        Assert.Contains("\"credentialId\":\"cred-1\"", Encoding.UTF8.GetString(withCred.LastBody!));
+
+        var without = new CapturingCarrier { Declares = false };
+        await new DeviceEventPublisher(without).EmitLocationAsync("sensor-001", "cred-1", new LocationFix(1, 2));
+        string body = Encoding.UTF8.GetString(without.LastBody!);
+        Assert.DoesNotContain("credential", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // 🔴 The one place the two wires are ALLOWED to differ is the credential. HTTP (and an external
+    // broker) authenticate nothing at the transport, so its body presents the credential; the
+    // platform MQTT broker authenticated the CONNECT and REFUSES a body that names one (the broker
+    // writes the body to a stream before any platform code runs, so a secret in it rests in
+    // plaintext). Everything ELSE must stay byte-for-byte the same, so this removes the credential
+    // fields from the HTTP body and demands the MQTT body equal what is left.
+    private static void AssertHttpCarriesTheCredentialAndMqttDoesNot(byte[] overHttp, byte[] overMqtt)
+    {
+        string[] credentialFields = { "credentialType", "credentialId", "credentialSecret" };
+
+        var http = System.Text.Json.Nodes.JsonNode.Parse(overHttp)!.AsObject();
+        var mqtt = System.Text.Json.Nodes.JsonNode.Parse(overMqtt)!.AsObject();
+
+        Assert.Equal("ACCESS_TOKEN", (string?)http["credentialType"]);
+        Assert.Equal("cred-1", (string?)http["credentialId"]);
+        foreach (string field in credentialFields)
+        {
+            Assert.False(mqtt.ContainsKey(field), $"the MQTT body carries \"{field}\"");
+            Assert.DoesNotContain(field, Encoding.UTF8.GetString(overMqtt), StringComparison.OrdinalIgnoreCase);
+            http.Remove(field);
+        }
+
+        Assert.Equal(http.ToJsonString(), mqtt.ToJsonString());
+    }
+
     private sealed class CapturingCarrier : IDeviceEventCarrier
     {
         public byte[]? LastBody { get; private set; }
+
+        public bool Declares { get; set; } = true;
+
+        public bool CarriesBodyCredential => Declares;
 
         public Task SendAsync(string deviceToken, byte[] jsonEvent, CancellationToken cancellationToken)
         {

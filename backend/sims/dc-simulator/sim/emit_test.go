@@ -398,3 +398,21 @@ func TestEventTimestampIsMicrosecondExact(t *testing.T) {
 		}
 	}
 }
+
+// HTTP is the one transport on which the simulator's event body carries the credential: the
+// body is the only authentication there. The MQTT leg (command responses) is pinned in
+// cmdreceiver to carry none.
+func TestHTTPEventBodyCarriesTheCredential(t *testing.T) {
+	body, err := httpEventBody(DeviceInstance{Token: "dev-1", CredentialId: "cred-1"},
+		"Measurement", "2026-10-21T00:00:00Z", map[string]interface{}{"entries": []interface{}{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var members map[string]any
+	if err := json.Unmarshal(body, &members); err != nil {
+		t.Fatal(err)
+	}
+	if members["credentialType"] != "ACCESS_TOKEN" || members["credentialId"] != "cred-1" {
+		t.Fatalf("the HTTP event body must carry the credential, got %s", body)
+	}
+}

@@ -42,6 +42,9 @@ namespace DeviceChain.Sitepulse.Tests
             public string Token;
             public byte[] Body;
 
+            // The wire a SdkDeviceLink publishes on is the platform MQTT broker: no body credential.
+            public bool CarriesBodyCredential => false;
+
             public Task SendAsync(string deviceToken, byte[] jsonEvent, CancellationToken cancellationToken)
             {
                 Token = deviceToken;
@@ -67,7 +70,8 @@ namespace DeviceChain.Sitepulse.Tests
             using var doc = JsonDocument.Parse(carrier.Body);
             var root = doc.RootElement;
             Assert.AreEqual("Location", root.GetProperty("eventType").GetString());
-            Assert.AreEqual("cred-id", root.GetProperty("credentialId").GetString());
+            foreach (var field in new[] { "credentialType", "credentialId", "credentialSecret" })
+                Assert.IsFalse(root.TryGetProperty(field, out _), "the platform MQTT broker refuses a body that carries " + field);
             var entry = root.GetProperty("payload").GetProperty("entries")[0];
             Assert.AreEqual(6.25, Num(entry.GetProperty("speed")), 1e-9, "speed is the speed");
             Assert.AreEqual(271.5, Num(entry.GetProperty("heading")), 1e-9, "heading is the heading");

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://docs.devicechain.io/schema/device/device-event.schema.json",
   "title": "DeviceChain device event",
-  "description": "The JSON body a device sends for one event: published on MQTT to {instanceId}/{tenant}/devices/{deviceToken}/events, or POSTed over HTTP to /{instanceId}/{tenant}/events. The same body is accepted on both transports. Unknown members are ignored rather than refused, so a misspelled optional member is silently dropped. Envelope member names are matched without regard to case, but send them exactly as written here.",
+  "description": "The JSON body a device sends for one event: published on MQTT to {instanceId}/{tenant}/devices/{deviceToken}/events, or POSTed over HTTP to /{instanceId}/{tenant}/events. The same body is accepted on both transports, except for the credential members (credentialType, credentialId, credentialSecret): over HTTP they are how the event is authenticated, and over the platform's MQTT broker they must be absent, because the broker authenticates the connection and the platform refuses an event whose body carries one. Unknown members are ignored rather than refused, so a misspelled optional member is silently dropped. Envelope member names are matched without regard to case, but send them exactly as written here.",
   "type": "object",
   "properties": {
     "altId": {
@@ -34,15 +34,15 @@
     "credentialType": {
       "type": "string",
       "enum": ["ACCESS_TOKEN", "MQTT_BASIC"],
-      "description": "The type of the credential the device presents for this event. With credentialId, it authenticates the event in the pipeline. Required by the default device-authentication mode (required); omit the credential only on an instance configured as optional or disabled. A credential is only read when both credentialType and a non-empty credentialId are present."
+      "description": "The type of the credential the device presents for this event. HTTP only (and a broker you run yourself): with credentialId, it authenticates the event in the pipeline, and the default device-authentication mode (required) needs it there. On the platform's MQTT broker it MUST be omitted: the connection is already authenticated, and an event whose body carries any credential member is refused. A credential is only read when both credentialType and a non-empty credentialId are present."
     },
     "credentialId": {
       "type": "string",
-      "description": "The credential's id. For ACCESS_TOKEN it is the bearer token itself; for MQTT_BASIC it is the username, without the {tenant}: prefix the MQTT connection uses."
+      "description": "HTTP only; forbidden on the platform's MQTT broker (see credentialType). The credential's id. For ACCESS_TOKEN it is the bearer token itself; for MQTT_BASIC it is the username, without the {tenant}: prefix the MQTT connection uses."
     },
     "credentialSecret": {
       "type": "string",
-      "description": "The MQTT_BASIC password. Not used by ACCESS_TOKEN."
+      "description": "HTTP only; forbidden on the platform's MQTT broker (see credentialType). The MQTT_BASIC password. Not used by ACCESS_TOKEN."
     }
   },
   "required": ["device", "eventType", "payload"],
@@ -65,6 +65,11 @@
     }
   ],
   "examples": [
+    {
+      "device": "sensor-001",
+      "eventType": "Measurement",
+      "payload": { "entries": [ { "measurements": { "temperature": "21.5", "humidity": "48" } } ] }
+    },
     {
       "device": "sensor-001",
       "eventType": "Measurement",
