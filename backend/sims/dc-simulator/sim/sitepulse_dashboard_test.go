@@ -551,6 +551,9 @@ func TestSitepulseBoardCarriesTheEngineTrendChart(t *testing.T) {
 	if chart.Type != "timeseries-chart" || chart.Options["markAlarms"] != true || chart.Options["markCommands"] != true {
 		t.Errorf("trend chart = %s %v, want a timeseries-chart marking alarms and commands", chart.Type, chart.Options)
 	}
+	if chart.Options["markAlarmsScope"] != "series" {
+		t.Errorf("trend chart alarm scope = %v, want series: a tyre or fuel alarm must not tint the engine chart", chart.Options["markAlarmsScope"])
+	}
 	if _, ok := chart.Options["windowSeconds"]; ok {
 		t.Errorf("trend chart sets windowSeconds %v, want the board's range", chart.Options["windowSeconds"])
 	}
