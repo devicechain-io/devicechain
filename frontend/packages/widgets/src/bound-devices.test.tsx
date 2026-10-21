@@ -57,7 +57,7 @@ vi.mock('maplibre-gl', () => {
   return { Map: FakeMap, Marker: FakeMarker, LngLatBounds: FakeLngLatBounds, setWorkerUrl: () => {} };
 });
 
-import { BoundDevicesNotice } from './bound-devices-notice';
+import { BoundDevicesNotice, describeBoundDevicesProblems } from './bound-devices-notice';
 import { DashboardRenderer } from './dashboard-renderer';
 import { MapRuntimeProvider } from './map-runtime-context';
 import { useBoundDevices } from './use-bound-devices';
@@ -329,5 +329,135 @@ describe('a deep link', () => {
     await settle();
     expect(source.live('hauler-1').length).toBeGreaterThan(0);
     expect(replaces).toEqual(['bind.machine=hauler-2']);
+  });
+});
+
+// A deviceExists whose answers are released by the test, one token at a time.
+function gatedExists() {
+  const asked: string[] = [];
+  const waiting = new Map<string, Array<(v: boolean) => void>>();
+  const deviceExists = (t: string) =>
+    new Promise<boolean>((resolve) => {
+      asked.push(t);
+      waiting.set(t, [...(waiting.get(t) ?? []), resolve]);
+    });
+  const answer = async (t: string, v: boolean) => {
+    const queue = waiting.get(t) ?? [];
+    waiting.delete(t);
+    for (const r of queue) r(v);
+    await settle();
+  };
+  return { asked, deviceExists, answer };
+}
+
+describe('nothing is shown for a link before it has been checked', () => {
+  it('subscribes no widget while the first check is in flight', async () => {
+    const g = gatedExists();
+    const { source } = mount({ initialSearch: 'bind.machine=hauler-2', deviceExists: g.deviceExists });
+    await settle();
+    expect(g.asked).toEqual(['hauler-2']);
+    expect(screen.getByText('checking')).toBeTruthy();
+    // Neither the linked device nor the board default: nothing at all, until the answer.
+    expect(source.opened).toHaveLength(0);
+
+    await g.answer('hauler-2', true);
+    expect(source.live('hauler-2').length).toBeGreaterThan(0);
+    expect(source.ever('hauler-1')).toHaveLength(0);
+  });
+
+  it('a link that changes ONLY the device is checked again, and a refused one is never subscribed', async () => {
+    const g = gatedExists();
+    const { source, handle } = mount({ initialSearch: 'bind.machine=hauler-2', deviceExists: g.deviceExists });
+    await settle();
+    await g.answer('hauler-2', true);
+    expect(source.live('hauler-2').length).toBeGreaterThan(0);
+
+    await act(async () => handle.setSearch('bind.machine=not-yours'));
+    await settle();
+    expect(g.asked).toEqual(['hauler-2', 'not-yours']);
+    expect(source.ever('not-yours')).toHaveLength(0);
+
+    await g.answer('not-yours', false);
+    expect(screen.getByTestId('bound-devices-notice').textContent).toContain('missing not-yours');
+    expect(source.ever('not-yours')).toHaveLength(0);
+  });
+
+  it('Back and Forward between two links check each one, every time', async () => {
+    const asked: string[] = [];
+    const { source, handle, replaces } = mount({
+      initialSearch: 'bind.machine=hauler-1',
+      deviceExists: async (t) => {
+        asked.push(t);
+        return true;
+      },
+    });
+    await settle();
+    for (const to of ['hauler-2', 'hauler-1', 'hauler-2']) {
+      await act(async () => handle.setSearch(`bind.machine=${to}`));
+      await settle();
+      expect(source.live(to).length).toBeGreaterThan(0);
+    }
+    expect(asked).toEqual(['hauler-1', 'hauler-2', 'hauler-1', 'hauler-2']);
+    // Reading an address never writes one.
+    expect(replaces).toEqual([]);
+  });
+
+  it('a slot named twice is refused without asking the server about either device', async () => {
+    const g = gatedExists();
+    const { source } = mount({ initialSearch: 'bind.machine=hauler-1&bind.machine=hauler-2', deviceExists: g.deviceExists });
+    await settle();
+    expect(g.asked).toEqual([]);
+    expect(screen.getByTestId('bound-devices-notice')).toBeTruthy();
+    expect(source.opened).toHaveLength(0);
+  });
+});
+
+describe('describeBoundDevicesProblems', () => {
+  const w = {
+    unknownSlot: (s: string) => `unknown ${s}`,
+    notADeviceSlot: (s: string) => `group ${s}`,
+    invalidToken: (s: string, t: string) => `invalid ${s} ${t}`,
+    duplicateSlot: (s: string) => `twice ${s}`,
+    derivedSlot: (s: string) => `derived ${s}`,
+    missing: (s: string, t: string) => `missing ${s} ${t}`,
+    failed: (s: string, t: string) => `failed ${s} ${t}`,
+  };
+
+  it('words each kind as itself', () => {
+    expect(
+      describeBoundDevicesProblems(
+        {
+          issues: [
+            { kind: 'unknown-slot', slot: 'a', token: 't' },
+            { kind: 'not-a-device-slot', slot: 'b', token: 't' },
+            { kind: 'duplicate-slot', slot: 'c', token: 't' },
+            { kind: 'derived-slot', slot: 'd', token: 't' },
+            { kind: 'invalid-token', slot: 'e', token: 'x y' },
+          ],
+          missing: [{ slot: 'f', token: 'g' }],
+          failed: [{ slot: 'h', token: 'i' }],
+        },
+        w,
+      ),
+    ).toEqual(['unknown a', 'group b', 'twice c', 'derived d', 'invalid e x y', 'missing f g', 'failed h i']);
+  });
+
+  // The slot and the malformed value are the link sender's own words, shown in the product's UI.
+  it('clips what the sender typed, so a link cannot put a paragraph in front of the viewer', () => {
+    const essay = 'Your session expired. Sign in again at https://example.invalid to keep your devices';
+    const [slotLine, tokenLine] = describeBoundDevicesProblems(
+      {
+        issues: [
+          { kind: 'unknown-slot', slot: essay, token: 't' },
+          { kind: 'invalid-token', slot: 'machine', token: essay },
+        ],
+        missing: [],
+        failed: [],
+      },
+      w,
+    );
+    expect(slotLine).not.toContain('example.invalid');
+    expect(tokenLine).not.toContain('example.invalid');
+    expect(slotLine.length).toBeLessThan(60);
   });
 });

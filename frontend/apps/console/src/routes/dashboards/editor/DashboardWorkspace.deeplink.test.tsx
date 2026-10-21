@@ -63,13 +63,22 @@ let nav: ReturnType<typeof useNavigate> | undefined;
 function Probe() {
   const loc = useLocation();
   nav = useNavigate();
-  return <div data-testid="search">{loc.search}</div>;
+  return (
+    <>
+      <div data-testid="search">{loc.search}</div>
+      <div data-testid="path">{loc.pathname}</div>
+    </>
+  );
 }
 
-function mount(entry: string, deviceExists: (t: string) => Promise<boolean> = async () => true) {
+function mount(
+  entry: string,
+  deviceExists: (t: string) => Promise<boolean> = async () => true,
+  entries: string[] = ['/dashboards', entry],
+) {
   const resolver = { deviceExists, devicesForAnchor: async () => [] } as unknown as DeviceResolver;
   render(
-    <MemoryRouter initialEntries={['/dashboards/dash-1', entry]} initialIndex={1}>
+    <MemoryRouter initialEntries={entries} initialIndex={entries.indexOf(entry)}>
       <Probe />
       <DashboardWorkspace token="dash-1" name="Workspace" updatedAt={null} loaded={loaded} resolver={resolver} />
     </MemoryRouter>,
@@ -117,7 +126,47 @@ describe('the console workspace opened by a deep link', () => {
     // board without the pick.
     act(() => nav?.(-1));
     await flush();
+    expect(screen.getByTestId('path').textContent).toBe('/dashboards');
     expect(screen.getByTestId('search').textContent).toBe('');
+  });
+
+  it('checks an outside change to another device, and never renders one the caller cannot see', async () => {
+    const asked: string[] = [];
+    mount('/dashboards/dash-1?bind.machine=hauler-2', async (t) => {
+      asked.push(t);
+      return t !== 'not-yours';
+    });
+    await flush();
+    await flush();
+    act(() => nav?.('/dashboards/dash-1?bind.machine=not-yours'));
+    await flush();
+    await flush();
+    expect(asked).toEqual(['hauler-2', 'not-yours']);
+    expect(screen.getByTestId('bound-devices-notice')).toBeTruthy();
+    expect(h.view.some((b) => JSON.stringify(b ?? {}).includes('not-yours'))).toBe(false);
+  });
+
+  it('Back and Forward between two links check each one, every time', async () => {
+    const asked: string[] = [];
+    const a = '/dashboards/dash-1?bind.machine=hauler-2';
+    const b = '/dashboards/dash-1?bind.machine=hauler-3';
+    mount(
+      b,
+      async (t) => {
+        asked.push(t);
+        return true;
+      },
+      [a, b],
+    );
+    await flush();
+    await flush();
+    for (const step of [-1, 1, -1]) {
+      act(() => nav?.(step));
+      await flush();
+      await flush();
+    }
+    expect(asked).toEqual(['hauler-3', 'hauler-2', 'hauler-3', 'hauler-2']);
+    expect(last(h.view)).toEqual({ machine: dev('hauler-2') });
   });
 
   it('follows an address that changes from outside', async () => {

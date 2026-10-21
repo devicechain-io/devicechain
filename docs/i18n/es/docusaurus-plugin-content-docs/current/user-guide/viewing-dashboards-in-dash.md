@@ -156,7 +156,8 @@ cada dispositivo del enlace existe y es uno que puedes ver. Si no, muestra el mo
 panel: un dispositivo que no existe y uno que no puedes ver se leen igual, de modo que un enlace no
 sirve para averiguar qué dispositivos existen. **Abrir el panel sin él** abre entonces el panel con su
 dispositivo predeterminado. Un enlace que nombra un slot que el panel no tiene, o algo que no es un
-token de dispositivo, se rechaza del mismo modo.
+token de dispositivo, se rechaza del mismo modo. También se rechaza un enlace que nombra el mismo slot dos veces, y uno que nombra un slot cuyo
+dispositivo sigue a otro slot, porque el panel mostraría el dispositivo que deduce y no el del enlace.
 
 Elegir un dispositivo en el panel (hacer clic en un marcador de un mapa, en una fila de una tabla de
 flota o en un selector) actualiza la dirección en el sitio, sin añadir entradas al historial del

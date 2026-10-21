@@ -121,8 +121,9 @@ sent it. If the device does not exist, or exists but is outside what you are all
 page says so instead of showing the board, and offers **Open the board without it**, which opens
 the board on its own default device. Both cases read the same on purpose: the platform does not
 confirm that a device you may not see exists. A link that names a slot the board does not have, or
-something that is not a device token, is refused the same way. If the check itself could not be
-completed, for example because the connection dropped, you can **Try again**.
+something that is not a device token, is refused the same way. So is a link that names the same
+slot twice, and one that names a slot whose device follows another slot, since the board would show the device it derives rather than the one in the link. If the check
+itself could not be completed, for example because the connection dropped, you can **Try again**.
 
 Choosing a device replaces the address rather than adding a history entry, so **Back** leaves the
 board instead of stepping through every device you clicked. The same link works in the /dash viewer;

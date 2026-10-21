@@ -160,4 +160,41 @@ describe('the /dash viewer and a deep link', () => {
     await flush();
     expect(h.seen).toContainEqual({ channel: 'measurement', token: 'hauler-7' });
   });
+
+  it('checks the address Back/Forward lands on, and refuses one the viewer cannot see', async () => {
+    const asked: string[] = [];
+    h.exists = async (t) => {
+      asked.push(t);
+      return t !== 'not-yours';
+    };
+    await open('?bind.machine=hauler-8');
+    const pop = async (search: string) => {
+      window.history.replaceState(null, '', `/dash/${search}`);
+      act(() => {
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      await flush();
+      await flush();
+    };
+    await pop('?bind.machine=hauler-7');
+    await pop('?bind.machine=hauler-8');
+    expect(asked).toEqual(['hauler-8', 'hauler-7', 'hauler-8']);
+
+    await pop('?bind.machine=not-yours');
+    expect(asked.at(-1)).toBe('not-yours');
+    expect(screen.getByTestId('bound-devices-notice')).toBeTruthy();
+    expect(h.seen.some((x) => x.token === 'not-yours')).toBe(false);
+  });
+
+  it('refuses a link that names a slot twice, and asks about neither device', async () => {
+    const asked: string[] = [];
+    h.exists = async (t) => {
+      asked.push(t);
+      return true;
+    };
+    await open('?bind.machine=hauler-7&bind.machine=hauler-8');
+    expect(asked).toEqual([]);
+    expect(screen.getByTestId('bound-devices-notice').textContent).toContain('more than once');
+    expect(h.seen).toHaveLength(0);
+  });
 });

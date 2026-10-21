@@ -19,6 +19,8 @@ const definition = {
   slots: {
     machine: { type: 'device' },
     site: { type: 'anchor' },
+    follower: { type: 'device', scope: { parent: 'site', strategy: 'first' } },
+    picked: { type: 'device', scope: { parent: 'site', strategy: 'manual' } },
   },
   widgets: [],
 } as unknown as DashboardDefinition;
@@ -36,6 +38,37 @@ describe('parseBindParams', () => {
 
   it('ignores parameters that are not bind.*', () => {
     expect(parseBindParams('dashboard=x&kiosk=1', definition)).toEqual({ binds: {}, issues: [] });
+  });
+
+  // 🔴 One parser reads the first of two values, another the last: a link that names a slot
+  // twice means different devices to different readers, so it binds neither.
+  it('refuses a slot named twice, whichever value is the visible one, and asks about neither', () => {
+    for (const search of [
+      'bind.machine=hauler-1&bind.machine=hauler-2',
+      'bind.machine=hauler-1&bind.machine=hauler-1',
+      'bind.machine=bad%20token&bind.machine=hauler-2',
+      // The same key spelled two ways decodes to one key: still a duplicate.
+      'bind.machine=hauler-1&bind.%6Dachine=hauler-2',
+      'bind.machine=hauler-1&kiosk=1&bind.machine=hauler-2&bind.machine=hauler-3',
+    ]) {
+      const r = parseBindParams(search, definition);
+      expect(r.binds, search).toEqual({});
+      expect(r.issues, search).toEqual([{ kind: 'duplicate-slot', slot: 'machine', token: r.issues[0].token }]);
+    }
+  });
+
+  it('a duplicate does not take the other slots of the link down with it', () => {
+    const r = parseBindParams('bind.machine=a&bind.machine=b&bind.picked=hauler-3', definition);
+    expect(r.binds).toEqual({ picked: 'hauler-3' });
+    expect(r.issues.map((i) => i.kind)).toEqual(['duplicate-slot']);
+  });
+
+  // A slot that follows its parent ignores any pick, so a link to it would put one device in the
+  // address and another on the screen.
+  it('refuses a slot whose device is derived from its parent, and binds a manually scoped one', () => {
+    const r = parseBindParams('bind.follower=hauler-1&bind.picked=hauler-2', definition);
+    expect(r.binds).toEqual({ picked: 'hauler-2' });
+    expect(r.issues).toEqual([{ kind: 'derived-slot', slot: 'follower', token: 'hauler-1' }]);
   });
 
   it('does not treat a prototype name as a slot', () => {

@@ -148,7 +148,8 @@ every device in the link exists and is one you may see. Otherwise it shows why i
 a device that does not exist and a device you may not see read the same, so a link cannot be used to
 find out which devices exist. **Open the board without it** then opens the board on its own default
 device. A link that names a slot the board does not have, or something that is not a device token, is
-refused the same way.
+refused the same way. So is a link that names the same slot twice, and one that names a slot whose device follows another
+slot, since the board would show the device it derives rather than the one in the link.
 
 Choosing a device on the board (clicking a marker on a map, a row in a fleet table, or a selector)
 updates the address in place, without adding browser history entries, so the address in the bar is

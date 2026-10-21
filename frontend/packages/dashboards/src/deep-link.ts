@@ -35,7 +35,15 @@ export type BindParamIssue =
   // `bind.x` where slot `x` is an anchor slot: a link binds a single device.
   | { kind: 'not-a-device-slot'; slot: string; token: string }
   // The value is not a token at all.
-  | { kind: 'invalid-token'; slot: string; token: string };
+  | { kind: 'invalid-token'; slot: string; token: string }
+  // `bind.x` given more than once. Which one the link "means" depends on which parser reads it
+  // (first wins in one, last in another), so the link is ambiguous and neither is asked of the
+  // server. `token` is the first value.
+  | { kind: 'duplicate-slot'; slot: string; token: string }
+  // `bind.x` where slot `x` follows its parent (`scope.strategy: 'first'`): the board derives
+  // that slot's device and ignores any pick, so honouring the link would mean showing a device
+  // other than the one in the address.
+  | { kind: 'derived-slot'; slot: string; token: string };
 
 export interface ParsedBinds {
   // slot → device token, for the parameters that name a real device slot with a well-formed token.
@@ -56,12 +64,19 @@ function ownSlot(definition: DashboardDefinition, slot: string) {
 export function parseBindParams(search: string, definition: DashboardDefinition): ParsedBinds {
   const binds: Record<string, string> = {};
   const issues: BindParamIssue[] = [];
-  for (const [key, token] of new URLSearchParams(search)) {
+  const params = new URLSearchParams(search);
+  const seen = new Set<string>();
+  for (const [key, token] of params) {
     if (!key.startsWith(BIND_PARAM_PREFIX)) continue;
     const slot = key.slice(BIND_PARAM_PREFIX.length);
+    // Every occurrence after the first is the same ambiguity, reported once.
+    if (seen.has(slot)) continue;
+    seen.add(slot);
     const def = ownSlot(definition, slot);
-    if (!def) issues.push({ kind: 'unknown-slot', slot, token });
+    if (params.getAll(key).length > 1) issues.push({ kind: 'duplicate-slot', slot, token });
+    else if (!def) issues.push({ kind: 'unknown-slot', slot, token });
     else if (def.type !== 'device') issues.push({ kind: 'not-a-device-slot', slot, token });
+    else if (def.scope?.strategy === 'first') issues.push({ kind: 'derived-slot', slot, token });
     else if (!isValidToken(token)) issues.push({ kind: 'invalid-token', slot, token });
     else Object.defineProperty(binds, slot, { value: token, enumerable: true, writable: true, configurable: true });
   }

@@ -1153,6 +1153,8 @@ export function DashboardWorkspace({
               lines={describeBoundDevicesProblems(linkProblems, {
                 unknownSlot: (slot) => t('linkUnknownSlot', { slot }),
                 notADeviceSlot: (slot) => t('linkNotDeviceSlot', { slot }),
+                duplicateSlot: (slot) => t('linkDuplicateSlot', { slot }),
+                derivedSlot: (slot) => t('linkDerivedSlot', { slot }),
                 invalidToken: (slot, token) => t('linkInvalidToken', { slot, token }),
                 missing: (slot, token) => t('linkMissing', { slot, token }),
                 failed: (slot, token) => t('linkFailed', { slot, token }),

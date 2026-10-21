@@ -122,8 +122,9 @@ dispositivo no existe, o existe pero queda fuera de lo que puedes ver, la págin
 de mostrar el panel y ofrece **Abrir el panel sin él**, que abre el panel con su dispositivo
 predeterminado. Ambos casos se leen igual a propósito: la plataforma no confirma que exista un
 dispositivo que no puedes ver. Un enlace que nombra un slot que el panel no tiene, o algo que no es
-un token de dispositivo, se rechaza del mismo modo. Si no se pudo completar la comprobación, por
-ejemplo porque se cortó la conexión, puedes **Reintentar**.
+un token de dispositivo, se rechaza del mismo modo. También se rechaza un enlace que nombra el mismo slot dos veces, y uno que nombra un slot cuyo
+dispositivo sigue a otro slot, porque el panel mostraría el dispositivo que deduce y no el del enlace. Si no se pudo completar la
+comprobación, por ejemplo porque se cortó la conexión, puedes **Reintentar**.
 
 Elegir un dispositivo reemplaza la dirección en lugar de añadir una entrada al historial, así que
 **Atrás** sale del panel en vez de recorrer cada dispositivo en el que hiciste clic. El mismo enlace

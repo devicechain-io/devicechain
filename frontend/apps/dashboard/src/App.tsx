@@ -957,6 +957,8 @@ export function View({
                 lines={describeBoundDevicesProblems(bound.problems, {
                   unknownSlot: (slot) => t('view:linkUnknownSlot', { slot }),
                   notADeviceSlot: (slot) => t('view:linkNotDeviceSlot', { slot }),
+                  duplicateSlot: (slot) => t('view:linkDuplicateSlot', { slot }),
+                  derivedSlot: (slot) => t('view:linkDerivedSlot', { slot }),
                   invalidToken: (slot, token) => t('view:linkInvalidToken', { slot, token }),
                   missing: (slot, token) => t('view:linkMissing', { slot, token }),
                   failed: (slot, token) => t('view:linkFailed', { slot, token }),
