@@ -314,7 +314,6 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 	for id, c := range map[string]struct{ typ, metric, unit string }{
 		"sp-plant-throughput-now": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-throughput-avg": {"stat-card", "throughput_tph", "t/h"},
-		"sp-plant-throughput-max": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-running":        {"status-light", "plant_running", ""},
 	} {
 		w := widgetByID(t, def, id)
@@ -334,8 +333,8 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 		}
 	}
 	// "Now" is the newest reading (`last`), which the card refuses once it is older than the
-	// board's range; the other two are the range's average and peak.
-	for id, stat := range map[string]string{"sp-plant-throughput-now": "last", "sp-plant-throughput-avg": "avg", "sp-plant-throughput-max": "max"} {
+	// board's range; the other is the range's average.
+	for id, stat := range map[string]string{"sp-plant-throughput-now": "last", "sp-plant-throughput-avg": "avg"} {
 		w := widgetByID(t, def, id)
 		if w.Options["stat"] != stat {
 			t.Errorf("%s stat = %v, want %s", id, w.Options["stat"], stat)
@@ -346,6 +345,12 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 		}
 		if _, banded := w.Options["thresholds"]; banded {
 			t.Errorf("%s carries threshold bands, but no rule fires on throughput", id)
+		}
+	}
+	// The trend is drawn on "now" only; the average beside it would repeat the line.
+	for id, want := range map[string]bool{"sp-plant-throughput-now": true, "sp-plant-throughput-avg": false} {
+		if got, _ := widgetByID(t, def, id).Options["sparkline"].(bool); got != want {
+			t.Errorf("%s sparkline = %v, want %v", id, got, want)
 		}
 	}
 	// The lamp is lit by the flag itself (1 = running), and carries no band: nothing alarms on it.
@@ -481,9 +486,42 @@ func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 	}
 	// The plant's throughput is the board's headline: its band is three rows, so the figure is
 	// fitted to a body that a subject line, an age footer and a caption leave room in.
-	for _, id := range []string{"sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-plant-throughput-max"} {
+	for _, id := range []string{"sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-low-fuel"} {
 		if b := widgetByID(t, def, id).Layout["base"]; b.Rows != 3 || b.Row != 2 || b.Cols != 3 {
 			t.Errorf("%s = %+v, want a 3x3 tile at row 2", id, b)
 		}
+	}
+}
+
+// The alarm table tabs by machine kind in the order the fleet is read, the map's marker click
+// drives the same slot as the table's rows, and the low-fuel count is built from the fleet
+// table's own fuel bands so the two cannot disagree.
+func TestSitepulseBoardCarriesTheFleetAwareWidgets(t *testing.T) {
+	def := sitepulseBoard(t, sitepulseManifest(t))
+
+	alarms := widgetByID(t, def, "sp-alarms")
+	if alarms.Options["groupBy"] != "deviceType" {
+		t.Errorf("alarm table groupBy = %v, want deviceType", alarms.Options["groupBy"])
+	}
+	if got, want := asJSON(t, alarms.Options["deviceTypes"]),
+		`[{"token":"sp-hauler"},{"token":"sp-loader"},{"token":"sp-dozer"},{"token":"sp-crusher-plant"}]`; got != want {
+		t.Errorf("alarm table deviceTypes = %s, want %s", got, want)
+	}
+
+	if got := widgetByID(t, def, "sp-map").Options["selectionTarget"]; got != "selectedMachine" {
+		t.Errorf("map selectionTarget = %v, want selectedMachine", got)
+	}
+
+	count := widgetByID(t, def, "sp-low-fuel")
+	if count.Type != "fleet-count" || count.Options["show"] != "attention" || count.Options["measurement"] != SitepulseFuelKey {
+		t.Errorf("low-fuel count = %s %v, want a fleet-count in attention mode over %s", count.Type, count.Options, SitepulseFuelKey)
+	}
+	if count.Datasource == nil || count.Datasource.Slot != "site" {
+		t.Errorf("low-fuel count datasource = %+v, want the site anchor", count.Datasource)
+	}
+	// The same edges the fleet table colours: severity below the rule's threshold, neutral above.
+	const want = `[{"level":"major","value":0},{"level":"normal","value":15}]`
+	if got := asJSON(t, count.Options["thresholds"]); got != want {
+		t.Errorf("low-fuel count thresholds = %s, want %s", got, want)
 	}
 }

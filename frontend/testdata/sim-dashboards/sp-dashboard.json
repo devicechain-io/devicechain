@@ -144,6 +144,7 @@
       "options": {
         "measurement": "throughput_tph",
         "precision": 0,
+        "sparkline": true,
         "stat": "last",
         "title": "Throughput now",
         "unit": "t/h"
@@ -181,11 +182,11 @@
       "datasource": {
         "kind": "slot",
         "measurements": [
-          "throughput_tph"
+          "fuel_pct"
         ],
-        "slot": "plant"
+        "slot": "site"
       },
-      "id": "sp-plant-throughput-max",
+      "id": "sp-low-fuel",
       "layout": {
         "base": {
           "col": 6,
@@ -196,13 +197,21 @@
         }
       },
       "options": {
-        "measurement": "throughput_tph",
-        "precision": 0,
-        "stat": "max",
-        "title": "Peak throughput",
-        "unit": "t/h"
+        "measurement": "fuel_pct",
+        "show": "attention",
+        "thresholds": [
+          {
+            "level": "major",
+            "value": 0
+          },
+          {
+            "level": "normal",
+            "value": 15
+          }
+        ],
+        "title": "Low fuel"
       },
-      "type": "stat-card"
+      "type": "fleet-count"
     },
     {
       "datasource": {
@@ -221,7 +230,22 @@
         }
       },
       "options": {
+        "deviceTypes": [
+          {
+            "token": "sp-hauler"
+          },
+          {
+            "token": "sp-loader"
+          },
+          {
+            "token": "sp-dozer"
+          },
+          {
+            "token": "sp-crusher-plant"
+          }
+        ],
         "flashOnChange": true,
+        "groupBy": "deviceType",
         "maxRows": 25,
         "precision": 1,
         "selectionTarget": "selectedMachine",
@@ -250,6 +274,7 @@
         }
       },
       "options": {
+        "selectionTarget": "selectedMachine",
         "title": "Machine positions"
       },
       "type": "map"

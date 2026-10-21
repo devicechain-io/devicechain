@@ -21,9 +21,10 @@ import (
 // full 1920 px screen the cells double and every widget only grows. From the top:
 //
 //	rows 0-4    nine columns of KPIs: the alarm counts and the crusher lamp (two rows), then the
-//	            plant's throughput now, on average and at peak (three rows); beside them the
-//	            Machine selector and the engine gauge
-//	rows 5-7    the alarm table, the map and the tyre gauge
+//	            plant's throughput now (with its trend) and on average, and how many machines are
+//	            low on fuel (three rows); beside them the Machine selector and the engine gauge
+//	rows 5-7    the alarm table (a tab per kind of machine), the map (a marker click selects the
+//	            machine) and the tyre gauge
 //	rows 8-12   the fleet table
 //
 // 🔴 THE FLEET IS ONE TABLE, NOT A TANK PER MACHINE. The fleet-table widget draws one row per
@@ -124,7 +125,7 @@ const (
 
 	// Rows. The KPIs lead in two bands of three tiles, each a third of NINE columns: the site's
 	// state (the two alarm counts and the crusher lamp) in two rows, then the plant's throughput
-	// (now, on average and at peak) in THREE. A tile is 3 columns wide because a stat card cannot
+	// (now and on average, with the low-fuel count) in THREE. A tile is 3 columns wide because a stat card cannot
 	// be narrower (its descriptor's minimum). The throughput band is the taller one because a stat
 	// card spends its height on more than a count does: a subject line, the reading's age and a
 	// caption under the figure. At two rows, at 960 px, that left "822 t/h" in ~17 px type beside
@@ -161,6 +162,14 @@ const (
 	sitepulseEngineTempGaugeMax = 130.0
 	sitepulseTyreGaugeMax       = 1000.0
 )
+
+// sitepulseAlarmTabs is the alarm table's tab order, as the `deviceTypes` option's list items.
+var sitepulseAlarmTabs = []map[string]any{
+	{"token": SitepulseHaulerTypeToken},
+	{"token": SitepulseLoaderTypeToken},
+	{"token": SitepulseDozerTypeToken},
+	{"token": SitepulsePlantTypeToken},
+}
 
 // sitepulseFleetBands turns a rule's bands into a fleet-table column's `thresholds` entries, tied to the measurement it
 // colours: the table's entries carry the measurement, unlike a gauge's.
@@ -240,6 +249,12 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// ACTIVE only: this is an operator board, and a cleared row must not push a live
 	// critical off a 25-row page. The raise-then-clear story shows on the counts and cards.
 	alarms.Options["state"] = AlarmStateActiveWire
+	// One tab per kind of machine, plus All, in the order a site manager reads the fleet: the
+	// haulers that move the material, the loaders that feed them, the dozers that prepare the
+	// ground, then the crusher plant. An unlisted type (a future machine kind) is not tabbed,
+	// but its alarms still show under All.
+	alarms.Options["groupBy"] = "deviceType"
+	alarms.Options["deviceTypes"] = sitepulseAlarmTabs
 
 	// The bands of the three rules, each the rule's own constants: the low-fuel rule's severity
 	// from empty and normal from the threshold it fires below (a "below X" rule is two entries,
@@ -295,19 +310,37 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	// board's time range (windowSeconds 0) and caption themselves "Average · 1h" from the span
 	// in force. No thresholds: no rule fires on throughput, and the sim defines no target or
 	// capacity, so there is no honest progress-ring either.
+	//
+	// The trend sparkline is drawn on "now" alone: it is the one card whose figure moves, and the
+	// average beside it would repeat the same line.
+	nowCard := buildStatCardWidget("sp-plant-throughput-now", flowTile(0), onPlant(SitepulseThroughputKey),
+		"Throughput now", SitepulseThroughputKey, "last", "t/h", 0, 0, nil)
+	nowCard.Options["sparkline"] = true
+
+	// How many machines are below the low-fuel edge, from the SAME bands as the fleet table's
+	// fuel column, so the count and the red cells cannot disagree. Attention mode counts the
+	// devices in an abnormal band ("normal" is neutral), so a machine with no fuel reading (the
+	// crusher) is not counted. It takes the place the peak card had: the average beside "now"
+	// already says what the plant does over the hour.
+	lowFuelCount := buildFleetCountWidget("sp-low-fuel", flowTile(2),
+		widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{SitepulseFuelKey}},
+		"Low fuel", "attention", SitepulseFuelKey, lowFuel)
+
+	// A marker click selects the machine, as a table row or an alarm's originator does.
+	siteMap := buildMapWidget("sp-map", box{5, 4, sitepulseKPIRows, sitepulseMidRows},
+		widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions")
+	siteMap.Options["selectionTarget"] = sitepulseSlotMachine
+
 	widgets := []dashboardWidget{
 		buildAlarmCountWidget("sp-alarms-critical", stateTile(0), onSite, "Critical alarms", AlarmSeverityCriticalWire),
 		buildAlarmCountWidget("sp-alarms-major", stateTile(1), onSite, "Major alarms", AlarmSeverityMajorWire),
 		running,
-		buildStatCardWidget("sp-plant-throughput-now", flowTile(0), onPlant(SitepulseThroughputKey),
-			"Throughput now", SitepulseThroughputKey, "last", "t/h", 0, 0, nil),
+		nowCard,
 		buildStatCardWidget("sp-plant-throughput-avg", flowTile(1), onPlant(SitepulseThroughputKey),
 			"Avg throughput", SitepulseThroughputKey, "avg", "t/h", 0, 0, nil),
-		buildStatCardWidget("sp-plant-throughput-max", flowTile(2), onPlant(SitepulseThroughputKey),
-			"Peak throughput", SitepulseThroughputKey, "max", "t/h", 0, 0, nil),
+		lowFuelCount,
 		alarms,
-		buildMapWidget("sp-map", box{5, 4, sitepulseKPIRows, sitepulseMidRows},
-			widgetSubject{Slot: sitepulseSlotSite, Measurements: []string{}, Location: "latest"}, "Machine positions"),
+		siteMap,
 		buildEntitySelectorWidget("sp-machine-select", box{sitepulseKPIColumns, sitepulseGaugeCols, 0, 1}, "Machine", sitepulseSlotMachine),
 		buildLinearGaugeWidget("sp-engine-temp", box{sitepulseKPIColumns, sitepulseGaugeCols, 1, sitepulseKPIRows - 1}, onMachine(SitepulseEngineTempKey),
 			"Engine temp", SitepulseEngineTempKey, "°C", "bar", 0, sitepulseEngineTempGaugeMax, overheat),
