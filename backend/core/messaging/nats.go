@@ -843,6 +843,9 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 		return "", fmt.Errorf("stream suffix %q is not declared in core/streams: "+
 			"add it to streams.All (with its disk tier) so the reservation budget accounts for it", suffix)
 	}
+	if err := nmgr.requireAdmin(suffix); err != nil {
+		return "", err
+	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	bounds := nmgr.streamBounds(suffix)
 	subjects := StreamSubjects(nmgr.Microservice.InstanceId, suffix)
@@ -1212,6 +1215,9 @@ type natsWriter struct {
 // subject ("{instance}.{tenant}.{suffix}") per message from the tenant in
 // context.
 func (nmgr *NatsManager) NewWriter(suffix string) (MessageWriter, error) {
+	if err := nmgr.requireWriter(suffix); err != nil {
+		return nil, err
+	}
 	if _, err := nmgr.ensureStream(suffix); err != nil {
 		return nil, err
 	}
@@ -2066,8 +2072,18 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if carriesDirectCopies(suffix) && !r.ackFloor() {
 		r.carried = suffix
 	}
+	mode := streams.ReadDurable
 	if r.ackFloor() {
 		r.durable = AckFloorDurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix)
+		mode = streams.ReadAckFloor
+	}
+	// The stream is already ensured above, which the area's administration of it allowed; what
+	// is held here is the CONSUMER: its mode, and so its name, must be one the area declares.
+	if err := nmgr.requireReader(suffix, mode); err != nil {
+		return nil, err
+	}
+	if err := nmgr.requireConsumer(suffix, r.durable); err != nil {
+		return nil, err
 	}
 	if r.downstream != "" {
 		nmgr.registerBackpressure(r.downstream)
@@ -2157,6 +2173,9 @@ const maxReplayStuckFetches = 30
 // and creates no consumer. The head is captured once, at open, so live messages
 // published during replay are left for the durable reader.
 func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (ReplayReader, uint64, error) {
+	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
+		return nil, 0, err
+	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	info, err := nmgr.js.StreamInfo(name)
 	if err != nil {
@@ -2203,6 +2222,9 @@ func (nmgr *NatsManager) NewReplayReader(suffix string, startSeq uint64) (Replay
 // time), not its logical OccurredTime — so the caller must still filter delivered events to its
 // occurred-time window; this only bounds the scan's lower edge.
 func (nmgr *NatsManager) NewReplayReaderFromTime(suffix string, startTime time.Time) (ReplayReader, time.Time, error) {
+	if err := nmgr.requireReader(suffix, streams.ReadEphemeral); err != nil {
+		return nil, time.Time{}, err
+	}
 	name := StreamName(nmgr.Microservice.InstanceId, suffix)
 	info, err := nmgr.js.StreamInfo(name)
 	if err != nil {
@@ -2846,6 +2868,9 @@ func (r *natsReader) dropPending() {
 // is cancelled (the client unsubscribed or the socket closed). A slow reader
 // drops messages (bounded buffer) rather than stalling the pipeline.
 func (nmgr *NatsManager) SubscribeLive(ctx context.Context, tenant string, suffix string) (<-chan Message, error) {
+	if err := nmgr.requireReader(suffix, streams.ReadLive); err != nil {
+		return nil, err
+	}
 	// Validate the tenant before it becomes a subscription filter — the read-side
 	// twin of the WriteMessages guard, and the higher-blast-radius one: a tenant of
 	// "*"/">" here would subscribe across EVERY tenant's live feed, not just corrupt

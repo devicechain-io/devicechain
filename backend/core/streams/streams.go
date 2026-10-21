@@ -40,6 +40,12 @@
 //
 // Adding a stream means adding an entry to All. There is no second list to
 // remember, and a derived suffix must be registered here too — see DeadLetter.
+//
+// The entry also says WHO uses the stream, in three roles (roles.go): the areas that write
+// it, the areas that read it (and in which mode, which decides the consumer's name), and the
+// areas that administer it. A manager over a deployed service refuses any use its area does
+// not declare (core/messaging, catalog.go), so the declaration is what a service is held to
+// rather than a description of it.
 package streams
 
 // Tier is a stream's disk-budget class. The two tiers exist because the streams
@@ -226,25 +232,30 @@ type Stream struct {
 	// ShapeTenant and ShapeTenantDevice it also appears in the subject; for
 	// ShapeDeviceEvents it does not (see Shape).
 	Suffix string
-	// Areas are the functional areas that CREATE this stream — every area with a
-	// writer or a reader on it. A stream comes into existence when the first such
-	// service ensures it, so on a deployment running none of them the stream simply
-	// does not exist.
+	// Writers are the areas that PUBLISH into this stream's subjects. An area absent
+	// from the list has no writer on the stream, and a manager built for a platform
+	// service refuses to open one (core/messaging, NewWriter and the writers built on it).
 	//
-	// This exists for the ADR-020 A0 replication check, which has to distinguish
-	// "this stream is missing because something is wrong" from "this stream is
-	// missing because nothing that makes it is deployed". Without the distinction
-	// the check reports a failure on every install of the `default` profile, which
-	// runs neither outbound-connectors nor the opt-in ingest areas — and a check
-	// that is red on a healthy system is a check somebody switches off.
+	// A stream no service writes - DeviceEventsCapture (the broker captures raw device
+	// publishes into it) and MaxDeliveries (the broker publishes advisories into it) - has an
+	// empty list, and that is a statement, not an omission. DeadLetters is the third shape:
+	// see RecorderWrites.
+	Writers []string
+	// RecorderWrites declares that every area that runs the max-delivery recorder writes this
+	// stream, and so replaces a hand-kept list of them (see RecorderAreas). The recorder runs
+	// in any area with a durable reader, and it letters that area's give-ups here, so "which
+	// areas write dead letters" and "which areas read" are one fact stated twice - and were two
+	// lists, which disagreed: dashboard-management reads entity-deleted, runs the recorder, and
+	// was in neither Areas list. Deriving the writers makes the disagreement unrepresentable.
+	RecorderWrites bool
+	// Readers are the consumers of this stream, each an area and the MODE it reads in, because
+	// the mode decides what the area may do and what the consumer is called (see ReadMode).
+	// An area absent from the list has no reader on the stream.
 	//
-	// DRIFT IS BENIGN HERE, which is worth stating so the list is not treated as
-	// more load-bearing than it is. It governs only whether a stream's ABSENCE is a
-	// failure. Replication of a stream that does exist is asserted by a prefix
-	// sweep that consults none of this, so an area missing from a list costs at
-	// most one presence requirement and never a silent pass on an
-	// under-replicated stream.
-	Areas []string
+	// A MaxDeliveries stream (ShapeAdvisory) declares none: each area with a durable reader
+	// reads it through its max-delivery recorder, so they are derived the same way
+	// RecorderWrites derives its writers (see ReadersOf).
+	Readers []Reader
 	// Tier selects the disk ceiling. Anything riding the device path is Hot.
 	Tier Tier
 	// Shape decides the subject the stream captures and that producers publish to.
@@ -304,7 +315,7 @@ type Stream struct {
 	RecreateOnRetentionChange bool
 	// Dormant marks a stream that is DECLARED but that no service ensures yet, so it does
 	// not exist on a running broker. The replication check does not require a dormant
-	// stream even where its Areas are deployed - a check that fails on a healthy install
+	// stream even where its areas (Areas()) are deployed - a check that fails on a healthy install
 	// is one somebody switches off. Whoever ships the first reader or writer removes the
 	// flag in the same change; TestDormantStreamsArePinned names the set so that cannot
 	// be forgotten.
@@ -348,7 +359,7 @@ type Stream struct {
 	// that durable's give-ups, so it is backed by a test that exhausts the durable's
 	// deliveries against a real broker and shows the area's checkpoint still covers every
 	// message (event-processing's replay_covers_exhausted_test.go is the one for DETECT).
-	// Each name must also be in Areas.
+	// Each name must also be a reader (a durable or ack-floor one).
 	//
 	// 🔴 A single-writer area's claim rests on its LEASE too. DETECT applies every delivery
 	// on first sight only while one replica consumes the shared durable; a zombie leader that
@@ -388,7 +399,7 @@ type Stream struct {
 	// checkpoint, and its unread position is that checkpoint, which no durable's backlog
 	// shows). Their loss stays counted by the unread-loss alerts, as before.
 	//
-	// Each name must be in Areas, and none may be in ReplayCovered.
+	// Each name must be a durable reader, and none may be in ReplayCovered.
 	BackpressureReaders []string
 	// Forwards maps an area that reads this stream to the stream it forwards what it reads
 	// into, when that stream applies backpressure. Every reader the area opens on this stream
@@ -635,7 +646,7 @@ var All = []Stream{
 	// rather than discard one of those. device-management forwards into resolved-events, so
 	// it stops reading here while that stream's gate is closed, and the backlog it leaves is
 	// what closes this one.
-	{Suffix: InboundEvents, Areas: []string{"device-management", "device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	{Suffix: InboundEvents, Writers: []string{"device-state", "event-sources", "lwm2m-ingest", "sparkplug-ingest"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind:      kindEvent,
 		BackpressureReaders: []string{"device-management"},
 		Forwards:            map[string]string{"device-management": ResolvedEvents},
@@ -670,7 +681,7 @@ var All = []Stream{
 	// which its durable's backlog does not show exactly (see BackpressureReaders). That
 	// backlog is still warned on (the chart's JetStreamDurableUnreadNearFull), as an upper
 	// bound: the checkpoint is never behind what the durable has acknowledged.
-	{Suffix: ResolvedEvents, PlatformAuthored: true, Areas: []string{"device-management", "device-state", "event-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindEvent,
+	{Suffix: ResolvedEvents, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}, {"event-management", ReadDurable}, {"event-management", ReadLive}, {"event-processing", ReadAckFloor}, {"event-processing", ReadEphemeral}}, Tier: Hot, DeadLetterKind: kindEvent,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		ReplayCovered:          []string{"event-processing"},
 		BackpressureReaders:    []string{"event-management"},
@@ -695,7 +706,7 @@ var All = []Stream{
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
 	// 540 s redelivery span = 1440 s. Cost: the rule-firing rate times 1800 s, ~270 MB (67-byte ids) per
 	// broker server per 1,000 detections/s.
-	{Suffix: DerivedEvents, PlatformAuthored: true, Areas: []string{"event-processing"}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
+	{Suffix: DerivedEvents, PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"event-processing", ReadDurable}, {"event-processing", ReadLive}}, Tier: Hot, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: kindDetectionAction, Why: "DETECT output — scales with rule firings against device traffic"},
 
 	// Emitted post-commit when a numeric platform-set attribute (ADR-012 scope
@@ -707,7 +718,7 @@ var All = []Stream{
 	// minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceAttribute, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
+	{Suffix: DeviceAttribute, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Hot, DeadLetterKind: kindControlFact, Why: "attribute set/delete per device — scales with fleet size"},
 
 	// PER-DEVICE: the concrete subject carries the target device's token as a
 	// final segment so the broker grant can confine a device to its own commands.
@@ -716,7 +727,7 @@ var All = []Stream{
 	// these names: a second literal is how the two drift apart.
 	// Window: command-delivery publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceCommands, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"command-delivery", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
+	{Suffix: DeviceCommands, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"command-delivery"}, Readers: []Reader{{"lwm2m-ingest", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommand, Why: "outbound commands — scale with fleet size"},
 
 	// PER-DEVICE, PLATFORM -> DEVICE: the desired-state downlink (configuration revisions,
 	// and later update assignments). Like DeviceCommands, the concrete subject ends in the
@@ -729,7 +740,7 @@ var All = []Stream{
 	// because volume follows state CHANGES, not telemetry samples.
 	// Window: device-management and update-management publish it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceDesired, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	{Suffix: DeviceDesired, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "desired-state downlink per device - one message per state change"},
 
 	// PER-DEVICE, DEVICE -> PLATFORM: progress and status reports. The device token in the
@@ -741,7 +752,7 @@ var All = []Stream{
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	// event-sources is an area too: with the fail-closed MQTT acknowledgement it forwards
 	// device reports from the MQTT gateway's message store into this stream.
-	{Suffix: DeviceReports, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"device-management", "event-sources", "update-management"}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
+	{Suffix: DeviceReports, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Readers: []Reader{{"device-management", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, Shape: ShapeTenantDevice, DeadLetterKind: kindControlFact,
 		Why: "device reports per device - one message per state change"},
 
 	// ADR-030 amendment. The durable capture of raw device telemetry, and the
@@ -790,7 +801,7 @@ var All = []Stream{
 	// retention move onto this one once the old stream has been drained.
 	// Window: the broker's MQTT gateway stores device publishes here with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceEventsCapture, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"event-sources"}, Tier: Hot, Shape: ShapeDeviceEvents,
+	{Suffix: DeviceEventsCapture, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Readers: []Reader{{"event-sources", ReadDurable}}, Tier: Hot, Shape: ShapeDeviceEvents,
 		DeadLetterKind: kindEvent, Retention: RetentionWorkQueue, RecreateOnRetentionChange: true,
 		Forwards: map[string]string{"event-sources": InboundEvents},
 		Why:      "raw device publishes, captured by the broker and held only until forwarded — the ingest durability floor"},
@@ -816,7 +827,7 @@ var All = []Stream{
 	// the two must move together is the point of deriving both from here.
 	// Window: devices and lwm2m-ingest publish it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: CommandResponses, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"command-delivery", "event-sources", "lwm2m-ingest"}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
+	{Suffix: CommandResponses, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources", "lwm2m-ingest"}, Readers: []Reader{{"command-delivery", ReadDurable}}, Tier: Hot, Shape: ShapeTenantDevice, DeadLetterKind: kindCommandResponse, Why: "device replies to commands — scale with fleet size"},
 
 	// One message per fired httpCall/publish action. The stream is auto-provisioned
 	// when event-processing creates the writer, so publishing is safe before the
@@ -838,7 +849,7 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// the connector-action rate times 600 s, ~72 MB per broker server per 1,000 actions/s.
-	{Suffix: ConnectorDispatch, PlatformAuthored: true, Areas: []string{"event-processing", "outbound-connectors"}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
+	{Suffix: ConnectorDispatch, PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"outbound-connectors", ReadDurable}}, Tier: Hot, DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds,
 		DeadLetterKind: kindConnectorDispatch, VerbatimCopy: ConnectorDispatchDead, Why: "REACT outbound dispatch — scales with rule firings"},
 
 	// ---- Control plane (Cold): volume cannot scale with device count ----
@@ -851,7 +862,7 @@ var All = []Stream{
 	// start and every five minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DetectionRulesPublished, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
+	{Suffix: DetectionRulesPublished, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a rule publish — a human authoring action"},
 
 	// Emitted post-commit when a device is created or re-typed, naming the device
 	// and the stable profile token its type adopts, so DETECT can arm absence for
@@ -862,7 +873,7 @@ var All = []Stream{
 	// start and every five minutes), not by replay.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceRoster, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"command-delivery", "device-management", "event-processing", "update-management"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
+	{Suffix: DeviceRoster, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"command-delivery", ReadDurable}, {"event-processing", ReadDurable}, {"update-management", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "roster projection updates"},
 
 	// Emitted post-commit whenever a geofence change mints a new fence-set version, naming that
 	// version's fences and the content address of each one's geometry so event-processing's live
@@ -878,7 +889,7 @@ var All = []Stream{
 	// contain, so no fence set can outgrow one message.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: GeoFenceSetManifest, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
+	{Suffix: GeoFenceSetManifest, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a fence edit — a human authoring action"},
 
 	// ADR-044. Emitted when an edge entity (device, customer, area, asset, and
 	// their groups) is deleted, so cross-service reference holders — such as
@@ -886,7 +897,7 @@ var All = []Stream{
 	// At-least-once and idempotent.
 	// Window: device-management publishes it with no Nats-Msg-Id; its consumers are idempotent.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: EntityDeleted, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"dashboard-management", "device-management", "event-management", "event-processing"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
+	{Suffix: EntityDeleted, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"dashboard-management", ReadDurable}, {"event-management", ReadDurable}, {"event-processing", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "entity lifecycle fan-out"},
 
 	// ADR-081. Emitted post-commit by device-management whenever a device's tracked
 	// relationships may have changed (an edge created or removed, a claim redeemed or
@@ -897,13 +908,13 @@ var All = []Stream{
 	// which carries the same anchors.
 	// Window: device-management publishes it with no Nats-Msg-Id (at-most-once).
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: DeviceOwnership, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "device-state"}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
+	{Suffix: DeviceOwnership, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"device-state", ReadDurable}}, Tier: Cold, DeadLetterKind: kindControlFact, Why: "a relationship edit — an operator assigning or claiming a device"},
 
 	// ADR-041, re-emitted on each alarm transition. The substrate for graphql-ws
 	// subscriptions (ADR-037) and for notifications (ADR-017).
 	// Window: device-management publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: AlarmEvents, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Areas: []string{"device-management", "notification-management"}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
+	{Suffix: AlarmEvents, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, PlatformAuthored: true, Writers: []string{"device-management"}, Readers: []Reader{{"notification-management", ReadDurable}, {"device-management", ReadLive}}, Tier: Cold, DeadLetterKind: kindNotification, Why: "alarm state changes, not raw telemetry"},
 
 	// ADR-051 5c / ADR-054, carrying a JSON RaiseAlarmRequest. AT-LEAST-once, and
 	// safe as such: ApplyAlarmContributorEdge (ADR-057) is an idempotent
@@ -918,19 +929,19 @@ var All = []Stream{
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// the alarm-edge rate times 600 s, ~72 MB per broker server per 1,000 edges/s.
-	{Suffix: RaiseAlarm, PlatformAuthored: true, Areas: []string{"device-management", "event-processing"}, Tier: Cold,
+	{Suffix: RaiseAlarm, PlatformAuthored: true, Writers: []string{"event-processing"}, Readers: []Reader{{"device-management", ReadDurable}}, Tier: Cold,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, DeadLetterKind: kindDetectionAction, Why: "REACT alarm requests"},
 
 	// Window: event-sources publishes it with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
-	{Suffix: FailedDecode, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Areas: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
+	{Suffix: FailedDecode, DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, Writers: []string{"event-sources"}, Tier: Cold, DeadLetterKind: NotLettered, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// device-management publishes each failure record with an id its source's redelivery
 	// reproduces (processor.sourceDedupID), on the same redelivery span as resolved-events;
 	// event-management's records carry none. It used to be the broker's two-minute default.
 	//
 	// Window: RedeliveryDuplicateWindowSeconds = 600 s >= (5-1)*2*60 s + 60 s = 540 s. Cost:
 	// ~0 in steady state; a spike at the full 10,000 events/s holds 6M ids, ~720 MB per server.
-	{Suffix: FailedEvents, PlatformAuthored: true, Areas: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered,
+	{Suffix: FailedEvents, PlatformAuthored: true, Writers: []string{"device-management", "event-management"}, Tier: Cold, DeadLetterKind: NotLettered,
 		DuplicateWindowSeconds: RedeliveryDuplicateWindowSeconds, Why: "error path — near zero in steady state; see the spike caveat below"},
 	// The dedup window is what lets the connectors service's own arm and the platform's
 	// max-delivery recorder both write the verbatim copy of one give-up and store it
@@ -939,10 +950,10 @@ var All = []Stream{
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance (a
 	// recorder down for a pod restart) + the 540 s redelivery span = 1440 s. Cost: ~0, one id
 	// per give-up.
-	{Suffix: ConnectorDispatchDead, Areas: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
+	{Suffix: ConnectorDispatchDead, Writers: []string{"outbound-connectors"}, Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds,
 		DeadLetterKind: NotLettered, Why: "terminal dead-letter sink (ADR-060 SD-2)"},
-	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. Areas is
-	// the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
+	// 🔴 user-management IS IN THIS LIST BECAUSE IT READS, NOT BECAUSE IT WRITES. The areas
+	// are the ADR-020 A0 deployment predicate, and NewReader creates the stream exactly as
 	// NewWriter does — so a profile running the store but none of the four producers would
 	// otherwise have a stream the replication check believes should not be there.
 	//
@@ -957,9 +968,7 @@ var All = []Stream{
 	// Window: RestartDuplicateWindowSeconds = 1800 s >= a 15-minute restart allowance + the
 	// 540 s redelivery span = 1440 s. Cost: ~0 in steady state, one id per letter.
 	{Suffix: DeadLetters,
-		Areas: []string{"event-processing", "notification-management", "command-delivery",
-			"device-management", "user-management", "outbound-connectors", "device-state",
-			"event-management", "event-sources", "lwm2m-ingest", "update-management"},
+		RecorderWrites: true, Readers: []Reader{{"user-management", ReadDurable}, {"command-delivery", ReadDurable}},
 		Tier: Cold, DuplicateWindowSeconds: RestartDuplicateWindowSeconds, DeadLetterKind: NotLettered,
 		Why: "ADR-024 dead-letter sink: every area that consumes a stream writes it, user-management " +
 			"stores it, command-delivery reads it back to settle the commands its letters are about"},
@@ -988,9 +997,6 @@ var All = []Stream{
 	// Window: nats-server publishes the advisories with no Nats-Msg-Id.
 	// 0 ids are held, so the window is inert; it is the broker default, so declaring it moves nothing.
 	{Suffix: MaxDeliveries,
-		Areas: []string{"device-management", "device-state", "event-management", "event-sources",
-			"notification-management", "outbound-connectors", "command-delivery", "user-management",
-			"event-processing", "lwm2m-ingest", "update-management"},
 		Tier: Cold, Shape: ShapeAdvisory, Retention: RetentionWorkQueue, MaxBytesCap: maxDeliveriesMaxBytesCap,
 		DuplicateWindowSeconds: BrokerDefaultDuplicateWindowSeconds, DeadLetterKind: NotLettered,
 		Why: "broker advisories for deliveries that ran out — empty in steady state"},

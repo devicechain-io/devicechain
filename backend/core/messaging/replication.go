@@ -50,10 +50,10 @@ func streamIsDeployed(st streams.Stream, deployedAreas []string) bool {
 	if st.Dormant {
 		return false
 	}
-	if len(deployedAreas) == 0 || len(st.Areas) == 0 {
+	if len(deployedAreas) == 0 || len(st.Admins()) == 0 {
 		return true
 	}
-	for _, owner := range st.Areas {
+	for _, owner := range st.Admins() {
 		if slices.Contains(deployedAreas, owner) {
 			return true
 		}

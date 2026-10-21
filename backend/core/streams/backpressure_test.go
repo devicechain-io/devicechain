@@ -17,12 +17,8 @@ func TestBackpressureIsDeclaredOnlyWhereUnreadLossIsDataLoss(t *testing.T) {
 	for _, s := range All {
 		for _, a := range s.BackpressureReaders {
 			got = append(got, pair{s.Suffix, a})
-			in := false
-			for _, r := range s.Areas {
-				in = in || r == a
-			}
-			if !in {
-				t.Errorf("stream %q gates on area %q, which is not in its Areas", s.Suffix, a)
+			if !ReadsAs(s.Suffix, a, ReadDurable) && !ReadsAs(s.Suffix, a, ReadAckFloor) {
+				t.Errorf("stream %q gates on area %q, which has no durable reader on it", s.Suffix, a)
 			}
 			if ReplayCoveredBy(s.Suffix, a) {
 				t.Errorf("stream %q gates on %q, whose unread position is its checkpoint, not its backlog", s.Suffix, a)
@@ -60,7 +56,7 @@ func TestBackpressureIsDeclaredOnlyWhereUnreadLossIsDataLoss(t *testing.T) {
 // The forwarding table is what makes a hop PAUSE rather than fail its publish, and NewReader
 // applies it from the reader's area, so it is pinned here as the whole of that wiring. Every
 // forward must go into a stream that applies backpressure (otherwise there is no gate to park
-// on), and the forwarding area must read the source and write the target (both Areas).
+// on), and the forwarding area must read the source (durably) and write the target.
 func TestForwardsIsTheIngestChain(t *testing.T) {
 	type hop struct{ from, area, into string }
 	var got []hop
@@ -70,14 +66,11 @@ func TestForwardsIsTheIngestChain(t *testing.T) {
 			if !AppliesBackpressure(into) {
 				t.Errorf("%s on %q forwards into %q, which applies no backpressure", area, s.Suffix, into)
 			}
-			for _, sfx := range []string{s.Suffix, into} {
-				in := false
-				for _, r := range bySuffix[sfx].Areas {
-					in = in || r == area
-				}
-				if !in {
-					t.Errorf("%s forwards %q into %q but is not in %q's Areas", area, s.Suffix, into, sfx)
-				}
+			if !ReadsAs(s.Suffix, area, ReadDurable) {
+				t.Errorf("%s forwards %q into %q but has no durable reader on %q", area, s.Suffix, into, s.Suffix)
+			}
+			if !Writes(into, area) {
+				t.Errorf("%s forwards %q into %q but does not write %q", area, s.Suffix, into, into)
 			}
 		}
 	}

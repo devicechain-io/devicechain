@@ -272,7 +272,7 @@ func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
 		nonDormant++
 		name := StreamName("inst", st.Suffix)
 		anyDeployed := false
-		for _, owner := range st.Areas {
+		for _, owner := range st.Admins() {
 			for _, d := range deployed {
 				if owner == d {
 					anyDeployed = true
@@ -281,12 +281,12 @@ func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
 		}
 		if anyDeployed && !required[name] {
 			t.Errorf("stream %q is created by a DEPLOYED area (%v) but is not required",
-				name, st.Areas)
+				name, st.Admins())
 		}
 		if !anyDeployed && required[name] {
 			t.Errorf("stream %q is created only by undeployed areas (%v) but is required "+
 				"present; it cannot exist, so this would fail every healthy install",
-				name, st.Areas)
+				name, st.Admins())
 		}
 	}
 	// Non-vacuity: if this list ever covers everything, the case above is asserting
@@ -303,21 +303,13 @@ func TestUndeployedAreasStreamsAreNotRequired(t *testing.T) {
 // the safe direction — but it is safe by accident rather than by declaration, and
 // this makes the omission visible.
 func TestEveryStreamDeclaresItsOwners(t *testing.T) {
-	known := map[string]bool{
-		"user-management": true, "device-management": true, "event-sources": true,
-		"event-management": true, "device-state": true, "dashboard-management": true,
-		"command-delivery": true, "notification-management": true,
-		"event-processing": true, "outbound-connectors": true, "mcp": true,
-		"ai-inference": true, "sparkplug-ingest": true, "lwm2m-ingest": true,
-		"update-management": true,
-	}
 	for _, st := range streams.All {
-		if len(st.Areas) == 0 {
+		if len(st.Admins()) == 0 {
 			t.Errorf("stream %q declares no owning functional area", st.Suffix)
 			continue
 		}
-		for _, a := range st.Areas {
-			if !known[a] {
+		for _, a := range st.Admins() {
+			if !streams.IsPlatformArea(a) {
 				t.Errorf("stream %q names %q as an owner, which is not a functional area",
 					st.Suffix, a)
 			}

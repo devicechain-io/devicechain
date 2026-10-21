@@ -230,6 +230,9 @@ func (nmgr *NatsManager) startRecorder(ctx context.Context) error {
 		// auth provides, and an area that is not ready yet is exactly one that may be
 		// abandoning deliveries.
 	}
+	if err := nmgr.requireConsumer(streams.MaxDeliveries, rec.durable); err != nil {
+		return err
+	}
 	if err := rec.bind(); err != nil {
 		return fmt.Errorf("binding the max-delivery recorder: %w", err)
 	}

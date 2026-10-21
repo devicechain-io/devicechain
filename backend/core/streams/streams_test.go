@@ -189,8 +189,8 @@ func TestVerbatimCopyNamesADeclaredStream(t *testing.T) {
 }
 
 // A replay-covered area silences the only record of its durable's give-ups, so the claim is
-// held to three things this leaf can check: the area actually reads the stream (it is in
-// Areas), the stream is one whose give-ups would otherwise be lettered (a NotLettered stream
+// held to three things this leaf can check: the area actually reads the stream (it holds a
+// durable reader), the stream is one whose give-ups would otherwise be lettered (a NotLettered stream
 // has nothing to silence, and naming an area there would read as a claim nobody made), and
 // the set is exactly the one the tree has proven. The last is deliberately a literal: adding a
 // name must fail here and send its author to write the proof the field's comment asks for.
@@ -201,11 +201,9 @@ func TestReplayCoveredIsDeclaredOnlyWhereProven(t *testing.T) {
 		for _, a := range s.ReplayCovered {
 			got = append(got, pair{s.Suffix, a})
 			in := false
-			for _, r := range s.Areas {
-				in = in || r == a
-			}
+			in = ReadsAs(s.Suffix, a, ReadDurable) || ReadsAs(s.Suffix, a, ReadAckFloor)
 			if !in {
-				t.Errorf("stream %q declares area %q replay-covered, but %q is not in its Areas", s.Suffix, a, a)
+				t.Errorf("stream %q declares area %q replay-covered, but %q has no durable reader on it", s.Suffix, a, a)
 			}
 			if s.DeadLetterKind == NotLettered {
 				t.Errorf("stream %q is NotLettered, so declaring %q replay-covered on it silences nothing", s.Suffix, a)
@@ -249,8 +247,8 @@ func TestOnlyTheCaptureStreamIsWorkQueue(t *testing.T) {
 		if got, want := RecreatesOnRetentionChange(s.Suffix), s.Suffix == DeviceEventsCapture; got != want {
 			t.Errorf("RecreatesOnRetentionChange(%q) = %v, want %v", s.Suffix, got, want)
 		}
-		if s.Retention == RetentionWorkQueue && len(s.Areas) != 1 && s.Suffix == DeviceEventsCapture {
-			t.Errorf("%q is a work queue and must have exactly one reading area, has %v", s.Suffix, s.Areas)
+		if s.Retention == RetentionWorkQueue && len(s.Admins()) != 1 && s.Suffix == DeviceEventsCapture {
+			t.Errorf("%q is a work queue and must have exactly one reading area, has %v", s.Suffix, s.Admins())
 		}
 	}
 	if ShapeOf(MaxDeliveries) != ShapeAdvisory {
