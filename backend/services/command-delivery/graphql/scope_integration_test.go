@@ -18,7 +18,9 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/devicechain-io/dc-command-delivery/model"
 	"github.com/devicechain-io/dc-microservice/auth"
@@ -352,4 +354,94 @@ func TestScopedMemberIsRefusedWhenOwnershipCannotBeAsked(t *testing.T) {
 
 	require.NotNil(t, enqueueTo(t, asOperator(ctx), "c-2", "acme-1").CreateCommand.Command,
 		"control: an unscoped caller still enqueues with no gate")
+}
+
+// The command search's time range, through the served schema on the real engine: a member
+// limited to Acme reads only Acme's commands inside the range, the range's total is exact,
+// and the planner can serve one device's range from idx_commands_device_time (the search's
+// predicate must be written as the index's key expression, or the index is never used).
+func TestScopedCommandsTimeRangeOnPostgres(t *testing.T) {
+	api, ctx := scopeFixture(t)
+	op := asOperator(ctx)
+	require.NotNil(t, enqueueTo(t, op, "c-acme-old", "acme-1").CreateCommand.Command)
+	require.NotNil(t, enqueueTo(t, op, "c-acme-new", "acme-1").CreateCommand.Command)
+	require.NotNil(t, enqueueTo(t, op, "c-shared", "shared-1").CreateCommand.Command)
+	require.NotNil(t, enqueueTo(t, op, "c-globex", "globex-1").CreateCommand.Command)
+	now := time.Now().UTC().Truncate(time.Second)
+	// c-acme-old was queued two days ago and never sent; c-globex was sent an hour ago.
+	db := api.RDB.DB(op)
+	require.NoError(t, db.Model(&model.Command{}).Where("token = ?", "c-acme-old").
+		Update("queued_time", now.Add(-48*time.Hour)).Error)
+	require.NoError(t, db.Model(&model.Command{}).Where("token = ?", "c-globex").
+		Update("sent_time", now.Add(-time.Hour)).Error)
+
+	ranged := func(ctx context.Context, device *string, from, to time.Time) ([]string, int) {
+		t.Helper()
+		criteria := map[string]any{"pageNumber": 1, "pageSize": 100,
+			"startTime": from.Format(time.RFC3339), "endTime": to.Format(time.RFC3339)}
+		if device != nil {
+			criteria["deviceToken"] = *device
+		}
+		res := run(ctx, `query($c: CommandSearchCriteria!) { commands(criteria: $c) {
+			results { token } pagination { totalRecords } } }`, map[string]any{"c": criteria})
+		require.Empty(t, res.Errors)
+		var out struct {
+			Commands struct {
+				Results []struct {
+					Token string `json:"token"`
+				} `json:"results"`
+				Pagination struct {
+					TotalRecords int `json:"totalRecords"`
+				} `json:"pagination"`
+			} `json:"commands"`
+		}
+		require.NoError(t, json.Unmarshal(res.Data, &out))
+		tokens := []string{}
+		for _, r := range out.Commands.Results {
+			tokens = append(tokens, r.Token)
+		}
+		sort.Strings(tokens)
+		return tokens, out.Commands.Pagination.TotalRecords
+	}
+	lastTwoHours := func(ctx context.Context, device *string) []string {
+		tokens, total := ranged(ctx, device, now.Add(-2*time.Hour), now.Add(time.Minute))
+		require.Equal(t, len(tokens), total)
+		return tokens
+	}
+	acme := "acme-1"
+	require.Equal(t, []string{"c-acme-new", "c-globex", "c-shared"}, lastTwoHours(op, nil), "control: the operator")
+	require.Equal(t, []string{"c-acme-new"}, lastTwoHours(op, &acme))
+	old, _ := ranged(op, &acme, now.Add(-49*time.Hour), now.Add(-47*time.Hour))
+	require.Equal(t, []string{"c-acme-old"}, old, "a command never sent is placed at its queue time")
+	require.Equal(t, []string{"c-acme-new", "c-shared"}, lastTwoHours(asMember(ctx, acmeAnchor), nil))
+	require.Equal(t, []string{"c-globex", "c-shared"}, lastTwoHours(asMember(ctx, globexAnchor), nil))
+
+	bad := run(op, `query { commands(criteria: {pageNumber: 1, pageSize: 1, startTime: "yesterday"}) { results { token } } }`, nil)
+	require.NotEmpty(t, bad.Errors, "a bound that is not RFC 3339 is an error, never an unbounded search")
+
+	// The plan, over a history big enough for the planner to choose: 50 devices of tenant A with
+	// 200 commands each, spread over 200 days. One device's one day is then ~1 row in 10,000, which
+	// only the device-and-time index reaches without reading the device's whole history.
+	require.NoError(t, db.Exec(`INSERT INTO "command-delivery".commands
+		(created_at, updated_at, tenant_id, token, device_token, name, status, queued_time)
+		SELECT now(), now(), 'A', 'bulk-' || g, 'bulk-dev-' || (g % 50), 'reboot', 'EXPIRED',
+			now() - (g % 200) * interval '1 day'
+		FROM generate_series(1, 10000) AS g`).Error)
+	require.NoError(t, db.Exec(`ANALYZE "command-delivery".commands`).Error)
+	var plan []string
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		return tx.Raw(`EXPLAIN SELECT id FROM "command-delivery".commands WHERE tenant_id = 'A' AND device_token = 'acme-1' ` +
+			`AND COALESCE(sent_time, queued_time) >= now() - interval '1 day' AND COALESCE(sent_time, queued_time) <= now() ` +
+			`AND deleted_at IS NULL`).Scan(&plan).Error
+	}))
+	require.Contains(t, fmt.Sprint(plan), "idx_commands_device_time")
+	// And the range itself bounds the scan: the time test is an Index Cond, not a Filter applied to
+	// every row of the device that the index found.
+	bounded := false
+	for _, line := range plan {
+		if strings.Contains(line, "Index Cond") && strings.Contains(line, "COALESCE(sent_time, queued_time)") {
+			bounded = true
+		}
+	}
+	require.True(t, bounded, "the time range is not part of the index condition: %v", plan)
 }

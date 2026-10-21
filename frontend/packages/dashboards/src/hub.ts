@@ -10,6 +10,7 @@
 // model fans out badly on a crowded board. The Hub owns the subscription
 // lifecycle; widgets just hand it a datasource selector and a sink.
 
+import { windowCriteria, type EventWindow } from './event-window';
 import { gql, isForbiddenError, isScopeUnsupportedError, subscribe, type Area, type SubscriptionSink } from '@devicechain/client';
 
 import { ConnectionTracker, type HubConnectionState } from './connection';
@@ -170,6 +171,10 @@ export interface AlarmSubscription {
   // the total is the alarm count's. With `deviceType`, only alarms on devices of that type count. A
   // source that cannot count by severity leaves `severityCounts` unset (or fails the stream).
   countBySeverity?: boolean;
+  // Keep only alarms whose span (raise to clear, or still active) overlaps this range, filtered
+  // by device-management, so `total` is the exact count in range. An alarm keeps only its latest
+  // raise, so an earlier raise of the same alarm is in no range.
+  window?: EventWindow;
 }
 
 // A full alarm snapshot: the current rows (newest first, capped to pageSize) and the
@@ -203,6 +208,9 @@ export interface AlarmStreamSink {
 export interface CommandSubscription {
   datasource?: DatasourceSelector;
   pageSize: number;
+  // Keep only commands sent inside this range (queued, for one never sent), filtered by
+  // command-delivery, so `total` is the exact count in range.
+  window?: EventWindow;
 }
 
 // A command-history snapshot: the resolved target device (null when unbound — the
@@ -792,6 +800,7 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       pageSize: sub.pageSize,
       ...filters,
       deviceType: sub.deviceType ?? null,
+      ...windowCriteria(sub.window, Date.now()),
     } satisfies Partial<AlarmSearchCriteriaInput>;
     const pages = await Promise.all(
       originators.map((o) => gql(DEVICE_AREA, ALARMS_QUERY, { criteria: { ...base, ...o } })),
@@ -918,7 +927,7 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   ): Promise<CommandSnapshot> {
     if (!deviceToken) return { deviceToken: null, commands: [], total: 0 };
     const data = await gql(COMMAND_AREA, COMMANDS_QUERY, {
-      criteria: { pageNumber: 1, pageSize: sub.pageSize, deviceToken, status: null },
+      criteria: { pageNumber: 1, pageSize: sub.pageSize, deviceToken, status: null, ...windowCriteria(sub.window, Date.now()) },
     });
     return {
       deviceToken,

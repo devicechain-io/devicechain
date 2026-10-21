@@ -288,6 +288,20 @@ const ALARM_FILTERS = {
 // a viewer can change from the header); set, it is PINNED to this span whatever the viewer picks,
 // which is what a "last 5 minutes" strip on a wall board wants. The bounds are the board range's:
 // a minute to a week.
+// The timeseries chart's event markers: off unless asked, and optional with no default, so a chart
+// saved before they existed needs no optionsVersion bump.
+const MARK_ALARMS = {
+  kind: 'boolean',
+  labelId: 'widgetLabelMarkAlarms',
+  helpId: 'widgetHintMarkAlarms',
+} as const satisfies RuntimeOptionSpec;
+
+const MARK_COMMANDS = {
+  kind: 'boolean',
+  labelId: 'widgetLabelMarkCommands',
+  helpId: 'widgetHintMarkCommands',
+} as const satisfies RuntimeOptionSpec;
+
 const WINDOW_SECONDS = {
   kind: 'number',
   integer: true,
@@ -355,6 +369,8 @@ export const builtinWidgetDescriptors = {
       thresholds: THRESHOLDS,
       staleAfterSeconds: STALE_AFTER_SECONDS,
       windowSeconds: WINDOW_SECONDS,
+      markAlarms: MARK_ALARMS,
+      markCommands: MARK_COMMANDS,
     },
     defaults: { title: 'Timeseries chart' },
     interactions: {},

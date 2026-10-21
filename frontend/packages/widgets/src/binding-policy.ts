@@ -16,7 +16,7 @@ import {
   type WidgetInstance,
 } from '@devicechain/dashboards';
 
-import { optNumber, optString } from '@devicechain/widget-sdk';
+import { optBoolean, optNumber, optString } from '@devicechain/widget-sdk';
 
 // The shapes a policy value takes at runtime (the descriptor is validated at registration,
 // so a ref names a declared option of a compatible kind; the value stored in a widget may
@@ -121,4 +121,15 @@ export function commandSubscription(descriptor: WidgetDescriptor, widget: Widget
     datasource: widget.datasource,
     pageSize: numberValue(policy(descriptor).pageSize as NumberBinding | undefined, widget.options) ?? 1,
   };
+}
+
+// Whether a measurement widget draws alarm or command markers: its descriptor declares the marker
+// options and one of them is on. The feed that reads them is its own chunk (event-markers-feed.tsx),
+// loaded only when this is true.
+export function wantsEventMarkers(descriptor: WidgetDescriptor, widget: WidgetInstance): boolean {
+  const declared = descriptor.options as Record<string, unknown>;
+  return (
+    (declared.markAlarms !== undefined && optBoolean(widget.options, 'markAlarms') === true) ||
+    (declared.markCommands !== undefined && optBoolean(widget.options, 'markCommands') === true)
+  );
 }

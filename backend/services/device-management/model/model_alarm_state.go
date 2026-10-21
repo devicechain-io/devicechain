@@ -134,6 +134,14 @@ type AlarmSearchCriteria struct {
 	// the devices its scope owns, so an alarm it can see on a device it no longer owns is under no
 	// type (see AlarmCountsByDeviceType, which classifies by the same read).
 	DeviceType *string
+	// StartTime and EndTime (RFC 3339, each optional, both inclusive) keep the alarms whose span
+	// OVERLAPS the range: raised at or before EndTime, and still active or cleared at or after
+	// StartTime. An alarm raised before StartTime that was still active during the range counts,
+	// which is what a chart drawing alarms as spans over a time axis needs. The span is the alarm's
+	// CURRENT cycle: a re-raise reuses the row and moves raised_time forward, so an earlier cycle
+	// of the same alarm is not a row and no range finds it. A value that is not RFC 3339 is an error.
+	StartTime *string
+	EndTime   *string
 }
 
 // Criteria for counting alarms by their originating device's type. The facets are the alarm

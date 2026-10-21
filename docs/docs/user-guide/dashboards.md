@@ -295,6 +295,20 @@ The settings depend on the widget. Common ones:
 - **Time span** (timeseries chart): how much history the chart draws, in seconds, from 60 to
   604800. Leave it empty and the chart follows the board's time range, which viewers can change.
   Set it and the chart keeps that span whatever range a viewer picks.
+- **Mark alarms** and **Mark commands** (timeseries chart): both off by default. **Mark alarms**
+  draws the chart device's alarms over the readings: a faint band from the moment an alarm was
+  raised to the moment it cleared (to the right edge while it is still active) with a line at the
+  raise, colored by severity. An alarm with no severity of its own and the line where it cleared are
+  drawn in the neutral color, because color on a board means severity and nothing else. **Mark
+  commands** draws a dotted neutral line where each command was sent to the device, named by the
+  command and, once known, its outcome (succeeded, failed, timed out, and so on). Hover or tap a
+  marker for the same details as text. Under the chart, **Events in this range** opens a list of
+  every marker, which a keyboard can reach. The markers follow the board's time range and the
+  pause, and read only the chart's own device, for a range of any age. At most 30 events are
+  drawn, the newest; the chart says exactly how many more fall in the range ("N more not shown").
+  An alarm that cleared and was raised again is drawn from its latest raise only, because the
+  platform keeps one record per alarm. On a replayed recording the markers come from the recording if it holds alarms or
+  commands, and the chart says "not in this recording" for a channel it does not.
 - **Statistic** (stat card): which figure of the span to show: average (the default), minimum,
   maximum, sum, number of readings, or the latest reading. The card prints the statistic and the
   span it covers under the figure, for example "Maximum · 1h". The same **Time span** setting

@@ -32,6 +32,7 @@ CREATE INDEX "idx_command-delivery_commands_token" ON "command-delivery".command
 CREATE INDEX idx_audit_tenant_time ON "command-delivery".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_command_batches_retry_of ON "command-delivery".command_batches USING btree (tenant_id, retry_of) WHERE (retry_of IS NOT NULL);
 CREATE INDEX idx_commands_batch_token ON "command-delivery".commands USING btree (tenant_id, batch_token) WHERE ((batch_token IS NOT NULL) AND (deleted_at IS NULL));
+CREATE INDEX idx_commands_device_time ON "command-delivery".commands USING btree (tenant_id, device_token, COALESCE(sent_time, queued_time)) WHERE (deleted_at IS NULL);
 CREATE INDEX idx_commands_dispatchable_status ON "command-delivery".commands USING btree (status, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['QUEUED'::character varying, 'HELD'::character varying])::text[])));
 CREATE INDEX idx_commands_drainable ON "command-delivery".commands USING btree (tenant_id, device_token, id) WHERE ((deleted_at IS NULL) AND ((status)::text = ANY ((ARRAY['HELD'::character varying, 'PARKED'::character varying])::text[])));
 CREATE INDEX idx_commands_queued_device ON "command-delivery".commands USING btree (tenant_id, device_token, id) WHERE ((deleted_at IS NULL) AND ((status)::text = 'QUEUED'::text));

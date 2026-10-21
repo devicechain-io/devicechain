@@ -2406,6 +2406,14 @@ func (api *Api) CommandsByToken(ctx context.Context, tokens []string) ([]*Comman
 
 // Commands searches for commands matching the given criteria.
 func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*CommandSearchResults, error) {
+	start, err := commandRangeBound("startTime", criteria.StartTime)
+	if err != nil {
+		return nil, err
+	}
+	end, err := commandRangeBound("endTime", criteria.EndTime)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]Command, 0)
 	db, pag := api.RDB.ListOf(ctx, &Command{}, func(db *gorm.DB) *gorm.DB {
 		if criteria.DeviceToken != nil {
@@ -2434,6 +2442,13 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 		if criteria.BatchToken != nil {
 			db = db.Where("batch_token = ?", *criteria.BatchToken)
 		}
+		// Written exactly as idx_commands_device_time's key expression, so the planner can use it.
+		if start != nil {
+			db = db.Where("COALESCE(sent_time, queued_time) >= ?", *start)
+		}
+		if end != nil {
+			db = db.Where("COALESCE(sent_time, queued_time) <= ?", *end)
+		}
 		return db
 	}, criteria.Pagination)
 	db.Find(&results)
@@ -2444,6 +2459,20 @@ func (api *Api) Commands(ctx context.Context, criteria CommandSearchCriteria) (*
 		Results:    results,
 		Pagination: pag,
 	}, nil
+}
+
+// commandRangeBound parses one bound of a command search's time range: absent is no bound, and
+// a value that is not RFC 3339 is an error rather than a silently unbounded search.
+func commandRangeBound(name string, value *string) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, *value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an RFC 3339 timestamp: %w", name, err)
+	}
+	t = t.UTC()
+	return &t, nil
 }
 
 // sweepLockName namespaces the advisory lock that makes the expiry + redelivery

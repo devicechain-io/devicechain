@@ -41,7 +41,7 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 
 | Widget | Canal | Muestra |
 |---|---|---|
-| **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo del intervalo de tiempo del panel, o de un intervalo propio |
+| **Gráfico de series temporales** | telemetría | una o más series de mediciones a lo largo del intervalo de tiempo del panel, o de un intervalo propio; opcionalmente marcado con las alarmas del dispositivo (una banda desde la activación hasta el despeje, con el color de su severidad) y los comandos que se le enviaron |
 | **Medidor (gauge)** | telemetría | un único valor más reciente frente a un rango / umbrales |
 | **Tarjeta de último valor** | telemetría | una sola lectura actual con su marca de tiempo |
 | **Tabla** | telemetría | la última lectura de cada medición de un dispositivo |

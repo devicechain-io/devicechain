@@ -769,7 +769,11 @@ describe('the gate itself', () => {
   // would silently restore the old blind spot for that pair, with every test still green.
   it('gives every option of a widget a value no other option of that widget has', () => {
     for (const type of WIDGET_TYPES) {
-      const keys = schemaOrder(type);
+      // A boolean has ONE reachable value from unchecked, so two of them on a widget (the
+      // timeseries chart's markAlarms and markCommands) cannot differ here. They are excluded,
+      // and the pair is pinned where it can be: WidgetConfigPanel.markers.test.tsx renders each
+      // with only itself set and requires the other to read unchecked.
+      const keys = schemaOrder(type).filter((k) => specsOf(type)[k].kind !== 'boolean');
       for (const side of ['written', 'shown'] as const) {
         const values = keys.map((k) => JSON.stringify(optionValue(type, k, side)));
         const collisions = keys.filter((_k, i) => values.indexOf(values[i]) !== i);

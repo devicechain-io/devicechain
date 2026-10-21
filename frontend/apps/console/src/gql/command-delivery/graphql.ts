@@ -165,6 +165,12 @@ export type CommandSearchCriteria = {
   /** Only commands addressed to this device. */
   deviceToken?: string | null | undefined;
   /**
+   * Only commands sent at or before this instant (inclusive), or queued at or before it when
+   * never sent, as an RFC 3339 timestamp. Omit for no upper bound. A value that is not RFC 3339
+   * is an error.
+   */
+  endTime?: string | null | undefined;
+  /**
    * Only finished commands whose outcome is one of these (SUCCEEDED, NOT_DELIVERED, REJECTED or
    * UNKNOWN). Live commands have no outcome and never match. An empty list is ignored.
    */
@@ -173,6 +179,12 @@ export type CommandSearchCriteria = {
   pageNumber: number;
   /** Results per page. Values below 1 become 100; values above 1000 are capped at 1000. */
   pageSize: number;
+  /**
+   * Only commands sent at or after this instant (inclusive), as an RFC 3339 timestamp. A
+   * command never sent (queued, held, or expired or cancelled first) is placed at the time it
+   * was queued instead. Omit for no lower bound. A value that is not RFC 3339 is an error.
+   */
+  startTime?: string | null | undefined;
   /** Only commands in exactly this lifecycle state (for example HELD). */
   status?: string | null | undefined;
   /**

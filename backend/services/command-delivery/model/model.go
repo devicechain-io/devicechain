@@ -366,6 +366,13 @@ type CommandSearchCriteria struct {
 	// Outcomes narrows to commands that finished in any of these classes (see CommandOutcome).
 	// An empty list is ignored, like Statuses.
 	Outcomes *[]string
+	// StartTime and EndTime (RFC 3339, each optional, both inclusive) keep the commands whose
+	// time falls in the range: when the command was sent, or when it was queued if it never was
+	// (still queued or held, or expired or cancelled before it went out). That is the instant a
+	// chart marks it at. A value that is not RFC 3339 is an error. Backed, for one device, by
+	// idx_commands_device_time.
+	StartTime *string
+	EndTime   *string
 }
 
 // CommandSearchResults wraps a page of commands.

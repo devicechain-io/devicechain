@@ -303,6 +303,23 @@ Los ajustes dependen del widget. Los más comunes:
   segundos, de 60 a 604800. Si lo dejas vacío, el gráfico sigue el intervalo de tiempo del panel,
   que los espectadores pueden cambiar. Si lo indicas, el gráfico conserva ese intervalo sea cual
   sea el que elija un espectador.
+- **Marcar alarmas** y **Marcar comandos** (gráfico de series temporales): ambas desactivadas por
+  defecto. **Marcar alarmas** dibuja las alarmas del dispositivo del gráfico sobre las lecturas: una
+  banda tenue desde que se activó la alarma hasta que se despejó (hasta el borde derecho mientras
+  sigue activa) con una línea en la activación, del color de su severidad. Una alarma sin severidad
+  propia y la línea donde se despejó se dibujan en el color neutro, porque en un panel el color
+  significa severidad y nada más. **Marcar comandos** dibuja una línea punteada neutra donde se
+  envió cada comando al dispositivo, con el nombre del comando y, cuando se conoce, su resultado
+  (correcto, fallido, sin respuesta a tiempo, etc.). Pasa el cursor o toca un marcador para ver los
+  mismos detalles en texto. Debajo del gráfico, **Eventos en este intervalo** abre una lista de
+  todos los marcadores, accesible con el teclado. Los marcadores siguen el intervalo de tiempo del
+  panel y la pausa, y leen solo el dispositivo del propio gráfico, para un intervalo de cualquier
+  antigüedad. Se dibujan como máximo 30 eventos, los más recientes; el gráfico indica exactamente
+  cuántos más caen en el intervalo («N más sin mostrar»). Una alarma que se despejó y volvió a
+  activarse se dibuja solo desde su última activación, porque la plataforma guarda un registro por
+  alarma. En una grabación reproducida, los
+  marcadores salen de la grabación si contiene alarmas o comandos, y el gráfico indica que no están
+  en la grabación para el canal que no los tiene.
 - **Estadística** (tarjeta de estadística): qué cifra del intervalo mostrar: promedio (por defecto),
   mínimo, máximo, suma, número de lecturas o la última lectura. La tarjeta escribe bajo la cifra la
   estadística y el intervalo que abarca, por ejemplo «Máximo · 1h». El mismo ajuste **Intervalo de
