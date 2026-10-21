@@ -201,14 +201,17 @@ func TestARevokedCredentialsSessionEndsOnlyThroughTheKickAndTheOtherCredentialsS
 // the credential's expiry, with no kick, and the reconnect is refused because the credential
 // now has no time left. The control is the same device on a credential with no expiry.
 func TestTheBrokerEndsASessionAtItsCredentialsExpiry(t *testing.T) {
-	api := &revocableApi{revoked: map[string]bool{}, expiries: map[string]time.Time{
-		"short": time.Now().Add(3 * time.Second),
-	}}
+	api := &revocableApi{revoked: map[string]bool{}, expiries: map[string]time.Time{}}
 	_, port := startRevocationBroker(t, api)
+	// The expiry is set only once the broker is up, so a slow start (the race detector)
+	// cannot eat the credential's remaining life before the device connects.
+	api.mu.Lock()
+	api.expiries["short"] = time.Now().Add(4 * time.Second)
+	api.mu.Unlock()
 	expiring := liveDevice(t, port, revokeClientID, "acme-corp:short")
 	lasting := liveDevice(t, port, revokeClientID+":b", "acme-corp:lasting")
 
-	require.Eventually(t, func() bool { return !expiring.IsConnectionOpen() }, 8*time.Second, 50*time.Millisecond,
+	require.Eventually(t, func() bool { return !expiring.IsConnectionOpen() }, 10*time.Second, 50*time.Millisecond,
 		"the session outlived its credential's expiry")
 	require.Never(t, expiring.IsConnectionOpen, 2*time.Second, 50*time.Millisecond,
 		"an expired credential reconnected")
