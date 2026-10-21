@@ -452,7 +452,24 @@ describe('declaredMetrics', () => {
     const asked = await Promise.all(['tank', 'crusher', 'tank', 'tank', 'crusher'].map((t) => hub.declaredMetrics(t)));
     await hub.declaredMetrics('tank');
     expect(asked[0]).toEqual(['fuel']);
+    expect(asked[1]).toEqual(['throughput']);
+    // Both types asked in one tick go in ONE read, and each is asked once.
+    expect(countOf(DECLARED_METRICS)).toBe(1);
+    expect(h.gql.mock.calls[0][2]).toEqual({ tokens: ['tank', 'crusher'] });
+  });
+
+  it('reads a board of many types in one request per hundred types, not one per type', async () => {
+    const many = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`t${i}`, [{ metricKey: `m${i}` }]]));
+    declares(many);
+    const hub = newHub();
+    const asked = await Promise.all(Object.keys(many).map((t) => hub.declaredMetrics(t)));
+    expect(asked[149]).toEqual(['m149']);
     expect(countOf(DECLARED_METRICS)).toBe(2);
+  });
+
+  it('is null for a published version that declares no metric: an undeclared measurement is still accepted', async () => {
+    declares({ open: [] });
+    expect(await newHub().declaredMetrics('open')).toBeNull();
   });
 
   it('is null when the read fails, not a rejection, and asks again next time rather than keeping the failure', async () => {

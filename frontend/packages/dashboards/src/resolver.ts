@@ -57,6 +57,9 @@ interface AnchorPage {
   types?: Map<string, string | null>;
 }
 
+// The most device types one declaration read asks for.
+const DECLARED_BATCH_SIZE = 100;
+
 // A server that reports no total is taken at its word: the page is the fleet.
 const trueSize = (reported: number | null | undefined, page: number) => Math.max(reported ?? page, page);
 
@@ -101,6 +104,10 @@ export function createDeviceResolver(): DeviceResolver {
   // dashboard bind the same device, and a device's existence is stable for a viewing
   // session (a delete mid-session is rare and the next mount re-checks).
   const existsCache = new Map<string, Promise<boolean>>();
+
+  // The device types asked for declarations in the current tick, and who is waiting on each.
+  type DeclaredWaiter = { resolve: (names: string[] | null) => void; reject: (err: unknown) => void };
+  let declaredBatch: Map<string, DeclaredWaiter[]> | null = null;
 
   function anchorKey(anchor: AnchorTarget): string {
     return `${anchor.relationship}|${anchor.targetType}|${anchor.targetToken}`;
@@ -160,13 +167,42 @@ export function createDeviceResolver(): DeviceResolver {
       return pending;
     },
 
-    // The names a device type's active profile version declares, or null when the type has no
-    // published profile to say (no profile, never published, or the type is not found). A failed
-    // read rejects: the caller treats that as unknown too, and does not cache it.
-    async declaredMetrics(deviceType: string): Promise<string[] | null> {
-      const r: DeclaredMetricsResult = await gql('device-management', DECLARED_METRICS, { tokens: [deviceType] });
-      const version = r.deviceTypesByToken.find((t) => t.token === deviceType)?.profile?.activeProfileVersion;
-      return version ? version.metrics.map((m) => m.metricKey) : null;
+    // The names a device type's active profile version declares, or null when it has nothing to
+    // say: no profile, never published, not found, or a published version that declares no metric
+    // at all (an undeclared measurement is still accepted, so an empty declaration rules nothing
+    // out). A failed read rejects: the caller treats that as unknown too, and does not cache it.
+    // Every type asked in the same tick goes in ONE read, so a board of many types costs one
+    // request rather than one per type.
+    declaredMetrics(deviceType: string): Promise<string[] | null> {
+      return new Promise((resolve, reject) => {
+        let batch = declaredBatch;
+        if (!batch) {
+          batch = declaredBatch = new Map();
+          queueMicrotask(() => {
+            const asked = declaredBatch!;
+            declaredBatch = null;
+            const tokens = [...asked.keys()];
+            for (let i = 0; i < tokens.length; i += DECLARED_BATCH_SIZE) {
+              const chunk = tokens.slice(i, i + DECLARED_BATCH_SIZE);
+              gql('device-management', DECLARED_METRICS, { tokens: chunk }).then(
+                (r: DeclaredMetricsResult) => {
+                  for (const token of chunk) {
+                    const version = r.deviceTypesByToken.find((t) => t.token === token)?.profile?.activeProfileVersion;
+                    const names = version && version.metrics.length > 0 ? version.metrics.map((m) => m.metricKey) : null;
+                    for (const w of asked.get(token)!) w.resolve(names);
+                  }
+                },
+                (err: unknown) => {
+                  for (const token of chunk) for (const w of asked.get(token)!) w.reject(err);
+                },
+              );
+            }
+          });
+        }
+        const waiting = batch.get(deviceType) ?? [];
+        waiting.push({ resolve, reject });
+        batch.set(deviceType, waiting);
+      });
     },
 
     // deviceExists caches only a POSITIVE result (a live device is stable for the

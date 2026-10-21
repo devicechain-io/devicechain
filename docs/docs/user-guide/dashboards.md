@@ -373,8 +373,8 @@ The settings depend on the widget. Common ones:
   "1 could not be read" when its readings failed to load. A device whose published profile does not
   declare the measurement (a crusher in a count of fuel) is outside the question: it is left out of
   the *of 21* and noted as "1 does not report this". That is decided from the profile, not from
-  what the device has sent, and a device whose profile cannot be read is counted as not reporting
-  rather than left out. While the group's
+  what the device has sent, and a device whose profile cannot be read, or declares no measurement
+  at all, is counted as not reporting rather than left out. While the group's
   readings are still loading, the card shows no number rather than a partial one. *Devices* shows
   how many devices the group holds, whatever they report. **Time span** works as for the fleet
   table; **Stale after** applies to the newest reading in the group, as on other cards. A group larger than the 500 devices read says "Showing 500 of N devices",
