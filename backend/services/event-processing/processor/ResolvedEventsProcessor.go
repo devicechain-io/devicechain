@@ -1721,8 +1721,16 @@ func (rp *ResolvedEventsProcessor) run() {
 			// the interval checkpoint below only handles the case idle-advance did not: buffered
 			// acks/detections from live messages, or a suppressed (not-caught-up) advance.
 			rp.idleAdvance(rp.pctx(), now)
+			// 🔴 THE TICK'S PASS IS ONLY AS GOOD AS ITS CHECKPOINT. The interval checkpoint is the
+			// one piece of the arm's work that can fail, and a tick filed complete over a
+			// checkpoint that did not commit would keep detect_tick's last-success stamp fresh
+			// through a database outage -- the series would read "working" while nothing became
+			// durable. A deferred retry (snapshot backoff) is the same: the work is still undone.
+			var tickErr error
 			if (rp.dirty || len(rp.pendingAcks) > 0 || len(rp.pendingDets) > 0) && now.Sub(rp.lastCheckpoint) >= rp.cfg.CheckpointInterval {
-				rp.checkpoint(rp.pctx())
+				if !rp.checkpoint(rp.pctx()) {
+					tickErr = errTickCheckpointNotCommitted
+				}
 			}
 			// Per-tenant state-budget accounting (ADR-023 amendment, slice 6c), sampled on the ticker
 			// on its own cadence — NOT from checkpoint(), whose every call site is activity-gated
@@ -1768,7 +1776,7 @@ func (rp *ResolvedEventsProcessor) run() {
 				rp.startFactReconcile()
 				rp.lastFactReconcile = now
 			}
-			rp.metrics.recordTickPass(rp.pctx(), tickStarted)
+			rp.metrics.recordTickPass(rp.pctx(), tickErr, tickStarted)
 		}
 	}
 }

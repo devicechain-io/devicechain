@@ -1187,6 +1187,12 @@ exports three series under its own service's name, `devicechain_<area>_<task>_â€
 | lwm2m-ingest | `tenant_sweep` |
 | sparkplug-ingest | `presence_probe` |
 
+Three of these run only while something drives them: `detect_tick` and lwm2m-ingest's
+`tenant_sweep` on the replica that holds leadership, and `presence_probe` once per connected
+Sparkplug session, with every session on one series. On a standby replica, or while
+sparkplug-ingest has no session, the last-success time stays NaN or keeps the value from its
+last term. Take `max by (job)` across replicas before comparing it with `time()`.
+
 For example, user-management's tenant-deletion coordinator exports
 `devicechain_usermanagement_tenant_purge_passes_total`.
 

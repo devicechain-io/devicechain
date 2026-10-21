@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/devicechain-io/dc-event-processing/internal/react"
@@ -955,18 +956,23 @@ func boolGauge(b bool) float64 {
 	return 0
 }
 
+// errTickCheckpointNotCommitted is the tick arm's outcome when its interval checkpoint did
+// not commit (failed, or deferred by the snapshot retry backoff). The checkpoint has already
+// logged and counted its own cause on detect_checkpoint_failures_total; this only keeps the
+// tick's pass series from reading complete over work that is not durable.
+var errTickCheckpointNotCommitted = errors.New("the tick's interval checkpoint did not commit; " +
+	"its messages stay unacked and the next tick retries")
+
 // recordTickPass files one pass of the single-writer loop's tick arm (idle-advance, interval
 // checkpoint, budget and lag sampling, rechecks, reconcile launches). Nil-safe.
 //
-// The arm has no error to report -- a failed checkpoint is handled and counted where it
-// happens -- so the outcomes are complete, or cancelled when shutdown caught the tick; what
-// the series adds is the arm's duration and a last-success stamp that stops moving when the
-// loop does.
-func (m *DetectMetrics) recordTickPass(ctx context.Context, started time.Time) {
+// err is the arm's one failure: an interval checkpoint that did not commit. Otherwise the
+// outcome is complete, or cancelled when shutdown caught the tick.
+func (m *DetectMetrics) recordTickPass(ctx context.Context, err error, started time.Time) {
 	if m == nil {
 		return
 	}
-	m.tickPass.RecordPass(ctx, nil, started, "detect-tick")
+	m.tickPass.RecordPass(ctx, err, started, "detect-tick")
 }
 
 // RuleStatFlushPass files one interval flush of the rule-health accumulator.

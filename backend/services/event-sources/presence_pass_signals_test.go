@@ -64,10 +64,9 @@ func (e *errProber) Probe(context.Context) error { e.probes.Add(1); return e.err
 func presenceTestMetrics(reg *prometheus.Registry) presenceLoopMetrics {
 	ms := &core.Microservice{FunctionalArea: "event-sources"}
 	ms.UseMetricsRegistry(reg)
-	return presenceLoopMetrics{
-		reconcile: ms.NewPeriodicTaskMetrics("presence_reconcile"),
-		canary:    ms.NewPeriodicTaskMetrics("presence_canary"),
-	}
+	// Built through the service's own constructor, so the series names below are the ones
+	// the service exports, not ones this test chose.
+	return newPresenceLoopMetrics(ms)
 }
 
 const (
@@ -133,4 +132,31 @@ func TestACancelledReconcileIsNotAFailure(t *testing.T) {
 	<-done
 	assert.EqualValues(t, 1, passSample(t, reg, reconcilePasses, core.PassCancelled))
 	assert.Zero(t, passSample(t, reg, reconcilePasses, core.PassFailed))
+}
+
+// A reconcile pass that returned an error is a failure, never a completed pass. The canary
+// half of TestThePresenceLoopsFileTheirPasses pins the same for the probe; this is the
+// reconcile half, and the outcomes differ from that test's so a loop filed on the other's
+// series fails both.
+func TestAFailedReconcileIsAFailedPass(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics := presenceTestMetrics(reg)
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &errRunner{err: errors.New("no tenant's presence state could be read")}
+	rt := &presenceRuntime{stopped: make(chan struct{})}
+
+	runPresenceLoops(ctx, rt, runner, nil, 5*time.Millisecond, time.Hour, metrics)
+
+	waitFor(t, "a failed reconcile pass to be filed", func() bool {
+		return passSample(t, reg, reconcilePasses, core.PassFailed) >= 2
+	})
+	assert.Zero(t, passSample(t, reg, reconcilePasses, core.PassComplete),
+		"a reconcile that returned an error is a failure, never a completed pass")
+
+	cancel()
+	select {
+	case <-rt.stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the presence loops did not stop on cancel")
+	}
 }

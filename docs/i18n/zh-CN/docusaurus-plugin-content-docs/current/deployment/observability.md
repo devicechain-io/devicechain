@@ -593,6 +593,8 @@ UPDATE "event-management".calculated_backfills
 | lwm2m-ingest | `tenant_sweep` |
 | sparkplug-ingest | `presence_probe` |
 
+其中三项只在有驱动对象时运行：`detect_tick` 和 lwm2m-ingest 的 `tenant_sweep` 只在持有领导权的副本上运行，`presence_probe` 针对每个已连接的 Sparkplug 会话运行，所有会话共用一个序列。在备用副本上，或 sparkplug-ingest 没有会话时，最近成功时间保持 NaN 或停留在上一任期的值。与 `time()` 比较前，请先跨副本取 `max by (job)`。
+
 例如用户管理租户删除协调器导出 `devicechain_usermanagement_tenant_purge_passes_total`。
 
 | 结果 | 含义 |

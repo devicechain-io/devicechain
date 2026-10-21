@@ -4,8 +4,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -47,4 +50,35 @@ func TestIngestMetricsAreAllBuiltAndTooOldIsExported(t *testing.T) {
 		}
 	}
 	require.Fail(t, "telemetry_too_old_dropped_total is not registered")
+}
+
+// The registry's tenant-sweep pass series is built and exported under its documented task
+// name. The registry tests build their own PeriodicTaskMetrics, and RecordPass is nil-safe, so
+// a buildMetrics that left TenantSweep out (or misnamed it) would sweep, record nothing and
+// keep every other test green.
+func TestTheTenantSweepPassIsExportedUnderItsDocumentedName(t *testing.T) {
+	newTestMicroservice(t)
+	prev := registryMetrics
+	t.Cleanup(func() { registryMetrics = prev })
+	registry := prometheus.NewRegistry()
+	Microservice.UseMetricsRegistry(registry)
+
+	buildMetrics()
+	registryMetrics.TenantSweep.RecordPass(context.Background(), errors.New("refused"), time.Now(), "tenant-sweep")
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() != "devicechain_lwm2mingest_tenant_sweep_passes_total" {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "outcome" && l.GetValue() == "failed" {
+					require.Equal(t, float64(1), m.GetCounter().GetValue())
+					return
+				}
+			}
+		}
+	}
+	require.Fail(t, "tenant_sweep_passes_total{outcome=failed} is not registered or did not record the pass")
 }

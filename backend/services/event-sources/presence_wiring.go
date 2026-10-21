@@ -346,7 +346,7 @@ func startBrokerPresence(ctx context.Context) {
 		probe = canary
 	}
 	go runPresenceLoops(runCtx, rt, reconciler, probe, cfg.ReconcileInterval(), cfg.CanaryInterval(),
-		presenceLoopMetrics{reconcile: PresenceReconcileTaskMetrics, canary: PresenceCanaryTaskMetrics})
+		PresenceLoopTaskMetrics)
 	// Armed LAST: from here a close nobody asked for is a fault. See sysConnGuard.
 	guard.arm(conn)
 	brokerPresence = rt
@@ -694,6 +694,16 @@ type prober interface {
 type presenceLoopMetrics struct {
 	reconcile *core.PeriodicTaskMetrics
 	canary    *core.PeriodicTaskMetrics
+}
+
+// newPresenceLoopMetrics builds both loops' signals under their documented task names. It is
+// the ONE place a name is bound to a loop: the service and the tests both build through it,
+// so the pair travels as one value and cannot be handed to each other's loop at a call site.
+func newPresenceLoopMetrics(ms *core.Microservice) presenceLoopMetrics {
+	return presenceLoopMetrics{
+		reconcile: ms.NewPeriodicTaskMetrics("presence_reconcile"),
+		canary:    ms.NewPeriodicTaskMetrics("presence_canary"),
+	}
 }
 
 // runReconcileLoop repairs the projection against the broker on its own schedule.
@@ -1049,11 +1059,10 @@ var (
 	PresenceCanaryMissCounter  prometheus.Counter
 	// PresenceDemoteTaskMetrics are the demote drain's pass signals.
 	PresenceDemoteTaskMetrics *core.PeriodicTaskMetrics
-	// PresenceReconcileTaskMetrics and PresenceCanaryTaskMetrics are the repair pass's and
-	// the canary probe's. Both loops are abandonable goroutines owned by the tap runtime, so
-	// neither can adopt core.PeriodicTask; they file through the same RecordPass.
-	PresenceReconcileTaskMetrics *core.PeriodicTaskMetrics
-	PresenceCanaryTaskMetrics    *core.PeriodicTaskMetrics
+	// PresenceLoopTaskMetrics are the repair pass's and the canary probe's. Both loops are
+	// abandonable goroutines owned by the tap runtime, so neither can adopt
+	// core.PeriodicTask; they file through the same RecordPass.
+	PresenceLoopTaskMetrics presenceLoopMetrics
 
 	CommandWakeRequestedCounter prometheus.Counter
 	CommandWakeDroppedCounter   prometheus.Counter
@@ -1075,8 +1084,7 @@ func initializePresenceMetrics() {
 	// but it is a fixed-cadence maintenance pass and an operator asks the same question of
 	// it. Built here, in the initialize phase, like every other collector in this file.
 	PresenceDemoteTaskMetrics = Microservice.NewPeriodicTaskMetrics("presence_demote")
-	PresenceReconcileTaskMetrics = Microservice.NewPeriodicTaskMetrics("presence_reconcile")
-	PresenceCanaryTaskMetrics = Microservice.NewPeriodicTaskMetrics("presence_canary")
+	PresenceLoopTaskMetrics = newPresenceLoopMetrics(Microservice)
 	PresenceEmittedCounter = Microservice.NewCounterVec(
 		"presence_events_total",
 		"Broker-asserted presence transitions emitted, by state",

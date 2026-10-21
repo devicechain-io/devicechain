@@ -1252,6 +1252,12 @@ reconciliador o un planificador. Cada una exporta tres series con el nombre de s
 | lwm2m-ingest | `tenant_sweep` |
 | sparkplug-ingest | `presence_probe` |
 
+Tres de ellas solo se ejecutan mientras algo las impulsa: `detect_tick` y `tenant_sweep` de
+lwm2m-ingest en la réplica que tiene el liderazgo, y `presence_probe` una vez por cada sesión
+Sparkplug conectada, con todas las sesiones en una sola serie. En una réplica en espera, o
+mientras sparkplug-ingest no tiene sesión, la hora del último éxito sigue en NaN o conserva el
+valor de su último mandato. Aplique `max by (job)` entre réplicas antes de compararla con `time()`.
+
 Por ejemplo, el coordinador de eliminación de inquilinos de user-management exporta
 `devicechain_usermanagement_tenant_purge_passes_total`.
 

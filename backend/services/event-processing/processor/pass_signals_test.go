@@ -120,3 +120,21 @@ func TestTheShedSummaryRunFilesItsPasses(t *testing.T) {
 		runUntil(t, s, reg, core.PassFailed)
 	})
 }
+
+// TestATickWhoseCheckpointDoesNotCommitIsAFailedPass pins the one way the tick arm fails: its
+// interval checkpoint not committing. Filed complete, detect_tick's last-success stamp would
+// stay fresh through a database outage while nothing became durable.
+func TestATickWhoseCheckpointDoesNotCommitIsAFailedPass(t *testing.T) {
+	g := newGapRig(t, &fakeReplayOpener{})
+	ms, reg := passMicroservice()
+	g.rp.metrics = NewDetectMetrics(ms)
+	g.rp.Store, _ = newBlockingStore(t)
+	g.rp.cfg.CheckpointTimeout = 20 * time.Millisecond
+	g.rp.cfg.CheckpointInterval = 0 // every tick with buffered work checkpoints
+	startLoop(t, g, newAtomicClock(testBase),
+		&feedReader{fakeReader: fakeReader{results: []readResult{{msg: hot(t, 1, &fakeAck{})}}}})
+
+	eventually2(t, "a failed tick pass", func() bool {
+		return passTotal(t, reg, "detect_tick", core.PassFailed) >= 1
+	})
+}
