@@ -26,7 +26,7 @@ import (
 //	            selector and the engine gauge
 //	rows 5-7    the alarm table (a tab per kind of machine), the map (a marker click selects the
 //	            machine) and the tyre gauge
-//	rows 8-12   the fleet table (seven columns), and beside it the selected machine's engine
+//	rows 8-12   the fleet table (eight columns), and beside it the selected machine's engine
 //	            temperature history with its alarms and commands marked
 //
 // 🔴 THE FLEET IS ONE TABLE, NOT A TANK PER MACHINE. The fleet-table widget draws one row per
@@ -37,8 +37,12 @@ import (
 // payload and tyre pressure, each a measurement the machines REALLY report, and each column that
 // a rule watches carries that rule's bands, built from the same constants the rules and the two
 // gauges use, so the table, the gauges and the alarms cannot disagree. A cell for a measurement
-// a machine never reports says so ("does not report this") rather than showing a zero: a dozer
-// is tracked and has no tyre pressure or load, and the crusher plant reports none of the four.
+// a machine's profile does not declare says so ("does not report this") rather than showing a
+// zero: the crusher plant's profile declares none of the four. A dozer is tracked and has no tyre
+// pressure or load, but it shares the equipment profile, which declares both, so its cells say
+// "no data in range": the table states what the profile promises, and a declared reading that
+// never arrives is exactly what it must not hide. (A dozer profile of its own would let them say
+// "does not report this"; that is a change to the scenario's contract with the scene.)
 // The table is sorted lowest fuel first, which is the order a site manager acts in, and the
 // device name drills to the selected-machine slot exactly as an alarm's originator does.
 //
@@ -177,6 +181,10 @@ const (
 	// fixed points are the rule thresholds, and each scale keeps its threshold well inside the arc.
 	sitepulseEngineTempGaugeMax = 130.0
 	sitepulseTyreGaugeMax       = 1000.0
+
+	// The low end of the engine history chart's axis: below every machine's working temperature
+	// (the scene runs them at about 80-95 C), so the line never sits on the floor.
+	sitepulseEngineTrendMin = 60.0
 )
 
 // sitepulseAlarmTabs is the alarm table's tab order, as the `deviceTypes` option's list items.
@@ -213,10 +221,21 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The gauges' default subject is the first haul truck, which reports both gauges' metrics.
-	firstHauler, err := firstOfType(devices, SitepulseHaulerTypeToken)
+	// The machine the board opens on: the haul truck whose tyre the run lets down
+	// (sitepulseLeakingMachine), so a first look has a story on every widget that follows the
+	// selection. Its tyre gauge reads in the low band, beside the Major alarm the alarm table lists
+	// for it and the amber cell in the fleet table, and the history chart marks that alarm. A haul
+	// truck reports both gauges' metrics, which a dozer (the overheating machine) does not: a dozer
+	// default would open on an empty tyre gauge. A fleet resized below that truck opens on the
+	// first haul truck instead.
+	defaultMachine, err := firstOfType(devices, SitepulseHaulerTypeToken)
 	if err != nil {
 		return "", err
+	}
+	for _, d := range devices {
+		if d.ExternalId == sitepulseLeakingMachine && d.DeviceTypeToken == SitepulseHaulerTypeToken {
+			defaultMachine = d
+		}
 	}
 
 	slots := map[string]dashboardSlot{
@@ -233,7 +252,7 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 			},
 		},
 		sitepulseSlotPlant:   sitepulseDeviceSlot("Crusher plant", plant, nil),
-		sitepulseSlotMachine: sitepulseDeviceSlot("Machine", firstHauler, &dashboardScope{Parent: sitepulseSlotSite, Strategy: "manual"}),
+		sitepulseSlotMachine: sitepulseDeviceSlot("Machine", defaultMachine, &dashboardScope{Parent: sitepulseSlotSite, Strategy: "manual"}),
 	}
 
 	onPlant := func(metric string) widgetSubject {
@@ -349,13 +368,23 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 
 	// The engine temperature of the SELECTED machine over the board's range, with its alarms drawn
 	// as spans (raise to clear) and the commands sent to it as ticks. The overheat rule's edge is
-	// the line's threshold, so a span opens where the line crosses it. A recording carries no
+	// the line's one threshold (not the gauge's "normal from 0" entry, which would pull the axis
+	// down to zero), so an overheat span opens where the line crosses it. A recording carries no
 	// commands, and the chart says so rather than drawing none silently.
+	//
+	// The axis is FRAMED, not left to the chart: from zero, a ~92 C engine is a flat line along the
+	// top of a tall empty tile. From sitepulseEngineTrendMin to the gauge's own top it sits in the
+	// lower half with the overheat edge and its band visible above it, so the distance to the alarm
+	// is what the eye reads. A reading outside the frame widens it, never falls off it.
 	trend := buildTimeSeriesChartWidget("sp-engine-trend", box{sitepulseFleetCols, sitepulseTrendCols, sitepulseFleetRow, sitepulseFleetRows},
 		onMachine(SitepulseEngineTempKey), "Engine temp history")
 	delete(trend.Options, "windowSeconds") // the board's range, as the stat cards
 	trend.Options["markAlarms"] = true
 	trend.Options["markCommands"] = true
+	trend.Options["unit"] = "°C"
+	trend.Options["min"] = sitepulseEngineTrendMin
+	trend.Options["max"] = sitepulseEngineTempGaugeMax
+	trend.Options["thresholds"] = []widgetThreshold{{Value: SitepulseOverheatThreshold, Level: SitepulseOverheatSeverity}}
 
 	widgets := []dashboardWidget{
 		buildAlarmCountWidget("sp-alarms-critical", stateTile(0), onSite, "Critical alarms", AlarmSeverityCriticalWire),

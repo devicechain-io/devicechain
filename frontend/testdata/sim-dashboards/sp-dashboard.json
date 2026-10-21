@@ -23,7 +23,7 @@
     },
     "selectedMachine": {
       "defaultBinding": {
-        "deviceToken": "sp-hauler-01",
+        "deviceToken": "sp-hauler-03",
         "kind": "device"
       },
       "label": "Machine",
@@ -510,7 +510,16 @@
       "options": {
         "markAlarms": true,
         "markCommands": true,
-        "title": "Engine temp history"
+        "max": 130,
+        "min": 60,
+        "thresholds": [
+          {
+            "level": "critical",
+            "value": 105
+          }
+        ],
+        "title": "Engine temp history",
+        "unit": "°C"
       },
       "type": "timeseries-chart"
     }

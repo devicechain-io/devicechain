@@ -5,6 +5,7 @@ package sim
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -378,10 +379,11 @@ func TestSitepulseBoardCarriesAnExplicitHourTimeRange(t *testing.T) {
 func TestSitepulseBoardDrillsAnAlarmToTheMachineGauges(t *testing.T) {
 	def := sitepulseBoard(t, sitepulseManifest(t))
 	sel, ok := def.Slots["selectedMachine"]
-	// A haul truck, not the first machine: a dozer is tracked and reports no tyre pressure, so
-	// a dozer default opens the board on an empty tyre gauge.
-	if !ok || sel.Type != "device" || sel.DefaultBinding == nil || sel.DefaultBinding.DeviceToken != "sp-hauler-01" {
-		t.Fatalf("selectedMachine = %+v, want a device slot defaulting to sp-hauler-01", sel)
+	// The haul truck whose tyre the run lets down, so the board opens on a machine with an alarm
+	// story; a haul truck, not a dozer, which reports no tyre pressure and would open the board on
+	// an empty tyre gauge.
+	if !ok || sel.Type != "device" || sel.DefaultBinding == nil || sel.DefaultBinding.DeviceToken != "sp-hauler-03" {
+		t.Fatalf("selectedMachine = %+v, want a device slot defaulting to sp-hauler-03", sel)
 	}
 	if sel.Scope == nil || sel.Scope.Parent != "site" || sel.Scope.Strategy != "manual" {
 		t.Errorf("selectedMachine scope = %+v, want parent site, strategy manual", sel.Scope)
@@ -557,5 +559,36 @@ func TestSitepulseBoardCarriesTheEngineTrendChart(t *testing.T) {
 	}
 	if b := chart.Layout["base"]; b.Row != 8 || b.Rows != 5 || b.Col != 8 || b.Cols != 4 {
 		t.Errorf("trend chart = %+v, want 4x5 at column 8, row 8", b)
+	}
+	// A framed axis with the overheat edge on it: never from zero, which flattens the line along the
+	// top, and only the rule's own edge (a "normal from 0" entry would pull the axis to zero).
+	if chart.Options["min"] != sitepulseEngineTrendMin || chart.Options["max"] != sitepulseEngineTempGaugeMax || chart.Options["unit"] != "°C" {
+		t.Errorf("trend chart axis = %v..%v %v, want %v..%v °C", chart.Options["min"], chart.Options["max"], chart.Options["unit"], sitepulseEngineTrendMin, sitepulseEngineTempGaugeMax)
+	}
+	got, _ := json.Marshal(chart.Options["thresholds"])
+	if want := fmt.Sprintf(`[{"level":%q,"value":%v}]`, SitepulseOverheatSeverity, SitepulseOverheatThreshold); string(got) != want {
+		t.Errorf("trend chart thresholds = %s, want %s", got, want)
+	}
+}
+
+// A fleet resized below the leaking haul truck opens on the first haul truck: the default never
+// names a machine the run does not provision.
+func TestSitepulseBoardDefaultMachineFallsBackToTheFirstHauler(t *testing.T) {
+	var devices []DeviceInstance
+	for _, d := range sitepulseManifest(t).Expand(1) {
+		if d.ExternalId != sitepulseLeakingMachine {
+			devices = append(devices, d)
+		}
+	}
+	raw, err := buildSitepulseDashboard(devices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var def dashboardDefinition
+	if err := json.Unmarshal([]byte(raw), &def); err != nil {
+		t.Fatal(err)
+	}
+	if got := def.Slots["selectedMachine"].DefaultBinding.DeviceToken; got != "sp-hauler-01" {
+		t.Errorf("default machine without %s = %s, want sp-hauler-01", sitepulseLeakingMachine, got)
 	}
 }
