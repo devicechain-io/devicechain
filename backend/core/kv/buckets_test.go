@@ -113,3 +113,25 @@ func TestKnownBucketRoles(t *testing.T) {
 		}
 	}
 }
+
+// A bucket in the identity account holds bearer secrets and only user-management's login can
+// enter that account, so the catalog must say the same: user-management alone writes, reads and
+// administers it. A second area declared here would be granted a bucket its login cannot reach,
+// and the grant generated from this declaration would point at the wrong account.
+func TestIdentityAccountBucketsBelongToUserManagementAlone(t *testing.T) {
+	n := 0
+	for _, b := range All {
+		if b.Account != Identity {
+			continue
+		}
+		n++
+		for role, areas := range map[string][]string{"writers": b.Writers, "readers": b.Readers, "admins": b.Admins()} {
+			if len(areas) != 1 || areas[0] != "user-management" {
+				t.Errorf("identity-account bucket %q declares %s %v, want exactly [user-management]", b.Name, role, areas)
+			}
+		}
+	}
+	if n != 5 {
+		t.Errorf("%d buckets are in the identity account, want the 5 sign-in buckets", n)
+	}
+}
