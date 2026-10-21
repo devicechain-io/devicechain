@@ -12,7 +12,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, ArrowRight, Plus, SlidersHorizontal, Unlink } from 'lucide-react';
+import { AlertTriangle, ArrowRight, LayoutDashboard, Plus, SlidersHorizontal, Unlink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
@@ -22,6 +22,8 @@ import { useQuery } from '@/lib/hooks/use-query';
 import { errMessage, typeCountLabel, useReload } from '@/routes/common';
 import { useAuth } from '@/auth/AuthProvider';
 import { hasAuthority } from '@devicechain/client';
+import { mayWrite } from '@/lib/scope';
+import { BoardFromProfileDrawer } from '@/routes/dashboards/boardFromProfile/BoardFromProfileDrawer';
 import {
   listDeviceProfiles,
   createDeviceProfile,
@@ -40,9 +42,12 @@ export function ProfilePanel({
   /** Refresh the parent detail so the attached profile updates after a change. */
   onChanged: () => void;
 }) {
-  const { t } = useTranslation(['devices', 'common']);
+  const { t } = useTranslation(['devices', 'common', 'dashboards']);
   const { claims } = useAuth();
   const canWrite = hasAuthority(claims, 'device:write');
+  // Creating the board writes a dashboard, which a member limited to part of the tenant may not do.
+  const canMakeBoard = mayWrite(claims, 'dashboard:write');
+  const [boardOpen, setBoardOpen] = useState(false);
   const { toast } = useToast();
   const confirm = useConfirm();
   // The picker (and its adopting-type counts) reloads after each change so a
@@ -196,12 +201,26 @@ export function ProfilePanel({
               {t('devices:typeProfileShared', { count: attachedCount })}
             </p>
           )}
-          <Link
-            to={`/device-profiles/${attached.token}`}
-            className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-          >
-            {t('devices:typeProfileAuthorLink')} <ArrowRight size={14} />
-          </Link>
+          <div className="flex flex-wrap items-center gap-4">
+            <Link
+              to={`/device-profiles/${attached.token}`}
+              className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+            >
+              {t('devices:typeProfileAuthorLink')} <ArrowRight size={14} />
+            </Link>
+            {canMakeBoard && (
+              <Button variant="outline" size="sm" onClick={() => setBoardOpen(true)}>
+                <LayoutDashboard size={14} /> {t('dashboards:boardFromProfileAction')}
+              </Button>
+            )}
+          </div>
+          <BoardFromProfileDrawer
+            open={boardOpen}
+            onOpenChange={setBoardOpen}
+            typeToken={entity.token}
+            typeName={entity.name || entity.token}
+            profileToken={attached.token}
+          />
         </div>
       ) : (
         <div

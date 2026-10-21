@@ -1558,6 +1558,13 @@ export type DeviceProfileByTokenQueryVariables = Exact<{
 
 export type DeviceProfileByTokenQuery = { deviceProfilesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, category: string | null, activeVersion: number | null, deviceTypeCount: number, metadata: string | null, createdAt: string | null, location: { expectedAccuracyMeters: number | null, expectedUpdateIntervalSeconds: number | null } | null }> };
 
+export type DeviceProfilePublishedVocabularyQueryVariables = Exact<{
+  tokens: Array<string> | string;
+}>;
+
+
+export type DeviceProfilePublishedVocabularyQuery = { deviceProfilesByToken: Array<{ activeProfileVersion: { version: number, metrics: Array<{ metricKey: string, dataType: string, unit: string | null, calculated: boolean }>, commands: Array<{ commandKey: string, name: string | null, description: string | null, parameterSchema: string | null, impact: string }> } | null }> };
+
 export type CreateDeviceProfileMutationVariables = Exact<{
   request?: DeviceProfileCreateRequest | null | undefined;
 }>;
@@ -3373,6 +3380,28 @@ export const DeviceProfileByTokenDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<DeviceProfileByTokenQuery, DeviceProfileByTokenQueryVariables>;
+export const DeviceProfilePublishedVocabularyDocument = new TypedDocumentString(`
+    query DeviceProfilePublishedVocabulary($tokens: [String!]!) {
+  deviceProfilesByToken(tokens: $tokens) {
+    activeProfileVersion {
+      version
+      metrics {
+        metricKey
+        dataType
+        unit
+        calculated
+      }
+      commands {
+        commandKey
+        name
+        description
+        parameterSchema
+        impact
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceProfilePublishedVocabularyQuery, DeviceProfilePublishedVocabularyQueryVariables>;
 export const CreateDeviceProfileDocument = new TypedDocumentString(`
     mutation CreateDeviceProfile($request: DeviceProfileCreateRequest) {
   createDeviceProfile(request: $request) {

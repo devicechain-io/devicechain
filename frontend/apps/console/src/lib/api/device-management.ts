@@ -20,6 +20,7 @@ import type {
   EntityGroupUpdateRequest,
   DeviceProfilesQuery,
   DeviceProfileByTokenQuery,
+  DeviceProfilePublishedVocabularyQuery,
   DeviceProfileVersionsQuery,
   CalculatedMetricPlanQuery,
   DeviceProfileCreateRequest,
@@ -911,6 +912,42 @@ const DEVICE_PROFILE_BY_TOKEN = graphql(`
 export async function getDeviceProfile(token: string): Promise<DeviceProfileDetail | null> {
   const data = await gql('device-management', DEVICE_PROFILE_BY_TOKEN, { tokens: [token] });
   return data.deviceProfilesByToken[0] ?? null;
+}
+
+const DEVICE_PROFILE_PUBLISHED_VOCABULARY = graphql(`
+  query DeviceProfilePublishedVocabulary($tokens: [String!]!) {
+    deviceProfilesByToken(tokens: $tokens) {
+      activeProfileVersion {
+        version
+        metrics {
+          metricKey
+          dataType
+          unit
+          calculated
+        }
+        commands {
+          commandKey
+          name
+          description
+          parameterSchema
+          impact
+        }
+      }
+    }
+  }
+`);
+
+export type ProfilePublishedVocabulary = NonNullable<
+  DeviceProfilePublishedVocabularyQuery['deviceProfilesByToken'][number]['activeProfileVersion']
+>;
+
+// getProfilePublishedVocabulary reads the metrics and commands frozen into a profile's ACTIVE
+// published version, by profile token: the same snapshot a device of the profile resolves
+// through, with no device needed. null when the profile has never been published (or no
+// profile has the token) — there is then no published answer, only the draft.
+export async function getProfilePublishedVocabulary(token: string): Promise<ProfilePublishedVocabulary | null> {
+  const data = await gql('device-management', DEVICE_PROFILE_PUBLISHED_VOCABULARY, { tokens: [token] });
+  return data.deviceProfilesByToken[0]?.activeProfileVersion ?? null;
 }
 
 const CREATE_DEVICE_PROFILE = graphql(`

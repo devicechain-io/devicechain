@@ -52,6 +52,41 @@ confirm. Deleting cannot be undone.
 Template measurement names such as `temperature` and `humidity` are examples. Change them in the
 editor to the ones your devices report.
 
+## Creating a dashboard from a device type {#from-a-device-type}
+
+On a device type's **Profile** tab, **Create dashboard** builds a starting board from what the
+profile declares, so you reach a useful board in a minute instead of placing widgets one by one. The
+button needs the dashboard write permission and is not offered to a member limited to part of the
+tenant.
+
+1. Choose **Create dashboard**. The drawer reads the profile and shows a **Layout preview**.
+2. Give the board a name and a token. Beneath the preview, the notes say how many cards, charts and
+   buttons it will have and anything that was left out.
+3. Choose **Create draft and open editor**. The board is created as a draft, never published, and
+   opens in the editor.
+
+The board uses only the widgets you can already add by hand:
+
+- a **device selector**, with the slot set to a device of this type when one exists. The selector
+  lists the tenant's devices, not only this type's, so pick a device of the type you built the board
+  for. A note beside the selector on the board says so;
+- a **latest-value card** for each declared measurement, in the profile's order, with its unit.
+  A calculated metric gets a card too, marked **Calculated** in its title, and reads like any other;
+- a **chart** of the first few numeric measurements, and an **alarm table** for the selected device;
+- a **command button** for each declared command that is safe to send from a board. Commands
+  declared disruptive or destructive, or whose impact is unknown, get no button; a note on the board
+  says how many were left out.
+
+A profile can declare dozens of measurements. The board shows the first twelve as cards and a note on
+the board says how many were left out; add the rest in the editor. A profile that declares no
+measurements is refused with an explanation, because there is nothing to build from.
+
+The drawer reads the profile's active published version, which is what the platform checks readings
+and commands against, whether or not the type has devices yet. Only a profile that was never
+published is read from its draft, and the drawer says so; a measurement the draft names is not
+accepted until the profile is published. Profiles do not declare severity bands, so the cards carry
+none; add them in the editor.
+
 ## Importing a dashboard
 
 **Import dashboard** creates a new dashboard from JSON exported from another dashboard or another
