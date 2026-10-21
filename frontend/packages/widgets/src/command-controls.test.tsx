@@ -444,8 +444,12 @@ describe('command-slider, stepper mode', () => {
   it('Send does nothing before a value is staged', () => {
     const send = makeSend();
     render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith(send)} />);
+    const sendButton = () => document.querySelector('[data-step="send"]')!;
+    expect(sendButton().getAttribute('aria-disabled')).toBe('true');
     press('send');
     expect(send).not.toHaveBeenCalled();
+    press('up');
+    expect(sendButton().getAttribute('aria-disabled')).toBeNull();
   });
 
   it('a disruptive command is still only sent by the explicit Send, and shows as held while the platform holds it', () => {
