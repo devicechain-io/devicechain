@@ -32,6 +32,18 @@ func TestTheEventCredentialLookupReadsOnlyWhatResolutionUses(t *testing.T) {
 	if dev.Metadata != nil {
 		t.Errorf("the device carries %d bytes of metadata; the event lookup must not read it", len(*dev.Metadata))
 	}
+	// The row says it did not read the metadata, so its nil Metadata is never taken for the
+	// device storing none (the resolver's device constants). A full read says it did.
+	if dev.MetadataRead() {
+		t.Error("the event lookup's device reports its metadata read; a nil Metadata on it would read as none stored")
+	}
+	if connected, err := f.api.deviceCredentialForConnect(f.ctx, string(CredentialMqttBasic), "cred-1"); err != nil ||
+		connected.Device == nil || connected.Device.MetadataRead() {
+		t.Errorf("the password connect lookup's device must report its metadata unread (err %v)", err)
+	}
+	if full, err := f.api.DevicesByToken(f.ctx, []string{"dev"}); err != nil || len(full) != 1 || !full[0].MetadataRead() {
+		t.Errorf("a full device read must report its metadata read (err %v)", err)
+	}
 	if dev.Name.Valid || dev.Description.Valid {
 		t.Errorf("the device carries name %q and description %q; the event lookup must not read them",
 			dev.Name.String, dev.Description.String)

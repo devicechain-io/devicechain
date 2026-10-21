@@ -409,6 +409,40 @@ func (rez *EventResolver) ResolveLocationsEventPayload(ctx context.Context, devi
 	return nil, fmt.Errorf("can not resolve locations payload. invalid unresolved payload type")
 }
 
+// deviceConstants reads the device constants a version's formulas use. The device a
+// credential authenticated is the narrow row of the credential lookup, which does not read
+// metadata (so a miss costs the same however much a device stores), and metadata is where
+// the constants live. The row says so (model.Device.MetadataRead): when the formulas read
+// any constant and the row in hand never read its metadata, the device is read by token
+// through the cached lookup the token path uses, which a device edit evicts on every
+// replica. A row that did read its metadata is used as is, empty or not, and a version
+// whose formulas read no constant reads nothing.
+//
+// The by-token row must be the device the credential authenticated: a token that names
+// another row now (the device was deleted and its token reused since the credential row
+// was cached) is refused, not computed from a stranger's constants.
+func (rez *EventResolver) deviceConstants(ctx context.Context, device *model.Device,
+	profile model.ProfileResolution) ([]calcfield.Constant, error) {
+	if !profile.ReadsDeviceConstants() {
+		return nil, nil
+	}
+	metadata := device.Metadata
+	if !device.MetadataRead() {
+		matches, err := rez.Api.DevicesByToken(ctx, []string{device.Token})
+		if err != nil {
+			return nil, fmt.Errorf("reading the metadata of device %q for its calculated metrics: %w", device.Token, err)
+		}
+		if len(matches) == 1 && matches[0] != nil {
+			if matches[0].ID != device.ID {
+				return nil, fmt.Errorf("reading the metadata of device %q for its calculated metrics: the token names row %d, the credential row %d",
+					device.Token, matches[0].ID, device.ID)
+			}
+			metadata = matches[0].Metadata
+		}
+	}
+	return profile.DeviceConstants(metadata), nil
+}
+
 // Resolve a measurements event payload. Each measurement is bound to its metric
 // definition (ADR-016): the classifier FK plus the denormalized unit + data type
 // make the stored value self-describing on read (no cross-service hop back to the
@@ -442,11 +476,16 @@ func (rez *EventResolver) ResolveMeasurementsEventPayload(ctx context.Context, d
 	if calculated {
 		rez.calcObs.ctx, rez.calcObs.device, rez.calcObs.version = ctx, device.Token, profile.Scope().ProfileVersionToken
 		// The device's numeric constants (`device.name` in a formula), read ONCE for the event
-		// from the device record already in hand — no extra read, no per-type cache change —
+		// from the device record in hand when it read its metadata and through the cached
+		// by-token read when it did not (a credential's narrow row; see deviceConstants),
 		// and nil, with the metadata untouched, for a version whose formulas read none. Each
 		// computed value is frozen with the constants as they are now: a later edit to the
 		// device never rewrites it.
-		constants = profile.DeviceConstants(device.Metadata)
+		var err error
+		constants, err = rez.deviceConstants(ctx, device, profile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// Calculated metrics read a SAMPLE, and a sample is every measurement of this message that
 	// shares an instant — not one payload entry. Sparkplug and LwM2M ingest emit one entry per
