@@ -65,9 +65,11 @@ type captureHarness struct {
 	mu          sync.Mutex
 	published   int
 	failedCalls int
-	lastSeq     uint64
-	received    int
-	allowResult bool
+	// failedReasons records the error each failed-decode call was handed, in order.
+	failedReasons []error
+	lastSeq       uint64
+	received      int
+	allowResult   bool
 	// redeliveries records the redelivery flag the source passed on each admission
 	// call, in order. It is what pins that the source REPORTS a redelivery rather
 	// than acting on one itself — the decision moved into the gate, so the source's
@@ -158,9 +160,10 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			h.mu.Unlock()
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
-		func(string, string, []byte, error) error {
+		func(_ string, _ string, _ []byte, err error) error {
 			h.mu.Lock()
 			h.failedCalls++
+			h.failedReasons = append(h.failedReasons, err)
 			h.mu.Unlock()
 			return h.failedErr
 		},

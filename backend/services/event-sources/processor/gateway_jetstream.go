@@ -583,6 +583,7 @@ func (es *GatewayJetStreamSource) handle(msg messaging.Message) {
 		meterAt:    meterAt,
 		redelivery: redelivery,
 		origin:     OriginAuthenticated,
+		assertion:  assertedByCaptureBroker(msg),
 		done:       es.settler(msg, tenant),
 	}
 }

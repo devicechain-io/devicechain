@@ -1164,6 +1164,14 @@ func transportAuthenticatedBypass(unrez *esmodel.UnresolvedEvent) bool {
 	}
 }
 
+// A BrokerAsserted event is the other way past the required-mode credential check, and it
+// is not confined to an event type: the device is the one the platform's own MQTT broker
+// authenticated at CONNECT and confined to this topic, so every type a device can publish
+// there is attributable to it. Only event-sources' capture source sets the marker, and it
+// refuses any event whose body carries a credential, so a marked event never reaches this
+// function with one to authenticate. A credential that IS presented is still authenticated
+// above, marker or not: the marker only removes the demand for one.
+
 // resolveDevice determines the originating device for an event, enforcing the
 // configured device authentication policy (transport security, ADR-014):
 //   - disabled: the self-asserted device token is trusted (legacy path).
@@ -1193,7 +1201,7 @@ func (rez *EventResolver) resolveDevice(ctx context.Context, unrez *esmodel.Unre
 			}
 			return device, 0, nil
 		}
-		if rez.AuthMode == config.AuthModeRequired && !transportAuthenticatedBypass(unrez) {
+		if rez.AuthMode == config.AuthModeRequired && !unrez.BrokerAsserted && !transportAuthenticatedBypass(unrez) {
 			return nil, uint(resolvedevent.FailureReason_Unauthenticated),
 				errors.New("device authentication required but no credential was presented")
 		}

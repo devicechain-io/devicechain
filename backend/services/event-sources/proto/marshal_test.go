@@ -166,3 +166,27 @@ func TestMarshalRefusesAnUnsealedAccessToken(t *testing.T) {
 	assert.Equal(t, []byte("\xd2sealed-token"), got.SealedCredentialId)
 	assert.NotContains(t, string(bytes), "tok-as-sent")
 }
+
+// The broker-asserted marker crosses the messaging hop to the resolver; a dropped marker
+// would refuse every platform-MQTT event under `required` now that the body carries no
+// credential. proto3 bool defaults false, so bytes written before the field existed read
+// as unasserted: there is no path where old bytes assert.
+func TestMarshalRoundTripCarriesBrokerAsserted(t *testing.T) {
+	for _, marked := range []bool{true, false} {
+		event := &model.UnresolvedEvent{
+			Source:         "gw",
+			Device:         "dev-1",
+			OccurredTime:   time.Now().UTC().Truncate(time.Second),
+			ProcessedTime:  time.Now().UTC().Truncate(time.Second),
+			EventType:      eventtype.StateChange,
+			Payload:        &model.UnresolvedStateChangePayload{State: presence.StateConnected, SessionId: "1"},
+			BrokerAsserted: marked,
+		}
+		bytes, err := MarshalUnresolvedEventAs(event, eventtime.WireCompact)
+		assert.NoError(t, err)
+		got, err := UnmarshalUnresolvedEvent(bytes)
+		assert.NoError(t, err)
+		assert.Equal(t, marked, got.BrokerAsserted)
+		assert.False(t, got.AuthenticatedTransport, "the two markers are independent")
+	}
+}

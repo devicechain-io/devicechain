@@ -276,6 +276,15 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	// the device's next event, in place of a field-by-field judgement of which changes
 	// matter that would have to be kept right forever.
 	api.evictDeviceCredentials(ctx, updated.TenantId, priorDeviceId, updated.DeviceId)
+	// A change that withdraws or alters what a session authenticated with ends the device's
+	// open sessions; a rename or a metadata edit does not. A credential that is DISABLED
+	// re-asks on every update, so repeating the disable after a failed kick is the retry.
+	if authorityChanged := !updated.Enabled || request.CredentialType.Set || request.CredentialId.Set ||
+		request.CredentialValue.Set || request.ExpiresAt.Set || repoint; authorityChanged {
+		if kerr := api.endDeviceSessions(ctx, updated.TenantId, currentDeviceToken, repointTo); kerr != nil {
+			return updated, kerr
+		}
+	}
 	return updated, nil
 }
 

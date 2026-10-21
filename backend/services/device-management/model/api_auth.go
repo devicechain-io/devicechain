@@ -200,8 +200,11 @@ func (api *Api) AuthenticateDevice(ctx context.Context, presented *PresentedCred
 // this; every connect reads the database, which is what makes a revocation refuse the
 // next connect on every replica at once.
 func (api *Api) AuthenticateDeviceConnect(ctx context.Context, presented *PresentedCredential, now time.Time) (*Device, error) {
-	_, device, err := api.authenticateCredential(ctx, presented, now)
-	return device, err
+	cred, device, err := api.authenticateCredential(ctx, presented, now)
+	if err != nil {
+		return nil, err
+	}
+	return withConnectExpiry(device, cred), nil
 }
 
 // authenticateCredential is AuthenticateDevice returning the verified row as well, for
@@ -223,6 +226,15 @@ func (api *Api) authenticateCredential(ctx context.Context, presented *Presented
 		return nil, nil, err
 	}
 	return cred, device, nil
+}
+
+// withConnectExpiry returns a COPY of device carrying the expiry of the credential that
+// authenticated a connect (Device.ConnectCredentialExpiresAt). A copy, because the device a
+// lookup returns can be shared with a cached credential row.
+func withConnectExpiry(device *Device, cred *DeviceCredential) *Device {
+	d := *device
+	d.ConnectCredentialExpiresAt = cred.ExpiresAt
+	return &d
 }
 
 // ResolveDeviceCredential is AuthenticateDevice WITHOUT the secret compare, for a
@@ -266,7 +278,7 @@ func (api *Api) ResolveDeviceCredential(ctx context.Context, presented *Presente
 	if err != nil {
 		return nil, "", err
 	}
-	return device, stored, nil
+	return withConnectExpiry(device, cred), stored, nil
 }
 
 // lookupPresentedCredential validates what was presented and finds the enabled

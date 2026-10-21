@@ -452,6 +452,7 @@ func MarshalUnresolvedEventAs(event *model.UnresolvedEvent, format eventtime.Wir
 		SealedSecret:           sealedSecret,
 		SealedToken:            sealedToken,
 		AuthenticatedTransport: event.AuthenticatedTransport,
+		BrokerAsserted:         event.BrokerAsserted,
 	}
 
 	// Marshal event to bytes.
@@ -503,6 +504,7 @@ func UnmarshalUnresolvedEvent(encoded []byte) (*model.UnresolvedEvent, error) {
 		SealedCredentialSecret: readSeal(pbevent.SealedSecret, pbevent.CredentialSecret),
 		SealedCredentialId:     readSeal(pbevent.SealedToken, pbevent.SealedCredentialId),
 		AuthenticatedTransport: pbevent.AuthenticatedTransport,
+		BrokerAsserted:         pbevent.BrokerAsserted,
 	}
 
 	return event, nil

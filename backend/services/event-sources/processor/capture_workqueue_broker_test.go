@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/payloadredact"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
 	natsserver "github.com/nats-io/nats-server/v2/server"
@@ -86,9 +88,21 @@ func storeHolds(t *testing.T, dir string, needle string) []string {
 	return hits
 }
 
-// canaryEvent is a device event the JSON decoder accepts, carrying a body credential the
-// way firmware following the credentials guide does.
+// canaryEvent is a device event the JSON decoder accepts, carrying the canary in a member the
+// decoder ignores. It stands for "a byte the broker stores verbatim and the platform never
+// looks at": what these tests measure is how long the BROKER keeps a captured publish, which
+// does not depend on what the body says. (It used to carry a body credential, which the
+// capture source now refuses: see credentialCanaryEvent.)
 func canaryEvent(device, canary string) string {
+	return fmt.Sprintf(
+		`{"device":%q,"eventType":"Location","occurredTime":%q,"x-canary":%q,`+
+			`"payload":{"entries":[{"latitude":"33.74900000","longitude":"-84.38800000","elevation":"320.5"}]}}`,
+		device, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339), canary)
+}
+
+// credentialCanaryEvent is canaryEvent carrying the canary as the device's credential secret,
+// the way firmware following the old credentials guide does.
+func credentialCanaryEvent(device, canary string) string {
 	return fmt.Sprintf(
 		`{"device":%q,"eventType":"Location","occurredTime":%q,`+
 			`"credentialType":"MQTT_BASIC","credentialId":"acme:%s","credentialSecret":%q,`+
@@ -179,7 +193,7 @@ func TestAForwardedCapturedPublishIsGoneFromTheStreamAndTheDisk(t *testing.T) {
 		return len(storeHolds(t, storeDir, canary)) == 0
 	})
 	require.Empty(t, storeHolds(t, storeDir, canary))
-	require.Empty(t, storeHolds(t, storeDir, "credentialSecret"), "no part of the body remains on disk")
+	require.Empty(t, storeHolds(t, storeDir, "x-canary"), "no part of the body remains on disk")
 }
 
 func firstCaptureSeq(t *testing.T, js nats.JetStreamContext) uint64 {
@@ -274,4 +288,64 @@ func TestAnOlderCaptureStreamIsMigratedUnderARunningSource(t *testing.T) {
 	eventually(t, 10*time.Second, "the bytes to leave the broker's files", func() bool {
 		return len(storeHolds(t, storeDir, after)) == 0
 	})
+}
+
+// S2 THROUGH A REAL BROKER. A device on the platform MQTT broker that still puts its credential
+// in the body is refused, and the refusal is terminal: the capture message is acked (so the
+// work-queue stream removes it and the broker's files stop holding the secret), nothing is
+// forwarded, and the record that goes to failed-decode carries no secret.
+//
+// The first half is the control: the same scan finds the secret while the message is unread,
+// so a clean scan afterwards means the bytes are gone and not that the scan cannot see them.
+// Against the code before the refusal this test is red: the event is forwarded.
+func TestACapturedBodyCredentialIsRefusedAndLeavesNothingOnTheBroker(t *testing.T) {
+	nc, mqttPort, storeDir := startGatewayWithStore(t)
+	const tenant, device = "acme", "sensor-004"
+	topic := messaging.SubjectToMqttTopic(messaging.DeviceEventsSubject(testInstance, tenant, device))
+	canary := newCanary(t)
+
+	reader := captureReader(t, nc, "refusal-consumer")
+	publishAsDevice(t, mqttPort, "refusal-device", topic, credentialCanaryEvent(device, canary))
+
+	require.EqualValues(t, 1, captureHeld(t, nc))
+	eventually(t, 10*time.Second, "the broker to write the secret to its store files", func() bool {
+		return len(storeHolds(t, storeDir, canary)) > 0
+	})
+	require.NotEmpty(t, storeHolds(t, storeDir, canary), "the scan must see the secret before the source runs")
+
+	type refusal struct {
+		payload []byte
+		err     error
+	}
+	refused := make(chan refusal, 4)
+	_, out := startCaptureSourceFailing(t, "gw-refusal", reader,
+		func(_ string, _ string, payload []byte, err error) error {
+			refused <- refusal{append([]byte(nil), payload...), err}
+			return nil
+		})
+	var got refusal
+	select {
+	case got = <-refused:
+	case e := <-out:
+		t.Fatalf("a body credential on the platform broker was forwarded as an event for %s", e.device)
+	case <-time.After(20 * time.Second):
+		t.Fatal("the source neither forwarded nor refused the published event")
+	}
+	require.ErrorIs(t, got.err, model.ErrCredentialInMqttBody)
+	require.NotContains(t, got.err.Error(), canary)
+	// What the service writes to failed-decode is this payload through payloadredact.Redact.
+	require.NotContains(t, string(payloadredact.Redact(got.payload, payloadredact.DiagnosticMaxBytes)), canary)
+
+	// Terminal: acked, so the work queue removes it and the broker's files stop holding it.
+	eventually(t, 10*time.Second, "the refused message to leave the capture stream", func() bool {
+		return captureHeld(t, nc) == 0
+	})
+	eventually(t, 10*time.Second, "the secret to leave the broker's store files", func() bool {
+		return len(storeHolds(t, storeDir, canary)) == 0
+	})
+	select {
+	case e := <-out:
+		t.Fatalf("the refused event was forwarded after all, for %s", e.device)
+	case <-time.After(300 * time.Millisecond):
+	}
 }

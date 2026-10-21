@@ -70,6 +70,14 @@ message PUnresolvedEvent {
     // The ACCESS_TOKEN credential id SEALED for the hop to the resolver, in the seal's binary
     // form. Same rule as sealed_credential_id (13), which it replaces.
     optional bytes sealed_token = 17;
+    // Set ONLY by event-sources' capture source: the device is the one the platform MQTT
+    // broker authenticated at CONNECT and confined to this topic, so the event presents no
+    // per-event credential (and a body that carries one is refused before it gets here). The
+    // resolver trusts the topic-derived device token on such an event under
+    // deviceAuthMode=required, for every event type. Distinct from authenticated_transport
+    // (12), whose trust is confined to the event types the LwM2M and Sparkplug services emit.
+    // NEVER set from device-controlled input, and NEVER by an external-broker source.
+    bool broker_asserted = 18;
 }
 
 /**

@@ -73,3 +73,13 @@ func CheckReadingCount(payload interface{}) error {
 		"per event; split it across messages (nothing was stored — the message is refused whole, not truncated)",
 		ErrTooManyReadings, kind, count, eventlimit.MaxReadingsPerEvent)
 }
+
+// ErrCredentialInMqttBody marks an event refused because it arrived over the platform's own
+// MQTT broker, which had already authenticated the device at CONNECT, and still carried a
+// credential in its body (credentialType, credentialId or credentialSecret).
+//
+// It is refused and not ignored so a leaking device becomes a counted, named failure instead
+// of one that works while the broker keeps writing its secret to the capture stream. The
+// message is static on purpose: it must never carry any part of what it refused.
+var ErrCredentialInMqttBody = errors.New("credential presented in the body of an event on the platform MQTT broker, " +
+	"which has already authenticated the device: remove credentialType, credentialId and credentialSecret from the payload")

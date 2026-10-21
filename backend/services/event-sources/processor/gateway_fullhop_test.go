@@ -115,6 +115,19 @@ type decodedEvent struct {
 // writer. allow is nil, so metering is disabled.
 func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader) (*GatewayJetStreamSource, <-chan decodedEvent) {
 	t.Helper()
+	return startCaptureSourceFailing(t, id, reader, func(_ string, _ string, _ []byte, decodeErr error) error {
+		// A failed decode on a payload the test controls is a test bug, not a
+		// path under test — surface it rather than let it look like a lost message.
+		t.Errorf("unexpected failed-decode on the full hop: %v", decodeErr)
+		return nil
+	})
+}
+
+// startCaptureSourceFailing is startCaptureSource for a test whose payload is MEANT to fail:
+// failed is the failed-decode route.
+func startCaptureSourceFailing(t *testing.T, id string, reader messaging.MessageReader,
+	failed func(string, string, []byte, error) error) (*GatewayJetStreamSource, <-chan decodedEvent) {
+	t.Helper()
 
 	out := make(chan decodedEvent, 32)
 	src := NewGatewayJetStreamSource(nil, id, NewJsonDecoder(map[string]string{}),
@@ -125,12 +138,7 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 			out <- decodedEvent{device: event.Device, seq: captureSeqOf(id)}
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
-		func(_ string, _ string, _ []byte, decodeErr error) error {
-			// A failed decode on a payload the test controls is a test bug, not a
-			// path under test — surface it rather than let it look like a lost message.
-			t.Errorf("unexpected failed-decode on the full hop: %v", decodeErr)
-			return nil
-		},
+		failed,
 		nil, admitAllReadings)
 
 	ctx := context.Background()
