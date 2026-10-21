@@ -209,3 +209,79 @@ func TestInfrastructureModuleCarriesTheServiceDeny(t *testing.T) {
 	require.Contains(t, tf, "permissions = { publish = { deny = local.service_publish_deny } }",
 		"the service user must be given the deny")
 }
+
+// The service login can also reach the broker through its MQTT gateway, where a publish at
+// every QoS and with retain set must meet the same deny: the gateway checks the subject the
+// topic maps to before it stores or delivers anything. withDeny false is the control: the same
+// publishes land.
+func TestServiceLoginCannotPublishDeviceEventsOverMQTT(t *testing.T) {
+	for _, withDeny := range []bool{true, false} {
+		t.Run(fmt.Sprintf("deny=%v", withDeny), func(t *testing.T) {
+			srv, mqttPort := denyBroker(t, withDeny)
+			js := captureStream(t, srv)
+			opts := mqtt.NewClientOptions().AddBroker(fmt.Sprintf("tcp://127.0.0.1:%d", mqttPort)).
+				SetClientID("svc-mqtt").SetUsername("dc_service").SetPassword("svc")
+			c := mqtt.NewClient(opts)
+			tok := c.Connect()
+			require.True(t, tok.WaitTimeout(10*time.Second))
+			require.NoError(t, tok.Error())
+			t.Cleanup(func() { c.Disconnect(100) })
+
+			topic := fmt.Sprintf("%s/%s/devices/%s/events", denyInstance, denyTenant, denyDevice)
+			publishes := []struct {
+				qos    byte
+				retain bool
+			}{{0, false}, {1, false}, {1, true}, {2, false}}
+			for _, p := range publishes {
+				pub := c.Publish(topic, p.qos, p.retain, `{"device":"dev-1"}`)
+				require.True(t, pub.WaitTimeout(10*time.Second), "qos %d retain %v", p.qos, p.retain)
+			}
+			if !withDeny {
+				require.Eventually(t, func() bool { return stored(t, js) == uint64(len(publishes)) },
+					5*time.Second, 25*time.Millisecond, "without the deny every MQTT publish lands in capture")
+				return
+			}
+			// A refused MQTT publish is PUBACKed and dropped, so absence is all there is to see.
+			time.Sleep(750 * time.Millisecond)
+			require.Zero(t, stored(t, js), "a refused MQTT publish must never reach the capture stream")
+		})
+	}
+}
+
+// 🔴 THE KNOWN LIMIT, PINNED. The deny refuses the service login's PUBLISHES; it does not stop
+// the login's JetStream administration, because the server writes into a stream on the
+// account's behalf, past every user permission. Both routes below land a forged device event
+// in capture with the deny in force. This test asserts the hole so nobody reads the deny as a
+// boundary against a holder of the login; when per-service logins scope the JetStream API, it
+// is meant to go red and be inverted.
+func TestServicePublishDenyDoesNotCoverJetStreamAdministration(t *testing.T) {
+	srv, _ := denyBroker(t, true)
+	js := captureStream(t, srv)
+
+	// A stream the login owns, republishing every message onto a device-events subject.
+	_, err := js.AddStream(&nats.StreamConfig{Name: "relay", Subjects: []string{"relay.*"}, Storage: nats.MemoryStorage,
+		RePublish: &nats.RePublish{Source: "relay.*", Destination: denyInstance + "." + denyTenant + ".devices.{{wildcard(1)}}.events"}})
+	require.NoError(t, err)
+	_, err = js.Publish("relay."+denyDevice, []byte(`{"forged":"republish"}`))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return stored(t, js) == 1 }, 5*time.Second, 25*time.Millisecond,
+		"a RePublish onto the device-events namespace lands in capture despite the deny")
+
+	// The capture stream itself, given a source whose subjects are transformed into it.
+	_, err = js.AddStream(&nats.StreamConfig{Name: "feed", Subjects: []string{"feed.x"}, Storage: nats.MemoryStorage})
+	require.NoError(t, err)
+	_, err = js.Publish("feed.x", []byte(`{"forged":"source"}`))
+	require.NoError(t, err)
+	info, err := js.StreamInfo("capture")
+	require.NoError(t, err)
+	cfg := info.Config
+	cfg.Sources = []*nats.StreamSource{{Name: "feed", SubjectTransforms: []nats.SubjectTransformConfig{
+		{Source: "feed.x", Destination: deviceEventsSubject()}}}}
+	_, err = js.UpdateStream(&cfg)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return stored(t, js) == 2 }, 5*time.Second, 25*time.Millisecond,
+		"a transformed source into capture lands a device-events subject despite the deny")
+	m, err := js.GetLastMsg("capture", deviceEventsSubject())
+	require.NoError(t, err)
+	require.Equal(t, `{"forged":"source"}`, string(m.Data))
+}

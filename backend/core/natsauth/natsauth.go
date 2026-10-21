@@ -40,17 +40,26 @@ const ServiceUser = "dc_service"
 // ServicePublishDeny is the publish DENY the broker holds the shared service login to: the
 // device-events namespace, "{instance}.{tenant}.devices.{device}.events" and the gateway's
 // "$MQTT.msgs." form of it. Only a device writes there, through the grant DevicePermissions
-// mints, so a subject in this namespace is what makes an event broker-asserted. A holder of
-// the service login could otherwise publish one for any device and have it taken as the
-// device's own.
+// mints, so a subject in this namespace is what makes an event broker-asserted. Without the
+// deny, one `nats pub` or MQTT publish as the service login forges an event for any device.
+//
+// 🔴 THIS IS NOT A BOUNDARY AGAINST A HOLDER OF THE LOGIN, ONLY AGAINST ITS PUBLISHES. The
+// login also administers JetStream, and the server writes into a stream on its own account's
+// behalf, past every user permission: a stream whose RePublish destination is a device-events
+// subject, or a capture source with a subject transform, lands a forged event in capture with
+// this deny in force (TestServicePublishDenyDoesNotCoverJetStreamAdministration pins both). The
+// services create and reconcile their own streams over that same login, so the JetStream API
+// cannot be denied to it; closing this takes per-service logins that scope the API to the
+// streams each service owns. Until then the deny removes the casual forgery (a plain or MQTT
+// publish), not the deliberate one.
 //
 // It is the one namespace the platform never writes: the messaging writer refuses the
 // device-events shape outright. The device-scoped streams a service DOES publish to
 // (command-responses and device-reports forwarded out of the MQTT store, desired state,
 // device commands) are deliberately not here.
 //
-// The instance and tenant tokens are wildcards: a broker serves one instance, and a deny
-// that did not cover every tenant would be a hole with a name on it. The infrastructure
+// The instance and tenant tokens are wildcards, so the deny covers every instance and tenant
+// on the broker: a deny that missed one would be a hole with a name on it. The infrastructure
 // module renders the same two subjects into the broker's static user (a test holds the two in
 // step).
 func ServicePublishDeny() []string {

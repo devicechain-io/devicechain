@@ -437,10 +437,13 @@ locals {
   # list (it publishes to every platform subject), so the one thing it is held to is a
   # DENY on the subjects only a device writes: "{instance}.{tenant}.devices.{device}.events"
   # and the MQTT gateway's "$MQTT.msgs." form of it. A subject there is what the platform
-  # takes as the broker-asserted identity of a device, so a holder of this login must not be
-  # able to speak it. Kept in sync with natsauth.ServicePublishDeny (a Go test reads this
+  # takes as the broker-asserted identity of a device, so this login must not be able to
+  # publish there. Kept in sync with natsauth.ServicePublishDeny (a Go test reads this
   # file). Deliberately NOT denied: command-responses / device-reports (the MQTT store
   # forwarder republishes them as this login), device-commands and desired state (downlinks).
+  # NOT A BOUNDARY against a holder of this login: it also administers JetStream, and a
+  # stream's RePublish or a transformed source writes into capture past any user permission
+  # (see natsauth.ServicePublishDeny). It stops a forged PUBLISH, not a forged stream config.
   service_publish_deny = ["*.*.devices.*.events", "$MQTT.msgs.*.*.devices.*.events"]
 
   # System-account login (see natsauth.SysUser), kept in sync with the Go constant
