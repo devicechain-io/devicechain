@@ -20,8 +20,36 @@ import {
   defineWidgetDescriptor,
   type BuiltinWidgetId,
   type OptionSpec,
+  type WidgetChannel,
   type WidgetDescriptor,
+  type WidgetOptionSpecs,
 } from '@devicechain/dashboards';
+
+// ---- The doc-free runtime form ----------------------------------------------
+// These descriptors carry no option `doc` (it lives in builtin-option-docs.ts; see there for
+// why). The public `OptionSpec` keeps `doc: string` -- an extension author must write one, and a
+// reader of any descriptor this package publishes gets one -- so the runtime form is typed here:
+// a spec is declared against RuntimeOptionSpec, which FORBIDS a doc (one creeping back is a
+// compile error), and the descriptor is typed as its documented counterpart so it plugs into
+// the registry and defineWidget unchanged. That type claims a doc the value does not hold; it
+// never leaves this package except as `builtinWidgetDefinitionsWithoutDocs`, whose name says so.
+type Undocumented<S> = S extends { kind: 'list'; item: infer I }
+  ? Omit<S, 'doc' | 'item'> & { doc?: never; item: { readonly [K in keyof I]: Undocumented<I[K]> } }
+  : Omit<S, 'doc'> & { doc?: never };
+type RuntimeOptionSpec = Undocumented<OptionSpec>;
+
+type Documented<S> = S extends { item: infer I }
+  ? Omit<S, 'item'> & { readonly doc: string; readonly item: { readonly [K in keyof I]: Documented<I[K]> } }
+  : S & { readonly doc: string };
+export type DocumentedSpecs<S> = { readonly [K in keyof S]: Documented<S[K]> };
+type AsSpecs<S> = DocumentedSpecs<S> extends infer D extends WidgetOptionSpecs ? D : never;
+
+const defineRuntimeDescriptor = defineWidgetDescriptor as unknown as <
+  const C extends WidgetChannel,
+  const S extends Readonly<Record<string, RuntimeOptionSpec>>,
+>(
+  descriptor: Omit<WidgetDescriptor<C, AsSpecs<S>>, 'options'> & { options: S },
+) => WidgetDescriptor<C, AsSpecs<S>>;
 
 // ---- Shared option specs ----------------------------------------------------
 // Declared once and referenced by each widget that reads them, so the same key always
@@ -32,13 +60,13 @@ import {
 const TITLE = {
   kind: 'string',
   labelId: 'widgetLabelTitle',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // gauge and latest-card fall back to the displayed measurement's name when no title is set.
 const TITLE_OR_MEASUREMENT = {
   kind: 'string',
   labelId: 'widgetLabelTitle',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // toFixed()'s domain is 0..100 — outside it throws a RangeError, which would take the
 // whole widget subtree down rather than degrading.
@@ -49,7 +77,7 @@ const PRECISION = {
   max: 100,
   labelId: 'widgetLabelPrecision',
   helpId: 'widgetHintPrecision',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // Where a measurement crosses from one severity to the next. A threshold STARTS a band that
 // runs to the next threshold's value, so "overheat above 105" is one entry and "low fuel below
@@ -87,13 +115,13 @@ const THRESHOLDS = {
       labelId: 'widgetLabelThresholdLabel',
     },
   },
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const FLASH_ON_CHANGE = {
   kind: 'boolean',
   labelId: 'widgetFlashOnChange',
   helpId: 'widgetFlashOnChangeHint',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // Read by MeasurementConnectedWidget for every measurement-channel widget, and declared on
 // each one that binds a datasource. It is NOT declared on label/image, which carry no
@@ -114,7 +142,7 @@ const WINDOW = {
   min: 1,
   labelId: 'widgetLabelWindow',
   helpId: 'widgetHintWindow',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // Read by the frame, not by the widget: with it set, a widget whose newest sample is older than
 // this many seconds is greyed out under a "stale" badge. Unset is the DEFAULT and means age
@@ -125,12 +153,12 @@ const STALE_AFTER_SECONDS = {
   min: 1,
   labelId: 'widgetLabelStaleAfter',
   helpId: 'widgetHintStaleAfter',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const UNIT = {
   kind: 'string',
   labelId: 'widgetLabelUnit',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // The two ends of a level widget's scale. REQUIRED, with no default on the descriptor: a tank
 // or a thermometer drawn against a range nobody chose reads a wrong value as a plausible one,
@@ -141,14 +169,14 @@ const SCALE_MIN = {
   required: true,
   labelId: 'widgetLabelMin',
   helpId: 'widgetHintScaleMin',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const SCALE_MAX = {
   kind: 'number',
   required: true,
   labelId: 'widgetLabelMax',
   helpId: 'widgetHintScaleMax',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // The command a control sends. The three keys are the command-vocabulary triple the console's
 // command picker writes at once (the command button declares the same three), so picking a
@@ -159,14 +187,14 @@ const CONTROL_COMMAND_NAME = {
   labelId: 'widgetCommandHeading',
   helpId: 'widgetCommandFieldHint',
   control: 'command-vocabulary',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const CONTROL_COMMAND_LABEL = {
   kind: 'string',
   labelId: 'widgetCommandHeading',
   helpId: 'widgetCommandFieldHint',
   control: 'command-vocabulary',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const CONTROL_PARAMETER_SCHEMA = {
   kind: 'string',
@@ -174,19 +202,19 @@ const CONTROL_PARAMETER_SCHEMA = {
   labelId: 'widgetCommandHeading',
   helpId: 'widgetCommandFieldHint',
   control: 'command-vocabulary',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const CONTROL_PARAMETER = {
   kind: 'string',
   labelId: 'widgetLabelParameter',
   helpId: 'widgetHintControlParameter',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const MEASUREMENT = {
   kind: 'string',
   labelId: 'widgetLabelMeasurement',
   helpId: 'widgetHintMeasurement',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const ALARM_STATE = {
   kind: 'enum',
@@ -195,7 +223,7 @@ const ALARM_STATE = {
   helpId: 'widgetStateHint',
   valueLabelIds: { ACTIVE: 'widgetAlarmStateActive', CLEARED: 'widgetAlarmStateCleared' },
   placeholderId: 'widgetPlaceholderAny',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const ALARM_SEVERITY = {
   kind: 'enum',
@@ -204,7 +232,7 @@ const ALARM_SEVERITY = {
   helpId: 'widgetSeverityHint',
   valueLabelIds: { CRITICAL: 'widgetAlarmSeverityCritical', MAJOR: 'widgetAlarmSeverityMajor', MINOR: 'widgetAlarmSeverityMinor', WARNING: 'widgetAlarmSeverityWarning', INDETERMINATE: 'widgetAlarmSeverityIndeterminate' },
   placeholderId: 'widgetPlaceholderAny',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // Stored as the STRING 'true'/'false', not a boolean — alarmSubscription() reads it with
 // optString and maps it through parseAcknowledged, so a real boolean here is read as
@@ -217,14 +245,14 @@ const ALARM_ACKNOWLEDGED = {
   helpId: 'widgetAcknowledgedHint',
   valueLabelIds: { true: 'widgetAlarmAckAcknowledged', false: 'widgetAlarmAckUnacknowledged' },
   placeholderId: 'widgetPlaceholderAny',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const SELECTION_TARGET = {
   kind: 'string',
   labelId: 'widgetLabelTargetSlot',
   helpId: 'widgetTargetSlotHint',
   control: 'slot-target',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 
 // Each widget's `layout` is its size contract, in SQUARE cells. A cell is never smaller than the
@@ -267,7 +295,7 @@ const WINDOW_SECONDS = {
   max: 604800,
   labelId: 'widgetLabelWindowSeconds',
   helpId: 'widgetHintWindowSeconds',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // The categorical charts' shared options. Both draw the latest reading of each measurement the
 // datasource names: the order is the datasource's own unless a sort is set.
@@ -277,7 +305,7 @@ const CATEGORY_SORT = {
   labelId: 'widgetLabelSort',
   valueLabelIds: { none: 'widgetSortNone', ascending: 'widgetSortAscending', descending: 'widgetSortDescending' },
   placeholderId: 'widgetPlaceholderDefault',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 // A fleet table's per-column and per-column-threshold entries NAME their measurement, because a list
 // item holds scalars only: one flat list per concern keeps each editable as a row, and a column
@@ -287,7 +315,7 @@ const FLEET_MEASUREMENT = {
   kind: 'string',
   required: true,
   labelId: 'widgetLabelMeasurement',
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const FLEET_COLUMNS = {
   kind: 'list',
@@ -300,7 +328,7 @@ const FLEET_COLUMNS = {
     unit: { ...UNIT },
     precision: { ...PRECISION },
   },
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 const FLEET_THRESHOLDS = {
   ...THRESHOLDS,
@@ -308,10 +336,10 @@ const FLEET_THRESHOLDS = {
     measurement: FLEET_MEASUREMENT,
     ...THRESHOLDS.item,
   },
-} as const satisfies OptionSpec;
+} as const satisfies RuntimeOptionSpec;
 
 export const builtinWidgetDescriptors = {
-  'timeseries-chart': defineWidgetDescriptor({
+  'timeseries-chart': defineRuntimeDescriptor({
     id: 'timeseries-chart',
     version: VERSION,
     sdkApiVersion: 1,
@@ -334,7 +362,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
   }),
 
-  'latest-card': defineWidgetDescriptor({
+  'latest-card': defineRuntimeDescriptor({
     id: 'latest-card',
     version: VERSION,
     sdkApiVersion: 1,
@@ -363,7 +391,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
-  gauge: defineWidgetDescriptor({
+  gauge: defineRuntimeDescriptor({
     id: 'gauge',
     version: VERSION,
     sdkApiVersion: 1,
@@ -401,7 +429,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 6, rows: 6 } },
   }),
 
-  table: defineWidgetDescriptor({
+  table: defineRuntimeDescriptor({
     id: 'table',
     version: VERSION,
     sdkApiVersion: 1,
@@ -425,7 +453,7 @@ export const builtinWidgetDescriptors = {
 
   // label and image are static: the `none` channel, no datasource, no subscription and no
   // history seed.
-  label: defineWidgetDescriptor({
+  label: defineRuntimeDescriptor({
     id: 'label',
     version: VERSION,
     sdkApiVersion: 1,
@@ -460,7 +488,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 1 }, minSpan: { cols: 1, rows: 1 }, maxSpan: { cols: 24, rows: 3 } },
   }),
 
-  image: defineWidgetDescriptor({
+  image: defineRuntimeDescriptor({
     id: 'image',
     version: VERSION,
     sdkApiVersion: 1,
@@ -493,7 +521,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 1, rows: 1 } },
   }),
 
-  'alarm-table': defineWidgetDescriptor({
+  'alarm-table': defineRuntimeDescriptor({
     id: 'alarm-table',
     version: VERSION,
     sdkApiVersion: 1,
@@ -543,7 +571,7 @@ export const builtinWidgetDescriptors = {
 
   // The count shows the SERVER total and reads a page only to sample the worst loaded
   // severity, so its page size is a constant rather than an authorable option.
-  'alarm-count': defineWidgetDescriptor({
+  'alarm-count': defineRuntimeDescriptor({
     id: 'alarm-count',
     version: VERSION,
     sdkApiVersion: 1,
@@ -566,7 +594,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
-  'command-button': defineWidgetDescriptor({
+  'command-button': defineRuntimeDescriptor({
     id: 'command-button',
     version: VERSION,
     sdkApiVersion: 1,
@@ -610,7 +638,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 6 } },
   }),
 
-  'entity-selector': defineWidgetDescriptor({
+  'entity-selector': defineRuntimeDescriptor({
     id: 'entity-selector',
     version: VERSION,
     sdkApiVersion: 1,
@@ -629,7 +657,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 1 }, minSpan: { cols: 3, rows: 1 }, maxSpan: { cols: 12, rows: 1 }, resize: 'horizontal' },
   }),
 
-  map: defineWidgetDescriptor({
+  map: defineRuntimeDescriptor({
     id: 'map',
     version: VERSION,
     sdkApiVersion: 1,
@@ -672,7 +700,7 @@ export const builtinWidgetDescriptors = {
   // DOM/SVG single-value widgets on the measurement channel. A threshold band colours the fill
   // or lamp; `normal` keeps the widget's neutral accent.
 
-  'linear-gauge': defineWidgetDescriptor({
+  'linear-gauge': defineRuntimeDescriptor({
     id: 'linear-gauge',
     version: VERSION,
     sdkApiVersion: 1,
@@ -713,7 +741,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 4, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
   }),
 
-  'level-gauge': defineWidgetDescriptor({
+  'level-gauge': defineRuntimeDescriptor({
     id: 'level-gauge',
     version: VERSION,
     sdkApiVersion: 1,
@@ -747,7 +775,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 4 }, minSpan: { cols: 2, rows: 3 }, maxSpan: { cols: 6, rows: 8 } },
   }),
 
-  battery: defineWidgetDescriptor({
+  battery: defineRuntimeDescriptor({
     id: 'battery',
     version: VERSION,
     sdkApiVersion: 1,
@@ -782,7 +810,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
-  'status-light': defineWidgetDescriptor({
+  'status-light': defineRuntimeDescriptor({
     id: 'status-light',
     version: VERSION,
     sdkApiVersion: 1,
@@ -811,7 +839,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 2, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 4, rows: 4 } },
   }),
 
-  'signal-bars': defineWidgetDescriptor({
+  'signal-bars': defineRuntimeDescriptor({
     id: 'signal-bars',
     version: VERSION,
     sdkApiVersion: 1,
@@ -845,7 +873,7 @@ export const builtinWidgetDescriptors = {
   // A heading on a full turn, and a ring filled between a configured min and max. The compass
   // draws on the registered gauge series; the ring is SVG. Both put their number in DOM text.
 
-  compass: defineWidgetDescriptor({
+  compass: defineRuntimeDescriptor({
     id: 'compass',
     version: VERSION,
     sdkApiVersion: 1,
@@ -872,7 +900,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
   }),
 
-  'progress-ring': defineWidgetDescriptor({
+  'progress-ring': defineRuntimeDescriptor({
     id: 'progress-ring',
     version: VERSION,
     sdkApiVersion: 1,
@@ -906,7 +934,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 6 } },
   }),
 
-  'command-slider': defineWidgetDescriptor({
+  'command-slider': defineRuntimeDescriptor({
     id: 'command-slider',
     version: VERSION,
     sdkApiVersion: 1,
@@ -945,7 +973,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 4, rows: 2 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 8, rows: 3 } },
   }),
 
-  'command-toggle': defineWidgetDescriptor({
+  'command-toggle': defineRuntimeDescriptor({
     id: 'command-toggle',
     version: VERSION,
     sdkApiVersion: 1,
@@ -965,7 +993,7 @@ export const builtinWidgetDescriptors = {
     interactions: { commandSend: true },
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 3 } },
   }),
-  'stat-card': defineWidgetDescriptor({
+  'stat-card': defineRuntimeDescriptor({
     id: 'stat-card',
     version: VERSION,
     sdkApiVersion: 1,
@@ -1007,7 +1035,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
-  'bar-chart': defineWidgetDescriptor({
+  'bar-chart': defineRuntimeDescriptor({
     id: 'bar-chart',
     version: VERSION,
     sdkApiVersion: 1,
@@ -1037,7 +1065,7 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
   }),
 
-  'pie-chart': defineWidgetDescriptor({
+  'pie-chart': defineRuntimeDescriptor({
     id: 'pie-chart',
     version: VERSION,
     sdkApiVersion: 1,
@@ -1055,7 +1083,7 @@ export const builtinWidgetDescriptors = {
   // A new widget rather than a mode of `table`: that one is one device's measurements as rows, on a
   // channel that keys its values by name; this one is a fleet, a row per member and a column per
   // measurement, and reads its data by device.
-  'fleet-table': defineWidgetDescriptor({
+  'fleet-table': defineRuntimeDescriptor({
     id: 'fleet-table',
     version: VERSION,
     sdkApiVersion: 1,
@@ -1102,7 +1130,7 @@ export const builtinWidgetDescriptors = {
   // Counts a fleet rather than listing it: how many of its devices are in an abnormal band of one
   // measurement ("3 of 21"), or how many devices it has. A new widget rather than a mode of the
   // fleet table, which is a grid; this is the figure above one.
-  'fleet-count': defineWidgetDescriptor({
+  'fleet-count': defineRuntimeDescriptor({
     id: 'fleet-count',
     version: VERSION,
     sdkApiVersion: 1,

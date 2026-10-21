@@ -42,8 +42,19 @@ export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 
 // The built-ins as registrations (the same descriptor + component pairing a third-party
 // package supplies), and the factory for a sealed registry holding exactly them.
-export { builtinWidgetCatalog, builtinWidgetDescriptors } from './documented-descriptors';
-export { builtinWidgetDefinitions, createBuiltinWidgetRegistry } from './builtin-registry';
+//
+// Every one of these carries each option's `doc`. `builtinWidgetDefinitionsWithoutDocs` is the same
+// registrations without it -- for a host that only renders boards and never shows an option's help,
+// which then does not download the prose (a built-in id is the one place the registry excuses a
+// missing doc). Its descriptors are TYPED as documented; their `doc` is absent at runtime.
+export {
+  builtinWidgetCatalog,
+  builtinWidgetDescriptors,
+  builtinWidgetDefinitions,
+  createBuiltinWidgetRegistry,
+  WIDGET_OPTIONS,
+} from './documented-descriptors';
+export { builtinWidgetDefinitions as builtinWidgetDefinitionsWithoutDocs } from './builtin-registry';
 export { preloadWidgets } from './preload';
 
 // Read-only by-id views of the built-in descriptors (channel, datasource binding), and the
@@ -66,7 +77,6 @@ export { MapRuntimeProvider, useMapRuntime, type MapRuntime } from './map-runtim
 // with what legal values. WidgetOptions<T> types code that BUILDS options;
 // validateWidgetOptions reports where a stored bag disagrees with the renderer.
 export {
-  WIDGET_OPTIONS,
   validateWidgetOptions,
   numberOptionSpec,
   clampNumberOption,

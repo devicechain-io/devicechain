@@ -30,11 +30,11 @@
 // generated dashboard carrying `"url": ""` validate clean and render nothing.
 interface OptionSpecBase {
   // What the option does. Short: this feeds the config panel's help text and the
-  // published "available widgets" page. REQUIRED of an extension's descriptor (the registry
-  // refuses one without it). Absent on the built-ins' RUNTIME descriptors, whose docs live in
-  // @devicechain/widgets's own table and are attached to the public descriptors it exports -- so
-  // a host that only renders boards never downloads prose it never shows.
-  doc?: string;
+  // published "available widgets" page. Required, and present on every descriptor a package
+  // publishes. The one exception is not a type: @devicechain/widgets's render-only definitions
+  // (`builtinWidgetDefinitionsWithoutDocs`) omit it so a host that only renders boards never
+  // downloads prose it never shows, which is why the validator excuses a BUILT-IN id's missing doc.
+  doc: string;
   required?: true;
   // Portable default text for the option's label and help. A host that cannot translate
   // an option it has never heard of falls back to these, so a third-party option is

@@ -273,3 +273,11 @@ export const stringSpan = defineWidgetDescriptor({
   // @ts-expect-error spans are counted in cells, not CSS strings
   layout: { defaultSpan: { cols: '8', rows: 4 } },
 });
+
+// ---- An option's doc is REQUIRED on the public type ---------------------------
+// The built-ins' render-only descriptors omit it (typed in @devicechain/widgets, not here); every
+// descriptor a package publishes carries it, so a reader gets `string`, never `string | undefined`,
+// and an extension author is told at compile time, not first at registration.
+// @ts-expect-error -- an option spec with no doc
+export const undocumentedSpec: WidgetOptionSpecs = { title: { kind: 'string' } };
+export type DocIsAString = Expect<Equals<WidgetOptionSpecs[string]['doc'], string>>;

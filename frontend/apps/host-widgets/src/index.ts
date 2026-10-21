@@ -12,7 +12,10 @@
 // "parse without the catalog" spelling here to reach for.
 
 import { createWidgetRegistry, type ErasedWidgetDefinition, type WidgetRegistry } from '@devicechain/widget-sdk';
-import { builtinWidgetDefinitions } from '@devicechain/widgets';
+// The built-ins WITHOUT their option docs: no host here shows an option's `doc` (the console's
+// panel reads its own message catalog), and the prose would otherwise ride in every host's first
+// download -- the replay player's size gate checks it stays out.
+import { builtinWidgetDefinitionsWithoutDocs as builtinWidgetDefinitions } from '@devicechain/widgets';
 
 import { extensionWidgets } from './extensions';
 

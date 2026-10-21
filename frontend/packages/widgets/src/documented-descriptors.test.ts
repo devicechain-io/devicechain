@@ -72,6 +72,42 @@ describe('built-in option docs', () => {
   it('exports the documented forms from the package entry', () => {
     expect(published.builtinWidgetDescriptors).toBe(builtinWidgetDescriptors);
     expect(published.builtinWidgetCatalog).toBe(builtinWidgetCatalog);
-    expect((published.builtinWidgetDescriptors.gauge.options.min as { doc?: string }).doc).toMatch(/gauge scale/);
+    // Typed `doc: string` on the public OptionSpec -- no cast needed to read it.
+    expect(published.builtinWidgetDescriptors.gauge.options.min.doc).toMatch(/gauge scale/);
+  });
+
+  // Every PUBLISHED view of the built-ins carries its docs: an embedder's config panel may read `doc`
+  // off any of them, and the package is on npm. Only the explicitly named WithoutDocs export may not.
+  it('documents every published view: WIDGET_OPTIONS, the definitions and a fresh registry', () => {
+    const views: [string, Record<string, Specs>][] = [
+      ['WIDGET_OPTIONS', published.WIDGET_OPTIONS as unknown as Record<string, Specs>],
+      ['builtinWidgetDefinitions', Object.fromEntries(published.builtinWidgetDefinitions.map((d) => [d.descriptor.id, d.descriptor.options as Specs]))],
+      ['createBuiltinWidgetRegistry', Object.fromEntries(published.createBuiltinWidgetRegistry().list().map((d) => [d.descriptor.id, d.descriptor.options as Specs]))],
+      ['builtinWidgetCatalog', Object.fromEntries(published.builtinWidgetCatalog.list().map((d) => [d.id, d.options as Specs]))],
+    ];
+    for (const [view, byId] of views) {
+      expect(Object.keys(byId).sort(), view).toEqual(Object.keys(runtime).sort());
+      for (const [id, specs] of Object.entries(byId)) {
+        for (const [path, spec] of paths(specs)) {
+          expect(spec.doc, `${view}: ${id}.${path}`).toBeTypeOf('string');
+          expect(spec.doc, `${view}: ${id}.${path}`).toBe(docOf(id, path));
+        }
+      }
+    }
+    expect(published.WIDGET_OPTIONS.gauge).toBe(builtinWidgetDescriptors.gauge.options);
+  });
+
+  it('keeps the docs off the definitions a render-only host registers', () => {
+    expect(published.builtinWidgetDefinitionsWithoutDocs.map((d) => d.descriptor.id)).toEqual(
+      published.builtinWidgetDefinitions.map((d) => d.descriptor.id),
+    );
+    for (const d of published.builtinWidgetDefinitionsWithoutDocs) {
+      expect(d.descriptor, d.descriptor.id).toBe(runtime[d.descriptor.id as keyof typeof runtime]);
+    }
   });
 });
+
+// The doc a documented descriptor carries at `path` (override first, then the shared text).
+function docOf(id: string, path: string): string | undefined {
+  return OPTION_DOC_OVERRIDES[id]?.[path] ?? OPTION_DOCS[path];
+}
