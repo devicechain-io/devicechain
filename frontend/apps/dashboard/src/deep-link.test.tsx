@@ -181,7 +181,7 @@ describe('the /dash viewer and a deep link', () => {
     expect(asked).toEqual(['hauler-8', 'hauler-7', 'hauler-8']);
 
     await pop('?bind.machine=not-yours');
-    expect(asked.at(-1)).toBe('not-yours');
+    expect(asked[asked.length - 1]).toBe('not-yours');
     expect(screen.getByTestId('bound-devices-notice')).toBeTruthy();
     expect(h.seen.some((x) => x.token === 'not-yours')).toBe(false);
   });
