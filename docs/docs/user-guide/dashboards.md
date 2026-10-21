@@ -369,7 +369,9 @@ The settings depend on the widget. Common ones:
   worst band among the flagged devices; with none flagged, or a fleet in its normal band, it stays
   the ordinary text color, so a healthy fleet is calm. A device with no reading of the measurement
   is neither healthy nor flagged: it is counted apart, as "2 not reporting" when it sent nothing
-  in the span and as "1 could not be read" when its readings failed to load. While the group's
+  in the span and as "1 could not be read" when its readings failed to load. A device that reports
+  other measurements but never this one (a crusher in a count of fuel) is outside the question: it
+  is left out of the *of 21* and noted as "1 does not report this". While the group's
   readings are still loading, the card shows no number rather than a partial one. *Devices* shows
   how many devices the group holds, whatever they report. **Time span** works as for the fleet
   table; **Stale after** applies to the newest reading in the group, as on other cards. A group larger than the 500 devices read says "Showing 500 of N devices",

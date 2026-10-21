@@ -36,6 +36,10 @@ export interface FleetStrings {
   needAttention: string;
   devices: string;
   notReporting: (n: number) => string;
+  // Devices that report other measurements but not this one: outside the count, said apart.
+  notMeasured: (n: number) => string;
+  // Every device of the group reports other measurements, none this one.
+  noneMeasured: string;
   notRead: (n: number) => string;
   // "Showing 500 of 812 devices": a fleet past what is read must say so.
   truncated: (shown: number, total: number) => string;
@@ -69,6 +73,8 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     needAttention: 'need attention',
     devices: 'devices',
     notReporting: (n) => `${n} not reporting`,
+    notMeasured: (n) => (n === 1 ? '1 does not report this' : `${n} do not report this`),
+    noneMeasured: 'No device in this group reports this',
     notRead: (n) => `${n} could not be read`,
     truncated: (shown, total) => `Showing ${shown} of ${total} devices`,
     range: (from, to, of) => `${from}–${to} of ${of}`,
@@ -99,6 +105,8 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     needAttention: 'requieren atención',
     devices: 'dispositivos',
     notReporting: (n) => `${n} sin informar`,
+    notMeasured: (n) => (n === 1 ? '1 no informa esta medición' : `${n} no informan esta medición`),
+    noneMeasured: 'Ningún dispositivo de este grupo informa esta medición',
     notRead: (n) => `${n} sin leer`,
     truncated: (shown, total) => `Mostrando ${shown} de ${total} dispositivos`,
     range: (from, to, of) => `${from}–${to} de ${of}`,

@@ -117,6 +117,12 @@ describe('attentionCount', () => {
     expect(c).toMatchObject({ members: 3, flagged: 1, reporting: 2 });
   });
 
+  it('leaves a device that reports other measurements, but not this one, out of the "of N"', () => {
+    const plant = member('plant', undefined, { observed: ['throughput'] });
+    const c = attentionCount([member('a', 5), member('b'), plant, member('c', 50)], 'fuel', t);
+    expect(c).toMatchObject({ members: 3, notMeasured: 1, flagged: 1, reporting: 2 });
+  });
+
   it('names the band only when every flagged device shares it', () => {
     expect(attentionCount([member('a', 5), member('b', 6)], 'fuel', t).label).toBe('Low');
     expect(attentionCount([member('a', 5), member('b', 90)], 'fuel', t).label).toBeUndefined();
@@ -164,6 +170,30 @@ describe('the attention count', () => {
     const s = show(fleet([member('a', 5), member('b'), member('c', 50)]));
     expect(s.figure).toBe('1of 3');
     expect(s.notes).toEqual(['1 not reporting']);
+  });
+
+  it('says a device that does not report the measurement is outside the count, not silent', () => {
+    sizedAt(300, 300);
+    const plant = member('plant', undefined, { observed: ['throughput'] });
+    const s = show(fleet([member('a', 5), member('b', 50), plant]));
+    expect(s.figure).toBe('1of 2');
+    expect(s.card?.getAttribute('data-of')).toBe('2');
+    expect(s.notes).toEqual(['1 does not report this']);
+  });
+
+  it('keeps a silent device and a device that does not report the measurement apart', () => {
+    sizedAt(300, 300);
+    const other = (token: string) => member(token, undefined, { observed: ['throughput'] });
+    const s = show(fleet([member('a', 5), member('b'), other('p'), other('q')]));
+    expect(s.figure).toBe('1of 2');
+    expect(s.notes).toEqual(['1 not reporting', '2 do not report this']);
+  });
+
+  it('has no "of N" when no device of the group reports the measurement', () => {
+    sizedAt(300, 300);
+    const s = show(fleet([member('p', undefined, { observed: ['throughput'] })]));
+    expect(s.empty).toBe('No device in this group reports this');
+    expect(s.figure).toBeUndefined();
   });
 
   it('has no figure while any member is still loading: a partial count is an undercount', () => {
