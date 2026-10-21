@@ -196,6 +196,8 @@
   "widgetHintMarkAlarms": "Draw this device’s alarms on the chart: a band from the raise to the clear, coloured by severity. Shows at most the newest 30 events and says how many more there are.",
   "widgetLabelMarkCommands": "Mark commands",
   "widgetHintMarkCommands": "Draw a line where each command sent to this device was sent, named by the command and its outcome.",
+  "widgetHintChartAxisMin": "The low end of the value axis. Leave it empty and the chart picks one. A reading or threshold below it still shows: the axis widens to take it in.",
+  "widgetHintChartAxisMax": "The high end of the value axis, above Min. Leave it empty and the chart picks one. A reading or threshold above it still shows: the axis widens to take it in.",
   "widgetLabelStaleAfter": "Stale after (seconds)",
   "widgetHintStaleAfter": "When the newest sample is older than this, the value is greyed out and badged as stale. Leave blank to show the sample's age only; no widget is ever marked stale without a value here.",
   "widgetLabelPrecision": "Precision",

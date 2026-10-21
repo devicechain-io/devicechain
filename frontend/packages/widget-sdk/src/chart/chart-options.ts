@@ -63,6 +63,12 @@ export interface LineChartOptions {
   // feed was interrupted (MeasurementStreamState.gaps). Every line breaks at each one instead of
   // joining the samples on either side.
   gaps?: readonly string[];
+  // The value axis's ends, as the author chose them. Each is a bound the axis REACHES, never a
+  // clip: a reading or a threshold beyond it widens the axis to take it in, so a fixed end can
+  // frame the data but never hide any. Unset (or not finite), that end is ECharts' own, as before.
+  // Both set and not ascending, neither applies (the descriptor refuses such a pair).
+  min?: number;
+  max?: number;
 }
 
 // breakAtGaps puts an empty point -- which ECharts draws as a break in the line -- at each gap
@@ -115,6 +121,20 @@ function thresholdMarks(theme: ChartTheme, thresholds: readonly Threshold[], uni
   return { markLine, markArea };
 }
 
+// One end of a line chart's value axis: `low` is the min end, otherwise the max end. `data` is
+// ECharts' own extent at that end (not finite with no data). With no author end, a threshold
+// beyond the data fixes the end at the threshold and otherwise ECharts keeps its auto range
+// (null). With one, the end is the furthest of the author's end, the threshold and the data, so
+// nothing drawn falls off the axis.
+function axisEnd(low: boolean, data: number, fixed: number | undefined, threshold: number | undefined): number | null {
+  const beyond = (a: number, b: number): boolean => (low ? a < b : a > b);
+  if (fixed === undefined) return threshold !== undefined && beyond(threshold, data) ? threshold : null;
+  let end = fixed;
+  if (Number.isFinite(data) && beyond(data, end)) end = data;
+  if (threshold !== undefined && beyond(threshold, end)) end = threshold;
+  return end;
+}
+
 // buildLineOption maps a rolling window of samples to a multi-series time chart,
 // one line per measurement name, coloured from the theme's chart palette.
 export function buildLineOption(
@@ -136,6 +156,10 @@ export function buildLineOption(
   const suffix = options.unit ? ` ${options.unit}` : '';
   const precision = options.precision;
   const gaps = (options.gaps ?? []).map(Date.parse).filter((g) => !Number.isNaN(g));
+  const finite = (v: number | undefined): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+  let fixedMin = finite(options.min);
+  let fixedMax = finite(options.max);
+  if (fixedMin !== undefined && fixedMax !== undefined && fixedMin >= fixedMax) fixedMin = fixedMax = undefined;
 
   const series = names.map((name, i) => {
     const color = theme.series[i % theme.series.length];
@@ -185,11 +209,13 @@ export function buildLineOption(
       // A threshold outside the data's range must still be on the chart: extend the range to
       // take it in. Only then -- a returned number FIXES that end of the axis (no nice
       // rounding, no zero baseline), so a threshold inside the data returns null and leaves
-      // ECharts' own auto range exactly as it is without thresholds.
-      ...(thresholds.length > 0
+      // ECharts' own auto range exactly as it is without thresholds. An author's end (min/max)
+      // is the same kind of bound: the axis reaches it, and goes past it only for a reading or a
+      // threshold beyond it.
+      ...(thresholds.length > 0 || fixedMin !== undefined || fixedMax !== undefined
         ? {
-            min: (e: { min: number }) => (lowest < e.min ? lowest : null),
-            max: (e: { max: number }) => (highest > e.max ? highest : null),
+            min: (e: { min: number }) => axisEnd(true, e.min, fixedMin, thresholds.length > 0 ? lowest : undefined),
+            max: (e: { max: number }) => axisEnd(false, e.max, fixedMax, thresholds.length > 0 ? highest : undefined),
           }
         : {}),
     },

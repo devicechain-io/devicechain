@@ -124,6 +124,10 @@ export const OPTION_DOC_OVERRIDES: Readonly<Record<string, Readonly<Record<strin
     min: "Lowest value, used only when the command's parameter declares no minimum.",
     max: "Highest value, used only when the command's parameter declares no maximum.",
   },
+  'timeseries-chart': {
+    min: 'Low end of the value axis. Unset, the axis starts where the chart picks. A reading or threshold below it still shows: the axis widens to take it in.',
+    max: 'High end of the value axis, above min. Unset, the chart picks. A reading or threshold above it still shows: the axis widens to take it in.',
+  },
   'bar-chart': {
     groupBy: 'One bar per measurement (the default), or per device of the group for the measurement set below.',
   },

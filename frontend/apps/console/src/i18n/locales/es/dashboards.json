@@ -196,6 +196,8 @@
   "widgetHintMarkAlarms": "Dibuja las alarmas de este dispositivo en el gráfico: una banda desde que se activa hasta que se despeja, con el color de su severidad. Muestra como máximo los 30 eventos más recientes e indica cuántos más hay.",
   "widgetLabelMarkCommands": "Marcar comandos",
   "widgetHintMarkCommands": "Dibuja una línea donde se envió cada comando a este dispositivo, con el nombre del comando y su resultado.",
+  "widgetHintChartAxisMin": "El extremo inferior del eje de valores. Déjalo vacío y el gráfico elige uno. Una lectura o un umbral por debajo sigue viéndose: el eje se amplía para incluirlo.",
+  "widgetHintChartAxisMax": "El extremo superior del eje de valores, por encima de Mín. Déjalo vacío y el gráfico elige uno. Una lectura o un umbral por encima sigue viéndose: el eje se amplía para incluirlo.",
   "widgetLabelStaleAfter": "Obsoleto tras (segundos)",
   "widgetHintStaleAfter": "Cuando la muestra más reciente supera esta antigüedad, el valor se atenúa y se marca como obsoleto. Déjelo vacío para mostrar solo la antigüedad de la muestra; ningún widget se marca como obsoleto sin un valor aquí.",
   "widgetLabelPrecision": "Precisión",

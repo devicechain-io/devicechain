@@ -151,6 +151,28 @@ describe('buildLineOption units, precision and thresholds', () => {
     expect(o.yAxis.max({ min: 20, max: 22 })).toBeNull();
   });
 
+  it("fixes an author's axis end, and widens past it only for a reading or a threshold beyond it", () => {
+    // A 92 degree engine on a 70..130 axis, its overheat edge at 105: the author's ends hold.
+    const framed = opt(buildLineOption(data, theme, { min: 70, max: 130, thresholds: [{ value: 105, level: 'critical' }] }));
+    expect(framed.yAxis.min({ min: 91, max: 94 })).toBe(70);
+    expect(framed.yAxis.max({ min: 91, max: 94 })).toBe(130);
+    // A reading past an end is never clipped: the axis takes it in.
+    expect(framed.yAxis.min({ min: 40, max: 94 })).toBe(40);
+    expect(framed.yAxis.max({ min: 91, max: 140 })).toBe(140);
+    // A threshold past an end is on the chart too.
+    const below = opt(buildLineOption(data, theme, { min: 70, thresholds: [{ value: 60, level: 'major' }] }));
+    expect(below.yAxis.min({ min: 91, max: 94 })).toBe(60);
+    // One end set leaves the other to ECharts, and with no data the author's end still holds.
+    const lowOnly = opt(buildLineOption(data, theme, { min: 70 }));
+    expect(lowOnly.yAxis.min({ min: Infinity, max: -Infinity })).toBe(70);
+    expect(lowOnly.yAxis.max({ min: 91, max: 94 })).toBeNull();
+  });
+
+  it('ignores an author pair that is not ascending (the descriptor refuses one), and a non-finite end', () => {
+    expect(opt(buildLineOption(data, theme, { min: 130, max: 70 })).yAxis.min).toBeUndefined();
+    expect(opt(buildLineOption(data, theme, { min: Number.NaN })).yAxis.min).toBeUndefined();
+  });
+
   it('accepts thresholds in any order (the builder is public and sorts them itself)', () => {
     const o = opt(
       buildLineOption(data, theme, {
