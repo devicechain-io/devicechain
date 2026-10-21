@@ -485,38 +485,65 @@ around the check rather than fix it.
 ## Replacing the root key {#replace-root-key}
 
 The root key cannot be rotated in place in this version. There is no command that swaps in a new key
-and re-encrypts what the old one protected. To replace the root key, you recreate the instance.
+and re-seals what the old one protected. To replace the root key, you recreate the instance, and a
+recreated instance starts with an empty control plane.
 
-Three things depend on the key:
+Three kinds of stored data depend on the key:
 
-- **Every secret the instance stores.** Each is sealed under the root key: connector credentials,
-  SMTP passwords, AI provider keys and the like.
-- **The token-signing key.** It is sealed under the root key too, so the key decides whether anyone
-  can sign in.
-- **Device MQTT password digests.** The instance derives the key that digests those passwords from
-  the root key. The digests are one-way, so they cannot be carried over to a new key.
+- **Every secret the instance stores.** Each is sealed under the root key: outbound-connector
+  credentials, the SMTP passwords and webhook secrets of notification channels, AI provider keys
+  and single sign-on client secrets.
+- **The token-signing key.** `user-management` seals it under the root key too, so without the key
+  no one can sign in.
+- **Device MQTT password digests.** The key that digests device MQTT passwords is derived from the
+  root key. A digest is one-way, so it cannot be re-made under a new key without the password.
+
+### What a recreate loses {#replace-root-key-losses}
+
+`dcctl destroy` drops the instance's database on the shared relational store, and everything kept
+there goes with it: tenants, users and roles, device types and profiles, devices and their
+credentials, detection rules, dashboards, outbound connectors, notification channels, alarms and
+last-known state. None of it can be carried across a key change. A relational backup does not
+help: its secrets are sealed under the old key, and restoring it brings the old key back, which is
+the opposite of replacing it. No command exports an instance's configuration as a whole.
+Dashboards can be exported from the console and imported into the new instance, and devices can be
+imported from a CSV file ([Importing devices](../guides/importing-devices.md)). Everything else
+is created again.
+
+Event history can be carried across. The event store holds no ciphertext, so its backups do not
+need the root key. Destroy with `--keep-backups` and bootstrap with `--restore-tsdb-from`, as in
+[Recovering an instance](#recover). History is stored against tenant and device tokens, so it lines
+up with the tenants and devices you create again under the same tokens. Telemetry of a tenant you
+do not create again stays in the event store with no tenant row to drive its deletion. Without
+`--keep-backups`, destroy deletes event-store backups kept in the cluster's own object store.
+
+### Recreating the instance {#replace-root-key-steps}
 
 If you think the root key may have been exposed:
 
-1. Take the backups and exports you need first. `dcctl destroy` removes the instance's database, so
-   its data goes with it. Backups of the old instance stay readable only with the old escrow
-   artifact, so keep that too.
-2. Move the old escrow artifact aside. Bootstrap will not overwrite one.
-3. Run [`dcctl destroy`](./bootstrap.md#destroy), then [`dcctl bootstrap`](./bootstrap.md) again.
-   With no `--restore-root-key`, the new instance mints a root key of its own and writes a new
-   escrow artifact.
-4. Enrol your devices again. The new instance has none of the old one's devices or MQTT passwords.
-5. Rotate the credentials the old instance stored, at the system that issued them: SMTP and
-   webhook credentials, broker and cloud credentials used by connectors, and AI provider keys.
-   Anyone holding the old root key and a copy of the old database could read them, so enter new
-   ones in the new instance.
+1. Export what you can: dashboard definitions, and a record of the configuration you will create
+   again.
+2. Move the old escrow artifact aside. Bootstrap will not overwrite one. Keep it: it is the only key
+   to the relational backups taken before the destroy.
+3. Run [`dcctl destroy <provider> <instance> --keep-backups`](./bootstrap.md#destroy), then
+   [`dcctl bootstrap <provider> <instance>`](./bootstrap.md), adding `--restore-tsdb-from` to bring
+   back event history. Do not pass `--restore-root-key`: after a destroy, bootstrap refuses it. The
+   new instance mints a root key of its own and writes a new escrow artifact.
+4. Create your tenants, users, profiles, rules, connectors and channels again, and register your
+   devices again, with an MQTT password for each one that uses one. A device can keep its old
+   password if you supply the same one, but anyone holding the old root key and a copy of the old
+   database can test guesses against its digest offline. A long random password survives that; a
+   short one does not, so give such devices new passwords.
+5. Rotate the credentials the old instance stored, at the system that issued them: SMTP passwords
+   and webhook secrets, the broker and cloud credentials used by outbound connectors, AI provider
+   keys and single sign-on client secrets. Anyone holding the old root key and a copy of the old
+   database could read them, so enter new ones in the new instance. Firmware signing keys are not
+   on this list: the instance holds only their public halves.
 
-Keep the escrow artifact safe. The [disaster-recovery restore](#recover) reads the root key from it,
-and it is the only way to read an old instance's backups. Anyone who holds the artifact and its
-passphrase holds the root key, so store the two apart.
+Anyone who holds an escrow artifact and its passphrase holds that instance's root key, so store the
+two apart.
 
-In-place rotation is planned for after the first stable release. It needs every secret re-encrypted
-under a new key version, and a key version recorded with each device password digest.
+In-place rotation is planned for after the first stable release.
 
 ## After `dcctl destroy` {#after-destroy}
 
