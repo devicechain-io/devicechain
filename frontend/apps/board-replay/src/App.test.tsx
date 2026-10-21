@@ -497,7 +497,7 @@ describe('the showcase recording (format 2)', () => {
   // rows into the buckets a card asks for). The oracle here is the excerpt's rows, read straight
   // from the file and folded by hand over the window a card over an hour reads: whole minutes,
   // ending at the last minute boundary before the cursor.
-  it('computes Avg throughput from the recorded rows, exactly', async () => {
+  it('computes Avg and Peak throughput from the recorded rows, exactly', async () => {
     const at = JSON.parse(readFileSync(SHOWCASE_PATH, 'utf-8')).chapters[0].tMs as number;
     const text = await showcaseOnCurrentBoardText();
     await mountApp(text);
@@ -516,6 +516,7 @@ describe('the showcase recording (format 2)', () => {
     const avg = values.reduce((a, b) => a + b, 0) / values.length;
     const card = (id: string) => document.querySelector(`[data-widget="${id}"]`)?.textContent ?? '';
     expect(card('sp-plant-throughput-avg')).toContain(`${Math.round(avg)}t/h`);
+    expect(card('sp-plant-throughput-max')).toContain(`${Math.round(Math.max(...values))}t/h`);
     expect(document.body.textContent).not.toMatch(/cannot compute/i);
   });
 

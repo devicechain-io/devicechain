@@ -314,6 +314,7 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 	for id, c := range map[string]struct{ typ, metric, unit string }{
 		"sp-plant-throughput-now": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-throughput-avg": {"stat-card", "throughput_tph", "t/h"},
+		"sp-plant-throughput-max": {"stat-card", "throughput_tph", "t/h"},
 		"sp-plant-running":        {"status-light", "plant_running", ""},
 	} {
 		w := widgetByID(t, def, id)
@@ -333,8 +334,8 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 		}
 	}
 	// "Now" is the newest reading (`last`), which the card refuses once it is older than the
-	// board's range; the other is the range's average.
-	for id, stat := range map[string]string{"sp-plant-throughput-now": "last", "sp-plant-throughput-avg": "avg"} {
+	// board's range; the other two are the range's average and peak.
+	for id, stat := range map[string]string{"sp-plant-throughput-now": "last", "sp-plant-throughput-avg": "avg", "sp-plant-throughput-max": "max"} {
 		w := widgetByID(t, def, id)
 		if w.Options["stat"] != stat {
 			t.Errorf("%s stat = %v, want %s", id, w.Options["stat"], stat)
@@ -348,7 +349,7 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 		}
 	}
 	// The trend is drawn on "now" only; the average beside it would repeat the line.
-	for id, want := range map[string]bool{"sp-plant-throughput-now": true, "sp-plant-throughput-avg": false} {
+	for id, want := range map[string]bool{"sp-plant-throughput-now": true, "sp-plant-throughput-avg": false, "sp-plant-throughput-max": false} {
 		if got, _ := widgetByID(t, def, id).Options["sparkline"].(bool); got != want {
 			t.Errorf("%s sparkline = %v, want %v", id, got, want)
 		}
@@ -489,6 +490,19 @@ func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 	for _, id := range []string{"sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-low-fuel"} {
 		if b := widgetByID(t, def, id).Layout["base"]; b.Rows != 3 || b.Row != 2 || b.Cols != 3 {
 			t.Errorf("%s = %+v, want a 3x3 tile at row 2", id, b)
+		}
+	}
+	// The site's state band gives up a column per tile (two columns is the alarm count's and the
+	// lamp's minimum) so the peak card keeps a place on the board beside them, two rows tall.
+	for id, want := range map[string]dashboardPlacement{
+		"sp-alarms-critical":      {Col: 0, Cols: 2, Row: 0, Rows: 2},
+		"sp-alarms-major":         {Col: 2, Cols: 2, Row: 0, Rows: 2},
+		"sp-plant-running":        {Col: 4, Cols: 2, Row: 0, Rows: 2},
+		"sp-plant-throughput-max": {Col: 6, Cols: 3, Row: 0, Rows: 2},
+	} {
+		b := widgetByID(t, def, id).Layout["base"]
+		if b.Col != want.Col || b.Cols != want.Cols || b.Row != want.Row || b.Rows != want.Rows {
+			t.Errorf("%s = %+v, want %+v", id, b, want)
 		}
 	}
 }

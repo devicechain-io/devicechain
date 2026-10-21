@@ -61,7 +61,7 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 3,
+          "cols": 2,
           "mode": "grid",
           "row": 0,
           "rows": 2
@@ -83,8 +83,8 @@
       "id": "sp-alarms-major",
       "layout": {
         "base": {
-          "col": 3,
-          "cols": 3,
+          "col": 2,
+          "cols": 2,
           "mode": "grid",
           "row": 0,
           "rows": 2
@@ -108,8 +108,8 @@
       "id": "sp-plant-running",
       "layout": {
         "base": {
-          "col": 6,
-          "cols": 3,
+          "col": 4,
+          "cols": 2,
           "mode": "grid",
           "row": 0,
           "rows": 2
@@ -174,6 +174,33 @@
         "precision": 0,
         "stat": "avg",
         "title": "Avg throughput",
+        "unit": "t/h"
+      },
+      "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "throughput_tph"
+        ],
+        "slot": "plant"
+      },
+      "id": "sp-plant-throughput-max",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 0,
+          "rows": 2
+        }
+      },
+      "options": {
+        "measurement": "throughput_tph",
+        "precision": 0,
+        "stat": "max",
+        "title": "Peak throughput",
         "unit": "t/h"
       },
       "type": "stat-card"
