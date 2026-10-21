@@ -18,6 +18,7 @@ import {
   ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
   ALARM_DEVICE_TYPES,
+  ALARM_SEVERITY_COUNTS,
   ALARM_TYPE_COUNTS,
   ALARMS_QUERY,
   CLEAR_ALARM,
@@ -40,6 +41,7 @@ import {
 import type {
   AlarmDeviceType,
   AlarmRow,
+  AlarmSeverityCount,
   AlarmTypeCount,
   AnchorTarget,
   CommandRow,
@@ -158,6 +160,12 @@ export interface AlarmSubscription {
   // rows, `typeCounts` is set, and `total` is their sum. A source that cannot count by type leaves
   // `typeCounts` unset (or fails the stream); it never answers with counts it did not make.
   countByDeviceType?: boolean;
+  // Read the per-severity counts of the matching alarms instead of the alarms: the snapshot then has
+  // no rows, `severityCounts` is set, and `total` is their sum. Tenant-wide, EVERY alarm the viewer
+  // can see counts, whatever its originator (a device, an asset, an area, a customer, a group), so
+  // the total is the alarm count's. With `deviceType`, only alarms on devices of that type count. A
+  // source that cannot count by severity leaves `severityCounts` unset (or fails the stream).
+  countBySeverity?: boolean;
 }
 
 // A full alarm snapshot: the current rows (newest first, capped to pageSize) and the
@@ -167,6 +175,8 @@ export interface AlarmSnapshot {
   total: number;
   // Only for a subscription with countByDeviceType: one entry per (device type, severity) present.
   typeCounts?: AlarmTypeCount[];
+  // Only for a subscription with countBySeverity: one entry per severity present.
+  severityCounts?: AlarmSeverityCount[];
 }
 
 
@@ -714,6 +724,22 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     const originators: Array<{ originatorType: string | null; originator: string | null }> = tenantWide
       ? [{ originatorType: null, originator: null }]
       : tokens.map((token) => ({ originatorType: 'device', originator: token }));
+
+    if (sub.countBySeverity) {
+      // One grouped read per originator query (one tenant-wide), summed by severity. Per-device
+      // reads cannot double count: an alarm has one originator.
+      const pages = await Promise.all(
+        originators.map((o) =>
+          gql(DEVICE_AREA, ALARM_SEVERITY_COUNTS, { criteria: { ...filters, ...o }, deviceType: sub.deviceType ?? null }),
+        ),
+      );
+      const merged = new Map<string, number>();
+      for (const page of pages) {
+        for (const c of page.alarmCountsBySeverity) merged.set(c.severity, (merged.get(c.severity) ?? 0) + c.count);
+      }
+      const severityCounts = [...merged].map(([severity, count]) => ({ severity, count }));
+      return { alarms: [], total: severityCounts.reduce((n, c) => n + c.count, 0), severityCounts };
+    }
 
     if (sub.countByDeviceType) {
       // One grouped read per originator query (one tenant-wide), summed by (type, severity).

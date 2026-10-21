@@ -6,4 +6,5 @@
 
 export { AlarmTable } from './alarm-table';
 export { AlarmCount } from './alarm-count';
+export { AlarmSeverity } from './alarm-severity';
 export { GroupedAlarm } from './alarm-grouped';

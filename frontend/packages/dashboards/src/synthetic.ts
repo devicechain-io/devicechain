@@ -258,6 +258,14 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           ...(typed ? withType(a.originatorToken) : {}),
         };
       });
+      if (subscription.countBySeverity) {
+        // The live hub's severity count, over the same filtered set (type facet included).
+        const bySeverity = new Map<string, number>();
+        for (const r of rows) bySeverity.set(r.severity, (bySeverity.get(r.severity) ?? 0) + 1);
+        const severityCounts = [...bySeverity].map(([severity, count]) => ({ severity, count }));
+        sink.next({ alarms: [], total: rows.length, severityCounts });
+        return;
+      }
       if (subscription.countByDeviceType) {
         // The live hub's count read, over the same filtered set: per (type, severity).
         const counts = new Map<string, AlarmTypeCount>();

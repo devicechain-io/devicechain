@@ -59,7 +59,7 @@ const SELECTOR_KINDS = ['device', 'anchor', 'slot'];
 // The keys each channel's binding policy may carry, mirroring ChannelBindingPolicy.
 const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
   measurement: ['window', 'windowSeconds', 'members'],
-  alarm: ['pageSize', 'state', 'severity', 'acknowledged', 'groupBy'],
+  alarm: ['pageSize', 'state', 'severity', 'acknowledged', 'groupBy', 'countBySeverity', 'deviceType'],
   control: ['pageSize'],
   location: [],
   aggregate: ['windowSeconds'],
@@ -429,6 +429,7 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
   ref('pageSize', isNumber, 'a number option', true);
   ref('state', isText, 'a string or enum option', false);
   ref('severity', isText, 'a string or enum option', false);
+  ref('deviceType', isText, 'a string or enum option', false);
   ref('acknowledged', isBoolEnum, 'an enum option whose values are only "true" and "false"', false);
 
   // A MODE binding turns a behaviour on: `members` makes a measurement widget a fleet widget
@@ -456,6 +457,11 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
   };
   modeBinding('members');
   modeBinding('groupBy');
+  // `countBySeverity` is a constant switch and nothing else: `{ const: true }`.
+  const counts = binding.countBySeverity;
+  if (counts !== undefined && !(isRecord(counts) && counts.const === true && Object.keys(counts).length === 1)) {
+    add('binding.countBySeverity', 'must be { const: true }');
+  }
 }
 
 function readSpan(value: unknown, path: string, add: Add): { cols: number; rows: number } | undefined {

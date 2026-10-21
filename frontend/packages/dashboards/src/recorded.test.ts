@@ -304,6 +304,26 @@ describe('RecordedDataSource: alarms', () => {
     expect(snaps[snaps.length - 1].total).toBe(3);
   });
 
+  it('counts by severity from the same fold as its rows, so the counts sum to the alarm count', async () => {
+    const { source } = playerAt(FIXTURE_DURATION_MS);
+    const counted = subscribe(source, { countBySeverity: true });
+    const rows = subscribe(source);
+    await settle();
+    const snap = counted[counted.length - 1];
+    const all = rows[rows.length - 1];
+    expect(snap.alarms).toEqual([]);
+    expect(snap.total).toBe(all.total);
+    expect(snap.severityCounts!.reduce((n, c) => n + c.count, 0)).toBe(all.total);
+    for (const c of snap.severityCounts!) {
+      expect(all.alarms.filter((a) => a.severity === c.severity)).toHaveLength(c.count);
+    }
+    // With a type, refused like any other type facet: the recording carries no types.
+    const errors: unknown[] = [];
+    source.subscribeAlarms({ pageSize: 1, countBySeverity: true, deviceType: 'hauler' }, { next: () => {}, error: (e) => errors.push(e) });
+    await settle();
+    expect(errors[0]).toBeInstanceOf(NotInRecordingError);
+  });
+
   it('re-emits only when the fold changes', async () => {
     const { source, clock } = playerAt(0);
     const snaps = subscribe(source);

@@ -263,7 +263,7 @@ draft only. Viewers see nothing new until you publish a version.
 |---|---|
 | Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count |
 | Static | Label, Image |
-| Alarms | Alarm table, Alarm count |
+| Alarms | Alarm table, Alarm count, Alarm severity |
 | Control | Command button, Command slider, Command toggle |
 | Navigation | Entity selector, which lets a viewer choose which device or entity the dashboard shows |
 | Location | Map, which draws on the tenant's map (see [Tenant settings](/user-guide/tenant-settings)) |
@@ -327,6 +327,23 @@ The settings depend on the widget. Common ones:
   device they can no longer see appears under **All** only. **Device type tabs** (alarm table, with *Device type* grouping) lists device type
   tokens to show as tabs, in that order, instead of every type that has an alarm; a type not listed
   appears under **All** only.
+- **Alarm severity**: how bad it is, at a glance. A stacked bar shows the widget's active alarms
+  split by severity, and under it every severity is listed, most severe first, with its count:
+  *Critical*, *Major*, *Minor*, *Warning* and *Indeterminate*. A severity with no alarms stays in the
+  list, dimmed, so the list never changes shape as alarms come and go, and has no segment in the
+  bar. A severity with alarms takes its severity color; *Indeterminate* stays neutral, and with no
+  alarms at all the bar is an empty track. The list is real text ("Critical: 2"), so the counts are
+  read aloud by a screen reader and the colors are never the only signal; the bar itself is
+  decoration. **State** (active by default) and **Acknowledged** narrow which alarms are counted.
+  With no data source the widget counts every alarm you can see, whatever raised it (a device, an
+  asset, an area, a customer or a group), so its total matches an alarm count's; bound to a device,
+  anchor or group it counts the alarms on the devices it covers. **Device type** counts only the
+  alarms on devices of that type, by its token, and the caption says so (*5 alarms on pump
+  devices*). The counts are exact, however many alarms there are, and a viewer limited to some
+  customers counts only the alarms they can see. A data source that cannot count alarms by
+  severity says so instead of showing zeros. In a board replay the widget counts the recorded
+  alarms; a recording carries no device types, so a widget set to one says it cannot be shown. The
+  widget does not filter a linked alarm table when you click a severity.
 - **Fleet table**: one row per device of the group the widget is bound to and one column per
   measurement the data source selects. Set the group on the widget's data source and pick the
   measurements to show. **Columns** gives a heading, unit and precision per measurement;

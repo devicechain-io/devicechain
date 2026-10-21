@@ -1375,6 +1375,51 @@
         "title": "Sensors in the zone"
       },
       "type": "fleet-count"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "zone"
+      },
+      "id": "wl-alarm-severity",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 6,
+          "mode": "grid",
+          "row": 54,
+          "rows": 3
+        }
+      },
+      "options": {
+        "state": "ACTIVE",
+        "title": "Active alarms by severity"
+      },
+      "type": "alarm-severity"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "zone"
+      },
+      "id": "wl-alarm-severity-type",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 6,
+          "mode": "grid",
+          "row": 54,
+          "rows": 3
+        }
+      },
+      "options": {
+        "deviceType": "wl-sensor",
+        "state": "ACTIVE",
+        "title": "Sensor alarms by severity"
+      },
+      "type": "alarm-severity"
     }
   ]
 }

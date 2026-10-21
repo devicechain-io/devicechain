@@ -173,3 +173,97 @@ func TestAlarmsByDeviceTypeIgnoreNonDeviceOriginators(t *testing.T) {
 	require.Equal(t, int64(1), total)
 	require.Equal(t, []string{"k1"}, keys)
 }
+
+func (r *alarmTypeRig) bySeverity(t *testing.T, ctx context.Context, c AlarmCountCriteria, deviceType *string) []string {
+	t.Helper()
+	found, err := r.api.AlarmCountsBySeverity(ctx, c, deviceType)
+	require.NoError(t, err)
+	out := []string{}
+	for _, f := range found {
+		out = append(out, fmt.Sprintf("%s=%d", f.Severity, f.Count))
+	}
+	sort.Strings(out)
+	return out
+}
+
+// nonDevice raises an alarm on a non-device anchor (an asset, an area, a customer, a group).
+func (r *alarmTypeRig) nonDevice(t *testing.T, tenant, originatorType, severity string, state AlarmState) {
+	t.Helper()
+	r.n++
+	a := Alarm{
+		TokenReference: rdb.TokenReference{Token: fmt.Sprintf("alarm-%d", r.n)},
+		// The id collides with a device's on purpose: only the originator TYPE tells them apart.
+		OriginatorType: originatorType, OriginatorId: 1,
+		AlarmKey: fmt.Sprintf("k%d", r.n), MetricKey: "m", State: string(state), Severity: severity,
+		RaisedTime: time.Unix(int64(1000+r.n), 0).UTC(),
+	}
+	require.NoError(t, r.db.WithContext(tenantCtx(tenant)).Create(&a).Error)
+}
+
+// The per-severity count with no type counts EVERY alarm the search returns, whatever its
+// originator, so a breakdown's total is the alarm count's; with a type it counts that type's
+// device alarms only, as the type-filtered search does.
+func TestAlarmCountsBySeverity(t *testing.T) {
+	r := newAlarmTypeRig(t)
+	r.device(t, "A", "pump", "p1")
+	r.device(t, "A", "valve", "v1")
+	r.device(t, "B", "pump", "p1")
+
+	r.alarm(t, "A", "p1", "MAJOR", AlarmStateActive)
+	r.alarm(t, "A", "p1", "CRITICAL", AlarmStateActive)
+	r.alarm(t, "A", "v1", "MAJOR", AlarmStateActive)
+	r.alarm(t, "A", "v1", "MINOR", AlarmStateCleared)
+	r.alarm(t, "A", "p1", "MAJOR", AlarmStateCleared) // a severity in both states is still ONE entry
+	r.nonDevice(t, "A", "asset", "CRITICAL", AlarmStateActive)
+	r.nonDevice(t, "A", "area", "WARNING", AlarmStateActive)
+	r.nonDevice(t, "A", "customer", "MAJOR", AlarmStateActive)
+	r.nonDevice(t, "A", "group", "INDETERMINATE", AlarmStateActive)
+	r.alarm(t, "B", "p1", "CRITICAL", AlarmStateActive)
+
+	a := tenantCtx("A")
+	active := string(AlarmStateActive)
+	require.Equal(t, []string{"CRITICAL=2", "INDETERMINATE=1", "MAJOR=3", "WARNING=1"},
+		r.bySeverity(t, a, AlarmCountCriteria{State: &active}, nil), "every originator counts")
+	require.Equal(t, []string{"CRITICAL=2", "INDETERMINATE=1", "MAJOR=4", "MINOR=1", "WARNING=1"},
+		r.bySeverity(t, a, AlarmCountCriteria{}, nil))
+
+	pump, valve, none := "pump", "valve", "no-such-type"
+	require.Equal(t, []string{"CRITICAL=1", "MAJOR=1"}, r.bySeverity(t, a, AlarmCountCriteria{State: &active}, &pump))
+	require.Equal(t, []string{"MAJOR=1", "MINOR=1"}, r.bySeverity(t, a, AlarmCountCriteria{}, &valve))
+	require.Empty(t, r.bySeverity(t, a, AlarmCountCriteria{}, &none), "an unknown type counts nothing")
+	asset := "asset"
+	require.Equal(t, []string{"CRITICAL=1"}, r.bySeverity(t, a, AlarmCountCriteria{OriginatorType: &asset}, nil))
+
+	// The other tenant sees its own alarm only.
+	require.Equal(t, []string{"CRITICAL=1"}, r.bySeverity(t, tenantCtx("B"), AlarmCountCriteria{}, nil))
+
+	// The invariant the breakdown relies on: the counts sum to the search's total, unfiltered and
+	// per type.
+	sum := func(ctx context.Context, c AlarmCountCriteria, deviceType *string) int32 {
+		found, err := r.api.AlarmCountsBySeverity(ctx, c, deviceType)
+		require.NoError(t, err)
+		n := int32(0)
+		for _, f := range found {
+			n += int32(f.Count)
+		}
+		return n
+	}
+	for _, tc := range []struct {
+		ctx        context.Context
+		state      *string
+		deviceType *string
+	}{{a, nil, nil}, {a, &active, nil}, {a, nil, &pump}, {a, &active, &valve}, {tenantCtx("B"), nil, nil}} {
+		found, err := r.api.Alarms(tc.ctx, AlarmSearchCriteria{Pagination: rdb.Pagination{PageNumber: 1, PageSize: 1},
+			State: tc.state, DeviceType: tc.deviceType})
+		require.NoError(t, err)
+		require.Equal(t, found.Pagination.TotalRecords, sum(tc.ctx, AlarmCountCriteria{State: tc.state}, tc.deviceType))
+	}
+	// Negative control: the per-type count leaves the four non-device alarms out.
+	n := 0
+	types, err := r.api.AlarmCountsByDeviceType(a, AlarmCountCriteria{State: &active})
+	require.NoError(t, err)
+	for _, c := range types {
+		n += c.Count
+	}
+	require.Equal(t, 3, n)
+}

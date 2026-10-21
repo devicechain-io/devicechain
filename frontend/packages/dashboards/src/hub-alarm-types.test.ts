@@ -222,3 +222,64 @@ describe('the per-type counts', () => {
     dispose();
   });
 });
+
+const severityReads = () => h.gql.mock.calls.filter((c) => String(c[1]).includes('alarmCountsBySeverity'));
+
+describe('the per-severity counts', () => {
+  it('are ONE grouped read tenant-wide, of every originator, reading no alarm rows', async () => {
+    h.gql.mockImplementation(async (_a: string, doc: string) => {
+      if (String(doc).includes('alarmCountsBySeverity')) {
+        // The server counts every originator: devices, assets, areas, customers, groups.
+        return { alarmCountsBySeverity: [{ severity: 'CRITICAL', count: 3000 }, { severity: 'MINOR', count: 2 }] };
+      }
+      throw new Error(`unexpected read ${String(doc)}`);
+    });
+    const { snaps, dispose } = read({ pageSize: 1, state: 'ACTIVE', countBySeverity: true });
+    await settle();
+    expect(severityReads()).toHaveLength(1);
+    // No originator facet, no type: nothing narrows the count to devices.
+    expect(severityReads()[0][2]).toEqual({
+      criteria: { state: 'ACTIVE', severity: null, acknowledged: null, originatorType: null, originator: null },
+      deviceType: null,
+    });
+    expect(h.gql.mock.calls).toHaveLength(1);
+    expect(snaps[0]).toEqual({
+      alarms: [],
+      total: 3002,
+      severityCounts: [
+        { severity: 'CRITICAL', count: 3000 },
+        { severity: 'MINOR', count: 2 },
+      ],
+    });
+    dispose();
+  });
+
+  it('send the device type to the server', async () => {
+    h.gql.mockImplementation(async () => ({ alarmCountsBySeverity: [{ severity: 'MAJOR', count: 1 }] }));
+    const { snaps, dispose } = read({ pageSize: 1, countBySeverity: true, deviceType: 'sensor' });
+    await settle();
+    expect(severityReads()[0][2]).toMatchObject({ deviceType: 'sensor' });
+    expect(snaps[0].total).toBe(1);
+    dispose();
+  });
+
+  it('sum a scoped widget’s per-originator counts by severity', async () => {
+    h.gql.mockImplementation(async (_a: string, _doc: string, vars: Record<string, unknown>) => {
+      const o = (vars.criteria as { originator: string }).originator;
+      return {
+        alarmCountsBySeverity:
+          o === 'therm-1' ? [{ severity: 'MAJOR', count: 2 }] : [{ severity: 'MAJOR', count: 1 }, { severity: 'CRITICAL', count: 4 }],
+      };
+    });
+    const snaps: AlarmSnapshot[] = [];
+    const dispose = scopedHub().subscribeAlarms({ datasource: ANCHOR, pageSize: 1, countBySeverity: true }, { next: (s) => snaps.push(s) });
+    await settle();
+    expect(severityReads()).toHaveLength(2);
+    expect(snaps[0].severityCounts).toEqual([
+      { severity: 'MAJOR', count: 3 },
+      { severity: 'CRITICAL', count: 4 },
+    ]);
+    expect(snaps[0].total).toBe(7);
+    dispose();
+  });
+});

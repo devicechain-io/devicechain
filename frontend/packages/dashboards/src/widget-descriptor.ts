@@ -138,6 +138,11 @@ export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOption
           // Makes the widget group its alarms by the originating device's type (a tab strip):
           // the referenced option holding `equals` turns the mode on. `data.typeTabs` is then set.
           groupBy?: StringOptionRef<S> & { equals: string };
+          // Makes the widget read the per-severity COUNTS of its alarms instead of alarm rows:
+          // `data.severityCounts` is set and `data.alarms` is empty. `{ const: true }` only.
+          countBySeverity?: ConstBinding<true>;
+          // Only alarms on devices of the type (token) the referenced option holds; unset, all.
+          deviceType?: StringOptionRef<S>;
         }
       : C extends 'control'
         ? { pageSize: PageSize<S> }

@@ -68,6 +68,7 @@ export type {
   AlarmRow,
   AlarmDeviceType,
   AlarmTypeCount,
+  AlarmSeverityCount,
   CommandRow,
   CommandParameter,
   CommandParamDataType,

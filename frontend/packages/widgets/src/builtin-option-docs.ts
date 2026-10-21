@@ -43,6 +43,7 @@ export const OPTION_DOCS: Readonly<Record<string, string>> = {
   severity: 'Show only alarms at this severity. Unset shows every severity.',
   acknowledged: "Show only acknowledged ('true') or unacknowledged ('false') alarms. Unset shows both.",
   groupBy: 'deviceType: a tab per device type.',
+  deviceType: 'Only alarms on devices of this type (token).',
   deviceTypes: 'Types to tab, in order; unset tabs all.',
   'deviceTypes.token': 'Type token.',
   maxRows: 'Alarms loaded into the table. Default 50.',

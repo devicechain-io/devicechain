@@ -1,7 +1,7 @@
 {
   "name": "@devicechain/widgets",
   "version": "0.0.0-dev",
-  "description": "DeviceChain's built-in dashboard widgets across six channels — telemetry (time-series chart + gauge over Apache ECharts, latest card, table, and lazily loaded level, indicator and radial widgets: linear and level gauges, battery, status light, signal bars, compass, progress ring), static (label, image; no data), alarm (table, count), control (command button), selection (entity selector), and location (map over MapLibre GL, lazily loaded, tile source supplied by the host app) — plus the renderer that lays them out. Each is a registration built on @devicechain/widget-sdk. Themed via CSS custom properties, no Tailwind leakage.",
+  "description": "DeviceChain's built-in dashboard widgets across six channels — telemetry (time-series chart + gauge over Apache ECharts, latest card, table, and lazily loaded level, indicator and radial widgets: linear and level gauges, battery, status light, signal bars, compass, progress ring), static (label, image; no data), alarm (table, count, severity breakdown), control (command button), selection (entity selector), and location (map over MapLibre GL, lazily loaded, tile source supplied by the host app) — plus the renderer that lays them out. Each is a registration built on @devicechain/widget-sdk. Themed via CSS custom properties, no Tailwind leakage.",
   "keywords": [
     "devicechain",
     "iot",

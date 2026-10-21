@@ -165,6 +165,7 @@ export const WIDGET_TYPES = [
   'image',
   'alarm-table',
   'alarm-count',
+  'alarm-severity',
   'command-button',
   'entity-selector',
   'map',
@@ -689,6 +690,12 @@ export interface AlarmRow {
 export interface AlarmDeviceType {
   token: string;
   name: string | null;
+}
+
+// How many matching alarms are at one severity (a severity-count read).
+export interface AlarmSeverityCount {
+  severity: string;
+  count: number;
 }
 
 // How many matching alarms are on devices of one type at one severity (a type-count read).

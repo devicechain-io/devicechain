@@ -22,6 +22,11 @@ export const alarmTableWidget = defineWidget({
   implementation: { kind: 'trusted-react', component: chunk.component('AlarmTable') },
 });
 
+export const alarmSeverityWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['alarm-severity'],
+  implementation: { kind: 'trusted-react', component: chunk.component('AlarmSeverity') },
+});
+
 export const alarmCountWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['alarm-count'],
   implementation: { kind: 'trusted-react', component: chunk.component('AlarmCount') },

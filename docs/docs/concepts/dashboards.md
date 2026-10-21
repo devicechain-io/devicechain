@@ -60,6 +60,7 @@ The command slider and toggle show what was last sent to the device, with that c
 | **Image** | static | a static image (e.g. a floor plan behind other widgets) |
 | **Alarm table** | alarm | live alarms for a device or anchor |
 | **Alarm count** | alarm | a rolled-up count of open alarms |
+| **Alarm severity** | alarm | the active alarms broken down by severity: a stacked bar over a legend with a count for each severity, for every alarm in scope or for the devices of one type |
 | **Command / control** | control | a typed parameter form that dispatches a command and shows its live delivery lifecycle |
 | **Command slider** | control | a slider for one numeric parameter of a command, sent when released; its range comes from the command definition |
 | **Command toggle** | control | a switch for one boolean parameter of a command, one command per click |

@@ -6,7 +6,7 @@
 // channel) rather than beside the React hooks that happen to produce them — a headless
 // validator, the SDK and the built-in widgets all read the same declarations.
 
-import type { AlarmRow, AlarmTypeCount, CommandRow, LocationSample, MeasurementSample } from './types';
+import type { AlarmRow, AlarmSeverityCount, AlarmTypeCount, CommandRow, LocationSample, MeasurementSample } from './types';
 
 export interface MeasurementStreamState {
   // The most recent sample per measurement name (drives cards, gauges, tables).
@@ -73,6 +73,8 @@ export interface AlarmStreamState {
   typeTabs?: AlarmTypeTabs;
   // Present only on a stream subscribed with countByDeviceType, from a source that counts by type.
   typeCounts?: AlarmTypeCount[];
+  // Present only on a stream subscribed with countBySeverity, from a source that counts by severity.
+  severityCounts?: AlarmSeverityCount[];
 }
 
 // One device type among the active alarms in a widget's scope: how many are active, and the worst

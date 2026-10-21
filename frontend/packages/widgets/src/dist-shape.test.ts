@@ -318,7 +318,7 @@ describe('the built package', () => {
     const entry = read('index.js');
     const specs = [...entry.matchAll(/import\(\s*["']([^"']+)["']\s*\)/g)].map((m) => m[1]);
     const families: Record<string, string[]> = {
-      'alarm-widgets': ['AlarmTable', 'AlarmCount'],
+      'alarm-widgets': ['AlarmTable', 'AlarmCount', 'AlarmSeverity'],
       'entity-selector': ['EntitySelector'],
       table: ['Table'],
       'control-widgets': ['CommandButton'],

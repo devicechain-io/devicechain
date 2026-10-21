@@ -192,6 +192,24 @@ describe('SyntheticDataSource.subscribeAlarms', () => {
     expect(snap.total).toBe([...byType.values()].reduce((x, y) => x + y, 0));
   });
 
+  it('counts by severity as the live count read does, agreeing with the alarm count, with and without a type', () => {
+    const src = new SyntheticDataSource();
+    for (const deviceType of [undefined, 'thermostat']) {
+      const counted = collectAlarms();
+      src.subscribeAlarms({ pageSize: 1, state: 'ACTIVE', countBySeverity: true, deviceType }, counted.sink);
+      const snap = counted.snapshots[0];
+      expect(snap.alarms).toEqual([]);
+      const rows = collectAlarms();
+      src.subscribeAlarms({ pageSize: 50, state: 'ACTIVE', deviceType }, rows.sink);
+      expect(snap.severityCounts!.reduce((n, c) => n + c.count, 0)).toBe(rows.snapshots[0].total);
+      expect(snap.total).toBe(rows.snapshots[0].total);
+      for (const c of snap.severityCounts!) {
+        expect(rows.snapshots[0].alarms.filter((a) => a.severity === c.severity)).toHaveLength(c.count);
+      }
+    }
+    src.disposeAll();
+  });
+
   // The preview must show authors exactly what production can: a field the live query
   // does not select is one the live table never has, so a synthetic row carrying it
   // previews something that never appears. The expected set is derived from the query

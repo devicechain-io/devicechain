@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACKNOWLEDGE_ALARM,
   ALARM_DEVICE_TYPES,
+  ALARM_SEVERITY_COUNTS,
   ALARM_STREAM,
   ALARM_TYPE_COUNTS,
   ALARMS_QUERY,
@@ -37,7 +38,7 @@ describe('alarm documents against the served device-management schema', () => {
     expect(schema.getType('AlarmEvent')).toBeDefined();
   });
 
-  const docs = { ALARMS_QUERY, ALARM_DEVICE_TYPES, ALARM_TYPE_COUNTS, ALARM_STREAM, ACKNOWLEDGE_ALARM, CLEAR_ALARM };
+  const docs = { ALARMS_QUERY, ALARM_DEVICE_TYPES, ALARM_TYPE_COUNTS, ALARM_SEVERITY_COUNTS, ALARM_STREAM, ACKNOWLEDGE_ALARM, CLEAR_ALARM };
   for (const [name, doc] of Object.entries(docs)) {
     it(`${name} validates with no errors`, () => {
       const errors = validate(schema, parse(doc as unknown as string)).map((e) => e.message);

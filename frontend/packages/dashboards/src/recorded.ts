@@ -823,6 +823,18 @@ export class RecordedDataSource implements WidgetDataSource {
         return compareInstants(wb, wa);
       };
       matches.sort((a, b) => byTime(a, b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      if (subscription.countBySeverity) {
+        // Counted from the same fold the rows come from, so the counts sum to what an alarm count
+        // over this recording shows. (A type facet was refused above: the recording has no types.)
+        const bySeverity = new Map<string, number>();
+        for (const a of matches) bySeverity.set(a.sev, (bySeverity.get(a.sev) ?? 0) + 1);
+        const severityCounts = [...bySeverity].map(([severity, count]) => ({ severity, count }));
+        const signature = JSON.stringify(severityCounts);
+        if (signature === lastSignature || isDisposed()) return;
+        lastSignature = signature;
+        sink.next({ alarms: [], total: matches.length, severityCounts });
+        return;
+      }
       const page = matches.slice(0, subscription.pageSize);
       // Whole snapshots, re-emitted only when the fold actually changed.
       const signature = JSON.stringify([matches.length, page]);
