@@ -115,11 +115,18 @@ func streamHolds(js nats.JetStreamContext, name string) bool {
 // ways in, and reports what worked.
 func probeBucket(t *testing.T, srv *natsserver.Server) exposure {
 	t.Helper()
-	_, ownerJS := connectAs(t, srv, idIdentityLogin, idIdentityPw)
+	return probeBucketAs(t, srv, idIdentityLogin, idIdentityPw, ServiceUser, idServicePw)
+}
+
+// probeBucketAs is probeBucket with the roles named: owner creates and fills the bucket, prober
+// tries the four ways in.
+func probeBucketAs(t *testing.T, srv *natsserver.Server, owner, ownerPw, prober, proberPw string) exposure {
+	t.Helper()
+	_, ownerJS := connectAs(t, srv, owner, ownerPw)
 	bucket, err := ownerJS.CreateKeyValue(&nats.KeyValueConfig{Bucket: idBucket, TTL: time.Hour})
 	require.NoError(t, err)
 
-	svcNC, svcJS := connectAs(t, srv, ServiceUser, idServicePw)
+	svcNC, svcJS := connectAs(t, srv, prober, proberPw)
 	sub, err := svcNC.SubscribeSync("$KV." + idBucket + ".>")
 	require.NoError(t, err)
 	require.NoError(t, svcNC.Flush())
@@ -179,6 +186,29 @@ func TestTheServiceLoginReachesTheSignInBucketsWhenTheyShareItsAccount(t *testin
 	require.True(t, got.read, "control: the service login reads the token when the bucket shares its account")
 	require.True(t, got.sourced, "control: a stream sourcing the bucket's stream copies the token")
 	require.True(t, got.mirrored, "control: a stream mirroring the bucket's stream copies the token")
+}
+
+// Least privilege in the other direction. dc_identity is a full JetStream login inside its own
+// account, so the account boundary is also what keeps IT out of everything in the shared account
+// (device state, commands, every other bucket). The same four ways in, with the roles swapped: a
+// bucket the shared service login owns, probed by the identity login. user-management needs nothing
+// in APP over this connection (its APP work runs on the shared connection), so all four must fail.
+func TestTheIdentityLoginCannotReachTheSharedAccount(t *testing.T) {
+	got := probeBucketAs(t, splitTopology(t), ServiceUser, idServicePw, idIdentityLogin, idIdentityPw)
+	require.False(t, got.subscribed, "the identity login must not see the shared account's KV puts")
+	require.False(t, got.read, "the identity login must not read a bucket in the shared account")
+	require.False(t, got.sourced, "a stream the identity login creates must not source a shared-account stream")
+	require.False(t, got.mirrored, "a stream the identity login creates must not mirror a shared-account stream")
+}
+
+// Its control: the same swapped probe with both logins in one account reaches everything, so the
+// test above fails for the account and not because the probe refuses all.
+func TestTheIdentityLoginReachesTheSharedBucketsWhenTheyShareItsAccount(t *testing.T) {
+	got := probeBucketAs(t, sharedTopology(t), ServiceUser, idServicePw, idIdentityLogin, idIdentityPw)
+	require.True(t, got.subscribed, "control: a core subscription sees the put in a shared account")
+	require.True(t, got.read, "control: the login reads the token in a shared account")
+	require.True(t, got.sourced, "control: a sourcing stream copies the token in a shared account")
+	require.True(t, got.mirrored, "control: a mirroring stream copies the token in a shared account")
 }
 
 // Sources can name an external stream by API prefix, which is how streams cross accounts WHEN an

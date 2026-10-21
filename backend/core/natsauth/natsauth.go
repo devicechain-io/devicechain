@@ -93,7 +93,16 @@ const IdentityAccount = messaging.IdentityAccountName
 
 // IdentityUser is the static login that places a connection in IdentityAccount. It is a separate
 // credential from ServiceUser, and its password is held by user-management alone (a Secret only
-// that Deployment mounts), so no other pod can open the account.
+// that Deployment mounts), so no other pod can open the account WITH A LOGIN.
+//
+// 🔴 ONE OTHER WAY IN, AND IT IS NOT A LOGIN: THE DEVICE CALLOUT'S SIGNER. In config mode
+// nats-server places a callout-authorized connection in whichever account the response JWT's
+// audience names (server/auth_callout.go, assignAccountAndPermissions), and auth_callout has no
+// setting that limits placement (allowed_accounts selects which accounts' users are DELEGATED to
+// the callout, not where it may put them). So whoever holds the callout issuer seed can mint a
+// connection into IDENTITY. This code only ever names AppAccount (SignDeviceUserJWT;
+// natsauth_test pins it), and since #1822 the seed is in device-management's
+// Secret alone, so the residual is "a compromised device-management", not "any service login".
 const IdentityUser = messaging.IdentityLoginUser
 
 // MqttGatewayPort is the port nats-server's MQTT gateway listens on, and the port the

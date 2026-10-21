@@ -416,7 +416,9 @@ What a running instance sees:
   The old buckets are **deleted, not copied**: their tokens were readable by every service, so
   carrying them over would keep the exposure alive. Every session from before the upgrade ends, so
   people sign in again in the console and dashboards, and MCP and OAuth clients authorize again.
-  Access tokens already issued keep working until they expire, 15 minutes by default. Nothing is lost
+  Access tokens already issued keep working until they expire, 15 minutes by default. While
+  `user-management` rolls, a sign-in or token refresh that reaches a pod still on the previous release
+  can fail with an error for a few seconds; it succeeds when retried. Nothing is lost
   silently: `user-management` logs the buckets it deleted the first time it starts, and `dcctl
   upgrade` says so when it finishes. The broker restarts once, one server at a time under `--ha`, to
   add the account. `user-management` refuses to start if the instance says the account exists and its

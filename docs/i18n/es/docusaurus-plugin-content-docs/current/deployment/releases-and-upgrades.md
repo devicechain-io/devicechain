@@ -444,7 +444,9 @@ Lo que ve una instancia en marcha:
   mantendría viva la exposición. Todas las sesiones anteriores a la actualización terminan: las
   personas vuelven a iniciar sesión en la consola y los paneles, y los clientes MCP y OAuth vuelven a
   autorizar. Los tokens de acceso ya emitidos siguen funcionando hasta que caducan, 15 minutos por
-  defecto. Nada se pierde en silencio: `user-management` registra los buckets que eliminó la primera
+  defecto. Mientras `user-management` se actualiza, un inicio de sesión o una renovación de token que
+  llegue a un pod que aún ejecuta la versión anterior puede fallar con un error durante unos segundos;
+  al reintentarlo funciona. Nada se pierde en silencio: `user-management` registra los buckets que eliminó la primera
   vez que arranca, y `dcctl upgrade` lo indica al terminar. El bróker se reinicia una vez, servidor a
   servidor con `--ha`, para añadir la cuenta. `user-management` se niega a arrancar si la instancia
   dice que la cuenta existe y falta su contraseña, en lugar de recurrir a la cuenta compartida.
