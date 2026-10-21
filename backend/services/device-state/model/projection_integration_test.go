@@ -45,7 +45,7 @@ func itEnv(key, fallback string) string {
 
 // newPostgresProjectionApi migrates a database of its own named for the test and name, and
 // returns an Api over it.
-func newPostgresProjectionApi(t *testing.T, name string) *Api {
+func newPostgresProjectionApi(t testing.TB, name string) *Api {
 	t.Helper()
 	port, err := strconv.Atoi(itEnv("DC_IT_PGPORT", "5432"))
 	if err != nil {
@@ -62,7 +62,7 @@ func newPostgresProjectionApi(t *testing.T, name string) *Api {
 
 // newPostgresReplica is a second Api over the SAME database as api, through a connection pool of
 // its own: what a second device-state replica is to the first.
-func newPostgresReplica(t *testing.T, api *Api) *Api {
+func newPostgresReplica(t testing.TB, api *Api) *Api {
 	t.Helper()
 	port, err := strconv.Atoi(itEnv("DC_IT_PGPORT", "5432"))
 	if err != nil {
@@ -74,7 +74,7 @@ func newPostgresReplica(t *testing.T, api *Api) *Api {
 
 // openPostgresProjectionApi migrates the instance database (a no-op when it already is) and
 // returns an Api over a pool of its own.
-func openPostgresProjectionApi(t *testing.T, host string, port int, user, pass, instance string) *Api {
+func openPostgresProjectionApi(t testing.TB, host string, port int, user, pass, instance string) *Api {
 	t.Helper()
 	mgr := &rdb.RdbManager{
 		Microservice: &core.Microservice{InstanceId: instance, FunctionalArea: "device-state"},
@@ -98,7 +98,7 @@ func openPostgresProjectionApi(t *testing.T, host string, port int, user, pass, 
 }
 
 // truncateProjection empties the three tables, so one database serves many cases.
-func truncateProjection(t *testing.T, api *Api) {
+func truncateProjection(t testing.TB, api *Api) {
 	t.Helper()
 	if err := api.RDB.Database.Exec(`TRUNCATE "device-state".device_states, "device-state".latest_measurements, ` +
 		`"device-state".latest_locations`).Error; err != nil {
