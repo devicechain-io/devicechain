@@ -41,7 +41,7 @@ A fourth identifier comes later: the `token` in a **command** envelope identifie
 
 ## The event body
 
-Every inbound event, over any transport, is a JSON object:
+Every inbound event, over any transport, is a JSON object. The example below is the HTTP form; the MQTT form is the same without the credential fields:
 
 ```json
 {
@@ -55,7 +55,7 @@ Every inbound event, over any transport, is a JSON object:
 
 - `device` — the device's stable token.
 - `eventType` — `Measurement`, `Location`, or `Alert` (also `NewRelationship`).
-- `credentialType` / `credentialId` — the credential the device presents. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so a credential is expected.
+- `credentialType` / `credentialId` — the credential the device presents **over HTTP**. `MQTT_BASIC` additionally carries `credentialSecret`. Omit these only when the instance's device-auth mode is set to `disabled` or `optional`. The default is `required`, so an HTTP event is expected to carry a credential. **Over MQTT, leave all three out**: the broker has already authenticated the device when it connected, and an event on the platform's MQTT broker that carries any of them is refused (see the [Device Protocol Reference](../reference/device-protocol.md#rejections-at-the-door)).
 - `payload` — its shape depends on `eventType`, and every shape is `{ "entries": [ … ] }`. See below.
 
 Every field, with its type and whether it is required, including the optional `altId` and `relationship`, is in the [Device Protocol Reference](../reference/device-protocol.md#device-event), together with JSON Schemas you can validate firmware output against.
@@ -205,10 +205,10 @@ mosquitto_pub \
   -i 'devicechain:acme:sensor-001' \
   -u 'acme:<credentialId>' -P '<credentialSecret>' \
   -t "devicechain/acme/devices/sensor-001/events" \
-  -m '{"device":"sensor-001","eventType":"Measurement","credentialType":"MQTT_BASIC","credentialId":"<credentialId>","credentialSecret":"<credentialSecret>","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
+  -m '{"device":"sensor-001","eventType":"Measurement","payload":{"entries":[{"measurements":{"temperature":"21.5"}}]}}'
 ```
 
-The credential authenticates the connection (broker) and the event (pipeline). The TLS host, CA source and port exposure depend on how the instance is deployed; see [Deployment](../deployment/kubernetes-operator.md).
+The credential authenticates the connection. The broker then knows which device every publish comes from, so the event carries no credential; one that does is refused. The TLS host, CA source and port exposure depend on how the instance is deployed; see [Deployment](../deployment/kubernetes-operator.md).
 
 The broker speaks TLS, so `--cafile` needs the instance's CA certificate. On a local kind install it
 is in the instance namespace's `dc-nats-tls` Secret, under the key `ca.crt`. Save it as

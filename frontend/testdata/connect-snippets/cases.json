@@ -25,7 +25,7 @@
         }
       ]
     },
-    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:sensor-001' \\\n  -u 'acme:5f989616-2a0d-4160-8ae1-da5fad2898b2' \\\n  -t '<instance-id>/acme/devices/sensor-001/events' \\\n  -m '{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"5f989616-2a0d-4160-8ae1-da5fad2898b2\",\"payload\":{\"entries\":[{\"measurements\":{\"door_open\":\"true\",\"humidity\":\"42\",\"temperature\":\"21.5\"}}]}}'",
+    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:sensor-001' \\\n  -u 'acme:5f989616-2a0d-4160-8ae1-da5fad2898b2' \\\n  -t '<instance-id>/acme/devices/sensor-001/events' \\\n  -m '{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"door_open\":\"true\",\"humidity\":\"42\",\"temperature\":\"21.5\"}}]}}'",
     "http": "curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/events' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"device\":\"sensor-001\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"5f989616-2a0d-4160-8ae1-da5fad2898b2\",\"payload\":{\"entries\":[{\"measurements\":{\"door_open\":\"true\",\"humidity\":\"42\",\"temperature\":\"21.5\"}}]}}'"
   },
   {
@@ -39,7 +39,7 @@
       },
       "metrics": []
     },
-    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:pump-7' \\\n  -u 'acme:pump-7-user' -P '<password>' \\\n  -t '<instance-id>/acme/devices/pump-7/events' \\\n  -m '{\"device\":\"pump-7\",\"eventType\":\"Measurement\",\"credentialType\":\"MQTT_BASIC\",\"credentialId\":\"pump-7-user\",\"credentialSecret\":\"<password>\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"21.5\"}}]}}'",
+    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:pump-7' \\\n  -u 'acme:pump-7-user' -P '<password>' \\\n  -t '<instance-id>/acme/devices/pump-7/events' \\\n  -m '{\"device\":\"pump-7\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"21.5\"}}]}}'",
     "http": "curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/events' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"device\":\"pump-7\",\"eventType\":\"Measurement\",\"credentialType\":\"MQTT_BASIC\",\"credentialId\":\"pump-7-user\",\"credentialSecret\":\"<password>\",\"payload\":{\"entries\":[{\"measurements\":{\"temperature\":\"21.5\"}}]}}'"
   },
   {
@@ -90,7 +90,7 @@
         }
       ]
     },
-    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:plant-1:boiler' \\\n  -u 'plant-1:tok-boiler' \\\n  -t '<instance-id>/plant-1/devices/boiler/events' \\\n  -m '{\"device\":\"boiler\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"tok-boiler\",\"payload\":{\"entries\":[{\"measurements\":{\"armed\":\"false\",\"pressure\":\"100\",\"setback\":\"-10\",\"stage\":\"3.5\"}}]}}'",
+    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:plant-1:boiler' \\\n  -u 'plant-1:tok-boiler' \\\n  -t '<instance-id>/plant-1/devices/boiler/events' \\\n  -m '{\"device\":\"boiler\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"armed\":\"false\",\"pressure\":\"100\",\"setback\":\"-10\",\"stage\":\"3.5\"}}]}}'",
     "http": "curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/plant-1/events' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"device\":\"boiler\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"tok-boiler\",\"payload\":{\"entries\":[{\"measurements\":{\"armed\":\"false\",\"pressure\":\"100\",\"setback\":\"-10\",\"stage\":\"3.5\"}}]}}'"
   },
   {
@@ -109,7 +109,7 @@
         }
       ]
     },
-    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:tag-1' \\\n  -u 'acme:tag-1-user' -P '<password>' \\\n  -t '<instance-id>/acme/devices/tag-1/events' \\\n  -m '{\"device\":\"tag-1\",\"eventType\":\"Measurement\",\"credentialType\":\"MQTT_BASIC\",\"credentialId\":\"tag-1-user\",\"credentialSecret\":\"<password>\",\"payload\":{\"entries\":[{\"measurements\":{\"reading\":\"21.5\"}}]}}'",
+    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:tag-1' \\\n  -u 'acme:tag-1-user' -P '<password>' \\\n  -t '<instance-id>/acme/devices/tag-1/events' \\\n  -m '{\"device\":\"tag-1\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"reading\":\"21.5\"}}]}}'",
     "http": "curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/events' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"device\":\"tag-1\",\"eventType\":\"Measurement\",\"credentialType\":\"MQTT_BASIC\",\"credentialId\":\"tag-1-user\",\"credentialSecret\":\"<password>\",\"payload\":{\"entries\":[{\"measurements\":{\"reading\":\"21.5\"}}]}}'"
   },
   {
@@ -168,7 +168,7 @@
         }
       ]
     },
-    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:rack-9' \\\n  -u 'acme:tok-rack' \\\n  -t '<instance-id>/acme/devices/rack-9/events' \\\n  -m '{\"device\":\"rack-9\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"tok-rack\",\"payload\":{\"entries\":[{\"measurements\":{\"m00\":\"21.5\",\"m01\":\"21.5\",\"m02\":\"21.5\",\"m03\":\"21.5\",\"m04\":\"21.5\",\"m05\":\"21.5\",\"m06\":\"21.5\",\"m07\":\"21.5\"}}]}}'",
+    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:rack-9' \\\n  -u 'acme:tok-rack' \\\n  -t '<instance-id>/acme/devices/rack-9/events' \\\n  -m '{\"device\":\"rack-9\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"m00\":\"21.5\",\"m01\":\"21.5\",\"m02\":\"21.5\",\"m03\":\"21.5\",\"m04\":\"21.5\",\"m05\":\"21.5\",\"m06\":\"21.5\",\"m07\":\"21.5\"}}]}}'",
     "http": "curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/events' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"device\":\"rack-9\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"tok-rack\",\"payload\":{\"entries\":[{\"measurements\":{\"m00\":\"21.5\",\"m01\":\"21.5\",\"m02\":\"21.5\",\"m03\":\"21.5\",\"m04\":\"21.5\",\"m05\":\"21.5\",\"m06\":\"21.5\",\"m07\":\"21.5\"}}]}}'"
   },
   {
@@ -187,7 +187,7 @@
         }
       ]
     },
-    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:odd-1' \\\n  -u 'acme:tok-odd' \\\n  -t '<instance-id>/acme/devices/odd-1/events' \\\n  -m '{\"device\":\"odd-1\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"tok-odd\",\"payload\":{\"entries\":[{\"measurements\":{\"it'\\''s $HOME\":\"21.5\"}}]}}'",
+    "mqtt": "mosquitto_pub \\\n  --cafile instance-ca.crt \\\n  -h '<mqtt-host>' -p 1883 \\\n  -i '<instance-id>:acme:odd-1' \\\n  -u 'acme:tok-odd' \\\n  -t '<instance-id>/acme/devices/odd-1/events' \\\n  -m '{\"device\":\"odd-1\",\"eventType\":\"Measurement\",\"payload\":{\"entries\":[{\"measurements\":{\"it'\\''s $HOME\":\"21.5\"}}]}}'",
     "http": "curl -i -X POST 'http://<ingest-host>:8081/<instance-id>/acme/events' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"device\":\"odd-1\",\"eventType\":\"Measurement\",\"credentialType\":\"ACCESS_TOKEN\",\"credentialId\":\"tok-odd\",\"payload\":{\"entries\":[{\"measurements\":{\"it'\\''s $HOME\":\"21.5\"}}]}}'"
   }
 ]

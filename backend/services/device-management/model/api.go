@@ -96,6 +96,11 @@ type Api struct {
 	// Injected at wiring time (it holds the cache layer); nil in tests disables eviction.
 	CacheEvictor CacheEvictor
 
+	// SessionKicker ends a device's live broker sessions when its authority is withdrawn (a
+	// credential disabled, rotated or deleted; the device disabled, replaced or deleted); see
+	// SessionKicker. Nil on an instance that runs no MQTT auth callout, and in tests.
+	SessionKicker SessionKicker
+
 	// DeviceSecretKey digests every device credential secret a create or update carries,
 	// and verifies a presented one against its stored digest on the per-event path. It is
 	// derived from the instance root key at wiring time. NIL FAILS CLOSED: a secret

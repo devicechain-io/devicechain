@@ -108,6 +108,37 @@ const (
 	SysConnzSubject = "$SYS.REQ.SERVER.PING.CONNZ"
 )
 
+// SysPublishAllow and SysSubscribeAllow are the ONLY subjects the SysUser login may use.
+//
+// 🔴 A SYSTEM-ACCOUNT LOGIN WITH NO PERMISSIONS BLOCK CAN DRIVE THE WHOLE BROKER, not just
+// read it: put a server into lame-duck mode ($SYS.REQ.SERVER.{id}.LDM), make it reload its
+// configuration (.RELOAD), and read every account's subscriptions, routes and JetStream state
+// (SUBSZ, ROUTEZ, JSZ, ACCOUNTZ). Its consumers in event-sources need three requests: the
+// cluster ping that names the servers, one server's connection list, and one server's kick
+// (which ends a device's session when its credential is revoked or the device disabled); plus
+// the connect/disconnect advisories and the inboxes replies come back on. Everything else is
+// refused at the broker, so a holder of the login can list connections and end them, and
+// nothing more. Ending any connection on the broker is inherent to the kick (its body names a
+// connection id, which no subject permission can scope), so the kick logs every session it ends.
+//
+// The "*" in the CONNZ entry also admits "$SYS.REQ.SERVER.PING.CONNZ", the same lists fanned
+// out, which grants nothing a per-server request does not.
+//
+// The infrastructure module renders the same lists into the broker's SYS user as literals
+// (HCL cannot call Go); TestSysPermissionsMatchTheInfrastructureModule holds the two in step.
+func SysPublishAllow() []string {
+	return []string{
+		"$SYS.REQ.SERVER.PING",    // the statsz fan-out: which servers the cluster has
+		"$SYS.REQ.SERVER.*.CONNZ", // one server's connection list, paged
+		"$SYS.REQ.SERVER.*.KICK",  // end one connection on one server
+	}
+}
+
+// SysSubscribeAllow is the subscribe half of SysPublishAllow.
+func SysSubscribeAllow() []string {
+	return []string{SysConnectSubject, SysDisconnectSubject, "_INBOX.>"}
+}
+
 // DefaultUserJWTTTL bounds how long a callout-minted device user JWT is valid.
 // The NATS server arms a timer at the JWT's expiry that force-closes the device's
 // connection, after which the reconnect re-runs the callout (an enabled-only

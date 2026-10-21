@@ -69,13 +69,15 @@ Schema 表达不了的内容：
 | `occurredTime` | string，RFC 3339 | 否 | 事件发生的时间。省略时，以平台收到消息的时间作为事件时间。 | `"2026-08-09T12:00:00.125Z"` |
 | `altId` | string | 否 | 由设备选定的幂等键：携带相同 `altId` **和**相同信封 `occurredTime` 的重复投递事件会被跳过。目前按租户而非按设备匹配，这是一个已知限制；见[下文](#altid)。 | `"sensor-001-4417"` |
 | `relationship` | string | 否 | 会被接受并沿处理链路传递，但**不会被使用**。无论此字段为何值，平台都会在事件上记录该设备所有被跟踪的关系。不要依赖它。 | — |
-| `credentialType` | string | 见下文 | `ACCESS_TOKEN` 或 `MQTT_BASIC`。与 `credentialId` 一起认证该事件。 | `"ACCESS_TOKEN"` |
-| `credentialId` | string | 见下文 | 对 `ACCESS_TOKEN` 而言就是令牌本身。对 `MQTT_BASIC` 而言是用户名，不带 MQTT 连接所用的 `{tenant}:` 前缀。 | `"5f98…98b2"` |
-| `credentialSecret` | string | 仅 `MQTT_BASIC` | `MQTT_BASIC` 的密码。 | |
+| `credentialType` | string | HTTP：见下文。MQTT：不要带 | `ACCESS_TOKEN` 或 `MQTT_BASIC`。与 `credentialId` 一起认证该事件。 | `"ACCESS_TOKEN"` |
+| `credentialId` | string | HTTP：见下文。MQTT：不要带 | 对 `ACCESS_TOKEN` 而言就是令牌本身。对 `MQTT_BASIC` 而言是用户名，不带 MQTT 连接所用的 `{tenant}:` 前缀。 | `"5f98…98b2"` |
+| `credentialSecret` | string | HTTP，仅 `MQTT_BASIC`。MQTT：不要带 | `MQTT_BASIC` 的密码。 | |
 
 ¹ 每个事件都应发送 `device`。严格来说，当凭据认证了该事件时，平台容忍其缺失，并将事件归属于该凭据所属的设备。
 
-**凭据。** 默认的设备认证模式是 `required`：没有凭据的事件会被拒绝（见[拒绝表](#rejections)）。只有在配置为 `optional` 或 `disabled` 的实例上才可以省略凭据。只有当 `credentialType` 和非空的 `credentialId` 同时存在时，平台才会读取凭据。见[设备凭据](../guides/device-credentials.md)。
+**通过 MQTT 时的凭据。** 不要发送。在平台的 MQTT 消息代理上，设备在连接时完成认证，主题已经指明设备，因此 `credentialType`、`credentialId` 和 `credentialSecret` 必须缺省：携带其中任何一个的事件会被拒绝（参见[拒绝表](#rejections-at-the-door)）。请把这样做过的设备的凭据视为已暴露并轮换。由您自己运维、作为外部 MQTT 源接入的消息代理不会为平台认证设备，因此来自它的事件仍像 HTTP 一样携带凭据。
+
+**通过 HTTP 时的凭据。** 默认的设备认证模式是 `required`：没有凭据的事件会被拒绝（见[拒绝表](#rejections)）。只有在配置为 `optional` 或 `disabled` 的实例上才可以省略凭据。只有当 `credentialType` 和非空的 `credentialId` 同时存在时，平台才会读取凭据。见[设备凭据](../guides/device-credentials.md)。
 
 **时间戳。** 每个 `occurredTime`，无论在信封上还是在条目上，都是 RFC 3339 格式。平台会拒绝不符合该格式的值、等于 `0001-01-01T00:00:00Z` 的值（保留用于表示"未报告时间"），以及早于平台收到消息时刻超过 **366 天**的值。远远超前于平台时钟的时间会被按上限存储，而不是被拒绝；见[超前的时钟](../guides/connecting-a-device.md#clocks-that-run-ahead)。
 
@@ -191,6 +193,7 @@ Schema 表达不了的内容：
 | 时间戳不是 RFC 3339、等于 `0001-01-01T00:00:00Z`，或早于 366 天以上 | `400`，并指出字段 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_invalid_event_time` |
 | 超过 256 个读数 | `400`，给出数量和上限 | 转入 `failed-decode` | `total_msg_failed_decode`、`total_msg_too_many_readings` |
 | 正文中的 `device` 不是主题中的设备 | — | 转入 `failed-decode` | `total_msg_failed_decode` |
+| 正文携带 `credentialType`、`credentialId` 或 `credentialSecret`，且在平台 MQTT 消息代理上 | — | 转入 `failed-decode`（已脱敏） | `total_msg_failed_decode`、`total_msg_credential_in_mqtt_body` |
 | 平台正在施加[背压](../deployment/observability.md#ingest-backpressure) | `503`，**带** `Retry-After`：未存储，请重新发送 | 不会被拒绝：它在捕获流中等待；只有该流写满时，最早捕获的消息才会被丢弃 | |
 | 事件无法交给处理链路 | `503`，**不带** `Retry-After`：可能已被存储，因此重发会存储两次，除非携带 [`altId`](#altid) | — | |
 | 已接受 | `202` | `PUBACK`（QoS 1） | |

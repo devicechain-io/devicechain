@@ -14,6 +14,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/entity"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
+	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
@@ -745,6 +746,14 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// its token (auth disabled or optional, or a transport-authenticated event). A re-type
 	// is what makes it wrong: the event would resolve to the old type's profile.
 	api.evictDeviceByToken(ctx, updated.Token)
+	// A device that is DISABLED (quarantined) has its open sessions ended, on every update that
+	// leaves it disabled, so repeating a disable whose kick failed is the retry. Enabling it, or
+	// editing an enabled device, ends nothing.
+	if updated.DisabledAt.Valid {
+		if kerr := api.endDeviceSessions(ctx, updated.TenantId, messaging.SessionKickDeviceDisabled, updated.Token); kerr != nil {
+			return updated, kerr
+		}
+	}
 	// Re-roster POST-COMMIT only when the device was re-typed (ADR-051 slice 4c-2): a
 	// re-type may change the adopted profile, so the roster's device→profile binding must
 	// follow. Metadata-only updates leave the binding unchanged, so they emit nothing. The

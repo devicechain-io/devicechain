@@ -264,6 +264,14 @@ type Device struct {
 	// gorm nor JSON sees it; the zero value is "read", which every full read and every
 	// decoded cache entry is. See MetadataRead.
 	metadataUnread bool
+
+	// ConnectCredentialExpiresAt is the expiry of the credential an MQTT CONNECT was just
+	// authenticated with, carried to the auth callout so it can clamp the session's JWT to it.
+	// It is TRANSIENT: set only on the copy AuthenticateDeviceConnect and ResolveDeviceCredential
+	// return, never stored (gorm:"-"), never serialized (the device-by-token bucket holds this
+	// struct as JSON), and zero on every other read. A session must not outlive the credential
+	// that opened it, and the callout is the only place that mints the session's lifetime.
+	ConnectCredentialExpiresAt sql.NullTime `gorm:"-" json:"-"`
 }
 
 // MetadataRead reports whether the row's Metadata is what the device stores. It is false

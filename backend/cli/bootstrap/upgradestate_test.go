@@ -171,3 +171,26 @@ func TestTheValuesAnUpgradeComposesAreAcceptedByTheChart(t *testing.T) {
 		})
 	}
 }
+
+// An instance that runs the device callout with no system-account login is refused before
+// anything changes: this release's event-sources would refuse to start on it. One with no
+// callout (broker auth off) has no device sessions to end and goes on as before.
+func TestAnUpgradeRefusesACalloutInstanceWithNoSystemLogin(t *testing.T) {
+	for _, c := range []struct {
+		name, seed, sys string
+		refused         bool
+	}{
+		{"callout, no system login", "SAseed", "", true},
+		{"callout and a system login", "SAseed", "sys-pw", false},
+		{"no callout, no system login", "", "", false},
+	} {
+		st := &State{Values: map[string]string{"natsCalloutIssuerSeed": c.seed, "natsSysPassword": c.sys}}
+		err := refuseNoSystemLogin("prod", st)
+		if c.refused && (err == nil || !strings.Contains(err.Error(), "Nothing has been changed")) {
+			t.Errorf("%s: want a refusal that says nothing changed, got %v", c.name, err)
+		}
+		if !c.refused && err != nil {
+			t.Errorf("%s: want no refusal, got %v", c.name, err)
+		}
+	}
+}

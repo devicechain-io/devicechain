@@ -450,8 +450,21 @@ locals {
   # the same way. Rendered only when a hash was supplied: an account block with an
   # empty user list is what SYS looked like before the presence tap, and is what an
   # instance that has not minted the credential must keep looking like.
-  sys_user  = "dc_sys"
-  sys_users = var.sys_password_bcrypt == "" ? [] : [{ user = local.sys_user, password = var.sys_password_bcrypt }]
+  #
+  # 🔴 THE LOGIN IS HELD TO AN ALLOW LIST. A system-account user with no permissions can
+  # put a server into lame-duck mode, make it reload, and read every account's
+  # subscriptions and JetStream state. event-sources needs the cluster ping, one server's
+  # connection list, one server's kick (ending a revoked device's session), the
+  # connect/disconnect advisories, and its reply inboxes; nothing else. Kept in sync with
+  # natsauth.SysPublishAllow / SysSubscribeAllow (a Go test reads this file).
+  sys_user            = "dc_sys"
+  sys_publish_allow   = ["$SYS.REQ.SERVER.PING", "$SYS.REQ.SERVER.*.CONNZ", "$SYS.REQ.SERVER.*.KICK"]
+  sys_subscribe_allow = ["$SYS.ACCOUNT.APP.CONNECT", "$SYS.ACCOUNT.APP.DISCONNECT", "_INBOX.>"]
+  sys_users = var.sys_password_bcrypt == "" ? [] : [{
+    user        = local.sys_user
+    password    = var.sys_password_bcrypt
+    permissions = { publish = { allow = local.sys_publish_allow }, subscribe = { allow = local.sys_subscribe_allow } }
+  }]
 
   # js_max_file_store resolves the server-level max_file_store (see the
   # jetstream_max_file_store variable and the fileStore.maxSize wiring below). When

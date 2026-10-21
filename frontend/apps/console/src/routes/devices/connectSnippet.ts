@@ -177,16 +177,22 @@ export function exampleMeasurements(metrics: readonly SnippetMetric[]): ExampleM
   return { measurements: Object.fromEntries([[key, FALLBACK_VALUE]]), omitted: 0, fallback: true };
 }
 
-// eventBody is the JSON event the device sends, identical on both transports.
-export function eventBody(input: SnippetInput): string {
+// eventBody is the JSON event the device sends. Over HTTP the body is the only authentication,
+// so it carries the credential. Over MQTT the broker has already authenticated the device at
+// CONNECT, and an event on the platform broker that carries a credential is REFUSED (its
+// secret would be written to the broker's stream before the platform could protect it), so
+// the MQTT body carries none.
+export function eventBody(input: SnippetInput, transport: 'http' | 'mqtt' = 'http'): string {
   const { measurements } = exampleMeasurements(input.metrics);
   const envelope: Record<string, unknown> = {
     device: input.deviceToken,
     eventType: 'Measurement',
-    credentialType: input.credential.credentialType,
-    credentialId: input.credential.credentialId,
   };
-  if (input.credential.credentialType === 'MQTT_BASIC') envelope.credentialSecret = PLACEHOLDER.password;
+  if (transport === 'http') {
+    envelope.credentialType = input.credential.credentialType;
+    envelope.credentialId = input.credential.credentialId;
+    if (input.credential.credentialType === 'MQTT_BASIC') envelope.credentialSecret = PLACEHOLDER.password;
+  }
   envelope.payload = { entries: [{ measurements }] };
   return JSON.stringify(envelope);
 }
@@ -214,7 +220,7 @@ export function mqttCommand(input: SnippetInput): string {
     `-i ${shellQuote(`${PLACEHOLDER.instanceId}:${tenant}:${deviceToken}`)}`,
     login,
     `-t ${shellQuote(`${PLACEHOLDER.instanceId}/${tenant}/devices/${deviceToken}/events`)}`,
-    `-m ${shellQuote(eventBody(input))}`,
+    `-m ${shellQuote(eventBody(input, 'mqtt'))}`,
   ].join(CONTINUATION);
 }
 

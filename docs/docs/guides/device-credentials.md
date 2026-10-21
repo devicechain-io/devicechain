@@ -32,7 +32,7 @@ For that reason, every query that returns a credential requires **`device:write`
 
 ## How a device presents a credential
 
-Credentials travel in the event body, on any transport (see [Connecting a Device](./connecting-a-device.md)):
+Over HTTP, a credential travels in the event body (see [Connecting a Device](./connecting-a-device.md)). Over MQTT it authenticates the connection and the event body carries none: an event on the platform's MQTT broker that includes `credentialType`, `credentialId` or `credentialSecret` is refused. The HTTP form is:
 
 ```json
 {
@@ -44,7 +44,7 @@ Credentials travel in the event body, on any transport (see [Connecting a Device
 }
 ```
 
-`MQTT_BASIC` additionally carries `"credentialSecret": "<password>"`.
+`MQTT_BASIC` additionally carries `"credentialSecret": "<password>"`. These are HTTP fields only.
 
 The platform resolves the credential to the device that owns it and verifies it. Verification honors the credential's **expiry**, and **disabling** a credential revokes it. The instance's device-auth mode decides how strictly this is enforced:
 

@@ -322,7 +322,26 @@ func buildApis(nmgr *messaging.NatsManager, rdbm *rdb.RdbManager, key *credentia
 	// The write paths evict the hot-path caches through this seam (ADR-044 F2). The GraphQL
 	// mutations run on the plain *Api, so the evictor is wired onto it.
 	api.CacheEvictor = cached
+	// An instance that runs the MQTT auth callout mints device sessions that outlive the
+	// credential that opened them, so a withdrawn credential or a disabled device must also
+	// END its sessions (model.SessionKicker). Without the callout there are no sessions of
+	// ours to end, and the kicker stays nil.
+	if nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.CalloutIssuerSeed != "" {
+		api.SessionKicker = natsSessionKicker{nmgr: nmgr, instanceId: nmgr.Microservice.InstanceId}
+	}
 	return api, cached, nil
+}
+
+// natsSessionKicker ends a device's broker sessions by asking the service that holds the
+// system-account login (event-sources) over the data-plane connection. The connection is read
+// at call time: it is replaced on a reconnect, and this is built before it exists.
+type natsSessionKicker struct {
+	nmgr       *messaging.NatsManager
+	instanceId string
+}
+
+func (k natsSessionKicker) KickDeviceSessions(ctx context.Context, tenant, reason string, deviceTokens []string) error {
+	return messaging.NewSessionKickRequester(k.nmgr.Conn(), k.instanceId).KickDeviceSessions(ctx, tenant, reason, deviceTokens)
 }
 
 // createPublishWriters builds the resolved and failed events writers, each with the

@@ -91,7 +91,10 @@ describe('DeviceConnectPanel', () => {
     render(<DeviceConnectPanel deviceToken="dev-1" deviceEnabled />);
     await screen.findByTestId('connect-command');
     expect(command()).toContain(`-P '<password>'`);
-    expect(command()).toContain('"credentialSecret":"<password>"');
+    // The password authenticates the CONNECT only: an MQTT event body that carries a
+    // credential is refused by the platform broker.
+    expect(command()).not.toContain('credentialSecret');
+    expect(command()).not.toContain('credentialId');
     expect(screen.getByText(/shown once, when it was set/)).toBeTruthy();
     // No published metric to use: the fallback is named as such.
     expect(screen.getByText(/sends an undeclared reading/)).toBeTruthy();

@@ -69,13 +69,15 @@ Un objeto JSON por mensaje MQTT o petición HTTP. Un mensaje es un evento.
 | `occurredTime` | string, RFC 3339 | no | Cuándo ocurrió el evento. Si se omite, el evento se fecha cuando la plataforma recibió el mensaje. | `"2026-08-09T12:00:00.125Z"` |
 | `altId` | string | no | Una clave de idempotencia elegida por el dispositivo: un evento reentregado con el mismo `altId` **y** el mismo `occurredTime` del sobre se omite. Hoy la coincidencia es por tenant, no por dispositivo, lo cual es una limitación conocida; consulta [más abajo](#altid). | `"sensor-001-4417"` |
 | `relationship` | string | no | Se acepta, se transporta por la cadena de proceso y **no se usa**. La plataforma registra en el evento todas las relaciones con seguimiento del dispositivo, diga lo que diga este campo. No dependas de él. | — |
-| `credentialType` | string | ver abajo | `ACCESS_TOKEN` o `MQTT_BASIC`. Junto con `credentialId`, autentica el evento. | `"ACCESS_TOKEN"` |
-| `credentialId` | string | ver abajo | Para `ACCESS_TOKEN`, el propio token. Para `MQTT_BASIC`, el nombre de usuario, sin el prefijo `{tenant}:` que usa la conexión MQTT. | `"5f98…98b2"` |
-| `credentialSecret` | string | solo `MQTT_BASIC` | La contraseña de `MQTT_BASIC`. | |
+| `credentialType` | string | HTTP: ver abajo. MQTT: nunca | `ACCESS_TOKEN` o `MQTT_BASIC`. Junto con `credentialId`, autentica el evento. | `"ACCESS_TOKEN"` |
+| `credentialId` | string | HTTP: ver abajo. MQTT: nunca | Para `ACCESS_TOKEN`, el propio token. Para `MQTT_BASIC`, el nombre de usuario, sin el prefijo `{tenant}:` que usa la conexión MQTT. | `"5f98…98b2"` |
+| `credentialSecret` | string | HTTP, solo `MQTT_BASIC`. MQTT: nunca | La contraseña de `MQTT_BASIC`. | |
 
 ¹ Envía `device` en cada evento. En sentido estricto, la plataforma tolera su ausencia cuando una credencial autentica el evento, y entonces atribuye el evento al dispositivo de la credencial.
 
-**La credencial.** El modo de autenticación de dispositivos por defecto es `required`: un evento sin credencial se rechaza (consulta la [tabla de rechazos](#rejections)). Omite la credencial solo en una instancia configurada como `optional` o `disabled`. Una credencial solo se lee cuando están presentes `credentialType` y un `credentialId` no vacío. Consulta [Credenciales de dispositivo](../guides/device-credentials.md).
+**La credencial, por MQTT.** No la envíes. En el broker MQTT de la plataforma el dispositivo se autentica al conectarse y el topic nombra al dispositivo, así que `credentialType`, `credentialId` y `credentialSecret` deben estar ausentes: un evento que lleve cualquiera de ellos se rechaza (consulta la [tabla de rechazos](#rejections-at-the-door)). Considera expuesta la credencial de un dispositivo que lo haya hecho y rótala. Un broker que operas tú y conectas como fuente MQTT externa no autentica dispositivos para la plataforma, así que sus eventos siguen llevando la credencial, como por HTTP.
+
+**La credencial, por HTTP.** El modo de autenticación de dispositivos por defecto es `required`: un evento sin credencial se rechaza (consulta la [tabla de rechazos](#rejections)). Omite la credencial solo en una instancia configurada como `optional` o `disabled`. Una credencial solo se lee cuando están presentes `credentialType` y un `credentialId` no vacío. Consulta [Credenciales de dispositivo](../guides/device-credentials.md).
 
 **Marcas de tiempo.** Todo `occurredTime`, en el sobre o en una entrada, es RFC 3339. La plataforma rechaza uno que no lo sea, uno igual a `0001-01-01T00:00:00Z` (reservado para indicar "no se informó ninguna hora") y uno anterior en más de **366 días** al momento en que la plataforma recibió el mensaje. Una hora muy por delante del reloj de la plataforma se almacena en un tope en lugar de rechazarse; consulta [Relojes adelantados](../guides/connecting-a-device.md#clocks-that-run-ahead).
 
@@ -191,6 +193,7 @@ Lo comprueba `event-sources` al recibir y decodificar el mensaje.
 | Una marca de tiempo que no es RFC 3339, es `0001-01-01T00:00:00Z` o tiene más de 366 días | `400`, nombrando el campo | Se envía a `failed-decode` | `total_msg_failed_decode`, `total_msg_invalid_event_time` |
 | Más de 256 lecturas | `400`, indicando el número y el límite | Se envía a `failed-decode` | `total_msg_failed_decode`, `total_msg_too_many_readings` |
 | El `device` del cuerpo no es el dispositivo del topic | — | Se envía a `failed-decode` | `total_msg_failed_decode` |
+| El cuerpo lleva `credentialType`, `credentialId` o `credentialSecret`, en el broker MQTT de la plataforma | — | Se envía a `failed-decode` (redactado) | `total_msg_failed_decode`, `total_msg_credential_in_mqtt_body` |
 | La plataforma está aplicando [contrapresión](../deployment/observability.md#ingest-backpressure) | `503` **con** `Retry-After`: no se almacenó, envíalo de nuevo | No se rechaza: espera en el stream de captura; los mensajes capturados más antiguos solo se descartan si ese stream se llena | |
 | El evento no se pudo entregar a la cadena de proceso | `503` **sin** `Retry-After`: puede haberse almacenado, así que reenviarlo lo almacena dos veces salvo que lleve un [`altId`](#altid) | — | |
 | Aceptado | `202` | `PUBACK` (QoS 1) | |

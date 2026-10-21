@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -48,10 +50,10 @@ jetstream { store_dir: %q }
 mqtt { listen: "127.0.0.1:-1" }
 accounts {
   APP: { jetstream: enabled, users: [ {user: dc_service, password: svc} ] }
-  SYS: { users: [ {user: dc_sys, password: sys} ] }
+  SYS: { users: [ {user: dc_sys, password: sys%s} ] }
 }
 system_account: SYS
-`, dir)), 0o600))
+`, dir, sysPermissions())), 0o600))
 	opts, err := natsserver.ProcessConfigFile(conf)
 	require.NoError(t, err)
 	opts.NoLog, opts.NoSigs = true, true
@@ -61,6 +63,20 @@ system_account: SYS
 	require.True(t, srv.ReadyForConnections(20*time.Second), "embedded broker not ready")
 	t.Cleanup(srv.Shutdown)
 	return srv, dctest.MQTTPort(t, srv)
+}
+
+// sysPermissions is the allow list the infrastructure module holds dc_sys to, so every test
+// here also proves the list is enough for what it exercises.
+func sysPermissions() string {
+	q := func(subjects []string) string {
+		out := make([]string, 0, len(subjects))
+		for _, s := range subjects {
+			out = append(out, strconv.Quote(s))
+		}
+		return strings.Join(out, ", ")
+	}
+	return fmt.Sprintf(", permissions: { publish: { allow: [%s] }, subscribe: { allow: [%s] } }",
+		q(natsauth.SysPublishAllow()), q(natsauth.SysSubscribeAllow()))
 }
 
 // sysConn dials the system account the way the service does.

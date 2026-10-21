@@ -7,8 +7,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/devicechain-io/dc-microservice/entityevent"
 	"time"
+
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/entityevent"
+	"github.com/devicechain-io/dc-microservice/messaging"
 
 	"github.com/devicechain-io/dc-microservice/entity"
 	"github.com/devicechain-io/dc-microservice/integrity"
@@ -325,6 +328,17 @@ func (api *Api) DeleteDevice(ctx context.Context, token string) (bool, error) {
 		})
 	if err == nil && deleted {
 		api.evictCredentialOwners(ctx, credentials)
+		// The device is gone and so is every credential it held: end whatever sessions it still has.
+		tenant := ""
+		for _, c := range credentials {
+			tenant = c.TenantId
+		}
+		if tenant == "" {
+			tenant, _ = core.TenantFromContext(ctx)
+		}
+		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickDeviceDeleted, token); kerr != nil {
+			return deleted, kerr
+		}
 	}
 	return deleted, err
 }
@@ -338,7 +352,30 @@ func (api *Api) DeleteDeviceCredential(ctx context.Context, token string) (bool,
 		return false, err
 	}
 	api.evictCredentialOwners(ctx, credentials)
-	return len(credentials) > 0, nil
+	if len(credentials) == 0 {
+		return false, nil
+	}
+	// The credential is gone: end the sessions it opened. They are named by the owning
+	// device(s) the DELETE returned, resolved to tokens because the broker knows tokens.
+	var errs []error
+	owners := map[string][]uint{}
+	for _, c := range credentials {
+		owners[c.TenantId] = append(owners[c.TenantId], c.DeviceId)
+	}
+	for tenant, ids := range owners {
+		tokens, terr := api.deviceTokensOf(ctx, tenant, ids)
+		if terr != nil {
+			errs = append(errs, fmt.Errorf("%w: could not name the devices whose sessions to end: %v", ErrSessionsNotEnded, terr))
+			continue
+		}
+		if kerr := api.endDeviceSessions(ctx, tenant, messaging.SessionKickCredentialDeleted, tokens...); kerr != nil {
+			errs = append(errs, kerr)
+		}
+	}
+	if len(errs) > 0 {
+		return true, errors.Join(errs...)
+	}
+	return true, nil
 }
 
 // deleteCredentialsReturningOwners runs the hard delete scoped by db and fills rows with

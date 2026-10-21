@@ -70,6 +70,19 @@ type UnresolvedEvent struct {
 	// (broker-level, NOT per-device — required no longer closes intra-tenant spoofing
 	// for Sparkplug; a known, tracked gap).
 	AuthenticatedTransport bool
+
+	// BrokerAsserted marks an event whose device is the one the PLATFORM MQTT broker
+	// authenticated at CONNECT and confined to this topic: the capture source sets it, and
+	// nothing else may. The event then presents no per-event credential (a body that carries
+	// one is refused, ErrCredentialInMqttBody), and the resolver trusts the topic-derived
+	// device under deviceAuthMode=required for every event type.
+	//
+	// It is deliberately a SEPARATE marker from AuthenticatedTransport, whose trust is
+	// confined to the event types LwM2M and Sparkplug emit. An external-broker MQTT source
+	// reads the same topic shape from the CUSTOMER's broker, which did not authenticate the
+	// device against this platform, so it must never set this: see
+	// processor.TestOnlyTheCaptureSourceAssertsTheBroker. Never settable from device input.
+	BrokerAsserted bool
 }
 
 // WithoutPresentedCredential returns a copy of the event with the credential the

@@ -211,6 +211,14 @@ var (
 	// BATCH SIZE needs lowering, which is a firmware conversation, not a bug report. It is the
 	// only signal that a device is losing nothing but delivering nothing either.
 	TooManyReadingsCounter *prometheus.CounterVec
+	// CredentialInMqttBodyCounter counts events refused because they arrived over the platform
+	// MQTT broker, which had already authenticated the device, and still carried a credential
+	// in the body. Also a subset of FailedDecodeCounter, and the one an operator acts on: the
+	// device's secret was written to the capture stream by the broker before any platform code
+	// ran, so a counted device's credential should be treated as exposed and rotated. The
+	// device itself is NOT told (the broker PUBACKed at capture); this counter and the
+	// failed-decode record, which names the device, are the only signals.
+	CredentialInMqttBodyCounter *prometheus.CounterVec
 	// EarlyCloseCounter counts connections to an HTTP ingest listener that closed
 	// before delivering a request. It is the only external signal that the listener's
 	// header bound is closing connections at all: net/http closes them itself, before
@@ -305,6 +313,11 @@ func initializeMetrics() {
 		"Count of inbound messages refused for carrying more readings than one event may hold",
 		// SOURCE only, never tenant (ADR-023 G.3) — the tenant on an undecodable
 		// message is an unverified string off the wire.
+		[]string{"source"})
+	CredentialInMqttBodyCounter = Microservice.NewCounterVec(
+		"total_msg_credential_in_mqtt_body",
+		"Count of inbound messages on the platform MQTT broker refused for carrying a credential in the body, which the broker's own authentication of the device makes unnecessary",
+		// SOURCE only, never tenant (ADR-023 G.3), like every refusal counter on this path.
 		[]string{"source"})
 	EarlyCloseCounter = Microservice.NewCounterVec(
 		"total_http_connections_closed_before_request",
@@ -970,6 +983,11 @@ func onEventDecodeFailed(source string, tenant string, raw []byte, err error) er
 	if errors.Is(err, model.ErrTooManyReadings) {
 		TooManyReadingsCounter.WithLabelValues(source).Inc()
 	}
+	// A body credential on the platform broker is counted apart for the same reason, and it
+	// is the one refusal that is also a SECURITY signal: see CredentialInMqttBodyCounter.
+	if errors.Is(err, model.ErrCredentialInMqttBody) {
+		CredentialInMqttBodyCounter.WithLabelValues(source).Inc()
+	}
 
 	// A message that could not be decoded is still routed to the failed-decode
 	// subject for the originating tenant; without a tenant it cannot be scoped, so
@@ -1253,6 +1271,12 @@ func afterMicroserviceStarted(ctx context.Context) error {
 	}
 	startBrokerPresence(ctx)
 
+	// Serving device-session kicks (see session_kick_wiring.go). Refuses to start the service
+	// when it ingests the platform broker and holds no way to end a session.
+	if err := startSessionKick(ctx); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -1261,6 +1285,7 @@ func beforeMicroserviceStopped(ctx context.Context) error {
 	// Stop the presence tap before the sources: it holds its own broker connection and
 	// its own goroutines, and a reconciliation pass mid-shutdown would emit into a
 	// writer that is about to close.
+	stopSessionKick()
 	stopBrokerPresence()
 	// The fail-closed store's watch holds no writer, but it uses the broker connection the
 	// manager drains below.

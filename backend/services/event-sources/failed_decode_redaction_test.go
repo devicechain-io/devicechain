@@ -5,15 +5,18 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-event-sources/model"
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -86,6 +89,37 @@ func TestFailedDecodeStoredPayloadIsBounded(t *testing.T) {
 	require.NotContains(t, string(stored), fixtureSecret)
 	require.LessOrEqual(t, len(stored), failedDecodeMaxBytes+64, "the cut note is the only thing allowed past the bound")
 	require.Less(t, len(stored), len(body))
+}
+
+// S2: a body credential on the platform broker is refused under its own counter, and what
+// reaches the failed-decode stream carries no secret. The counter is the operator's signal
+// that a device's credential should be treated as exposed and rotated: the device itself is
+// not told (the broker PUBACKed at capture).
+func TestABodyCredentialOnThePlatformBrokerIsCountedAndRecordedWithoutItsSecret(t *testing.T) {
+	savedMs, savedWriter := Microservice, FailedDecodeWriter
+	t.Cleanup(func() { Microservice, FailedDecodeWriter = savedMs, savedWriter })
+	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
+	initializeMetrics()
+	w := &capturingWriter{}
+	FailedDecodeWriter = w
+
+	body := `{"device":"dev-1","eventType":"Measurement","credentialType":"MQTT_BASIC",` +
+		`"credentialId":"cred-1","credentialSecret":"` + fixtureSecret + `",` +
+		`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`
+	require.NoError(t, onEventDecodeFailed("gw", "t1", []byte(body), model.ErrCredentialInMqttBody))
+
+	require.Equal(t, 1.0, testutil.ToFloat64(CredentialInMqttBodyCounter.WithLabelValues("gw")))
+	require.Equal(t, 1.0, testutil.ToFloat64(FailedDecodeCounter.WithLabelValues("gw")), "still a failed decode")
+	require.Len(t, w.sent, 1)
+	stored := string(w.sent[0].Value)
+	require.NotContains(t, stored, fixtureSecret)
+	require.NotContains(t, stored, "cred-1", "the credential id is redacted too")
+	require.Contains(t, stored, `"device":"dev-1"`, "the record must name the device, so the operator can rotate its credential")
+
+	// A different refusal does not move it.
+	require.NoError(t, onEventDecodeFailed("gw", "t1", []byte(body), errors.New("bad json")))
+	require.Equal(t, 1.0, testutil.ToFloat64(CredentialInMqttBodyCounter.WithLabelValues("gw")))
 }
 
 // The bearer token of an ACCESS_TOKEN credential is carried as credentialId. Every scan below

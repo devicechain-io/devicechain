@@ -53,6 +53,9 @@ type rawMessage struct {
 	// origin is the tenant's provenance, which decides the reading stage's limiter (see
 	// Origin). The zero value is treated as untrusted.
 	origin Origin
+	// assertion says whether the platform's own broker authenticated this message's
+	// device. Only the capture source can make it true; see brokerAssertion.
+	assertion brokerAssertion
 	// done reports the outcome of handling this message back to the source that
 	// produced it, so the source can acknowledge the broker only once the payload
 	// is durably forwarded. nil for a fire-and-forget transport, which is why every
@@ -157,6 +160,17 @@ func (wrk *DecodeWorker) Process() {
 			event, payload, err := wrk.Decoder.Decode(raw.payload, raw.receivedAt)
 			if err == nil {
 				err = checkDeviceMatchesTransport(raw, event)
+			}
+			if err == nil && raw.assertion.asserted {
+				// The topic IS the identity here, so a body credential is not needed and
+				// is refused rather than ignored: ignoring it would keep a leaking device
+				// working, silently, forever. The error is static, so the secret is never
+				// in a log line or a counter.
+				if credentialInBody(event) {
+					err = model.ErrCredentialInMqttBody
+				} else {
+					raw.assertion.mark(event)
+				}
 			}
 			if err != nil {
 				// A payload that cannot be decoded, or whose claimed device contradicts

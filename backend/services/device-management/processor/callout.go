@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"sync"
@@ -569,7 +570,18 @@ func (c *CalloutResponder) authorize(req jwt.AuthorizationRequest) (userJWT stri
 		return "", genericAuthFailure
 	}
 
-	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), c.ttl)
+	// A session must not outlive the credential that opened it. The broker force-closes a
+	// connection at its JWT's expiry, so clamping the JWT to the credential's own expiry makes
+	// "this credential expires at T" true of a session already open, with no scheduler and no
+	// kick. A credential with no expiry gets the full lifetime; revocation before expiry is the
+	// kick's job (see model.SessionKicker).
+	ttl, ok := clampSessionTTL(c.ttl, device.ConnectCredentialExpiresAt, c.now())
+	if !ok {
+		log.Debug().Str("tenant", tenant).Str("device", device.Token).
+			Msg("Auth-callout refused a device connect: the credential expires too soon to mint a session.")
+		return "", genericAuthFailure
+	}
+	signed, err := natsauth.SignDeviceUserJWT(c.issuerSeed, req.UserNkey, c.instanceId, tenant, device.Token, c.now(), ttl)
 	if err != nil {
 		log.Error().Err(err).Msg("Auth-callout failed to sign a device user JWT.")
 		return "", genericAuthFailure
@@ -731,4 +743,26 @@ func parseDeviceCredential(username, password string) (string, *model.PresentedC
 		CredentialType: string(model.CredentialAccessToken),
 		CredentialId:   credentialID,
 	}, true
+}
+
+// minSessionTTL is the shortest session the callout will mint. The JWT's expiry is whole
+// seconds, so anything under a second would be minted already expired.
+const minSessionTTL = time.Second
+
+// clampSessionTTL is the lifetime of a device session: the configured ttl, shortened to the
+// time left on the credential that authenticated it. ok is false when the credential has
+// less than minSessionTTL left, which is refused like any other expired credential rather
+// than minted as a session the broker would close at once.
+//
+// Pure, so the clamp is testable without a broker. A credential with no expiry returns ttl
+// unchanged.
+func clampSessionTTL(ttl time.Duration, expiresAt sql.NullTime, now time.Time) (time.Duration, bool) {
+	if !expiresAt.Valid {
+		return ttl, true
+	}
+	remaining := expiresAt.Time.Sub(now)
+	if remaining < minSessionTTL {
+		return 0, false
+	}
+	return min(ttl, remaining), true
 }

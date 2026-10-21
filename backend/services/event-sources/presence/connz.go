@@ -85,6 +85,8 @@ type connzReply struct {
 // mean "every device is gone". Kept as its own type next to advisory for exactly that
 // reason.
 type connzConn struct {
+	// Cid is the server-local connection id, the handle a kick names.
+	Cid        uint64     `json:"cid"`
 	MQTTClient string     `json:"mqtt_client"`
 	Type       string     `json:"type"`
 	Start      *time.Time `json:"start"`

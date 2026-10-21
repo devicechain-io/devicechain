@@ -5,6 +5,7 @@ package processor
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"slices"
@@ -573,5 +574,51 @@ func TestNewCalloutResponderRequiresTheFenceRead(t *testing.T) {
 	r, err := NewCalloutResponder(nil, fakeAuthApi{}, testChecker(t, credentialtest.NewStore()), creds.IssuerSeed, "inst-1", nil, nil)
 	if !errors.Is(err, errNoTenantFence) || r != nil {
 		t.Fatalf("got (%v, %v), want (nil, errNoTenantFence)", r, err)
+	}
+}
+
+// A session must not outlive the credential that opened it: the granted JWT expires when the
+// credential does, and a credential with no expiry gets the full lifetime.
+//
+// Negative control: with the clamp removed the JWT in the "expires in 2 minutes" row lives 12h.
+func TestAuthorizeClampsTheSessionToTheCredentialsExpiry(t *testing.T) {
+	now := time.Unix(1_780_000_000, 0)
+	cases := []struct {
+		name    string
+		expires sql.NullTime
+		want    time.Duration // 0: refused
+	}{
+		{"no expiry gets the full lifetime", sql.NullTime{}, natsauth.DefaultUserJWTTTL},
+		{"expiring in 2 minutes", sql.NullTime{Time: now.Add(2 * time.Minute), Valid: true}, 2 * time.Minute},
+		{"expiring beyond the lifetime is not extended", sql.NullTime{Time: now.Add(48 * time.Hour), Valid: true}, natsauth.DefaultUserJWTTTL},
+		{"expiring in under a second is refused, not minted already dead", sql.NullTime{Time: now.Add(500 * time.Millisecond), Valid: true}, 0},
+		{"already expired is refused", sql.NullTime{Time: now.Add(-time.Minute), Valid: true}, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := newTestResponder(t, func(context.Context, *model.PresentedCredential) (*model.Device, error) {
+				d := &model.Device{}
+				d.Token = "sensor-001"
+				d.ConnectCredentialExpiresAt = tc.expires
+				return d, nil
+			})
+			userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+			if tc.want == 0 {
+				if userJWT != "" || errMsg != genericAuthFailure {
+					t.Fatalf("expected a generic refusal, got jwt=%q err=%q", userJWT, errMsg)
+				}
+				return
+			}
+			if errMsg != "" {
+				t.Fatalf("expected a grant, got %q", errMsg)
+			}
+			uc, err := jwt.DecodeUserClaims(userJWT)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := uc.Expires, now.Add(tc.want).Unix(); got != want {
+				t.Errorf("JWT expires at %d, want %d (now+%s)", got, want, tc.want)
+			}
+		})
 	}
 }

@@ -67,3 +67,45 @@ func (suite *EventResolverTestSuite) TestTransportAuthenticatedStillVerifiesPres
 	assert.Equal(suite.T(), "TEST-123", device.Token)
 	suite.API.AssertCalled(suite.T(), "AuthenticateDevice")
 }
+
+// S2: an event the platform MQTT broker asserted (event-sources' capture source) resolves on
+// its topic-derived device under `required`, for EVERY event type a device can publish, with
+// no credential and no credential lookup.
+func (suite *EventResolverTestSuite) TestRequiredBrokerAssertedIsAcceptedForEveryEventType() {
+	suite.API.Mock.On("DevicesByToken").Return([]*dmodel.Device{deviceWithToken("sensor-001")}, nil)
+	for _, et := range []eventtype.EventType{eventtype.Measurement, eventtype.Location, eventtype.Alert,
+		eventtype.StateChange, eventtype.NewRelationship} {
+		event := &esmodel.UnresolvedEvent{Device: "sensor-001", EventType: et, BrokerAsserted: true}
+		device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
+		assert.NoError(suite.T(), err, et.String())
+		assert.Equal(suite.T(), "sensor-001", device.Token, et.String())
+	}
+	suite.API.AssertNotCalled(suite.T(), "AuthenticateDevice")
+}
+
+// S2, the negative control: with no marker (an external-broker MQTT event, HTTP, the edge)
+// the same events are still refused under `required`. This is the resolver half of the
+// forgery test; the event-sources half proves an external source can never produce the marker.
+func (suite *EventResolverTestSuite) TestRequiredUnassertedEventWithoutACredentialIsRefusedForEveryEventType() {
+	for _, et := range []eventtype.EventType{eventtype.Measurement, eventtype.Location, eventtype.Alert,
+		eventtype.StateChange, eventtype.NewRelationship} {
+		event := &esmodel.UnresolvedEvent{Device: "sensor-001", EventType: et, BrokerAsserted: false}
+		_, reason, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
+		assert.Error(suite.T(), err, et.String())
+		assert.Equal(suite.T(), uint(resolvedevent.FailureReason_Unauthenticated), reason, et.String())
+	}
+	suite.API.AssertNotCalled(suite.T(), "DevicesByToken")
+}
+
+// The marker substitutes for an absent credential only: one that IS presented is still
+// authenticated, and still has to name the device it authenticates.
+func (suite *EventResolverTestSuite) TestBrokerAssertedStillVerifiesAPresentedCredential() {
+	suite.API.Mock.On("AuthenticateDevice").Return(deviceWithToken("TEST-123"), nil)
+	event := eventWithCredential(suite.T(), "TEST-123")
+	event.EventType = eventtype.Measurement
+	event.BrokerAsserted = true
+	device, _, err := suite.resolver(config.AuthModeRequired).resolveDevice(credCtx(), event)
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "TEST-123", device.Token)
+	suite.API.AssertCalled(suite.T(), "AuthenticateDevice")
+}
