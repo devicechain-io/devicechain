@@ -1004,6 +1004,13 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelStep',
         helpId: 'widgetHintSliderStep',
       },
+      mode: {
+        kind: 'enum',
+        values: ['slider', 'stepper'],
+        labelId: 'widgetLabelControlMode',
+        valueLabelIds: { slider: 'widgetControlModeSlider', stepper: 'widgetControlModeStepper' },
+        placeholderId: 'widgetPlaceholderDefault',
+      },
     },
     constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
     defaults: { title: 'Command slider' },

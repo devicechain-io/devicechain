@@ -379,6 +379,206 @@ const onButton = () => screen.getByRole('button', { name: /^on$/i });
 const power = (payload: unknown, over: Partial<CommandRow> = {}) =>
   row({ name: 'setPower', payload: JSON.stringify(payload), ...over });
 
+describe('command-slider, stepper mode', () => {
+  const stepper = (extra: Record<string, unknown> = {}) => slider({ mode: 'stepper', step: 1, ...extra });
+  const spin = () => screen.getByRole('spinbutton');
+  const press = (which: 'up' | 'down' | 'send') => fireEvent.click(document.querySelector(`[data-step="${which}"]`)!);
+  const num = () => Number(spin().getAttribute('aria-valuenow'));
+
+  it('leaves the slider alone: no mode, an unknown mode and mode slider all draw the range input', () => {
+    for (const extra of [{}, { mode: 'slider' }, { mode: 'bogus' }]) {
+      render(<CommandSlider widget={slider(extra)} data={state()} actions={actionsWith()} />);
+      expect(screen.getByRole('slider')).toBeTruthy();
+      expect(screen.queryByRole('spinbutton')).toBeNull();
+      cleanup();
+    }
+  });
+
+  it('takes its bounds from the command parameter and exposes spinbutton semantics', () => {
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith()} />);
+    expect(spin().getAttribute('aria-valuemin')).toBe('15');
+    expect(spin().getAttribute('aria-valuemax')).toBe('35');
+    expect(spin().getAttribute('aria-label')).toBe('Setpoint');
+    expect(screen.queryByRole('slider')).toBeNull();
+  });
+
+  it('clamps at min and max and never steps past them', () => {
+    render(<CommandSlider widget={stepper({ step: 5 })} data={state([row({ status: 'SUCCESSFUL' })])} actions={actionsWith()} />);
+    expect(num()).toBe(20); // 21 snapped onto the 5-step grid from min
+    for (let i = 0; i < 6; i++) press('up');
+    expect(num()).toBe(35);
+    for (let i = 0; i < 9; i++) press('down');
+    expect(num()).toBe(15);
+  });
+
+  it('steps by 0.1 without float drift', () => {
+    const schema = JSON.stringify([{ name: 'target', dataType: 'DOUBLE', required: true, minValue: 0, maxValue: 1 }]);
+    render(
+      <CommandSlider
+        widget={widget('command-slider', { commandName: 'setSetpoint', parameterSchema: schema, parameter: 'target', mode: 'stepper', step: 0.1 })}
+        data={state()}
+        actions={actionsWith()}
+      />,
+    );
+    press('up');
+    press('up');
+    press('up');
+    expect(num()).toBe(0.3);
+    expect(spin().textContent).toBe('0.3');
+  });
+
+  it('sends nothing on a press, and one command with defaults on Send', () => {
+    const send = makeSend();
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith(send)} />);
+    press('up');
+    press('up');
+    expect(send).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toMatch(/Press Send/);
+    press('send');
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith('therm-1', 'setSetpoint', '{"target":17,"mode":"auto"}');
+    press('send');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('Send does nothing before a value is staged', () => {
+    const send = makeSend();
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith(send)} />);
+    const sendButton = () => document.querySelector('[data-step="send"]')!;
+    expect(sendButton().getAttribute('aria-disabled')).toBe('true');
+    press('send');
+    expect(send).not.toHaveBeenCalled();
+    press('up');
+    expect(sendButton().getAttribute('aria-disabled')).toBeNull();
+  });
+
+  it('a disruptive command is still only sent by the explicit Send, and shows as held while the platform holds it', () => {
+    const send = makeSend();
+    const held = row({ status: 'HELD', payload: JSON.stringify({ target: 25, mode: 'auto' }) });
+    render(<CommandSlider widget={stepper()} data={state([held])} actions={actionsWith(send)} />);
+    expect(screen.getByRole('status').textContent).toMatch(/Last sent.*25.*Pending/);
+    press('down');
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.keyDown(spin(), { key: 'Escape' });
+    expect(num()).toBe(25);
+    press('up');
+    press('send');
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('follows the delivery status after a send', async () => {
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith(makeSend())} />);
+    press('up');
+    press('send');
+    await act(async () => {});
+    expect(screen.getByRole('status').textContent).toMatch(/Last sent.*16.*Pending/);
+    cleanup();
+    render(<CommandSlider widget={stepper()} data={state([row({ status: 'FAILED' })])} actions={actionsWith()} />);
+    expect(screen.getByRole('status').textContent).toMatch(/Failed/);
+  });
+
+  it('answers the arrows, Page and Home/End, sends on Enter and discards on Escape', () => {
+    const send = makeSend();
+    render(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL' })])} actions={actionsWith(send)} />);
+    fireEvent.keyDown(spin(), { key: 'ArrowUp' });
+    expect(num()).toBe(22);
+    fireEvent.keyDown(spin(), { key: 'ArrowLeft' });
+    fireEvent.keyDown(spin(), { key: 'ArrowDown' });
+    expect(num()).toBe(20);
+    fireEvent.keyDown(spin(), { key: 'PageUp' });
+    expect(num()).toBe(30);
+    fireEvent.keyDown(spin(), { key: 'PageUp' });
+    expect(num()).toBe(35);
+    fireEvent.keyDown(spin(), { key: 'PageDown' });
+    expect(num()).toBe(25);
+    fireEvent.keyDown(spin(), { key: 'Home' });
+    expect(num()).toBe(15);
+    fireEvent.keyDown(spin(), { key: 'End' });
+    expect(num()).toBe(35);
+    fireEvent.keyDown(spin(), { key: 'Escape' });
+    expect(num()).toBe(21);
+    expect(send).not.toHaveBeenCalled();
+    fireEvent.keyDown(spin(), { key: 'ArrowUp' });
+    fireEvent.keyDown(spin(), { key: 'Enter' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(send.mock.calls[0][2]!).target).toBe(22);
+  });
+
+  it('is inert without the command permission', () => {
+    const send = makeSend();
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith(send, false)} />);
+    press('up');
+    fireEvent.keyDown(spin(), { key: 'ArrowUp' });
+    expect(spin().getAttribute('aria-disabled')).toBe('true');
+    expect(spin().getAttribute('data-staged')).toBeNull();
+    press('send');
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('refuses a range nobody chose, as the slider does', () => {
+    const open = JSON.stringify([{ name: 'level', dataType: 'INT', required: true }]);
+    render(
+      <CommandSlider
+        widget={widget('command-slider', { commandName: 'dim', parameterSchema: open, parameter: 'level', mode: 'stepper' })}
+        data={state()}
+        actions={actionsWith()}
+      />,
+    );
+    expect(screen.getByRole('alert').textContent).toMatch(/min and max/);
+    expect(screen.queryByRole('spinbutton')).toBeNull();
+  });
+
+  it('sends a whole number for an INT parameter, whatever the authored step', () => {
+    const send = makeSend();
+    const schema = JSON.stringify([{ name: 'level', dataType: 'INT', required: true, minValue: 0, maxValue: 10 }]);
+    render(
+      <CommandSlider
+        widget={widget('command-slider', { commandName: 'dim', parameterSchema: schema, parameter: 'level', mode: 'stepper', step: 0.5 })}
+        data={state()}
+        actions={actionsWith(send)}
+      />,
+    );
+    press('up');
+    expect(num()).toBe(1);
+    press('send');
+    expect(send).toHaveBeenCalledWith('therm-1', 'dim', '{"level":1}');
+  });
+
+  it('says there is no value, rather than announcing the minimum, before anything was sent', () => {
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith()} />);
+    expect(spin().textContent).toBe('—');
+    expect(spin().getAttribute('aria-valuenow')).toBeNull();
+    expect(spin().getAttribute('aria-valuetext')).toBe('no value');
+    press('up');
+    expect(spin().getAttribute('aria-valuetext')).toBe('16 C');
+  });
+
+  it('keeps Send in the tab order, and the − / + out of it (the arrows on the value are their keys)', () => {
+    render(<CommandSlider widget={stepper()} data={state()} actions={actionsWith()} />);
+    const at = (w: string) => document.querySelector(`[data-step="${w}"]`)!;
+    expect(at('send').getAttribute('tabindex')).toBeNull();
+    expect(at('send').tagName).toBe('BUTTON');
+    expect(at('up').getAttribute('tabindex')).toBe('-1');
+    expect(spin().getAttribute('tabindex')).toBe('0');
+  });
+
+  it('discards a staged value when a newer command arrives, so a stale Send cannot overwrite it', () => {
+    const send = makeSend();
+    const { rerender } = render(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL' })])} actions={actionsWith(send)} />);
+    press('up');
+    expect(num()).toBe(22);
+    // A status update on the same command is not a newer command: the staged value stays.
+    rerender(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL', respondedTime: '2026-07-06T12:00:05Z' })])} actions={actionsWith(send)} />);
+    expect(spin().getAttribute('data-staged')).toBe('true');
+    const newer = row({ token: 'c-2', status: 'QUEUED', queuedTime: '2026-07-06T12:01:00Z', payload: JSON.stringify({ target: 30, mode: 'auto' }) });
+    rerender(<CommandSlider widget={stepper()} data={state([row({ status: 'SUCCESSFUL' }), newer])} actions={actionsWith(send)} />);
+    expect(spin().getAttribute('data-staged')).toBeNull();
+    expect(num()).toBe(30);
+    press('send');
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
 describe('command-toggle', () => {
   it('sends a real boolean, not the string, and nothing before the click', () => {
     const send = makeSend();

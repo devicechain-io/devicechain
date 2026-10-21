@@ -32,6 +32,12 @@ export interface ControlStrings {
   unsent: string;
   // The slider's keyboard description: arrows choose, Enter sends.
   sliderHint: string;
+  // The stepper: its keyboard description, the unsent caption, and its buttons.
+  stepperHint: string;
+  stepperUnsent: string;
+  send: string;
+  decrease: string;
+  increase: string;
   pending: string;
   delivered: string;
   failed: string;
@@ -66,6 +72,11 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     noValue: 'no value',
     unsent: 'Not sent yet. Release or press Enter to send',
     sliderHint: 'Arrow keys choose a value; press Enter to send it, or Escape to discard it.',
+    stepperHint: 'Arrow keys and Page Up or Down change the value; press Enter to send it, or Escape to discard it.',
+    stepperUnsent: 'Not sent yet. Press Send',
+    send: 'Send',
+    decrease: 'Decrease',
+    increase: 'Increase',
     pending: 'Pending',
     delivered: 'Delivered',
     failed: 'Failed',
@@ -96,6 +107,11 @@ export const CONTROL_STRINGS: Record<'en' | 'es', ControlStrings> = {
     noValue: 'sin valor',
     unsent: 'Aún no enviado. Suelte o pulse Intro para enviar',
     sliderHint: 'Las flechas eligen un valor; pulse Intro para enviarlo o Escape para descartarlo.',
+    stepperHint: 'Las flechas y Re Pág o Av Pág cambian el valor; pulse Intro para enviarlo o Escape para descartarlo.',
+    stepperUnsent: 'Aún no enviado. Pulse Enviar',
+    send: 'Enviar',
+    decrease: 'Disminuir',
+    increase: 'Aumentar',
     pending: 'Pendiente',
     delivered: 'Entregado',
     failed: 'Fallido',

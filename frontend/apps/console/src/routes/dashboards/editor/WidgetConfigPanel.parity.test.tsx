@@ -75,6 +75,7 @@ const LEGACY_LABEL: Record<string, string> = {
   // Appended with the command controls.
   parameter: 'widgetLabelParameter',
   step: 'widgetLabelStep',
+  mode: 'widgetLabelControlMode',
   // Appended with the stat card and the categorical charts.
   stat: 'widgetLabelStat',
   sort: 'widgetLabelSort',
@@ -182,6 +183,8 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'groupBy:device': 'widgetGroupByDevice',
   'show:attention': 'widgetFleetShowAttention',
   'show:devices': 'widgetFleetShowDevices',
+  'mode:slider': 'widgetControlModeSlider',
+  'mode:stepper': 'widgetControlModeStepper',
 };
 
 const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
@@ -197,6 +200,7 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   sort: 'widgetPlaceholderDefault',
   groupBy: 'widgetPlaceholderDefault',
   show: 'widgetPlaceholderDefault',
+  mode: 'widgetPlaceholderDefault',
 };
 
 // Options added to a built-in's panel after the cutover that reuse a key the tables above already
