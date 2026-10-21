@@ -63,6 +63,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   image: 'widgets/image.tsx',
   'alarm-table': 'widgets/alarm-table.tsx',
   'alarm-count': 'widgets/alarm-count.tsx',
+  'alarm-severity': 'widgets/alarm-severity.tsx',
   'command-button': 'widgets/command-button.tsx',
   'entity-selector': 'widgets/entity-selector.tsx',
   map: 'widgets/map.tsx',
@@ -241,6 +242,7 @@ describe('binding-policy option references', () => {
     expect(policyKeys('timeseries-chart')).toEqual(['windowSeconds']);
     expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'groupBy', 'maxRows', 'severity', 'state']);
     expect(policyKeys('alarm-count').sort()).toEqual(['acknowledged', 'severity', 'state']); // page size is a constant
+    expect(policyKeys('alarm-severity').sort()).toEqual(['acknowledged', 'deviceType', 'state']); // it breaks severity down, so none filters it
     expect(policyKeys('command-button')).toEqual(['maxRows']);
   });
 });
@@ -323,6 +325,7 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     selectionTarget: 'thermostat',
   },
   'alarm-count': { title: 'Open', state: 'ACTIVE', severity: 'MAJOR', acknowledged: 'true' },
+  'alarm-severity': { title: 'By severity', state: 'ACTIVE', acknowledged: 'false', deviceType: 'thermostat' },
   'command-button': {
     title: 'Setpoint',
     commandName: 'setSetpoint',

@@ -1677,8 +1677,9 @@ input AlarmSearchCriteria {
 }
 
 """
-Criteria for counting alarms by device type. The facets are those of AlarmSearchCriteria,
-without paging and without deviceType (the grouping), and they AND together.
+Criteria for counting alarms by device type or by severity. The facets are those of
+AlarmSearchCriteria, without paging and without deviceType (the per-type count's grouping; the
+per-severity count takes it as an argument of its own), and they AND together.
 """
 input AlarmCountCriteria {
     """Entity type of the originator, e.g. "device". Required when originator is set."""
@@ -1705,6 +1706,14 @@ type AlarmDeviceTypeCount {
     """The severity of the counted alarms."""
     severity: String!
     """How many matching alarms have this device type and severity."""
+    count: Int!
+}
+
+"""How many matching alarms are at one severity."""
+type AlarmSeverityCount {
+    """The severity of the counted alarms."""
+    severity: String!
+    """How many matching alarms have this severity."""
     count: Int!
 }
 
@@ -3773,6 +3782,19 @@ type Query {
         """The facets the counted alarms must match."""
         criteria: AlarmCountCriteria!
     ): [AlarmDeviceTypeCount!]!
+    """
+    Counts the alarms matching the criteria per severity, in one read. With no deviceType every
+    alarm alarms(criteria) would return is counted, whatever its originator (a device, an asset,
+    an area, a customer or a group), so the counts sum to its total. With a deviceType only the
+    alarms on devices of that type are counted, as alarms(criteria) filtered to that type returns
+    them; an unknown type counts nothing. A severity with no alarm is absent. Requires alarm:read.
+    """
+    alarmCountsBySeverity(
+        """The facets the counted alarms must match."""
+        criteria: AlarmCountCriteria!
+        """Only alarms on devices of this type, by its token."""
+        deviceType: String
+    ): [AlarmSeverityCount!]!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the audit journal (ADR-019); tenant-scoped, newest first.

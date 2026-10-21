@@ -88,6 +88,7 @@ const LEGACY_LABEL: Record<string, string> = {
   // Appended with the stat card trend and the fleet count.
   sparkline: 'widgetLabelSparkline',
   show: 'widgetLabelFleetShow',
+  deviceType: 'widgetLabelAlarmSeverityType',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -133,6 +134,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   columns: 'widgetHintColumns',
   sparkline: 'widgetHintSparkline',
   show: 'widgetHintFleetShow',
+  deviceType: 'widgetHintAlarmSeverityType',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {

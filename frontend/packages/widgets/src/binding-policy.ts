@@ -94,12 +94,17 @@ function parseAcknowledged(value: string | undefined): boolean | undefined {
 // renderer's; the page size and filters come from the policy.
 export function alarmSubscription(descriptor: WidgetDescriptor, widget: WidgetInstance): AlarmSubscription {
   const p = policy(descriptor);
+  const deviceType = stringValue(p.deviceType as StringBinding | undefined, widget.options);
   return {
     datasource: widget.datasource,
     state: stringValue(p.state as StringBinding | undefined, widget.options),
     severity: stringValue(p.severity as StringBinding | undefined, widget.options),
     acknowledged: parseAcknowledged(stringValue(p.acknowledged as StringBinding | undefined, widget.options)),
     pageSize: numberValue(p.pageSize as NumberBinding | undefined, widget.options) ?? 1,
+    // A widget that declares `binding.countBySeverity` reads counts, not rows; `binding.deviceType`
+    // narrows them to one device type (a blank option is no type).
+    ...((p.countBySeverity as { const?: boolean } | undefined)?.const === true ? { countBySeverity: true } : {}),
+    ...(deviceType ? { deviceType } : {}),
   };
 }
 

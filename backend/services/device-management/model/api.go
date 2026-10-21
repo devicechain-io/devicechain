@@ -492,6 +492,7 @@ type DeviceManagementApi interface {
 	AlarmsByToken(ctx context.Context, tokens []string) ([]*Alarm, error)
 	Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error)
 	AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCountCriteria) ([]AlarmDeviceTypeCount, error)
+	AlarmCountsBySeverity(ctx context.Context, criteria AlarmCountCriteria, deviceType *string) ([]AlarmSeverityCount, error)
 	AcknowledgeAlarm(ctx context.Context, token string, by *string) (*Alarm, error)
 	ClearAlarm(ctx context.Context, token string) (*Alarm, error)
 	// ApplyAlarmContributorEdge is the ADR-057 REACT alarm entry — the sole alarm-raise path since

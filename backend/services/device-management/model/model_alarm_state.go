@@ -155,6 +155,12 @@ type AlarmDeviceTypeCount struct {
 	Count      int
 }
 
+// AlarmSeverityCount is how many matching alarms are at one severity.
+type AlarmSeverityCount struct {
+	Severity string
+	Count    int
+}
+
 // Results for an alarm search.
 type AlarmSearchResults struct {
 	Results    []Alarm

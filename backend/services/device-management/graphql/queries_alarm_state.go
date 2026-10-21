@@ -92,6 +92,35 @@ func (r *AlarmDeviceTypeCountResolver) Severity() string { return r.M.Severity }
 
 func (r *AlarmDeviceTypeCountResolver) Count() int32 { return int32(r.M.Count) }
 
+// Count the alarms matching the criteria per severity, optionally only those on one device type.
+func (r *SchemaResolver) AlarmCountsBySeverity(ctx context.Context, args struct {
+	Criteria   model.AlarmCountCriteria
+	DeviceType *string
+}) ([]*AlarmSeverityCountResolver, error) {
+	if _, err := auth.AuthorizeScoped(ctx, auth.AlarmRead); err != nil {
+		return nil, err
+	}
+
+	found, err := r.GetApi(ctx).AlarmCountsBySeverity(ctx, args.Criteria, args.DeviceType)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*AlarmSeverityCountResolver, 0, len(found))
+	for _, c := range found {
+		result = append(result, &AlarmSeverityCountResolver{M: c})
+	}
+	return result, nil
+}
+
+// AlarmSeverityCountResolver resolves one per-severity alarm count.
+type AlarmSeverityCountResolver struct {
+	M model.AlarmSeverityCount
+}
+
+func (r *AlarmSeverityCountResolver) Severity() string { return r.M.Severity }
+
+func (r *AlarmSeverityCountResolver) Count() int32 { return int32(r.M.Count) }
+
 // List all alarms that match the given criteria.
 func (r *SchemaResolver) Alarms(ctx context.Context, args struct {
 	Criteria model.AlarmSearchCriteria

@@ -242,3 +242,39 @@ func TestScopedAlarmCountsByDeviceType(t *testing.T) {
 	require.Equal(t, 2, count(r.operator))
 	require.Equal(t, []string{"acme-hot", "globex-hot"}, search(r.operator))
 }
+
+// TestScopedAlarmCountsBySeverity: a scoped member's per-severity counts cover exactly the alarms
+// its search returns -- by the alarm's own stamp, whatever the originator -- and the type facet
+// narrows them as the type-filtered search does.
+func TestScopedAlarmCountsBySeverity(t *testing.T) {
+	r := newScopeAlarmRig(t)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	r.raise(t, "acme-pump", "acme-hot", t0)
+	r.raise(t, "globex-pump", "globex-hot", t0)
+
+	pump := "pump"
+	count := func(ctx context.Context, deviceType *string) int {
+		found, err := r.api.AlarmCountsBySeverity(ctx, AlarmCountCriteria{}, deviceType)
+		require.NoError(t, err)
+		n := 0
+		for _, c := range found {
+			require.Equal(t, string(AlarmSeverityMajor), c.Severity)
+			n += c.Count
+		}
+		return n
+	}
+	total := func(ctx context.Context) int {
+		found, err := r.api.Alarms(ctx, AlarmSearchCriteria{})
+		require.NoError(t, err)
+		return int(found.Pagination.TotalRecords)
+	}
+	acme := r.member("customer:acme")
+	require.Equal(t, 1, count(acme, nil))
+	require.Equal(t, total(acme), count(acme, nil))
+	require.Equal(t, 1, count(acme, &pump))
+	require.Equal(t, 0, count(r.member("group:acme"), nil))
+	// Negative control: the operator counts both.
+	require.Equal(t, 2, count(r.operator, nil))
+	require.Equal(t, 2, count(r.operator, &pump))
+	require.Equal(t, total(r.operator), count(r.operator, nil))
+}

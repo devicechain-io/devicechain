@@ -113,6 +113,7 @@ export { Label } from './widgets/label';
 export { Image } from './widgets/image';
 export { AlarmTable } from './widgets/alarm-table';
 export { AlarmCount } from './widgets/alarm-count';
+export { AlarmSeverity } from './widgets/alarm-severity';
 export { CommandButton } from './widgets/command-button';
 export { EntitySelector } from './widgets/entity-selector';
 export { MapWidget } from './widgets/map';

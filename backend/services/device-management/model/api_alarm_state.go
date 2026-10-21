@@ -97,6 +97,28 @@ func (api *Api) alarmDevices(ctx context.Context) *gorm.DB {
 	return api.RDB.DB(ctx).Model(&Device{})
 }
 
+// alarmDeviceTypeFilter is the ONE device-type facet: the search's DeviceType filter and the
+// per-severity count's both narrow by it, so a type's rows and its severity counts cannot disagree
+// about which alarms are on that type. A nil token is no facet (the identity filter); an unknown
+// token reports !ok, which the caller answers with nothing, as for an unknown originator.
+func (api *Api) alarmDeviceTypeFilter(ctx context.Context, deviceType *string) (func(*gorm.DB) *gorm.DB, bool, error) {
+	if deviceType == nil {
+		return func(db *gorm.DB) *gorm.DB { return db }, true, nil
+	}
+	types, err := api.DeviceTypesByToken(ctx, []string{*deviceType})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(types) == 0 {
+		return nil, false, nil
+	}
+	id := types[0].ID
+	return func(db *gorm.DB) *gorm.DB {
+		return db.Where("alarms.originator_type = ? AND alarms.originator_id IN (?)",
+			string(entity.TypeDevice), api.alarmDevices(ctx).Select("devices.id").Where("devices.device_type_id = ?", id))
+	}, true, nil
+}
+
 // Search for alarms that meet criteria. An unresolvable originator or device type yields an
 // empty result rather than an error.
 func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*AlarmSearchResults, error) {
@@ -111,25 +133,17 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 	if !ok {
 		return empty, nil
 	}
-	var deviceTypeId *uint
-	if criteria.DeviceType != nil {
-		types, err := api.DeviceTypesByToken(ctx, []string{*criteria.DeviceType})
-		if err != nil {
-			return nil, err
-		}
-		if len(types) == 0 {
-			return empty, nil
-		}
-		deviceTypeId = &types[0].ID
+	ofType, ok, err := api.alarmDeviceTypeFilter(ctx, criteria.DeviceType)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return empty, nil
 	}
 
 	results := make([]Alarm, 0)
 	db, pag := api.RDB.ListOf(ctx, &Alarm{}, func(result *gorm.DB) *gorm.DB {
-		result = filter(result)
-		if deviceTypeId != nil {
-			result = result.Where("alarms.originator_type = ? AND alarms.originator_id IN (?)",
-				string(entity.TypeDevice), api.alarmDevices(ctx).Select("devices.id").Where("devices.device_type_id = ?", *deviceTypeId))
-		}
+		result = ofType(filter(result))
 		// No .Order() here: the deterministic newest-cycle-first order this search
 		// needs is Alarm.DefaultOrder(), which ListOf injects for every paged read of
 		// the model. One place per model says what the order is, and it says it
@@ -202,6 +216,40 @@ func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCount
 		}
 	}
 	return out, nil
+}
+
+// AlarmCountsBySeverity counts the alarms matching criteria per severity, in one grouped read.
+// With no deviceType it counts EVERY alarm the search would return -- whatever its originator
+// (a device, an asset, an area, a customer, a group) -- under the same tenant and scope rules, so
+// the counts sum to the search's total. With a deviceType it counts only the alarms on devices of
+// that type, by the search's own type facet (alarmDeviceTypeFilter), so they sum to the
+// type-filtered search's total; an unknown type counts nothing. Severities with no alarm are
+// absent. Ordered by severity.
+func (api *Api) AlarmCountsBySeverity(ctx context.Context, criteria AlarmCountCriteria, deviceType *string) ([]AlarmSeverityCount, error) {
+	out := make([]AlarmSeverityCount, 0)
+	filter, ok, err := alarmFacets{
+		originatorType: criteria.OriginatorType, originator: criteria.Originator, state: criteria.State,
+		severity: criteria.Severity, acknowledged: criteria.Acknowledged, alarmKey: criteria.AlarmKey,
+	}.resolve(ctx, api)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return out, nil
+	}
+	ofType, ok, err := api.alarmDeviceTypeFilter(ctx, deviceType)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return out, nil
+	}
+	var rows []AlarmSeverityCount
+	q := api.RDB.DB(ctx).Model(&Alarm{}).Select("alarms.severity AS severity, COUNT(*) AS count")
+	if err := ofType(filter(q)).Group("alarms.severity").Order("alarms.severity").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return append(out, rows...), nil
 }
 
 // AcknowledgeAlarm records an operator acknowledgment of the alarm named by token.

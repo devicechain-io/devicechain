@@ -68,7 +68,7 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 | measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count` |
 | aggregate | `stat-card` |
 | none (static) | `label`, `image` |
-| alarm | `alarm-table`, `alarm-count` |
+| alarm | `alarm-table`, `alarm-count`, `alarm-severity` |
 | control | `command-button`, `command-slider`, `command-toggle` |
 | selection | `entity-selector` |
 | location | `map` |

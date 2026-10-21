@@ -594,6 +594,44 @@ export const builtinWidgetDescriptors = {
     layout: { defaultSpan: { cols: 3, rows: 2 }, minSpan: { cols: 2, rows: 2 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 
+  // Alarms by severity, from ONE grouped count read (device-management's per-severity counts, every
+  // originator, exact past any page). Not a mode of alarm-count: a different shape and size, and no
+  // severity filter. `deviceType` narrows it to the alarms on one type's devices.
+  'alarm-severity': defineRuntimeDescriptor({
+    id: 'alarm-severity',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: {
+      title: 'Alarm severity',
+      category: 'Alarms',
+      titleId: 'widgetTypeAlarmSeverity',
+      categoryId: 'widgetCategoryAlarms',
+    },
+    channel: 'alarm',
+    datasource: { mode: 'optional', selectors: ALL_SELECTORS },
+    binding: {
+      pageSize: { const: 1 },
+      state: { option: 'state' },
+      acknowledged: { option: 'acknowledged' },
+      countBySeverity: { const: true },
+      deviceType: { option: 'deviceType' },
+    },
+    options: {
+      title: TITLE,
+      state: ALARM_STATE,
+      acknowledged: ALARM_ACKNOWLEDGED,
+      deviceType: {
+        kind: 'string',
+        labelId: 'widgetLabelAlarmSeverityType',
+        helpId: 'widgetHintAlarmSeverityType',
+      },
+    },
+    defaults: { title: 'Alarm severity', state: 'ACTIVE' },
+    interactions: {},
+    layout: { defaultSpan: { cols: 4, rows: 2 }, minSpan: { cols: 3, rows: 2 }, maxSpan: { cols: 12, rows: 4 } },
+  }),
+
   'command-button': defineRuntimeDescriptor({
     id: 'command-button',
     version: VERSION,

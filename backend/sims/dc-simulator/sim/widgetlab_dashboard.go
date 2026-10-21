@@ -442,6 +442,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabCommandControls(widgetSubject{Slot: widgetlabSlotSensor})...)
 	def.Widgets = append(def.Widgets, widgetlabAggregates(onSensor)...)
 	def.Widgets = append(def.Widgets, widgetlabFleet()...)
+	def.Widgets = append(def.Widgets, widgetlabAlarmSeverity(onZone)...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -730,6 +731,31 @@ func widgetlabFleet() []dashboardWidget {
 		buildFleetCountWidget("wl-fleet-count", box{0, 3, r + 9, 3}, zone, "Sensors needing attention", "attention",
 			WidgetlabTemperatureKey, widgetlabTemperatureBands),
 		buildFleetCountWidget("wl-fleet-devices", box{3, 3, r + 9, 3}, zone, "Sensors in the zone", "devices", "", nil),
+	}
+}
+
+// widgetlabAlarmSeverityRow is the first row of the alarm-severity block (rows 54-56), under the
+// fleet block that ends at row 53.
+const widgetlabAlarmSeverityRow = 54
+
+// buildAlarmSeverityWidget breaks the subject's active alarms down by severity. A non-empty
+// deviceType narrows it to the alarms on devices of that type.
+func buildAlarmSeverityWidget(id string, b box, s widgetSubject, title, deviceType string) dashboardWidget {
+	options := map[string]any{"title": title, "state": AlarmStateActiveWire}
+	if deviceType != "" {
+		options["deviceType"] = deviceType
+	}
+	return dashboardWidget{Id: id, Type: "alarm-severity", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
+// widgetlabAlarmSeverity places the severity breakdown over the zone twice: every active alarm in
+// it, and only those on devices of the gallery's sensor type. The sweep raises one severity, so
+// the other four rows show the dimmed zero.
+func widgetlabAlarmSeverity(onZone widgetSubject) []dashboardWidget {
+	const r = widgetlabAlarmSeverityRow
+	return []dashboardWidget{
+		buildAlarmSeverityWidget("wl-alarm-severity", box{0, 6, r, 3}, onZone, "Active alarms by severity", ""),
+		buildAlarmSeverityWidget("wl-alarm-severity-type", box{6, 6, r, 3}, onZone, "Sensor alarms by severity", WidgetlabDeviceTypeToken),
 	}
 }
 

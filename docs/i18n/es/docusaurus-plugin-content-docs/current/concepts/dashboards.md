@@ -60,6 +60,7 @@ El control deslizante y el interruptor de comando muestran lo último que se env
 | **Imagen** | estático | una imagen estática (p. ej., un plano de planta detrás de otros widgets) |
 | **Tabla de alarmas** | alarma | alarmas en vivo de un dispositivo o ancla |
 | **Conteo de alarmas** | alarma | un recuento agregado de alarmas abiertas |
+| **Severidad de alarmas** | alarma | las alarmas activas desglosadas por severidad: una barra apilada sobre una leyenda con el recuento de cada severidad, para todas las alarmas del alcance o para los dispositivos de un tipo |
 | **Comando / control** | control | un formulario de parámetros tipado que despacha un comando y muestra en vivo su ciclo de vida de entrega |
 | **Control deslizante de comando** | control | un control deslizante para un parámetro numérico de un comando, que se envía al soltarlo; su rango proviene de la definición del comando |
 | **Interruptor de comando** | control | un interruptor para un parámetro booleano de un comando, un comando por clic |

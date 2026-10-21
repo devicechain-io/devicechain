@@ -13,7 +13,7 @@
 import { createWidgetRegistry, type WidgetRegistry } from '@devicechain/widget-sdk';
 
 import { barChartWidget, fleetCountWidget, fleetTableWidget, pieChartWidget, statCardWidget } from './widgets/aggregate-lazy';
-import { alarmCountWidget, alarmTableWidget } from './widgets/alarm-lazy';
+import { alarmCountWidget, alarmSeverityWidget, alarmTableWidget } from './widgets/alarm-lazy';
 import { commandButtonWidget, commandSliderWidget, commandToggleWidget } from './widgets/control-lazy';
 import { entitySelectorWidget } from './widgets/selection-lazy';
 import { gaugeWidget } from './widgets/gauge';
@@ -42,6 +42,7 @@ export const builtinWidgetDefinitions = [
   imageWidget,
   alarmTableWidget,
   alarmCountWidget,
+  alarmSeverityWidget,
   commandButtonWidget,
   entitySelectorWidget,
   mapWidget,

@@ -217,6 +217,37 @@ describe('validateWidgetDescriptor', () => {
     expect(at({ option: 'state', equals: 'ACTIVE' }, 'control')).toContain('binding.groupBy');
   });
 
+  it('checks the countBySeverity binding that makes an alarm widget read counts instead of rows', () => {
+    const at = (countBySeverity: unknown, channel = 'alarm') =>
+      issuesOf({
+        ...valid(),
+        channel,
+        datasource: { mode: 'optional', selectors: ['device'] },
+        binding: { pageSize: { const: 1 }, countBySeverity },
+      }).map((i) => i.path);
+    expect(at({ const: true })).toEqual([]);
+    // A constant switch and nothing else.
+    expect(at({ const: false })).toEqual(['binding.countBySeverity']);
+    expect(at({ option: 'state', equals: 'ACTIVE' })).toEqual(['binding.countBySeverity']);
+    expect(at({ const: true, option: 'state' })).toEqual(['binding.countBySeverity']);
+    expect(at(true)).toEqual(['binding.countBySeverity']);
+    // Only the alarm channel counts alarms.
+    expect(at({ const: true }, 'control')).toContain('binding.countBySeverity');
+  });
+
+  it('checks that the deviceType binding names a declared string option', () => {
+    const at = (deviceType: unknown, channel = 'alarm') =>
+      issuesOf({
+        ...valid(),
+        channel,
+        datasource: { mode: 'optional', selectors: ['device'] },
+        binding: { pageSize: { const: 1 }, deviceType },
+      }).map((i) => i.path);
+    expect(at({ option: 'state' })).toEqual([]);
+    expect(at({ option: 'nope' })).toEqual(['binding.deviceType.option']);
+    expect(at({ option: 'state' }, 'control')).toContain('binding.deviceType');
+  });
+
   it('accepts an aggregate-channel widget that pins its span, and nothing else in its binding', () => {
     const OPTS = { ...OPTIONS, windowSeconds: { kind: 'number', integer: true, min: 60, max: 604800, doc: 'Span.' } } as const;
     const { constraints: _constraints, ...base } = valid();

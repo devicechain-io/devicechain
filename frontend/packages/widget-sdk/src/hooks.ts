@@ -528,6 +528,7 @@ export function useAlarmStream(
             alarms: snapshot.alarms,
             total: snapshot.total,
             ...(snapshot.typeCounts ? { typeCounts: snapshot.typeCounts } : {}),
+            ...(snapshot.severityCounts ? { severityCounts: snapshot.severityCounts } : {}),
             loading: false,
             error: null,
           },

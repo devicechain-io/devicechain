@@ -117,6 +117,28 @@ export const ALARM_TYPE_COUNTS = `
   }
 ` as unknown as TypedDocument<AlarmTypeCountsResult, AlarmTypeCountsVariables>;
 
+// ── Alarm counts per severity (one grouped read) ────────────────────────
+// A severity breakdown. With no deviceType it counts every alarm the search would return, whatever
+// its originator, so the counts sum to the alarm search's total; with one, only that type's devices.
+
+export interface AlarmSeverityCountsResult {
+  alarmCountsBySeverity: Array<{ severity: string; count: number }>;
+}
+
+export interface AlarmSeverityCountsVariables {
+  criteria: AlarmCountCriteriaInput;
+  deviceType: string | null;
+}
+
+export const ALARM_SEVERITY_COUNTS = `
+  query DashboardAlarmSeverityCounts($criteria: AlarmCountCriteria!, $deviceType: String) {
+    alarmCountsBySeverity(criteria: $criteria, deviceType: $deviceType) {
+      severity
+      count
+    }
+  }
+` as unknown as TypedDocument<AlarmSeverityCountsResult, AlarmSeverityCountsVariables>;
+
 // ── Live trigger ─────────────────────────────────────────────────────────
 
 export interface AlarmStreamResult {
