@@ -189,7 +189,8 @@ describe('alarm markers', () => {
     mount(chart({ markAlarms: true }), f.hub);
     await vi.waitFor(() => expect(helper()).toBeDefined());
     expect(f.alarmSubs).toHaveBeenCalledTimes(1);
-    expect(f.alarmSubs.mock.calls[0][0]).toEqual({ datasource: ds, pageSize: 100 });
+    // The chart's range goes to the server, which pages and counts inside it: one page of the cap.
+    expect(f.alarmSubs.mock.calls[0][0]).toEqual({ datasource: ds, pageSize: MAX_EVENT_MARKERS, window: { spanSeconds: 3600 } });
     expect(f.commandSubs).not.toHaveBeenCalled();
     const [from, to] = helper()!.markArea!.data[0];
     expect([from.xAxis, to.xAxis]).toEqual([NOW - 30 * MIN, NOW - 10 * MIN]);
@@ -209,6 +210,10 @@ describe('alarm markers', () => {
     expect(summary?.textContent).toBe('Events in this range (1)');
     expect(listed()).toHaveLength(1);
     expect(listed()[0].textContent).toMatch(/^Alarm: high-temp · Critical · raised .+ · cleared .+$/);
+    // The list scrolls, so a keyboard must be able to reach it to scroll it.
+    const list = footer()!.querySelector('details ul');
+    expect(list?.getAttribute('tabindex')).toBe('0');
+    expect(list?.getAttribute('aria-label')).toBe('Events in this range (1)');
   });
 });
 
@@ -217,7 +222,7 @@ describe('command markers', () => {
     const f = fakeHub({ commands: { deviceToken: 'd-1', commands: [command(), command({ token: 'c2', name: 'ping', status: 'FAILED', sentTime: at(5) })], total: 2 } });
     mount(chart({ markCommands: true }), f.hub);
     await vi.waitFor(() => expect(helper()).toBeDefined());
-    expect(f.commandSubs.mock.calls[0][0]).toEqual({ datasource: ds, pageSize: 100 });
+    expect(f.commandSubs.mock.calls[0][0]).toEqual({ datasource: ds, pageSize: MAX_EVENT_MARKERS, window: { spanSeconds: 3600 } });
     expect(f.alarmSubs).not.toHaveBeenCalled();
     expect(helper()!.markLine!.data.map((l) => [l.name, l.xAxis])).toEqual([
       ['c1', NOW - 20 * MIN],
@@ -249,21 +254,21 @@ describe('what is NOT shown is said', () => {
     expect(helper()!.markArea!.data).toHaveLength(MAX_EVENT_MARKERS);
   });
 
-  it('does not pass a full page off as the whole range: "Up to N more not shown"', async () => {
-    const rows = Array.from({ length: 100 }, (_, i) => alarm({ token: `a${i}`, raisedTime: at(55 - i / 2), clearedTime: null, state: 'ACTIVE' }));
+  it('counts the range past the page exactly, from the source total for the range', async () => {
+    const rows = Array.from({ length: MAX_EVENT_MARKERS }, (_, i) => alarm({ token: `a${i}`, raisedTime: at(55 - i), clearedTime: null, state: 'ACTIVE' }));
     const f = fakeHub({ alarms: { alarms: rows, total: 250 } });
     mount(chart({ markAlarms: true }), f.hub);
-    // 100 in range, 30 drawn, 70 over the cap, and up to 150 more never read.
-    await vi.waitFor(() => expect(notes()).toEqual(['Up to 220 more not shown']));
+    // 250 in range, 30 read and drawn: exactly 220 more, never "up to".
+    await vi.waitFor(() => expect(notes()).toEqual(['220 more not shown']));
   });
 
-  it('a full page that stops short of the range start has nothing behind it', async () => {
-    const rows = Array.from({ length: 100 }, (_, i) => alarm({ token: `a${i}`, raisedTime: at(10 + i), clearedTime: at(9 + i), state: 'CLEARED' }));
-    // Oldest raised 109 minutes ago: past the 60-minute range, so older rows cannot be inside it.
-    const f = fakeHub({ alarms: { alarms: rows, total: 250 } });
-    mount(chart({ markAlarms: true }), f.hub);
-    await vi.waitFor(() => expect(footer()).not.toBeNull());
-    expect(notes().every((n) => !n?.startsWith('Up to'))).toBe(true);
+  it('adds the commands past their page to the alarms past the cap', async () => {
+    const alarms = Array.from({ length: MAX_EVENT_MARKERS }, (_, i) => alarm({ token: `a${i}`, raisedTime: at(55 - i), clearedTime: null, state: 'ACTIVE' }));
+    const commands = Array.from({ length: 4 }, (_, i) => command({ token: `c${i}`, sentTime: at(2 + i) }));
+    const f = fakeHub({ alarms: { alarms, total: 40 }, commands: { deviceToken: 'd-1', commands, total: 9 } });
+    mount(chart({ markAlarms: true, markCommands: true }), f.hub);
+    // 34 read, 30 drawn (4 over the cap), and 10 + 5 never read.
+    await vi.waitFor(() => expect(notes()).toEqual(['19 more not shown']));
   });
 
   it('says so in Spanish for a Spanish viewer', async () => {
@@ -312,16 +317,37 @@ describe('the board range', () => {
     expect(helper()!.markLine!.data.map((l) => l.name)).toEqual(['a1:cleared']);
   });
 
-  it('a paused board holds the events it showed, and shows the new ones when it resumes', async () => {
+  it('a pause reads the range it fixes, holds it, and a resume reads the live range again', async () => {
     const f = fakeHub({ alarms: { alarms: [alarm({ token: 'first' })], total: 1 } });
     const { setRange } = mount(chart({ markAlarms: true }), f.hub, live());
     await vi.waitFor(() => expect(listed()).toHaveLength(1));
     setRange(frozen());
+    // The pause fixes the range's end, so the server is asked for exactly that range.
+    await vi.waitFor(() => expect(f.alarmSubs).toHaveBeenCalledTimes(2));
+    expect(f.alarmSubs.mock.calls[1][0]).toEqual({ datasource: ds, pageSize: MAX_EVENT_MARKERS, window: { spanSeconds: 3600, endAt: NOW } });
+    expect(f.alarmDisposed).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(listed()).toHaveLength(1));
+    // While paused, a later answer for the same range is held back.
     act(() => f.alarms()!.next({ alarms: [alarm({ token: 'first' }), alarm({ token: 'second', raisedTime: at(5), clearedTime: null, state: 'ACTIVE' })], total: 2 }));
     await act(async () => {});
     expect(listed()).toHaveLength(1);
     setRange(live());
+    await vi.waitFor(() => expect(f.alarmSubs).toHaveBeenCalledTimes(3));
+    expect(f.alarmSubs.mock.calls[2][0]).toEqual({ datasource: ds, pageSize: MAX_EVENT_MARKERS, window: { spanSeconds: 3600 } });
+    await vi.waitFor(() => expect(listed()).toHaveLength(1));
+    act(() => f.alarms()!.next({ alarms: [alarm({ token: 'first' }), alarm({ token: 'second', raisedTime: at(5), clearedTime: null, state: 'ACTIVE' })], total: 2 }));
     await vi.waitFor(() => expect(listed()).toHaveLength(2));
+  });
+
+  it('a range a month back asks the server for that month, and draws what it answers', async () => {
+    const MONTH = 30 * 86_400;
+    const old = at(20 * 24 * 60); // 20 days ago
+    const f = fakeHub({ commands: { deviceToken: 'd-1', commands: [command({ token: 'old', sentTime: old, queuedTime: old })], total: 1 } });
+    mount(chart({ markCommands: true }), f.hub, live(MONTH));
+    await vi.waitFor(() => expect(helper()).toBeDefined());
+    expect(f.commandSubs.mock.calls[0][0]).toMatchObject({ window: { spanSeconds: MONTH } });
+    expect(helper()!.markLine!.data.map((l) => l.name)).toEqual(['old']);
+    expect(notes()).toEqual([]);
   });
 });
 

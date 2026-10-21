@@ -42,5 +42,6 @@ var (
 		NewCommandOutcomeSchema(),
 		NewDispatchAfterSchema(),
 		NewCommandScopeAnchorsSchema(),
+		NewDeviceTimeIndexSchema(),
 	}
 )

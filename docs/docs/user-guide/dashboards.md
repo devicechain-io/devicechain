@@ -304,10 +304,10 @@ The settings depend on the widget. Common ones:
   command and, once known, its outcome (succeeded, failed, timed out, and so on). Hover or tap a
   marker for the same details as text. Under the chart, **Events in this range** opens a list of
   every marker, which a keyboard can reach. The markers follow the board's time range and the
-  pause, and read only the chart's own device. At most 30 events are drawn, the newest; the chart
-  says "N more not shown" for the rest, and "Up to N more not shown" when the platform returned a
-  full page of history that still reaches into the range, because it cannot be asked for a time
-  range. On a replayed recording the markers come from the recording if it holds alarms or
+  pause, and read only the chart's own device, for a range of any age. At most 30 events are
+  drawn, the newest; the chart says exactly how many more fall in the range ("N more not shown").
+  An alarm that cleared and was raised again is drawn from its latest raise only, because the
+  platform keeps one record per alarm. On a replayed recording the markers come from the recording if it holds alarms or
   commands, and the chart says "not in this recording" for a channel it does not.
 - **Statistic** (stat card): which figure of the span to show: average (the default), minimum,
   maximum, sum, number of readings, or the latest reading. The card prints the statistic and the

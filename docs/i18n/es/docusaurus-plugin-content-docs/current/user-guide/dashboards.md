@@ -313,10 +313,11 @@ Los ajustes dependen del widget. Los más comunes:
   (correcto, fallido, sin respuesta a tiempo, etc.). Pasa el cursor o toca un marcador para ver los
   mismos detalles en texto. Debajo del gráfico, **Eventos en este intervalo** abre una lista de
   todos los marcadores, accesible con el teclado. Los marcadores siguen el intervalo de tiempo del
-  panel y la pausa, y leen solo el dispositivo del propio gráfico. Se dibujan como máximo 30
-  eventos, los más recientes; el gráfico indica «N más sin mostrar» para el resto, y «Hasta N más
-  sin mostrar» cuando la plataforma devolvió una página completa de historial que aún alcanza el
-  intervalo, porque no se le puede pedir un intervalo de tiempo. En una grabación reproducida, los
+  panel y la pausa, y leen solo el dispositivo del propio gráfico, para un intervalo de cualquier
+  antigüedad. Se dibujan como máximo 30 eventos, los más recientes; el gráfico indica exactamente
+  cuántos más caen en el intervalo («N más sin mostrar»). Una alarma que se despejó y volvió a
+  activarse se dibuja solo desde su última activación, porque la plataforma guarda un registro por
+  alarma. En una grabación reproducida, los
   marcadores salen de la grabación si contiene alarmas o comandos, y el gráfico indica que no están
   en la grabación para el canal que no los tiene.
 - **Estadística** (tarjeta de estadística): qué cifra del intervalo mostrar: promedio (por defecto),

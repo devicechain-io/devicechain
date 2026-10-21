@@ -28,6 +28,9 @@ export interface CommandSearchCriteriaInput {
   // value, and "still cancellable" is a different set again (SENT is outstanding but
   // cannot be called back).
   statuses?: string[] | null;
+  // Only commands sent (queued, when never sent) inside this range (RFC 3339, each optional).
+  startTime?: string | null;
+  endTime?: string | null;
 }
 
 export interface CommandsQueryResult {

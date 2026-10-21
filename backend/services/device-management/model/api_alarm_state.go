@@ -133,6 +133,14 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 	if !ok {
 		return empty, nil
 	}
+	start, err := alarmRangeBound("startTime", criteria.StartTime)
+	if err != nil {
+		return nil, err
+	}
+	end, err := alarmRangeBound("endTime", criteria.EndTime)
+	if err != nil {
+		return nil, err
+	}
 	ofType, ok, err := api.alarmDeviceTypeFilter(ctx, criteria.DeviceType)
 	if err != nil {
 		return nil, err
@@ -144,6 +152,17 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 	results := make([]Alarm, 0)
 	db, pag := api.RDB.ListOf(ctx, &Alarm{}, func(result *gorm.DB) *gorm.DB {
 		result = ofType(filter(result))
+		// Overlap, not containment: an alarm raised before the range and still active (or cleared
+		// inside it) was present during the range. A re-raise nulls cleared_time, so NULL means
+		// active. No index is added for these: the caller that sends a range (a chart's event
+		// markers) also sends one originator, and uix_alarm_originator_key narrows that to one
+		// row per alarm key of the device before either bound is tested.
+		if end != nil {
+			result = result.Where("alarms.raised_time <= ?", *end)
+		}
+		if start != nil {
+			result = result.Where("(alarms.cleared_time IS NULL OR alarms.cleared_time >= ?)", *start)
+		}
 		// No .Order() here: the deterministic newest-cycle-first order this search
 		// needs is Alarm.DefaultOrder(), which ListOf injects for every paged read of
 		// the model. One place per model says what the order is, and it says it
@@ -155,6 +174,20 @@ func (api *Api) Alarms(ctx context.Context, criteria AlarmSearchCriteria) (*Alar
 		return nil, db.Error
 	}
 	return &AlarmSearchResults{Results: results, Pagination: pag}, nil
+}
+
+// alarmRangeBound parses one bound of an alarm search's time range: absent is no bound, and a
+// value that is not RFC 3339 is an error rather than a silently unbounded search.
+func alarmRangeBound(name string, value *string) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, *value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an RFC 3339 timestamp: %w", name, err)
+	}
+	t = t.UTC()
+	return &t, nil
 }
 
 // AlarmCountsByDeviceType counts the alarms matching criteria per originating device type and

@@ -28,6 +28,9 @@ export interface AlarmSearchCriteriaInput {
   alarmKey?: string | null;
   // Only alarms raised on a device of this type (its token).
   deviceType?: string | null;
+  // Only alarms whose span overlaps this range (RFC 3339, each optional).
+  startTime?: string | null;
+  endTime?: string | null;
 }
 
 export interface AlarmsQueryResult {
@@ -94,7 +97,7 @@ export const ALARM_DEVICE_TYPES = `
 // The tab strip of an alarm table grouped by type: how many alarms match, per type and severity,
 // counted by device-management, so the badges are exact however many alarms there are.
 
-export type AlarmCountCriteriaInput = Omit<AlarmSearchCriteriaInput, 'pageNumber' | 'pageSize' | 'deviceType'>;
+export type AlarmCountCriteriaInput = Omit<AlarmSearchCriteriaInput, 'pageNumber' | 'pageSize' | 'deviceType' | 'startTime' | 'endTime'>;
 
 export interface AlarmTypeCountsResult {
   alarmCountsByDeviceType: Array<{ deviceType: { token: string; name: string | null }; severity: string; count: number }>;

@@ -508,3 +508,4 @@ export {
   type LayoutLintSeverity,
   type SpanLimits,
 } from './layout-lint';
+export { type EventWindow, eventWindowBounds } from './event-window';

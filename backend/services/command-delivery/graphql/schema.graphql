@@ -341,6 +341,18 @@ input CommandSearchCriteria {
     UNKNOWN). Live commands have no outcome and never match. An empty list is ignored.
     """
     outcomes: [String!]
+    """
+    Only commands sent at or after this instant (inclusive), as an RFC 3339 timestamp. A
+    command never sent (queued, held, or expired or cancelled first) is placed at the time it
+    was queued instead. Omit for no lower bound. A value that is not RFC 3339 is an error.
+    """
+    startTime: String
+    """
+    Only commands sent at or before this instant (inclusive), or queued at or before it when
+    never sent, as an RFC 3339 timestamp. Omit for no upper bound. A value that is not RFC 3339
+    is an error.
+    """
+    endTime: String
 }
 
 """One page of commands."""

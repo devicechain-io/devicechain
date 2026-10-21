@@ -7,13 +7,13 @@
 // off never downloads it, and the ECharts pieces it draws with load only when a marker is drawn.
 //
 // Where the events come from: the hub's own alarm and command channels (the queries the alarm table
-// and the command button already read), scoped to the chart's ONE device. Neither query takes a time
-// range, so the newest page of each is read and filtered here. That is why:
+// and the command button already read), scoped to the chart's ONE device and to the chart's range,
+// which device-management and command-delivery apply before paging. So:
 //
-//   - a page that comes back full and still reaches into the range is NOT passed off as the whole
-//     range: the note says "up to N more not shown";
-//   - a change of range reads again (the subscription is keyed by the span), so the note and the
-//     markers are never those of the previous range;
+//   - one page of MAX_EVENT_MARKERS is read per channel, and each page's total is the exact count in
+//     range, so the note says exactly how many were left out, for a range of any age;
+//   - a change of range, and a pause, read again (the subscription is keyed by the span and the
+//     pause instant), so the note and the markers are never those of another range;
 //   - a chart with no device reads nothing. It is NEVER given an unscoped subscription: on the alarm
 //     channel "no datasource" means every alarm in the tenant;
 //   - a paused board holds the events it showed at the pause (useHeld), as its readings are held;
@@ -47,7 +47,7 @@ import { measurementSpan } from './binding-policy';
 import {
   alarmEvents,
   commandEvents,
-  EVENT_FETCH_ROWS,
+  MAX_EVENT_MARKERS,
   planMarkers,
   type EventItem,
   type EventRange,
@@ -101,18 +101,6 @@ function useChannel<S>(subscribe: ((sink: Sink<S>) => () => void) | null, key: s
 
 const isNotInRecording = (err: unknown): boolean => err instanceof Error && err.name === 'NotInRecordingError';
 
-// The oldest time among rows, or Infinity when none has one.
-function oldest(times: Array<number | null>): number {
-  let min = Infinity;
-  for (const t of times) if (t !== null && t < min) min = t;
-  return min;
-}
-
-const when = (iso: string | null): number | null => {
-  const t = iso ? Date.parse(iso) : Number.NaN;
-  return Number.isNaN(t) ? null : t;
-};
-
 export default function EventMarkersFeed({ hub, widget, descriptor, data, Component, actions }: EventMarkersFeedProps) {
   const range = useWidgetTimeRange();
   const timeZone = useWidgetTimeZone();
@@ -127,16 +115,17 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
   const wantAlarms = bound && optBoolean(widget.options, 'markAlarms') === true;
   const wantCommands = bound && optBoolean(widget.options, 'markCommands') === true;
 
-  // The span is part of the key: a new range reads again, and the answer for the old one is never
-  // shown under the new one.
-  const key = JSON.stringify([ds ?? null, spanSeconds]);
+  // The range is part of the key: a new span, or a pause (which fixes the range's end), reads
+  // again, and the answer for one range is never shown under another.
+  const key = JSON.stringify([ds ?? null, spanSeconds, pausedAt ?? null]);
+  const window = { spanSeconds, ...(pausedAt !== undefined ? { endAt: pausedAt } : {}) };
   const alarms = useChannel<AlarmSnapshot>(
-    wantAlarms ? (sink) => hub.subscribeAlarms({ datasource: ds, pageSize: EVENT_FETCH_ROWS }, sink) : null,
+    wantAlarms ? (sink) => hub.subscribeAlarms({ datasource: ds, pageSize: MAX_EVENT_MARKERS, window }, sink) : null,
     `a${key}`,
     paused,
   );
   const commands = useChannel<CommandSnapshot>(
-    wantCommands ? (sink) => hub.subscribeCommands({ datasource: ds, pageSize: EVENT_FETCH_ROWS }, sink) : null,
+    wantCommands ? (sink) => hub.subscribeCommands({ datasource: ds, pageSize: MAX_EVENT_MARKERS, window }, sink) : null,
     `c${key}`,
     paused,
   );
@@ -165,10 +154,8 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
       const snap = alarms.value;
       if (snap) {
         items.push(...alarmEvents(snap.alarms, deviceToken, span, words, fmt));
-        // A full page that still reaches into the range may have older events behind it.
-        if (snap.alarms.length >= EVENT_FETCH_ROWS && snap.total > snap.alarms.length) {
-          if (oldest(snap.alarms.map((r) => when(r.raisedTime))) >= span.from) unloaded += snap.total - snap.alarms.length;
-        }
+        // The source counted the range before paging, so the rows past the page are exact.
+        unloaded += Math.max(0, snap.total - snap.alarms.length);
       }
     }
     if (wantCommands) {
@@ -176,17 +163,13 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
       const snap = commands.value;
       if (snap) {
         items.push(...commandEvents(snap.commands, span, words, fmt));
-        if (snap.commands.length >= EVENT_FETCH_ROWS && snap.total > snap.commands.length) {
-          if (oldest(snap.commands.map((r) => when(r.sentTime) ?? when(r.queuedTime))) >= span.from) {
-            unloaded += snap.total - snap.commands.length;
-          }
-        }
+        unloaded += Math.max(0, snap.total - snap.commands.length);
       }
     }
 
     const plan = planMarkers(items, span, theme);
     const more = plan.hidden + unloaded;
-    if (more > 0) notes.push(unloaded > 0 ? words.moreUpTo(more) : words.more(more));
+    if (more > 0) notes.push(words.more(more));
     return { decorate: plan.decorate, footer: footerOf(plan.shown, notes, theme.severity) };
     // `ds` is read through the keys (value identity). `alarms`/`commands` are the channels' values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -217,7 +200,12 @@ function footerOf(shown: readonly EventItem[], notes: readonly string[], severit
         // as its pointer-and-touch counterpart.
         <details>
           <summary style={{ cursor: 'pointer' }}>{words.events(shown.length)}</summary>
-          <ul style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 96, overflowY: 'auto' }}>
+          {/* The list scrolls past a few rows, so it takes focus: a keyboard can only scroll what it can reach. */}
+          <ul
+            tabIndex={0}
+            aria-label={words.events(shown.length)}
+            style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 96, overflowY: 'auto' }}
+          >
             {[...shown].reverse().map((e) => (
               <li key={e.id} data-chart-event={e.kind} style={{ display: 'flex', gap: spaceVar(1), alignItems: 'baseline' }}>
                 <span

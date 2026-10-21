@@ -21,9 +21,8 @@ export interface EventMarkerStrings {
   sent: (time: string) => string;
   // A command's delivery status, where it has settled into one; otherwise the raw status.
   outcome: Record<string, string>;
-  // Events beyond the cap, exact; and an upper bound when the page read was itself full.
+  // Events in the range beyond the cap, exact.
   more: (count: number) => string;
-  moreUpTo: (count: number) => string;
   // A channel the source cannot supply (a recording without it) or failed to read.
   notInRecording: Record<EventKind, string>;
   failed: Record<EventKind, string>;
@@ -51,7 +50,6 @@ export const EVENT_MARKER_STRINGS: Record<'en' | 'es', EventMarkerStrings> = {
       PARKED: 'parked',
     },
     more: (n) => `${n} more not shown`,
-    moreUpTo: (n) => `Up to ${n} more not shown`,
     notInRecording: { alarm: 'Alarm markers: not in this recording', command: 'Command markers: not in this recording' },
     failed: { alarm: 'Alarm markers could not be loaded', command: 'Command markers could not be loaded' },
   },
@@ -76,7 +74,6 @@ export const EVENT_MARKER_STRINGS: Record<'en' | 'es', EventMarkerStrings> = {
       PARKED: 'en espera',
     },
     more: (n) => `${n} más sin mostrar`,
-    moreUpTo: (n) => `Hasta ${n} más sin mostrar`,
     notInRecording: { alarm: 'Marcadores de alarmas: no están en esta grabación', command: 'Marcadores de comandos: no están en esta grabación' },
     failed: { alarm: 'No se pudieron cargar los marcadores de alarmas', command: 'No se pudieron cargar los marcadores de comandos' },
   },

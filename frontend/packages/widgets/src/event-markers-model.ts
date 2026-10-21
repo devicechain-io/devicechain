@@ -23,10 +23,6 @@ import type { EventKind, EventMarkerStrings } from './event-markers-strings';
 
 // The most events drawn on one chart. Past it the chart is a comb, not a timeline.
 export const MAX_EVENT_MARKERS = 30;
-// Rows asked of each channel. Neither query takes a time range, so the newest page is read and
-// filtered to the chart's range here; a page that comes back full and still reaches into the range
-// means older events may exist, and the count says so (see the feed).
-export const EVENT_FETCH_ROWS = 100;
 
 // The opacity of an alarm's span behind the readings: a zone, not a wall.
 const SPAN_ALPHA = 0.1;

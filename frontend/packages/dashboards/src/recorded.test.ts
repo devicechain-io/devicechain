@@ -279,6 +279,23 @@ describe('RecordedDataSource: alarms', () => {
     expect(acked[acked.length - 1].alarms.map((a) => a.token)).toEqual(['alarm-3']);
   });
 
+  it('applies an event window before paging, by overlap, against the view clock', async () => {
+    const { source } = playerAt(FIXTURE_DURATION_MS);
+    const all = subscribe(source);
+    const active = subscribe(source, { state: 'ACTIVE' });
+    // The last second: only the alarms still active overlap it, however long ago they were raised.
+    const lastSecond = subscribe(source, { window: { spanSeconds: 1 } });
+    const everything = subscribe(source, { window: { spanSeconds: 10 * 86_400 } });
+    // A range that ended before the run began holds nothing.
+    const before = subscribe(source, { window: { spanSeconds: 60, endAt: source.now() - 30 * 86_400_000 } });
+    await settle();
+    const total = (s: AlarmSnapshot[]) => s[s.length - 1].total;
+    expect(total(all)).toBeGreaterThan(total(active));
+    expect(total(lastSecond)).toBe(total(active));
+    expect(total(everything)).toBe(total(all));
+    expect(total(before)).toBe(0);
+  });
+
   it('scopes to the devices a selector names', async () => {
     const { source } = playerAt(FIXTURE_DURATION_MS);
     const snaps = subscribe(source, { datasource: { kind: 'device', deviceToken: 'sp-hauler-01', measurements: [] } });

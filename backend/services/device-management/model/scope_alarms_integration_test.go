@@ -278,3 +278,47 @@ func TestScopedAlarmCountsBySeverity(t *testing.T) {
 	require.Equal(t, 2, count(r.operator, &pump))
 	require.Equal(t, total(r.operator), count(r.operator, nil))
 }
+
+// TestScopedAlarmTimeRangeOnPostgres: the alarm search's time range keeps the alarms whose span
+// overlaps it, on the real engine and through the real raise and resolve path, and a scoped
+// member's ranged search still finds only its own customer's alarms.
+func TestScopedAlarmTimeRangeOnPostgres(t *testing.T) {
+	r := newScopeAlarmRig(t)
+	t0 := time.Now().UTC().Truncate(time.Second)
+	// acme: raised 3h ago, cleared 2h ago. globex: raised 3h ago, still active.
+	r.raise(t, "acme-pump", "acme-hot", t0.Add(-3*time.Hour))
+	r.resolve(t, "acme-pump", "acme-hot", t0.Add(-2*time.Hour))
+	r.raise(t, "globex-pump", "globex-hot", t0.Add(-3*time.Hour))
+
+	ranged := func(ctx context.Context, from, to time.Time) []string {
+		t.Helper()
+		f, e := from.Format(time.RFC3339), to.Format(time.RFC3339)
+		found, err := r.api.Alarms(ctx, AlarmSearchCriteria{StartTime: &f, EndTime: &e})
+		require.NoError(t, err)
+		require.EqualValues(t, len(found.Results), found.Pagination.TotalRecords)
+		keys := []string{}
+		for _, a := range found.Results {
+			keys = append(keys, a.AlarmKey)
+		}
+		sort.Strings(keys)
+		return keys
+	}
+	// The last hour: acme's alarm was over, globex's raised before it is still active.
+	require.Equal(t, []string{"globex-hot"}, ranged(r.operator, t0.Add(-time.Hour), t0))
+	// 2.5h ago to 1h ago: acme's cleared inside the range, so it overlaps too.
+	require.Equal(t, []string{"acme-hot", "globex-hot"}, ranged(r.operator, t0.Add(-150*time.Minute), t0.Add(-time.Hour)))
+	// Before either was raised: nothing.
+	require.Empty(t, ranged(r.operator, t0.Add(-5*time.Hour), t0.Add(-4*time.Hour)))
+
+	// A scoped member's range is still its scope's.
+	acme := r.member("customer:acme")
+	require.Equal(t, []string{"acme-hot"}, ranged(acme, t0.Add(-150*time.Minute), t0.Add(-time.Hour)))
+	require.Empty(t, ranged(acme, t0.Add(-time.Hour), t0))
+	require.Equal(t, []string{"globex-hot"}, ranged(r.member("customer:globex"), t0.Add(-150*time.Minute), t0))
+
+	// A re-raise reuses the row and nulls cleared_time: the alarm is active again from its new
+	// raise, and the earlier cycle is no row any range can find.
+	r.raise(t, "acme-pump", "acme-hot", t0.Add(-30*time.Minute))
+	require.Equal(t, []string{"acme-hot", "globex-hot"}, ranged(r.operator, t0.Add(-10*time.Minute), t0))
+	require.Equal(t, []string{"globex-hot"}, ranged(r.operator, t0.Add(-150*time.Minute), t0.Add(-time.Hour)))
+}

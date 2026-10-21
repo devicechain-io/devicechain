@@ -66,6 +66,7 @@ import type {
   EntityListKind,
   MeasurementSample,
 } from './types';
+import { alarmOverlaps } from './event-window';
 import type { HistoryWindow } from './history';
 import type { MeasurementBucket } from './queries';
 import {
@@ -811,7 +812,11 @@ export class RecordedDataSource implements WidgetDataSource {
           (scope === null || scope.has(a.dev)) &&
           (!subscription.state || a.state === subscription.state) &&
           (!subscription.severity || a.sev === subscription.severity) &&
-          (subscription.acknowledged == null || a.ack === subscription.acknowledged),
+          (subscription.acknowledged == null || a.ack === subscription.acknowledged) &&
+          // The range is applied before paging, as device-management applies it, so `total`
+          // counts the range. Measured against the view's now(), in the view's (shifted) time.
+          (!subscription.window ||
+            alarmOverlaps({ raisedTime: this.shifted(a.raised), clearedTime: this.shifted(a.cleared) }, subscription.window, this.now())),
       );
       // Newest first by raise time, compared as instants (not as text); the id breaks ties
       // so the order is deterministic.

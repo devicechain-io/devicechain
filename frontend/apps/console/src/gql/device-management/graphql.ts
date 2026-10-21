@@ -13,11 +13,24 @@ export type AlarmSearchCriteria = {
    * scope owns, so an alarm it can see on a device it no longer owns is under no type.
    */
   deviceType?: string | null | undefined;
+  /**
+   * Only alarms raised at or before this instant (inclusive), as an RFC 3339 timestamp. With
+   * startTime, this keeps the alarms whose span overlaps the range. An alarm row holds its
+   * latest raise only, so an earlier raise of the same alarm is not found by any range. Omit for
+   * no upper bound. A value that is not RFC 3339 is an error.
+   */
+  endTime?: string | null | undefined;
   originator?: string | null | undefined;
   originatorType?: string | null | undefined;
   pageNumber: number;
   pageSize: number;
   severity?: string | null | undefined;
+  /**
+   * Only alarms active at some point at or after this instant (inclusive), as an RFC 3339
+   * timestamp: still active, or cleared at or after it. An alarm raised earlier that was still
+   * active then is included. Omit for no lower bound. A value that is not RFC 3339 is an error.
+   */
+  startTime?: string | null | undefined;
   state?: string | null | undefined;
 };
 

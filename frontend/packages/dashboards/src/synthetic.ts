@@ -11,6 +11,7 @@
 // names, never resolves
 // a device).
 
+import { alarmOverlaps, commandInRange } from './event-window';
 import type { HistoryWindow } from './history';
 import type { MemberRef, MemberSeed, MemberSeedPlan, MemberSink } from './members';
 import type { MeasurementBucket } from './queries';
@@ -280,7 +281,8 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
         sink.next({ alarms: [], total: typeCounts.reduce((n, c) => n + c.count, 0), typeCounts });
         return;
       }
-      sink.next({ alarms: rows.slice(0, subscription.pageSize), total: rows.length });
+      const inRange = subscription.window ? rows.filter((r) => alarmOverlaps(r, subscription.window!, now)) : rows;
+      sink.next({ alarms: inRange.slice(0, subscription.pageSize), total: inRange.length });
     };
 
     emit();
@@ -321,10 +323,11 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
           respondedTime: answered ? queued : null,
         };
       });
+      const inRange = subscription.window ? commands.filter((c) => commandInRange(c, subscription.window!, now)) : commands;
       sink.next({
         deviceToken: SYNTHETIC_COMMAND_DEVICE,
-        commands: commands.slice(0, subscription.pageSize),
-        total: commands.length,
+        commands: inRange.slice(0, subscription.pageSize),
+        total: inRange.length,
       });
     };
 
