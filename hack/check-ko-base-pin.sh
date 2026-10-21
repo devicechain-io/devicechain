@@ -198,20 +198,24 @@ latest_run_note() {
 # ---------------------------------------------------------------------------
 # $1 = commits the bump branch is ahead of main (0 = nothing waiting)
 # $2 = days since the most recent change on main to any pinned file (newest_epoch)
+# $3 = 1 when the tree being checked already carries the waiting bump (every
+#      pinned file matches ${BUMP_BRANCH}), else 0. The pull request that TAKES
+#      the bump is exactly that tree; failing it would leave the bump with no
+#      way to land, since main has not moved yet while it is open.
 #
 # Split out from the API call deliberately. The reading half needs a token and a
 # network; the DECIDING half is where a mistake would hide, and this way the
 # self-test can drive it directly with values no live repository would hold —
 # which is the difference between a control and a demonstration.
 bump_verdict() {
-  local ahead="$1" pin_age="$2"
+  local ahead="$1" pin_age="$2" carried="${3:-0}"
 
   # Reject a non-integer loudly. Its caller sanitises, so reaching here with
   # anything else is a defect in this script — and the failure mode it replaces
   # is the one the first live run produced: bash's `[: integer expression
   # expected` on stderr, immediately followed by a cheerful "a bump is waiting"
   # and exit 0. A confusing message beside a wrong verdict is worse than a stop.
-  case "$ahead$pin_age" in
+  case "$ahead$pin_age$carried" in
     "" | *[!0-9]*)
       echo "::error::bump_verdict called with non-numeric arguments (ahead=${ahead}, pin_age=${pin_age})."
       echo "  This is a bug in $(basename "$0"), not a state of the repository."
@@ -221,6 +225,12 @@ bump_verdict() {
 
   if [ "$ahead" -eq 0 ]; then
     echo "  ok: no bump waiting on ${BUMP_BRANCH}"
+    return 0
+  fi
+
+  if [ "$carried" -eq 1 ]; then
+    echo "  ok: this tree already carries the bump waiting on ${BUMP_BRANCH} (${ahead} commit(s) ahead);"
+    echo "      merging it is what clears the wait"
     return 0
   fi
 
@@ -311,7 +321,24 @@ check_waiting_bump() {
   done
   pin_age=$(( ( $(date -u +%s) - $(newest_epoch "${epochs[@]}") ) / 86400 ))
 
-  bump_verdict "$ahead" "$pin_age"
+  # Does the tree under test already carry the bump? Compare each pinned file
+  # here with its copy on the bump branch, read through the API (the checkout
+  # is shallow and need not have the branch). Any read failure counts as "not
+  # carried", so this can only ever relax the verdict for a tree that provably
+  # matches, never for one that merely could not be compared.
+  local carried=0 remote
+  if [ "$ahead" -gt 0 ]; then
+    carried=1
+    for file in "${PINNED_FILES[@]}"; do
+      remote="$(gh api -H 'Accept: application/vnd.github.raw'                   "repos/${REPO}/contents/${file}?ref=${BUMP_BRANCH}" 2>/dev/null || true)"
+      if [ -z "$remote" ] || ! [ -f "$file" ] || [ "$remote" != "$(cat "$file")" ]; then
+        carried=0
+        break
+      fi
+    done
+  fi
+
+  bump_verdict "$ahead" "$pin_age" "$carried"
 }
 
 run_checks() {
@@ -407,6 +434,14 @@ self_test() {
   rc=0; bump_verdict 1 60 >/dev/null 2>&1 || rc=$?
   [ "$rc" -ne 0 ] && echo "  ok: a bump ignored for 60 days is an error" || {
     echo "FAIL: an ignored bump passed — the guard cannot fire" >&2; return 1; }
+
+  # Case 10b — the pull request that takes the bump carries it, so it must pass
+  # however long the bump waited; the same age without it must still fail.
+  rc=0; bump_verdict 1 60 1 >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] && echo "  ok: a tree carrying the waiting bump passes at 60 days" || {
+    echo "FAIL: the pull request that takes the bump was refused — it could never land" >&2; return 1; }
+  rc=0; bump_verdict 1 60 0 >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || { echo "FAIL: an uncarried bump at 60 days passed" >&2; return 1; }
 
   # Case 11 — the boundary, both sides. An off-by-one here is invisible in
   # production for three weeks and then wrong by a day forever.
