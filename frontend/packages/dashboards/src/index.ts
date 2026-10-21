@@ -109,6 +109,19 @@ export {
 } from './context';
 
 export {
+  BIND_PARAM_PREFIX,
+  parseBindParams,
+  validateBinds,
+  bindsToSelection,
+  selectionToBinds,
+  withBindParams,
+  bindParamsOf,
+  type BindCheck,
+  type BindParamIssue,
+  type ParsedBinds,
+} from './deep-link';
+
+export {
   migrateToSlots,
   bindWidgetSlot,
   clearWidgetDatasource,

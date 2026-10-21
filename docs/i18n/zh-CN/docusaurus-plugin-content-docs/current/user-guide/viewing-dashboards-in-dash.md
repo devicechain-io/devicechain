@@ -74,12 +74,25 @@ import GuideShot from '@site/src/components/GuideShot';
 | `density` | `compact`、`comfortable` 或 `wall` | 缩放看板的文字和间距：`compact` 更小，`wall` 更大，适合从房间另一端观看的显示器。会覆盖看板保存时的密度。 |
 | `range` | `15m`、`1h`、`6h`、`24h` 或 `7d` | 以该时间范围打开看板，而不是看板自带的范围。 |
 | `paused` | `1` | 在加载的那一刻冻结看板并显示 **Paused** 徽标。其他任何取值都以实时方式打开。 |
+| `bind.<slot>` | 设备令牌 | 以为该 slot 选好的设备打开看板。参见[打开已选好设备的看板](#linking-to-a-device)。 |
 
 取值不被查看器识别的参数会被忽略，其他参数仍然生效。
 
 在展示模式下，看板占满整个页面。连接指示器位于左上角。唯一的控件是右上角的 **Fullscreen**，它会变成 **Exit fullscreen**（退出全屏）；如果浏览器无法进入全屏，则会隐藏。展示模式下没有退出登录控件，因此墙面显示器会一直停留在其看板上。展示模式同样没有时间范围和暂停控件，但以 `paused=1` 打开的看板仍会在连接指示器旁显示 **Paused** 徽标，所以冻结的墙面显示器会如实说明。
 
 <GuideShot id="dash-kiosk" alt="展示模式下的 Widget Lab 看板：没有页眉，左上角有 Live 指示器，右上角有 Fullscreen 按钮，下方是标题卡片和同样的实时组件。" />
+
+## 打开已选好设备的看板 {#linking-to-a-device}
+
+链接还可以通过指明看板的 slot 和设备令牌，直接打开已选好设备的看板：
+
+```text
+/dash/?dashboard=<token>&bind.machine=hauler-7
+```
+
+每个要设置的 slot 重复一次 `bind.<slot>`。`<slot>` 是看板作者给该 slot 起的名称。查看器会先用你自己的权限检查链接中的每台设备是否存在且你有权查看，通过之后才显示看板；否则它会说明原因，而不是显示看板。设备不存在和你无权查看两种情况的提示相同，因此无法借助链接探测哪些设备存在。随后 **Open the board without it**（不带它打开看板）会以看板自己的默认设备打开。指向看板上没有的 slot、或不是设备令牌的取值，同样会被拒绝。
+
+在看板上选择设备（点击地图标记、设备表中的一行或选择器）会就地更新地址，不会新增浏览器历史记录，因此地址栏中的地址始终是指向当前画面的链接。通过 **Back** 或 **Forward** 回到指明另一台设备的地址时，会选择那台设备。**Change**（返回加载表单）会把已选设备从地址中去掉。同样的链接也适用于控制台，地址为 `/dashboards/<token>?bind.<slot>=<设备令牌>`，参见[选择设备并分享链接](/user-guide/dashboards#sharing-a-link)。
 
 ## 保持登录状态 {#staying-signed-in}
 

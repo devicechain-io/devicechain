@@ -19,7 +19,7 @@
 
 /// <reference types="node" />
 import type { LocationSample, WidgetInstance } from '@devicechain/dashboards';
-import { cleanup, render as rtlRender, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -30,7 +30,7 @@ vi.mock('maplibre-gl', () => {
   throw new Error('simulated: the maplibre-gl chunk could not be fetched');
 });
 
-import { type LocationStreamState } from '@devicechain/widget-sdk';
+import { type LocationStreamState, WidgetSelectProvider } from '@devicechain/widget-sdk';
 import { MapRuntimeProvider, type MapRuntime } from '../map-runtime-context';
 import { MapWidget } from './map';
 
@@ -145,5 +145,21 @@ describe('MapWidget — the renderer could not be loaded', () => {
   // on — that importing the renderer here fails — and that is what is asserted.
   it('the renderer really is unobtainable in this file', async () => {
     await expect(import('maplibre-gl')).rejects.toThrow();
+  });
+});
+
+describe('MapWidget — the plain panel is selectable too', () => {
+  it('a marker click re-points the target slot when the author named one', async () => {
+    const select = vi.fn();
+    render(
+      <WidgetSelectProvider select={select}>
+        <MapWidget widget={widget({ selectionTarget: 'machine' })} data={twoDevices()} />
+      </WidgetSelectProvider>,
+    );
+    await waitFor(() => expect(screen.getAllByTestId('map-marker')).toHaveLength(2));
+
+    fireEvent.click(screen.getAllByTestId('map-marker')[1]);
+
+    expect(select).toHaveBeenCalledWith({ slot: 'machine', binding: { kind: 'device', deviceToken: 'truck-4' } });
   });
 });

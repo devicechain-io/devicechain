@@ -98,6 +98,38 @@ En la parte superior:
 Los widgets con acciones, como reconocer una alarma o enviar un comando, también funcionan aquí. La
 plataforma comprueba cada acción contra tus propios permisos.
 
+### Elegir un dispositivo y compartir un enlace {#sharing-a-link}
+
+Cuando un panel tiene un slot que siguen varios widgets (un **Target slot** en un mapa, una tabla de
+flota o una tabla de alarmas, o un selector de entidad), elegir un dispositivo redirige los widgets
+vinculados a ese slot. En un mapa, haz clic en un marcador, o llega a él con el tabulador y pulsa
+Intro, para elegir ese dispositivo; define el **Target slot** del mapa en el editor para activarlo.
+Sin él, un marcador es solo una marca.
+
+La dirección del navegador siempre reproduce lo que estás viendo. Al elegir un dispositivo se le
+añade `bind.<slot>=<token del dispositivo>`, por ejemplo:
+
+```text
+/dashboards/pump-station?bind.machine=hauler-7
+```
+
+Copia la dirección y envíala, y quien la abra verá el panel con ese dispositivo elegido. El `<slot>`
+es el nombre del slot tal como aparece en el editor, y el valor es el token del dispositivo. Un
+enlace puede fijar varios slots repitiendo el parámetro.
+
+Un enlace se comprueba con los permisos de quien lo abre, nunca con los de quien lo envió. Si el
+dispositivo no existe, o existe pero queda fuera de lo que puedes ver, la página lo indica en lugar
+de mostrar el panel y ofrece **Abrir el panel sin él**, que abre el panel con su dispositivo
+predeterminado. Ambos casos se leen igual a propósito: la plataforma no confirma que exista un
+dispositivo que no puedes ver. Un enlace que nombra un slot que el panel no tiene, o algo que no es
+un token de dispositivo, se rechaza del mismo modo. Si no se pudo completar la comprobación, por
+ejemplo porque se cortó la conexión, puedes **Reintentar**.
+
+Elegir un dispositivo reemplaza la dirección en lugar de añadir una entrada al historial, así que
+**Atrás** sale del panel en vez de recorrer cada dispositivo en el que hiciste clic. El mismo enlace
+funciona en el visor /dash; consulta
+[Enlazar a un panel con un dispositivo elegido](/user-guide/viewing-dashboards-in-dash#linking-to-a-device).
+
 ### Cómo se ven los widgets {#what-the-widgets-look-like}
 
 El panel *Widget Lab* del inquilino de prueba contiene un widget de cada tipo integrado. Más abajo en

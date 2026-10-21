@@ -119,6 +119,7 @@ the right mode:
 | `density` | `compact`, `comfortable` or `wall` | Scales the board's text and spacing: `compact` is smaller, `wall` is larger, for a display read from across a room. Overrides the density the board was saved with. |
 | `range` | `15m`, `1h`, `6h`, `24h` or `7d` | Opens the board on that time range instead of the board's own. |
 | `paused` | `1` | Opens the board frozen at the moment it loads, with the **Paused** badge showing. Any other value opens it live. |
+| `bind.<slot>` | a device token | Opens the board with that device chosen for the slot. See [Linking to a board with a device chosen](#linking-to-a-device). |
 
 A parameter with a value the viewer does not recognize is ignored, and the other parameters still
 apply.
@@ -131,6 +132,30 @@ time-range or pause controls either, but a board opened with `paused=1` still sh
 badge beside the connection indicator, so a frozen wall display says so.
 
 <GuideShot id="dash-kiosk" alt="The Widget Lab board in kiosk mode: no header, a Live indicator in the top left corner, a Fullscreen button in the top right corner, and the title card and the same live widgets below." />
+
+## Linking to a board with a device chosen {#linking-to-a-device}
+
+A link can also open a board with a device already chosen, by naming the board's slot and the
+device's token:
+
+```text
+/dash/?dashboard=<token>&bind.machine=hauler-7
+```
+
+Repeat `bind.<slot>` for each slot you want to set. The `<slot>` is the slot's name as the board's
+author gave it. The viewer shows the board only after it has checked, with your own permissions, that
+every device in the link exists and is one you may see. Otherwise it shows why instead of the board:
+a device that does not exist and a device you may not see read the same, so a link cannot be used to
+find out which devices exist. **Open the board without it** then opens the board on its own default
+device. A link that names a slot the board does not have, or something that is not a device token, is
+refused the same way.
+
+Choosing a device on the board (clicking a marker on a map, a row in a fleet table, or a selector)
+updates the address in place, without adding browser history entries, so the address in the bar is
+always a link to what is on screen. Following **Back** or **Forward** to an address that names another
+device chooses that device. **Change**, which returns to the load form, drops the chosen devices from
+the address. The same link works in the console, at `/dashboards/<token>?bind.<slot>=<device token>`;
+see [Choosing a device, and sharing a link](/user-guide/dashboards#sharing-a-link).
 
 ## Staying signed in
 

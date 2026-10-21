@@ -31,21 +31,23 @@ import {
   createDeviceResolver,
   createEntityLister,
   effectiveBindings,
-  type SelectionTarget,
-  type SlotBinding,
+  withBindParams,
 } from '@devicechain/dashboards';
 import {
+  BoundDevicesNotice,
   DashboardRenderer,
   MapRuntimeProvider,
   PausedIndicator,
   TenantBasemapProvider,
   TimeRangeBar,
+  describeBoundDevicesProblems,
   useBoardTimeRange,
+  useBoundDevices,
   useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
 } from '@devicechain/widgets';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { Basemap } from '@devicechain/client';
@@ -198,7 +200,13 @@ export default function App() {
     <View
       loaded={loaded}
       authorities={authorities}
-      onChange={() => setLoaded(null)}
+      onChange={() => {
+        // Leaving this board for another: the devices a link bound belong to THIS board's slots.
+        const { pathname, search, hash } = window.location;
+        const kept = withBindParams(search, {});
+        window.history.replaceState(window.history.state, '', `${pathname}${kept ? `?${kept}` : ''}${hash}`);
+        setLoaded(null);
+      }}
       onSignOut={signOut}
       kiosk={params.kiosk}
       kioskChrome={params.kioskChrome}
@@ -841,11 +849,28 @@ export function View({
   // member within it. Shares the resolver's device-management coupling via one factory.
   const lister = useMemo(() => createEntityLister(), []);
   const base = useMemo(() => effectiveBindings(definition, manifest), [definition, manifest]);
-  // The view-driven selection overlay (an alarm-originator drill, a selector pick).
-  const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
-  const select = useCallback((t: SelectionTarget) => {
-    setSelection((prev) => ({ ...prev, [t.slot]: t.binding }));
+  // The view-driven selection overlay (an alarm-originator drill, a marker or selector pick),
+  // kept in step with the address: `?bind.<slot>=<device>` opens the board with that device bound
+  // (checked against the viewer's own scope), and a pick rewrites the address in place.
+  const [search, setSearch] = useState(() => window.location.search);
+  useEffect(() => {
+    const onPop = () => setSearch(window.location.search);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
   }, []);
+  const address = useMemo(
+    () => ({
+      search,
+      replaceSearch: (next: string) => {
+        const { pathname, hash } = window.location;
+        window.history.replaceState(window.history.state, '', `${pathname}${next ? `?${next}` : ''}${hash}`);
+        setSearch(window.location.search);
+      },
+    }),
+    [search],
+  );
+  const bound = useBoundDevices({ definition, resolver, address });
+  const { selection, select } = bound;
   const bindings = useResolvedBindings(definition, base, selection, resolver);
   const candidates = useSlotCandidates(definition, bindings, resolver, lister);
   // ONE hub for this view's lifetime (per resolver + authorities), torn down on unmount.
@@ -922,6 +947,26 @@ export function View({
             drawing nothing, on a surface where nobody would know to look. */}
         <TenantBasemapProvider basemap={basemap}>
           <MapRuntimeProvider runtime={MAP_RUNTIME}>
+            {bound.phase === 'checking' ? (
+              <p role="status" style={{ padding: 16, color: 'hsl(var(--muted-foreground))' }}>
+                {t('view:linkChecking')}
+              </p>
+            ) : bound.phase === 'refused' && bound.problems ? (
+              <BoundDevicesNotice
+                title={t('view:linkBlockedTitle')}
+                lines={describeBoundDevicesProblems(bound.problems, {
+                  unknownSlot: (slot) => t('view:linkUnknownSlot', { slot }),
+                  notADeviceSlot: (slot) => t('view:linkNotDeviceSlot', { slot }),
+                  invalidToken: (slot, token) => t('view:linkInvalidToken', { slot, token }),
+                  missing: (slot, token) => t('view:linkMissing', { slot, token }),
+                  failed: (slot, token) => t('view:linkFailed', { slot, token }),
+                })}
+                dismissLabel={t('view:linkOpenWithout')}
+                onDismiss={bound.dismiss}
+                retryLabel={bound.problems.failed.length > 0 ? t('view:linkRetry') : undefined}
+                onRetry={bound.retry}
+              />
+            ) : (
             <DashboardRenderer
               definition={definition}
               hub={hub}
@@ -933,6 +978,7 @@ export function View({
               density={density ?? undefined}
               timeRange={timeRange}
             />
+            )}
           </MapRuntimeProvider>
         </TenantBasemapProvider>
       </main>

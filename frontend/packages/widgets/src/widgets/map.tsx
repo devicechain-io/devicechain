@@ -43,6 +43,7 @@ import {
   defineWidget,
   type LocationStreamState,
   optString,
+  useWidgetSelect,
   WidgetFrame,
   type WidgetProps,
 } from '@devicechain/widget-sdk';
@@ -136,6 +137,17 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
   // hooks, because a hook cannot live behind one of the early returns below.
   const runtime = useMapRuntime();
 
+  // A marker click re-points the target slot at that device, so the widgets bound to it follow
+  // (the same linked-selection seam a fleet-table row uses). Undefined unless the author named a
+  // target slot AND the host wires selection: with either missing a marker is only a mark, and
+  // it neither looks nor behaves clickable. Hook order: read before the early returns below.
+  const select = useWidgetSelect();
+  const selectionTarget = optString(widget.options, 'selectionTarget');
+  const pick: PickDevice | undefined =
+    select && selectionTarget
+      ? (deviceToken) => select({ slot: selectionTarget, binding: { kind: 'device', deviceToken } })
+      : undefined;
+
   // Precedence is per-widget override → tenant → no basemap (ADR-079 §9). The
   // per-widget options are kept, not replaced: they are how someone tries a provider
   // on one board before committing it tenant-wide.
@@ -216,7 +228,7 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
 
   return (
     <WidgetFrame title={title} flush>
-      <LiveMap basemap={basemap} positions={positions} runtime={runtime} />
+      <LiveMap basemap={basemap} positions={positions} runtime={runtime} pick={pick} />
     </WidgetFrame>
   );
 }
@@ -237,7 +249,15 @@ export function MapWidget({ widget, data }: WidgetProps<LocationStreamState>) {
 // and this still answers it when the renderer cannot load. That is also why
 // projectToPanel exists at all, and why deleting either would look like tidying up
 // dead code right until someone's dashboard went blank behind a proxy.
-function PlainPanel({ positions, note }: { positions: PlaceableLocation[]; note: string }) {
+function PlainPanel({
+  positions,
+  note,
+  pick,
+}: {
+  positions: PlaceableLocation[];
+  note: string;
+  pick: PickDevice | undefined;
+}) {
   const points = projectToPanel(positions);
   return (
     <div
@@ -254,6 +274,7 @@ function PlainPanel({ positions, note }: { positions: PlaceableLocation[]; note:
         <Marker
           key={position.deviceToken}
           position={position}
+          pick={pick}
           style={{
             position: 'absolute',
             left: `${points[i].x * 100}%`,
@@ -303,15 +324,22 @@ function LiveMap({
   basemap,
   positions,
   runtime,
+  pick,
 }: {
   basemap: { tileUrl: string; attribution: string | null } | null;
   positions: PlaceableLocation[];
   runtime: MapRuntime;
+  pick: PickDevice | undefined;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<MapLibreMarker[]>([]);
   const [status, setStatus] = useState<MapStatus>('loading');
+  // The markers are rebuilt only when positions change, so the click handler they hold reads the
+  // CURRENT pick through a ref instead of closing over the one from the render that built them.
+  const pickRef = useRef(pick);
+  pickRef.current = pick;
+  const selectable = pick !== undefined;
 
   const tileUrl = basemap?.tileUrl ?? null;
   const attribution = basemap?.attribution ?? null;
@@ -387,7 +415,25 @@ function LiveMap({
         el.setAttribute('data-device', position.deviceToken);
         el.setAttribute('title', describePosition(position));
         el.setAttribute('aria-label', describePosition(position));
-        Object.assign(el.style, MARKER_DOT_STYLE);
+        if (selectable) {
+          // A 24 px target around the 12 px dot: a fingertip on a phone-width board cannot hit the dot.
+          Object.assign(el.style, MARKER_HIT_STYLE);
+          el.setAttribute('role', 'button');
+          el.setAttribute('tabindex', '0');
+          const dot = document.createElement('div');
+          Object.assign(dot.style, MARKER_DOT_STYLE, { cursor: 'inherit' });
+          el.appendChild(dot);
+          const choose = () => pickRef.current?.(position.deviceToken);
+          el.addEventListener('click', choose);
+          el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              choose();
+            }
+          });
+        } else {
+          Object.assign(el.style, MARKER_DOT_STYLE);
+        }
         // 🔴 setLngLat takes [LONGITUDE, LATITUDE] — x before y, the opposite order
         // from how a coordinate is spoken and written everywhere else on the platform.
         // Swapping them puts a device reporting Atlanta into the Indian Ocean, which
@@ -412,13 +458,14 @@ function LiveMap({
     // Positions are compared by VALUE: a poll hands back a fresh array every tick, and
     // rebuilding every marker 4 times a minute for an unchanged fleet would make the
     // markers flicker.
-  }, [status, positionsKey(positions)]);
+  }, [status, positionsKey(positions), selectable]);
 
   if (status === 'unavailable') {
     return (
       <PlainPanel
         positions={positions}
         note="Map renderer unavailable — positions are shown without a basemap."
+        pick={pick}
       />
     );
   }
@@ -433,6 +480,19 @@ function positionsKey(positions: PlaceableLocation[]): string {
 }
 
 // ---- Shared bits ------------------------------------------------------------
+
+// What a marker click does: pick that device for the board's linked widgets. Absent = not selectable.
+type PickDevice = (deviceToken: string) => void;
+
+// The clickable box around a selectable marker's dot (WCAG 2.5.8 asks for 24 px).
+const MARKER_HIT_STYLE = {
+  width: '24px',
+  height: '24px',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  cursor: 'pointer',
+} as const;
 
 const MARKER_DOT_STYLE = {
   width: '12px',
@@ -450,11 +510,28 @@ const MARKER_DOT_STYLE = {
 function Marker({
   position,
   style,
+  pick,
 }: {
   position: PlaceableLocation;
   style: CSSProperties;
+  pick: PickDevice | undefined;
 }) {
   const label = describePosition(position);
+  if (pick) {
+    return (
+      <button
+        type="button"
+        data-testid="map-marker"
+        data-device={position.deviceToken}
+        title={label}
+        aria-label={label}
+        onClick={() => pick(position.deviceToken)}
+        style={{ ...MARKER_HIT_STYLE, padding: 0, border: 0, background: 'transparent', ...style }}
+      >
+        <span style={{ ...MARKER_DOT_STYLE, cursor: 'inherit', display: 'block' }} />
+      </button>
+    );
+  }
   return (
     <div
       data-testid="map-marker"

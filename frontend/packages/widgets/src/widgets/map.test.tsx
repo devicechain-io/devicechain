@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import type { LocationSample, WidgetInstance } from '@devicechain/dashboards';
 import { cleanup, render as rtlRender, screen, waitFor } from '@testing-library/react';
 import type { ReactElement } from 'react';
+import { fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // jsdom has no WebGL, so MapLibre is stubbed — as ECharts is in the chart tests. The
@@ -74,7 +75,7 @@ vi.mock('maplibre-gl', () => {
   };
 });
 
-import { type LocationStreamState } from '@devicechain/widget-sdk';
+import { type LocationStreamState, WidgetSelectProvider } from '@devicechain/widget-sdk';
 import { TenantBasemapProvider } from '../basemap-context';
 import { MapRuntimeProvider, type MapRuntime } from '../map-runtime-context';
 import { MapWidget } from './map';
@@ -804,5 +805,65 @@ describe('the bundled-geometry lazy boundary', () => {
   it('the bundled geometry is really the size this boundary exists for', () => {
     const data = readFileSync(join(SRC, 'widgets', 'natural-earth-data.ts'), 'utf8');
     expect(data.length).toBeGreaterThan(100_000);
+  });
+});
+
+// A marker click is the map's half of the linked-selection seam: it re-points the target slot
+// at that device, so the widgets bound to the slot follow. Only when the author named a slot AND
+// the host wires selection; otherwise a marker is only a mark.
+describe('MapWidget — marker click selects the device', () => {
+  const picked = () => {
+    const select = vi.fn();
+    return select;
+  };
+
+  it('re-points the target slot at the device of the clicked marker', async () => {
+    const select = picked();
+    render(
+      <WidgetSelectProvider select={select}>
+        <MapWidget widget={widget({ tileUrl: TILE_URL, selectionTarget: 'machine' })} data={twoDevices()} />
+      </WidgetSelectProvider>,
+    );
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+
+    fireEvent.click(m.markers[1].element);
+
+    expect(select).toHaveBeenCalledTimes(1);
+    expect(select).toHaveBeenCalledWith({ slot: 'machine', binding: { kind: 'device', deviceToken: 'truck-4' } });
+  });
+
+  it('is keyboard operable and announces itself as a button', async () => {
+    const select = picked();
+    render(
+      <WidgetSelectProvider select={select}>
+        <MapWidget widget={widget({ tileUrl: TILE_URL, selectionTarget: 'machine' })} data={twoDevices()} />
+      </WidgetSelectProvider>,
+    );
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    const el = m.markers[0].element;
+    expect(el.getAttribute('role')).toBe('button');
+    expect(el.getAttribute('tabindex')).toBe('0');
+
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(select).toHaveBeenCalledWith({ slot: 'machine', binding: { kind: 'device', deviceToken: 'dozer-1' } });
+  });
+
+  it('a marker is only a mark with no target slot, or with a host that wires no selection', async () => {
+    const select = picked();
+    const { unmount } = render(
+      <WidgetSelectProvider select={select}>
+        <MapWidget widget={widget({ tileUrl: TILE_URL })} data={twoDevices()} />
+      </WidgetSelectProvider>,
+    );
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    fireEvent.click(m.markers[0].element);
+    expect(select).not.toHaveBeenCalled();
+    expect(m.markers[0].element.getAttribute('role')).toBeNull();
+    unmount();
+
+    m.markers.length = 0;
+    render(<MapWidget widget={widget({ tileUrl: TILE_URL, selectionTarget: 'machine' })} data={twoDevices()} />);
+    await waitFor(() => expect(m.markers).toHaveLength(2));
+    expect(m.markers[0].element.getAttribute('role')).toBeNull();
   });
 });
