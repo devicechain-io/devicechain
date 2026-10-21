@@ -36,9 +36,9 @@ export interface FleetStrings {
   needAttention: string;
   devices: string;
   notReporting: (n: number) => string;
-  // Devices that report other measurements but not this one: outside the count, said apart.
+  // Devices whose profile does not declare the measurement: outside the count, said apart.
   notMeasured: (n: number) => string;
-  // Every device of the group reports other measurements, none this one.
+  // No device of the group has a profile that declares the measurement.
   noneMeasured: string;
   // The same over a truncated group: only the devices read were asked, so it must not speak for the rest.
   noneMeasuredShown: (shown: number, total: number) => string;

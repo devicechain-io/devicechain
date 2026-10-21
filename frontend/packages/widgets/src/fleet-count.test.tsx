@@ -117,10 +117,44 @@ describe('attentionCount', () => {
     expect(c).toMatchObject({ members: 3, flagged: 1, reporting: 2 });
   });
 
-  it('leaves a device that reports other measurements, but not this one, out of the "of N"', () => {
-    const plant = member('plant', undefined, { observed: ['throughput'] });
+  it('leaves a device whose profile does not declare the measurement out of the "of N"', () => {
+    const plant = member('plant', undefined, { observed: ['throughput'], declared: ['throughput'] });
     const c = attentionCount([member('a', 5), member('b'), plant, member('c', 50)], 'fuel', t);
     expect(c).toMatchObject({ members: 3, notMeasured: 1, flagged: 1, reporting: 2 });
+  });
+
+  // The device's PROFILE decides whether it is outside the question, never what it has sent.
+  it('counts a dead probe with a live heartbeat as not reporting: it declares the measurement, so it stays in N', () => {
+    const deadProbe = member('probe', undefined, { observed: ['battery', 'rssi'], declared: ['fuel', 'battery', 'rssi'] });
+    const c = attentionCount([member('a', 5), member('b', 50), deadProbe], 'fuel', t);
+    expect(c).toMatchObject({ members: 3, notMeasured: 0, flagged: 1, reporting: 2 });
+    const s = show(fleet([member('a', 5), member('b', 50), deadProbe]));
+    expect(s.figure).toBe('1of 3');
+    expect(s.notes).toEqual(['1 not reporting']);
+  });
+
+  it('counts a device whose profile declares the measurement and which sent nothing at all as not reporting', () => {
+    const c = attentionCount([member('a', 5), member('quiet', undefined, { observed: [], declared: ['fuel'] })], 'fuel', t);
+    expect(c).toMatchObject({ members: 2, notMeasured: 0, reporting: 1 });
+  });
+
+  it('leaves out a device whose profile does not declare the measurement even though it sent nothing at all', () => {
+    const c = attentionCount([member('a', 5), member('quiet', undefined, { observed: [], declared: ['throughput'] })], 'fuel', t);
+    expect(c).toMatchObject({ members: 1, notMeasured: 1 });
+  });
+
+  it('counts a device whose declaration is not known as declared, not left out: a failed or pending lookup never excludes', () => {
+    // No `declared` on the member: the profile was not read (yet), or its read failed.
+    const unknown = member('u', undefined, { observed: ['battery'] });
+    const c = attentionCount([member('a', 5), unknown], 'fuel', t);
+    expect(c).toMatchObject({ members: 2, notMeasured: 0, reporting: 1 });
+    expect(show(fleet([member('a', 5), unknown])).notes).toEqual(['1 not reporting']);
+  });
+
+  it('counts a calculated metric the profile declares like any other', () => {
+    // A calculated metric is in the profile's metric list beside the sensed ones.
+    const calc = member('c', undefined, { observed: [], declared: ['fuel_pct'] });
+    expect(attentionCount([calc], 'fuel_pct', t)).toMatchObject({ members: 1, notMeasured: 0 });
   });
 
   it('names the band only when every flagged device shares it', () => {
@@ -174,7 +208,7 @@ describe('the attention count', () => {
 
   it('says a device that does not report the measurement is outside the count, not silent', () => {
     sizedAt(300, 300);
-    const plant = member('plant', undefined, { observed: ['throughput'] });
+    const plant = member('plant', undefined, { observed: ['throughput'], declared: ['throughput'] });
     const s = show(fleet([member('a', 5), member('b', 50), plant]));
     expect(s.figure).toBe('1of 2');
     expect(s.card?.getAttribute('data-of')).toBe('2');
@@ -183,7 +217,7 @@ describe('the attention count', () => {
 
   it('keeps a silent device and a device that does not report the measurement apart', () => {
     sizedAt(300, 300);
-    const other = (token: string) => member(token, undefined, { observed: ['throughput'] });
+    const other = (token: string) => member(token, undefined, { observed: ['throughput'], declared: ['throughput'] });
     const s = show(fleet([member('a', 5), member('b'), other('p'), other('q')]));
     expect(s.figure).toBe('1of 2');
     expect(s.notes).toEqual(['1 not reporting', '2 do not report this']);
@@ -191,14 +225,14 @@ describe('the attention count', () => {
 
   it('has no "of N" when no device of the group reports the measurement', () => {
     sizedAt(300, 300);
-    const s = show(fleet([member('p', undefined, { observed: ['throughput'] })]));
+    const s = show(fleet([member('p', undefined, { observed: ['throughput'], declared: ['throughput'] })]));
     expect(s.empty).toBe('No device in this group reports this');
     expect(s.figure).toBeUndefined();
   });
 
   it('does not speak for a whole truncated group when none of the devices read reports the measurement', () => {
     sizedAt(300, 300);
-    const s = show(fleet([member('p', undefined, { observed: ['throughput'] })], { total: 812, truncated: true }));
+    const s = show(fleet([member('p', undefined, { observed: ['throughput'], declared: ['throughput'] })], { total: 812, truncated: true }));
     expect(s.empty).toBe('None of the 1 of 812 devices read reports this');
     expect(s.figure).toBeUndefined();
   });

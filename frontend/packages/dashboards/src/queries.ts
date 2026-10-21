@@ -57,7 +57,7 @@ export const DEVICES_FOR_ANCHOR = `
 
 export interface CustomerDevicesResult {
   customerDevices: {
-    results: Array<{ token: string; name: string | null }>;
+    results: Array<{ token: string; name: string | null; deviceType?: { token: string } | null }>;
     pagination?: { totalRecords: number | null } | null;
   };
 }
@@ -76,6 +76,9 @@ export const CUSTOMER_DEVICES = `
       results {
         token
         name
+        deviceType {
+          token
+        }
       }
       pagination {
         totalRecords
@@ -112,7 +115,7 @@ export const DEVICES_BY_TOKEN = `
 // round trip however large the fleet.
 
 export interface DeviceNamesResult {
-  devicesByToken: Array<{ token: string; name: string | null }>;
+  devicesByToken: Array<{ token: string; name: string | null; deviceType?: { token: string } | null }>;
 }
 
 export const DEVICE_NAMES = `
@@ -120,9 +123,44 @@ export const DEVICE_NAMES = `
     devicesByToken(tokens: $tokens) {
       token
       name
+      deviceType {
+        token
+      }
     }
   }
 ` as unknown as TypedDocument<DeviceNamesResult, DevicesByTokenVariables>;
+
+// -- device-management: what a device type's ACTIVE profile version declares ---
+// The names a fleet widget reads to tell "does not report this" (the device's profile never
+// declares the measurement) from "not reporting" (it declares it and the device is silent). A
+// catalogue read: a member limited to some customers may make it. Calculated metrics are part of
+// the same list. activeProfileVersion is null until the profile is first published, and profile is
+// null on a type with none: neither declares anything, so neither can say a measurement is absent.
+
+export interface DeclaredMetricsResult {
+  deviceTypesByToken: Array<{
+    token: string;
+    profile: { activeProfileVersion: { metrics: Array<{ metricKey: string }> } | null } | null;
+  }>;
+}
+export interface DeclaredMetricsVariables {
+  tokens: string[];
+}
+
+export const DECLARED_METRICS = `
+  query DashboardDeclaredMetrics($tokens: [String!]!) {
+    deviceTypesByToken(tokens: $tokens) {
+      token
+      profile {
+        activeProfileVersion {
+          metrics {
+            metricKey
+          }
+        }
+      }
+    }
+  }
+` as unknown as TypedDocument<DeclaredMetricsResult, DeclaredMetricsVariables>;
 
 // ── device-management: list entities of one kind (root context-selector candidates) ─
 // Each anchor target type (customer/area/asset) plus bare devices exposes a

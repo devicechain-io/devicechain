@@ -16,7 +16,7 @@
 //     viewer's clock, so a played-back run (whose readings are all days old) shows the machine
 //     that fell silent and no other;
 //   - a cell with no number says WHY: still loading, the read failed, the device sent nothing in
-//     the range, or it sent other measurements but not this one;
+//     the range, or its profile does not declare this measurement;
 //   - columns sort from their headings (real buttons, so the keyboard works), the device column
 //     drills like the alarm table's originator, and a long fleet is paged. A fleet beyond what the
 //     resolver reads says "Showing N of M devices" rather than pass a subset off as the fleet;

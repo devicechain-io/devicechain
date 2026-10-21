@@ -51,7 +51,7 @@ const state: FleetState = {
   truncated: false,
   members: [
     member('a', 'Pump A', { temperature: 30, humidity: 40 }),
-    member('b', 'Pump B', { temperature: 10 }),
+    member('b', 'Pump B', { temperature: 10 }, { declared: ['temperature'] }),
     member('c', 'Pump C', {}, { observed: [] }),
   ],
 };

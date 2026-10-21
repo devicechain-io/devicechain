@@ -45,8 +45,8 @@ const sample = (deviceToken: string, name: string, value: number, ageSeconds = 5
   classifier: null,
 });
 
-const roster = (tokens: string[], total = tokens.length): MemberRoster => ({
-  members: tokens.map((token) => ({ token, name: `Machine ${token}` })),
+const roster = (tokens: string[], total = tokens.length, types: Record<string, string> = {}): MemberRoster => ({
+  members: tokens.map((token) => ({ token, name: `Machine ${token}`, deviceType: types[token] ?? null })),
   total,
   unbound: false,
 });
@@ -64,6 +64,8 @@ interface Fake {
   hub: DashboardHub;
   subscribe: ReturnType<typeof vi.fn>;
   seeds: ReturnType<typeof vi.fn>;
+  // hub.declaredMetrics: by default every type declares nothing it can be asked about (null).
+  declared: ReturnType<typeof vi.fn>;
   disposed: ReturnType<typeof vi.fn>;
   sink: () => MemberSink;
   seed: (token: string, seed: MemberSeed | null, failure?: SeedFailure) => void;
@@ -94,7 +96,9 @@ function makeHub(): Fake {
     });
     windows.push(asked[asked.length - 1]);
   });
+  const declared = vi.fn(async (_type: string): Promise<readonly string[] | null> => null);
   const hub = {
+    declaredMetrics: declared,
     subscribeWidget: () => () => {},
     isDatasourceAvailable: async () => true,
     subscribeMembers: subscribe,
@@ -104,6 +108,7 @@ function makeHub(): Fake {
     hub,
     subscribe,
     seeds,
+    declared,
     disposed,
     sink: () => sink!,
     seed: (token, seed, failure) => onSeeds.forEach((f) => f(token, seed, failure)),
@@ -259,10 +264,78 @@ describe('what it shows', () => {
     expect(cellText('a', 'temperature')).toContain('12');
   });
 
+  // "Does not report this" is what the PROFILE declares, looked up once per device TYPE.
+  describe('the profile declaration', () => {
+    const TYPES = { fuel1: 'tank', fuel2: 'tank', fuel3: 'tank', plant: 'crusher' };
+    const DECLARES: Record<string, string[]> = { tank: ['temperature', 'battery'], crusher: ['throughput'] };
+
+    it('looks a device type up once, however many devices have it', async () => {
+      const f = makeHub();
+      f.declared.mockImplementation(async (type) => DECLARES[type] ?? null);
+      mount(widget(), f.hub, live());
+      act0(() => f.sink().roster(roster(['fuel1', 'fuel2', 'fuel3', 'plant'], 4, TYPES)));
+      await flush();
+      expect(f.declared.mock.calls.map((c) => c[0]).sort()).toEqual(['crusher', 'tank']);
+      // A later roster of the same types (a membership change) does not ask again.
+      act0(() => f.sink().roster(roster(['fuel1', 'fuel2', 'fuel3', 'plant'], 4, TYPES)));
+      await flush();
+      expect(f.declared).toHaveBeenCalledTimes(2);
+    });
+
+    it('says a dead probe with a live heartbeat is silent, and a device whose profile never declares it does not report it', async () => {
+      const f = makeHub();
+      f.declared.mockImplementation(async (type) => DECLARES[type] ?? null);
+      mount(widget(), f.hub, live());
+      act0(() => f.sink().roster(roster(['fuel1', 'plant'], 2, TYPES)));
+      act0(() => {
+        f.seed('fuel1', { latest: { battery: sample('fuel1', 'battery', 88) }, observed: ['battery'] });
+        f.seed('plant', { latest: { throughput: sample('plant', 'throughput', 5) }, observed: ['throughput'] });
+      });
+      await flush();
+      expect(cellText('fuel1', 'temperature')).toBe('no data in range');
+      expect(cellText('plant', 'temperature')).toBe('does not report this');
+    });
+
+    it('treats a failed lookup as declared: the device is silent, never left out', async () => {
+      const f = makeHub();
+      f.declared.mockRejectedValue(new Error('profile read failed'));
+      mount(widget(), f.hub, live());
+      act0(() => f.sink().roster(roster(['plant'], 1, TYPES)));
+      act0(() => f.seed('plant', { latest: { throughput: sample('plant', 'throughput', 5) }, observed: ['throughput'] }));
+      await flush();
+      expect(cellText('plant', 'temperature')).toBe('no data in range');
+    });
+
+    it('treats a lookup that has not landed as declared, then follows it when it does', async () => {
+      const f = makeHub();
+      let land: (names: string[]) => void = () => {};
+      f.declared.mockImplementation(() => new Promise((resolve) => (land = resolve)));
+      mount(widget(), f.hub, live());
+      act0(() => f.sink().roster(roster(['plant'], 1, TYPES)));
+      act0(() => f.seed('plant', { latest: { throughput: sample('plant', 'throughput', 5) }, observed: ['throughput'] }));
+      await flush();
+      expect(cellText('plant', 'temperature')).toBe('no data in range');
+      land(DECLARES.crusher);
+      await flush();
+      expect(cellText('plant', 'temperature')).toBe('does not report this');
+    });
+
+    it('does not look up a device with no known type, and counts it as declared', async () => {
+      const f = makeHub();
+      mount(widget(), f.hub, live());
+      act0(() => f.sink().roster(roster(['plant'])));
+      act0(() => f.seed('plant', { latest: { throughput: sample('plant', 'throughput', 5) }, observed: ['throughput'] }));
+      await flush();
+      expect(f.declared).not.toHaveBeenCalled();
+      expect(cellText('plant', 'temperature')).toBe('no data in range');
+    });
+  });
+
   it('explains an empty cell once the seed has settled', async () => {
     const f = makeHub();
+    f.declared.mockImplementation(async (type) => (type === 'wide' ? ['temperature', 'humidity'] : ['humidity']));
     mount(widget(), f.hub, live());
-    act0(() => f.sink().roster(roster(['quiet', 'partial', 'broken'])));
+    act0(() => f.sink().roster(roster(['quiet', 'partial', 'broken'], 3, { quiet: 'wide', partial: 'narrow', broken: 'wide' })));
     act0(() => {
       f.seed('quiet', { latest: {}, observed: [] });
       f.seed('partial', { latest: { humidity: sample('partial', 'humidity', 40) }, observed: ['humidity'] });

@@ -20,10 +20,13 @@
 import type { MeasurementBucket } from './queries';
 import type { MeasurementSample } from './types';
 
-// One device of a roster. `name` is null when the source does not know it.
+// One device of a roster. `name` is null when the source does not know it. `deviceType` is the
+// token of its device type, when the source knows it: it is what the device's declared metrics are
+// looked up by, once per type.
 export interface MemberRef {
   token: string;
   name: string | null;
+  deviceType?: string | null;
 }
 
 // The members a selector resolves to. `total` is the size of the anchor, which can exceed

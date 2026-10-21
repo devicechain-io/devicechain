@@ -9,12 +9,15 @@
 //     is the healthy state, so a fleet in it counts zero and the card stays neutral (ISA-101);
 //   - a device with no reading of the measurement is neither healthy nor flagged: it is counted
 //     apart, never folded into either figure -- as NOT REPORTING when its read settled and found
-//     nothing (it sent nothing in the span, or sent other measurements), and as NOT READ when the
+//     nothing (it sent nothing in the span, or sent others but not this one), and as NOT READ when the
 //     read failed or did not load its newest reading (the device may well be reporting);
-//   - a device that reports OTHER measurements but never this one (a plant counted among the
-//     machines in a fuel count) is outside the question, not silent: it is left out of the "of N"
-//     and counted apart again (NOT MEASURED), so the card neither calls it "not reporting" nor
-//     drops it unseen -- a sensor that stopped sending this one measurement still shows;
+//   - a device whose profile does not DECLARE the measurement (a plant counted among the machines
+//     in a fuel count) is outside the question, not silent: it is left out of the "of N" and
+//     counted apart again (NOT MEASURED), so the card neither calls it "not reporting" nor drops it
+//     unseen. That is decided from the declaration, never from what the device has sent: a fuel
+//     sensor with a dead probe and a live heartbeat declares fuel and stays in N, as not reporting.
+//     A device whose declaration is not known (not looked up yet, or the lookup failed) is taken to
+//     declare it -- it is never left out on a guess;
 //   - while any member's read is still loading there is no count yet: a figure over the members
 //     read so far would undercount, and nothing on the card would say so;
 //   - the card names the band when every flagged device is in the same labelled one ("Low"), and
@@ -29,7 +32,7 @@ export interface AttentionCount {
   // The members the question covers: those the feed delivered (fewer than the fleet when it is
   // truncated), less the ones that do not report the measurement at all.
   members: number;
-  // Members that reported other measurements in the span but never this one.
+  // Members whose profile does not declare the measurement.
   notMeasured: number;
   flagged: number;
   // Members with a reading of the measurement.

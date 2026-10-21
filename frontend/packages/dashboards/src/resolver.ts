@@ -31,10 +31,12 @@ import type { DeviceResolver } from './hub';
 import type { MemberRef } from './members';
 import {
   CUSTOMER_DEVICES,
+  DECLARED_METRICS,
   DEVICES_BY_TOKEN,
   DEVICES_FOR_ANCHOR,
   DEVICE_NAMES,
   type CustomerDevicesResult,
+  type DeclaredMetricsResult,
   type DeviceNamesResult,
   type DevicesByTokenResult,
   type EntityRelationshipsResult,
@@ -51,6 +53,8 @@ interface AnchorPage {
   tokens: string[];
   total: number;
   names?: Map<string, string | null>;
+  // Their device type tokens, from the same read as `names`.
+  types?: Map<string, string | null>;
 }
 
 // A server that reports no total is taken at its word: the page is the fleet.
@@ -71,6 +75,7 @@ function readAnchorPage(anchor: AnchorTarget): Promise<AnchorPage> {
         tokens: rows.map((d) => d.token),
         total: trueSize(r.customerDevices.pagination?.totalRecords, rows.length),
         names: new Map(rows.map((d) => [d.token, d.name])),
+        types: new Map(rows.map((d) => [d.token, d.deviceType?.token ?? null])),
       };
     });
   }
@@ -130,17 +135,21 @@ export function createDeviceResolver(): DeviceResolver {
       let pending = memberCache.get(key);
       if (!pending) {
         pending = anchorPage(anchor)
-          .then(async ({ tokens, total, names: listed }) => {
+          .then(async ({ tokens, total, names: listed, types: listedTypes }) => {
             const names = listed ?? new Map<string, string | null>();
+            const types = listedTypes ?? new Map<string, string | null>();
             if (!listed && tokens.length > 0) {
               try {
                 const r: DeviceNamesResult = await gql('device-management', DEVICE_NAMES, { tokens });
-                for (const d of r.devicesByToken) names.set(d.token, d.name);
+                for (const d of r.devicesByToken) {
+                  names.set(d.token, d.name);
+                  types.set(d.token, d.deviceType?.token ?? null);
+                }
               } catch {
-                // labelled by token
+                // labelled by token, and of no known type
               }
             }
-            return { members: tokens.map((token) => ({ token, name: names.get(token) ?? null })), total };
+            return { members: tokens.map((token) => ({ token, name: names.get(token) ?? null, deviceType: types.get(token) ?? null })), total };
           })
           .catch((err) => {
             memberCache.delete(key);
@@ -149,6 +158,15 @@ export function createDeviceResolver(): DeviceResolver {
         memberCache.set(key, pending);
       }
       return pending;
+    },
+
+    // The names a device type's active profile version declares, or null when the type has no
+    // published profile to say (no profile, never published, or the type is not found). A failed
+    // read rejects: the caller treats that as unknown too, and does not cache it.
+    async declaredMetrics(deviceType: string): Promise<string[] | null> {
+      const r: DeclaredMetricsResult = await gql('device-management', DECLARED_METRICS, { tokens: [deviceType] });
+      const version = r.deviceTypesByToken.find((t) => t.token === deviceType)?.profile?.activeProfileVersion;
+      return version ? version.metrics.map((m) => m.metricKey) : null;
     },
 
     // deviceExists caches only a POSITIVE result (a live device is stable for the
