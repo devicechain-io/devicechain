@@ -680,6 +680,22 @@ export interface AlarmRow {
   acknowledgedTime: string | null;
   acknowledgedBy: string | null;
   lastValue: number | null;
+  // The originating device's type, present only on a row read for a subscription that asked for it
+  // (AlarmSubscription.enrichDeviceType / deviceType). `undefined` means "not asked for or not
+  // resolvable"; `null` means the originator is not a device. Additive: every other source omits it.
+  deviceType?: AlarmDeviceType | null;
+}
+
+export interface AlarmDeviceType {
+  token: string;
+  name: string | null;
+}
+
+// How many matching alarms are on devices of one type at one severity (a type-count read).
+export interface AlarmTypeCount {
+  deviceType: AlarmDeviceType;
+  severity: string;
+  count: number;
 }
 
 // ---- Locations (location channel) -------------------------------------------

@@ -284,25 +284,81 @@ func TestReadSweepSuppliesSeededTokens(t *testing.T) {
 // row is the smallest read that still reaches a row. Pinned because a mutation to zero
 // changed no test and no output — the reasoning lived only in a comment.
 func TestReadSweepAsksForTheSmallestRealPage(t *testing.T) {
-	calls, _ := planAll(t)
-	checked := 0
-	for _, c := range calls {
-		criteria, ok := c.Vars["criteria"].(map[string]any)
-		if !ok {
-			continue
+	checked, unpaged := 0, 0
+	for _, area := range probeAreas() {
+		schema, err := loadServedSchema(filepath.Join("..", "..", "services"), area)
+		if err != nil || schema == nil {
+			t.Fatalf("load %s: %v", area, err)
 		}
-		checked++
-		if criteria["pageNumber"] != 1 || criteria["pageSize"] != 1 {
-			t.Errorf("%s.%s asks for %v; a search sweep wants page one, one row — and a "+
-				"pageSize of 0 is refused by some criteria, which would arrive as a finding",
-				c.Area, c.Field, criteria)
+		calls, _ := planReadSweep(area, schema, probeTokens())
+		for _, c := range calls {
+			criteria, ok := c.Vars["criteria"].(map[string]any)
+			if !ok {
+				continue
+			}
+			// Whether this door's criteria is a PAGED search is the schema's answer, not the
+			// planner's: a criteria that declares no paging (a count, say) must be sent none,
+			// and one that declares it must be sent page one, one row.
+			if !criteriaIsPaged(t, schema, c.Field) {
+				unpaged++
+				if _, has := criteria["pageSize"]; has {
+					t.Errorf("%s.%s declares no paging but was asked for %v", c.Area, c.Field, criteria)
+				}
+				continue
+			}
+			checked++
+			if criteria["pageNumber"] != 1 || criteria["pageSize"] != 1 {
+				t.Errorf("%s.%s asks for %v; a search sweep wants page one, one row — and a "+
+					"pageSize of 0 is refused by some criteria, which would arrive as a finding",
+					c.Area, c.Field, criteria)
+			}
 		}
 	}
 	// The search doors are most of what this sweep adds over the read-backs, so a run that
-	// found none of them has measured nothing about pagination at all.
+	// found none of them has measured nothing about pagination at all. The unpaged doors are
+	// few by nature; most of them would mean the paging test above stopped telling them apart.
 	if checked < 20 {
-		t.Errorf("only %d doors take a search criteria; the planner is not reaching them", checked)
+		t.Errorf("only %d doors take a paged search criteria; the planner is not reaching them", checked)
 	}
+	if unpaged > checked/4 {
+		t.Errorf("%d of %d criteria doors read as unpaged; criteriaIsPaged is misreading the schema", unpaged, checked+unpaged)
+	}
+}
+
+// criteriaIsPaged answers whether a Query field's `criteria` argument is an input object
+// declaring the pagination scalars.
+func criteriaIsPaged(t *testing.T, schema *ast.Schema, field string) bool {
+	t.Helper()
+	query, ok := schema.Types["Query"].(*ast.ObjectTypeDefinition)
+	if !ok {
+		t.Fatalf("schema has no Query type")
+	}
+	for _, f := range query.Fields {
+		if f.Name != field {
+			continue
+		}
+		for _, arg := range f.Arguments {
+			if arg.Name.Name != "criteria" {
+				continue
+			}
+			named, ok := underlying(arg.Type).(ast.NamedType)
+			if !ok {
+				t.Fatalf("%s.criteria is not a named type", field)
+			}
+			def, ok := schema.Types[named.String()].(*ast.InputObject)
+			if !ok {
+				t.Fatalf("%s.criteria is not an input object", field)
+			}
+			for _, v := range def.Values {
+				if v.Name.Name == "pageSize" {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	t.Fatalf("%s has no criteria argument", field)
+	return false
 }
 
 func flatten(vars map[string]any) string {

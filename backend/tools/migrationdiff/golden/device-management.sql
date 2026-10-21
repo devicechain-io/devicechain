@@ -273,6 +273,7 @@ CREATE INDEX "idx_device-management_provisioning_profiles_tenant_id" ON "device-
 CREATE INDEX "idx_device-management_provisioning_profiles_token" ON "device-management".provisioning_profiles USING btree (token);
 CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (scope_anchors);
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
+CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
 CREATE INDEX idx_devices_disabled ON "device-management".devices USING btree (tenant_id, id) WHERE ((disabled_at IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_dr_scope_ref_group ON "device-management".detection_rule_scope_refs USING btree (group_token, group_version);
 CREATE INDEX idx_egfr_group ON "device-management".entity_group_facet_refs USING btree (group_id, selector_version);

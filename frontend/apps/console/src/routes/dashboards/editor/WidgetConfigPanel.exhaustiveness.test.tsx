@@ -401,10 +401,13 @@ async function drive(
     const [seed] = listSeed(type, id);
     const entered: Row = { ...seed };
     const item = listSpec(type, id).item;
+    // A number cell if the row has one; a list of plain text cells (a list of tokens) is worked
+    // through its first text cell instead.
+    const drivable = Object.values(item).some((spec) => spec.kind === 'number') ? 'number' : 'string';
     for (const [field, spec] of Object.entries(item)) {
-      if (spec.kind === 'number') {
+      if (spec.kind === drivable) {
         const input = container.querySelector<HTMLInputElement>(`[data-testid="list-cell-${id}-0-${field}"] input`);
-        expect(input, `list ${id}: no number cell for ${field}`).toBeTruthy();
+        expect(input, `list ${id}: no ${drivable} cell for ${field}`).toBeTruthy();
         fireEvent.change(input!, { target: { value: String(written[field]) } });
         fireEvent.blur(input!);
         entered[field] = written[field];
@@ -412,7 +415,7 @@ async function drive(
         return { [id]: [entered] };
       }
     }
-    throw new Error(`list ${id} on ${type} declares no number cell the driver can work`);
+    throw new Error(`list ${id} on ${type} declares no number or text cell the driver can work`);
   }
 
   const number = container.querySelector<HTMLInputElement>('input[type="number"]');

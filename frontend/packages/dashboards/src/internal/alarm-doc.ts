@@ -26,6 +26,8 @@ export interface AlarmSearchCriteriaInput {
   severity?: string | null;
   acknowledged?: boolean | null;
   alarmKey?: string | null;
+  // Only alarms raised on a device of this type (its token).
+  deviceType?: string | null;
 }
 
 export interface AlarmsQueryResult {
@@ -63,6 +65,57 @@ export const ALARMS_QUERY = `
     }
   }
 ` as unknown as TypedDocument<AlarmsQueryResult, AlarmsQueryVariables>;
+
+// ── Device types of a set of originators (one batched read) ─────────────
+// The alarm row carries only its originator's token. A widget that groups alarms by device type
+// resolves them with ONE devicesByToken read (up to 1000 tokens), never one query per alarm.
+
+export interface AlarmDeviceTypesResult {
+  devicesByToken: Array<{ token: string; deviceType: { token: string; name: string | null } }>;
+}
+
+export interface AlarmDeviceTypesVariables {
+  tokens: string[];
+}
+
+export const ALARM_DEVICE_TYPES = `
+  query DashboardAlarmDeviceTypes($tokens: [String!]!) {
+    devicesByToken(tokens: $tokens) {
+      token
+      deviceType {
+        token
+        name
+      }
+    }
+  }
+` as unknown as TypedDocument<AlarmDeviceTypesResult, AlarmDeviceTypesVariables>;
+
+// ── Alarm counts per device type (one grouped read) ─────────────────────
+// The tab strip of an alarm table grouped by type: how many alarms match, per type and severity,
+// counted by device-management, so the badges are exact however many alarms there are.
+
+export type AlarmCountCriteriaInput = Omit<AlarmSearchCriteriaInput, 'pageNumber' | 'pageSize' | 'deviceType'>;
+
+export interface AlarmTypeCountsResult {
+  alarmCountsByDeviceType: Array<{ deviceType: { token: string; name: string | null }; severity: string; count: number }>;
+}
+
+export interface AlarmTypeCountsVariables {
+  criteria: AlarmCountCriteriaInput;
+}
+
+export const ALARM_TYPE_COUNTS = `
+  query DashboardAlarmTypeCounts($criteria: AlarmCountCriteria!) {
+    alarmCountsByDeviceType(criteria: $criteria) {
+      deviceType {
+        token
+        name
+      }
+      severity
+      count
+    }
+  }
+` as unknown as TypedDocument<AlarmTypeCountsResult, AlarmTypeCountsVariables>;
 
 // ── Live trigger ─────────────────────────────────────────────────────────
 

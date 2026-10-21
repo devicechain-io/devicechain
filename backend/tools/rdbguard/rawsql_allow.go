@@ -161,4 +161,10 @@ var rawJoinAllowList = []siteEntry{
 		Why: "joins devices through entity_attributes.entity_id, written by a tenant-scoped attribute " +
 			"write that resolves the entity token under the same tenant",
 	},
+	{
+		Path: "backend/services/device-management/model/api_alarm_state.go", Func: "Api.AlarmCountsByDeviceType", Count: 1,
+		Why: "joins a DERIVED table built through gorm (Model(&Device{}), alarmDevices), so the tenant " +
+			"and scope callbacks filter it as its own statement; the ON clause also equates " +
+			"d.tenant_id with alarms.tenant_id, which this guard cannot read through the subquery",
+	},
 }

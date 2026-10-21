@@ -522,7 +522,16 @@ export function useAlarmStream(
     setState([key, EMPTY_ALARMS]); // reset to loading whenever the subscription changes
     return hub.subscribeAlarms(subscription, {
       next: (snapshot) =>
-        setState([key, { alarms: snapshot.alarms, total: snapshot.total, loading: false, error: null }]),
+        setState([
+          key,
+          {
+            alarms: snapshot.alarms,
+            total: snapshot.total,
+            ...(snapshot.typeCounts ? { typeCounts: snapshot.typeCounts } : {}),
+            loading: false,
+            error: null,
+          },
+        ]),
       error: (err) => setState(([, prev]) => [key, { ...prev, loading: false, error: err }]),
     });
     // `subscription` is intentionally read via `key` (value identity), not reference.

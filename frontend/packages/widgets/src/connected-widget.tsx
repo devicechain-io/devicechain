@@ -37,7 +37,7 @@ import {
 import { isForbiddenError } from '@devicechain/client';
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, measurementSpan, measurementWindow, membersMode } from './binding-policy';
+import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementWindow, membersMode } from './binding-policy';
 import { useHeld } from './use-held';
 import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
@@ -55,6 +55,7 @@ import {
 import { WidgetContainment, useReportRejection } from './widget-containment';
 import { lazyChunk } from './widgets/lazy-chunk';
 import type { AggregateFeedProps } from './aggregate-feed';
+import type { GroupedAlarmProps } from './widgets/alarm-grouped';
 import type { FleetFeedProps } from './fleet-feed';
 import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 
@@ -318,7 +319,30 @@ function AggregateConnectedWidget({ widget, hub, descriptor, Component, actions 
   return widget.datasource?.kind === 'anchor' ? <FleetFeed {...props} refuse /> : <AggregateFeed {...props} />;
 }
 
-function AlarmConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
+// An alarm widget grouped by device type is its own part of the alarm chunk (widgets/alarm-grouped.tsx):
+// a board without one never downloads the tab logic, and the eager code carries only this switch.
+const GroupedAlarm = lazyChunk<typeof import('./widgets/alarm-widgets')>(() => import('./widgets/alarm-widgets')).component<
+  never,
+  GroupedAlarmProps
+>('GroupedAlarm');
+
+function AlarmConnectedWidget(props: ChannelProps) {
+  return groupsAlarmsByDeviceType(props.descriptor, props.widget) ? (
+    <GroupedAlarm
+      hub={props.hub}
+      widget={props.widget}
+      base={alarmSubscription(props.descriptor, props.widget)}
+      useHeld={useHeld}
+      Component={props.Component}
+      actions={props.actions}
+      ErrorFrame={WidgetErrorFrame}
+    />
+  ) : (
+    <PlainAlarmConnectedWidget {...props} />
+  );
+}
+
+function PlainAlarmConnectedWidget({ widget, hub, descriptor, Component, actions }: ChannelProps) {
   // Frozen while the board is paused: the snapshot on screen at the pause (or the first one to land,
   // when the board opened paused) stays, and the live one is shown again on resume.
   const range = useWidgetTimeRange();

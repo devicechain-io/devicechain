@@ -339,6 +339,11 @@ func (api *MockApi) Alarms(ctx context.Context, criteria model.AlarmSearchCriter
 	return args.Get(0).(*model.AlarmSearchResults), args.Error(1)
 }
 
+func (api *MockApi) AlarmCountsByDeviceType(ctx context.Context, criteria model.AlarmCountCriteria) ([]model.AlarmDeviceTypeCount, error) {
+	args := api.Mock.Called()
+	return args.Get(0).([]model.AlarmDeviceTypeCount), args.Error(1)
+}
+
 func (api *MockApi) AcknowledgeAlarm(ctx context.Context, token string, by *string) (*model.Alarm, error) {
 	args := api.Mock.Called()
 	return args.Get(0).(*model.Alarm), args.Error(1)

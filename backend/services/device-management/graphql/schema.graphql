@@ -1668,6 +1668,44 @@ input AlarmSearchCriteria {
     severity: String
     acknowledged: Boolean
     alarmKey: String
+    """
+    Only alarms raised on a device of this type, by the type's token. An unknown token finds
+    nothing. A member whose access is limited to some customers matches only the devices its
+    scope owns, so an alarm it can see on a device it no longer owns is under no type.
+    """
+    deviceType: String
+}
+
+"""
+Criteria for counting alarms by device type. The facets are those of AlarmSearchCriteria,
+without paging and without deviceType (the grouping), and they AND together.
+"""
+input AlarmCountCriteria {
+    """Entity type of the originator, e.g. "device". Required when originator is set."""
+    originatorType: String
+    """Only alarms of this originator, by its token. An unknown token counts nothing."""
+    originator: String
+    """Only alarms in this state: ACTIVE or CLEARED."""
+    state: String
+    """Only alarms at this severity."""
+    severity: String
+    """Only acknowledged (true) or unacknowledged (false) alarms."""
+    acknowledged: Boolean
+    """Only alarms with this alarm key."""
+    alarmKey: String
+}
+
+"""
+How many matching alarms are raised on devices of one type at one severity. A type with
+alarms at several severities has one entry per severity.
+"""
+type AlarmDeviceTypeCount {
+    """The device type the counted alarms' devices have."""
+    deviceType: DeviceType!
+    """The severity of the counted alarms."""
+    severity: String!
+    """How many matching alarms have this device type and severity."""
+    count: Int!
 }
 
 # Search results returned from an alarm query.
@@ -3725,6 +3763,16 @@ type Query {
     alarmsByToken(tokens: [String!]!): [Alarm!]!
     # List raised alarms that meet criteria.
     alarms(criteria: AlarmSearchCriteria!): AlarmSearchResults!
+    """
+    Counts the alarms matching the criteria per originating device type and severity, in one
+    read, for a view that groups alarms by type. Only alarms on devices the caller can read are
+    counted, so a type's count equals the total of alarms(criteria) filtered to that type.
+    Requires alarm:read.
+    """
+    alarmCountsByDeviceType(
+        """The facets the counted alarms must match."""
+        criteria: AlarmCountCriteria!
+    ): [AlarmDeviceTypeCount!]!
     # List entity attributes that meet criteria.
     entityAttributes(criteria: EntityAttributeSearchCriteria!): EntityAttributeSearchResults!
     # Query the audit journal (ADR-019); tenant-scoped, newest first.

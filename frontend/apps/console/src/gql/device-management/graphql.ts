@@ -7,6 +7,12 @@ import { DocumentTypeDecoration } from '@graphql-typed-document-node/core';
 export type AlarmSearchCriteria = {
   acknowledged?: boolean | null | undefined;
   alarmKey?: string | null | undefined;
+  /**
+   * Only alarms raised on a device of this type, by the type's token. An unknown token finds
+   * nothing. A member whose access is limited to some customers matches only the devices its
+   * scope owns, so an alarm it can see on a device it no longer owns is under no type.
+   */
+  deviceType?: string | null | undefined;
   originator?: string | null | undefined;
   originatorType?: string | null | undefined;
   pageNumber: number;

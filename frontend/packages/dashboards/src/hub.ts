@@ -17,6 +17,8 @@ import type { HistoryWindow } from './history';
 import {
   ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
+  ALARM_DEVICE_TYPES,
+  ALARM_TYPE_COUNTS,
   ALARMS_QUERY,
   CLEAR_ALARM,
   type AlarmSearchCriteriaInput,
@@ -36,7 +38,9 @@ import {
   type MeasurementStreamVariables,
 } from './internal/measurement-doc';
 import type {
+  AlarmDeviceType,
   AlarmRow,
+  AlarmTypeCount,
   AnchorTarget,
   CommandRow,
   DatasourceSelector,
@@ -66,6 +70,8 @@ function randomToken(): string {
 // re-query.
 const ALARM_RECONCILE_DEBOUNCE_MS = 800;
 const ALARM_POLL_MS = 30_000;
+// devicesByToken takes at most 1000 tokens.
+const ALARM_DEVICE_TYPES_CHUNK = 1000;
 
 // Command channel cadence. command-delivery exposes NO subscription, so the control
 // channel is poll-only — but a command's lifecycle (QUEUED→SENT→SUCCESSFUL)
@@ -142,6 +148,16 @@ export interface AlarmSubscription {
   severity?: string;
   acknowledged?: boolean;
   pageSize: number;
+  // Resolve each row's originating device type (AlarmRow.deviceType) with one batched read per
+  // reconcile. Off by default: an alarm table that does not group by type pays nothing.
+  enrichDeviceType?: boolean;
+  // Keep only alarms whose originating device has this device-type TOKEN.
+  // Filtered by device-management, so `total` is the exact match count.
+  deviceType?: string;
+  // Read the per-type counts of the matching alarms instead of the alarms: the snapshot then has no
+  // rows, `typeCounts` is set, and `total` is their sum. A source that cannot count by type leaves
+  // `typeCounts` unset (or fails the stream); it never answers with counts it did not make.
+  countByDeviceType?: boolean;
 }
 
 // A full alarm snapshot: the current rows (newest first, capped to pageSize) and the
@@ -149,7 +165,10 @@ export interface AlarmSubscription {
 export interface AlarmSnapshot {
   alarms: AlarmRow[];
   total: number;
+  // Only for a subscription with countByDeviceType: one entry per (device type, severity) present.
+  typeCounts?: AlarmTypeCount[];
 }
+
 
 export interface AlarmStreamSink {
   next: (snapshot: AlarmSnapshot) => void;
@@ -687,27 +706,41 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     tokens: string[],
     tenantWide: boolean,
   ): Promise<AlarmSnapshot> {
-    const base = {
-      pageNumber: 1, // the alarms query paginates 1-based
-      pageSize: sub.pageSize,
+    const filters = {
       state: sub.state ?? null,
       severity: sub.severity ?? null,
       acknowledged: sub.acknowledged ?? null,
     } satisfies Partial<AlarmSearchCriteriaInput>;
+    const originators: Array<{ originatorType: string | null; originator: string | null }> = tenantWide
+      ? [{ originatorType: null, originator: null }]
+      : tokens.map((token) => ({ originatorType: 'device', originator: token }));
 
-    if (tenantWide) {
-      const data = await gql(DEVICE_AREA, ALARMS_QUERY, {
-        criteria: { ...base, originatorType: null, originator: null },
-      });
-      return { alarms: data.alarms.results, total: data.alarms.pagination.totalRecords };
+    if (sub.countByDeviceType) {
+      // One grouped read per originator query (one tenant-wide), summed by (type, severity).
+      const pages = await Promise.all(
+        originators.map((o) => gql(DEVICE_AREA, ALARM_TYPE_COUNTS, { criteria: { ...filters, ...o } })),
+      );
+      const merged = new Map<string, AlarmTypeCount>();
+      for (const page of pages) {
+        for (const c of page.alarmCountsByDeviceType) {
+          const key = `${c.deviceType.token}\u0000${c.severity}`;
+          const prior = merged.get(key);
+          merged.set(key, prior ? { ...prior, count: prior.count + c.count } : { ...c, deviceType: { ...c.deviceType } });
+        }
+      }
+      const typeCounts = [...merged.values()];
+      return { alarms: [], total: typeCounts.reduce((n, c) => n + c.count, 0), typeCounts };
     }
 
+    // The type filter is device-management's, so a page is the subscription's either way.
+    const base = {
+      pageNumber: 1, // the alarms query paginates 1-based
+      pageSize: sub.pageSize,
+      ...filters,
+      deviceType: sub.deviceType ?? null,
+    } satisfies Partial<AlarmSearchCriteriaInput>;
     const pages = await Promise.all(
-      tokens.map((token) =>
-        gql(DEVICE_AREA, ALARMS_QUERY, {
-          criteria: { ...base, originatorType: 'device', originator: token },
-        }),
-      ),
+      originators.map((o) => gql(DEVICE_AREA, ALARMS_QUERY, { criteria: { ...base, ...o } })),
     );
     const byToken = new Map<string, AlarmRow>();
     let total = 0;
@@ -715,10 +748,41 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
       total += page.alarms.pagination.totalRecords;
       for (const row of page.alarms.results) byToken.set(row.token, row);
     }
-    const alarms = [...byToken.values()]
+    let alarms = [...byToken.values()]
       .sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''))
       .slice(0, sub.pageSize);
+    if (sub.enrichDeviceType === true) alarms = await this.withDeviceTypes(alarms);
     return { alarms, total };
+  }
+
+  // Each device's type, for the lifetime of the hub: a device's type is fixed for a viewing session,
+  // and the same originators come back every poll. ONE devicesByToken read per chunk of uncached
+  // tokens (the server takes 1000), never one per alarm. A failed read leaves those rows with no
+  // `deviceType` (unknown, so a grouping widget lists them under All only) instead of failing the
+  // whole alarm table, and is retried on the next reconcile because a failure is not cached.
+  private readonly alarmDeviceTypes = new Map<string, AlarmDeviceType>();
+
+  private async withDeviceTypes(rows: AlarmRow[]): Promise<AlarmRow[]> {
+    const missing = [
+      ...new Set(
+        rows
+          .filter((r) => r.originatorType === 'device' && r.originatorToken && !this.alarmDeviceTypes.has(r.originatorToken))
+          .map((r) => r.originatorToken as string),
+      ),
+    ];
+    for (let i = 0; i < missing.length; i += ALARM_DEVICE_TYPES_CHUNK) {
+      try {
+        const r = await gql(DEVICE_AREA, ALARM_DEVICE_TYPES, { tokens: missing.slice(i, i + ALARM_DEVICE_TYPES_CHUNK) });
+        for (const d of r.devicesByToken) this.alarmDeviceTypes.set(d.token, d.deviceType);
+      } catch {
+        // rows stay unresolved; see above
+      }
+    }
+    return rows.map((r) => {
+      if (r.originatorType !== 'device' || !r.originatorToken) return { ...r, deviceType: null };
+      const deviceType = this.alarmDeviceTypes.get(r.originatorToken);
+      return deviceType ? { ...r, deviceType } : r;
+    });
   }
 
   // ── Control channel ──────────────────────────────────────────────────────

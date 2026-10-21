@@ -7,8 +7,8 @@
 // table is read-only. Bound through the hub's alarm channel, so it renders identically
 // from live data or the synthetic preview source.
 
-import type { AlarmRow, WidgetActions } from '@devicechain/dashboards';
-import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
+import type { AlarmRow, AlarmTypeTab, WidgetActions } from '@devicechain/dashboards';
+import { Fragment, useEffect, useId, useState, type CSSProperties, type ReactNode } from 'react';
 
 import {
   type AlarmStreamState,
@@ -28,6 +28,8 @@ import {
   type WidgetSelect,
 } from '@devicechain/widget-sdk';
 
+import { alarmStrings } from '../alarm-strings';
+import { AlarmTypeTabsStrip, panelDomId, tabDomId } from './alarm-type-tabs';
 import { severityColor, severityLabel } from './severity';
 
 const cell: CSSProperties = { padding: '6px 10px', textAlign: 'left', whiteSpace: 'nowrap' };
@@ -84,6 +86,32 @@ export function hyphenBreaks(text: string): ReactNode {
   ));
 }
 
+// The tabs a type-grouping table shows. By default every device type with an active alarm; an
+// authored `deviceTypes` list (`[{ token }]`) pins WHICH types and their ORDER instead, and a type
+// not listed is under All only. A pinned type with no active alarm still gets its tab (at no badge),
+// named by its token when no alarm has told us its name.
+export function shownTabs(discovered: readonly AlarmTypeTab[], pinned: readonly string[]): AlarmTypeTab[] {
+  if (pinned.length === 0) return [...discovered];
+  const byToken = new Map(discovered.map((t) => [t.token, t]));
+  const seen = new Set<string>();
+  const out: AlarmTypeTab[] = [];
+  for (const token of pinned) {
+    if (seen.has(token)) continue;
+    seen.add(token);
+    out.push(byToken.get(token) ?? { token, name: null, active: 0, worstSeverity: null });
+  }
+  return out;
+}
+
+function pinnedTypes(widget: WidgetProps<AlarmStreamState>['widget']): string[] {
+  const list = widget.options?.deviceTypes;
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((item) => {
+    const token = (item as { token?: unknown } | null)?.token;
+    return typeof token === 'string' && token !== '' ? [token] : [];
+  });
+}
+
 function statusLabel(alarm: AlarmRow): string {
   if (alarm.state === 'CLEARED') return 'Cleared';
   return alarm.acknowledged ? 'Acknowledged' : 'Active';
@@ -96,7 +124,22 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   const [sizeRef, size] = useElementSize<HTMLDivElement>();
   const severity = useSeverityColors();
   const narrow = size.width > 0 && size.width < ALARM_TABLE_NARROW_PX;
-  const columns = 5 + (narrow ? 0 : 2) + (canAct ? 1 : 0);
+  // Grouped by device type: a tab strip above the table. `typeTabs` is set only for a table whose
+  // descriptor groups, so an ungrouped one runs none of this and renders exactly as it always has.
+  const typeTabs = data.typeTabs;
+  const tabs = typeTabs ? shownTabs(typeTabs.tabs, pinnedTypes(widget)) : [];
+  const stripShown = typeTabs !== undefined && tabs.length > 0;
+  const selectTab = typeTabs?.select;
+  const selectedType = typeTabs?.selected ?? null;
+  // A selection the pin dropped must not leave the table filtered to a tab the viewer cannot see.
+  const dropped = stripShown && selectedType !== null && !tabs.some((t) => t.token === selectedType);
+  useEffect(() => {
+    if (dropped) selectTab?.(null);
+  }, [dropped, selectTab]);
+  const idBase = useId();
+  // The type column is redundant inside a type's own tab, and too wide for a phone.
+  const typeColumn = stripShown && selectedType === null && !narrow;
+  const columns = 5 + (narrow ? 0 : 2) + (typeColumn ? 1 : 0) + (canAct ? 1 : 0);
   const text = narrow ? narrowCell : cell;
   // Round the triggering value to a fixed precision when configured; unset keeps the raw
   // value (formatValue's default), matching the table widget. An alarm's raw lastValue is
@@ -116,7 +159,21 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
   return (
     <WidgetFrame title={optString(widget.options, 'title')} flush>
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div ref={sizeRef} style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+        {stripShown && typeTabs ? (
+          <AlarmTypeTabsStrip
+            tabs={tabs}
+            selected={dropped ? null : selectedType}
+            onSelect={typeTabs.select}
+            idBase={idBase}
+          />
+        ) : null}
+        <div
+          ref={sizeRef}
+          style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+          {...(stripShown
+            ? { role: 'tabpanel', id: panelDomId(idBase), 'aria-labelledby': tabDomId(idBase, dropped ? null : selectedType) }
+            : {})}
+        >
           <table
             style={{
               width: '100%',
@@ -140,6 +197,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                 <th scope="col" style={headCell}>
                   Originator
                 </th>
+                {typeColumn ? (
+                  <th scope="col" style={headCell}>
+                    {alarmStrings().deviceType}
+                  </th>
+                ) : null}
                 <th scope="col" style={headCell}>
                   Alarm
                 </th>
@@ -184,6 +246,11 @@ export function AlarmTable({ widget, data, actions }: WidgetProps<AlarmStreamSta
                       <td style={text}>
                         <OriginatorCell alarm={alarm} drillTo={drillTo} />
                       </td>
+                      {typeColumn ? (
+                        <td style={{ ...cell, color: css('muted-foreground') }}>
+                          {alarm.deviceType ? (alarm.deviceType.name ?? alarm.deviceType.token) : '—'}
+                        </td>
+                      ) : null}
                       <td style={text}>
                         {hyphenBreaks(alarm.alarmKey)}
                       </td>

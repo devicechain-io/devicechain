@@ -286,6 +286,24 @@ describe('RecordedDataSource: alarms', () => {
     expect(snaps[snaps.length - 1].alarms.map((a) => a.alarmKey)).toEqual(['tyre-pressure-low']);
   });
 
+  it('refuses to filter or count by device type, which a recording does not carry', async () => {
+    for (const over of [{ deviceType: 'hauler' }, { countByDeviceType: true }]) {
+      const { source } = playerAt(FIXTURE_DURATION_MS);
+      const errors: unknown[] = [];
+      const snaps: AlarmSnapshot[] = [];
+      source.subscribeAlarms({ pageSize: 10, ...over }, { next: (s) => snaps.push(s), error: (e) => errors.push(e) });
+      await settle();
+      expect(snaps).toEqual([]);
+      expect(errors[0]).toBeInstanceOf(NotInRecordingError);
+      expect((errors[0] as NotInRecordingError).channel).toBe('alarms');
+    }
+    // Negative control: rows with their types asked for are served (the types stay unresolved).
+    const { source } = playerAt(FIXTURE_DURATION_MS);
+    const snaps = subscribe(source, { enrichDeviceType: true });
+    await settle();
+    expect(snaps[snaps.length - 1].total).toBe(3);
+  });
+
   it('re-emits only when the fold changes', async () => {
     const { source, clock } = playerAt(0);
     const snaps = subscribe(source);
