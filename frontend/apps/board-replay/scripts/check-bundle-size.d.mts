@@ -22,3 +22,10 @@ export interface LazyBoundary {
 }
 export function lazyBoundaries(): LazyBoundary[];
 export function checkShape(dist: string, boundaries: LazyBoundary[]): string[];
+export interface AbsentBoundary {
+  what: string;
+  reach: string;
+  markers: string[];
+}
+export function absentBoundaries(): AbsentBoundary[];
+export function checkAbsent(dist: string, boundaries: AbsentBoundary[]): string[];

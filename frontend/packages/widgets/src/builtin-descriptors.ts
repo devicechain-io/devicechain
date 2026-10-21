@@ -32,14 +32,12 @@ import {
 const TITLE = {
   kind: 'string',
   labelId: 'widgetLabelTitle',
-  doc: 'Heading shown in the widget frame. Blank hides the frame heading.',
 } as const satisfies OptionSpec;
 
 // gauge and latest-card fall back to the displayed measurement's name when no title is set.
 const TITLE_OR_MEASUREMENT = {
   kind: 'string',
   labelId: 'widgetLabelTitle',
-  doc: 'Heading shown in the widget frame. Defaults to the displayed measurement name.',
 } as const satisfies OptionSpec;
 
 // toFixed()'s domain is 0..100 — outside it throws a RangeError, which would take the
@@ -51,7 +49,6 @@ const PRECISION = {
   max: 100,
   labelId: 'widgetLabelPrecision',
   helpId: 'widgetHintPrecision',
-  doc: 'Decimal places to round displayed values to. Unset rounds to at most 3 decimals (4 significant digits under 1).',
 } as const satisfies OptionSpec;
 
 // Where a measurement crosses from one severity to the next. A threshold STARTS a band that
@@ -65,13 +62,11 @@ const THRESHOLDS = {
   maxItems: 12,
   labelId: 'widgetLabelThresholds',
   helpId: 'widgetHintThresholds',
-  doc: 'Severity bands over the value. Each entry starts a band at its value that runs to the next entry; below the first, and in a normal band, the widget keeps its own colour.',
   item: {
     value: {
       kind: 'number',
       required: true,
       labelId: 'widgetLabelThresholdValue',
-      doc: 'The value at which this band starts.',
     },
     level: {
       kind: 'enum',
@@ -86,12 +81,10 @@ const THRESHOLDS = {
         critical: 'widgetSeverityCritical',
       },
       placeholderId: 'widgetPlaceholderThresholdLevel',
-      doc: 'The severity of this band. The theme decides the colour; normal has none.',
     },
     label: {
       kind: 'string',
       labelId: 'widgetLabelThresholdLabel',
-      doc: 'Text shown on the chart line for this threshold. Defaults to its value.',
     },
   },
 } as const satisfies OptionSpec;
@@ -100,7 +93,6 @@ const FLASH_ON_CHANGE = {
   kind: 'boolean',
   labelId: 'widgetFlashOnChange',
   helpId: 'widgetFlashOnChangeHint',
-  doc: 'Briefly tint a value green on a rise and red on a fall when it changes.',
 } as const satisfies OptionSpec;
 
 // Read by MeasurementConnectedWidget for every measurement-channel widget, and declared on
@@ -122,7 +114,6 @@ const WINDOW = {
   min: 1,
   labelId: 'widgetLabelWindow',
   helpId: 'widgetHintWindow',
-  doc: 'Samples retained across ALL of the widget\'s measurements before the oldest are dropped. Bounds memory; only the chart draws them. Default 300.',
 } as const satisfies OptionSpec;
 
 // Read by the frame, not by the widget: with it set, a widget whose newest sample is older than
@@ -134,13 +125,11 @@ const STALE_AFTER_SECONDS = {
   min: 1,
   labelId: 'widgetLabelStaleAfter',
   helpId: 'widgetHintStaleAfter',
-  doc: 'Seconds after which the newest sample is called stale: the value is greyed out and badged. Unset shows the sample age only and never marks the widget stale.',
 } as const satisfies OptionSpec;
 
 const UNIT = {
   kind: 'string',
   labelId: 'widgetLabelUnit',
-  doc: 'Unit suffix shown beside the value.',
 } as const satisfies OptionSpec;
 
 // The two ends of a level widget's scale. REQUIRED, with no default on the descriptor: a tank
@@ -152,7 +141,6 @@ const SCALE_MIN = {
   required: true,
   labelId: 'widgetLabelMin',
   helpId: 'widgetHintScaleMin',
-  doc: 'Value at the empty end of the scale. Required: the widget does not guess a range.',
 } as const satisfies OptionSpec;
 
 const SCALE_MAX = {
@@ -160,7 +148,6 @@ const SCALE_MAX = {
   required: true,
   labelId: 'widgetLabelMax',
   helpId: 'widgetHintScaleMax',
-  doc: 'Value at the full end of the scale. Required, and above min.',
 } as const satisfies OptionSpec;
 
 // The command a control sends. The three keys are the command-vocabulary triple the console's
@@ -172,7 +159,6 @@ const CONTROL_COMMAND_NAME = {
   labelId: 'widgetCommandHeading',
   helpId: 'widgetCommandFieldHint',
   control: 'command-vocabulary',
-  doc: 'Command key issued to the target device. Without it the control cannot send.',
 } as const satisfies OptionSpec;
 
 const CONTROL_COMMAND_LABEL = {
@@ -180,7 +166,6 @@ const CONTROL_COMMAND_LABEL = {
   labelId: 'widgetCommandHeading',
   helpId: 'widgetCommandFieldHint',
   control: 'command-vocabulary',
-  doc: 'Name of the control for assistive technology. Defaults to the command key.',
 } as const satisfies OptionSpec;
 
 const CONTROL_PARAMETER_SCHEMA = {
@@ -189,21 +174,18 @@ const CONTROL_PARAMETER_SCHEMA = {
   labelId: 'widgetCommandHeading',
   helpId: 'widgetCommandFieldHint',
   control: 'command-vocabulary',
-  doc: "The command's parameter descriptors, baked in as JSON at author time. Gives the control its range and its refusals.",
 } as const satisfies OptionSpec;
 
 const CONTROL_PARAMETER = {
   kind: 'string',
   labelId: 'widgetLabelParameter',
   helpId: 'widgetHintControlParameter',
-  doc: 'Which parameter of the command this control sets. May be left blank when the command has exactly one parameter of the right type.',
 } as const satisfies OptionSpec;
 
 const MEASUREMENT = {
   kind: 'string',
   labelId: 'widgetLabelMeasurement',
   helpId: 'widgetHintMeasurement',
-  doc: 'Which measurement to display. Defaults to the first the datasource selects.',
 } as const satisfies OptionSpec;
 
 const ALARM_STATE = {
@@ -213,7 +195,6 @@ const ALARM_STATE = {
   helpId: 'widgetStateHint',
   valueLabelIds: { ACTIVE: 'widgetAlarmStateActive', CLEARED: 'widgetAlarmStateCleared' },
   placeholderId: 'widgetPlaceholderAny',
-  doc: 'Show only alarms in this state. Unset shows every state.',
 } as const satisfies OptionSpec;
 
 const ALARM_SEVERITY = {
@@ -223,7 +204,6 @@ const ALARM_SEVERITY = {
   helpId: 'widgetSeverityHint',
   valueLabelIds: { CRITICAL: 'widgetAlarmSeverityCritical', MAJOR: 'widgetAlarmSeverityMajor', MINOR: 'widgetAlarmSeverityMinor', WARNING: 'widgetAlarmSeverityWarning', INDETERMINATE: 'widgetAlarmSeverityIndeterminate' },
   placeholderId: 'widgetPlaceholderAny',
-  doc: 'Show only alarms at this severity. Unset shows every severity.',
 } as const satisfies OptionSpec;
 
 // Stored as the STRING 'true'/'false', not a boolean — alarmSubscription() reads it with
@@ -237,7 +217,6 @@ const ALARM_ACKNOWLEDGED = {
   helpId: 'widgetAcknowledgedHint',
   valueLabelIds: { true: 'widgetAlarmAckAcknowledged', false: 'widgetAlarmAckUnacknowledged' },
   placeholderId: 'widgetPlaceholderAny',
-  doc: "Show only acknowledged ('true') or unacknowledged ('false') alarms. Unset shows both.",
 } as const satisfies OptionSpec;
 
 const SELECTION_TARGET = {
@@ -245,7 +224,6 @@ const SELECTION_TARGET = {
   labelId: 'widgetLabelTargetSlot',
   helpId: 'widgetTargetSlotHint',
   control: 'slot-target',
-  doc: 'Name of the slot this widget re-points when the viewer picks an entity.',
 } as const satisfies OptionSpec;
 
 
@@ -289,7 +267,6 @@ const WINDOW_SECONDS = {
   max: 604800,
   labelId: 'widgetLabelWindowSeconds',
   helpId: 'widgetHintWindowSeconds',
-  doc: 'Seconds of history the widget covers, back from now. Leave unset to follow the board’s time range; set it to pin this widget to a fixed span that the viewer’s range picker does not change. 60 to 604800.',
 } as const satisfies OptionSpec;
 
 // The categorical charts' shared options. Both draw the latest reading of each measurement the
@@ -300,7 +277,6 @@ const CATEGORY_SORT = {
   labelId: 'widgetLabelSort',
   valueLabelIds: { none: 'widgetSortNone', ascending: 'widgetSortAscending', descending: 'widgetSortDescending' },
   placeholderId: 'widgetPlaceholderDefault',
-  doc: 'Order of the categories. Default: as the data source lists them.',
 } as const satisfies OptionSpec;
 
 // A fleet table's per-column and per-column-threshold entries NAME their measurement, because a list
@@ -311,7 +287,6 @@ const FLEET_MEASUREMENT = {
   kind: 'string',
   required: true,
   labelId: 'widgetLabelMeasurement',
-  doc: 'The measurement column this entry applies to.',
 } as const satisfies OptionSpec;
 
 const FLEET_COLUMNS = {
@@ -319,10 +294,9 @@ const FLEET_COLUMNS = {
   maxItems: 24,
   labelId: 'widgetLabelColumns',
   helpId: 'widgetHintColumns',
-  doc: 'Heading, unit and precision per measurement column; a column with none shows its name.',
   item: {
     measurement: FLEET_MEASUREMENT,
-    label: { kind: 'string', labelId: 'widgetLabelColumnHeading', doc: 'Column heading. Defaults to the measurement name.' },
+    label: { kind: 'string', labelId: 'widgetLabelColumnHeading' },
     unit: { ...UNIT },
     precision: { ...PRECISION },
   },
@@ -375,7 +349,6 @@ export const builtinWidgetDescriptors = {
         kind: 'string',
         labelId: 'widgetLabelMeasurement',
         helpId: 'widgetHintMeasurement',
-        doc: 'Which measurement to display. Defaults to the first the datasource selects.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -405,17 +378,14 @@ export const builtinWidgetDescriptors = {
         kind: 'string',
         labelId: 'widgetLabelMeasurement',
         helpId: 'widgetHintMeasurement',
-        doc: 'Which measurement to display. Defaults to the first the datasource selects.',
       },
       min: {
         kind: 'number',
         labelId: 'widgetLabelMin',
-        doc: 'Low end of the gauge scale. Default 0.',
       },
       max: {
         kind: 'number',
         labelId: 'widgetLabelMax',
-        doc: 'High end of the gauge scale. Default 100.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -470,7 +440,6 @@ export const builtinWidgetDescriptors = {
         kind: 'string',
         required: true,
         labelId: 'widgetLabelText',
-        doc: 'The text to show. Rendered as plain text — markup is never interpreted.',
       },
       align: {
         kind: 'enum',
@@ -478,14 +447,12 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelAlign',
         valueLabelIds: { left: 'widgetAlignLeft', center: 'widgetAlignCenter', right: 'widgetAlignRight' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'Horizontal alignment of the text. Default center.',
       },
       fontSize: {
         kind: 'number',
         min: 1,
         labelId: 'widgetLabelFontSize',
         helpId: 'widgetHintFontSize',
-        doc: 'Text size in pixels at the comfortable density; it scales with the board density. Default 16.',
       },
     },
     defaults: { text: 'New label' },
@@ -508,12 +475,10 @@ export const builtinWidgetDescriptors = {
         kind: 'string',
         required: true,
         labelId: 'widgetLabelImageUrl',
-        doc: 'Source URL of the image.',
       },
       alt: {
         kind: 'string',
         labelId: 'widgetLabelAltText',
-        doc: 'Alternative text describing the image for assistive technology.',
       },
       fit: {
         kind: 'enum',
@@ -521,7 +486,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelFit',
         valueLabelIds: { contain: 'widgetFitContain', cover: 'widgetFitCover', fill: 'widgetFitFill' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'How the image fills its box. Default contain.',
       },
     },
     defaults: { title: 'Image' },
@@ -551,16 +515,14 @@ export const builtinWidgetDescriptors = {
         helpId: 'widgetHintAlarmGroupBy',
         valueLabelIds: { none: 'widgetAlarmGroupByNone', deviceType: 'widgetAlarmGroupByDeviceType' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'deviceType: a tab per device type.',
       },
       deviceTypes: {
         kind: 'list',
         maxItems: 24,
         labelId: 'widgetLabelAlarmDeviceTypes',
         helpId: 'widgetHintAlarmDeviceTypes',
-        doc: 'Types to tab, in order; unset tabs all.',
         item: {
-          token: { kind: 'string', labelId: 'widgetLabelAlarmDeviceTypeToken', doc: 'Type token.' },
+          token: { kind: 'string', labelId: 'widgetLabelAlarmDeviceTypeToken' },
         },
       },
       maxRows: {
@@ -569,7 +531,6 @@ export const builtinWidgetDescriptors = {
         min: 1,
         labelId: 'widgetLabelMaxRows',
         helpId: 'widgetMaxRowsAlarmHint',
-        doc: 'Alarms loaded into the table. Default 50.',
       },
       precision: PRECISION,
       flashOnChange: FLASH_ON_CHANGE,
@@ -622,14 +583,12 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetCommandHeading',
         helpId: 'widgetCommandFieldHint',
         control: 'command-vocabulary',
-        doc: 'Command key issued to the target device. Without it the widget cannot send.',
       },
       commandLabel: {
         kind: 'string',
         labelId: 'widgetCommandHeading',
         helpId: 'widgetCommandFieldHint',
         control: 'command-vocabulary',
-        doc: 'Text on the send button. Defaults to the command key.',
       },
       parameterSchema: {
         kind: 'string',
@@ -637,7 +596,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetCommandHeading',
         helpId: 'widgetCommandFieldHint',
         control: 'command-vocabulary',
-        doc: "The command's parameter descriptors, baked in as JSON at author time. Drives the typed form.",
       },
       maxRows: {
         kind: 'number',
@@ -645,7 +603,6 @@ export const builtinWidgetDescriptors = {
         min: 1,
         labelId: 'widgetLabelMaxRows',
         helpId: 'widgetMaxRowsCommandHint',
-        doc: 'Recent commands shown in the history. Default 20.',
       },
     },
     defaults: { title: 'Command button' },
@@ -695,14 +652,12 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelTileUrl',
         helpId: 'widgetTileUrlHint',
         control: 'basemap',
-        doc: "Raster tile URL template, e.g. https://tiles.example.com/{z}/{x}/{y}.png. Leave empty to inherit the tenant's basemap; setting one overrides it for this board only.",
       },
       attribution: {
         kind: 'string',
         labelId: 'widgetLabelAttribution',
         helpId: 'widgetAttributionHint',
         control: 'basemap',
-        doc: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
       },
       // Optional and additive: unset, a marker is only a mark. Set, clicking a marker re-points
       // that slot at the device, exactly as a fleet-table row does.
@@ -737,7 +692,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelLinearStyle',
         valueLabelIds: { bar: 'widgetLinearStyleBar', thermometer: 'widgetLinearStyleThermometer' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'A plain bar (default) or a thermometer: a vertical tube with a bulb. A thermometer is always vertical.',
       },
       orientation: {
         kind: 'enum',
@@ -745,7 +699,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelOrientation',
         valueLabelIds: { horizontal: 'widgetOrientationHorizontal', vertical: 'widgetOrientationVertical' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'Direction of a bar: horizontal (default) or vertical. Ignored by a thermometer.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -780,7 +733,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelReadout',
         valueLabelIds: { value: 'widgetReadoutValue', percent: 'widgetReadoutPercent' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'What the readout shows: the value with its unit (default) or the percent of the scale.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -811,13 +763,11 @@ export const builtinWidgetDescriptors = {
         kind: 'number',
         labelId: 'widgetLabelMin',
         helpId: 'widgetHintBatteryRange',
-        doc: 'Value of an empty battery. Default 0 (the scale is percent unless you set min and max).',
       },
       max: {
         kind: 'number',
         labelId: 'widgetLabelMax',
         helpId: 'widgetHintBatteryRange',
-        doc: 'Value of a full battery. Default 100 (the scale is percent unless you set min and max).',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -848,7 +798,6 @@ export const builtinWidgetDescriptors = {
         kind: 'number',
         labelId: 'widgetLabelOnAt',
         helpId: 'widgetHintOnAt',
-        doc: 'For an on/off signal: the lamp is lit at or above this value and dark below it. Unset keeps the lamp lit while a value is present, coloured by its threshold band.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -882,7 +831,6 @@ export const builtinWidgetDescriptors = {
         maxItems: 8,
         required: true,
         helpId: 'widgetHintSignalThresholds',
-        doc: 'The steps of the signal, lowest first: one bar per entry, lit once the value reaches it and coloured by its level. At least two, at most eight.',
       },
       staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
@@ -911,11 +859,9 @@ export const builtinWidgetDescriptors = {
       measurement: MEASUREMENT,
       precision: {
         ...PRECISION,
-        doc: 'Decimal places of the heading. Default 0 (whole degrees). The heading is rounded first, then folded onto 0 to 360, so it never reads 360.',
       },
       thresholds: {
         ...THRESHOLDS,
-        doc: 'Severity bands over the heading in degrees (0 to 360, after folding). Each entry starts a band at its value that runs to the next entry; below the first, and in a normal band, the needle keeps its own colour.',
       },
       staleAfterSeconds: STALE_AFTER_SECONDS,
       window: WINDOW,
@@ -946,7 +892,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelReadout',
         valueLabelIds: { percent: 'widgetReadoutPercent', value: 'widgetReadoutValue' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'What the middle of the ring shows: the percent of the scale (default) or the value with its unit.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -981,20 +926,17 @@ export const builtinWidgetDescriptors = {
         kind: 'number',
         labelId: 'widgetLabelMin',
         helpId: 'widgetHintSliderRange',
-        doc: "Lowest value, used only when the command's parameter declares no minimum.",
       },
       max: {
         kind: 'number',
         labelId: 'widgetLabelMax',
         helpId: 'widgetHintSliderRange',
-        doc: "Highest value, used only when the command's parameter declares no maximum.",
       },
       step: {
         kind: 'number',
         min: 0,
         labelId: 'widgetLabelStep',
         helpId: 'widgetHintSliderStep',
-        doc: 'Distance between values. Defaults to 1 for a whole-number parameter, else a hundredth of the range.',
       },
     },
     constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
@@ -1049,7 +991,6 @@ export const builtinWidgetDescriptors = {
           last: 'widgetStatLast',
         },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'Which figure to show. Default average.',
       },
       unit: UNIT,
       precision: PRECISION,
@@ -1058,7 +999,6 @@ export const builtinWidgetDescriptors = {
         kind: 'boolean',
         labelId: 'widgetLabelSparkline',
         helpId: 'widgetHintSparkline',
-        doc: 'Draw the measurement’s trend over the span under the figure. Default off.',
       },
       windowSeconds: WINDOW_SECONDS,
     },
@@ -1086,7 +1026,6 @@ export const builtinWidgetDescriptors = {
         helpId: 'widgetHintGroupBy',
         valueLabelIds: { measurement: 'widgetGroupByMeasurement', device: 'widgetGroupByDevice' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'One bar per measurement (the default), or per device of the group for the measurement set below.',
       },
       measurement: MEASUREMENT,
       unit: UNIT,
@@ -1136,22 +1075,19 @@ export const builtinWidgetDescriptors = {
         min: 1,
         labelId: 'widgetLabelAgeLag',
         helpId: 'widgetHintAgeLag',
-        doc: "Show a reading's age under it only when the reading is at least this many seconds older than the newest reading in the table (or stale). Unset shows every reading's age.",
       },
       sortBy: {
         kind: 'string',
         labelId: 'widgetLabelSortBy',
         helpId: 'widgetHintSortBy',
-        doc: 'The measurement the table is ordered by. Blank orders by device name.',
       },
-      sortDescending: { kind: 'boolean', labelId: 'widgetLabelSortDescending', doc: 'Largest first.' },
+      sortDescending: { kind: 'boolean', labelId: 'widgetLabelSortDescending' },
       pageSize: {
         kind: 'number',
         integer: true,
         min: 5,
         max: 100,
         labelId: 'widgetLabelPageSize',
-        doc: 'Devices per page. Default 20.',
       },
       selectionTarget: SELECTION_TARGET,
       windowSeconds: WINDOW_SECONDS,
@@ -1184,11 +1120,9 @@ export const builtinWidgetDescriptors = {
         helpId: 'widgetHintFleetShow',
         valueLabelIds: { attention: 'widgetFleetShowAttention', devices: 'widgetFleetShowDevices' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'What to count: devices in an abnormal band of the measurement (default), or all devices.',
       },
       measurement: {
         ...MEASUREMENT,
-        doc: 'The measurement whose bands flag a device. Defaults to the first the datasource selects.',
       },
       thresholds: THRESHOLDS,
       staleAfterSeconds: STALE_AFTER_SECONDS,

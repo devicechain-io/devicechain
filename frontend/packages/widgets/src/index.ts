@@ -42,7 +42,7 @@ export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 
 // The built-ins as registrations (the same descriptor + component pairing a third-party
 // package supplies), and the factory for a sealed registry holding exactly them.
-export { builtinWidgetCatalog, builtinWidgetDescriptors } from './builtin-descriptors';
+export { builtinWidgetCatalog, builtinWidgetDescriptors } from './documented-descriptors';
 export { builtinWidgetDefinitions, createBuiltinWidgetRegistry } from './builtin-registry';
 export { preloadWidgets } from './preload';
 

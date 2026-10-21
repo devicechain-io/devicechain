@@ -10,7 +10,7 @@ import { randomBytes } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { check, checkShape, initialFiles, lazyBoundaries, measure, type Budget } from '../scripts/check-bundle-size.mjs';
+import { absentBoundaries, check, checkAbsent, checkShape, initialFiles, lazyBoundaries, measure, type Budget } from '../scripts/check-bundle-size.mjs';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -113,6 +113,48 @@ describe('lazy boundary check', () => {
     for (const marker of markers) {
       expect(marker.length).toBeGreaterThan(5);
       expect(Object.values(en).some((v) => v.includes(marker)), `${marker} is English chrome`).toBe(false);
+    }
+  });
+});
+
+describe('absent-from-the-build check', () => {
+  function absentDist(files: { main?: string; widget?: string }): { dist: string; owner: string } {
+    const dist = mkdtempSync(path.join(tmpdir(), 'absent-gate-'));
+    dirs.push(dist);
+    mkdirSync(path.join(dist, 'chunks'));
+    writeFileSync(path.join(dist, 'main.js'), files.main ?? 'export const a=1;');
+    writeFileSync(path.join(dist, 'chunks/widget-1.js'), files.widget ?? 'export const w=1;');
+    // The owning package lives OUTSIDE dist, as the real one does.
+    const home = mkdtempSync(path.join(tmpdir(), 'absent-owner-'));
+    dirs.push(home);
+    const owner = path.join(home, 'owner.src.js');
+    writeFileSync(owner, 'const docs = "MARKER";');
+    return { dist, owner };
+  }
+  const boundary = (owner: string) => [{ what: 'the docs', reach: owner, markers: ['MARKER'] }];
+
+  it('passes when no file of the build holds the marker', () => {
+    const { dist, owner } = absentDist({});
+    expect(checkAbsent(dist, boundary(owner))).toEqual([]);
+  });
+
+  it('fails when the entry or a lazy chunk holds it -- initial or not', () => {
+    const a = absentDist({ main: '"MARKER"' });
+    expect(checkAbsent(a.dist, boundary(a.owner))).toHaveLength(1);
+    const b = absentDist({ widget: '"MARKER"' });
+    expect(checkAbsent(b.dist, boundary(b.owner))).toHaveLength(1);
+  });
+
+  it('fails when the owning package no longer holds the marker (the reach control)', () => {
+    const { dist, owner } = absentDist({});
+    writeFileSync(owner, 'const docs = "reworded";');
+    expect(checkAbsent(dist, boundary(owner))).toHaveLength(1);
+  });
+
+  it('names markers the widgets package really holds', () => {
+    for (const { reach, markers } of absentBoundaries()) {
+      const owner = readFileSync(reach, 'utf8');
+      for (const marker of markers) expect(owner.includes(marker), marker).toBe(true);
     }
   });
 });
