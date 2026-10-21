@@ -704,9 +704,12 @@ export const builtinWidgetDescriptors = {
         control: 'basemap',
         doc: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
       },
+      // Optional and additive: unset, a marker is only a mark. Set, clicking a marker re-points
+      // that slot at the device, exactly as a fleet-table row does.
+      selectionTarget: SELECTION_TARGET,
     },
     defaults: { title: 'Map' },
-    interactions: {},
+    interactions: { selection: true },
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },
   }),
 
@@ -1051,6 +1054,12 @@ export const builtinWidgetDescriptors = {
       unit: UNIT,
       precision: PRECISION,
       thresholds: THRESHOLDS,
+      sparkline: {
+        kind: 'boolean',
+        labelId: 'widgetLabelSparkline',
+        helpId: 'widgetHintSparkline',
+        doc: 'Draw the measurement’s trend over the span under the figure. Default off.',
+      },
       windowSeconds: WINDOW_SECONDS,
     },
     defaults: { title: 'Stat card' },
@@ -1152,6 +1161,43 @@ export const builtinWidgetDescriptors = {
     freshness: true,
     interactions: { selection: true },
     layout: { defaultSpan: { cols: 12, rows: 6 }, minSpan: { cols: 6, rows: 3 } },
+  }),
+
+  // Counts a fleet rather than listing it: how many of its devices are in an abnormal band of one
+  // measurement ("3 of 21"), or how many devices it has. A new widget rather than a mode of the
+  // fleet table, which is a grid; this is the figure above one.
+  'fleet-count': defineWidgetDescriptor({
+    id: 'fleet-count',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Fleet count', category: 'Telemetry', titleId: 'widgetTypeFleetCount', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { windowSeconds: { option: 'windowSeconds' }, members: { const: true } },
+    options: {
+      title: TITLE,
+      show: {
+        kind: 'enum',
+        values: ['attention', 'devices'],
+        labelId: 'widgetLabelFleetShow',
+        helpId: 'widgetHintFleetShow',
+        valueLabelIds: { attention: 'widgetFleetShowAttention', devices: 'widgetFleetShowDevices' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'What to count: devices in an abnormal band of the measurement (default), or all devices.',
+      },
+      measurement: {
+        ...MEASUREMENT,
+        doc: 'The measurement whose bands flag a device. Defaults to the first the datasource selects.',
+      },
+      thresholds: THRESHOLDS,
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'Fleet count' },
+    freshness: true,
+    interactions: {},
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 6, rows: 4 } },
   }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 

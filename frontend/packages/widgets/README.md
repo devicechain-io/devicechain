@@ -65,7 +65,7 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 
 | channel | widgets |
 | --- | --- |
-| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table` |
+| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count` |
 | aggregate | `stat-card` |
 | none (static) | `label`, `image` |
 | alarm | `alarm-table`, `alarm-count` |
@@ -73,7 +73,7 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 | selection | `entity-selector` |
 | location | `map` |
 
-`fleet-table`, and `bar-chart` in its one-bar-per-device mode, read a device
+`fleet-table`, `fleet-count`, and `bar-chart` in its one-bar-per-device mode, read a device
 group member by member. The other measurement widgets, and `stat-card`, show one
 device and refuse a group. `stat-card` shows one figure (average, minimum, maximum, sum, count or
 latest) over the board's time range.

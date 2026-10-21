@@ -141,12 +141,24 @@ export interface AggregateSpan {
   spanSeconds: number;
 }
 
+// One bucket of a measurement's trend: the exact aggregates of the readings in that bucket, stamped
+// at the bucket's start. A bucket that holds no reading is absent from a series, not zero.
+export interface AggregateTrendPoint extends MeasurementAggregate {
+  bucketStart: string;
+}
+
 // Where an aggregate read stands. `unavailable` is a settled, explained state -- the source cannot
 // compute aggregates (`unsupported`), or the read failed or came back unusable (`failed`) -- and
 // the widget says so instead of drawing a number it could not compute.
 export type AggregateResult =
   | { status: 'loading' }
-  | ({ status: 'ready'; byName: Record<string, MeasurementAggregate> } & AggregateSpan)
+  | ({
+      status: 'ready';
+      byName: Record<string, MeasurementAggregate>;
+      // Per measurement, the buckets the aggregates were folded from, oldest first. Present only
+      // when the widget asked for a trend (the stat card's `sparkline`); absent otherwise.
+      series?: Record<string, AggregateTrendPoint[]>;
+    } & AggregateSpan)
   | { status: 'unavailable'; reason: 'unsupported' | 'failed'; message?: string };
 
 // The state an aggregate widget renders from: the aggregates over its span, and the newest LIVE

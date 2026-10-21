@@ -8,8 +8,8 @@
 // cell-snapped canvas + the widget config panel. Editing is gated on dashboard:write
 // (the server enforces it too — this just hides a button the caller can't use).
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ClipboardPaste, Download, FlaskConical, History, Redo2, Trash2, Undo2 } from 'lucide-react';
 import { mayWrite } from '@/lib/scope';
@@ -56,7 +56,6 @@ import {
   type ConcreteSelector,
   type DashboardDefinition,
   type DeviceResolver,
-  type SelectionTarget,
   type SlotBinding,
   type SyntheticGenerator,
   type UnboundPaste,
@@ -64,8 +63,11 @@ import {
   type WidgetInstance,
 } from '@devicechain/dashboards';
 import {
+  BoundDevicesNotice,
   DashboardRenderer,
   TimeRangeBar,
+  describeBoundDevicesProblems,
+  useBoundDevices,
   stripUnknownOptions,
   useBoardTimeRange,
   useDashboardHub,
@@ -413,10 +415,27 @@ export function DashboardWorkspace({
   // The view-driven selection overlay (ADR-039 selection amendment): an alarm-originator
   // drill (and, in PR2b, a context-selector) accumulates slot→binding picks here.
   // Cleared on mode switch so the author sees their own bindings, not a stale drill.
-  const [selection, setSelection] = useState<Record<string, SlotBinding>>({});
-  const select = useCallback((t: SelectionTarget) => {
-    setSelection((prev) => ({ ...prev, [t.slot]: t.binding }));
-  }, []);
+  //
+  // It also follows the address: a `?bind.<slot>=<device>` link opens the board with that device
+  // bound (checked against the caller's own scope first), and a pick rewrites the address by
+  // REPLACING the history entry. See useBoundDevices for the reasoning.
+  const location = useLocation();
+  const address = useMemo(
+    () => ({
+      search: location.search,
+      replaceSearch: (search: string) => navigate({ search: search ? `?${search}` : '' }, { replace: true }),
+    }),
+    [location.search, navigate],
+  );
+  const {
+    selection,
+    select,
+    reset: resetSelection,
+    phase: linkPhase,
+    problems: linkProblems,
+    dismiss: dismissLink,
+    retry: retryLink,
+  } = useBoundDevices({ definition: working, resolver, address, enabled: mode === 'view' });
   const [saved, setSaved] = useState<DashboardDefinition>(loaded);
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'clean' });
   // Selection is owned here (not in the canvas) so the config panel and the canvas
@@ -666,7 +685,7 @@ export function DashboardWorkspace({
 
   const toggleMode = () => {
     setSelectedId(null);
-    setSelection({}); // drop any drill selection so the other mode starts from the defaults
+    resetSelection(); // drop any drill selection so the other mode starts from the defaults
     setMode(mode === 'edit' ? 'view' : 'edit');
   };
 
@@ -1122,6 +1141,30 @@ export function DashboardWorkspace({
         // overflow:auto is the single scroll region — no bounded/fixed height that
         // double-scrolls against an outer container.
         <div className="h-full min-h-0 p-4">
+          {/* A deep link that cannot be honoured replaces the board: showing the board's default
+              device under a link that names another would be showing the wrong device. */}
+          {linkPhase === 'checking' ? (
+            <p className="p-4 text-sm text-muted-foreground" role="status">
+              {t('linkChecking')}
+            </p>
+          ) : linkPhase === 'refused' && linkProblems ? (
+            <BoundDevicesNotice
+              title={t('linkBlockedTitle')}
+              lines={describeBoundDevicesProblems(linkProblems, {
+                unknownSlot: (slot) => t('linkUnknownSlot', { slot }),
+                notADeviceSlot: (slot) => t('linkNotDeviceSlot', { slot }),
+                duplicateSlot: (slot) => t('linkDuplicateSlot', { slot }),
+                derivedSlot: (slot) => t('linkDerivedSlot', { slot }),
+                invalidToken: (slot, token) => t('linkInvalidToken', { slot, token }),
+                missing: (slot, token) => t('linkMissing', { slot, token }),
+                failed: (slot, token) => t('linkFailed', { slot, token }),
+              })}
+              dismissLabel={t('linkOpenWithout')}
+              onDismiss={dismissLink}
+              retryLabel={linkProblems.failed.length > 0 ? t('linkRetry') : undefined}
+              onRetry={retryLink}
+            />
+          ) : (
           <DashboardRenderer
             definition={working}
             hub={dataHub}
@@ -1138,6 +1181,7 @@ export function DashboardWorkspace({
             // entities to offer, and a pick would poison the live overlay.
             candidates={preview ? undefined : candidates}
           />
+          )}
         </div>
       )}
     </PageShell>
