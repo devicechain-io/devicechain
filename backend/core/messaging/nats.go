@@ -163,8 +163,16 @@ type NatsManager struct {
 	Microservice *core.Microservice
 
 	oncreate func(*NatsManager) error
-	nc       *nats.Conn
-	js       nats.JetStreamContext
+	// runCtx is the context ExecuteStart was handed, kept until ExecuteStop so the
+	// stream, bucket and consumer provisioning that oncreate (and any later lazy
+	// constructor) reaches can be abandoned by the caller's cancellation instead of
+	// riding a context nobody can cancel. See opContext.
+	runMu  sync.Mutex
+	runCtx context.Context
+	runEnd context.CancelFunc
+
+	nc *nats.Conn
+	js nats.JetStreamContext
 	// connectWait overrides connectWaitTimeout when positive. Only tests set it, so
 	// that a broker that never answers can be shown to fail initialization without
 	// waiting out the production minute.
@@ -755,6 +763,20 @@ func applyStreamReplicas(cfg *nats.StreamConfig, desired int) (changed, refusedD
 	return true, false
 }
 
+// opContext is the context broker provisioning runs under: the one ExecuteStart was
+// handed, cancelled by ExecuteStop too. oncreate takes only the manager, so this is how
+// the caller's context reaches NewWriter/NewReader/NewReplayReader without a signature
+// change at every service. A manager that was never started (a test driving a
+// constructor directly) has no such context and gets context.Background().
+func (nmgr *NatsManager) opContext() context.Context {
+	nmgr.runMu.Lock()
+	defer nmgr.runMu.Unlock()
+	if nmgr.runCtx != nil {
+		return nmgr.runCtx
+	}
+	return context.Background()
+}
+
 // ensureStream creates the per-suffix stream if it does not already exist, and
 // reconciles its size ceilings and subjects if it does. The stream captures every
 // tenant's subjects for the suffix, so a single stream backs both the scoped
@@ -783,25 +805,14 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 	// does not yet exist (ErrStreamNotFound) is the normal first-run case and is
 	// handled by creating it, not retried.
 	//
-	// ⚠️ context.Background() HERE IS A GAP, not a decision, and it is recorded rather
-	// than papered over. RetryInfraConnect's one advertised property is that it returns
-	// as soon as its context is cancelled; passing a context that is never cancelled
-	// opts out of it, so a bring-up against a broker that is not answering spends the
-	// full retry budget per stream with nothing able to shorten it.
-	//
-	// What bounds the damage today is that this runs only during ExecuteStart, and a
-	// signal arriving before startup completes takes the phase gate in
-	// Microservice.shutDown that reports "nothing to tear down" and lets the process
-	// exit — the startup goroutine goes with it. So this does not hold a pod past its
-	// grace period; it burns time in a process that is leaving anyway.
-	//
-	// Closing it properly means giving the callers a context to pass: NewWriter,
-	// NewReader and NewReplayReader are all reached from the oncreate callback, which
-	// takes only the manager. That is a signature change across every service and is
-	// deliberately not folded in here.
+	// The retry runs under opContext, so cancelling the context ExecuteStart was handed
+	// (shutdown, or a start the caller gave up on) ends it at once rather than after the
+	// full retry budget, and the JetStream calls inside carry the same context so one
+	// stalled in flight is abandoned too.
+	ctx := nmgr.opContext()
 	var refused error
-	err := core.RetryInfraConnect(context.Background(), "nats jetstream", func(context.Context) error {
-		info, err := nmgr.js.StreamInfo(name)
+	err := core.RetryInfraConnect(ctx, "nats jetstream", func(ctx context.Context) error {
+		info, err := nmgr.js.StreamInfo(name, nats.Context(ctx))
 		if err == nil {
 			// The stream exists — an older build (or an earlier ceiling) may have left
 			// it unbounded, so reconcile in place. UpdateStream touches the byte/msg
@@ -864,7 +875,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 						"newest events with nothing counting them")
 			}
 			if boundsChanged || subjectsChanged || dupChanged || discardChanged {
-				if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
+				if _, err := nmgr.js.UpdateStream(&cfg, nats.Context(ctx)); err != nil {
 					return err
 				}
 				log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
@@ -925,7 +936,7 @@ func (nmgr *NatsManager) ensureStream(suffix string) (string, error) {
 			// starts at 1: its sequence is the basis of a dedup id.
 			cfg.FirstSeq = captureFirstSeq()
 		}
-		if _, err := nmgr.js.AddStream(cfg); err != nil {
+		if _, err := nmgr.js.AddStream(cfg, nats.Context(ctx)); err != nil {
 			return err
 		}
 		log.Info().Str("stream", name).Int64("maxBytes", bounds.maxBytes).
@@ -3278,6 +3289,16 @@ func (nmgr *NatsManager) Start(ctx context.Context) error {
 // says a long-running loop started by a lifecycle transition should do, and what the
 // signalling channel this replaced could not do.
 func (nmgr *NatsManager) ExecuteStart(ctx context.Context) error {
+	// Hand the caller's context to the provisioning oncreate triggers (see opContext). It
+	// stays set after oncreate returns, for constructors called later, and ExecuteStop
+	// cancels it.
+	runCtx, runEnd := context.WithCancel(ctx)
+	nmgr.runMu.Lock()
+	if nmgr.runEnd != nil {
+		nmgr.runEnd()
+	}
+	nmgr.runCtx, nmgr.runEnd = runCtx, runEnd
+	nmgr.runMu.Unlock()
 	if err := nmgr.oncreate(nmgr); err != nil {
 		return err
 	}
@@ -3330,6 +3351,11 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 //     the sampler only reads, and the reader unsubscribes and the drain that follow
 //     are what a terminating pod actually owes its peers.
 func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
+	nmgr.runMu.Lock()
+	if nmgr.runEnd != nil {
+		nmgr.runEnd()
+	}
+	nmgr.runMu.Unlock()
 	if nmgr.samplerCancel != nil {
 		nmgr.samplerCancel()
 		joined := make(chan struct{})
