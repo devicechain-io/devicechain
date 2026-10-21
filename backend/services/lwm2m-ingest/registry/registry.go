@@ -28,6 +28,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 
@@ -112,6 +114,9 @@ type Metrics struct {
 	BadRequests          prometheus.Counter // malformed /rd request (handler layer)
 	DisabledRefused      prometheus.Counter // registrations refused (4.03) because an operator disabled the device
 	ObservationOverflow  prometheus.Counter // telemetry instances a registration declared beyond the per-registration observe cap (L2b)
+	// TenantSweep files each RunTenantSweep pass. Nil-safe: a registry built without it runs
+	// the same sweep and records nothing.
+	TenantSweep *core.PeriodicTaskMetrics
 }
 
 // entry is one live registration. It is mutated only under Registry.mu.
@@ -773,7 +778,11 @@ func (r *Registry) RunTenantSweep(ctx context.Context, every time.Duration) {
 			if r.isStopped() {
 				return
 			}
+			started := time.Now()
 			r.SweepDeletedTenants()
+			// The sweep reports no error (its tenant lookup is a plain bool), so the outcomes are
+			// complete, or cancelled when shutdown caught it.
+			r.metrics.TenantSweep.RecordPass(ctx, nil, started, "tenant-sweep")
 		}
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -143,4 +145,53 @@ func TestAnExpiryForADeletedTenantEndsTheSessionWithoutWritingPresence(t *testin
 
 	r.onExpiry(liveReg, 0)
 	assert.Len(t, em.disconnects(), 1, "a live tenant's expiry still writes its DISCONNECTED")
+}
+
+// TestTheTenantSweepFilesItsPasses pins the loop's call site: the pass counter moves only
+// when the loop actually runs the sweep body, so a loop that records but no longer sweeps
+// (or sweeps but no longer records) fails here.
+func TestTheTenantSweepFilesItsPasses(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	ms := &core.Microservice{FunctionalArea: "lwm2m-ingest"}
+	ms.UseMetricsRegistry(reg)
+
+	res, em := okResolver(), &fakeEmitter{}
+	clk := &testClock{t: time.Unix(1_700_000_000, 0)}
+	r := newTestRegistry(res, em, clk, func(o *Options) { o.TenantDeleted = func(string) bool { return true } })
+	r.metrics = Metrics{TenantSweep: ms.NewPeriodicTaskMetrics("tenant_sweep")}
+	result, _, _, _ := r.Register(context.Background(), "dev-1", testBinding, 86400)
+	require.Equal(t, RegisterOK, result)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { r.RunTenantSweep(ctx, 5*time.Millisecond); close(done) }()
+
+	passes := func(outcome string) float64 {
+		families, err := reg.Gather()
+		require.NoError(t, err)
+		for _, f := range families {
+			if f.GetName() != "devicechain_lwm2mingest_tenant_sweep_passes_total" {
+				continue
+			}
+			for _, m := range f.GetMetric() {
+				for _, l := range m.GetLabel() {
+					if l.GetName() == "outcome" && l.GetValue() == outcome {
+						return m.GetCounter().GetValue()
+					}
+				}
+			}
+		}
+		return 0
+	}
+	require.Eventually(t, func() bool { return passes(core.PassComplete) >= 1 }, 2*time.Second, 5*time.Millisecond)
+	_, ok := r.DeviceToken("dev-1")
+	assert.False(t, ok, "the pass that was filed must be one that swept")
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunTenantSweep did not return after its context was cancelled")
+	}
+	assert.Zero(t, passes(core.PassFailed), "a stop is never a failed pass")
 }

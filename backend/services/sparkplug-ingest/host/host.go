@@ -191,6 +191,11 @@ type Metrics struct {
 	// answering a rebirth, by the same trigger label. In a healthy fleet it is near zero; a
 	// standing periodic rate means death certificates are being lost.
 	PresenceProbeDisconnects *prometheus.CounterVec
+	// PresenceProbePass files each periodic-probe slot on the same pass series every other
+	// maintenance pass uses (duration, outcome, last success). It is NOT presence_probes_total:
+	// that counts verdicts, and a slot that could not read the projection reached none, which
+	// is exactly the case this series exists to show as a failure.
+	PresenceProbePass *core.PeriodicTaskMetrics
 }
 
 // Probe trigger labels for Metrics.PresenceProbes and Metrics.PresenceProbeDisconnects.
@@ -875,7 +880,10 @@ func (c *Client) presenceProbeLoop(ctx context.Context) {
 			log.Debug().Str("tenant", c.tenant).Msg("Deferring a periodic presence probe slot: another probe is still in its window.")
 			continue
 		}
-		c.probeTick(ctx, round)
+		started := time.Now()
+		err := c.probeTick(ctx, round)
+		// ctx is the SESSION's: a slot cut short because the session ended is cancelled, not failed.
+		c.metrics.PresenceProbePass.RecordPass(ctx, err, started, "presence-probe")
 	}
 }
 
@@ -925,11 +933,15 @@ func slotOf(key nodeKey, slots int) int {
 // mid-round waits for the next round. A failed read consumes nothing — the round retries
 // on the next tick — and counts nothing; every slot that runs counts as a verdict, even one
 // with nothing to ask.
-func (c *Client) probeTick(ctx context.Context, r *probeRound) {
+//
+// It returns an error only when the slot could not read the projection, which is the one way
+// a slot fails to do its work; the caller files it as a failed pass.
+func (c *Client) probeTick(ctx context.Context, r *probeRound) error {
 	if r.slot == 0 {
 		asserted, read := c.readAssertedAndFloor(ctx)
 		if !read {
-			return // decided nothing, so counts nothing: a flat series is the right alarm
+			// decided nothing, so counts nothing: a flat series is the right alarm
+			return errors.New("could not read the asserted-active set from device-state")
 		}
 		r.asserted = asserted
 	}
@@ -948,9 +960,10 @@ func (c *Client) probeTick(ctx context.Context, r *probeRound) {
 		if c.metrics.PresenceProbes != nil {
 			c.metrics.PresenceProbes.WithLabelValues(ProbeTriggerPeriodic).Inc()
 		}
-		return
+		return nil
 	}
 	c.reconcileProbe(ctx, silent, now, ProbeTriggerPeriodic)
+	return nil
 }
 
 // silentDevices returns the devices among asserted that have NOT produced traffic on this

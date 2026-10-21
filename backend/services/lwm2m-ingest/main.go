@@ -352,6 +352,7 @@ func buildMetrics() {
 			"Malformed /rd requests (e.g. a registration-item request with no location)."),
 		DisabledRefused: Microservice.NewCounter("registrations_disabled_refused_total",
 			"LwM2M /rd registrations refused (4.03) because an operator has disabled the device."),
+		TenantSweep: Microservice.NewPeriodicTaskMetrics("tenant_sweep"),
 		ObservationOverflow: Microservice.NewCounter("observation_overflow_total",
 			"Telemetry object instances a registration declared beyond the per-registration observe cap (dropped, not observed)."),
 	}
