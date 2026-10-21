@@ -168,7 +168,8 @@ func (api *Api) AlarmCountsByDeviceType(ctx context.Context, criteria AlarmCount
 	var rows []grouped
 	q := api.RDB.DB(ctx).Model(&Alarm{}).
 		Select("d.device_type_id AS device_type_id, alarms.severity AS severity, COUNT(*) AS count").
-		Joins("JOIN (?) AS d ON d.id = alarms.originator_id", api.alarmDevices(ctx).Select("devices.id", "devices.device_type_id")).
+		Joins("JOIN (?) AS d ON d.id = alarms.originator_id AND d.tenant_id = alarms.tenant_id",
+			api.alarmDevices(ctx).Select("devices.id", "devices.device_type_id", "devices.tenant_id")).
 		Where("alarms.originator_type = ?", string(entity.TypeDevice))
 	if err := filter(q).Group("d.device_type_id, alarms.severity").
 		Order("d.device_type_id, alarms.severity").Scan(&rows).Error; err != nil {
