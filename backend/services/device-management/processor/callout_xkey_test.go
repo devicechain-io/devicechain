@@ -6,6 +6,7 @@ package processor
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/nats-io/jwt/v2"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	nats "github.com/nats-io/nats.go"
+	"github.com/nats-io/nkeys"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -38,6 +40,7 @@ type xkeyHarness struct {
 	srv       *natsserver.Server
 	mqttPort  int
 	responder *CalloutResponder
+	connect   func(...nats.Option) *nats.Conn
 	seen      func() [][]byte
 }
 
@@ -51,8 +54,8 @@ func startXKeyHarness(t *testing.T, creds natsauth.Credentials, brokerEncrypts, 
 		xkeyPublic = creds.XKeyPublic
 	}
 	srv, mqttPort := startCalloutServerEncrypted(t, creds, 5*time.Second, xkeyPublic)
-	connect := func() *nats.Conn {
-		nc, err := nats.Connect(srv.ClientURL(), nats.UserInfo(natsauth.ServiceUser, creds.ServicePassword))
+	connect := func(extra ...nats.Option) *nats.Conn {
+		nc, err := nats.Connect(srv.ClientURL(), append([]nats.Option{nats.UserInfo(natsauth.ServiceUser, creds.ServicePassword)}, extra...)...)
 		if err != nil {
 			t.Fatalf("service connect: %v", err)
 		}
@@ -99,7 +102,7 @@ func startXKeyHarness(t *testing.T, creds natsauth.Credentials, brokerEncrypts, 
 		t.Fatalf("start responder: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Stop() })
-	return &xkeyHarness{srv: srv, mqttPort: mqttPort, responder: r, seen: func() [][]byte {
+	return &xkeyHarness{srv: srv, mqttPort: mqttPort, responder: r, connect: connect, seen: func() [][]byte {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([][]byte(nil), payloads...)
@@ -217,5 +220,77 @@ func TestTheResponderRefusesASeedThatIsNotTheBrokersKey(t *testing.T) {
 	}
 	if _, err := r.WithRequestEncryption(creds.XKeySeed, creds.XKeyPublic); err != nil {
 		t.Errorf("the matching seed was refused: %v", err)
+	}
+}
+
+// 🔴 WHY ANSWERING PLAINTEXT IS NOT A DOWNGRADE PATH, PINNED. The responder answers an unencrypted
+// request even when it holds the xkey, so the rolling upgrade never meets a responder that cannot
+// read the broker. Once the broker encrypts it never sends one, so a plaintext request could only
+// be FORGED by a client publishing on the callout subject, and every platform service holds a login
+// in the callout account. nats-server denies that publish to every client authenticated into the
+// callout account; this test holds the upgrade's safety to that, so a server bump that drops the
+// deny fails here instead of opening a password oracle and an issuer-signed grant to every pod.
+//
+// The forged request is a well-formed authorization request, self-signed by a made-up server. The
+// controls: the same connection publishes elsewhere without a violation (so the refusal is about
+// the subject, not the login), and TestAResponderWithTheSeedStillServesABrokerThatDoesNotEncryptYet
+// shows the responder WOULD answer a plaintext request that reached it.
+func TestNoClientInTheCalloutAccountCanPublishARequest(t *testing.T) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := startXKeyHarness(t, creds, true, true, nil)
+
+	violations := make(chan error, 8)
+	forger := h.connect(nats.ErrorHandler(func(_ *nats.Conn, _ *nats.Subscription, err error) {
+		violations <- err
+	}))
+
+	serverKP, err := nkeys.CreateServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverPub, _ := serverKP.PublicKey()
+	userKP, err := nkeys.CreateUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	userPub, _ := userKP.PublicKey()
+	claims := jwt.NewAuthorizationRequestClaims(userPub)
+	claims.Server = jwt.ServerID{Name: "forged", ID: serverPub}
+	claims.UserNkey = userPub
+	claims.ConnectOptions.Username = xkeyUsername
+	claims.ConnectOptions.Password = xkeyPassword
+	forged, err := claims.Encode(serverKP)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The control: an ordinary subject draws no violation on this connection.
+	if err := forger.Publish("control.subject", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := forger.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-violations:
+		t.Fatalf("control: the service login is refused an ordinary publish (%v), so a refusal below proves nothing", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := forger.Request(AuthCalloutSubject, []byte(forged), time.Second); err == nil {
+		t.Fatal("a FORGED plaintext authorization request published by the service login was answered: the " +
+			"responder's plaintext acceptance is now a downgrade path around the broker's encryption")
+	}
+	select {
+	case err := <-violations:
+		if !errors.Is(err, nats.ErrPermissionViolation) || !strings.Contains(err.Error(), AuthCalloutSubject) {
+			t.Fatalf("the forged request failed for another reason: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the broker raised no permission violation for a publish on the callout subject: the deny " +
+			"this upgrade's safety rests on is gone")
 	}
 }

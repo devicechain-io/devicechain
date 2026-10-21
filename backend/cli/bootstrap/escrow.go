@@ -633,9 +633,18 @@ func syncDir(dir string) {
 // stopping for rather than guessing past.
 // brokerHashPair matches one `"password": "<bcrypt>", "user": "<name>"` pair in the
 // broker's rendered config. The chart writes the account users as JSON objects with
-// the keys in this order, which is what makes a targeted match viable — but see
+// their keys SORTED, which is what makes a targeted match viable — but see
 // DeployedBrokerHashes for why being wrong about that is survivable.
-var brokerHashPair = regexp.MustCompile(`"password":\s*"(\$2[aby]\$[^"]+)",\s*"user":\s*"([^"]+)"`)
+//
+// 🔴 SORTED MEANS `permissions` SITS BETWEEN THE TWO. Both logins carry permissions (the
+// service login's publish deny, the system login's allow lists), so a pattern that wants
+// `user` straight after `password` matched neither: every hash read back as absent, was
+// minted afresh with a new salt, changed the ConfigMap's checksum and rolled the broker on
+// every upgrade and every bootstrap re-run. The optional group skips one permissions
+// object, nested up to the depth the chart renders (permissions → publish → allow/deny).
+var brokerHashPair = regexp.MustCompile(`"password":\s*"(\$2[aby]\$[^"]+)",\s*` +
+	`(?:"permissions":\s*\{(?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*\},\s*)?` +
+	`"user":\s*"([^"]+)"`)
 
 // DeployedBrokerHashes reads the bcrypt password hashes the RUNNING broker is
 // configured with, so a bootstrap re-run can keep them rather than minting

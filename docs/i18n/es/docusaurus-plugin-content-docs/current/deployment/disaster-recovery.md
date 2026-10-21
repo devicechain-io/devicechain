@@ -252,6 +252,11 @@ lugar de acuñarse. La instancia conserva la clave con la que se cifraron sus se
 filas recuperadas en el paso 1 pueden descifrarse. Se te pedirá la frase de contraseña del
 artefacto, o puedes proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`.
 
+Las credenciales del broker no están en el depósito y no necesitan estarlo. La instancia
+reconstruida acuña unas nuevas, incluidas las claves del callout de autenticación de dispositivos,
+y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
+ninguna de ellas: inician sesión con sus propias credenciales, que vuelven con la base de datos.
+
 `dcctl bootstrap` se niega a hacerlo de otra manera; es la primera de las dos comprobaciones
 descritas [arriba](#root-key). Antes de escribir nada, le pregunta al almacén recuperado qué
 contiene ya bajo el nombre de esa instancia, y una ejecución sin `--restore-root-key` se detiene y

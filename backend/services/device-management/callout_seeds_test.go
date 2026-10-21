@@ -107,6 +107,11 @@ func TestACalloutWithoutAnXKeyNeedsOnlyTheIssuerSeed(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, got.Enabled)
 	require.Empty(t, got.XKeySeed)
+	// A seed with no public key to check it against is left unused, never used unchecked.
+	got, err = resolveCalloutSeeds(mscfg.NatsAuthConfiguration{CalloutIssuerPublic: creds.IssuerPublic},
+		envOf(map[string]string{envCalloutIssuerSeed: creds.IssuerSeed, envCalloutXKeySeed: creds.XKeySeed}))
+	require.NoError(t, err)
+	require.Empty(t, got.XKeySeed, "an xkey seed the configuration names no key for was handed to the responder")
 }
 
 // main.go is not run by a test, so the one wiring that matters is read off its source: the start

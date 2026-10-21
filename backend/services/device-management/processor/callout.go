@@ -197,12 +197,17 @@ func (c *CalloutResponder) Configure(maxInFlight int, lookupTimeout, stopWait ti
 // that is given: a Secret from another instance, or the issuer seed in the wrong key, would
 // otherwise start cleanly and then fail to open a single request.
 //
-// 🔴 PLAINTEXT IS STILL ANSWERED, deliberately and only for the roll. A request without the
-// server's xkey header is answered as before (and counted, and logged). That is what lets this
-// responder be rolled out BEFORE the broker is told to encrypt, so the broker roll never meets
-// a responder that cannot read it. It costs nothing at rest: a plaintext request carries nothing
-// that is not already in the sender's hands, and an eavesdropper gains nothing from one it can
-// only fabricate.
+// 🔴 PLAINTEXT IS STILL ANSWERED. A request without the server's xkey header is answered as
+// before (and counted, and logged). That is what lets this responder be rolled out BEFORE the
+// broker is told to encrypt, so the broker roll never meets a responder that cannot read it.
+//
+// It is not a downgrade path once the broker encrypts, and the reason is the BROKER, not this
+// code: a broker configured with auth_callout.xkey never sends an unencrypted request, so the only
+// source of one would be a client publishing on the callout subject, and nats-server denies that
+// publish to every client authenticated into the callout account (the service logins included)
+// and isolates the subject from every other account. Were that ever to change, answering a forged
+// request would hand its sender a password oracle around the broker and an issuer-signed grant, so
+// the deny is pinned by TestNoClientInTheCalloutAccountCanPublishARequest.
 func (c *CalloutResponder) WithRequestEncryption(seed, wantPublic string) (*CalloutResponder, error) {
 	codec, err := natsauth.NewXKeyCodec(seed)
 	if err != nil {

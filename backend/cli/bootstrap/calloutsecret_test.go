@@ -96,11 +96,16 @@ func TestTheChartReadsTheCalloutSecretDcctlWrites(t *testing.T) {
 				t.Errorf("a callout seed was rendered into a %s", kind)
 			}
 		}
+		meta, _ := d["metadata"].(map[string]interface{})
+		name, _ := meta["name"].(string)
+		// ANY reference to the Secret outside device-management, by whatever route (an env var
+		// under another name, envFrom, a volume), hands another workload the seeds.
+		if strings.Contains(string(b), `"dci-acme-callout"`) && (kind != "Deployment" || name != "device-management") {
+			t.Errorf("%s %s references the callout Secret; only device-management may", kind, name)
+		}
 		if kind != "Deployment" {
 			continue
 		}
-		meta, _ := d["metadata"].(map[string]interface{})
-		name, _ := meta["name"].(string)
 		spec := d["spec"].(map[string]interface{})["template"].(map[string]interface{})["spec"].(map[string]interface{})
 		for _, c := range spec["containers"].([]interface{}) {
 			env, _ := c.(map[string]interface{})["env"].([]interface{})

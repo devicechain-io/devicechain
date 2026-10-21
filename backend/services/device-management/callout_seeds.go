@@ -82,6 +82,9 @@ func resolveCalloutSeeds(auth mscfg.NatsAuthConfiguration, getenv func(string) s
 	}
 
 	if auth.CalloutXKeyPublic == "" {
+		// No key the broker encrypts to, so nothing to check a seed against: an xkey seed in the
+		// environment is left unused rather than used unchecked.
+		out.XKeySeed = ""
 		return out, nil
 	}
 	if xkey == "" {

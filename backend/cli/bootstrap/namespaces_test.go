@@ -250,6 +250,64 @@ func TestOpenInstanceRootRunsTheNamespaceFence(t *testing.T) {
 	}
 }
 
+// 🔴 THE HASHES ARE FOUND WHERE THE CHART ACTUALLY PUTS THEM. Both logins carry permissions, and the
+// chart renders each user's keys sorted, so `permissions` sits between `password` and `user`. The
+// fixture is the nats chart's own output (helm template of nats-2.15.1 with the module's users),
+// not a hand-written approximation: a pattern that missed it read every hash as absent, re-hashed
+// both passwords with new salts and rolled the broker on every upgrade.
+func TestBrokerHashesAreReadFromUsersThatCarryPermissions(t *testing.T) {
+	const rendered = `    {
+      "accounts": {
+        "APP": {
+          "users": [
+            {
+              "password": "$2a$10$service",
+              "permissions": {
+                "publish": {
+                  "deny": [
+                    "*.*.devices.*.events",
+                    "$MQTT.msgs.*.*.devices.*.events"
+                  ]
+                }
+              },
+              "user": "dc_service"
+            }
+          ]
+        },
+        "SYS": {
+          "users": [
+            {
+              "password": "$2a$10$system",
+              "permissions": {
+                "publish": {
+                  "allow": [
+                    "$SYS.REQ.SERVER.PING"
+                  ]
+                },
+                "subscribe": {
+                  "allow": [
+                    "$SYS.ACCOUNT.APP.CONNECT",
+                    "_INBOX.>"
+                  ]
+                }
+              },
+              "user": "dc_sys"
+            }
+          ]
+        }
+      }
+    }`
+	c := fake.NewSimpleClientset(&corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: InstanceNamespace("acme"), Name: natsStatefulSetName + "-config"},
+		Data:       map[string]string{"nats.conf": rendered},
+	})
+	got := deployedBrokerHashesIn(context.Background(), c, InstanceNamespace("acme"), natsStatefulSetName)
+	if got.Service != "$2a$10$service" || got.Sys != "$2a$10$system" {
+		t.Errorf("read %+v from users that carry permissions, want both hashes: a miss re-hashes the password "+
+			"and rolls the broker on every upgrade", got)
+	}
+}
+
 // The broker's password hashes are read from the INSTANCE's namespace — and the render
 // step asks for exactly that one. A decoy in the shared namespace, where the broker used
 // to run, is what reading the wrong one would return.
