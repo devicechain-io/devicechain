@@ -122,7 +122,8 @@ public sealed class DeviceEventPublisher
     /// is dropped. A batch is lossy in a way a single entry cannot be.
     /// </remarks>
     /// <param name="deviceToken">The device the fix belongs to.</param>
-    /// <param name="credentialId">The device credential id presented in the body.</param>
+    /// <param name="credentialId">The device credential id: presented in the body when the carrier
+    /// declares <see cref="IDeviceEventCarrier.CarriesBodyCredential"/>, and left out of it otherwise.</param>
     /// <param name="fix">Where the device is.</param>
     /// <param name="occurredTime">When the fix was taken (defaults to now, UTC).</param>
     /// <param name="cancellationToken">Cancels the send.</param>

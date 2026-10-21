@@ -20,7 +20,7 @@ Conectar un dispositivo por MQTT significa acertar con tres identificadores dist
 | Identificador | Qué es | Dónde va |
 | --- | --- | --- |
 | **Token del dispositivo** | La identidad del dispositivo en el registro, p. ej. `sensor-001`. Lo eliges tú. | El campo `device` del cuerpo del evento y el segmento `{token}` del topic. Ambos deben coincidir: un evento que dice venir de un dispositivo distinto al de su topic se rechaza. |
-| **Id de credencial** | Lo que el dispositivo presenta para demostrar que es él mismo. La consola lo etiqueta **Token de acceso** en una credencial `ACCESS_TOKEN` y **Usuario** en `MQTT_BASIC`. | Autentica dos veces: en la conexión MQTT y de nuevo por evento en el pipeline. El nombre de usuario MQTT es `{tenant}:{credentialId}`. |
+| **Id de credencial** | Lo que el dispositivo presenta para demostrar que es él mismo. La consola lo etiqueta **Token de acceso** en una credencial `ACCESS_TOKEN` y **Usuario** en `MQTT_BASIC`. | Por MQTT autentica la conexión, y el cuerpo del evento no lleva ninguna. Por HTTP autentica cada evento, desde el cuerpo. El nombre de usuario MQTT es `{tenant}:{credentialId}`. |
 | **Client id de MQTT** | `{instanceId}:{tenant}:{deviceToken}`. Es una clave de sesión, no una etiqueta. | La conexión MQTT. No aparece en ninguna parte de la consola. |
 
 :::warning El nombre de usuario MQTT no es el id de credencial por sí solo

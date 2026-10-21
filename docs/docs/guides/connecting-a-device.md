@@ -20,7 +20,7 @@ Connecting a device over MQTT means getting three different identifiers right. T
 | Identifier | What it is | Where it goes |
 | --- | --- | --- |
 | **Device token** | The device's identity in the registry, e.g. `sensor-001`. You choose it. | The `device` field in the event body and the `{token}` segment of the topic. The two must agree: an event claiming to be from a different device than its topic is rejected. |
-| **Credential id** | What the device presents to prove it is itself. The console labels it **Access token** for an `ACCESS_TOKEN` credential and **Username** for `MQTT_BASIC`. | It authenticates twice: on the MQTT connection, and again per event in the pipeline. The MQTT username is `{tenant}:{credentialId}`. |
+| **Credential id** | What the device presents to prove it is itself. The console labels it **Access token** for an `ACCESS_TOKEN` credential and **Username** for `MQTT_BASIC`. | Over MQTT it authenticates the connection, and the event body carries none. Over HTTP it authenticates each event, from the body. The MQTT username is `{tenant}:{credentialId}`. |
 | **MQTT client id** | `{instanceId}:{tenant}:{deviceToken}`. It is a session key, not a label. | The MQTT connection. It appears nowhere in the console. |
 
 :::warning The MQTT username is not the credential id on its own

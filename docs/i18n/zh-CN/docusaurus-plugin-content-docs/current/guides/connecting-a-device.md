@@ -20,7 +20,7 @@ MQTT 和 HTTP 摄取已可用。资源受限设备也可通过 [LwM2M 摄取](..
 | 标识符 | 含义 | 使用位置 |
 | --- | --- | --- |
 | **设备令牌** | 注册表中的设备身份，例如 `sensor-001`。由你选择。 | 事件正文的 `device` 字段和主题中的 `{token}` 段。二者必须一致：事件声称的设备与主题不同，就会被拒绝。 |
-| **凭据 ID** | 设备用来证明自身身份的值。对于 `ACCESS_TOKEN` 凭据，控制台标注为**访问令牌**；对于 `MQTT_BASIC`，标注为**用户名**。 | 进行两次认证：MQTT 连接时，以及流水线逐事件处理时。MQTT 用户名为 `{tenant}:{credentialId}`。 |
+| **凭据 ID** | 设备用来证明自身身份的值。对于 `ACCESS_TOKEN` 凭据，控制台标注为**访问令牌**；对于 `MQTT_BASIC`，标注为**用户名**。 | 通过 MQTT 时认证连接，事件正文不携带凭据。通过 HTTP 时从正文认证每个事件。MQTT 用户名为 `{tenant}:{credentialId}`。 |
 | **MQTT 客户端 ID** | `{instanceId}:{tenant}:{deviceToken}`。它是会话键，不是标签。 | 用于 MQTT 连接，不会出现在控制台中。 |
 
 :::warning MQTT 用户名不是单独的凭据 ID

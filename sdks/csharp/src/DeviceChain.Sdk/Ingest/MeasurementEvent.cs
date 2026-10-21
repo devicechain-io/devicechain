@@ -5,10 +5,11 @@ using System.Collections.Generic;
 
 namespace DeviceChain.Sdk.Ingest;
 
-// The device-plane event body (event-sources' JsonEvent, ADR-014/025): a device
+// The device-plane event body (event-sources' JsonEvent, ADR-014/025): over HTTP a device
 // authenticates by presenting its credential IN the body (credentialType + credentialId),
 // not a Bearer header — the ingress resolver authenticates the device rather than trusting
-// the bare token. These concrete types serialize to the exact wire shape a real device (and
+// the bare token. Over the platform MQTT broker the credential fields stay null (and are not
+// serialized): the broker authenticated the CONNECT and refuses a body that carries one. These concrete types serialize to the exact wire shape a real device (and
 // the Go sim's emit.go) posts, so a twin emits with no sim-only backdoor.
 
 /// <summary>One measurement reading set at a point in time (the payload's <c>entries[i]</c>).</summary>
