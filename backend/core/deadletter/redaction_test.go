@@ -171,3 +171,59 @@ func TestACommandResponseLetterIsBounded(t *testing.T) {
 	require.NotContains(t, string(got.Payload), fixtureSecret)
 	require.LessOrEqual(t, len(got.Payload), payloadredact.DiagnosticMaxBytes+64)
 }
+
+// An ACCESS_TOKEN credential's id IS the bearer token, so a device-authored body that carries
+// one keeps no trace of it on ANY of the three paths a letter is written by: Write (the kind
+// decides), WriteFor (the origin stream decides) and the max-delivery recorder. Each scan is
+// over the WHOLE letter as it went onto the stream, not its Payload field: a token copied into
+// any other part of the envelope is the same leak.
+func TestALetterKeepsNoAccessTokenCredentialIdOnAnyWritePath(t *testing.T) {
+	const token = "fixture-access-token-bearer-value"
+	body := []byte(`{"correlationId":"c-1","credentialType":"access-token","credentialId":"` + token +
+		`","payload":{"inner":[{"Credential_ID":"` + token + `"}]}}`)
+	requireNoToken := func(t *testing.T, w *fakeWriter) {
+		t.Helper()
+		require.NotEmpty(t, w.got)
+		// The envelope carries Payload as base64, so the raw letter alone is blind to it: a
+		// scan of the letter bytes passes with the token intact inside the payload. Both the
+		// letter and its decoded payload are scanned.
+		raw := string(w.got[len(w.got)-1].Value)
+		payload := string(lastLetter(t, w).Payload)
+		require.NotContains(t, raw, token)
+		require.NotContains(t, payload, token)
+		require.Contains(t, payload, `"credentialType":"access-token"`, "the type is kept: it is the diagnostic")
+	}
+	t.Run("Write", func(t *testing.T) {
+		p, _ := testProducer(t, "command-delivery")
+		w := &fakeWriter{}
+		e := good()
+		e.Kind = KindCommandResponse
+		e.Payload = body
+		require.NoError(t, p.NewSink(w).Write(tenantCtx(), e))
+		requireNoToken(t, w)
+	})
+	t.Run("WriteFor", func(t *testing.T) {
+		p, _ := testProducer(t, "device-management")
+		w := &fakeWriter{}
+		msg := messaging.NewConsumedMessage("test.acme.device-reports.dev-1", body, 5, nil, nil).
+			WithOrigin(messaging.Origin{Suffix: streams.DeviceReports, Stream: "test_device-reports",
+				Consumer: "test_device-management_device-reports", Seq: 3})
+		e := armEnvelope()
+		e.Payload = body
+		require.NoError(t, p.NewSink(w).WriteFor(tenantCtx(), msg, e))
+		requireNoToken(t, w)
+	})
+	t.Run("recorder", func(t *testing.T) {
+		p, _ := testProducer(t, "rec-redact-credential-id")
+		w := &fakeWriter{}
+		r := &maxDeliveryRecorder{producer: p, sink: &Sink{writer: w, source: p.source, onLoss: func(error) {}},
+			maxLetter: 1 << 20}
+		d := abandoned(streams.DeviceReports, true)
+		d.Original = &nats.RawStreamMsg{Subject: messaging.ScopedSubject("test", "acme", streams.DeviceReports),
+			Data: body, Header: nats.Header{}}
+		outcome, err := r.record(context.Background(), d)
+		require.NoError(t, err)
+		require.Equal(t, messaging.MaxDeliveryLettered, outcome)
+		requireNoToken(t, w)
+	})
+}
