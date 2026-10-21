@@ -8,10 +8,12 @@
 // routing every device to one writer (keyed routing) change? It exists to decide a build/drop
 // question with numbers (issue #1399, experiment 1); it measures, it asserts nothing about speed.
 //
-// It runs only when DC_CONTENTION=1, so hack/integration-tests.sh runs it as a skip:
+// It is a benchmark so that hack/integration-tests.sh lists it as a measurement rig rather than
+// running it (that script fails any tagged Test that skips), and it also needs DC_CONTENTION=1, so
+// a stray -bench . does not start a multi-minute run. One measurement per invocation, so -benchtime=1x:
 //
-//	DC_CONTENTION=1 DC_IT_PGPORT=$PORT go test -tags integration -run TestProjectionContention \
-//	  -count=1 -v -p 1 ./model/
+//	DC_CONTENTION=1 DC_IT_PGPORT=$PORT go test -tags integration -run '^$' \
+//	  -bench BenchmarkProjectionContention -benchtime=1x -count=1 -v -p 1 ./model/
 //
 // Knobs (defaults in brackets): DC_CONTENTION_EVENTS [30000], _WRITERS [10], _BATCH [32],
 // _FLEET [10000], _REPS [3]. It prints one row per shape x mode x rep and PASSES whatever the
@@ -68,7 +70,7 @@ type contentionResult struct {
 	p50, p99     time.Duration // batch latency
 }
 
-func TestProjectionContention(t *testing.T) {
+func BenchmarkProjectionContention(t *testing.B) {
 	if os.Getenv("DC_CONTENTION") != "1" {
 		t.Skip("set DC_CONTENTION=1 to run the contention measurement")
 	}
@@ -133,7 +135,7 @@ func contentionEvents(sh contentionShape, n, fleet int, seed int64) []Projection
 	return out
 }
 
-func runContention(t *testing.T, api, probe *Api, sh contentionShape, keyed bool, n, writers, maxBatch, fleet int,
+func runContention(t testing.TB, api, probe *Api, sh contentionShape, keyed bool, n, writers, maxBatch, fleet int,
 	seed int64) contentionResult {
 	t.Helper()
 	ctx := context.Background()
@@ -277,7 +279,7 @@ func runContention(t *testing.T, api, probe *Api, sh contentionShape, keyed bool
 	return res
 }
 
-func deadlockCount(t *testing.T, probe *Api) int64 {
+func deadlockCount(t testing.TB, probe *Api) int64 {
 	t.Helper()
 	var d int64
 	if err := probe.RDB.Database.Raw(`SELECT deadlocks FROM pg_stat_database WHERE datname = current_database()`).
