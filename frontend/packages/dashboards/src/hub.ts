@@ -17,6 +17,7 @@ import type { HistoryWindow } from './history';
 import {
   ACKNOWLEDGE_ALARM,
   ALARM_STREAM,
+  ALARM_DEVICE_TYPES,
   ALARMS_QUERY,
   CLEAR_ALARM,
   type AlarmSearchCriteriaInput,
@@ -36,6 +37,7 @@ import {
   type MeasurementStreamVariables,
 } from './internal/measurement-doc';
 import type {
+  AlarmDeviceType,
   AlarmRow,
   AnchorTarget,
   CommandRow,
@@ -66,6 +68,12 @@ function randomToken(): string {
 // re-query.
 const ALARM_RECONCILE_DEBOUNCE_MS = 800;
 const ALARM_POLL_MS = 30_000;
+// A device-type filter reads the matching alarms in pages of this size, up to this many rows, and
+// narrows them in the hub (the alarms query has no device facet).
+const ALARM_TYPE_SCAN_PAGE = 500;
+const ALARM_TYPE_SCAN_ROWS = 2000;
+// devicesByToken takes at most 1000 tokens.
+const ALARM_DEVICE_TYPES_CHUNK = 1000;
 
 // Command channel cadence. command-delivery exposes NO subscription, so the control
 // channel is poll-only — but a command's lifecycle (QUEUED→SENT→SUCCESSFUL)
@@ -142,6 +150,13 @@ export interface AlarmSubscription {
   severity?: string;
   acknowledged?: boolean;
   pageSize: number;
+  // Resolve each row's originating device type (AlarmRow.deviceType) with one batched read per
+  // reconcile. Off by default: an alarm table that does not group by type pays nothing.
+  enrichDeviceType?: boolean;
+  // Keep only alarms whose originating device has this device-type TOKEN (implies enrichDeviceType).
+  // Applied by the hub over at most ALARM_TYPE_FILTER_SCAN rows -- the alarms query filters on
+  // nothing about the device -- so `total` is the match count within that scan.
+  deviceType?: string;
 }
 
 // A full alarm snapshot: the current rows (newest first, capped to pageSize) and the
@@ -687,38 +702,86 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
     tokens: string[],
     tenantWide: boolean,
   ): Promise<AlarmSnapshot> {
+    const filtering = sub.deviceType !== undefined;
+    const wantType = filtering || sub.enrichDeviceType === true;
+    // The alarms query cannot filter on the originating device, so a type filter reads a bigger
+    // window of the matching alarms and narrows it here. Without one, the page is the subscription's.
+    const pageSize = filtering ? ALARM_TYPE_SCAN_PAGE : sub.pageSize;
     const base = {
       pageNumber: 1, // the alarms query paginates 1-based
-      pageSize: sub.pageSize,
+      pageSize,
       state: sub.state ?? null,
       severity: sub.severity ?? null,
       acknowledged: sub.acknowledged ?? null,
     } satisfies Partial<AlarmSearchCriteriaInput>;
 
+    let rows: AlarmRow[];
+    let total = 0;
     if (tenantWide) {
-      const data = await gql(DEVICE_AREA, ALARMS_QUERY, {
+      const first = await gql(DEVICE_AREA, ALARMS_QUERY, {
         criteria: { ...base, originatorType: null, originator: null },
       });
-      return { alarms: data.alarms.results, total: data.alarms.pagination.totalRecords };
+      rows = first.alarms.results;
+      total = first.alarms.pagination.totalRecords;
+      for (let page = 2; filtering && rows.length < total && rows.length < ALARM_TYPE_SCAN_ROWS; page++) {
+        const next = await gql(DEVICE_AREA, ALARMS_QUERY, {
+          criteria: { ...base, pageNumber: page, originatorType: null, originator: null },
+        });
+        if (next.alarms.results.length === 0) break;
+        rows = rows.concat(next.alarms.results);
+      }
+    } else {
+      const pages = await Promise.all(
+        tokens.map((token) =>
+          gql(DEVICE_AREA, ALARMS_QUERY, {
+            criteria: { ...base, originatorType: 'device', originator: token },
+          }),
+        ),
+      );
+      const byToken = new Map<string, AlarmRow>();
+      for (const page of pages) {
+        total += page.alarms.pagination.totalRecords;
+        for (const row of page.alarms.results) byToken.set(row.token, row);
+      }
+      rows = [...byToken.values()].sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''));
     }
 
-    const pages = await Promise.all(
-      tokens.map((token) =>
-        gql(DEVICE_AREA, ALARMS_QUERY, {
-          criteria: { ...base, originatorType: 'device', originator: token },
-        }),
-      ),
-    );
-    const byToken = new Map<string, AlarmRow>();
-    let total = 0;
-    for (const page of pages) {
-      total += page.alarms.pagination.totalRecords;
-      for (const row of page.alarms.results) byToken.set(row.token, row);
+    if (wantType) rows = await this.withDeviceTypes(rows);
+    if (filtering) {
+      rows = rows.filter((r) => r.deviceType?.token === sub.deviceType);
+      total = rows.length;
     }
-    const alarms = [...byToken.values()]
-      .sort((a, b) => (b.raisedTime ?? '').localeCompare(a.raisedTime ?? ''))
-      .slice(0, sub.pageSize);
-    return { alarms, total };
+    return { alarms: rows.slice(0, sub.pageSize), total };
+  }
+
+  // Each device's type, for the lifetime of the hub: a device's type is fixed for a viewing session,
+  // and the same originators come back every poll. ONE devicesByToken read per chunk of uncached
+  // tokens (the server takes 1000), never one per alarm. A failed read leaves those rows with no
+  // `deviceType` (unknown, so a grouping widget lists them under All only) instead of failing the
+  // whole alarm table, and is retried on the next reconcile because a failure is not cached.
+  private readonly alarmDeviceTypes = new Map<string, AlarmDeviceType>();
+
+  private async withDeviceTypes(rows: AlarmRow[]): Promise<AlarmRow[]> {
+    const missing = [
+      ...new Set(
+        rows
+          .filter((r) => r.originatorType === 'device' && r.originatorToken && !this.alarmDeviceTypes.has(r.originatorToken))
+          .map((r) => r.originatorToken as string),
+      ),
+    ];
+    for (let i = 0; i < missing.length; i += ALARM_DEVICE_TYPES_CHUNK) {
+      try {
+        const r = await gql(DEVICE_AREA, ALARM_DEVICE_TYPES, { tokens: missing.slice(i, i + ALARM_DEVICE_TYPES_CHUNK) });
+        for (const d of r.devicesByToken) this.alarmDeviceTypes.set(d.token, d.deviceType);
+      } catch {
+        // rows stay unresolved; see above
+      }
+    }
+    return rows.map((r) => {
+      if (r.originatorType !== 'device' || !r.originatorToken) return { ...r, deviceType: null };
+      const deviceType = this.alarmDeviceTypes.get(r.originatorToken);
+      return deviceType ? { ...r, deviceType } : r;
+    });
   }
 
   // ── Control channel ──────────────────────────────────────────────────────

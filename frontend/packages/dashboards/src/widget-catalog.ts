@@ -59,7 +59,7 @@ const SELECTOR_KINDS = ['device', 'anchor', 'slot'];
 // The keys each channel's binding policy may carry, mirroring ChannelBindingPolicy.
 const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
   measurement: ['window', 'windowSeconds', 'members'],
-  alarm: ['pageSize', 'state', 'severity', 'acknowledged'],
+  alarm: ['pageSize', 'state', 'severity', 'acknowledged', 'groupBy'],
   control: ['pageSize'],
   location: [],
   aggregate: ['windowSeconds'],
@@ -429,25 +429,31 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
   ref('severity', isText, 'a string or enum option', false);
   ref('acknowledged', isBoolEnum, 'an enum option whose values are only "true" and "false"', false);
 
-  // `members` makes a measurement widget a fleet widget: `{ const: true }` always, or
-  // `{ option, equals }` when a declared option holding `equals` turns the mode on.
-  const members = binding.members;
-  if (members !== undefined) {
-    const m = isRecord(members) ? members : {};
+  // A MODE binding turns a behaviour on: `members` makes a measurement widget a fleet widget
+  // (`{ const: true }` always, or `{ option, equals }`), and `groupBy` makes an alarm widget group by
+  // device type (`{ option, equals }` only). Either way a declared option holding `equals` is the switch.
+  const modeBinding = (key: 'members' | 'groupBy'): void => {
+    const mode = binding[key];
+    if (mode === undefined) return;
+    const m = isRecord(mode) ? mode : {};
+    const at = `binding.${key}`;
+    const allowConst = key === 'members';
     const isConst = m.const !== undefined;
-    if (isConst ? m.option !== undefined || m.equals !== undefined : typeof m.option !== 'string' || typeof m.equals !== 'string') {
-      add('binding.members', 'members must be { const: true } or { option, equals } naming a declared option and a value of it');
+    if (isConst ? !allowConst || m.option !== undefined || m.equals !== undefined : typeof m.option !== 'string' || typeof m.equals !== 'string') {
+      add(at, `${key} must be ${allowConst ? '{ const: true } or ' : ''}{ option, equals } naming a declared option and a value of it`);
     } else if (isConst) {
-      if (m.const !== true) add('binding.members.const', `const must be true, got ${JSON.stringify(m.const)}`);
+      if (m.const !== true) add(`${at}.const`, `const must be true, got ${JSON.stringify(m.const)}`);
     } else if (specs) {
       const spec = hasOwn(specs, m.option as string) ? specs[m.option as string] : undefined;
-      if (!spec) add('binding.members.option', `option ${JSON.stringify(m.option)} is not a declared option key`);
-      else if (!isText(spec)) add('binding.members.option', `option ${JSON.stringify(m.option)} must be a string or enum option`);
+      if (!spec) add(`${at}.option`, `option ${JSON.stringify(m.option)} is not a declared option key`);
+      else if (!isText(spec)) add(`${at}.option`, `option ${JSON.stringify(m.option)} must be a string or enum option`);
       else if (spec.kind === 'enum' && !spec.values.includes(m.equals as string)) {
-        add('binding.members.equals', `${JSON.stringify(m.equals)} is not one of the option's values`);
+        add(`${at}.equals`, `${JSON.stringify(m.equals)} is not one of the option's values`);
       }
     }
-  }
+  };
+  modeBinding('members');
+  modeBinding('groupBy');
 }
 
 function readSpan(value: unknown, path: string, add: Add): { cols: number; rows: number } | undefined {

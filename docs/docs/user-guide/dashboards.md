@@ -236,6 +236,18 @@ The settings depend on the widget. Common ones:
   **Measurement** you choose, so the data source must be a device group, not a single device. A
   group too large to draw is cut to its first bars in the chosen order, and the chart says "Showing
   N of M devices".
+- **Group by** (alarm table): *Device type* shows a tab strip above the table, an **All** tab and then
+  one tab per device type that has an active alarm in the widget's scope, each named by the device
+  type's name. A tab's badge counts its **active** alarms and takes the color of the worst severity
+  among them; a tab with no active alarm has no badge, and a tab whose worst alarm is indeterminate
+  stays neutral. The counts come from one read for the whole table, and a tab's rows are read only
+  when you choose it. On **All** the table adds a **Device type** column, which a type's own tab
+  leaves out. Your tab stays selected when the data refreshes. The strip scrolls sideways on a
+  narrow screen; use the left and right arrow keys, **Home** and **End** to move between tabs, and
+  **Enter** or **Space** to choose one. The counts cover the newest 500 active alarms, and show "+"
+  past that. **Device type tabs** (alarm table, with *Device type* grouping) lists device type
+  tokens to show as tabs, in that order, instead of every type that has an alarm; a type not listed
+  appears under **All** only.
 - **Fleet table**: one row per device of the group the widget is bound to and one column per
   measurement the data source selects. Set the group on the widget's data source and pick the
   measurements to show. **Columns** gives a heading, unit and precision per measurement;

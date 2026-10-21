@@ -103,6 +103,13 @@ export function alarmSubscription(descriptor: WidgetDescriptor, widget: WidgetIn
   };
 }
 
+// Whether an alarm widget groups its alarms by the originating device's type (a tab strip). The
+// descriptor says so with `binding.groupBy`: a declared option holding a given value turns it on.
+export function groupsAlarmsByDeviceType(descriptor: WidgetDescriptor, widget: WidgetInstance): boolean {
+  const groupBy = policy(descriptor).groupBy as { option?: string; equals?: string } | undefined;
+  return groupBy?.option !== undefined && optString(widget.options, groupBy.option) === groupBy.equals;
+}
+
 // A command widget's target scope and how many recent commands its history shows.
 export function commandSubscription(descriptor: WidgetDescriptor, widget: WidgetInstance): CommandSubscription {
   return {

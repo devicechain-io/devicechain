@@ -537,12 +537,32 @@ export const builtinWidgetDescriptors = {
     display: { title: 'Alarm table', category: 'Alarms', titleId: 'widgetTypeAlarmTable', categoryId: 'widgetCategoryAlarms' },
     channel: 'alarm',
     datasource: { mode: 'optional', selectors: ALL_SELECTORS },
-    binding: { pageSize: { option: 'maxRows', default: 50, min: 1 }, ...ALARM_FILTERS },
+    // groupBy 'deviceType' turns the table into one tab per device type (plus All).
+    binding: { pageSize: { option: 'maxRows', default: 50, min: 1 }, ...ALARM_FILTERS, groupBy: { option: 'groupBy', equals: 'deviceType' } },
     options: {
       title: TITLE,
       state: ALARM_STATE,
       severity: ALARM_SEVERITY,
       acknowledged: ALARM_ACKNOWLEDGED,
+      groupBy: {
+        kind: 'enum',
+        values: ['none', 'deviceType'],
+        labelId: 'widgetLabelAlarmGroupBy',
+        helpId: 'widgetHintAlarmGroupBy',
+        valueLabelIds: { none: 'widgetAlarmGroupByNone', deviceType: 'widgetAlarmGroupByDeviceType' },
+        placeholderId: 'widgetPlaceholderDefault',
+        doc: 'deviceType shows a tab per device type, each with an active-alarm badge.',
+      },
+      deviceTypes: {
+        kind: 'list',
+        maxItems: 24,
+        labelId: 'widgetLabelAlarmDeviceTypes',
+        helpId: 'widgetHintAlarmDeviceTypes',
+        doc: 'With deviceType grouping: the types to tab, in order, by token. Unset tabs every type with an active alarm.',
+        item: {
+          token: { kind: 'string', labelId: 'widgetLabelAlarmDeviceTypeToken', doc: 'Device type token.' },
+        },
+      },
       maxRows: {
         kind: 'number',
         integer: true,

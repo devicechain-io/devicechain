@@ -157,6 +157,24 @@ describe('SyntheticDataSource.subscribeAlarms', () => {
     expect(snap.alarms.every((a) => a.severity === 'CRITICAL')).toBe(true);
   });
 
+  it('resolves device types only when asked, and filters by a type token', () => {
+    const src = new SyntheticDataSource();
+    const plain = collectAlarms();
+    src.subscribeAlarms({ pageSize: 50 }, plain.sink);
+    expect(plain.snapshots[0].alarms.some((a) => 'deviceType' in a)).toBe(false);
+
+    const typed = collectAlarms();
+    src.subscribeAlarms({ pageSize: 50, enrichDeviceType: true }, typed.sink);
+    const types = new Set(typed.snapshots[0].alarms.map((a) => a.deviceType?.token));
+    expect(types).toEqual(new Set(['thermostat', 'sensor', 'gateway', undefined]));
+
+    const sensors = collectAlarms();
+    src.subscribeAlarms({ pageSize: 50, deviceType: 'sensor' }, sensors.sink);
+    expect(sensors.snapshots[0].alarms.length).toBeGreaterThan(0);
+    expect(sensors.snapshots[0].alarms.every((a) => a.deviceType?.token === 'sensor')).toBe(true);
+    expect(sensors.snapshots[0].total).toBe(sensors.snapshots[0].alarms.length);
+  });
+
   // The preview must show authors exactly what production can: a field the live query
   // does not select is one the live table never has, so a synthetic row carrying it
   // previews something that never appears. The expected set is derived from the query

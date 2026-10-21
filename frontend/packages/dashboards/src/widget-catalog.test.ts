@@ -187,6 +187,25 @@ describe('validateWidgetDescriptor', () => {
     expect(at({ const: true }, 'alarm')).toContain('binding.members');
   });
 
+  it('checks the groupBy binding that makes an alarm widget group by device type', () => {
+    const at = (groupBy: unknown, channel = 'alarm') =>
+      issuesOf({
+        ...valid(),
+        channel,
+        datasource: { mode: 'optional', selectors: ['device'] },
+        binding: { pageSize: { const: 50 }, groupBy },
+      }).map((i) => i.path);
+    expect(at({ option: 'state', equals: 'ACTIVE' })).toEqual([]);
+    // A mode needs a switch: a constant is not one for grouping.
+    expect(at({ const: true })).toEqual(['binding.groupBy']);
+    expect(at({ option: 'state' })).toEqual(['binding.groupBy']);
+    expect(at({ option: 'ghost', equals: 'x' })).toEqual(['binding.groupBy.option']);
+    expect(at({ option: 'min', equals: 'x' })).toEqual(['binding.groupBy.option']);
+    expect(at({ option: 'state', equals: 'PAUSED' })).toEqual(['binding.groupBy.equals']);
+    // Only the alarm channel groups.
+    expect(at({ option: 'state', equals: 'ACTIVE' }, 'control')).toContain('binding.groupBy');
+  });
+
   it('accepts an aggregate-channel widget that pins its span, and nothing else in its binding', () => {
     const OPTS = { ...OPTIONS, windowSeconds: { kind: 'number', integer: true, min: 60, max: 604800, doc: 'Span.' } } as const;
     const { constraints: _constraints, ...base } = valid();

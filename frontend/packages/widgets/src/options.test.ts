@@ -234,7 +234,7 @@ describe('binding-policy option references', () => {
   // — pin that it still finds them, per channel.
   it('finds the references each channel declares', () => {
     expect(policyKeys('timeseries-chart')).toEqual(['windowSeconds']);
-    expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'maxRows', 'severity', 'state']);
+    expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'groupBy', 'maxRows', 'severity', 'state']);
     expect(policyKeys('alarm-count').sort()).toEqual(['acknowledged', 'severity', 'state']); // page size is a constant
     expect(policyKeys('command-button')).toEqual(['maxRows']);
   });

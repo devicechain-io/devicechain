@@ -67,6 +67,31 @@ export interface AlarmStreamState {
   total: number;
   loading: boolean;
   error: unknown | null;
+  // Present only on an alarm widget that groups by device type (its descriptor's `binding.groupBy`
+  // and the mode is on). `alarms`/`total` above are then the SELECTED tab's rows; this carries the
+  // tab strip around them.
+  typeTabs?: AlarmTypeTabs;
+}
+
+// One device type among the active alarms in a widget's scope: how many are active, and the worst
+// severity among them (null when none is). `name` is the type's name, null when it has none.
+export interface AlarmTypeTab {
+  token: string;
+  name: string | null;
+  active: number;
+  worstSeverity: string | null;
+}
+
+// The tab strip of an alarm widget that groups by device type. `tabs` is every type present among
+// the ACTIVE alarms of the scope, from one summary read (never a read per tab). `selected` is the
+// token of the tab whose rows `alarms` holds, or null for All; `select` changes it. `truncated` is
+// true when the summary read was capped, so the counts are lower bounds.
+export interface AlarmTypeTabs {
+  tabs: AlarmTypeTab[];
+  selected: string | null;
+  select: (token: string | null) => void;
+  loading: boolean;
+  truncated: boolean;
 }
 
 // The state a command widget renders from: the resolved target device (null = unbound,

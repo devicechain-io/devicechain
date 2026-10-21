@@ -135,6 +135,9 @@ export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOption
           state?: StringOptionRef<S>;
           severity?: StringOptionRef<S>;
           acknowledged?: AckOptionRef<S>;
+          // Makes the widget group its alarms by the originating device's type (a tab strip):
+          // the referenced option holding `equals` turns the mode on. `data.typeTabs` is then set.
+          groupBy?: StringOptionRef<S> & { equals: string };
         }
       : C extends 'control'
         ? { pageSize: PageSize<S> }

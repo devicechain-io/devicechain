@@ -64,6 +64,30 @@ export const ALARMS_QUERY = `
   }
 ` as unknown as TypedDocument<AlarmsQueryResult, AlarmsQueryVariables>;
 
+// ── Device types of a set of originators (one batched read) ─────────────
+// The alarm row carries only its originator's token. A widget that groups alarms by device type
+// resolves them with ONE devicesByToken read (up to 1000 tokens), never one query per alarm.
+
+export interface AlarmDeviceTypesResult {
+  devicesByToken: Array<{ token: string; deviceType: { token: string; name: string | null } }>;
+}
+
+export interface AlarmDeviceTypesVariables {
+  tokens: string[];
+}
+
+export const ALARM_DEVICE_TYPES = `
+  query DashboardAlarmDeviceTypes($tokens: [String!]!) {
+    devicesByToken(tokens: $tokens) {
+      token
+      deviceType {
+        token
+        name
+      }
+    }
+  }
+` as unknown as TypedDocument<AlarmDeviceTypesResult, AlarmDeviceTypesVariables>;
+
 // ── Live trigger ─────────────────────────────────────────────────────────
 
 export interface AlarmStreamResult {

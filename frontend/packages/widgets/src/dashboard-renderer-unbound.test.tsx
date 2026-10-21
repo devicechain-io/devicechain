@@ -9,7 +9,7 @@
 
 import { DashboardHub, type DashboardDefinition, type WidgetInstance } from '@devicechain/dashboards';
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 const TENANT_TOTAL = 4242;
 
@@ -24,6 +24,13 @@ vi.mock('@devicechain/client', async (importOriginal) => {
 });
 
 import { DashboardRenderer } from './dashboard-renderer';
+import { loadAlarmWidgets } from './widgets/alarm-lazy';
+
+// The alarm widgets ship as a lazy chunk; load it up front so the one-tick flush below measures the
+// hub hand-off, not how long the chunk's modules take to transform.
+beforeAll(async () => {
+  await loadAlarmWidgets();
+});
 
 afterEach(cleanup);
 
