@@ -230,6 +230,10 @@ function SchemaField({
 
 type Row = Record<string, unknown>;
 
+// A row's controls are h-10 and its buttons size-6, and the row aligns to the top (a cell may grow
+// below its control), so the buttons drop by half the difference to sit level with the controls.
+const ROW_BUTTON = 'mt-2';
+
 // The `control` that picks a device type from the catalogue instead of asking for its token to be
 // typed. Open vocabulary: a descriptor that names it on a string option or a string list field
 // gets the picker, and the stored value is still the bare token.
@@ -356,6 +360,7 @@ function ListField({
               <>
                 <IconButton
                   data-testid={`list-up-${option}-${index}`}
+                  className={ROW_BUTTON}
                   label={t('widgetListMoveUp', { n: index + 1 })}
                   disabled={index === 0}
                   onClick={() => move(index, index - 1)}
@@ -364,6 +369,7 @@ function ListField({
                 </IconButton>
                 <IconButton
                   data-testid={`list-down-${option}-${index}`}
+                  className={ROW_BUTTON}
                   label={t('widgetListMoveDown', { n: index + 1 })}
                   disabled={index === rows.length - 1}
                   onClick={() => move(index, index + 1)}
@@ -373,6 +379,7 @@ function ListField({
               </>
             )}
             <IconButton
+              className={ROW_BUTTON}
               label={t('widgetListRemove', { n: index + 1 })}
               onClick={() => write(rows.filter((_, i) => i !== index))}
             >

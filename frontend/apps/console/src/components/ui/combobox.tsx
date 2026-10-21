@@ -10,6 +10,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronsUpDown, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { FIELD_POPOVER_WIDTH } from './popover-width';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 
 export interface ComboboxOption {
@@ -157,7 +158,7 @@ export function Combobox({
           <ChevronsUpDown size={14} className="shrink-0 opacity-50" />
         )}
       </PopoverTrigger>
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" onKeyDown={onKeyDown}>
+      <PopoverContent className={cn(FIELD_POPOVER_WIDTH, 'p-0')} onKeyDown={onKeyDown}>
         <input
           autoFocus
           value={query}
