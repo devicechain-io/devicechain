@@ -5,18 +5,17 @@
 //
 // "What the profile declares" has two answers, and they differ on purpose:
 //   - the ACTIVE PUBLISHED version is what ingest validates against and what a command is
-//     checked against when it is enqueued. The API exposes it per DEVICE, so when the type has a
-//     device it is read through that device, and the board matches what the type really accepts;
-//   - the DRAFT is what the author has written down, readable per profile. It is the fallback
-//     for a type with no device yet (or a profile never published), and the caller is told so,
-//     because a draft can name a metric ingest does not yet know.
-// The published command list carries no `impact`, so it is joined with the draft by command key;
-// a published command with no draft row has an unknown impact, which the generator treats as not
-// safe to put a button on.
+//     checked against when it is enqueued. It is read by the profile's token, so a type with
+//     no devices yet gets it too, and every field comes from that one frozen version,
+//     including each command's impact, which decides whether it gets a button;
+//   - the DRAFT is what the author has written down. It is used ONLY when the profile has
+//     never been published, and the caller is told so, because a draft can name a metric
+//     ingest does not yet know.
+// A published version that declares no metrics is a real answer (the generator refuses an
+// empty board); it is never swapped for the draft.
 
 import {
-  getDeviceCommandVocabulary,
-  getDeviceMetricVocabulary,
+  getProfilePublishedVocabulary,
   listCommandDefinitions,
   listDevices,
   listMetricDefinitions,
@@ -31,41 +30,36 @@ export interface BoardSource {
 }
 
 export async function loadBoardSource(typeToken: string, profileToken: string): Promise<BoardSource> {
-  const [devices, draftCommands] = await Promise.all([
+  const [devices, published] = await Promise.all([
     listDevices({ pageNumber: 1, pageSize: 1, deviceType: typeToken }),
-    listCommandDefinitions(profileToken),
+    getProfilePublishedVocabulary(profileToken),
   ]);
   const defaultDevice = devices.results[0]?.token ?? null;
-  const impactOf = new Map(draftCommands.map((c) => [c.commandKey, c.impact]));
 
-  if (defaultDevice) {
-    const [metrics, commands] = await Promise.all([
-      getDeviceMetricVocabulary(defaultDevice),
-      getDeviceCommandVocabulary(defaultDevice),
-    ]);
-    if (metrics && metrics.length > 0) {
-      return {
-        basis: 'published',
-        defaultDevice,
-        metrics: metrics.map((m) => ({
-          key: m.metricKey,
-          dataType: m.dataType,
-          unit: m.unit,
-          calculated: m.calculated,
-        })),
-        // Unconstrained means the profile restricts nothing: there is no list to build buttons from.
-        commands: (commands?.constrained ? commands.commands : []).map((c) => ({
-          key: c.commandKey,
-          name: c.name,
-          description: c.description,
-          parameterSchema: c.parameterSchema,
-          impact: impactOf.get(c.commandKey) ?? null,
-        })),
-      };
-    }
+  if (published) {
+    return {
+      basis: 'published',
+      defaultDevice,
+      metrics: published.metrics.map((m) => ({
+        key: m.metricKey,
+        dataType: m.dataType,
+        unit: m.unit,
+        calculated: m.calculated,
+      })),
+      commands: published.commands.map((c) => ({
+        key: c.commandKey,
+        name: c.name,
+        description: c.description,
+        parameterSchema: c.parameterSchema,
+        impact: c.impact,
+      })),
+    };
   }
 
-  const draftMetrics = await listMetricDefinitions(profileToken);
+  const [draftMetrics, draftCommands] = await Promise.all([
+    listMetricDefinitions(profileToken),
+    listCommandDefinitions(profileToken),
+  ]);
   return {
     basis: 'draft',
     defaultDevice,

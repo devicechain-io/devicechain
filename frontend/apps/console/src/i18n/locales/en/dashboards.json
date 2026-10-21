@@ -491,7 +491,8 @@
   "boardFromProfileCommandsLeftOut_one": "{{count}} command was left out because sending it from a board is not safe (it is disruptive or its impact is unknown).",
   "boardFromProfileCommandsLeftOut_other": "{{count}} commands were left out because sending them from a board is not safe (they are disruptive or their impact is unknown).",
   "boardFromProfileNoDevice": "This type has no devices yet, so the selector starts unbound.",
-  "boardFromProfileBasisDraft": "Built from the profile's draft, because no published version could be read through a device. A measurement the draft names may not be accepted until the profile is published.",
+  "boardFromProfileBasisDraft": "Built from the profile's draft, because the profile has never been published. A measurement the draft names is not accepted until the profile is published.",
+  "boardFromProfileSelectorScope": "The device selector lists every device in the tenant, not only devices of this type.",
   "boardFromProfileInvalid": "The generated board is not valid: {{detail}}",
   "boardFromProfileCreate": "Create draft and open editor"
 }

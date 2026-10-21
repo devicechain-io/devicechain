@@ -69,7 +69,7 @@ The board uses only the widgets you can already add by hand:
 
 - a **device selector**, with the slot set to a device of this type when one exists. The selector
   lists the tenant's devices, not only this type's, so pick a device of the type you built the board
-  for;
+  for. A note beside the selector on the board says so;
 - a **latest-value card** for each declared measurement, in the profile's order, with its unit.
   A calculated metric gets a card too, marked **Calculated** in its title, and reads like any other;
 - a **chart** of the first few numeric measurements, and an **alarm table** for the selected device;
@@ -81,11 +81,11 @@ A profile can declare dozens of measurements. The board shows the first twelve a
 the board says how many were left out; add the rest in the editor. A profile that declares no
 measurements is refused with an explanation, because there is nothing to build from.
 
-The drawer reads the profile's active published version through one of the type's devices, which is
-what the platform checks readings and commands against. A type with no devices yet, or a profile
-that was never published, is read from its draft instead, and the drawer says so; a measurement the
-draft names may not be accepted until the profile is published. Profiles do not declare
-severity bands, so the cards carry none; add them in the editor.
+The drawer reads the profile's active published version, which is what the platform checks readings
+and commands against, whether or not the type has devices yet. Only a profile that was never
+published is read from its draft, and the drawer says so; a measurement the draft names is not
+accepted until the profile is published. Profiles do not declare severity bands, so the cards carry
+none; add them in the editor.
 
 ## Importing a dashboard
 

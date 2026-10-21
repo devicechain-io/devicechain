@@ -69,7 +69,7 @@ El panel usa solo los widgets que ya puedes añadir a mano:
 
 - un **selector de dispositivo**, con la ranura apuntando a un dispositivo de este tipo cuando existe
   uno. El selector lista los dispositivos del inquilino, no solo los de este tipo, así que elige un
-  dispositivo del tipo para el que creaste el panel;
+  dispositivo del tipo para el que creaste el panel. Una nota junto al selector en el panel lo indica;
 - una **tarjeta de último valor** por cada medición declarada, en el orden del perfil y con su unidad.
   Una métrica calculada también recibe tarjeta, marcada **Calculada** en el título, y se lee como las demás;
 - un **gráfico** de las primeras mediciones numéricas y una **tabla de alarmas** del dispositivo seleccionado;
@@ -81,10 +81,10 @@ Un perfil puede declarar decenas de mediciones. El panel muestra las primeras do
 nota en el panel indica cuántas se omitieron; añade el resto en el editor. Un perfil que no declara
 mediciones se rechaza con una explicación, porque no hay nada con qué construir.
 
-El panel lateral lee la versión publicada activa del perfil a través de uno de los dispositivos del
-tipo, que es contra lo que la plataforma comprueba lecturas y comandos. Un tipo sin dispositivos aún, o
-un perfil que nunca se publicó, se lee de su borrador, y el panel lateral lo indica; una medición que
-nombre el borrador puede no aceptarse hasta publicar el perfil. Los perfiles no declaran bandas de
+El panel lateral lee la versión publicada activa del perfil, que es contra lo que la plataforma
+comprueba lecturas y comandos, tenga o no el tipo dispositivos todavía. Solo un perfil que nunca se
+publicó se lee de su borrador, y el panel lateral lo indica; una medición que nombre el borrador no se
+acepta hasta publicar el perfil. Los perfiles no declaran bandas de
 severidad, así que las tarjetas no las llevan; añádelas en el editor.
 
 ## Importar un panel

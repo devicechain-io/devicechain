@@ -491,7 +491,8 @@
   "boardFromProfileCommandsLeftOut_one": "Se omitió {{count}} comando porque enviarlo desde un panel no es seguro (es disruptivo o se desconoce su impacto).",
   "boardFromProfileCommandsLeftOut_other": "Se omitieron {{count}} comandos porque enviarlos desde un panel no es seguro (son disruptivos o se desconoce su impacto).",
   "boardFromProfileNoDevice": "Este tipo aún no tiene dispositivos, así que el selector empieza sin selección.",
-  "boardFromProfileBasisDraft": "Generado a partir del borrador del perfil, porque no se pudo leer una versión publicada a través de un dispositivo. Una medición que nombre el borrador puede no aceptarse hasta publicar el perfil.",
+  "boardFromProfileBasisDraft": "Generado a partir del borrador del perfil, porque el perfil nunca se ha publicado. Una medición que nombre el borrador no se acepta hasta publicar el perfil.",
+  "boardFromProfileSelectorScope": "El selector de dispositivos muestra todos los dispositivos del inquilino, no solo los de este tipo.",
   "boardFromProfileInvalid": "El panel generado no es válido: {{detail}}",
   "boardFromProfileCreate": "Crear borrador y abrir el editor"
 }

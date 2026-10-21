@@ -21,6 +21,7 @@ import {
 
 const labels: BoardInput['labels'] = {
   device: 'Device',
+  selectorScope: 'Lists every device',
   chart: 'Telemetry',
   alarms: 'Alarms',
   calculated: 'Calculated',
@@ -72,6 +73,8 @@ function assertValid(definition: Record<string, unknown>) {
 type Loose = Record<string, any>;
 const widgetsOf = (b: ReturnType<typeof generated>, type: string) =>
   (b.definition.widgets as Loose[]).filter((w) => w.type === type);
+// The notes about what was left out, without the selector-scope note every board carries.
+const notesOf = (b: ReturnType<typeof generated>) => widgetsOf(b, 'label').filter((w) => w.id !== 'note-selector');
 
 describe('a small profile', () => {
   it('gets a selector, a card per measurement with its unit, a chart and an alarm table', () => {
@@ -85,7 +88,7 @@ describe('a small profile', () => {
     ]);
     expect(widgetsOf(b, 'timeseries-chart')[0].datasource.measurements).toEqual(['temperature', 'humidity']);
     expect(widgetsOf(b, 'alarm-table')).toHaveLength(1);
-    expect(widgetsOf(b, 'label')).toHaveLength(0);
+    expect(notesOf(b)).toHaveLength(0);
     expect(b.summary.leftOut).toEqual([]);
   });
 
@@ -97,6 +100,14 @@ describe('a small profile', () => {
     // Every data widget reads the one slot the selector re-points.
     for (const w of widgetsOf(generated(), 'latest-card')) expect(w.datasource.slot).toBe('device');
     expect(widgetsOf(generated(), 'entity-selector')[0].options.selectionTarget).toBe('device');
+  });
+
+  it('says beside the selector that it lists every device, not only this type', () => {
+    const b = generated();
+    const note = (b.definition.widgets as Loose[]).find((w) => w.id === 'note-selector');
+    expect(note?.type).toBe('label');
+    expect(note?.options.text).toBe('Lists every device');
+    expect(note?.layout.base.row).toBe(widgetsOf(b, 'entity-selector')[0].layout.base.row);
   });
 
   it('is deterministic', () => {
@@ -132,7 +143,7 @@ describe('a large profile', () => {
     expect(b.summary.leftOut).toHaveLength(60 - MAX_CARDS);
     expect(b.summary.leftOut[0]).toBe(sixty[MAX_CARDS].key);
     // Also on the board itself, as a text widget.
-    expect(widgetsOf(b, 'label')[0].options.text).toBe(`Showing ${MAX_CARDS} of 60`);
+    expect(notesOf(b)[0].options.text).toBe(`Showing ${MAX_CARDS} of 60`);
   });
 
   it('draws at most a few series on the chart', () => {
@@ -144,7 +155,7 @@ describe('a large profile', () => {
   it('stays valid at exactly the cap and one past it', () => {
     const atCap = generated({ metrics: sixty.slice(0, MAX_CARDS) });
     assertValid(atCap.definition);
-    expect(widgetsOf(atCap, 'label')).toHaveLength(0);
+    expect(notesOf(atCap)).toHaveLength(0);
     const over = generated({ metrics: sixty.slice(0, MAX_CARDS + 1) });
     assertValid(over.definition);
     expect(over.summary.leftOut).toHaveLength(1);
@@ -199,7 +210,7 @@ describe('commands', () => {
     assertValid(b.definition);
     expect(widgetsOf(b, 'command-button').map((w) => w.options.commandName)).toEqual(['flush']);
     expect(b.summary.skippedCommands).toEqual(['reboot', 'wipe', 'mystery']);
-    expect(widgetsOf(b, 'label')[0].options.text).toBe('3 commands left out');
+    expect(notesOf(b)[0].options.text).toBe('3 commands left out');
   });
 
   it('lays out many buttons without overlap', () => {

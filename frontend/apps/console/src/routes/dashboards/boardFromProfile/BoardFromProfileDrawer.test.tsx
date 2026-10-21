@@ -20,8 +20,7 @@ vi.mock('@/lib/api/device-management', () => ({
   listDevices: vi.fn(),
   listCommandDefinitions: vi.fn(),
   listMetricDefinitions: vi.fn(),
-  getDeviceMetricVocabulary: vi.fn(),
-  getDeviceCommandVocabulary: vi.fn(),
+  getProfilePublishedVocabulary: vi.fn(),
 }));
 vi.mock('@/components/ui/token-field', () => ({
   TokenField: (p: { id?: string; value: string; onChange: (v: string) => void }) => (
@@ -31,8 +30,7 @@ vi.mock('@/components/ui/token-field', () => ({
 
 import { createDashboard, publishDashboard, updateDashboard } from '@/lib/api/dashboards';
 import {
-  getDeviceCommandVocabulary,
-  getDeviceMetricVocabulary,
+  getProfilePublishedVocabulary,
   listCommandDefinitions,
   listDevices,
   listMetricDefinitions,
@@ -88,8 +86,7 @@ beforeEach(() => {
     listDevices,
     listCommandDefinitions,
     listMetricDefinitions,
-    getDeviceMetricVocabulary,
-    getDeviceCommandVocabulary,
+    getProfilePublishedVocabulary,
   ]) {
     vi.mocked(fn).mockReset();
   }
@@ -97,17 +94,20 @@ beforeEach(() => {
   vi.mocked(listCommandDefinitions).mockResolvedValue(
     asReturn([draftCommand('flush', 'NORMAL'), draftCommand('reboot', 'DISRUPTIVE')]),
   );
+  // Never published unless a test says otherwise.
+  vi.mocked(getProfilePublishedVocabulary).mockResolvedValue(null);
 });
 afterEach(cleanup);
 
 describe('BoardFromProfileDrawer', () => {
   it('previews the layout, creates a DRAFT under the typed token and opens the editor', async () => {
     vi.mocked(listDevices).mockResolvedValue(asReturn({ results: [{ token: 'boiler-1' }] }));
-    vi.mocked(getDeviceMetricVocabulary).mockResolvedValue(
-      asReturn([draftMetric('temperature', { unit: 'C' }), draftMetric('heatIndex', { calculated: true })]),
-    );
-    vi.mocked(getDeviceCommandVocabulary).mockResolvedValue(
-      asReturn({ constrained: true, commands: [draftCommand('flush', 'x'), draftCommand('reboot', 'x')] }),
+    vi.mocked(getProfilePublishedVocabulary).mockResolvedValue(
+      asReturn({
+        version: 3,
+        metrics: [draftMetric('temperature', { unit: 'C' }), draftMetric('heatIndex', { calculated: true })],
+        commands: [draftCommand('flush', 'NORMAL'), draftCommand('reboot', 'DISRUPTIVE')],
+      }),
     );
     renderDrawer();
 
@@ -140,26 +140,47 @@ describe('BoardFromProfileDrawer', () => {
     expect(publishDashboard).not.toHaveBeenCalled();
   });
 
-  it('joins the published command list with the draft for impact, so an unknown one gets no button', async () => {
-    vi.mocked(listDevices).mockResolvedValue(asReturn({ results: [{ token: 'boiler-1' }] }));
-    vi.mocked(getDeviceMetricVocabulary).mockResolvedValue(asReturn([draftMetric('temperature')]));
-    // `ghost` is published but has no draft row: its impact is unknown.
-    vi.mocked(getDeviceCommandVocabulary).mockResolvedValue(
-      asReturn({ constrained: true, commands: [draftCommand('flush', 'x'), draftCommand('ghost', 'x')] }),
+  it('reads the active published version by profile for a type with no devices, impacts included', async () => {
+    vi.mocked(listDevices).mockResolvedValue(asReturn({ results: [] }));
+    // The draft has since made `reboot` NORMAL; the published version still says DISRUPTIVE.
+    vi.mocked(listCommandDefinitions).mockResolvedValue(
+      asReturn([draftCommand('flush', 'NORMAL'), draftCommand('reboot', 'NORMAL')]),
+    );
+    vi.mocked(getProfilePublishedVocabulary).mockResolvedValue(
+      asReturn({
+        version: 2,
+        metrics: [draftMetric('temperature')],
+        commands: [draftCommand('flush', 'NORMAL'), draftCommand('reboot', 'DISRUPTIVE')],
+      }),
     );
     renderDrawer();
-    expect(await screen.findByText('1 command button')).toBeTruthy();
+    expect(await screen.findByText('1 measurement card')).toBeTruthy();
+    expect(screen.getByText('1 command button')).toBeTruthy();
     expect(screen.getAllByText(/1 command was left out/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/no devices yet/)).toBeTruthy();
+    expect(screen.queryByText(/Built from the profile's draft/)).toBeNull();
+    expect(getProfilePublishedVocabulary).toHaveBeenCalledWith('boiler-profile');
+    expect(listMetricDefinitions).not.toHaveBeenCalled();
+    expect(listCommandDefinitions).not.toHaveBeenCalled();
   });
 
-  it('falls back to the profile draft for a type with no devices, and says so', async () => {
+  it('does not swap a published version that declares no measurements for the draft', async () => {
+    vi.mocked(listDevices).mockResolvedValue(asReturn({ results: [{ token: 'boiler-1' }] }));
+    vi.mocked(listMetricDefinitions).mockResolvedValue(asReturn([draftMetric('temperature')]));
+    vi.mocked(getProfilePublishedVocabulary).mockResolvedValue(asReturn({ version: 1, metrics: [], commands: [] }));
+    renderDrawer();
+    expect(await screen.findByText(/declares no measurements/)).toBeTruthy();
+    expect(listMetricDefinitions).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the draft only when the profile was never published, and says so', async () => {
     vi.mocked(listDevices).mockResolvedValue(asReturn({ results: [] }));
     vi.mocked(listMetricDefinitions).mockResolvedValue(asReturn([draftMetric('temperature')]));
     renderDrawer();
     expect(await screen.findByText('1 measurement card')).toBeTruthy();
     expect(screen.getByText(/no devices yet/)).toBeTruthy();
     expect(screen.getByText(/Built from the profile's draft/)).toBeTruthy();
-    expect(getDeviceMetricVocabulary).not.toHaveBeenCalled();
+    expect(screen.getAllByText(/lists every device in the tenant/).length).toBeGreaterThan(0);
   });
 
   it('refuses a profile with no measurements, with no way to create', async () => {

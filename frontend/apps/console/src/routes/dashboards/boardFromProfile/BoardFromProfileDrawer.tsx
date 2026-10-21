@@ -81,6 +81,7 @@ function BoardFlow({
   const labels: BoardLabels = useMemo(
     () => ({
       device: t('boardFromProfileDeviceLabel'),
+      selectorScope: t('boardFromProfileSelectorScope'),
       chart: t('boardFromProfileChartTitle'),
       alarms: t('boardFromProfileAlarmsTitle'),
       calculated: t('widgetMetricCalculated'),
@@ -200,6 +201,7 @@ function BoardFlow({
           {summary.skippedCommands.length > 0 && (
             <li>{t('boardFromProfileCommandsLeftOut', { count: summary.skippedCommands.length })}</li>
           )}
+          <li>{t('boardFromProfileSelectorScope')}</li>
           {!loaded.defaultDevice && <li>{t('boardFromProfileNoDevice')}</li>}
           {loaded.basis === 'draft' && <li>{t('boardFromProfileBasisDraft')}</li>}
         </ul>

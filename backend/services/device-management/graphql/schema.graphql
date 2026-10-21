@@ -403,6 +403,18 @@ type DeviceProfileVersion {
     knows.
     """
     thingModel: String!
+    """
+    The metrics frozen into this version, in declaration order: what a device's measurements
+    are validated against while this version is active. Calculated metrics are included and
+    marked. It never changes after publication.
+    """
+    metrics: [PublishedMetric!]!
+    """
+    The commands frozen into this version, each with the impact it was published with. Empty
+    when the version declares none, in which case a device accepts any command key. It never
+    changes after publication.
+    """
+    commands: [PublishedCommand!]!
 }
 
 # Represents a typed, unit-bearing metric declared on a device profile (ADR-016/ADR-045).

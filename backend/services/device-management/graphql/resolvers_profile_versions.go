@@ -83,6 +83,41 @@ func (r *DeviceProfileVersionResolver) ConfigurationDeclaration() ([]*Configurat
 	return result, nil
 }
 
+// Metrics are the metric definitions frozen into this version, read from the same snapshot
+// the device resolution reads, so a client asking by profile is told what a device of the
+// profile is told. A snapshot that cannot be decoded is an error, not an empty list.
+func (r *DeviceProfileVersionResolver) Metrics() ([]*PublishedMetricResolver, error) {
+	snap, err := model.ParseProfileSnapshot(r.M.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*PublishedMetricResolver, 0, len(snap.Metrics))
+	for _, def := range snap.Metrics {
+		if def == nil {
+			continue
+		}
+		result = append(result, &PublishedMetricResolver{M: def.Resolved()})
+	}
+	return result, nil
+}
+
+// Commands are the command definitions frozen into this version, with the impact each was
+// published with. Like Metrics, an undecodable snapshot is an error.
+func (r *DeviceProfileVersionResolver) Commands() ([]*PublishedCommandResolver, error) {
+	snap, err := model.ParseProfileSnapshot(r.M.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*PublishedCommandResolver, 0, len(snap.Commands))
+	for _, cd := range snap.Commands {
+		if cd == nil {
+			continue
+		}
+		result = append(result, &PublishedCommandResolver{M: *cd})
+	}
+	return result, nil
+}
+
 // Activations reads the profile's activation log, newest first (see
 // model.DeviceProfileActivation). It carries the same authority as reading the profile's
 // versions: catalogue configuration, readable by any device:read member.

@@ -42,6 +42,9 @@ export interface BoardCommand {
 // Every word the board contains, supplied by the caller (translated in the app, literal in tests).
 export interface BoardLabels {
   device: string;
+  // The selector offers every device of the tenant, not only this type's: a slot cannot yet be
+  // narrowed to a device type, so the board says so beside the selector.
+  selectorScope: string;
   chart: string;
   alarms: string;
   calculated: string;
@@ -114,6 +117,9 @@ export function generateBoard(input: BoardInput): GeneratedBoard {
   let row = 0;
   add({ id: 'selector', type: 'entity-selector', title: labels.device }, [0, row, 6, 1], {
     options: { title: labels.device, selectionTarget: SELECTOR_SLOT },
+  });
+  add({ id: 'note-selector', type: 'label', title: labels.selectorScope }, [6, row, 6, 1], {
+    options: { text: labels.selectorScope, align: 'left' },
   });
   row += 1;
 
