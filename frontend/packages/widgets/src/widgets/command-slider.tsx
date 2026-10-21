@@ -46,6 +46,7 @@ import {
   payloadFor,
   type Binding,
 } from '../command-control-core';
+import { StepperBody } from './command-stepper';
 import {
   ControlEmpty,
   ControlNotes,
@@ -69,6 +70,8 @@ export function CommandSlider({ widget, data, actions }: WidgetProps<CommandStre
   const min = optNumber(widget.options, 'min');
   const max = optNumber(widget.options, 'max');
   const step = optNumber(widget.options, 'step');
+  // Additive: absent, or anything but 'stepper', is the slider as before.
+  const stepper = optString(widget.options, 'mode') === 'stepper';
 
   const binding = useMemo(
     () => bindControl('number', { commandName, parameterSchema, parameter, min, max, step }),
@@ -134,45 +137,60 @@ export function CommandSlider({ widget, data, actions }: WidgetProps<CommandStre
     commit();
   };
 
+  const caption = binding.ok ? (
+    <LastSentCaption
+      id={captionId}
+      last={last}
+      strings={sender.strings}
+      truncated={data.total > data.commands.length}
+      format={(v) => (typeof v === 'number' ? withUnit(v, binding.param.unit) : sender.strings.noValue)}
+      override={
+        draft !== null
+          ? stepper
+            ? sender.strings.stepperUnsent
+            : sender.strings.unsent
+          : sender.pending
+            ? sender.strings.sending
+            : undefined
+      }
+    />
+  ) : null;
+  const onStage = (v: number) => {
+    // A value moved while a send is in flight is not staged: the control is aria-disabled.
+    if (binding.ok && !sender.pending) setDraft(clampToRange(binding.range!, v));
+  };
+
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
-      {(scale) =>
-        !binding.ok ? (
-          <ControlEmpty message={refusalText(binding.refusal, sender.strings, 'number')} />
+      {(scale) => {
+        if (!binding.ok) return <ControlEmpty message={refusalText(binding.refusal, sender.strings, 'number')} />;
+        const common = {
+          binding,
+          label: commandLabel ?? binding.param.name,
+          draft,
+          lastValue: typeof last?.value === 'number' ? last.value : undefined,
+          sender,
+          captionId,
+          hintId,
+          caption,
+          onStage,
+          onCommit: commit,
+          onDiscard: discard,
+          scale,
+        };
+        return stepper ? (
+          <StepperBody {...common} />
         ) : (
           <SliderBody
-            binding={binding}
-            label={commandLabel ?? binding.param.name}
-            draft={draft}
-            lastValue={typeof last?.value === 'number' ? last.value : undefined}
-            sender={sender}
-            captionId={captionId}
-            hintId={hintId}
-            caption={
-              <LastSentCaption
-                id={captionId}
-                last={last}
-                strings={sender.strings}
-                truncated={data.total > data.commands.length}
-                format={(v) => (typeof v === 'number' ? withUnit(v, binding.param.unit) : sender.strings.noValue)}
-                override={draft !== null ? sender.strings.unsent : sender.pending ? sender.strings.sending : undefined}
-              />
-            }
-            onStage={(v) => {
-              // A value moved while a send is in flight is not staged: the slider is aria-disabled.
-              if (!sender.pending) setDraft(clampToRange(binding.range!, v));
-            }}
-            onCommit={commit}
+            {...common}
             onPress={press}
             onRelease={release}
-            onDiscard={discard}
             onLostCapture={() => {
               if (pressed.current) discard();
             }}
-            scale={scale}
           />
-        )
-      }
+        );
+      }}
     </WidgetFrame>
   );
 }
