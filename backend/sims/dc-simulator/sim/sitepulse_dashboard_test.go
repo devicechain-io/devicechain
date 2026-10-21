@@ -348,6 +348,12 @@ func TestSitepulseBoardBindsThePlantThroughItsOwnSlot(t *testing.T) {
 			t.Errorf("%s carries threshold bands, but no rule fires on throughput", id)
 		}
 	}
+	// The trend is drawn on "now" only; the average beside it would repeat the line.
+	for id, want := range map[string]bool{"sp-plant-throughput-now": true, "sp-plant-throughput-avg": false, "sp-plant-throughput-max": false} {
+		if got, _ := widgetByID(t, def, id).Options["sparkline"].(bool); got != want {
+			t.Errorf("%s sparkline = %v, want %v", id, got, want)
+		}
+	}
 	// The lamp is lit by the flag itself (1 = running), and carries no band: nothing alarms on it.
 	lamp := widgetByID(t, def, "sp-plant-running")
 	if lamp.Options["onAt"] != 1.0 {
@@ -481,9 +487,55 @@ func TestSitepulseBoardFitsOneScreen(t *testing.T) {
 	}
 	// The plant's throughput is the board's headline: its band is three rows, so the figure is
 	// fitted to a body that a subject line, an age footer and a caption leave room in.
-	for _, id := range []string{"sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-plant-throughput-max"} {
+	for _, id := range []string{"sp-plant-throughput-now", "sp-plant-throughput-avg", "sp-low-fuel"} {
 		if b := widgetByID(t, def, id).Layout["base"]; b.Rows != 3 || b.Row != 2 || b.Cols != 3 {
 			t.Errorf("%s = %+v, want a 3x3 tile at row 2", id, b)
 		}
+	}
+	// The site's state band gives up a column per tile (two columns is the alarm count's and the
+	// lamp's minimum) so the peak card keeps a place on the board beside them, two rows tall.
+	for id, want := range map[string]dashboardPlacement{
+		"sp-alarms-critical":      {Col: 0, Cols: 2, Row: 0, Rows: 2},
+		"sp-alarms-major":         {Col: 2, Cols: 2, Row: 0, Rows: 2},
+		"sp-plant-running":        {Col: 4, Cols: 2, Row: 0, Rows: 2},
+		"sp-plant-throughput-max": {Col: 6, Cols: 3, Row: 0, Rows: 2},
+	} {
+		b := widgetByID(t, def, id).Layout["base"]
+		if b.Col != want.Col || b.Cols != want.Cols || b.Row != want.Row || b.Rows != want.Rows {
+			t.Errorf("%s = %+v, want %+v", id, b, want)
+		}
+	}
+}
+
+// The alarm table tabs by machine kind in the order the fleet is read, the map's marker click
+// drives the same slot as the table's rows, and the low-fuel count is built from the fleet
+// table's own fuel bands so the two cannot disagree.
+func TestSitepulseBoardCarriesTheFleetAwareWidgets(t *testing.T) {
+	def := sitepulseBoard(t, sitepulseManifest(t))
+
+	alarms := widgetByID(t, def, "sp-alarms")
+	if alarms.Options["groupBy"] != "deviceType" {
+		t.Errorf("alarm table groupBy = %v, want deviceType", alarms.Options["groupBy"])
+	}
+	if got, want := asJSON(t, alarms.Options["deviceTypes"]),
+		`[{"token":"sp-hauler"},{"token":"sp-loader"},{"token":"sp-dozer"},{"token":"sp-crusher-plant"}]`; got != want {
+		t.Errorf("alarm table deviceTypes = %s, want %s", got, want)
+	}
+
+	if got := widgetByID(t, def, "sp-map").Options["selectionTarget"]; got != "selectedMachine" {
+		t.Errorf("map selectionTarget = %v, want selectedMachine", got)
+	}
+
+	count := widgetByID(t, def, "sp-low-fuel")
+	if count.Type != "fleet-count" || count.Options["show"] != "attention" || count.Options["measurement"] != SitepulseFuelKey {
+		t.Errorf("low-fuel count = %s %v, want a fleet-count in attention mode over %s", count.Type, count.Options, SitepulseFuelKey)
+	}
+	if count.Datasource == nil || count.Datasource.Slot != "site" {
+		t.Errorf("low-fuel count datasource = %+v, want the site anchor", count.Datasource)
+	}
+	// The same edges the fleet table colours: severity below the rule's threshold, neutral above.
+	const want = `[{"level":"major","value":0},{"level":"normal","value":15}]`
+	if got := asJSON(t, count.Options["thresholds"]); got != want {
+		t.Errorf("low-fuel count thresholds = %s, want %s", got, want)
 	}
 }

@@ -61,7 +61,7 @@
       "layout": {
         "base": {
           "col": 0,
-          "cols": 3,
+          "cols": 2,
           "mode": "grid",
           "row": 0,
           "rows": 2
@@ -83,8 +83,8 @@
       "id": "sp-alarms-major",
       "layout": {
         "base": {
-          "col": 3,
-          "cols": 3,
+          "col": 2,
+          "cols": 2,
           "mode": "grid",
           "row": 0,
           "rows": 2
@@ -108,8 +108,8 @@
       "id": "sp-plant-running",
       "layout": {
         "base": {
-          "col": 6,
-          "cols": 3,
+          "col": 4,
+          "cols": 2,
           "mode": "grid",
           "row": 0,
           "rows": 2
@@ -144,6 +144,7 @@
       "options": {
         "measurement": "throughput_tph",
         "precision": 0,
+        "sparkline": true,
         "stat": "last",
         "title": "Throughput now",
         "unit": "t/h"
@@ -191,8 +192,8 @@
           "col": 6,
           "cols": 3,
           "mode": "grid",
-          "row": 2,
-          "rows": 3
+          "row": 0,
+          "rows": 2
         }
       },
       "options": {
@@ -203,6 +204,41 @@
         "unit": "t/h"
       },
       "type": "stat-card"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "fuel_pct"
+        ],
+        "slot": "site"
+      },
+      "id": "sp-low-fuel",
+      "layout": {
+        "base": {
+          "col": 6,
+          "cols": 3,
+          "mode": "grid",
+          "row": 2,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "fuel_pct",
+        "show": "attention",
+        "thresholds": [
+          {
+            "level": "major",
+            "value": 0
+          },
+          {
+            "level": "normal",
+            "value": 15
+          }
+        ],
+        "title": "Low fuel"
+      },
+      "type": "fleet-count"
     },
     {
       "datasource": {
@@ -221,7 +257,22 @@
         }
       },
       "options": {
+        "deviceTypes": [
+          {
+            "token": "sp-hauler"
+          },
+          {
+            "token": "sp-loader"
+          },
+          {
+            "token": "sp-dozer"
+          },
+          {
+            "token": "sp-crusher-plant"
+          }
+        ],
         "flashOnChange": true,
+        "groupBy": "deviceType",
         "maxRows": 25,
         "precision": 1,
         "selectionTarget": "selectedMachine",
@@ -250,6 +301,7 @@
         }
       },
       "options": {
+        "selectionTarget": "selectedMachine",
         "title": "Machine positions"
       },
       "type": "map"
