@@ -29,6 +29,13 @@ export interface FleetStrings {
   useFleetTable: string;
   usePerDevice: string;
   stale: string;
+  // The fleet count card.
+  noMeasurementCount: string;
+  noBands: string;
+  countOf: (total: number) => string;
+  needAttention: string;
+  devices: string;
+  notReporting: (n: number) => string;
   // "Showing 500 of 812 devices": a fleet past what is read must say so.
   truncated: (shown: number, total: number) => string;
   range: (from: number, to: number, of: number) => string;
@@ -55,6 +62,12 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     useFleetTable: 'Bind it to one device, or show the group in a fleet table.',
     usePerDevice: 'Set it to one bar per device to compare them, or bind it to one device.',
     stale: 'stale',
+    noMeasurementCount: 'Choose the measurement to watch',
+    noBands: 'Add thresholds to say what needs attention',
+    countOf: (total) => `of ${total}`,
+    needAttention: 'need attention',
+    devices: 'devices',
+    notReporting: (n) => `${n} not reporting`,
     truncated: (shown, total) => `Showing ${shown} of ${total} devices`,
     range: (from, to, of) => `${from}–${to} of ${of}`,
     previous: 'Previous page',
@@ -78,6 +91,12 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     useFleetTable: 'Vincúlelo a un dispositivo o muestre el grupo en una tabla de flota.',
     usePerDevice: 'Configúrelo con una barra por dispositivo para compararlos, o vincúlelo a un dispositivo.',
     stale: 'obsoleto',
+    noMeasurementCount: 'Elija la medición que vigilar',
+    noBands: 'Añada umbrales para indicar qué requiere atención',
+    countOf: (total) => `de ${total}`,
+    needAttention: 'requieren atención',
+    devices: 'dispositivos',
+    notReporting: (n) => `${n} sin informar`,
     truncated: (shown, total) => `Mostrando ${shown} de ${total} dispositivos`,
     range: (from, to, of) => `${from}–${to} de ${of}`,
     previous: 'Página anterior',

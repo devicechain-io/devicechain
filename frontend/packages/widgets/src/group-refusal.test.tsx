@@ -97,6 +97,6 @@ describe('a widget that shows one device, bound to a group', () => {
       .filter((d) => d.datasource.mode !== 'none' && (d.datasource.selectors as readonly string[]).includes('anchor'))
       .map((d) => d.id)
       .sort();
-    expect(takesGroup).toEqual(['alarm-count', 'alarm-table', 'bar-chart', 'fleet-table', 'map']);
+    expect(takesGroup).toEqual(['alarm-count', 'alarm-table', 'bar-chart', 'fleet-count', 'fleet-table', 'map']);
   });
 });

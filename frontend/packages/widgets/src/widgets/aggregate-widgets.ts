@@ -7,6 +7,7 @@
 // host's initial download, and nothing about behaviour would change to reveal it.
 
 export { BarChart } from './bar-chart';
+export { FleetCount } from './fleet-count';
 export { FleetTable } from './fleet-table';
 export { PieChart } from './pie-chart';
 export { StatCard } from './stat-card';

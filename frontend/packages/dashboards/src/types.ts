@@ -181,6 +181,7 @@ export const WIDGET_TYPES = [
   'bar-chart',
   'pie-chart',
   'fleet-table',
+  'fleet-count',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];

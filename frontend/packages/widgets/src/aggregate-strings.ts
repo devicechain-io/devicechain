@@ -23,6 +23,8 @@ export interface AggregateStrings {
   noData: string;
   // The widget's slot is bound to no device.
   unbound: string;
+  // The accessible name of a card's trend strip: what it draws and over how long.
+  trend: (stat: string, span: string) => string;
   // Categorical charts.
   noCategories: string;
   pieNegative: string;
@@ -38,6 +40,7 @@ export const AGGREGATE_STRINGS: Record<'en' | 'es', AggregateStrings> = {
     noReadings: (span) => `No readings in the last ${span}`,
     noData: 'No data',
     unbound: 'Choose a device for this widget',
+    trend: (stat, span) => `${stat} trend over the last ${span}`,
     noCategories: 'Select the measurements to show',
     pieNegative: 'A pie needs values of zero or more',
     pieNoShare: 'Every value is zero, so there is no share to show',
@@ -50,6 +53,7 @@ export const AGGREGATE_STRINGS: Record<'en' | 'es', AggregateStrings> = {
     noReadings: (span) => `Sin lecturas en los últimos ${span}`,
     noData: 'Sin datos',
     unbound: 'Elija un dispositivo para este widget',
+    trend: (stat, span) => `Tendencia de ${stat.toLowerCase()} en los últimos ${span}`,
     noCategories: 'Seleccione las mediciones que mostrar',
     pieNegative: 'Un gráfico circular necesita valores de cero o más',
     pieNoShare: 'Todos los valores son cero, no hay proporción que mostrar',

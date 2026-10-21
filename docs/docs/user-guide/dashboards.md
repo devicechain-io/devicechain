@@ -112,7 +112,10 @@ and the thermometer above, and a reading in any band but the normal one takes th
 
 A stat card shows one figure over the dashboard's time range, labeled with the statistic and the
 span it covers, such as *Maximum · 1h*. A card with its own **Time span** keeps it, like *Average,
-last 5 min* above.
+last 5 min* above. Turn on **Show trend** and the card draws the measurement's trend over the
+same span under the figure, so "is it rising?" is answered on the card itself. The line is always
+the neutral color, whatever band the figure is in, and it is left out when the card is too small
+to keep the figure readable.
 
 <GuideShot id="dashboard-bar-pie" alt="Two bar charts of wl-sensor-01's latest temperature, humidity and battery: Latest readings with vertical bars in the data source's order, and Largest first with horizontal bars sorted largest first. Below them, two pie charts of the same readings." />
 
@@ -124,6 +127,10 @@ widget and rows in a tall one.
 
 The fleet table shows one row per device of a group and one column per measurement. Click a column
 heading to sort by it. Its settings are described under [Configuring a widget](#configuring-a-widget).
+
+A fleet count card puts a number above that table: how many of a group's devices need attention
+(*3 of 21*), or simply how many devices the group holds. Its settings are described under
+[Configuring a widget](#configuring-a-widget).
 
 ## Editing on the canvas
 
@@ -188,7 +195,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count |
 | Control | Command button, Command slider, Command toggle |
@@ -215,7 +222,7 @@ The settings depend on the widget. Common ones:
   inside the building chosen elsewhere on the dashboard. With a parent, **Strategy** decides whether
   it follows the parent's **First member** or a member you choose (**Manual pick**).
 - **Data source** picks the device or entity the widget reads. For a widget scoped to a parent, it
-  explains that the widget follows the parent. Only the fleet table and a bar chart set to one bar
+  explains that the widget follows the parent. Only the fleet table, the fleet count and a bar chart set to one bar
   per device can read a device group; every other telemetry widget shows one device, and bound to a
   group it says so rather than mixing the readings of several devices.
 - **Measurement** and display options such as units, range and precision.
@@ -228,6 +235,11 @@ The settings depend on the widget. Common ones:
   pins the card to its own span. A card says why it has no figure (the data source cannot compute
   aggregates, the read failed, or there were no readings in the span) instead of showing a number
   it could not compute. The number of readings of a span with none is 0.
+- **Show trend** (stat card): off by default. On, the card draws the measurement's trend over its
+  span in a thin neutral line under the figure, one point per bucket of the span's chart, for the
+  statistic the card shows (the latest-reading card draws the bucket averages). A gap in the
+  readings is a gap in the line, a single point is a dot, and a span with no readings draws
+  nothing. The figure is the same number with or without it.
 - **Order** (bar chart, pie chart): the measurements in the order the data source lists them, or
   sorted smallest or largest first. A measurement that has not reported yet comes last. A bar chart
   draws columns in a wide widget and rows in a tall one.
@@ -253,6 +265,17 @@ The settings depend on the widget. Common ones:
   *could not be read*. The table reads the first 500 devices of a group and says "Showing 500 of N
   devices" when the group is larger. It follows the dashboard's time range, and a paused
   dashboard stops it moving.
+- **Fleet count**: a number for a group of devices, bound like the fleet table. **Count** chooses
+  what it counts. *Devices needing attention* (the default) counts the devices whose latest
+  reading of the **Measurement** is in an abnormal band of the card's **Thresholds** and shows it
+  as *3 of 21*, named after the band when every flagged device is in the same labelled one (a band
+  labelled *Low* reads "Low") and otherwise "need attention". The number takes the color of the
+  worst band among the flagged devices; with none flagged, or a fleet in its normal band, it stays
+  the ordinary text color, so a healthy fleet is calm. A device with no reading of the measurement
+  is neither healthy nor flagged: it is counted apart ("2 not reporting"). *Devices* shows how
+  many devices the group holds, whatever they report. **Stale after** and **Time span** work as
+  for the fleet table. A group larger than the 500 devices read says "Showing 500 of N devices",
+  and the attention count covers the devices shown.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until

@@ -347,6 +347,7 @@ export {
 export type {
   AggregateResult,
   AggregateSpan,
+  AggregateTrendPoint,
   AggregateStreamState,
   AlarmStreamState,
   CommandStreamState,

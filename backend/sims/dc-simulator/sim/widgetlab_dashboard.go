@@ -622,9 +622,12 @@ func widgetlabAggregates(onSensor func(measurements ...string) widgetSubject) []
 	const r = widgetlabAggregatesRow
 	temperature := onSensor(WidgetlabTemperatureKey)
 	all := onSensor(WidgetlabTemperatureKey, WidgetlabHumidityKey, WidgetlabBatteryKey)
+	// The average card also draws its trend; every other card is the card without one.
+	avg := buildStatCardWidget("wl-stat-avg", box{0, 3, r, 3}, temperature, "Average temperature",
+		WidgetlabTemperatureKey, "avg", "C", 1, 0, nil)
+	avg.Options["sparkline"] = true
 	return []dashboardWidget{
-		buildStatCardWidget("wl-stat-avg", box{0, 3, r, 3}, temperature, "Average temperature",
-			WidgetlabTemperatureKey, "avg", "C", 1, 0, nil),
+		avg,
 		buildStatCardWidget("wl-stat-max", box{3, 3, r, 3}, temperature, "Peak temperature",
 			WidgetlabTemperatureKey, "max", "C", 1, 0, widgetlabTemperatureBands),
 		buildStatCardWidget("wl-stat-min", box{6, 3, r, 3}, temperature, "Lowest temperature",
@@ -673,6 +676,20 @@ func buildFleetTableWidget(id string, b box, s widgetSubject, title string, colu
 	return dashboardWidget{Id: id, Type: "fleet-table", Layout: b.layout(), Datasource: s.datasource(), Options: options}
 }
 
+// buildFleetCountWidget counts the devices of the subject's anchor: those whose latest reading of
+// the measurement is in an abnormal band of the thresholds ("attention"), or the devices themselves
+// ("devices", which needs neither a measurement nor bands).
+func buildFleetCountWidget(id string, b box, s widgetSubject, title, show, measurement string, thresholds []widgetThreshold) dashboardWidget {
+	options := map[string]any{"title": title, "show": show}
+	if measurement != "" {
+		options["measurement"] = measurement
+	}
+	if len(thresholds) > 0 {
+		options["thresholds"] = thresholds
+	}
+	return dashboardWidget{Id: id, Type: "fleet-count", Layout: b.layout(), Datasource: s.datasource(), Options: options}
+}
+
 // buildDeviceBarChartWidget is a bar chart with one bar per device of the subject's anchor, for
 // one measurement.
 func buildDeviceBarChartWidget(id string, b box, s widgetSubject, title, measurement, unit, sort string) dashboardWidget {
@@ -710,6 +727,9 @@ func widgetlabFleet() []dashboardWidget {
 			"Fleet (smallest)", columns[:1], bands, 0, ""),
 		buildDeviceBarChartWidget("wl-fleet-bar", box{6, 6, r + 6, 5}, zone, "Temperature by sensor",
 			WidgetlabTemperatureKey, "C", "descending"),
+		buildFleetCountWidget("wl-fleet-count", box{0, 3, r + 9, 3}, zone, "Sensors needing attention", "attention",
+			WidgetlabTemperatureKey, widgetlabTemperatureBands),
+		buildFleetCountWidget("wl-fleet-devices", box{3, 3, r + 9, 3}, zone, "Sensors in the zone", "devices", "", nil),
 	}
 }
 

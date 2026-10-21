@@ -78,7 +78,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 <GuideShot id="dashboard-stat-cards" alt="wl-sensor-01 的八张统计卡片：Average temperature、Peak temperature（红色）、Lowest temperature 和 Readings，各自标有统计量和 1h；然后是 Humidity total、显示读数（标为 Latest）及其到达时间的 Latest temperature、标有 Average · 5m 的 Average, last 5 min，以及 Peak (smallest)。" />
 
-统计卡片显示仪表板时间范围内的一个数值，并标出统计量及其覆盖的跨度，例如 *Maximum · 1h*。设置了自己 **Time span** 的卡片会保留该跨度，如上图中的 *Average, last 5 min*。
+统计卡片显示仪表板时间范围内的一个数值，并标出统计量及其覆盖的跨度，例如 *Maximum · 1h*。设置了自己 **Time span** 的卡片会保留该跨度，如上图中的 *Average, last 5 min*。开启 **Show trend**（显示趋势）后，卡片会在数值下方绘制该测量在同一跨度内的趋势，让“是否在上升”直接在卡片上得到回答。这条线始终是中性色，无论数值处于哪个区间；卡片小到无法保持数值清晰可读时，会省略这条线。
 
 <GuideShot id="dashboard-bar-pie" alt="两个柱状图，显示 wl-sensor-01 最新的温度、湿度和电量读数：Latest readings 按数据源顺序绘制竖向柱，Largest first 按从大到小绘制横向柱。下方是同样读数的两个饼图。" />
 
@@ -87,6 +87,8 @@ import GuideShot from '@site/src/components/GuideShot';
 <GuideShot id="dashboard-fleet-table" alt="wl-zone-01 的 Sensors in the zone 车队表格：每台设备一行（wl-sensor-01 和 wl-sensor-03），列为按其排序的 Temperature (C)、Humidity (%) 和 Battery (%)，每个值都带有其时长。下方是一个较小的车队表格和一个 Temperature by sensor 柱状图。" />
 
 车队表格为设备组中的每台设备显示一行，为每个测量显示一列。点击列标题即可按该列排序。其设置见[配置组件](#configuring-a-widget)。
+
+车队计数卡片在该表格之上给出一个数字：设备组中有多少台设备需要关注（*3 / 21*），或者设备组共有多少台设备。其设置见[配置组件](#configuring-a-widget)。
 
 ## 在画布上编辑 {#editing-on-the-canvas}
 
@@ -118,7 +120,7 @@ import GuideShot from '@site/src/components/GuideShot';
 
 | 分组 | 组件 |
 |---|---|
-| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环）、Stat card（统计卡片）、Bar chart（柱状图）、Pie chart（饼图）、Fleet table（车队表格） |
+| Telemetry（遥测） | Timeseries chart（时序图表）、Latest card（最新值卡片）、Gauge（仪表）、Table（表格）、Linear gauge（线性仪表）、Level gauge（液位仪表）、Battery（电池）、Status light（状态灯）、Signal bars（信号格）、Compass（罗盘）、Progress ring（进度环）、Stat card（统计卡片）、Bar chart（柱状图）、Pie chart（饼图）、Fleet table（车队表格）、Fleet count（车队计数） |
 | Static（静态） | Label（标签）、Image（图片） |
 | Alarms（告警） | Alarm table（告警表）、Alarm count（告警计数） |
 | Control（控制） | Command button（命令按钮）、Command slider（命令滑块）、Command toggle（命令开关） |
@@ -137,13 +139,16 @@ import GuideShot from '@site/src/components/GuideShot';
 
 - **Title**：显示在组件上的标题。
 - **Context**（上下文）：组件绑定到什么。**Root context**（根上下文）把它直接绑定到某台设备或实体。**Scoped to a parent**（限定到父级）使它跟随另一个组件的上下文，例如仪表板上其他位置选中的那栋楼里的某台设备。有父级时，**Strategy**（策略）决定它跟随父级的 **First member**（第一个成员），还是你自己选择的成员（**Manual pick**，手动选择）。
-- **Data source**（数据源）选择组件读取的设备或实体。对于限定到父级的组件，它会说明该组件跟随父级。只有车队表格和设置为每台设备一根柱的柱状图可以读取设备组；其他遥测组件只显示一台设备，绑定到设备组时会明确说明这一点，而不会混合多台设备的读数。
+- **Data source**（数据源）选择组件读取的设备或实体。对于限定到父级的组件，它会说明该组件跟随父级。只有车队表格、车队计数和设置为每台设备一根柱的柱状图可以读取设备组；其他遥测组件只显示一台设备，绑定到设备组时会明确说明这一点，而不会混合多台设备的读数。
 - **Measurement**（测量）以及显示选项，例如单位、范围和精度。
 - **Time span**（时间跨度，时序图表）：图表绘制多少历史数据，单位为秒，范围 60 到 604800。留空时图表跟随看板的时间范围，查看者可以更改；填写后，无论查看者选择什么范围，图表都保持该跨度。
 - **Statistic**（统计量，统计卡片）：显示跨度内的哪个数值：平均值（默认）、最小值、最大值、总和、读数个数，或最新读数。卡片会在数值下方写出统计量及其覆盖的跨度，例如“Maximum · 1h”。同一个 **Time span** 设置可以把卡片固定在自己的跨度上。卡片无法得出数值时（数据源无法计算聚合、读取失败，或跨度内没有读数），会说明原因，而不会显示一个它没能算出的数字。没有读数的跨度，其读数个数为 0。
+- **Show trend**（显示趋势，统计卡片）：默认关闭。开启后，卡片会在数值下方用一条细的中性色线绘制该测量在其跨度内的趋势，跨度图表的每个分桶对应一个点，所绘统计量即卡片显示的统计量（最新读数卡片绘制各分桶的平均值）。读数中的空缺在线上也是空缺，单个点绘制为一个圆点，没有读数的跨度则什么也不绘制。无论是否开启，数值都是同一个数字。
 - **Order**（顺序，柱状图、饼图）：测量按数据源列出的顺序排列，或按从小到大、从大到小排序。尚未上报的测量排在最后。柱状图在宽组件中绘制纵向柱，在高组件中绘制横向条。
 - **One bar per**（每根柱代表，柱状图）：*Measurement*（测量，默认）为一台设备的每个测量绘制一根柱；*Device*（设备）为组件所绑定设备组中的每台设备绘制一根柱，针对你选择的那一个 **Measurement**，因此数据源必须是设备组而不是单台设备。过大的设备组会按所选顺序截取前若干根柱，图表会注明“Showing N of M devices”。
 - **Fleet table**（车队表格）：组件所绑定设备组中每台设备一行，数据源所选的每个测量一列。请在组件的数据源上设置设备组，并选择要显示的测量。**Columns** 为每个测量设置标题、单位和精度；**Thresholds** 为某个测量一列的单元格着色（正常区间保持表格原有颜色）；**Stale after** 把早于该秒数的读数标记为过期，不设置时表格只显示每个读数的时效。**Show age when behind**（落后时显示时效）只在某个读数比表格中最新的读数早至少该秒数（或已过期）时才显示其时效，这样每隔几秒上报一次的设备群每行只占一行，停止上报的设备会突显出来；组件底部仍显示最新读数的时效。点击列标题（或用键盘按下）即可排序；**Order by** 与 **Largest first** 设置初始顺序，排序列中没有数值的设备始终排在最后。**Devices per page** 为较长的设备群分页。**Target slot** 让设备名称成为链接，在绑定到该槽位的组件中选中该设备。看板较窄时，表格会变成每台设备一张卡片。没有数值的单元格会说明原因：*no data in range*（范围内无数据）、*does not report this*（该设备上报其他测量但从不上报这一项）或 *could not be read*（无法读取）。表格读取设备组的前 500 台设备，设备组更大时会注明“Showing 500 of N devices”。它遵循看板的时间范围，看板暂停时表格不再变动。
+
+- **Fleet count**（车队计数）：为设备组给出一个数字，其绑定方式与车队表格相同。**Count**（计数）选择计什么。*Devices needing attention*（需要关注的设备，默认）统计 **Measurement** 的最新读数处于卡片 **Thresholds** 某个异常区间的设备数，显示为 *3 / 21*；当所有被标出的设备都处于同一个带标签的区间时，以该区间的标签命名（标签为 *Low* 的区间显示为“Low”），否则显示“need attention”。数字采用被标出设备中最差区间的颜色；没有设备被标出，或整个设备群都在正常区间时，保持普通文字颜色，因此健康的设备群显得平静。没有该测量读数的设备既不算健康也不算被标出，而是单独计数（“2 not reporting”）。*Devices*（设备）显示设备组共有多少台设备，无论它们上报什么。**Stale after** 与 **Time span** 的作用与车队表格相同。设备组超过所读取的 500 台设备时，会注明“Showing 500 of N devices”，关注计数涵盖所显示的设备。
 
 组件选项的问题，例如它不读取的选项、留空的必填项或超出范围的值，会列在 **Version history**（版本历史）中。问题修复之前，**Publish version** 保持不可用。
 
