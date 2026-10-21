@@ -57,6 +57,7 @@ func TestHydrationCarriesSkipInfrastructureOntoTheState(t *testing.T) {
 	deployed.Infrastructure.Nats.Tls.Ca = "-----RUNNING CA-----"
 	deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed = creds.IssuerSeed
 	deployed.Infrastructure.Nats.Auth.Password = creds.ServicePassword
+	deployed.Infrastructure.Nats.Auth.SysPassword = creds.SysPassword
 
 	prevDecl, prevDeployed := readInstanceDeclaration, lookupDeployedInstance
 	t.Cleanup(func() { readInstanceDeclaration, lookupDeployedInstance = prevDecl, prevDeployed })
