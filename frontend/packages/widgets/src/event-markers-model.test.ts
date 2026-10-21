@@ -11,9 +11,11 @@ import { describe, expect, it } from 'vitest';
 import {
   alarmEvents,
   alarmLevel,
+  alarmScope,
   commandEvents,
   MAX_EVENT_MARKERS,
   planMarkers,
+  splitByScope,
   type EventRange,
 } from './event-markers-model';
 import { EVENT_MARKER_STRINGS } from './event-markers-strings';
@@ -136,7 +138,8 @@ describe('where an alarm is drawn', () => {
         fmt,
       ),
     );
-    const bands = helper(o).markArea!.data.map(([a, b]) => [a.xAxis, b.xAxis]);
+    // Each alarm is a band and a strip along its top edge, over the same span.
+    const bands = helper(o).markArea!.data.filter(([a]) => String(a.name).endsWith(':span')).map(([a, b]) => [a.xAxis, b.xAxis]);
     expect(bands).toEqual([
       [range.from, T0 + 15 * MIN],
       [T0 + 40 * MIN, range.to],
@@ -163,7 +166,7 @@ describe('severity colours', () => {
     const [e] = alarmEvents([alarm({ severity: level.toUpperCase() })], 'd-1', range, words, fmt);
     const o = decorated([e]);
     expect(helper(o).markLine!.data[0].lineStyle.color).toBe(SEVERITY[level]);
-    expect(helper(o).markArea!.data[0][0].itemStyle.color).toBe(SEVERITY[level].replace(/^hsl\(/, 'hsla(').replace(/\)$/, ', 0.1)'));
+    expect(helper(o).markArea!.data[0][0].itemStyle.color).toBe(SEVERITY[level].replace(/^hsl\(/, 'hsla(').replace(/\)$/, ', 0.05)'));
   });
 
   it('an INDETERMINATE alarm, and every clear line, are neutral: no severity colour at all', () => {
@@ -241,5 +244,71 @@ describe('the cap', () => {
 
   it('hides nothing at the cap exactly', () => {
     expect(planMarkers(many(MAX_EVENT_MARKERS), range, theme).hidden).toBe(0);
+  });
+});
+
+describe('the alarm scope', () => {
+  const items = alarmEvents(
+    [
+      alarm({ token: 'engine', metricKey: 'engine_temp_c' }),
+      alarm({ token: 'tyre', metricKey: 'tyre_pressure_kpa' }),
+      alarm({ token: 'unknown', metricKey: '' }),
+    ],
+    'd-1',
+    range,
+    words,
+    fmt,
+  );
+  const cmd = commandEvents([command()], range, words, fmt);
+
+  it('reads an unset or unknown value as the whole device, what charts saved before it do', () => {
+    expect(alarmScope(undefined)).toBe('device');
+    expect(alarmScope('')).toBe('device');
+    expect(alarmScope('nonsense')).toBe('device');
+    expect(alarmScope('device')).toBe('device');
+    expect(alarmScope('series')).toBe('series');
+  });
+
+  it('device keeps every event drawn and lists none apart', () => {
+    const { drawn, other } = splitByScope([...items, ...cmd], 'device', new Set(['engine_temp_c']));
+    expect(drawn).toHaveLength(4);
+    expect(other).toEqual([]);
+  });
+
+  it('series draws the alarms about a charted measurement and the commands; the rest go apart, none dropped', () => {
+    const { drawn, other } = splitByScope([...items, ...cmd], 'series', new Set(['engine_temp_c']));
+    expect(drawn.map((e) => e.id)).toEqual(['engine', 'c1']);
+    expect(other.map((e) => e.id)).toEqual(['tyre', 'unknown']);
+  });
+
+  it('series never draws an alarm with no known measurement, whatever is charted', () => {
+    const { drawn, other } = splitByScope(items, 'series', new Set(['', 'engine_temp_c']));
+    expect(drawn.map((e) => e.id)).toEqual(['engine']);
+    expect(other.map((e) => e.id)).toContain('unknown');
+  });
+});
+
+describe('the alarm band', () => {
+  type Area = [{ name: string; y?: number; itemStyle: { color: string } }, { y?: number }];
+
+  it('is a faint fill under a thin top-edge strip in the severity colour, placed at the plot top', () => {
+    const [e] = alarmEvents([alarm()], 'd-1', range, words, fmt);
+    const o = planMarkers([e], range, theme).decorate({ series: [], xAxis: {}, grid: { top: 28 } } as never) as never;
+    const areas = helper(o).markArea!.data as unknown as Area[];
+    const band = areas.find(([a]) => a.name === 'a1:span')!;
+    const strip = areas.find(([a]) => a.name === 'a1:strip')!;
+    expect(band[0].y).toBeUndefined();
+    expect(band[0].itemStyle.color).toBe('hsla(4, 4%, 4%, 0.05)');
+    expect([strip[0].y, strip[1].y]).toEqual([28, 31]);
+    expect(strip[0].itemStyle.color).toBe('hsla(4, 4%, 4%, 0.85)');
+    // The strip is drawn after the band, so it sits on top of it.
+    expect(areas.indexOf(strip)).toBeGreaterThan(areas.indexOf(band));
+  });
+
+  it('is neutral for an INDETERMINATE alarm: the strip takes no severity colour', () => {
+    const [e] = alarmEvents([alarm({ severity: 'INDETERMINATE' })], 'd-1', range, words, fmt);
+    const o = planMarkers([e], range, theme).decorate({ series: [], xAxis: {}, grid: { top: 12 } } as never) as never;
+    const areas = helper(o).markArea!.data as unknown as Area[];
+    expect(areas.find(([a]) => a.name === 'a1:strip')![0].itemStyle.color).toBe('muted');
   });
 });

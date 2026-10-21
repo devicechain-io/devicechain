@@ -251,7 +251,8 @@ describe('what is NOT shown is said', () => {
     mount(chart({ markAlarms: true }), f.hub);
     await vi.waitFor(() => expect(notes()).toEqual(['5 more not shown']));
     expect(listed()).toHaveLength(MAX_EVENT_MARKERS);
-    expect(helper()!.markArea!.data).toHaveLength(MAX_EVENT_MARKERS);
+    // A band and a strip each.
+    expect(helper()!.markArea!.data).toHaveLength(MAX_EVENT_MARKERS * 2);
   });
 
   it('counts the range past the page exactly, from the source total for the range', async () => {
@@ -371,5 +372,78 @@ describe('who sees which devices', () => {
     expect(f.alarmSubs).not.toHaveBeenCalled();
     expect(f.commandSubs).not.toHaveBeenCalled();
     expect(helper()).toBeUndefined();
+  });
+});
+
+describe('alarm scope', () => {
+  const engine = alarm({ token: 'engine', alarmKey: 'engine-overheat', metricKey: 'engine_temp_c' });
+  const tyre = alarm({ token: 'tyre', alarmKey: 'tyre-pressure-low', metricKey: 'tyre_pressure_kpa', severity: 'MAJOR' });
+  const unknown = alarm({ token: 'unknown', alarmKey: 'raw-cel', metricKey: '' });
+  const rows = { alarms: [engine, tyre, unknown], total: 3 };
+  const engineChart = { kind: 'device', deviceToken: 'd-1', measurements: ['engine_temp_c'] } as DatasourceSelector;
+  const bandNames = () =>
+    helper()!
+      .markArea!.data.map(([a]) => (a as unknown as { name: string }).name)
+      .filter((n) => n.endsWith(':span'));
+  const others = () => [...document.querySelectorAll('[data-chart-events-other] [data-chart-event]')].map((n) => n.textContent);
+  const drawnList = () => [...document.querySelectorAll('[data-chart-events] details:not([data-chart-events-other]) [data-chart-event]')];
+
+  it('series: only the alarms about the charted measurement are drawn and listed as events', async () => {
+    const f = fakeHub({ alarms: rows });
+    mount(chart({ markAlarms: true, markAlarmsScope: 'series' }, engineChart), f.hub);
+    await vi.waitFor(() => expect(helper()).toBeDefined());
+    expect(bandNames()).toEqual(['engine:span']);
+    expect(drawnList().map((n) => n.textContent)).toEqual([expect.stringContaining('engine-overheat')]);
+  });
+
+  it('series: an alarm about another measurement, or none known, is listed apart and never drawn', async () => {
+    const f = fakeHub({ alarms: rows });
+    mount(chart({ markAlarms: true, markAlarmsScope: 'series' }, engineChart), f.hub);
+    await vi.waitFor(() => expect(others()).toHaveLength(2));
+    const summary = document.querySelector('[data-chart-events-other] summary');
+    expect(summary?.textContent).toBe('Other alarms on this device (2)');
+    expect(others().find((t) => t?.includes('tyre-pressure-low'))).toContain('about tyre_pressure_kpa');
+    expect(others().find((t) => t?.includes('raw-cel'))).toContain('no measurement known');
+    expect(bandNames()).not.toContain('tyre:span');
+    expect(bandNames()).not.toContain('unknown:span');
+  });
+
+  it('series: with every alarm about something else, nothing is drawn but all are listed', async () => {
+    const f = fakeHub({ alarms: { alarms: [tyre, unknown], total: 2 } });
+    mount(chart({ markAlarms: true, markAlarmsScope: 'series' }, engineChart), f.hub);
+    await vi.waitFor(() => expect(others()).toHaveLength(2));
+    expect(helper()).toBeUndefined();
+  });
+
+  it('series: a chart that names no measurement takes the ones its readings carry', async () => {
+    const f = fakeHub({ alarms: { alarms: [alarm({ token: 'temp', metricKey: 'temperature' }), tyre], total: 2 } });
+    mount(chart({ markAlarms: true, markAlarmsScope: 'series' }, { kind: 'device', deviceToken: 'd-1' } as DatasourceSelector), f.hub);
+    await vi.waitFor(() => expect(helper()).toBeDefined());
+    expect(bandNames()).toEqual(['temp:span']);
+    expect(others()).toHaveLength(1);
+  });
+
+  it('series: commands are still drawn', async () => {
+    const f = fakeHub({ alarms: { alarms: [tyre], total: 1 }, commands: { deviceToken: 'd-1', commands: [command()], total: 1 } });
+    mount(chart({ markAlarms: true, markCommands: true, markAlarmsScope: 'series' }, engineChart), f.hub);
+    await vi.waitFor(() => expect(helper()).toBeDefined());
+    expect(helper()!.markLine!.data.map((l) => l.name)).toEqual(['c1']);
+    expect(others()).toHaveLength(1);
+  });
+
+  it('device: every alarm on the device is drawn, as before, and nothing is listed apart', async () => {
+    const f = fakeHub({ alarms: rows });
+    mount(chart({ markAlarms: true, markAlarmsScope: 'device' }, engineChart), f.hub);
+    await vi.waitFor(() => expect(helper()).toBeDefined());
+    expect(bandNames().sort()).toEqual(['engine:span', 'tyre:span', 'unknown:span']);
+    expect(document.querySelector('[data-chart-events-other]')).toBeNull();
+  });
+
+  it('an old definition with no scope draws exactly what the device scope does', async () => {
+    const old = fakeHub({ alarms: rows });
+    mount(chart({ markAlarms: true }, engineChart), old.hub);
+    await vi.waitFor(() => expect(helper()).toBeDefined());
+    expect(bandNames().sort()).toEqual(['engine:span', 'tyre:span', 'unknown:span']);
+    expect(document.querySelector('[data-chart-events-other]')).toBeNull();
   });
 });

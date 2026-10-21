@@ -55,6 +55,7 @@ export const OPTION_DOCS: Readonly<Record<string, string>> = {
   attribution: 'Credit line the tile source requires, shown on the map. Set whatever the provider you chose asks for.',
   style: 'A plain bar (default) or a thermometer: a vertical tube with a bulb. A thermometer is always vertical.',
   markAlarms: 'Mark this device’s alarms on the chart, from raise to clear.',
+  markAlarmsScope: 'Which alarms to mark: only those about what this chart plots (series, the default for a new chart), or every alarm on the device. An alarm with no known measurement is never marked in series mode; it is listed under the chart as another alarm on the device. A chart saved before this option marks the whole device.',
   markCommands: 'Mark the commands sent to this device on the chart.',
   orientation: 'Direction of a bar: horizontal (default) or vertical. Ignored by a thermometer.',
   readout: 'What the readout shows: the value with its unit (default) or the percent of the scale.',

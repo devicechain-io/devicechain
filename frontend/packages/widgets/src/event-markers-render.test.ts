@@ -79,7 +79,8 @@ describe('the decorated chart through a real ECharts', () => {
   it('draws the severity line and band, and the neutral command line', () => {
     const svg = draw(decorated);
     expect(svg).toContain('stroke="hsl(4, 4%, 4%)"'); // the raise line: critical
-    expect(svg).toContain('fill="hsla(4, 4%, 4%, 0.1)"'); // the band, faint
+    expect(svg).toContain('fill="hsla(4, 4%, 4%, 0.05)"'); // the band, faint
+    expect(svg).toContain('fill="hsla(4, 4%, 4%, 0.85)"'); // the strip along its top edge
     expect(svg).toContain('stroke="#999"'); // neutral: the clear line and the command line
     expect(svg).not.toMatch(/Infinity|NaN/);
   });
@@ -87,7 +88,7 @@ describe('the decorated chart through a real ECharts', () => {
   it('draws nothing of the kind without the markers: the same chart, undecorated', () => {
     const svg = draw(base);
     expect(svg).not.toContain('stroke="hsl(4, 4%, 4%)"');
-    expect(svg).not.toContain('hsla(4, 4%, 4%, 0.1)');
+    expect(svg).not.toContain('hsla(4, 4%, 4%, 0.05)');
   });
 
   it('keeps every reading series, and the legend lists the readings alone', () => {

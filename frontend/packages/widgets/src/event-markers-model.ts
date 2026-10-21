@@ -6,9 +6,12 @@
 // ECharts import), and part of the markers' lazy chunk (event-markers-feed.tsx).
 //
 //   - An ALARM is a span: a faint band from the raise to the clear (or to the end of the range while
-//     it is still active), with a solid line at the raise. The span takes its severity's colour; an
+//     it is still active) under a thin strip along the top edge, with a solid line at the raise. The
+//     span takes its severity's colour; an
 //     INDETERMINATE alarm and the clear line are neutral, because colour means severity and
 //     "back to normal" has none (the ISA-101 rule the threshold bands follow).
+//   - A chart whose alarm scope is 'series' draws only the alarms about a measurement it charts. The
+//     rest (another measurement's, or none known) are not drawn but are LISTED, so nothing is hidden.
 //   - A COMMAND is a dotted neutral line at the time it was sent (queued, when it never was), named
 //     by the command, with its delivery outcome where it has one.
 //   - At most MAX_EVENT_MARKERS events are drawn, the newest ones; the rest are COUNTED, never
@@ -25,7 +28,11 @@ import type { EventKind, EventMarkerStrings } from './event-markers-strings';
 export const MAX_EVENT_MARKERS = 30;
 
 // The opacity of an alarm's span behind the readings: a zone, not a wall.
-const SPAN_ALPHA = 0.1;
+const SPAN_ALPHA = 0.05;
+// The strip along the top edge of the plot that carries the span's colour: the band is a hint, the
+// strip is what reads as the alarm's severity.
+const STRIP_PX = 3;
+const STRIP_ALPHA = 0.85;
 // Labels are written on the canvas only on a roomy chart with few lines; the tooltip and the list
 // carry the same text everywhere.
 const LABEL_MIN_WIDTH = 480;
@@ -48,6 +55,8 @@ export interface EventItem {
   name: string;
   title: string;
   detail: string;
+  // An alarm's measurement (its metricKey); empty when none is known. Absent on a command.
+  metric?: string;
 }
 
 const LEVELS: Record<string, AlarmLevel> = { CRITICAL: 'critical', MAJOR: 'major', MINOR: 'minor', WARNING: 'warning' };
@@ -89,11 +98,33 @@ export function alarmEvents(
       end,
       level: alarmLevel(r.severity),
       name: r.alarmKey,
+      metric: r.metricKey,
       title: `${words.alarm}: ${r.alarmKey}`,
       detail: [sev, words.raised(fmt(at)), end === null ? words.stillActive : words.cleared(fmt(end))].join(' · '),
     });
   }
   return out;
+}
+
+export type AlarmScope = 'series' | 'device';
+
+// Unset is 'device': a chart saved before the option existed marked every alarm on its device.
+export function alarmScope(value: unknown): AlarmScope {
+  return value === 'series' ? 'series' : 'device';
+}
+
+// The alarms a series-scoped chart draws are those about a measurement it charts; the others are
+// returned apart, for the list. An alarm with no known measurement is never drawn. Commands pass.
+export function splitByScope(
+  items: readonly EventItem[],
+  scope: AlarmScope,
+  charted: ReadonlySet<string>,
+): { drawn: EventItem[]; other: EventItem[] } {
+  if (scope === 'device') return { drawn: [...items], other: [] };
+  const drawn: EventItem[] = [];
+  const other: EventItem[] = [];
+  for (const e of items) (e.kind === 'alarm' && !(e.metric && charted.has(e.metric)) ? other : drawn).push(e);
+  return { drawn, other };
 }
 
 // The commands sent inside the range, as events.
@@ -142,6 +173,7 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
   const tips: Record<string, string> = {};
   const lines: Record<string, unknown>[] = [];
   const areas: unknown[] = [];
+  const strips: Array<(top: number) => unknown> = [];
   for (const e of shown) {
     const tip = `<b>${escapeHtml(e.title)}</b><br/>${escapeHtml(e.detail)}`;
     if (e.kind === 'command') {
@@ -157,6 +189,13 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
       { name: `${e.id}:span`, xAxis: start, itemStyle: { color: e.level ? severityFill(theme, e.level, SPAN_ALPHA) : theme.border } },
       { xAxis: stop },
     ]);
+    // Pixels, not data: the strip hugs the top of the plot whatever the value axis does, so its
+    // y is known only when the option is (decorate).
+    tips[`${e.id}:strip`] = tip;
+    strips.push((top) => [
+      { name: `${e.id}:strip`, xAxis: start, y: top, itemStyle: { color: e.level ? severityFill(theme, e.level, STRIP_ALPHA) : neutral } },
+      { xAxis: stop, y: top + STRIP_PX },
+    ]);
     if (e.at >= range.from) {
       tips[`${e.id}:raised`] = tip;
       lines.push({ name: `${e.id}:raised`, xAxis: e.at, lineStyle: { color: ink, type: 'solid', width: 2 } });
@@ -171,7 +210,8 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
 
   const decorate: MarkerPlan['decorate'] = (option, size) => {
     if (lines.length === 0 && areas.length === 0) return option;
-    const base = option as { series?: unknown; xAxis?: object; legend?: object; textStyle?: { fontSize?: number } };
+    const base = option as { series?: unknown; xAxis?: object; legend?: object; textStyle?: { fontSize?: number }; grid?: { top?: unknown } };
+    const top = typeof base.grid?.top === 'number' ? base.grid.top : 0;
     const series = Array.isArray(base.series) ? base.series : base.series ? [base.series] : [];
     const labelled = (size?.width ?? 0) >= LABEL_MIN_WIDTH && lines.length <= LABEL_MAX_LINES;
     const fontSize = base.textStyle?.fontSize ?? 10;
@@ -193,7 +233,7 @@ export function planMarkers(items: readonly EventItem[], range: EventRange, them
           data: [],
           silent: false,
           z: 1,
-          markArea: { silent: false, animation: false, label: { show: false }, tooltip, data: areas },
+          markArea: { silent: false, animation: false, label: { show: false }, tooltip, data: [...areas, ...strips.map((strip) => strip(top))] },
           markLine: { silent: false, animation: false, symbol: 'none', tooltip, data: lineData },
         },
       ],

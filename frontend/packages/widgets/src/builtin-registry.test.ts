@@ -112,6 +112,9 @@ describe('the built-in registry', () => {
         'alarm-table': { title: 'Alarm table', state: 'ACTIVE' },
         'alarm-count': { title: 'Alarm count', state: 'ACTIVE' },
         'alarm-severity': { title: 'Alarm severity', state: 'ACTIVE' },
+        // A new chart marks only the alarms about what it plots; one saved before the option does not
+        // have it, and reads as the whole device.
+        'timeseries-chart': { title: 'Timeseries chart', markAlarmsScope: 'series' },
       };
       const words = type.replace(/-/g, ' ');
       const expected = legacy[type] ?? { title: words.charAt(0).toUpperCase() + words.slice(1) };

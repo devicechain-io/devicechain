@@ -302,8 +302,8 @@ The settings depend on the widget. Common ones:
   off: a reading or threshold beyond it widens the axis, so nothing drawn falls off the chart.
 - **Mark alarms** and **Mark commands** (timeseries chart): both off by default. **Mark alarms**
   draws the chart device's alarms over the readings: a faint band from the moment an alarm was
-  raised to the moment it cleared (to the right edge while it is still active) with a line at the
-  raise, colored by severity. An alarm with no severity of its own and the line where it cleared are
+  raised to the moment it cleared (to the right edge while it is still active), with a thin strip
+  along the top of the band and a line at the raise, colored by severity. An alarm with no severity of its own and the line where it cleared are
   drawn in the neutral color, because color on a board means severity and nothing else. **Mark
   commands** draws a dotted neutral line where each command was sent to the device, named by the
   command and, once known, its outcome (succeeded, failed, timed out, and so on). Hover or tap a
@@ -312,7 +312,12 @@ The settings depend on the widget. Common ones:
   pause, and read only the chart's own device, for a range of any age. At most 30 events are
   drawn, the newest; the chart says exactly how many more fall in the range ("N more not shown").
   An alarm that cleared and was raised again is drawn from its latest raise only, because the
-  platform keeps one record per alarm. On a replayed recording the markers come from the recording if it holds alarms or
+  platform keeps one record per alarm. **Alarms to mark** (timeseries chart) picks which alarms are
+  drawn. *Only this chart's measurements* is the default for a new chart: it draws the alarms about
+  a measurement the chart plots, so a tire-pressure alarm does not tint an engine-temperature
+  chart. An alarm about another measurement, or one the platform cannot tie to a measurement, is
+  not drawn; it is listed under the chart as **Other alarms on this device**. *Every alarm on the
+  device* draws them all, as charts saved before this option existed do. On a replayed recording the markers come from the recording if it holds alarms or
   commands, and the chart says "not in this recording" for a channel it does not.
 - **Statistic** (stat card): which figure of the span to show: average (the default), minimum,
   maximum, sum, number of readings, or the latest reading. The card prints the statistic and the

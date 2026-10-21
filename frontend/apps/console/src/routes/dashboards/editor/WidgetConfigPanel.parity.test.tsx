@@ -92,6 +92,7 @@ const LEGACY_LABEL: Record<string, string> = {
   deviceType: 'widgetLabelAlarmSeverityType',
   // Appended with the timeseries chart's event markers.
   markAlarms: 'widgetLabelMarkAlarms',
+  markAlarmsScope: 'widgetLabelMarkAlarmsScope',
   markCommands: 'widgetLabelMarkCommands',
 };
 
@@ -140,6 +141,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   show: 'widgetHintFleetShow',
   deviceType: 'widgetHintAlarmSeverityType',
   markAlarms: 'widgetHintMarkAlarms',
+  markAlarmsScope: 'widgetHintMarkAlarmsScope',
   markCommands: 'widgetHintMarkCommands',
 };
 
@@ -191,6 +193,8 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'show:devices': 'widgetFleetShowDevices',
   'mode:slider': 'widgetControlModeSlider',
   'mode:stepper': 'widgetControlModeStepper',
+  'markAlarmsScope:series': 'widgetMarkAlarmsScopeSeries',
+  'markAlarmsScope:device': 'widgetMarkAlarmsScopeDevice',
 };
 
 const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
@@ -207,6 +211,8 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   groupBy: 'widgetPlaceholderDefault',
   show: 'widgetPlaceholderDefault',
   mode: 'widgetPlaceholderDefault',
+  // Unset is NOT a neutral default here: it is the whole device, what charts saved before the option do.
+  markAlarmsScope: 'widgetPlaceholderWholeDevice',
 };
 
 // Options added to a built-in's panel after the cutover that reuse a key the tables above already

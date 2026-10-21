@@ -17,6 +17,9 @@
 //   - a chart with no device reads nothing. It is NEVER given an unscoped subscription: on the alarm
 //     channel "no datasource" means every alarm in the tenant;
 //   - a paused board holds the events it showed at the pause (useHeld), as its readings are held;
+//   - the alarm scope ('series', or 'device' when unset) picks which of the device's alarms are DRAWN:
+//     'series' keeps those about a measurement the chart plots, and the others are listed apart
+//     ("other alarms on this device"), never drawn and never dropped;
 //   - a source that cannot supply a channel (a recording without alarms or commands) says so in a
 //     note instead of drawing none and implying there were none.
 
@@ -36,6 +39,7 @@ import {
   formatDateTime,
   formatTimestamp,
   optBoolean,
+  optString,
   spaceVar,
   useWidgetTimeRange,
   useWidgetTimeZone,
@@ -46,9 +50,11 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNod
 import { measurementSpan } from './binding-policy';
 import {
   alarmEvents,
+  alarmScope,
   commandEvents,
   MAX_EVENT_MARKERS,
   planMarkers,
+  splitByScope,
   type EventItem,
   type EventRange,
 } from './event-markers-model';
@@ -113,6 +119,7 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
   const ds = widget.datasource;
   const bound = ds !== undefined && ds.kind !== 'unbound';
   const wantAlarms = bound && optBoolean(widget.options, 'markAlarms') === true;
+  const scope = alarmScope(optString(widget.options, 'markAlarmsScope'));
   const wantCommands = bound && optBoolean(widget.options, 'markCommands') === true;
 
   // The range is part of the key: a new span, or a pause (which fixes the range's end), reads
@@ -139,8 +146,12 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
         ? formatDateTime(new Date(at).toISOString(), timeZone)
         : formatTimestamp(new Date(at).toISOString(), timeZone);
 
+    // What the chart plots: the measurements it names, else those its readings carry.
+    const named = ds?.measurements ?? [];
+    const charted = new Set<string>(named.length > 0 ? named : data.samples.map((s) => s.name));
+
     const deviceToken = ds?.kind === 'device' ? ds.deviceToken : undefined;
-    const items: EventItem[] = [];
+    const found: EventItem[] = [];
     const notes: string[] = [];
     let unloaded = 0;
 
@@ -153,7 +164,7 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
       channel('alarm', alarms);
       const snap = alarms.value;
       if (snap) {
-        items.push(...alarmEvents(snap.alarms, deviceToken, span, words, fmt));
+        found.push(...alarmEvents(snap.alarms, deviceToken, span, words, fmt));
         // The source counted the range before paging, so the rows past the page are exact.
         unloaded += Math.max(0, snap.total - snap.alarms.length);
       }
@@ -162,18 +173,23 @@ export default function EventMarkersFeed({ hub, widget, descriptor, data, Compon
       channel('command', commands);
       const snap = commands.value;
       if (snap) {
-        items.push(...commandEvents(snap.commands, span, words, fmt));
+        found.push(...commandEvents(snap.commands, span, words, fmt));
         unloaded += Math.max(0, snap.total - snap.commands.length);
       }
     }
 
-    const plan = planMarkers(items, span, theme);
+    const { drawn, other } = splitByScope(found, scope, charted);
+    const plan = planMarkers(drawn, span, theme);
     const more = plan.hidden + unloaded;
     if (more > 0) notes.push(words.more(more));
-    return { decorate: plan.decorate, footer: footerOf(plan.shown, notes, theme.severity) };
+    const listed = other.map((e) => ({
+      ...e,
+      detail: `${e.detail} · ${e.metric ? words.aboutMeasurement(e.metric) : words.noMeasurement}`,
+    }));
+    return { decorate: plan.decorate, footer: footerOf(plan.shown, listed, notes, theme.severity) };
     // `ds` is read through the keys (value identity). `alarms`/`commands` are the channels' values.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wantAlarms, wantCommands, alarms, commands, data.samples, theme, words, spanSeconds, pausedAt, now, timeZone, key]);
+  }, [wantAlarms, wantCommands, scope, alarms, commands, data.samples, theme, words, spanSeconds, pausedAt, now, timeZone, key]);
 
   return <Component widget={widget} data={data} actions={actions} markers={view} />;
 }
@@ -185,8 +201,13 @@ const FOOTER_STYLE = {
   padding: `0 ${spaceVar(2)}`,
 } as const;
 
-function footerOf(shown: readonly EventItem[], notes: readonly string[], severity: Record<string, string>): ReactNode {
-  if (shown.length === 0 && notes.length === 0) return null;
+function footerOf(
+  shown: readonly EventItem[],
+  other: readonly EventItem[],
+  notes: readonly string[],
+  severity: Record<string, string>,
+): ReactNode {
+  if (shown.length === 0 && other.length === 0 && notes.length === 0) return null;
   const words = eventMarkerStrings();
   return (
     <div data-chart-events="" style={FOOTER_STYLE}>
@@ -195,37 +216,48 @@ function footerOf(shown: readonly EventItem[], notes: readonly string[], severit
           {note}
         </div>
       ))}
-      {shown.length > 0 && (
-        // A native disclosure: reachable and operable from the keyboard, with the canvas's tooltips
-        // as its pointer-and-touch counterpart.
-        <details>
-          <summary style={{ cursor: 'pointer' }}>{words.events(shown.length)}</summary>
-          {/* The list scrolls past a few rows, so it takes focus: a keyboard can only scroll what it can reach. */}
-          <ul
-            tabIndex={0}
-            aria-label={words.events(shown.length)}
-            style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 96, overflowY: 'auto' }}
-          >
-            {[...shown].reverse().map((e) => (
-              <li key={e.id} data-chart-event={e.kind} style={{ display: 'flex', gap: spaceVar(1), alignItems: 'baseline' }}>
-                <span
-                  aria-hidden="true"
-                  style={{
-                    flex: 'none',
-                    width: 8,
-                    height: 8,
-                    background: e.level ? severity[e.level] : css('muted-foreground'),
-                    borderRadius: e.kind === 'command' ? 4 : 0,
-                  }}
-                />
-                <span>
-                  {e.title} · {e.detail}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {shown.length > 0 && <EventList events={shown} label={words.events(shown.length)} severity={severity} />}
+      {other.length > 0 && <EventList events={other} label={words.otherAlarms(other.length)} severity={severity} other />}
     </div>
+  );
+}
+
+function EventList({
+  events,
+  label,
+  severity,
+  other,
+}: {
+  events: readonly EventItem[];
+  label: string;
+  severity: Record<string, string>;
+  other?: boolean;
+}) {
+  return (
+    // A native disclosure: reachable and operable from the keyboard, with the canvas's tooltips
+    // as its pointer-and-touch counterpart.
+    <details data-chart-events-other={other ? '' : undefined}>
+      <summary style={{ cursor: 'pointer' }}>{label}</summary>
+      {/* The list scrolls past a few rows, so it takes focus: a keyboard can only scroll what it can reach. */}
+      <ul tabIndex={0} aria-label={label} style={{ margin: 0, padding: 0, listStyle: 'none', maxHeight: 96, overflowY: 'auto' }}>
+        {[...events].reverse().map((e) => (
+          <li key={e.id} data-chart-event={e.kind} style={{ display: 'flex', gap: spaceVar(1), alignItems: 'baseline' }}>
+            <span
+              aria-hidden="true"
+              style={{
+                flex: 'none',
+                width: 8,
+                height: 8,
+                background: e.level ? severity[e.level] : css('muted-foreground'),
+                borderRadius: e.kind === 'command' ? 4 : 0,
+              }}
+            />
+            <span>
+              {e.title} · {e.detail}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }

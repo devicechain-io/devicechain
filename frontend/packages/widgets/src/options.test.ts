@@ -130,6 +130,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   sparkline: ['stat-card'],
   // binding-policy.ts and event-markers-feed.tsx read which markers the timeseries chart draws.
   markAlarms: ['timeseries-chart'],
+  markAlarmsScope: ['timeseries-chart'],
   markCommands: ['timeseries-chart'],
 };
 
