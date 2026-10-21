@@ -31,7 +31,9 @@ var natsAuthIdentityFields = map[string]bool{"User": true, "SysUser": true}
 // The callout's two SEEDS are carried too, but not in the document: they travel in the Secret
 // only device-management mounts, and the test below holds both halves of that: they reach it,
 // and they do not reach the document every service reads.
-var natsAuthSecretFields = map[string]bool{"CalloutIssuerSeed": true, "CalloutXKeySeed": true}
+//
+// The identity account's PASSWORD is held the same way, in the Secret only user-management mounts.
+var natsAuthSecretFields = map[string]bool{"CalloutIssuerSeed": true, "CalloutXKeySeed": true, "IdentityPassword": true}
 
 // CalloutXKeyPublic is DERIVED from the xkey seed it belongs to, never carried on its own: a
 // public key that disagrees with its seed is a broker encrypting to a key nothing can open.
@@ -117,6 +119,18 @@ func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
 			t.Error("a callout SEED reached the values the instance document is composed from, " +
 				"which every service mounts")
 		}
+	}
+	// The identity login: in its own Secret, and nowhere in the document every service reads.
+	idSpec, ok := identitySecret(st)
+	if !ok {
+		t.Fatal("an instance with broker authentication writes no identity Secret")
+	}
+	if idSpec.Data[identitySecretKey] != "sentinel-nats-IdentityPassword" {
+		t.Errorf("the hydrated identity password did not reach the identity Secret: %v", idSpec.Data)
+	}
+	if strings.Contains(got, "sentinel-nats-IdentityPassword") {
+		t.Error("the identity PASSWORD reached the values the instance document is composed from, " +
+			"which every service mounts")
 	}
 	// The derived key is the one the seed owns, and it is what the document records.
 	if !strings.Contains(got, minted.XKeyPublic) {

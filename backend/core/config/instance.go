@@ -395,6 +395,19 @@ type NatsAuthConfiguration struct {
 	// exists only in dcctl's view of a running instance (see CalloutIssuerSeed) and is never
 	// written to the document.
 	CalloutXKeySeed string
+	// IdentityAccount says the broker has the IDENTITY account (natsauth.IdentityAccount) and
+	// user-management must open its sign-in buckets there. The flag is not secret and rides in the
+	// document every service reads; the login's PASSWORD does not. It lives in a Secret of its own
+	// that only user-management mounts (DC_NATS_IDENTITY_PASSWORD).
+	//
+	// 🔴 FAIL CLOSED. When this is true user-management refuses to start without the password, and
+	// without a reachable account, rather than quietly keeping the buckets in the shared account
+	// where any service login can read them. When it is false (a broker with no authentication, or
+	// one built before the account existed) the buckets stay where they were.
+	IdentityAccount bool
+	// IdentityPassword is dcctl's view of a running instance only (DeployedInstanceConfig overlays
+	// it from the identity Secret). Nothing writes it into the document and no service reads it.
+	IdentityPassword string
 }
 
 // CalloutEnabled reports whether the broker runs the device auth callout. It is keyed on the

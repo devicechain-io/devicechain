@@ -696,6 +696,8 @@ func deployedBrokerHashesIn(ctx context.Context, typed kubernetes.Interface, nam
 				out.Service = m[1]
 			case natsauth.SysUser:
 				out.Sys = m[1]
+			case natsauth.IdentityUser:
+				out.Identity = m[1]
 			}
 		}
 	}
@@ -756,6 +758,12 @@ func deployedInstanceConfigVia(ctx context.Context, typed kubernetes.Interface, 
 				cfg.Infrastructure.Nats.Auth.CalloutIssuerSeed = issuer
 			}
 			cfg.Infrastructure.Nats.Auth.CalloutXKeySeed = xkey
+			// ...and the identity-account login, from the Secret only user-management mounts.
+			identity, err := readIdentityPassword(ctx, typed, candidate, instanceId)
+			if err != nil {
+				return nil, err
+			}
+			cfg.Infrastructure.Nats.Auth.IdentityPassword = identity
 			return cfg, nil
 		case apierrors.IsNotFound(err):
 			continue

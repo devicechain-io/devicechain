@@ -196,6 +196,22 @@ holds the two together.
 {{- .Values.instance.calloutSecret | default (printf "dci-%s-callout" .Values.instance.id) -}}
 {{- end -}}
 
+{{/*
+The Secret holding the password for the broker's IDENTITY account (key `password`), projected as
+DC_NATS_IDENTITY_PASSWORD into user-management and no other area. That account holds the sign-in
+buckets (refresh tokens, OAuth and single sign-on codes), and the password is why no other pod can
+open it. dcctl writes it under this default name; instance.identitySecret overrides it for an
+install that manages the Secret itself.
+
+It is a Secret of its own, and not a key in the instance document, for the reason the callout
+Secret is: that document is mounted by every pod. The name is spelled in Go too
+(identitySecretName in backend/cli/bootstrap/identitysecret.go);
+TestTheChartReadsTheIdentitySecretDcctlWrites holds the two together.
+*/}}
+{{- define "devicechain.identitySecret" -}}
+{{- .Values.instance.identitySecret | default (printf "dci-%s-identity" .Values.instance.id) -}}
+{{- end -}}
+
 {{/* The per-service config ConfigMap name. */}}
 {{- define "devicechain.microserviceConfigMap" -}}
 {{- printf "dct-%s-config" .Values.instance.id -}}

@@ -311,6 +311,30 @@ variable "sys_password_bcrypt" {
   sensitive   = true
 }
 
+variable "identity_password_bcrypt" {
+  description = <<-EOT
+    BCRYPT HASH ($2a$...) of the `dc_identity` password: the one login of the IDENTITY account, which
+    holds user-management's sign-in buckets (refresh tokens, OAuth and single sign-on codes, sign-in
+    backoff). Only user-management holds the plaintext (a Secret only its Deployment mounts).
+
+    WHY AN ACCOUNT. Those buckets hold bearer secrets. A login that can create JetStream streams can
+    source, mirror or subject-capture a bucket into a stream of its own and read the copy, and the
+    server writes the copy past every user permission, so a deny on the shared `dc_service` login
+    closes nothing. A stream cannot cross an account boundary, and nothing else needs these buckets,
+    so the account shares nothing: no import, no export.
+
+    EMPTY (the default) renders no IDENTITY account: every instance before it existed, whose
+    sign-in buckets stay in APP. An upgrade passes the hash on its first apply; the services then
+    roll onto a user-management that opens the account.
+
+    auth_callout cannot be hot-reloaded and the new login joins its auth_users, so setting this
+    rolls the broker. Sensitive.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "mqtt_node_port" {
   description = <<-EOT
     Local-kind only: expose the MQTT gateway as a NodePort on this node port so a
@@ -484,6 +508,22 @@ locals {
   sys_user            = "dc_sys"
   sys_publish_allow   = ["$SYS.REQ.SERVER.PING", "$SYS.REQ.SERVER.*.CONNZ", "$SYS.REQ.SERVER.*.KICK"]
   sys_subscribe_allow = ["$SYS.ACCOUNT.APP.CONNECT", "$SYS.ACCOUNT.APP.DISCONNECT", "_INBOX.>"]
+  # The IDENTITY account (see var.identity_password_bcrypt): its login, and the one account block
+  # it adds. Kept in sync with natsauth.IdentityUser / natsauth.IdentityAccount (a Go test reads
+  # this file). It is rendered only when a hash was supplied, so an instance that has not minted the
+  # credential renders exactly what it did before. `jetstream = "enabled"` and nothing else, for
+  # the reason the APP account's comment gives: explicit account limits bill a reservation times its
+  # replica count and fail at a third of the number written; the server's max_file_store is the ceiling.
+  identity_user    = "dc_identity"
+  identity_account = "IDENTITY"
+  identity_enabled = var.identity_password_bcrypt != ""
+  identity_accounts = local.identity_enabled ? {
+    (local.identity_account) = {
+      jetstream = "enabled"
+      users     = [{ user = local.identity_user, password = var.identity_password_bcrypt }]
+    }
+  } : {}
+
   sys_users = var.sys_password_bcrypt == "" ? [] : [{
     user        = local.sys_user
     password    = var.sys_password_bcrypt
@@ -670,7 +710,7 @@ locals {
   # FRESH JetStream state. A real migration would export/import streams across
   # accounts.
   auth_merge_content = {
-    accounts = {
+    accounts = merge({
       APP = {
         jetstream = "enabled"
         users     = [{ user = local.service_user, password = var.service_password_bcrypt, permissions = { publish = { deny = local.service_publish_deny } } }]
@@ -680,7 +720,7 @@ locals {
       # tap reads and the CONNZ request it makes are both served INSIDE SYS, and a
       # subscriber there is a plain core-NATS client.
       SYS = { users = local.sys_users }
-    }
+    }, local.identity_accounts)
     system_account = "SYS"
     authorization = {
       # NUMBER of seconds, not a duration string: nats-server's authorization
@@ -705,8 +745,10 @@ locals {
       # the clear. It is merged in only when set, so an empty value renders the block
       # exactly as before (an `xkey: ""` would be a different config, not an absent one).
       auth_callout = merge({
-        issuer     = var.callout_issuer_public
-        auth_users = [local.service_user, local.sys_user]
+        issuer = var.callout_issuer_public
+        # dc_identity is listed when its account exists, for the reason this list exists at all: a login
+        # absent from it is handed to the DEVICE callout, which refuses it.
+        auth_users = concat([local.service_user, local.sys_user], local.identity_enabled ? [local.identity_user] : [])
         account    = "APP"
       }, var.callout_xkey_public == "" ? {} : { xkey = var.callout_xkey_public })
     }
@@ -1216,6 +1258,13 @@ resource "helm_release" "nats" {
     precondition {
       condition     = !var.enable_auth || (var.callout_issuer_public != "" && var.service_password_bcrypt != "")
       error_message = "nats enable_auth=true requires non-empty callout_issuer_public and service_password_bcrypt (mint them via dcctl / the genauth helper)."
+    }
+
+    # An identity login without the broker auth it belongs to would be a hash in a config that
+    # authenticates nobody, and the operator reading it would believe the buckets were isolated.
+    precondition {
+      condition     = var.identity_password_bcrypt == "" || var.enable_auth
+      error_message = "nats identity_password_bcrypt is set but enable_auth is false: there is no broker authentication for the identity account to separate."
     }
 
     # An xkey without the callout it encrypts is a config the broker would carry for nothing,
