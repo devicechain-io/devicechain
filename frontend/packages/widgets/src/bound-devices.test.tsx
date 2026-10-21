@@ -376,6 +376,10 @@ describe('nothing is shown for a link before it has been checked', () => {
     await settle();
     expect(g.asked).toEqual(['hauler-2', 'not-yours']);
     expect(source.ever('not-yours')).toHaveLength(0);
+    // While it is checked, the board is not shown at all: the previous device under the new
+    // address would be the wrong device under the link.
+    expect(screen.getByText('checking')).toBeTruthy();
+    expect(source.live('hauler-2')).toHaveLength(0);
 
     await g.answer('not-yours', false);
     expect(screen.getByTestId('bound-devices-notice').textContent).toContain('missing not-yours');
