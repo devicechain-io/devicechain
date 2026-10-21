@@ -72,8 +72,12 @@ export function FleetCount({ widget, data }: WidgetProps) {
   if (!showDevices && fleet.members.length === 0) return empty(strings.noMembers);
   // A count over the members read so far would be an undercount that looks like an answer.
   if (counted && counted.pending > 0) return empty(strings.loading);
-  // Every member reports something, none of them this: there is no "N" here either.
-  if (counted && counted.members === 0) return empty(strings.noneMeasured);
+  // Every member reports something, none of them this: there is no "N" here either. Over a
+  // truncated group only the members read were asked, so the message says so rather than speaking
+  // for devices past the page.
+  if (counted && counted.members === 0) {
+    return empty(fleet.truncated ? strings.noneMeasuredShown(fleet.members.length, fleet.total) : strings.noneMeasured);
+  }
 
   const figure = showDevices ? String(fleet.total) : String(counted!.flagged);
   const unit = showDevices ? undefined : strings.countOf(counted!.members);

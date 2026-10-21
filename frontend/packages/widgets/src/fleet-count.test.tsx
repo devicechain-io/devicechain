@@ -196,6 +196,13 @@ describe('the attention count', () => {
     expect(s.figure).toBeUndefined();
   });
 
+  it('does not speak for a whole truncated group when none of the devices read reports the measurement', () => {
+    sizedAt(300, 300);
+    const s = show(fleet([member('p', undefined, { observed: ['throughput'] })], { total: 812, truncated: true }));
+    expect(s.empty).toBe('None of the 1 of 812 devices read reports this');
+    expect(s.figure).toBeUndefined();
+  });
+
   it('has no figure while any member is still loading: a partial count is an undercount', () => {
     sizedAt(300, 300);
     const s = show(fleet([member('a', 5), member('b', undefined, { seed: 'pending' }), member('c', 50)]));
