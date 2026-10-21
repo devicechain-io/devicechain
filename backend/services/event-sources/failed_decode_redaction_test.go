@@ -66,8 +66,9 @@ func TestFailedDecodeKeepsNoCredentialFromABodyThatDecodesExceptForItsTime(t *te
 		`"payload":{"entries":[{"name":"temp","value":21.5}]}}`
 	stored := string(routeFailedDecode(t, body))
 	require.NotContains(t, stored, fixtureSecret)
+	require.NotContains(t, stored, "cred-1", "the credential id is redacted with the secret")
 	// Diagnostics survive: the field names and the other values are still there.
-	for _, want := range []string{`"device":"dev-1"`, `"occurredTime":"not-a-time"`, `"credentialId":"cred-1"`, `"temp"`, `21.5`, `"credentialSecret"`} {
+	for _, want := range []string{`"device":"dev-1"`, `"occurredTime":"not-a-time"`, `"credentialType":"mqtt-basic"`, `"temp"`, `21.5`, `"credentialSecret"`} {
 		require.Contains(t, stored, want)
 	}
 }
@@ -113,9 +114,61 @@ func TestABodyCredentialOnThePlatformBrokerIsCountedAndRecordedWithoutItsSecret(
 	require.Len(t, w.sent, 1)
 	stored := string(w.sent[0].Value)
 	require.NotContains(t, stored, fixtureSecret)
+	require.NotContains(t, stored, "cred-1", "the credential id is redacted too")
 	require.Contains(t, stored, `"device":"dev-1"`, "the record must name the device, so the operator can rotate its credential")
 
 	// A different refusal does not move it.
 	require.NoError(t, onEventDecodeFailed("gw", "t1", []byte(body), errors.New("bad json")))
 	require.Equal(t, 1.0, testutil.ToFloat64(CredentialInMqttBodyCounter.WithLabelValues("gw")))
+}
+
+// The bearer token of an ACCESS_TOKEN credential is carried as credentialId. Every scan below
+// looks at the WHOLE persisted record, not one field: a value that survives in a field the
+// test did not think to name is exactly the leak.
+const fixtureToken = "fixture-access-token-bearer-value"
+
+func requireAbsent(t *testing.T, stored []byte, needles ...string) {
+	t.Helper()
+	for _, n := range needles {
+		require.NotContains(t, string(stored), n)
+	}
+}
+
+func TestFailedDecodeKeepsNoAccessTokenCredentialId(t *testing.T) {
+	body := `{"device":"dev-1","eventType":"measurements","occurredTime":"not-a-time",` +
+		`"credentialType":"access-token","credentialId":"` + fixtureToken + `",` +
+		`"payload":{"entries":[{"name":"temp","value":21.5}]}}`
+	stored := routeFailedDecode(t, body)
+	requireAbsent(t, stored, fixtureToken)
+	require.Contains(t, string(stored), `"credentialType":"access-token"`, "the type stays: it says what kind of failure to look for")
+}
+
+func TestFailedDecodeKeepsNoMqttBasicIdOrSecret(t *testing.T) {
+	body := `{"device":"dev-1","eventType":"measurements","occurredTime":"not-a-time",` +
+		`"credentialType":"mqtt-basic","credentialId":"fixture-login-name","credentialSecret":"` + fixtureSecret + `",` +
+		`"payload":{"entries":[{"name":"temp","value":21.5}]}}`
+	requireAbsent(t, routeFailedDecode(t, body), "fixture-login-name", fixtureSecret)
+}
+
+func TestFailedDecodeKeepsNoCredentialFromOddlyPlacedOrDuplicatedFields(t *testing.T) {
+	for name, body := range map[string]string{
+		"duplicated": `{"credentialId":"` + fixtureToken + `","device":"d","occurredTime":"not-a-time",` +
+			`"credentialId":"` + fixtureToken + `-2","credentialSecret":"` + fixtureSecret + `","credentialSecret":"` + fixtureSecret + `-2"}`,
+		"nested": `{"device":"d","occurredTime":"not-a-time","payload":{"credentialId":"` + fixtureToken + `",` +
+			`"inner":[{"credentialSecret":"` + fixtureSecret + `"}]}}`,
+		"case and separator": `{"device":"d","occurredTime":"not-a-time","Credential_ID":"` + fixtureToken + `","CREDENTIAL-SECRET":"` + fixtureSecret + `"}`,
+		// I is 'I': the decoder reads this key as credentialId, so the redactor must too.
+		"escaped key":   `{"device":"d","occurredTime":"not-a-time","credentialId":"` + fixtureToken + `"}`,
+		"first of many": `{"credentialId":"` + fixtureToken + `","credentialSecret":"` + fixtureSecret + `","device":"d","occurredTime":"not-a-time"}`,
+		"non-string id": `{"device":"d","occurredTime":"not-a-time","credentialId":{"v":"` + fixtureToken + `"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			requireAbsent(t, routeFailedDecode(t, body), fixtureToken, fixtureSecret)
+		})
+	}
+}
+
+func TestFailedDecodeKeepsNoCredentialIdFromAMalformedBody(t *testing.T) {
+	body := `{"credentialId":"` + fixtureToken + `","credentialSecret":"` + fixtureSecret + `","payload":[`
+	requireAbsent(t, routeFailedDecode(t, body), fixtureToken, fixtureSecret)
 }

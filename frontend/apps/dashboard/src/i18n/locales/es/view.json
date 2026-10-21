@@ -14,5 +14,16 @@
   "themeToDark": "Tema oscuro",
   "themeToLight": "Tema claro",
   "timeRange": "Intervalo de tiempo",
+  "linkBlockedTitle": "Este enlace no puede abrir el panel como se pidió",
+  "linkUnknownSlot": "El panel no tiene ningún slot llamado \"{{slot}}\".",
+  "linkNotDeviceSlot": "El slot \"{{slot}}\" admite un grupo, no un único dispositivo.",
+  "linkDuplicateSlot": "El enlace nombra el slot \"{{slot}}\" más de una vez.",
+  "linkDerivedSlot": "El slot \"{{slot}}\" sigue a otro slot, así que un enlace no puede elegir su dispositivo.",
+  "linkInvalidToken": "\"{{token}}\" no es un token de dispositivo válido (slot \"{{slot}}\").",
+  "linkMissing": "El dispositivo \"{{token}}\" (slot \"{{slot}}\") no existe, o no tienes acceso a él.",
+  "linkFailed": "No se pudo comprobar el dispositivo \"{{token}}\" (slot \"{{slot}}\").",
+  "linkOpenWithout": "Abrir el panel sin él",
+  "linkRetry": "Reintentar",
+  "linkChecking": "Comprobando el enlace…",
   "untitled": "Panel"
 }

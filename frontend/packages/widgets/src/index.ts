@@ -20,6 +20,23 @@ export {
   type TimeRangeLabels,
 } from './time-range-bar';
 
+// Deep links that open a board with a device bound: the hook that keeps the address and the
+// selection in step (and checks the named devices against the caller's scope), and the notice a
+// host shows instead of the board when a link cannot be honoured.
+export {
+  useBoundDevices,
+  type BoundDevices,
+  type BoundDevicesAddress,
+  type BoundDevicesPhase,
+  type LinkProblems,
+} from './use-bound-devices';
+export {
+  BoundDevicesNotice,
+  describeBoundDevicesProblems,
+  type BoundDevicesNoticeProps,
+  type BoundDevicesWording,
+} from './bound-devices-notice';
+
 // Renderer entry point: binds the hub to a widget by type.
 export { ConnectedWidget, type ConnectedWidgetProps } from './connected-widget';
 

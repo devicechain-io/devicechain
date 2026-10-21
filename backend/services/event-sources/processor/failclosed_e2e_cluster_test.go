@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,7 @@ import (
 	"github.com/devicechain-io/dc-event-sources/presence"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/natsauth"
 	corepresence "github.com/devicechain-io/dc-microservice/presence"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -76,14 +78,28 @@ const (
 
 // clusterAccounts gives every node an application account with JetStream, which the platform
 // and the devices use, and a system account the presence tap reads the advisories on.
-const clusterAccounts = `
+//
+// The platform's login carries the same publish deny the infrastructure module gives the shared
+// service login, so this test cannot lean on it to speak the device-events namespace: the devices
+// are their own login ("dev"), as a real device is under its callout grant, and the platform
+// reaches that namespace only through the broker's MQTT gateway.
+func clusterAccounts() string {
+	deny := make([]string, 0, 2)
+	for _, s := range natsauth.ServicePublishDeny() {
+		deny = append(deny, strconv.Quote(s))
+	}
+	return fmt.Sprintf(`
 accounts {
-  APP: { jetstream: enabled, users: [ {user: dc_service, password: svc} ] }
+  APP: { jetstream: enabled, users: [
+    {user: dc_service, password: svc, permissions: { publish: { deny: [%s] } }},
+    {user: dev, password: dev}
+  ] }
   SYS: { users: [ {user: dc_sys, password: sys} ] }
 }
 system_account: SYS
 no_auth_user: dc_service
-`
+`, strings.Join(deny, ", "))
+}
 
 // ledger is what was PUBACKed to the devices and what reached inbound-events.
 type ledger struct {
@@ -292,7 +308,7 @@ func connectClusterDevice(t *testing.T, url, token string) *clusterDevice {
 	require.NoError(t, err)
 	d := &clusterDevice{token: token, store: mqttack.NewStore(), errs: make(chan error, 1)}
 	opts := mqtt.NewClientOptions().AddBroker(url).SetClientID(clientID).
-		SetUsername("dc_service").SetPassword("svc").
+		SetUsername("dev").SetPassword("dev").
 		SetCleanSession(false).SetStore(d.store).
 		SetAutoReconnect(true).SetConnectRetry(true).SetConnectRetryInterval(250 * time.Millisecond).
 		SetMaxReconnectInterval(500 * time.Millisecond).SetConnectTimeout(10 * time.Second).
@@ -406,7 +422,7 @@ func TestFailClosedOnAClusterUnderLoadLosesNoPubackedMessage(t *testing.T) {
 		t.Skip("a minutes-long load run on a three-node cluster")
 	}
 	conf := filepath.Join(t.TempDir(), "accounts.conf")
-	require.NoError(t, os.WriteFile(conf, []byte(clusterAccounts), 0o600))
+	require.NoError(t, os.WriteFile(conf, []byte(clusterAccounts()), 0o600))
 	servers, _ := dctest.StartJetStreamClusterConfigured(t, 3, func(i int, o *natsserver.Options) {
 		parsed, err := natsserver.ProcessConfigFile(conf)
 		if err != nil {

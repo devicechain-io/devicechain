@@ -85,6 +85,9 @@ const LEGACY_LABEL: Record<string, string> = {
   pageSize: 'widgetLabelPageSize',
   ageLagSeconds: 'widgetLabelAgeLag',
   columns: 'widgetLabelColumns',
+  // Appended with the stat card trend and the fleet count.
+  sparkline: 'widgetLabelSparkline',
+  show: 'widgetLabelFleetShow',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -128,6 +131,8 @@ const LEGACY_HINT: Record<string, string | null> = {
   pageSize: null,
   ageLagSeconds: 'widgetHintAgeLag',
   columns: 'widgetHintColumns',
+  sparkline: 'widgetHintSparkline',
+  show: 'widgetHintFleetShow',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -173,6 +178,8 @@ const LEGACY_ENUM_VALUE: Record<string, string> = {
   'sort:descending': 'widgetSortDescending',
   'groupBy:measurement': 'widgetGroupByMeasurement',
   'groupBy:device': 'widgetGroupByDevice',
+  'show:attention': 'widgetFleetShowAttention',
+  'show:devices': 'widgetFleetShowDevices',
 };
 
 const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
@@ -187,6 +194,7 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
   stat: 'widgetPlaceholderDefault',
   sort: 'widgetPlaceholderDefault',
   groupBy: 'widgetPlaceholderDefault',
+  show: 'widgetPlaceholderDefault',
 };
 
 const LEGACY_CUSTOM: Record<string, 'command' | 'slot'> = {
@@ -312,9 +320,9 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
     fireEvent.click(within(kindField).getAllByRole('button')[0]);
     // A deliberate change since the pre-registry editor: a telemetry widget that shows readings by
     // measurement name shows ONE device (a group would mix its devices' readings), so only the
-    // fleet widgets -- the fleet table and the bar chart, whose one-bar-per-device mode reads a
+    // fleet widgets -- the fleet table, the fleet count and the bar chart, whose one-bar-per-device mode reads a
     // group -- are offered a group, beside the alarm and map widgets.
-    const fleet = type === 'fleet-table' || type === 'bar-chart';
+    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count';
     const takesGroup = channel === 'alarm' || channel === 'location' || (channel === 'measurement' && fleet);
     expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(takesGroup);
   });

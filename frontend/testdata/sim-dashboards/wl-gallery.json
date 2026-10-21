@@ -827,6 +827,7 @@
       "options": {
         "measurement": "temperature",
         "precision": 1,
+        "sparkline": true,
         "stat": "avg",
         "title": "Average temperature",
         "unit": "C"
@@ -1307,6 +1308,73 @@
         "unit": "C"
       },
       "type": "bar-chart"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "zone"
+      },
+      "id": "wl-fleet-count",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 3,
+          "mode": "grid",
+          "row": 51,
+          "rows": 3
+        }
+      },
+      "options": {
+        "measurement": "temperature",
+        "show": "attention",
+        "thresholds": [
+          {
+            "level": "normal",
+            "value": 15
+          },
+          {
+            "level": "warning",
+            "value": 28
+          },
+          {
+            "level": "critical",
+            "value": 32
+          }
+        ],
+        "title": "Sensors needing attention"
+      },
+      "type": "fleet-count"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [
+          "temperature",
+          "humidity",
+          "battery"
+        ],
+        "slot": "zone"
+      },
+      "id": "wl-fleet-devices",
+      "layout": {
+        "base": {
+          "col": 3,
+          "cols": 3,
+          "mode": "grid",
+          "row": 51,
+          "rows": 3
+        }
+      },
+      "options": {
+        "show": "devices",
+        "title": "Sensors in the zone"
+      },
+      "type": "fleet-count"
     }
   ]
 }

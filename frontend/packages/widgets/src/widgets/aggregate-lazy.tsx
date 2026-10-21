@@ -29,6 +29,11 @@ export const pieChartWidget = defineWidget({
   implementation: { kind: 'trusted-react', component: chunk.component('PieChart') },
 });
 
+export const fleetCountWidget = defineWidget({
+  descriptor: builtinWidgetDescriptors['fleet-count'],
+  implementation: { kind: 'trusted-react', component: chunk.component('FleetCount') },
+});
+
 export const fleetTableWidget = defineWidget({
   descriptor: builtinWidgetDescriptors['fleet-table'],
   implementation: { kind: 'trusted-react', component: chunk.component('FleetTable') },

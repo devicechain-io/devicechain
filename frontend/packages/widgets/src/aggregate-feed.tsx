@@ -16,6 +16,9 @@
 //     (one chart bucket of the span: a minute for an hour, 42 minutes for a week), so every card on
 //     the board reads at the same moment and the hub serves identical reads once; paused, it ends
 //     at the freeze instant and is read once, so the number on screen does not move;
+//   - a card with `sparkline` set reads the SAME window in the span's chart buckets
+//     (bucketSecondsFor) instead of one, and keeps each bucket as a trend point; the figure is
+//     folded from those buckets and is the same number either way;
 //   - a hidden tab does not read; it reads once when it is shown again;
 //   - a live feed that resumes after an interruption reads again at once, so the figures take in
 //     the readings sent during the outage (and a read that failed during it stops saying so) without
@@ -24,6 +27,7 @@
 //     result is tagged with the key it was read for, and a mismatch reads as loading.
 
 import {
+  bucketSecondsFor,
   DEFAULT_TIME_RANGE_SECONDS,
   type AggregateResult,
   type AggregateStreamState,
@@ -32,10 +36,10 @@ import {
   type WidgetDescriptor,
   type WidgetInstance,
 } from '@devicechain/dashboards';
-import { useMeasurementStream, useWidgetTimeRange } from '@devicechain/widget-sdk';
+import { optBoolean, useMeasurementStream, useWidgetTimeRange } from '@devicechain/widget-sdk';
 import { useEffect, useMemo, useReducer, useState, type ComponentType } from 'react';
 
-import { aggregateBuckets, aggregateRefreshMs, aggregateWindow } from './aggregate-fold';
+import { aggregateBuckets, aggregateRefreshMs, aggregateSeries, aggregateWindow } from './aggregate-fold';
 import { measurementSpan } from './binding-policy';
 
 const LOADING: AggregateResult = { status: 'loading' };
@@ -63,7 +67,8 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
   const [resumes, resumed] = useReducer((n: number) => n + 1, 0);
   const stream = useMeasurementStream(hub, ds, { window: 1, pausedAt, now, onReconnect: resumed });
 
-  const key = JSON.stringify([ds ?? null, spanSeconds, pausedAt ?? null]);
+  const trend = optBoolean(widget.options, 'sparkline');
+  const key = JSON.stringify([ds ?? null, spanSeconds, pausedAt ?? null, trend]);
   const supported = hub.bucketMeasurements !== undefined;
   const [tagged, setTagged] = useState<{ key: string; result: AggregateResult }>({ key, result: LOADING });
 
@@ -71,13 +76,14 @@ export default function AggregateFeed({ hub, widget, descriptor, Component, acti
     if (!supported || !ds) return;
     let current = true;
     const run = (): void => {
-      const { window, spanSeconds: covered } = aggregateWindow(spanSeconds, pausedAt ?? now());
+      const { window, spanSeconds: covered } = aggregateWindow(spanSeconds, pausedAt ?? now(), trend ? bucketSecondsFor(spanSeconds) : undefined);
       // Folded inside the chain, so a bucket that cannot be trusted fails the read like a network error.
-      hub.bucketMeasurements!(ds, window).then(aggregateBuckets).then(
-        (byName) => {
+      hub.bucketMeasurements!(ds, window).then((buckets) => ({ byName: aggregateBuckets(buckets), buckets })).then(
+        ({ byName, buckets }) => {
           if (!current) return;
           const { startTime, endTime } = window;
-          setTagged({ key, result: { status: 'ready', byName, startTime, endTime, spanSeconds: covered } });
+          const series = trend ? { series: aggregateSeries(buckets) } : {};
+          setTagged({ key, result: { status: 'ready', byName, ...series, startTime, endTime, spanSeconds: covered } });
         },
         (err: unknown) => {
           if (!current) return;

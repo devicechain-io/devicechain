@@ -83,6 +83,7 @@ describe('the built-in registry', () => {
         'entity-selector': { selection: true, candidates: true },
         // The device column drills like the alarm table's originator.
         'fleet-table': { selection: true },
+        map: { selection: true },
       };
       expect(descriptor.interactions).toEqual(expected[type] ?? {});
     });
