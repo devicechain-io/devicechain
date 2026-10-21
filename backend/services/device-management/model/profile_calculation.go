@@ -217,6 +217,12 @@ func (r ProfileResolution) DeviceConstants(metadata *datatypes.JSON) []calcfield
 	return readConstants(*metadata, r.calc.constKeys)
 }
 
+// ReadsDeviceConstants reports whether this version's formulas read any device constant:
+// ConstantKeys without the copy, for the resolver's per-event check.
+func (r ProfileResolution) ReadsDeviceConstants() bool {
+	return r.calc != nil && len(r.calc.constKeys) > 0
+}
+
 // ConstantKeys returns the device constants this version's formulas read, sorted; empty when
 // none. A copy.
 func (r ProfileResolution) ConstantKeys() []string {

@@ -417,6 +417,7 @@ func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType s
 	result := api.presentedCredentialStatement(ctx, credentialType, credentialId, device).
 		Select(connectCredentialColumns).
 		Find(&found)
+	markMetadataUnread(found)
 	return oneLiveCredential(result, found, credentialType, credentialId)
 }
 
@@ -460,7 +461,18 @@ func (api *Api) deviceCredentialForAuth(ctx context.Context, credentialType stri
 	result := api.presentedCredentialStatement(ctx, credentialType, credentialId, device).
 		Select(authCredentialColumns).
 		Find(&found)
+	markMetadataUnread(found)
 	return oneLiveCredential(result, found, credentialType, credentialId)
+}
+
+// markMetadataUnread marks the device of each row a narrow lookup found as read without
+// its metadata (Device.MetadataRead), so a nil Metadata on it is not taken for none stored.
+func markMetadataUnread(found []*DeviceCredential) {
+	for _, c := range found {
+		if c != nil && c.Device != nil {
+			c.Device.metadataUnread = true
+		}
+	}
 }
 
 // presentedCredentialStatement is the one statement that resolves a presented
