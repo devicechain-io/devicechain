@@ -58,6 +58,7 @@ export const OPTION_DOCS: Readonly<Record<string, string>> = {
   onAt: 'For an on/off signal: the lamp is lit at or above this value and dark below it. Unset keeps the lamp lit while a value is present, coloured by its threshold band.',
   parameter: 'Which parameter of the command this control sets. May be left blank when the command has exactly one parameter of the right type.',
   step: 'Distance between values. Defaults to 1 for a whole-number parameter, else a hundredth of the range.',
+  mode: 'Slider (default) or stepper: − / + and Send.',
   stat: 'Which figure to show. Default average.',
   sparkline: 'Draw the measurement’s trend over the span under the figure. Default off.',
   sort: 'Order of the categories. Default: as the data source lists them.',

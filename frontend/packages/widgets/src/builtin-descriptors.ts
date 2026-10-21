@@ -972,7 +972,6 @@ export const builtinWidgetDescriptors = {
         labelId: 'widgetLabelControlMode',
         valueLabelIds: { slider: 'widgetControlModeSlider', stepper: 'widgetControlModeStepper' },
         placeholderId: 'widgetPlaceholderDefault',
-        doc: 'Slider (default) or stepper: − / + and Send.',
       },
     },
     constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
