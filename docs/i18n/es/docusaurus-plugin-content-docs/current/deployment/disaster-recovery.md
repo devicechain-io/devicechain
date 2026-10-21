@@ -253,8 +253,8 @@ filas recuperadas en el paso 1 pueden descifrarse. Se te pedirá la frase de con
 artefacto, o puedes proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCROW_PASSPHRASE`.
 
 Las credenciales del broker no están en el depósito y no necesitan estarlo. La instancia
-reconstruida acuña unas nuevas, incluidas las claves del callout de autenticación de dispositivos,
-y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
+reconstruida acuña unas nuevas, incluidas las claves del callout de autenticación de dispositivos y la credencial de la cuenta de
+identidad del broker, y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
 ninguna de ellas: inician sesión con sus propias credenciales, que vuelven con la base de datos.
 
 `dcctl bootstrap` se niega a hacerlo de otra manera; es la primera de las dos comprobaciones
@@ -467,7 +467,10 @@ Un cambio de versión no puede convertirse en un cambio de credenciales. Lo úni
 una credencial que no existía: la primera actualización de una instancia construida antes de que se
 cifrara la devolución de llamada de autenticación de dispositivos acuña la clave de cifrado de esa
 devolución, la guarda junto con la semilla del emisor en el Secret de la instancia para ella, y no
-la reemplaza nunca después.
+la reemplaza nunca después. Lo mismo vale para la credencial de la cuenta de identidad del broker,
+que guarda el estado de inicio de sesión: se acuña una sola vez, se guarda en un Secret que solo
+monta `user-management` y se conserva desde entonces. El estado de inicio de sesión no se restaura
+desde una copia, así que tras una reconstrucción todos inician sesión de nuevo.
 
 ### Terminar un bootstrap que falló a mitad de camino {#resuming-a-bootstrap}
 

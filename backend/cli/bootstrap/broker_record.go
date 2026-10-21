@@ -83,9 +83,13 @@ type brokerRecord struct {
 	// XKeySeed is the callout's curve seed. Optional on read, unlike the three secrets around
 	// it: a record written before the xkey existed is a valid record, and the absence reads as
 	// "introduce one", which is the one thing a missing credential may mean here.
-	XKeySeed        string `json:"xkeySeed,omitempty"`
-	ServicePassword string `json:"servicePassword"`
-	SysPassword     string `json:"sysPassword"`
+	XKeySeed string `json:"xkeySeed,omitempty"`
+	// IdentityPassword is the login for the broker's identity account. Optional on read for the
+	// same reason as XKeySeed: a record written before the account existed is valid, and the
+	// absence reads as "introduce one".
+	IdentityPassword string `json:"identityPassword,omitempty"`
+	ServicePassword  string `json:"servicePassword"`
+	SysPassword      string `json:"sysPassword"`
 }
 
 // brokerRecordPathFor resolves the record's path. A seam so tests never touch a real

@@ -320,11 +320,18 @@ func applyDeployedInfrastructure(st *State, deployed *config.InstanceConfigurati
 	st.Values["natsCalloutIssuerSeed"] = nats.Auth.CalloutIssuerSeed
 	st.Values["natsCalloutXKeySeed"] = nats.Auth.CalloutXKeySeed
 	st.Values["natsCalloutIssuerPublic"] = nats.Auth.CalloutIssuerPublic
+	st.Values["natsIdentityPassword"] = nats.Auth.IdentityPassword
+	if nats.Auth.IdentityAccount {
+		st.Values[identityDeployedValue] = "true"
+	}
 	st.Values["natsServicePassword"] = nats.Auth.Password
 	st.Values["natsSysPassword"] = nats.Auth.SysPassword
 	st.Values["serviceAuthSecret"] = deployed.Infrastructure.ServiceAuth.Secret
 	st.Values["secretsRootKey"] = deployed.Infrastructure.Secrets.RootKey
-	return introduceCalloutXKey(st)
+	if err := introduceCalloutXKey(st); err != nil {
+		return err
+	}
+	return introduceIdentity(st)
 }
 
 // refuseNoSystemLogin refuses an upgrade of an instance whose broker runs the device auth

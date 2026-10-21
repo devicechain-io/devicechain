@@ -61,6 +61,21 @@ const (
 	State
 )
 
+// Account is the NATS account a bucket lives in.
+type Account int
+
+const (
+	// App is the account every service and device shares (natsauth.AppAccount). The zero value, so
+	// a bucket that declares nothing lives where every bucket always has.
+	App Account = iota
+	// Identity is user-management's own account (natsauth.IdentityAccount). It holds the buckets
+	// whose contents are bearer secrets, and only a login that user-management alone holds can
+	// open it. A separate account is what makes the buckets uncapturable: a login in App that can
+	// create streams could otherwise source, mirror or subject-capture a bucket into a stream it
+	// reads, and a deny list does not stop a stream.
+	Identity
+)
+
 // Bucket is one KV bucket's declaration.
 type Bucket struct {
 	// Name is the LOGICAL bucket name — the identifier the creating code passes,
@@ -71,6 +86,8 @@ type Bucket struct {
 	Name string
 	// Tier selects the disk ceiling, keyed on what a refused write costs.
 	Tier Tier
+	// Account is the NATS account the bucket lives in. See Account.
+	Account Account
 	// Why records what drives this bucket's growth and what a full bucket breaks.
 	// It sits next to the tier so a reclassification has to confront it.
 	Why string
@@ -79,23 +96,26 @@ type Bucket struct {
 // All is every KV bucket the platform creates.
 var All = []Bucket{
 	{
-		Name: BucketRefreshTokens,
-		Tier: State,
+		Name:    BucketRefreshTokens,
+		Tier:    State,
+		Account: Identity,
 		Why: "One entry per live refresh token (jti -> email), plus two small entries " +
 			"per sign-in (its record and its per-identity index entry), so it scales " +
 			"with concurrent signed-in humans, not with devices. A full bucket refuses " +
 			"the write in identity.Manager, which fails the login that issued it.",
 	},
 	{
-		Name: BucketOAuthCodes,
-		Tier: State,
+		Name:    BucketOAuthCodes,
+		Tier:    State,
+		Account: Identity,
 		Why: "One entry per in-flight OAuth 2.1 authorization code (ADR-047), held " +
 			"only between the authorize redirect and the token exchange. Lowest " +
 			"volume of any bucket here; a full one breaks MCP authorization.",
 	},
 	{
-		Name: BucketSsoState,
-		Tier: State,
+		Name:    BucketSsoState,
+		Tier:    State,
+		Account: Identity,
 		Why: "One entry per in-flight single sign-on attempt (state, nonce, the upstream " +
 			"PKCE verifier and the return address), written by the UNAUTHENTICATED beginSso " +
 			"call and held ten minutes or until the identity provider's redirect consumes it. " +
@@ -105,16 +125,18 @@ var All = []Bucket{
 			"bucket makes beginSso FAIL CLOSED and raises the SsoStateStoreFull alert.",
 	},
 	{
-		Name: BucketSsoCodes,
-		Tier: State,
+		Name:    BucketSsoCodes,
+		Tier:    State,
+		Account: Identity,
 		Why: "One entry per completed single sign-on awaiting its completeSso call, " +
 			"single-use with a 60-second lifetime. Kept apart from the OAuth authorization " +
 			"codes so neither redeemer can ever be handed the other's record. Lowest volume " +
 			"of the sign-in buckets; a full one breaks single sign-on completion only.",
 	},
 	{
-		Name: BucketCredentialAttempts,
-		Tier: State,
+		Name:    BucketCredentialAttempts,
+		Tier:    State,
+		Account: Identity,
 		Why: "One entry per principal of a throttled kind (in user-management, a " +
 			"hashed email; OAuth client secrets are unthrottled and write nothing) that " +
 			"was checked recently, expiring 10 minutes after its last write, so it " +
@@ -243,6 +265,17 @@ func TierFor(name string) Tier {
 		}
 	}
 	return State
+}
+
+// AccountFor returns the account of the named bucket. An unregistered name is in App, where a
+// bucket nobody declared has always been created.
+func AccountFor(name string) Account {
+	for _, b := range All {
+		if b.Name == name {
+			return b.Account
+		}
+	}
+	return App
 }
 
 // Count returns how many declared buckets are in the given tier. The disk budget

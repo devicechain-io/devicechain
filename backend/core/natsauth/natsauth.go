@@ -83,6 +83,28 @@ const SystemAccount = "SYS"
 // consumer a subscription.
 const SysUser = "dc_sys"
 
+// IdentityAccount is the NATS account that holds user-management's sign-in state: the refresh
+// tokens, OAuth authorization codes, single sign-on records and sign-in backoff counters. It
+// exists because those buckets hold bearer secrets, and a deny list cannot protect them: any login
+// in AppAccount that can create a stream can capture a subject, or source or mirror a bucket, into
+// a stream of its own and read the copy. Accounts are the one boundary a stream cannot cross, and
+// nothing outside user-management needs these buckets, so nothing is imported or exported.
+const IdentityAccount = messaging.IdentityAccountName
+
+// IdentityUser is the static login that places a connection in IdentityAccount. It is a separate
+// credential from ServiceUser, and its password is held by user-management alone (a Secret only
+// that Deployment mounts), so no other pod can open the account WITH A LOGIN.
+//
+// 🔴 ONE OTHER WAY IN, AND IT IS NOT A LOGIN: THE DEVICE CALLOUT'S SIGNER. In config mode
+// nats-server places a callout-authorized connection in whichever account the response JWT's
+// audience names (server/auth_callout.go, assignAccountAndPermissions), and auth_callout has no
+// setting that limits placement (allowed_accounts selects which accounts' users are DELEGATED to
+// the callout, not where it may put them). So whoever holds the callout issuer seed can mint a
+// connection into IDENTITY. This code only ever names AppAccount (SignDeviceUserJWT;
+// natsauth_test pins it), and since #1822 the seed is in device-management's
+// Secret alone, so the residual is "a compromised device-management", not "any service login".
+const IdentityUser = messaging.IdentityLoginUser
+
 // MqttGatewayPort is the port nats-server's MQTT gateway listens on, and the port the
 // broker-presence canary opens its probe connection to. It is fixed by the chart's
 // broker configuration rather than negotiated, so a constant is the honest shape.
@@ -189,6 +211,10 @@ type Credentials struct {
 	// wider grant — see SysUser.
 	SysPassword       string
 	SysPasswordBcrypt string
+	// IdentityPassword / IdentityPasswordBcrypt are the same pair for IdentityUser in
+	// IdentityAccount, held by user-management alone. See WithIdentity.
+	IdentityPassword       string
+	IdentityPasswordBcrypt string
 }
 
 // GenerateCredentials mints a fresh set of broker-auth credentials: an account
@@ -220,7 +246,7 @@ func GenerateCredentials() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	return Credentials{
+	withXKey, err := Credentials{
 		IssuerPublic:          pub,
 		IssuerSeed:            string(seed),
 		ServicePassword:       pw,
@@ -228,6 +254,10 @@ func GenerateCredentials() (Credentials, error) {
 		SysPassword:           sysPw,
 		SysPasswordBcrypt:     sysHash,
 	}.WithXKey("")
+	if err != nil {
+		return Credentials{}, err
+	}
+	return withXKey.WithIdentity("", "")
 }
 
 // generateSysPassword mints the system-account login and its hash together, the
@@ -295,8 +325,9 @@ func generateSysPassword() (string, string, error) {
 // so a re-run can keep them instead of minting salt-different ones. Both fields are
 // best-effort: an empty or wrong value costs a re-hash, never a failure.
 type DeployedHashes struct {
-	Service string
-	Sys     string
+	Service  string
+	Sys      string
+	Identity string
 }
 
 // reuseOrRehash returns existing when it is a bcrypt hash of plaintext, and a fresh

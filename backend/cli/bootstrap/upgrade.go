@@ -393,6 +393,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 		color.GreenString("unchanged — the cluster's, already at this release"))
 	sayUpgradeInfrastructure(st, opts)
 	sayUpgradeCredentialsKept(st, opts)
+	sayIdentityIntroduced(st)
 	return nil
 }
 
@@ -467,8 +468,9 @@ func sayUpgradeDryRun(st *State) {
 func sayUpgradeCredentialsKept(st *State, opts UpgradeOptions) {
 	reconcileUpgradeEscrow(st, st.Values["secretsRootKey"], opts)
 	fmt.Println(color.WhiteString(
-		"\nEvery credential this instance was running on was kept. An upgrade reads them;\n" +
-			"it mints nothing, so nothing here rotated."))
+		"\nEvery credential this instance was running on was kept. An upgrade reads them and replaces\n" +
+			"none, so nothing here rotated. The only thing it may create is a credential that did not exist\n" +
+			"yet (a new login or key), and it keeps that one from then on."))
 	// ...which, for an instance older than the generated superuser password, is also
 	// the one thing that must not be read as good news. See warnPreGeneratedSuperuser.
 	warnPreGeneratedSuperuser(st)

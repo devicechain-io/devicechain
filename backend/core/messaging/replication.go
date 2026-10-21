@@ -183,6 +183,35 @@ const deviceCredentialStoreMissingHint = " device-management creates this bucket
 // purpose: a caller that cannot observe what is deployed should get the loudest
 // check, not the most forgiving one.
 func ReplicationExpectation(instanceId string, replicas int, deployedAreas []string) replication.Expectation {
+	return ReplicationExpectationFor(instanceId, replicas, deployedAreas, false)
+}
+
+// ReplicationExpectationFor is ReplicationExpectation for an instance that may keep user-management's
+// sign-in buckets in the identity account (identityAccount). The checker reads the shared account,
+// where those buckets are no longer, so naming them as required would report every one of them
+// missing on a healthy instance. They are replicated by the same code and reported by
+// user-management's own replication gauges, which sample the identity account through its own
+// connection; this check does not enter that account.
+func ReplicationExpectationFor(instanceId string, replicas int, deployedAreas []string, identityAccount bool) replication.Expectation {
+	exp := replicationExpectation(instanceId, replicas, deployedAreas)
+	if !identityAccount {
+		return exp
+	}
+	moved := map[string]bool{}
+	for _, name := range IdentityBucketNames(instanceId) {
+		moved[KvStreamName(name)] = true
+	}
+	kept := exp.StateBuckets[:0:0]
+	for _, name := range exp.StateBuckets {
+		if !moved[name] {
+			kept = append(kept, name)
+		}
+	}
+	exp.StateBuckets = kept
+	return exp
+}
+
+func replicationExpectation(instanceId string, replicas int, deployedAreas []string) replication.Expectation {
 	exp := replication.Expectation{
 		Replicas:            replicas,
 		MqttStreams:         append([]string(nil), mqttStreamNames...),

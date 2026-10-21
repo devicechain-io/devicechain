@@ -196,6 +196,14 @@ type NatsManager struct {
 	streamNames []string
 	sinkStreams map[string]bool
 	bucketNames []string
+	// identityBucketNames is the KV buckets opened in the identity account, sampled through
+	// that account's own JetStream context. Guarded by streamMu.
+	identityBucketNames []string
+	// identityLogin is the password for the identity account, set by UseIdentityLogin before
+	// Initialize; identity is the open connection to the account, nil unless the instance has one
+	// and this manager holds its login. See identity.go.
+	identityLogin *string
+	identity      *identityLink
 	// retentionPending is the streams (suffix -> name) found holding an older retention
 	// than declared, which core/streams permits to be drained and recreated; see
 	// retention_migration.go. Guarded by streamMu.
@@ -1013,6 +1021,12 @@ func retentionPolicy(r streams.Retention) nats.RetentionPolicy {
 // operation — they are the same object to JetStream, and the KV path had the
 // lenient posture first.
 func (nmgr *NatsManager) reconcileStreamReplicas(name string, current nats.StreamConfig) {
+	nmgr.reconcileStreamReplicasOn(nmgr.js, name, current)
+}
+
+// reconcileStreamReplicasOn is reconcileStreamReplicas against the JetStream context of the
+// account the stream lives in.
+func (nmgr *NatsManager) reconcileStreamReplicasOn(js nats.JetStreamContext, name string, current nats.StreamConfig) {
 	desired := nmgr.desiredStreamReplicas()
 	effective := nmgr.effectiveStreamReplicas()
 	cfg := current
@@ -1035,7 +1049,7 @@ func (nmgr *NatsManager) reconcileStreamReplicas(name string, current nats.Strea
 	if !changed {
 		return
 	}
-	if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
+	if _, err := js.UpdateStream(&cfg); err != nil {
 		log.Warn().Err(err).Str("stream", name).Int("from", current.Replicas).Int("to", effective).
 			Msg("Could not raise the replica factor; it stays as-is until the next startup. This is " +
 				"expected while the NATS cluster is still scaling — the broker reports a cluster but " +
@@ -1174,6 +1188,7 @@ func (nmgr *NatsManager) sampleNow(ctx context.Context) {
 	seen := newSampleSeen()
 	nmgr.metrics.sample(ctx, nmgr.js, nmgr.trackedStreams(), nmgr.trackedSinks(), nmgr.trackedBuckets(),
 		nmgr.trackedDurables(), nmgr.desiredStreamReplicas(), nmgr.brokerIsClustered(), seen)
+	nmgr.sampleIdentity(ctx, seen)
 	nmgr.aff().afterSample(ctx, seen)
 }
 
@@ -3256,6 +3271,15 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 	nmgr.js = js
 	nmgr.connectedServer.Store(nc.ConnectedUrl())
 	log.Info().Msg(fmt.Sprintf("Verified connectivity to NATS at '%s'", url))
+	// The identity account, for the one service that holds its login. Dialled after the main
+	// connection so a broker that is merely slow fails here with the same named error, and closed
+	// with it if this fails: a service that cannot reach the account it is configured to use
+	// does not start.
+	if err := nmgr.initializeIdentity(ctx, natscfg, tlsConfig); err != nil {
+		closeConn(nc, requested)
+		nmgr.nc, nmgr.js = nil, nil
+		return err
+	}
 	return nil
 }
 
@@ -3446,6 +3470,7 @@ func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
 		nmgr.drainAndWait(ctx)
 	}
 	nmgr.aff().closeConns(ctx)
+	nmgr.closeIdentity()
 	return nil
 }
 
@@ -3586,6 +3611,7 @@ func (nmgr *NatsManager) ExecuteTerminate(context.Context) error {
 	if nmgr.nc != nil && !nmgr.nc.IsClosed() {
 		nmgr.closeConn()
 	}
+	nmgr.closeIdentity()
 	return nil
 }
 

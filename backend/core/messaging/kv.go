@@ -54,8 +54,9 @@ func kvKey(key string) string {
 // is lost. Whether the refusal is survivable is a property of the call site, and
 // that is exactly what the tier in kv.All records.
 func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration) (nats.KeyValue, error) {
-	if nmgr.js == nil {
-		return nil, errors.New("messaging: JetStream context not initialized")
+	js, tracked, err := nmgr.kvContext(logical)
+	if err != nil {
+		return nil, err
 	}
 	maxBytes := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats.KvMaxBytesFor(logical)
 	if maxBytes <= 0 {
@@ -66,14 +67,14 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 		// instead of silently creating an unbounded bucket (ADR-023 never-unlimited).
 		return nil, fmt.Errorf("messaging: non-positive ceiling %d for KV bucket %q", maxBytes, bucket)
 	}
-	if existing, err := nmgr.js.KeyValue(bucket); err == nil {
-		nmgr.reconcileKvBucket(bucket, maxBytes, kv.TierFor(logical))
-		nmgr.trackKvBucket(bucket)
+	if existing, err := js.KeyValue(bucket); err == nil {
+		nmgr.reconcileKvBucketOn(js, bucket, maxBytes, kv.TierFor(logical))
+		tracked(bucket)
 		return existing, nil
 	} else if !errors.Is(err, nats.ErrBucketNotFound) {
 		return nil, err
 	}
-	created, err := nmgr.js.CreateKeyValue(&nats.KeyValueConfig{
+	created, err := js.CreateKeyValue(&nats.KeyValueConfig{
 		Bucket:   bucket,
 		TTL:      ttl,
 		MaxBytes: maxBytes,
@@ -82,7 +83,7 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 	if err != nil {
 		return nil, err
 	}
-	nmgr.trackKvBucket(bucket)
+	tracked(bucket)
 	return created, nil
 }
 
@@ -119,8 +120,14 @@ func (nmgr *NatsManager) KeyValueStore(logical, bucket string, ttl time.Duration
 // exactly where it was before this ran; the disk budget is optimistic by that
 // bucket's ceiling until an operator raises the bound or the bucket drains.
 func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier kv.Tier) {
+	nmgr.reconcileKvBucketOn(nmgr.js, bucket, maxBytes, tier)
+}
+
+// reconcileKvBucketOn is reconcileKvBucket against the JetStream context of the account the
+// bucket lives in.
+func (nmgr *NatsManager) reconcileKvBucketOn(js nats.JetStreamContext, bucket string, maxBytes int64, tier kv.Tier) {
 	stream := kvStreamPrefix + bucket
-	info, err := nmgr.js.StreamInfo(stream)
+	info, err := js.StreamInfo(stream)
 	if err != nil {
 		log.Warn().Err(err).Str("bucket", bucket).
 			Msg("Could not read KV bucket config to apply its disk ceiling; it stays as-is until the next startup")
@@ -142,11 +149,11 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier k
 	// afford it. A bucket being too full to safely bound says nothing about whether
 	// it should be replicated. It is also a separate UpdateStream for the reasons
 	// given in reconcileStreamReplicas, which both paths now share.
-	nmgr.reconcileStreamReplicas(stream, info.Config)
+	nmgr.reconcileStreamReplicasOn(js, stream, info.Config)
 
 	// Re-read: the replica reconcile above may have updated the stream, and applying
 	// a ceiling from a stale config would revert it.
-	info, err = nmgr.js.StreamInfo(stream)
+	info, err = js.StreamInfo(stream)
 	if err != nil {
 		log.Warn().Err(err).Str("bucket", bucket).
 			Msg("Could not re-read KV bucket config after the replica reconcile; its disk ceiling " +
@@ -169,7 +176,7 @@ func (nmgr *NatsManager) reconcileKvBucket(bucket string, maxBytes int64, tier k
 	cfg := info.Config
 	previous := cfg.MaxBytes
 	cfg.MaxBytes = maxBytes
-	if _, err := nmgr.js.UpdateStream(&cfg); err != nil {
+	if _, err := js.UpdateStream(&cfg); err != nil {
 		log.Warn().Err(err).Str("bucket", bucket).Int64("maxBytes", maxBytes).Int64("previous", previous).
 			Msg("Could not apply the disk ceiling to an existing KV bucket; it stays as-is until the next startup")
 		return

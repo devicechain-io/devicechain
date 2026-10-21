@@ -252,6 +252,13 @@ variable "nats_service_password_bcrypt" {
   sensitive   = true
 }
 
+variable "nats_identity_password_bcrypt" {
+  description = "BCRYPT HASH ($2a$...) of the `dc_identity` password: the one login of the broker's IDENTITY account, which holds user-management's sign-in buckets (refresh tokens, OAuth and single sign-on codes, sign-in backoff) apart from every other service's login. The plaintext goes only into a Secret that only user-management mounts. Minted by the bring-up. Empty renders no IDENTITY account. Sensitive."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "nats_sys_password_bcrypt" {
   description = "BCRYPT HASH ($2a$...) of the `dc_sys` system-account password, read by the event-sources broker-presence tap. Minted by the bring-up alongside the service password; a separate credential because the system account observes every account's connections. Empty leaves SYS without users and the tap off. Sensitive."
   type        = string
