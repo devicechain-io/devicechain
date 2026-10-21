@@ -211,7 +211,9 @@ func (r *natsReader) ackFloorConsumerConfig(startSeq uint64) *nats.ConsumerConfi
 // filter, without calling AddConsumer on an existing durable. bindMu is held.
 func (r *natsReader) bindAckFloorLocked() error {
 	js := r.nmgr.js
-	info, err := js.ConsumerInfo(r.stream, r.durable)
+	// Under the manager's run context, as bindLocked's consumer calls are (see opContext).
+	opctx := nats.Context(r.nmgr.opContext())
+	info, err := js.ConsumerInfo(r.stream, r.durable, opctx)
 	if err != nil {
 		if !errors.Is(err, nats.ErrConsumerNotFound) {
 			return err
@@ -226,14 +228,14 @@ func (r *natsReader) bindAckFloorLocked() error {
 			return fmt.Errorf("messaging: ack-floor start position for durable %q is sequence 0; "+
 				"stream sequences begin at 1", r.durable)
 		}
-		if _, aerr := js.AddConsumer(r.stream, r.ackFloorConsumerConfig(startSeq)); aerr != nil {
+		if _, aerr := js.AddConsumer(r.stream, r.ackFloorConsumerConfig(startSeq), opctx); aerr != nil {
 			// Another replica may have created it between our look and our create, with its
 			// own start position. Anything that exists now is bound as it is.
-			if _, ierr := js.ConsumerInfo(r.stream, r.durable); ierr != nil {
+			if _, ierr := js.ConsumerInfo(r.stream, r.durable, opctx); ierr != nil {
 				return aerr
 			}
 		}
-		if info, err = js.ConsumerInfo(r.stream, r.durable); err != nil {
+		if info, err = js.ConsumerInfo(r.stream, r.durable, opctx); err != nil {
 			return err
 		}
 	}
@@ -274,7 +276,7 @@ func (r *natsReader) reconcileAckFloorFilter(info *nats.ConsumerInfo) error {
 	log.Info().Str("stream", r.stream).Str("durable", r.durable).
 		Str("from", info.Config.FilterSubject).Str("to", want.FilterSubject).
 		Msg("Reconciling an existing ack-floor durable with this build's configuration")
-	if _, err := r.nmgr.js.UpdateConsumer(r.stream, &cfg); err != nil {
+	if _, err := r.nmgr.js.UpdateConsumer(r.stream, &cfg, nats.Context(r.nmgr.opContext())); err != nil {
 		return fmt.Errorf("moving ack-floor durable %q onto filter %q: %w", r.durable, want.FilterSubject, err)
 	}
 	return nil

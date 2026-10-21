@@ -163,10 +163,11 @@ type NatsManager struct {
 	Microservice *core.Microservice
 
 	oncreate func(*NatsManager) error
-	// runCtx is the context ExecuteStart was handed, kept until ExecuteStop so the
-	// stream, bucket and consumer provisioning that oncreate (and any later lazy
-	// constructor) reaches can be abandoned by the caller's cancellation instead of
-	// riding a context nobody can cancel. See opContext.
+	// runCtx is the context ExecuteStart (or, before it, ExecuteInitialize) was handed,
+	// kept until ExecuteStop so the stream and consumer provisioning that oncreate (and
+	// any later lazy constructor) reaches can be abandoned by the caller's cancellation
+	// instead of riding a context nobody can cancel. KV buckets are not covered: the
+	// client's KeyValue and CreateKeyValue take no context. See opContext.
 	runMu  sync.Mutex
 	runCtx context.Context
 	runEnd context.CancelFunc
@@ -763,11 +764,50 @@ func applyStreamReplicas(cfg *nats.StreamConfig, desired int) (changed, refusedD
 	return true, false
 }
 
+// setRunContext makes a context derived from ctx the one provisioning runs under,
+// cancelling any it replaces.
+func (nmgr *NatsManager) setRunContext(ctx context.Context) {
+	runCtx, runEnd := context.WithCancel(ctx)
+	nmgr.runMu.Lock()
+	defer nmgr.runMu.Unlock()
+	if nmgr.runEnd != nil {
+		nmgr.runEnd()
+	}
+	nmgr.runCtx, nmgr.runEnd = runCtx, runEnd
+}
+
+// endRunContext cancels the context provisioning runs under. It stays set, cancelled,
+// so a constructor called after the stop fails with the cancellation (see opContext).
+func (nmgr *NatsManager) endRunContext() {
+	nmgr.runMu.Lock()
+	defer nmgr.runMu.Unlock()
+	if nmgr.runEnd != nil {
+		nmgr.runEnd()
+	}
+}
+
 // opContext is the context broker provisioning runs under: the one ExecuteStart was
-// handed, cancelled by ExecuteStop too. oncreate takes only the manager, so this is how
-// the caller's context reaches NewWriter/NewReader/NewReplayReader without a signature
-// change at every service. A manager that was never started (a test driving a
-// constructor directly) has no such context and gets context.Background().
+// handed (or, before Start, the one ExecuteInitialize was), cancelled by ExecuteStop and
+// ExecuteTerminate too. oncreate takes only the manager, so this is how
+// the caller's context reaches stream provisioning (ensureStream, behind NewWriter,
+// NewReader, NewOrderedWriter, NewAsyncWriter and the recorder) and consumer
+// provisioning (a reader's bind, including its self-heal re-bind) without a signature
+// change at every service. It covers constructors called AFTER start as well, such as
+// event-sources building the MQTT store forwarders from its watch: they provision under
+// the live context, and once ExecuteStop has cancelled it they fail with that
+// cancellation instead of provisioning for a manager that is going away.
+//
+// Provisioning BEFORE Start is a production path, not only a test one: lwm2m-ingest and
+// sparkplug-ingest build their writers in their initialize callback, after the dial,
+// because oncreate does not run until Start. ExecuteInitialize therefore sets the
+// context too, so a shutdown during that initialize also abandons the retry.
+//
+// A manager that was never initialized has no such context and gets
+// context.Background(). That is not a stub standing in for a missing answer: in
+// production a manager cannot provision anything before Initialize has dialled, so the
+// only callers here are tests that build the manager as a struct literal and drive a
+// constructor directly, with no caller context to honour. Each call is still bounded by
+// the client's request wait and ensureStream's retry budget.
 func (nmgr *NatsManager) opContext() context.Context {
 	nmgr.runMu.Lock()
 	defer nmgr.runMu.Unlock()
@@ -1899,7 +1939,10 @@ func (r *natsReader) bindLocked() error {
 	// A reader over the MQTT message store binds to its durable and never creates it: the
 	// fail-closed pass owns the durables (see mqtt_failclosed_reader.go).
 	if !r.store {
-		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig()); err != nil {
+		// Consumer provisioning runs under the manager's run context, as stream provisioning
+		// does (see opContext): a stop abandons a create or update still in flight rather than
+		// waiting out the client's request timeout on each call.
+		if _, err := r.nmgr.js.AddConsumer(r.stream, r.consumerConfig(), nats.Context(r.nmgr.opContext())); err != nil {
 			return err
 		}
 		if err := r.reconcileFilterSubject(); err != nil {
@@ -1940,7 +1983,8 @@ func (r *natsReader) bindLocked() error {
 // reach here, so this cannot quietly converge a config change that was meant to be
 // refused — it only closes the one gap where the server's own answer is unreliable.
 func (r *natsReader) reconcileFilterSubject() error {
-	info, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable)
+	ctx := r.nmgr.opContext()
+	info, err := r.nmgr.js.ConsumerInfo(r.stream, r.durable, nats.Context(ctx))
 	if err != nil {
 		return err
 	}
@@ -1957,7 +2001,7 @@ func (r *natsReader) reconcileFilterSubject() error {
 		Str("from", info.Config.FilterSubject).Str("to", r.subject).
 		Strs("fromList", have).Strs("toList", r.filters).
 		Msg("Moving an existing durable consumer onto this build's filter subject")
-	if _, err := r.nmgr.js.UpdateConsumer(r.stream, r.consumerConfig()); err != nil {
+	if _, err := r.nmgr.js.UpdateConsumer(r.stream, r.consumerConfig(), nats.Context(ctx)); err != nil {
 		return fmt.Errorf("moving durable %q from filter %q %v to %q %v: %w",
 			r.durable, info.Config.FilterSubject, have, r.subject, r.filters, err)
 	}
@@ -3090,6 +3134,10 @@ func (nmgr *NatsManager) lastConnectedServer() string {
 
 // ExecuteInitialize connects to NATS and obtains a JetStream context.
 func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
+	// Two services (lwm2m-ingest, sparkplug-ingest) build their writers on the initialize
+	// path, after the dial and before Start, so provisioning there runs under this
+	// context; ExecuteStart replaces it (see opContext).
+	nmgr.setRunContext(ctx)
 	url := nmgr.NatsUrl()
 	natscfg := nmgr.Microservice.InstanceConfiguration.Infrastructure.Nats
 	// Fail closed on a fetch setting the readers could not honour, before anything dials:
@@ -3292,13 +3340,7 @@ func (nmgr *NatsManager) ExecuteStart(ctx context.Context) error {
 	// Hand the caller's context to the provisioning oncreate triggers (see opContext). It
 	// stays set after oncreate returns, for constructors called later, and ExecuteStop
 	// cancels it.
-	runCtx, runEnd := context.WithCancel(ctx)
-	nmgr.runMu.Lock()
-	if nmgr.runEnd != nil {
-		nmgr.runEnd()
-	}
-	nmgr.runCtx, nmgr.runEnd = runCtx, runEnd
-	nmgr.runMu.Unlock()
+	nmgr.setRunContext(ctx)
 	if err := nmgr.oncreate(nmgr); err != nil {
 		return err
 	}
@@ -3351,11 +3393,7 @@ func (nmgr *NatsManager) Stop(ctx context.Context) error {
 //     the sampler only reads, and the reader unsubscribes and the drain that follow
 //     are what a terminating pod actually owes its peers.
 func (nmgr *NatsManager) ExecuteStop(ctx context.Context) error {
-	nmgr.runMu.Lock()
-	if nmgr.runEnd != nil {
-		nmgr.runEnd()
-	}
-	nmgr.runMu.Unlock()
+	nmgr.endRunContext()
 	if nmgr.samplerCancel != nil {
 		nmgr.samplerCancel()
 		joined := make(chan struct{})
@@ -3543,6 +3581,8 @@ func (nmgr *NatsManager) Terminate(ctx context.Context) error {
 // library's drain goroutine reports the connection as draining again — and closing an
 // already-closed connection is a no-op.
 func (nmgr *NatsManager) ExecuteTerminate(context.Context) error {
+	// A manager initialized and never started still holds its initialize context.
+	nmgr.endRunContext()
 	if nmgr.nc != nil && !nmgr.nc.IsClosed() {
 		nmgr.closeConn()
 	}
