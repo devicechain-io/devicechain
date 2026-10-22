@@ -130,6 +130,60 @@ func TestRetargetRetryBacksOffAndEnds(t *testing.T) {
 	}
 }
 
+// A pass that ran under a retry a newer trigger has since replaced leaves the newer one alone,
+// even when the pass settled: the newer trigger (a later election) has not been followed yet.
+//
+// GUARD: without the check a pass that read the previous leader ends the next election's
+// retry, and that election is followed with one pass again, as before the retry existed.
+func TestASupersededRetryDoesNotEndTheNewerOne(t *testing.T) {
+	_, nmgr := orderedManager(t)
+	a := nmgr.aff()
+	now := time.Now()
+	older := newRetargetRetry("n2", now)
+	newer := newRetargetRetry("n3", now)
+	// Due well after the test, so the running loop does not pick the stream up.
+	newer.due = now.Add(time.Hour)
+	a.mu.Lock()
+	a.retries["superseded"] = newer
+	a.mu.Unlock()
+	t.Cleanup(func() {
+		a.mu.Lock()
+		delete(a.retries, "superseded")
+		a.mu.Unlock()
+	})
+
+	a.settle("superseded", older, "n2", true)
+	a.mu.Lock()
+	got := a.retries["superseded"]
+	a.mu.Unlock()
+	if got != newer {
+		t.Fatalf("a pass under the replaced retry changed the newer one: retry is %+v, want %+v", got, newer)
+	}
+}
+
+// The loop's timer is set for the EARLIEST pending retry, whichever stream it belongs to.
+//
+// GUARD: a timer set for the latest leaves a stream whose retry is due sooner waiting for
+// another stream's backoff.
+func TestTheLoopWakesForTheEarliestRetry(t *testing.T) {
+	now := time.Now()
+	a := &affinity{retries: map[string]*retargetRetry{}}
+	if _, ok := a.nextRetry(now); ok {
+		t.Fatal("a retry is reported pending with none")
+	}
+	for s, in := range map[string]time.Duration{"late": 2 * time.Second, "soon": 250 * time.Millisecond, "mid": time.Second} {
+		r := newRetargetRetry("", now)
+		r.due = now.Add(in)
+		a.retries[s] = r
+	}
+	if d, ok := a.nextRetry(now); !ok || d != 250*time.Millisecond {
+		t.Fatalf("nextRetry = %v, %v; want 250ms, true", d, ok)
+	}
+	if d, _ := a.nextRetry(now.Add(5 * time.Second)); d != 0 {
+		t.Fatalf("nextRetry for an overdue retry = %v, want 0", d)
+	}
+}
+
 // The leader a leader-elected advisory names. The payload is the broker's
 // JSStreamLeaderElectedAdvisory, as sent.
 func TestElectedLeader(t *testing.T) {
