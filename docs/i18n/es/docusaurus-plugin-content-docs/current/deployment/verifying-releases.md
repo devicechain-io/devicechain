@@ -41,7 +41,7 @@ chmod +x verify-release-signatures.sh
 
 Obtenga el script de la **misma etiqueta** que está verificando. Termina con un código distinto de cero si falla cualquier comprobación de firma, SBOM o procedencia, e indica cuál.
 
-Termina con dos **controles negativos**. Un verificador que solo ha visto entradas correctas nunca ha demostrado que rechace nada, así que el script verifica una imagen firmada de DeviceChain contra una identidad que no puede coincidir, y verifica una imagen que DeviceChain no publicó, y exige que ambas se rechacen por el motivo correcto. Una ejecución que omita cualquiera de los dos no es un éxito.
+Termina con dos **controles negativos**. Un verificador que solo ha visto entradas correctas nunca ha demostrado que rechace nada, así que el script verifica una imagen firmada de DeviceChain contra una identidad que no puede coincidir, y verifica una imagen que no se firmó para esta versión (por defecto, una imagen anterior del operador de DeviceChain, de antes de que las versiones se firmaran), y exige que ambas se rechacen por el motivo correcto. Una ejecución que omita cualquiera de los dos no es un éxito.
 
 ## Verificar una imagen a mano {#by-hand}
 

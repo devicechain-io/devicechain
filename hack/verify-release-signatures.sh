@@ -29,9 +29,12 @@
 #   --source-ref REF        git ref the provenance must name (default refs/tags/<tag>)
 #   --issuer URL            default https://token.actions.githubusercontent.com
 #   --image NAME            verify only this image (repeatable); default every image
-#   --foreign-image REF     image NOT signed by the workflow, for negative control B
-#                           (default registry.k8s.io/pause:3.9: long-lived, public, and
-#                           never signed by this workflow)
+#   --foreign-image REF     image NOT signed by the workflow for this tag, for negative
+#                           control B (default: the v0.23.0 operator image BY DIGEST --
+#                           ours, on the same registry as everything else checked here, so
+#                           the control cannot fail over a third-party registry's outage;
+#                           released before signing existed, and never signed for any
+#                           newer tag in any case)
 #   --skip-provenance       do not run `gh attestation verify` (explicit, never implicit)
 #   --with-chart            with --image, verify the chart too (otherwise --image skips it)
 #   --skip-chart            do not verify the chart
@@ -73,6 +76,7 @@ RELEASE_IMAGES=(
   operator dc-edge-agent frontend
 )
 RELEASE_CHART="charts/devicechain"
+DEFAULT_FOREIGN="ghcr.io/devicechain-io/operator@sha256:c3106468ae919b9f129fcf86b659808db10f9fdc49af3300d0cae71db35374dc"
 
 die() { echo "error: $*" >&2; exit 2; }
 
@@ -129,7 +133,7 @@ negative_controls() { # <identity-re> <tag> <image>
     fail_count=$((fail_count + 1))
   fi
   # B: foreign image, real identity.
-  foreign="${FOREIGN:-registry.k8s.io/pause:3.9}"
+  foreign="${FOREIGN:-$DEFAULT_FOREIGN}"
   if verify_sig "$foreign" "$re" >/dev/null; then
     echo "  CONTROL B FAILED: $foreign verified under the release identity -- it must not."
     fail_count=$((fail_count + 1))

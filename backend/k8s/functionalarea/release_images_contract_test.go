@@ -27,7 +27,8 @@ import (
 //	            hack/list-services.sh's rule, plus every module it echoes by hand), the
 //	            backend/k8s -> "operator" rename, the console's tag line, the chart's OCI path.
 //	EXPECTED    what the deploy side pulls: the catalog's areas, dcctl's operator.ImageName,
-//	            the chart's default console image, the chart's own name.
+//	            the chart's default console image, the edge agent RUNBOOK's image, the
+//	            chart's own name.
 //	VERIFIED    the RELEASE_IMAGES array embedded in hack/verify-release-signatures.sh -- the
 //	            list a user's signature check walks. An image released but missing there ships
 //	            unverified while the verifier reports success.
@@ -189,11 +190,24 @@ func TestReleaseImageSetMatchesDeployAndVerifier(t *testing.T) {
 		t.Error("the chart's default console image is no longer {registry}/frontend -- update the release and this test together")
 	}
 	expected = append(expected, "frontend")
-	// The edge agent is a standalone image no chart area renders; it is expected by being a
-	// by-hand release module, so it joins the expected side through the same parse.
+	// The edge agent is a standalone image no chart area renders. What an operator pulls is
+	// the image its RUNBOOK tells them to run, so each by-hand module other than the operator
+	// joins the expected side from its RUNBOOK's `ghcr.io/devicechain-io/<name>:<version>`
+	// line -- not from the release's own module name, which would compare the release to itself.
+	runbookImage := regexp.MustCompile(`ghcr\.io/devicechain-io/([a-z0-9-]+):<version>`)
 	for _, mod := range modules {
-		if mod != "backend/k8s" {
-			expected = append(expected, moduleName(mod))
+		if mod == "backend/k8s" {
+			continue
+		}
+		names := map[string]bool{}
+		for _, m := range runbookImage.FindAllStringSubmatch(readRepoFile(t, mod+"/RUNBOOK.md"), -1) {
+			names[m[1]] = true
+		}
+		if len(names) != 1 {
+			t.Errorf("%s/RUNBOOK.md should name exactly one ghcr.io/devicechain-io/<name>:<version> image, found %v", mod, names)
+		}
+		for n := range names {
+			expected = append(expected, n)
 		}
 	}
 

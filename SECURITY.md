@@ -22,7 +22,8 @@ Include, as far as you can:
 
 ## What to expect
 
-These are targets, not guarantees; DeviceChain is maintained by a small team.
+We aim to meet these targets, but they are targets, not guarantees: DeviceChain is maintained
+by a small team, and a hard report can take longer.
 
 | Step | Target |
 | --- | --- |
@@ -31,9 +32,9 @@ These are targets, not guarantees; DeviceChain is maintained by a small team.
 | Fix released, by severity | Critical: 14 days. High: 30 days. Medium: 90 days. Low: the next scheduled release |
 | Advisory published | with the fix, crediting you unless you ask us not to |
 
-We will keep you informed as we go, and if a target will be missed we will say so and why. We
+We aim to keep you informed as we go, and to tell you if a target will be missed, and why. We
 ask for a reasonable opportunity to release a fix before any public disclosure (coordinated
-disclosure), and will agree a disclosure date with you; the default is the day the fix ships.
+disclosure), and will seek to agree a disclosure date with you; the default is the day the fix ships.
 
 ## Supported versions
 

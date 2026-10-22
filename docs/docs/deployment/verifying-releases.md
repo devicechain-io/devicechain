@@ -55,8 +55,9 @@ SBOM or provenance check fails, and prints which one.
 
 It ends with two **negative controls**. A verifier that has only ever seen good input has never been
 shown to reject anything, so the script verifies a signed DeviceChain image against an identity that
-cannot match, and verifies an image DeviceChain did not publish, and requires both to be rejected
-for the right reason. A run that skips either is not a pass.
+cannot match, and verifies an image that was not signed for this release (by default, an older
+DeviceChain operator image, from before releases were signed), and requires both to be rejected for
+the right reason. A run that skips either is not a pass.
 
 ## Verify one image by hand {#by-hand}
 
