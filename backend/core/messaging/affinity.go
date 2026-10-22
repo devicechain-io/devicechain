@@ -74,6 +74,15 @@ const (
 	// submission (affinitySwapRetry).
 	affinitySwapSettle = publishWait + orderedBackoffMax
 	affinitySwapRetry  = 10 * time.Second
+	// affinityRetargetRetry is the wait before a stream's target is worked out again after a
+	// pass that could not settle it (see retargetRetry), doubling up to affinityRetargetRetryMax.
+	// Once the broker names the leader and the leader can be dialled, its writers' target is
+	// on it within affinityRetargetRetryMax: that is the bound on following an election.
+	affinityRetargetRetry    = 250 * time.Millisecond
+	affinityRetargetRetryMax = 2 * time.Second
+	// affinityRetargetFor is how long a trigger's retries go on. After it the sampler's pass,
+	// one interval apart, is the retry, as it was for a stream no trigger named.
+	affinityRetargetFor = streamMetricsSampleInterval
 	// affinityLogEvery bounds how often a repeated affinity condition (a leader that cannot
 	// be dialled, readers split across servers) is logged per subject.
 	affinityLogEvery = 10 * time.Minute
@@ -123,11 +132,17 @@ type affinity struct {
 	// dirty is the streams whose target is to be worked out again; poke wakes the loop.
 	dirty map[string]bool
 	poke  chan struct{}
+	// retries are the streams a trigger asked to follow whose target the loop has not yet
+	// settled, with when to try again.
+	retries map[string]*retargetRetry
 	// logged is when each repeated condition was last logged (affinityLogEvery).
 	logged map[string]time.Time
 
 	// leaderURLs, when set, replaces the default candidate URLs for a server (tests).
 	leaderURLs func(server string) []string
+	// lookup, when set, replaces the stream info request retarget makes (tests). Set before
+	// Start: only the loop reads it.
+	lookup func(ctx context.Context, stream string) (*nats.StreamInfo, error)
 
 	// durables is the reconciler's memory; touched only by the sampler goroutine.
 	durables map[durableRef]*durableAffinity
@@ -151,6 +166,7 @@ func (nmgr *NatsManager) aff() *affinity {
 			writers:  map[string][]*orderedWriter{},
 			dirty:    map[string]bool{},
 			poke:     make(chan struct{}, 1),
+			retries:  map[string]*retargetRetry{},
 			logged:   map[string]time.Time{},
 			durables: map[durableRef]*durableAffinity{},
 		}
@@ -207,7 +223,7 @@ func (a *affinity) registerWriter(w *orderedWriter) *atomic.Pointer[pubTarget] {
 		if a.publishOn() && a.nmgr.nc != nil {
 			stream := w.stream
 			subject := "$JS.EVENT.ADVISORY.STREAM.LEADER_ELECTED." + stream
-			sub, err := SubscribeSynced(a.nmgr.nc, subject, func(*nats.Msg) { a.markDirty(stream) })
+			sub, err := SubscribeSynced(a.nmgr.nc, subject, func(m *nats.Msg) { a.follow(stream, electedLeader(m.Data)) })
 			if err != nil {
 				log.Warn().Err(err).Str("stream", stream).
 					Msg("Could not watch the stream's leader elections; its writers follow a new leader at the next 30 s sample")
@@ -218,18 +234,89 @@ func (a *affinity) registerWriter(w *orderedWriter) *atomic.Pointer[pubTarget] {
 	}
 	a.writers[w.stream] = append(a.writers[w.stream], w)
 	if a.publishOn() {
-		a.dirty[w.stream] = true
+		a.followLocked(w.stream, "", time.Now())
 		a.wake()
 	}
 	return ptr
 }
 
-// markDirty asks the loop to work out stream's target again.
+// electedLeader is the server a leader-elected advisory names, "" when it names none.
+func electedLeader(data []byte) string {
+	var adv struct {
+		Leader string `json:"leader"`
+	}
+	if json.Unmarshal(data, &adv) != nil {
+		return ""
+	}
+	return adv.Leader
+}
+
+// markDirty asks the loop to work out stream's target again, once.
 func (a *affinity) markDirty(stream string) {
 	a.mu.Lock()
 	a.dirty[stream] = true
 	a.mu.Unlock()
 	a.wake()
+}
+
+// follow asks the loop to work out stream's target again and to keep at it until the target
+// is settled (retargetRetry): for an election (leader is the server the advisory names) or a
+// writer's registration (leader is "").
+func (a *affinity) follow(stream, leader string) {
+	a.mu.Lock()
+	a.followLocked(stream, leader, time.Now())
+	a.mu.Unlock()
+	a.wake()
+}
+
+func (a *affinity) followLocked(stream, leader string, now time.Time) {
+	a.dirty[stream] = true
+	a.retries[stream] = newRetargetRetry(leader, now)
+}
+
+// retargetRetry is one stream that a trigger asked the loop to follow and whose target is not
+// settled yet.
+//
+// 🔴 ONE PASS IS NOT ENOUGH. A pass reads the leader with one stream info request and dials
+// it, and each step can fail transiently exactly when it is needed: right after an election
+// the request can go unanswered, or be answered by a member that does not yet know the new
+// leader (the broker lets a leaderless member, and the preferred member of a young group,
+// answer with its own view), and a dial can fail. A pass that gave up there left the
+// writers where they were until the sampler's next pass, 30 s later, however promptly the
+// advisory arrived; with the sampler stopped, as the cluster tests run, it left them there
+// for good. So the loop tries again, backing off from affinityRetargetRetry to
+// affinityRetargetRetryMax, until a pass settles the target or affinityRetargetFor has gone
+// by, after which the sampler's passes are the retry.
+type retargetRetry struct {
+	// want is the leader the advisory named; "" when the trigger named none. A pass whose
+	// lookup names another leader is not settled: the lookup was answered from a view of
+	// the group older than the advisory. (A later advisory replaces want, so an election
+	// that follows is not mistaken for a stale answer.)
+	want  string
+	delay time.Duration
+	due   time.Time
+	until time.Time
+}
+
+func newRetargetRetry(want string, now time.Time) *retargetRetry {
+	return &retargetRetry{want: want, delay: affinityRetargetRetry, until: now.Add(affinityRetargetFor)}
+}
+
+// next records a pass that did not settle the target at now and reports whether another is
+// due: it is, at r.due, until r.until.
+func (r *retargetRetry) next(now time.Time) bool {
+	if now.After(r.until) {
+		return false
+	}
+	r.due = now.Add(r.delay)
+	r.delay = min(2*r.delay, affinityRetargetRetryMax)
+	return true
+}
+
+// settles reports whether a pass that read leader (and, when the leader is not this
+// service's own server, dialled it: dialled) settled the target the trigger asked for.
+func (r *retargetRetry) settles(leader string, dialled bool) bool {
+	return leader != "" && dialled && (r.want == "" || r.want == leader)
 }
 
 func (a *affinity) wake() {
@@ -327,20 +414,30 @@ func drainLeaderConn(ctx context.Context, nc *nats.Conn) {
 	}
 }
 
-// run works out the target of every stream marked dirty, then closes leader connections no
-// writer uses any more.
+// run works out the target of every stream marked dirty, and of every stream whose retry is
+// due (retargetRetry), then closes leader connections no writer uses any more.
 func (a *affinity) run(ctx context.Context) {
 	defer a.wg.Done()
+	retry := time.NewTimer(time.Hour)
+	retry.Stop()
+	defer retry.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-a.poke:
+		case <-retry.C:
 		}
+		now := time.Now()
 		a.mu.Lock()
-		streams := make([]string, 0, len(a.dirty))
+		streams := make([]string, 0, len(a.dirty)+len(a.retries))
 		for s := range a.dirty {
 			streams = append(streams, s)
+		}
+		for s, r := range a.retries {
+			if !a.dirty[s] && !r.due.After(now) {
+				streams = append(streams, s)
+			}
 		}
 		a.dirty = map[string]bool{}
 		a.mu.Unlock()
@@ -349,43 +446,95 @@ func (a *affinity) run(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			a.retarget(ctx, s)
+			a.mu.Lock()
+			r := a.retries[s]
+			a.mu.Unlock()
+			leader, dialled := a.retarget(ctx, s)
+			a.settle(s, r, leader, dialled)
 		}
 		a.closeIdle()
+		if d, ok := a.nextRetry(time.Now()); ok {
+			retry.Reset(d)
+		} else {
+			retry.Stop()
+		}
 	}
+}
+
+// settle ends r, the retry stream's pass ran under, when the pass settled the target or
+// r's time is up, and otherwise schedules the next pass. A retry a newer trigger replaced
+// while the pass ran is left alone: the stream is dirty again, and that trigger's own
+// retry decides.
+func (a *affinity) settle(stream string, r *retargetRetry, leader string, dialled bool) {
+	if r == nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.retries[stream] != r {
+		return
+	}
+	if !a.publishOn() || r.settles(leader, dialled) || !r.next(time.Now()) {
+		delete(a.retries, stream)
+	}
+}
+
+// nextRetry is how long until the earliest retry is due; false when none is pending.
+func (a *affinity) nextRetry(now time.Time) (time.Duration, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var due time.Time
+	for _, r := range a.retries {
+		if due.IsZero() || r.due.Before(due) {
+			due = r.due
+		}
+	}
+	if due.IsZero() {
+		return 0, false
+	}
+	return max(due.Sub(now), 0), true
 }
 
 // retarget points stream's writers at a connection to its current leader: the manager's own
 // connection when that is where the leader is, or when anything goes wrong, and a dialled one
-// otherwise. A stream with no leader (an election in progress) keeps its target: the next
-// leader-elected advisory, or the next sample, comes back here.
-func (a *affinity) retarget(ctx context.Context, stream string) {
+// otherwise. A stream with no leader (an election in progress), or whose leader cannot be
+// read, keeps its target.
+//
+// It returns the leader it read ("" for none) and whether the writers' target is now on it,
+// which is what decides a retry (retargetRetry).
+func (a *affinity) retarget(ctx context.Context, stream string) (leader string, dialled bool) {
 	a.mu.Lock()
 	ptr := a.targets[stream]
 	a.mu.Unlock()
 	if ptr == nil {
-		return
+		return "", false
 	}
 	if !a.publishOn() {
 		ptr.Store(a.main)
-		return
+		return "", false
 	}
 	rctx, cancel := context.WithTimeout(ctx, affinityRequestTimeout)
-	info, err := a.nmgr.js.StreamInfo(stream, nats.Context(rctx))
+	var info *nats.StreamInfo
+	var err error
+	if a.lookup != nil {
+		info, err = a.lookup(rctx, stream)
+	} else {
+		info, err = a.nmgr.js.StreamInfo(stream, nats.Context(rctx))
+	}
 	cancel()
 	if err != nil {
-		return
+		return "", false
 	}
-	leader := leaderOfStream(info)
+	leader = leaderOfStream(info)
 	if leader == "" {
-		return
+		return "", false
 	}
 	if leader == a.ownServer() {
 		ptr.Store(a.main)
-		return
+		return leader, true
 	}
 	if cur := ptr.Load(); cur.server == leader && cur.nc != nil && !cur.nc.IsClosed() {
-		return
+		return leader, true
 	}
 	nc, err := a.connTo(leader)
 	if err != nil {
@@ -395,11 +544,12 @@ func (a *affinity) retarget(ctx context.Context, stream string) {
 				Msg("Could not connect to the server leading the stream; its writers publish through this " +
 					"service's own connection, and every publish crosses a route between servers")
 		}
-		return
+		return leader, false
 	}
 	ptr.Store(&pubTarget{nc: nc, server: leader})
 	log.Info().Str("stream", stream).Str("leader", leader).
 		Msg("Writers on the stream now publish on a connection to its leader")
+	return leader, true
 }
 
 // connTo returns a connection attached to server, dialling one if none is open. A candidate

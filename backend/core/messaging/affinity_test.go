@@ -67,6 +67,82 @@ func TestHeadlessURL(t *testing.T) {
 	}
 }
 
+// What settles a triggered retarget: a leader was read, the target is on it, and it is the
+// leader the advisory named (when one did).
+//
+// The counterweight is the first case: a pass that read the advisory's leader and is on it
+// settles. Without it a retargetRetry that never settles would pass every other case, and
+// would only cost lookups until affinityRetargetFor.
+func TestRetargetRetrySettles(t *testing.T) {
+	cases := []struct {
+		name, want, leader string
+		dialled, settles   bool
+	}{
+		{"the advisory's leader, on it", "n2", "n2", true, true},
+		{"a registration (no leader named), on the leader", "", "n2", true, true},
+		{"no leader read (an election in progress, or the lookup failed)", "n2", "", false, false},
+		{"no leader read, though nothing was dialled", "", "", true, false},
+		{"the lookup named the old leader", "n2", "n3", true, false},
+		{"the leader could not be dialled", "n2", "n2", false, false},
+		{"a registration whose leader could not be dialled", "", "n2", false, false},
+	}
+	for _, c := range cases {
+		r := newRetargetRetry(c.want, time.Now())
+		if got := r.settles(c.leader, c.dialled); got != c.settles {
+			t.Errorf("%s: settles(%q, %v) with want %q = %v, want %v", c.name, c.leader, c.dialled, c.want, got, c.settles)
+		}
+	}
+}
+
+// An unsettled retarget is tried again, sooner first: affinityRetargetRetry doubling to
+// affinityRetargetRetryMax, and never after affinityRetargetFor.
+//
+// GUARD: a retry with no cap backs off past the sampler's interval, and one with no end asks
+// the broker every affinityRetargetRetryMax for as long as a stream has no leader.
+func TestRetargetRetryBacksOffAndEnds(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	r := newRetargetRetry("n2", start)
+	now := start
+	var gaps []time.Duration
+	for r.next(now) {
+		gaps = append(gaps, r.due.Sub(now))
+		now = r.due
+		if len(gaps) > 1000 {
+			t.Fatal("the retries never end")
+		}
+	}
+	if gaps[0] != affinityRetargetRetry {
+		t.Fatalf("first retry after %v, want %v", gaps[0], affinityRetargetRetry)
+	}
+	for i := 1; i < len(gaps); i++ {
+		if want := min(2*gaps[i-1], affinityRetargetRetryMax); gaps[i] != want {
+			t.Fatalf("retry %d after %v, want %v (gaps %v)", i, gaps[i], want, gaps)
+		}
+	}
+	if last := gaps[len(gaps)-1]; last != affinityRetargetRetryMax {
+		t.Fatalf("the backoff stopped at %v, short of its cap %v", last, affinityRetargetRetryMax)
+	}
+	if now.Sub(start) > affinityRetargetFor+affinityRetargetRetryMax {
+		t.Fatalf("retries went on for %v, past affinityRetargetFor (%v)", now.Sub(start), affinityRetargetFor)
+	}
+	if now.Sub(start) < affinityRetargetFor-affinityRetargetRetryMax {
+		t.Fatalf("retries ended after %v, well short of affinityRetargetFor (%v)", now.Sub(start), affinityRetargetFor)
+	}
+}
+
+// The leader a leader-elected advisory names. The payload is the broker's
+// JSStreamLeaderElectedAdvisory, as sent.
+func TestElectedLeader(t *testing.T) {
+	adv := `{"type":"io.nats.jetstream.advisory.v1.stream_leader_elected","id":"x","timestamp":"2026-10-22T15:15:51Z",` +
+		`"stream":"test_resolved-events","leader":"n2","replicas":[{"name":"n3","current":false,"active":0}]}`
+	if got := electedLeader([]byte(adv)); got != "n2" {
+		t.Fatalf("electedLeader = %q, want n2", got)
+	}
+	if got := electedLeader([]byte("not json")); got != "" {
+		t.Fatalf("electedLeader of a payload that is not JSON = %q, want none", got)
+	}
+}
+
 // A writer whose stream has a new leader does not wait for its window to settle while a
 // failure episode is open: the episode keeps slots back until a publish succeeds, so the
 // window cannot settle until the submitter publishes again, and waiting would only block the
