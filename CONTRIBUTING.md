@@ -220,8 +220,9 @@ Every served schema (`backend/services/*/graphql/*.graphql`) is compared with th
 schema at the last release, and a change that would break a client written against that
 release fails CI. Breaking means removing or renaming a type, field, argument, input field,
 enum value or union member; changing a type (except making an output field non-null or an
-input optional); and adding a required argument or input field. New enum values, union
-members and changed defaults are reported but do not fail. Additions are always fine.
+input optional); and adding a required argument or input field, or removing the default
+that let a client omit a non-null one. New enum values, union members and changed defaults
+are reported but do not fail. Any other addition is fine.
 
 ```bash
 hack/check-graphql-compat.sh          # against the nearest release tag; needs the tags fetched
