@@ -35,7 +35,8 @@ import {
   type LocationStreamState,
   type MeasurementStreamState,
 } from '@devicechain/widget-sdk';
-import { membersMode, presenceMode } from './binding-policy';
+import { historyMode, membersMode, presenceMode } from './binding-policy';
+import { HISTORY_STRINGS } from './history-strings';
 import { createBuiltinWidgetRegistry } from './builtin-registry';
 import { CONTROL_STRINGS } from './command-control-strings';
 import { FLEET_STRINGS } from './fleet-strings';
@@ -47,6 +48,7 @@ import { loadAggregateWidgets } from './widgets/aggregate-lazy';
 import { loadAlarmWidgets } from './widgets/alarm-lazy';
 import { loadControlWidgets } from './widgets/control-lazy';
 import { loadLevelWidgets } from './widgets/level-lazy';
+import { loadHistoryWidgets } from './widgets/history-lazy';
 import { loadPresenceWidgets } from './widgets/presence-lazy';
 import { loadSelectionWidgets } from './widgets/selection-lazy';
 import { loadTableWidget } from './widgets/table-lazy';
@@ -62,6 +64,7 @@ beforeAll(() =>
   Promise.all([
     loadLevelWidgets(),
     loadPresenceWidgets(),
+    loadHistoryWidgets(),
     loadControlWidgets(),
     loadAggregateWidgets(),
     loadAlarmWidgets(),
@@ -162,6 +165,13 @@ const EMPTY_STATES = [
   PRESENCE_STRINGS.en.unsupported,
   PRESENCE_STRINGS.en.failed,
   PRESENCE_STRINGS.en.oneDevice,
+  // The history table's explained states: a configured board has a device, access and stored history.
+  HISTORY_STRINGS.en.loading,
+  HISTORY_STRINGS.en.unbound,
+  HISTORY_STRINGS.en.forbidden,
+  HISTORY_STRINGS.en.unsupported,
+  HISTORY_STRINGS.en.failed,
+  HISTORY_STRINGS.en.empty,
 ];
 
 const sample = (name: string, value: number): MeasurementSample => ({
@@ -250,6 +260,16 @@ const PRESENCE_MEMBERS = [
   { token: 'wl-sensor-03', presence: { status: 'ready' as const, active: false, lastActivityTime: '2026-07-31T12:00:00Z', inactivityTimeout: 600 } },
   { token: 'wl-sensor-04', presence: { status: 'unknown' as const } },
 ].map(({ token, presence }) => ({ token, name: token, latest: {}, seed: 'ready' as const, observed: [], presence }));
+
+// What the history table is handed once its buckets are read: two buckets of the sensor's temperature
+// and humidity, in the one-minute buckets of an hour's chart.
+const HISTORY_VIEW = {
+  status: 'ready' as const,
+  window: { startTime: '2026-08-01T11:00:00.000Z', endTime: '2026-08-01T11:59:59.999Z', intervalSeconds: 60 },
+  buckets: ['2026-08-01T11:57:00Z', '2026-08-01T11:58:00Z'].flatMap((bucketStart) =>
+    ['temperature', 'humidity'].map((name) => ({ bucketStart, name, avg: SAMPLE_VALUE, min: SAMPLE_VALUE, max: SAMPLE_VALUE, sum: SAMPLE_VALUE, count: 1 })),
+  ),
+};
 
 function presenceData(widget: KnownWidgetInstance): MeasurementStreamState {
   const members = widget.type === 'device-status' ? PRESENCE_MEMBERS.slice(0, 1) : PRESENCE_MEMBERS;
@@ -365,6 +385,11 @@ function renderWidget(widget: KnownWidgetInstance) {
       // The descriptor decides whether a measurement widget reads member by member, or reads device
       // connectivity, as it does live.
       if (presenceMode(registry.descriptor(widget.type)!)) return render(<Component widget={widget} data={presenceData(widget)} />);
+      // (and reads stored history in buckets, through its own feed, which hands it the view)
+      if (historyMode(registry.descriptor(widget.type)!)) {
+        const Table = Component as ComponentType<{ widget: KnownWidgetInstance; data: unknown; history: unknown }>;
+        return render(<Table widget={widget} data={measurementData()} history={HISTORY_VIEW} />);
+      }
       return render(
         <Component
           widget={widget}

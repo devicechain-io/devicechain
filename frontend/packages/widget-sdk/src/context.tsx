@@ -12,7 +12,7 @@
 // package depend on as a PEER (never a dependency) so the host's install supplies the
 // single copy.
 
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
 
 import type { ResolvedFrame, SelectionCandidate, SelectionTarget, TimeRangeState } from '@devicechain/dashboards';
 
@@ -225,4 +225,43 @@ export function WidgetTimeRangeProvider({
 
 export function useWidgetTimeRange(): TimeRangeState | undefined {
   return useContext(WidgetTimeRangeContext);
+}
+
+// ---- Chart image export --------------------------------------------------------------------
+//
+// A chart widget draws into a canvas the frame cannot reach, and the frame owns the export menu. So
+// the chart wrapper (<EChart>) REGISTERS a way to read its image, and the frame offers "Download
+// image" only while one is registered: a widget that draws no chart has nothing to register and is
+// offered no image. The registrar is provided by the frame around its content; outside a frame it is
+// absent and registering does nothing.
+
+/** Reads the chart as a PNG data URL on the given background (a canvas is transparent), or undefined while it has none. */
+export type WidgetImageSource = (options: { backgroundColor: string }) => string | undefined;
+
+const WidgetImageRegistrarContext = createContext<((source: WidgetImageSource | undefined) => void) | undefined>(undefined);
+
+export function WidgetImageRegistrarProvider({
+  register,
+  children,
+}: {
+  register: (source: WidgetImageSource | undefined) => void;
+  children: ReactNode;
+}) {
+  return <WidgetImageRegistrarContext.Provider value={register}>{children}</WidgetImageRegistrarContext.Provider>;
+}
+
+/**
+ * Offers the caller's image to the enclosing frame while `source` is given. It may change every
+ * render; passing `undefined` withdraws it (a chart that has not drawn yet has no image to offer).
+ */
+export function useRegisterWidgetImage(source: WidgetImageSource | undefined): void {
+  const register = useContext(WidgetImageRegistrarContext);
+  const latest = useRef(source);
+  latest.current = source;
+  const offered = source !== undefined;
+  useEffect(() => {
+    if (!register || !offered) return;
+    register((options) => latest.current?.(options));
+    return () => register(undefined);
+  }, [register, offered]);
 }

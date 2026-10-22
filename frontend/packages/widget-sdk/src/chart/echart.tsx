@@ -22,6 +22,8 @@
 import type * as echarts from 'echarts/core';
 import { useEffect, useRef, useState } from 'react';
 
+import { useRegisterWidgetImage } from '../context';
+
 type Engine = typeof import('./echart-engine');
 
 let engine: Engine | undefined;
@@ -98,6 +100,13 @@ export function EChart({ option, className, style }: EChartProps) {
   const [failed, setFailed] = useState<{ error: unknown }>();
   const [markersLoaded, setMarkersLoaded] = useState(markersReady);
   const needsMarkers = optionUsesMarkers(option) && !markersLoaded;
+
+  // Offer the chart's image to the frame it is drawn in (its "Download image") once the engine is
+  // here and the chart exists: a PNG at twice the on-screen resolution, on the background the frame
+  // hands over, since the canvas itself is transparent.
+  useRegisterWidgetImage(
+    loaded ? ({ backgroundColor }) => chartRef.current?.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor }) : undefined,
+  );
 
   // The engine, when this is the first chart to mount and nobody preloaded it.
   useEffect(() => {

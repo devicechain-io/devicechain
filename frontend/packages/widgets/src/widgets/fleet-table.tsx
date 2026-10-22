@@ -61,6 +61,7 @@ import {
   type Cell,
   type SortKey,
 } from '../fleet-model';
+import { fleetExport } from '../export-rows';
 import { fleetStrings, type FleetStrings } from '../fleet-strings';
 import { LevelEmpty } from '../level-readout';
 
@@ -351,7 +352,22 @@ function Table({
   );
 
   return (
-    <Frame title={optString(widget.options, 'title')}>
+    <WidgetFrame
+      title={optString(widget.options, 'title')}
+      flush
+      exportRows={() =>
+        fleetExport({
+          subject: optString(widget.options, 'title') ?? 'fleet',
+          members: fleet.members,
+          total: fleet.total,
+          columns: columns.map((name) => {
+            const f = formats.get(name);
+            return { name, heading: (f?.label ?? name) + (f?.unit ? ` (${f.unit})` : ''), precision: f?.precision };
+          }),
+          sort,
+        })
+      }
+    >
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {/* A focusable scroll region: a keyboard user can scroll a wide table sideways. */}
         <div
@@ -395,7 +411,7 @@ function Table({
           </div>
         )}
       </div>
-    </Frame>
+    </WidgetFrame>
   );
 }
 

@@ -132,6 +132,9 @@ export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOption
         // and when each was last active) rather than their readings, and `data.members` is set with
         // each member's `presence`. `{ const: true }` only.
         presence?: ConstBinding<true>;
+        // Makes the widget a HISTORY widget: it reads one device's stored history in time buckets over
+        // its span (never the live feed), and is handed the buckets. `{ const: true }` only.
+        history?: ConstBinding<true>;
       }
     : C extends 'alarm'
       ? {

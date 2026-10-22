@@ -37,7 +37,7 @@ import {
 import { isForbiddenError } from '@devicechain/client';
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementIsMembersOnly, measurementWindow, membersMode, presenceMode, wantsEventMarkers } from './binding-policy';
+import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, historyMode, measurementSpan, measurementIsMembersOnly, measurementWindow, membersMode, presenceMode, wantsEventMarkers } from './binding-policy';
 import { useHeld } from './use-held';
 import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
@@ -58,6 +58,7 @@ import type { AggregateFeedProps } from './aggregate-feed';
 import type { GroupedAlarmProps } from './widgets/alarm-grouped';
 import type { EventMarkersFeedProps } from './event-markers-feed';
 import type { FleetFeedProps } from './fleet-feed';
+import type { HistoryFeedProps } from './history-feed';
 import type { PresenceFeedProps } from './presence-feed';
 import { narrowActions, narrowCandidates, narrowSelect } from './widget-host';
 
@@ -255,6 +256,10 @@ const FleetFeed = lazyChunk<typeof import('./fleet-feed')>(() => import('./fleet
 // without a device status card or an online doughnut never downloads it.
 const PresenceFeed = lazyChunk<typeof import('./widgets/presence-widgets')>(() => import('./widgets/presence-widgets')).component<never, PresenceFeedProps>('PresenceFeed');
 
+// The history feed (history-feed.tsx) loads with the history table, in its chunk: a board without one
+// never downloads it.
+const HistoryFeed = lazyChunk<typeof import('./widgets/history-widgets')>(() => import('./widgets/history-widgets')).component<never, HistoryFeedProps>('HistoryFeed');
+
 function MeasurementConnectedWidget(props: ChannelProps) {
   // A presence widget reads device-state, not readings: its own feed, whatever it is bound to (the
   // widget itself says so when a card meant for one device is bound to a group).
@@ -276,6 +281,10 @@ function MeasurementConnectedWidget(props: ChannelProps) {
     return (
       <FleetFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} ErrorFrame={WidgetErrorFrame} refuse={!members} />
     );
+  }
+  // One device's stored history, in buckets (after the group check above, so a group is refused in words).
+  if (historyMode(descriptor)) {
+    return <HistoryFeed hub={hub} widget={widget} descriptor={descriptor} Component={Component} actions={actions} />;
   }
   return <StreamConnectedWidget {...props} />;
 }

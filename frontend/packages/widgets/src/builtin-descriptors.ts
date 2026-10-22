@@ -1318,6 +1318,40 @@ export const builtinWidgetDescriptors = {
     interactions: {},
     layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
   }),
+
+  // One device's stored history as rows: a row per time bucket over the span, a column per
+  // measurement, each cell the bucket's AVERAGE (the table says "avg per 5m"). It reads the store's
+  // buckets (`binding.history`), never the live feed, so it is time-ranged and takes one device.
+  'history-table': defineRuntimeDescriptor({
+    id: 'history-table',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'History table', category: 'Telemetry', titleId: 'widgetTypeHistoryTable', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
+    binding: { windowSeconds: { option: 'windowSeconds' }, history: { const: true } },
+    options: {
+      title: TITLE,
+      columns: FLEET_COLUMNS,
+      precision: PRECISION,
+      oldestFirst: { kind: 'boolean', labelId: 'widgetLabelOldestFirst' },
+      pageSize: {
+        kind: 'number',
+        integer: true,
+        min: 5,
+        max: 100,
+        labelId: 'widgetLabelRowsPerPage',
+      },
+      staleAfterSeconds: STALE_AFTER_SECONDS,
+      windowSeconds: WINDOW_SECONDS,
+    },
+    defaults: { title: 'History table' },
+    // The frame's age is the table's: when its buckets were last read.
+    freshness: true,
+    interactions: {},
+    layout: { defaultSpan: { cols: 6, rows: 5 }, minSpan: { cols: 4, rows: 3 } },
+  }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 
 // The catalog the headless validators read. Constructed at module load, so a built-in that

@@ -203,6 +203,31 @@ for (const width of WIDTHS) {
   });
 }
 
+// ---- The history table ---------------------------------------------------------------
+//
+// One device's stored history as rows (frontend/packages/widgets/src/widgets/history-table.tsx): a plain
+// table, one with three columns and long headings, a week's history (dates as well as times, the widest
+// time column), and the smallest span the widget may be given, where its footer has the least room. The table and
+// its feed are a chunk of their own, so each must be drawn before the board is measured. Every one must
+// say its figures are bucket averages, and none may read badly -- with the frame's export button
+// taking room beside the title.
+
+for (const width of WIDTHS) {
+  test(`the history table board at ${width} px reads cleanly in light and dark`, async ({ page }) => {
+    for (const theme of THEMES) {
+      const { findings, widgets } = await measure(page, 'fixture/history-table', width, theme, '[data-history-bucket]');
+      expect([...widgets].sort(), 'every widget of the board is on the page').toEqual(['hist-chart', 'hist-min', 'hist-plain', 'hist-week', 'hist-wide']);
+      expect(await page.locator('[data-history-bucket]').count(), `${theme}: all four tables drawn`).toBe(4);
+      // Every table says what its figures are, and in which bucket (the smallest keeps the order for its title).
+      const labels = await page.locator('[data-history-bucket]').allTextContents();
+      expect(labels.every((t) => /^avg per \d+[mh]( · (newest|oldest) first)?$/.test(t)), `${theme}: ${JSON.stringify(labels)}`).toBe(true);
+      // A table that has rows lists them, and its frame offers the export.
+      await expect.poll(() => page.locator('[data-widget-export]').count(), { message: `${theme}: each frame offers the export` }).toBe(5);
+      expect(findings.map(describeFinding), `${theme}: new readability findings`).toEqual([]);
+    }
+  });
+}
+
 // ---- The negative control --------------------------------------------------------
 //
 // A gate is worth nothing until it has been seen to fail. This board is broken on purpose and

@@ -18,7 +18,7 @@ import type {
   WidgetInstance,
 } from '@devicechain/dashboards';
 import { WidgetTimeRangeProvider } from '@devicechain/widget-sdk';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The chart engine needs a canvas; the option it is handed is what these tests read.
@@ -352,6 +352,39 @@ describe('one line per device', () => {
       f.sink().next(live('p1', -5, 9));
     });
     await vi.waitFor(() => expect(lastOption()?.series?.[0]?.data.map((d) => d[1])).toEqual([1, 2]));
+  });
+});
+
+describe('the CSV export of a compare chart', () => {
+  it('holds the points on screen, a row each, the device as the series and the basis of each point', async () => {
+    const saved: Blob[] = [];
+    const names: string[] = [];
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((b) => (saved.push(b as Blob), 'blob:csv'));
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+      names.push(this.download);
+    });
+    const f = fakeHub((token) => [{ bucketStart: at(30), name: 'flow', avg: token === 'p1' ? 10 : 20 }]);
+    mount(chart({ title: 'Pump flow', unit: 'L/s', precision: 1 }), f.hub);
+    await vi.waitFor(() => expect(f.asked).toHaveBeenCalled());
+    act(() => {
+      f.sink().roster(roster(2));
+      f.sink().next(live('p1', 0, 12.345));
+    });
+    await vi.waitFor(() => expect(lines()).toEqual(['Pump 1', 'Pump 2']));
+    await vi.waitFor(() => expect(lastOption().series[0].data).toHaveLength(2));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Export data' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Download CSV' }));
+    await vi.waitFor(() => expect(saved).toHaveLength(1));
+    const csv = new TextDecoder().decode(new Uint8Array(await saved[0].arrayBuffer()).slice(3));
+    expect(csv.trimEnd().split('\r\n')).toEqual([
+      'Time (UTC),Series,Value (L/s),Basis',
+      '2026-10-21T11:30:00.000Z,Pump 1,10,avg per 1m',
+      '2026-10-21T11:30:00.000Z,Pump 2,20,avg per 1m',
+      '2026-10-21T12:00:00.000Z,Pump 1,12.3,reading',
+    ]);
+    expect(names[0]).toBe('Pump-flow-1h-20261021T1130Z-20261021T1200Z-avg-per-1m-reading.csv');
   });
 });
 

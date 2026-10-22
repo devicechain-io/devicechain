@@ -52,6 +52,7 @@ import { bucketSamples, capMembers, composeSeries, memberLabels, pushLive, serie
 import { compareStrings } from './compare-strings';
 import { seedWindow } from './fleet-model';
 import { fleetStrings } from './fleet-strings';
+import { samplesExport } from './export-rows';
 import { LevelEmpty } from './level-readout';
 
 export const FLUSH_MS = 250;
@@ -181,7 +182,7 @@ export default function CompareFeed({ hub, widget, descriptor, ErrorFrame }: Com
           const buckets = await read({ startTime: window.startTime, endTime: window.endTime, intervalSeconds: window.intervalSeconds, name: measurement });
           // A read this effect no longer wants (the span, the freeze instant or the roster moved on
           // while it was in flight) must not overwrite the newer one's history when it lands last.
-          if (!cancelled) s.history.set(token, { samples: bucketSamples(token, measurement, buckets), end });
+          if (!cancelled) s.history.set(token, { samples: bucketSamples(token, measurement, buckets, window.intervalSeconds), end });
           return { latest: {}, observed: [] };
         },
       },
@@ -244,7 +245,20 @@ export default function CompareFeed({ hub, widget, descriptor, ErrorFrame }: Com
 
   return (
     <WidgetFreshnessProvider freshness={freshness}>
-      <WidgetFrame title={title} flush>
+      <WidgetFrame
+        title={title}
+        flush
+        exportRows={() =>
+          samplesExport({
+            subject: title ?? measurement,
+            samples: composed?.samples ?? [],
+            unit: optString(widget.options, 'unit'),
+            precision: optNumber(widget.options, 'precision'),
+            seriesIs: 'device',
+            spanSeconds,
+          })
+        }
+      >
         <CompareBody
           widget={widget}
           names={capped.shown.map((m) => labels.get(m.token) ?? m.token)}

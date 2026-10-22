@@ -65,7 +65,7 @@ bound to a slot needs its datasource resolved first (`resolveWidgets` or
 
 | channel | widgets |
 | --- | --- |
-| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count`, `device-status`, `online-doughnut` |
+| measurement | `timeseries-chart`, `latest-card`, `gauge`, `linear-gauge`, `level-gauge`, `battery`, `status-light`, `signal-bars`, `compass`, `progress-ring`, `table`, `bar-chart`, `pie-chart`, `fleet-table`, `fleet-count`, `device-status`, `online-doughnut`, `history-table` |
 | aggregate | `stat-card` |
 | none (static) | `label`, `image` |
 | alarm | `alarm-table`, `alarm-count`, `alarm-severity` |
@@ -82,6 +82,16 @@ latest) over the board's time range.
 each was last active) from device-state, not their readings. They ride the measurement channel's
 member feed (`data.members[].presence`), so the channel set is unchanged. `device-status` shows one
 device; `online-doughnut` takes a group.
+
+`history-table` lists one device's stored history as rows, one per time bucket over the board's
+span, each cell the bucket's average (the table says "avg per 5m"). It reads the store's buckets
+(`binding.history`), not the live feed, and refuses a group.
+
+A frame offers a data download from its title bar when its widget opts in: `timeseries-chart`,
+`fleet-table` and `history-table` hand it a table (CSV), and the charts drawn on a canvas
+(`timeseries-chart`, `gauge`, `compass`) a PNG. The file holds what the widget shows, for the
+span and bucket on screen, and its name says so. A widget of your own opts in with the
+optional `exportRows` prop of `WidgetFrame` (see the widget SDK).
 
 The time-series chart, the dial gauge and the compass are drawn with
 [Apache ECharts](https://echarts.apache.org); the other widgets are plain DOM
