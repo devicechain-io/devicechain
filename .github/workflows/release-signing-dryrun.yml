@@ -154,7 +154,7 @@ jobs:
       # must refuse them. A workflow other than release.yml cannot produce a release.
       - name: Signed by another workflow is not a release (control)
         run: |
-          set -uo pipefail
+          set +e -u -o pipefail
           out="$(hack/verify-release-signatures.sh "$TAG" --registry "$REG" --image svc-a \
             --repo "$GITHUB_REPOSITORY" --skip-provenance 2>&1)"
           rc=$?
