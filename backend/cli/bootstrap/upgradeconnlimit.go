@@ -225,7 +225,7 @@ func precheckUpgradeLogin(ctx context.Context, st *State) error {
 	})
 	if errors.Is(err, errNoConnectionBudget) {
 		err = fmt.Errorf("this release needs instance %q's database login to hold %d connections, up from %s, "+
-			"and nothing has been changed: %w", st.Instance, admit.Limit, describeLoginLimit(have), err)
+			"and nothing has been changed: %w%s", st.Instance, admit.Limit, describeLoginLimit(have), err, overlayBudgetHint(st))
 	}
 	if err != nil {
 		return fail("checking the instance's database login", asBudgetRefusal(err))

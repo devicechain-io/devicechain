@@ -161,6 +161,9 @@ type State struct {
 	// ValuesOverlayRecorded is the overlay the declaration holds NOW, so a run can say what
 	// it changes and write only when it changes something.
 	ValuesOverlayRecorded map[string]interface{}
+	// ValuesOverlayUnreadable says the declaration's record could not be read and this run
+	// replaces it (--values or --reset-values), so it is rewritten whatever the diff says.
+	ValuesOverlayUnreadable bool
 	// ObjectStore is the settled object store (--object-store): nil for none. A bootstrap
 	// resolves it from the flags and the provider's default; an upgrade reads it back from
 	// the declaration, which is how it survives a re-run. See objectstore.go.

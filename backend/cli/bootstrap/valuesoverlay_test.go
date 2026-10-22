@@ -12,6 +12,7 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 )
 
 // writeOverlayFile writes an operator's values file and returns its path.
@@ -195,6 +196,22 @@ func TestARefusedKeyIsNamedAndRefusedBeforeAnyChange(t *testing.T) {
 		"functionalAreas.event-sources.config.capture.bodyCredential": "functionalAreas:\n  event-sources:\n    config:\n      capture:\n        bodyCredential: strip\n",
 		"functionalAreas.lwm2m-ingest.replicas":                       "functionalAreas:\n  lwm2m-ingest:\n    replicas: 1\n",
 		"securityContext.runAsUser":                                   "securityContext:\n  runAsUser: 0\n",
+		// A security switch or wiring inside an area's otherwise tunable config.
+		"functionalAreas.device-management.config.deviceAuthMode":                      "functionalAreas:\n  device-management:\n    config:\n      deviceAuthMode: disabled\n",
+		"functionalAreas.update-management.config.updates.allowUnverifiedArtifacts":    "functionalAreas:\n  update-management:\n    config:\n      updates:\n        allowUnverifiedArtifacts: true\n",
+		"functionalAreas.user-management.config.auth.issuerUrl":                        "functionalAreas:\n  user-management:\n    config:\n      auth:\n        issuerUrl: https://evil.example\n",
+		"functionalAreas.device-state.config.rdbConfiguration.sqlDebug":                "functionalAreas:\n  device-state:\n    config:\n      rdbConfiguration:\n        sqlDebug: true\n",
+		"functionalAreas.event-management.config.tsdbConfiguration.maxOpenConnections": "functionalAreas:\n  event-management:\n    config:\n      tsdbConfiguration:\n        maxOpenConnections: 80\n",
+		// ...in any spelling the service would bind: the services match keys as encoding/json does.
+		"functionalAreas.device-management.config.DeviceAuthMode":                "functionalAreas:\n  device-management:\n    config:\n      DeviceAuthMode: disabled\n",
+		"functionalAreas.event-sources.config.Capture.BodyCredential":            "functionalAreas:\n  event-sources:\n    config:\n      Capture:\n        BodyCredential: strip\n",
+		"functionalAreas.event-management.config.TsdbConfiguration.MaxOpenConns": "functionalAreas:\n  event-management:\n    config:\n      TsdbConfiguration:\n        MaxOpenConns: 80\n",
+		// An ingress annotation the chart sets itself would REPLACE the chart's.
+		"ingress.annotations.nginx.ingress.kubernetes.io/configuration-snippet": "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/configuration-snippet: \"#\"\n",
+		"ingress.annotations.nginx.ingress.kubernetes.io/enable-access-log":     "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/enable-access-log: \"true\"\n",
+		"ingress.annotations.nginx.ingress.kubernetes.io/server-snippet":        "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/server-snippet: \"#\"\n",
+		"ingress.annotations.cert-manager.io/cluster-issuer":                    "ingress:\n  annotations:\n    cert-manager.io/cluster-issuer: other\n",
+		"ingress.annotations.nginx.ingress.kubernetes.io/ssl-redirect":          "ingress:\n  annotations:\n    nginx.ingress.kubernetes.io/ssl-redirect: \"false\"\n",
 	} {
 		f := writeOverlayFile(t, "bad.yaml", body)
 		_, err := LoadValuesOverlay([]string{f})
@@ -503,5 +520,125 @@ func TestEveryTunableValueExistsInTheChart(t *testing.T) {
 		if !strings.Contains(schema, `"`+last+`"`) {
 			t.Errorf("tunable %s: the chart's values schema has no %q", p, last)
 		}
+	}
+}
+
+// 🔴 THE CONNECTION LIMIT COUNTS WHAT THE OVERLAY RUNS. An overlay that raises a relational
+// area's pods or pool raises what the instance's login has to hold; sized from dcctl's
+// topology alone, the login would refuse the extra pods' connections under load while
+// the store reported healthy.
+func TestTheConnectionLimitCountsTheOverlaysReplicasAndPools(t *testing.T) {
+	per := servicePoolSize * rolloutSurge
+	base := 7 * per // the default profile's seven relational areas, one pod each
+	for _, tc := range []struct {
+		name    string
+		overlay string
+		want    int
+	}{
+		{"no overlay", "", base},
+		{"one relational area's replicas", "functionalAreas:\n  device-management:\n    replicas: 3\n", base + 2*per},
+		// event-processing's chart default pins its own count at 1, so the top-level count
+		// reaches the other six.
+		{"the top-level replicas", "replicas: 2\n", base + 6*per},
+		{"an area's own pool", "functionalAreas:\n  device-state:\n    config:\n      rdbConfiguration:\n        maxOpenConnections: 50\n",
+			base - per + 50*rolloutSurge},
+		{"a pool in another spelling", "functionalAreas:\n  device-state:\n    config:\n      RdbConfiguration:\n        MaxOpenConnections: 50\n",
+			base - per + 50*rolloutSurge},
+		{"replicas and pool together", "functionalAreas:\n  device-state:\n    replicas: 2\n    config:\n      rdbConfiguration:\n        maxOpenConnections: 30\n",
+			base - per + 2*30*rolloutSurge},
+		{"a non-relational area's replicas", "functionalAreas:\n  event-sources:\n    replicas: 4\n", base},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &State{Profile: "default"}
+			if tc.overlay != "" {
+				o, err := LoadValuesOverlay([]string{writeOverlayFile(t, "o.yaml", tc.overlay)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				st.ValuesOverlay = o
+			}
+			got, err := instanceConnectionLimit(st)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("limit %d, want %d", got, tc.want)
+			}
+		})
+	}
+	// The refusal names the overlay as part of the need.
+	if h := overlayBudgetHint(&State{ValuesOverlay: map[string]interface{}{"replicas": float64(2)}}); !strings.Contains(h, "--reset-values") {
+		t.Errorf("a budget refusal with an overlay does not name the way out: %q", h)
+	}
+}
+
+// 🔴 NO OVERLAY ANNOTATION MAY REPLACE ONE THE CHART SETS. The chart appends
+// ingress.annotations after its own on every Ingress, and a repeated key renders: the
+// overlay's value would replace the chart's. The set the chart writes is GENERATED here
+// from a real render, so a new chart annotation fails this until it is refused.
+func TestNoOverlayAnnotationReplacesOneTheChartSets(t *testing.T) {
+	manifest, err := renderChartClientSide(t.Context(), chartForTest(t), renderOnlyAuthoring(compactState(false)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingresses := 0
+	for _, doc := range strings.Split(manifest, "\n---") {
+		var obj struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name        string            `json:"name"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil || obj.Kind != "Ingress" {
+			continue
+		}
+		ingresses++
+		for k := range obj.Metadata.Annotations {
+			if refuseIngressAnnotation(k) == "" {
+				t.Errorf("Ingress %s carries annotation %s, and an overlay may set it -- which would replace the chart's value. "+
+					"Add it to refusedIngressAnnotations", obj.Metadata.Name, k)
+			}
+		}
+	}
+	if ingresses < 3 {
+		t.Fatalf("only %d Ingresses rendered; this check is not looking at the chart", ingresses)
+	}
+	// An annotation the chart does not set stays the operator's.
+	if why := refuseOverlayKey([]string{"ingress", "annotations", "nginx.ingress.kubernetes.io/proxy-read-timeout"}); why != "" {
+		t.Errorf("a timeout annotation was refused: %s", why)
+	}
+}
+
+// An unreadable record is refused when it would be carried, and REPLACED by the two ways out
+// the refusal names.
+func TestACorruptRecordedOverlayIsReplacedByEitherWayOut(t *testing.T) {
+	corrupt := func() *dcv1beta1.Instance {
+		inst := &dcv1beta1.Instance{ObjectMeta: metav1.ObjectMeta{Name: "prod"}}
+		inst.Annotations = map[string]string{AnnotationValuesOverlay: "{not json"}
+		return inst
+	}
+	st := &State{Instance: "prod"}
+	if err := applyUpgradeValuesOverlay(st, corrupt(), UpgradeOptions{Options: Options{ResetValues: true}}); err != nil {
+		t.Fatalf("--reset-values did not get past an unreadable record: %v", err)
+	}
+	if len(st.ValuesOverlay) != 0 || !valuesOverlayChanges(st) {
+		t.Errorf("--reset-values over an unreadable record would not rewrite it (overlay %v, changes %v)",
+			st.ValuesOverlay, valuesOverlayChanges(st))
+	}
+	st = &State{Instance: "prod"}
+	if err := applyUpgradeValuesOverlay(st, corrupt(), UpgradeOptions{Options: Options{ValuesOverlay: loadTuning(t)}}); err != nil {
+		t.Fatalf("--values did not get past an unreadable record: %v", err)
+	}
+	if !valuesOverlayChanges(st) {
+		t.Error("--values over an unreadable record would not rewrite it")
+	}
+	// The bootstrap side: given --values, the record is replaced; given none, refused.
+	st = &State{Instance: "prod", ValuesOverlay: loadTuning(t)}
+	if err := adoptRecordedValuesOverlay(st, corrupt()); err != nil || !valuesOverlayChanges(st) {
+		t.Errorf("a bootstrap with --values did not replace an unreadable record (err %v)", err)
+	}
+	if err := adoptRecordedValuesOverlay(&State{Instance: "prod"}, corrupt()); err == nil {
+		t.Error("a bootstrap without --values carried an unreadable record")
 	}
 }

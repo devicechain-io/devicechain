@@ -117,6 +117,68 @@ var ownedWithinTunable = []struct {
 }{
 	{"functionalAreas.event-management.replicas",
 		"the event-management replica count is set by --ha, and the event store's connection reserve is sized to it; changing it here would leave the reserve counting a different number of pods"},
+	// 🔴 AN AREA'S CONFIG IS TUNABLE AS A WHOLE, SO WHAT INSIDE IT IS NOT HAS TO BE SAID HERE.
+	// These are its credentials, wiring, trust anchors and security switches: each one is
+	// either decided elsewhere (by a flag, by the declaration, by the instance's own
+	// identity) or weakens a check, and none is a dial an operator turns for capacity.
+	// Matched case-insensitively, because the services bind their configuration as
+	// encoding/json does.
+	{"functionalAreas.*.config.tsdbConfiguration",
+		"an area's event-store pool is not tunable: the event store's connection reserve is fixed per event-management pod, and a larger pool would take connections the reserve does not hold"},
+	{"functionalAreas.*.config.rdbConfiguration.sqlDebug",
+		"SQL debug logging writes statements with their bound values (credentials, sealed secrets, tenant data) to the logs"},
+	{"functionalAreas.device-management.config.deviceAuthMode",
+		"device authentication is a security switch, not a tuning value: relaxing it accepts events from devices that present no credential"},
+	{"functionalAreas.user-management.config.auth",
+		"the identity service's issuer, signing keys, seeded clients and token lifetimes are the instance's identity, not tuning"},
+	{"functionalAreas.mcp.config.resourceUrl",
+		"the MCP server's resource URL is the audience every token is bound to; it follows the instance's host"},
+	{"functionalAreas.mcp.config.issuerUrl",
+		"the MCP server's issuer is the authorization server tokens are trusted from; it follows the instance's host"},
+	{"functionalAreas.update-management.config.updates.allowUnverifiedArtifacts",
+		"assigning unverified firmware turns off the signature check on every update"},
+	{"functionalAreas.update-management.config.updates.downloadBaseURL",
+		"the download URL devices are sent to follows the instance's host"},
+	{"functionalAreas.event-sources.config.eventSources",
+		"event-sources' listeners and broker connections are wiring, not tuning"},
+	{"functionalAreas.sparkplug-ingest.config.sources",
+		"sparkplug-ingest's broker connections, credential references and tenant bindings are wiring, not tuning"},
+}
+
+// refusedIngressAnnotations are ingress.annotations keys an overlay may not set. The chart
+// writes its overlay annotations AFTER its own on every Ingress, and a repeated key is not
+// refused by the render -- so an overlay naming a key the chart sets would REPLACE it: the
+// configuration snippet that keeps the service-token mint off the public host, the access
+// log kept off the download route (its capability rides in the query string), the upload
+// route's body limit, the TLS issuer. TestNoOverlayAnnotationReplacesOneTheChartSets renders
+// the chart and holds this list to what it actually sets. Snippets (nginx configuration
+// injected verbatim) and turning the TLS redirect off are refused for the same reason: the
+// ingress host and its TLS are dcctl's.
+var refusedIngressAnnotations = []string{
+	"nginx.ingress.kubernetes.io/rewrite-target",
+	"nginx.ingress.kubernetes.io/configuration-snippet",
+	"nginx.ingress.kubernetes.io/enable-access-log",
+	"nginx.ingress.kubernetes.io/proxy-body-size",
+	"nginx.ingress.kubernetes.io/proxy-request-buffering",
+	"nginx.ingress.kubernetes.io/ssl-redirect",
+	"nginx.ingress.kubernetes.io/force-ssl-redirect",
+}
+
+// refuseIngressAnnotation returns why an ingress annotation key may not be set, or "".
+func refuseIngressAnnotation(key string) string {
+	k := strings.ToLower(key)
+	switch {
+	case strings.HasPrefix(k, "cert-manager.io/"):
+		return "the TLS certificate's issuer is dcctl's (it follows --no-tls and the cluster's issuer)"
+	case strings.HasSuffix(k, "-snippet"):
+		return "a snippet injects nginx configuration verbatim, and can undo the routes the chart refuses at the edge"
+	}
+	for _, r := range refusedIngressAnnotations {
+		if k == r {
+			return "the chart sets this annotation itself (or it turns the TLS redirect off), and an overlay value would replace the chart's"
+		}
+	}
+	return ""
 }
 
 // presetDefaults are values dcctl writes as a PRESET DEFAULT that the overlay may
@@ -165,18 +227,39 @@ func overlayLeaves(m map[string]interface{}) [][]string {
 	return out
 }
 
+// pathsOverlap reports whether one path is a prefix of the other, either way round, with
+// "*" in either matching any one segment and segments compared case-insensitively. Either
+// way round, because a leaf ABOVE a protected value (a null, or a scalar, over its parent)
+// replaces it as surely as a leaf AT it; case-insensitively, because below an area's config
+// the services bind keys as encoding/json does, and a check that `capture` passed while
+// `Capture` slipped by would be no check.
+func pathsOverlap(a, b []string) bool {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != "*" && b[i] != "*" && !strings.EqualFold(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 // refuseOverlayKey returns why this leaf may not be set from an overlay, or "" when it may.
 func refuseOverlayKey(path []string) string {
 	// What an upgrade copies from the previous release by itself. An overlay that touched
 	// one would either be overwritten by the carry or, worse, make the carry skip.
 	for _, carried := range carriedValuePaths {
-		if pathHasPrefix(path, carried) || pathHasPrefix(carried, path) {
+		if pathsOverlap(path, carried) {
 			return "dcctl carries this value from the previous release itself (it is set by --lwm2m-identities or --mqtt-body-credential, or is provisioning state), so an overlay cannot set it"
 		}
 	}
 	for _, owned := range ownedWithinTunable {
-		if pathHasPrefix(path, splitPath(owned.path)) {
+		if pathsOverlap(path, splitPath(owned.path)) {
 			return owned.reason
+		}
+	}
+	if len(path) == 3 && path[0] == "ingress" && path[1] == "annotations" {
+		if why := refuseIngressAnnotation(path[2]); why != "" {
+			return why
 		}
 	}
 	for _, ok := range tunableValues {

@@ -28,7 +28,13 @@ import (
 func applyUpgradeValuesOverlay(st *State, inst *dcv1beta1.Instance, opts UpgradeOptions) error {
 	recorded, err := decodeValuesOverlay(inst.Annotations)
 	if err != nil {
-		return err
+		// 🔴 THE TWO WAYS OUT HAVE TO WORK ON THE ONE CASE THAT NAMES THEM. An unreadable
+		// record is refused when it would be carried; --values and --reset-values do not
+		// carry it, so they replace it, and the record is rewritten whatever it held.
+		if !opts.ResetValues && opts.ValuesOverlay == nil {
+			return err
+		}
+		recorded, st.ValuesOverlayUnreadable = nil, true
 	}
 	st.ValuesOverlayRecorded = recorded
 	switch {
@@ -51,15 +57,19 @@ func applyUpgradeValuesOverlay(st *State, inst *dcv1beta1.Instance, opts Upgrade
 
 // valuesOverlayChanges is whether this run changes the recorded overlay.
 func valuesOverlayChanges(st *State) bool {
-	return len(diffOverlays(st.ValuesOverlayRecorded, st.ValuesOverlay)) > 0
+	return st.ValuesOverlayUnreadable || len(diffOverlays(st.ValuesOverlayRecorded, st.ValuesOverlay)) > 0
 }
 
 // sayValuesOverlay reports the overlay in effect and, under --dry-run, exactly what the
 // run would change in the recorded one.
 func sayValuesOverlay(st *State) {
 	lines := diffOverlays(st.ValuesOverlayRecorded, st.ValuesOverlay)
+	if st.ValuesOverlayUnreadable {
+		fmt.Printf("  %s %s\n", color.WhiteString("Overlay:"),
+			color.YellowString("the recorded overlay cannot be read; this run replaces it"))
+	}
 	switch {
-	case len(st.ValuesOverlay) == 0 && len(lines) == 0:
+	case len(st.ValuesOverlay) == 0 && len(lines) == 0 && !st.ValuesOverlayUnreadable:
 		return
 	case len(st.ValuesOverlay) == 0:
 		fmt.Printf("  %s %s\n", color.WhiteString("Overlay:"),
@@ -156,7 +166,11 @@ func adoptRecordedValuesOverlay(st *State, existing *dcv1beta1.Instance) error {
 	}
 	recorded, err := decodeValuesOverlay(existing.Annotations)
 	if err != nil {
-		return err
+		// Given --values, the unreadable record is replaced rather than carried.
+		if st.ValuesOverlay == nil {
+			return err
+		}
+		recorded, st.ValuesOverlayUnreadable = nil, true
 	}
 	st.ValuesOverlayRecorded = recorded
 	if st.ValuesOverlay == nil && len(recorded) > 0 {

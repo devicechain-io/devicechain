@@ -163,6 +163,9 @@ var precheckSharedStore = func(ctx context.Context, st *State) (instanceStore, e
 		return err
 	})
 	if err != nil {
+		if errors.Is(err, errNoConnectionBudget) {
+			err = fmt.Errorf("%w%s", err, overlayBudgetHint(st))
+		}
 		return instanceStore{}, asBudgetRefusal(err)
 	}
 	return store, nil
