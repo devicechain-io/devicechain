@@ -456,8 +456,11 @@ Lo que ve una instancia en marcha:
   credencial por cada área que usa el bróker, y otra para la administración del bróker, y guarda cada
   una en un Secret llamado `dci-<instancia>-nats-<área>` que se monta solo en el pod de esa área.
   `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Las credenciales
-  nuevas tienen los mismos permisos que la compartida, así que lo que un área puede hacer no cambia, y
-  la compartida sigue en su sitio por ahora, de modo que un rollback sigue funcionando. El bróker se
+  nuevas tienen los mismos permisos que la compartida, así que lo que un área puede hacer no cambia. La
+  compartida sigue en su sitio por ahora, de modo que los servicios que aún no se han reiniciado siguen
+  conectándose durante la actualización. Hasta que una versión posterior la retire, la credencial
+  compartida sigue en la configuración que lee cada pod, así que esto aún no impide que un pod la
+  presente. El bróker se
   reinicia una vez, servidor a servidor con `--ha`, para añadir los usuarios. Un área se niega a
   arrancar si la instancia dice que las credenciales existen y falta la suya, en lugar de recurrir a la
   compartida. Las credenciales existentes nunca se reemplazan: una actualización crea solo las que faltan.

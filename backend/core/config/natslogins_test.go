@@ -82,6 +82,13 @@ func TestApplyAreaLoginOverridesOnlyWhenTheBrokerHasTheLogins(t *testing.T) {
 		err := a.ApplyAreaLogin("device-state", env(map[string]string{EnvNatsUser: "dc-event-sources-g1", EnvNatsPassword: "pw"}))
 		require.Error(t, err)
 	})
+	t.Run("a name that only starts like its own is refused", func(t *testing.T) {
+		for _, user := range []string{"dc-device-state-g", "dc-device-state-gx", "dc-device-state-g0",
+			"dc-device-state-g01", "dc-device-state-g+1", "dc-device-state-g1-extra"} {
+			a := NatsAuthConfiguration{AreaLogins: true}
+			require.Error(t, a.ApplyAreaLogin("device-state", env(map[string]string{EnvNatsUser: user, EnvNatsPassword: "pw"})), user)
+		}
+	})
 	t.Run("a later generation of its own login is accepted", func(t *testing.T) {
 		a := NatsAuthConfiguration{AreaLogins: true}
 		require.NoError(t, a.ApplyAreaLogin("device-state", env(map[string]string{EnvNatsUser: "dc-device-state-g2", EnvNatsPassword: "pw"})))
@@ -91,4 +98,13 @@ func TestApplyAreaLoginOverridesOnlyWhenTheBrokerHasTheLogins(t *testing.T) {
 		require.NoError(t, a.ApplyAreaLogin("mcp", env(nil)))
 		assert.Equal(t, "shared", a.Password)
 	})
+}
+
+// A principal named another's plus "-g..." must not pass as that other: the reason IsNatsLoginOf is
+// not a prefix match. No two platform areas are named that way, so the case is built by hand.
+func TestALoginIsNotAnotherPrincipalsWhoseNameItExtends(t *testing.T) {
+	assert.True(t, IsNatsLoginOf("dc-event-g1", "event"))
+	assert.True(t, IsNatsLoginOf("dc-event-g12", "event"))
+	assert.False(t, IsNatsLoginOf("dc-event-gateway-g1", "event"))
+	assert.True(t, IsNatsLoginOf("dc-event-gateway-g1", "event-gateway"))
 }

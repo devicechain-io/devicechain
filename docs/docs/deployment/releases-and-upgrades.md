@@ -429,7 +429,9 @@ What a running instance sees:
   one for broker administration, and stores each in a Secret named `dci-<instance>-nats-<area>` that
   is mounted into that area's pod only. `mcp` and `ai-inference` never open a broker connection and
   mount none. The new logins have the same permissions as the shared one, so what an area can do does
-  not change, and the shared login stays in place beside them for now, so a rollback still works.
+  not change. The shared login stays in place beside them for now, so services that have not
+  restarted yet keep connecting during the upgrade. Until a later release retires it, the shared login
+  is still in the configuration every pod reads, so this does not yet stop a pod from presenting it.
   The broker restarts once, one server at a time under `--ha`, to add the users. An area refuses to
   start if the instance says the logins exist and its own is missing, rather than fall back to the
   shared one. Existing logins are never replaced: an upgrade creates only the ones that are absent.

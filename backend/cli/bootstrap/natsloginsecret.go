@@ -271,7 +271,7 @@ func loginPlaintexts(creds natsauth.Credentials) map[string]string {
 // any generation.
 func isNatsLoginUser(user string) bool {
 	for _, p := range config.NatsLoginPrincipals() {
-		if strings.HasPrefix(user, "dc-"+p+"-g") {
+		if config.IsNatsLoginOf(user, p) {
 			return true
 		}
 	}

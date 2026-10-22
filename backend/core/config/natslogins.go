@@ -6,6 +6,7 @@ package config
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -64,6 +65,22 @@ func NatsLoginUser(principal string, generation int) string {
 	return fmt.Sprintf("dc-%s-g%d", principal, generation)
 }
 
+// IsNatsLoginOf reports whether user is principal's login at some generation: exactly
+// dc-<principal>-g<n>, n a positive decimal with no sign or leading zero.
+//
+// 🔴 NOT A PREFIX MATCH. "dc-<principal>-g" alone would let one principal's name pass as another's
+// whenever a second principal is named the first plus "-g…": an area "event" beside an area
+// "event-gateway" would accept dc-event-gateway-g1 as its own. No two principals are named that way
+// today; this keeps that from being what the check rests on.
+func IsNatsLoginOf(user, principal string) bool {
+	gen, ok := strings.CutPrefix(user, "dc-"+principal+"-g")
+	if !ok {
+		return false
+	}
+	n, err := strconv.Atoi(gen)
+	return err == nil && n >= 1 && strconv.Itoa(n) == gen
+}
+
 // ApplyAreaLogin makes this area connect as itself. It is called once, as the instance document is
 // loaded, so every broker connection the process opens (the manager's, the affinity leader's, the
 // presence canary's) presents the same login without each having to know about the change.
@@ -83,7 +100,7 @@ func (a *NatsAuthConfiguration) ApplyAreaLogin(area string, getenv func(string) 
 			"(dci-<instance>-nats-%s). Refusing to start rather than connect as the shared login",
 			area, EnvNatsUser, EnvNatsPassword, area)
 	}
-	if !strings.HasPrefix(user, "dc-"+area+"-g") {
+	if !IsNatsLoginOf(user, area) {
 		// Any generation of THIS area's login is legitimate (a rotation adds the next beside it); a
 		// different name is a Secret that belongs to another principal, and connecting with it
 		// would be exactly the cross-area credential this design removes.
