@@ -262,37 +262,29 @@ func TestAuditJournalTenantScopedRead(t *testing.T) {
 	}
 }
 
-// 🔴 THE FAIL-CLOSED CONTRACT, WHICH THE TESTS ABOVE STRUCTURALLY CANNOT SEE.
+// 🔴 THE JOURNAL ROW AND THE MUTATION ARE ONE WRITE: a journal write that fails fails the
+// mutation AND rolls it back.
 //
-// The journal's hooks are After("gorm:create"/"update"/"delete"), which gorm sorts
-// past the commit callback, and a failed journal write is reported with
-// db.AddError. So a mutation whose audit row cannot land reports FAILURE for a
-// change that has ALREADY HAPPENED. Every test above performs a mutation, asserts
-// it returned nil, and then reads the journal — none of them can observe an error
-// raised over a completed write, so nothing in this package pinned the reporting
-// half of the contract.
+// This test used to pin the opposite, and the old pin is the defect: the journal's hooks
+// ran past the commit callback, so a mutation whose audit row could not land reported
+// FAILURE for a change that had ALREADY HAPPENED and was never journaled. The hooks now
+// run inside the statement's transaction (see RegisterAuditJournal), so the error is
+// truthful: the change is absent.
 //
-// This drives it: take the journal's table away, then mutate. The error is
-// required AND so is the state the mutation left behind, because an assertion on
-// the error alone would also pass if the write had been refused or rolled back,
-// which is the opposite behaviour — a change that did not happen, reported as
-// failed.
-//
-// It runs over all three operations because the two halves of the contract fail
-// differently. The three hooks share one closure, so the fail-closed reporting
-// cannot break for one operation alone — but they are three separate
-// registrations, and it is the placement each one is given that puts the journal
-// write past the commit. Delete is the arm downstream reasoning leans on: the
-// erasure fence excludes the journal precisely because the journal runs after the
-// sweeper's delete has committed (see RegisterAuditJournal).
-func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
+// It drives it by taking the journal's table away and then mutating. Both halves are
+// required, because an assertion on the error alone would also pass for the old
+// behaviour. It runs over all three operations because they are three separate
+// registrations, and the placement each is given is what puts the journal write before
+// the commit. Delete is the arm downstream reasoning leans on: the erasure fence excludes
+// the journal precisely because a refusal of its row would now roll back the sweeper's
+// delete.
+func TestAuditJournalFailureRollsBackTheMutation(t *testing.T) {
 	for _, tc := range []struct {
 		op string
 		// mutate performs, on a database whose journal table has been dropped, the
 		// mutation whose audit row therefore cannot land.
 		mutate func(db *gorm.DB, ctx context.Context, seeded *widget) error
-		// landed asserts the mutation took effect anyway, and says what "took
-		// effect" means for this operation.
+		// landed asserts the mutation did NOT take effect.
 		landed func(t *testing.T, db *gorm.DB, ctx context.Context, seeded *widget)
 	}{
 		{
@@ -301,10 +293,9 @@ func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
 				return db.WithContext(ctx).Create(&widget{Name: "created"}).Error
 			},
 			landed: func(t *testing.T, db *gorm.DB, ctx context.Context, _ *widget) {
-				if n := countWidgets(t, db, ctx, "created"); n != 1 {
-					t.Fatalf("the created widget matched %d rows, want 1 — the failure "+
-						"reported above is supposed to be one raised over an insert that "+
-						"ALREADY COMMITTED; a refused insert is the opposite behaviour", n)
+				if n := countWidgets(t, db, ctx, "created"); n != 0 {
+					t.Fatalf("the created widget matched %d rows, want 0 — a create whose "+
+						"journal row failed must roll back, not report failure over a saved row", n)
 				}
 			},
 		},
@@ -315,10 +306,12 @@ func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
 					Where("id = ?", seeded.ID).Update("name", "moved").Error
 			},
 			landed: func(t *testing.T, db *gorm.DB, ctx context.Context, _ *widget) {
-				if n := countWidgets(t, db, ctx, "moved"); n != 1 {
-					t.Fatalf("the updated widget matched %d rows, want 1 — the failure "+
-						"reported above is supposed to be one raised over an update that "+
-						"ALREADY COMMITTED; a rolled-back update is the opposite behaviour", n)
+				if n := countWidgets(t, db, ctx, "moved"); n != 0 {
+					t.Fatalf("the updated widget matched %d rows, want 0 — an update whose "+
+						"journal row failed must roll back, not report failure over a saved change", n)
+				}
+				if n := countWidgets(t, db, ctx, "seeded"); n != 1 {
+					t.Fatalf("the seeded widget matched %d rows after the rolled-back update, want 1", n)
 				}
 			},
 		},
@@ -328,11 +321,9 @@ func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
 				return db.WithContext(ctx).Delete(&widget{}, seeded.ID).Error
 			},
 			landed: func(t *testing.T, db *gorm.DB, ctx context.Context, _ *widget) {
-				if n := countWidgets(t, db, ctx, "seeded"); n != 0 {
-					t.Fatalf("the deleted widget still matched %d rows, want 0 — the failure "+
-						"reported above is supposed to be one raised over a delete that "+
-						"ALREADY COMMITTED, which is what lets the erasure fence exclude "+
-						"the journal; a rolled-back delete is the opposite behaviour", n)
+				if n := countWidgets(t, db, ctx, "seeded"); n != 1 {
+					t.Fatalf("the seeded widget matched %d rows, want 1 — a delete whose "+
+						"journal row failed must roll back, not report failure over a removed row", n)
 				}
 			},
 		},
@@ -378,4 +369,68 @@ func countWidgets(t *testing.T, db *gorm.DB, ctx context.Context, name string) i
 		t.Fatalf("read widgets named %q: %v", name, err)
 	}
 	return len(rows)
+}
+
+func sysWidgetCount(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var n int64
+	if err := db.WithContext(core.WithSystemContext(context.Background())).Model(&widget{}).Count(&n).Error; err != nil {
+		t.Fatalf("counting widgets: %v", err)
+	}
+	return n
+}
+
+// The success path writes both, and an explicit transaction that rolls back takes the
+// audit row with it: there is no journal entry for a change that did not happen.
+func TestAuditRowSharesTheCallersTransaction(t *testing.T) {
+	db := newAuditTestDB(t)
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "alice", Tenant: "A"})
+
+	if err := db.WithContext(ctx).Create(&widget{Name: "kept"}).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if n, a := sysWidgetCount(t, db), len(readAudit(t, db)); n != 1 || a != 1 {
+		t.Fatalf("widgets=%d audit=%d; want one of each", n, a)
+	}
+
+	rollback := fmt.Errorf("rollback")
+	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&widget{Name: "undone"}).Error; err != nil {
+			return err
+		}
+		return rollback
+	})
+	if err != rollback {
+		t.Fatalf("transaction error = %v", err)
+	}
+	if n, a := sysWidgetCount(t, db), len(readAudit(t, db)); n != 1 || a != 1 {
+		t.Fatalf("after a rolled-back transaction widgets=%d audit=%d; want 1 and 1", n, a)
+	}
+}
+
+// The ordering is the whole mechanism, so it is asserted directly: the journal callbacks
+// sit between the statement and the commit callback.
+func TestAuditCallbacksRunBeforeTheCommit(t *testing.T) {
+	db := newAuditTestDB(t)
+	// gorm exposes no ordered listing, so observe it: a probe registered Before the
+	// commit callback and After the journal must see the audit row inside the open
+	// transaction.
+	seen := -1
+	if err := db.Callback().Create().After("dc:audit_create").Before("gorm:commit_or_rollback_transaction").
+		Register("probe_after_audit", func(tx *gorm.DB) {
+			var n int64
+			s := tx.Session(&gorm.Session{NewDB: true, Context: core.WithSystemContext(tx.Statement.Context)})
+			if err := s.Model(&AuditEvent{}).Count(&n).Error; err == nil {
+				seen = int(n)
+			}
+		}); err != nil {
+		t.Fatalf("registering probe: %v", err)
+	}
+	ctx := core.WithTenant(context.Background(), "A")
+	if err := db.WithContext(ctx).Create(&widget{Name: "w"}).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if seen != 1 {
+		t.Fatalf("a callback ordered After the journal and Before the commit saw %d audit rows, want 1", seen)
+	}
 }

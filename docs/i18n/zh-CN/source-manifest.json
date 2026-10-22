@@ -67,8 +67,8 @@
       "translationSha256": "ab5592d549847e6695514622d11434b05dcafce2ec6b0224d869428830f5d2cc"
     },
     "concepts/security-model.md": {
-      "sourceSha256": "553a9afea16b8ce9a0f03e0a4803fb27d9a05f41f8caa590f237bad767685952",
-      "translationSha256": "71a8794e51afc3b8df9f92eb4cf0f00547764a10089f85501bbb195328bcc17c"
+      "sourceSha256": "c949923403e94278dfc0e8191af0857e6ba56d79177887a9d9bdcb3345ff4db7",
+      "translationSha256": "9b4a8b3463de972333515b8e083c2ea0c389cb65ba6404e1099f17be6a915d82"
     },
     "concepts/single-sign-on.md": {
       "sourceSha256": "9979f642b5846262c252585b0e00da2c96703cc6313a4fa38813f14b96d504b4",
@@ -243,8 +243,8 @@
       "translationSha256": "26f569084428c949b23abde2802df7701198697cb2da5308bd3a0296a610b13c"
     },
     "user-guide/audit.md": {
-      "sourceSha256": "17af061f5e4ed7d5132b7c66d2c5ed30b19072cc474fb4d571aeda6292113ce5",
-      "translationSha256": "05b859c5b7351ee1002976172fe785a2fe01c0b6e9be5e8019fe212e560fa52d"
+      "sourceSha256": "b84e325d9743d5cbc21b68c7e7c4a09f01ac4e6c3c10748d1986d0b4bc391ede",
+      "translationSha256": "e9b54286a12276725de4164df2193b526c3377082241430362e5cc364c4b35b7"
     },
     "user-guide/calculated-metrics.md": {
       "sourceSha256": "b5f251f0284a9dc7eda887e6a155750520c27cb9f708096daea70f2663d037ac",

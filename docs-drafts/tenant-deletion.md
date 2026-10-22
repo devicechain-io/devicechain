@@ -510,10 +510,9 @@ running at all. That is what lets the sweep itself work, since the sweep is raw 
 it would take to make the claim hold at the database instead.
 
 **The audit journal is excluded, and the exclusion is load-bearing** (`backend/core/rdb/audit.go`).
-Its callback is registered after the create hook, which gorm sorts after the commit callback, so an
-audit row is inserted once the mutation it describes has already committed. Fencing it would hand
-the caller `ErrTenantPurged` for a delete that happened — the sweeper being told it failed to remove
-rows it had removed. The journal records what happened and can resurrect nothing.
+Its row is written inside the transaction of the mutation it describes (before the commit callback),
+so a refusal of it would roll that mutation back. Fencing it would hand the caller `ErrTenantPurged`
+for a delete the sweeper is entitled to make — the sweeper being told it failed to remove rows. The journal records what happened and can resurrect nothing.
 
 **A refusal must never be retried forever**, and one consumer had to change for that
 (`backend/services/event-processing/processor/roster_consumer.go`). Its persist-before-ack loop

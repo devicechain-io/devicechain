@@ -199,32 +199,43 @@ func isAuditExempt(db *gorm.DB) bool {
 	return false
 }
 
-// RegisterAuditJournal installs global GORM After callbacks that append an
-// AuditEvent for every create/update/delete by construction (ADR-019), alongside
-// the tenant-scope callbacks. A failure to record the audit row is reported as the
-// mutation's error (fail-closed — no silently unrecorded mutation).
+// RegisterAuditJournal installs global GORM callbacks that append an AuditEvent for
+// every create/update/delete by construction (ADR-019), alongside the tenant-scope
+// callbacks.
 //
-// 🔴 IT DOES NOT COMMIT WITH THE MUTATION, AND THIS COMMENT USED TO SAY IT DID.
-// gorm sorts an After("gorm:create") callback AFTER gorm:commit_or_rollback_transaction,
-// so by the time this one runs the statement's implicit transaction has committed
-// and the fresh session is on the pool rather than in that transaction. The
-// consequence is the one that matters when reading the error: a failed audit write
-// reports failure for a mutation that HAPPENED. It is why the ADR-077 erasure fence
-// excludes the journal — fencing it would have handed the tenant sweeper a refusal
-// for rows it had already deleted (see rdb.RegisterTenantFence).
+// 🔴 THE AUDIT ROW COMMITS WITH THE MUTATION, OR NEITHER DOES. Each callback is placed
+// After the statement and Before("gorm:commit_or_rollback_transaction"), so it runs
+// inside the statement's own implicit transaction (or inside the transaction the caller
+// opened, which it joins). A failed audit write is added to the statement's error, the
+// commit callback sees it and rolls the mutation back, and the caller is told the
+// truth: the change did NOT happen. The previous registration was a bare
+// After("gorm:create"), which gorm sorts AFTER the commit callback; the mutation was
+// already durable when the journal row was written, so an audit failure reported
+// failure for a change that had been saved and left it unjournaled.
 //
-// An explicit transaction the caller opened is a different case: there the session
-// shares that transaction and does roll back with it.
+// What is still best effort, deliberately: authentication events (RecordAuthEvent),
+// which are not mutations and must not turn an audit-table blip into a sign-in outage.
+// What is not journaled at all: raw SQL (Exec/Raw), which never reaches these processors.
+// And a session opened with SkipDefaultTransaction and no caller transaction has no
+// transaction to share, so there the audit row is a second, separate write.
+//
+// Lock order: the journal insert is the LAST statement of the transaction it joins, so
+// a transaction takes its entity locks in the order it always did and the journal's
+// rows (a plain append with a serial key and no unique index, so no row is contended
+// between writers) afterwards. The journal takes no lock another writer waits for.
 func RegisterAuditJournal(db *gorm.DB) error {
 	for _, register := range []func() error{
 		func() error {
-			return db.Callback().Create().After("gorm:create").Register("dc:audit_create", auditCallback("create"))
+			return db.Callback().Create().After("gorm:create").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:audit_create", auditCallback("create"))
 		},
 		func() error {
-			return db.Callback().Update().After("gorm:update").Register("dc:audit_update", auditCallback("update"))
+			return db.Callback().Update().After("gorm:update").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:audit_update", auditCallback("update"))
 		},
 		func() error {
-			return db.Callback().Delete().After("gorm:delete").Register("dc:audit_delete", auditCallback("delete"))
+			return db.Callback().Delete().After("gorm:delete").Before("gorm:commit_or_rollback_transaction").
+				Register("dc:audit_delete", auditCallback("delete"))
 		},
 	} {
 		if err := register(); err != nil {
@@ -268,8 +279,8 @@ func auditCallback(operation string) func(*gorm.DB) {
 
 		// Write the audit row on a fresh session that shares this statement's
 		// connection (and thus its transaction), carrying the same context so the
-		// scoping callbacks see the same tenant/system marker. A failure rolls the
-		// whole mutation back.
+		// scoping callbacks see the same tenant/system marker. A failure is added to
+		// this statement's error, so the commit callback rolls the mutation back with it.
 		session := db.Session(&gorm.Session{NewDB: true, Context: db.Statement.Context})
 		if err := session.Create(row).Error; err != nil {
 			_ = db.AddError(err)

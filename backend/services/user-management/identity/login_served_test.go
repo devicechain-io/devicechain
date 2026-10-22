@@ -73,3 +73,36 @@ func TestSingleServedLoginIsAcceptedAndMintsAToken(t *testing.T) {
 	require.Equal(t, int64(1), count(rdb.AuditOpLogin))
 	require.Equal(t, int64(0), count(rdb.AuditOpLoginFailed))
 }
+
+// A sign-in is not a mutation, and its audit row is written best effort: when the journal
+// cannot take the row, the sign-in still succeeds. This is the deliberate exception to the
+// journal's rule that an entity change and its audit row commit together or not at all — a
+// password sign-in writes no audited row of its own (its session lives in the key-value
+// store), so nothing here can roll back, and failing every sign-in because the audit table
+// is briefly unwritable would turn a journal outage into a platform-wide lockout.
+func TestASignInSucceedsWhenItsAuditRowCannotBeWritten(t *testing.T) {
+	const email, password = "jo@devicechain.local", "correct-horse-battery-staple"
+	db := putest.NewSQLiteDB(t, &iam.Identity{}, &iam.Role{}, &iam.Membership{})
+	rdbm := &rdb.RdbManager{Database: db}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	require.NoError(t, err)
+	sys := core.WithSystemContext(context.Background())
+	require.NoError(t, iam.NewStore(rdbm).CreateIdentity(sys,
+		&iam.Identity{Email: email, Enabled: true, PasswordHash: string(hash)}))
+
+	policy := credential.Policy{Free: 1000, Base: time.Minute, Cap: 4 * time.Minute}
+	checker, err := credential.NewChecker(credentialtest.NewStore(),
+		map[credential.Kind]credential.Policy{credential.KindIdentity: policy, credential.KindOAuthClient: policy})
+	require.NoError(t, err)
+	mgr := identity.NewManager(nil, rdbm, nil, nil, 0, 0, "", identity.BootstrapConfig{}, checker)
+	identity.InstallSigningForTest(t, mgr)
+
+	// The journal is unwritable from here on, so every audit insert fails.
+	require.NoError(t, db.Migrator().DropTable(&rdb.AuditEvent{}))
+	require.Error(t, rdbm.RecordAuthEvent(sys, rdb.AuditOpLogin, email, ""),
+		"precondition: the journal must refuse a row, or this test exercises nothing")
+
+	auth, err := mgr.Login(context.Background(), email, password)
+	require.NoError(t, err, "a sign-in must not fail because its audit row could not be written")
+	require.NotEmpty(t, auth.IdentityToken)
+}

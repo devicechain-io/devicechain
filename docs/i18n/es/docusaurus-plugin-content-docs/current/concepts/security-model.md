@@ -106,8 +106,9 @@ inicio de sesión único. La pantalla de Auditoría de un inquilino muestra el d
 Los eventos de inicio de sesión se leen a través de la API de administración del operador, y los diarios de otras áreas, como
 conectores, paneles y actualizaciones, se registran pero no se muestran en la pantalla de Auditoría.
 
-Si una entrada del registro no puede escribirse, la llamada informa de un fallo aunque el cambio ya se haya guardado, de modo que un
-cambio nunca queda sin registrar en silencio. Un fallo al escribir una entrada de inicio de sesión se anota en el log y no bloquea el
+Una entrada del registro se escribe en la misma transacción que el cambio que describe, de modo que ambos se guardan juntos o no se
+guarda ninguno. Si la entrada no puede escribirse, el cambio no se realiza y la llamada informa de un fallo, así que un cambio nunca
+queda sin registrar y un fallo notificado nunca corresponde a un cambio guardado. Un fallo al escribir una entrada de inicio de sesión se anota en el log y no bloquea el
 acceso. Las entradas nunca se editan, salvo que eliminar un inquilino vacía los nombres de sus entradas. El diario no se depura
 automáticamente. Consulte [Auditoría](../user-guide/audit.md).
 

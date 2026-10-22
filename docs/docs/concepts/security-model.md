@@ -107,8 +107,9 @@ sign-on outcomes. A tenant's Audit screen shows the registry journal, and only t
 events are read through the operator's administration API, and the journals of other areas, such as connectors,
 dashboards and updates, are recorded but are not shown on the Audit screen.
 
-If a registry entry cannot be written, the call reports a failure even though the change itself was saved, so a
-change is never silently left unrecorded. A failed write of a sign-in entry is logged and does not block the
+A registry entry is written in the same transaction as the change it describes, so the two are saved together or
+not at all. If the entry cannot be written, the change is not made and the call reports a failure, so a change is
+never left unrecorded and a reported failure is never a change that was saved. A failed write of a sign-in entry is logged and does not block the
 sign-in. Entries are never edited, except that deleting a tenant empties the names in its entries. The journal
 is not pruned automatically. See [Audit](../user-guide/audit.md).
 
