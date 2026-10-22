@@ -144,6 +144,9 @@ export function lazyBoundaries() {
     },
     // The light theme's tokens, fetched only for a light page.
     { what: 'the light theme', chunk: 'theme-light', markers: ['240 4.8% 95.9%'] },
+    // A widget frame's export button, its menu, the CSV encoder and the image download: fetched by a
+    // frame that has something to export. The frame itself draws only the box the button sits in.
+    { what: 'the widget export button and menu', chunk: 'export-menu', markers: ['Download CSV', 'Exportar datos', 'Widget export failed'] },
     // The recording's positions and aggregates, fetched by the first map or stat that asks.
     { what: 'the recorded positions and aggregates', chunk: 'recorded-extra', markers: ['bucketMeasurements: not a window: '] },
   ];

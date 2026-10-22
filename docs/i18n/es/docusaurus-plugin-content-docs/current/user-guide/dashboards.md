@@ -200,7 +200,7 @@ Una tarjeta de recuento de flota pone una cifra sobre esa tabla: cuántos dispos
 
 Dos widgets responden a la primera pregunta sobre una flota: si está conectada. Una tarjeta de estado del dispositivo muestra un dispositivo como *En línea* o *Sin conexión*, con la hora a la que se vio por última vez, y un anillo de conexión divide un grupo según cuántos de sus dispositivos están en línea, sin conexión o todavía sin estado. Leen el estado de los dispositivos que conoce la plataforma, no sus lecturas.
 
-Una tabla de historial lista el historial almacenado de un dispositivo como filas: una fila por intervalo de tiempo dentro del intervalo de tiempo del tablero y una columna por medición. Cada cifra es el **promedio** de las lecturas de ese intervalo, no una lectura, y la tabla lo dice bajo las filas (*prom. por 5m*); la hora es el inicio del intervalo. Úsela para leer los números que hay detrás de un gráfico. Su configuración se describe en [Configurar un widget](#configuring-a-widget).
+Una tabla de historial lista el historial almacenado de un dispositivo como filas: una fila por intervalo de tiempo dentro del intervalo de tiempo del tablero y una columna por medición. Cada cifra es el **promedio** de las lecturas de ese intervalo, no una lectura, y la tabla lo dice bajo las filas (*prom. por 5m*); la hora es el inicio del intervalo. Úsela para leer los números que hay detrás de un gráfico. Su configuración se describe en [Configurar un widget](#configurar-un-widget).
 
 ### Descargar los datos de un widget {#downloading-a-widgets-data}
 

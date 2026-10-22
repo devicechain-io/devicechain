@@ -56,7 +56,10 @@ export function toCsv(table: Pick<WidgetExportTable, 'columns' | 'rows'>): strin
 
 // A name safe on every file system: what is not a letter, digit, dot, dash or underscore becomes a
 // dash, runs collapse, and a name that is nothing but separators falls to `fallback`. An accented letter
-// keeps its base letter (the accent is a combining mark once decomposed, and is dropped).
+// keeps its base letter (the accent is a combining mark once decomposed, and is dropped). A name Windows
+// reserves for a device (`CON`, `nul.csv`, `COM1`: reserved whatever the extension) is prefixed with an
+// underscore, since a widget title is the tenant's to choose.
+const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i;
 export function safeFileStem(name: string, fallback = 'widget'): string {
   const stem = name
     .normalize('NFKD')
@@ -65,7 +68,8 @@ export function safeFileStem(name: string, fallback = 'widget'): string {
     .replace(/^[-.]+/, '')
     .slice(0, 160)
     .replace(/[-.]+$/, '');
-  return stem === '' ? fallback : stem;
+  if (stem === '') return fallback;
+  return WINDOWS_RESERVED.test(stem) ? `_${stem}` : stem;
 }
 
 // U+FEFF, spelled as a code point so no editor can silently drop the invisible character.

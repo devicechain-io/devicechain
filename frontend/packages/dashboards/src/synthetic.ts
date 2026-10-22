@@ -428,13 +428,18 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
     // bucket below.
     const width = window.intervalSeconds * 1000;
     if (width > 0 && width < to - from) {
-      const first = Math.floor(from / width) * width;
-      const count = Math.min(Math.ceil((to - first) / width), MAX_PREVIEW_BUCKETS);
+      // Past the cap the OLDEST buckets go: a table lists newest first and a trend ends at now, so the
+      // preview keeps the end of the window, as the screen does.
+      const aligned = Math.floor(from / width) * width;
+      const total = Math.ceil((to - aligned) / width);
+      const count = Math.min(total, MAX_PREVIEW_BUCKETS);
+      const first = aligned + (total - count) * width;
       return names.flatMap((name) => {
         const walk = new Map<string, number>();
         return Array.from({ length: count }, (_, i) => {
           const start = first + i * width;
-          const values = Array.from({ length: 6 }, (_v, j) => this.valueFor(name, start + (width * j) / 5, walk));
+          // Six instants inside the bucket, never the next bucket's start.
+          const values = Array.from({ length: 6 }, (_v, j) => this.valueFor(name, start + (width * j) / 6, walk));
           const sum = values.reduce((a, v) => a + v, 0);
           return { bucketStart: new Date(start).toISOString(), name, avg: sum / values.length, min: Math.min(...values), max: Math.max(...values), sum, count: values.length };
         });

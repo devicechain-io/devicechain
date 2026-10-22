@@ -11,6 +11,14 @@ describe('formula injection', () => {
     expect(csvCell(text)).toBe(text.includes('\r') ? `"'${text}"` : `'${text}`);
   });
 
+  it.each(['＋SUM(A1)', '－2+3', '－5', '＠SUM(A1)', '\u3000=1+1', '\u00a0+1'])('guards the full-width and odd-space form %j', (text) => {
+    expect(csvCell(text)).toBe(`'${text}`);
+  });
+
+  it('guards a formula behind a line break, and still quotes the line break', () => {
+    expect(csvCell('\n=1+1')).toBe(`"'\n=1+1"`);
+  });
+
   it('writes the apostrophe in front of the value, then quotes when RFC 4180 needs it', () => {
     expect(csvCell('=HYPERLINK("http://x","y")')).toBe(`"'=HYPERLINK(""http://x"",""y"")"`);
     expect(csvCell('-1,5')).toBe(`"'-1,5"`);
@@ -67,6 +75,18 @@ describe('file names', () => {
     expect(safeFileStem('日本語')).toBe('widget');
     expect(safeFileStem('???', 'chart')).toBe('chart');
     expect(safeFileStem('x'.repeat(500)).length).toBeLessThanOrEqual(160);
+  });
+
+  it('never yields a name Windows reserves for a device, whatever the case or extension', () => {
+    for (const name of ['CON', 'con', 'Nul', 'aux', 'prn', 'COM1', 'lpt9', 'nul.csv', 'CON-24h']) {
+      const stem = safeFileStem(name);
+      expect(stem, name).not.toMatch(/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\.|$)/i);
+    }
+    expect(safeFileStem('CON')).toBe('_CON');
+    expect(safeFileStem('nul.csv')).toBe('_nul.csv');
+    // A name that only begins with the letters is not reserved.
+    expect(safeFileStem('console-24h')).toBe('console-24h');
+    expect(safeFileStem('COM10')).toBe('COM10');
   });
 
   it('turns an accented letter into its base letter rather than dropping it', () => {

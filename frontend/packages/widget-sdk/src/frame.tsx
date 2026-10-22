@@ -18,7 +18,7 @@
 // a board gets the card.
 
 import { resolveFrame, sameLabel, type FrameRadius, type ResolvedFrame, type SpaceTokenName } from '@devicechain/dashboards';
-import { useCallback, useEffect, useMemo, useState, type ComponentType, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import {
   WidgetImageRegistrarProvider,
@@ -28,7 +28,6 @@ import {
   useWidgetSubject,
   WidgetBodySizeProvider,
 } from './context';
-import type { ExportButtonProps } from './export-button';
 import { FreshnessReadout, StaleBadge, useFreshness } from './freshness-readout';
 import { useElementSize } from './hooks';
 import { css } from './theme';
@@ -136,21 +135,6 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
   const widgetScale = useMemo(() => makeWidgetScale(columnSize, scale), [columnSize, scale]);
   // The export button lives in the title bar, so it goes with the title bar.
   const exportable = Boolean(shownTitle || sub) && (exportRows !== undefined || image !== undefined);
-  // The button is its own chunk, fetched once a frame has something to export; until it arrives the
-  // title bar already reserves its room, so nothing moves when it does.
-  const [ExportButton, setExportButton] = useState<{ component: ComponentType<ExportButtonProps> }>();
-  useEffect(() => {
-    if (!exportable || ExportButton) return;
-    let live = true;
-    import('./export-button').then(
-      (m) => live && setExportButton({ component: m.ExportButton }),
-      // No button is a missing convenience, not a broken widget; the next mount tries again.
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, [exportable, ExportButton]);
   const compact = size.width > 0 && (size.width < FRESHNESS_MIN_WIDTH || size.height < FRESHNESS_MIN_HEIGHT);
   const stale = reading?.stale === true;
 
@@ -216,9 +200,7 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
               {sub}
             </div>
           ) : null}
-          {exportable && ExportButton ? (
-            <ExportButton.component size={EXPORT_BUTTON_SIZE} exportRows={exportRows} image={image?.source} title={title} frameElement={() => rootRef.current} />
-          ) : null}
+          {exportable ? <ExportSlot exportRows={exportRows} image={image?.source} title={title} frameElement={() => rootRef.current} /> : null}
         </div>
       ) : null}
       {/* The body clips: the card root already stops a widget painting outside the card, and
@@ -272,5 +254,48 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ---- The export button ---------------------------------------------------------------------
+//
+// One small button at the right of the title bar that opens the export menu. The frame draws only the
+// box it sits in (its room is reserved, so nothing moves when it arrives); the button, the menu, the CSV
+// encoder and the image download are a chunk of their own (export-menu.ts), fetched by a frame that has
+// something to export, so a board's first download holds none of them. A chunk that does not arrive is
+// a missing convenience, not a broken widget: no button, and the next mount tries again.
+
+interface ExportSlotProps {
+  exportRows: (() => WidgetExportResult) | undefined;
+  image: WidgetImageSource | undefined;
+  title: string | undefined;
+  frameElement: () => Element | null;
+}
+
+function ExportSlot(props: ExportSlotProps) {
+  const host = useRef<HTMLDivElement>(null);
+  // What the menu reads when it is opened: the widget as it is then, not as it was at mount.
+  const latest = useRef(props);
+  latest.current = props;
+  useEffect(() => {
+    let live = true;
+    let unmount: (() => void) | undefined;
+    import('./export-menu').then(
+      (m) => {
+        if (live && host.current) unmount = m.mountExportButton(host.current, EXPORT_BUTTON_SIZE, () => latest.current);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+      unmount?.();
+    };
+  }, []);
+  return (
+    <div
+      ref={host}
+      data-widget-export=""
+      style={{ position: 'absolute', top: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', paddingRight: 4 }}
+    />
   );
 }
