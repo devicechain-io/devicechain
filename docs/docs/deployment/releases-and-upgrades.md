@@ -3582,8 +3582,9 @@ Nothing needs doing.
 `dcctl upgrade` for each instance, as described [for v0.17.0](#v0170-upgrade). Give `dcctl install`
 the settings the cluster was installed with, such as `--ha` and `--database-node-selector`, as well as
 the new `--version`. **It cannot be reached in place from `v0.22.0` or earlier: upgrade to `v0.23.0`
-first.** Its four migrations add one table and three indexes and rewrite no existing row (see
-[During the upgrade](#v0240-during)). Coming from `v0.22.0` or earlier, read the
+first.** Its four migrations add two tables and two indexes and rewrite no existing row (see
+[During the upgrade](#v0240-during)). **Roll forward from it, not back:** `v0.23.0` cannot start on
+the configuration this release writes (see [Going back](#v0240-going-back)). Coming from `v0.22.0` or earlier, read the
 [`v0.23.0` notes](#v0230-upgrade) as well; they apply to any upgrade that crosses that release.
 
 This release makes calculated metrics something you author and fill in yourself: a checked formula
@@ -3604,8 +3605,10 @@ of an MQTT event, and the sign-in state. What changes for somebody:
   [The broker's logins are narrowed](#v0240-broker-logins).
 - **Upgrade through `v0.23.0`.** Events are now written in the `compact` form by default, which
   `v0.22.0` and earlier cannot read. See [The event wire format](#event-wire-format).
-- **The broker restarts once, onto NATS 2.15.1.** See
+- **The broker moves to NATS 2.15.1** in the first of those restarts. See
   [The broker moves to NATS 2.15](#v0240-nats).
+- **There is no going back to `v0.23.0`.** Roll forward: a `helm rollback` leaves services that
+  cannot start. See [Going back](#v0240-going-back).
 - **Four migrations:** a table for backfill jobs in `event-management`, a table for the profile
   activation log and an index in `device-management`, and an index in `command-delivery`. See
   [During the upgrade](#v0240-during).
@@ -3661,7 +3664,9 @@ of an MQTT event, and the sign-in state. What changes for somebody:
   while it runs, so on a table with millions of rows start that service in a quiet period.
 - **The broker restarts, and on the first upgrade that adds the encrypted callout it restarts twice.**
   The first restart carries the move to NATS 2.15.1 and the new sign-in account; the second turns
-  callout encryption on once the services can read it. Under `--ha`, one server at a time, each
+  callout encryption on once the services have rolled onto a responder that can read it (an instance
+  with no device authentication callout has nothing to encrypt and restarts once). Under `--ha`, one
+  server at a time, each
   Ready before the next stops; without `--ha` the single server restarts and the broker is
   unavailable for about a minute each time. See [The broker's logins are narrowed](#v0240-broker-logins).
   Devices reconnect on their own, and a persistent MQTT session keeps its subscriptions and the QoS 1
@@ -3669,28 +3674,49 @@ of an MQTT event, and the sign-in state. What changes for somebody:
   [The broker moves to NATS 2.15](#v0240-nats).
 - **Services start writing `compact` events as they roll.** Pods of `v0.23.0` read both forms, so a
   rolling update between the two releases is safe.
-- **Revoking a device's authority while `device-management` and `event-sources` are on different
-  releases can fail.** Disabling or deleting a device, or changing a credential, now also ends the
-  device's open MQTT sessions by asking `event-sources` to do it. If a pod of the previous release
-  of either service answers (or no one does) during the roll, the change is saved and the call
-  returns the error `ErrSessionsNotEnded` ("the change was saved, but the device's live broker
-  sessions could not be confirmed ended ... repeat the operation"). Repeat it after the roll
-  finishes; repeating is safe and asks again.
+- **Revoking a device's authority during the roll can fail, or leave a session open.** Disabling or
+  deleting a device, or changing a credential, now also ends the device's open MQTT sessions by
+  asking `event-sources` to do it, and only an `event-sources` pod of this release answers. Until one
+  is running, the change is saved and the call returns an error ("the change was saved, but the
+  device's live broker sessions could not be confirmed ended ... repeat the operation"). A change
+  that a `device-management` pod of the previous release handles is saved and ends no session, as
+  before the upgrade. Repeat such changes after the roll finishes; repeating is safe and asks again.
+- **A pod of the previous release that restarts during the roll does not come back.** Before the
+  services move, `dcctl` writes the instance configuration for this release, and `v0.23.0` refuses
+  it at startup (see [Going back](#v0240-going-back)). A `v0.23.0` pod that is evicted, OOM-killed
+  or loses its node in that window stays down until the new release replaces it, so let the
+  upgrade finish rather than restarting pods by hand.
 - **A sign-in or token refresh that reaches a `user-management` pod of the previous release can
   fail for a few seconds** while the sign-in state moves. It succeeds when retried.
 - **A derived value stored by a pod of the old release and one stored by a pod of the new release
   can carry different ids** for a reading that has sub-microsecond digits in its instant. See
   [Calculated metrics](#v0240-calculated-metrics).
 
-Going back to `v0.23.0` after the upgrade reads the same database. The `calculated_backfills` and
-`device_profile_activations` tables and the new indexes stay in place, unused, and a backfill that
-was queued or running is not continued. Roll forward rather than back, though: the callout's
-encryption seeds live in a Secret that `v0.23.0` does not read, so a broker that already encrypts its
-callout is left with no responder that can serve it, and every device stays refused until the
-upgrade is run again. Sign-in state is not restored by going back either: the previous release
-recreates its buckets empty, so everyone signs in once more. Going back to
-`v0.22.0` or earlier needs `legacy` set first and every `compact` message drained from the streams
-(see [The event wire format](#event-wire-format)).
+#### Going back {#v0240-going-back}
+
+**Roll forward. Do not go back to `v0.23.0`, with `helm rollback` or any other way.** If the upgrade
+fails partway, fix the cause and run `dcctl upgrade` again with the same `--version`. Going back
+leaves an instance that does not work:
+
+- **The services of `v0.23.0` cannot start.** `dcctl` writes the instance configuration to the
+  Secret `dci-<instance>-config`, outside the chart's release, so `helm rollback` restores the
+  previous release's workloads and leaves the configuration as this release wrote it. That
+  configuration carries keys `v0.23.0` does not know, such as `identityAccount`,
+  `calloutIssuerPublic` and `calloutXKeyPublic`, and `v0.23.0` refuses any key it does not know in
+  its configuration at startup. Every service it starts fails, and the callout's signing seed is no
+  longer in that configuration at all.
+- **Devices cannot connect.** The broker is not part of the chart release, so it stays on NATS 2.15
+  and keeps encrypting its device authentication callout. The callout's seeds live in a Secret that
+  `v0.23.0` does not read, so there is no responder that can serve the broker's requests, and every
+  device is refused.
+- **The broker cannot go back either.** NATS supports going back from 2.15 only to 2.14.7 or later,
+  and the previous release runs 2.14.4.
+- **Sign-in state is not restored.** The previous release's sign-in buckets were deleted, so
+  everyone would sign in once more.
+
+The new tables and indexes would not be in the way: `v0.23.0` reads the same database and leaves
+them unused. Going back to `v0.22.0` or earlier needs `legacy` set first and every `compact` message
+drained from the streams (see [The event wire format](#event-wire-format)).
 
 #### After the upgrade {#v0240-after}
 
@@ -3699,7 +3725,7 @@ recreates its buckets empty, so everyone signs in once more. Going back to
   previous release runs 2.14.4.
 - **Keep `metrics.enabled` and `metrics.alerts` on** (both are by default) to install the new
   `MqttGatewayStreamUnbounded` alert.
-- **Find the devices that still send a body credential.** `total_msg_credential_in_mqtt_body`
+- **Find the devices that still send a body credential.** `devicechain_eventsources_total_msg_credential_in_mqtt_body`
   counts the refused events by source. Update the firmware or SDK of each, and rotate the credential
   of any device that was counted (see the next section).
 
@@ -3713,7 +3739,7 @@ with the volume and by its snapshots. The body credential is now refused instead
 
 - **An event published over the platform's MQTT broker whose body carries `credentialType`,
   `credentialId` or `credentialSecret` is refused.** It is counted in
-  `total_msg_credential_in_mqtt_body`, set aside on the failed-decode stream with the credential
+  `devicechain_eventsources_total_msg_credential_in_mqtt_body`, set aside on the failed-decode stream with the credential
   redacted, and never forwarded. The broker has already acknowledged the message, so the refusal is
   visible to you and not to the device: a device that keeps sending the old body goes quiet while it
   believes it is publishing.
@@ -3738,7 +3764,7 @@ with the volume and by its snapshots. The body credential is now refused instead
   sessions. The device reconnects and is authenticated again against the credential it presents,
   which the database refuses if it was revoked. All of a device's sessions end, so revoking one of
   two credentials briefly drops the session on the other. If the platform cannot confirm the sessions
-  ended, the change is still saved and the call returns `ErrSessionsNotEnded`; repeat it.
+  ended, the change is still saved and the call returns an error that says so; repeat it.
 - **Rotate the tokens of access-token devices whose messages were refused or dead-lettered.** The
   failed-decode and dead-letter records used to keep an access token's `credentialId`, which for that
   credential type is the token itself (for MQTT_BASIC it is the login name). They are now redacted,
@@ -3778,20 +3804,25 @@ mechanism and the restarts are described under
 - **The broker restarts twice on the first upgrade that does both**, as described above. Devices
   reconnect within seconds under `--ha`, and in about a minute without it. If the second step fails,
   devices keep connecting; run `dcctl upgrade` again to finish it.
-- **Helm release history keeps the old issuer seed until it ages out.** The callout's signing seed
-  used to be in the instance configuration; Helm's stored releases from before the upgrade still
-  hold it. Delete old release Secrets if that matters to you.
+- **The signing seed is moved, not replaced.** The callout's signing seed used to be in the instance
+  configuration, and `dcctl upgrade` carries the same seed into the new Secret. `dcctl` keeps the
+  configuration out of Helm's values, so its release history holds no copy. A chart install that
+  supplies the configuration inline still has the seed in the Helm releases stored before the
+  upgrade; delete those release Secrets if that matters to you.
 - **A restored instance gets a new sign-in login,** and sign-in state is not restored from a backup.
-- **The Kubernetes Secrets are the only copy of the seeds.** There is no rotation verb, and editing
-  either Secret outside `dcctl` is unsupported. Anyone who can read Secrets in the instance
-  namespace can still read them.
+- **In the cluster, those Secrets are the only copy of the seeds.** The machine that ran
+  `dcctl bootstrap` also keeps them in `~/.devicechain/instances/<instance>/`. There is no rotation
+  verb, and editing either Secret outside `dcctl` is unsupported. Anyone who can read Secrets in the
+  instance namespace can still read them.
 
 ##### The broker moves to NATS 2.15 {#v0240-nats}
 
 The instance's message broker moves from NATS `2.14.4` to `2.15.1` (the official `nats` chart, same
-version). `dcctl upgrade` applies it, and the broker restarts once: under `--ha` its servers restart
-one at a time, each Ready before the next stops; without `--ha` the single server restarts and the
-broker is unavailable for about a minute. Devices reconnect on their own, and a persistent MQTT
+version). `dcctl upgrade` applies it in its first broker apply, the one that also adds the sign-in
+account, so the move costs no restart of its own: under `--ha` its servers restart one at a time,
+each Ready before the next stops; without `--ha` the single server restarts and the broker is
+unavailable for about a minute. The second restart, which turns callout encryption on, follows the
+services (see [During the upgrade](#v0240-during)). Devices reconnect on their own, and a persistent MQTT
 session keeps its subscriptions and the QoS 1 messages held for it while the device was away.
 
 - **Do not change the broker's replication in the same upgrade.** While the servers restart, some
@@ -4035,14 +4066,18 @@ usually because the broker has no storage left to reserve it. New metrics:
   is saved or published, and a stored rule with an invalid value is dropped (counted with the reason
   `invalid_action`) rather than sent without a bound.
 - **Dashboards and widgets.** The alarm table can group its alarms into tabs by device type, each with
-  its own count and highest severity; the stat card can show a trend sparkline and a count of devices
-  in a fleet; a fleet count leaves out devices whose profile does not declare the measurement; the
+  its own count and highest severity; the stat card can show a trend sparkline; a new fleet count
+  card counts a group's devices, or those needing attention, and leaves out devices whose profile
+  does not declare the measurement; a device status card shows whether one device is online, with
+  when it was last seen, and an online doughnut splits a group into online, offline and no status
+  yet (both read the platform's device status and need permission to read device state); the
   command slider has a stepper mode; a click on a map marker selects the device, and a link can open
   a board with a device bound; an alarm severity breakdown shows active alarms by severity; the
   timeseries chart can mark alarms and commands on its time axis, limited to the alarms about the
-  measurement it plots with the `markAlarmsScope` option (a chart without the option marks every
-  alarm of the device), and one line per device across a group with `groupBy: device`; the widget
-  editor offers a device's metrics and marks the calculated ones; and **Create dashboard** on a
+  measurement it plots with the `markAlarmsScope` option (a new chart starts limited; a chart saved
+  without the option marks every alarm of the device), and draw one line per device across a group
+  with `groupBy: device` (5 lines by default, at most 12); the widget editor offers a device's
+  metrics and marks the calculated ones; and **Create dashboard** on a
   device type's Profile tab drafts a board from what the profile declares. All of it is additive: a
   saved dashboard reads and renders as before. See the [user guide](../user-guide/dashboards.md).
 - **Console: forms no longer save onto the wrong entity.** After switching registry, tenant, tier,
@@ -4053,9 +4088,11 @@ usually because the broker has no storage left to reserve it. New metrics:
   unknown-field error.
 - **Detection dashboard.** Two latency panels (the p50 and p99 of the rule-health write and of the
   derived-publish acknowledgement) join the rule-health write panel.
-- **A task that keeps failing no longer fills the log.** The "Maintenance pass failed" line from a
-  loop that runs every second (the detection tick) is logged once when a streak starts, then at most
-  once a minute with a count of the lines held back, and once when the task recovers. Seven loops
+- **A task that keeps failing no longer fills the log.** The "Maintenance pass failed" line of a
+  periodic task, such as the detection tick that runs every second, is logged once when a streak of
+  failures starts, then at most once a minute with a count of the lines held back, and once when the
+  task recovers. Each Sparkplug source keeps its own streak, so one failing source does not hide
+  behind a healthy one. Seven loops
   that recorded no pass duration, outcome or last success now do, under the existing
   `devicechain_<area>_<task>_passes_total` series.
 - **Stream and bucket access is declared per service.** Each service may open only the streams and
