@@ -144,6 +144,40 @@ func (r *SchemaResolver) UpdateDevice(ctx context.Context, args struct {
 	return dt, nil
 }
 
+// Put a device behind a gateway device. The model owns every rule; this only authorizes.
+//
+// The authority is the one that manages device credentials (device:write): assigning a gateway
+// gives it the same standing over the device as issuing the device a credential. Authorize
+// refuses a member limited to part of the tenant outright, so both devices are necessarily in
+// the caller's scope: a scoped caller cannot reach this at all.
+func (r *SchemaResolver) AssignDeviceGateway(ctx context.Context, args struct {
+	DeviceToken  string
+	GatewayToken string
+}) (*DeviceResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	updated, err := r.GetApi(ctx).AssignDeviceGateway(ctx, args.DeviceToken, args.GatewayToken)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceResolver{M: *updated, S: r, C: ctx}, nil
+}
+
+// Take a device out from behind its gateway.
+func (r *SchemaResolver) ClearDeviceGateway(ctx context.Context, args struct {
+	DeviceToken string
+}) (*DeviceResolver, error) {
+	if err := auth.Authorize(ctx, auth.DeviceWrite); err != nil {
+		return nil, err
+	}
+	updated, err := r.GetApi(ctx).ClearDeviceGateway(ctx, args.DeviceToken)
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceResolver{M: *updated, S: r, C: ctx}, nil
+}
+
 // Import devices from rows, one transaction per row, reporting the outcome of each. The
 // model owns every rule; this only authorizes. Rows (and the credential secrets they may
 // carry) are passed through and never logged here.

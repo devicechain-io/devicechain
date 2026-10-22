@@ -83,6 +83,17 @@ type UnresolvedEvent struct {
 	// device against this platform, so it must never set this: see
 	// processor.TestOnlyTheCaptureSourceAssertsTheBroker. Never settable from device input.
 	BrokerAsserted bool
+
+	// Gateway is the token of the GATEWAY device the platform MQTT broker authenticated, set
+	// only when the event arrived on that gateway's own subject namespace
+	// ("{instance}.{tenant}.gateways.{gateway}.devices.{child}.events"). Device is then the
+	// child the subject names, and the resolver accepts the event only if the child's
+	// recorded gateway is this one (NotGatewayChild otherwise), in every device auth mode.
+	//
+	// Set by the same mark as BrokerAsserted and under the same rule: only the capture source
+	// can obtain a value that carries it, no decoder has a field for it, and an external-broker
+	// or HTTP source can never set it. Empty on every other event.
+	Gateway string
 }
 
 // WithoutPresentedCredential returns a copy of the event with the credential the

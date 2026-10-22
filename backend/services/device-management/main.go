@@ -27,6 +27,7 @@ import (
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-microservice/streams"
 	"github.com/devicechain-io/dc-microservice/svcclient"
+	nats "github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/zerolog/log"
 )
@@ -290,7 +291,9 @@ func newInboundEventsProcessor() *processor.InboundEventsProcessor {
 		time.Duration(Configuration.MaxEventFutureSkewSeconds)*time.Second, ResolveMetrics,
 		processor.WithResolvers(Configuration.Resolution.Workers),
 		processor.WithDeadLetters(DeadLetters),
-		processor.WithSecretTransit(SecretTransit))
+		processor.WithSecretTransit(SecretTransit),
+		processor.WithGatewayNotices(messaging.NewGatewayNoticePublisher(
+			func() *nats.Conn { return NatsManager.Conn() }, Microservice.InstanceId)))
 }
 
 // buildApis builds the service's two Apis over the relational store and the broker: the

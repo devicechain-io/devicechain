@@ -91,6 +91,8 @@ type InboundEventsProcessor struct {
 	Api                  dmodel.DeviceManagementApi
 	AuthMode             string
 	secretTransit        *credential.SecretTransit
+	// gatewayNoticer tells a gateway its publish for a child was refused; nil sends no notice.
+	gatewayNoticer GatewayNoticer
 	// MaxFutureSkew bounds how far a device-reported instant may lead the server's
 	// own clock before resolution replaces it with the ceiling. It is the platform's
 	// ONE event-time knob and it lives here because resolution is the one place the
@@ -185,6 +187,11 @@ type ResolveMetrics struct {
 	// for the pool, for the same reason.
 	deviceDisabled prometheus.Counter
 
+	// notGatewayChild counts a gateway's publishes refused because the device it named is not
+	// assigned to it (or does not exist). ONE label-free counter for the pool; each refusal is
+	// also dead-lettered with reason NotGatewayChild.
+	notGatewayChild prometheus.Counter
+
 	// workers is the resolver pool width this pod runs. Beside red's resolve_inflight it
 	// says whether the pool is saturated. Nil in a zero ResolveMetrics.
 	workers prometheus.Gauge
@@ -215,6 +222,9 @@ func NewResolveMetrics(ms *core.Microservice) ResolveMetrics {
 		deviceDisabled: ms.NewCounter(
 			"resolve_device_disabled_total",
 			"Events refused because their device is disabled; each is discarded, not dead-lettered"),
+		notGatewayChild: ms.NewCounter(
+			"resolve_not_gateway_child_total",
+			"Events a gateway published for a device that is not assigned to it, or that does not exist; each is refused, dead-lettered with reason NotGatewayChild and announced to the gateway"),
 		workers: ms.NewGauge("resolve_workers",
 			"Resolvers this pod runs (resolution.workers). resolve_inflight held at this value means every resolver is busy and inbound events are queueing in front of them."),
 	}
@@ -243,6 +253,13 @@ func WithSecretTransit(t *credential.SecretTransit) InboundOption {
 		panic("processor: WithSecretTransit needs the service's secret transit key; without it no sealed credential secret opens")
 	}
 	return func(iproc *InboundEventsProcessor) { iproc.secretTransit = t }
+}
+
+// WithGatewayNotices hands the processor the sender of the notices a refused gateway publish
+// earns (see GatewayNoticer). Without it a refusal is still dead-lettered, counted and logged;
+// only the best-effort notice to the gateway is not sent.
+func WithGatewayNotices(n GatewayNoticer) InboundOption {
+	return func(iproc *InboundEventsProcessor) { iproc.gatewayNoticer = n }
 }
 
 // SecretTransit is the key WithSecretTransit set. It exists so the service's wiring test can
@@ -497,7 +514,15 @@ func (iproc *InboundEventsProcessor) OnUnresolvedEvent(src messaging.Message, te
 		// looked identical from the logs (a "could not be resolved" debug line with no
 		// error), which hid a real presence-auth bug for a long time. WARN, not ERROR:
 		// a misbehaving producer can flood this, and each line is a single dropped event.
-		log.Warn().Err(rezerr).Uint("reason", reason).Str("tenant", tenant).
+		//
+		// A refused gateway publish has its own rate-limited WARN naming tenant, gateway and
+		// child (gatewayRefusals.refused), so this unbounded line is Debug for it: a gateway
+		// misassigned over a whole site would otherwise log once per event.
+		level := log.Warn()
+		if reason == uint(resolvedevent.FailureReason_NotGatewayChild) {
+			level = log.Debug()
+		}
+		level.Err(rezerr).Uint("reason", reason).Str("tenant", tenant).
 			Str("source", unrez.Source).Str("device", unrez.Device).
 			Str("eventType", unrez.EventType.String()).Str("correlation", correlation).
 			Msg("event could not be resolved; dead-lettering")
@@ -699,6 +724,11 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 	// ONE slow-resolve reporter for the pool, for the same reason: a stall holds every
 	// worker at once, and a reporter per worker would log it once per worker.
 	slow := newSlowResolveReporter()
+	// ONE refusal reporter for the pool too: the WARN limit is per (tenant, gateway, child), and
+	// a limiter per worker would log the same pair once per worker.
+	gateway := newGatewayRefusals()
+	gateway.counter = iproc.metrics.notGatewayChild
+	gateway.noticer = iproc.gatewayNoticer
 	// ONE counter for the whole pool, for the same reason as the memo above: the
 	// workers share the inbound channel, so a per-worker counter would report a
 	// fleet's clock skew as N unrelated series. It comes from the instruments built in
@@ -732,6 +762,7 @@ func (iproc *InboundEventsProcessor) initializeEventResolvers(ctx context.Contex
 		resolver.SecretTransit = iproc.secretTransit
 		resolver.tenantDeleted = iproc.tenantDeleted
 		resolver.deviceDisabled = iproc.metrics.deviceDisabled
+		resolver.gateway = gateway
 		resolver.calcObs.metrics = iproc.metrics.calc
 		iproc.resolvers = append(iproc.resolvers, resolver)
 		// Resolvers run on a background context (not the cancelable read context)

@@ -51,5 +51,6 @@ var (
 		NewMetricExpressionSchema(),
 		NewProfileActivationsSchema(),
 		NewDeviceTypeIndexSchema(),
+		NewDeviceGatewaySchema(),
 	}
 )

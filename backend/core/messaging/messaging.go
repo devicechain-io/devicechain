@@ -95,6 +95,17 @@ func TenantSubjectFilter(instanceId, tenant, suffix string) string {
 	return ConcreteSubjectFor(instanceId, tenant, suffix, "*")
 }
 
+// TenantSubjectFilters is every filter a tenant-scoped purge hands JetStream for one stream:
+// TenantSubjectFilter, and for the device-events capture stream also the tenant's gateway
+// subjects, which a purge of the device shape alone would leave on the broker.
+func TenantSubjectFilters(instanceId, tenant, suffix string) []string {
+	filters := []string{TenantSubjectFilter(instanceId, tenant, suffix)}
+	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
+		filters = append(filters, fmt.Sprintf("%s.%s.%s.*.%s.*.%s", instanceId, tenant, SegmentGateways, SegmentDevices, SegmentEvents))
+	}
+	return filters
+}
+
 // StreamSubject is the subject pattern a suffix's stream captures, per its
 // declared shape. A tenant-scoped suffix captures "{instance}.*.{suffix}"; a
 // per-device one captures an extra level, "{instance}.*.{suffix}.*", so every
@@ -112,7 +123,7 @@ func StreamSubject(instanceId, suffix string) string {
 	case streams.ShapeTenantDevice:
 		return WildcardSubject(instanceId, suffix) + ".*"
 	case streams.ShapeDeviceEvents:
-		return DeviceEventsWildcard(instanceId)
+		panic(fmt.Sprintf("messaging: %q captures two subjects (a device's own and a gateway's); use StreamSubjects", suffix))
 	case streams.ShapeAdvisory:
 		panic(fmt.Sprintf("messaging: %q is an advisory capture with no single subject; use StreamSubjects", suffix))
 	default:
@@ -130,6 +141,9 @@ func StreamSubject(instanceId, suffix string) string {
 // would do is every stream on the broker, which captures other instances' advisories into
 // this one's work queue.
 func StreamSubjects(instanceId, suffix string) []string {
+	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
+		return DeviceEventsSubjects(instanceId)
+	}
 	if streams.ShapeOf(suffix) != streams.ShapeAdvisory {
 		return []string{StreamSubject(instanceId, suffix)}
 	}
@@ -735,6 +749,97 @@ func DeviceEventsSubject(instanceId, tenant, deviceToken string) string {
 // subject cannot be granted to a device, so it cannot be ingested as telemetry.
 func DeviceEventsWildcard(instanceId string) string {
 	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentDevices, SegmentEvents)
+}
+
+// The GATEWAY shape (see streams.SegmentGateways): a gateway device publishes for a child
+// device on its OWN namespace,
+// "{instance}.{tenant}.gateways.{gateway}.devices.{child}.{leaf}" (MQTT topic
+// "{instance}/{tenant}/gateways/{gateway}/devices/{child}/{leaf}"), so the broker-asserted
+// identity (the gateway the grant was minted for) and the subject-named child travel together.
+const (
+	SegmentGateways  = streams.SegmentGateways
+	SegmentNotices   = streams.SegmentNotices
+	SegmentResponses = streams.SegmentResponses
+	SegmentReports   = streams.SegmentReports
+	SegmentCommands  = streams.SegmentCommands
+	SegmentDesired   = streams.SegmentDesired
+
+	// Segment count and the position of each segment within a well-formed gateway subject:
+	// {instance}.{tenant}.gateways.{gateway}.devices.{child}.{leaf}.
+	GatewaySegmentCount    = 7
+	GatewayGatewaysIndex   = 2
+	GatewayTokenIndex      = 3
+	GatewayDevicesIndex    = 4
+	GatewayChildIndex      = 5
+	GatewayLeafIndex       = 6
+	GatewayNoticesSegments = 5
+)
+
+// GatewayDeviceSubject builds the subject a gateway uses for one child and one leaf
+// (events, responses, reports for the uplink; commands, desired for the downlink).
+func GatewayDeviceSubject(instanceId, tenant, gateway, child, leaf string) string {
+	return fmt.Sprintf("%s.%s.%s.%s.%s.%s.%s", instanceId, tenant, SegmentGateways, gateway, SegmentDevices, child, leaf)
+}
+
+// GatewayEventsSubject is the subject a gateway publishes a child's telemetry to.
+func GatewayEventsSubject(instanceId, tenant, gateway, child string) string {
+	return GatewayDeviceSubject(instanceId, tenant, gateway, child, SegmentEvents)
+}
+
+// GatewayEventsWildcard is the pattern covering every gateway's child telemetry for an
+// instance: "{instance}.*.gateways.*.devices.*.events". It is the second subject the
+// device-events capture stream stores (DeviceEventsSubjects).
+func GatewayEventsWildcard(instanceId string) string {
+	return fmt.Sprintf("%s.*.%s.*.%s.*.%s", instanceId, SegmentGateways, SegmentDevices, SegmentEvents)
+}
+
+// GatewayLeafWildcard is one gateway's pattern over every child for a leaf:
+// "{instance}.{tenant}.gateways.{gateway}.devices.*.{leaf}". The device grant is built from
+// it, which is what makes the grant constant-size however many children a gateway has.
+func GatewayLeafWildcard(instanceId, tenant, gateway, leaf string) string {
+	return GatewayDeviceSubject(instanceId, tenant, gateway, "*", leaf)
+}
+
+// GatewayNoticesSubject is the subject the platform tells a gateway about a refused publish
+// on: "{instance}.{tenant}.gateways.{gateway}.notices". The gateway is granted a subscription
+// to its own and nothing else.
+func GatewayNoticesSubject(instanceId, tenant, gateway string) string {
+	return fmt.Sprintf("%s.%s.%s.%s.%s", instanceId, tenant, SegmentGateways, gateway, SegmentNotices)
+}
+
+// GatewayNoticesWildcard is the pattern over every gateway's notices subject in an instance,
+// which the one area that publishes notices is granted: "{instance}.*.gateways.*.notices".
+func GatewayNoticesWildcard(instanceId string) string {
+	return fmt.Sprintf("%s.*.%s.*.%s", instanceId, SegmentGateways, SegmentNotices)
+}
+
+// DeviceEventsSubjects is every subject the device-events capture stream stores: a device's
+// own telemetry and a gateway's telemetry for its children. The stream's subjects, its
+// reader's filters and the message-store forwarding all come from this one list.
+func DeviceEventsSubjects(instanceId string) []string {
+	return []string{DeviceEventsWildcard(instanceId), GatewayEventsWildcard(instanceId)}
+}
+
+// ParseDeviceEventsSubject recovers who a captured telemetry subject speaks for. For a
+// device's own subject gateway is empty and device is the publisher; for a gateway subject
+// gateway is the broker-asserted publisher and device the child the subject names. ok is
+// false for any other shape, so a caller cannot take a token from a subject that is not one
+// of the two the capture stream stores.
+func ParseDeviceEventsSubject(subject string) (gateway, device string, ok bool) {
+	parts := strings.Split(subject, ".")
+	switch len(parts) {
+	case DeviceEventsSegmentCount:
+		if parts[DeviceEventsDevicesIndex] == SegmentDevices && parts[DeviceEventsEventsIndex] == SegmentEvents &&
+			parts[DeviceEventsTokenIndex] != "" {
+			return "", parts[DeviceEventsTokenIndex], true
+		}
+	case GatewaySegmentCount:
+		if parts[GatewayGatewaysIndex] == SegmentGateways && parts[GatewayDevicesIndex] == SegmentDevices &&
+			parts[GatewayLeafIndex] == SegmentEvents && parts[GatewayTokenIndex] != "" && parts[GatewayChildIndex] != "" {
+			return parts[GatewayTokenIndex], parts[GatewayChildIndex], true
+		}
+	}
+	return "", "", false
 }
 
 // MqttMsgsSubject is the subject the broker's MQTT gateway stores a QoS 1 publish under

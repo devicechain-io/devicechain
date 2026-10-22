@@ -35,6 +35,7 @@ const (
 	FailureReason_DeviceNotFound  FailureReason = 3 // Device token could not be resolved to a device
 	FailureReason_Unauthenticated FailureReason = 4 // Presented device credential was missing or invalid (ADR-014)
 	FailureReason_DeviceDisabled  FailureReason = 5 // The device was resolved, but an operator has disabled it
+	FailureReason_NotGatewayChild FailureReason = 6 // A gateway published for a device that is not assigned to it (or that does not exist)
 )
 
 // Enum value maps for FailureReason.
@@ -46,6 +47,7 @@ var (
 		3: "DeviceNotFound",
 		4: "Unauthenticated",
 		5: "DeviceDisabled",
+		6: "NotGatewayChild",
 	}
 	FailureReason_value = map[string]int32{
 		"Unknown":         0,
@@ -54,6 +56,7 @@ var (
 		"DeviceNotFound":  3,
 		"Unauthenticated": 4,
 		"DeviceDisabled":  5,
+		"NotGatewayChild": 6,
 	}
 )
 
@@ -1249,14 +1252,15 @@ const file_resolvedevent_dc_resolved_events_proto_rawDesc = "" +
 	"session_id\x18\x03 \x01(\x04R\tsessionId\x12(\n" +
 	"\roccurred_time\x18\x04 \x01(\tH\x00R\foccurredTime\x88\x01\x01\x12.\n" +
 	"\x13expected_session_id\x18\x05 \x01(\x04R\x11expectedSessionIdB\x10\n" +
-	"\x0e_occurred_time*y\n" +
+	"\x0e_occurred_time*\x8e\x01\n" +
 	"\rFailureReason\x12\v\n" +
 	"\aUnknown\x10\x00\x12\v\n" +
 	"\aInvalid\x10\x01\x12\x11\n" +
 	"\rApiCallFailed\x10\x02\x12\x12\n" +
 	"\x0eDeviceNotFound\x10\x03\x12\x13\n" +
 	"\x0fUnauthenticated\x10\x04\x12\x12\n" +
-	"\x0eDeviceDisabled\x10\x05BGZEgithub.com/devicechain-io/dc-microservice/resolvedevent;resolvedeventb\x06proto3"
+	"\x0eDeviceDisabled\x10\x05\x12\x13\n" +
+	"\x0fNotGatewayChild\x10\x06BGZEgithub.com/devicechain-io/dc-microservice/resolvedevent;resolvedeventb\x06proto3"
 
 var (
 	file_resolvedevent_dc_resolved_events_proto_rawDescOnce sync.Once

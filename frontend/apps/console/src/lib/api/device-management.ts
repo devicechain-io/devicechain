@@ -32,6 +32,8 @@ import type {
   MetricDefinitionUpdateRequest,
   CommandDefinitionsQuery,
   DeviceCommandVocabularyQuery,
+  DeviceByTokenQuery,
+  DeviceGatewayQuery,
   DeviceLocationDeclarationQuery,
   DeviceMetricVocabularyQuery,
   CommandDefinitionCreateRequest,
@@ -163,6 +165,10 @@ const DEVICE_BY_TOKEN = graphql(`
       createdAt
       enabled
       disabledAt
+      gateway {
+        token
+        name
+      }
       deviceType {
         id
         token
@@ -176,7 +182,10 @@ const DEVICE_BY_TOKEN = graphql(`
   }
 `);
 
-export async function getDevice(token: string): Promise<Device | null> {
+// A device as the detail page reads it: the listing's fields plus the gateway it is behind.
+export type DeviceDetail = NonNullable<DeviceByTokenQuery['devicesByToken'][number]>;
+
+export async function getDevice(token: string): Promise<DeviceDetail | null> {
   const data = await gql('device-management', DEVICE_BY_TOKEN, { tokens: [token] });
   return data.devicesByToken[0] ?? null;
 }
@@ -311,6 +320,77 @@ export async function updateDevice(
 ): Promise<Device> {
   const data = await gql('device-management', UPDATE_DEVICE, { token, request });
   return data.updateDevice;
+}
+
+// ── Gateways ────────────────────────────────────────────────────────────
+//
+// A gateway is an ordinary device that fronts other devices: the credential at a site
+// publishes for each device behind it. Which devices those are is the `gateway` of each
+// device, written only by assignDeviceGateway / clearDeviceGateway.
+
+const DEVICE_GATEWAY = graphql(`
+  query DeviceGateway($tokens: [String!]!, $pagination: PaginationInput!) {
+    devicesByToken(tokens: $tokens) {
+      token
+      gateway {
+        token
+        name
+        enabled
+      }
+      children(pagination: $pagination) {
+        results {
+          token
+          name
+          enabled
+        }
+        pagination {
+          totalRecords
+        }
+      }
+    }
+  }
+`);
+
+export type DeviceGatewayInfo = NonNullable<DeviceGatewayQuery['devicesByToken'][number]>;
+
+// getDeviceGateway reads the gateway a device is behind and the first page of the devices
+// behind it. Null when no device has the token.
+export async function getDeviceGateway(
+  token: string,
+  pageSize = 100,
+): Promise<DeviceGatewayInfo | null> {
+  const data = await gql('device-management', DEVICE_GATEWAY, {
+    tokens: [token],
+    pagination: { pageNumber: 1, pageSize },
+  });
+  return data.devicesByToken[0] ?? null;
+}
+
+const ASSIGN_DEVICE_GATEWAY = graphql(`
+  mutation AssignDeviceGateway($deviceToken: String!, $gatewayToken: String!) {
+    assignDeviceGateway(deviceToken: $deviceToken, gatewayToken: $gatewayToken) {
+      token
+    }
+  }
+`);
+
+// assignDeviceGateway puts a device behind a gateway. The server refuses a device as its own
+// gateway, a gateway that is itself behind a gateway, and a device that is itself a gateway.
+export async function assignDeviceGateway(deviceToken: string, gatewayToken: string): Promise<void> {
+  await gql('device-management', ASSIGN_DEVICE_GATEWAY, { deviceToken, gatewayToken });
+}
+
+const CLEAR_DEVICE_GATEWAY = graphql(`
+  mutation ClearDeviceGateway($deviceToken: String!) {
+    clearDeviceGateway(deviceToken: $deviceToken) {
+      token
+    }
+  }
+`);
+
+// clearDeviceGateway takes a device out from behind its gateway.
+export async function clearDeviceGateway(deviceToken: string): Promise<void> {
+  await gql('device-management', CLEAR_DEVICE_GATEWAY, { deviceToken });
 }
 
 // setDeviceEnabled disables (false) or re-enables (true) a device: a partial update

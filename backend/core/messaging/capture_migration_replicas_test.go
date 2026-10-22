@@ -163,7 +163,7 @@ func TestAForeignConsumerDoesNotBlockTheMigration(t *testing.T) {
 	srv := startEmbeddedServer(t)
 	nmgr, reader := replicaManager(t, srv, uniqueArea("foreign"), 2)
 	_, err := nmgr.js.AddConsumer(captureStreamOn("test"), &nats.ConsumerConfig{
-		Durable: "stale-leftover", AckPolicy: nats.AckExplicitPolicy, FilterSubject: StreamSubject("test", captureSuffix),
+		Durable: "stale-leftover", AckPolicy: nats.AckExplicitPolicy, FilterSubject: DeviceEventsWildcard("test"),
 	})
 	require.NoError(t, err)
 	consumeCaptured(t, reader)

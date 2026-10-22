@@ -35,6 +35,7 @@ import { presenceKind, presenceSourceLabelKey } from '@/lib/presence';
 import { errMessage, useReload } from '@/routes/common';
 import { DeviceForm } from '@/routes/devices/DeviceForm';
 import { DeviceEnabledAction } from '@/routes/devices/DeviceEnabledAction';
+import { DeviceGatewayPanel } from '@/routes/devices/DeviceGatewayPanel';
 import { DeviceCommandsPanel } from '@/routes/devices/DeviceCommandsPanel';
 import { DeviceCredentialsPanel } from '@/routes/devices/DeviceCredentialsPanel';
 import { DeviceConnectPanel } from '@/routes/devices/DeviceConnectPanel';
@@ -132,6 +133,12 @@ export default function DeviceDetailPage() {
               {t('deviceDisabledBadge')}
             </Badge>
           )}
+          {/* A device behind a gateway reports through it: say so beside its status. */}
+          {device.gateway && (
+            <Badge variant="secondary" title={device.gateway.name ?? undefined}>
+              {t('viaGatewayBadge', { token: device.gateway.token })}
+            </Badge>
+          )}
         </div>
       }
       action={
@@ -151,6 +158,7 @@ export default function DeviceDetailPage() {
         <TabsList>
           <TabsTrigger value="basic">{t('tabBasic')}</TabsTrigger>
           {!scoped && <TabsTrigger value="assignment">{t('tabAssignment')}</TabsTrigger>}
+          {!scoped && <TabsTrigger value="gateway">{t('tabGateway')}</TabsTrigger>}
           {/* The device's share of the facet-value authoring surface the other three
               member families get through the registry kit's detailTabs. */}
           {!scoped && <TabsTrigger value="facets">{t('facets:panelTab')}</TabsTrigger>}
@@ -195,6 +203,11 @@ export default function DeviceDetailPage() {
         <TabsContent value="assignment">
           <SectionPanel>
             <DeviceAssignmentPanel deviceToken={device.token} />
+          </SectionPanel>
+        </TabsContent>
+        <TabsContent value="gateway">
+          <SectionPanel>
+            <DeviceGatewayPanel key={device.token} deviceToken={device.token} canWrite={canManageCredentials} />
           </SectionPanel>
         </TabsContent>
         <TabsContent value="facets">

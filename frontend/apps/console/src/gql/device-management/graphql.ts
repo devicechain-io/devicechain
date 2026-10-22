@@ -369,6 +369,12 @@ export type DeviceCreateRequest = {
    * tenant already has is refused with CONFLICT.
    */
   externalId?: string | null | undefined;
+  /**
+   * Token of the gateway device to create this device behind. The same rules as
+   * assignDeviceGateway apply, and a refusal fails the create. Omitted or null creates the
+   * device behind no gateway.
+   */
+  gatewayToken?: string | null | undefined;
   /** Caller-defined metadata. Must be valid JSON; an empty string means none. */
   metadata?: string | null | undefined;
   /** Human-readable name, up to 128 characters. */
@@ -1409,7 +1415,7 @@ export type DeviceByTokenQueryVariables = Exact<{
 }>;
 
 
-export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
+export type DeviceByTokenQuery = { devicesByToken: Array<{ id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, gateway: { token: string, name: string | null } | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } }> };
 
 export type CreateDeviceMutationVariables = Exact<{
   request?: DeviceCreateRequest | null | undefined;
@@ -1441,6 +1447,29 @@ export type UpdateDeviceMutationVariables = Exact<{
 
 
 export type UpdateDeviceMutation = { updateDevice: { id: string, token: string, name: string | null, description: string | null, externalId: string | null, metadata: string | null, createdAt: string | null, enabled: boolean, disabledAt: string | null, deviceType: { id: string, token: string, name: string | null, icon: string | null, backgroundColor: string | null, foregroundColor: string | null, borderColor: string | null } } };
+
+export type DeviceGatewayQueryVariables = Exact<{
+  tokens: Array<string> | string;
+  pagination: PaginationInput;
+}>;
+
+
+export type DeviceGatewayQuery = { devicesByToken: Array<{ token: string, gateway: { token: string, name: string | null, enabled: boolean } | null, children: { results: Array<{ token: string, name: string | null, enabled: boolean }>, pagination: { totalRecords: number | null } } }> };
+
+export type AssignDeviceGatewayMutationVariables = Exact<{
+  deviceToken: string;
+  gatewayToken: string;
+}>;
+
+
+export type AssignDeviceGatewayMutation = { assignDeviceGateway: { token: string } };
+
+export type ClearDeviceGatewayMutationVariables = Exact<{
+  deviceToken: string;
+}>;
+
+
+export type ClearDeviceGatewayMutation = { clearDeviceGateway: { token: string } };
 
 export type DeleteDeviceMutationVariables = Exact<{
   token: string;
@@ -2990,6 +3019,10 @@ export const DeviceByTokenDocument = new TypedDocumentString(`
     createdAt
     enabled
     disabledAt
+    gateway {
+      token
+      name
+    }
     deviceType {
       id
       token
@@ -3078,6 +3111,42 @@ export const UpdateDeviceDocument = new TypedDocumentString(`
   }
 }
     `) as unknown as TypedDocumentString<UpdateDeviceMutation, UpdateDeviceMutationVariables>;
+export const DeviceGatewayDocument = new TypedDocumentString(`
+    query DeviceGateway($tokens: [String!]!, $pagination: PaginationInput!) {
+  devicesByToken(tokens: $tokens) {
+    token
+    gateway {
+      token
+      name
+      enabled
+    }
+    children(pagination: $pagination) {
+      results {
+        token
+        name
+        enabled
+      }
+      pagination {
+        totalRecords
+      }
+    }
+  }
+}
+    `) as unknown as TypedDocumentString<DeviceGatewayQuery, DeviceGatewayQueryVariables>;
+export const AssignDeviceGatewayDocument = new TypedDocumentString(`
+    mutation AssignDeviceGateway($deviceToken: String!, $gatewayToken: String!) {
+  assignDeviceGateway(deviceToken: $deviceToken, gatewayToken: $gatewayToken) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<AssignDeviceGatewayMutation, AssignDeviceGatewayMutationVariables>;
+export const ClearDeviceGatewayDocument = new TypedDocumentString(`
+    mutation ClearDeviceGateway($deviceToken: String!) {
+  clearDeviceGateway(deviceToken: $deviceToken) {
+    token
+  }
+}
+    `) as unknown as TypedDocumentString<ClearDeviceGatewayMutation, ClearDeviceGatewayMutationVariables>;
 export const DeleteDeviceDocument = new TypedDocumentString(`
     mutation DeleteDevice($token: String!) {
   deleteDevice(token: $token)

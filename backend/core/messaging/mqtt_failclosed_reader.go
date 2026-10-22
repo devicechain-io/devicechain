@@ -68,15 +68,16 @@ func (nmgr *NatsManager) NewMqttMessageStoreReader(kind MqttFailClosedKind) (*Mq
 		downstream = direct
 	}
 	r := &natsReader{
-		nmgr:       nmgr,
-		suffix:     direct,
-		stream:     MqttMessageStore,
-		subject:    d.Filter,
-		durable:    d.Name,
-		forwards:   d.Forwards,
-		gate:       nmgr.Microservice.Readiness,
-		downstream: downstream,
-		store:      true,
+		nmgr:         nmgr,
+		suffix:       direct,
+		stream:       MqttMessageStore,
+		subject:      d.Filter,
+		durable:      d.Name,
+		forwards:     d.Forwards,
+		alsoForwards: d.AlsoForwards,
+		gate:         nmgr.Microservice.Readiness,
+		downstream:   downstream,
+		store:        true,
 	}
 	if r.downstream != "" {
 		nmgr.registerBackpressure(r.downstream)
@@ -117,7 +118,7 @@ func (s *MqttStoreReader) Durable() string { return s.durable }
 // that it is one to ack and drop (keep false): a QoS 2 copy, or a message that is not of this
 // reader's kind (the events durable is unfiltered, see MqttFailClosedDurable.Filter).
 func (r *natsReader) storeHandOut(nm *nats.Msg, msg *Message, seq uint64, appended time.Time) (keep bool) {
-	if r.forwards != r.subject && !storeSubjectMatches(r.forwards, nm.Subject) {
+	if r.forwards != r.subject && !r.forwardsSubject(nm.Subject) {
 		return false
 	}
 	if qos := nm.Header.Get(mqttGatewayHeader); qos != "" && qos[0] != '1' {
@@ -134,6 +135,19 @@ func (r *natsReader) storeHandOut(nm *nats.Msg, msg *Message, seq uint64, append
 		msg.DedupID = MqttMessageStoreDedupID(tenant, r.nmgr.mqttView().epochOf(appended), seq)
 	}
 	return true
+}
+
+// forwardsSubject reports whether a delivered store subject is one this reader hands out.
+func (r *natsReader) forwardsSubject(subject string) bool {
+	if storeSubjectMatches(r.forwards, subject) {
+		return true
+	}
+	for _, p := range r.alsoForwards {
+		if storeSubjectMatches(p, subject) {
+			return true
+		}
+	}
+	return false
 }
 
 // storeLost drops a store reader's subscription when its durable has gone (the pass removed

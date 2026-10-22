@@ -198,8 +198,8 @@ func TestSignDeviceUserJWT(t *testing.T) {
 	// The signed claim must carry the SAME per-device grant DevicePermissions builds,
 	// so a device's JWT cannot be broader than the policy. Checked by reachability:
 	// nothing in the signed grant may reach another device's command subject.
-	if got := []string(uc.Permissions.Pub.Allow); len(got) != 3 {
-		t.Errorf("pub allow = %v, want the device's events topic, its own command-responses and its own device-reports", got)
+	if got := []string(uc.Permissions.Pub.Allow); len(got) != 6 {
+		t.Errorf("pub allow = %v, want the device's events topic, its own command-responses and its own device-reports, and the same three leaves under its own gateway namespace", got)
 	}
 	if !slices.Contains(uc.Permissions.Sub.Allow, "inst-1.plant_07.device-desired.sensor-001") {
 		t.Errorf("sub allow = %v, missing this device's own desired subject",

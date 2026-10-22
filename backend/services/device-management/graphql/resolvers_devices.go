@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"github.com/devicechain-io/dc-device-management/model"
+	"github.com/devicechain-io/dc-microservice/auth"
 	util "github.com/devicechain-io/dc-microservice/graphql"
 	gql "github.com/graph-gophers/graphql-go"
 )
@@ -190,6 +191,36 @@ func (r *DeviceResolver) DisabledAt() *string {
 		return util.FormatTime(r.M.DisabledAt.Time)
 	}
 	return nil
+}
+
+// Gateway resolves the gateway the device is behind, or nil when it is behind none (or the
+// caller cannot see the gateway: the store applies the caller's scope to the read).
+func (r *DeviceResolver) Gateway(ctx context.Context) (*DeviceResolver, error) {
+	if r.M.GatewayId == nil {
+		return nil, nil
+	}
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	gateway, err := r.S.GetApi(ctx).DeviceGateway(ctx, &r.M)
+	if err != nil || gateway == nil {
+		return nil, err
+	}
+	return &DeviceResolver{M: *gateway, S: r.S, C: ctx}, nil
+}
+
+// Children pages the devices behind this device.
+func (r *DeviceResolver) Children(ctx context.Context, args struct {
+	Pagination PaginationInput
+}) (*DeviceSearchResultsResolver, error) {
+	if _, err := auth.AuthorizeScoped(ctx, auth.DeviceRead); err != nil {
+		return nil, err
+	}
+	found, err := r.S.GetApi(ctx).DeviceChildren(ctx, r.M.Token, rdbPagination(args.Pagination))
+	if err != nil {
+		return nil, err
+	}
+	return &DeviceSearchResultsResolver{M: *found, S: r.S, C: ctx}, nil
 }
 
 func (r *DeviceResolver) DeviceType() *DeviceTypeResolver {

@@ -78,6 +78,14 @@ message PUnresolvedEvent {
     // (12), whose trust is confined to the event types the LwM2M and Sparkplug services emit.
     // NEVER set from device-controlled input, and NEVER by an external-broker source.
     bool broker_asserted = 18;
+    // gateway is the token of the GATEWAY device the platform MQTT broker authenticated, set only
+    // when the event arrived on that gateway's own subject namespace
+    // ("{instance}.{tenant}.gateways.{gateway}.devices.{device}.events"). Then device (the
+    // subject's child) is the one the gateway claims to speak for, and the resolver accepts it
+    // only if the device's gateway assignment names this gateway. Empty on every other event.
+    // Same trust rule as broker_asserted: NEVER set from device-controlled input, and NEVER by an
+    // external-broker or HTTP source.
+    string gateway = 19;
 }
 
 /**

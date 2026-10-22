@@ -121,6 +121,9 @@ const (
 	// mqttBackoffArea answers device connects and backs them off while the gateway's message
 	// store is deep: it reads the store's depth.
 	mqttBackoffArea = "device-management"
+	// gatewayNoticeArea tells a gateway that a publish it made for a child was refused (the
+	// resolver's NotGatewayChild verdict): a core publish on the gateway's own notices subject.
+	gatewayNoticeArea = "device-management"
 	// tenantPurgeArea erases a deleted tenant's data across every stream and bucket.
 	tenantPurgeArea = "user-management"
 )
@@ -313,6 +316,9 @@ func controlGrant(g *grant, instance, area string) {
 	}
 	if area == calloutArea {
 		g.subscribe(AuthCalloutRequestSubject)
+	}
+	if area == gatewayNoticeArea {
+		g.publish(messaging.GatewayNoticesWildcard(instance))
 	}
 	if area == detectPurgeResponderArea {
 		g.subscribe(messaging.DetectPurgeSubject(instance))

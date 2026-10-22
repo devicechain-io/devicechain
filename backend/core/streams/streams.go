@@ -566,6 +566,35 @@ const (
 	SegmentEvents  = "events"
 )
 
+// The GATEWAY shape, the second device-plane subject family a capture stream stores. A
+// gateway is an ordinary device that fronts other devices (the edge agent is one); what it
+// publishes for a child is addressed on the GATEWAY's own namespace,
+//
+//	{instance}.{tenant}.gateways.{gateway}.devices.{child}.{events|responses|reports}   uplink
+//	{instance}.{tenant}.gateways.{gateway}.devices.{child}.{commands|desired}           downlink
+//	{instance}.{tenant}.gateways.{gateway}.notices                                       downlink
+//
+// because a captured message does not say who published it: the broker's grant confines a
+// login to the SUBJECT it may publish to, and the subject is the only place a gateway's
+// identity can travel to the platform. The broker asserts the gateway (the grant is spliced
+// from the authenticated token), the subject names the child, and ONE column
+// (devices.gateway_id) decides whether that gateway may speak for that child.
+//
+// Declared here, once, beside the device-events shape: the capture stream's subjects, the
+// event-sources capture filter and assertion parser, the device grant, the service deny and
+// the edge agent's topic builder all derive from these segments (through core/messaging).
+// The response/report/command/desired leaves are all in the v1 grant although only the
+// events leaf is captured today, so adding their routing later changes no grant and no fleet
+// has to reconnect.
+const (
+	SegmentGateways  = "gateways"
+	SegmentNotices   = "notices"
+	SegmentResponses = "responses"
+	SegmentReports   = "reports"
+	SegmentCommands  = "commands"
+	SegmentDesired   = "desired"
+)
+
 // maxDeliveriesMaxBytesCap caps the max-delivery capture. An advisory is a few hundred
 // bytes and the stream is a work queue, so it holds only advisories no recorder has
 // finished with — steady state is empty. 8 MiB is some tens of thousands of them.
