@@ -3599,6 +3599,11 @@ dcctl upgrade local devicechain --version v0.24.0
 `--kube-context` to `dcctl install` and `dcctl upgrade`, and pass `--registry` when the images come
 from a registry other than the default. If any MQTT device still sends a credential in the body of its
 events, add `--mqtt-body-credential=strip` to the last command: see [Before you upgrade](#v0240-before).
+`dcctl upgrade --dry-run` does not print the `--mqtt-body-credential` value, so confirm it took effect
+after the upgrade (see the procedure under
+[Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential)). If the instance
+was bootstrapped without root-key escrow, `dcctl upgrade` prints an escrow warning; that is expected
+and unrelated to this upgrade.
 
 This release makes calculated metrics something you author and fill in yourself: a checked formula
 editor, per-device constants, formulas that read other calculated metrics, previews, and a
@@ -3692,9 +3697,9 @@ of an MQTT event, and the sign-in state. What changes for somebody:
   Ready before the next stops; without `--ha` the single server restarts and the broker is
   unavailable for about a minute each time. See [The broker's logins are narrowed](#v0240-broker-logins).
   Devices reconnect on their own, and a persistent MQTT session keeps its subscriptions and the QoS 1
-  messages held for it. Devices reconnect without losing messages only under `--ha`. On a single-node
-  `kind` cluster the two restarts took about 90 seconds for the first roll, about 40 seconds with
-  nothing happening, and about 80 seconds for the second, which is 4 to 5 minutes in all.
+  messages held for it. Devices reconnect without losing messages only under `--ha`. On `kind`
+  with `--ha` (two rolling broker restarts) the upgrade took about 4 to 5 minutes in all: about 90 seconds
+  for the first roll, about 40 seconds with nothing happening, and about 80 seconds for the second.
   **Do not restart a broker server by hand while it rolls.** See
   [The broker moves to NATS 2.15](#v0240-nats).
 - **Services start writing `compact` events as they roll.** Pods of `v0.23.0` read both forms, so a
@@ -3783,14 +3788,21 @@ with the volume and by its snapshots. The body credential is now refused instead
   update its firmware before the upgrade. The bridge is `capture.bodyCredential: strip`, which accepts
   an event from the platform's MQTT broker with the credential removed. In this order:
   1. Upgrade with `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`.
-     Events keep flowing, and each one that carried a credential is counted.
+     Events keep flowing, and each one that carried a credential is counted. The command's `--dry-run`
+     does not print this flag's value; to confirm the upgrade took it, look for the `event-sources`
+     startup warning that says the setting is transitional, or check that
+     `devicechain_eventsources_capture_body_credential_strip` is `1`.
   2. Roll out the SDK or firmware that stops sending the body credential.
   3. Watch `devicechain_eventsources_total_msg_credential_in_mqtt_body` until it has stopped rising for
-     longer than your slowest device's reporting interval. A warning in the `event-sources` log names
-     the tenant and the device of each one that still sends a credential (once an hour for each, on each
-     `event-sources` pod), which is how you find the stragglers.
-  4. Run `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`.
-  5. Rotate the credential of every device that sent one.
+     longer than your slowest device's reporting interval. **Collect the list of devices as you go.** A
+     warning in the `event-sources` log names the tenant and the device of each one that still sends a
+     credential (once an hour for each device, on each `event-sources` pod); copy those tenant and device
+     pairs out of the log during this phase, because it is the only place they are named.
+  4. Run `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`. From here the
+     `event-sources` log names no device and the metric has no device label. The only per-device record
+     left is the failed-decode stream, which keeps the device name with the credential redacted.
+  5. Rotate the credential of every device on the list you collected in step 3 (and any the failed-decode
+     stream names after step 4).
 
   `strip` does not remove the exposure: the broker stored the body before either setting ran, so `strip`
   and `refuse` leave the same plaintext at rest, and step 5 is needed with both. `strip` applies only

@@ -2114,6 +2114,9 @@ dcctl upgrade local devicechain --version v0.24.0
 `--version` 取带 `v` 的标签。集群不是默认的本地集群时，请向 `dcctl install` 和 `dcctl upgrade` 传入
 `--kube-context`；镜像来自默认之外的镜像仓库时，再传入 `--registry`。如果仍有 MQTT 设备在事件正文中发送
 凭据，请在最后一条命令中加上 `--mqtt-body-credential=strip`：见[升级之前](#v0240-before)。
+`dcctl upgrade --dry-run` 不会打印 `--mqtt-body-credential` 的取值，所以请在升级后确认它已生效（见
+[设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)中的步骤）。如果实例引导时没有根密钥托管，
+`dcctl upgrade` 会打印托管警告；这是预期行为，与本次升级无关。
 
 本版本让计算指标成为可以由你自己编写并补全历史的东西：带检查的公式编辑器、每台设备的常量、读取其他
 计算指标的公式、预览，以及为指标出现之前已存储的读数计算该指标的**回填**。其余内容围绕一条承载更多
@@ -2183,8 +2186,8 @@ dcctl upgrade local devicechain --version v0.24.0
 实例无需加密，只重启一次）。使用 `--ha` 时逐个服务器重启，前一个
   Ready 之后才停止下一个；不使用 `--ha` 时，单个服务器重启，每次代理约有一分钟不可用。见
   [代理的登录被收窄](#v0240-broker-logins)。设备会自行重新连接，持久 MQTT 会话会保留其订阅和为它保留的
-  QoS 1 消息。只有使用 `--ha` 时，设备重新连接才不会丢失消息。在单节点 `kind` 集群上，两次重启中，第一次滚动约
-  90 秒，其间约 40 秒无任何动作，第二次滚动约 80 秒，总共 4 到 5 分钟。**代理滚动期间不要手动重启代理服务器。** 见[代理升级到 NATS 2.15](#v0240-nats)。
+  QoS 1 消息。只有使用 `--ha` 时，设备重新连接才不会丢失消息。在使用 `--ha` 的 `kind` 上（代理两次滚动重启），升级总共约
+  4 到 5 分钟：第一次滚动约 90 秒，其间约 40 秒无任何动作，第二次滚动约 80 秒。**代理滚动期间不要手动重启代理服务器。** 见[代理升级到 NATS 2.15](#v0240-nats)。
 - **服务在滚动过程中开始写入 `compact` 事件。** `v0.23.0` 的 pod 两种形式都能读取，所以这两个版本之间
   的滚动更新是安全的。
 - **滚动期间撤销设备的权限可能失败，或留下仍打开的会话。** 禁用或删除设备，或更改凭据，现在还会请
@@ -2247,13 +2250,16 @@ dcctl upgrade local devicechain --version v0.24.0
   而本版本会拒绝带凭据的，所以设备群无法在升级之前更新固件。过渡办法是 `capture.bodyCredential: strip`，它会接受
   来自平台 MQTT 代理的事件并去掉其中的凭据。按此顺序操作：
   1. 使用 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip` 升级。事件继续流入，
-     每个带凭据的事件都会被计数。
+     每个带凭据的事件都会被计数。该命令的 `--dry-run`
+     不会打印此标志的取值；要确认升级已采用它，请查看 `event-sources` 启动时说明该设置为过渡性的警告，或检查
+     `devicechain_eventsources_capture_body_credential_strip` 是否为 `1`。
   2. 推出不再在正文中发送凭据的 SDK 或固件。
   3. 观察 `devicechain_eventsources_total_msg_credential_in_mqtt_body`，直到它停止增长的时间超过你最慢那台设备的
-     上报间隔。`event-sources` 日志中的警告会写明每个仍在发送凭据的设备所属的租户和设备（每个 `event-sources` pod 上每台设备每小时一次），
-     据此找出落在后面的设备。
-  4. 执行 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`。
-  5. 轮换所有发送过凭据的设备的凭据。
+     上报间隔。**请边观察边收集设备清单。** `event-sources` 日志中的警告会写明每个仍在发送凭据的设备所属的租户和设备
+     （每个 `event-sources` pod 上每台设备每小时一次）；请在这一阶段把这些租户和设备对从日志中复制出来，因为只有这里会点名它们。
+  4. 执行 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`。此后 `event-sources`
+     日志不再点名任何设备，指标也没有设备标签；留下的唯一按设备的记录是解码失败 stream，它保留设备名称并对凭据做了涂抹。
+  5. 轮换第 3 步收集的清单中每台设备的凭据（以及第 4 步之后解码失败 stream 点名的设备）。
 
   `strip` 不会消除暴露：代理在这两种设置生效之前就已存下了正文，所以 `strip` 与 `refuse` 留下的静态明文相同，
   两者都需要第 5 步。`strip` 只作用于平台 MQTT 代理。之后不带该选项的 `dcctl upgrade` 会保留这个值。它是过渡性

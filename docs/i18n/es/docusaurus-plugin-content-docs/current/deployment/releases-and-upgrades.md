@@ -3867,6 +3867,11 @@ dcctl upgrade local devicechain --version v0.24.0
 un registro distinto del predeterminado. Si algún dispositivo MQTT sigue enviando una credencial en el
 cuerpo de sus eventos, añade `--mqtt-body-credential=strip` al último comando: consulta
 [Antes de actualizar](#v0240-before).
+`dcctl upgrade --dry-run` no imprime el valor de `--mqtt-body-credential`, así que confirma que surtió efecto
+tras la actualización (consulta el procedimiento en
+[Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential)). Si la
+instancia se inicializó sin custodia de la clave raíz, `dcctl upgrade` imprime una advertencia de custodia; es lo
+esperado y no tiene relación con esta actualización.
 
 Esta versión convierte las métricas calculadas en algo que creas y rellenas tú mismo: un editor de
 fórmulas con comprobación, constantes por dispositivo, fórmulas que leen otras métricas calculadas,
@@ -3965,9 +3970,9 @@ sesión. Qué cambia para alguien:
   y el bróker no está disponible durante aproximadamente un minuto cada vez. Consulta
   [Los inicios de sesión del bróker se acotan](#v0240-broker-logins). Los dispositivos se vuelven a conectar solos, y una sesión MQTT persistente
   conserva sus suscripciones y los mensajes QoS 1 retenidos para ella. Los dispositivos se vuelven a conectar
-  sin perder mensajes solo con `--ha`. En un clúster `kind` de un solo nodo, los dos reinicios tardaron
-  unos 90 segundos el primero, unos 40 segundos sin actividad y unos 80 segundos el segundo, es decir, de
-  4 a 5 minutos en total. **No reinicies a mano un servidor del bróker mientras avanza.** Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
+  sin perder mensajes solo con `--ha`. En `kind` con `--ha` (dos reinicios
+  progresivos del bróker), la actualización tardó de 4 a 5 minutos en total: unos 90 segundos el primero, unos
+  40 segundos sin actividad y unos 80 segundos el segundo. **No reinicies a mano un servidor del bróker mientras avanza.** Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
 - **Los servicios empiezan a escribir eventos `compact` a medida que se renuevan.** Los pods de la
   `v0.23.0` leen ambas formas, así que una actualización progresiva entre las dos versiones es segura.
 - **Revocar la autoridad de un dispositivo durante la renovación puede fallar, o dejar una sesión
@@ -4059,14 +4064,23 @@ instantáneas. Ahora la credencial en el cuerpo se rechaza:
   `capture.bodyCredential: strip`, que acepta un evento del bróker MQTT de la plataforma con la credencial
   eliminada. En este orden:
   1. Actualiza con `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`.
-     Los eventos siguen fluyendo y se cuenta cada uno que llevaba una credencial.
+     Los eventos siguen fluyendo y se cuenta cada uno que llevaba una credencial. El `--dry-run` del comando
+     no imprime el valor de este indicador; para confirmar que la actualización lo tomó, busca la advertencia de
+     arranque de `event-sources` que dice que el ajuste es transitorio, o comprueba que
+     `devicechain_eventsources_capture_body_credential_strip` vale `1`.
   2. Despliega el SDK o el firmware que deja de enviar la credencial en el cuerpo.
   3. Vigila `devicechain_eventsources_total_msg_credential_in_mqtt_body` hasta que deje de subir durante
-     más tiempo que el intervalo de envío de tu dispositivo más lento. Una advertencia en el registro de
-     `event-sources` indica el inquilino y el dispositivo de cada uno que sigue enviando una credencial
-     (una vez por hora para cada uno, en cada pod de `event-sources`); así encuentras los rezagados.
-  4. Ejecuta `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`.
-  5. Rota la credencial de todo dispositivo que la haya enviado.
+     más tiempo que el intervalo de envío de tu dispositivo más lento. **Recopila la lista de dispositivos
+     sobre la marcha.** Una advertencia en el registro de `event-sources` indica el inquilino y el dispositivo
+     de cada uno que sigue enviando una credencial (una vez por hora para cada dispositivo, en cada pod de
+     `event-sources`); copia esas parejas inquilino-dispositivo del registro durante esta fase, porque es el
+     único lugar donde se nombran.
+  4. Ejecuta `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`. A partir de
+     aquí el registro de `event-sources` no nombra ningún dispositivo y la métrica no tiene etiqueta de
+     dispositivo. El único registro por dispositivo que queda es el stream de decodificaciones fallidas, que
+     conserva el nombre del dispositivo con la credencial censurada.
+  5. Rota la credencial de todo dispositivo de la lista que recopilaste en el paso 3 (y de los que el stream de
+     decodificaciones fallidas nombre después del paso 4).
 
   `strip` no elimina la exposición: el bróker guardó el cuerpo antes de que se aplicara cualquiera de los
   dos ajustes, así que `strip` y `refuse` dejan el mismo texto claro en reposo, y el paso 5 hace falta con
