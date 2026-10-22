@@ -117,13 +117,20 @@ is not pruned automatically. See [Audit](../user-guide/audit.md).
 
 These are known and accepted for the current release. Plan around them.
 
-1. **The platform services share one broker login today.** Every service connects to the broker with the same login. The login is
-   refused the subjects only a device may write, which stops a service from publishing a device event by
-   mistake, but it can also administer the broker's streams, and a stream can be configured to write into
-   those subjects. A compromised service could therefore forge device events, command responses and device
-   reports for any tenant. Giving each service its own login, limited to the subjects and streams it needs, is
-   being built and is planned before 1.0.0. This entry will change when it ships. Until then, treat the services that accept device
-   traffic as part of the trusted core of the platform.
+1. **The broker's shared login is still in place beside the per-service logins.** Every area connects to the broker with a
+   login of its own, limited to the subjects, streams, consumers and buckets it uses, and no service can create,
+   change or delete a stream or a bucket: one administration login does that, in a job the chart runs before every
+   install and upgrade, and a service only checks that what it opens matches what its release declares and stops, naming the difference,
+   when it does not. A compromised service therefore cannot reconfigure a stream to write into the subjects only a device
+   may write, so it cannot forge device events, command responses or device reports by that route. What is left
+   is the shared login that earlier releases used. It stays in the broker's configuration, and in the instance configuration every pod
+   reads, until a later release retires it, and it still has the permissions it always had, including administering streams. Until it is retired, a
+   pod can present it. Services that accept device traffic (event-sources, device-management, lwm2m-ingest and sparkplug-ingest) are
+   still part of the trusted core of the platform, because they write device data by design. Event-processing, which
+   replays the resolved-events stream through consumers whose names the client library chooses, can still reach the other
+   consumers on that stream. Two grants are wider by design: event-sources can update the broker's own MQTT stores, and
+   user-management can purge a deleted tenant's data across every stream. A compromised service can still cause
+   loss, though not forgery, by filling a stream it may create consumers on until older messages are discarded.
 2. **The database login is shared by all services in an instance.** Every service reaches the instance's relational
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
    in the database rests on the application's tenant scope, not on database permissions. Separate roles per

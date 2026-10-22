@@ -484,21 +484,47 @@ Lo que ve una instancia en marcha:
   escribir en la caché de otra ni suscribirse a las respuestas de otra. Los permisos se generan a
   partir de las mismas declaraciones contra las que se comprueban los servicios, así que no pueden
   quedar por detrás de lo que un servicio hace. Esto aún no es una frontera frente a un servicio
-  comprometido, y quedan tres huecos hasta que versiones posteriores los cierren. Cada área sigue
-  pudiendo crear y actualizar los streams que usa, incluidos los que solo lee, y la configuración de
-  un stream puede copiar mensajes a otro stream o capturar subjects que la propia credencial no podría
-  publicar ni suscribir. event-processing, que reproduce el stream resolved-events, sigue pudiendo
+  comprometido, y quedan dos huecos hasta que versiones posteriores los cierren.
+  event-processing, que reproduce el stream resolved-events, sigue pudiendo
   alcanzar los demás consumidores de ese stream. Y la credencial compartida sigue en su sitio junto a
   las nuevas, con los permisos que siempre tuvo, de modo que los servicios que aún no se han
   reiniciado siguen conectándose durante la actualización; hasta que una versión posterior la retire,
   sigue en la configuración que lee cada pod, así que un pod aún puede presentarla. Dos permisos son
   más amplios a propósito: event-sources conserva permisos de actualización sobre los almacenes MQTT
-  del bróker, y user-management puede purgar los datos de un tenant eliminado en todos los streams.
+  del bróker, y user-management puede purgar los datos de un tenant eliminado en todos los streams, salvo los
+  consumidores con los que event-sources conserva la durabilidad de los mensajes confirmados.
   Una instalación que ejecuta el chart sin dcctl y aporta su propio bróker puede imprimir los mismos
   permisos con `dcctl broker permissions`. El bróker se
   reinicia una vez, servidor a servidor con `--ha`, para añadir los usuarios. Un área se niega a
   arrancar si la instancia dice que las credenciales existen y falta la suya, en lugar de recurrir a la
   compartida. Las credenciales existentes nunca se reemplazan: una actualización crea solo las que faltan.
+- **Los streams y buckets los crea ahora una única credencial de administración, antes de que los servicios
+  se actualicen.** La configuración de un stream decide qué se almacena bajo qué subject, de modo que dejar que
+  cada servicio creara y cambiara los streams que usa permitía que cualquiera de ellos remodelara un stream para
+  capturar o falsificar mensajes. El chart ejecuta ahora un job, `<instancia>-broker-admin`, antes de cada instalación y
+  actualización (un hook de Helm pre-install y pre-upgrade). Entra con la credencial de administración del
+  bróker, que ningún Deployment monta, y hace lo que antes hacía cada servicio por su cuenta al arrancar:
+  crea lo que falta, restablece los subjects, la ventana de duplicados, la política de descarte, los límites de tamaño y el
+  número de réplicas de lo que existe y, para el único stream de captura que una versión anterior creó con otra
+  retención, espera a que su lector lo vacíe antes de recrearlo como se declara. Esa espera puede tardar unos
+  minutos. Un servicio ya no crea ni cambia nada: comprueba que cada stream y bucket que abre coincide con lo
+  que declara su versión, y se niega a arrancar, indicando el stream y en qué difiere, cuando falta alguno o es
+  incorrecto. Si el job falla, la actualización falla antes de que se actualice ningún servicio, y `dcctl upgrade`
+  muestra el log del job; los servicios de la versión anterior siguen funcionando. `dcctl broker reconcile
+  <instancia>` ejecuta de nuevo el mismo job, que es también la forma de recuperar un stream o bucket borrado a mano.
+  Las credenciales de área ya no tienen derecho a crear, actualizar ni borrar un stream o bucket, con dos
+  excepciones que se mantienen a propósito: event-sources conserva sus derechos sobre los almacenes MQTT propios
+  del bróker, y user-management conserva el derecho a borrar las copias antiguas de los buckets de inicio de sesión.
+  Con esto cambian dos comportamientos. La vida útil de los buckets de caché queda fijada en cinco minutos, porque
+  los crea el job y ya no se la pide a cada servicio; los ajustes de tiempo de vida de la caché de
+  device-management limitan solo cuánto tiempo conserva una réplica una entrada en su propia memoria. Y un
+  número de réplicas aumentado en la configuración de la instancia surte efecto cuando se ejecuta el job, en la
+  siguiente actualización, y no en cada reinicio de pod. Un pod de la versión anterior que se reinicia después de
+  actualizar el bróker pero antes de que el job se haya ejecutado es rechazado cuando intenta reconfigurar un stream; avance a la
+  versión nueva y arrancará. Una instalación que ejecuta el chart sin dcctl necesita tener listos el namespace y el Secret de
+  la credencial de administración antes de la primera instalación, porque el job se ejecuta antes de que el chart cree nada;
+  puede desactivar el job con `brokerAdmin.enabled=false` y crear los streams y buckets por su cuenta con la imagen
+  `dc-broker-admin`.
 - **El almacén de eventos se reinicia cuando cambian sus pods**, por ejemplo por una imagen o una
   ubicación nuevas. Un cambio solo de ajustes se recarga sin reinicio. Con `--ha` se reinician
   primero las réplicas en espera y después el rol primario pasa a una de ellas. Sin `--ha` se
