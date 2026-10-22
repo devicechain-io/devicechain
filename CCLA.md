@@ -1,6 +1,6 @@
 # DeviceChain Corporate Contributor License Agreement ("Agreement")
 
-**v1.0**
+**v1.1**
 
 Thank you for your interest in contributing to DeviceChain, a project stewarded by
 **IoT Innovations, LLC** ("We" or "Us").
@@ -50,8 +50,8 @@ recipients of Material distributed by Us a perpetual, worldwide, non-exclusive,
 no-charge, royalty-free, irrevocable copyright license to reproduce, prepare
 derivative works of, publicly display, publicly perform, **sublicense**, and
 distribute Your Contributions and such derivative works. This license includes the
-right to license Your Contributions under any license terms We choose, including any
-open-source, proprietary, or commercial license.
+right to license Your Contributions under the terms of any open-source license
+approved by the Open Source Initiative (OSI) that We choose.
 
 ## 3. Grant of Patent License
 

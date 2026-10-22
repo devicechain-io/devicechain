@@ -24,9 +24,9 @@ good issue.
 DeviceChain is stewarded by **IoT Innovations, LLC**. Before we can merge your
 contribution, you must agree to our Contributor License Agreement (CLA). The CLA
 grants us a broad license to your contribution — including the right to sublicense —
-while **you keep ownership of your copyright**. This lets the project relicense or
-dual-license in the future if needed, without having to track down every
-contributor.
+while **you keep ownership of your copyright**. This lets the project relicense under another
+OSI-approved open-source license in the future if needed, without having to track
+down every contributor.
 
 - **Individuals:** [ICLA.md](ICLA.md)
 - **Companies** (or anyone contributing as part of their employment): have an

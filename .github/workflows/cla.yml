@@ -6,7 +6,8 @@
 # Uses contributor-assistant/github-action ("CLA Assistant Lite") — no third-party
 # app or OAuth grant. Contributors sign by commenting the phrase below on their PR;
 # signatures are recorded as JSON in the dedicated `cla-signatures` branch of this
-# repo. The CLA text itself lives at ICLA.md (individuals) / CCLA.md (companies).
+# repo. The `versionN` path is the CLA text's version: bump it when the text changes so
+# signatures given under the old text are not read as agreement to the new. The CLA text itself lives at ICLA.md (individuals) / CCLA.md (companies).
 
 name: cla
 
@@ -47,7 +48,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Where signatures are recorded (in the branch named below).
-          path-to-signatures: 'signatures/version1/cla.json'
+          path-to-signatures: 'signatures/version2/cla.json'
           # The agreement contributors are signing.
           path-to-document: 'https://github.com/devicechain-io/devicechain/blob/main/ICLA.md'
           # Dedicated branch that holds the signatures file (keep it unprotected).
