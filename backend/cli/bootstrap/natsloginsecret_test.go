@@ -26,12 +26,43 @@ import (
 
 func loginState(t *testing.T) (*State, natsauth.Credentials) {
 	t.Helper()
-	st, creds := calloutState(t)
+	creds, err := mintBrokerCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(creds.Logins) != len(config.NatsLoginPrincipals()) {
-		t.Fatalf("GenerateCredentials minted %d logins, want one per principal (%d)",
+		t.Fatalf("mintBrokerCredentials minted %d logins, want one per principal (%d)",
 			len(creds.Logins), len(config.NatsLoginPrincipals()))
 	}
+	st := aWritableState()
+	setBrokerCredentialValues(st, creds)
 	return st, creds
+}
+
+// A fresh bootstrap's mint carries a login for every principal and turns the document's flag on; the
+// bare shared set carries none and must NOT turn it on, or every area would be told to present a
+// login the broker was never given (and, failing closed, none would start).
+func TestAFreshBootstrapMintsLoginsAndTheBareSharedSetCannotEnableThem(t *testing.T) {
+	st, creds := loginState(t)
+	if st.Values[areaLoginsEnabledValue] != "true" {
+		t.Error("a fresh bootstrap does not turn the per-area logins on")
+	}
+	if v := strings.Join(infraVars(withIssuer(st, creds)), "\n"); !strings.Contains(v, "nats_login_password_bcrypts") {
+		t.Error("a fresh bootstrap hands the broker no login hashes")
+	}
+
+	bare, err := natsauth.GenerateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st2 := aWritableState()
+	setBrokerCredentialValues(st2, bare)
+	if st2.Values[areaLoginsEnabledValue] == "true" {
+		t.Fatal("the instance document would claim per-area logins that were never minted")
+	}
+	if v := strings.Join(infraVars(withIssuer(st2, bare)), "\n"); strings.Contains(v, "nats_login_password_bcrypts") {
+		t.Error("the broker is handed login hashes that were never minted")
+	}
 }
 
 func TestEachNatsLoginSecretCarriesItsOwnUserAndPasswordAndNothingElse(t *testing.T) {
@@ -295,7 +326,7 @@ func TestTheDeployedViewOverlaysTheNatsLoginSecrets(t *testing.T) {
 // The logins are INTRODUCED: minted when the starting state has none, kept when it has them, and
 // completed one principal at a time when it has some.
 func TestAnUpgradeIntroducesTheNatsLoginsOnceAndNeverReplacesOne(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := mintBrokerCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}

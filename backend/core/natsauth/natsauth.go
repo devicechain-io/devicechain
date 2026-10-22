@@ -224,6 +224,12 @@ type Credentials struct {
 // nkey (the callout issuer) and a random service password (plus its bcrypt hash
 // for the broker config). Uses crypto/rand throughout so nothing is predictable.
 // The plaintext and its hash are minted together here so they can never drift.
+//
+// It does NOT mint the per-principal Logins: each is a bcrypt hash at the production cost, so
+// minting one for every area is ~15 hashes that a caller wanting only the shared set should not
+// pay. A caller that gives the broker per-area logins asks for them with WithLogins, and one that
+// does not leaves Logins empty, which the instance document and the broker render both treat as
+// "no per-area logins" (see bootstrap's areaLoginsEnabledFor).
 func GenerateCredentials() (Credentials, error) {
 	akp, err := nkeys.CreateAccount()
 	if err != nil {
@@ -264,7 +270,7 @@ func GenerateCredentials() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	return withIdentity.WithLogins(nil, nil)
+	return withIdentity, nil
 }
 
 // generateSysPassword mints the system-account login and its hash together, the

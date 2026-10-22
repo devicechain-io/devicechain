@@ -25,6 +25,7 @@ import (
 
 func calloutState(t *testing.T) (*State, natsauth.Credentials) {
 	t.Helper()
+	// The shared set only. The tests that exercise the per-area logins ask for them (loginState).
 	creds, err := natsauth.GenerateCredentials()
 	if err != nil {
 		t.Fatal(err)

@@ -5,6 +5,8 @@ package natsauth
 
 import (
 	"fmt"
+	"runtime"
+	"sync"
 
 	"github.com/devicechain-io/dc-microservice/config"
 )
@@ -41,22 +43,45 @@ func LoginUser(principal string) string {
 //
 // existing is keyed by principal, deployedHashes by username.
 func (c Credentials) WithLogins(existing map[string]string, deployedHashes map[string]string) (Credentials, error) {
-	out := make(map[string]Login, len(config.NatsLoginPrincipals()))
-	for _, principal := range config.NatsLoginPrincipals() {
-		user := LoginUser(principal)
-		if pw := existing[principal]; pw != "" {
-			hash, err := reuseOrRehash(pw, deployedHashes[user])
-			if err != nil {
-				return Credentials{}, fmt.Errorf("hashing the running instance's broker login for %s: %w", principal, err)
+	principals := config.NatsLoginPrincipals()
+	logins := make([]Login, len(principals))
+	errs := make([]error, len(principals))
+
+	// Each login is a production-cost bcrypt hash, independent of every other, so they are computed
+	// concurrently (bounded by the CPUs available). The cost is unchanged; only the wall clock moves.
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, runtime.GOMAXPROCS(0))
+	for i, principal := range principals {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer func() { <-slots; wg.Done() }()
+			user := LoginUser(principal)
+			if pw := existing[principal]; pw != "" {
+				hash, err := reuseOrRehash(pw, deployedHashes[user])
+				if err != nil {
+					errs[i] = fmt.Errorf("hashing the running instance's broker login for %s: %w", principal, err)
+					return
+				}
+				logins[i] = Login{User: user, Password: pw, PasswordBcrypt: hash}
+				return
 			}
-			out[principal] = Login{User: user, Password: pw, PasswordBcrypt: hash}
-			continue
+			pw, hash, err := generateSysPassword()
+			if err != nil {
+				errs[i] = fmt.Errorf("minting the broker login for %s: %w", principal, err)
+				return
+			}
+			logins[i] = Login{User: user, Password: pw, PasswordBcrypt: hash}
+		}()
+	}
+	wg.Wait()
+
+	out := make(map[string]Login, len(principals))
+	for i, principal := range principals {
+		if errs[i] != nil {
+			return Credentials{}, errs[i]
 		}
-		pw, hash, err := generateSysPassword()
-		if err != nil {
-			return Credentials{}, fmt.Errorf("minting the broker login for %s: %w", principal, err)
-		}
-		out[principal] = Login{User: user, Password: pw, PasswordBcrypt: hash}
+		out[principal] = logins[i]
 	}
 	c.Logins = out
 	return c, nil

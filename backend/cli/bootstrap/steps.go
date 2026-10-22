@@ -291,7 +291,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 				"the bootstrap record for this instance is unusable (%v); minting fresh broker "+
 					"credentials, which a running broker would be reconfigured with", rerr))
 		}
-		creds, err = natsauth.GenerateCredentials()
+		creds, err = mintBrokerCredentials()
 		if err != nil {
 			return fail("minting NATS auth credentials", err)
 		}

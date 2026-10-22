@@ -12,8 +12,18 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-func TestGenerateCredentialsMintsALoginForEveryPrincipalAndNoTwoAlike(t *testing.T) {
+// GenerateCredentials is the shared set only; the per-principal logins are asked for with WithLogins,
+// so a caller that has no use for them does not pay ~15 production-cost bcrypt hashes.
+func TestGenerateCredentialsMintsNoPerPrincipalLogins(t *testing.T) {
 	c, err := GenerateCredentials()
+	require.NoError(t, err)
+	assert.Empty(t, c.Logins)
+}
+
+func TestWithLoginsMintsALoginForEveryPrincipalAndNoTwoAlike(t *testing.T) {
+	c, err := GenerateCredentials()
+	require.NoError(t, err)
+	c, err = c.WithLogins(nil, nil)
 	require.NoError(t, err)
 	require.Len(t, c.Logins, len(config.NatsLoginPrincipals()))
 
@@ -38,7 +48,7 @@ func TestGenerateCredentialsMintsALoginForEveryPrincipalAndNoTwoAlike(t *testing
 // A login that is present is NEVER replaced; one that is absent is minted; a hash the broker holds
 // is reused only if it verifies.
 func TestWithLoginsReusesWhatIsPresentAndMintsWhatIsNot(t *testing.T) {
-	first, err := GenerateCredentials()
+	first, err := Credentials{}.WithLogins(nil, nil)
 	require.NoError(t, err)
 
 	existing := map[string]string{}

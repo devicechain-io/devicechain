@@ -64,3 +64,15 @@ func setBrokerCredentialValues(st *State, creds natsauth.Credentials) {
 	setIdentityValues(st, creds)
 	setLoginValues(st, creds)
 }
+
+// mintBrokerCredentials is the fresh mint of a bootstrap that has nothing to reuse: the shared set
+// AND a login for every principal. The logins are asked for here, explicitly, because
+// natsauth.GenerateCredentials no longer includes them; without this call a fresh instance would
+// come up with the per-area logins switched off (areaLoginsEnabledFor needs every one).
+func mintBrokerCredentials() (natsauth.Credentials, error) {
+	creds, err := natsauth.GenerateCredentials()
+	if err != nil {
+		return natsauth.Credentials{}, err
+	}
+	return creds.WithLogins(nil, nil)
+}
