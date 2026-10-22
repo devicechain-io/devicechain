@@ -211,8 +211,8 @@
       "translationSha256": "75652e3e983ab288d0e1fe0f9760fd2e9c62941fe87ab1b3e64593d38cfb182b"
     },
     "reference/dcctl.md": {
-      "sourceSha256": "62fa659055a4945657d884e77db7290857e0857dfb6ff348132b31797c45642e",
-      "translationSha256": "f53cc41bcf01a3d20ed6b986be424cde925d216d24cd39cbdbe2abdce56400c0"
+      "sourceSha256": "c9c4d4cd6ac3fdf7dedb08ff5332e454c83d66ba362ac35de27bee6a5e692ad4",
+      "translationSha256": "c7950e9b9762009fd3ee38ed94aba45f81fdde6f71808c029270ae1a13d1c4bf"
     },
     "reference/device-protocol.md": {
       "sourceSha256": "3537d8e1f80ac582927bd00104408216acc9aae9e4cfc9a566c75ad383b57389",
