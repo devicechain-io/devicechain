@@ -705,7 +705,7 @@ temporizadores se reporta como un total de toda la instancia, porque atribuirlo 
 exigiría recorrerlo entero en cada punto de control.
 :::
 
-### Qué tan rápido se aplican las alarmas
+### Qué tan rápido se aplican las alarmas {#how-fast-alarms-are-applied}
 
 La detección decide que una alarma debe activarse o cerrarse; el área `device-management` aplica
 después cada una de esas decisiones a la propia alarma, y lo hace varias a la vez. Un cambio de

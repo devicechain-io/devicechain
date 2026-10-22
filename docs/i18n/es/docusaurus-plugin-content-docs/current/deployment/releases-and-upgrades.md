@@ -572,7 +572,7 @@ esos mensajes:
 
 | Valor | Codificación |
 | --- | --- |
-| `compact` | **El valor por defecto desde la versión posterior a `v0.23.0`.** Cada instante como un recuento de nanosegundos y el sello de cada credencial de dispositivo en binario. Alrededor de un tercio más pequeño por mensaje, lo que significa menos disco, red y retención del bróker por evento. |
+| `compact` | **El valor por defecto desde `v0.24.0`.** Cada instante como un recuento de nanosegundos y el sello de cada credencial de dispositivo en binario. Alrededor de un tercio más pequeño por mensaje, lo que significa menos disco, red y retención del bróker por evento. |
 | `legacy` | Cada instante como texto y cada sello en su forma de texto, byte a byte lo que escribían `v0.22.0` y anteriores. `v0.23.0` lo escribe por defecto. |
 
 Cualquier otro valor, incluido `Compact`, se rechaza: el servicio no arranca y su registro nombra
@@ -3841,24 +3841,355 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 
 No hay que hacer nada.
 
-### Próxima versión: el bróker pasa a NATS 2.15 {#next-nats-215}
+### v0.24.0 — métricas calculadas que puedes crear tú mismo, y una ruta de eventos que transporta más {#v0240-upgrade}
+
+`v0.24.0` es una actualización en su sitio desde `v0.23.0`: `dcctl install` para el clúster y después
+`dcctl upgrade` para cada instancia, como se describe [para la v0.17.0](#v0170-upgrade). Pasa a
+`dcctl install` los ajustes con los que se instaló el clúster, como `--ha` y `--database-node-selector`,
+además de la nueva `--version`. **No se puede alcanzar en su sitio desde la `v0.22.0` ni versiones
+anteriores: actualiza primero a la `v0.23.0`.** Sus cuatro migraciones añaden dos tablas y dos índices
+y no reescriben ninguna fila existente (consulta [Durante la actualización](#v0240-during)). **Desde ella
+se avanza, no se vuelve atrás:** la `v0.23.0` no puede arrancar con la configuración que escribe esta
+versión (consulta [Volver atrás](#v0240-going-back)). Si vienes de
+la `v0.22.0` o anterior, lee también las [notas de la `v0.23.0`](#v0230-upgrade); se aplican a cualquier
+actualización que cruce esa versión.
+
+Los comandos, con la `v` en la versión y un ensayo primero:
+
+```bash
+dcctl install local --version v0.24.0
+dcctl upgrade local devicechain --version v0.24.0 --dry-run
+dcctl upgrade local devicechain --version v0.24.0
+```
+
+`--version` lleva la etiqueta con su `v`. En un clúster que no sea el local por defecto, pasa
+`--kube-context` a `dcctl install` y a `dcctl upgrade`, y pasa `--registry` cuando las imágenes salgan de
+un registro distinto del predeterminado. Si algún dispositivo MQTT sigue enviando una credencial en el
+cuerpo de sus eventos, añade `--mqtt-body-credential=strip` al último comando: consulta
+[Antes de actualizar](#v0240-before).
+`dcctl upgrade --dry-run` no imprime el valor de `--mqtt-body-credential`, así que confirma que surtió efecto
+tras la actualización (consulta el procedimiento en
+[Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential)). Si la
+instancia se inicializó sin custodia de la clave raíz, `dcctl upgrade` imprime una advertencia de custodia; es lo
+esperado y no tiene relación con esta actualización.
+
+Esta versión convierte las métricas calculadas en algo que creas y rellenas tú mismo: un editor de
+fórmulas con comprobación, constantes por dispositivo, fórmulas que leen otras métricas calculadas,
+vistas previas y un **relleno** que calcula una métrica para las lecturas almacenadas antes de que
+existiera. Lo demás trata de una ruta de eventos que transporta más: los eventos se escriben por defecto
+en una forma más pequeña, las detecciones se publican en paralelo y los cambios de alarma se aplican
+varios a la vez. También cierra dos sitios donde un secreto estaba al alcance de todos los servicios de la
+plataforma: la credencial de un dispositivo en el cuerpo de un evento MQTT y el estado de inicio de
+sesión. Qué cambia para alguien:
+
+- **Los dispositivos deben dejar de enviar una credencial en el cuerpo de un evento publicado por el
+  bróker MQTT de la plataforma.** Ese evento se rechaza ahora. Para que una flota siga informando mientras
+  se actualiza su firmware, actualiza con `--mqtt-body-credential=strip`. Consulta
+  [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential).
+- **`IDeviceEventCarrier` del SDK de C# tiene un miembro abstracto nuevo,** `CarriesBodyCredential`; un
+  portador propio deja de compilar hasta que lo declara. Consulta la misma sección.
+- **Todos vuelven a iniciar sesión una vez, y el bróker se reinicia dos veces.** El estado de inicio de
+  sesión pasa a una cuenta propia del bróker y no se traslada, y el callout de autenticación de
+  dispositivos se cifra. Consulta [Los inicios de sesión del bróker se acotan](#v0240-broker-logins).
+- **Actualiza pasando por la `v0.23.0`.** Los eventos se escriben ahora por defecto en la forma
+  `compact`, que la `v0.22.0` y anteriores no pueden leer. Consulta
+  [El formato de los eventos en el cable](#event-wire-format).
+- **El bróker pasa a NATS 2.15.1** en el primero de esos reinicios. Consulta
+  [El bróker pasa a NATS 2.15](#v0240-nats).
+- **No hay vuelta atrás a la `v0.23.0`.** Avanza: un `helm rollback` deja servicios que no pueden
+  arrancar. Consulta [Volver atrás](#v0240-going-back).
+- **Cuatro migraciones:** una tabla para los trabajos de relleno en `event-management`, una tabla para el
+  registro de activaciones de perfil y un índice en `device-management`, y un índice en
+  `command-delivery`. Consulta [Durante la actualización](#v0240-during).
+- **`device` es un nombre reservado en las fórmulas de métricas calculadas.** Consulta
+  [Métricas calculadas](#v0240-calculated-metrics).
+- **Cambia el id de un valor calculado para una lectura JSON que no envía su propia hora.** Consulta
+  [Métricas calculadas](#v0240-calculated-metrics).
+- **Se rechaza una medición numérica que sea NaN, infinita o demasiado grande.** Consulta
+  [Mediciones](#v0240-measurements).
+- **Se mueven algunos valores por defecto:** el motor de detección publica 32 detecciones a la vez,
+  `device-management` aplica los cambios de alarma en varios carriles, el endpoint MCP limita el tamaño
+  de un lote y a cada llamante, y el tipo de máquina del grupo de servicios del módulo de referencia
+  de GKE es otro. Consulta [Valores por defecto que cambiaron](#v0240-defaults).
+
+#### Antes de actualizar {#v0240-before}
+
+1. **Si vienes de la `v0.22.0` o anterior, detente y actualiza primero a la `v0.23.0`.** La `v0.22.0` y
+   las anteriores leen solo la forma de cable `legacy`. Un pod de una de ellas descarta un mensaje
+   `compact`, o lo aparta como fallido en `device-management`, así que una actualización progresiva
+   directa a la `v0.24.0` pierde los eventos escritos mientras conviven pods viejos y nuevos. Actualiza
+   cada instancia a la `v0.23.0`, espera a que todos los pods la ejecuten y después actualiza a la
+   `v0.24.0`. En una instalación con el chart (no con `dcctl`) puedes en cambio indicar
+   `infrastructure.messaging.wireFormat: legacy` durante la actualización y quitarlo cuando todos los pods
+   se hayan renovado. `dcctl` no tiene ninguna opción para indicarlo.
+2. **Si algún dispositivo MQTT envía una credencial en el cuerpo de sus eventos, actualiza con
+   `--mqtt-body-credential=strip`.** Con `deviceAuthMode: required` son todos los dispositivos MQTT,
+   porque la `v0.23.0` rechaza un evento MQTT que no lleva credencial en el cuerpo. Por eso el firmware no
+   se puede actualizar primero: un dispositivo actualizado antes de la actualización ve rechazados sus
+   eventos hasta que esta termina. Ejecuta
+   `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip` y sigue los pasos de
+   [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential).
+   **No indiques `deviceAuthMode: optional` para salvar el intervalo.** Hace que la instancia acepte un
+   evento HTTP sin credencial, solo con el token del dispositivo.
+3. **Si un `terraform.tfvars` junto al estado de infraestructura de la instancia fija
+   `nats_chart_version`, súbelo a `2.15.1` o elimínalo.** Un chart de NATS anterior a `2.15.0` se rechaza
+   al elaborar el plan.
+4. **No cambies la replicación del bróker (`streamReplicas`, `nats_cluster_replicas`) en la misma
+   actualización.** Mientras los servidores se reinician, unos ejecutan `2.14.4` y otros `2.15.1`, y un
+   cambio de réplicas o de ubicación iniciado en ese intervalo puede quedarse atascado. Hazlo antes o
+   después. Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
+5. **Si una fórmula publicada de una métrica calculada lee como identificador simple una métrica medida
+   cuya clave es `device`, reescríbela** como `double(m["device"])` (o la conversión de su tipo) antes de
+   actualizar. Tras la actualización esa fórmula ya no compila y no produce valor en ninguna lectura. Las
+   métricas calculadas están desactivadas hasta que el `calculatedMetricsPerProfile` de un nivel supera 0,
+   así que esto solo afecta a los niveles en los que ya lo hayas subido.
+6. **Si instalaste tú mismo el módulo `nats`, mantén `jetstream.limits.default_max_consumers` en
+   `-1`.** NATS 2.15, si no, limita cada stream a 1.000 consumidores, y la suscripción MQTT QoS 1 o 2
+   número 1.001 se rechaza mientras su dispositivo sigue conectado.
+
+#### Durante la actualización {#v0240-during}
+
+- **Se ejecutan cuatro migraciones, en el primer arranque del servicio al que pertenece cada una.**
+  Ninguna escribe ni reescribe filas, y cada una se puede volver a ejecutar si se interrumpe.
+  - `event-management` crea la tabla `calculated_backfills` y sus índices.
+  - `device-management` crea `device_profile_activations`, el registro de qué versión de un perfil pasó a
+    estar activa y cuándo (empieza vacío: no se reconstruye nada de las activaciones anteriores a la
+    actualización), y un índice sobre `devices (tenant_id, device_type_id)` que atiende las pestañas por
+    tipo de dispositivo de la tabla de alarmas.
+  - `command-delivery` crea `idx_commands_device_time`, que atiende las marcas de los gráficos que
+    muestran los comandos de un dispositivo en su eje de tiempo.
+
+  Cada índice se construye con un `CREATE INDEX` simple, que mantiene un bloqueo contra escrituras en la
+  tabla mientras se ejecuta; en una tabla con millones de filas, arranca ese servicio en un momento
+  tranquilo.
+- **El bróker se reinicia, y en la primera actualización que añade el callout cifrado se reinicia dos
+  veces.** El primer reinicio lleva el paso a NATS 2.15.1 y la nueva cuenta de inicio de sesión; el
+  segundo activa el cifrado del callout cuando los servicios ya se han renovado a un respondedor que
+  puede leerlo (una instancia sin callout de autenticación de dispositivos no tiene nada que cifrar y se
+  reinicia una vez). Con `--ha`, de un servidor en otro, cada uno Ready antes de que se detenga el siguiente; sin `--ha` el único servidor se reinicia
+  y el bróker no está disponible durante aproximadamente un minuto cada vez. Consulta
+  [Los inicios de sesión del bróker se acotan](#v0240-broker-logins). Los dispositivos se vuelven a conectar solos, y una sesión MQTT persistente
+  conserva sus suscripciones y los mensajes QoS 1 retenidos para ella. Los dispositivos se vuelven a conectar
+  sin perder mensajes solo con `--ha`. En `kind` con `--ha` (dos reinicios
+  progresivos del bróker), la actualización tardó de 4 a 5 minutos en total: unos 90 segundos el primero, unos
+  40 segundos sin actividad y unos 80 segundos el segundo. **No reinicies a mano un servidor del bróker mientras avanza.** Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
+- **Los servicios empiezan a escribir eventos `compact` a medida que se renuevan.** Los pods de la
+  `v0.23.0` leen ambas formas, así que una actualización progresiva entre las dos versiones es segura.
+- **Revocar la autoridad de un dispositivo durante la renovación puede fallar, o dejar una sesión
+  abierta.** Deshabilitar o eliminar un dispositivo, o cambiar una credencial, termina ahora también las
+  sesiones MQTT abiertas del dispositivo pidiéndoselo a `event-sources`, y solo responde un pod de
+  `event-sources` de esta versión. Mientras no haya ninguno en marcha, el cambio se guarda y la llamada
+  devuelve un error («the change was saved, but the device's live broker sessions could not be
+  confirmed ended ... repeat the operation»). Un cambio que atiende un pod de `device-management` de la
+  versión anterior se guarda y no termina ninguna sesión, como antes de la actualización. Repite esos
+  cambios cuando termine la renovación; repetirlos es seguro y vuelve a preguntar.
+- **Un pod de la versión anterior que se reinicia durante la renovación no vuelve.** Antes de que se
+  muevan los servicios, `dcctl` escribe la configuración de la instancia para esta versión, y la
+  `v0.23.0` la rechaza al arrancar (consulta [Volver atrás](#v0240-going-back)). Un pod de la `v0.23.0`
+  desalojado, terminado por falta de memoria o que pierde su nodo en ese intervalo sigue caído hasta que
+  la nueva versión lo sustituye, así que deja que la actualización termine en lugar de reiniciar pods a
+  mano.
+- **Un inicio de sesión o una renovación de token que llegue a un pod de `user-management` de la versión
+  anterior puede fallar durante unos segundos** mientras se traslada el estado de inicio de sesión. Sale
+  bien al reintentarlo.
+- **Un valor derivado almacenado por un pod de la versión anterior y otro almacenado por un pod de la
+  nueva pueden llevar ids distintos** para una lectura cuyo instante tiene dígitos por debajo del
+  microsegundo. Consulta [Métricas calculadas](#v0240-calculated-metrics).
+
+#### Volver atrás {#v0240-going-back}
+
+**Avanza. No vuelvas a la `v0.23.0`, ni con `helm rollback` ni de ninguna otra forma.** Si la
+actualización falla a medias, corrige la causa y vuelve a ejecutar `dcctl upgrade` con la misma
+`--version`. Volver atrás deja una instancia que no funciona:
+
+- **Los servicios de la `v0.23.0` no pueden arrancar.** `dcctl` escribe la configuración de la instancia
+  en el Secret `dci-<instance>-config`, fuera de la release del chart, así que `helm rollback` restaura
+  las cargas de trabajo de la release anterior y deja la configuración tal como la escribió esta
+  versión. Esa configuración lleva claves que la `v0.23.0` no conoce, como `identityAccount`,
+  `calloutIssuerPublic` y `calloutXKeyPublic`, y la `v0.23.0` rechaza al arrancar cualquier clave de su
+  configuración que no conozca. Todos los servicios que arranca fallan, y la semilla de firma del
+  callout ya ni siquiera está en esa configuración.
+- **Los dispositivos no pueden conectarse.** El bróker no forma parte de la release del chart, así que
+  sigue en NATS 2.15 y sigue cifrando su callout de autenticación de dispositivos. Las semillas del
+  callout están en un Secret que la `v0.23.0` no lee, así que no hay ningún respondedor que pueda
+  atender las peticiones del bróker, y todos los dispositivos se rechazan.
+- **El bróker tampoco puede volver atrás.** NATS solo admite volver de 2.15 a 2.14.7 o posterior, y la
+  versión anterior ejecuta 2.14.4.
+- **No se restaura el estado de inicio de sesión.** Los buckets de inicio de sesión de la versión
+  anterior se eliminaron, así que todos tendrían que volver a iniciar sesión.
+
+Las tablas y los índices nuevos no estorbarían: la `v0.23.0` lee la misma base de datos y los deja sin
+usar. Volver a la `v0.22.0` o anterior exige indicar antes `legacy` y que se hayan vaciado de los
+streams todos los mensajes `compact` (consulta [El formato de los eventos en el cable](#event-wire-format)).
+
+#### Después de la actualización {#v0240-after}
+
+- **No hace falta nada.** Todos los ajustes nuevos tienen un valor por defecto.
+- **El paso del bróker es irreversible.** NATS solo admite volver de 2.15 a 2.14.7 o posterior, y la
+  versión anterior ejecuta 2.14.4.
+- **Mantén `metrics.enabled` y `metrics.alerts` activados** (lo están por defecto) para instalar la nueva
+  alerta `MqttGatewayStreamUnbounded`.
+- **Localiza los dispositivos que aún envían una credencial en el cuerpo.**
+  `devicechain_eventsources_total_msg_credential_in_mqtt_body` cuenta los eventos rechazados por origen y, con
+  `strip`, los que se eliminaron. Actualiza el firmware o el SDK de cada uno y rota la credencial de todo
+  dispositivo que se haya contado (consulta la sección siguiente).
+
+##### Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT {#v0240-mqtt-body-credential}
+
+Un dispositivo en el bróker MQTT de la plataforma se autentica al conectarse, mediante el callout de
+autenticación de dispositivos. El contrato publicado hacía además que repitiera su credencial en el
+cuerpo de cada evento, y el bróker escribía ese cuerpo en sus propios streams antes de que se ejecutara
+ningún código de la plataforma, de modo que una contraseña o un token de acceso en texto claro quedaba en
+un stream legible por todos los servicios de la plataforma, por cualquiera con acceso al volumen y por sus
+instantáneas. Ahora la credencial en el cuerpo se rechaza:
+
+- **Se rechaza un evento publicado por el bróker MQTT de la plataforma cuyo cuerpo lleve
+  `credentialType`, `credentialId` o `credentialSecret`,** salvo que hayas indicado
+  `capture.bodyCredential: strip` para la actualización (más abajo). Se cuenta en
+  `devicechain_eventsources_total_msg_credential_in_mqtt_body`, se aparta en el stream failed-decode con la credencial censurada y
+  no se reenvía nunca. El bróker ya ha confirmado el mensaje, así que el rechazo lo ves tú y no el
+  dispositivo: un dispositivo que sigue enviando el cuerpo antiguo se queda en silencio mientras cree que
+  publica.
+- **Se acepta un evento sin credencial** y se atribuye al dispositivo que se conectó. Con
+  `deviceAuthMode: required` se acepta para todos los tipos de evento.
+- **La ingesta HTTP y un bróker MQTT que conectas como origen no cambian.** Siguen exigiendo la
+  credencial en el cuerpo.
+- **Trata como expuesto a un dispositivo que fue rechazado.** El texto claro existió en el bróker durante
+  los instantes previos a la confirmación del mensaje, en el almacén del gateway MQTT mientras había una
+  suscripción interesada y en bloques de archivo sin recuperar hasta la compactación. Rota la credencial
+  de todo dispositivo que se haya contado.
+- **Actualiza con `strip`, actualiza los SDK y el firmware y pasa después a `refuse`.** La `v0.23.0`
+  rechaza un evento MQTT que no lleva credencial en el cuerpo, y esta versión rechaza uno que sí la lleva,
+  así que una flota no puede actualizar su firmware antes de la actualización. El puente es
+  `capture.bodyCredential: strip`, que acepta un evento del bróker MQTT de la plataforma con la credencial
+  eliminada. En este orden:
+  1. Actualiza con `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`.
+     Los eventos siguen fluyendo y se cuenta cada uno que llevaba una credencial. El `--dry-run` del comando
+     no imprime el valor de este indicador; para confirmar que la actualización lo tomó, busca la advertencia de
+     arranque de `event-sources` que dice que el ajuste es transitorio, o comprueba que
+     `devicechain_eventsources_capture_body_credential_strip` vale `1`.
+  2. Despliega el SDK o el firmware que deja de enviar la credencial en el cuerpo.
+  3. Vigila `devicechain_eventsources_total_msg_credential_in_mqtt_body` hasta que deje de subir durante
+     más tiempo que el intervalo de envío de tu dispositivo más lento. **Recopila la lista de dispositivos
+     sobre la marcha.** Una advertencia en el registro de `event-sources` indica el inquilino y el dispositivo
+     de cada uno que sigue enviando una credencial (una vez por hora para cada dispositivo, en cada pod de
+     `event-sources`); copia esas parejas inquilino-dispositivo del registro durante esta fase, porque es el
+     único lugar donde se nombran.
+  4. Ejecuta `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`. A partir de
+     aquí el registro de `event-sources` no nombra ningún dispositivo y la métrica no tiene etiqueta de
+     dispositivo. El único registro por dispositivo que queda es el stream de decodificaciones fallidas, que
+     conserva el nombre del dispositivo con la credencial censurada.
+  5. Rota la credencial de todo dispositivo de la lista que recopilaste en el paso 3 (y de los que el stream de
+     decodificaciones fallidas nombre después del paso 4).
+
+  `strip` no elimina la exposición: el bróker guardó el cuerpo antes de que se aplicara cualquiera de los
+  dos ajustes, así que `strip` y `refuse` dejan el mismo texto claro en reposo, y el paso 5 hace falta con
+  ambos. `strip` se aplica solo al bróker MQTT de la plataforma. Un `dcctl upgrade` posterior sin la opción
+  conserva el valor. Es transitorio: está previsto eliminarlo en la `v0.26.0`, que no dejará arrancar
+  `event-sources` mientras siga indicado. En una instalación con el chart (no con `dcctl`) indica
+  `functionalAreas.event-sources.config.capture.bodyCredential`.
+
+  Mientras la actualización se despliega, un pod de `event-sources` de esta versión puede quitar la
+  credencial de un evento antes de que `device-management` se haya actualizado. Un `device-management` de
+  la `v0.23.0` rechaza ese evento, porque ya no lleva credencial, y lo deja para que se entregue de nuevo un
+  minuto después, hasta cinco entregas en total; un `device-management` de esta versión lo acepta. Así que
+  no se pierde nada si `device-management` termina de actualizarse en unos cuatro minutos desde el primer
+  pod nuevo de `event-sources`, como ocurre en una actualización normal. Un evento que siga rechazado en su
+  quinta entrega queda apartado en el flujo de eventos fallidos como no autenticado, sin la credencial.
+- **Qué cambiar en un dispositivo.** El SDK de C# (y el paquete de Unity, que se apoya en él) deja de
+  enviar la credencial por MQTT en esta versión, y la sigue enviando por HTTP. El JSON Schema del sobre
+  marca ahora los tres miembros como solo HTTP. Un `IDeviceEventCarrier` propio debe declarar el nuevo
+  miembro `CarriesBodyCredential` (`true` para un portador que va por HTTP, `false` para el MQTT de la
+  plataforma); es un error de compilación, a propósito, en lugar de un valor por defecto. El firmware que
+  escribe el cuerpo a mano debe quitar los tres miembros. El agente de borde reenvía los cuerpos sin
+  cambios, y su enlace ascendente a un bróker de la plataforma que autentica dispositivos no es
+  compatible en esta versión.
+- **Una sesión ya no sobrevive a su credencial.** El token de la conexión caduca ahora con la credencial
+  (lo que ocurra antes entre 12 horas y la caducidad de la propia credencial), y revocar una credencial,
+  rotar su secreto, deshabilitar o eliminar un dispositivo o sustituirlo termina las sesiones MQTT
+  abiertas del dispositivo. El dispositivo se vuelve a conectar y se autentica de nuevo con la credencial
+  que presenta, que la base de datos rechaza si se revocó. Terminan todas las sesiones del dispositivo,
+  así que revocar una de dos credenciales corta un momento la sesión de la otra. Si la plataforma no puede
+  confirmar que las sesiones terminaron, el cambio se guarda igualmente y la llamada devuelve un error
+  que lo indica; repítela.
+- **Rota los tokens de los dispositivos de token de acceso cuyos mensajes se rechazaron o pasaron a
+  mensajes fallidos.** Los registros de failed-decode y de dead-letter conservaban el `credentialId` de un
+  token de acceso, que en ese tipo de credencial es el propio token (en MQTT_BASIC es el nombre de inicio
+  de sesión). Ahora se censuran, pero nada reescribe un registro escrito por una versión anterior: esos
+  streams caducan a los 7 días, la tabla de dead-letters la limpia su barrido de retención y una copia de
+  seguridad de la base de datos los conserva hasta que caduca.
+- **`event-sources` necesita el inicio de sesión de la cuenta de sistema del bróker para arrancar**
+  siempre que el bróker ejecute el callout de autenticación de dispositivos (`dcctl bootstrap` lo crea), y
+  ese inicio de sesión queda limitado a listar y terminar conexiones. `dcctl upgrade` rechaza una
+  instancia que tiene el callout y no tiene inicio de sesión de sistema, en lugar de dejar a
+  `event-sources` en un bucle de fallos.
+- **El inicio de sesión de servicio compartido ya no puede publicar en el subject de eventos de un
+  dispositivo.** Quien lo tuviera podía antes falsificar un evento de cualquier dispositivo con una sola
+  publicación. No es una frontera frente a quien posee el inicio de sesión, que sigue administrando los
+  streams de los servicios.
+
+Consulta [Conexión de un dispositivo](../guides/connecting-a-device.md),
+[Credenciales de dispositivo](../guides/device-credentials.md) y el
+[referencia del protocolo de dispositivo](../reference/device-protocol.md).
+
+##### Los inicios de sesión del bróker se acotan {#v0240-broker-logins}
+
+Dos secretos que estaban al alcance de todos los servicios están ahora al alcance de uno solo. El
+mecanismo y los reinicios se describen en
+[Qué aplica una actualización a la infraestructura](#upgrade-infrastructure); qué cambia para alguien:
+
+- **El callout de autenticación de dispositivos se cifra.** La contraseña de un dispositivo cruzaba el
+  bróker en claro hacia cualquier servicio que escuchara. `dcctl upgrade` crea el Secret
+  `dci-<instance>-callout` (la semilla de firma y una nueva semilla de cifrado), montado solo en
+  `device-management`. La configuración de la instancia conserva las mitades públicas. Una instalación
+  solo con el chart debe crear ese Secret por su cuenta.
+- **El estado de inicio de sesión pasa a una cuenta propia del bróker, y todos vuelven a iniciar sesión
+  una vez.** Los tokens de actualización, los códigos de autorización OAuth, los registros de inicio de
+  sesión único y el limitador de inicios de sesión pasan a una cuenta `IDENTITY` a la que solo puede
+  entrar `user-management`, con la contraseña en el Secret `dci-<instance>-identity`. Las copias de la
+  versión anterior se **eliminan, no se trasladan**, así que termina toda sesión anterior a la
+  actualización: la gente inicia sesión de nuevo en la consola y en los paneles, y los clientes MCP y OAuth
+  vuelven a autorizar. Un token de acceso ya emitido funciona hasta que caduca, 15 minutos por defecto.
+  Una instalación solo con el chart debe añadir la cuenta a su propio bróker, o no cambia nada.
+- **El bróker se reinicia dos veces en la primera actualización que hace ambas cosas**, como se describe
+  más arriba. Los dispositivos se vuelven a conectar en segundos con `--ha` y en aproximadamente un minuto
+  sin él. Si falla el segundo paso, los dispositivos siguen conectándose; ejecuta `dcctl upgrade` otra vez
+  para terminarlo.
+- **La semilla de firma se traslada, no se sustituye.** La semilla de firma del callout estaba en la
+  configuración de la instancia, y `dcctl upgrade` lleva esa misma semilla al nuevo Secret. `dcctl`
+  mantiene la configuración fuera de los valores de Helm, así que su historial de releases no guarda
+  ninguna copia. Una instalación con el chart que pasa la configuración en línea sigue teniendo la
+  semilla en las releases de Helm guardadas antes de la actualización; elimina esos Secrets de release si
+  eso te importa.
+- **Una instancia restaurada recibe un inicio de sesión nuevo para el estado de inicio de sesión,** y ese
+  estado no se restaura desde una copia de seguridad.
+- **En el clúster, esos Secrets son la única copia de las semillas.** La máquina que ejecutó
+  `dcctl bootstrap` también las guarda en `~/.devicechain/instances/<instance>/`. No hay verbo de
+  rotación, y editar
+  cualquiera de los dos Secrets fuera de `dcctl` no está admitido. Quien pueda leer Secrets en el
+  espacio de nombres de la instancia puede seguir leyéndolos.
+
+##### El bróker pasa a NATS 2.15 {#v0240-nats}
 
 El bróker de mensajería de la instancia pasa de NATS `2.14.4` a `2.15.1` (el chart oficial `nats`,
-misma versión). `dcctl upgrade` lo aplica y el bróker se reinicia una vez: con `--ha` sus servidores
-se reinician de uno en uno, cada uno Ready antes de que se detenga el siguiente; sin `--ha` el único
-servidor se reinicia y el bróker no está disponible durante aproximadamente un minuto. Los
+misma versión). `dcctl upgrade` lo aplica en su primera aplicación del bróker, la que también añade la
+cuenta de inicio de sesión, así que el paso no cuesta un reinicio propio: con `--ha` sus servidores se
+reinician de uno en uno, cada uno Ready antes de que se detenga el siguiente; sin `--ha` el único
+servidor se reinicia y el bróker no está disponible durante aproximadamente un minuto. El segundo
+reinicio, que activa el cifrado del callout, llega después de los servicios (consulta
+[Durante la actualización](#v0240-during)). Los
 dispositivos se vuelven a conectar solos, y una sesión MQTT persistente conserva sus suscripciones y
 los mensajes QoS 1 retenidos para ella mientras el dispositivo no estaba.
 
-- **No cambie la replicación del bróker en la misma actualización.** Mientras los servidores se
+- **No cambies la replicación del bróker en la misma actualización.** Mientras los servidores se
   reinician, unos ejecutan `2.14.4` y otros `2.15.1`. NATS 2.15 cambió la forma en que un stream o
   un consumidor cambia su número de réplicas o su ubicación, y solo NATS `2.14.7` y posteriores
   entienden el nuevo mecanismo. Esta actualización parte de `2.14.4`, así que un cambio de réplicas
   o de ubicación iniciado mientras algún servidor todavía lo ejecuta puede quedarse atascado, no
   solo retrasado. Los streams se pueden leer y escribir durante todo el proceso, y crearlos o
-  eliminarlos no se ve afectado. Suba `streamReplicas` o `nats_cluster_replicas` antes o después de
+  eliminarlos no se ve afectado. Sube `streamReplicas` o `nats_cluster_replicas` antes o después de
   esta actualización, no durante.
-- **No reinicie a mano un servidor del bróker mientras avanza la actualización.** La nueva
+- **No reinicies a mano un servidor del bróker mientras avanza la actualización.** La nueva
   configuración llega a todos los servidores a la vez, pero cada servidor pasa a `2.15.1` solo
   cuando le toca. Hasta entonces sigue funcionando con la configuración con la que arrancó, y si se
   reinicia en ese intervalo (a mano, o porque falla su nodo) no puede arrancar con la nueva
@@ -3869,14 +4200,14 @@ los mensajes QoS 1 retenidos para ella mientras el dispositivo no estaba.
   para NATS 2.15 y un servidor 2.14 la rechaza al arrancar, así que un `nats_chart_version` inferior
   a `2.15.0` hace fallar el plan en lugar de dejar el bróker en un bucle de reinicios. Si un
   `terraform.tfvars` junto al estado de infraestructura de la instancia fija `nats_chart_version`,
-  súbalo a `2.15.1` o elimínelo antes de actualizar. Considere el paso a 2.15 como irreversible: NATS
+  súbelo a `2.15.1` o elimínalo antes de actualizar. Considera el paso a 2.15 como irreversible: NATS
   solo admite volver de 2.15 a 2.14.7 o posterior, y la versión anterior ejecuta 2.14.4.
 - **Se levanta el límite de 1.000 consumidores que NATS 2.15 añade a cada stream.** Cada
   suscripción MQTT con QoS 1 o 2 es un consumidor en el stream de mensajes propio del bróker, así que
   con el nuevo valor por defecto se rechazaría la suscripción número 1.001 de ese tipo en toda la
   flota mientras su dispositivo seguía conectado, y ese dispositivo nunca recibiría un comando. Se
   cuentan suscripciones, no dispositivos: un dispositivo con dos suscripciones QoS 1 usa dos. Si
-  instala usted mismo el módulo `nats`, mantenga `jetstream.limits.default_max_consumers` en `-1`.
+  instalas tú mismo el módulo `nats`, mantén `jetstream.limits.default_max_consumers` en `-1`.
 
 Qué mejora:
 
@@ -3897,6 +4228,276 @@ Qué mejora:
   1.001 de un sitio con un rechazo mientras el dispositivo seguía conectado. El límite se levanta
   también allí. Actualice el agente en cualquier sitio cuyos dispositivos mantengan entre todos más
   de 1.000 suscripciones de ese tipo en su listener.
+
+##### Métricas calculadas {#v0240-calculated-metrics}
+
+Las métricas calculadas siguen desactivadas hasta que el `calculatedMetricsPerProfile` de un nivel supera
+0 (se introdujo en la `v0.23.0`). Novedades de esta versión, allí donde estén activadas:
+
+- **Creación desde la consola.** La pestaña Métricas del perfil de dispositivo tiene un selector **Tipo**
+  (Medida o Calculada) y un editor de **Fórmula** con comprobación. El borrador se compila con el mismo
+  compilador que usan la puerta de publicación y el resolvedor, y muestra su coste frente al techo de 100.
+  La [guía de usuario](../user-guide/calculated-metrics.md) le dedica un capítulo.
+- **Constantes numéricas por dispositivo.** `device.calibration` o `device["ct-ratio"]` leen un número de
+  los metadatos del dispositivo. Solo cuenta un número JSON; una cadena, un booleano, null, un objeto o
+  una lista está presente pero no es utilizable y nunca se convierte. **`device` es ahora un nombre
+  reservado**: una métrica medida con la clave `device` se lee como `m["device"]`, con su conversión de
+  tipo. Una fórmula publicada que leía esa métrica como identificador simple ya no compila: no produce
+  valor en ninguna lectura, se cuenta como `eval_error` en
+  `devicechain_devicemanagement_calcmetric_skipped_total` y se informa en el registro de
+  `device-management`. Un valor que el dispositivo envíe bajo la clave de esa métrica calculada se sigue
+  descartando.
+- **Encadenamiento.** Una fórmula puede leer otra métrica calculada, hasta cuatro niveles. Un anillo
+  (`a -> b -> a`) o una cadena de más de cuatro se rechaza al publicar, indicando la cadena.
+- **Vistas previas.** `previewRule` acepta las métricas del perfil en borrador y vuelve a derivar los
+  valores calculados con ese borrador, y un panel **Pruébalo con el historial reciente** de la consola
+  evalúa una fórmula en borrador sobre las lecturas almacenadas de un dispositivo.
+- **Relleno.** Un trabajo que calcula una métrica calculada para las lecturas almacenadas antes de que se
+  publicara su versión y escribe los valores que faltan. Consulta [Relleno del historial](#v0240-backfill).
+- **Las métricas de dispositivos Sparkplug y LwM2M ahora se calculan.** Un dispositivo que envía una
+  métrica por entrada (Sparkplug, LwM2M o un lote JSON) omitía toda fórmula de varias entradas como
+  `missing_input`, porque cada entrada era una lectura por separado. Ahora una lectura es cada medición
+  de un mismo mensaje que lleva exactamente el mismo instante, de modo que `power = voltage * current`
+  se calcula cuando ambas comparten instante. Sparkplug y LwM2M sellan al milisegundo, así que un nodo que
+  sella cada métrica por separado (valores con unos milisegundos de diferencia), o que solo informa de lo
+  que cambió, sigue sin obtener valor en una fórmula de varias entradas. Si una métrica aparece dos veces
+  en un instante, la fórmula lee la primera. Las lecturas LwM2M de un mismo paquete SenML comparten ahora
+  un único instante de recepción. La guía de usuario describe
+  [cómo se forma una lectura](../user-guide/calculated-metrics.md#what-a-calculated-metric-is).
+- **Dos muestras calculadas del mismo nombre en el mismo instante conservan una sola fila almacenada**, la
+  primera escrita.
+- **El id de un valor derivado sigue ahora a su instante en UTC con precisión de microsegundo.** Las
+  lecturas cuyo instante es exacto al microsegundo (todas las de Sparkplug y LwM2M, y las lecturas JSON
+  que envían su propia hora con hasta seis decimales) conservan los mismos ids. Una lectura con dígitos
+  por debajo del microsegundo recibe un id derivado nuevo, lo que incluye toda lectura JSON que no envía
+  su propia hora, porque la plataforma le pone la hora de recepción con nanosegundos. Si esa misma lectura
+  se almacena de nuevo tras la actualización, porque el almacenamiento de eventos la recibió de nuevo (aún no
+  estaba confirmada cuando los pods se renovaron) o el dispositivo reenvió una lectura anterior, su valor derivado se almacena como una segunda fila. Las
+  filas sin procesar no se ven afectadas y las filas antiguas no se reescriben.
+- **Un mensaje que no lleva ninguna de las entradas de una fórmula deja de contarse como omisión.** Una
+  fórmula de batería registraba una omisión `missing_input` por cada mensaje de temperatura de un
+  dispositivo que envía ambas magnitudes en mensajes separados (unas 3.600 por hora con un mensaje por
+  segundo). Ese mensaje simplemente ya no se evalúa, y un mensaje que lleva algunas de las entradas pero
+  no todas sigue contando como `missing_input`. Tras la actualización,
+  `devicechain_devicemanagement_calcmetric_skipped_total` con `missing_input` y las líneas de registro
+  correspondientes bajan, así que un panel o una alerta basados en ello leerán menos. No cambia ningún
+  valor almacenado.
+- **Las fórmulas que leen una constante de dispositivo ahora se calculan con lecturas en vivo de
+  dispositivos que se autentican con una credencial** (inicio de sesión MQTT o token de acceso, por
+  cualquier transporte). Se omitían como `missing_input` en cada una de esas lecturas, mientras que la
+  vista previa de la consola, que toma las constantes de la petición, funcionaba. Una constante que
+  edites llega a la siguiente lectura.
+- **En la consola,** la pestaña Versiones del perfil muestra, para la versión activa, si cada métrica
+  calculada está calculándose, no se está calculando o no tiene lecturas de entrada, en las últimas 24
+  horas o 7 días, contado a partir de las lecturas almacenadas; el relleno se deshabilita de antemano, con
+  el motivo, cuando la instancia no puede ejecutarlo (`calculatedMetricBackfillAvailability`); y
+  `calculatedMetricPlan` marca una métrica cuyo nombre también usa la versión activa de otro perfil
+  (`nameSharedWithOtherProfiles`).
+- **Un perfil de dispositivo registra qué versión pasó a estar activa y cuándo.**
+  `DeviceProfile.activations` lista las publicaciones y los retrocesos, de la más reciente a la más
+  antigua. El registro empieza en la actualización; un perfil publicado antes no tiene entrada hasta su
+  próxima publicación o retroceso, y una entrada ausente significa desconocido, no inactivo.
+
+##### Relleno del historial {#v0240-backfill}
+
+Un relleno añade una métrica calculada al historial almacenado antes de que se publicara la versión que
+la define, de modo que los gráficos y las exportaciones del pasado también la muestren. Está disponible
+allí donde hay métricas calculadas y no necesita nada para activarse salvo una versión publicada de un
+perfil que tenga una métrica calculada.
+
+- **Iniciar y cancelar un relleno exige `device:write`; leer y listar los trabajos exige `event:read`.**
+  Un llamante limitado a clientes es rechazado por las cuatro operaciones. La consola lo inicia desde la
+  pestaña Versiones del perfil y lo ofrece una vez cuando publicas una versión que añade una métrica
+  calculada.
+- **Un trabajo tiene límites.** Como máximo 90 días por trabajo, que terminen como muy tarde ahora, sobre
+  una versión publicada de un perfil, para hasta 1.000 dispositivos nombrados o todos los del perfil. Un
+  intervalo más antiguo de lo que permite la retención se rechaza en lugar de acortarse. Hay un trabajo
+  activo (en cola o en ejecución) por tenant.
+- **Solo añade valores y es silencioso.** Un valor almacenado nunca cambia. Un valor rellenado aparece en
+  paneles, historial y exportaciones; no cambia los últimos valores de un dispositivo y las reglas de
+  detección nunca lo ven.
+- **Una lectura que contiene una misma entrada dos veces con valores distintos se omite como
+  `ambiguous`**, mientras que el cálculo en vivo lee la primera. El trabajo cuenta cada omisión por motivo.
+- **El historial comprimido se omite** en esta versión (el almacén de eventos comprime por defecto los
+  fragmentos de más de 7 días), y el trabajo cuenta lo que omitió.
+- **Un trabajador por instancia ejecuta los trabajos, a un ritmo acotado.** `calculatedBackfill.enabled`
+  en la configuración de `event-management` tiene tres estados. Sin definir, el valor por defecto, el
+  trabajador se ejecuta cuando el pool de conexiones tiene sitio para él junto a los escritores de
+  persistencia y se queda apagado, con un aviso al arrancar que nombra los ajustes, cuando no lo tiene,
+  de modo que una instancia afinada antes de esta versión arranca como lo hacía. `true` detiene el
+  servicio al arrancar si el pool no puede alojar al trabajador. `false` apaga el trabajador, y entonces
+  iniciar un relleno se rechaza como no disponible, con el motivo. `calculatedBackfill.rowsPerSecond` es
+  20000 por defecto, de 1 a 200000, y ese valor es provisional. Consulta
+  [Relleno de métricas calculadas](./observability.md#calculated-backfill), que también lista las métricas
+  y el SQL que cancela un trabajo atascado, y [Rellenar el historial](../user-guide/calculated-metrics.md#backfilling-history)
+  en la guía de usuario.
+
+##### Mediciones: se rechazan NaN, infinito y valores enormes {#v0240-measurements}
+
+Una medición numérica que sea NaN, infinita o de 1.000.000.000.000 o más en magnitud se rechaza ahora al
+resolver el evento.
+
+- Para una métrica **declarada en el perfil**, se rechaza todo el evento como no válido. Antes, un valor de
+  1e12 o más ya se perdía del historial (la columna lo rechazaba); ahora además se mantiene fuera del
+  estado en vivo y de la evaluación de reglas, y NaN ya no se cuela por los valores Mín. y Máx. de una
+  métrica.
+- Para una **clave no declarada**, solo se descarta ese valor, con un aviso en el registro de
+  `device-management`. Antes, fallaba el almacenamiento de todo el evento.
+- Un valor NaN o infinito ya no hace que el almacenamiento de eventos reintente el mensaje durante unos
+  cinco minutos (cinco entregas) y lo informe después como un fallo de un componente posterior.
+
+##### Valores por defecto que cambiaron {#v0240-defaults}
+
+| Ajuste | Antes | Ahora | Restaurar el comportamiento anterior |
+| --- | --- | --- | --- |
+| `infrastructure.messaging.wireFormat` | `legacy` | `compact` | `legacy` (solo en instalación con el chart; consulta [Antes de actualizar](#v0240-before)) |
+| `event-processing` `derivedPublishing.maxInFlight` (nuevo) | una detección cada vez | 32 | Indica `1`. Sigue habiendo como máximo una detección pendiente por dispositivo, así que las detecciones de cada dispositivo llegan en orden. Volver a publicar sin duplicados se mantiene dentro de la ventana de duplicados de 30 minutos del stream de eventos derivados. |
+| `device-management` `raiseAlarm.workers` (nuevo, fijo, se lee al arrancar) | un cambio cada vez | `max(1, min(8, pool - resolution.workers - 4))`, es decir, 6 con el pool por defecto de 20 | Indica `1` para la ruta en línea anterior. Los cambios de una misma alarma se aplican siempre en orden. Un valor explícito se valida contra el pool de conexiones y nunca se ajusta. |
+| `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (en `functionalAreas.mcp.config`) | sin límite | 16, 20 y 40 | Súbelos; `callsBurst` no puede ser menor que `maxBatchEntries`. |
+| `event-sources` `capture.bodyCredential` (nuevo, fijo, en `functionalAreas.event-sources.config`) | ninguno: se aceptaba una credencial en el cuerpo en el bróker MQTT de la plataforma | `refuse` | Indica `strip` solo para la actualización (transitorio, está previsto eliminarlo en la `v0.26.0`). Consulta [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential). |
+| `services_machine_type` del módulo de referencia de GKE (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Indícalo explícitamente. Cambiar el tipo de máquina de un grupo existente recrea sus nodos. |
+
+- **Detección:** las detecciones de distintos dispositivos se publican en paralelo, hasta 32 a la vez, en
+  lugar de esperar cada confirmación. En un clúster de pruebas de GKE con una carga de disparos intensa de unas
+  2.500 detecciones por segundo ofrecidas, una ventana de 32 publicó 2.441 detecciones por segundo frente a
+  528 con una ventana de 1, y el retraso de la marca de agua fue de 5,1 s en lugar de 139 s. El
+  presupuesto de bytes `derivedPublishing.maxBufferedBytes` cuenta ahora todas las cargas preparadas que
+  aún no se han confirmado. Consulta [la página del motor de detección](./detection-engine.md#configuration).
+- **Alarmas:** `device-management` aplicaba cada cambio de raise-alarm en su bucle de lectura, unos cien
+  por segundo en una base de datos local, por inactivo que estuviera el servicio. Ahora los aplica en
+  `raiseAlarm.workers` carriles, y los cambios de una alarma van al mismo carril. En una prueba local con
+  8 carriles fueron entre cuatro y siete veces más. El valor por defecto deja libres cuatro conexiones del
+  pool junto a los resolvedores; ambos grupos comparten el pool de conexiones, así que dimensiónalos
+  juntos. Consulta [Qué tan rápido se aplican las alarmas](./detection-engine.md#how-fast-alarms-are-applied).
+- **MCP:** un lote que supera el tope se rechaza entero (HTTP 400, petición no válida de JSON-RPC, no se
+  ejecuta nada), y un llamante que supera la tasa recibe HTTP 429 con `Retry-After`. Un lote de N cuenta
+  como N mensajes, y el llamante es el sujeto del token verificado (tenant y correo). Consulta
+  [los límites del servidor MCP](../concepts/mcp.md#limits-and-boundaries).
+- **GKE:** en una instalación HA 3+3, los nodos de servicios T2D persistieron un 18 % más de eventos por
+  segundo (unos 17.200 frente a 14.500 y 14.700, con 18.000 ofrecidos por HTTP), y el p99 de la
+  confirmación MQTT QoS 1 a 9.000 eventos por segundo fue de 38 ms frente a 578 y 171 ms. La alternativa
+  `n2d-custom-4-8192` equivale a la forma N2 dentro del ruido y es aproximadamente un 13 % más barata por
+  nodo. `T2D_CPUS` es una cuota propia, y no todas las zonas ofrecen T2D (`us-east4-a`, `-b` y `-c` sí). El
+  grupo de bases de datos sigue siendo `n2-standard-4`.
+
+##### Confirmación MQTT con fallo cerrado {#v0240-mqtt-failclosed}
+
+`infrastructure.nats.mqttFailClosed` lo acepta ahora la configuración (la `v0.23.0` lo rechazaba) y
+**sigue desactivado por defecto**: nada cambia a menos que lo actives. Con él activado, un PUBACK QoS 1
+significa que la plataforma tiene el mensaje. El almacén de mensajes MQTT del propio bróker (`$MQTT_msgs`)
+se declara acotado y con descarte de lo nuevo, de modo que un almacén lleno rechaza una publicación QoS 1
+(el dispositivo no recibe PUBACK y la reenvía) en lugar de descartar una que ya había confirmado.
+`event-sources` reenvía desde el almacén, y el almacén se traspasa entre pods de forma segura durante una
+actualización progresiva. Un almacén casi lleno aparta a los dispositivos: `device-management` rechaza las
+conexiones MQTT nuevas en cuanto llega al 80 % y hasta que baja del 60 %, lo que un dispositivo
+ve como CONNACK con código 5 (no autorizado), así que el firmware debe seguir reintentando ante él. El
+ajuste se rechaza en un bróker que sirve también a otra instancia.
+
+Límites, descritos en las páginas de [observabilidad](./observability.md#mqtt-fail-closed) y de la
+[matriz de transportes](../reference/transport-matrix.md): QoS 0 nunca se almacena; un fallo del bróker con
+una acumulación grande no está cubierto; los PUBACK son más lentos con él activado (p99 de 336 ms a 6.000
+eventos por segundo en una prueba, frente a 35 ms con él desactivado); y el margen de memoria cerca de
+10.000 eventos por segundo es escaso en ambos modos, así que sube `nats_memory_limit` si un servidor se
+detiene por falta de memoria.
+
+##### Los streams del gateway MQTT quedan acotados en una instalación nueva {#v0240-gateway-streams}
+
+En una instalación nueva de la `v0.22.0` o la `v0.23.0`, los streams `$MQTT_msgs`, `$MQTT_out` y
+`$MQTT_qos2in` del gateway MQTT los creaba el bróker sin límite de tamaño cuando se conectaba el primer
+dispositivo MQTT, y seguían sin límite hasta que `event-sources` se reiniciaba. Un `$MQTT_msgs` sin límite
+puede llenar el volumen del bróker. Ahora cada pod de `event-sources` comprueba estos streams cada 30
+segundos y fija el techo, así que en una instancia existente en ejecución quedan acotados en cuanto
+arrancan los pods nuevos. Una alerta nueva, `MqttGatewayStreamUnbounded` (aviso, 10 minutos), se dispara
+cuando no se pudo fijar el techo, normalmente porque el bróker no tiene almacenamiento libre para
+reservarlo. Métricas nuevas: `devicechain_eventsources_mqtt_gateway_stream_unbounded{stream}` y
+`devicechain_eventsources_mqtt_gateway_stream_bounded_late_total{stream}`.
+
+#### Qué más cambió {#v0240-what-changed}
+
+##### Limitaciones conocidas {#v0240-known-limitations}
+
+- **Heredada de la `v0.23.0`:** con `mqttFailClosed` desactivado, un cambio de líder del stream de captura
+  de MQTT con mucha carga puede perder eventos QoS 1 ya confirmados sin contarlos
+  (`JetStreamCaptureLeaderChanged` avisa). El techo documentado de MQTT es de unos 6.000 eventos por
+  segundo en tres nodos de 4 vCPU, limitado por el bróker.
+- **Un fallo del bróker con una acumulación grande no lo cubre `mqttFailClosed`.** En una prueba de carga
+  de 9.000 eventos QoS 1 por segundo, antes de acelerar el lector del almacén, dos de los tres servidores
+  NATS se quedaron sin memoria y cerca de un tercio de los eventos confirmados no llegó nunca al almacén
+  de eventos. No se ha establecido dónde se perdieron. El ajuste es opcional y está desactivado por
+  defecto.
+- **El relleno omite el historial comprimido,** y su ritmo por defecto (`rowsPerSecond`) no se ha medido
+  en una instancia con carga.
+
+##### También en esta versión {#v0240-also}
+
+- **`dcctl upgrade` comprueba el montaje del almacén de objetos antes de registrar la versión nueva.** Un
+  almacén ReadWriteOnce que montaría un segundo pod se rechaza antes de registrar la versión, como ya
+  hacía `--enable-area`. El mensaje «recorded binding» ya no nombra dos veces el contexto.
+- **Una acción de regla `sendCommand` puede acotar cuánto espera su comando al dispositivo.** El
+  `expiresAfter` opcional admite una duración de `1m` a `168h`; sin él, el comando espera los 7 días por
+  defecto como antes. Un valor fuera de rango, o que no se puede leer, se rechaza al guardar o publicar la
+  regla, y una regla almacenada con un valor no válido se descarta (se cuenta con el motivo
+  `invalid_action`) en lugar de enviarse sin límite.
+- **Paneles y widgets.** La tabla de alarmas puede agrupar sus alarmas en pestañas por tipo de
+  dispositivo, cada una con su propio recuento y su mayor severidad; la tarjeta de estadística puede
+  mostrar una minigráfica de tendencia; una nueva tarjeta de recuento de flota cuenta los dispositivos de
+  un grupo, o los que requieren atención, y deja fuera los dispositivos cuyo perfil no declara la
+  medición; una tarjeta de estado del dispositivo muestra si un dispositivo está en línea, con cuándo se
+  vio por última vez, y un anillo de conexión divide un grupo en en línea, sin conexión y sin estado
+  todavía (ambos leen el estado de los dispositivos que conoce la plataforma y requieren permiso para
+  leer el estado de los dispositivos); el control deslizante de comandos tiene
+  un modo de pasos; un clic en un marcador del mapa selecciona el dispositivo, y un enlace puede abrir un
+  panel con un dispositivo enlazado; un desglose de severidad de alarmas muestra las alarmas activas por
+  severidad; el gráfico de series temporales puede marcar alarmas y comandos en su eje de tiempo, limitado
+  a las alarmas sobre la medición que dibuja con la opción `markAlarmsScope` (un gráfico nuevo empieza
+  limitado; un gráfico guardado sin la opción marca todas las alarmas del dispositivo), y dibujar una
+  línea por dispositivo de un grupo con `groupBy: device` (5 líneas por defecto, 12 como máximo); el editor de widgets ofrece las métricas de un dispositivo y marca las calculadas; y
+  **Create dashboard** en la pestaña Perfil de un tipo de dispositivo crea un borrador de panel a partir
+  de lo que declara el perfil. Todo es aditivo: un panel guardado se lee y se dibuja como antes. Consulta
+  la [guía de usuario](../user-guide/dashboards.md).
+- **Consola: los formularios ya no guardan sobre la entidad equivocada.** Tras cambiar de registro,
+  inquilino, nivel, rol o dispositivo, un formulario podía conservar los datos de la entidad anterior y
+  guardarlos sobre la nueva. Ahora se separan los datos que se muestran de los datos sobre los que se
+  actúa, en todas las consultas de la consola.
+- **GraphQL.** La mutación de relleno de posición `_empty` de `event-management` desaparece, porque el servicio ya
+  tiene una mutación real (iniciar y cancelar un relleno). Un cliente que llamara a `_empty` recibe un
+  error de campo desconocido.
+- **Panel de detección.** Dos paneles de latencia (p50 y p99 de la escritura de salud de las reglas y de
+  la confirmación de publicación derivada) se suman al panel de escritura de salud de las reglas.
+- **Una tarea que falla una y otra vez ya no llena el registro.** La línea «Maintenance pass failed» de
+  una tarea periódica, como el tick de detección que se ejecuta cada segundo, se registra una vez al
+  empezar una racha de fallos, después como mucho una vez por minuto con un recuento de las líneas
+  retenidas, y una vez cuando la tarea se recupera. Cada origen Sparkplug lleva su propia racha, así que
+  un origen que falla no se esconde tras uno sano. Siete bucles que no registraban duración, resultado ni último éxito de sus pasadas
+  ahora lo hacen, en las series existentes `devicechain_<area>_<task>_passes_total`.
+- **El acceso a streams y buckets se declara por servicio.** Cada servicio solo puede abrir los streams
+  y buckets clave-valor que tiene declarados para leer o escribir, y rechaza la llamada, nombrando el
+  stream y la solución, si pide otro. Un arranque del bróker abandonado por quien lo llamó (apagado) ya
+  no gasta aproximadamente un minuto por stream reintentando.
+- **Salud de las reglas.** Los contadores de disparos de la salud de las reglas se agrupan fuera del bucle
+  de detección (unos 2,6 ms ahorrados por detección publicada en PostgreSQL), y el panel de detección
+  gana un panel para `detect_rule_stat_write_failures_total` y la nueva
+  `detect_rule_stat_admission_contended_total`.
+- **Propiedad de dispositivos.** Las horas de los hechos de propiedad las da el reloj de la base de datos,
+  y un dispositivo que vuelve a ponerse en cola una y otra vez conserva su lugar en la cola, así que ya
+  no puede quedar relegado indefinidamente.
+- **Un consumidor duradero de fallo cerrado que se vuelve a crear empieza en la primera secuencia del
+  almacén,** de modo que un consumidor eliminado no deja mensajes confirmados sin leer (solo con
+  `mqttFailClosed` activado). La ventana de duplicados del stream de destino absorbe una repetición y, más
+  allá de ella, se almacena de nuevo.
+- **Usuarios de cliente.** Un miembro limitado a algunos clientes vuelve a ver su lista de Actualizaciones,
+  y la pestaña Usuarios del cliente, con más de 10.000 miembros, muestra los primeros 10.000 con un aviso
+  en lugar de un error.
+- **Go 1.27.3.** La cadena de herramientas pasa a Go 1.27.3, que incluye la corrección de un aviso de
+  `crypto/x509`.
+- **Sustituir la clave raíz de la instancia significa recrear la instancia.** No hay verbo de rotación;
+  consulta [Recuperación ante desastres](./disaster-recovery.md#replace-root-key-losses).
+- **Compilar desde el código fuente.** El SDK de C# se compila ahora con el SDK de .NET fijado en
+  `global.json` (8.0.425), así que una restauración bloqueada ya no se rompe cuando una imagen de runner
+  cambia de parche.
+- **Documentación.** Un capítulo de la guía de usuario sobre métricas calculadas (en inglés, español y
+  chino), y las opciones de custodia de la guía de inicio rápido, la extracción de la CA de MQTT y las
+  pruebas locales con TLS.
 
 ### v0.23.0 — usuarios de cliente con acceso acotado, y una ingesta MQTT que pierde menos {#v0230-upgrade}
 
