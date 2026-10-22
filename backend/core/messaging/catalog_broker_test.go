@@ -16,8 +16,9 @@ func initializedManager(t *testing.T, area string, deployed bool) *NatsManager {
 	t.Helper()
 	srv := runTestServer(t)
 	if deployed {
-		// A deployed manager only verifies; the broker administrator has created what it opens.
-		_, err := adminOn(t, srv).ReconcileBroker(context.Background(), streams.PlatformAreas)
+		// A deployed manager only verifies; the broker administrator has created what its area
+		// opens, and nothing of the rest.
+		_, err := adminOn(t, srv).ReconcileBroker(context.Background(), []string{area})
 		require.NoError(t, err)
 	}
 	ms := testMicroservice(t, srv, area)
