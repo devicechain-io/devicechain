@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { ArrowLeft, ClipboardPaste, Download, FlaskConical, History, Redo2, Trash2, Undo2 } from 'lucide-react';
 import { mayWrite } from '@/lib/scope';
@@ -51,6 +52,7 @@ import {
   SyntheticDataSource,
   SYNTHETIC_GENERATORS,
   TIME_RANGE_PRESETS,
+  timeRangeFromSearch,
   type CanvasDensity,
   type CanvasSizing,
   type ConcreteSelector,
@@ -63,6 +65,8 @@ import {
   type WidgetInstance,
 } from '@devicechain/dashboards';
 import {
+  type AbsoluteLabels,
+  rejectedLinkNote,
   BoundDevicesNotice,
   DashboardRenderer,
   TimeRangeBar,
@@ -328,6 +332,35 @@ function applyDatasource(
 }
 
 // A widget's name as an author recognises it: its title option, else its type.
+// The custom-window strings for the shared time-range bar.
+function timeRangeAbsoluteLabels(t: TFunction): AbsoluteLabels {
+  return {
+    custom: t('timeRangeAbsCustom'),
+    from: t('timeRangeAbsFrom'),
+    to: t('timeRangeAbsTo'),
+    apply: t('timeRangeAbsApply'),
+    cancel: t('timeRangeAbsCancel'),
+    fixed: t('timeRangeAbsFixed'),
+    backToLive: t('timeRangeAbsBackToLive'),
+    copyLink: t('timeRangeAbsCopyLink'),
+    linkCopied: t('timeRangeAbsLinkCopied'),
+    loadFailed: t('timeRangeAbsLoadFailed'),
+    dismiss: t('timeRangeAbsDismiss'),
+    incomplete: t('timeRangeAbsIncomplete'),
+    unzoned: t('timeRangeAbsUnzoned'),
+    zone: (zone, offset) => t('timeRangeAbsZone', { zone, offset }),
+    problem: {
+      unparseable: t('timeRangeAbsProblemUnparseable'),
+      order: t('timeRangeAbsProblemOrder'),
+      tooShort: t('timeRangeAbsProblemTooShort'),
+      tooLong: t('timeRangeAbsProblemTooLong'),
+      future: t('timeRangeAbsProblemFuture'),
+      tooEarly: t('timeRangeAbsProblemTooEarly'),
+    },
+    ignored: (reason, raw) => t('timeRangeAbsIgnored', { reason, raw }),
+  };
+}
+
 function widgetName(widget: WidgetInstance | undefined): string {
   if (!widget) return '';
   const title = widget.options?.title;
@@ -411,7 +444,12 @@ export function DashboardWorkspace({
   const [pasteNotices, setPasteNotices] = useState<(UnboundPaste & { name: string })[]>([]);
   // The viewer's time range and pause. Held here (not in the renderer) so the control sits in the
   // page header; it starts at the board's own default span and follows the author changing it.
-  const [timeRange, timeRangeControls] = useBoardTimeRange(working.timeRange?.defaultSeconds);
+  // A `?from=&to=` link opens the preview on that fixed window (the picker offers the same); an
+  // unusable one is ignored with a note in the bar. Read once, like the rest of the range state.
+  const [rangeLink] = useState(() => timeRangeFromSearch(window.location.search));
+  const [timeRange, timeRangeControls] = useBoardTimeRange(working.timeRange?.defaultSeconds, {
+    absolute: rangeLink.absolute,
+  });
   // The view-driven selection overlay (ADR-039 selection amendment): an alarm-originator
   // drill (and, in PR2b, a context-selector) accumulates slot→binding picks here.
   // Cleared on mode switch so the author sees their own bindings, not a stale drill.
@@ -896,19 +934,23 @@ export function DashboardWorkspace({
     </div>
   );
 
+  const timeLabels = {
+    range: t('timeRangeLabel'),
+    pause: t('timeRangePause'),
+    resume: t('timeRangeResume'),
+    paused: t('timeRangePaused'),
+    pausedAt: (time: string) => t('timeRangePausedAt', { time }),
+    actionsLive: t('timeRangeActionsLive'),
+    absolute: timeRangeAbsoluteLabels(t),
+  };
+
   const viewActions = (
     <div className="flex flex-wrap items-center justify-end gap-2">
       <TimeRangeBar
         state={timeRange}
         controls={timeRangeControls}
-        labels={{
-          range: t('timeRangeLabel'),
-          pause: t('timeRangePause'),
-          resume: t('timeRangeResume'),
-          paused: t('timeRangePaused'),
-          pausedAt: (time) => t('timeRangePausedAt', { time }),
-          actionsLive: t('timeRangeActionsLive'),
-        }}
+        labels={timeLabels}
+        notice={rangeLink.rejected ? rejectedLinkNote(rangeLink.rejected, timeLabels) : undefined}
       />
       {!preview && <WorkspaceConnection hub={liveHub} />}
       {statusEl}

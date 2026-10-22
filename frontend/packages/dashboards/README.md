@@ -124,7 +124,10 @@ overlap, so there is no stacking order to manage.
 
 A board has a time range: `TIME_RANGE_PRESETS` (15 minutes to 7 days),
 `initialTimeRange`, `pauseRange` / `resumeRange` and `rangeWindow` manage it, and
-`timeRangeFromSearch` reads the `range` and `paused` URL parameters. Its density
+`timeRangeFromSearch` reads the `range`, `paused` and `from` / `to` URL parameters. A fixed
+from-to window is an additive variant of the same state: `absoluteRange` builds it and
+`TimeRangeState.absolute` marks it, while `paused`, `pausedAt` and `spanSeconds` still describe the
+window as a frozen rolling range, so code that only knows rolling ranges keeps working. Its density
 (`CANVAS_DENSITIES`: `compact`, `comfortable`, `wall`) scales every text and
 spacing size by `DENSITY_SCALE`; a host may override the board's own value at
 view time.

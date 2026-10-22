@@ -12,10 +12,16 @@
 // canvas and binds each to the hub. The shared viewer for the console + external apps.
 export { DashboardRenderer, resolveWidgets, widgetSubjectLabel, type DashboardRendererProps } from './dashboard-renderer';
 export {
+  AbsoluteIndicator,
+  DEFAULT_ABSOLUTE_LABELS,
   DEFAULT_TIME_RANGE_LABELS,
   PausedIndicator,
   TimeRangeBar,
+  absoluteLinkFor,
+  formatAbsoluteRange,
+  rejectedLinkNote,
   useBoardTimeRange,
+  type AbsoluteLabels,
   type TimeRangeControls,
   type TimeRangeLabels,
 } from './time-range-bar';

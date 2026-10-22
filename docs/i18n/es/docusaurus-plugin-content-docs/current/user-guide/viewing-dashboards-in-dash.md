@@ -109,6 +109,27 @@ en pausa, igual que la lista de comandos recientes que muestran; por eso la insi
 dice también «los comandos se siguen enviando»: un comando enviado desde un panel congelado sale en
 el acto.
 
+### Intervalo personalizado {#custom-range}
+
+**Intervalo personalizado** abre un pequeño panel con los campos **Desde** y **Hasta**, para
+mirar un tramo fijo del pasado, como las dos horas en torno a un incidente. Los campos usan tu zona
+horaria, y el panel la muestra («Las horas están en Europe/Madrid (UTC+02:00)») para que «02:00» no
+sea nunca ambiguo. **Aplicar** muestra el intervalo; se rechaza, con el motivo en el mismo sitio,
+cuando el inicio no es anterior al fin, el intervalo dura menos de un minuto o más de 31 días, el fin
+está en el futuro o el inicio es anterior al año 2000.
+
+Mientras se muestra un intervalo personalizado, la cabecera indica **Intervalo fijo** con ambos
+extremos y su zona horaria, y el panel no sigue los datos nuevos: gráficos, valores y contadores se
+quedan en ese intervalo, igual que en pausa. Nada está en pausa, así que no hay insignia **En
+pausa**, y los comandos se siguen enviando. **Volver a en vivo**, o cualquiera de los botones de 15m
+a 7d, devuelve el panel a en vivo. **Copiar enlace** copia una dirección que abre el mismo intervalo
+a cualquiera, con las horas escritas en UTC.
+
+Un gráfico que sigue el intervalo del panel dibuja ese intervalo. Un gráfico cuyo autor fijó su
+propio lapso lo conserva, contado hacia atrás desde el final del intervalo, y lo muestra en su
+esquina como siempre. Un widget personalizado escrito antes de los intervalos personalizados ve el
+intervalo como un panel congelado y dibuja los datos correctos, sin cambios.
+
 ## Modo quiosco y enlaces para pantallas murales
 
 La dirección del visor puede llevar parámetros, para que un marcador o una pantalla mural abra el
@@ -127,10 +148,16 @@ panel adecuado en el modo adecuado:
 | `density` | `compact`, `comfortable` o `wall` | Escala el texto y el espaciado del panel: `compact` lo reduce y `wall` lo amplía, para una pantalla que se lee desde el otro lado de una sala. Sustituye la densidad con la que se guardó el panel. |
 | `range` | `15m`, `1h`, `6h`, `24h` o `7d` | Abre el panel con ese intervalo de tiempo en lugar del propio del panel. |
 | `paused` | `1` | Abre el panel congelado en el momento en que carga, con la insignia **En pausa** visible. Cualquier otro valor lo abre en vivo. |
+| `from`, `to` | dos horas, cada una en ISO 8601 con zona, como `2026-10-22T02:00:00Z` o `2026-10-22T04:00:00+02:00` | Abre el panel en ese intervalo fijo en lugar de uno en vivo; consulta [Intervalo personalizado](#custom-range). Hacen falta las dos. Una hora sin zona se rechaza, porque «02:00» es un momento distinto en cada lugar. Prevalece sobre `range` y `paused`. |
 | `bind.<slot>` | un token de dispositivo | Abre el panel con ese dispositivo elegido para el slot. Consulta [Enlazar a un panel con un dispositivo elegido](#linking-to-a-device). |
 
 Si un parámetro lleva un valor que el visor no reconoce, se ignora, y los demás parámetros se siguen
 aplicando.
+
+Un par `from` y `to` que no se puede usar (solo uno de los dos, sin zona, el inicio no anterior al
+fin, un intervalo fuera del rango de un minuto a 31 días o un fin en el futuro) se ignora, y una
+nota bajo los controles del intervalo de tiempo indica los valores y el motivo, así que el panel
+nunca muestra algo distinto en silencio. El panel se abre en vivo.
 
 En modo quiosco el panel ocupa toda la página. El indicador de conexión está en la esquina superior
 izquierda. El único control es **Pantalla completa**, en la esquina superior derecha, que pasa a ser **Salir de pantalla completa**; se oculta si el navegador no

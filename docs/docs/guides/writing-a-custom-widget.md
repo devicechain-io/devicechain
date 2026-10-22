@@ -312,6 +312,12 @@ hour. `withinSpan(samples, spanSeconds, end)` drops the samples older than the s
 is paused the host holds every data channel except `control` at the snapshot on screen, so your
 widget needs no pause logic of its own.
 
+A board can also show a fixed from-to window. The range your widget reads then looks like a frozen
+rolling one: `paused` is `true`, `pausedAt` is the end of the window and `spanSeconds` is its
+length, so a widget that only understands rolling ranges draws exactly the window, already off the
+live tail, and needs no change. A widget that wants to say "fixed window" reads the optional
+`absolute` field (`fromMs` and `toMs`, epoch milliseconds), which is present only then.
+
 `formatValue(value)` with no precision prints at most 3 decimals, or 4 significant digits below 1;
 pass a precision to fix the number of decimals.
 

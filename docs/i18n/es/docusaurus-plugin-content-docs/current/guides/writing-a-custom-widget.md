@@ -332,6 +332,13 @@ lugar de suponer una hora. `withinSpan(samples, spanSeconds, end)` descarta las 
 que el lapso. Mientras el panel está en pausa, el anfitrión mantiene todos los canales de datos salvo
 `control` en la instantánea que hay en pantalla, así que tu widget no necesita lógica de pausa propia.
 
+Un panel también puede mostrar un intervalo fijo de fecha a fecha. El intervalo que lee tu widget se
+parece entonces a uno móvil congelado: `paused` es `true`, `pausedAt` es el final del intervalo y
+`spanSeconds` su duración, así que un widget que solo entiende intervalos móviles dibuja exactamente
+ese intervalo, ya sin seguir los datos en vivo, y no necesita cambios. Un widget que quiera indicar
+«intervalo fijo» lee el campo opcional `absolute` (`fromMs` y `toMs`, milisegundos de época), que
+solo existe en ese caso.
+
 `formatValue(value)` sin precisión muestra como máximo 3 decimales, o 4 dígitos significativos por
 debajo de 1; pasa una precisión para fijar el número de decimales.
 

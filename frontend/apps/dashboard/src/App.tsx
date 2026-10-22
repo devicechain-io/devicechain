@@ -32,8 +32,11 @@ import {
   createEntityLister,
   effectiveBindings,
   withBindParams,
+  type AbsoluteLinkRejection,
+  type AbsoluteRange,
 } from '@devicechain/dashboards';
 import {
+  AbsoluteIndicator,
   BoundDevicesNotice,
   DashboardRenderer,
   MapRuntimeProvider,
@@ -41,13 +44,16 @@ import {
   TenantBasemapProvider,
   TimeRangeBar,
   describeBoundDevicesProblems,
+  rejectedLinkNote,
   useBoardTimeRange,
   useBoundDevices,
   useDashboardHub,
   useResolvedBindings,
   useSlotCandidates,
+  type AbsoluteLabels,
 } from '@devicechain/widgets';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
 import type { Basemap } from '@devicechain/client';
@@ -213,6 +219,8 @@ export default function App() {
       density={params.density}
       range={params.range}
       paused={params.paused}
+      absolute={params.absolute}
+      rejectedWindow={params.rejected}
       theme={theme}
       onToggleTheme={toggleTheme}
     />
@@ -797,6 +805,35 @@ function ListItemButton({
 // Render the parsed definition read-only, its slots resolved through the effective
 // manifest. VIEW-ONLY — no edit mode, no save, no react-rnd.
 
+// The custom-window strings for the shared time-range bar.
+function absoluteLabels(t: TFunction): AbsoluteLabels {
+  return {
+    custom: t('view:absCustom'),
+    from: t('view:absFrom'),
+    to: t('view:absTo'),
+    apply: t('view:absApply'),
+    cancel: t('view:absCancel'),
+    fixed: t('view:absFixed'),
+    backToLive: t('view:absBackToLive'),
+    copyLink: t('view:absCopyLink'),
+    linkCopied: t('view:absLinkCopied'),
+    loadFailed: t('view:absLoadFailed'),
+    dismiss: t('view:absDismiss'),
+    incomplete: t('view:absIncomplete'),
+    unzoned: t('view:absUnzoned'),
+    zone: (zone, offset) => t('view:absZone', { zone, offset }),
+    problem: {
+      unparseable: t('view:absProblemUnparseable'),
+      order: t('view:absProblemOrder'),
+      tooShort: t('view:absProblemTooShort'),
+      tooLong: t('view:absProblemTooLong'),
+      future: t('view:absProblemFuture'),
+      tooEarly: t('view:absProblemTooEarly'),
+    },
+    ignored: (reason, raw) => t('view:absIgnored', { reason, raw }),
+  };
+}
+
 // Exported for its behaviour test (view-bindings.test.tsx); App is the only render site.
 export function View({
   loaded,
@@ -808,6 +845,8 @@ export function View({
   density = null,
   range = null,
   paused = false,
+  absolute,
+  rejectedWindow,
   theme,
   onToggleTheme,
 }: {
@@ -832,6 +871,10 @@ export function View({
   range?: number | null;
   /** The ?paused=1 deep link: open frozen at the moment of loading. */
   paused?: boolean;
+  /** The ?from=&to= deep link, validated: a fixed window that wins over range and paused. */
+  absolute?: AbsoluteRange;
+  /** The ?from=&to= values that were unusable; the header says the link was ignored. */
+  rejectedWindow?: AbsoluteLinkRejection;
   theme?: DashTheme;
   onToggleTheme?: () => void;
 }) {
@@ -883,6 +926,7 @@ export function View({
   const [timeRange, timeRangeControls] = useBoardTimeRange(definition.timeRange?.defaultSeconds, {
     spanSeconds: range ?? undefined,
     paused,
+    absolute,
   });
   const timeLabels = {
     range: t('view:timeRange'),
@@ -891,7 +935,9 @@ export function View({
     paused: t('view:paused'),
     pausedAt: (time: string) => t('view:pausedAt', { time }),
     actionsLive: t('view:actionsLive'),
+    absolute: absoluteLabels(t),
   };
+  const rangeNotice = rejectedWindow ? rejectedLinkNote(rejectedWindow, timeLabels) : undefined;
 
   const title = definition.title || t('view:untitled');
   const basemap = useTenantBasemapQuery();
@@ -910,7 +956,11 @@ export function View({
             {/* chrome=0 hides it only while the board is live: a dropped board still says so. */}
             <ConnectionStatus hub={hub} onlyWhenDown={!kioskChrome} />
             {/* A wall board has no controls, but it must never be frozen without saying so. */}
-            {timeRange.paused && <PausedIndicator pausedAt={timeRange.pausedAt} labels={timeLabels} />}
+            {timeRange.absolute ? (
+              <AbsoluteIndicator absolute={timeRange.absolute} labels={timeLabels} />
+            ) : (
+              timeRange.paused && <PausedIndicator pausedAt={timeRange.pausedAt} labels={timeLabels} />
+            )}
           </div>
           {kioskChrome && <FullscreenButton />}
         </>
@@ -926,7 +976,7 @@ export function View({
           }}
         >
           <div style={{ flex: '1 1 auto', fontWeight: 600 }}>{title}</div>
-          <TimeRangeBar state={timeRange} controls={timeRangeControls} labels={timeLabels} />
+          <TimeRangeBar state={timeRange} controls={timeRangeControls} labels={timeLabels} notice={rangeNotice} />
           <ConnectionStatus hub={hub} />
           <LocaleSwitcher />
           {onToggleTheme && (

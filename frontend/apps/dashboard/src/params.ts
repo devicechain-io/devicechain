@@ -13,6 +13,11 @@
 //   theme      dark | light
 //   density    compact | comfortable | wall
 //   range      15m | 1h | 6h | 24h | 7d  the time range the board opens at
+//   from, to   an ABSOLUTE window, both required: ISO 8601 WITH a zone (`Z` or `+02:00`), e.g.
+//              from=2026-10-22T02:00:00Z&to=2026-10-22T04:00:00Z. Needs from < to, a span of one
+//              minute to 31 days, and an end that is not in the future. The live tail is off while
+//              it shows, and it wins over range/paused. Unusable values are ignored WITH a note
+//              on the page (not only a console warning), and the board opens live.
 //   paused     1  open frozen at the moment of loading (any other value opens live)
 //
 // A parameter that is absent is simply unset. One that is PRESENT BUT INVALID is ignored
@@ -20,7 +25,13 @@
 // (with the default for that one setting) rather than a blank screen nobody is there to read.
 
 import { isValidToken } from '@devicechain/client';
-import { TIME_RANGE_PRESETS, parseRangeParam } from '@devicechain/dashboards';
+import {
+  TIME_RANGE_PRESETS,
+  parseAbsoluteParams,
+  parseRangeParam,
+  type AbsoluteLinkRejection,
+  type AbsoluteRange,
+} from '@devicechain/dashboards';
 
 export type DashTheme = 'dark' | 'light';
 export type DashDensity = 'compact' | 'comfortable' | 'wall';
@@ -37,6 +48,10 @@ export interface DashParams {
   // Open frozen. Only `paused=1` freezes: a malformed value opens LIVE, never frozen on an
   // instant nobody chose.
   paused: boolean;
+  // A valid `from`+`to` window; absent otherwise.
+  absolute?: AbsoluteRange;
+  // `from`/`to` were given but unusable: why, so the page can say the link was ignored.
+  rejected?: AbsoluteLinkRejection;
 }
 
 const THEMES: readonly DashTheme[] = ['dark', 'light'];
@@ -102,5 +117,11 @@ export function parseDashParams(
     else if (p !== '0') bad('paused', p, '1 or 0');
   }
 
-  return { dashboard, kiosk, kioskChrome, theme, density, range, paused };
+  const link = parseAbsoluteParams(q.get('from'), q.get('to'));
+  if (link.rejected) bad('from/to', `${link.rejected.from}..${link.rejected.to}`, `a zoned ISO 8601 window (${link.rejected.reason})`);
+
+  const got: DashParams = { dashboard, kiosk, kioskChrome, theme, density, range, paused };
+  if (link.absolute) got.absolute = link.absolute;
+  if (link.rejected) got.rejected = link.rejected;
+  return got;
 }

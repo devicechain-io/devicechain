@@ -101,6 +101,26 @@ Pause freezes what the board shows, not what it does. Command buttons keep worki
 and so does the list of recent commands they show, which is why the **Paused** badge also reads
 "commands still send": a command sent from a frozen board goes out at once.
 
+### Custom range {#custom-range}
+
+**Custom range** opens a small panel with a **From** and a **To** field, for looking at a fixed
+stretch of the past, such as the two hours around an incident. The fields use your own time zone,
+and the panel prints it ("Times are in Europe/Berlin (UTC+02:00)") so "02:00" is never ambiguous.
+**Apply** shows the window; it is refused, with the reason shown in place, when the start is not
+before the end, the window is shorter than a minute or longer than 31 days, the end is in the
+future, or the start is before the year 2000.
+
+While a custom range shows, the header says **Fixed window** with both ends and their time zone,
+and the board does not follow new data: charts, values and counts stay on that window, the way they
+do when paused. Nothing is paused, so there is no **Paused** badge, and commands still send. **Back
+to live**, or any of the 15m to 7d buttons, returns to a live board. **Copy link** copies an
+address that opens the same window for anyone, with the times written in UTC.
+
+A chart that follows the board's range draws the window. A chart whose author pinned its own span
+keeps that span, counted back from the end of the window, and shows it in its corner as usual. A
+custom widget written before custom ranges existed sees the window as a frozen board and draws the
+right data, with no change.
+
 ## Kiosk mode and links for wall displays
 
 The viewer's address can carry parameters, so a bookmark or a wall display opens the right board in
@@ -119,10 +139,16 @@ the right mode:
 | `density` | `compact`, `comfortable` or `wall` | Scales the board's text and spacing: `compact` is smaller, `wall` is larger, for a display read from across a room. Overrides the density the board was saved with. |
 | `range` | `15m`, `1h`, `6h`, `24h` or `7d` | Opens the board on that time range instead of the board's own. |
 | `paused` | `1` | Opens the board frozen at the moment it loads, with the **Paused** badge showing. Any other value opens it live. |
+| `from`, `to` | two times, each ISO 8601 with a zone, such as `2026-10-22T02:00:00Z` or `2026-10-22T04:00:00+02:00` | Opens the board on that fixed window instead of a live range; see [Custom range](#custom-range). Both are needed. A time with no zone is refused, because "02:00" means a different moment in each place. It wins over `range` and `paused`. |
 | `bind.<slot>` | a device token | Opens the board with that device chosen for the slot. See [Linking to a board with a device chosen](#linking-to-a-device). |
 
 A parameter with a value the viewer does not recognize is ignored, and the other parameters still
 apply.
+
+A `from` and `to` pair that cannot be used (only one of them, no zone, the start not before the end,
+a window outside one minute to 31 days, or an end in the future) is ignored, and a note under the
+time range controls names the values and the reason, so the board is never silently showing
+something else. The board opens live.
 
 In kiosk mode the board takes the whole page. The connection indicator sits in the top left corner.
 The only control is **Fullscreen** in the top right corner, which turns into **Exit fullscreen**; it
