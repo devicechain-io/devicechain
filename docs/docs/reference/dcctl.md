@@ -77,6 +77,7 @@ dcctl bootstrap <provider> <instance> [flags]
       --restore-tsdb-at string                      stop the event store's recovery at this RFC3339 timestamp instead of replaying the whole archive. For the disaster where the data was destroyed correctly — a mistaken delete — so pick a moment strictly before the damage. Needs --restore-tsdb-from
       --restore-tsdb-from string                    disaster recovery: recover the EVENT store from this archive path (the serverName inside the backup bucket, e.g. dc-tsdb) instead of initialising an empty database. 🔴 Only takes effect when the cluster is CREATED — recover by destroying the instance and rebuilding it with this set, not by re-running against a live one. When the backups are in the cluster's in-cluster object store, destroy with --keep-backups: a destroy without it deletes the archive this reads
       --skip-preflight                              skip the local-system preflight checks
+      --values stringArray                          a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                              image version/tag to deploy (default: the published release version, or 'dev' with --build)
   -y, --yes                                         assume yes for prompts
 ```
@@ -1206,6 +1207,11 @@ It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'
 recorded. Use it to move versions, not to reconfigure.
 
+Operator tuning is the exception, and it is carried: a values overlay given to
+'dcctl bootstrap --values' or to this command is recorded on the instance and applied
+again by every later upgrade. '--values \<file>' replaces the recorded overlay,
+'--reset-values' removes it, and --dry-run prints what would change in it.
+
 The broker and event store are applied from this machine's OpenTofu state for the
 instance, in ~/.devicechain/instances/\<instance>/, so the upgrade needs 'tofu' on
 PATH and runs where the instance was bootstrapped. It plans first, prints what
@@ -1232,6 +1238,9 @@ when they are in a terraform.tfvars beside its state
 
   # Move only the services, leaving the broker and event store as they are
   dcctl upgrade local devicechain --version v1.3.0 --skip-infrastructure
+
+  # Tune the instance; later upgrades keep applying it without --values
+  dcctl upgrade local devicechain --values tuning.yaml
 ```
 
 ```
@@ -1248,7 +1257,9 @@ dcctl upgrade <provider> <instance> [flags]
       --kube-context string             kube-context to target (default: the cluster recorded at bootstrap; a different context is refused)
       --mqtt-body-credential string     TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. Planned for removal in v0.26.0
       --registry string                 image registry to pull from (default: ghcr.io/devicechain-io)
+      --reset-values                    remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values
       --skip-infrastructure             move only the services: leave this instance's message broker and event store on the configuration they were built with
+      --values stringArray              a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes
       --version string                  release version to upgrade to (default: this dcctl's pinned version)
 ```
 

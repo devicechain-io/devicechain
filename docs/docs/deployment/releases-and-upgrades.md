@@ -336,6 +336,10 @@ One thing is deliberately outside this command as well: it does not touch the da
 beyond letting the services run their own migrations, and it never resizes a volume.
 :::
 
+### Operator tuning is carried {#upgrade-tuning}
+
+An upgrade does not change an instance's shape, but it does keep the tuning you gave it. A values file passed to `dcctl bootstrap --values` or `dcctl upgrade --values` is recorded on the instance and applied again by every later upgrade; `--reset-values` removes it. See [Tuning an Instance](./tuning-an-instance.md).
+
 ### What an upgrade applies to the infrastructure {#upgrade-infrastructure}
 
 Before it moves the services, `dcctl upgrade` applies the instance's OpenTofu configuration,

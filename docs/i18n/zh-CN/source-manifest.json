@@ -123,12 +123,16 @@
       "translationSha256": "1ad012cc4b9390f424a4d451991bfebb6c932de904770c8f4a0c5390208e8ffb"
     },
     "deployment/releases-and-upgrades.md": {
-      "sourceSha256": "bd817f8db74596ddb88006c45b9ad059e032b5a6a7926c9a82d35d6d7b8baef5",
-      "translationSha256": "15b72597c52b1bdae4db11e7955c11547a1ebcdae855d4ca94163abd1f736752"
+      "sourceSha256": "f39626a0bb1faa83c373367dd35b54726eb4b989ed02ce4a1c9bffe5a904c925",
+      "translationSha256": "cb7108c639d4c8e19387088e46008bcd1dfbfd5963daec7e7e84dc5d1de597ab"
     },
     "deployment/tenant-deletion.md": {
       "sourceSha256": "f9142e047073c0aca1ea41eb941d66035163b6a5c12bd2a79757449af30629fc",
       "translationSha256": "1360a981574dd6e834bbe927ff4b2efadbf94cebb5f4f0d951d1a66fa0adb58f"
+    },
+    "deployment/tuning-an-instance.md": {
+      "sourceSha256": "c53aceee48c5646f9dcdb637f4487d3e78939880d89e8d4333a23262afd4176a",
+      "translationSha256": "892703475e7bfefcc842c9ce3cc3ebb229cc36a98f835faadc0bb1c12f778861"
     },
     "deployment/versioning-policy.md": {
       "sourceSha256": "020237577f7bdfce6fc19be5590945e99a1e14d185a4b59ee813db6d6c8a8e9f",

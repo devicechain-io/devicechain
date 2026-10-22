@@ -540,7 +540,23 @@ func checkObjectStoreMountableWith(ctx context.Context, st *State, tweak func(ma
 	if err != nil {
 		return fmt.Errorf("loading the chart to check the object store: %w", err)
 	}
-	authoring := helmValues(st)
+	authoring := renderOnlyAuthoring(st)
+	if tweak != nil {
+		tweak(authoring)
+	}
+	manifest, err := renderChartClientSide(ctx, ch, authoring)
+	if err != nil {
+		return fmt.Errorf("the chart refuses this object store: %w", err)
+	}
+	return refuseSharedReadWriteOnce(manifest)
+}
+
+// renderOnlyAuthoring is the authoring values a pre-flight render uses: what a real run
+// would render (dcctl's values with the operator's overlay over them), with the values the
+// render step has not settled yet filled so the chart's schema accepts them. Nothing
+// rendered from it is applied.
+func renderOnlyAuthoring(st *State) map[string]interface{} {
+	authoring := authoringValues(st)
 	inst, _ := authoring["instance"].(map[string]interface{})
 	cfg, _ := inst["config"].(map[string]interface{})
 	if cfg == nil {
@@ -563,14 +579,7 @@ func checkObjectStoreMountableWith(ctx context.Context, st *State, tweak func(ma
 			img["tag"] = "render-only"
 		}
 	}
-	if tweak != nil {
-		tweak(authoring)
-	}
-	manifest, err := renderChartClientSide(ctx, ch, authoring)
-	if err != nil {
-		return fmt.Errorf("the chart refuses this object store: %w", err)
-	}
-	return refuseSharedReadWriteOnce(manifest)
+	return authoring
 }
 
 // refuseSharedReadWriteOnce counts the pods in a rendered manifest that mount the store volume

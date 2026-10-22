@@ -82,6 +82,13 @@ var dispositions = map[string]disposition{
 	"object-store-s3-path-style":         declared,
 	"object-store-s3-credentials-secret": declared,
 
+	// values is the operator's tuning overlay. It is recorded in the declaration -- as the
+	// core.devicechain.io/values-overlay annotation rather than a spec field, because it is
+	// free-form tuning bounded by an allowlist the CLI owns, not a part of the instance's
+	// shape that the operator and CRD schema need to understand. `dcctl upgrade` reads it back
+	// from there, which is what makes it survive a version bump from any machine.
+	"values": declared,
+
 	// --- properties of the run ---
 	"dry-run":                 runScoped,
 	"yes":                     runScoped,

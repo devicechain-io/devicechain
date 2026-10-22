@@ -282,7 +282,7 @@ func helmInstall(ctx context.Context, st *State) error {
 // st must already carry what carryForwardFromRelease reads out of previous: some of it
 // is an input to helmValues.
 func releaseValues(ctx context.Context, ch *chart.Chart, st *State, previous map[string]interface{}) (map[string]interface{}, []byte, error) {
-	authoring := helmValues(st)
+	authoring := authoringValues(st)
 	doc, err := composeInstanceConfig(ctx, ch, authoring)
 	if err != nil {
 		return nil, nil, err

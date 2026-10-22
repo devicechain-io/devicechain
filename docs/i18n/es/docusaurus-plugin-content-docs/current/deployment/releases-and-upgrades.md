@@ -355,6 +355,10 @@ datos más allá de dejar que los servicios ejecuten sus propias migraciones, y 
 tamaño de un volumen.
 :::
 
+### El ajuste del operador se conserva {#upgrade-tuning}
+
+Una actualización no cambia la forma de una instancia, pero sí conserva el ajuste que le diste. Un archivo de valores pasado a `dcctl bootstrap --values` o a `dcctl upgrade --values` se registra en la instancia y lo aplica de nuevo cada actualización posterior; `--reset-values` lo elimina. Consulta [Ajustar una instancia](./tuning-an-instance.md).
+
 ### Qué aplica una actualización a la infraestructura {#upgrade-infrastructure}
 
 Antes de mover los servicios, `dcctl upgrade` aplica la configuración de OpenTofu de la

@@ -154,6 +154,16 @@ type State struct {
 	// set, so an upgrade run without the flag leaves the release's value to be carried
 	// forward (see carriedValuePaths) and an explicit value always wins. See mqttbodycredential.go.
 	MqttBodyCredential string
+	// ValuesOverlay is the operator's tuning overlay in effect for this run (--values, or the
+	// one the declaration already records), merged over what dcctl computes. See
+	// valuesoverlay.go. Nil means none.
+	ValuesOverlay map[string]interface{}
+	// ValuesOverlayRecorded is the overlay the declaration holds NOW, so a run can say what
+	// it changes and write only when it changes something.
+	ValuesOverlayRecorded map[string]interface{}
+	// ValuesOverlayUnreadable says the declaration's record could not be read and this run
+	// replaces it (--values or --reset-values), so it is rewritten whatever the diff says.
+	ValuesOverlayUnreadable bool
 	// ObjectStore is the settled object store (--object-store): nil for none. A bootstrap
 	// resolves it from the flags and the provider's default; an upgrade reads it back from
 	// the declaration, which is how it survives a re-run. See objectstore.go.

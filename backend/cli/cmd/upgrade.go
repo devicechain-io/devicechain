@@ -21,6 +21,9 @@ var (
 	upgradeSkipInfra   bool
 
 	upgradeMqttBodyCredential string
+
+	upgradeValues      []string
+	upgradeResetValues bool
 )
 
 // upgradeCmd moves a live instance onto a release's version. It began as the half of
@@ -61,6 +64,11 @@ It does not change an instance's shape. The profile, topology and functional
 areas come from the instance's own declaration, which is what 'dcctl bootstrap'
 recorded. Use it to move versions, not to reconfigure.
 
+Operator tuning is the exception, and it is carried: a values overlay given to
+'dcctl bootstrap --values' or to this command is recorded on the instance and applied
+again by every later upgrade. '--values <file>' replaces the recorded overlay,
+'--reset-values' removes it, and --dry-run prints what would change in it.
+
 The broker and event store are applied from this machine's OpenTofu state for the
 instance, in ~/.devicechain/instances/<instance>/, so the upgrade needs 'tofu' on
 PATH and runs where the instance was bootstrapped. It plans first, prints what
@@ -85,7 +93,10 @@ when they are in a terraform.tfvars beside its state
   dcctl upgrade local devicechain --version v1.3.0 --dry-run
 
   # Move only the services, leaving the broker and event store as they are
-  dcctl upgrade local devicechain --version v1.3.0 --skip-infrastructure`,
+  dcctl upgrade local devicechain --version v1.3.0 --skip-infrastructure
+
+  # Tune the instance; later upgrades keep applying it without --values
+  dcctl upgrade local devicechain --values tuning.yaml`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// The provider is resolved rather than ignored: it is validated here, so a
@@ -99,6 +110,15 @@ when they are in a terraform.tfvars beside its state
 		if err != nil {
 			return fmt.Errorf("--mqtt-body-credential: %w", err)
 		}
+		if upgradeResetValues && len(upgradeValues) > 0 {
+			return fmt.Errorf("--values replaces the recorded overlay and --reset-values removes it; give one")
+		}
+		var valuesOverlay map[string]interface{}
+		if len(upgradeValues) > 0 {
+			if valuesOverlay, err = bootstrap.LoadValuesOverlay(upgradeValues); err != nil {
+				return err
+			}
+		}
 		opts := bootstrap.UpgradeOptions{
 			Options: bootstrap.Options{
 				Instance:      args[1],
@@ -108,6 +128,8 @@ when they are in a terraform.tfvars beside its state
 				ImageVersion:  upgradeVersion,
 
 				MqttBodyCredential: mqttBodyCredential,
+				ValuesOverlay:      valuesOverlay,
+				ResetValues:        upgradeResetValues,
 			},
 			EscrowFile:           upgradeEscrowFile,
 			EscrowPassphraseFile: upgradeEscrowPass,
@@ -127,6 +149,8 @@ func init() {
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
 	upgradeCmd.Flags().StringVar(&upgradeMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
+	upgradeCmd.Flags().StringArrayVar(&upgradeValues, "values", nil, valuesUsage)
+	upgradeCmd.Flags().BoolVar(&upgradeResetValues, "reset-values", false, "remove the tuning overlay recorded on the instance: it returns to the values dcctl computes. Cannot be combined with --values")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 
 	rootCmd.AddCommand(upgradeCmd)

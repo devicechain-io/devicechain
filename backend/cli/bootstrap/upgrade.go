@@ -189,6 +189,11 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	}
 	fmt.Printf("  %s %s\n", color.WhiteString("Services:"),
 		color.GreenString(fmt.Sprintf("%s/<area>:%s", st.ImageRegistry, st.ImageVersion)))
+	// The operator's tuning, rendered with the chart before anything is written.
+	if err := precheckValuesOverlay(ctx, st); err != nil {
+		return err
+	}
+	sayValuesOverlay(st)
 	// 🔴 THE OPERATOR IS NOT LISTED AS SOMETHING THIS RUN WILL MOVE, because it is
 	// not. hydrateUpgradeState has already refused unless the cluster's operator is
 	// the one this build expects; what this verb moves is the instance.
@@ -260,6 +265,15 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	if opts.DryRun {
 		sayUpgradeDryRun(st)
 		return nil
+	}
+
+	// 🔴 THE OVERLAY IS RECORDED BEFORE THE MOVE, for the reason the version is: a run that
+	// dies half-way leaves the declaration naming the tuning this run was asked for, and the
+	// flagless re-run finishes the job instead of rolling the moved half back.
+	if valuesOverlayChanges(st) {
+		if err := recordValuesOverlay(ctx, dyn, opts.Instance, st.ValuesOverlay); err != nil {
+			return err
+		}
 	}
 
 	// 🔴 UPGRADE TAKES THE CLUSTER LOCK TOO. It no longer applies the cluster-scoped
@@ -452,6 +466,9 @@ func sayUpgradeDryRun(st *State) {
 	}
 	wouldDo("recompose the instance configuration document from this release's chart, " +
 		"keeping every credential the instance is running on")
+	if len(st.ValuesOverlay) > 0 {
+		wouldDo("apply the values overlay over the computed values")
+	}
 	wouldDo("upgrade the instance's Helm release")
 	// A rehearsal that hid this would rehearse a different run: see below.
 	warnPreGeneratedSuperuser(st)
