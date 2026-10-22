@@ -79,7 +79,7 @@ const (
 	affinityLogEvery = 10 * time.Minute
 
 	// affinityCensusSegment is the control subject replicas of one area answer a census on;
-	// see censusSubject.
+	// see CensusSubject.
 	affinityCensusSegment = ".affinity-census."
 
 	// Results of jetstream_consumer_leader_moves_total.
@@ -246,7 +246,7 @@ func (a *affinity) start(ctx context.Context) {
 		return
 	}
 	if a.nmgr.nc != nil && len(a.nmgr.trackedDurables()) > 0 {
-		sub, err := SubscribeSynced(a.nmgr.nc, censusSubject(a.nmgr.Microservice.InstanceId,
+		sub, err := SubscribeSynced(a.nmgr.nc, CensusSubject(a.nmgr.Microservice.InstanceId,
 			a.nmgr.Microservice.FunctionalArea), a.answerCensus)
 		if err != nil {
 			// Without an answer from this replica a census never finds it, so no replica of
@@ -495,6 +495,7 @@ func (a *affinity) dial(server, url string) (*nats.Conn, error) {
 		nats.Name(a.nmgr.Microservice.FunctionalArea),
 		nats.NoReconnect(),
 		nats.DontRandomize(),
+		nats.CustomInboxPrefix(InboxPrefix(a.nmgr.Microservice.FunctionalArea)),
 	}
 	// 🔴 NO nats.Timeout HERE. BrokerLivenessOptions' dialer carries a fixed dial timeout and
 	// its stall detector tells nats.go's whole-connect deadline from a traffic write deadline
@@ -824,9 +825,9 @@ type censusReply struct {
 	Durables []string `json:"durables"`
 }
 
-// censusSubject is the control subject one area's replicas answer a census on. It sits under
+// CensusSubject is the control subject one area's replicas answer a census on. It sits under
 // controlSubjectRoot, outside every stream's capture space, so no stream stores a census.
-func censusSubject(instanceId, area string) string {
+func CensusSubject(instanceId, area string) string {
 	return controlSubjectRoot + instanceId + affinityCensusSegment + sanitizeName(area)
 }
 
@@ -851,7 +852,7 @@ func (a *affinity) answerCensus(msg *nats.Msg) {
 // replica answers its own census, so an empty result is a failure, never "no readers".
 func (a *affinity) census(ctx context.Context) ([]censusReply, error) {
 	nc := a.nmgr.nc
-	inbox := nats.NewInbox()
+	inbox := nc.NewInbox()
 	//subconfirm:ok the request below goes out on this same connection, so the server reads
 	// SUB before PUB (the reasoning is PurgeTenantDetect's)
 	sub, err := nc.SubscribeSync(inbox)
@@ -859,7 +860,7 @@ func (a *affinity) census(ctx context.Context) ([]censusReply, error) {
 		return nil, err
 	}
 	defer func() { _ = sub.Unsubscribe() }()
-	if err := nc.PublishRequest(censusSubject(a.nmgr.Microservice.InstanceId,
+	if err := nc.PublishRequest(CensusSubject(a.nmgr.Microservice.InstanceId,
 		a.nmgr.Microservice.FunctionalArea), inbox, nil); err != nil {
 		return nil, err
 	}

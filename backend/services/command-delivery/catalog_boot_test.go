@@ -16,6 +16,7 @@ import (
 	"github.com/devicechain-io/dc-command-delivery/model"
 	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
 )
@@ -32,7 +33,11 @@ import (
 // max-delivery recorder, so Initialize + Start covers them all. The service opens nothing
 // lazily after start and uses no KV bucket.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
+	// this is also the area's permission test: a subject the wiring uses that the generator does
+	// not grant is a refusal in the broker's log, asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevRdb, prevApi, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Api, Svc
 	prevProc, prevWriteback, prevRoster := CommandDeliveryProcessor, DeadLetterWriteback, RosterConsumer
@@ -46,13 +51,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalogboot%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "command-delivery",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("command-delivery")
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Configuration = &config.CommandDeliveryConfiguration{SweepIntervalSeconds: config.DefaultSweepIntervalSeconds}
 
@@ -77,4 +82,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, CommandResponsesReader)
 	require.NotNil(t, DeviceCommandsWriter)
 	require.NotNil(t, RosterConsumer)
+	broker.RequireNoViolations(t)
 }

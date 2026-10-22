@@ -124,6 +124,7 @@ run "compression_survives_the_auth_merge" {
     enable_auth             = true
     callout_issuer_public   = "AISSUER"
     service_password_bcrypt = "$2a$10$x"
+    service_users           = "{\"APP\":{\"dc_service\":{\"publish\":{\"deny\":[\"*.*.devices.*.events\"]}}}}"
     route_compression       = "s2_better"
   }
 

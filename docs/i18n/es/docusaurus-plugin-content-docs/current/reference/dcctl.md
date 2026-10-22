@@ -22,6 +22,7 @@ dcctl [command]
 ### Commands
 
 * [dcctl bootstrap](#dcctl-bootstrap)	 - Bootstrap a DeviceChain instance
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
 * [dcctl dead-letters](#dcctl-dead-letters)	 - Inspect work the platform accepted and then gave up on
 * [dcctl destroy](#dcctl-destroy)	 - Destroy a DeviceChain instance
 * [dcctl enable-area](#dcctl-enable-area)	 - Turn on a functional area on a running instance
@@ -89,6 +90,78 @@ dcctl bootstrap <provider> <instance> [flags]
 ### SEE ALSO
 
 * [dcctl](#dcctl)	 - DeviceChain CLI
+
+## dcctl broker {#dcctl-broker}
+
+Message broker operations
+
+### Synopsis
+
+Operate on the message broker an instance runs on.
+
+### Options
+
+```
+  -h, --help   help for broker
+```
+
+### SEE ALSO
+
+* [dcctl](#dcctl)	 - DeviceChain CLI
+* [dcctl broker permissions](#dcctl-broker-permissions)	 - Print the broker permissions every platform login is held to
+
+## dcctl broker permissions {#dcctl-broker-permissions}
+
+Print the broker permissions every platform login is held to
+
+### Synopsis
+
+Print the message broker permissions of every platform login, as JSON.
+
+An instance dcctl installs never needs this: dcctl generates the same document at install and
+upgrade time and gives it to the broker. It exists for an installation that runs the chart
+WITHOUT dcctl and brings its own broker, which has to hold each service to the same grants.
+
+The document is generated from the same declarations the services are held to (which streams and
+buckets each area writes, reads and administers, and under which consumer names), so it cannot
+drift from what a service does. Its shape is:
+
+```
+  {"APP": {"<username>": <permissions>, ...}, "SYS": {"dc_sys": <permissions>}}
+```
+
+where each \<permissions> is a nats-server permissions block (publish and subscribe allow and deny
+lists, and allow_responses). Merge each block into the user of the same name in the broker's APP
+account (and dc_sys's into the system account). Usernames are dc-\<area>-g\<generation> for an area's
+own login, dc-broker-admin-g\<generation> for the broker administrator and dc_service for the shared
+login an upgraded instance keeps until it is retired.
+
+--profile (or --enable-area) limits the output to the areas that installation deploys. A login with
+no block must not be created: nats-server reads a user with no permissions as unrestricted.
+
+```
+dcctl broker permissions [flags]
+```
+
+### Examples
+
+```
+  dcctl broker permissions --instance-id acme > permissions.json
+  dcctl broker permissions --instance-id acme --profile telemetry
+```
+
+### Options
+
+```
+      --enable-area stringArray   also include this area's login on top of --profile; repeat for more
+  -h, --help                      help for permissions
+      --instance-id string        the instance id the services run under (their DC_INSTANCE_ID); it is part of every subject and stream name (required)
+      --profile string            limit the output to the areas of this deployment profile (default: every area)
+```
+
+### SEE ALSO
+
+* [dcctl broker](#dcctl-broker)	 - Message broker operations
 
 ## dcctl dead-letters {#dcctl-dead-letters}
 

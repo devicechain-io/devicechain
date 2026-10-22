@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/devicechain-io/dc-update-management/model"
@@ -31,7 +31,11 @@ import (
 // newDeadLetterSink, DeviceReports reader, DeviceRoster reader with DeliverNew), and
 // afterMicroserviceStarted starts both consumers.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
+	// is also the area's permission test: the real wiring runs against it and the broker's log of
+	// refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevApi, prevSvc, prevRdb := Microservice, Configuration, NatsManager, Api, Svc, RdbManager
 	prevReports, prevRoster, prevMetrics, prevDead, prevDL := ReportsConsumer, RosterConsumer, ReportsMetrics, DeadLetters, DownloadStats
@@ -43,13 +47,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalogboot%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "update-management",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("update-management")
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 
@@ -86,4 +90,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, Api.Desired, "createNatsComponents wired no device-desired publisher")
 	require.NoError(t, ReportsConsumer.Start(ctx), "starting the device-reports consumer (durable)")
 	require.NoError(t, RosterConsumer.Start(ctx), "starting the device-roster consumer (durable)")
+	broker.RequireNoViolations(t)
 }

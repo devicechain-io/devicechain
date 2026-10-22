@@ -48,10 +48,12 @@ const ServiceUser = "dc_service"
 // behalf, past every user permission: a stream whose RePublish destination is a device-events
 // subject, or a capture source with a subject transform, lands a forged event in capture with
 // this deny in force (TestServicePublishDenyDoesNotCoverJetStreamAdministration pins both). The
-// services create and reconcile their own streams over that same login, so the JetStream API
-// cannot be denied to it; closing this takes per-service logins that scope the API to the
-// streams each service owns. Until then the deny removes the casual forgery (a plain or MQTT
-// publish), not the deliberate one.
+// services create and reconcile their own streams over their logins, so the JetStream API
+// cannot be denied to them; closing this takes moving stream administration to one dedicated
+// login. The shared login this deny is held on is the one an upgraded instance keeps until it is
+// retired: every area now has a login of its own, held to an allow-list (AreaPermissions), and
+// that list carries this same deny as a backstop. Until stream creation moves, the deny removes
+// the casual forgery (a plain or MQTT publish), not the deliberate one.
 //
 // It is the one namespace the platform never writes: the messaging writer refuses the
 // device-events shape outright. The device-scoped streams a service DOES publish to
@@ -59,9 +61,9 @@ const ServiceUser = "dc_service"
 // device commands) are deliberately not here.
 //
 // The instance and tenant tokens are wildcards, so the deny covers every instance and tenant
-// on the broker: a deny that missed one would be a hole with a name on it. The infrastructure
-// module renders the same two subjects into the broker's static user (a test holds the two in
-// step).
+// on the broker: a deny that missed one would be a hole with a name on it. The deny reaches the
+// broker through the generated permissions document (ServicePermissions and every area's
+// AreaPermissions), which the infrastructure module renders verbatim.
 func ServicePublishDeny() []string {
 	events := messaging.DeviceEventsWildcard("*")
 	return []string{events, messaging.MqttMsgsSubject(events)}
@@ -146,8 +148,8 @@ const (
 // The "*" in the CONNZ entry also admits "$SYS.REQ.SERVER.PING.CONNZ", the same lists fanned
 // out, which grants nothing a per-server request does not.
 //
-// The infrastructure module renders the same lists into the broker's SYS user as literals
-// (HCL cannot call Go); TestSysPermissionsMatchTheInfrastructureModule holds the two in step.
+// The lists reach the broker through the generated permissions document (SysPermissions, rendered
+// verbatim by the infrastructure module), so there is no second copy to keep in step.
 func SysPublishAllow() []string {
 	return []string{
 		"$SYS.REQ.SERVER.PING",    // the statsz fan-out: which servers the cluster has

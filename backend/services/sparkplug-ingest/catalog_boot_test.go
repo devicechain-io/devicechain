@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
 )
 
@@ -29,7 +30,11 @@ import (
 // (afterMicroserviceStarted -> startLeadership -> runLeadership -> Acquire, which opens the
 // lease bucket). The source's broker is unreachable, which degrades that source only.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("sparkplug-ingest-catalog-%d", identitySeq.Add(1))
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so
+	// this is also the area's permission test: the real wiring runs against it and the broker's
+	// log of refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevMgr, prevSvc, prevManager := Microservice, Configuration, NatsManager, Svc, Manager
 	prevLease, prevWriters, prevGates, prevGauge := Lease, PublishWriters, safetyGates, leaderGauge
@@ -43,7 +48,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	service.ProbesPort = 0
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("sparkplug-ingest-catalog-%d", identitySeq.Add(1)),
+		InstanceId:     instance,
 		FunctionalArea: "sparkplug-ingest",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
@@ -53,8 +58,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	  "sources": [{"tenant": "acme", "broker": {"url": "tcp://127.0.0.1:1"}}]
 	}`)
 	infra := &Microservice.InstanceConfiguration.Infrastructure
-	infra.Nats.Hostname = host
-	infra.Nats.Port = port
+	infra.Nats = broker.NatsConfiguration("sparkplug-ingest")
 	infra.ServiceAuth.Secret = "shh"
 	// Peer services nothing listens on: the ingest path only builds clients to them.
 	infra.DeviceManagement.Hostname, infra.DeviceManagement.Port = "127.0.0.1", 1
@@ -76,4 +80,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.Eventually(t, func() bool { return testutil.ToFloat64(leaderGauge) == 1 },
 		30*time.Second, 50*time.Millisecond,
 		"the leadership lease was never acquired under the catalog (runLeadership, main.go)")
+	broker.RequireNoViolations(t)
 }

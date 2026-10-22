@@ -8,13 +8,11 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
@@ -22,8 +20,10 @@ import (
 	"github.com/devicechain-io/dc-event-sources/processor"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
+	natsserver "github.com/nats-io/nats-server/v2/server"
 )
 
 // TestStartsUnderItsDeclaredCatalog runs the service's REAL initialize and start callbacks
@@ -60,20 +60,27 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 		ShedPriorityResolver, ingestGate, readingGate = savedShed, savedIngest, savedReading
 	})
 
-	srv, err := natsserver.NewServer(&natsserver.Options{
-		Host: "127.0.0.1", Port: -1, JetStream: true, NoLog: true, NoSigs: true,
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, and
+	// runs the MQTT gateway, so this is also the area's permission test: the real wiring (the
+	// fail-closed store loop included) runs against it and the broker's log of refusals is
+	// asserted empty at the end.
+	const instance = "catalog-boot-es"
+	broker := permtest.Start(t, instance, permtest.WithMQTT())
+	nc := broker.NatsConfiguration("event-sources")
+
+	// The external source stands for SOMEONE ELSE'S broker, which has its own accounts and does not
+	// know the platform's logins: it is a plain MQTT server of its own, not the platform broker.
+	ext, err := natsserver.NewServer(&natsserver.Options{
+		Host: "127.0.0.1", Port: -1, NoLog: true, NoSigs: true, JetStream: true,
 		StoreDir: dctest.JetStreamStoreDir(t),
 		MQTT:     natsserver.MQTTOpts{Host: "127.0.0.1", Port: -1},
 	})
 	require.NoError(t, err)
-	go srv.Start()
-	require.True(t, srv.ReadyForConnections(10*time.Second))
-	t.Cleanup(srv.Shutdown)
-	mqttPort := dctest.MQTTPort(t, srv)
-	u, err := url.Parse(srv.ClientURL())
-	require.NoError(t, err)
-	port, err := strconv.Atoi(u.Port())
-	require.NoError(t, err)
+	go ext.Start()
+	require.True(t, ext.ReadyForConnections(10*time.Second))
+	t.Cleanup(ext.Shutdown)
+	extPort := dctest.MQTTPort(t, ext)
+	mqttPort := broker.MQTTPort(t)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -86,10 +93,10 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	  {"id":"mqtt1","type":"mqtt","configuration":{"host":%q,"port":%q},"decoder":{"type":"json"}},
 	  {"id":"ext1","type":"mqtt","configuration":{"host":"localhost","port":%q,"topic":"ext/+/#"},"decoder":{"type":"json"}},
 	  {"id":"http1","type":"http","configuration":{"port":%q},"decoder":{"type":"json"}}
-	]}`, u.Hostname(), strconv.Itoa(mqttPort), strconv.Itoa(mqttPort), strconv.Itoa(httpPort))
+	]}`, nc.Hostname, strconv.Itoa(mqttPort), strconv.Itoa(extPort), strconv.Itoa(httpPort))
 
 	Microservice = &core.Microservice{
-		InstanceId:     "catalog-boot-es",
+		InstanceId:     instance,
 		FunctionalArea: "event-sources",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
@@ -97,8 +104,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
 	Microservice.MicroserviceConfigurationRaw = []byte(cfgJSON)
 	infra := &Microservice.InstanceConfiguration.Infrastructure
-	infra.Nats.Hostname = u.Hostname()
-	infra.Nats.Port = uint32(port)
+	infra.Nats = nc
 	infra.Nats.MqttFailClosed = true
 	infra.Secrets.RootKey = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
 	Microservice.InstanceConfiguration.ApplyDefaults()
@@ -148,4 +154,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	ow.Close()
 	_, err = nmgr.NewWriter(streams.InboundEvents)
 	require.NoError(t, err, "inbound-events writer")
+	broker.RequireNoViolations(t)
 }

@@ -448,11 +448,24 @@ What a running instance sees:
   the credential of all of them. `dcctl upgrade` creates one login per area that uses the broker, and
   one for broker administration, and stores each in a Secret named `dci-<instance>-nats-<area>` that
   is mounted into that area's pod only. `mcp` and `ai-inference` never open a broker connection and
-  mount none. The new logins have the same permissions as the shared one, so what an area can do does
-  not change. The shared login stays in place beside them for now, so services that have not
-  restarted yet keep connecting during the upgrade. Until a later release retires it, the shared login
-  is still in the configuration every pod reads, so this does not yet stop a pod from presenting it.
-  The broker restarts once, one server at a time under `--ha`, to add the users. An area refuses to
+  mount none. Each login is held to what its area uses, and no more: the streams it writes, the
+  consumers it reads under (named exactly, so one area cannot rewrite, take messages from or
+  acknowledge another's, with one exception below), the key-value buckets it opens, and its own reply
+  subjects. A login can no longer publish into another area's streams, write another area's cache, or
+  subscribe to another area's replies. The grants are generated from the same declarations the
+  services are checked against, so they cannot fall behind what a service does. This is not yet a
+  boundary against a compromised service, and three gaps remain until later releases close them.
+  Every area can still create and update the streams it uses, including streams it only reads, and a
+  stream's configuration can copy messages into another stream or capture subjects that the login
+  itself could not publish or subscribe to. event-processing, which replays the resolved-events
+  stream, can still reach the other consumers on that stream. And the shared login stays in place
+  beside the new ones, with the permissions it always had, so services that have not restarted yet
+  keep connecting during the upgrade; until a later release retires it, it is still in the
+  configuration every pod reads, so a pod can still present it. Two grants are wider by design:
+  event-sources keeps update rights on the broker's MQTT stores, and user-management can purge a
+  deleted tenant's data across every stream. An installation that runs the chart without dcctl and
+  brings its own broker can print the same grants with `dcctl broker permissions`. The broker
+  restarts once, one server at a time under `--ha`, to add the users. An area refuses to
   start if the instance says the logins exist and its own is missing, rather than fall back to the
   shared one. Existing logins are never replaced: an upgrade creates only the ones that are absent.
 - **The event store restarts when its pods change**, for example for a new image or placement.

@@ -22,6 +22,7 @@ variables {
 
   callout_issuer_public   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   service_password_bcrypt = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234"
+  service_users           = "{\"APP\":{\"dc_service\":{\"publish\":{\"deny\":[\"*.*.devices.*.events\"]}}}}"
 }
 
 run "xkey_is_rendered_into_the_callout_when_given" {

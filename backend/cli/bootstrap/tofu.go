@@ -182,6 +182,10 @@ func openInstanceRoot(ctx context.Context, st *State) (_ openedInstanceRoot, err
 	if err := removeSupersededRootConfig(workdir); err != nil {
 		return openedInstanceRoot{}, err
 	}
+	// The generated broker permissions, as a variable file the root loads by itself.
+	if err := writeBrokerPermissionsVarFile(rootdir, st); err != nil {
+		return openedInstanceRoot{}, err
+	}
 
 	// Streams tofu's own progress so a long apply is not a silent wait — and only its
 	// progress: see tofuExec for why a read must never reach the terminal.
@@ -690,6 +694,9 @@ func infraVars(st *State) []string {
 		if h := st.Values["natsIdentityPasswordBcrypt"]; h != "" && st.Values[identityEnabledValue] == "true" {
 			vars = append(vars, "nats_identity_password_bcrypt="+h)
 		}
+		// The permissions every static login is held to are NOT a -var: the document is far past a
+		// command line's limit on Windows, so it travels in a variable file (see
+		// writeBrokerPermissionsVarFile), written by openInstanceRoot.
 		// The per-area logins and the administrator's, beside the shared one. Omitted until every one
 		// was minted: the module then renders none, which is what every earlier release ran.
 		if st.Values[areaLoginsEnabledValue] == "true" {

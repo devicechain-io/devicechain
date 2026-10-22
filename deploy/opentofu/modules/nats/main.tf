@@ -341,9 +341,9 @@ variable "login_password_bcrypts" {
     USERNAME (`dc-<area>-g<generation>`, `dc-broker-admin-g<generation>`). Each area holds only its own
     plaintext, in a Secret only its Deployment mounts; the administrator's is mounted nowhere yet.
 
-    Every login lands in the APP account with the SAME permissions as the shared `dc_service` login,
-    so behaviour does not change: this gives each area a credential of its own, which a later change
-    narrows to what the area uses. They are exempt from the device callout like the other static logins.
+    Every login lands in the APP account with the permissions block var.service_users generates for it:
+    an area's login is held to the streams, durables, buckets and subjects the catalog declares for that
+    area. They are exempt from the device callout like the other static logins.
 
     EMPTY (the default) renders none: every instance before they existed. An upgrade passes the hashes
     on its first apply, keeping `dc_service` beside them so the services that have not rolled yet still
@@ -359,6 +359,30 @@ variable "login_password_bcrypts" {
   validation {
     condition     = alltrue([for u, h in var.login_password_bcrypts : can(regex("^dc-[a-z0-9]+(-[a-z0-9]+)*-g[0-9]+$", u)) && startswith(h, "$2")])
     error_message = "login_password_bcrypts is keyed by username (dc-<principal>-g<generation>) and holds bcrypt hashes ($2a$...)."
+  }
+}
+
+variable "service_users" {
+  description = <<-EOT
+    The GENERATED broker permissions of every static login, as one JSON document:
+    `{"APP": {"<username>": <permissions>, ...}, "SYS": {"dc_sys": <permissions>}}`, where each
+    <permissions> is a nats-server permissions block (`publish`/`subscribe` allow and deny lists and
+    `allow_responses`). dcctl produces it from the same declarations the services are held to
+    (`dcctl broker permissions` prints it), and this module renders each block into its user VERBATIM:
+    the module holds no subject, so there is no second description of what a login may do.
+
+    Required when enable_auth is true and any static login is rendered: a user rendered without a block
+    would be a login with NO restriction (nats-server reads an absent block as allow-all), so a login
+    with no entry here is refused at plan time, never defaulted.
+
+    Not sensitive: it names subjects, never a credential.
+  EOT
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.service_users == "" || can(jsondecode(var.service_users))
+    error_message = "service_users must be the JSON document dcctl generates (dcctl broker permissions), or empty."
   }
 }
 
@@ -508,33 +532,33 @@ locals {
   # sync with the Go constant; a mismatch would lock every service out.
   service_user = "dc_service"
 
-  # 🔴 THE DEVICE-EVENTS NAMESPACE IS DEVICE-ONLY. The service login carries no allow
-  # list (it publishes to every platform subject), so the one thing it is held to is a
-  # DENY on the subjects only a device writes: "{instance}.{tenant}.devices.{device}.events"
-  # and the MQTT gateway's "$MQTT.msgs." form of it. A subject there is what the platform
-  # takes as the broker-asserted identity of a device, so this login must not be able to
-  # publish there. Kept in sync with natsauth.ServicePublishDeny (a Go test reads this
-  # file). Deliberately NOT denied: command-responses / device-reports (the MQTT store
-  # forwarder republishes them as this login), device-commands and desired state (downlinks).
-  # NOT A BOUNDARY against a holder of this login: it also administers JetStream, and a
-  # stream's RePublish or a transformed source writes into capture past any user permission
-  # (see natsauth.ServicePublishDeny). It stops a forged PUBLISH, not a forged stream config.
-  service_publish_deny = ["*.*.devices.*.events", "$MQTT.msgs.*.*.devices.*.events"]
+  # 🔴 THIS MODULE HOLDS NO SUBJECT. Every static login's permissions block comes from
+  # var.service_users, which dcctl generates from the stream and bucket declarations the services
+  # are held to (natsauth.ServiceUsers), and is rendered into the user unchanged. Before, the
+  # device-events deny and dc_sys's allow-lists were written here as literals and a Go test read this
+  # file to keep them in step; now there is one description and this renders it.
+  #
+  # An ABSENT block is the dangerous case (nats-server reads it as allow-all), so a login without an
+  # entry is refused by the precondition on helm_release.nats rather than rendered.
+  service_permissions     = try(jsondecode(var.service_users), {})
+  service_app_permissions = try(local.service_permissions.APP, {})
+  service_sys_permissions = try(local.service_permissions.SYS, {})
 
   # System-account login (see natsauth.SysUser), kept in sync with the Go constant
   # the same way. Rendered only when a hash was supplied: an account block with an
   # empty user list is what SYS looked like before the presence tap, and is what an
-  # instance that has not minted the credential must keep looking like.
-  #
-  # 🔴 THE LOGIN IS HELD TO AN ALLOW LIST. A system-account user with no permissions can
-  # put a server into lame-duck mode, make it reload, and read every account's
-  # subscriptions and JetStream state. event-sources needs the cluster ping, one server's
-  # connection list, one server's kick (ending a revoked device's session), the
-  # connect/disconnect advisories, and its reply inboxes; nothing else. Kept in sync with
-  # natsauth.SysPublishAllow / SysSubscribeAllow (a Go test reads this file).
-  sys_user            = "dc_sys"
-  sys_publish_allow   = ["$SYS.REQ.SERVER.PING", "$SYS.REQ.SERVER.*.CONNZ", "$SYS.REQ.SERVER.*.KICK"]
-  sys_subscribe_allow = ["$SYS.ACCOUNT.APP.CONNECT", "$SYS.ACCOUNT.APP.DISCONNECT", "_INBOX.>"]
+  # instance that has not minted the credential must keep looking like. Its allow
+  # list (cluster ping, one server's CONNZ and KICK, the connect/disconnect advisories and its
+  # reply inboxes) is generated like every other (natsauth.SysPermissions).
+  sys_user = "dc_sys"
+
+  # The users the precondition holds to an entry in var.service_users.
+  static_app_users = concat([local.service_user], nonsensitive(keys(var.login_password_bcrypts)))
+  static_sys_users = var.sys_password_bcrypt == "" ? [] : [local.sys_user]
+  missing_permissions = concat(
+    [for u in local.static_app_users : u if !contains(keys(local.service_app_permissions), u)],
+    [for u in local.static_sys_users : u if !contains(keys(local.service_sys_permissions), u)],
+  )
   # The IDENTITY account (see var.identity_password_bcrypt): its login, and the one account block
   # it adds. Kept in sync with natsauth.IdentityUser / natsauth.IdentityAccount (a Go test reads
   # this file). It is rendered only when a hash was supplied, so an instance that has not minted the
@@ -551,14 +575,14 @@ locals {
     }
   } : {}
 
-  # The per-area logins (see var.login_password_bcrypts): same permissions as the shared service login.
+  # The per-area logins (see var.login_password_bcrypts), each with its own generated block.
   # Terraform iterates a map in key order, so the rendered users are stable across runs.
-  login_users = [for u, h in var.login_password_bcrypts : { user = u, password = h, permissions = { publish = { deny = local.service_publish_deny } } }]
+  login_users = [for u, h in var.login_password_bcrypts : { user = u, password = h, permissions = try(local.service_app_permissions[u], null) }]
 
   sys_users = var.sys_password_bcrypt == "" ? [] : [{
     user        = local.sys_user
     password    = var.sys_password_bcrypt
-    permissions = { publish = { allow = local.sys_publish_allow }, subscribe = { allow = local.sys_subscribe_allow } }
+    permissions = try(local.service_sys_permissions[local.sys_user], null)
   }]
 
   # js_max_file_store resolves the server-level max_file_store (see the
@@ -744,7 +768,7 @@ locals {
     accounts = merge({
       APP = {
         jetstream = "enabled"
-        users     = concat([{ user = local.service_user, password = var.service_password_bcrypt, permissions = { publish = { deny = local.service_publish_deny } } }], local.login_users)
+        users     = concat([{ user = local.service_user, password = var.service_password_bcrypt, permissions = try(local.service_app_permissions[local.service_user], null) }], local.login_users)
       }
       # SYS carries a user only once the presence tap's credential has been minted.
       # The system account needs no `jetstream` and no exports: the advisories the
@@ -1303,6 +1327,12 @@ resource "helm_release" "nats" {
     precondition {
       condition     = length(var.login_password_bcrypts) == 0 || var.enable_auth
       error_message = "nats login_password_bcrypts is set but enable_auth is false: there is no broker authentication for the per-area logins to belong to."
+    }
+
+    # A login rendered without its permissions block would authenticate with NO restriction.
+    precondition {
+      condition     = !var.enable_auth || length(local.missing_permissions) == 0
+      error_message = "nats service_users has no permissions for the static login(s) ${join(", ", local.missing_permissions)}. nats-server reads a user with no permissions block as unrestricted, so the module refuses to render one: pass the generated document (dcctl broker permissions)."
     }
 
     # An xkey without the callout it encrypts is a config the broker would carry for nothing,
