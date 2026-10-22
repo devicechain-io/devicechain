@@ -81,6 +81,8 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'pie-chart': 'widgets/pie-chart.tsx',
   'fleet-table': 'widgets/fleet-table.tsx',
   'fleet-count': 'widgets/fleet-count.tsx',
+  'device-status': 'widgets/device-status.tsx',
+  'online-doughnut': 'widgets/online-doughnut.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -449,6 +451,8 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
     staleAfterSeconds: 300,
     windowSeconds: 3600,
   },
+  'device-status': { title: 'Pump 3', staleAfterSeconds: 900 },
+  'online-doughnut': { title: 'Site connectivity', staleAfterSeconds: 3600 },
 };
 
 describe('validateWidgetOptions', () => {

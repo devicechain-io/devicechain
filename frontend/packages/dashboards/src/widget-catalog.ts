@@ -58,7 +58,7 @@ const SELECTOR_KINDS = ['device', 'anchor', 'slot'];
 
 // The keys each channel's binding policy may carry, mirroring ChannelBindingPolicy.
 const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
-  measurement: ['window', 'windowSeconds', 'members'],
+  measurement: ['window', 'windowSeconds', 'members', 'presence'],
   alarm: ['pageSize', 'state', 'severity', 'acknowledged', 'groupBy', 'countBySeverity', 'deviceType'],
   control: ['pageSize'],
   location: [],
@@ -460,6 +460,12 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
       }
     }
   };
+  // `presence` is a constant switch and nothing else: `{ const: true }`. It makes a measurement widget
+  // read its devices' connectivity (online or offline, last seen) in place of their readings.
+  const presence = binding.presence;
+  if (presence !== undefined && !(isRecord(presence) && presence.const === true && Object.keys(presence).length === 1)) {
+    add('binding.presence', 'must be { const: true }');
+  }
   modeBinding('members');
   modeBinding('groupBy');
   // `countBySeverity` is a constant switch and nothing else: `{ const: true }`.

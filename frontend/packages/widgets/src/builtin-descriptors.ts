@@ -1280,6 +1280,44 @@ export const builtinWidgetDescriptors = {
     interactions: {},
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 6, rows: 4 } },
   }),
+
+  // One device's connectivity: Online or Offline, and when it was last seen. It reads device-state
+  // (`binding.presence`), not the device's readings, and shows one device, so it takes no group.
+  'device-status': defineRuntimeDescriptor({
+    id: 'device-status',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Device status', category: 'Telemetry', titleId: 'widgetTypeDeviceStatus', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ONE_DEVICE },
+    binding: { presence: { const: true } },
+    options: { title: TITLE, staleAfterSeconds: STALE_AFTER_SECONDS },
+    defaults: { title: 'Device status' },
+    // The frame's age is the device's last activity, not a reading.
+    freshness: true,
+    interactions: {},
+    layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 6, rows: 4 } },
+  }),
+
+  // How many of a group's devices are online: a ring of online, offline and no status yet. A new
+  // widget rather than a mode of the pie chart, which is shares of readings; this reads device-state.
+  'online-doughnut': defineRuntimeDescriptor({
+    id: 'online-doughnut',
+    version: VERSION,
+    sdkApiVersion: 1,
+    optionsVersion: 1,
+    display: { title: 'Online doughnut', category: 'Telemetry', titleId: 'widgetTypeOnlineDoughnut', categoryId: 'widgetCategoryTelemetry' },
+    channel: 'measurement',
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { presence: { const: true } },
+    options: { title: TITLE, staleAfterSeconds: STALE_AFTER_SECONDS },
+    defaults: { title: 'Online doughnut' },
+    // The frame's age is the newest activity anywhere in the group.
+    freshness: true,
+    interactions: {},
+    layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },
+  }),
 } as const satisfies Record<BuiltinWidgetId, WidgetDescriptor>;
 
 // The catalog the headless validators read. Constructed at module load, so a built-in that

@@ -494,6 +494,8 @@
   "widgetLabelMaxSeries": "Máximo de líneas",
   "widgetHintMaxSeries": "El máximo de dispositivos dibujados como líneas cuando el gráfico muestra una línea por dispositivo (5 por defecto, hasta 12). Cada línea cuesta una lectura de historial, y los colores se repiten tras cinco. Un grupo mayor muestra sus primeros dispositivos e indica cuántos omitió.",
   "widgetTypeFleetCount": "Recuento de flota",
+  "widgetTypeDeviceStatus": "Estado del dispositivo",
+  "widgetTypeOnlineDoughnut": "Anillo de conexión",
   "widgetLabelFleetShow": "Contar",
   "widgetHintFleetShow": "Dispositivos que requieren atención: cuántos tienen la última lectura de la medición en una banda anormal de los umbrales de abajo. Dispositivos: cuántos dispositivos tiene el grupo.",
   "widgetFleetShowAttention": "Dispositivos que requieren atención",

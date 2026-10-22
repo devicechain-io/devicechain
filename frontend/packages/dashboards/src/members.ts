@@ -18,7 +18,7 @@
 // fleet-seed.ts in the widgets package).
 
 import type { MeasurementBucket } from './queries';
-import type { MeasurementSample } from './types';
+import type { DevicePresence, MeasurementSample } from './types';
 
 // One device of a roster. `name` is null when the source does not know it. `deviceType` is the
 // token of its device type, when the source knows it: it is what the device's declared metrics are
@@ -52,6 +52,17 @@ export interface MemberSink {
   // reads it again. Called once per member stream that resumed. Optional on both sides: a source
   // that never drops a feed does not call it.
   reconnected?(): void;
+}
+
+// Where a presence widget's data lands: the roster once, then a whole snapshot of the roster's
+// connectivity on every poll. A token the snapshot does not carry has no device-state row (the
+// service omits those), which is a settled answer -- never connected -- not a failure.
+export interface PresenceSink {
+  roster(roster: MemberRoster): void;
+  next(states: readonly DevicePresence[]): void;
+  // The viewer may not read device state (a refusal, not a failure).
+  forbidden?(): void;
+  error?(err: unknown): void;
 }
 
 // Why one member's seed read did not come back.

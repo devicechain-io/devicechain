@@ -354,7 +354,10 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
           : 'widgetLabelDataSource';
     expect(screen.getByText(tr(heading))).toBeTruthy();
     // (aggregate, like measurement, names the measurements it reads)
-    const showMeasurements = channel !== 'alarm' && channel !== 'control' && channel !== 'location';
+    // A deliberate change since the pre-registry editor: the presence widgets read device-state, so
+    // they name no measurements.
+    const presence = type === 'device-status' || type === 'online-doughnut';
+    const showMeasurements = channel !== 'alarm' && channel !== 'control' && channel !== 'location' && !presence;
     expect(screen.queryByText(tr('widgetLabelMeasurements')) !== null, 'measurements field').toBe(showMeasurements);
 
     // Open the kind picker and see which kinds it offers.
@@ -362,9 +365,9 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
     fireEvent.click(within(kindField).getAllByRole('button')[0]);
     // A deliberate change since the pre-registry editor: a telemetry widget that shows readings by
     // measurement name shows ONE device (a group would mix its devices' readings), so only the
-    // fleet widgets -- the fleet table, the fleet count, the bar chart and the time-series chart, whose
+    // fleet widgets -- the fleet table, the fleet count, the online doughnut, the bar chart and the time-series chart, whose
     // one-bar-or-line-per-device modes read a group -- are offered a group, beside the alarm and map widgets.
-    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count' || type === 'timeseries-chart';
+    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count' || type === 'timeseries-chart' || type === 'online-doughnut';
     const takesGroup = channel === 'alarm' || channel === 'location' || (channel === 'measurement' && fleet);
     expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(takesGroup);
   });

@@ -63,6 +63,17 @@ export function polar(cx: number, cy: number, r: number, turns: number): { x: nu
   return { x: cx + r * Math.sin(angle), y: cy - r * Math.cos(angle) };
 }
 
+// The SVG path of an open arc about (cx, cy) at radius r, for a ring segment drawn as a stroke. A
+// span that fills the circle has no path here (an arc from a point to itself draws nothing): the
+// caller draws a circle, as wedgePath does for the pie. An empty span has none either.
+export function arcPath(cx: number, cy: number, r: number, from: number, to: number): string | undefined {
+  const span = to - from;
+  if (span <= 0 || span >= 1 - 1e-9) return undefined;
+  const a = polar(cx, cy, r, from);
+  const b = polar(cx, cy, r, to);
+  return `M${a.x},${a.y}A${r},${r} 0 ${span > 0.5 ? 1 : 0} 1 ${b.x},${b.y}`;
+}
+
 // The SVG path of one wedge. A slice that fills the circle is a circle (an arc from a point to
 // itself draws nothing), and an empty one has no path at all.
 export function wedgePath(cx: number, cy: number, r: number, from: number, to: number): string | undefined {

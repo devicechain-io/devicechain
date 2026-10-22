@@ -183,6 +183,8 @@ export const WIDGET_TYPES = [
   'pie-chart',
   'fleet-table',
   'fleet-count',
+  'device-status',
+  'online-doughnut',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -690,6 +692,17 @@ export interface AlarmRow {
 export interface AlarmDeviceType {
   token: string;
   name: string | null;
+}
+
+// One device's connectivity, as device-state holds it: whether it is considered connected, and when
+// it last did anything. `lastActivityTime` is null for a device that has not produced an event.
+// A device with no state row at all has no DevicePresence (the service omits it).
+export interface DevicePresence {
+  deviceToken: string;
+  active: boolean;
+  lastActivityTime: string | null;
+  // Seconds without activity after which an INFERRED device is marked inactive.
+  inactivityTimeout: number;
 }
 
 // How many matching alarms are at one severity (a severity-count read).

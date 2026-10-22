@@ -66,7 +66,10 @@ describe('the built-in registry', () => {
         // (a group would mix its devices' readings); the alarm and location widgets and the fleet
         // widgets (which read member by member) may be bound to a group.
         selectors:
-          channel === 'control' || channel === 'aggregate' || (channel === 'measurement' && !('members' in descriptor.binding))
+          // (the online doughnut reads a group's connectivity, the status card one device's)
+          channel === 'control' ||
+          channel === 'aggregate' ||
+          (channel === 'measurement' && !('members' in descriptor.binding) && type !== 'online-doughnut')
             ? ['device', 'slot']
             : ['device', 'anchor', 'slot'],
       });

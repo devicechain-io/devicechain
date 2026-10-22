@@ -63,6 +63,7 @@ export type {
   EntityListKind,
   MeasurementSample,
   LocationSample,
+  DevicePresence,
   LocationSeries,
   LocationSelection,
   AlarmRow,
@@ -327,6 +328,7 @@ export type {
   MemberSeed,
   MemberSeedPlan,
   MemberSink,
+  PresenceSink,
   SeedFailure,
 } from './members';
 export { defaultHistoryWindow, fetchWidgetHistory, historyWindowFor, type HistoryWindow } from './history';
@@ -371,6 +373,7 @@ export type {
   CommandStreamState,
   FleetMember,
   FleetState,
+  MemberPresence,
   LocationStreamState,
   MeasurementAggregate,
   MeasurementStreamState,

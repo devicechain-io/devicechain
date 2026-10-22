@@ -13,7 +13,7 @@
 
 import { alarmOverlaps, commandInRange } from './event-window';
 import type { HistoryWindow } from './history';
-import type { MemberRef, MemberSeed, MemberSeedPlan, MemberSink } from './members';
+import type { MemberRef, MemberSeed, MemberSeedPlan, MemberSink, PresenceSink } from './members';
 import type { MeasurementBucket } from './queries';
 import type {
   AlarmStreamSink,
@@ -33,6 +33,7 @@ import type {
   AlarmTypeCount,
   CommandRow,
   DatasourceSelector,
+  DevicePresence,
   LocationSample,
   MeasurementSample,
 } from './types';
@@ -468,6 +469,36 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
     const timer = setInterval(() => {
       for (const m of members) emit(m.token, Date.now());
     }, this.intervalMs);
+    this.timers.add(timer);
+    return () => {
+      if (this.timers.delete(timer)) clearInterval(timer);
+    };
+  }
+
+  // A preview fleet's connectivity: three online, one offline (silent for hours) and one that never
+  // reported, with no state row, so every state a presence widget draws is previewed. Last-active
+  // times are offsets from now, so the preview always reads as just-seen for the online ones.
+  subscribePresence(datasource: DatasourceSelector, sink: PresenceSink): () => void {
+    // A device is its own roster of one; a group is the preview fleet.
+    const members = datasource.kind === 'device' ? [{ token: datasource.deviceToken, name: null }] : this.previewMembers(datasource);
+    sink.roster({ members, total: members.length, unbound: datasource.kind === 'unbound' });
+    const emit = (): void => {
+      const now = Date.now();
+      const states: DevicePresence[] = [];
+      members.forEach((m, i) => {
+        if (m.token === 'synthetic-5') return; // never reported: no state row
+        const offline = m.token === 'synthetic-4';
+        states.push({
+          deviceToken: m.token,
+          active: !offline,
+          lastActivityTime: new Date(now - (offline ? 2 * 3600_000 : (i + 1) * 20_000)).toISOString(),
+          inactivityTimeout: 600,
+        });
+      });
+      sink.next(states);
+    };
+    emit();
+    const timer = setInterval(emit, this.intervalMs);
     this.timers.add(timer);
     return () => {
       if (this.timers.delete(timer)) clearInterval(timer);

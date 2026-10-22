@@ -119,6 +119,12 @@ export const OPTION_DOC_OVERRIDES: Readonly<Record<string, Readonly<Record<strin
   'stat-card': {
     title: 'Heading shown in the widget frame. Defaults to the displayed measurement name.',
   },
+  'device-status': {
+    staleAfterSeconds: 'Marks the card stale once the device has been silent for longer than this many seconds. Unset, the age is shown and nothing is marked stale.',
+  },
+  'online-doughnut': {
+    staleAfterSeconds: 'Marks the ring stale once the newest activity anywhere in the group is older than this many seconds. Unset, the age is shown and nothing is marked stale.',
+  },
   'fleet-count': {
     measurement: 'The measurement whose bands flag a device. Defaults to the first the datasource selects.',
   },

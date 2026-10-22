@@ -128,6 +128,10 @@ export type ChannelBindingPolicy<C extends WidgetChannel, S extends WidgetOption
         // per device of an anchor) and `data.members` is set. `{ const: true }` always; or an option
         // reference with the value that turns the mode on (a bar chart's "one bar per device").
         members?: ConstBinding<true> | (StringOptionRef<S> & { equals: string });
+        // Makes the widget a PRESENCE widget: it reads its devices' connectivity (online or offline,
+        // and when each was last active) rather than their readings, and `data.members` is set with
+        // each member's `presence`. `{ const: true }` only.
+        presence?: ConstBinding<true>;
       }
     : C extends 'alarm'
       ? {
