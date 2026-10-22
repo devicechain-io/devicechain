@@ -474,10 +474,17 @@ type DeviceCredential struct {
 	DeviceId       uint
 	Device         *Device
 	CredentialType string
-	CredentialId   string
-	SecretDigest   sql.NullString
-	Enabled        bool
-	ExpiresAt      sql.NullTime
+	// CredentialId is what the credential is looked up by. For MQTT_BASIC it is the
+	// username as sent. For ACCESS_TOKEN it is the keyed digest of the token, never the
+	// token: the token is a bearer secret, and a copy of the database must not hold one.
+	CredentialId string
+	// IssuedCredentialId is the access token as sent, on the row a create or update just
+	// wrote, and "" on every row read from the database. It is not a column. The response
+	// to the write that set a token shows it, once.
+	IssuedCredentialId string `gorm:"-"`
+	SecretDigest       sql.NullString
+	Enabled            bool
+	ExpiresAt          sql.NullTime
 
 	// LegacyCredentialValue is the retired plaintext column, mapped WRITE-ONLY so that
 	// every create and save of a credential writes it NULL. Nothing reads it, and nothing

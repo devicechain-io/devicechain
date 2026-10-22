@@ -19,7 +19,7 @@
 //
 // The members in Watched: bcrypt.CompareHashAndPassword, subtle.ConstantTimeCompare
 // and hmac.Equal — the three ways this codebase, or code written the obvious way,
-// checks a secret — and credential.VerifyDeviceSecret, the primitive's own unthrottled
+// checks a secret — and credential.VerifyDeviceSecret and credential.VerifyAccessToken, the primitive's own unthrottled
 // compare of a device secret against its stored digest, which is exported for the one
 // caller that needs no backoff and must not quietly gain others. Every site outside the primitive must carry an exemption that
 // names its directory, its function AND the member it calls, with a reason. The
@@ -78,6 +78,7 @@ var Watched = []Member{
 	{Path: "crypto/subtle", Name: "ConstantTimeCompare", Label: "subtle.ConstantTimeCompare"},
 	{Path: "crypto/hmac", Name: "Equal", Label: "hmac.Equal"},
 	{Path: "github.com/devicechain-io/dc-microservice/credential", Name: "VerifyDeviceSecret", Label: "credential.VerifyDeviceSecret"},
+	{Path: "github.com/devicechain-io/dc-microservice/credential", Name: "VerifyAccessToken", Label: "credential.VerifyAccessToken"},
 }
 
 // memberByLabel finds a watched member by its exemption label.

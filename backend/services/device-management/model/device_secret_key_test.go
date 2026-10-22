@@ -50,3 +50,13 @@ func secretStr(d sql.NullString, candidates ...string) string {
 func verifies(stored, secret string) bool {
 	return credential.VerifyDeviceSecret(testSecretKey, partialUpdateTenant, stored, secret) == nil
 }
+
+// testTokenDigest is an access token's stored credential_id under testSecretKey, for a
+// credential of tenant: what a test that reaches into the table by credential_id matches.
+func testTokenDigest(tenant, token string) string {
+	d, err := testSecretKey.AccessTokenDigest(tenant, token)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}

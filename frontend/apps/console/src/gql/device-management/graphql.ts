@@ -384,6 +384,10 @@ export type DeviceCreateRequest = {
 };
 
 export type DeviceCredentialCreateRequest = {
+  /**
+   * The MQTT username, or the access token for ACCESS_TOKEN (at most 256 bytes). The token
+   * is stored only as a keyed digest and is returned once, in this mutation's response.
+   */
   credentialId: string;
   credentialType: string;
   /**
@@ -401,6 +405,10 @@ export type DeviceCredentialCreateRequest = {
 };
 
 export type DeviceCredentialSearchCriteria = {
+  /**
+   * An MQTT username, or for ACCESS_TOKEN either the access token or the fingerprint a read
+   * returns. The token is matched through its digest; it is never stored or compared as sent.
+   */
   credentialId?: string | null | undefined;
   credentialType?: string | null | undefined;
   device?: string | null | undefined;
@@ -410,6 +418,13 @@ export type DeviceCredentialSearchCriteria = {
 };
 
 export type DeviceCredentialUpdateRequest = {
+  /**
+   * The MQTT username, or the new access token for ACCESS_TOKEN. Setting it on an
+   * ACCESS_TOKEN credential rotates the token: the old one stops working at once and the
+   * new one is returned once, in this mutation's response. Required when this request
+   * changes the credential's type to or from ACCESS_TOKEN, and refused otherwise with
+   * extensions.code INVALID_VALUE.
+   */
   credentialId?: string | null | undefined;
   credentialType?: string | null | undefined;
   /**

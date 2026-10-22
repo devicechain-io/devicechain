@@ -56,6 +56,9 @@ var sanctionedSystemContexts = map[string][]string{
 	"backend/services/device-management/schema/migration_credential_secret_digest.go": {
 		"CountForeignCredentialDigests", "DigestPlaintextCredentialSecrets",
 	},
+	"backend/services/device-management/schema/credential_token_digest.go": {
+		"CountForeignAccessTokenDigests", "DigestPlaintextAccessTokens",
+	},
 	"backend/services/device-state/processor/StateProcessor.go":                {"StateProcessor.runInactivityMonitor"},
 	"backend/services/event-management/model/analytics.go":                     {"ReconcileAnalyticsSurface"},
 	"backend/services/event-management/model/lifecycle.go":                     {"ApplyDataLifecyclePolicies"},

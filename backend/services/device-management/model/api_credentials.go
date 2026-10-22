@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/integrity"
@@ -69,6 +70,13 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 			return nil, err
 		}
 	}
+	// An ACCESS_TOKEN is stored as its keyed digest, never as the token. The row handed back
+	// carries the token as sent in IssuedCredentialId, once, for the response to the write
+	// that set it.
+	storedId, issued, err := storedCredentialIdForWrite(key, device.TenantId, request.CredentialType, request.CredentialId)
+	if err != nil {
+		return nil, err
+	}
 	return &DeviceCredential{
 		TokenReference: rdb.TokenReference{
 			Token: request.Token,
@@ -76,14 +84,75 @@ func buildDeviceCredential(key *credential.DeviceSecretKey, device *Device, requ
 		MetadataEntity: rdb.MetadataEntity{
 			Metadata: metadataJSON,
 		},
-		DeviceId:       device.ID,
-		Device:         device,
-		CredentialType: request.CredentialType,
-		CredentialId:   request.CredentialId,
-		SecretDigest:   secretDigest,
-		Enabled:        request.Enabled,
-		ExpiresAt:      expiresAt,
+		DeviceId:           device.ID,
+		Device:             device,
+		CredentialType:     request.CredentialType,
+		CredentialId:       storedId,
+		IssuedCredentialId: issued,
+		SecretDigest:       secretDigest,
+		Enabled:            request.Enabled,
+		ExpiresAt:          expiresAt,
 	}, nil
+}
+
+// ErrCredentialIdRequiredForType refuses a change of a credential's type to or from
+// ACCESS_TOKEN that does not set its id in the same request. INVALID_VALUE.
+//
+// The stored id of an ACCESS_TOKEN is a digest of the token, and of any other type the id
+// itself (an MQTT username). Carrying one over across the change would read a username as
+// a digest, or a digest as a username, and the credential would authenticate nobody.
+var ErrCredentialIdRequiredForType = integrity.NewRefusal(integrity.ClassInvalid,
+	"changing a credential to or from ACCESS_TOKEN requires credentialId in the same request")
+
+// accessTokenCredential reports whether ctype stores its id as a keyed digest of the token.
+func accessTokenCredential(ctype string) bool {
+	return CredentialType(ctype) == CredentialAccessToken
+}
+
+// storedCredentialId is the value a presented (type, id) is stored and looked up as in the
+// credential_id column: the id itself, except for an ACCESS_TOKEN, whose id IS the bearer
+// secret and is kept only as its keyed digest (credential.DeviceSecretKey.AccessTokenDigest).
+// It is deterministic, which is what lets a lookup be an indexed equality on the stored
+// value. A missing key refuses: there is nothing to digest or look up by.
+func storedCredentialId(key *credential.DeviceSecretKey, tenant, ctype, id string) (string, error) {
+	if !accessTokenCredential(ctype) {
+		return id, nil
+	}
+	if key == nil {
+		return "", errNoDeviceSecretKey
+	}
+	return key.AccessTokenDigest(tenant, id)
+}
+
+// storedCredentialIdForWrite is storedCredentialId for a create or update that sets the id,
+// returning the token as sent as well when it is one, for the one response that shows it.
+// An access token over credential.MaxAccessTokenBytes is refused with LIMIT_EXCEEDED, as
+// the plaintext column refused it before.
+func storedCredentialIdForWrite(key *credential.DeviceSecretKey, tenant, ctype, id string) (stored, issued string, err error) {
+	if !accessTokenCredential(ctype) {
+		return id, "", nil
+	}
+	if len(id) > credential.MaxAccessTokenBytes {
+		return "", "", limit.Exceeded("credentialId bytes", len(id), credential.MaxAccessTokenBytes)
+	}
+	if id == "" {
+		return "", "", errors.New("an ACCESS_TOKEN credential needs a credentialId")
+	}
+	stored, err = storedCredentialId(key, tenant, ctype, id)
+	if err != nil {
+		return "", "", err
+	}
+	return stored, id, nil
+}
+
+// tenantOf is the tenant of the request context, or an error: a credential lookup is
+// tenant-scoped, and an access token digest is bound to the tenant.
+func tenantOf(ctx context.Context) (string, error) {
+	tenant, ok := core.TenantFromContext(ctx)
+	if !ok || tenant == "" {
+		return "", errors.New("a credential lookup needs a tenant in context")
+	}
+	return tenant, nil
 }
 
 // ErrCredentialSecretTooShort refuses an MQTT_BASIC secret shorter than
@@ -219,6 +288,18 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	if err != nil {
 		return nil, err
 	}
+	// The id is stored as a digest for an ACCESS_TOKEN and as sent for any other type, so
+	// it follows the type. An id that is sent is digested for its resulting type; one that is
+	// not is kept, which a change to or from ACCESS_TOKEN cannot do.
+	var issuedId string
+	switch {
+	case request.CredentialId.Set:
+		if credentialId, issuedId, err = storedCredentialIdForWrite(api.DeviceSecretKey, updated.TenantId, credentialType, credentialId); err != nil {
+			return nil, err
+		}
+	case accessTokenCredential(credentialType) != accessTokenCredential(updated.CredentialType):
+		return nil, ErrCredentialIdRequiredForType
+	}
 	enabled, err := request.Enabled.ApplyToRequired("enabled", updated.Enabled)
 	if err != nil {
 		return nil, err
@@ -257,6 +338,7 @@ func (api *Api) UpdateDeviceCredential(ctx context.Context, token string,
 	updated.Metadata = metadataJSON
 	updated.CredentialType = credentialType
 	updated.CredentialId = credentialId
+	updated.IssuedCredentialId = issuedId
 	updated.SecretDigest = secretDigest
 	updated.Enabled = enabled
 	updated.ExpiresAt = expiresAt
@@ -335,13 +417,30 @@ func (api *Api) deviceCredentialFilters(ctx context.Context,
 			result = result.Where("credential_type = ?", criteria.CredentialType)
 		}
 		if criteria.CredentialId != nil {
-			result = result.Where("credential_id = ?", criteria.CredentialId)
+			result = result.Where("credential_id IN ?", api.searchCredentialIds(ctx, criteria.CredentialType, *criteria.CredentialId))
 		}
 		if criteria.Enabled != nil {
 			result = result.Where("enabled = ?", criteria.Enabled)
 		}
 		return result.Preload("Device")
 	}
+}
+
+// searchCredentialIds are the stored values a credentialId filter matches: the id as sent
+// (an MQTT username, or the fingerprint a read of an ACCESS_TOKEN returns) and, unless the
+// search is narrowed to another type, the digest of the id as an access token, so an
+// operator holding a token can still find its credential.
+func (api *Api) searchCredentialIds(ctx context.Context, ctype *string, id string) []string {
+	ids := []string{id}
+	if ctype != nil && !accessTokenCredential(*ctype) {
+		return ids
+	}
+	if tenant, err := tenantOf(ctx); err == nil {
+		if digest, err := storedCredentialId(api.DeviceSecretKey, tenant, string(CredentialAccessToken), id); err == nil {
+			ids = append(ids, digest)
+		}
+	}
+	return ids
 }
 
 // Search for device credentials that meet criteria, ONE PAGE at a time.
@@ -372,9 +471,31 @@ func (api *Api) DeviceCredentials(ctx context.Context, criteria DeviceCredential
 // every column of both rows. An MQTT password connect runs the same statement over far
 // fewer columns: deviceCredentialForConnect.
 func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialType string, credentialId string) (*DeviceCredential, error) {
+	lookupId, err := api.presentedCredentialLookupId(ctx, credentialType, credentialId)
+	if err != nil {
+		return nil, err
+	}
 	found := make([]*DeviceCredential, 0)
-	result := api.presentedCredentialStatement(ctx, credentialType, credentialId).Find(&found)
-	return oneLiveCredential(result, found, credentialType, credentialId)
+	result := api.presentedCredentialStatement(ctx, credentialType, lookupId).Find(&found)
+	return oneLiveCredential(result, found, credentialType, lookupId)
+}
+
+// presentedCredentialLookupId is the stored credential_id a presented (type, id) is matched
+// against: storedCredentialId under the context's tenant. A missing tenant or key is an
+// error, never a lookup that matches nothing quietly. An access token longer than any
+// stored one matches nothing and is not digested.
+func (api *Api) presentedCredentialLookupId(ctx context.Context, ctype, id string) (string, error) {
+	if !accessTokenCredential(ctype) {
+		return id, nil
+	}
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return "", err
+	}
+	if len(id) > credential.MaxAccessTokenBytes {
+		return "", gorm.ErrRecordNotFound
+	}
+	return storedCredentialId(api.DeviceSecretKey, tenant, ctype, id)
 }
 
 // connectCredentialColumns and connectDeviceFields are everything an MQTT password
@@ -447,6 +568,7 @@ func (api *Api) deviceCredentialForConnect(ctx context.Context, credentialType s
 var (
 	authCredentialColumns = []string{
 		"device_credentials.id",
+		"device_credentials.credential_id",
 		"device_credentials.tenant_id",
 		"device_credentials.device_id",
 		"device_credentials.credential_type",

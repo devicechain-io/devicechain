@@ -132,6 +132,9 @@ type importRow struct {
 	metadata *string // canonical JSON text for the stored column, nil for none
 	credType string
 	credID   string
+	// credStored is credID as the credential_id column holds it (see storedCredentialId):
+	// the keyed digest for an ACCESS_TOKEN. Set by decideImportRows, which has the key.
+	credStored string
 }
 
 func importDescription(row *DeviceImportRow) (name, desc, external string) {
@@ -210,6 +213,10 @@ func validateImportRow(row *DeviceImportRow, mode string) (outcome, code, messag
 	credID := *row.CredentialId
 	if utf8.RuneCountInString(credID) > maxCredentialIdLen {
 		return DeviceImportInvalid, limit.Code, fmt.Sprintf("credentialId exceeds the maximum of %d characters", maxCredentialIdLen), nil
+	}
+	// An access token is held as a digest of its bytes, and the limit on those is bytes.
+	if CredentialType(ctype) == CredentialAccessToken && len(credID) > credential.MaxAccessTokenBytes {
+		return DeviceImportInvalid, limit.Code, fmt.Sprintf("an access token credentialId exceeds the maximum of %d bytes", credential.MaxAccessTokenBytes), nil
 	}
 	if len(row.Token)+len(importCredentialTokenSuffix) > core.MaxTokenLen {
 		return DeviceImportInvalid, limit.Code,
@@ -372,6 +379,15 @@ func (api *Api) ImportDevices(ctx context.Context, rows []*DeviceImportRow, mode
 	return result, nil
 }
 
+// importStoredCredentialId is the stored credential_id of an import row's credential.
+func (api *Api) importStoredCredentialId(ctx context.Context, p *importRow) (string, error) {
+	tenant, err := tenantOf(ctx)
+	if err != nil {
+		return "", err
+	}
+	return storedCredentialId(api.DeviceSecretKey, tenant, p.credType, p.credID)
+}
+
 // decideImportRows is the database half: it reads what the pending rows could collide with
 // in a handful of batched queries, decides every row, and (unless dryRun) writes the rows
 // that are new, one transaction each.
@@ -392,7 +408,12 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 			externals = append(externals, p.external)
 		}
 		if p.credID != "" {
-			credIDs[p.credType] = append(credIDs[p.credType], p.credID)
+			stored, err := api.importStoredCredentialId(ctx, p)
+			if err != nil {
+				return err
+			}
+			p.credStored = stored
+			credIDs[p.credType] = append(credIDs[p.credType], stored)
 		}
 	}
 
@@ -438,7 +459,7 @@ func (api *Api) decideImportRows(ctx context.Context, result *DeviceImportResult
 		row := p.row
 		i := p.idx
 		dt := types[strings.TrimSpace(row.DeviceTypeToken)]
-		credKey := p.credType + "\x00" + p.credID
+		credKey := p.credType + "\x00" + p.credStored
 
 		if dev := byToken[row.Token]; dev != nil {
 			if diff := differingFields(dev, p); len(diff) > 0 {

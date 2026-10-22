@@ -5,7 +5,9 @@
 // device-management schema. The secret (credentialValue) is write-only on the
 // API: it is submitted on create or rotation and never returned on read (the
 // platform keeps only a keyed digest of it). The list query below deliberately does
-// not select it.
+// not select it. An access token is the same: it is the credentialId of an ACCESS_TOKEN
+// credential, stored only as a digest, and returned ONCE, on the create or rotation that
+// set it. A read of an ACCESS_TOKEN returns a fingerprint that cannot be presented.
 import { gql } from '@devicechain/client';
 import { graphql } from '@/gql/device-management';
 import type {
@@ -70,8 +72,8 @@ const DELETE_DEVICE_CREDENTIAL = graphql(`
 `);
 
 // List a device's credentials (newest-first is not guaranteed; the set is small).
-// Requires device:write, not device:read: the returned credentialId is the bearer
-// secret for ACCESS_TOKEN, so reading confers impersonation.
+// Requires device:write, not device:read. For an ACCESS_TOKEN the credentialId read here
+// is a fingerprint, not the token, which is only ever shown once.
 export async function listDeviceCredentials(deviceToken: string): Promise<DeviceCredential[]> {
   const data = await gql('device-management', DEVICE_CREDENTIALS, {
     criteria: { pageNumber: 1, pageSize: 100, device: deviceToken },
@@ -90,6 +92,14 @@ export async function createDeviceCredential(request: DeviceCredentialCreateRequ
 // stops working at once. Requires device:write.
 export async function rotateDeviceCredentialSecret(token: string, credentialValue: string) {
   return (await gql('device-management', UPDATE_DEVICE_CREDENTIAL, { token, request: { credentialValue } }))
+    .updateDeviceCredential;
+}
+
+// Set a new access token on an ACCESS_TOKEN credential (rotation). The old token stops
+// working at once. The returned credentialId is the new token and is the only time it is
+// readable. Requires device:write.
+export async function rotateDeviceCredentialToken(token: string, credentialId: string) {
+  return (await gql('device-management', UPDATE_DEVICE_CREDENTIAL, { token, request: { credentialId } }))
     .updateDeviceCredential;
 }
 

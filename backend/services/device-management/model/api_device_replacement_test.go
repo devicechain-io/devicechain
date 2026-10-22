@@ -157,9 +157,13 @@ func TestReplaceDeviceRetiresEveryLiveCredential(t *testing.T) {
 		"tech@acme.example", time.Now())
 	require.NoError(t, err, "replace device")
 
+	// deviceCredentialForConnect matches the STORED id, so it is asked by the digest the
+	// retired token is stored as; a plaintext would miss it whether or not it was retired.
 	finders := map[string]func(context.Context, string, string) (*DeviceCredential, error){
 		"DeviceCredentialByCredentialId": api.DeviceCredentialByCredentialId,
-		"deviceCredentialForConnect":     api.deviceCredentialForConnect,
+		"deviceCredentialForConnect": func(ctx context.Context, ctype, id string) (*DeviceCredential, error) {
+			return api.deviceCredentialForConnect(ctx, ctype, testTokenDigest(partialUpdateTenant, id))
+		},
 	}
 	for name, find := range finders {
 		for _, bearer := range []string{"bearer-never", "bearer-future", "bearer-expired"} {
@@ -171,8 +175,9 @@ func TestReplaceDeviceRetiresEveryLiveCredential(t *testing.T) {
 
 	// The counterweight — a replacement that disabled everything and minted nothing
 	// would pass every assertion above while leaving the device unable to speak.
+	require.NotEmpty(t, result.NewCredential.IssuedCredentialId, "the minted token is returned once")
 	resolved, err := api.DeviceCredentialByCredentialId(ctx,
-		string(CredentialAccessToken), result.NewCredential.CredentialId)
+		string(CredentialAccessToken), result.NewCredential.IssuedCredentialId)
 	require.NoError(t, err, "the incoming unit's credential does not resolve")
 	require.Equal(t, device.ID, resolved.DeviceId, "new credential bound to the wrong device")
 }
