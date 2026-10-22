@@ -152,6 +152,57 @@ type PeriodicTaskMetrics struct {
 	passes      *prometheus.CounterVec
 	duration    prometheus.Histogram
 	lastSuccess prometheus.Gauge
+
+	// failLog rate-limits the failure log line so a sustained outage logs once, not once a pass.
+	failLog failStreak
+}
+
+// FailureLogEvery is the longest a task that keeps failing goes between failure log lines.
+// A pass that fails every second during a database outage would otherwise log an error a
+// second for the length of the outage; the counter still counts every pass.
+const FailureLogEvery = time.Minute
+
+// failStreak is the state behind the rate-limited failure log: whether the task is inside a
+// run of failed passes, when it last said so, and how many failures it has not logged since.
+type failStreak struct {
+	mu         sync.Mutex
+	failing    bool
+	lastLogged time.Time
+	suppressed int
+	// now is the clock; nil means time.Now. A test sets it.
+	now func() time.Time
+}
+
+func (f *failStreak) clock() time.Time {
+	if f.now != nil {
+		return f.now()
+	}
+	return time.Now()
+}
+
+// failed notes one failed pass and reports whether to log it, with the failures suppressed
+// since the last line. The first failure of a streak always logs.
+func (f *failStreak) failed() (log bool, suppressed int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	now := f.clock()
+	if !f.failing || now.Sub(f.lastLogged) >= FailureLogEvery {
+		suppressed = f.suppressed
+		f.failing, f.lastLogged, f.suppressed = true, now, 0
+		return true, suppressed
+	}
+	f.suppressed++
+	return false, 0
+}
+
+// recovered ends a streak, reporting whether one was in progress and how many failures went
+// unlogged. A streak is a run of failed passes; only a complete pass ends it.
+func (f *failStreak) recovered() (was bool, suppressed int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	was, suppressed = f.failing, f.suppressed
+	f.failing, f.suppressed = false, 0
+	return was, suppressed
 }
 
 // NewPeriodicTaskMetrics builds the three signals under this service's namespace.
@@ -368,14 +419,33 @@ func (m *PeriodicTaskMetrics) RecordPass(ctx context.Context, err error, started
 	m.record(outcome, time.Since(started), time.Now())
 
 	switch outcome {
-	case PassComplete, PassCancelled:
-		// Nothing to say. A completed pass logs its own findings if it has any, and a
-		// cancelled one is the operator's own deploy.
+	case PassComplete:
+		// A completed pass logs its own findings if it has any. The one thing said here is the
+		// end of a failure streak, so an operator reading the log sees the outage close.
+		if m != nil {
+			if was, n := m.failLog.recovered(); was {
+				log.Info().Str("task", name).Int("suppressed", n).
+					Msg("Maintenance pass recovered after failing.")
+			}
+		}
+	case PassCancelled:
+		// Nothing to say: a cancelled pass is the operator's own deploy.
 	case PassSkipped:
 		log.Debug().Str("task", name).Msg("Maintenance pass skipped; another replica holds the lock.")
 	case PassPartial:
 		log.Warn().Err(err).Str("task", name).Msg("Maintenance pass completed only part of its work.")
 	default:
+		// RATE-LIMITED PER TASK: once on entry to a failure streak, then at most once a
+		// FailureLogEvery with the count it swallowed, then once on recovery (above). A nil
+		// receiver has nowhere to keep a streak and logs every failure, as it always did.
+		if m != nil {
+			emit, n := m.failLog.failed()
+			if !emit {
+				return
+			}
+			log.Error().Err(err).Str("task", name).Int("suppressed", n).Msg("Maintenance pass failed.")
+			return
+		}
 		log.Error().Err(err).Str("task", name).Msg("Maintenance pass failed.")
 	}
 }

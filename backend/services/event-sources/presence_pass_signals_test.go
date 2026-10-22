@@ -160,3 +160,46 @@ func TestAFailedReconcileIsAFailedPass(t *testing.T) {
 		t.Fatal("the presence loops did not stop on cancel")
 	}
 }
+
+// initializePresenceMetrics is where the service binds its three presence task names. The loop
+// tests build their own metrics through newPresenceLoopMetrics, so nothing else proves the
+// STARTUP path registers them: a service that stopped calling the constructor (or left a field
+// nil, which still classifies and logs) would export no pass series at all.
+func TestThePresencePassSeriesAreRegisteredAtStartup(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	prevMS, prevDemote, prevLoops := Microservice, PresenceDemoteTaskMetrics, PresenceLoopTaskMetrics
+	t.Cleanup(func() {
+		Microservice, PresenceDemoteTaskMetrics, PresenceLoopTaskMetrics = prevMS, prevDemote, prevLoops
+	})
+	Microservice = &core.Microservice{InstanceId: "inst-1", FunctionalArea: "event-sources"}
+	Microservice.UseMetricsRegistry(reg)
+	PresenceDemoteTaskMetrics, PresenceLoopTaskMetrics = nil, presenceLoopMetrics{}
+
+	initializePresenceMetrics()
+
+	require.NotNil(t, PresenceDemoteTaskMetrics, "the demote drain files no passes")
+	require.NotNil(t, PresenceLoopTaskMetrics.reconcile, "the reconcile loop files no passes")
+	require.NotNil(t, PresenceLoopTaskMetrics.canary, "the canary loop files no passes")
+
+	// Each task's last-success gauge exists from registration (NaN until a pass completes), so
+	// it is visible before any pass has run; the counter appears with its first pass.
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	have := map[string]bool{}
+	for _, f := range families {
+		have[f.GetName()] = true
+	}
+	for _, task := range []string{"presence_demote", "presence_reconcile", "presence_canary"} {
+		assert.True(t, have["devicechain_eventsources_"+task+"_last_success_timestamp_seconds"],
+			"%s is not registered by the startup path", task)
+	}
+
+	// And each field is bound to its own name: filing through one moves only that series.
+	PresenceLoopTaskMetrics.canary.RecordPass(context.Background(), nil, time.Now(), "presence-canary")
+	PresenceLoopTaskMetrics.reconcile.RecordPass(context.Background(), errors.New("x"), time.Now(), "presence-reconcile")
+	PresenceDemoteTaskMetrics.RecordPass(context.Background(), nil, time.Now(), "presence-demote")
+	assert.Equal(t, float64(1), passSample(t, reg, canaryPasses, core.PassComplete))
+	assert.Equal(t, float64(1), passSample(t, reg, reconcilePasses, core.PassFailed))
+	assert.Zero(t, passSample(t, reg, canaryPasses, core.PassFailed))
+	assert.Equal(t, float64(1), passSample(t, reg, "devicechain_eventsources_presence_demote_passes_total", core.PassComplete))
+}

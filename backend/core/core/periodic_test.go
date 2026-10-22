@@ -4,10 +4,13 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -516,4 +519,82 @@ func TestRecordPassOnNilMetricsStillLogs(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A task that fails every pass for the length of an outage logs once on entry, once per
+// FailureLogEvery with the count it swallowed, and once when it recovers -- not once a pass.
+// It drives RecordPass, the caller every loop uses, under a controlled clock.
+func TestASustainedFailureLogsOnEntryPeriodicallyAndOnRecovery(t *testing.T) {
+	logs := captureCoreLogs(t)
+	m, _ := newTaskMetrics(t, "tick")
+	clock := time.Unix(1_000_000, 0)
+	m.failLog.now = func() time.Time { return clock }
+	boom := errors.New("db down")
+	pass := func(err error) { m.RecordPass(context.Background(), err, time.Now(), "detect-tick") }
+	lines := func() []map[string]any {
+		var out []map[string]any
+		for _, l := range bytes.Split(bytes.TrimSpace([]byte(logs.String())), []byte("\n")) {
+			if len(l) == 0 {
+				continue
+			}
+			var e map[string]any
+			require.NoError(t, json.Unmarshal(l, &e))
+			out = append(out, e)
+		}
+		return out
+	}
+
+	for i := 0; i < 30; i++ { // thirty seconds of failure, one pass a second
+		pass(boom)
+		clock = clock.Add(time.Second)
+	}
+	got := lines()
+	require.Len(t, got, 1, "thirty failed passes in half a minute logged more than the entry line")
+	assert.Equal(t, "error", got[0]["level"])
+	assert.EqualValues(t, 0, got[0]["suppressed"])
+
+	for i := 0; i < 60; i++ { // cross the minute boundary
+		pass(boom)
+		clock = clock.Add(time.Second)
+	}
+	got = lines()
+	require.Len(t, got, 2, "the periodic line did not appear once the minute was up")
+	assert.EqualValues(t, 59, got[1]["suppressed"], "the periodic line must say how many failures it swallowed")
+
+	pass(nil)
+	got = lines()
+	require.Len(t, got, 3)
+	assert.Equal(t, "info", got[2]["level"], "recovery is logged once")
+	assert.Contains(t, got[2]["message"], "recovered")
+
+	pass(nil)
+	assert.Len(t, lines(), 3, "a second complete pass logged a second recovery")
+
+	pass(boom)
+	got = lines()
+	require.Len(t, got, 4, "a new outage must log on entry again")
+	assert.EqualValues(t, 0, got[3]["suppressed"])
+}
+
+// A failure streak is per task: another task's failures neither hide nor end it.
+func TestFailureLogStateIsPerTask(t *testing.T) {
+	logs := captureCoreLogs(t)
+	a, _ := newTaskMetrics(t, "a")
+	b, _ := newTaskMetrics(t, "b")
+	a.RecordPass(context.Background(), errors.New("x"), time.Now(), "a")
+	b.RecordPass(context.Background(), errors.New("x"), time.Now(), "b")
+	assert.Equal(t, 2, strings.Count(logs.String(), "Maintenance pass failed."))
+}
+
+// A cancelled pass neither logs nor ends a streak: shutdown is not a recovery.
+func TestACancelledPassDoesNotEndAFailureStreak(t *testing.T) {
+	logs := captureCoreLogs(t)
+	m, _ := newTaskMetrics(t, "t")
+	m.RecordPass(context.Background(), errors.New("x"), time.Now(), "t")
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	m.RecordPass(cancelled, nil, time.Now(), "t")
+	assert.NotContains(t, logs.String(), "recovered")
+	m.RecordPass(context.Background(), nil, time.Now(), "t")
+	assert.Contains(t, logs.String(), "recovered", "the streak the cancelled pass left open ends on the next complete one")
 }
