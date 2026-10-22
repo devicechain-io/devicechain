@@ -57,6 +57,7 @@ func loadTuning(t *testing.T) map[string]interface{} {
 // The overlay reaches the values the chart is installed with, over what dcctl computed --
 // and does not disturb what dcctl owns beside it.
 func TestTheOverlayIsAppliedOverWhatDcctlComputes(t *testing.T) {
+	t.Parallel()
 	st := persistenceState(true, false, "default") // --ha: dcctl sets event-management.replicas
 	st.ValuesOverlay = loadTuning(t)
 
@@ -94,6 +95,7 @@ func TestTheOverlayIsAppliedOverWhatDcctlComputes(t *testing.T) {
 // The overlay is judged before it can touch a render: with no overlay the values are
 // exactly what they were (the change is inert for every existing caller).
 func TestNoOverlayLeavesTheValuesAlone(t *testing.T) {
+	t.Parallel()
 	st := compactState(false)
 	a, _, err := releaseValues(t.Context(), chartForTest(t), st, nil)
 	if err != nil {
@@ -165,6 +167,7 @@ func TestValuesReplacesTheRecordedOverlay(t *testing.T) {
 
 // --reset-values returns the instance to what dcctl computes.
 func TestResetValuesClearsTheRecordedOverlay(t *testing.T) {
+	t.Parallel()
 	st := &State{Instance: "prod"}
 	if err := applyUpgradeValuesOverlay(st, declarationWithOverlay(t, loadTuning(t)),
 		UpgradeOptions{Options: Options{ResetValues: true}}); err != nil {

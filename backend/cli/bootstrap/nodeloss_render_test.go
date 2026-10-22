@@ -155,6 +155,7 @@ func TestEveryRenderedPodCarriesTheNodeLossFuse(t *testing.T) {
 //   - 0 is a real request -- evict as soon as the taint lands -- and must render
 //     as 0, which `with` would have treated as unset.
 func TestNodeLossFuseNullRendersNoneAndZeroRendersZero(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		value interface{}

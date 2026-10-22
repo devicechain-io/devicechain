@@ -137,6 +137,7 @@ func TestCompactLowersTheCeilingsAServiceReads(t *testing.T) {
 // Without --compact nothing changes. The preset must be opt-in all the way
 // through, or the published DEFAULT footprint is measuring the compact sizing.
 func TestWithoutCompactTheCeilingsAreUntouched(t *testing.T) {
+	t.Parallel()
 	n := renderFromState(t, compactState(false)).Infrastructure.Nats
 
 	if n.StreamMaxBytes != config.DefaultStreamMaxBytes {
@@ -515,6 +516,7 @@ func TestCompactPassesTheConfigTheServicesEnforce(t *testing.T) {
 // chart's untouched 256Mi limit is a pod spec the API server rejects outright. A
 // preset that made every pod uncreatable would have passed.
 func TestCompactLowersRequestsAndNotLimits(t *testing.T) {
+	t.Parallel()
 	if _, ok := helmValues(compactState(true))["resources"]; !ok {
 		t.Fatal("--compact set no resources: the pods keep the full-size requests and " +
 			"the preset's whole scheduling claim is unfounded")

@@ -75,6 +75,7 @@ func composedForTest(t *testing.T, st *State) (doc []byte, install map[string]in
 // document the pods actually mount must still carry them, or this is a release that
 // hides the credentials by not having any.
 func TestTheCredentialsLeaveTheHelmValuesAndStayInTheDocument(t *testing.T) {
+	t.Parallel()
 	st := composeStateForTest()
 	doc, install := composedForTest(t, st)
 
@@ -119,6 +120,7 @@ func TestTheCredentialsLeaveTheHelmValuesAndStayInTheDocument(t *testing.T) {
 // makes the digest something other than "the hash of what the pods mount", which is
 // the one thing it is relied on for.
 func TestTheDeclaredChecksumIsTheOneTheInlinePathWouldHaveStamped(t *testing.T) {
+	t.Parallel()
 	st := composeStateForTest()
 	ch := chartForTest(t)
 	authoring := helmValues(st)
@@ -158,6 +160,7 @@ func TestTheDeclaredChecksumIsTheOneTheInlinePathWouldHaveStamped(t *testing.T) 
 // nothing: a release that carries BOTH a rendered Secret and a document dcctl wrote
 // is two documents for one mount point.
 func TestTheInstallValuesPointAtTheSecretAndTheChartWritesNone(t *testing.T) {
+	t.Parallel()
 	st := composeStateForTest()
 	ch := chartForTest(t)
 	doc, install := composedForTest(t, st)
@@ -199,6 +202,7 @@ func TestTheInstallValuesPointAtTheSecretAndTheChartWritesNone(t *testing.T) {
 // database that are nothing like the chart's, so a restatement taken from anywhere
 // but the document gives the wrong answer.
 func TestTheRestatedCoordinatesFollowTheDocumentAndNotTheChartDefaults(t *testing.T) {
+	t.Parallel()
 	authoring := map[string]interface{}{
 		// The policy only renders where outbound-connectors is deployed — it exists to
 		// bound that one service's egress — so the fixture deploys it.
@@ -316,6 +320,7 @@ func TestComposingStillRunsTheChartsAuthoringGuards(t *testing.T) {
 // Secret makes the chart render no document, and a nil read as success would write
 // an empty document over a live instance's configuration.
 func TestComposingRefusesValuesThatAlreadyNameASecret(t *testing.T) {
+	t.Parallel()
 	ch := chartForTest(t)
 	_, err := composeInstanceConfig(t.Context(), ch, externalValues(digest("a")))
 	if err == nil {
@@ -661,6 +666,7 @@ func TestTheTakeoverIsANoOpOnAFreshInstall(t *testing.T) {
 // those leaves rules that load, evaluate nothing and never fire — an instance that
 // looks monitored and is not.
 func TestRestatingACoordinateDoesNotDropTheBlockItLandsIn(t *testing.T) {
+	t.Parallel()
 	st := composeStateForTest()
 	st.Values[databaseBackupsKey] = "true"
 	st.Values[cnpgNamespaceKey] = "cnpg-system"

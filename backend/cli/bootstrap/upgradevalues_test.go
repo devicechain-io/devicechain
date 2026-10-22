@@ -166,6 +166,7 @@ func upgradeReleaseValues(t *testing.T, previous map[string]interface{}) map[str
 // is moving an instance. Without it, an upgrade would compute fresh values, drop the
 // provisioned LwM2M Secret from the manifest, and Helm would delete it.
 func TestReleaseValuesCarriesThePreviousReleaseOnAnUpgrade(t *testing.T) {
+	t.Parallel()
 	vals := upgradeReleaseValues(t, aPreviousRelease())
 
 	secrets, _ := vals["extraSecrets"].([]interface{})
@@ -192,6 +193,7 @@ func TestReleaseValuesCarriesThePreviousReleaseOnAnUpgrade(t *testing.T) {
 // ...and the counterweight: a run that is BUILDING an instance carries nothing, even
 // handed a release map, because there is no release whose values it may inherit.
 func TestReleaseValuesCarriesNothingOnAFreshInstall(t *testing.T) {
+	t.Parallel()
 	st := profileState(false, false, "default")("dci-fresh")
 	vals, _, err := releaseValues(t.Context(), chartForTest(t), st, aPreviousRelease())
 	if err != nil {

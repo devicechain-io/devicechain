@@ -428,6 +428,7 @@ func opensTheRelationalStore(path string) (bool, error) {
 // instance reserving connections nothing uses. The services' source is the witness — see
 // opensTheRelationalStore for what counts as one.
 func TestTheRelationalAreasAreTheServicesThatOpenTheRelationalStore(t *testing.T) {
+	t.Parallel()
 	root := filepath.Join("..", "..", "services")
 	dirs, err := os.ReadDir(root)
 	if err != nil {

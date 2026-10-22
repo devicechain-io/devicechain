@@ -112,6 +112,7 @@ func renderInstanceConfig(t *testing.T, natsOverrides map[string]interface{}) *c
 // hand-maintained mirror of exactly the kind core/streams and core/kv exist to
 // eliminate.
 func TestChartJetStreamCeilingsReachTheStruct(t *testing.T) {
+	t.Parallel()
 	cfg := renderInstanceConfig(t, nil)
 	n := cfg.Infrastructure.Nats
 
@@ -144,6 +145,7 @@ func TestChartJetStreamCeilingsReachTheStruct(t *testing.T) {
 // user values completely, since its expected numbers ARE the defaults; this is the
 // half that proves the override path works.
 func TestChartOverriddenCeilingsReachTheStruct(t *testing.T) {
+	t.Parallel()
 	const (
 		wantHot     int64 = 64 << 20
 		wantCold    int64 = 16 << 20
@@ -392,6 +394,7 @@ func TestBootstrapRejectsAConfigTheServicesWouldRefuse(t *testing.T) {
 // is caught by config.Validate — reaching the gate through State exactly as a real
 // bootstrap would.
 func TestHelmInstallChecksTheConfigBeforeTouchingTheCluster(t *testing.T) {
+	t.Parallel()
 	st := &State{
 		Instance: "dctest",
 		Profile:  "default",
@@ -431,6 +434,7 @@ func TestHelmInstallChecksTheConfigBeforeTouchingTheCluster(t *testing.T) {
 // they wrote it or not, and the failure this catches is one shipped key, not one written
 // key.
 func TestChartRenderedInstanceConfigLoadsThroughTheServiceLoader(t *testing.T) {
+	t.Parallel()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading embedded chart: %v", err)

@@ -1050,7 +1050,7 @@ func withArchiveState(t *testing.T, live clusterArchiveState, err error) {
 // the caller is testing. Generating them the way bootstrap does keeps that honest.
 func deployedWithRootKey(t *testing.T, rootKey string) *config.InstanceConfiguration {
 	t.Helper()
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatalf("generating credentials for the fake deployed instance: %v", err)
 	}
@@ -1260,6 +1260,7 @@ users:
 // ReconcileEscrow is what a re-run does instead of refusing. Each branch tells the
 // operator something different, and one of them is a refusal.
 func TestReconcileEscrowOnARerun(t *testing.T) {
+	t.Parallel()
 	t.Run("an artifact holding the running key is verified, not rewritten", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "prod.escrow")
 		plan := EscrowPlan{Path: path, Passphrase: "pw"}
