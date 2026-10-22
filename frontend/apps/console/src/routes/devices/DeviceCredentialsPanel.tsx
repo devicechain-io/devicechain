@@ -245,13 +245,17 @@ export function DeviceCredentialsPanel({ deviceToken }: { deviceToken: string })
             </div>
           )}
           <div className="flex items-center gap-1.5">
-            <span
-              className="font-mono text-xs break-all text-foreground"
-              data-testid={issued.kind === 'token' ? 'issued-token' : 'issued-password'}
-              data-shot-mask
-            >
-              {issued.secret}
-            </span>
+            {/* Two literal test ids rather than one computed: the guide-capture anchor
+                check finds data-testid="issued-password" by its text. */}
+            {issued.kind === 'token' ? (
+              <span className="font-mono text-xs break-all text-foreground" data-testid="issued-token" data-shot-mask>
+                {issued.secret}
+              </span>
+            ) : (
+              <span className="font-mono text-xs break-all text-foreground" data-testid="issued-password" data-shot-mask>
+                {issued.secret}
+              </span>
+            )}
             <IconButton
               label={issued.kind === 'token' ? t('copyTokenAriaLabel') : t('copyPasswordAriaLabel')}
               variant="quiet"

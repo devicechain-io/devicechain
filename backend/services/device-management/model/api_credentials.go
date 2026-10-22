@@ -483,7 +483,7 @@ func (api *Api) DeviceCredentialByCredentialId(ctx context.Context, credentialTy
 // presentedCredentialLookupId is the stored credential_id a presented (type, id) is matched
 // against: storedCredentialId under the context's tenant. A missing tenant or key is an
 // error, never a lookup that matches nothing quietly. An access token longer than any
-// stored one matches nothing and is not digested.
+// stored one (credential.MaxStoredAccessTokenBytes) matches nothing and is not digested.
 func (api *Api) presentedCredentialLookupId(ctx context.Context, ctype, id string) (string, error) {
 	if !accessTokenCredential(ctype) {
 		return id, nil
@@ -492,7 +492,7 @@ func (api *Api) presentedCredentialLookupId(ctx context.Context, ctype, id strin
 	if err != nil {
 		return "", err
 	}
-	if len(id) > credential.MaxAccessTokenBytes {
+	if len(id) > credential.MaxStoredAccessTokenBytes {
 		return "", gorm.ErrRecordNotFound
 	}
 	return storedCredentialId(api.DeviceSecretKey, tenant, ctype, id)

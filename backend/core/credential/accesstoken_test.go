@@ -65,7 +65,7 @@ func TestAccessTokenDigestVerifiesOnlyItsTokenInItsTenant(t *testing.T) {
 		"a digest copied into another tenant's row must verify nothing there")
 	require.ErrorIs(t, credential.VerifyAccessToken(k, "", d, "tok"), credential.ErrMismatch)
 	require.ErrorIs(t, credential.VerifyAccessToken(nil, "acme", d, "tok"), credential.ErrMismatch, "no key fails closed")
-	require.ErrorIs(t, credential.VerifyAccessToken(k, "acme", d, strings.Repeat("x", credential.MaxAccessTokenBytes+1)), credential.ErrMismatch)
+	require.ErrorIs(t, credential.VerifyAccessToken(k, "acme", d, strings.Repeat("x", credential.MaxStoredAccessTokenBytes+1)), credential.ErrMismatch)
 }
 
 // A stored value that is not a digest this key made is refused as unrecognized and never
@@ -108,9 +108,11 @@ func TestAccessTokenDigestRefusals(t *testing.T) {
 	require.Error(t, err)
 	_, err = k.AccessTokenDigest("acme", "")
 	require.Error(t, err, "no token has no digest")
-	_, err = k.AccessTokenDigest("acme", strings.Repeat("x", credential.MaxAccessTokenBytes+1))
+	_, err = k.AccessTokenDigest("acme", strings.Repeat("x", credential.MaxStoredAccessTokenBytes+1))
 	require.Error(t, err)
-	_, err = k.AccessTokenDigest("acme", strings.Repeat("x", credential.MaxAccessTokenBytes))
+	// A token the old column held is digested whatever its encoding: 256 characters of
+	// four bytes each is the longest.
+	_, err = k.AccessTokenDigest("acme", strings.Repeat("🔑", credential.MaxAccessTokenBytes))
 	require.NoError(t, err)
 }
 

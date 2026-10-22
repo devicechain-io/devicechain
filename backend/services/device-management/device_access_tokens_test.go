@@ -43,6 +43,10 @@ var legacyTokens = map[string]struct{ tenant, token string }{
 	"b-1":   {"beta", "tok-b1"},
 	// The same token string in two tenants: two rows, two digests, one tenant each.
 	"b-same": {"beta", "tok-a1"},
+	// The old column bounded a token in CHARACTERS (256), not bytes, so a stored token can be
+	// longer in bytes than a new one may be set to. It must still convert and authenticate:
+	// a conversion that refused it would stop the service from starting.
+	"a-wide": {"acme", strings.Repeat("漢", 256)},
 }
 
 func newLegacyTokenFixture(t *testing.T) legacyTokenFixture {

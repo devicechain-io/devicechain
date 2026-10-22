@@ -41,9 +41,15 @@ const accessTokenKeyInfo = "devicechain/device-access-token-lookup/v1"
 
 const (
 	accessTokenVersion = "dctk1"
-	// MaxAccessTokenBytes is the longest access token a credential may carry: the credential
+	// MaxAccessTokenBytes is the longest access token a credential may be SET to: the credential
 	// id column's width. A longer one is refused where it is accepted, not truncated.
 	MaxAccessTokenBytes = 256
+	// MaxStoredAccessTokenBytes is the longest access token a credential may already HOLD, and
+	// so the longest one that is digested and looked up. Before tokens were digested the column
+	// bounded a token at 256 CHARACTERS, not bytes, so a token stored then can be up to four
+	// bytes a character. Bounding the digest at the write limit instead would leave such a row
+	// unconvertible: the startup conversion would fail and the service would not start.
+	MaxStoredAccessTokenBytes = 4 * MaxAccessTokenBytes
 )
 
 // ErrAccessTokenUnrecognized is returned for a stored value that is not an access token
@@ -51,7 +57,7 @@ const (
 var ErrAccessTokenUnrecognized = errors.New("credential: stored access token is not a digest made by this key")
 
 // AccessTokenDigest returns the stored form of tenant's access token. It is deterministic.
-// An empty tenant or token, and a token over MaxAccessTokenBytes, are refused.
+// An empty tenant or token, and a token over MaxStoredAccessTokenBytes, are refused.
 func (k *DeviceSecretKey) AccessTokenDigest(tenant, token string) (string, error) {
 	if tenant == "" {
 		return "", errors.New("credential: an access token digest needs the credential's tenant")
@@ -59,8 +65,8 @@ func (k *DeviceSecretKey) AccessTokenDigest(tenant, token string) (string, error
 	if token == "" {
 		return "", errors.New("credential: an empty access token has no digest")
 	}
-	if len(token) > MaxAccessTokenBytes {
-		return "", fmt.Errorf("credential: an access token is at most %d bytes, got %d", MaxAccessTokenBytes, len(token))
+	if len(token) > MaxStoredAccessTokenBytes {
+		return "", fmt.Errorf("credential: an access token is at most %d bytes, got %d", MaxStoredAccessTokenBytes, len(token))
 	}
 	return k.accessTokenDigest(tenant, token), nil
 }
@@ -112,7 +118,7 @@ func (k *DeviceSecretKey) RecognizesAccessToken(stored string) error {
 // It is unthrottled, like VerifyDeviceSecret, and hack/check-credential-compare.sh
 // refuses any production caller without a stated exemption.
 func VerifyAccessToken(k *DeviceSecretKey, tenant, stored, token string) error {
-	if k == nil || tenant == "" || token == "" || len(token) > MaxAccessTokenBytes {
+	if k == nil || tenant == "" || token == "" || len(token) > MaxStoredAccessTokenBytes {
 		return ErrMismatch
 	}
 	want := []byte(stored)
