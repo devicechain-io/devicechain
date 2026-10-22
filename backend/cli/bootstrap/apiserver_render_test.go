@@ -177,17 +177,60 @@ func installProfile(t *testing.T, cfg *action.Configuration, c client.Client, ch
 	inst.ReleaseName = helmReleaseNameFor(instance)
 	inst.Namespace = helmReleaseNamespace
 	inst.Wait = false
-	return inst.RunWithContext(t.Context(), ch, vals)
+	inst.DisableHooks = true // see hooksAsObjects
+	rel, err := inst.RunWithContext(t.Context(), ch, vals)
+	if err != nil {
+		return rel, err
+	}
+	return rel, hooksAsObjects(t, c, rel)
+}
+
+// hooksAsObjects creates a release's hook objects (the broker administrator's Job, and its copy
+// of the instance document) through the API server, so it accepts or refuses them like
+// everything else the chart renders.
+//
+// Helm itself cannot be let run them here. A hook Job is WAITED ON until it completes, envtest
+// runs no Job controller, so nothing would ever complete it; and Helm runs a pre-install hook
+// before the release creates the namespace it lives in, which dcctl creates first
+// (ensureNamespaceForRelease) and this harness does not. So Helm is told to skip the hooks and
+// this applies them, after the release, the way before-hook-creation would: what is there is
+// replaced.
+func hooksAsObjects(t *testing.T, c client.Client, rel *release.Release) error {
+	t.Helper()
+	for _, h := range rel.Hooks {
+		obj := &unstructured.Unstructured{}
+		if err := yaml.Unmarshal([]byte(h.Manifest), &obj.Object); err != nil {
+			return fmt.Errorf("decoding hook %s: %w", h.Path, err)
+		}
+		if len(obj.Object) == 0 {
+			continue
+		}
+		// Background, because a Job's default is to orphan its pods, which puts a finalizer on it
+		// that only the garbage collector removes, and envtest runs none: the delete would never
+		// finish and the create after it would find the Job still there.
+		if err := c.Delete(t.Context(), obj.DeepCopy(), client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("replacing hook %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+		if err := c.Create(t.Context(), obj); err != nil {
+			return fmt.Errorf("the API server refused hook %s %s: %w", obj.GetKind(), obj.GetName(), err)
+		}
+	}
+	return nil
 }
 
 // upgradeRelease upgrades through newHelmUpgrade, the action every dcctl re-run of the
 // chart goes through, with Wait off (nothing becomes ready under envtest).
-func upgradeRelease(t *testing.T, cfg *action.Configuration, name string, ch *chart.Chart,
+func upgradeRelease(t *testing.T, c client.Client, cfg *action.Configuration, name string, ch *chart.Chart,
 	vals map[string]interface{}) (*release.Release, error) {
 	t.Helper()
 	upg := newHelmUpgrade(cfg, helmReleaseNamespace)
 	upg.Wait = false
-	return upg.RunWithContext(t.Context(), name, ch, vals)
+	upg.DisableHooks = true // see hooksAsObjects
+	rel, err := upg.RunWithContext(t.Context(), name, ch, vals)
+	if err != nil || c == nil {
+		return rel, err
+	}
+	return rel, hooksAsObjects(t, c, rel)
 }
 
 // everyObjectIsThere reports what in the release manifest the server does not hold.
@@ -343,7 +386,7 @@ func probeInstall(t *testing.T, cfg *action.Configuration, name string, d *appsv
 // probeUpgrade upgrades the probe release to d, through newHelmUpgrade.
 func probeUpgrade(t *testing.T, cfg *action.Configuration, name string, d *appsv1.Deployment) error {
 	t.Helper()
-	_, err := upgradeRelease(t, cfg, name, probeChart(), probeValues(t, d))
+	_, err := upgradeRelease(t, nil, cfg, name, probeChart(), probeValues(t, d))
 	return err
 }
 
@@ -488,7 +531,7 @@ func TestAnUpgradeLeavesTheChartsPlacementInPlace(t *testing.T) {
 		}
 		for i, s := range steps {
 			if i > 0 {
-				if rel, err = upgradeRelease(t, cfg, helmReleaseNameFor(instance), ch, s.vals); err != nil {
+				if rel, err = upgradeRelease(t, c, cfg, helmReleaseNameFor(instance), ch, s.vals); err != nil {
 					t.Fatalf("upgrading to %s: %v", s.name, err)
 				}
 			}
