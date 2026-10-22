@@ -163,8 +163,14 @@ func TestADriftedStreamIsRefusedByNameAndTheAdministratorRestoresIt(t *testing.T
 	_, err := admin.ReconcileBroker(context.Background(), []string{"event-sources"})
 	require.NoError(t, err)
 	name := StreamName("test", streams.InboundEvents)
+	// A stream outside the catalog for the "sources" case to copy from.
+	_, err = admin.js.AddStream(&nats.StreamConfig{Name: "elsewhere", Subjects: []string{"elsewhere.>"}})
+	require.NoError(t, err)
 
 	for label, mutate := range map[string]func(*nats.StreamConfig){
+		"sources": func(c *nats.StreamConfig) {
+			c.Sources = []*nats.StreamSource{{Name: "elsewhere"}}
+		},
 		"republish": func(c *nats.StreamConfig) {
 			c.RePublish = &nats.RePublish{Source: ">", Destination: "forged.>"}
 		},
