@@ -205,6 +205,12 @@ func TestReleaseImageSetMatchesDeployAndVerifier(t *testing.T) {
 			if !strings.Contains(helpers, `"%s/dc-broker-admin:%s" .Values.image.registry`) {
 				t.Error("the chart's broker administrator image is no longer {registry}/dc-broker-admin:{tag} -- update the release, the verifier and the chart together")
 			}
+			// ...and the local image build, which the upgrade drill and every registry bring-up
+			// populate the registry with, builds it too: a hook whose image is missing fails the
+			// install or upgrade on ImagePullBackOff before any service rolls.
+			if build := readRepoFile(t, "deploy/local/build-images.sh"); !strings.Contains(build, `build_one "$ROOT/backend/admin/dc-broker-admin" "$REGISTRY/dc-broker-admin"`) {
+				t.Error("deploy/local/build-images.sh does not build the broker administrator's image ({registry}/dc-broker-admin), which the chart's hook pulls")
+			}
 			expected = append(expected, "dc-broker-admin")
 			continue
 		}
