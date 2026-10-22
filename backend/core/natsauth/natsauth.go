@@ -215,6 +215,9 @@ type Credentials struct {
 	// IdentityAccount, held by user-management alone. See WithIdentity.
 	IdentityPassword       string
 	IdentityPasswordBcrypt string
+	// Logins are the per-principal logins (an area, or the broker administrator), keyed by
+	// principal. See WithLogins.
+	Logins map[string]Login
 }
 
 // GenerateCredentials mints a fresh set of broker-auth credentials: an account
@@ -257,7 +260,11 @@ func GenerateCredentials() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	return withXKey.WithIdentity("", "")
+	withIdentity, err := withXKey.WithIdentity("", "")
+	if err != nil {
+		return Credentials{}, err
+	}
+	return withIdentity.WithLogins(nil, nil)
 }
 
 // generateSysPassword mints the system-account login and its hash together, the
@@ -328,6 +335,8 @@ type DeployedHashes struct {
 	Service  string
 	Sys      string
 	Identity string
+	// Logins are the hashes of the per-principal logins, keyed by USERNAME (dc-<principal>-g<n>).
+	Logins map[string]string
 }
 
 // reuseOrRehash returns existing when it is a bcrypt hash of plaintext, and a fresh

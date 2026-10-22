@@ -335,6 +335,33 @@ variable "identity_password_bcrypt" {
   sensitive   = true
 }
 
+variable "login_password_bcrypts" {
+  description = <<-EOT
+    BCRYPT HASHES ($2a$...) of the per-area broker logins and the broker administrator's, keyed by
+    USERNAME (`dc-<area>-g<generation>`, `dc-broker-admin-g<generation>`). Each area holds only its own
+    plaintext, in a Secret only its Deployment mounts; the administrator's is mounted nowhere yet.
+
+    Every login lands in the APP account with the SAME permissions as the shared `dc_service` login,
+    so behaviour does not change: this gives each area a credential of its own, which a later change
+    narrows to what the area uses. They are exempt from the device callout like the other static logins.
+
+    EMPTY (the default) renders none: every instance before they existed. An upgrade passes the hashes
+    on its first apply, keeping `dc_service` beside them so the services that have not rolled yet still
+    connect.
+
+    auth_callout cannot be hot-reloaded and these join its auth_users, so setting this rolls the broker.
+    Sensitive.
+  EOT
+  type        = map(string)
+  default     = {}
+  sensitive   = true
+
+  validation {
+    condition     = alltrue([for u, h in var.login_password_bcrypts : can(regex("^dc-[a-z0-9]+(-[a-z0-9]+)*-g[0-9]+$", u)) && startswith(h, "$2")])
+    error_message = "login_password_bcrypts is keyed by username (dc-<principal>-g<generation>) and holds bcrypt hashes ($2a$...)."
+  }
+}
+
 variable "mqtt_node_port" {
   description = <<-EOT
     Local-kind only: expose the MQTT gateway as a NodePort on this node port so a
@@ -523,6 +550,10 @@ locals {
       users     = [{ user = local.identity_user, password = var.identity_password_bcrypt }]
     }
   } : {}
+
+  # The per-area logins (see var.login_password_bcrypts): same permissions as the shared service login.
+  # Terraform iterates a map in key order, so the rendered users are stable across runs.
+  login_users = [for u, h in var.login_password_bcrypts : { user = u, password = h, permissions = { publish = { deny = local.service_publish_deny } } }]
 
   sys_users = var.sys_password_bcrypt == "" ? [] : [{
     user        = local.sys_user
@@ -713,7 +744,7 @@ locals {
     accounts = merge({
       APP = {
         jetstream = "enabled"
-        users     = [{ user = local.service_user, password = var.service_password_bcrypt, permissions = { publish = { deny = local.service_publish_deny } } }]
+        users     = concat([{ user = local.service_user, password = var.service_password_bcrypt, permissions = { publish = { deny = local.service_publish_deny } } }], local.login_users)
       }
       # SYS carries a user only once the presence tap's credential has been minted.
       # The system account needs no `jetstream` and no exports: the advisories the
@@ -748,7 +779,7 @@ locals {
         issuer = var.callout_issuer_public
         # dc_identity is listed when its account exists, for the reason this list exists at all: a login
         # absent from it is handed to the DEVICE callout, which refuses it.
-        auth_users = concat([local.service_user, local.sys_user], local.identity_enabled ? [local.identity_user] : [])
+        auth_users = concat([local.service_user, local.sys_user], local.identity_enabled ? [local.identity_user] : [], [for l in local.login_users : l.user])
         account    = "APP"
       }, var.callout_xkey_public == "" ? {} : { xkey = var.callout_xkey_public })
     }
@@ -1265,6 +1296,13 @@ resource "helm_release" "nats" {
     precondition {
       condition     = var.identity_password_bcrypt == "" || var.enable_auth
       error_message = "nats identity_password_bcrypt is set but enable_auth is false: there is no broker authentication for the identity account to separate."
+    }
+
+    # Logins without the broker auth they belong to would be hashes in a config that authenticates
+    # nobody, and the operator reading it would believe each area had a credential of its own.
+    precondition {
+      condition     = length(var.login_password_bcrypts) == 0 || var.enable_auth
+      error_message = "nats login_password_bcrypts is set but enable_auth is false: there is no broker authentication for the per-area logins to belong to."
     }
 
     # An xkey without the callout it encrypts is a config the broker would carry for nothing,

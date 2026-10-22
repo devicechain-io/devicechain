@@ -212,6 +212,34 @@ TestTheChartReadsTheIdentitySecretDcctlWrites holds the two together.
 {{- .Values.instance.identitySecret | default (printf "dci-%s-identity" .Values.instance.id) -}}
 {{- end -}}
 
+{{/*
+devicechain.areasWithoutNatsLogin — the functional areas that never open a broker connection, and so
+hold no broker login and mount no login Secret: mcp fronts GraphQL over HTTP under the caller's own
+token, ai-inference calls model providers over HTTP. Every other area mounts exactly its own login.
+
+🔴 A LIST OF EXEMPTIONS, NOT OF GRANTS: an area added to the catalog gets a login by default, and has
+to be named here to be let off. The Go side is config.NatsLoginAreas (backend/core/config); a test
+renders the chart and holds the two together.
+*/}}
+{{- define "devicechain.areasWithoutNatsLogin" -}}
+mcp,ai-inference
+{{- end -}}
+
+{{/*
+The Secret holding one area's OWN broker login (keys `user` and `password`), projected as
+DC_NATS_USER / DC_NATS_PASSWORD into that area's Deployment and no other. Each area connecting as
+itself is the point: a login every pod could read would be per-area in name only. dcctl writes
+the Secrets under dci-<id>-nats-<area>; instance.natsLoginSecrets (area to name) overrides one for an
+install that manages its Secrets itself.
+
+Takes (dict "root" . "area" <area>). The name is spelled in Go too (natsLoginSecretName in
+backend/cli/bootstrap/natsloginsecret.go); TestTheChartMountsEachAreaItsOwnBrokerLogin holds the two
+together.
+*/}}
+{{- define "devicechain.natsLoginSecret" -}}
+{{- get ((.root.Values.instance.natsLoginSecrets) | default dict) .area | default (printf "dci-%s-nats-%s" .root.Values.instance.id .area) -}}
+{{- end -}}
+
 {{/* The per-service config ConfigMap name. */}}
 {{- define "devicechain.microserviceConfigMap" -}}
 {{- printf "dct-%s-config" .Values.instance.id -}}

@@ -690,6 +690,11 @@ func infraVars(st *State) []string {
 		if h := st.Values["natsIdentityPasswordBcrypt"]; h != "" && st.Values[identityEnabledValue] == "true" {
 			vars = append(vars, "nats_identity_password_bcrypt="+h)
 		}
+		// The per-area logins and the administrator's, beside the shared one. Omitted until every one
+		// was minted: the module then renders none, which is what every earlier release ran.
+		if st.Values[areaLoginsEnabledValue] == "true" {
+			vars = append(vars, loginsVar(loginsBcryptByUser(st)))
+		}
 	}
 	return vars
 }

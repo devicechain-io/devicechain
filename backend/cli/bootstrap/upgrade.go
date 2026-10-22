@@ -395,6 +395,7 @@ func Upgrade(ctx context.Context, provider Provider, opts UpgradeOptions) (err e
 	sayUpgradeInfrastructure(st, opts)
 	sayUpgradeCredentialsKept(st, opts)
 	sayIdentityIntroduced(st)
+	sayAreaLoginsIntroduced(st)
 	return nil
 }
 

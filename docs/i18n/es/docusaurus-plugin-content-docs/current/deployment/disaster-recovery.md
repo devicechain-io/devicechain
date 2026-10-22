@@ -254,7 +254,7 @@ artefacto, o puedes proporcionarla con `--escrow-passphrase-file` / `DCCTL_ESCRO
 
 Las credenciales del broker no están en el depósito y no necesitan estarlo. La instancia
 reconstruida acuña unas nuevas, incluidas las claves del callout de autenticación de dispositivos y la credencial de la cuenta de
-identidad del broker, y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
+identidad del broker y la credencial propia de cada área, y se las entrega al broker y a los servicios en la misma ejecución. Los dispositivos no guardan
 ninguna de ellas: inician sesión con sus propias credenciales, que vuelven con la base de datos.
 
 `dcctl bootstrap` se niega a hacerlo de otra manera; es la primera de las dos comprobaciones

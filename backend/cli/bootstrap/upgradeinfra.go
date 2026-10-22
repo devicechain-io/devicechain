@@ -346,7 +346,7 @@ func settleUpgradeInfraInputs(ctx context.Context, st *State) error {
 	}
 	// Its logins, with the hashes the broker already holds.
 	creds, err := brokerCredentialsFromRunning(ctx, st, st.Values["natsCalloutIssuerSeed"],
-		st.Values["natsCalloutXKeySeed"], st.Values["natsIdentityPassword"], st.Values["natsServicePassword"],
+		st.Values["natsCalloutXKeySeed"], st.Values["natsIdentityPassword"], loginsInValues(st), st.Values["natsServicePassword"],
 		st.Values["natsSysPassword"])
 	if err != nil {
 		return fmt.Errorf("reusing instance %q's broker logins for its broker's configuration: %w. "+

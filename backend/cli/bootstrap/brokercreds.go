@@ -28,8 +28,10 @@ import (
 // xkeySeed is the callout's curve seed if the instance already has one. An empty one is
 // MINTED, not refused: the xkey is an introduced credential (see calloutsecret.go), absent from
 // the starting state of any instance that predates it, and minting it replaces nothing. The same
-// is true of identityPassword, the login for the identity account (see identitysecret.go).
-func brokerCredentialsFromRunning(ctx context.Context, st *State, seed, xkeySeed, identityPassword, password, sysPassword string) (natsauth.Credentials, error) {
+// is true of identityPassword, the login for the identity account (see identitysecret.go), and of
+// logins, the per-area ones keyed by principal (see natsloginsecret.go): a principal with none is
+// minted, one that has a password keeps it.
+func brokerCredentialsFromRunning(ctx context.Context, st *State, seed, xkeySeed, identityPassword string, logins map[string]string, password, sysPassword string) (natsauth.Credentials, error) {
 	hashes := lookupDeployedBrokerHashes(ctx, st.KubeContext, InstanceNamespace(st.Instance), natsStatefulSetName)
 	creds, err := natsauth.CredentialsFromDeployed(seed, password, sysPassword, hashes)
 	if err != nil {
@@ -39,7 +41,11 @@ func brokerCredentialsFromRunning(ctx context.Context, st *State, seed, xkeySeed
 	if err != nil {
 		return natsauth.Credentials{}, err
 	}
-	return creds.WithIdentity(identityPassword, hashes.Identity)
+	creds, err = creds.WithIdentity(identityPassword, hashes.Identity)
+	if err != nil {
+		return natsauth.Credentials{}, err
+	}
+	return creds.WithLogins(logins, hashes.Logins)
 }
 
 // setBrokerCredentialValues is where the broker's credentials enter the values both
@@ -56,4 +62,5 @@ func setBrokerCredentialValues(st *State, creds natsauth.Credentials) {
 	st.Values["natsSysPassword"] = creds.SysPassword
 	st.Values["natsSysPasswordBcrypt"] = creds.SysPasswordBcrypt
 	setIdentityValues(st, creds)
+	setLoginValues(st, creds)
 }

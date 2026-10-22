@@ -22,6 +22,7 @@ module "nats" {
   service_password_bcrypt  = var.nats_service_password_bcrypt
   sys_password_bcrypt      = var.nats_sys_password_bcrypt
   identity_password_bcrypt = var.nats_identity_password_bcrypt
+  login_password_bcrypts   = var.nats_login_password_bcrypts
   mqtt_node_port           = var.nats_mqtt_node_port
   cpu_request              = var.nats_cpu_request
   memory_request           = var.nats_memory_request

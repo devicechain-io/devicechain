@@ -240,6 +240,10 @@ func helmInstall(ctx context.Context, st *State) error {
 	if err := writeIdentitySecret(ctx, typed, st); err != nil {
 		return err
 	}
+	// ...and every area's own broker login, each in a Secret only that area mounts.
+	if err := writeNatsLoginSecrets(ctx, typed, st); err != nil {
+		return err
+	}
 	if err := writeOwnedSecret(ctx, typed, instanceOwner(st.Instance, st.InstanceUID),
 		instanceConfigSecret(st.Instance, doc), time.Now); err != nil {
 		return err
@@ -391,6 +395,11 @@ func helmValues(st *State) map[string]interface{} {
 		// user-management mounts). user-management refuses to start without the login once this is set.
 		if st.Values[identityEnabledValue] == "true" {
 			auth["identityAccount"] = true
+		}
+		// The FLAG that the broker has a login for every area, not the logins (each is in a Secret only its
+		// own area mounts). An area refuses to start without its own once this is set.
+		if st.Values[areaLoginsEnabledValue] == "true" {
+			auth["areaLogins"] = true
 		}
 		natsVals["auth"] = auth
 	}

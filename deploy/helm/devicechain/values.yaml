@@ -113,6 +113,13 @@ instance:
   # user-management refuses to start without it rather than keep the buckets in the
   # shared account.
   identitySecret: ""
+  # Per-area broker logins: a map of area name to the name of the Secret holding THAT area's login
+  # (keys `user` and `password`), mounted into that area ALONE as DC_NATS_USER / DC_NATS_PASSWORD.
+  # An area not listed uses `dci-<id>-nats-<area>`, the Secret `dcctl` writes. mcp and ai-inference
+  # never open a broker connection and mount none. Optional at the pod: an instance whose broker has
+  # no per-area logins has none, and when the instance configuration says they exist an area
+  # refuses to start without its own rather than connect as the shared login.
+  natsLoginSecrets: {}
   # Instance-wide configuration mounted at /etc/dci-config/instance and read by
   # every service (infrastructure endpoints + persistence). Rendered verbatim as
   # JSON into a Secret; keys are matched case-insensitively to the Go config struct.
@@ -322,6 +329,11 @@ instance:
           # by instance.identitySecret, mounted into user-management alone. false (the
           # default) keeps the buckets in the shared account, as every instance before it did.
           identityAccount: false
+          # True when the broker has a login for every area that uses it and each area must
+          # present its own (DC_NATS_USER / DC_NATS_PASSWORD, from its own Secret) rather than the
+          # shared user/password above. false (the default) keeps every area on the shared login,
+          # as every instance before it did.
+          areaLogins: false
           # The SEPARATE system-account login, read only by event-sources' broker
           # presence tap: the system account is where the broker publishes its own
           # connection advisories, and a connection there sees every account's traffic —

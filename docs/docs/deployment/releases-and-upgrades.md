@@ -423,6 +423,16 @@ What a running instance sees:
   upgrade` says so when it finishes. The broker restarts once, one server at a time under `--ha`, to
   add the account. `user-management` refuses to start if the instance says the account exists and its
   password is missing, rather than fall back to the shared account.
+- **Every area gets a broker login of its own.** Until now every service signed in to the message
+  broker with one shared login, so any pod could present, and any leak of its configuration exposed,
+  the credential of all of them. `dcctl upgrade` creates one login per area that uses the broker, and
+  one for broker administration, and stores each in a Secret named `dci-<instance>-nats-<area>` that
+  is mounted into that area's pod only. `mcp` and `ai-inference` never open a broker connection and
+  mount none. The new logins have the same permissions as the shared one, so what an area can do does
+  not change, and the shared login stays in place beside them for now, so a rollback still works.
+  The broker restarts once, one server at a time under `--ha`, to add the users. An area refuses to
+  start if the instance says the logins exist and its own is missing, rather than fall back to the
+  shared one. Existing logins are never replaced: an upgrade creates only the ones that are absent.
 - **The event store restarts when its pods change**, for example for a new image or placement.
   A settings-only change reloads without a restart. Under `--ha` the standbys restart first, then
   the primary role switches to one of them. Without `--ha` the one instance restarts and
