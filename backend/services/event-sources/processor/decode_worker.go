@@ -186,7 +186,9 @@ func (wrk *DecodeWorker) Process() {
 					if wrk.StripBodyCredential {
 						event.CredentialType, event.CredentialId, event.CredentialSecret = nil, nil, nil
 						if wrk.OnBodyCredential != nil {
-							wrk.OnBodyCredential(wrk.SourceId, raw.tenant, event.Device, true)
+							// raw.device, the topic's token, not event.Device: the body may
+							// omit its device, and the WARN must still name one.
+							wrk.OnBodyCredential(wrk.SourceId, raw.tenant, raw.device, true)
 						}
 						raw.assertion.mark(event)
 					} else {

@@ -133,6 +133,44 @@ func TestAStrippedCaptureSourceCountsOnlyEventsThatCarriedACredential(t *testing
 	require.Empty(t, calls())
 }
 
+// IMPERSONATION UNDER STRIP. A body naming a DIFFERENT device than the topic is refused before
+// the strip is reached, credential or not: strip removes a credential from an event the broker
+// asserted, it never turns an event about another device into an accepted one. Nothing is
+// published, the strip callback is not told, and the event goes to failed-decode.
+func TestStripStillRefusesABodyNamingAnotherDevice(t *testing.T) {
+	for name, cred := range credentialBodies {
+		t.Run(name, func(t *testing.T) {
+			h, calls := newStripHarness(t)
+			ack := &recordingAck{}
+			body := strings.Replace(measurementWith(cred), `"device":"sensor-001"`, `"device":"sensor-999"`, 1)
+			h.source.handle(capturedMsgAt(captureSubject, body, 1, time.Now(), ack))
+
+			require.True(t, ack.settled(t))
+			published, failed, _, _ := h.counts()
+			require.Zero(t, published, "an event naming another device must not be published")
+			require.Equal(t, 1, failed)
+			require.Empty(t, h.publishedEvents())
+			require.Empty(t, calls())
+		})
+	}
+}
+
+// The strip callback names the TOPIC's device, which the broker authenticated, so the WARN an
+// operator reads to find a straggler names one even when the body leaves its device out.
+func TestTheStripCallbackNamesTheTopicDevice(t *testing.T) {
+	h, calls := newStripHarness(t)
+	ack := &recordingAck{}
+	body := strings.Replace(measurementWith(credentialBodies["all three"]), `"device":"sensor-001",`, ``, 1)
+	require.NotContains(t, body, `"device"`)
+	h.source.handle(capturedMsgAt(captureSubject, body, 1, time.Now(), ack))
+
+	require.True(t, ack.settled(t))
+	got := calls()
+	require.Len(t, got, 1)
+	require.Equal(t, "acme", got[0].tenant)
+	require.Equal(t, "sensor-001", got[0].device)
+}
+
 // THE DEFAULT. A source nobody told to strip refuses, exactly as before: the policy is opt-in
 // per source and its zero value is the refusal.
 func TestACaptureSourceNotToldToStripStillRefuses(t *testing.T) {
