@@ -71,6 +71,23 @@ Una superposición solo puede fijar los valores siguientes. Todo lo demás se re
 sea: lo fija `--ha`, y la reserva de conexiones del almacén de eventos se dimensiona según ese
 número.
 
+También se rechazan algunos valores dentro de un subárbol ajustable, porque son interruptores de
+seguridad o cableado y no capacidad:
+
+- En la `config` de un área: `deviceAuthMode` (device-management), el bloque `auth`
+  (user-management), `resourceUrl` e `issuerUrl` (mcp), `updates.allowUnverifiedArtifacts` y
+  `updates.downloadBaseURL` (update-management), `eventSources` (event-sources), `sources`
+  (sparkplug-ingest), la `tsdbConfiguration` de cualquier área y `rdbConfiguration.sqlDebug`. Las
+  claves se comparan sin distinguir mayúsculas de minúsculas, igual que las leen los servicios.
+- En `ingress.annotations`: toda anotación que el chart ya fija en sus ingress (tu valor
+  reemplazaría el del chart), cualquier anotación `*-snippet`, `cert-manager.io/*`, y
+  `ssl-redirect` o `force-ssl-redirect`.
+
+`serviceAccount.annotations` se acepta porque es donde se vincula una identidad de nube (workload
+identity, o un rol IAM para cuentas de servicio) para el almacén de objetos s3. Todos los pods de
+servicio de la instancia comparten esa cuenta de servicio, así que todos tienen el rol que se
+vincule ahí: no le concedas más de lo que necesita el bucket.
+
 Se rechaza todo lo que `dcctl` posee: imágenes y versiones, credenciales y la clave raíz del
 almacén de secretos, endpoints del broker y de las bases de datos, el host y el TLS del ingress,
 el perfil y el conjunto de áreas (lo cambia `dcctl enable-area`), los ajustes del almacén de
@@ -90,6 +107,17 @@ La superposición también se valida contra el esquema de valores del chart y se
 con los demás valores de la instancia antes de aplicar nada. Un valor de tipo incorrecto, una
 petición por encima de su límite o una combinación que el chart rechaza detiene la ejecución sin
 cambiar nada.
+
+## Réplicas y el presupuesto de conexiones de la base de datos {#connections}
+
+El usuario de base de datos de cada instancia está limitado a las conexiones que sus servicios
+pueden abrir: un pool completo por cada pod, duplicado para cubrir un despliegue. Una
+superposición que sube las réplicas de un área que usa la base de datos relacional, o el pool de
+esa área (`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`), sube ese límite, y
+`dcctl` pide a la base de datos compartida el límite mayor antes de cambiar nada. Si el
+presupuesto de conexiones del clúster no puede darlo, la ejecución se detiene sin cambiar nada:
+reduce la superposición, o sube el presupuesto con `dcctl install --max-connections`. Quitar la
+superposición devuelve las conexiones.
 
 ## Cambiar o quitar la superposición {#changing}
 

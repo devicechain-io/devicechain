@@ -59,6 +59,13 @@ dcctl upgrade local my-instance --version <new-version>
 
 `functionalAreas.event-management.replicas` 虽然属于可调优区域，但它本身不可调：它由 `--ha` 设置，事件存储的连接预留量正是按它来确定的。
 
+可调优子树中的某些值同样会被拒绝，因为它们是安全开关或连接配置，而不是容量参数：
+
+- 在区域的 `config` 中：`deviceAuthMode`（device-management）、`auth` 块（user-management）、`resourceUrl` 和 `issuerUrl`（mcp）、`updates.allowUnverifiedArtifacts` 和 `updates.downloadBaseURL`（update-management）、`eventSources`（event-sources）、`sources`（sparkplug-ingest）、任何区域的 `tsdbConfiguration`，以及 `rdbConfiguration.sqlDebug`。键的匹配不区分大小写，与服务读取它们的方式一致。
+- 在 `ingress.annotations` 中：chart 已在其入口上设置的每一个注解（你的值会替换 chart 的值）、任何 `*-snippet` 注解、`cert-manager.io/*`，以及 `ssl-redirect` 或 `force-ssl-redirect`。
+
+`serviceAccount.annotations` 是允许的，因为 s3 对象存储的云身份（workload identity，或服务账号的 IAM 角色）正是在这里绑定的。实例的所有服务 Pod 共用这个服务账号，因此在这里绑定的角色它们全都持有：授予的权限不要超过存储桶所需。
+
 `dcctl` 拥有的一切都会被拒绝：镜像与版本、凭据和密钥库根密钥、代理与数据库端点、入口主机和 TLS、配置档和区域集合（由 `dcctl enable-area` 更改）、对象存储设置、安全上下文，以及 `dcctl` 自行在版本之间延续的 LwM2M 和 MQTT 消息体凭据设置。这里刻意采用允许列表：chart 在后续版本中新增的值，在被加入此列表之前一直会被拒绝，而不会意外变成可设置。
 
 拒绝信息会在任何更改发生之前，列出每一个违规的键及其所在文件：
@@ -69,6 +76,10 @@ dcctl upgrade local my-instance --version <new-version>
 ```
 
 在应用任何内容之前，覆盖层还会对照 chart 的 values 模式进行校验，并与实例的其他值一起渲染。类型错误的值、超过上限的请求量，或 chart 拒绝的组合，都会使本次运行在未做任何更改的情况下停止。
+
+## 副本数与数据库的连接预算 {#connections}
+
+每个实例的数据库登录账号被限制为其服务能够打开的连接数：每个 Pod 一个完整的连接池，并为滚动更新预留一倍。覆盖层如果提高了使用关系型数据库的区域的副本数，或该区域的连接池（`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`），这个上限也会随之提高，`dcctl` 会在做任何更改之前向共享数据库申请更大的上限。如果集群的连接预算无法满足，本次运行会在未做任何更改的情况下停止：降低覆盖层中的值，或用 `dcctl install --max-connections` 提高预算。移除覆盖层会归还这些连接。
 
 ## 更改或移除覆盖层 {#changing}
 

@@ -67,6 +67,23 @@ An overlay may set only the values below. Anything else is refused.
 `functionalAreas.event-management.replicas` is not tunable even though the rest of that area is:
 `--ha` sets it, and the event store's connection reserve is sized to it.
 
+Some values inside a tunable subtree are refused too, because they are security switches or
+wiring rather than capacity:
+
+- In an area's `config`: `deviceAuthMode` (device-management), the `auth` block
+  (user-management), `resourceUrl` and `issuerUrl` (mcp), `updates.allowUnverifiedArtifacts` and
+  `updates.downloadBaseURL` (update-management), `eventSources` (event-sources), `sources`
+  (sparkplug-ingest), any area's `tsdbConfiguration`, and `rdbConfiguration.sqlDebug`. Keys are
+  matched without regard to case, the way the services read them.
+- In `ingress.annotations`: every annotation the chart already sets on its ingresses (your value
+  would replace the chart's), any `*-snippet` annotation, `cert-manager.io/*`, and `ssl-redirect`
+  or `force-ssl-redirect`.
+
+`serviceAccount.annotations` is accepted because it is where a cloud identity (workload identity,
+or an IAM role for service accounts) is bound for the s3 object store. Every service pod of the
+instance shares that service account, so all of them hold a role bound there: grant it no more
+than the bucket needs.
+
 Everything `dcctl` owns is refused: images and versions, credentials and the secret-store root
 key, broker and database endpoints, the ingress host and TLS, the profile and the set of areas
 (`dcctl enable-area` changes that), object-store settings, security contexts, and the LwM2M and
@@ -84,6 +101,16 @@ A refusal names every offending key, and the file it came from, before anything 
 The overlay is also checked against the chart's values schema, and rendered with the instance's
 other values, before anything is applied. A value of the wrong type, a request above its limit, or
 a combination the chart refuses stops the run with nothing changed.
+
+## Replicas and the database's connection budget {#connections}
+
+Each instance's database login is limited to the connections its services can open: a full pool
+for every pod, doubled to cover a rollout. An overlay that raises the replicas of an area that
+uses the relational database, or that area's pool
+(`functionalAreas.<area>.config.rdbConfiguration.maxOpenConnections`), raises that limit, and
+`dcctl` asks the shared database for the larger limit before it changes anything. If the cluster's
+connection budget cannot give it, the run stops with nothing changed: lower the overlay, or raise
+the budget with `dcctl install --max-connections`. Removing the overlay gives the connections back.
 
 ## Changing or removing the overlay {#changing}
 
@@ -127,6 +154,9 @@ an area's `config` is free-form, so keep secrets out of it.
 A new release can rename a value or tighten what it accepts. An upgrade checks the recorded overlay
 against the release it is moving to, before changing anything, and stops with the key named if it
 no longer fits. Fix it with `--values <fixed-file>`, or remove it with `--reset-values`.
+
+If the recorded overlay cannot be read at all, an upgrade given neither flag stops rather than
+running without it; `--values` or `--reset-values` replaces it.
 
 ## What applying it does {#rollout}
 
