@@ -37,7 +37,7 @@ import {
 import { isForbiddenError } from '@devicechain/client';
 import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 
-import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementWindow, membersMode, wantsEventMarkers } from './binding-policy';
+import { alarmSubscription, commandSubscription, groupsAlarmsByDeviceType, measurementSpan, measurementIsMembersOnly, measurementWindow, membersMode, wantsEventMarkers } from './binding-policy';
 import { useHeld } from './use-held';
 import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
@@ -53,7 +53,7 @@ import {
   WidgetFrame,
 } from '@devicechain/widget-sdk';
 import { WidgetContainment, useReportRejection } from './widget-containment';
-import { lazyChunk } from './widgets/lazy-chunk';
+import { ChunkLoadingFrame, lazyChunk } from './widgets/lazy-chunk';
 import type { AggregateFeedProps } from './aggregate-feed';
 import type { GroupedAlarmProps } from './widgets/alarm-grouped';
 import type { EventMarkersFeedProps } from './event-markers-feed';
@@ -248,7 +248,7 @@ function StaticConnectedWidget({ widget, Component, actions }: ChannelProps) {
 // The fleet feed is its own chunk (fleet-feed.tsx), like the aggregate feed: a board without a fleet
 // table or a per-device bar chart never downloads it. A chunk that fails to load is thrown to the
 // widget's containment, which shows the failure, and its Reset fetches it again (lazyChunk).
-const FleetFeed = lazyChunk<typeof import('./fleet-feed')>(() => import('./fleet-feed')).component<never, FleetFeedProps>('default');
+const FleetFeed = lazyChunk<typeof import('./fleet-feed')>(() => import('./fleet-feed')).component<never, FleetFeedProps>('default', undefined, ChunkLoadingFrame);
 
 function MeasurementConnectedWidget(props: ChannelProps) {
   // Read member by member, or as one stream keyed by measurement name: decided by the descriptor
@@ -293,7 +293,9 @@ function StreamConnectedWidget({ widget, hub, descriptor, Component, actions, in
   // The threshold is the widget's own option, and absent means age only.
   const freshness = useMemo<WidgetFreshness | undefined>(() => {
     if (descriptor.freshness !== true) return undefined;
-    const pinned = optString(widget.options, 'measurement');
+    // A `measurement` that only the widget's members mode reads (a chart's compared measurement) is
+    // not what it draws here, one device at a time: it narrows nothing.
+    const pinned = measurementIsMembersOnly(descriptor) ? undefined : optString(widget.options, 'measurement');
     const names = pinned ? [pinned] : widget.datasource?.measurements;
     return {
       at: newestSampleTime(data.latest, names),

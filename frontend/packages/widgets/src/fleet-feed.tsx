@@ -48,7 +48,7 @@ import { buildFleet, newestMemberTime, seedWindow } from './fleet-model';
 import { memberSeedPlan } from './fleet-seed';
 import { fleetStrings } from './fleet-strings';
 import { LevelEmpty } from './level-readout';
-import { lazyChunk } from './widgets/lazy-chunk';
+import { ChunkLoadingFrame, lazyChunk } from './widgets/lazy-chunk';
 
 // The most often the state is rebuilt from live samples.
 export const FLUSH_MS = 250;
@@ -130,7 +130,7 @@ export function comparesMembers(descriptor: WidgetDescriptor): boolean {
 }
 
 // Its own chunk inside this one: a board with a fleet table but no compare chart never loads it.
-const CompareFeed = lazyChunk<typeof import('./compare-feed')>(() => import('./compare-feed')).component<never, CompareFeedProps>('default');
+const CompareFeed = lazyChunk<typeof import('./compare-feed')>(() => import('./compare-feed')).component<never, CompareFeedProps>('default', undefined, ChunkLoadingFrame);
 
 export default function FleetEntry(props: FleetFeedProps) {
   if (props.refuse) return <GroupRefusal widget={props.widget} descriptor={props.descriptor} />;

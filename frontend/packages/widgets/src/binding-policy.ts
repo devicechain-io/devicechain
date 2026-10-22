@@ -83,6 +83,16 @@ export function membersMode(descriptor: WidgetDescriptor, widget: WidgetInstance
   return members.option !== undefined && optString(widget.options, members.option) === members.equals;
 }
 
+// Whether a widget's `measurement` option is the one its MEMBERS mode compares, and so means nothing
+// outside that mode: the descriptor gates members mode on an option (a chart set to one line or one
+// bar per device) rather than always reading member by member. Read one device at a time, such a
+// widget draws every measurement its datasource selects, so a `measurement` left stored from the
+// members mode must not narrow anything (its freshness is the newest of what it draws).
+export function measurementIsMembersOnly(descriptor: WidgetDescriptor): boolean {
+  const members = policy(descriptor).members as { const?: boolean; option?: string } | undefined;
+  return members !== undefined && members.const !== true && members.option !== undefined;
+}
+
 // The acknowledged filter is stored as 'true' / 'false' (or absent = any).
 function parseAcknowledged(value: string | undefined): boolean | undefined {
   if (value === 'true') return true;

@@ -111,6 +111,8 @@ const SHARED_SOURCES = [
   // The compare feed (the time-series chart set to one line per device) reads which measurement is
   // compared and how many lines are drawn.
   'compare-feed.tsx',
+  // The loading frame a feed chunk shows while it is in flight reads the widget's title.
+  'widgets/lazy-chunk.tsx',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —

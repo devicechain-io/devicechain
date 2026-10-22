@@ -179,11 +179,14 @@ export default function CompareFeed({ hub, widget, descriptor, ErrorFrame }: Com
         // is empty because this chart draws the history itself, not a "latest" cell.
         seed: async (token, read) => {
           const buckets = await read({ startTime: window.startTime, endTime: window.endTime, intervalSeconds: window.intervalSeconds, name: measurement });
-          s.history.set(token, { samples: bucketSamples(token, measurement, buckets), end });
+          // A read this effect no longer wants (the span, the freeze instant or the roster moved on
+          // while it was in flight) must not overwrite the newer one's history when it lands last.
+          if (!cancelled) s.history.set(token, { samples: bucketSamples(token, measurement, buckets), end });
           return { latest: {}, observed: [] };
         },
       },
       (token, seed, failure) => {
+        if (cancelled) return;
         if (failure === 'forbidden') s.forbidden = true;
         // A re-read that failed keeps the history it would have replaced: those points are still true.
         else if (!seed && !s.history.has(token)) s.history.set(token, 'failed');
@@ -307,7 +310,6 @@ function CompareBody({
         color: css('muted-foreground'),
         background: css('muted'),
         borderRadius: 4,
-        pointerEvents: 'auto',
       }}
     >
       {strings.bucketed(bucket)}
@@ -318,22 +320,22 @@ function CompareBody({
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', height: '100%' }} data-compare-chart="">
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <EChart option={option} />
-        {/* Over the chart's corner, as the span badge is; in a box too small for that it would cover the legend. */}
-        {!compact && <div style={{ position: 'absolute', top: spaceVar(1), right: spaceVar(2) }}>{badge}</div>}
       </div>
+      {/* Under the chart, never over it: a corner of the plot is where the legend runs once it fills
+          the width (five devices on a phone) and where a threshold's label sits, and the badge
+          covered both. */}
       {compact ? (
         <div data-compare-notes={facts.length > 0 ? '' : undefined} data-compare-compact="" title={facts.map((f) => f.full).join(' ')} style={noteStyle}>
           {badge}
           {facts.map((f) => ` · ${f.short}`).join('')}
         </div>
       ) : (
-        facts.length > 0 && (
-          <div data-compare-notes="" title={facts.map((f) => f.full).join(' ')} style={noteStyle}>
-            {facts.map((f) => (
-              <div key={f.full}>{f.full}</div>
-            ))}
-          </div>
-        )
+        <div data-compare-notes={facts.length > 0 ? '' : undefined} title={facts.length > 0 ? facts.map((f) => f.full).join(' ') : undefined} style={noteStyle}>
+          <div>{badge}</div>
+          {facts.map((f) => (
+            <div key={f.full}>{f.full}</div>
+          ))}
+        </div>
       )}
     </div>
   );

@@ -140,6 +140,21 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// First in the file on purpose: the feed chunks are fetched once per module graph, so only the
+// first mount sees them in flight.
+describe('while the feed chunks load', () => {
+  it('draws the widget frame, busy, never an empty box', async () => {
+    const f = fakeHub();
+    mount(chart({ title: 'Pump flow' }), f.hub);
+    const busy = document.querySelector('[data-chunk-loading]');
+    expect(busy).not.toBeNull();
+    expect(busy!.getAttribute('aria-busy')).toBe('true');
+    expect(screen.getByText('Pump flow')).toBeTruthy();
+    await vi.waitFor(() => expect(f.asked).toHaveBeenCalled());
+    expect(document.querySelector('[data-chunk-loading]')).toBeNull();
+  });
+});
+
 describe('one line per device', () => {
   it('draws a line per member, named by the device, from history and the live tail', async () => {
     const f = fakeHub((token) => [{ bucketStart: at(30), name: 'flow', avg: token === 'p1' ? 10 : 20 }]);
@@ -235,6 +250,95 @@ describe('one line per device', () => {
     expect(lastOption().series[1].data.map((d) => d[1])).toEqual([4]);
   });
 
+  it('keeps the newer history when an older read lands last (the span changed mid-read)', async () => {
+    // Each read waits until the test answers it, so the two spans' reads can land in either order.
+    const pending: Array<{ span: number; answer: (b: MeasurementBucket[]) => void }> = [];
+    const f = fakeHub();
+    const hub = {
+      ...(f.hub as object),
+      readMemberSeeds: async (tokens: readonly string[], plan: MemberSeedPlan, onSeed: (t: string, seed: unknown) => void) => {
+        await Promise.all(
+          tokens.map(async (token) => {
+            const seed = await plan.seed(token, (criteria) => {
+              const span = (Date.parse(criteria.endTime) - Date.parse(criteria.startTime)) / 1000;
+              return new Promise<MeasurementBucket[]>((answer) => pending.push({ span, answer }));
+            });
+            onSeed(token, seed);
+          }),
+        );
+      },
+    } as unknown as DashboardHub;
+    const view = mount(chart(), hub, range(3600));
+    await vi.waitFor(() => expect(f.asked).toHaveBeenCalled());
+    act(() => f.sink().roster(roster(1)));
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    view.rerender(
+      <WidgetTimeRangeProvider range={range(21600)}>
+        <ConnectedWidget widget={chart()} hub={hub} />
+      </WidgetTimeRangeProvider>,
+    );
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    expect(pending[0].span).toBeLessThan(pending[1].span);
+    await act(async () => pending[1].answer([{ bucketStart: at(30), name: 'flow', avg: 2 }]));
+    await vi.waitFor(() => expect(lastOption()?.series?.[0]?.data.map((d) => d[1])).toEqual([2]));
+    // The 1-hour read, superseded, answers last: its average must not replace the 6-hour one.
+    await act(async () => pending[0].answer([{ bucketStart: at(30), name: 'flow', avg: 1 }]));
+    // Any reading redraws from the store (this one is older than the history's end, so not drawn).
+    act(() => f.sink().next(live('p1', 5, 9)));
+    await act(async () => new Promise((r) => setTimeout(r, 300)));
+    expect(lastOption().series[0].data.map((d) => d[1])).toEqual([2]);
+  });
+
+  it('follows the roster: a member that joins gets its history read, one that leaves loses its line', async () => {
+    const f = fakeHub((token) => [{ bucketStart: at(30), name: 'flow', avg: Number(token.slice(1)) }]);
+    mount(chart(), f.hub);
+    await vi.waitFor(() => expect(f.asked).toHaveBeenCalled());
+    act(() => f.sink().roster(roster(2)));
+    await vi.waitFor(() => expect(lines()).toEqual(['Pump 1', 'Pump 2']));
+    act(() =>
+      f.sink().roster({
+        members: [
+          { token: 'p1', name: 'Pump 1' },
+          { token: 'p3', name: 'Pump 3' },
+        ],
+        total: 2,
+        unbound: false,
+      }),
+    );
+    await vi.waitFor(() => expect(lines()).toEqual(['Pump 1', 'Pump 3']));
+    expect(f.reads.map((r) => r.token)).toContain('p3');
+    await vi.waitFor(() => expect(lastOption().series[1].data.map((d) => d[1])).toEqual([3]));
+  });
+
+  it('labels the averaging in a box too small for the sentences, too', async () => {
+    const f = fakeHub();
+    // jsdom measures nothing; a ResizeObserver reporting a small box is what makes it compact.
+    const RO = globalThis.ResizeObserver;
+    class Small {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe(el: Element) {
+        this.cb([{ target: el, contentRect: { width: 240, height: 150 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver = Small as unknown as typeof ResizeObserver;
+    try {
+      mount(chart({ maxSeries: 1 }), f.hub);
+      await vi.waitFor(() => expect(f.asked).toHaveBeenCalled());
+      act(() => f.sink().roster(roster(3)));
+      const line = await vi.waitFor(() => {
+        const el = document.querySelector('[data-compare-compact]');
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      expect(line.textContent).toContain('avg per');
+      expect(line.textContent).toContain('1 of 3 devices');
+    } finally {
+      globalThis.ResizeObserver = RO;
+    }
+  });
+
   it('cuts the chart at the freeze instant while paused: nothing newer than the freeze is drawn', async () => {
     const f = fakeHub(() => [
       { bucketStart: at(10), name: 'flow', avg: 1 },
@@ -297,6 +401,29 @@ describe('the default mode is the chart it always was', () => {
     await screen.findByTestId('echart');
     expect(f.asked).not.toHaveBeenCalled();
     expect(document.querySelector('[data-compare-chart]')).toBeNull();
+  });
+
+  it('a measurement stored for the compare mode does not narrow a one-device chart: its age is the newest line', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    try {
+      const one: DatasourceSelector = { kind: 'device', deviceToken: 'p1', measurements: ['flow', 'pressure'] };
+      const hub = {
+        subscribeWidget: (_d: DatasourceSelector, sink: { next: (s: MeasurementSample) => void }) => {
+          sink.next(live('p1', 10, 3, 'flow'));
+          sink.next(live('p1', 0, 7, 'pressure'));
+          return () => {};
+        },
+        isDatasourceAvailable: async () => true,
+        now: () => NOW,
+      } as unknown as DashboardHub;
+      mount(chart({ groupBy: undefined, measurement: 'flow', staleAfterSeconds: 60 }, one), hub);
+      await screen.findByTestId('echart');
+      await vi.waitFor(() => expect(lines()).toEqual(['flow', 'pressure']));
+      expect(document.querySelector('[data-stale="true"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a group bound without the compare mode is refused in words that point at the compare mode', async () => {
