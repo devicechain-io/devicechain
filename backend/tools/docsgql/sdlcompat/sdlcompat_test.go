@@ -22,11 +22,12 @@ const servicesTree = "../../../services"
 var allKinds = []string{
 	SchemaRemoved, SchemaAdded, RootOperationChanged, TypeRemoved, TypeAdded, TypeKindChanged,
 	FieldRemoved, FieldAdded, FieldTypeChanged, FieldTypeNarrowed,
-	ArgumentRemoved, ArgumentAdded, RequiredArgumentAdded, ArgumentTypeChanged, ArgumentTypeWidened, ArgumentDefaultChanged,
-	InputFieldRemoved, InputFieldAdded, RequiredInputFieldAdded, InputFieldTypeChanged, InputFieldTypeWidened, InputFieldDefaultChanged,
+	ArgumentRemoved, ArgumentAdded, RequiredArgumentAdded, ArgumentTypeChanged, ArgumentTypeWidened, ArgumentDefaultChanged, ArgumentBecameRequired,
+	InputFieldRemoved, InputFieldAdded, RequiredInputFieldAdded, InputFieldTypeChanged, InputFieldTypeWidened, InputFieldDefaultChanged, InputFieldBecameRequired,
 	EnumValueRemoved, EnumValueAdded, UnionMemberRemoved, UnionMemberAdded, InterfaceRemoved, InterfaceAdded,
 	DeprecationAdded, DeprecationRemoved,
 	DirectiveRemoved, DirectiveAdded, DirectiveArgumentRemoved, RequiredDirectiveArgAdded, DirectiveArgumentTypeChanged, DirectiveLocationRemoved,
+	DirectiveArgBecameRequired,
 }
 
 func TestEveryKindIsClassified(t *testing.T) {
@@ -82,9 +83,9 @@ func TestClassification(t *testing.T) {
 		type Other { x: Int }
 		union Any = Thing | Other
 		enum Mode { A B }
-		input Filter { q: String, n: Int!, depth: Int = 1 }
+		input Filter { q: String, n: Int!, max: Int! = 9, depth: Int = 1 }
 		scalar Time
-		type Query { thing(id: ID!, f: Filter): Thing, any: Any, t: Time }
+		type Query { thing(id: ID!, f: Filter, first: Int! = 5): Thing, any: Any, t: Time }
 	`
 	cases := []struct {
 		name string
@@ -127,6 +128,16 @@ func TestClassification(t *testing.T) {
 			[]string{"Query.thing(id:) argument-type-changed breaking"}},
 		{"argument default changed", func(s string) string { return strings.Replace(s, "limit: Int = 10", "limit: Int = 20", 1) },
 			[]string{"Thing.find(limit:) argument-default-changed dangerous"}},
+		// A non-null value that loses its default keeps its type string, so only the
+		// default comparison sees it; every caller that omitted it now fails validation.
+		{"non-null argument default removed", func(s string) string { return strings.Replace(s, "first: Int! = 5", "first: Int!", 1) },
+			[]string{"Query.thing(first:) argument-became-required breaking"}},
+		{"non-null argument default changed", func(s string) string { return strings.Replace(s, "first: Int! = 5", "first: Int! = 6", 1) },
+			[]string{"Query.thing(first:) argument-default-changed dangerous"}},
+		{"non-null argument default removed and made nullable", func(s string) string { return strings.Replace(s, "first: Int! = 5", "first: Int", 1) },
+			[]string{"Query.thing(first:) argument-default-changed dangerous", "Query.thing(first:) argument-type-widened safe"}},
+		{"input list item made nullable", func(s string) string { return strings.Replace(s, "f: Filter,", "f: Filter, ids: [ID!]!,", 1) },
+			[]string{"Query.thing(ids:) required-argument-added breaking"}},
 		{"input field removed", func(s string) string { return strings.Replace(s, "input Filter { q: String,", "input Filter {", 1) },
 			[]string{"Filter.q input-field-removed breaking"}},
 		{"optional input field added", func(s string) string { return strings.Replace(s, "depth: Int = 1 }", "depth: Int = 1, z: Int }", 1) },
@@ -141,6 +152,8 @@ func TestClassification(t *testing.T) {
 			[]string{"Filter.depth input-field-default-changed dangerous"}},
 		{"input field default removed", func(s string) string { return strings.Replace(s, "depth: Int = 1", "depth: Int", 1) },
 			[]string{"Filter.depth input-field-default-changed dangerous"}},
+		{"non-null input field default removed", func(s string) string { return strings.Replace(s, "max: Int! = 9", "max: Int!", 1) },
+			[]string{"Filter.max input-field-became-required breaking"}},
 		{"enum value removed", func(s string) string { return strings.Replace(s, "enum Mode { A B }", "enum Mode { A }", 1) },
 			[]string{"Mode.B enum-value-removed breaking"}},
 		{"enum value added", func(s string) string { return strings.Replace(s, "enum Mode { A B }", "enum Mode { A B C }", 1) },
@@ -213,6 +226,18 @@ func TestDirectives(t *testing.T) {
 				t.Errorf("changes:\n  got  %q\n  want %q", g, tc.want)
 			}
 		})
+	}
+}
+
+func TestDirectiveArgumentDefaultRemoved(t *testing.T) {
+	b := mustParse(t, `directive @lim(n: Int! = 1) on FIELD_DEFINITION
+		type Query { x: Int }`)
+	h := mustParse(t, `directive @lim(n: Int!) on FIELD_DEFINITION
+		type Query { x: Int }`)
+	g := got(Diff("s", b.AST, h.AST))
+	want := []string{"@lim(n:) directive-argument-became-required breaking"}
+	if strings.Join(g, "\n") != strings.Join(want, "\n") {
+		t.Errorf("got %q, want %q", g, want)
 	}
 }
 

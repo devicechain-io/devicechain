@@ -80,12 +80,14 @@ const (
 	ArgumentTypeChanged          = "argument-type-changed"
 	ArgumentTypeWidened          = "argument-type-widened"
 	ArgumentDefaultChanged       = "argument-default-changed"
+	ArgumentBecameRequired       = "argument-became-required"
 	InputFieldRemoved            = "input-field-removed"
 	InputFieldAdded              = "input-field-added"
 	RequiredInputFieldAdded      = "required-input-field-added"
 	InputFieldTypeChanged        = "input-field-type-changed"
 	InputFieldTypeWidened        = "input-field-type-widened"
 	InputFieldDefaultChanged     = "input-field-default-changed"
+	InputFieldBecameRequired     = "input-field-became-required"
 	EnumValueRemoved             = "enum-value-removed"
 	EnumValueAdded               = "enum-value-added"
 	UnionMemberRemoved           = "union-member-removed"
@@ -99,6 +101,7 @@ const (
 	DirectiveArgumentRemoved     = "directive-argument-removed"
 	RequiredDirectiveArgAdded    = "required-directive-argument-added"
 	DirectiveArgumentTypeChanged = "directive-argument-type-changed"
+	DirectiveArgBecameRequired   = "directive-argument-became-required"
 	DirectiveLocationRemoved     = "directive-location-removed"
 )
 
@@ -121,12 +124,14 @@ var severities = map[string]Severity{
 	ArgumentTypeChanged:          Breaking,
 	ArgumentTypeWidened:          Safe,
 	ArgumentDefaultChanged:       Dangerous,
+	ArgumentBecameRequired:       Breaking,
 	InputFieldRemoved:            Breaking,
 	InputFieldAdded:              Safe,
 	RequiredInputFieldAdded:      Breaking,
 	InputFieldTypeChanged:        Breaking,
 	InputFieldTypeWidened:        Safe,
 	InputFieldDefaultChanged:     Dangerous,
+	InputFieldBecameRequired:     Breaking,
 	EnumValueRemoved:             Breaking,
 	EnumValueAdded:               Dangerous,
 	UnionMemberRemoved:           Breaking,
@@ -140,6 +145,7 @@ var severities = map[string]Severity{
 	DirectiveArgumentRemoved:     Breaking,
 	RequiredDirectiveArgAdded:    Breaking,
 	DirectiveArgumentTypeChanged: Breaking,
+	DirectiveArgBecameRequired:   Breaking,
 	DirectiveLocationRemoved:     Breaking,
 }
 
@@ -442,20 +448,23 @@ func diffInterfaces(add adder, typ string, old, cur []string) {
 // directive.
 type InputValueKinds struct {
 	Removed, Added, RequiredAdded, TypeChanged, TypeWidened, DefaultChanged string
+	// BecameRequired is a non-null value that LOST its default: its type is unchanged,
+	// but every caller that relied on the default by omitting it now fails validation.
+	BecameRequired string
 }
 
 var (
 	// ArgumentKinds are the kinds for a field's arguments.
 	ArgumentKinds = InputValueKinds{ArgumentRemoved, ArgumentAdded, RequiredArgumentAdded,
-		ArgumentTypeChanged, ArgumentTypeWidened, ArgumentDefaultChanged}
+		ArgumentTypeChanged, ArgumentTypeWidened, ArgumentDefaultChanged, ArgumentBecameRequired}
 	// InputKinds are the kinds for an input object's fields.
 	InputKinds = InputValueKinds{InputFieldRemoved, InputFieldAdded, RequiredInputFieldAdded,
-		InputFieldTypeChanged, InputFieldTypeWidened, InputFieldDefaultChanged}
+		InputFieldTypeChanged, InputFieldTypeWidened, InputFieldDefaultChanged, InputFieldBecameRequired}
 	// DirectiveKinds are the kinds for a directive's arguments. A directive argument's
 	// default and a widened type are not worth their own kinds; they report as an
 	// argument's would.
 	DirectiveKinds = InputValueKinds{DirectiveArgumentRemoved, ArgumentAdded, RequiredDirectiveArgAdded,
-		DirectiveArgumentTypeChanged, ArgumentTypeWidened, ArgumentDefaultChanged}
+		DirectiveArgumentTypeChanged, ArgumentTypeWidened, ArgumentDefaultChanged, DirectiveArgBecameRequired}
 )
 
 // diffInputValues compares arguments or input fields. The coordinate of an element is
@@ -476,7 +485,15 @@ func diffInputValues(add adder, owner, open, closing string, k InputValueKinds, 
 		default:
 			add(coord, k.TypeChanged, fmt.Sprintf("type changed from %s to %s", ov.Type, nv.Type))
 		}
-		if od, nd := valueString(ov.Default), valueString(nv.Default); od != nd {
+		_, oldNonNull := ov.Type.(*ast.NonNull)
+		_, newNonNull := nv.Type.(*ast.NonNull)
+		if od, nd := valueString(ov.Default), valueString(nv.Default); od != nd && oldNonNull && newNonNull && nv.Default == nil {
+			// `limit: Int! = 10` -> `limit: Int!`: the type string is unchanged, so only
+			// the default comparison sees it, and a changed default is merely dangerous.
+			// But a caller that omitted the value was relying on the default, and now
+			// sends an operation that fails validation: that is a required value added.
+			add(coord, k.BecameRequired, fmt.Sprintf("default %s was removed from a non-null value, which is now required; every caller that omitted it fails", od))
+		} else if od != nd {
 			add(coord, k.DefaultChanged, fmt.Sprintf("default changed from %s to %s", orNone(od), orNone(nd)))
 		}
 		diffDeprecation(add, coord, ov.Directives, nv.Directives)
