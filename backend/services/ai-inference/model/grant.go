@@ -138,7 +138,7 @@ func (g AIProviderTierGrant) AuditLabel() string {
 }
 
 // AIProviderTenantGrant offers one provider to ONE tenant, over and above whatever
-// its tier already offers — ADR-065 decision 7's audited exception, in Derek's
+// its tier already offers — ADR-065 decision 7's audited exception, in the maintainer's
 // framing: "a bronze-tier tenant could be given access to Fable when it's not offered
 // in the bronze contract".
 //

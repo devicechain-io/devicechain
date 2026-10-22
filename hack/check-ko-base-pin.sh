@@ -52,7 +52,7 @@ MAX_BUMPER_SILENCE_DAYS="${MAX_BUMPER_SILENCE_DAYS:-40}"
 
 # The branch the bumper pushes to, and how long a bump may sit on it unmerged.
 #
-# 🔴 THE WORKFLOW DOES NOT OPEN A PULL REQUEST (Derek, 2026-09-04) — it cannot,
+# 🔴 THE WORKFLOW DOES NOT OPEN A PULL REQUEST (a maintainer decision, 2026-09-04) — it cannot,
 # since the repository forbids Actions from creating them, and granting that
 # would also let a workflow APPROVE one. So this guard is the notification: it
 # runs on every pull request and says a bump is waiting, going red once one has

@@ -23,7 +23,7 @@
 #     it is still a cost with nothing bought. Two workflows each carry their own
 #     filter and the waste disappears.
 #
-# WHY javascript-typescript AND NOT csharp (Derek, 2026-09-04). The console
+# WHY javascript-typescript AND NOT csharp (a maintainer decision, 2026-09-04). The console
 # holds auth tokens and `/dash` is a reference external embedder with its own
 # login, so the frontend is real trust-boundary surface and CodeQL's JS rules —
 # XSS, injection, prototype pollution — bite on exactly that. The C# SDK is a

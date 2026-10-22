@@ -59,7 +59,7 @@ func readAudit(t *testing.T, db *gorm.DB) []AuditEvent {
 // (recursion guard).
 func TestAuditCaptureCreateUpdateDelete(t *testing.T) {
 	db := newAuditTestDB(t)
-	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "derek", Tenant: "A"})
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "alice", Tenant: "A"})
 
 	w := &widget{Name: "w1"}
 	if err := db.WithContext(ctx).Create(w).Error; err != nil {
@@ -81,8 +81,8 @@ func TestAuditCaptureCreateUpdateDelete(t *testing.T) {
 		if row.Operation != wantOps[i] {
 			t.Errorf("row %d: operation = %q, want %q", i, row.Operation, wantOps[i])
 		}
-		if row.Actor != "derek" {
-			t.Errorf("row %d: actor = %q, want derek", i, row.Actor)
+		if row.Actor != "alice" {
+			t.Errorf("row %d: actor = %q, want alice", i, row.Actor)
 		}
 		if row.TenantId != "A" {
 			t.Errorf("row %d: tenant = %q, want A", i, row.TenantId)
@@ -118,7 +118,7 @@ func TestAuditCaptureCreateUpdateDelete(t *testing.T) {
 // The difference between them is whether the caller had the identity to give.
 func TestAuditRecordsNoPrimaryKeyWhereNoSingleRowIsIdentified(t *testing.T) {
 	db := newAuditTestDB(t)
-	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "derek", Tenant: "A"})
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "alice", Tenant: "A"})
 
 	for _, name := range []string{"a", "b", "c"} {
 		if err := db.WithContext(ctx).Create(&widget{Name: name}).Error; err != nil {
@@ -156,7 +156,7 @@ func TestRecordAuthEvent(t *testing.T) {
 	db := newAuditTestDB(t)
 	mgr := &RdbManager{Database: db}
 
-	if err := mgr.RecordAuthEvent(context.Background(), AuditOpLogin, "derek", "A"); err != nil {
+	if err := mgr.RecordAuthEvent(context.Background(), AuditOpLogin, "alice", "A"); err != nil {
 		t.Fatalf("record login: %v", err)
 	}
 	// A failed login for an unknown user has no tenant — must still record.
@@ -176,7 +176,7 @@ func TestRecordAuthEvent(t *testing.T) {
 			t.Errorf("auth row should have no table, got %q", row.TableName)
 		}
 	}
-	if rows[0].Operation != AuditOpLogin || rows[0].Actor != "derek" || rows[0].TenantId != "A" {
+	if rows[0].Operation != AuditOpLogin || rows[0].Actor != "alice" || rows[0].TenantId != "A" {
 		t.Errorf("unexpected login row: %+v", rows[0])
 	}
 	if rows[1].Operation != AuditOpLoginFailed || rows[1].Actor != "ghost" || rows[1].TenantId != "" {
@@ -201,7 +201,7 @@ func TestAuditExemptModelNotRecorded(t *testing.T) {
 	if err := db.AutoMigrate(&exemptWidget{}); err != nil {
 		t.Fatalf("migrate exemptWidget: %v", err)
 	}
-	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "derek", Tenant: "A"})
+	ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"), &auth.Claims{Username: "alice", Tenant: "A"})
 
 	if err := db.WithContext(ctx).Create(&exemptWidget{Name: "telemetry"}).Error; err != nil {
 		t.Fatalf("create exempt: %v", err)
@@ -340,7 +340,7 @@ func TestAuditJournalFailureFailsTheMutationItAlreadyMade(t *testing.T) {
 		t.Run(tc.op, func(t *testing.T) {
 			db := newAuditTestDB(t)
 			ctx := auth.WithClaims(core.WithTenant(context.Background(), "A"),
-				&auth.Claims{Username: "derek", Tenant: "A"})
+				&auth.Claims{Username: "alice", Tenant: "A"})
 
 			seeded := &widget{Name: "seeded"}
 			if err := db.WithContext(ctx).Create(seeded).Error; err != nil {

@@ -45,7 +45,7 @@ test('ordinary docs vocabulary passes through, including look-alikes', () => {
 
 test('sensitive queries are dropped entirely, not truncated or masked', () => {
   const sensitive = [
-    'derek.adams@sitewhere.com',
+    'jane.doe@example.com',
     'why does user@example.com fail',
     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U',
     'Bearer abcDEF1234567890abcdef',
