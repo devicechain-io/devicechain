@@ -58,7 +58,7 @@ const ONE_DEVICE_WIDGETS = Object.values(builtinWidgetDescriptors)
 
 describe('a widget that shows one device, bound to a group', () => {
   it('covers the widgets the brief names, so an empty list cannot pass for a clean one', () => {
-    expect(ONE_DEVICE_WIDGETS).toEqual(expect.arrayContaining(['latest-card', 'gauge', 'timeseries-chart', 'table', 'pie-chart', 'stat-card']));
+    expect(ONE_DEVICE_WIDGETS).toEqual(expect.arrayContaining(['latest-card', 'gauge', 'table', 'pie-chart', 'stat-card']));
   });
 
   it.each(ONE_DEVICE_WIDGETS)('%s refuses it in words and reads nothing', async (type) => {
@@ -92,11 +92,31 @@ describe('a widget that shows one device, bound to a group', () => {
     expect(document.body.textContent).not.toContain('bound to a group of devices');
   }, 30_000);
 
+  it('points a time-series chart at its own one-line-per-device mode, and lets that mode read the group', async () => {
+    const f = hub();
+    render(<ConnectedWidget widget={widget('timeseries-chart', GROUP)} hub={f.hub} />);
+    expect(await screen.findByText(/one line per device/, {}, { timeout: 20_000 })).toBeTruthy();
+    expect(f.reads.subscribeWidget).not.toHaveBeenCalled();
+    expect(f.reads.subscribeMembers).not.toHaveBeenCalled();
+    cleanup();
+
+    render(<ConnectedWidget widget={widget('timeseries-chart', GROUP, { groupBy: 'device' })} hub={f.hub} />);
+    await vi.waitFor(() => expect(f.reads.subscribeMembers).toHaveBeenCalledTimes(1), { timeout: 20_000 });
+    expect(document.body.textContent).not.toContain('bound to a group of devices');
+  }, 30_000);
+
+  it('a time-series chart bound to one device reads it as before', async () => {
+    const f = hub();
+    render(<ConnectedWidget widget={widget('timeseries-chart', ONE)} hub={f.hub} />);
+    await vi.waitFor(() => expect(f.reads.subscribeWidget).toHaveBeenCalled(), { timeout: 20_000 });
+    expect(f.reads.subscribeMembers).not.toHaveBeenCalled();
+  }, 30_000);
+
   it('is offered no group in the editor: only the fleet widgets and the alarm and map widgets take one', () => {
     const takesGroup = Object.values(builtinWidgetDescriptors)
       .filter((d) => d.datasource.mode !== 'none' && (d.datasource.selectors as readonly string[]).includes('anchor'))
       .map((d) => d.id)
       .sort();
-    expect(takesGroup).toEqual(['alarm-count', 'alarm-severity', 'alarm-table', 'bar-chart', 'fleet-count', 'fleet-table', 'map']);
+    expect(takesGroup).toEqual(['alarm-count', 'alarm-severity', 'alarm-table', 'bar-chart', 'fleet-count', 'fleet-table', 'map', 'timeseries-chart']);
   });
 });

@@ -5,9 +5,9 @@
 // descriptors stay eager (the catalog, the editor and the validators read them), and each
 // registration's component loads the family's chunk on first mount, together, from one fetch.
 //
-// Until the chunk arrives the widget renders nothing inside its box, unless the host awaited
-// preloadWidgets (preload.ts) for the board first: then the chunk is already here and the first
-// frame is complete. A chunk that fails to load is THROWN, so the widget's error boundary shows
+// Until the chunk arrives the widget renders nothing inside its box (or the `Fallback` its
+// registration names: a feed uses ChunkLoadingFrame), unless the host awaited preloadWidgets
+// (preload.ts) for the board first: then the chunk is already here and the first frame is complete. A chunk that fails to load is THROWN, so the widget's error boundary shows
 // the failure: an empty box that looks like a widget with nothing to say is the outcome this must
 // never produce. The failure is NOT remembered: the next mount (the boundary's "Reset widget")
 // fetches the chunk again, so a blip on a wall display's network is not a widget that stays broken
@@ -17,7 +17,19 @@
 // bundler split the chunk, and it is what the dist-shape guard looks for.
 
 import { useEffect, useState, type ComponentType } from 'react';
-import type { MeasurementStreamState, WidgetProps } from '@devicechain/widget-sdk';
+import { optString, WidgetFrame, type MeasurementStreamState, type WidgetProps } from '@devicechain/widget-sdk';
+import type { WidgetInstance } from '@devicechain/dashboards';
+
+// What a feed chunk shows while it is in flight: the widget's frame and title, marked busy, rather
+// than an empty box. A feed is chosen by the widget's OPTIONS (a chart set to one line per device),
+// which preloadWidgets cannot see -- it is handed types -- so its first frame is often this one.
+export function ChunkLoadingFrame({ widget }: { widget: WidgetInstance }) {
+  return (
+    <WidgetFrame title={optString(widget.options, 'title')}>
+      <div data-chunk-loading="" aria-busy="true" style={{ width: '100%', height: '100%' }} />
+    </WidgetFrame>
+  );
+}
 
 export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStreamState>(importer: () => Promise<M>) {
   let loaded: M | undefined;
@@ -43,6 +55,8 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
   function component<P = D, Props extends object = WidgetProps<P>>(
     name: keyof M & string,
     alsoPreload?: () => Promise<unknown>,
+    // Drawn until the chunk arrives (nothing, when absent).
+    Fallback?: ComponentType<Props>,
   ) {
     function LazyChunkWidget(props: Props) {
       const [mod, setMod] = useState(loaded);
@@ -51,7 +65,7 @@ export function lazyChunk<M extends Record<string, unknown>, D = MeasurementStre
         if (!mod) load().then(setMod, setError);
       }, [mod]);
       if (error !== undefined) throw error;
-      if (!mod) return null;
+      if (!mod) return Fallback ? <Fallback {...props} /> : null;
       const Component = mod[name] as ComponentType<Props>;
       return <Component {...props} />;
     }

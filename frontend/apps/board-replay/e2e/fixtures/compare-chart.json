@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 2,
+  "title": "Compare chart readability",
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "minCellSize": 24,
+      "gutter": 8,
+      "padding": 0
+    },
+    "sizing": "fill"
+  },
+  "widgets": [
+    {
+      "id": "cmp-plain",
+      "type": "timeseries-chart",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 0,
+          "cols": 12,
+          "rows": 4
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "One device"
+      }
+    },
+    {
+      "id": "cmp-compare",
+      "type": "timeseries-chart",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 12,
+          "row": 0,
+          "cols": 12,
+          "rows": 4
+        }
+      },
+      "datasource": {
+        "kind": "anchor",
+        "anchor": {
+          "relationship": "assigned-to",
+          "targetType": "area",
+          "targetToken": "gate-area"
+        },
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "Compare the pumps",
+        "groupBy": "device",
+        "measurement": "value",
+        "unit": "kPa"
+      }
+    },
+    {
+      "id": "cmp-compare-notes",
+      "type": "timeseries-chart",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 4,
+          "cols": 12,
+          "rows": 4
+        }
+      },
+      "datasource": {
+        "kind": "anchor",
+        "anchor": {
+          "relationship": "assigned-to",
+          "targetType": "area",
+          "targetToken": "gate-area"
+        },
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "Compare, capped, with thresholds",
+        "groupBy": "device",
+        "measurement": "value",
+        "maxSeries": 3,
+        "unit": "kPa",
+        "thresholds": [
+          {
+            "value": 700,
+            "level": "warning"
+          },
+          {
+            "value": 900,
+            "level": "critical"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cmp-compare-min",
+      "type": "timeseries-chart",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 12,
+          "row": 4,
+          "cols": 4,
+          "rows": 3
+        }
+      },
+      "datasource": {
+        "kind": "anchor",
+        "anchor": {
+          "relationship": "assigned-to",
+          "targetType": "area",
+          "targetToken": "gate-area"
+        },
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "Smallest",
+        "groupBy": "device",
+        "measurement": "value",
+        "maxSeries": 2,
+        "thresholds": [
+          {
+            "value": 700,
+            "level": "warning"
+          },
+          {
+            "value": 900,
+            "level": "critical"
+          }
+        ]
+      }
+    }
+  ]
+}

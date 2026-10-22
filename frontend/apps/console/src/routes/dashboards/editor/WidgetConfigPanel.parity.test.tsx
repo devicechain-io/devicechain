@@ -97,6 +97,8 @@ const LEGACY_LABEL: Record<string, string> = {
   markAlarms: 'widgetLabelMarkAlarms',
   markAlarmsScope: 'widgetLabelMarkAlarmsScope',
   markCommands: 'widgetLabelMarkCommands',
+  // Appended with the multi-device compare chart.
+  maxSeries: 'widgetLabelMaxSeries',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -146,6 +148,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   markAlarms: 'widgetHintMarkAlarms',
   markAlarmsScope: 'widgetHintMarkAlarmsScope',
   markCommands: 'widgetHintMarkCommands',
+  maxSeries: 'widgetHintMaxSeries',
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -225,9 +228,11 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
 // name with the bar chart's (measurement | device) and nothing else.
 const LABEL_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { groupBy: 'widgetLabelAlarmGroupBy' },
+  'timeseries-chart': { groupBy: 'widgetLabelSeriesBy' },
 };
 const HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { groupBy: 'widgetHintAlarmGroupBy' },
+  'timeseries-chart': { groupBy: 'widgetHintSeriesBy' },
 };
 const ENUM_VALUE_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { 'groupBy:none': 'widgetAlarmGroupByNone', 'groupBy:deviceType': 'widgetAlarmGroupByDeviceType' },
@@ -357,9 +362,9 @@ describe.each([...WIDGET_TYPES])('the %s settings panel matches the pre-registry
     fireEvent.click(within(kindField).getAllByRole('button')[0]);
     // A deliberate change since the pre-registry editor: a telemetry widget that shows readings by
     // measurement name shows ONE device (a group would mix its devices' readings), so only the
-    // fleet widgets -- the fleet table, the fleet count and the bar chart, whose one-bar-per-device mode reads a
-    // group -- are offered a group, beside the alarm and map widgets.
-    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count';
+    // fleet widgets -- the fleet table, the fleet count, the bar chart and the time-series chart, whose
+    // one-bar-or-line-per-device modes read a group -- are offered a group, beside the alarm and map widgets.
+    const fleet = type === 'fleet-table' || type === 'bar-chart' || type === 'fleet-count' || type === 'timeseries-chart';
     const takesGroup = channel === 'alarm' || channel === 'location' || (channel === 'measurement' && fleet);
     expect(screen.queryByText(tr('widgetKindAnchor')) !== null, 'anchor kind offered').toBe(takesGroup);
   });

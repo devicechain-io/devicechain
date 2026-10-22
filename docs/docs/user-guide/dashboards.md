@@ -288,8 +288,8 @@ The settings depend on the widget. Common ones:
   inside the building chosen elsewhere on the dashboard. With a parent, **Strategy** decides whether
   it follows the parent's **First member** or a member you choose (**Manual pick**).
 - **Data source** picks the device or entity the widget reads. For a widget scoped to a parent, it
-  explains that the widget follows the parent. Only the fleet table, the fleet count and a bar chart set to one bar
-  per device can read a device group; every other telemetry widget shows one device, and bound to a
+  explains that the widget follows the parent. Only the fleet table, the fleet count, a bar chart set to one bar
+  per device and a timeseries chart set to one line per device can read a device group; every other telemetry widget shows one device, and bound to a
   group it says so rather than mixing the readings of several devices.
 - **Measurement** and display options such as units, range and precision.
 - **Time span** (timeseries chart): how much history the chart draws, in seconds, from 60 to
@@ -338,6 +338,19 @@ The settings depend on the widget. Common ones:
   **Measurement** you choose, so the data source must be a device group, not a single device. A
   group too large to draw is cut to its first bars in the chosen order, and the chart says "Showing
   N of M devices".
+- **One line per** (timeseries chart): *Measurement* (the default) draws a line for each measurement
+  of one device. *Device* draws a line for each device of the group the widget is bound to, for the
+  one **Measurement** you choose, over the board's time range (or the chart's own **Time span**), so
+  the data source must be a device group. Lines keep the group's order and a device keeps its
+  color as readings arrive. The stored history is drawn as the **average of each time bucket**, one
+  point per bucket, and the chart labels it (for example "avg per 6m"); readings that arrive live
+  after it are drawn as they came. Threshold lines are reference values drawn on the chart: a
+  plotted history point is a bucket average, not a single reading, and the chart says so beside the
+  lines. Alarm and command markers are not drawn in this mode.
+- **Most lines** (timeseries chart, one line per device): the most devices drawn, 5 by default and
+  at most 12; the chart's colors repeat after five. Each line costs one stored-history read, and
+  the platform reads one device at a time, so keep it small. A group larger than the limit shows
+  its first devices and the chart says "Showing N of M devices", so a group is never cut silently.
 - **Group by** (alarm table): *Device type* shows a tab strip above the table, an **All** tab and then
   one tab per device type that has an active alarm in the widget's scope, each named by the device
   type's name. A tab's badge counts its **active** alarms and takes the color of the worst severity

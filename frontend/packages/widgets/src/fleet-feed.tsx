@@ -43,10 +43,12 @@ import { optString, resolveStaleAfterSeconds, useWidgetTimeRange, WidgetFrame, W
 import { useEffect, useMemo, useReducer, useRef, useState, type ComponentType } from 'react';
 
 import { measurementSpan } from './binding-policy';
+import type { CompareFeedProps } from './compare-feed';
 import { buildFleet, newestMemberTime, seedWindow } from './fleet-model';
 import { memberSeedPlan } from './fleet-seed';
 import { fleetStrings } from './fleet-strings';
 import { LevelEmpty } from './level-readout';
+import { ChunkLoadingFrame, lazyChunk } from './widgets/lazy-chunk';
 
 // The most often the state is rebuilt from live samples.
 export const FLUSH_MS = 250;
@@ -103,7 +105,7 @@ export function GroupRefusal({ widget, descriptor }: { widget: WidgetInstance; d
   return (
     <WidgetFrame title={optString(widget.options, 'title')}>
       <div data-group-refused="" style={{ display: 'contents' }}>
-        <LevelEmpty message={`${strings.oneDevice} ${perDevice ? strings.usePerDevice : strings.useFleetTable}`} />
+        <LevelEmpty message={`${strings.oneDevice} ${perDevice ? (comparesMembers(descriptor) ? strings.useLinePerDevice : strings.usePerDevice) : strings.useFleetTable}`} />
       </div>
     </WidgetFrame>
   );
@@ -120,8 +122,22 @@ export function shownMeasurements(widget: WidgetInstance): string[] {
   return [...new Set(named)];
 }
 
+// A members-mode widget that draws a line per member over the span (the time-series chart set to one
+// line per device) reads history, not a latest cell, so it has its own feed. The descriptor says so by
+// declaring the option that limits those lines; the widget id is never consulted.
+export function comparesMembers(descriptor: WidgetDescriptor): boolean {
+  return (descriptor.options as Record<string, unknown>).maxSeries !== undefined;
+}
+
+// Its own chunk inside this one: a board with a fleet table but no compare chart never loads it.
+const CompareFeed = lazyChunk<typeof import('./compare-feed')>(() => import('./compare-feed')).component<never, CompareFeedProps>('default', undefined, ChunkLoadingFrame);
+
 export default function FleetEntry(props: FleetFeedProps) {
-  return props.refuse ? <GroupRefusal widget={props.widget} descriptor={props.descriptor} /> : <FleetFeed {...props} />;
+  if (props.refuse) return <GroupRefusal widget={props.widget} descriptor={props.descriptor} />;
+  if (comparesMembers(props.descriptor)) {
+    return <CompareFeed hub={props.hub} widget={props.widget} descriptor={props.descriptor} ErrorFrame={props.ErrorFrame} />;
+  }
+  return <FleetFeed {...props} />;
 }
 
 function FleetFeed({ hub, widget, descriptor, Component, actions, ErrorFrame }: FleetFeedProps) {

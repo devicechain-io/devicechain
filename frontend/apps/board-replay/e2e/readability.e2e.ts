@@ -51,7 +51,7 @@ const keyOf = (board: string, width: number, f: Finding) =>
 const describeFinding = (f: Finding) => `${f.detail} [widget box ${JSON.stringify(f.box)}]`;
 
 // Load a board on the gate page and measure it once it has settled.
-async function measure(page: Page, board: string, width: number, theme: string) {
+async function measure(page: Page, board: string, width: number, theme: string, ready?: string) {
   await page.setViewportSize({ width, height: HEIGHT });
   await page.goto(`/e2e/page/gate.html?board=${board}&theme=${theme}`);
   await page.waitForFunction(() => document.documentElement.dataset.gate !== undefined);
@@ -63,6 +63,9 @@ async function measure(page: Page, board: string, width: number, theme: string) 
   expect(Number(state.gateCharts), `${board}: no chart was on the first frame, so the check below saw nothing`).toBeGreaterThan(0);
   expect(state.gateChartsEmpty, `${board}: charts on the first frame that had not drawn`).toBe('0');
 
+  // A widget whose code arrives after the first frame (its feed is a chunk of its own) is waited for
+  // by what it draws, or the settle below could pass before it has appeared.
+  if (ready) await page.waitForSelector(ready, { timeout: 30_000 });
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await page.waitForLoadState('networkidle');
   await page.addScriptTag({ content: `window.__gateSignature = ${layoutSignature.toString()};` });
@@ -168,6 +171,36 @@ for (const board of BOARDS) {
       expect(stale, 'allowlisted findings that no longer occur: delete these entries').toEqual([]);
     });
   }
+}
+
+// ---- The compare chart ---------------------------------------------------------------
+//
+// The time-series chart set to one line per device (frontend/packages/widgets/src/compare-feed.tsx):
+// plain, capped to fewer lines than the group, capped with thresholds (both notes under the chart),
+// and at the smallest span the widget may be given, where the notes have the least room. It is a
+// fixture board rather than a sim board because the sim boards are generated from the simulator.
+// Every compare chart must be drawn (its feed is a chunk of its own) and none may read badly.
+
+for (const width of WIDTHS) {
+  test(`the compare chart board at ${width} px reads cleanly in light and dark`, async ({ page }) => {
+    for (const theme of THEMES) {
+      const { findings, widgets } = await measure(page, 'fixture/compare-chart', width, theme, '[data-compare-chart]');
+      expect([...widgets].sort(), 'every widget of the board is on the page').toEqual([
+        'cmp-compare',
+        'cmp-compare-min',
+        'cmp-compare-notes',
+        'cmp-plain',
+      ]);
+      expect(await page.locator('[data-compare-chart]').count(), `${theme}: all three compare charts drawn`).toBe(3);
+      expect(await page.locator('[data-compare-bucket]').count(), `${theme}: each says its history is bucketed`).toBe(3);
+      // The capped charts say how much of the group they show.
+      const notes = await page.locator('[data-compare-notes]').allTextContents();
+      expect(notes.filter((n) => /(Showing )?3 (of|de) 5 devices/.test(n)).length, `${theme}: ${JSON.stringify(notes)}`).toBe(1);
+      expect(notes.filter((n) => /(Showing )?2 of 5 devices/.test(n)).length, `${theme}: ${JSON.stringify(notes)}`).toBe(1);
+      expect(notes.filter((n) => /[Tt]hresholds are (reference lines|references)/.test(n)).length, `${theme}: ${JSON.stringify(notes)}`).toBe(2);
+      expect(findings.map(describeFinding), `${theme}: new readability findings`).toEqual([]);
+    }
+  });
 }
 
 // ---- The negative control --------------------------------------------------------

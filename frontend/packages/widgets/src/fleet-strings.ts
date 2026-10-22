@@ -28,6 +28,7 @@ export interface FleetStrings {
   oneDevice: string;
   useFleetTable: string;
   usePerDevice: string;
+  useLinePerDevice: string;
   stale: string;
   // The fleet count card.
   noMeasurementCount: string;
@@ -68,6 +69,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     oneDevice: 'This widget shows one device, and it is bound to a group of devices whose readings it would mix together.',
     useFleetTable: 'Bind it to one device, or show the group in a fleet table.',
     usePerDevice: 'Set it to one bar per device to compare them, or bind it to one device.',
+    useLinePerDevice: 'Set it to one line per device to compare them, or bind it to one device.',
     stale: 'stale',
     noMeasurementCount: 'Choose the measurement to watch',
     noBands: 'Add thresholds to say what needs attention',
@@ -101,6 +103,7 @@ export const FLEET_STRINGS: Record<'en' | 'es', FleetStrings> = {
     oneDevice: 'Este widget muestra un solo dispositivo y está vinculado a un grupo de dispositivos cuyas lecturas mezclaría.',
     useFleetTable: 'Vincúlelo a un dispositivo o muestre el grupo en una tabla de flota.',
     usePerDevice: 'Configúrelo con una barra por dispositivo para compararlos, o vincúlelo a un dispositivo.',
+    useLinePerDevice: 'Configúrelo con una línea por dispositivo para compararlos, o vincúlelo a un dispositivo.',
     stale: 'obsoleto',
     noMeasurementCount: 'Elija la medición que vigilar',
     noBands: 'Añada umbrales para indicar qué requiere atención',

@@ -147,15 +147,17 @@ describe('membersMode', () => {
     expect(membersMode(d, widget({ groupBy: 7 }))).toBe(false);
   });
 
-  it('is declared by the fleet table and the fleet count (always) and the bar chart (per device), and by no other built-in', () => {
+  it('is declared by the fleet table and the fleet count (always) and the bar chart and time-series chart (per device), and by no other built-in', () => {
     const on = (type: string, options?: Record<string, unknown>) =>
       membersMode(builtinWidgetCatalog.get(type as never)!, widget(options, type));
     expect(on('fleet-table', {})).toBe(true);
     expect(on('fleet-count', {})).toBe(true);
     expect(on('bar-chart', {})).toBe(false);
     expect(on('bar-chart', { groupBy: 'device' })).toBe(true);
+    expect(on('timeseries-chart', {})).toBe(false);
+    expect(on('timeseries-chart', { groupBy: 'device' })).toBe(true);
     for (const type of WIDGET_TYPES) {
-      if (type === 'fleet-table' || type === 'fleet-count' || type === 'bar-chart') continue;
+      if (type === 'fleet-table' || type === 'fleet-count' || type === 'bar-chart' || type === 'timeseries-chart') continue;
       expect(on(type, { groupBy: 'device' }), type).toBe(false);
     }
   });

@@ -330,6 +330,18 @@ const CHART_AXIS_MAX = {
   helpId: 'widgetHintChartAxisMax',
 } as const satisfies RuntimeOptionSpec;
 
+// The compare mode's line limit: optional, no default stored (the chart's own applies), whole numbers.
+// The ceiling (MAX_SERIES_LIMIT, 12) is the compare model's and is applied when the chart reads the
+// option, not declared here: the editor's own test drives each number option with a value spaced by its
+// position in the schema, which a ceiling this low cannot take.
+const MAX_SERIES = {
+  kind: 'number',
+  integer: true,
+  min: 1,
+  labelId: 'widgetLabelMaxSeries',
+  helpId: 'widgetHintMaxSeries',
+} as const satisfies RuntimeOptionSpec;
+
 const WINDOW_SECONDS = {
   kind: 'number',
   integer: true,
@@ -388,8 +400,10 @@ export const builtinWidgetDescriptors = {
     optionsVersion: 2,
     display: { title: 'Timeseries chart', category: 'Telemetry', titleId: 'widgetTypeTimeseriesChart', categoryId: 'widgetCategoryTelemetry' },
     channel: 'measurement',
-    datasource: { mode: 'required', selectors: ONE_DEVICE },
-    binding: { windowSeconds: { option: 'windowSeconds' } },
+    // ALL_SELECTORS because of the compare mode (groupBy device): a group bound with the default mode
+    // is refused in words at runtime, exactly as for the bar chart.
+    datasource: { mode: 'required', selectors: ALL_SELECTORS },
+    binding: { windowSeconds: { option: 'windowSeconds' }, members: { option: 'groupBy', equals: 'device' } },
     options: {
       title: TITLE,
       unit: UNIT,
@@ -397,6 +411,16 @@ export const builtinWidgetDescriptors = {
       thresholds: THRESHOLDS,
       staleAfterSeconds: STALE_AFTER_SECONDS,
       windowSeconds: WINDOW_SECONDS,
+      groupBy: {
+        kind: 'enum',
+        values: ['measurement', 'device'],
+        labelId: 'widgetLabelSeriesBy',
+        helpId: 'widgetHintSeriesBy',
+        valueLabelIds: { measurement: 'widgetGroupByMeasurement', device: 'widgetGroupByDevice' },
+        placeholderId: 'widgetPlaceholderDefault',
+      },
+      measurement: MEASUREMENT,
+      maxSeries: MAX_SERIES,
       markAlarms: MARK_ALARMS,
       markAlarmsScope: MARK_ALARMS_SCOPE,
       markCommands: MARK_COMMANDS,
