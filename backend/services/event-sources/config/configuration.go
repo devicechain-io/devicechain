@@ -289,6 +289,28 @@ type Capture struct {
 	// It is a pointer so that "not written" and "written as 0" are different things; after
 	// ApplyDefaults it is never nil.
 	PublishWindow *int
+
+	// BodyCredential is what the platform capture source does with an event whose body
+	// carries a credential: "refuse" (the default) dead-letters it, "strip" accepts it with
+	// the credential removed. TRANSITIONAL: it exists so a fleet whose firmware still sends
+	// the credential keeps working across the upgrade that begins refusing it (the previous
+	// release refuses an MQTT event WITHOUT one, so firmware cannot be updated first). Only
+	// the platform broker's capture source reads it; the external-broker MQTT source and
+	// HTTP ignore it. Planned removal in v0.26.0, where "strip" is refused at load. A fixed
+	// setting, read once at startup.
+	BodyCredential string
+}
+
+// The two capture.bodyCredential values.
+const (
+	BodyCredentialRefuse = "refuse"
+	BodyCredentialStrip  = "strip"
+)
+
+// StripsBodyCredential reports whether the capture source strips a body credential rather
+// than refusing the event. An unset value is the refusal.
+func (c Capture) StripsBodyCredential() bool {
+	return c.BodyCredential == BodyCredentialStrip
 }
 
 // PublishWindowSize is the publish window in effect: the configured one, or the default
@@ -387,6 +409,9 @@ func (c *EventSourcesConfiguration) ApplyDefaults() {
 		w := DefaultCapturePublishWindow
 		c.Capture.PublishWindow = &w
 	}
+	if c.Capture.BodyCredential == "" {
+		c.Capture.BodyCredential = BodyCredentialRefuse
+	}
 	if c.ExternalMqtt.PublishWindow == nil {
 		w := DefaultExternalMqttPublishWindow
 		c.ExternalMqtt.PublishWindow = &w
@@ -443,6 +468,9 @@ func (c *EventSourcesConfiguration) Validate() error {
 	}
 	if w := c.Capture.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("capture.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)
+	}
+	if v := c.Capture.BodyCredential; v != "" && v != BodyCredentialRefuse && v != BodyCredentialStrip {
+		return fmt.Errorf("capture.bodyCredential must be %q or %q (got %q)", BodyCredentialRefuse, BodyCredentialStrip, v)
 	}
 	if w := c.ExternalMqtt.PublishWindowSize(); w < 1 || w > messaging.MaxOrderedWindow {
 		return fmt.Errorf("externalMqtt.publishWindow must be between 1 and %d (got %d)", messaging.MaxOrderedWindow, w)

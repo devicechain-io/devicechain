@@ -16,6 +16,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// bootstrapMqttBodyCredential is --mqtt-body-credential, kept apart from the block below so
+// its longer name does not realign every line of it.
+var bootstrapMqttBodyCredential string
+
 // Bootstrap command flags.
 var (
 	bootstrapKubeContext     string
@@ -173,6 +177,10 @@ var bootstrapCmd = &cobra.Command{
 		// Parse + validate --lwm2m-identities up front (a short PSK or a missing tenancy
 		// field must fail here, not as a ten-minute helm-timeout when lwm2m-ingest
 		// crash-loops on a bad credential). An empty flag yields no identities.
+		mqttBodyCredential, err := bootstrap.ParseMqttBodyCredential(bootstrapMqttBodyCredential)
+		if err != nil {
+			return fmt.Errorf("--mqtt-body-credential: %w", err)
+		}
 		lwm2mIdentities, err := bootstrap.ParseLwm2mIdentities(bootstrapLwm2mIdentities)
 		if err != nil {
 			return fmt.Errorf("--lwm2m-identities: %w", err)
@@ -401,6 +409,7 @@ var bootstrapCmd = &cobra.Command{
 			EnableAreas:          opts.EnableAreas,
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
+			MqttBodyCredential:   mqttBodyCredential,
 			ObjectStore:          objectStore,
 			ObjectStoreExplicit:  objectStoreFlagGiven(cmd.Flags().Changed),
 			Escrow:               escrowPlan,
@@ -591,6 +600,7 @@ func init() {
 	bootstrapCmd.Flags().BoolVar(&bootstrapDev, "dev", false, "local-developer preset: --build --host localhost --no-tls --yes, and implies --no-escrow (a zero-config http://localhost/ bring-up); rejects contradictory flags")
 
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
+	bootstrapCmd.Flags().StringVar(&bootstrapMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")
@@ -665,3 +675,9 @@ func finishClaim(ctx context.Context, st *bootstrap.State, runErr error) error {
 	}
 	return finishErr
 }
+
+// mqttBodyCredentialUsage is the help for --mqtt-body-credential on bootstrap and upgrade.
+const mqttBodyCredentialUsage = "TRANSITIONAL. What event-sources does with an MQTT event whose body carries a device credential: " +
+	"refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, " +
+	"then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. " +
+	"Removed in v0.26.0"

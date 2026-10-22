@@ -145,6 +145,13 @@ func (h *captureHarness) quiesce(t *testing.T, n int) {
 
 func newCaptureHarness(t *testing.T) *captureHarness {
 	t.Helper()
+	return newCaptureHarnessWith(t, nil)
+}
+
+// newCaptureHarnessWith builds the harness, letting configure act on the source BEFORE its
+// pipeline starts (the workers copy their settings at that moment).
+func newCaptureHarnessWith(t *testing.T, configure func(*GatewayJetStreamSource)) *captureHarness {
+	t.Helper()
 	h := &captureHarness{allowResult: true}
 	h.source = NewGatewayJetStreamSource(nil, "gw-test", NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {
@@ -152,8 +159,9 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 			defer h.mu.Unlock()
 			h.received++
 		},
-		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, id string) (context.Context, messaging.Message, bool) {
+		func(_ string, tenant string, event *model.UnresolvedEvent, payload interface{}, id string) (context.Context, messaging.Message, bool) {
 			h.mu.Lock()
+			event.Payload = payload // as main's inboundEventMessage does, so a test can marshal the event
 			h.published++
 			h.lastSeq = captureSeqOf(id)
 			h.events = append(h.events, event)
@@ -189,6 +197,9 @@ func newCaptureHarness(t *testing.T) *captureHarness {
 	// is bypassed so tests drive handle directly with the exact message they mean to
 	// exercise.
 	h.source.SetWriter(harnessWriter{h})
+	if configure != nil {
+		configure(h.source)
+	}
 	h.source.startPipeline(2)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

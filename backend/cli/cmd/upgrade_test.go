@@ -50,3 +50,35 @@ func TestSkipInfrastructureIsOffByDefaultAndReachesTheUpgrade(t *testing.T) {
 		t.Errorf("the flag is not bound to upgradeSkipInfra (%v)", err)
 	}
 }
+
+// --mqtt-body-credential exists on both verbs, is off by default (an upgrade that is not
+// asked must carry the release's value, which only an unset flag does), and reaches the
+// options the verbs build.
+func TestMqttBodyCredentialFlagIsOnBothVerbsAndOffByDefault(t *testing.T) {
+	for name, f := range map[string]string{
+		"upgrade":   upgradeCmd.Flags().Lookup("mqtt-body-credential").DefValue,
+		"bootstrap": bootstrapCmd.Flags().Lookup("mqtt-body-credential").DefValue,
+	} {
+		if f != "" {
+			t.Errorf("dcctl %s --mqtt-body-credential defaults to %q; unset must mean 'not asked'", name, f)
+		}
+	}
+
+	file, err := parser.ParseFile(token.NewFileSet(), "upgrade.go", nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	threaded := false
+	ast.Inspect(file, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if ok {
+			if k, kok := kv.Key.(*ast.Ident); kok && k.Name == "MqttBodyCredential" {
+				threaded = true
+			}
+		}
+		return true
+	})
+	if !threaded {
+		t.Error("the upgrade command does not pass --mqtt-body-credential to its options")
+	}
+}

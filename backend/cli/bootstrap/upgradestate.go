@@ -59,6 +59,7 @@ func hydrateUpgradeState(
 		Values:       map[string]string{},
 
 		SkipInfrastructure: opts.SkipInfrastructure,
+		MqttBodyCredential: opts.MqttBodyCredential,
 	}
 
 	// 0. THE OPERATOR, AND IT COMES FIRST FOR A REASON THAT IS NOT PRIORITY.

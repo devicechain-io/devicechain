@@ -219,6 +219,11 @@ var (
 	// device itself is NOT told (the broker PUBACKed at capture); this counter and the
 	// failed-decode record, which names the device, are the only signals.
 	CredentialInMqttBodyCounter *prometheus.CounterVec
+	// BodyCredentialStripGauge is 1 when capture.bodyCredential is "strip" on this pod and 0
+	// when it is "refuse": the transitional setting is visible, not just configured. It is the
+	// series to alert on after the migration window, because a strip left on is a device
+	// fleet still sending credentials that nobody is being told to rotate.
+	BodyCredentialStripGauge prometheus.Gauge
 	// EarlyCloseCounter counts connections to an HTTP ingest listener that closed
 	// before delivering a request. It is the only external signal that the listener's
 	// header bound is closing connections at all: net/http closes them itself, before
@@ -316,9 +321,12 @@ func initializeMetrics() {
 		[]string{"source"})
 	CredentialInMqttBodyCounter = Microservice.NewCounterVec(
 		"total_msg_credential_in_mqtt_body",
-		"Count of inbound messages on the platform MQTT broker refused for carrying a credential in the body, which the broker's own authentication of the device makes unnecessary",
+		"Count of inbound messages on the platform MQTT broker that carried a credential in the body, which the broker's own authentication of the device makes unnecessary: refused, or stripped under capture.bodyCredential: strip",
 		// SOURCE only, never tenant (ADR-023 G.3), like every refusal counter on this path.
 		[]string{"source"})
+	BodyCredentialStripGauge = Microservice.NewGauge(
+		"capture_body_credential_strip",
+		"1 when capture.bodyCredential is strip (transitional: a body credential on the platform MQTT broker is removed, not refused), 0 when it is refuse")
 	EarlyCloseCounter = Microservice.NewCounterVec(
 		"total_http_connections_closed_before_request",
 		"Count of connections to an HTTP ingest listener that closed before delivering a request — "+
@@ -568,6 +576,10 @@ func buildEventSources() error {
 				// INITIALIZE phase and readers and writers are created in START, so there
 				// is nothing to wire here yet.
 				GatewaySource = gateway
+				// The transitional strip is wired onto the capture sources and nowhere else:
+				// the external-broker MQTT and HTTP sources below are built without it, so
+				// a body credential there is never accepted-and-dropped. See
+				// wireBodyCredential.
 				created = append(created, gateway)
 				// The same source over the MQTT message store: the copy of a device's QoS 1
 				// publish the broker PUBACKs on, read with the fail-closed store (see
@@ -577,6 +589,7 @@ func buildEventSources() error {
 					onMessageReceived, inboundEventMessage, onEventDecodeFailed,
 					ingestGate, readingGate)
 				StoreSource.UseMessageStore()
+				wireBodyCredential(gateway, StoreSource)
 				continue
 			}
 			// An external broker must NOT be forced to verify against the NATS CA (it

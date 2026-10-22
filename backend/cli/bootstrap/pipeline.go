@@ -144,6 +144,11 @@ type State struct {
 	// helmValues renders them into a chart-owned Secret + lwm2m-ingest config. Setting
 	// this implies lwm2m-ingest ∈ EnabledAreas. Empty when the flag is unused.
 	Lwm2mIdentities []Lwm2mIdentity
+	// MqttBodyCredential is --mqtt-body-credential: "refuse" or "strip", or "" when the flag
+	// was not given. helmValues writes it to event-sources' capture.bodyCredential only when
+	// set, so an upgrade run without the flag leaves the release's value to be carried
+	// forward (see carriedValuePaths) and an explicit value always wins. See mqttbodycredential.go.
+	MqttBodyCredential string
 	// ObjectStore is the settled object store (--object-store): nil for none. A bootstrap
 	// resolves it from the flags and the provider's default; an upgrade reads it back from
 	// the declaration, which is how it survives a re-run. See objectstore.go.

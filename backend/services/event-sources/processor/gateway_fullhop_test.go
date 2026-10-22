@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	core "github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/devicechain-io/dc-microservice/streams"
@@ -105,6 +106,11 @@ func captureManagerAndReader(t *testing.T, nc *nats.Conn, area string) (*messagi
 type decodedEvent struct {
 	device string
 	seq    uint64
+	// wire is the event marshalled as inbound-events would carry it, or nil when it would not
+	// marshal. It is what a test asserts a stripped credential is absent from.
+	wire []byte
+	// credentialMembers is true when the event still carried any of the three credential members.
+	credentialMembers bool
 }
 
 // startCaptureSource wires a real GatewayJetStreamSource to the given reader and
@@ -128,14 +134,24 @@ func startCaptureSource(t *testing.T, id string, reader messaging.MessageReader)
 func startCaptureSourceFailing(t *testing.T, id string, reader messaging.MessageReader,
 	failed func(string, string, []byte, error) error) (*GatewayJetStreamSource, <-chan decodedEvent) {
 	t.Helper()
+	return startCaptureSourceWith(t, id, reader, failed, nil)
+}
+
+// startCaptureSourceWith is startCaptureSourceFailing that lets configure act on the source
+// before it starts.
+func startCaptureSourceWith(t *testing.T, id string, reader messaging.MessageReader,
+	failed func(string, string, []byte, error) error, configure func(*GatewayJetStreamSource)) (*GatewayJetStreamSource, <-chan decodedEvent) {
+	t.Helper()
 
 	out := make(chan decodedEvent, 32)
 	src := NewGatewayJetStreamSource(nil, id, NewJsonDecoder(map[string]string{}),
 		func(string, []byte) {},
 		// The build callback is (sourceId, tenant, event, payload, dedupID); the
 		// device token the payload claims is on the event, not a positional argument.
-		func(_ string, tenant string, event *model.UnresolvedEvent, _ interface{}, id string) (context.Context, messaging.Message, bool) {
-			out <- decodedEvent{device: event.Device, seq: captureSeqOf(id)}
+		func(_ string, tenant string, event *model.UnresolvedEvent, payload interface{}, id string) (context.Context, messaging.Message, bool) {
+			event.Payload = payload
+			wire, _ := esproto.MarshalUnresolvedEvent(event)
+			out <- decodedEvent{device: event.Device, seq: captureSeqOf(id), wire: wire, credentialMembers: credentialInBody(event)}
 			return core.WithTenant(context.Background(), tenant), messaging.Message{Value: []byte(event.Device)}, true
 		},
 		failed,
@@ -145,6 +161,9 @@ func startCaptureSourceFailing(t *testing.T, id string, reader messaging.Message
 	require.NoError(t, src.Initialize(ctx))
 	src.SetReader(reader)
 	src.SetWriter(settleAtOnce{settled: new(atomic.Int64)})
+	if configure != nil {
+		configure(src)
+	}
 	require.NoError(t, src.Start(ctx))
 	// Registered here, not left to the caller: if an assertion between Start and the
 	// caller's own Stop fails, the read loop, the DECODE_WORKER_COUNT decode workers and

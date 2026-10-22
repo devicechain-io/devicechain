@@ -44,6 +44,9 @@ type Options struct {
 	// a default/compact bring-up). Resolved+validated by ResolveEnabledAreas into the
 	// State's EnabledAreas before the pipeline runs.
 	EnableAreas []string
+	// MqttBodyCredential is --mqtt-body-credential ("refuse", "strip", or "" for not given):
+	// the transitional capture.bodyCredential of event-sources. See mqttbodycredential.go.
+	MqttBodyCredential string
 }
 
 // Provider abstracts the target environment (local cluster today; cloud later)
