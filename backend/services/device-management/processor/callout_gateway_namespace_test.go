@@ -149,20 +149,16 @@ func TestAGatewayPublishesOnlyOnItsOwnNamespaceAgainstARealCalloutBroker(t *test
 	// Notices: a gateway hears its own, and only its own.
 	got1 := make(chan string, 4)
 	got2 := make(chan string, 4)
-	sub := func(c mqtt.Client, gateway string, ch chan string) byte {
-		tok := c.Subscribe(messaging.SubjectToMqttTopic(messaging.GatewayNoticesSubject(nsInstance, "acme", gateway)), 0,
-			func(_ mqtt.Client, m mqtt.Message) { ch <- string(m.Payload()) })
-		require.True(t, tok.WaitTimeout(10*time.Second))
-		if st, ok := tok.(*mqtt.SubscribeToken); ok {
-			for _, q := range st.Result() {
-				return q
-			}
-		}
-		return 0xff
+	// SubscribeMqttConfirmed reads the granted QoS: paho reports a SUBACK 0x80 as success.
+	sub := func(c mqtt.Client, gateway string, ch chan string) error {
+		return messaging.SubscribeMqttConfirmed(c,
+			messaging.SubjectToMqttTopic(messaging.GatewayNoticesSubject(nsInstance, "acme", gateway)), 0,
+			func(_ mqtt.Client, m mqtt.Message) { ch <- string(m.Payload()) }, 10*time.Second)
 	}
-	require.NotEqual(t, byte(0x80), sub(gw, "gw", got1), "a gateway was refused its own notices subject")
-	require.NotEqual(t, byte(0x80), sub(gw2, "gw2", got2))
-	require.Equal(t, byte(0x80), sub(gw2, "gw", got2), "a gateway was allowed to subscribe to ANOTHER gateway's notices")
+	require.NoError(t, sub(gw, "gw", got1), "a gateway was refused its own notices subject")
+	require.NoError(t, sub(gw2, "gw2", got2))
+	require.ErrorIs(t, sub(gw2, "gw", got2), messaging.ErrSubscriptionRefused,
+		"a gateway was allowed to subscribe to ANOTHER gateway's notices")
 
 	notices := messaging.NewGatewayNoticePublisher(func() *nats.Conn { return nc }, nsInstance)
 	require.NoError(t, notices.Notice("acme", "gw", messaging.GatewayNotice{AltId: "a1", Device: "dev", Reason: messaging.GatewayNoticeReasonNotGatewayChild}))

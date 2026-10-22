@@ -121,7 +121,8 @@ func TestTheCaptureReaderDrainsBothSubjectShapesAndMarksTheGateway(t *testing.T)
 		require.NoError(t, err)
 		event, err := esproto.UnmarshalUnresolvedEvent(m.Data)
 		require.NoError(t, err)
-		require.True(t, event.BrokerAsserted)
+		// A device's own event is broker-asserted; a gateway's is not (brokerAssertion.mark).
+		require.Equal(t, event.Gateway == "", event.BrokerAsserted)
 		if event.Gateway != "" {
 			gateways++
 			require.Equal(t, "gw-1", event.Gateway)

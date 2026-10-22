@@ -55,8 +55,10 @@ type GatewayNoticer interface {
 // costs one (a two-token lookup would bypass the cache and read the store per event).
 //
 // The decision, in the order it is made, each step refusing:
-//   - the event is broker-asserted (only the capture source sets Gateway, and sets it with the
-//     assertion; an event carrying one without the other is not from the capture source);
+//   - the event names a child (the capture source sets Device from the subject with Gateway). It
+//     is NOT BrokerAsserted, deliberately: the broker authenticated the gateway, not the child,
+//     and a replica that predates Gateway must not read the event as the child's own (see
+//     event-sources' brokerAssertion.mark). Only that mark sets Gateway;
 //   - the child exists in the tenant (an unknown token is refused on the first delivery, not
 //     retried: a gateway cannot register a device by naming it);
 //   - the gateway exists and is enabled;
@@ -67,8 +69,8 @@ func (rez *EventResolver) resolveGatewayChild(ctx context.Context, unrez *esmode
 		return nil, uint(resolvedevent.FailureReason_NotGatewayChild),
 			fmt.Errorf("%w: gateway %q published for device %q, %s", ErrNotGatewayChild, unrez.Gateway, unrez.Device, why)
 	}
-	if !unrez.BrokerAsserted || unrez.Device == "" {
-		return refuse("but the event was not asserted by the broker")
+	if unrez.Device == "" {
+		return refuse("but the event names no device")
 	}
 	children, err := rez.Api.DevicesByToken(ctx, []string{unrez.Device})
 	if err != nil {

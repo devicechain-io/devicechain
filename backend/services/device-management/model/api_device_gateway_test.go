@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-microservice/core"
+	dcgraphql "github.com/devicechain-io/dc-microservice/graphql"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -266,4 +267,38 @@ func TestGatewayAssignmentEvictsTheChildNotTheGateway(t *testing.T) {
 	_, err = api.AssignDeviceGateway(ctx, "c", "c")
 	require.Error(t, err)
 	require.Len(t, evictor.deviceTokenEvicts, before)
+}
+
+// An edit of a device never writes its gateway. UpdateDevice loads the row and saves it whole, so
+// a clear that commits between its read and its write would be undone by the stale gateway_id it
+// loaded: the gateway an operator had just taken the device away from would speak for it again.
+// The clear is staged INSIDE the edit's write, after its read (a callback ahead of gorm's update),
+// which is exactly that interleaving.
+//
+// Negative control: drop "GatewayId" from UpdateDevice's omit list and the edit puts the gateway back (red).
+func TestAnEditRacingAClearDoesNotPutTheGatewayBack(t *testing.T) {
+	api, ctx := gatewayFixture(t, "gw", "c1")
+	_, err := api.AssignDeviceGateway(ctx, "c1", "gw")
+	require.NoError(t, err)
+	c1 := deviceOf(t, api, ctx, "c1")
+
+	cleared := false
+	db := api.RDB.DB(ctx)
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register("test:clear-gateway-mid-edit",
+		func(tx *gorm.DB) {
+			if cleared || tx.Statement.Table != "devices" {
+				return
+			}
+			cleared = true
+			tx.Session(&gorm.Session{NewDB: true}).Exec(
+				`UPDATE devices SET gateway_id = NULL WHERE id = ?`, c1.ID)
+		}))
+	t.Cleanup(func() { _ = db.Callback().Update().Remove("test:clear-gateway-mid-edit") })
+
+	name := "renamed"
+	_, err = api.UpdateDevice(ctx, "c1", &DeviceUpdateRequest{Name: dcgraphql.OptionalStringOf(name)})
+	require.NoError(t, err)
+	require.True(t, cleared, "the clear was never staged inside the edit; the test proves nothing")
+	require.Nil(t, gatewayOf(t, api, ctx, "c1"), "an edit wrote back the gateway it had loaded")
+	require.Equal(t, name, deviceOf(t, api, ctx, "c1").Name.String, "the edit itself was not applied")
 }

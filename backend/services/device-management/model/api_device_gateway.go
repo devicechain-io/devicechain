@@ -88,25 +88,28 @@ func checkGatewayPair(tx *gorm.DB, child, gateway *Device) error {
 // gatewayForNewDevice resolves and checks the gateway a device is being created behind, or
 // returns nil when it is created behind none. The new device has no id yet and no children, so
 // the only rules that can apply to it are the gateway's own: it must exist in the tenant and
-// not itself be behind a gateway.
-func (api *Api) gatewayForNewDevice(ctx context.Context, token string, gatewayToken *string) (*uint, error) {
+// not itself be behind a gateway. It reads the gateway LOCKED on the create's transaction (see
+// CreateDevice), so neither an assignment nor a delete of the gateway can land between the check
+// and the insert.
+func gatewayForNewDevice(tx *gorm.DB, token string, gatewayToken *string) (*uint, error) {
 	if gatewayToken == nil || *gatewayToken == "" {
 		return nil, nil
 	}
 	if *gatewayToken == token {
 		return nil, ErrGatewayIsSelf
 	}
-	matches, err := api.DevicesByToken(ctx, []string{*gatewayToken})
+	devices, err := readLockedDevices(tx, *gatewayToken)
 	if err != nil {
 		return nil, err
 	}
-	if len(matches) == 0 {
+	gateway := devices[*gatewayToken]
+	if gateway == nil {
 		return nil, gorm.ErrRecordNotFound
 	}
-	if matches[0].GatewayId != nil {
+	if gateway.GatewayId != nil {
 		return nil, ErrGatewayHasGateway
 	}
-	id := matches[0].ID
+	id := gateway.ID
 	return &id, nil
 }
 

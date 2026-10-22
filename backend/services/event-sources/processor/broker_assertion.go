@@ -59,12 +59,23 @@ func assertedByCaptureBroker(msg messaging.Message) brokerAssertion {
 // mark stamps an event that has already passed every check on its way out of the decode
 // worker. The event it is given is never one a decoder could have marked: no decoder has a
 // field for it (see TestJsonDecoderCannotSetBrokerAsserted).
+//
+// 🔴 A GATEWAY EVENT LEAVES WITH BrokerAsserted FALSE, AND THAT IS WHAT KEEPS A ROLLING UPGRADE
+// CLOSED. BrokerAsserted says "the broker authenticated THIS DEVICE", and on a gateway subject it
+// did not: it authenticated the gateway. A device-management replica that predates the gateway
+// field ignores it (an unknown proto field), so a gateway event marked BrokerAsserted would reach
+// it as the child's own broker-asserted event and resolve under deviceAuthMode required with no
+// assignment check at all: any device could speak for any device of its tenant for as long as the
+// rollout lasted. Unmarked, that replica asks for a credential and refuses it. The current
+// resolver keys a gateway event on Gateway alone (resolveGatewayChild), which only this mark sets.
 func (a brokerAssertion) mark(event *model.UnresolvedEvent) {
-	event.BrokerAsserted = a.asserted
 	if a.gateway != "" {
+		event.BrokerAsserted = false
 		event.Gateway = a.gateway
 		event.Device = a.child
+		return
 	}
+	event.BrokerAsserted = a.asserted
 }
 
 // credentialInBody reports whether a decoded event carries any of the three credential

@@ -316,14 +316,20 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		DeviceType: matches[0],
 		DisabledAt: disabledAtOnCreate(request.Enabled, time.Now()),
 	}
-	gatewayId, err := api.gatewayForNewDevice(ctx, request.Token, request.GatewayToken)
+	// A device created behind a gateway is checked and inserted in ONE transaction holding the
+	// gateway's row lock, the lock AssignDeviceGateway and DeleteDevice take: checked outside it,
+	// a gateway put behind another gateway, or deleted, in between would leave the new device two
+	// levels deep or naming a gateway that is gone.
+	err = api.RDB.DB(ctx).Transaction(func(tx *gorm.DB) error {
+		gatewayId, err := gatewayForNewDevice(tx, request.Token, request.GatewayToken)
+		if err != nil {
+			return err
+		}
+		created.GatewayId = gatewayId
+		return tx.Create(created).Error
+	})
 	if err != nil {
 		return nil, err
-	}
-	created.GatewayId = gatewayId
-	result := api.RDB.DB(ctx).Create(created)
-	if result.Error != nil {
-		return nil, result.Error
 	}
 	// Roster the new device with event-processing (ADR-051 slice 4c-2), POST-COMMIT and
 	// best-effort, so the DETECT engine can arm absence for it even if it never reports.
@@ -728,18 +734,19 @@ func (api *Api) UpdateDevice(ctx context.Context, token string, request *DeviceU
 	// disabled_at is written only by an update that names `enabled`, for the same reason:
 	// a rename racing a disable would otherwise write back the enabled state it loaded and
 	// silently re-enable a device an operator had just quarantined.
-	omit := make([]string, 0, 2)
+	//
+	// gateway_id is NEVER written here: AssignDeviceGateway and ClearDeviceGateway are its only
+	// writers, under a row lock. Written whole, an edit racing a clear would put the gateway it
+	// loaded back, and a gateway an operator had just taken a device away from would speak for
+	// it again with nothing recording that it had been re-granted.
+	omit := []string{"GatewayId"}
 	if !retyped && !toggled {
 		omit = append(omit, "ExpectedSince")
 	}
 	if !request.Enabled.Set {
 		omit = append(omit, "DisabledAt")
 	}
-	db := api.RDB.DB(ctx)
-	if len(omit) > 0 {
-		db = db.Omit(omit...)
-	}
-	result := db.Save(updated)
+	result := api.RDB.DB(ctx).Omit(omit...).Save(updated)
 	if result.Error != nil {
 		return nil, result.Error
 	}

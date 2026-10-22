@@ -42,12 +42,12 @@ func gatewayRig(t *testing.T, mode string) *resolveRig {
 }
 
 // viaGateway is a measurement the capture source would have produced from a publish on the
-// gateway's namespace: broker-asserted, the child as its device, the gateway marked.
+// gateway's namespace: the child as its device, the gateway marked, and NOT BrokerAsserted (the
+// broker authenticated the gateway, not the child; see event-sources' brokerAssertion.mark).
 func viaGateway(gateway, child string) *esmodel.UnresolvedEvent {
 	e := tempEvent("21.5")
 	e.Device = child
 	e.Gateway = gateway
-	e.BrokerAsserted = true
 	altId := "alt-" + child
 	e.AltId = &altId
 	now := time.Now().UTC()
@@ -132,14 +132,14 @@ func TestAGatewayEventForAnUnknownDeviceIsRefusedNotRetried(t *testing.T) {
 }
 
 // A disabled gateway speaks for no one; a disabled child is refused by the existing path; an
-// event naming a gateway that does not exist, or one the broker did not assert, is refused.
-func TestAGatewayEventNeedsAnEnabledGatewayAndABrokerAssertion(t *testing.T) {
+// event naming a gateway that does not exist, or naming no child, is refused.
+func TestAGatewayEventNeedsAnEnabledGatewayAndAChild(t *testing.T) {
 	rig := gatewayRig(t, config.AuthModeRequired)
 
-	unasserted := viaGateway("gw", "c")
-	unasserted.BrokerAsserted = false
-	_, _, err := rig.rez.ResolveEvent(rig.ctx, unasserted)
-	require.ErrorIs(t, err, ErrNotGatewayChild, "an event not asserted by the broker was trusted")
+	nameless := viaGateway("gw", "c")
+	nameless.Device = ""
+	_, _, err := rig.rez.ResolveEvent(rig.ctx, nameless)
+	require.ErrorIs(t, err, ErrNotGatewayChild, "a gateway event naming no child was resolved")
 
 	_, _, err = rig.rez.ResolveEvent(rig.ctx, viaGateway("ghost-gateway", "c"))
 	require.ErrorIs(t, err, ErrNotGatewayChild)
@@ -330,4 +330,33 @@ func TestTheGatewayRefusalWarnIsRateLimitedPerPair(t *testing.T) {
 		g.shouldWarn("acme|gw|c-" + time.Duration(i).String())
 	}
 	require.LessOrEqual(t, len(g.last), gatewayWarnKeys)
+}
+
+// THE ROLLING-UPGRADE DIRECTION ON THE WIRE. A device-management replica that predates the
+// gateway field reads a gateway event with field 19 unknown, so it sees a plain event for the
+// child: what it does with that is decided by BrokerAsserted alone. The capture source leaves a
+// gateway event UNMARKED (event-sources' brokerAssertion.mark), so such a replica asks for a
+// credential under required and refuses; marked, it would resolve the child's event with no
+// assignment check, and any device could speak for any device of its tenant during a rollout.
+//
+// Negative control: mark the fixture BrokerAsserted (what the source sent before it was unmarked)
+// and the old replica's resolve below succeeds (red). The source's half, that mark leaves a gateway
+// event unmarked, is pinned in event-sources by TestAGatewaySubjectAssertsTheGatewayAndNamesTheChild.
+func TestAGatewayEventIsRefusedByAResolverThatPredatesTheGatewayField(t *testing.T) {
+	rig := gatewayRig(t, config.AuthModeRequired)
+
+	// What the current resolver accepts...
+	event := viaGateway("gw", "c")
+	rig.resolve(event)
+
+	// ...and the same event as the older replica decodes it: the field it does not know is gone.
+	encoded, err := esproto.MarshalUnresolvedEvent(event)
+	require.NoError(t, err)
+	old, err := esproto.UnmarshalUnresolvedEvent(encoded)
+	require.NoError(t, err)
+	require.Equal(t, "gw", old.Gateway, "the fixture did not carry the gateway over the wire")
+	old.Gateway = ""
+	_, reason, err := rig.rez.ResolveEvent(rig.ctx, old)
+	require.Error(t, err, "a resolver that ignores the gateway field accepted a gateway's event as the child's own")
+	require.Equal(t, uint(resolvedevent.FailureReason_Unauthenticated), reason)
 }

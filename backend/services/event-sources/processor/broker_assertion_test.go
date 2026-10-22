@@ -435,7 +435,9 @@ func TestAGatewaySubjectAssertsTheGatewayAndNamesTheChild(t *testing.T) {
 	require.Len(t, events, 1)
 	require.Equal(t, "gw-1", events[0].Gateway)
 	require.Equal(t, "sensor-001", events[0].Device)
-	require.True(t, events[0].BrokerAsserted)
+	// NOT BrokerAsserted: the broker authenticated the gateway, not the child, and a resolver
+	// that predates Gateway must not read this as the child's own event (brokerAssertion.mark).
+	require.False(t, events[0].BrokerAsserted)
 
 	// The control: a device's OWN subject sets no gateway.
 	h2 := newCaptureHarness(t)
