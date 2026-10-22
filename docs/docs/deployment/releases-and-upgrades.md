@@ -3787,16 +3787,25 @@ with the volume and by its snapshots. The body credential is now refused instead
   2. Roll out the SDK or firmware that stops sending the body credential.
   3. Watch `devicechain_eventsources_total_msg_credential_in_mqtt_body` until it has stopped rising for
      longer than your slowest device's reporting interval. A warning in the `event-sources` log names
-     the tenant and the device of each one that still sends a credential (once an hour for each), which
-     is how you find the stragglers.
+     the tenant and the device of each one that still sends a credential (once an hour for each, on each
+     `event-sources` pod), which is how you find the stragglers.
   4. Run `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`.
   5. Rotate the credential of every device that sent one.
 
   `strip` does not remove the exposure: the broker stored the body before either setting ran, so `strip`
   and `refuse` leave the same plaintext at rest, and step 5 is needed with both. `strip` applies only
   to the platform's MQTT broker. A later `dcctl upgrade` without the flag keeps the value. It is
-  transitional and is removed in `v0.26.0`: `event-sources` refuses to start while it is set. On a chart
-  install (not `dcctl`) set `functionalAreas.event-sources.config.capture.bodyCredential`.
+  transitional: its removal is planned for `v0.26.0`, which is to refuse to start `event-sources` while
+  it is still set. On a chart install (not `dcctl`) set
+  `functionalAreas.event-sources.config.capture.bodyCredential`.
+
+  While the upgrade rolls, an `event-sources` pod of this release can strip an event before
+  `device-management` has rolled. A `v0.23.0` `device-management` refuses that event, because it no
+  longer carries a credential, and leaves it to be delivered again a minute later, up to five deliveries
+  in all; a `device-management` of this release accepts it. So nothing is lost when `device-management`
+  finishes rolling within about four minutes of the first new `event-sources` pod, which an ordinary
+  upgrade does. An event still refused on its fifth delivery is set aside on the failed-events stream as
+  unauthenticated, without the credential.
 - **What to change in a device.** The C# SDK (and the Unity package, which rides it) stops
   sending the credential over MQTT in this release, and still sends it over HTTP. The envelope JSON
   Schema now marks the three members HTTP-only. A custom `IDeviceEventCarrier` must declare the new
@@ -4032,7 +4041,7 @@ when the event is resolved.
 | `event-processing` `derivedPublishing.maxInFlight` (new) | one detection at a time | 32 | Set `1`. Still at most one outstanding detection per device, so each device's detections arrive in order. Publishing again without duplicates holds within the derived-events stream's 30-minute duplicate window. |
 | `device-management` `raiseAlarm.workers` (new, fixed, read at startup) | one change at a time | `max(1, min(8, pool - resolution.workers - 4))`, which is 6 on the default pool of 20 | Set `1` for the old inline path. Changes to one alarm are always applied in order. An explicit value is validated against the connection pool and never adjusted. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (under `functionalAreas.mcp.config`) | no cap | 16, 20 and 40 | Raise them; `callsBurst` may not be below `maxBatchEntries`. |
-| `event-sources` `capture.bodyCredential` (new, fixed, under `functionalAreas.event-sources.config`) | none: a body credential on the platform's MQTT broker was accepted | `refuse` | Set `strip` for the upgrade only (transitional, removed in `v0.26.0`). See [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential). |
+| `event-sources` `capture.bodyCredential` (new, fixed, under `functionalAreas.event-sources.config`) | none: a body credential on the platform's MQTT broker was accepted | `refuse` | Set `strip` for the upgrade only (transitional, removal planned for `v0.26.0`). See [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential). |
 | GKE reference module `services_machine_type` (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Set it explicitly. Changing an existing pool's machine type recreates its nodes. |
 
 - **Detection:** detections of different devices are published side by side, up to 32 at a time,

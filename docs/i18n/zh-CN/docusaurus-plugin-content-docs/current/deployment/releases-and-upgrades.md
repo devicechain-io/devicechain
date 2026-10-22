@@ -2250,15 +2250,21 @@ dcctl upgrade local devicechain --version v0.24.0
      每个带凭据的事件都会被计数。
   2. 推出不再在正文中发送凭据的 SDK 或固件。
   3. 观察 `devicechain_eventsources_total_msg_credential_in_mqtt_body`，直到它停止增长的时间超过你最慢那台设备的
-     上报间隔。`event-sources` 日志中的警告会写明每个仍在发送凭据的设备所属的租户和设备（每台设备每小时一次），
+     上报间隔。`event-sources` 日志中的警告会写明每个仍在发送凭据的设备所属的租户和设备（每个 `event-sources` pod 上每台设备每小时一次），
      据此找出落在后面的设备。
   4. 执行 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`。
   5. 轮换所有发送过凭据的设备的凭据。
 
   `strip` 不会消除暴露：代理在这两种设置生效之前就已存下了正文，所以 `strip` 与 `refuse` 留下的静态明文相同，
   两者都需要第 5 步。`strip` 只作用于平台 MQTT 代理。之后不带该选项的 `dcctl upgrade` 会保留这个值。它是过渡性
-  的，将在 `v0.26.0` 中移除：设置了它时 `event-sources` 会拒绝启动。使用 chart 安装（不是 `dcctl`）时，请设置
-  `functionalAreas.event-sources.config.capture.bodyCredential`。
+  的：计划在 `v0.26.0` 中移除，届时只要仍设置着它，`event-sources` 就将拒绝启动。使用 chart 安装（不是 `dcctl`）
+  时，请设置 `functionalAreas.event-sources.config.capture.bodyCredential`。
+
+  升级滚动期间，本版本的 `event-sources` pod 可能会在 `device-management` 完成滚动之前就去掉某个事件的凭据。
+  `v0.23.0` 的 `device-management` 会拒绝这个已不带凭据的事件，并让它在一分钟后再次投递，总共最多投递五次；
+  本版本的 `device-management` 会接受它。因此，只要 `device-management` 在第一个新的 `event-sources` pod 启动后
+  约四分钟内完成滚动（正常升级都是如此），就不会丢失任何事件。第五次投递时仍被拒绝的事件会作为未认证事件被放到
+  失败事件流中，其中不含凭据。
 - **设备上要改什么。** C# SDK（以及基于它的 Unity 包）在本版本中不再通过 MQTT 发送凭据，通过 HTTP
   仍会发送。事件信封的 JSON Schema 现在把这三个成员标注为仅限 HTTP。自定义的 `IDeviceEventCarrier`
   必须声明新增的 `CarriesBodyCredential` 成员（经由 HTTP 的承载器为 `true`，平台 MQTT 为 `false`）；这是
@@ -2436,7 +2442,7 @@ dcctl upgrade local devicechain --version v0.24.0
 | `event-processing` 的 `derivedPublishing.maxInFlight`（新增） | 一次一条检测结果 | 32 | 设为 `1`。每台设备仍最多只有一条未完成的检测结果，因此每台设备的检测结果按顺序到达。无重复的重新发布在派生事件流 30 分钟的去重窗口内成立。 |
 | `device-management` 的 `raiseAlarm.workers`（新增，固定设置，启动时读取） | 一次一个变更 | `max(1, min(8, pool - resolution.workers - 4))`，默认连接池为 20 时即 6 | 设为 `1` 即恢复原来的串行路径。同一条告警的变更始终按顺序应用。显式给出的值会按连接池校验，绝不会被调整。 |
 | `mcp` 的 `maxBatchEntries`、`callsPerSecond`、`callsBurst`（位于 `functionalAreas.mcp.config`） | 无上限 | 16、20 和 40 | 调高它们；`callsBurst` 不能小于 `maxBatchEntries`。 |
-| `event-sources` 的 `capture.bodyCredential`（新增，固定设置，位于 `functionalAreas.event-sources.config`） | 无：平台 MQTT 代理上正文中的凭据会被接受 | `refuse` | 仅在升级期间设为 `strip`（过渡性设置，将在 `v0.26.0` 中移除）。见[设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)。 |
+| `event-sources` 的 `capture.bodyCredential`（新增，固定设置，位于 `functionalAreas.event-sources.config`） | 无：平台 MQTT 代理上正文中的凭据会被接受 | `refuse` | 仅在升级期间设为 `strip`（过渡性设置，计划在 `v0.26.0` 中移除）。见[设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)。 |
 | GKE 参考模块的 `services_machine_type`（`deploy/gke`） | `n2-custom-4-8192` | `t2d-standard-4` | 显式设置。更改现有节点池的机型会重建其节点。 |
 
 - **检测：** 不同设备的检测结果并行发布，一次最多 32 条，而不再逐条等待确认。在一个 GKE 测试集群上，以每秒约

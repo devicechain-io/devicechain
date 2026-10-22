@@ -4064,16 +4064,24 @@ instantáneas. Ahora la credencial en el cuerpo se rechaza:
   3. Vigila `devicechain_eventsources_total_msg_credential_in_mqtt_body` hasta que deje de subir durante
      más tiempo que el intervalo de envío de tu dispositivo más lento. Una advertencia en el registro de
      `event-sources` indica el inquilino y el dispositivo de cada uno que sigue enviando una credencial
-     (una vez por hora para cada uno); así encuentras los rezagados.
+     (una vez por hora para cada uno, en cada pod de `event-sources`); así encuentras los rezagados.
   4. Ejecuta `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`.
   5. Rota la credencial de todo dispositivo que la haya enviado.
 
   `strip` no elimina la exposición: el bróker guardó el cuerpo antes de que se aplicara cualquiera de los
   dos ajustes, así que `strip` y `refuse` dejan el mismo texto claro en reposo, y el paso 5 hace falta con
   ambos. `strip` se aplica solo al bróker MQTT de la plataforma. Un `dcctl upgrade` posterior sin la opción
-  conserva el valor. Es transitorio y se elimina en la `v0.26.0`: `event-sources` se niega a arrancar
-  mientras esté indicado. En una instalación con el chart (no con `dcctl`) indica
+  conserva el valor. Es transitorio: está previsto eliminarlo en la `v0.26.0`, que no dejará arrancar
+  `event-sources` mientras siga indicado. En una instalación con el chart (no con `dcctl`) indica
   `functionalAreas.event-sources.config.capture.bodyCredential`.
+
+  Mientras la actualización se despliega, un pod de `event-sources` de esta versión puede quitar la
+  credencial de un evento antes de que `device-management` se haya actualizado. Un `device-management` de
+  la `v0.23.0` rechaza ese evento, porque ya no lleva credencial, y lo deja para que se entregue de nuevo un
+  minuto después, hasta cinco entregas en total; un `device-management` de esta versión lo acepta. Así que
+  no se pierde nada si `device-management` termina de actualizarse en unos cuatro minutos desde el primer
+  pod nuevo de `event-sources`, como ocurre en una actualización normal. Un evento que siga rechazado en su
+  quinta entrega queda apartado en el flujo de eventos fallidos como no autenticado, sin la credencial.
 - **Qué cambiar en un dispositivo.** El SDK de C# (y el paquete de Unity, que se apoya en él) deja de
   enviar la credencial por MQTT en esta versión, y la sigue enviando por HTTP. El JSON Schema del sobre
   marca ahora los tres miembros como solo HTTP. Un `IDeviceEventCarrier` propio debe declarar el nuevo
@@ -4332,7 +4340,7 @@ resolver el evento.
 | `event-processing` `derivedPublishing.maxInFlight` (nuevo) | una detección cada vez | 32 | Indica `1`. Sigue habiendo como máximo una detección pendiente por dispositivo, así que las detecciones de cada dispositivo llegan en orden. Volver a publicar sin duplicados se mantiene dentro de la ventana de duplicados de 30 minutos del stream de eventos derivados. |
 | `device-management` `raiseAlarm.workers` (nuevo, fijo, se lee al arrancar) | un cambio cada vez | `max(1, min(8, pool - resolution.workers - 4))`, es decir, 6 con el pool por defecto de 20 | Indica `1` para la ruta en línea anterior. Los cambios de una misma alarma se aplican siempre en orden. Un valor explícito se valida contra el pool de conexiones y nunca se ajusta. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (en `functionalAreas.mcp.config`) | sin límite | 16, 20 y 40 | Súbelos; `callsBurst` no puede ser menor que `maxBatchEntries`. |
-| `event-sources` `capture.bodyCredential` (nuevo, fijo, en `functionalAreas.event-sources.config`) | ninguno: se aceptaba una credencial en el cuerpo en el bróker MQTT de la plataforma | `refuse` | Indica `strip` solo para la actualización (transitorio, se elimina en la `v0.26.0`). Consulta [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential). |
+| `event-sources` `capture.bodyCredential` (nuevo, fijo, en `functionalAreas.event-sources.config`) | ninguno: se aceptaba una credencial en el cuerpo en el bróker MQTT de la plataforma | `refuse` | Indica `strip` solo para la actualización (transitorio, está previsto eliminarlo en la `v0.26.0`). Consulta [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential). |
 | `services_machine_type` del módulo de referencia de GKE (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Indícalo explícitamente. Cambiar el tipo de máquina de un grupo existente recrea sus nodos. |
 
 - **Detección:** las detecciones de distintos dispositivos se publican en paralelo, hasta 32 a la vez, en
