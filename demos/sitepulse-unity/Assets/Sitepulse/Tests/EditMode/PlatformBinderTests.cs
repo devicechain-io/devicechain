@@ -283,7 +283,7 @@ namespace DeviceChain.Sitepulse.Tests
             new DeviceBinder(query, Contract()).BindAsync(one, board, creds, CancellationToken.None).GetAwaiter().GetResult();
 
             Assert.IsTrue(creds.TryGet("sp-hauler-01", out var secret));
-            Assert.AreEqual(43, secret.Length);
+            Assert.AreEqual(64, secret.Length);
             StringAssert.DoesNotContain(secret, creds.ToString());
             StringAssert.DoesNotContain(secret, board.Summary());
             foreach (var l in board.Lines()) StringAssert.DoesNotContain(secret, l.Text);

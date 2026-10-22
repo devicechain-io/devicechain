@@ -161,14 +161,17 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
-        public void MintedTokensAreLongDistinctAndUrlSafe()
+        public void MintedTokensAreLongDistinctAndRedacted()
         {
             var a = CredentialResolver.MintToken();
             var b = CredentialResolver.MintToken();
             Assert.AreNotEqual(a, b);
-            Assert.AreEqual(43, a.Length);
-            Assert.IsTrue(a.All(c => char.IsLetterOrDigit(c) || c == '-' || c == '_'), a);
+            Assert.AreEqual(64, a.Length);
+            Assert.IsTrue(a.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')), a);
             Assert.IsFalse(a.StartsWith(CredentialResolver.FingerprintPrefix));
+            // the shape is chosen so the redactor catches a token wherever it is printed
+            StringAssert.DoesNotContain(a, Redactor.Redact("device d connected with " + a));
+            StringAssert.DoesNotContain(a, Redactor.RedactForRecording("device d connected with " + a));
         }
 
         [Test]

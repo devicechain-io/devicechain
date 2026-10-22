@@ -85,12 +85,18 @@ namespace DeviceChain.Sitepulse.Platform
 
         public static string CredentialToken(string deviceToken) => deviceToken + "-sitepulse";
 
-        /// <summary>A fresh random token: 32 bytes, base64url, 43 characters.</summary>
+        /// <summary>
+        /// A fresh random token: 32 bytes as 64 lowercase hex characters. Hex, not base64url, because a
+        /// run of 32 or more hex characters is what the <see cref="Domain.Redactor"/> recognises as a
+        /// credential, so a token that ever reached a log line or a recording would be redacted there.
+        /// </summary>
         public static string MintToken()
         {
             var bytes = new byte[32];
             using (var rng = System.Security.Cryptography.RandomNumberGenerator.Create()) rng.GetBytes(bytes);
-            return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            var sb = new System.Text.StringBuilder(64);
+            foreach (var b in bytes) sb.Append(b.ToString("x2"));
+            return sb.ToString();
         }
 
         /// <summary>Null when the row is an enabled ACCESS_TOKEN credential of <paramref name="deviceToken"/> that carries an id, else why not.</summary>
