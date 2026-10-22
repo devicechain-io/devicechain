@@ -854,6 +854,11 @@ func (ms *Microservice) LoadInstanceConfigurationFrom(path string) error {
 	if err := eventtime.SetProducerWireFormat(wire); err != nil {
 		return fmt.Errorf("instance configuration invalid: %w", err)
 	}
+	// This area's own broker login replaces the shared one for every connection the process opens. It
+	// is here, with the document, so no connection site has to know the logins were split.
+	if err := cfg.Infrastructure.Nats.Auth.ApplyAreaLogin(os.Getenv(ENV_MS_FUNCTIONAL_AREA), os.Getenv); err != nil {
+		return fmt.Errorf("instance configuration invalid: %w", err)
+	}
 	ms.InstanceConfiguration = *cfg
 	log.Info().Str("eventWireFormat", wire.String()).Msg("Event wire format set from instance configuration")
 	log.Info().Str("level", logging.Level).Msg("Log level set from instance configuration")

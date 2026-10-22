@@ -144,7 +144,7 @@ func introduceIdentity(st *State) error {
 	if st.Values["natsCalloutIssuerSeed"] == "" {
 		return nil // a broker with no authentication has no accounts to separate
 	}
-	creds, err := natsauth.Credentials{}.WithIdentity(st.Values["natsIdentityPassword"], "")
+	creds, err := withIdentity(natsauth.Credentials{}, st.Values["natsIdentityPassword"], "")
 	if err != nil {
 		return err
 	}

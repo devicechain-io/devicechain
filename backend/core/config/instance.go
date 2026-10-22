@@ -408,6 +408,20 @@ type NatsAuthConfiguration struct {
 	// IdentityPassword is dcctl's view of a running instance only (DeployedInstanceConfig overlays
 	// it from the identity Secret). Nothing writes it into the document and no service reads it.
 	IdentityPassword string
+	// AreaLogins says the broker has a login of its own for every area that uses it (NatsLoginAreas),
+	// and that each such area must present ITS OWN instead of the shared User/Password above. The
+	// flag is not secret and rides in the document every service reads; the logins do not. Each is in
+	// a Secret of its own that only that area's Deployment mounts (DC_NATS_USER, DC_NATS_PASSWORD).
+	//
+	// 🔴 FAIL CLOSED. When this is true an area that uses the broker refuses to start without its
+	// login, rather than quietly connecting as the shared one. When it is false (a broker with no
+	// authentication, or one built before the logins existed) every area uses User/Password as it
+	// always did.
+	AreaLogins bool
+	// AreaPasswords is dcctl's view of a running instance only (DeployedInstanceConfig overlays it
+	// from the per-area Secrets), keyed by login principal: an area, or NatsAdminPrincipal. Nothing
+	// writes it into the document and no service reads it.
+	AreaPasswords map[string]string
 }
 
 // CalloutEnabled reports whether the broker runs the device auth callout. It is keyed on the

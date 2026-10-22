@@ -249,6 +249,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			deployed.Infrastructure.Nats.Auth.CalloutIssuerSeed,
 			deployed.Infrastructure.Nats.Auth.CalloutXKeySeed,
 			deployed.Infrastructure.Nats.Auth.IdentityPassword,
+			deployed.Infrastructure.Nats.Auth.AreaPasswords,
 			deployed.Infrastructure.Nats.Auth.Password,
 			deployed.Infrastructure.Nats.Auth.SysPassword)
 		if err != nil {
@@ -280,7 +281,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 			// broker's next roll; a refused run does not converge on anything.
 			reused, rerr := brokerCredentialsFromRunning(ctx, st,
 				localRecord.IssuerSeed, localRecord.XKeySeed, localRecord.IdentityPassword,
-				localRecord.ServicePassword, localRecord.SysPassword)
+				localRecord.AreaLogins, localRecord.ServicePassword, localRecord.SysPassword)
 			if rerr == nil {
 				creds = reused
 				notes = append(notes, "NATS broker credentials reused from this machine's bootstrap record")
@@ -290,7 +291,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 				"the bootstrap record for this instance is unusable (%v); minting fresh broker "+
 					"credentials, which a running broker would be reconfigured with", rerr))
 		}
-		creds, err = natsauth.GenerateCredentials()
+		creds, err = mintBrokerCredentials()
 		if err != nil {
 			return fail("minting NATS auth credentials", err)
 		}
@@ -339,6 +340,7 @@ func stepRenderConfig(ctx context.Context, st *State) error {
 		IssuerSeed:       creds.IssuerSeed,
 		XKeySeed:         creds.XKeySeed,
 		IdentityPassword: creds.IdentityPassword,
+		AreaLogins:       loginPlaintexts(creds),
 		ServicePassword:  creds.ServicePassword,
 		SysPassword:      creds.SysPassword,
 	}); err != nil {

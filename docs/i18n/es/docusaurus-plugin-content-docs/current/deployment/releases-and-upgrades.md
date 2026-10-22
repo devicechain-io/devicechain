@@ -471,6 +471,20 @@ Lo que ve una instancia en marcha:
   vez que arranca, y `dcctl upgrade` lo indica al terminar. El bróker se reinicia una vez, servidor a
   servidor con `--ha`, para añadir la cuenta. `user-management` se niega a arrancar si la instancia
   dice que la cuenta existe y falta su contraseña, en lugar de recurrir a la cuenta compartida.
+- **Cada área recibe una credencial propia para el bróker.** Hasta ahora todos los servicios entraban
+  al bróker de mensajes con una sola credencial compartida, de modo que cualquier pod podía presentar,
+  y cualquier fuga de su configuración exponía, la credencial de todos. `dcctl upgrade` crea una
+  credencial por cada área que usa el bróker, y otra para la administración del bróker, y guarda cada
+  una en un Secret llamado `dci-<instancia>-nats-<área>` que se monta solo en el pod de esa área.
+  `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Las credenciales
+  nuevas tienen los mismos permisos que la compartida, así que lo que un área puede hacer no cambia. La
+  compartida sigue en su sitio por ahora, de modo que los servicios que aún no se han reiniciado siguen
+  conectándose durante la actualización. Hasta que una versión posterior la retire, la credencial
+  compartida sigue en la configuración que lee cada pod, así que esto aún no impide que un pod la
+  presente. El bróker se
+  reinicia una vez, servidor a servidor con `--ha`, para añadir los usuarios. Un área se niega a
+  arrancar si la instancia dice que las credenciales existen y falta la suya, en lugar de recurrir a la
+  compartida. Las credenciales existentes nunca se reemplazan: una actualización crea solo las que faltan.
 - **El almacén de eventos se reinicia cuando cambian sus pods**, por ejemplo por una imagen o una
   ubicación nuevas. Un cambio solo de ajustes se recarga sin reinicio. Con `--ha` se reinician
   primero las réplicas en espera y después el rol primario pasa a una de ellas. Sin `--ha` se

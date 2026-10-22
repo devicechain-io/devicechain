@@ -172,6 +172,7 @@ func TestARerunDiscardsABrokerHashThatDoesNotVerify(t *testing.T) {
 // The reuse branch must not have swallowed the fresh-install path: a first bootstrap
 // still mints, and mints something different every time.
 func TestAFreshInstallStillMintsBrokerCredentials(t *testing.T) {
+	useRealBrokerMinting(t)
 	first := rerun(t, nil)
 	second := rerun(t, nil)
 

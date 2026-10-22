@@ -305,6 +305,22 @@ spec:
                   key: password
                   optional: true
             {{- end }}
+            {{- /* This area's OWN broker login, from the Secret named for this area alone
+            (devicechain.natsLoginSecret), and never another area's: that is what makes the login
+            this area's rather than the platform's. Areas that never open a broker connection
+            (devicechain.areasWithoutNatsLogin) get none. OPTIONAL at the pod so an instance whose
+            broker has no per-area logins starts; the service itself refuses to start when its
+            configuration says the logins exist and this one is missing. */}}
+            {{- if not (has $area (splitList "," (include "devicechain.areasWithoutNatsLogin" $root))) }}
+            {{- range $env, $key := dict "DC_NATS_USER" "user" "DC_NATS_PASSWORD" "password" }}
+            - name: {{ $env }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "devicechain.natsLoginSecret" (dict "root" $root "area" $area) | quote }}
+                  key: {{ $key }}
+                  optional: true
+            {{- end }}
+            {{- end }}
             {{/* Per-area extra environment, passed through verbatim as core-v1
             EnvVar entries. This is how a Secret is projected into an env var:
             sparkplug-ingest reads each per-tenant broker password from the env var

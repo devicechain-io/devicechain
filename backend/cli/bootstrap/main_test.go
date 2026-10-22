@@ -45,5 +45,6 @@ func TestMain(m *testing.M) {
 	readInstanceCredentialSecret = func(context.Context, string, string) (bool, error) {
 		return false, nil
 	}
+	installMemoizedBrokerCredentials()
 	os.Exit(kubeisolation.Run(m))
 }

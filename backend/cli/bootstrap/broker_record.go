@@ -88,8 +88,13 @@ type brokerRecord struct {
 	// same reason as XKeySeed: a record written before the account existed is valid, and the
 	// absence reads as "introduce one".
 	IdentityPassword string `json:"identityPassword,omitempty"`
-	ServicePassword  string `json:"servicePassword"`
-	SysPassword      string `json:"sysPassword"`
+	// AreaLogins are the per-area broker logins and the administrator's, keyed by principal (an area,
+	// or "broker-admin"). Optional on read for the same reason as the two above: a record written
+	// before they existed is valid, and a principal's absence reads as "introduce one". A principal
+	// that is present is never replaced.
+	AreaLogins      map[string]string `json:"areaLogins,omitempty"`
+	ServicePassword string            `json:"servicePassword"`
+	SysPassword     string            `json:"sysPassword"`
 }
 
 // brokerRecordPathFor resolves the record's path. A seam so tests never touch a real

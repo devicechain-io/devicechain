@@ -4,6 +4,7 @@
 package natsauth
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -391,7 +392,7 @@ func TestCredentialsFromDeployedFailsClosed(t *testing.T) {
 			if err == nil {
 				t.Fatalf("accepted unusable deployed credentials, returning %+v", got)
 			}
-			if got != (Credentials{}) {
+			if !reflect.DeepEqual(got, Credentials{}) {
 				t.Errorf("credentials were returned alongside the error: %+v", got)
 			}
 		})

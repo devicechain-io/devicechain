@@ -235,7 +235,7 @@ decrypted. You are asked for the artifact's passphrase, or you can supply it wit
 
 The broker's credentials are not in the escrow and do not need to be. The rebuilt instance mints
 new ones, including the keys of the device authentication callout and the login for the broker's
-identity account, and gives them to the broker
+identity account and every area's own broker login, and gives them to the broker
 and the services in the same run. Devices do not hold any of them: they sign in with their own
 credentials, which come back with the database.
 
