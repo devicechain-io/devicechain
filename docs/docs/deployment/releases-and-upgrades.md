@@ -3587,6 +3587,19 @@ first.** Its four migrations add two tables and two indexes and rewrite no exist
 the configuration this release writes (see [Going back](#v0240-going-back)). Coming from `v0.22.0` or earlier, read the
 [`v0.23.0` notes](#v0230-upgrade) as well; they apply to any upgrade that crosses that release.
 
+The commands, with the `v` in the version and a rehearsal first:
+
+```bash
+dcctl install local --version v0.24.0
+dcctl upgrade local devicechain --version v0.24.0 --dry-run
+dcctl upgrade local devicechain --version v0.24.0
+```
+
+`--version` takes the tag with its `v`. On a cluster other than the default local one, pass
+`--kube-context` to `dcctl install` and `dcctl upgrade`, and pass `--registry` when the images come
+from a registry other than the default. If any MQTT device still sends a credential in the body of its
+events, add `--mqtt-body-credential=strip` to the last command: see [Before you upgrade](#v0240-before).
+
 This release makes calculated metrics something you author and fill in yourself: a checked formula
 editor, per-device constants, formulas that read other calculated metrics, previews, and a
 **backfill** that computes a metric for readings stored before it existed. The rest is about an
@@ -3596,7 +3609,8 @@ where a secret rested where every platform service could read it: a device's cre
 of an MQTT event, and the sign-in state. What changes for somebody:
 
 - **Devices must stop sending a credential in the body of an event published over the platform's MQTT
-  broker.** Such an event is now refused. See
+  broker.** Such an event is now refused. To keep a fleet reporting while its firmware is updated,
+  upgrade with `--mqtt-body-credential=strip`. See
   [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential).
 - **The C# SDK's `IDeviceEventCarrier` has a new abstract member,** `CarriesBodyCredential`; a custom
   carrier no longer compiles until it declares it. See the same section.
@@ -3632,19 +3646,27 @@ of an MQTT event, and the sign-in state. What changes for somebody:
    every pod runs it, then upgrade to `v0.24.0`. On a chart install (not `dcctl`) you may instead set
    `infrastructure.messaging.wireFormat: legacy` for the upgrade and remove it once every pod has
    rolled. `dcctl` has no option to set it.
-2. **If a `terraform.tfvars` beside the instance's infrastructure state pins `nats_chart_version`,
+2. **If any MQTT device sends a credential in the body of its events, upgrade with
+   `--mqtt-body-credential=strip`.** Under `deviceAuthMode: required` that is every MQTT device, because
+   `v0.23.0` refuses an MQTT event that has no body credential. So firmware cannot be updated first: a
+   device updated before the upgrade has its events refused until the upgrade is done. Run
+   `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`, then follow the
+   steps in [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential).
+   **Do not set `deviceAuthMode: optional` to bridge the gap.** It makes the instance accept an HTTP
+   event that carries no credential, on the device's token alone.
+3. **If a `terraform.tfvars` beside the instance's infrastructure state pins `nats_chart_version`,
    raise it to `2.15.1` or remove it.** A NATS chart older than `2.15.0` is refused when the plan is
    made.
-3. **Do not change the broker's replication (`streamReplicas`, `nats_cluster_replicas`) in the same
+4. **Do not change the broker's replication (`streamReplicas`, `nats_cluster_replicas`) in the same
    upgrade.** While the servers restart, some run `2.14.4` and some `2.15.1`, and a replica or
    placement change started in that window can be left stuck. Make it before or after. See
    [The broker moves to NATS 2.15](#v0240-nats).
-4. **If a published calculated-metric formula reads a measured metric whose key is `device` as a bare
+5. **If a published calculated-metric formula reads a measured metric whose key is `device` as a bare
    identifier, rewrite it** as `double(m["device"])` (or the conversion for its type) before you
    upgrade. After the upgrade such a formula no longer compiles, so it produces no value on any
    reading. Calculated metrics are off until a tier's `calculatedMetricsPerProfile` is above 0, so
    this affects only tiers where you already raised it.
-5. **If you installed the `nats` module yourself, keep `jetstream.limits.default_max_consumers` at
+6. **If you installed the `nats` module yourself, keep `jetstream.limits.default_max_consumers` at
    `-1`.** NATS 2.15 otherwise caps every stream at 1,000 consumers, and the 1,001st QoS 1 or 2 MQTT
    subscription is refused while its device stays connected.
 
@@ -3670,7 +3692,10 @@ of an MQTT event, and the sign-in state. What changes for somebody:
   Ready before the next stops; without `--ha` the single server restarts and the broker is
   unavailable for about a minute each time. See [The broker's logins are narrowed](#v0240-broker-logins).
   Devices reconnect on their own, and a persistent MQTT session keeps its subscriptions and the QoS 1
-  messages held for it. **Do not restart a broker server by hand while it rolls.** See
+  messages held for it. Devices reconnect without losing messages only under `--ha`. On a single-node
+  `kind` cluster the two restarts took about 90 seconds for the first roll, about 40 seconds with
+  nothing happening, and about 80 seconds for the second, which is 4 to 5 minutes in all.
+  **Do not restart a broker server by hand while it rolls.** See
   [The broker moves to NATS 2.15](#v0240-nats).
 - **Services start writing `compact` events as they roll.** Pods of `v0.23.0` read both forms, so a
   rolling update between the two releases is safe.
@@ -3726,8 +3751,9 @@ drained from the streams (see [The event wire format](#event-wire-format)).
 - **Keep `metrics.enabled` and `metrics.alerts` on** (both are by default) to install the new
   `MqttGatewayStreamUnbounded` alert.
 - **Find the devices that still send a body credential.** `devicechain_eventsources_total_msg_credential_in_mqtt_body`
-  counts the refused events by source. Update the firmware or SDK of each, and rotate the credential
-  of any device that was counted (see the next section).
+  counts the refused events by source, and under `strip` the ones that were stripped. Update the
+  firmware or SDK of each, and rotate the credential of any device that was counted (see the next
+  section).
 
 ##### Devices must stop sending a body credential over MQTT {#v0240-mqtt-body-credential}
 
@@ -3738,7 +3764,8 @@ plaintext password or access token rested in a stream readable by every platform
 with the volume and by its snapshots. The body credential is now refused instead:
 
 - **An event published over the platform's MQTT broker whose body carries `credentialType`,
-  `credentialId` or `credentialSecret` is refused.** It is counted in
+  `credentialId` or `credentialSecret` is refused** unless you have set `capture.bodyCredential` to
+  `strip` for the upgrade (below). It is counted in
   `devicechain_eventsources_total_msg_credential_in_mqtt_body`, set aside on the failed-decode stream with the credential
   redacted, and never forwarded. The broker has already acknowledged the message, so the refusal is
   visible to you and not to the device: a device that keeps sending the old body goes quiet while it
@@ -3751,7 +3778,26 @@ with the volume and by its snapshots. The body credential is now refused instead
   moments before the message was acknowledged, in the MQTT gateway's store while a subscription was
   interested, and in unreclaimed file blocks until compaction. Rotate the credential of every device
   that was counted.
-- **Update SDKs and firmware first.** The C# SDK (and the Unity package, which rides it) stops
+- **Upgrade with `strip`, update the SDKs and firmware, then switch to `refuse`.** `v0.23.0` refuses an
+  MQTT event that has no body credential, and this release refuses one that has it, so a fleet cannot
+  update its firmware before the upgrade. The bridge is `capture.bodyCredential: strip`, which accepts
+  an event from the platform's MQTT broker with the credential removed. In this order:
+  1. Upgrade with `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`.
+     Events keep flowing, and each one that carried a credential is counted.
+  2. Roll out the SDK or firmware that stops sending the body credential.
+  3. Watch `devicechain_eventsources_total_msg_credential_in_mqtt_body` until it has stopped rising for
+     longer than your slowest device's reporting interval. A warning in the `event-sources` log names
+     the tenant and the device of each one that still sends a credential (once an hour for each), which
+     is how you find the stragglers.
+  4. Run `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`.
+  5. Rotate the credential of every device that sent one.
+
+  `strip` does not remove the exposure: the broker stored the body before either setting ran, so `strip`
+  and `refuse` leave the same plaintext at rest, and step 5 is needed with both. `strip` applies only
+  to the platform's MQTT broker. A later `dcctl upgrade` without the flag keeps the value. It is
+  transitional and is removed in `v0.26.0`: `event-sources` refuses to start while it is set. On a chart
+  install (not `dcctl`) set `functionalAreas.event-sources.config.capture.bodyCredential`.
+- **What to change in a device.** The C# SDK (and the Unity package, which rides it) stops
   sending the credential over MQTT in this release, and still sends it over HTTP. The envelope JSON
   Schema now marks the three members HTTP-only. A custom `IDeviceEventCarrier` must declare the new
   `CarriesBodyCredential` member (`true` for a carrier that goes over HTTP, `false` for the platform's
@@ -3986,6 +4032,7 @@ when the event is resolved.
 | `event-processing` `derivedPublishing.maxInFlight` (new) | one detection at a time | 32 | Set `1`. Still at most one outstanding detection per device, so each device's detections arrive in order. Publishing again without duplicates holds within the derived-events stream's 30-minute duplicate window. |
 | `device-management` `raiseAlarm.workers` (new, fixed, read at startup) | one change at a time | `max(1, min(8, pool - resolution.workers - 4))`, which is 6 on the default pool of 20 | Set `1` for the old inline path. Changes to one alarm are always applied in order. An explicit value is validated against the connection pool and never adjusted. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (under `functionalAreas.mcp.config`) | no cap | 16, 20 and 40 | Raise them; `callsBurst` may not be below `maxBatchEntries`. |
+| `event-sources` `capture.bodyCredential` (new, fixed, under `functionalAreas.event-sources.config`) | none: a body credential on the platform's MQTT broker was accepted | `refuse` | Set `strip` for the upgrade only (transitional, removed in `v0.26.0`). See [Devices must stop sending a body credential over MQTT](#v0240-mqtt-body-credential). |
 | GKE reference module `services_machine_type` (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Set it explicitly. Changing an existing pool's machine type recreates its nodes. |
 
 - **Detection:** detections of different devices are published side by side, up to 32 at a time,

@@ -3854,6 +3854,20 @@ versión (consulta [Volver atrás](#v0240-going-back)). Si vienes de
 la `v0.22.0` o anterior, lee también las [notas de la `v0.23.0`](#v0230-upgrade); se aplican a cualquier
 actualización que cruce esa versión.
 
+Los comandos, con la `v` en la versión y un ensayo primero:
+
+```bash
+dcctl install local --version v0.24.0
+dcctl upgrade local devicechain --version v0.24.0 --dry-run
+dcctl upgrade local devicechain --version v0.24.0
+```
+
+`--version` lleva la etiqueta con su `v`. En un clúster que no sea el local por defecto, pasa
+`--kube-context` a `dcctl install` y a `dcctl upgrade`, y pasa `--registry` cuando las imágenes salgan de
+un registro distinto del predeterminado. Si algún dispositivo MQTT sigue enviando una credencial en el
+cuerpo de sus eventos, añade `--mqtt-body-credential=strip` al último comando: consulta
+[Antes de actualizar](#v0240-before).
+
 Esta versión convierte las métricas calculadas en algo que creas y rellenas tú mismo: un editor de
 fórmulas con comprobación, constantes por dispositivo, fórmulas que leen otras métricas calculadas,
 vistas previas y un **relleno** que calcula una métrica para las lecturas almacenadas antes de que
@@ -3864,7 +3878,8 @@ plataforma: la credencial de un dispositivo en el cuerpo de un evento MQTT y el 
 sesión. Qué cambia para alguien:
 
 - **Los dispositivos deben dejar de enviar una credencial en el cuerpo de un evento publicado por el
-  bróker MQTT de la plataforma.** Ese evento se rechaza ahora. Consulta
+  bróker MQTT de la plataforma.** Ese evento se rechaza ahora. Para que una flota siga informando mientras
+  se actualiza su firmware, actualiza con `--mqtt-body-credential=strip`. Consulta
   [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential).
 - **`IDeviceEventCarrier` del SDK de C# tiene un miembro abstracto nuevo,** `CarriesBodyCredential`; un
   portador propio deja de compilar hasta que lo declara. Consulta la misma sección.
@@ -3902,19 +3917,28 @@ sesión. Qué cambia para alguien:
    `v0.24.0`. En una instalación con el chart (no con `dcctl`) puedes en cambio indicar
    `infrastructure.messaging.wireFormat: legacy` durante la actualización y quitarlo cuando todos los pods
    se hayan renovado. `dcctl` no tiene ninguna opción para indicarlo.
-2. **Si un `terraform.tfvars` junto al estado de infraestructura de la instancia fija
+2. **Si algún dispositivo MQTT envía una credencial en el cuerpo de sus eventos, actualiza con
+   `--mqtt-body-credential=strip`.** Con `deviceAuthMode: required` son todos los dispositivos MQTT,
+   porque la `v0.23.0` rechaza un evento MQTT que no lleva credencial en el cuerpo. Por eso el firmware no
+   se puede actualizar primero: un dispositivo actualizado antes de la actualización ve rechazados sus
+   eventos hasta que esta termina. Ejecuta
+   `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip` y sigue los pasos de
+   [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential).
+   **No indiques `deviceAuthMode: optional` para salvar el intervalo.** Hace que la instancia acepte un
+   evento HTTP sin credencial, solo con el token del dispositivo.
+3. **Si un `terraform.tfvars` junto al estado de infraestructura de la instancia fija
    `nats_chart_version`, súbelo a `2.15.1` o elimínalo.** Un chart de NATS anterior a `2.15.0` se rechaza
    al elaborar el plan.
-3. **No cambies la replicación del bróker (`streamReplicas`, `nats_cluster_replicas`) en la misma
+4. **No cambies la replicación del bróker (`streamReplicas`, `nats_cluster_replicas`) en la misma
    actualización.** Mientras los servidores se reinician, unos ejecutan `2.14.4` y otros `2.15.1`, y un
    cambio de réplicas o de ubicación iniciado en ese intervalo puede quedarse atascado. Hazlo antes o
    después. Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
-4. **Si una fórmula publicada de una métrica calculada lee como identificador simple una métrica medida
+5. **Si una fórmula publicada de una métrica calculada lee como identificador simple una métrica medida
    cuya clave es `device`, reescríbela** como `double(m["device"])` (o la conversión de su tipo) antes de
    actualizar. Tras la actualización esa fórmula ya no compila y no produce valor en ninguna lectura. Las
    métricas calculadas están desactivadas hasta que el `calculatedMetricsPerProfile` de un nivel supera 0,
    así que esto solo afecta a los niveles en los que ya lo hayas subido.
-5. **Si instalaste tú mismo el módulo `nats`, mantén `jetstream.limits.default_max_consumers` en
+6. **Si instalaste tú mismo el módulo `nats`, mantén `jetstream.limits.default_max_consumers` en
    `-1`.** NATS 2.15, si no, limita cada stream a 1.000 consumidores, y la suscripción MQTT QoS 1 o 2
    número 1.001 se rechaza mientras su dispositivo sigue conectado.
 
@@ -3940,8 +3964,10 @@ sesión. Qué cambia para alguien:
   reinicia una vez). Con `--ha`, de un servidor en otro, cada uno Ready antes de que se detenga el siguiente; sin `--ha` el único servidor se reinicia
   y el bróker no está disponible durante aproximadamente un minuto cada vez. Consulta
   [Los inicios de sesión del bróker se acotan](#v0240-broker-logins). Los dispositivos se vuelven a conectar solos, y una sesión MQTT persistente
-  conserva sus suscripciones y los mensajes QoS 1 retenidos para ella. **No reinicies a mano un servidor
-  del bróker mientras avanza.** Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
+  conserva sus suscripciones y los mensajes QoS 1 retenidos para ella. Los dispositivos se vuelven a conectar
+  sin perder mensajes solo con `--ha`. En un clúster `kind` de un solo nodo, los dos reinicios tardaron
+  unos 90 segundos el primero, unos 40 segundos sin actividad y unos 80 segundos el segundo, es decir, de
+  4 a 5 minutos en total. **No reinicies a mano un servidor del bróker mientras avanza.** Consulta [El bróker pasa a NATS 2.15](#v0240-nats).
 - **Los servicios empiezan a escribir eventos `compact` a medida que se renuevan.** Los pods de la
   `v0.23.0` leen ambas formas, así que una actualización progresiva entre las dos versiones es segura.
 - **Revocar la autoridad de un dispositivo durante la renovación puede fallar, o dejar una sesión
@@ -3999,9 +4025,9 @@ streams todos los mensajes `compact` (consulta [El formato de los eventos en el 
 - **Mantén `metrics.enabled` y `metrics.alerts` activados** (lo están por defecto) para instalar la nueva
   alerta `MqttGatewayStreamUnbounded`.
 - **Localiza los dispositivos que aún envían una credencial en el cuerpo.**
-  `devicechain_eventsources_total_msg_credential_in_mqtt_body` cuenta los eventos rechazados por origen. Actualiza el firmware o
-  el SDK de cada uno y rota la credencial de todo dispositivo que se haya contado (consulta la sección
-  siguiente).
+  `devicechain_eventsources_total_msg_credential_in_mqtt_body` cuenta los eventos rechazados por origen y, con
+  `strip`, los que se eliminaron. Actualiza el firmware o el SDK de cada uno y rota la credencial de todo
+  dispositivo que se haya contado (consulta la sección siguiente).
 
 ##### Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT {#v0240-mqtt-body-credential}
 
@@ -4013,7 +4039,8 @@ un stream legible por todos los servicios de la plataforma, por cualquiera con a
 instantáneas. Ahora la credencial en el cuerpo se rechaza:
 
 - **Se rechaza un evento publicado por el bróker MQTT de la plataforma cuyo cuerpo lleve
-  `credentialType`, `credentialId` o `credentialSecret`.** Se cuenta en
+  `credentialType`, `credentialId` o `credentialSecret`,** salvo que hayas indicado
+  `capture.bodyCredential: strip` para la actualización (más abajo). Se cuenta en
   `devicechain_eventsources_total_msg_credential_in_mqtt_body`, se aparta en el stream failed-decode con la credencial censurada y
   no se reenvía nunca. El bróker ya ha confirmado el mensaje, así que el rechazo lo ves tú y no el
   dispositivo: un dispositivo que sigue enviando el cuerpo antiguo se queda en silencio mientras cree que
@@ -4026,7 +4053,28 @@ instantáneas. Ahora la credencial en el cuerpo se rechaza:
   los instantes previos a la confirmación del mensaje, en el almacén del gateway MQTT mientras había una
   suscripción interesada y en bloques de archivo sin recuperar hasta la compactación. Rota la credencial
   de todo dispositivo que se haya contado.
-- **Actualiza primero SDK y firmware.** El SDK de C# (y el paquete de Unity, que se apoya en él) deja de
+- **Actualiza con `strip`, actualiza los SDK y el firmware y pasa después a `refuse`.** La `v0.23.0`
+  rechaza un evento MQTT que no lleva credencial en el cuerpo, y esta versión rechaza uno que sí la lleva,
+  así que una flota no puede actualizar su firmware antes de la actualización. El puente es
+  `capture.bodyCredential: strip`, que acepta un evento del bróker MQTT de la plataforma con la credencial
+  eliminada. En este orden:
+  1. Actualiza con `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`.
+     Los eventos siguen fluyendo y se cuenta cada uno que llevaba una credencial.
+  2. Despliega el SDK o el firmware que deja de enviar la credencial en el cuerpo.
+  3. Vigila `devicechain_eventsources_total_msg_credential_in_mqtt_body` hasta que deje de subir durante
+     más tiempo que el intervalo de envío de tu dispositivo más lento. Una advertencia en el registro de
+     `event-sources` indica el inquilino y el dispositivo de cada uno que sigue enviando una credencial
+     (una vez por hora para cada uno); así encuentras los rezagados.
+  4. Ejecuta `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`.
+  5. Rota la credencial de todo dispositivo que la haya enviado.
+
+  `strip` no elimina la exposición: el bróker guardó el cuerpo antes de que se aplicara cualquiera de los
+  dos ajustes, así que `strip` y `refuse` dejan el mismo texto claro en reposo, y el paso 5 hace falta con
+  ambos. `strip` se aplica solo al bróker MQTT de la plataforma. Un `dcctl upgrade` posterior sin la opción
+  conserva el valor. Es transitorio y se elimina en la `v0.26.0`: `event-sources` se niega a arrancar
+  mientras esté indicado. En una instalación con el chart (no con `dcctl`) indica
+  `functionalAreas.event-sources.config.capture.bodyCredential`.
+- **Qué cambiar en un dispositivo.** El SDK de C# (y el paquete de Unity, que se apoya en él) deja de
   enviar la credencial por MQTT en esta versión, y la sigue enviando por HTTP. El JSON Schema del sobre
   marca ahora los tres miembros como solo HTTP. Un `IDeviceEventCarrier` propio debe declarar el nuevo
   miembro `CarriesBodyCredential` (`true` para un portador que va por HTTP, `false` para el MQTT de la
@@ -4284,6 +4332,7 @@ resolver el evento.
 | `event-processing` `derivedPublishing.maxInFlight` (nuevo) | una detección cada vez | 32 | Indica `1`. Sigue habiendo como máximo una detección pendiente por dispositivo, así que las detecciones de cada dispositivo llegan en orden. Volver a publicar sin duplicados se mantiene dentro de la ventana de duplicados de 30 minutos del stream de eventos derivados. |
 | `device-management` `raiseAlarm.workers` (nuevo, fijo, se lee al arrancar) | un cambio cada vez | `max(1, min(8, pool - resolution.workers - 4))`, es decir, 6 con el pool por defecto de 20 | Indica `1` para la ruta en línea anterior. Los cambios de una misma alarma se aplican siempre en orden. Un valor explícito se valida contra el pool de conexiones y nunca se ajusta. |
 | `mcp` `maxBatchEntries`, `callsPerSecond`, `callsBurst` (en `functionalAreas.mcp.config`) | sin límite | 16, 20 y 40 | Súbelos; `callsBurst` no puede ser menor que `maxBatchEntries`. |
+| `event-sources` `capture.bodyCredential` (nuevo, fijo, en `functionalAreas.event-sources.config`) | ninguno: se aceptaba una credencial en el cuerpo en el bróker MQTT de la plataforma | `refuse` | Indica `strip` solo para la actualización (transitorio, se elimina en la `v0.26.0`). Consulta [Los dispositivos deben dejar de enviar la credencial en el cuerpo por MQTT](#v0240-mqtt-body-credential). |
 | `services_machine_type` del módulo de referencia de GKE (`deploy/gke`) | `n2-custom-4-8192` | `t2d-standard-4` | Indícalo explícitamente. Cambiar el tipo de máquina de un grupo existente recrea sus nodos. |
 
 - **Detección:** las detecciones de distintos dispositivos se publican en paralelo, hasta 32 a la vez, en

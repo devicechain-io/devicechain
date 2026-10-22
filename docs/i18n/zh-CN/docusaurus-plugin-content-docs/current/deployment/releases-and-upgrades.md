@@ -2103,12 +2103,25 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 配置上启动（见[回退](#v0240-going-back)）。从 `v0.22.0` 或更早版本升级时，也请阅读
 [`v0.23.0` 说明](#v0230-upgrade)；任何跨越该版本的升级都适用。
 
+命令如下，版本号带 `v`，并先做一次演练：
+
+```bash
+dcctl install local --version v0.24.0
+dcctl upgrade local devicechain --version v0.24.0 --dry-run
+dcctl upgrade local devicechain --version v0.24.0
+```
+
+`--version` 取带 `v` 的标签。集群不是默认的本地集群时，请向 `dcctl install` 和 `dcctl upgrade` 传入
+`--kube-context`；镜像来自默认之外的镜像仓库时，再传入 `--registry`。如果仍有 MQTT 设备在事件正文中发送
+凭据，请在最后一条命令中加上 `--mqtt-body-credential=strip`：见[升级之前](#v0240-before)。
+
 本版本让计算指标成为可以由你自己编写并补全历史的东西：带检查的公式编辑器、每台设备的常量、读取其他
 计算指标的公式、预览，以及为指标出现之前已存储的读数计算该指标的**回填**。其余内容围绕一条承载更多
 事件的事件路径：事件默认以更小的形式写入，检测结果并行发布，告警变更也同时应用多个。本版本还封堵了两处密钥曾处于所有平台服务都能读取的位置的问题：设备在 MQTT
 事件正文中的凭据，以及登录状态。对某些人有影响的变化：
 
-- **设备必须停止在经由平台 MQTT 代理发布的事件正文中发送凭据。** 这样的事件现在会被拒绝。见
+- **设备必须停止在经由平台 MQTT 代理发布的事件正文中发送凭据。** 这样的事件现在会被拒绝。要在更新固件期间让设备群继续上报，请使用
+  `--mqtt-body-credential=strip` 升级。见
   [设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)。
 - **C# SDK 的 `IDeviceEventCarrier` 新增一个抽象成员** `CarriesBodyCredential`；自定义的承载器在声明它
   之前无法编译。见同一节。
@@ -2135,16 +2148,22 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
    `v0.23.0`，等所有 pod 都在运行该版本，再升级到 `v0.24.0`。使用 chart 安装（不是 `dcctl`）时，也可以
    在升级期间改为设置 `infrastructure.messaging.wireFormat: legacy`，待所有 pod 都滚动完成后再移除。
    `dcctl` 没有设置它的选项。
-2. **如果实例基础设施状态旁的 `terraform.tfvars` 固定了 `nats_chart_version`，请把它升到 `2.15.1` 或
+2. **如果有 MQTT 设备在事件正文中发送凭据，请使用 `--mqtt-body-credential=strip` 升级。** 在
+   `deviceAuthMode: required` 下，每台 MQTT 设备都是如此，因为 `v0.23.0` 会拒绝正文中不带凭据的 MQTT
+   事件。所以不能先更新固件：在升级之前就更新的设备，其事件在升级完成之前会被拒绝。执行
+   `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip`，然后按
+   [设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)中的步骤操作。
+   **不要用设置 `deviceAuthMode: optional` 来过渡。** 它会让整个实例接受不带凭据的 HTTP 事件，仅凭设备令牌即可。
+3. **如果实例基础设施状态旁的 `terraform.tfvars` 固定了 `nats_chart_version`，请把它升到 `2.15.1` 或
    删除。** 低于 `2.15.0` 的 NATS chart 在生成计划时就会被拒绝。
-3. **不要在同一次升级中更改代理的复制份数（`streamReplicas`、`nats_cluster_replicas`）。** 服务器重启
+4. **不要在同一次升级中更改代理的复制份数（`streamReplicas`、`nats_cluster_replicas`）。** 服务器重启
    期间，有的运行 `2.14.4`，有的运行 `2.15.1`，在此期间发起的副本数或放置变更可能卡住。请在升级之前或
    之后进行。见[代理升级到 NATS 2.15](#v0240-nats)。
-4. **如果某个已发布的计算指标公式把键为 `device` 的测量指标当作裸标识符读取，请在升级前改写它**，写成
+5. **如果某个已发布的计算指标公式把键为 `device` 的测量指标当作裸标识符读取，请在升级前改写它**，写成
    `double(m["device"])`（或其类型对应的转换）。升级后这样的公式将无法编译，对任何读数都不产生值。
    在某个层级的 `calculatedMetricsPerProfile` 调到 0 以上之前，计算指标一直是关闭的，所以这只影响你已经
    调高过的层级。
-5. **如果你自行安装了 `nats` 模块，请让 `jetstream.limits.default_max_consumers` 保持为 `-1`。**
+6. **如果你自行安装了 `nats` 模块，请让 `jetstream.limits.default_max_consumers` 保持为 `-1`。**
    否则 NATS 2.15 会把每个流限制在 1,000 个消费者，第 1,001 个 QoS 1 或 2 的 MQTT 订阅会被拒绝，而其
    设备仍保持连接。
 
@@ -2164,7 +2183,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 实例无需加密，只重启一次）。使用 `--ha` 时逐个服务器重启，前一个
   Ready 之后才停止下一个；不使用 `--ha` 时，单个服务器重启，每次代理约有一分钟不可用。见
   [代理的登录被收窄](#v0240-broker-logins)。设备会自行重新连接，持久 MQTT 会话会保留其订阅和为它保留的
-  QoS 1 消息。**代理滚动期间不要手动重启代理服务器。** 见[代理升级到 NATS 2.15](#v0240-nats)。
+  QoS 1 消息。只有使用 `--ha` 时，设备重新连接才不会丢失消息。在单节点 `kind` 集群上，两次重启中，第一次滚动约
+  90 秒，其间约 40 秒无任何动作，第二次滚动约 80 秒，总共 4 到 5 分钟。**代理滚动期间不要手动重启代理服务器。** 见[代理升级到 NATS 2.15](#v0240-nats)。
 - **服务在滚动过程中开始写入 `compact` 事件。** `v0.23.0` 的 pod 两种形式都能读取，所以这两个版本之间
   的滚动更新是安全的。
 - **滚动期间撤销设备的权限可能失败，或留下仍打开的会话。** 禁用或删除设备，或更改凭据，现在还会请
@@ -2205,8 +2225,8 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **代理的升级是单向的。** NATS 只支持从 2.15 回退到 2.14.7 或更高版本，而上一个版本运行的是 2.14.4。
 - **保持 `metrics.enabled` 和 `metrics.alerts` 开启**（默认都开启），以安装新的
   `MqttGatewayStreamUnbounded` 告警。
-- **找出仍在正文中发送凭据的设备。** `devicechain_eventsources_total_msg_credential_in_mqtt_body` 按来源统计被拒绝的事件。更新
-  每台设备的固件或 SDK，并轮换所有被统计到的设备的凭据（见下一节）。
+- **找出仍在正文中发送凭据的设备。** `devicechain_eventsources_total_msg_credential_in_mqtt_body` 按来源统计被拒绝的事件，使用 `strip` 时
+  也统计被去掉凭据的事件。更新每台设备的固件或 SDK，并轮换所有被统计到的设备的凭据（见下一节）。
 
 ##### 设备必须停止在 MQTT 事件正文中发送凭据 {#v0240-mqtt-body-credential}
 
@@ -2215,7 +2235,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 所有平台服务、任何能访问卷的人以及卷快照都可读取的流中。现在改为拒绝正文中的凭据：
 
 - **经由平台 MQTT 代理发布、正文带有 `credentialType`、`credentialId` 或 `credentialSecret` 的事件会被
-  拒绝。** 它会被计入 `devicechain_eventsources_total_msg_credential_in_mqtt_body`，在凭据被涂黑后存放到 failed-decode 流，且
+  拒绝**，除非你为这次升级把 `capture.bodyCredential` 设为 `strip`（见下文）。它会被计入 `devicechain_eventsources_total_msg_credential_in_mqtt_body`，在凭据被涂黑后存放到 failed-decode 流，且
   绝不转发。代理此前已经确认了该消息，所以拒绝只对你可见而对设备不可见：继续发送旧正文的设备会在自以为
   仍在发布的情况下变得沉默。
 - **不带凭据的事件会被接受**，并归属于连接上来的设备。在 `deviceAuthMode: required` 下，所有事件类型
@@ -2223,7 +2243,23 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 - **HTTP 接入以及你作为来源接入的 MQTT 代理不变。** 它们仍要求在正文中带凭据。
 - **把被拒绝的设备视为已暴露。** 明文在消息被确认之前的片刻存在于代理上，在有订阅关注期间存在于 MQTT
   网关的存储中，并在压缩之前存在于尚未回收的文件块中。轮换所有被统计到的设备的凭据。
-- **先更新 SDK 和固件。** C# SDK（以及基于它的 Unity 包）在本版本中不再通过 MQTT 发送凭据，通过 HTTP
+- **先用 `strip` 升级，再更新 SDK 和固件，最后切换为 `refuse`。** `v0.23.0` 会拒绝正文中不带凭据的 MQTT 事件，
+  而本版本会拒绝带凭据的，所以设备群无法在升级之前更新固件。过渡办法是 `capture.bodyCredential: strip`，它会接受
+  来自平台 MQTT 代理的事件并去掉其中的凭据。按此顺序操作：
+  1. 使用 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=strip` 升级。事件继续流入，
+     每个带凭据的事件都会被计数。
+  2. 推出不再在正文中发送凭据的 SDK 或固件。
+  3. 观察 `devicechain_eventsources_total_msg_credential_in_mqtt_body`，直到它停止增长的时间超过你最慢那台设备的
+     上报间隔。`event-sources` 日志中的警告会写明每个仍在发送凭据的设备所属的租户和设备（每台设备每小时一次），
+     据此找出落在后面的设备。
+  4. 执行 `dcctl upgrade local devicechain --version v0.24.0 --mqtt-body-credential=refuse`。
+  5. 轮换所有发送过凭据的设备的凭据。
+
+  `strip` 不会消除暴露：代理在这两种设置生效之前就已存下了正文，所以 `strip` 与 `refuse` 留下的静态明文相同，
+  两者都需要第 5 步。`strip` 只作用于平台 MQTT 代理。之后不带该选项的 `dcctl upgrade` 会保留这个值。它是过渡性
+  的，将在 `v0.26.0` 中移除：设置了它时 `event-sources` 会拒绝启动。使用 chart 安装（不是 `dcctl`）时，请设置
+  `functionalAreas.event-sources.config.capture.bodyCredential`。
+- **设备上要改什么。** C# SDK（以及基于它的 Unity 包）在本版本中不再通过 MQTT 发送凭据，通过 HTTP
   仍会发送。事件信封的 JSON Schema 现在把这三个成员标注为仅限 HTTP。自定义的 `IDeviceEventCarrier`
   必须声明新增的 `CarriesBodyCredential` 成员（经由 HTTP 的承载器为 `true`，平台 MQTT 为 `false`）；这是
   有意设计的编译错误，而不是默认值。手工编写正文的固件必须去掉这三个成员。边缘代理原样转发正文，本
@@ -2400,6 +2436,7 @@ gh attestation verify <archive> --repo devicechain-io/devicechain \
 | `event-processing` 的 `derivedPublishing.maxInFlight`（新增） | 一次一条检测结果 | 32 | 设为 `1`。每台设备仍最多只有一条未完成的检测结果，因此每台设备的检测结果按顺序到达。无重复的重新发布在派生事件流 30 分钟的去重窗口内成立。 |
 | `device-management` 的 `raiseAlarm.workers`（新增，固定设置，启动时读取） | 一次一个变更 | `max(1, min(8, pool - resolution.workers - 4))`，默认连接池为 20 时即 6 | 设为 `1` 即恢复原来的串行路径。同一条告警的变更始终按顺序应用。显式给出的值会按连接池校验，绝不会被调整。 |
 | `mcp` 的 `maxBatchEntries`、`callsPerSecond`、`callsBurst`（位于 `functionalAreas.mcp.config`） | 无上限 | 16、20 和 40 | 调高它们；`callsBurst` 不能小于 `maxBatchEntries`。 |
+| `event-sources` 的 `capture.bodyCredential`（新增，固定设置，位于 `functionalAreas.event-sources.config`） | 无：平台 MQTT 代理上正文中的凭据会被接受 | `refuse` | 仅在升级期间设为 `strip`（过渡性设置，将在 `v0.26.0` 中移除）。见[设备必须停止在 MQTT 事件正文中发送凭据](#v0240-mqtt-body-credential)。 |
 | GKE 参考模块的 `services_machine_type`（`deploy/gke`） | `n2-custom-4-8192` | `t2d-standard-4` | 显式设置。更改现有节点池的机型会重建其节点。 |
 
 - **检测：** 不同设备的检测结果并行发布，一次最多 32 条，而不再逐条等待确认。在一个 GKE 测试集群上，以每秒约
