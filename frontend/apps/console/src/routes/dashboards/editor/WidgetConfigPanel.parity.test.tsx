@@ -34,7 +34,10 @@ import { WidgetConfigPanel } from './WidgetConfigPanel';
 import { enumChoiceLabel, enumPlaceholder, type MessageLookup } from './optionWording';
 import { defaultWidgetRegistry } from './widgetRegistry';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+vi.mock('./EntityPicker', () => ({
+  EntityPicker: () => null,
+  SharedDeviceTypeCatalogue: ({ children }: { children: unknown }) => children,
+}));
 
 afterEach(cleanup);
 

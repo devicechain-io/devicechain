@@ -92,6 +92,22 @@ describe('EntityPicker kind="deviceType"', () => {
     expect(optionTokens()).toContain('retired');
   });
 
+  it('shows the whole "unknown type <token>" text: it wraps rather than truncating, and carries a title', async () => {
+    const token = 'a-long-retired-device-type-token-that-would-not-fit-in-a-narrow-row';
+    render(<EntityPicker kind="deviceType" value={token} onChange={vi.fn()} />);
+    await waitFor(() => expect(trigger().textContent).toContain(`unknown type ${token}`));
+    const label = trigger().querySelector('span')!;
+    expect(label.className).not.toContain('truncate');
+    expect(label.className).toContain('break-all');
+    expect(label.getAttribute('title')).toBe(`unknown type ${token}`);
+    // A name that resolves keeps the single-line form, with the full name on hover.
+    cleanup();
+    render(<EntityPicker kind="deviceType" value="thermostat" onChange={vi.fn()} />);
+    await waitFor(() => expect(trigger().textContent).toContain('Thermostat'));
+    expect(trigger().querySelector('span')!.className).toContain('truncate');
+    expect(trigger().querySelector('span')!.getAttribute('title')).toBe('Thermostat');
+  });
+
   it('resolves a stored token beyond the first page by token, and names it', async () => {
     listDeviceTypes.mockResolvedValue({ results: [{ token: 'a', name: 'A' }], pagination: { totalRecords: 500 } });
     getDeviceType.mockResolvedValue({ token: 'on-page-two', name: 'Chiller' });

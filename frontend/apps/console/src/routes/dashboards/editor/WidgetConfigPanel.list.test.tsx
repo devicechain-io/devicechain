@@ -15,7 +15,10 @@ import type { KnownWidgetInstance, ResolvedWidgetInstance } from '@devicechain/d
 
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+vi.mock('./EntityPicker', () => ({
+  EntityPicker: () => null,
+  SharedDeviceTypeCatalogue: ({ children }: { children: unknown }) => children,
+}));
 
 afterEach(cleanup);
 

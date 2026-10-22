@@ -9,6 +9,8 @@
 //                                          offers both Make live and Roll back
 //   layout.html?surface=canvas&selected=ID the editor canvas with widget ID selected, so its
 //                                          toolbar (Grid, Relative, Duplicate, ...) is shown
+//   layout.html?surface=settings           the widget settings panel for an alarm table whose pinned
+//                                          device-type list holds a type the catalogue lacks
 //   &labels=none                           (versions) a history in which no version has a label
 //   &lang=es                               the locale (default en)
 //   &theme=light                           light; anything else is dark, the console default
@@ -32,6 +34,7 @@ import { createRoot } from 'react-dom/client';
 
 import { ConfirmProvider } from '@/components/ui/confirm-dialog';
 import { ToastProvider } from '@/components/ui/toast';
+import { WidgetConfigPanel } from '@/routes/dashboards/editor/WidgetConfigPanel';
 import { DashboardCanvas } from '@/routes/dashboards/editor/DashboardCanvas';
 import { VersionHistorySheet } from '@/routes/dashboards/editor/VersionHistorySheet';
 
@@ -54,6 +57,11 @@ const VERSIONS = [
 const ANSWERS: Record<string, unknown> = {
   DashboardVersions: { dashboardVersions: VERSIONS },
   DashboardPublishedVersion: { dashboard: { publishedVersion: LIVE_VERSION } },
+  // The device-type catalogue the settings panel's pickers read: one type, so the other pinned
+  // row's token is "unknown", and long enough to need more than a phone row's width.
+  DeviceTypes: {
+    deviceTypes: { results: [{ token: 'thermostat', name: 'Thermostat' }], pagination: { totalRecords: 1 } },
+  },
 };
 
 const realFetch = window.fetch.bind(window);
@@ -137,8 +145,28 @@ async function main() {
     );
   } else if (surface === 'canvas') {
     page = <Canvas initial={params.get('selected')} />;
+  } else if (surface === 'settings') {
+    page = (
+      <WidgetConfigPanel
+        widget={{
+          id: 'alarms',
+          type: 'alarm-table',
+          layout: { base: { mode: 'grid' as const, col: 0, row: 0, cols: 6, rows: 4 } },
+          options: {
+            groupBy: 'deviceType',
+            deviceTypes: [{ token: 'thermostat' }, { token: 'retired-boiler-controller-v2-legacy' }],
+          },
+        }}
+        datasource={undefined}
+        slots={{}}
+        onChange={() => {}}
+        onDatasource={() => {}}
+        onScope={() => {}}
+        onClose={() => {}}
+      />
+    );
   } else {
-    throw new Error(`surface must be versions or canvas, got '${surface}'`);
+    throw new Error(`surface must be versions, canvas or settings, got '${surface}'`);
   }
   createRoot(document.getElementById('root')!).render(
     <ToastProvider>

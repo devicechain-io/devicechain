@@ -240,3 +240,25 @@ test('the pick-a-host banner stays over the toolbar when the canvas scrolls', as
   await shot(page, 'canvas-pick-host-banner');
   expect(covered).toBeNull();
 });
+
+// A pinned device type the catalogue no longer holds is named in full ("unknown type <token>"):
+// in a narrow list row the picker wraps it rather than cutting it off with an ellipsis.
+for (const width of [320, 390, 960] as const) {
+  test(`an unknown device type in the settings list is readable at ${width} px`, async ({ page }) => {
+    await open(page, 'surface=settings&lang=en', width, 1100);
+    const cell = page.getByTestId('list-cell-deviceTypes-1-token');
+    const label = cell.locator('[data-shot="combobox"] > span').first();
+    await expect(label).toContainText('unknown type retired-boiler-controller-v2-legacy');
+    const findings = await label.evaluate((el) => {
+      const own = el as HTMLElement;
+      const out: string[] = [];
+      if (own.scrollWidth > own.clientWidth + 1) out.push(`its label is truncated (${own.scrollWidth} > ${own.clientWidth})`);
+      if (own.getBoundingClientRect().right > window.innerWidth) out.push('outside the viewport sideways');
+      return out;
+    });
+    await shot(page, `settings-unknown-type-${width}`);
+    expect(findings).toEqual([]);
+    // The resolved row beside it keeps its single line.
+    await expect(page.getByTestId('list-cell-deviceTypes-0-token')).toContainText('Thermostat');
+  });
+}

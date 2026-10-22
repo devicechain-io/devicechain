@@ -19,6 +19,9 @@ export interface ComboboxOption {
   label?: string;
   // Optional muted secondary line (e.g. an authority pattern or tenant name).
   description?: string;
+  // Show the label in full, wrapping onto further lines, instead of truncating it with an
+  // ellipsis. For a label whose tail is the point (a token named in a message).
+  wrap?: boolean;
 }
 
 export const optionLabel = (o: ComboboxOption) => o.label ?? o.value;
@@ -137,9 +140,12 @@ export function Combobox({
         type="button"
         aria-labelledby={ariaLabel ? `${labelId} ${triggerId}` : undefined}
         disabled={disabled}
-        className={cn(triggerClasses, className)}
+        className={cn(triggerClasses, selected?.wrap && 'h-auto min-h-10', className)}
       >
-        <span className={cn('truncate', !selected && 'text-muted-foreground')}>
+        <span
+          title={selected ? optionLabel(selected) : undefined}
+          className={cn(selected?.wrap ? 'min-w-0 break-all text-left' : 'truncate', !selected && 'text-muted-foreground')}
+        >
           {selected ? optionLabel(selected) : placeholderText}
         </span>
         {allowClear && selected && !disabled ? (
@@ -191,7 +197,7 @@ export function Combobox({
                 >
                   <Check size={14} className={cn('mt-0.5 shrink-0', isSelected ? 'opacity-100' : 'opacity-0')} />
                   <span className="min-w-0">
-                    <span className="block truncate">{optionLabel(o)}</span>
+                    <span className={cn('block', o.wrap ? 'break-all' : 'truncate')}>{optionLabel(o)}</span>
                     {o.description && (
                       <span className="block truncate text-xs text-muted-foreground">{o.description}</span>
                     )}

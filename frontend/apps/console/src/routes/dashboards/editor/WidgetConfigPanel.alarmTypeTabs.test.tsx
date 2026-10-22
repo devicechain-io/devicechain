@@ -184,6 +184,26 @@ describe('the alarm table’s device-type tabs in the settings panel', () => {
     expect(stored()?.deviceTypes).toEqual([{ token: 'pump' }]);
   });
 
+  it('reads the device-type catalogue once for every row, not once per row', async () => {
+    store.options = undefined;
+    const { container } = render(
+      <Harness
+        initial={{
+          groupBy: 'deviceType',
+          deviceTypes: [{ token: 'thermostat' }, { token: 'sensor' }, { token: 'pump' }],
+        }}
+      />,
+    );
+    await waitFor(() => expect(cell(container, 2).textContent).toContain('Pump'));
+    expect(cell(container, 0).textContent).toContain('Thermostat');
+    expect(cell(container, 1).textContent).toContain('Sensor');
+    expect(listDeviceTypes).toHaveBeenCalledTimes(1);
+    // A row added afterwards joins the shared read rather than starting another.
+    addRow(container);
+    await waitFor(() => expect(cell(container, 3)).toBeTruthy());
+    expect(listDeviceTypes).toHaveBeenCalledTimes(1);
+  });
+
   it('is worded in Spanish too', async () => {
     await i18n.changeLanguage('es');
     try {

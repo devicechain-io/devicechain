@@ -7,7 +7,7 @@
 // authoring in the console gets real pickers). Selection stores the entity TOKEN
 // — the value dashboard datasources reference.
 
-import { useMemo } from 'react';
+import { createContext, useContext, useMemo, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { useQuery } from '@/lib/hooks/use-query';
@@ -99,14 +99,26 @@ async function loadEntities(kind: EntityKind): Promise<Loaded> {
 
 const whole = (rows: Named[]): Loaded => ({ rows, truncated: false });
 
-export function EntityPicker({
-  kind,
-  value,
-  onChange,
-  id,
-  placeholder,
-  ariaLabel,
-}: {
+// What a picker needs of its kind's catalogue read: the answer to the current question (`current`,
+// never the sticky display data), a failure, and whether it is in flight.
+interface Catalogue {
+  current: Loaded | undefined;
+  error: string | null;
+  loading: boolean;
+}
+
+// The device-type catalogue read once for a group of pickers. A repeated list control holds one
+// picker per row, and each would otherwise fetch the same page; a picker under this provider reads
+// the shared answer instead. Pickers outside one fetch for themselves, as before.
+const DeviceTypeCatalogue = createContext<Catalogue | null>(null);
+
+export function SharedDeviceTypeCatalogue({ children }: { children: ReactNode }) {
+  const { current, error, loading } = useQuery(() => loadEntities('deviceType'), []);
+  const value = useMemo<Catalogue>(() => ({ current, error, loading }), [current, error, loading]);
+  return <DeviceTypeCatalogue.Provider value={value}>{children}</DeviceTypeCatalogue.Provider>;
+}
+
+interface PickerProps {
   kind: EntityKind;
   value: string;
   onChange: (token: string) => void;
@@ -114,9 +126,32 @@ export function EntityPicker({
   placeholder?: string;
   // The accessible name for a picker with no visible label of its own (one of a row of them).
   ariaLabel?: string;
-}) {
+}
+
+export function EntityPicker(props: PickerProps) {
+  const shared = useContext(DeviceTypeCatalogue);
+  return props.kind === 'deviceType' && shared ? (
+    <PickerBody {...props} catalogue={shared} />
+  ) : (
+    <FetchingPicker {...props} />
+  );
+}
+
+function FetchingPicker(props: PickerProps) {
+  const { current, error, loading } = useQuery(() => loadEntities(props.kind), [props.kind]);
+  return <PickerBody {...props} catalogue={{ current, error, loading }} />;
+}
+
+function PickerBody({
+  kind,
+  value,
+  onChange,
+  id,
+  placeholder,
+  ariaLabel,
+  catalogue: { current, error, loading },
+}: PickerProps & { catalogue: Catalogue }) {
   const { t } = useTranslation(['dashboards', 'common']);
-  const { current, error, loading } = useQuery(() => loadEntities(kind), [kind]);
   // A hand-edited/imported definition (opaque JSON, ADR-039) can carry an out-of-union
   // targetType; loadEntities already degrades it to an empty list rather than throwing
   // (see entity-lister.ts). Fall back to the device copy so the picker renders instead
@@ -154,7 +189,10 @@ export function EntityPicker({
         opts.unshift({ value, label: lookedUp.found.name || value, description: lookedUp.found.name ? value : undefined });
       } else {
         const absent = current !== undefined && (!current.truncated || (lookedUp != null && lookedUp.found === null));
-        opts.unshift({ value, label: kindKeys.unknown && absent ? t(kindKeys.unknown, { token: value }) : value });
+        // The "unknown type <token>" text is the one label that carries a token the author must be
+        // able to read in full, so it wraps instead of truncating (a narrow list row cut it off).
+        const named = Boolean(kindKeys.unknown && absent);
+        opts.unshift({ value, label: named ? t(kindKeys.unknown!, { token: value }) : value, wrap: named });
       }
     }
     return opts;

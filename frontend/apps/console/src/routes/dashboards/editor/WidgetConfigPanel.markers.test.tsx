@@ -16,7 +16,10 @@ import { addWidget, parseDashboardDefinition, serializeDefinition, type KnownWid
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 import { defaultWidgetRegistry } from './widgetRegistry';
 
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+vi.mock('./EntityPicker', () => ({
+  EntityPicker: () => null,
+  SharedDeviceTypeCatalogue: ({ children }: { children: unknown }) => children,
+}));
 
 afterEach(async () => {
   cleanup();
