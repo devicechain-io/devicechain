@@ -1294,7 +1294,7 @@ export const builtinWidgetDescriptors = {
     binding: { presence: { const: true } },
     options: { title: TITLE, staleAfterSeconds: STALE_AFTER_SECONDS },
     defaults: { title: 'Device status' },
-    // The frame's age is the device's last activity, not a reading.
+    // The frame's age is the status's: when device-state was last read, not the device's last activity.
     freshness: true,
     interactions: {},
     layout: { defaultSpan: { cols: 3, rows: 3 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 6, rows: 4 } },
@@ -1313,7 +1313,7 @@ export const builtinWidgetDescriptors = {
     binding: { presence: { const: true } },
     options: { title: TITLE, staleAfterSeconds: STALE_AFTER_SECONDS },
     defaults: { title: 'Online doughnut' },
-    // The frame's age is the newest activity anywhere in the group.
+    // The frame's age is the status's: when device-state was last read for the group.
     freshness: true,
     interactions: {},
     layout: { defaultSpan: { cols: 4, rows: 4 }, minSpan: { cols: 3, rows: 3 }, maxSpan: { cols: 8, rows: 8 } },

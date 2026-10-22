@@ -15,8 +15,13 @@
 //   - a read that fails before any snapshot has landed leaves every member `failed`; once one has, a
 //     later blip keeps the last good answer (the poll heals it), as the alarm and location channels do;
 //   - a paused board holds the snapshot on screen (useHeld) rather than moving under a "Paused" badge;
-//   - the frame's freshness is the newest last-activity time among the members, opted into through the
-//     descriptor like any other widget.
+//   - the frame's freshness is the age of the STATUS -- when device-state was last read successfully --
+//     not the devices' last activity. What these widgets show is the platform's verdict (online or
+//     offline), and that verdict is current as long as it keeps being read: an offline device is silent
+//     by definition, and an asserted device can be connected and quiet, so greying a card out for the
+//     device's silence would strip the one colour an outage takes, or grey out a true "Online". A read
+//     that keeps failing is what makes the answer old, and that is what goes stale. "Last seen" (the
+//     device's last activity) is the widget's own caption.
 
 import {
   type DevicePresence,
@@ -32,7 +37,6 @@ import {
 import { resolveStaleAfterSeconds, useWidgetTimeRange, WidgetFreshnessProvider } from '@devicechain/widget-sdk';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 
-import { tallyPresence } from './presence-model';
 import { useHeld } from './use-held';
 
 export interface PresenceFeedProps {
@@ -53,9 +57,11 @@ interface Store {
   states: Map<string, DevicePresence> | null;
   forbidden: boolean;
   error: unknown | null;
+  // When the last snapshot landed (epoch ms): the age of the status on screen.
+  readAt: number | null;
 }
 
-const emptyStore = (key: string | null): Store => ({ key, roster: null, states: null, forbidden: false, error: null });
+const emptyStore = (key: string | null): Store => ({ key, roster: null, states: null, forbidden: false, error: null, readAt: null });
 
 // The state a presence widget renders from, built from the store. Exported for the tests.
 export function buildPresenceFleet(store: Pick<Store, 'roster' | 'states' | 'forbidden' | 'error'>): FleetState {
@@ -95,7 +101,7 @@ export default function PresenceFeed({ hub, widget, descriptor, Component, actio
     if (!ds || !supported) return;
     return hub.subscribePresence!(ds, {
       roster: (roster) => setStore((s) => ({ ...s, roster })),
-      next: (states) => setStore((s) => ({ ...s, states: new Map(states.map((p) => [p.deviceToken, p])), error: null })),
+      next: (states) => setStore((s) => ({ ...s, states: new Map(states.map((p) => [p.deviceToken, p])), error: null, readAt: Date.now() })),
       forbidden: () => setStore((s) => ({ ...s, forbidden: true })),
       error: (error) => setStore((s) => ({ ...s, error })),
     });
@@ -103,18 +109,21 @@ export default function PresenceFeed({ hub, widget, descriptor, Component, actio
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hub, dsKey, supported]);
 
-  const live = useMemo<FleetState>(() => {
-    if (!supported) return { status: 'unsupported', members: [], total: 0, truncated: false };
-    return buildPresenceFleet(store.key === dsKey ? store : emptyStore(dsKey));
+  const live = useMemo<{ fleet: FleetState; readAt: number | null }>(() => {
+    if (!supported) return { fleet: { status: 'unsupported', members: [], total: 0, truncated: false }, readAt: null };
+    const current = store.key === dsKey ? store : emptyStore(dsKey);
+    return { fleet: buildPresenceFleet(current), readAt: current.readAt };
   }, [store, dsKey, supported]);
-  const members = useHeld(live, range?.paused === true, (s) => s.status !== 'loading');
+  // Held together, so a paused board's frame ages from the snapshot it is showing.
+  const held = useHeld(live, range?.paused === true, (s) => s.fleet.status !== 'loading');
+  const members = held.fleet;
 
   const freshness = useMemo(
     () =>
       descriptor.freshness === true
-        ? { at: tallyPresence(members.members).newest, staleAfterSeconds: resolveStaleAfterSeconds(widget.options) }
+        ? { at: held.readAt ?? undefined, staleAfterSeconds: resolveStaleAfterSeconds(widget.options) }
         : undefined,
-    [descriptor, widget.options, members],
+    [descriptor, widget.options, held.readAt],
   );
   const data: MeasurementStreamState = { latest: {}, samples: [], error: null, members };
   return (

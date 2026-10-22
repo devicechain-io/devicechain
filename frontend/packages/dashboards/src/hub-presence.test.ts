@@ -149,6 +149,35 @@ describe('DashboardHub presence channel', () => {
     expect(r.snapshots.map((s) => s[0].active)).toEqual([true, false]);
   });
 
+  it('reads nothing while the tab is hidden, and reads at once when it is shown again', async () => {
+    const doc = Object.assign(new EventTarget(), { hidden: false });
+    vi.stubGlobal('document', doc);
+    try {
+      h.gql.mockResolvedValue(result([state('d-1')]));
+      const hub = new DashboardHub({ resolver: newResolver() });
+      const r = recorder();
+      const dispose = hub.subscribePresence(ONE, r.sink);
+      await settle();
+      expect(h.gql).toHaveBeenCalledTimes(1);
+      doc.hidden = true;
+      doc.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.gql).toHaveBeenCalledTimes(1);
+      doc.hidden = false;
+      doc.dispatchEvent(new Event('visibilitychange'));
+      await settle();
+      expect(h.gql).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(h.gql).toHaveBeenCalledTimes(3);
+      dispose();
+      doc.dispatchEvent(new Event('visibilitychange'));
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.gql).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('opens no poll for an unbound slot, and says so with an empty snapshot', async () => {
     const hub = new DashboardHub({ resolver: newResolver([]) });
     const r = recorder();

@@ -120,10 +120,10 @@ export const OPTION_DOC_OVERRIDES: Readonly<Record<string, Readonly<Record<strin
     title: 'Heading shown in the widget frame. Defaults to the displayed measurement name.',
   },
   'device-status': {
-    staleAfterSeconds: 'Marks the card stale once the device has been silent for longer than this many seconds. Unset, the age is shown and nothing is marked stale.',
+    staleAfterSeconds: 'Marks the card stale once its status has not been read for longer than this many seconds (it is re-read every 15 seconds, so only reads that keep failing make it stale). A device that is merely silent is not stale: whether it is online is the status itself. Unset, the age is shown and nothing is marked stale.',
   },
   'online-doughnut': {
-    staleAfterSeconds: 'Marks the ring stale once the newest activity anywhere in the group is older than this many seconds. Unset, the age is shown and nothing is marked stale.',
+    staleAfterSeconds: 'Marks the ring stale once the status of its devices has not been read for longer than this many seconds (it is re-read every 15 seconds, so only reads that keep failing make it stale). Unset, the age is shown and nothing is marked stale.',
   },
   'fleet-count': {
     measurement: 'The measurement whose bands flag a device. Defaults to the first the datasource selects.',

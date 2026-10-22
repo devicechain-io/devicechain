@@ -1052,10 +1052,12 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
   subscribePresence(datasource: DatasourceSelector, sink: PresenceSink): () => void {
     let disposed = false;
     let poll: ReturnType<typeof setInterval> | undefined;
+    let shown: (() => void) | undefined;
     let generation = 0;
     const dispose = (): void => {
       disposed = true;
       if (poll) clearInterval(poll);
+      if (shown) document.removeEventListener('visibilitychange', shown);
       this.presenceDisposers.delete(dispose);
     };
     this.presenceDisposers.add(dispose);
@@ -1083,7 +1085,19 @@ export class DashboardHub implements WidgetDataSource, WidgetActions {
           sink.next([]);
           return;
         }
-        poll = setInterval(() => reconcile(tokens), PRESENCE_POLL_MS);
+        // A hidden tab reads nothing: nobody is looking, and a board left open in a background tab
+        // would otherwise poll device-state for as long as the browser lives. Shown again, it reads at
+        // once rather than drawing the snapshot it last had until the next tick.
+        const hidden = (): boolean => typeof document !== 'undefined' && document.hidden;
+        poll = setInterval(() => {
+          if (!hidden()) reconcile(tokens);
+        }, PRESENCE_POLL_MS);
+        if (typeof document !== 'undefined') {
+          shown = () => {
+            if (!hidden()) reconcile(tokens);
+          };
+          document.addEventListener('visibilitychange', shown);
+        }
         reconcile(tokens);
       },
       (err) => {

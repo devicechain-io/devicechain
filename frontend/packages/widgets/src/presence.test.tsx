@@ -316,6 +316,8 @@ describe('buildPresenceFleet', () => {
     expect(failed.members.map((m) => m.presence?.status)).toEqual(['failed', 'failed']);
     const kept = buildPresenceFleet({ roster, states: new Map([['a', state('a', false)]]), forbidden: false, error: new Error('x') });
     expect(kept.members[0].presence).toMatchObject({ status: 'ready', active: false });
+    // The member the kept snapshot carried no row for stays a settled 'unknown', not a failure.
+    expect(kept.members[1].presence).toEqual({ status: 'unknown' });
   });
 
   it('reports a refusal as forbidden, and an unbound slot as unbound', () => {
@@ -423,7 +425,7 @@ describe('through the connected widget', () => {
     expect(document.querySelector('[data-online-doughnut]')?.getAttribute('data-offline')).toBe('1');
   });
 
-  it('shows the card for one device with its last activity as the frame age', async () => {
+  it('ages the frame from the last READ, not the device: a silent offline device is not stale', async () => {
     const f = fakeHub();
     render(<ConnectedWidget widget={instance('device-status', ONE, { staleAfterSeconds: 60 })} hub={f.hub} />);
     await flush();
@@ -433,8 +435,18 @@ describe('through the connected widget', () => {
     });
     await flush();
     expect(document.querySelector('[data-device-status]')?.getAttribute('data-device-status')).toBe('offline');
-    // 10 minutes silent against a 1-minute threshold: the frame marks it stale.
+    // 10 minutes silent against a 1-minute threshold, but the status was read just now: an offline
+    // device is silent by definition, and greying it out would strip the one colour an outage takes.
+    expect(document.querySelector('[data-stale-badge]')).toBeNull();
+    // The reads then keep failing for two minutes: now the status on screen is old, and says so.
+    act(() => f.sink().error?.(new Error('blip')));
+    await act(async () => void (await vi.advanceTimersByTimeAsync(2 * MIN)));
+    expect(document.querySelector('[data-device-status]')?.getAttribute('data-device-status')).toBe('offline');
     expect(document.querySelector('[data-stale-badge]')).toBeTruthy();
+    // A read that lands again makes it current.
+    act(() => f.sink().next(poll(['d-1', false, 12 * MIN])));
+    await flush();
+    expect(document.querySelector('[data-stale-badge]')).toBeNull();
   });
 
   it('does not mark the card stale when no threshold is set', async () => {

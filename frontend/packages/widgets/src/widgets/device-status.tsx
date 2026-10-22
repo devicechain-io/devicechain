@@ -8,8 +8,9 @@
 //     and the word says which, so colour is never the only signal;
 //   - a device with no state row has never sent anything: it reads "No status yet", muted, and is not
 //     painted as an outage;
-//   - "last seen" is the device's last activity. The frame's age readout ("12 min. ago", with a stale
-//     badge past `staleAfterSeconds`) sits beside it, from the descriptor's freshness;
+//   - "last seen" is the device's last activity. The frame's age readout is the age of the STATUS
+//     (when device-state was last read), with a stale badge past `staleAfterSeconds` -- never the
+//     device's silence, which would grey out the very Offline it explains (presence-feed.tsx);
 //   - the card shows ONE device: a group reaching it is refused in words, with where the group can be shown.
 //
 // DOM text, so the readability gate sees it.
@@ -77,7 +78,7 @@ export function DeviceStatus({ widget, data }: WidgetProps) {
   const caption = seen !== undefined ? strings.lastSeen(formatLastSeen(seen)) : strings.neverSeen;
 
   return (
-    <WidgetFrame title={title} sampleTime={presence?.status === 'ready' ? presence.lastActivityTime : null}>
+    <WidgetFrame title={title}>
       {({ size, scale }) => {
         const room = Math.round(CAPTION_ROOM_PX * scale);
         const fit = { width: size.width, height: Math.max(Math.round(FIT_MIN_FONT_PX * scale), size.height - room) };

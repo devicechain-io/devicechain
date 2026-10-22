@@ -425,9 +425,11 @@ The settings depend on the widget. Common ones:
   it, when the device was last seen (the time of its newest event). Online keeps the ordinary text
   color; only *Offline* takes a color, and the word says which, so the color is never the only
   signal. A device that has never sent anything has no status yet, and reads *No status yet* and
-  *Never seen* in a muted color rather than as an outage. The widget's footer shows how long ago the
-  device was last active, and **Stale after** marks the card stale once the device has been silent
-  for that many seconds; without it the age is shown and nothing is marked stale. Bound to a
+  *Never seen* in a muted color rather than as an outage. The widget's footer shows how old the
+  status is, and **Stale after** marks the card stale once the status has not been read for that
+  many seconds, which happens only when reading it keeps failing; a device that is merely quiet is
+  not stale, since whether it is online is the status itself. Without it the age is shown and
+  nothing is marked stale. Bound to a
   group it says so rather than showing one device of several. The status is read every 15 seconds
   and holds still while the dashboard is paused. Showing it needs permission to read device state;
   without it the card says you do not have access to this data.
@@ -439,7 +441,7 @@ The settings depend on the widget. Common ones:
   still loading the widget shows no ring rather than a partial one, and a device whose status could
   not be read is noted apart ("1 could not be read") and left out of the ring. It reads the first
   500 devices of a group and says "Showing 500 of N devices" when the group is larger. **Stale
-  after** marks the ring stale once the newest activity anywhere in the group is older than that.
+  after** marks the ring stale once the group's status has not been read for that many seconds.
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until
