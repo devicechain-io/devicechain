@@ -3,7 +3,6 @@
     "rootNamespace": "DeviceChain.Demos.DevicePlane",
     "references": [
         "DeviceChain.Demos.Platform",
-        "DeviceChain.Sdk.Unity",
         "DeviceChain.Demos.Core"
     ],
     "includePlatforms": [],

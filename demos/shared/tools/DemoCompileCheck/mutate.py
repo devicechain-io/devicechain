@@ -33,6 +33,11 @@ def main(case, root):
         # Replay stops listing the recording assembly it uses types from: a compile error
         edit(os.path.join(sp, "Scripts/Replay/DeviceChain.Sitepulse.Replay.asmdef"),
              '"DeviceChain.Demos.Recording",', "", case)
+    elif case == "unlisted-sdk-dependency":
+        # the connection stops listing System.Text.Json, which it uses and which the SDK it lists depends on:
+        # the Editor refuses it, so the check must not hand it the SDK's packages
+        edit(os.path.join(kit, "Platform/DeviceChain.Demos.Platform.asmdef"),
+             '"System.Text.Json.dll",', "", case)
     elif case == "replay-reaches-network":
         # compiles; only the boundary rule can see it
         edit(os.path.join(sp, "Scripts/Replay/DeviceChain.Sitepulse.Replay.asmdef"),

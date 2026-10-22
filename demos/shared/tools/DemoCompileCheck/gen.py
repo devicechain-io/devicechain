@@ -171,6 +171,7 @@ def main(out, roots, tests):
             "    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>",
             "    <AssemblyName>%s</AssemblyName>" % name,
             "    <IsPackable>false</IsPackable>",
+            "    <DcAssemblyProject>true</DcAssemblyProject>",
             "  </PropertyGroup>",
             "  <PropertyGroup Condition=\"'$(Configuration)' == 'WebGL'\">",
             "    <DefineConstants>$(DefineConstants);UNITY_WEBGL</DefineConstants>",
@@ -185,12 +186,17 @@ def main(out, roots, tests):
             lines.append('    <PackageReference Include="UnityEngine.Modules" Version="2021.3.33" PrivateAssets="all" />')
             for imp in IMPLICIT + (IMPLICIT_EDITOR if d.get("includePlatforms") == ["Editor"] else []):
                 lines.append('    <ProjectReference Include="%s" />' % fwd(os.path.join(out, "stub." + imp + ".csproj")))
+        listed = ["UnityEngine.Modules"] if engine else []
         for r in refs:
             if r[0] == "project":
                 lines.append('    <ProjectReference Include="%s" />' % fwd(r[1]))
             else:
                 lines.append('    <PackageReference Include="%s" Version="%s" PrivateAssets="all" />' % (r[1], r[2]))
-        inc = fwd(os.path.join(a["dir"], "**", "*.cs"))
+                listed.append(r[1])
+        # the only packages this assembly compiles against (Directory.Build.targets drops the rest)
+        for pkg in listed:
+            lines.append('    <DcListedPackage Include="%s" NuGetPackageId="%s" />' % (pkg, pkg))
+        inc =fwd(os.path.join(a["dir"], "**", "*.cs"))
         compat = []
         for src in glob.glob(os.path.join(a["dir"], "**", "*.cs"), recursive=True):
             base = os.path.basename(src)
@@ -259,6 +265,26 @@ def main(out, roots, tests):
     ]
     with open(os.path.join(out, "Directory.Build.props"), "w", newline="\n") as f:
         f.write("\n".join(props) + "\n")
+
+    # The same rule for packages. The SDK is a ProjectReference to sdks/csharp, and NuGet hands a project the
+    # packages of every project it references, PrivateAssets or not on this side: System.Text.Json,
+    # Microsoft.Bcl.AsyncInterfaces, MQTTnet and the rest would reach an assembly whose .asmdef lists
+    # DeviceChain.Sdk.dll alone, which would then compile here and fail in the Editor. So an assembly compiles
+    # against the packages its .asmdef lists (precompiledReferences, and UnityEngine.Modules for the engine) and
+    # no others. The stubs are not assemblies of the demos and keep what they restore.
+    targets = [
+        "<Project>",
+        "  <Target Name=\"DcListedPackagesOnly\" AfterTargets=\"ResolvePackageAssets\" Condition=\"'$(DcAssemblyProject)' == 'true'\">",
+        "    <ItemGroup>",
+        "      <_DcUnlisted Include=\"@(ResolvedCompileFileDefinitions)\" />",
+        "      <_DcUnlisted Remove=\"@(DcListedPackage)\" MatchOnMetadata=\"NuGetPackageId\" />",
+        "      <ResolvedCompileFileDefinitions Remove=\"@(_DcUnlisted)\" />",
+        "    </ItemGroup>",
+        "  </Target>",
+        "</Project>",
+    ]
+    with open(os.path.join(out, "Directory.Build.targets"), "w", newline="\n") as f:
+        f.write("\n".join(targets) + "\n")
 
     build = ['<Project DefaultTargets="Build">', "  <ItemGroup>"]
     for p in projects:

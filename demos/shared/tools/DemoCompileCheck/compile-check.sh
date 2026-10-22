@@ -121,6 +121,7 @@ self_test() {
   expect pass "the sources as committed (the counterweight: a check that fails everything proves nothing)" "$c"
 
   broken missing-reference 'error CS0(234|246)' "an assembly that uses a type from an assembly it no longer references"
+  broken unlisted-sdk-dependency 'error CS0234: The type or namespace name .Json. does not exist in the namespace .System\.Text..*Demos\.Platform\.csproj' "an assembly that uses a package its .asmdef does not list, which the SDK it lists depends on"
   broken left-behind-namespace 'DeviceFleet.cs.*error CS0(103|246)' "a file that lost the using for a namespace it moved to"
   broken test-missing-using 'ObservedSourceTests.cs.*error CS0(103|246)' "a test that lost the using for a type it uses"
   broken shared-reaches-demo 'Leak.cs.*error CS0234' "a shared assembly that uses a demo's type"
