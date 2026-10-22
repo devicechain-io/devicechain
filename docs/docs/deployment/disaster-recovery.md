@@ -489,7 +489,7 @@ The root key cannot be rotated in place in this version. There is no command tha
 and re-seals what the old one protected. To replace the root key, you recreate the instance, and a
 recreated instance starts with an empty control plane.
 
-Three kinds of stored data depend on the key:
+Four kinds of stored data depend on the key:
 
 - **Every secret the instance stores.** Each is sealed under the root key: outbound-connector
   credentials, the SMTP passwords and webhook secrets of notification channels, AI provider keys
@@ -498,6 +498,9 @@ Three kinds of stored data depend on the key:
   no one can sign in.
 - **Device MQTT password digests.** The key that digests device MQTT passwords is derived from the
   root key. A digest is one-way, so it cannot be re-made under a new key without the password.
+- **Device access token digests.** An access token is stored only as a digest made under a key
+  derived from the root key. Like a password digest, it cannot be re-made under a new key without
+  the token, so each token device needs its token set again, or registered again with the same one.
 
 ### What a recreate loses {#replace-root-key-losses}
 

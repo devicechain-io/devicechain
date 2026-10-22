@@ -519,7 +519,7 @@ En esta versión la clave raíz no se puede rotar in situ. No existe ningún com
 clave nueva y vuelva a sellar lo que protegía la anterior. Para sustituir la clave raíz, se recrea la
 instancia, y una instancia recreada empieza con un plano de control vacío.
 
-Tres tipos de datos guardados dependen de la clave:
+Cuatro tipos de datos guardados dependen de la clave:
 
 - **Todos los secretos que guarda la instancia.** Cada uno está sellado bajo la clave raíz:
   credenciales de los conectores de salida, contraseñas SMTP y secretos de webhook de los canales de
@@ -529,6 +529,10 @@ Tres tipos de datos guardados dependen de la clave:
 - **Los resúmenes de las contraseñas MQTT de los dispositivos.** La clave con la que se calculan esos
   resúmenes se deriva de la clave raíz. Un resumen es de un solo sentido, así que no se puede volver
   a calcular bajo una clave nueva sin la contraseña.
+- **Los resúmenes de los tokens de acceso de los dispositivos.** Un token de acceso solo se guarda
+  como un resumen calculado con una clave derivada de la clave raíz. Como el resumen de una
+  contraseña, no se puede volver a calcular bajo una clave nueva sin el token, así que a cada
+  dispositivo con token hay que establecerle el token de nuevo, o registrarlo otra vez con el mismo.
 
 ### Qué se pierde al recrear {#replace-root-key-losses}
 

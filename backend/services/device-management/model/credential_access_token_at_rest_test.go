@@ -167,6 +167,28 @@ func TestAnAccessTokenIsNotResolvedAsAPassword(t *testing.T) {
 	require.ErrorIs(t, err, ErrCredentialTypeInvalid)
 }
 
+// The lookup is not the last word: a row the finder returns for any reason other than an
+// exact match on the presented token's digest (a case-folding collation, say) is confirmed
+// against the token and refused. A finder that hands back another token's row stands in for
+// that store here, since neither SQLite nor a default Postgres collation can produce one.
+func TestARowTheLookupReturnsForAnotherTokenDoesNotAuthenticate(t *testing.T) {
+	api, ctx := resolveFixture(t)
+	other := createAccessToken(t, api, ctx, "t-other", "another-token-0003")
+	var asked string
+	loose := func(_ context.Context, _ string, credentialId string) (*DeviceCredential, error) {
+		asked = credentialId
+		return other, nil
+	}
+	_, err := api.lookupPresentedCredential(ctx, accessToken(bearerToken), loose)
+	require.ErrorIs(t, err, ErrCredentialNotResolved, "a row matched for another token authenticated this one")
+	require.True(t, credential.IsAccessTokenDigest(asked), "the finder was asked for %q, not a digest", asked)
+
+	// The control: the same finder, presented the row's own token, resolves it.
+	got, err := api.lookupPresentedCredential(ctx, accessToken("another-token-0003"), loose)
+	require.NoError(t, err)
+	require.Equal(t, other.ID, got.ID)
+}
+
 // A token the platform rotated stops working at once, and the new one starts.
 func TestARotatedAccessTokenReplacesTheOldOne(t *testing.T) {
 	api, ctx := resolveFixture(t)
