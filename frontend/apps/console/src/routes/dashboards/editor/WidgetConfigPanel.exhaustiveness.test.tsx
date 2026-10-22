@@ -837,7 +837,14 @@ describe('the gate itself', () => {
       // timeseries chart's markAlarms and markCommands) cannot differ here. They are excluded,
       // and the pair is pinned where it can be: WidgetConfigPanel.markers.test.tsx renders each
       // with only itself set and requires the other to read unchecked.
-      const keys = schemaOrder(type).filter((k) => specsOf(type)[k].kind !== 'boolean');
+      // The same holds for a two-valued enum: the driver reaches its second entry on the written side,
+      // so the timeseries chart's groupBy and markAlarmsScope (both ending in 'device') cannot differ here
+      // either. Enums offering three or more entries stay in the check.
+      const twoValuedEnum = (k: string) => {
+        const spec = specsOf(type)[k];
+        return spec.kind === 'enum' && spec.values.length < 3;
+      };
+      const keys = schemaOrder(type).filter((k) => specsOf(type)[k].kind !== 'boolean' && !twoValuedEnum(k));
       for (const side of ['written', 'shown'] as const) {
         const values = keys.map((k) => JSON.stringify(optionValue(type, k, side)));
         const collisions = keys.filter((_k, i) => values.indexOf(values[i]) !== i);
