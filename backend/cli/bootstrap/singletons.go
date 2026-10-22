@@ -254,6 +254,10 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 		// has never been rehearsed, and what the store already holds cannot be either. A
 		// rehearsal that simply omitted the one refusal whose cost is permanent would be
 		// read as clearance for the run it cannot clear.
+		if err := precheckValuesOverlay(ctx, st); err != nil {
+			wouldDo(fmt.Sprintf("render the values overlay -- the check did not pass (%v), and "+
+				"a real run would stop here", err))
+		}
 		if err := precheckObjectStore(ctx, st); err != nil {
 			wouldDo(fmt.Sprintf("check the s3 credentials Secret -- the check did not pass (%v), and "+
 				"a real run would stop here", err))
@@ -297,6 +301,10 @@ func stepCheckClusterSingletons(ctx context.Context, st *State) error {
 	// absent or incomplete, the pods would sit in CreateContainerConfigError for as long as
 	// the readiness wait lasts. Here nothing has been written.
 	if err := precheckObjectStore(ctx, st); err != nil {
+		return err
+	}
+	// The operator's tuning, rendered with the chart while nothing has been written.
+	if err := precheckValuesOverlay(ctx, st); err != nil {
 		return err
 	}
 	// 🔴 AND THE SHARED RELATIONAL STORE, FOR THE SAME REASON, TWICE OVER.

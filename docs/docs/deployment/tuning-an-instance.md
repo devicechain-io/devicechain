@@ -1,0 +1,136 @@
+---
+sidebar_position: 4.5
+title: Tuning an Instance
+---
+
+# Tuning an Instance {#tuning-an-instance}
+
+You tune an instance — replica counts, CPU and memory, an area's own configuration — with a
+values file. You give it to `dcctl bootstrap` or `dcctl upgrade` with `--values`, and `dcctl`
+**records it on the instance**, so every later `dcctl upgrade` applies it again without being
+asked. Without that record, an upgrade rebuilds the instance's settings from its declaration
+and your tuning is reverted.
+
+```yaml title="tuning.yaml"
+functionalAreas:
+  device-management:
+    replicas: 3
+    resources:
+      limits:
+        cpu: "3"
+  event-sources:
+    config:
+      capture:
+        publishWindow: 512
+```
+
+```bash
+# At bootstrap
+dcctl bootstrap local my-instance --values tuning.yaml
+
+# On a running instance
+dcctl upgrade local my-instance --values tuning.yaml
+
+# Every later upgrade keeps applying it; nothing to repeat
+dcctl upgrade local my-instance --version <new-version>
+```
+
+## How the overlay combines with what dcctl sets {#precedence}
+
+Three layers, each over the one before:
+
+1. The chart's defaults.
+2. The values `dcctl` computes from the instance's declaration: images, credentials, endpoints,
+   the profile and areas, and the sizing a preset such as `--compact` or `--ha` implies.
+3. Your overlay.
+
+Maps merge key by key, so you set only the keys you want to change. A list or a single value
+replaces what is under it. Repeat `--values` to layer several files; later files win.
+
+The overlay is applied to the same values the chart renders the instance configuration from, so a
+setting such as `shutdownDrainSeconds` reaches the configuration document as well as the pods.
+
+## What you can set {#tunable}
+
+An overlay may set only the values below. Anything else is refused.
+
+| Values | What they control |
+| --- | --- |
+| `replicas`, `rollingUpdate`, `terminationGracePeriodSeconds`, `nodeLossTolerationSeconds`, `shutdownDrainSeconds`, `podDisruptionBudget`, `startupProbe`, `livenessProbe` | Scale and rollout for every area |
+| `resources`, `useMeasuredRequests`, `goMemLimitPercent`, `gogc`, `goMemLimit` | CPU and memory, and Go's memory behaviour, for every area |
+| `functionalAreas.<area>.replicas`, `.strategy`, `.resources`, `.measuredRequests`, `.goMemLimitPercent`, `.memoryLimitFloor`, `.gogc`, `.goMemLimit`, `.avoidEventStorePrimary`, `.eventPathSpread` | The same, for one area |
+| `functionalAreas.<area>.config` | That area's own configuration. An unknown key stops the service at startup |
+| `frontend.replicas`, `frontend.resources` | The console's pods |
+| `metrics.alerts`, `metrics.grafanaDashboards` | Alerting rules and dashboards |
+| `ingress.className`, `ingress.annotations`, `ingress.uploadMaxBodySize`, `networkPolicy.additionalAllowedCidrs`, `serviceAccount.annotations` | How the ingress is fronted and who may reach the pods |
+
+`functionalAreas.event-management.replicas` is not tunable even though the rest of that area is:
+`--ha` sets it, and the event store's connection reserve is sized to it.
+
+Everything `dcctl` owns is refused: images and versions, credentials and the secret-store root
+key, broker and database endpoints, the ingress host and TLS, the profile and the set of areas
+(`dcctl enable-area` changes that), object-store settings, security contexts, and the LwM2M and
+MQTT body-credential settings that `dcctl` carries from one release to the next on its own. The
+list is an allowlist on purpose: a value the chart gains in a later release stays refused until
+it is added here, instead of becoming settable by accident.
+
+A refusal names every offending key, and the file it came from, before anything is changed:
+
+```text
+--values tuning.yaml sets values dcctl does not let an overlay set, so nothing has been changed:
+  image.tag: this is not an operator-tunable value: dcctl or the chart owns it (images, credentials, endpoints, exposure, the area set, security contexts)
+```
+
+The overlay is also checked against the chart's values schema, and rendered with the instance's
+other values, before anything is applied. A value of the wrong type, a request above its limit, or
+a combination the chart refuses stops the run with nothing changed.
+
+## Changing or removing the overlay {#changing}
+
+`--values` on `dcctl upgrade` **replaces** the recorded overlay as a whole; it does not merge into
+it. To add a key, put it in the file beside the ones already there. To remove the overlay and
+return the instance to the values `dcctl` computes:
+
+```bash
+dcctl upgrade local my-instance --reset-values
+```
+
+`--values` and `--reset-values` cannot be combined. `dcctl enable-area` and an upgrade given
+neither flag keep the recorded overlay as it is.
+
+## See what would change first {#dry-run}
+
+`--dry-run` prints the difference between the recorded overlay and the one the run would leave:
+
+```text
+  Overlay: changes to the recorded tuning:
+    ~ functionalAreas.device-management.replicas: 3 -> 4
+    + gogc: 400
+    - functionalAreas.device-state.replicas: 2
+[dry-run] would record the values overlay in the instance declaration
+```
+
+`+` is added, `-` removed and `~` changed.
+
+## Where the overlay is kept {#where}
+
+The overlay is stored on the instance's declaration, in the cluster, as the
+`core.devicechain.io/values-overlay` annotation. Any machine that can reach the cluster upgrades
+with it; nothing is kept in a file on the machine that bootstrapped. Destroying the instance
+removes it.
+
+Anyone who can read the instance declaration can read the overlay. It cannot set credentials, but
+an area's `config` is free-form, so keep secrets out of it.
+
+## When an upgrade refuses the recorded overlay {#stale}
+
+A new release can rename a value or tighten what it accepts. An upgrade checks the recorded overlay
+against the release it is moving to, before changing anything, and stops with the key named if it
+no longer fits. Fix it with `--values <fixed-file>`, or remove it with `--reset-values`.
+
+## What applying it does {#rollout}
+
+An overlay is applied through the same release as every other setting, so a change that alters a
+pod's settings or an area's `config` rolls that area's pods; running pods do not re-read it. Tuning that moves load between services, such
+as replica counts on the event path, is worth rehearsing with `--dry-run` and rolling out when the
+instance is quiet.

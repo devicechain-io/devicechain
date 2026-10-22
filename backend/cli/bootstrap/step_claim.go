@@ -35,13 +35,18 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// cluster dcctl was pointed at, a fresh default one on a cluster it created. Either rewrites
 	// what the instance is built on, and a store dropped from the declaration is a volume Helm
 	// would then remove along with every logo and artifact on it.
-	if !st.DryRun && !st.ObjectStoreExplicit {
+	if !st.DryRun {
 		existing, err := readInstanceDeclaration(ctx, st.KubeContext, st.Instance)
 		if err != nil {
 			return err
 		}
-		if existing != nil {
+		if existing != nil && !st.ObjectStoreExplicit {
 			st.ObjectStore = existing.Spec.ObjectStore.DeepCopy()
+		}
+		// 🔴 THE SAME RULE FOR THE OPERATOR'S TUNING: a re-run that names no --values keeps the
+		// overlay the declaration records, rather than rendering the instance without it.
+		if err := adoptRecordedValuesOverlay(st, existing); err != nil {
+			return err
 		}
 	}
 	spec := InstanceSpecFrom(st, st.Binding, st.Provider)
@@ -56,6 +61,7 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 		fmt.Println()
 		wouldDo(fmt.Sprintf("declare instance %q (provider %s, profile %s)",
 			st.Instance, spec.Provider, spec.Profile))
+		sayValuesOverlay(st)
 		return nil
 	}
 
@@ -71,6 +77,12 @@ func stepDeclareInstance(ctx context.Context, st *State) error {
 	// written one, its failure would hand the next plain bootstrap a running instance.
 	if err := writeInstanceDeclaration(ctx, st.KubeContext, st.Instance, spec, st.DcctlVersion, !st.OverLiveInstance); err != nil {
 		return err
+	}
+	// The operator's tuning rides on the declaration, so the first upgrade finds it there.
+	if valuesOverlayChanges(st) {
+		if err := recordValuesOverlayFor(ctx, st.KubeContext, st.Instance, st.ValuesOverlay); err != nil {
+			return err
+		}
 	}
 	done()
 

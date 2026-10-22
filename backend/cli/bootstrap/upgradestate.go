@@ -135,6 +135,12 @@ func hydrateUpgradeState(
 	if err := applyUpgradeDeclaration(st, inst, opts); err != nil {
 		return nil, err
 	}
+	// The operator's tuning overlay: the one this run was given, or else the one the
+	// declaration records. Settled here, before anything is written, so a recorded overlay
+	// this release no longer accepts stops the run while nothing has moved.
+	if err := applyUpgradeValuesOverlay(st, inst, opts); err != nil {
+		return nil, err
+	}
 	// An upgrade over an instance whose first bootstrap never finished (the document
 	// written, then Helm or readiness failed) is let through: it runs the same Helm
 	// upgrade and readiness gate against the same document, and its Ready removes the

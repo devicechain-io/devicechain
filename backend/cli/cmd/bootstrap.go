@@ -20,6 +20,9 @@ import (
 // its longer name does not realign every line of it.
 var bootstrapMqttBodyCredential string
 
+// bootstrapValues is --values: operator tuning overlay files, merged in order.
+var bootstrapValues []string
+
 // Bootstrap command flags.
 var (
 	bootstrapKubeContext     string
@@ -180,6 +183,14 @@ var bootstrapCmd = &cobra.Command{
 		mqttBodyCredential, err := bootstrap.ParseMqttBodyCredential(bootstrapMqttBodyCredential)
 		if err != nil {
 			return fmt.Errorf("--mqtt-body-credential: %w", err)
+		}
+		// The tuning overlay is judged here too -- its keys against the allowlist and its values
+		// against the chart's schema -- so a refused key fails before any cluster exists.
+		var valuesOverlay map[string]interface{}
+		if len(bootstrapValues) > 0 {
+			if valuesOverlay, err = bootstrap.LoadValuesOverlay(bootstrapValues); err != nil {
+				return err
+			}
 		}
 		lwm2mIdentities, err := bootstrap.ParseLwm2mIdentities(bootstrapLwm2mIdentities)
 		if err != nil {
@@ -410,6 +421,7 @@ var bootstrapCmd = &cobra.Command{
 			EnabledAreas:         enabledAreas,
 			Lwm2mIdentities:      lwm2mIdentities,
 			MqttBodyCredential:   mqttBodyCredential,
+			ValuesOverlay:        valuesOverlay,
 			ObjectStore:          objectStore,
 			ObjectStoreExplicit:  objectStoreFlagGiven(cmd.Flags().Changed),
 			Escrow:               escrowPlan,
@@ -601,6 +613,7 @@ func init() {
 
 	bootstrapCmd.Flags().StringSliceVar(&bootstrapEnableAreas, "enable-area", nil, "additionally deploy a functional area on TOP of the profile (repeatable, e.g. --enable-area lwm2m-ingest --enable-area sparkplug-ingest). Composes with the cluster's --compact setting; validated against the area catalog (unknown area or unmet hard dependency fails before any cluster spin-up)")
 	bootstrapCmd.Flags().StringVar(&bootstrapMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
+	bootstrapCmd.Flags().StringArrayVar(&bootstrapValues, "values", nil, valuesUsage)
 	bootstrapCmd.Flags().StringVar(&bootstrapLwm2mIdentities, "lwm2m-identities", "", "path to a JSON file of LwM2M DTLS-PSK credentials to provision: [{identity, psk(base64), tenant, externalId, deviceTypeToken, autoRegister}]. Renders the PSKs into a chart-owned Secret and binds each to lwm2m-ingest; implies --enable-area lwm2m-ingest. Validated up front (short PSK / missing tenancy fails before any cluster). Re-running bootstrap WITHOUT this flag removes the provisioned credentials")
 
 	bootstrapCmd.Flags().StringVar(&bootstrapObjectStore.Mode, "object-store", "", "where the instance keeps tenant logos and update artifacts: none, filesystem (a volume the chart creates) or s3. Default: a small filesystem store on a cluster dcctl created, none on one it was pointed at with --kube-context. Fixed configuration, recorded on the instance and kept by 'dcctl upgrade'")
@@ -681,3 +694,8 @@ const mqttBodyCredentialUsage = "TRANSITIONAL. What event-sources does with an M
 	"refuse (the default) or strip (accept it with the credential removed). Use strip while a fleet whose firmware still sends one is updated, " +
 	"then refuse; a device that sent one should have its credential rotated. A value given here is kept by later upgrades that omit the flag. " +
 	"Planned for removal in v0.26.0"
+
+// valuesUsage is the help for --values on bootstrap and upgrade.
+const valuesUsage = "a YAML file of operator tuning (replica counts, resources, an area's own configuration), merged over the values dcctl computes (repeatable; later files win). " +
+	"The overlay is recorded on the instance, so 'dcctl upgrade' keeps applying it; on upgrade, --values REPLACES the recorded overlay. " +
+	"Only tunable values are accepted: a key dcctl owns (images, credentials, endpoints, ingress host and TLS, the area set) is refused, naming it, before anything changes"

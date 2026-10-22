@@ -267,6 +267,10 @@ profile、拓扑和启用的功能区来自实例自身声明，即 `dcctl boots
 此命令也有意不做一件事：除让服务执行自身迁移外，不接触数据库数据，而且绝不调整卷大小。
 :::
 
+### 运维人员的调优会被保留 {#upgrade-tuning}
+
+升级不会改变实例的形态，但会保留你为它设置的调优。传给 `dcctl bootstrap --values` 或 `dcctl upgrade --values` 的 values 文件会记录在实例上，之后每次升级都会再次应用；`--reset-values` 可将其移除。参见[调优实例](./tuning-an-instance.md)。
+
 ### 升级会应用哪些基础设施 {#upgrade-infrastructure}
 
 更新服务前，`dcctl upgrade` 应用实例 OpenTofu 配置，即 `dcctl bootstrap` 构建实例时使用的配置。
