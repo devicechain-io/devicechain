@@ -339,6 +339,7 @@ func TestFinishInstallOverAShortStoreReturnsTheErrorAndReportsNoSuccess(t *testi
 }
 
 func TestFinishInstallOverAJoinedStoreReportsSuccess(t *testing.T) {
+	isolateHome(t)
 	rec := aCompleteInstall()
 	typed := fake.NewSimpleClientset(cnpgPods("dc-system", "dc-rdb", 3)...)
 	dyn := fakeDyn(aCluster("dc-system", "dc-rdb", 3, 3, healthyClusterPhase))

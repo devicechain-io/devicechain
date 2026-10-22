@@ -825,8 +825,57 @@ func reportInstall(st *State, provider string) {
 			color.GreenString("requested from %q — the store was waited for until healthy, which does "+
 				"not say the rows came back: check the data before believing it", st.Restore.RdbFrom))
 	}
+	if existing := instancesOnCluster(st); len(existing) > 0 {
+		fmt.Println(color.HiGreenString("\nThis cluster already hosts %s. Next: move it onto this operator:\n", describeInstances(existing)))
+		for _, name := range existing {
+			fmt.Printf("    dcctl upgrade %s --dry-run%s\n    dcctl upgrade %s%s\n\n",
+				name, upgradeTargetFlags(st), name, upgradeTargetFlags(st))
+		}
+		return
+	}
 	fmt.Println(color.HiGreenString("\nNext: build an instance on it:\n\n    dcctl bootstrap %s <instance>%s\n",
 		provider, clusterTargetFlag(st.Binding)))
+}
+
+// instancesOnCluster names the instances recorded against the cluster this install
+// just prepared. A listing that cannot be read answers none, which only means the
+// generic next step is printed.
+func instancesOnCluster(st *State) []string {
+	known, err := ListInstances()
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, k := range known {
+		if st.KubeContext == "" || !k.HasRecord || k.Destroying || k.Record.KubeContext != st.KubeContext {
+			continue
+		}
+		if uid := k.Record.ClusterUID; uid != "" && st.ClusterUID != "" && uid != st.ClusterUID {
+			continue // same context name, a different (rebuilt) cluster
+		}
+		names = append(names, k.Instance)
+	}
+	return names
+}
+
+func describeInstances(names []string) string {
+	if len(names) == 1 {
+		return "the instance " + names[0]
+	}
+	return fmt.Sprintf("%d instances (%s)", len(names), strings.Join(names, ", "))
+}
+
+// upgradeTargetFlags is what `dcctl upgrade` needs to be told to land where this
+// install did: an adopted context, and a registry other than the published one.
+func upgradeTargetFlags(st *State) string {
+	var f string
+	if !st.Binding.Managed {
+		f += " --kube-context " + st.Binding.KubeContext
+	}
+	if st.ImageRegistry != "" && st.ImageRegistry != DefaultImageRegistry {
+		f += " --registry " + st.ImageRegistry
+	}
+	return f
 }
 
 // clusterTargetFlag is what a command needs to be told to land on this cluster: a

@@ -15,6 +15,7 @@ import (
 	apply "github.com/devicechain-io/dc-k8s/apply"
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -736,6 +737,9 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 			if deploymentRolledOut(d) {
 				continue
 			}
+			if err := imagePullFailure(ctx, typed, d); err != nil {
+				return err
+			}
 			desired := int32(1)
 			if d.Spec.Replicas != nil {
 				desired = *d.Spec.Replicas
@@ -767,6 +771,42 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 		case <-time.After(wait):
 		}
 	}
+}
+
+// imagePullFailure answers non-nil when a pod of the Deployment is stuck unable to
+// pull its image. Waiting out the timeout for that would only end in a message that
+// names no cause: the image will not appear by itself, a mistyped tag or registry
+// being the usual reason, so the wait stops and says which image and why.
+//
+// A pull that is merely slow has no waiting reason at all, so it is never reported;
+// ErrImagePull is a failed attempt, and the registry or tag is wrong far more often
+// than the network blinked.
+func imagePullFailure(ctx context.Context, typed kubernetes.Interface, d *appsv1.Deployment) error {
+	if d.Spec.Selector == nil {
+		return nil
+	}
+	pods, err := typed.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: metav1.FormatLabelSelector(d.Spec.Selector),
+	})
+	if err != nil {
+		return nil // the wait's own polling reports a cluster that cannot be read
+	}
+	for _, p := range pods.Items {
+		statuses := append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...)
+		for _, cs := range statuses {
+			w := cs.State.Waiting
+			if w == nil {
+				continue
+			}
+			switch w.Reason {
+			case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+				return fmt.Errorf("%s/%s cannot start: the image %q cannot be pulled (%s: %s) - "+
+					"check that the tag exists in the registry and that --registry and --version are right",
+					d.Namespace, d.Name, cs.Image, w.Reason, w.Message)
+			}
+		}
+	}
+	return nil
 }
 
 // beginUpgradeClaim takes the cluster lock for an operator upgrade, warning rather

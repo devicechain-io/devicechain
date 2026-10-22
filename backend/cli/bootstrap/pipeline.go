@@ -6,6 +6,7 @@ package bootstrap
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
@@ -58,6 +59,10 @@ var DefaultImageVersion = "dev"
 func IsUnpublishedImageVersion(tag string) bool {
 	return tag == "dev" || strings.Contains(tag, "-dev.")
 }
+
+// bareSemver matches a release number written without the "v" the published image
+// tags carry (0.23.0, 0.24.0-rc.1).
+var bareSemver = regexp.MustCompile(`^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?$`)
 
 // State threads data between pipeline steps. Values is populated as the
 // pipeline runs (generated broker credentials, endpoints, etc.). The superuser's
@@ -443,6 +448,15 @@ func ResolveImageSource(registry, version string, build bool) (ImageSource, erro
 		} else {
 			version = DefaultImageVersion
 		}
+	}
+	// Published release tags carry a leading "v" (v0.23.0) while a release number is
+	// written 0.23.0 everywhere else, so a bare semver asked of the published
+	// registry would pull a tag that does not exist and sit in ImagePullBackOff.
+	// Only the published registry is normalized: a registry the operator named holds
+	// whatever tags they pushed (the upgrade drill pushes 0.24.0-drill.1 to
+	// localhost:5000), and rewriting those would break exactly that.
+	if !build && registry == DefaultImageRegistry && bareSemver.MatchString(version) {
+		version = "v" + version
 	}
 	// Deploying an image tag that was never published fails as an
 	// ImagePullBackOff on every workload, several minutes into a run that looked
