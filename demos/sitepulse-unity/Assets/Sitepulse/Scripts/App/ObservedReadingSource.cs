@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Visuals;

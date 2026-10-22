@@ -1,0 +1,19 @@
+{
+    "name": "DeviceChain.Demos.Recording",
+    "rootNamespace": "DeviceChain.Demos.Recording",
+    "references": [
+        "DeviceChain.Demos.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "System.Text.Json.dll",
+        "Microsoft.Bcl.AsyncInterfaces.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

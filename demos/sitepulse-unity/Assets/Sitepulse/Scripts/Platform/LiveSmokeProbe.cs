@@ -12,6 +12,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sdk;
 using DeviceChain.Sdk.Subscriptions;
 using DeviceChain.Sdk.Transport;

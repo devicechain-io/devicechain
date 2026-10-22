@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Tasks;

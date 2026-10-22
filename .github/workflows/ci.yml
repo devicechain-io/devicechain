@@ -1967,6 +1967,37 @@ jobs:
         run: ./sdks/unity/tools/UnityCompileCheck/compile-check.sh
 
   # ---------------------------------------------------------------------------
+  # Unity demos (demos/sitepulse-unity and the packages in demos/shared): the same no-Editor idea as
+  # above, for the demos' own code. Every assembly definition is compiled as its own project, tests
+  # included, in both platform branches, so a type used from an assembly its .asmdef does not list
+  # fails here and not in the Editor; and the assembly graph is held to its boundaries (a shared
+  # package never reaches a demo, the replay and the recording format never reach the network). The
+  # self-test runs first so the green run after it is one that could have been red. It compiles and
+  # runs nothing else: scenes, prefabs and play mode are the Editor's.
+  # ---------------------------------------------------------------------------
+  demo-compile-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: global.json
+
+      - name: Demo check fails when it should (self-test)
+        run: ./demos/shared/tools/DemoCompileCheck/compile-check.sh --self-test
+
+      - name: Boundaries hold and every demo and shared assembly compiles (both platform branches)
+        run: ./demos/shared/tools/DemoCompileCheck/compile-check.sh
+
+      # Unity imports a package from the files with whatever .meta files are committed; a missing one
+      # gets a new GUID on every machine, which breaks every scene that points at it.
+      - name: Every file and folder of the shared platform package has a committed .meta
+        run: |
+          hack/check-unity-metas.sh --self-test
+          hack/check-unity-metas.sh demos/shared/io.devicechain.demo-platform
+
+  # ---------------------------------------------------------------------------
   # Shared simulation traffic library (demos/shared/io.devicechain.sim-traffic): a source
   # Unity package whose Dotnet~/ sidecar compiles the SAME .cs files Unity compiles. No CI job
   # runs Unity, so this is the coverage those files get:
@@ -2813,6 +2844,7 @@ jobs:
       - frontend
       - csharp
       - unity-compile-check
+      - demo-compile-check
       - sim-traffic
       - helm
       - opentofu

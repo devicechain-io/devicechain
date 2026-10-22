@@ -49,7 +49,10 @@ run it again after regenerating anything under `ArtSource/`.
 Assets/Sitepulse/
   Scenes/              scenes
   Scripts/Domain/      machine and task state, free of Unity and transport types
-  Scripts/Platform/    the DeviceChain connection
+  Scripts/Platform/    what is Sitepulse's of the DeviceChain connection: the device binder and readiness
+                       board for its two kinds of device, the acceptance flags, the live smoke probe. The
+                       rest of the connection, the device link and the run-recording format are in
+                       `io.devicechain.demo-platform` (see "Shared with other demos" below)
   Scripts/Simulation/  movement, tasks and the simulation clock
   Scripts/Visuals/     machine rigs (FleetRig, MachineRig), the quarry terrain, the fleet preview,
                        the effects and the data overlay
@@ -67,6 +70,31 @@ Assets/Sitepulse/
   Tests/EditMode/      Edit Mode tests
 ArtSource/             the code that builds the models, props and terrain (see ArtSource/README.md)
 ```
+
+## Shared with other demos
+
+The parts of Sitepulse that do not depend on a quarry live in local packages that the next demo uses too, listed in
+`Packages/manifest.json`:
+
+| Package | What Sitepulse takes from it |
+| --- | --- |
+| [`../shared/io.devicechain.demo-platform`](../shared/io.devicechain.demo-platform) | the connection to an instance, the device link and the sample a device says, the run-recording line format, and the overlay's card maths. Its README says what is in each assembly and what a demo supplies. |
+| [`../shared/io.devicechain.demo-intro`](../shared/io.devicechain.demo-intro) | the logo intro (see [The intro](#the-intro)). |
+
+What stays here is what is written around Sitepulse's two kinds of device (equipment and the crusher plant) and its
+machine-pose recording: the device binder and readiness board, the device session host and fleet, the recorder and
+the replay, and the overlay's cards. The moved code's tests have not moved: they run in this project's Edit Mode
+tests, which is why the shared assemblies name this project's test assembly in `InternalsVisibleTo`.
+
+The log tag is the one place the shared code needs telling who it is: `PlatformLog.Prefix` is `[sitepulse]` here,
+set at player start (`Scripts/Platform/SitepulseLog.cs`) and, for Edit Mode tests, by
+`Tests/EditMode/SitepulseLogTag.cs`.
+
+`demos/shared/tools/DemoCompileCheck/compile-check.sh` checks all of this without the Editor: it compiles every
+assembly of this project, its tests included, and of the shared packages, in both platform branches, and holds
+the assembly graph to its boundaries (the replay and the recording format reach no network). `--self-test` shows it
+failing on sources broken in the ways it exists to catch. It compiles; it runs nothing. Opening the project is still
+the check that the scenes and prefabs bind and that play mode works.
 
 ## The machine models
 

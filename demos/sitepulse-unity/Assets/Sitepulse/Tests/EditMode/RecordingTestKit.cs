@@ -4,6 +4,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.Recording;
 using NUnit.Framework;
 

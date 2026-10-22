@@ -1,6 +1,7 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+using DeviceChain.Demos.Overlay;
 using DeviceChain.Sitepulse.Visuals;
 using NUnit.Framework;
 using UnityEngine;

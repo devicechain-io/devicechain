@@ -3,6 +3,7 @@
 
 using System;
 using System.Text.Json;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.Platform;
 using NUnit.Framework;
 

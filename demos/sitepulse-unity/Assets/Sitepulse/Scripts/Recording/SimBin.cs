@@ -5,6 +5,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Recording;
 
 namespace DeviceChain.Sitepulse.Recording
 {

@@ -4,6 +4,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Core;
 
 namespace DeviceChain.Sitepulse.Simulation
 {

@@ -1,6 +1,8 @@
 // Copyright The DeviceChain Authors
 // SPDX-License-Identifier: Apache-2.0
 
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.DevicePlane;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Simulation;
 

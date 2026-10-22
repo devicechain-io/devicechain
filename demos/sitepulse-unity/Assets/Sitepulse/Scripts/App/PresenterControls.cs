@@ -5,6 +5,8 @@ using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;

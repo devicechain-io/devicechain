@@ -6,12 +6,10 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Platform;
 
 namespace DeviceChain.Sitepulse.Platform
 {
-    /// <summary>Runs one operator GraphQL query and returns the response's <c>data</c> as JSON text.</summary>
-    public delegate Task<string> QueryFn(string query, string variablesJson, CancellationToken ct);
-
     /// <summary>
     /// Resolves the scene's devices against the platform. <see cref="Classify"/> is pure over the
     /// response text so every outcome is testable without a network; <see cref="BindAsync"/> runs the
@@ -90,7 +88,7 @@ namespace DeviceChain.Sitepulse.Platform
             var byId = new Dictionary<string, List<JsonElement>>(StringComparer.Ordinal);
             foreach (var row in rows.EnumerateArray())
             {
-                var id = Str(row, "externalId");
+                var id = JsonFields.Str(row, "externalId");
                 if (id == null) continue;
                 if (!byId.TryGetValue(id, out var list)) byId[id] = list = new List<JsonElement>();
                 list.Add(row);
@@ -124,9 +122,9 @@ namespace DeviceChain.Sitepulse.Platform
 
             var row = matches[0];
             r.Count = 1;
-            r.DeviceToken = Str(row, "token");
-            var type = Obj(row, "deviceType");
-            r.TypeToken = type.HasValue ? Str(type.Value, "token") : null;
+            r.DeviceToken = JsonFields.Str(row, "token");
+            var type = JsonFields.Obj(row, "deviceType");
+            r.TypeToken = type.HasValue ? JsonFields.Str(type.Value, "token") : null;
             var want = c.TypeTokens[d.Kind];
             if (r.TypeToken != want)
             {
@@ -135,7 +133,7 @@ namespace DeviceChain.Sitepulse.Platform
                 return r;
             }
 
-            var profile = Obj(type.Value, "profile");
+            var profile = JsonFields.Obj(type.Value, "profile");
             if (!profile.HasValue)
             {
                 r.Outcome = BindOutcome.ProfileMismatch;
@@ -143,23 +141,23 @@ namespace DeviceChain.Sitepulse.Platform
                 return r;
             }
 
-            r.ProfileToken = Str(profile.Value, "token");
+            r.ProfileToken = JsonFields.Str(profile.Value, "token");
             r.ActiveVersion = profile.Value.TryGetProperty("activeVersion", out var av) && av.ValueKind == JsonValueKind.Number && av.TryGetInt32(out var v) ? v : 0;
 
             var metrics = new Dictionary<string, string>(StringComparer.Ordinal); // metricKey -> dataType
             if (profile.Value.TryGetProperty("metricDefinitions", out var md) && md.ValueKind == JsonValueKind.Array)
                 foreach (var m in md.EnumerateArray())
                 {
-                    var key = Str(m, "metricKey");
-                    if (key != null) metrics[key] = Str(m, "dataType") ?? "";
+                    var key = JsonFields.Str(m, "metricKey");
+                    if (key != null) metrics[key] = JsonFields.Str(m, "dataType") ?? "";
                 }
 
             var commands = new Dictionary<string, string>(StringComparer.Ordinal); // commandKey -> parameterSchema
             if (profile.Value.TryGetProperty("commandDefinitions", out var cd) && cd.ValueKind == JsonValueKind.Array)
                 foreach (var m in cd.EnumerateArray())
                 {
-                    var key = Str(m, "commandKey");
-                    if (key != null) commands[key] = Str(m, "parameterSchema");
+                    var key = JsonFields.Str(m, "commandKey");
+                    if (key != null) commands[key] = JsonFields.Str(m, "parameterSchema");
                 }
 
             var problems = new List<string>();
@@ -242,11 +240,5 @@ namespace DeviceChain.Sitepulse.Platform
                 return false;
             }
         }
-
-        internal static string Str(JsonElement o, string name) =>
-            o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
-
-        internal static JsonElement? Obj(JsonElement o, string name) =>
-            o.ValueKind == JsonValueKind.Object && o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Object ? v : (JsonElement?)null;
     }
 }

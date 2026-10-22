@@ -4,6 +4,7 @@
 using System;
 using System.Collections;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.Platform;
 using NUnit.Framework;
 using UnityEngine.TestTools;

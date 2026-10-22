@@ -3,6 +3,8 @@
 
 using System.Collections.Generic;
 using System.Linq;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Overlay;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Replay;
 using DeviceChain.Sitepulse.Visuals;

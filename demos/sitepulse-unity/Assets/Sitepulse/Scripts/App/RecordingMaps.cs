@@ -3,6 +3,10 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Overlay;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
 using DeviceChain.Sitepulse.Recording;

@@ -30,7 +30,7 @@ import urllib.error
 import urllib.request
 
 # ---------------------------------------------------------------------------------------------
-# redaction (mirrors Scripts/Platform/Redactor.cs: a JWT becomes a short hash, a 32+ hex run its tail)
+# redaction (mirrors demos/shared/io.devicechain.demo-platform/Runtime/Platform/Redactor.cs: a JWT becomes a short hash, a 32+ hex run its tail)
 # ---------------------------------------------------------------------------------------------
 
 _JWT = re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")

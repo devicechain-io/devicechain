@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos.Overlay;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Tasks;
 using UnityEngine;
@@ -24,7 +25,7 @@ namespace DeviceChain.Sitepulse.Visuals
         public static readonly Color Grey = new Color(0.40f, 0.44f, 0.46f, 1f);
         public static readonly Color Violet = new Color(0.74f, 0.62f, 1f, 1f);
 
-        public const float RefH = 1080f, Margin = 18f;
+        public const float RefH = OverlayMetrics.RefH, Margin = OverlayMetrics.Margin;
 
         public static Color Of(RowTone tone) => tone == RowTone.Dim ? Dim : tone == RowTone.Ink ? Ink : tone == RowTone.Warn ? Warn : Grey;
 

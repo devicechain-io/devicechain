@@ -4,6 +4,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using DeviceChain.Demos.Overlay;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Replay;
@@ -276,9 +278,9 @@ namespace DeviceChain.Sitepulse.Tests
         public void AQueuedRowReachesTheDrawerThroughTheRecordedLinesToo()
         {
             var log = new ProofLog();
-            var line = new DeviceChain.Sitepulse.Recording.ObservedLine
+            var line = new DeviceChain.Demos.Recording.ObservedLine
             {
-                K = DeviceChain.Sitepulse.Recording.ObservedKinds.Command, Device = "sp-hauler-06", Token = "tok-9-zzzzzzzzzz", Name = "goto-refuel", State = "SENT",
+                K = DeviceChain.Demos.Recording.ObservedKinds.Command, Device = "sp-hauler-06", Token = "tok-9-zzzzzzzzzz", Name = "goto-refuel", State = "SENT",
                 QueuedAt = T0.AddSeconds(5), ObservedAt = T0.AddSeconds(6), Utc = T0.AddSeconds(6),
             };
             DeviceChain.Sitepulse.Recording.ProofFeed.Apply(log, line, d => d == "sp-hauler-06" ? Truck : null);
@@ -286,9 +288,9 @@ namespace DeviceChain.Sitepulse.Tests
             Assert.AreEqual(T0.AddSeconds(5), Rows(log)[0].At);
 
             // a line with no queued time (or the minimum date a missing one is recorded as) makes no QUEUED row
-            var bare = new DeviceChain.Sitepulse.Recording.ObservedLine
+            var bare = new DeviceChain.Demos.Recording.ObservedLine
             {
-                K = DeviceChain.Sitepulse.Recording.ObservedKinds.Command, Device = "sp-hauler-06", Token = "tok-8-yyyyyyyyyy", Name = "goto-area", State = "SENT",
+                K = DeviceChain.Demos.Recording.ObservedKinds.Command, Device = "sp-hauler-06", Token = "tok-8-yyyyyyyyyy", Name = "goto-area", State = "SENT",
                 QueuedAt = DateTimeOffset.MinValue, ObservedAt = T0.AddSeconds(60), Utc = T0.AddSeconds(60),
             };
             DeviceChain.Sitepulse.Recording.ProofFeed.Apply(log, bare, d => Truck);

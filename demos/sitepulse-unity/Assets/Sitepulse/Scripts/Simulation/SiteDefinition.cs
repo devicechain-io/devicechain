@@ -2,22 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 using System;
+using DeviceChain.Demos.Core;
 
 namespace DeviceChain.Sitepulse.Simulation
 {
-    /// <summary>A WGS84 position in decimal degrees.</summary>
-    public readonly struct GeoPoint
-    {
-        public GeoPoint(double latitude, double longitude)
-        {
-            Latitude = latitude;
-            Longitude = longitude;
-        }
-
-        public double Latitude { get; }
-        public double Longitude { get; }
-    }
-
     /// <summary>
     /// The site's one geographic definition: where Unity site-local (0, 0) is on the globe, and how a
     /// metre east or north of it becomes a degree. Unity X is east, Z is north, both in metres, and
