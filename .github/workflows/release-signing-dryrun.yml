@@ -99,7 +99,7 @@ jobs:
 
           helm package deploy/helm/devicechain --version "${TAG#v}" --app-version "$TAG"
           helm push "devicechain-${TAG#v}.tgz" "oci://$REG/charts" --plain-http | tee push-chart.log
-          echo "chart_digest=$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' push-chart.log | tail -n1)" >> "$GITHUB_OUTPUT"
+          echo "chart_digest=$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' push-chart.log | tail -n1)" >> "$GITHUB_OUTPUT"
 
       - name: The signer refuses a tag reference (control)
         run: |

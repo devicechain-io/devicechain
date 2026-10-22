@@ -334,7 +334,7 @@ jobs:
           # helm package writes devicechain-<chart_version>.tgz to the cwd.
           # The digest helm prints is what the `sign` job signs (see the images job).
           helm push "devicechain-${chart_version}.tgz" "oci://${REGISTRY}/charts" | tee push.log
-          digest="$(sed -n 's/^Digest: \(sha256:[0-9a-f]\{64\}\)$/\1/p' push.log | tail -n1)"
+          digest="$(sed -n 's/^Digest: *\(sha256:[0-9a-f]\{64\}\).*/\1/p' push.log | tail -n1)"
           if [ -z "$digest" ]; then
             echo "::error::helm push did not report a digest"
             exit 1
