@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos.Core;
 
 namespace DeviceChain.Sitepulse.Simulation
 {

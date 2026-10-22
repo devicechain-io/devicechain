@@ -9,6 +9,8 @@ using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sdk;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Domain;

@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 

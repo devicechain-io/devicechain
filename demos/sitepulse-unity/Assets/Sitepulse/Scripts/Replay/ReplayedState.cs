@@ -3,6 +3,8 @@
 
 using System;
 using System.Collections.Generic;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 

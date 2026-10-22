@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using DeviceChain.Demos.Core;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Simulation;
 using NUnit.Framework;

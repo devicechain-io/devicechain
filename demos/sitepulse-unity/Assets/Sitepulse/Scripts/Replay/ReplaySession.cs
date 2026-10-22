@@ -4,6 +4,9 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Overlay;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Recording;
 using DeviceChain.Sitepulse.Tasks;

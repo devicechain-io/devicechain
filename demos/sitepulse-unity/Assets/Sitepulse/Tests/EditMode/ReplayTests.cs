@@ -8,6 +8,9 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Platform;
+using DeviceChain.Demos.Recording;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;
@@ -42,7 +45,16 @@ namespace DeviceChain.Sitepulse.Tests
             return seen;
         }
 
-        static readonly string[] Forbidden = { "DeviceChain.Sitepulse.Platform", "DeviceChain.Sitepulse.DevicePlane", "DeviceChain.Sitepulse.App", "DeviceChain.Sdk", "DeviceChain.Sdk.Unity", "MQTTnet" };
+        // the shared platform and device-plane assemblies are as forbidden as Sitepulse's own: they hold the connection to an instance
+        static readonly string[] Forbidden =
+        {
+            "DeviceChain.Sitepulse.Platform", "DeviceChain.Sitepulse.DevicePlane", "DeviceChain.Sitepulse.App",
+            "DeviceChain.Demos.Platform", "DeviceChain.Demos.DevicePlane",
+            "DeviceChain.Sdk", "DeviceChain.Sdk.Unity", "MQTTnet",
+        };
+
+        // the shared package's runtime folders, found from the project the way the tests find tools/ and ArtSource/
+        static string KitRuntime(string folder) => Path.GetFullPath(Path.Combine(Application.dataPath, "..", "..", "shared", "io.devicechain.demo-platform", "Runtime", folder));
 
         [Test]
         public void TheReplayRootReferencesNothingThatCanTouchTheNetwork()
@@ -52,6 +64,7 @@ namespace DeviceChain.Sitepulse.Tests
             // and what it does reach is the base, the recording format and Unity's own
             CollectionAssert.Contains(closure, "DeviceChain.Sitepulse");
             CollectionAssert.Contains(closure, "DeviceChain.Sitepulse.Recording");
+            CollectionAssert.Contains(closure, "DeviceChain.Demos.Recording");
         }
 
         [Test]
@@ -64,11 +77,31 @@ namespace DeviceChain.Sitepulse.Tests
         }
 
         [Test]
+        public void TheSharedRecordingAndCoreAssembliesAreAsPure()
+        {
+            // the recording line format and the types it is made of live in the shared package; the same two rules hold there
+            foreach (var type in new[] { typeof(RunHeader), typeof(Sample) })
+            {
+                var closure = Closure(type.Assembly);
+                foreach (var name in Forbidden) CollectionAssert.DoesNotContain(closure, name, type.Assembly.GetName().Name + " reaches " + name);
+                var direct = type.Assembly.GetReferencedAssemblies().Select(a => a.Name).ToList();
+                Assert.IsFalse(direct.Any(n => n.StartsWith("UnityEngine", StringComparison.Ordinal)), type.Assembly.GetName().Name + " needs no engine module: " + string.Join(", ", direct));
+            }
+        }
+
+        [Test]
         public void TheAssemblyDefinitionsSayTheSameAsTheBuiltAssemblies()
         {
-            foreach (var dir in new[] { "Replay", "Recording" })
+            var folders = new[]
             {
-                var path = Directory.GetFiles(Path.Combine(Application.dataPath, "Sitepulse", "Scripts", dir), "*.asmdef").Single();
+                Path.Combine(Application.dataPath, "Sitepulse", "Scripts", "Replay"),
+                Path.Combine(Application.dataPath, "Sitepulse", "Scripts", "Recording"),
+                KitRuntime("Recording"),
+                KitRuntime("Core"),
+            };
+            foreach (var dir in folders)
+            {
+                var path = Directory.GetFiles(dir, "*.asmdef").Single();
                 using var doc = JsonDocument.Parse(File.ReadAllText(path));
                 var refs = doc.RootElement.GetProperty("references").EnumerateArray().Select(e => e.GetString()).ToList();
                 foreach (var name in Forbidden) CollectionAssert.DoesNotContain(refs, name, dir + " asmdef");
@@ -91,8 +124,15 @@ namespace DeviceChain.Sitepulse.Tests
         public void NoRecordingOrReplaySourceUsesReflectionJson()
         {
             // IL2CPP strips what reflection needs: these files read and write by hand
-            foreach (var dir in new[] { "Recording", "Replay" })
-                foreach (var f in Directory.GetFiles(Path.Combine(Application.dataPath, "Sitepulse", "Scripts", dir), "*.cs"))
+            var sourceFolders = new[]
+            {
+                Path.Combine(Application.dataPath, "Sitepulse", "Scripts", "Recording"),
+                Path.Combine(Application.dataPath, "Sitepulse", "Scripts", "Replay"),
+                KitRuntime("Recording"),
+                KitRuntime("Core"),
+            };
+            foreach (var dir in sourceFolders)
+                foreach (var f in Directory.GetFiles(dir, "*.cs"))
                 {
                     var text = File.ReadAllText(f);
                     foreach (var banned in new[] { "JsonSerializer.", "JsonUtility", "System.Reflection", "Activator.CreateInstance", "Newtonsoft" })

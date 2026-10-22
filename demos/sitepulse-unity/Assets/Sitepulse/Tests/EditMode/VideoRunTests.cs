@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Platform;
 using NUnit.Framework;

@@ -4,6 +4,8 @@
 using System;
 using System.Collections.Generic;
 using DeviceChain.Demos;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Overlay;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Simulation;
 using DeviceChain.Sitepulse.Tasks;

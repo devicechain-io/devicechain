@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.App;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.Platform;

@@ -7,6 +7,8 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using DeviceChain.Demos.Core;
+using DeviceChain.Demos.Platform;
 using DeviceChain.Sitepulse.Domain;
 using DeviceChain.Sitepulse.DevicePlane;
 using DeviceChain.Sitepulse.Platform;
