@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/devicechain-io/dc-event-sources/model"
+	esproto "github.com/devicechain-io/dc-event-sources/proto"
 	"github.com/devicechain-io/dc-microservice/messaging"
 	"github.com/stretchr/testify/require"
 )
@@ -57,6 +59,182 @@ func TestACaptureSourceEventWithABodyCredentialIsRefusedAndAcked(t *testing.T) {
 			require.NotContains(t, h.failedReasons[0].Error(), bodySecret, "the refusal must not carry the secret")
 			require.NotContains(t, h.failedReasons[0].Error(), "cred-1")
 		})
+	}
+}
+
+// stripHarness is a capture harness with capture.bodyCredential: strip, recording what the
+// strip callback was told.
+type strippedCall struct{ source, tenant, device string }
+
+func newStripHarness(t *testing.T) (*captureHarness, func() []strippedCall) {
+	t.Helper()
+	var mu sync.Mutex
+	var calls []strippedCall
+	h := newCaptureHarnessWith(t, func(s *GatewayJetStreamSource) {
+		s.StripBodyCredential(func(source, tenant, device string, stripped bool) {
+			require.True(t, stripped)
+			mu.Lock()
+			defer mu.Unlock()
+			calls = append(calls, strippedCall{source, tenant, device})
+		})
+	})
+	return h, func() []strippedCall {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]strippedCall(nil), calls...)
+	}
+}
+
+// THE TRANSITIONAL STRIP. Under capture.bodyCredential: strip a body credential on the capture
+// source is accepted with all three members removed, published, acked, marked broker-asserted
+// (identity is the topic), and the bytes that would reach inbound-events hold none of it.
+func TestAStrippedCaptureSourceEventWithABodyCredentialIsAcceptedWithoutIt(t *testing.T) {
+	for name, cred := range credentialBodies {
+		t.Run(name, func(t *testing.T) {
+			h, calls := newStripHarness(t)
+			ack := &recordingAck{}
+			h.source.handle(capturedMsgAt(captureSubject, measurementWith(cred), 1, time.Now(), ack))
+
+			require.True(t, ack.settled(t))
+			require.Equal(t, 1, ack.counts(), "acked exactly once")
+			published, failed, _, _ := h.counts()
+			require.Equal(t, 1, published)
+			require.Zero(t, failed, "a stripped event is not a failed decode")
+
+			events := h.publishedEvents()
+			require.Len(t, events, 1)
+			require.Nil(t, events[0].CredentialType)
+			require.Nil(t, events[0].CredentialId)
+			require.Nil(t, events[0].CredentialSecret)
+			require.True(t, events[0].BrokerAsserted, "a stripped event is still the broker's assertion")
+			require.False(t, credentialInBody(events[0]))
+
+			wire, err := esproto.MarshalUnresolvedEvent(events[0])
+			require.NoError(t, err)
+			require.NotContains(t, string(wire), bodySecret)
+			require.NotContains(t, string(wire), "cred-1")
+
+			got := calls()
+			require.Len(t, got, 1)
+			require.Equal(t, "sensor-001", got[0].device)
+			require.Equal(t, "gw-test", got[0].source)
+		})
+	}
+}
+
+// A strip-mode source with NO credential on the event does not call the strip callback: the
+// counter it feeds counts only events that carried one.
+func TestAStrippedCaptureSourceCountsOnlyEventsThatCarriedACredential(t *testing.T) {
+	h, calls := newStripHarness(t)
+	ack := &recordingAck{}
+	h.source.handle(capturedMsgAt(captureSubject, measurementWith(""), 1, time.Now(), ack))
+	require.True(t, ack.settled(t))
+	require.Len(t, h.publishedEvents(), 1)
+	require.Empty(t, calls())
+}
+
+// IMPERSONATION UNDER STRIP. A body naming a DIFFERENT device than the topic is refused before
+// the strip is reached, credential or not: strip removes a credential from an event the broker
+// asserted, it never turns an event about another device into an accepted one. Nothing is
+// published, the strip callback is not told, and the event goes to failed-decode.
+func TestStripStillRefusesABodyNamingAnotherDevice(t *testing.T) {
+	for name, cred := range credentialBodies {
+		t.Run(name, func(t *testing.T) {
+			h, calls := newStripHarness(t)
+			ack := &recordingAck{}
+			body := strings.Replace(measurementWith(cred), `"device":"sensor-001"`, `"device":"sensor-999"`, 1)
+			h.source.handle(capturedMsgAt(captureSubject, body, 1, time.Now(), ack))
+
+			require.True(t, ack.settled(t))
+			published, failed, _, _ := h.counts()
+			require.Zero(t, published, "an event naming another device must not be published")
+			require.Equal(t, 1, failed)
+			require.Empty(t, h.publishedEvents())
+			require.Empty(t, calls())
+		})
+	}
+}
+
+// The strip callback names the TOPIC's device, which the broker authenticated, so the WARN an
+// operator reads to find a straggler names one even when the body leaves its device out.
+func TestTheStripCallbackNamesTheTopicDevice(t *testing.T) {
+	h, calls := newStripHarness(t)
+	ack := &recordingAck{}
+	body := strings.Replace(measurementWith(credentialBodies["all three"]), `"device":"sensor-001",`, ``, 1)
+	require.NotContains(t, body, `"device"`)
+	h.source.handle(capturedMsgAt(captureSubject, body, 1, time.Now(), ack))
+
+	require.True(t, ack.settled(t))
+	got := calls()
+	require.Len(t, got, 1)
+	require.Equal(t, "acme", got[0].tenant)
+	require.Equal(t, "sensor-001", got[0].device)
+}
+
+// THE DEFAULT. A source nobody told to strip refuses, exactly as before: the policy is opt-in
+// per source and its zero value is the refusal.
+func TestACaptureSourceNotToldToStripStillRefuses(t *testing.T) {
+	h := newCaptureHarness(t)
+	require.False(t, h.source.stripBodyCredential)
+	ack := &recordingAck{}
+	h.source.handle(capturedMsgAt(captureSubject, measurementWith(credentialBodies["all three"]), 1, time.Now(), ack))
+	require.True(t, ack.settled(t))
+	published, failed, _, _ := h.counts()
+	require.Zero(t, published)
+	require.Equal(t, 1, failed)
+}
+
+// THE FORGERY CONTROL. A worker set to strip still keeps a body credential on a message the
+// platform broker did NOT assert (the external broker's source, HTTP): the strip lives inside
+// the asserted branch, and a credential there is the message's only authentication.
+//
+// Negative control: move the strip out of the asserted branch in decode_worker.go and this
+// goes red.
+func TestStripNeverAppliesToAMessageTheBrokerDidNotAssert(t *testing.T) {
+	for name, cred := range credentialBodies {
+		t.Run(name, func(t *testing.T) {
+			in := make(chan rawMessage, 1)
+			var events []*model.UnresolvedEvent
+			var failed []error
+			called := 0
+			w := NewDecodeWorker(1, "src", NewJsonDecoder(map[string]string{}), in, admitAllReadings,
+				func(_, _ string, e *model.UnresolvedEvent, _ interface{}, _ string, done func(error)) {
+					events = append(events, e)
+					done(nil)
+				},
+				func(_ string, _ string, _ []byte, err error) error {
+					failed = append(failed, err)
+					return nil
+				})
+			w.StripBodyCredential = true
+			w.OnBodyCredential = func(string, string, string, bool) { called++ }
+			in <- rawMessage{tenant: "acme", device: "sensor-001", payload: []byte(measurementWith(cred))}
+			close(in)
+			w.Process()
+
+			require.Empty(t, failed)
+			require.Len(t, events, 1)
+			require.True(t, credentialInBody(events[0]), "an unasserted message keeps its credential")
+			require.False(t, events[0].BrokerAsserted)
+			require.Zero(t, called)
+		})
+	}
+}
+
+// Strip is a property of the capture source's constructor surface only: the external-broker
+// MQTT source file never names it, so it cannot be turned on there by a copied line.
+func TestOnlyTheCaptureSourceCanStripABodyCredential(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	require.NoError(t, err)
+	allowed := map[string]bool{"decode_worker.go": true, "gateway_jetstream.go": true}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") || allowed[f] {
+			continue
+		}
+		src, err := os.ReadFile(f)
+		require.NoError(t, err)
+		require.NotContains(t, string(src), "StripBodyCredential", "%s must not strip a body credential", f)
+		require.NotContains(t, string(src), "OnBodyCredential", f)
 	}
 }
 

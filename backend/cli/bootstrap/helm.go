@@ -582,6 +582,8 @@ func helmValues(st *State) map[string]interface{} {
 		mergeFunctionalArea(vals, "lwm2m-ingest", areaConfig)
 	}
 
+	applyMqttBodyCredential(vals, st)
+
 	return vals
 }
 

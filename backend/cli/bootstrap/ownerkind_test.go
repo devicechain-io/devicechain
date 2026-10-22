@@ -304,7 +304,7 @@ func TestAnUpgradeReadsTheClusterOwnedCredentials(t *testing.T) {
 	stubOperatorCheck(t, nil)
 	st, err := hydrateUpgradeState(context.Background(), c, provider,
 		ClusterBinding{KubeContext: "kind-devicechain", Cluster: "devicechain"},
-		UpgradeOptions{Options: Options{Instance: "prod"}})
+		UpgradeOptions{Options: Options{Instance: "prod", MqttBodyCredential: MqttBodyCredentialStrip}})
 	if err != nil {
 		t.Fatalf("the upgrade could not read back what bootstrap wrote: %v", err)
 	}
@@ -313,6 +313,11 @@ func TestAnUpgradeReadsTheClusterOwnedCredentials(t *testing.T) {
 	}
 	if st.Credentials.RDBPassword != "rdb-pw" || st.Credentials.ObjectStoreSecret != "os-secret" {
 		t.Errorf("the cluster-owned credentials were not recovered: %+v", st.Credentials)
+	}
+	// --mqtt-body-credential reaches the state helmValues renders from: without it
+	// `dcctl upgrade --mqtt-body-credential=strip` is accepted and changes nothing.
+	if st.MqttBodyCredential != MqttBodyCredentialStrip {
+		t.Errorf("the upgrade state's MqttBodyCredential = %q, want the option's strip", st.MqttBodyCredential)
 	}
 }
 

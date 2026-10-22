@@ -1468,6 +1468,21 @@ functionalAreas:
     #     capture:
     #       publishWindow: 1024
     #
+    # TRANSITIONAL upgrade bridge for a credential in the body of an MQTT event. A device on
+    # the platform's own broker is already authenticated by it, so a credential in the body
+    # is refused (the default, "refuse"). The release before refuses an MQTT event WITHOUT
+    # one, so firmware cannot be updated first. For the upgrade, "strip" accepts such an
+    # event with the credential removed (counted on total_msg_credential_in_mqtt_body,
+    # warned per device), so the fleet keeps reporting while its firmware rolls. Set it back
+    # to "refuse" when that counter stops rising. A device that sent one has had its
+    # credential stored by the broker: rotate it. Only the platform broker's source honours
+    # this; an external-broker source and HTTP ingest never do. Its removal is planned for
+    # v0.26.0, which is to refuse to start event-sources while it is set. dcctl upgrade --mqtt-body-credential=strip
+    # writes it and carries it across later upgrades.
+    #   config:
+    #     capture:
+    #       bodyCredential: refuse   # refuse | strip
+    #
     # Broker-presence publish window: how many presence transitions a pod keeps awaiting
     # the broker's acknowledgement at once, 1 to 1024 (out of range, 0 included, stops the
     # service). The reader used to wait for each acknowledgement, which held a pod near 88

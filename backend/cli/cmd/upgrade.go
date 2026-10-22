@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"fmt"
+
 	"github.com/devicechain-io/dcctl/bootstrap"
 	"github.com/spf13/cobra"
 )
@@ -17,6 +19,8 @@ var (
 	upgradeEscrowFile  string
 	upgradeEscrowPass  string
 	upgradeSkipInfra   bool
+
+	upgradeMqttBodyCredential string
 )
 
 // upgradeCmd moves a live instance onto a release's version. It began as the half of
@@ -91,6 +95,10 @@ when they are in a terraform.tfvars beside its state
 		if err != nil {
 			return err
 		}
+		mqttBodyCredential, err := bootstrap.ParseMqttBodyCredential(upgradeMqttBodyCredential)
+		if err != nil {
+			return fmt.Errorf("--mqtt-body-credential: %w", err)
+		}
 		opts := bootstrap.UpgradeOptions{
 			Options: bootstrap.Options{
 				Instance:      args[1],
@@ -98,6 +106,8 @@ when they are in a terraform.tfvars beside its state
 				DryRun:        upgradeDryRun,
 				ImageRegistry: upgradeRegistry,
 				ImageVersion:  upgradeVersion,
+
+				MqttBodyCredential: mqttBodyCredential,
 			},
 			EscrowFile:           upgradeEscrowFile,
 			EscrowPassphraseFile: upgradeEscrowPass,
@@ -116,6 +126,7 @@ func init() {
 	upgradeCmd.Flags().BoolVar(&upgradeDryRun, "dry-run", false, "print what would happen without changing anything")
 	upgradeCmd.Flags().StringVar(&upgradeEscrowFile, "escrow-file", "", "where this instance's root-key escrow artifact lives (default ~/.devicechain/escrow/<instance>-rootkey.escrow). The upgrade checks it still protects the key the instance is running on")
 	upgradeCmd.Flags().BoolVar(&upgradeSkipInfra, "skip-infrastructure", false, "move only the services: leave this instance's message broker and event store on the configuration they were built with")
+	upgradeCmd.Flags().StringVar(&upgradeMqttBodyCredential, "mqtt-body-credential", "", mqttBodyCredentialUsage)
 	upgradeCmd.Flags().StringVar(&upgradeEscrowPass, "escrow-passphrase-file", "", "read the escrow passphrase from this file (or $"+bootstrap.EscrowPassphraseEnv+"). Only needed to WRITE an escrow for an instance that has none — checking an existing one needs no passphrase")
 
 	rootCmd.AddCommand(upgradeCmd)

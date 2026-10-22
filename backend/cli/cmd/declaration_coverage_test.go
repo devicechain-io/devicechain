@@ -100,6 +100,14 @@ var dispositions = map[string]disposition{
 	"restore-tsdb-from": excluded,
 	"restore-tsdb-at":   excluded,
 
+	// mqtt-body-credential is a TRANSITIONAL upgrade bridge (event-sources'
+	// capture.bodyCredential, removed in v0.26.0), not a property of the instance's shape.
+	// It is deliberately not a declaration field: it is carried upgrade to upgrade through
+	// the Helm release's values (carriedValuePaths), and the running pods report it on the
+	// capture_body_credential_strip gauge. A permanent CR field for a setting with a
+	// scheduled end would outlive the thing it configures.
+	"mqtt-body-credential": excluded,
+
 	// --- known gaps ---
 	//
 	// lwm2m-identities is two halves too. The pre-shared keys are secretHalf. The

@@ -153,6 +153,11 @@ type GatewayJetStreamSource struct {
 	// (see ReadingGate). Never nil (the constructor refuses one).
 	readings ReadingGate
 
+	// stripBodyCredential and onBodyCredential carry capture.bodyCredential: strip to this
+	// source's workers; see StripBodyCredential. Only this source sets them.
+	stripBodyCredential bool
+	onBodyCredential    func(source, tenant, device string, stripped bool)
+
 	// fromStore makes this the source over the MQTT gateway's message store rather than the
 	// capture stream; see UseMessageStore.
 	fromStore bool
@@ -218,6 +223,22 @@ func (es *GatewayJetStreamSource) SetReader(reader messaging.MessageReader) {
 // to reach inbound-events. Call it before Start.
 func (es *GatewayJetStreamSource) UseMessageStore() {
 	es.fromStore = true
+}
+
+// StripBodyCredential makes this source accept an event that carries a credential in its body
+// with the credential removed, instead of refusing it, and calls onStripped for each one. It
+// is the transitional capture.bodyCredential: strip, and it exists on this source ALONE: the
+// external-broker MQTT source and HTTP have no equivalent and cannot be given one, because
+// only this source reads messages the platform's own broker authenticated. Call before Start.
+func (es *GatewayJetStreamSource) StripBodyCredential(onStripped func(source, tenant, device string, stripped bool)) {
+	es.stripBodyCredential = true
+	es.onBodyCredential = onStripped
+}
+
+// StrippingBodyCredential reports whether StripBodyCredential was called on this source. Read
+// by main's wiring test, which must see what buildEventSources configured.
+func (es *GatewayJetStreamSource) StrippingBodyCredential() bool {
+	return es.stripBodyCredential && es.onBodyCredential != nil
 }
 
 // SetWriter supplies the ordered writer to inbound-events. Like the reader it exists only
@@ -310,6 +331,8 @@ func (es *GatewayJetStreamSource) startPipeline(workers int) {
 	es.workers = make([]*DecodeWorker, 0, workers)
 	for w := 1; w <= workers; w++ {
 		worker := NewDecodeWorker(w, es.Id, es.Decoder, messages, es.readings, submit, es.failed)
+		worker.StripBodyCredential = es.stripBodyCredential
+		worker.OnBodyCredential = es.onBodyCredential
 		es.workers = append(es.workers, worker)
 		running.Add(1)
 		go func() {
