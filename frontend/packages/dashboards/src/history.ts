@@ -89,6 +89,7 @@ export async function fetchWidgetHistory(
         name: b.name,
         value: b.avg,
         classifier: null,
+        bucketSeconds: window.intervalSeconds,
       }))
       .sort((a, b) => (a.occurredTime! < b.occurredTime! ? -1 : 1));
   } catch (err) {

@@ -205,6 +205,35 @@ shows one device as *Online* or *Offline* with the time it was last seen, and an
 rings a group by how many of its devices are online, offline or have no status yet. They read the
 platform's device status, not the devices' readings.
 
+A history table lists one device's stored history as rows: a row per time bucket over the dashboard's
+time range, a column per measurement. Every figure is the **average** of the readings in that bucket,
+not a reading, and the table says so under the rows (*avg per 5m*); the time is the start of the
+bucket. Use it to read the numbers behind a chart. Its settings are described under
+[Configuring a widget](#configuring-a-widget).
+
+### Downloading a widget's data {#downloading-a-widgets-data}
+
+A widget with data to hand over shows a download button at the right of its title bar. Open it to
+choose **Download CSV** (the history table, the timeseries chart and the fleet table) or **Download
+image (PNG)** (the charts drawn on a canvas: the timeseries chart, the gauge and the compass).
+
+- The file holds what the widget is showing, not a new query: the same time range and the same time
+  bucket. The file name says so. A history table over the last hour, in 5-minute buckets, saves as
+  `Pump-3-history-pump-3-avg-per-5m-20261022T1300Z-20261022T1400Z.csv`: the title, the device, the
+  bucket and the window it covers, in UTC.
+- The history table's file holds every row, not only the page on screen. The timeseries chart's file
+  has a row per point, with a **Basis** column that says whether a point is a bucket average (*avg
+  per 1m*) or a reading that arrived live. The fleet table's file has a row per device, in the order
+  on screen, with its latest reading and the time it was taken; a cell with no reading is empty.
+- Units are in the headings. Times are ISO 8601 in UTC, for example `2026-10-22T14:00:00.000Z`.
+  Values are numbers, rounded as the widget shows them.
+- The CSV is UTF-8 with a byte-order mark, so Excel reads units such as °C correctly. A program that
+  reads the raw bytes sees that mark at the start of the first heading.
+- Text that a spreadsheet could read as a formula, a device or measurement name starting with `=`,
+  `+`, `-` or `@`, is written with a leading apostrophe, so opening the file never runs anything.
+- The button belongs to the title bar. A widget with no title and no subject line, and a dashboard
+  that hides widget headings, have no button.
+
 ## Editing on the canvas
 
 **Edit** turns the dashboard into a canvas. The buttons change to **Undo**, **Redo**, **Add
@@ -268,7 +297,7 @@ draft only. Viewers see nothing new until you publish a version.
 
 | Group | Widgets |
 |---|---|
-| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut |
+| Telemetry | Timeseries chart, Latest card, Gauge, Table, Linear gauge, Level gauge, Battery, Status light, Signal bars, Compass, Progress ring, Stat card, Bar chart, Pie chart, Fleet table, Fleet count, Device status, Online doughnut, History table |
 | Static | Label, Image |
 | Alarms | Alarm table, Alarm count, Alarm severity |
 | Control | Command button, Command slider, Command toggle |
@@ -444,6 +473,22 @@ The settings depend on the widget. Common ones:
   not be read is noted apart ("1 could not be read") and left out of the ring. It reads the first
   500 devices of a group and says "Showing 500 of N devices" when the group is larger. **Stale
   after** marks the ring stale once the group's status has not been read for that many seconds.
+- **History table**: one device's stored history as a table. It has a row per time bucket, newest
+  first, and a column per measurement, each cell the average of that measurement's readings in the
+  bucket. It follows the dashboard's time range, or its own **Time span** when you set one, and the
+  bucket is the width the timeseries chart would use for that span (1 minute for an hour, 6 minutes
+  for a day), named under the rows as *avg per 6m*. The time is the start of the bucket, and a
+  measurement with no readings in a bucket shows a dash, not the last value. There is no live
+  tail: the table reads again when each bucket ends, and the newest row is a bucket that is still
+  filling. **Columns** chooses which measurements to list, in order, with a heading, unit and
+  precision for each; with none it lists the data source's measurements, or every measurement the
+  device reported in the range. **Oldest first** reverses the order and **Rows per page** sets the
+  page length (5 to 100, default 10). **Stale after** marks the table stale once its history has
+  not been read for that many seconds, which happens only when reading it keeps failing; the
+  table keeps showing what it last read. Bound to a group it says so, since a table of one
+  device's history would mix the group's readings. A viewer who is not allowed to read
+  the history sees a note that they do not have access to this data. Its download is
+  described under [Downloading a widget's data](#downloading-a-widgets-data).
 
 Problems with a widget's options, such as an option it does not read, a required one left empty or
 a value out of range, are listed in **Version history**. **Publish version** stays disabled until

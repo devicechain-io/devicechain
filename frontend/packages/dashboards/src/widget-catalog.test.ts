@@ -253,6 +253,24 @@ describe('validateWidgetDescriptor', () => {
     expect(at({ const: true }, 'alarm')).toContain('binding.presence');
   });
 
+  it('checks the history binding that makes a measurement widget read stored buckets instead of the live feed', () => {
+    const at = (history: unknown, channel = 'measurement') =>
+      issuesOf({
+        ...valid(),
+        channel,
+        datasource: { mode: 'required', selectors: ['device'] },
+        binding: channel === 'alarm' ? { pageSize: { const: 1 }, history } : { history },
+      }).map((i) => i.path);
+    expect(at({ const: true })).toEqual([]);
+    // A constant switch and nothing else.
+    expect(at({ const: false })).toEqual(['binding.history']);
+    expect(at({ option: 'state', equals: 'ACTIVE' })).toEqual(['binding.history']);
+    expect(at({ const: true, option: 'state' })).toEqual(['binding.history']);
+    expect(at(true)).toEqual(['binding.history']);
+    // Only the measurement channel reads history in buckets.
+    expect(at({ const: true }, 'alarm')).toContain('binding.history');
+  });
+
   it('checks that the deviceType binding names a declared string option', () => {
     const at = (deviceType: unknown, channel = 'alarm') =>
       issuesOf({

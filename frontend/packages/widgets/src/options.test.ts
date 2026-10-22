@@ -83,6 +83,7 @@ const WIDGET_SOURCES: Record<WidgetType, string> = {
   'fleet-count': 'widgets/fleet-count.tsx',
   'device-status': 'widgets/device-status.tsx',
   'online-doughnut': 'widgets/online-doughnut.tsx',
+  'history-table': 'widgets/history-table.tsx',
 };
 
 // Files that read options on behalf of MORE THAN ONE widget type — the channel wrapper,
@@ -453,6 +454,15 @@ const VALID: { [T in WidgetType]: WidgetOptions<T> } = {
   },
   'device-status': { title: 'Pump 3', staleAfterSeconds: 900 },
   'online-doughnut': { title: 'Site connectivity', staleAfterSeconds: 3600 },
+  'history-table': {
+    title: 'Pump 3 history',
+    columns: [{ measurement: 'temperature', label: 'Temp', unit: '°C', precision: 1 }],
+    precision: 2,
+    oldestFirst: true,
+    pageSize: 25,
+    staleAfterSeconds: 900,
+    windowSeconds: 21600,
+  },
 };
 
 describe('validateWidgetOptions', () => {

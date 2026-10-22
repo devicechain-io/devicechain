@@ -148,9 +148,12 @@ describe('DashboardHub.bucketMeasurements, asked the same question twice', () =>
 });
 
 describe('SyntheticDataSource.bucketMeasurements', () => {
+  // A stat card's figure asks for the window as ONE bucket: the interval is the window's width.
+  const ONE_BUCKET = { ...WINDOW, intervalSeconds: 3600 };
+
   it('answers with one bucket per measurement whose extremes the waveform actually reached', async () => {
     const source = new SyntheticDataSource({ generator: 'sine', min: 10, max: 30 });
-    const out = await source.bucketMeasurements({ kind: 'unbound', measurements: ['temperature', 'humidity'] }, WINDOW);
+    const out = await source.bucketMeasurements({ kind: 'unbound', measurements: ['temperature', 'humidity'] }, ONE_BUCKET);
     expect(out.map((b) => b.name)).toEqual(['temperature', 'humidity']);
     for (const b of out) {
       expect(b.count).toBe(120);
@@ -164,7 +167,7 @@ describe('SyntheticDataSource.bucketMeasurements', () => {
 
   it('is not the average pretending to be an extreme: a sine over a full period spans most of its range', async () => {
     const source = new SyntheticDataSource({ generator: 'sine', min: 0, max: 100, periodMs: 3_600_000 });
-    const [b] = await source.bucketMeasurements({ kind: 'unbound', measurements: ['t'] }, WINDOW);
+    const [b] = await source.bucketMeasurements({ kind: 'unbound', measurements: ['t'] }, ONE_BUCKET);
     expect(b.max! - b.min!).toBeGreaterThan(90);
   });
 });

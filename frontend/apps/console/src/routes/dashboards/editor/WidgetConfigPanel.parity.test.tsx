@@ -99,6 +99,8 @@ const LEGACY_LABEL: Record<string, string> = {
   markCommands: 'widgetLabelMarkCommands',
   // Appended with the multi-device compare chart.
   maxSeries: 'widgetLabelMaxSeries',
+  // Appended with the history table.
+  oldestFirst: 'widgetLabelOldestFirst',
 };
 
 const LEGACY_HINT: Record<string, string | null> = {
@@ -149,6 +151,7 @@ const LEGACY_HINT: Record<string, string | null> = {
   markAlarmsScope: 'widgetHintMarkAlarmsScope',
   markCommands: 'widgetHintMarkCommands',
   maxSeries: 'widgetHintMaxSeries',
+  oldestFirst: null,
 };
 
 const LEGACY_HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
@@ -229,6 +232,8 @@ const LEGACY_ENUM_PLACEHOLDER: Record<string, string> = {
 const LABEL_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { groupBy: 'widgetLabelAlarmGroupBy' },
   'timeseries-chart': { groupBy: 'widgetLabelSeriesBy' },
+  // The history table pages rows, not devices.
+  'history-table': { pageSize: 'widgetLabelRowsPerPage' },
 };
 const HINT_OVERRIDES: Partial<Record<WidgetType, Record<string, string>>> = {
   'alarm-table': { groupBy: 'widgetHintAlarmGroupBy' },

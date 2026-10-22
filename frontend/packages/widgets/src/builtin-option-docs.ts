@@ -75,6 +75,7 @@ export const OPTION_DOCS: Readonly<Record<string, string>> = {
   ageLagSeconds: "Show a reading's age under it only when the reading is at least this many seconds older than the newest reading in the table (or stale). Unset shows every reading's age.",
   sortBy: 'The measurement the table is ordered by. Blank orders by device name.',
   sortDescending: 'Largest first.',
+  oldestFirst: 'List the oldest bucket first. Unset lists the newest first.',
   pageSize: 'Devices per page. Default 20.',
   maxSeries: 'Most lines drawn when the chart shows one line per device. Default 5, at most 12. Each line costs one stored-history read, and the chart colours repeat after five; a group larger than this shows the first devices of the group and says how many it left out.',
   show: 'What to count: devices in an abnormal band of the measurement (default), or all devices.',
@@ -124,6 +125,12 @@ export const OPTION_DOC_OVERRIDES: Readonly<Record<string, Readonly<Record<strin
   },
   'online-doughnut': {
     staleAfterSeconds: 'Marks the ring stale once the status of its devices has not been read for longer than this many seconds (it is re-read every 15 seconds, so only reads that keep failing make it stale). Unset, the age is shown and nothing is marked stale.',
+  },
+  'history-table': {
+    columns: 'Which measurements are columns, in order, with a heading, unit and precision each. With none, the columns are the datasource’s measurements (or, when it names none, every measurement the device reported in the range). Every figure is the average of the readings in a time bucket.',
+    precision: 'Decimal places to round displayed averages to, for a column that sets none. Unset rounds to at most 3 decimals (4 significant digits under 1). The CSV export is rounded the same way.',
+    pageSize: 'Rows per page. Default 10. The CSV export holds every row, not just the page.',
+    staleAfterSeconds: 'Marks the table stale once its history has not been read for longer than this many seconds (it is re-read at the end of each time bucket, so only reads that keep failing make it stale). Unset, the age is shown and nothing is marked stale.',
   },
   'fleet-count': {
     measurement: 'The measurement whose bands flag a device. Defaults to the first the datasource selects.',

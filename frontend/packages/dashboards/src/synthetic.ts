@@ -65,6 +65,9 @@ export interface SyntheticDataSourceConfig {
 // gives cards/gauges/charts something to render in preview.
 const DEFAULT_NAME = 'value';
 
+// The most buckets one preview read returns per measurement (the store's own ceiling is far higher).
+const MAX_PREVIEW_BUCKETS = 500;
+
 // A canonical spread of synthetic alarms (one per severity, mixed state/ack) so an
 // author previewing an alarm table/count sees populated, representative rows before any
 // real alarm has raised. The filter on the subscription is applied so the preview
@@ -420,6 +423,28 @@ export class SyntheticDataSource implements WidgetDataSource, WidgetActions {
     const names = datasource.measurements.length > 0 ? datasource.measurements : [DEFAULT_NAME];
     const from = Date.parse(window.startTime);
     const to = Date.parse(window.endTime);
+    // A window asked in buckets narrower than itself (a history table, a trend) gets one bucket per
+    // interval, aligned on the epoch as the store's are; one as wide as the window gets the single
+    // bucket below.
+    const width = window.intervalSeconds * 1000;
+    if (width > 0 && width < to - from) {
+      // Past the cap the OLDEST buckets go: a table lists newest first and a trend ends at now, so the
+      // preview keeps the end of the window, as the screen does.
+      const aligned = Math.floor(from / width) * width;
+      const total = Math.ceil((to - aligned) / width);
+      const count = Math.min(total, MAX_PREVIEW_BUCKETS);
+      const first = aligned + (total - count) * width;
+      return names.flatMap((name) => {
+        const walk = new Map<string, number>();
+        return Array.from({ length: count }, (_, i) => {
+          const start = first + i * width;
+          // Six instants inside the bucket, never the next bucket's start.
+          const values = Array.from({ length: 6 }, (_v, j) => this.valueFor(name, start + (width * j) / 6, walk));
+          const sum = values.reduce((a, v) => a + v, 0);
+          return { bucketStart: new Date(start).toISOString(), name, avg: sum / values.length, min: Math.min(...values), max: Math.max(...values), sum, count: values.length };
+        });
+      });
+    }
     return names.map((name) => {
       const walk = new Map<string, number>();
       const values = Array.from({ length: 120 }, (_, i) => this.valueFor(name, from + ((to - from) * i) / 119, walk));

@@ -58,7 +58,7 @@ const SELECTOR_KINDS = ['device', 'anchor', 'slot'];
 
 // The keys each channel's binding policy may carry, mirroring ChannelBindingPolicy.
 const BINDING_KEYS: Record<WidgetChannel, readonly string[]> = {
-  measurement: ['window', 'windowSeconds', 'members', 'presence'],
+  measurement: ['window', 'windowSeconds', 'members', 'presence', 'history'],
   alarm: ['pageSize', 'state', 'severity', 'acknowledged', 'groupBy', 'countBySeverity', 'deviceType'],
   control: ['pageSize'],
   location: [],
@@ -460,11 +460,14 @@ function checkBinding(binding: unknown, channel: WidgetChannel, specs: WidgetOpt
       }
     }
   };
-  // `presence` is a constant switch and nothing else: `{ const: true }`. It makes a measurement widget
-  // read its devices' connectivity (online or offline, last seen) in place of their readings.
-  const presence = binding.presence;
-  if (presence !== undefined && !(isRecord(presence) && presence.const === true && Object.keys(presence).length === 1)) {
-    add('binding.presence', 'must be { const: true }');
+  // `presence` and `history` are constant switches and nothing else: `{ const: true }`. `presence` makes a
+  // measurement widget read its devices' connectivity (online or offline, last seen) in place of their
+  // readings; `history` makes it read one device's stored history in time buckets, not the live feed.
+  for (const key of ['presence', 'history'] as const) {
+    const flag = binding[key];
+    if (flag !== undefined && !(isRecord(flag) && flag.const === true && Object.keys(flag).length === 1)) {
+      add(`binding.${key}`, 'must be { const: true }');
+    }
   }
   modeBinding('members');
   modeBinding('groupBy');

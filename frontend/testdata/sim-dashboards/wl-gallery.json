@@ -1463,6 +1463,42 @@
         "title": "Sensors online"
       },
       "type": "online-doughnut"
+    },
+    {
+      "datasource": {
+        "kind": "slot",
+        "measurements": [],
+        "slot": "sensor"
+      },
+      "id": "wl-history-table",
+      "layout": {
+        "base": {
+          "col": 0,
+          "cols": 8,
+          "mode": "grid",
+          "row": 61,
+          "rows": 5
+        }
+      },
+      "options": {
+        "columns": [
+          {
+            "label": "Temperature",
+            "measurement": "temperature",
+            "precision": 1,
+            "unit": "C"
+          },
+          {
+            "label": "Humidity",
+            "measurement": "humidity",
+            "precision": 0,
+            "unit": "%"
+          }
+        ],
+        "pageSize": 8,
+        "title": "Sensor history"
+      },
+      "type": "history-table"
     }
   ]
 }

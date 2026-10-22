@@ -53,6 +53,7 @@ export {
 // engine helpers are NOT here -- they are on the `/echarts` subpath, so importing this root
 // never pulls Apache ECharts (nor MapLibre, nor the built-in catalog).
 export { WidgetFrame, type WidgetFrameProps } from './frame';
+export type { WidgetExportCell, WidgetExportResult, WidgetExportTable } from './widget-export';
 export { css, type ThemeVar } from './theme';
 // The curve's constants and the pure sticky-length step stay internal: a widget reaches them
 // through fitValueFont / fitValueFontCss / useStickyChars, so the curve can be retuned.

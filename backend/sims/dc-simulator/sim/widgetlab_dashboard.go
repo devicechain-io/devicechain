@@ -444,6 +444,7 @@ func buildWidgetlabGallery(devices []DeviceInstance) (string, error) {
 	def.Widgets = append(def.Widgets, widgetlabFleet()...)
 	def.Widgets = append(def.Widgets, widgetlabAlarmSeverity(onZone)...)
 	def.Widgets = append(def.Widgets, widgetlabPresence(onSensor(), onZone)...)
+	def.Widgets = append(def.Widgets, widgetlabHistory(onSensor())...)
 
 	raw, err := json.Marshal(def)
 	if err != nil {
@@ -787,6 +788,32 @@ func widgetlabPresence(onSensor, onZone widgetSubject) []dashboardWidget {
 	return []dashboardWidget{
 		buildDeviceStatusWidget("wl-device-status", box{0, 3, r, 3}, onSensor, "Sensor status", 600),
 		buildOnlineDoughnutWidget("wl-online-doughnut", box{3, 4, r, 4}, onZone, "Sensors online"),
+	}
+}
+
+// widgetlabHistoryRow is the first row of the history block (rows 61-65), under the presence block
+// that ends at row 60.
+const widgetlabHistoryRow = 61
+
+// buildHistoryTableWidget lists one device's stored history: a row per time bucket over the board's
+// span, each cell the bucket's average. The columns name the sensor's measurements with a unit each.
+func buildHistoryTableWidget(id string, b box, s widgetSubject, title string, columns []map[string]any, pageSize int) dashboardWidget {
+	return dashboardWidget{
+		Id: id, Type: "history-table", Layout: b.layout(), Datasource: s.datasource(),
+		Options: map[string]any{"title": title, "columns": columns, "pageSize": pageSize},
+	}
+}
+
+// widgetlabHistory places the history table over the sensor. It selects no measurements of its own:
+// the columns say which to list.
+func widgetlabHistory(onSensor widgetSubject) []dashboardWidget {
+	const r = widgetlabHistoryRow
+	return []dashboardWidget{
+		buildHistoryTableWidget("wl-history-table", box{0, 8, r, 5}, onSensor, "Sensor history",
+			[]map[string]any{
+				{"measurement": WidgetlabTemperatureKey, "label": "Temperature", "unit": "C", "precision": 1},
+				{"measurement": WidgetlabHumidityKey, "label": "Humidity", "unit": "%", "precision": 0},
+			}, 8),
 	}
 }
 

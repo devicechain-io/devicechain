@@ -98,6 +98,21 @@ for the built-in widgets.
 Trusted widget code runs with the host page's privileges. The declarations in a descriptor
 shape the API; they are not a security boundary.
 
+## Offering a download from the frame
+
+A widget can let the viewer save the data it shows. Pass `exportRows` to `WidgetFrame`: a function
+that returns a `WidgetExportTable` (a file name without its extension, headings, and rows of
+strings, numbers, booleans or nulls), or a promise of one. The frame then draws a download button
+in its title bar, and **Download CSV** calls your function when the viewer picks it, so the table is
+built on demand from what the widget is showing. The prop is optional and feature-detected: a widget
+that passes none is unchanged, and the frame draws no button when its title bar is hidden.
+
+The CSV encoder is the frame's: RFC 4180 quoting, a leading apostrophe on a text cell that begins with
+`=`, `+`, `-`, `@`, tab or carriage return (so a spreadsheet never runs it as a formula), and UTF-8 with
+a byte-order mark so Excel reads units such as `°C`. Put the unit in the heading, write instants as
+ISO 8601 with a zone, and say in the file name what the file covers (the span and the bucket on
+screen). A chart drawn with `<EChart>` also gets **Download image (PNG)** with no code of yours.
+
 ## Upgrading from 0.21
 
 0.22 removes no export. A TypeScript build can notice three changes:

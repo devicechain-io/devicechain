@@ -37,8 +37,26 @@ import type { EventMarkersView } from '../event-markers-types';
 type TimeSeriesProps = WidgetProps & { markers?: EventMarkersView };
 
 export function TimeSeriesChart({ widget, data, markers }: TimeSeriesProps) {
+  const range = useWidgetTimeRange();
+  const pinned = optNumber(widget.options, 'windowSeconds');
+  const spanSeconds = isValidSpanSeconds(pinned) ? pinned : range?.spanSeconds;
+  // The frame's "Download CSV": the samples on screen, nothing re-read. The builder is its own chunk, so
+  // the chart carries only this closure.
+  const exportRows = () => {
+    const device = widget.datasource?.kind === 'device' ? widget.datasource.deviceToken : undefined;
+    return import('../export-rows').then((m) =>
+      m.samplesExport({
+        subject: optString(widget.options, 'title') ?? device ?? 'chart',
+        samples: data.samples,
+        unit: optString(widget.options, 'unit'),
+        precision: optNumber(widget.options, 'precision'),
+        seriesIs: 'measurement',
+        spanSeconds,
+      }),
+    );
+  };
   return (
-    <WidgetFrame title={optString(widget.options, 'title')} flush>
+    <WidgetFrame title={optString(widget.options, 'title')} flush exportRows={exportRows}>
       <TimeSeriesBody widget={widget} data={data} markers={markers} />
     </WidgetFrame>
   );

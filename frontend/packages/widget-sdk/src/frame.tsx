@@ -18,9 +18,10 @@
 // a board gets the card.
 
 import { resolveFrame, sameLabel, type FrameRadius, type ResolvedFrame, type SpaceTokenName } from '@devicechain/dashboards';
-import { useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
 import {
+  WidgetImageRegistrarProvider,
   useWidgetDensityScale,
   useWidgetFrameStyle,
   useWidgetFreshness,
@@ -32,6 +33,8 @@ import { useElementSize } from './hooks';
 import { css } from './theme';
 import { makeWidgetScale, type WidgetScale } from './scale';
 import { fontVar, spaceVar, type SpaceToken } from './tokens';
+import type { WidgetExportResult } from './widget-export';
+import type { WidgetImageSource } from './context';
 
 // Below either of these (px, content box) the age readout is dropped so a small widget keeps
 // its room for the value; a stale widget still shows its badge, in the corner.
@@ -46,6 +49,9 @@ export const FRAME_TITLE_MIN_HEIGHT = 76;
 
 // The content column's size is quantised to this many px before it reaches a widget.
 const BODY_SIZE_STEP = 4;
+
+// The export button's side (px); the title bar reserves it beside the title.
+const EXPORT_BUTTON_SIZE = 24;
 
 // The card a widget gets when no board says otherwise.
 const DEFAULT_FRAME: ResolvedFrame = resolveFrame(undefined, undefined);
@@ -81,6 +87,13 @@ export interface WidgetFrameProps {
   // must pass it: on a device reporting several measurements, the newest is often not the one
   // on screen, and the age of another measurement would make a frozen value look live.
   sampleTime?: string | null;
+  // Makes the data the widget shows downloadable: the frame draws an export button in its title bar,
+  // and "Download CSV" calls this when the viewer picks it, so a table is built only on demand, from
+  // what the widget is showing at that moment (the span and the bucket on screen, not a new
+  // question). Return nothing to export nothing. OPTIONAL and feature-detected: a widget that passes
+  // none gets no CSV item (a widget drawing an <EChart> still gets "Download image"), and a frame
+  // whose title bar is hidden (a board that hides headers, or a very short widget) draws no button.
+  exportRows?: () => WidgetExportResult;
 }
 
 // The epoch-ms time of a sample timestamp, or undefined when it has none or is unparseable.
@@ -90,7 +103,7 @@ function parseSampleTime(time: string | null): number | undefined {
   return Number.isNaN(at) ? undefined : at;
 }
 
-export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampleTime }: WidgetFrameProps) {
+export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampleTime, exportRows }: WidgetFrameProps) {
   const subject = useWidgetSubject();
   // A subtitle that only repeats the title says nothing (a card titled by its device's
   // external id, under a subject line naming the same device).
@@ -103,6 +116,10 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
   const at = freshness === undefined ? undefined : sampleTime === undefined ? freshness.at : parseSampleTime(sampleTime);
   const reading = useFreshness(at, freshness?.staleAfterSeconds);
   const [rootRef, size] = useElementSize<HTMLDivElement>();
+  // A chart inside registers a way to read its image (see WidgetImageRegistrarProvider); the frame
+  // offers the export menu while there is a table to download or an image to save.
+  const [image, setImage] = useState<{ source: WidgetImageSource }>();
+  const registerImage = useCallback((source: WidgetImageSource | undefined) => setImage(source ? { source } : undefined), []);
   const [columnRef, columnSize] = useElementSize<HTMLDivElement>(BODY_SIZE_STEP);
   const scale = useWidgetDensityScale();
   const frame = useWidgetFrameStyle() ?? DEFAULT_FRAME;
@@ -116,6 +133,8 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
   const sub = showSub ? dupSub : undefined;
   const shownTitle = showTitle ? title : undefined;
   const widgetScale = useMemo(() => makeWidgetScale(columnSize, scale), [columnSize, scale]);
+  // The export button lives in the title bar, so it goes with the title bar.
+  const exportable = Boolean(shownTitle || sub) && (exportRows !== undefined || image !== undefined);
   const compact = size.width > 0 && (size.width < FRESHNESS_MIN_WIDTH || size.height < FRESHNESS_MIN_HEIGHT);
   const stale = reading?.stale === true;
 
@@ -142,7 +161,10 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
       {shownTitle || sub ? (
         <div
           style={{
+            position: 'relative',
             padding: `${spaceVar(2)} ${spaceVar(3)}`,
+            // Room for the export button, which sits at the bar's right edge.
+            ...(exportable ? { paddingRight: `calc(${spaceVar(3)} + ${EXPORT_BUTTON_SIZE}px)` } : null),
             borderBottom: rule,
           }}
         >
@@ -178,6 +200,7 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
               {sub}
             </div>
           ) : null}
+          {exportable ? <ExportSlot exportRows={exportRows} image={image?.source} title={title} frameElement={() => rootRef.current} /> : null}
         </div>
       ) : null}
       {/* The body clips: the card root already stops a widget painting outside the card, and
@@ -211,7 +234,9 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
           }}
         >
           <WidgetBodySizeProvider size={columnSize}>
-            {typeof children === 'function' ? children(widgetScale) : children}
+            <WidgetImageRegistrarProvider register={registerImage}>
+              {typeof children === 'function' ? children(widgetScale) : children}
+            </WidgetImageRegistrarProvider>
           </WidgetBodySizeProvider>
         </div>
       </div>
@@ -229,5 +254,48 @@ export function WidgetFrame({ title, subtitle, children, bodyStyle, flush, sampl
         </div>
       ) : null}
     </div>
+  );
+}
+
+// ---- The export button ---------------------------------------------------------------------
+//
+// One small button at the right of the title bar that opens the export menu. The frame draws only the
+// box it sits in (its room is reserved, so nothing moves when it arrives); the button, the menu, the CSV
+// encoder and the image download are a chunk of their own (export-menu.ts), fetched by a frame that has
+// something to export, so a board's first download holds none of them. A chunk that does not arrive is
+// a missing convenience, not a broken widget: no button, and the next mount tries again.
+
+interface ExportSlotProps {
+  exportRows: (() => WidgetExportResult) | undefined;
+  image: WidgetImageSource | undefined;
+  title: string | undefined;
+  frameElement: () => Element | null;
+}
+
+function ExportSlot(props: ExportSlotProps) {
+  const host = useRef<HTMLDivElement>(null);
+  // What the menu reads when it is opened: the widget as it is then, not as it was at mount.
+  const latest = useRef(props);
+  latest.current = props;
+  useEffect(() => {
+    let live = true;
+    let unmount: (() => void) | undefined;
+    import('./export-menu').then(
+      (m) => {
+        if (live && host.current) unmount = m.mountExportButton(host.current, EXPORT_BUTTON_SIZE, () => latest.current);
+      },
+      () => undefined,
+    );
+    return () => {
+      live = false;
+      unmount?.();
+    };
+  }, []);
+  return (
+    <div
+      ref={host}
+      data-widget-export=""
+      style={{ position: 'absolute', top: 0, right: 0, bottom: 0, display: 'flex', alignItems: 'center', paddingRight: 4 }}
+    />
   );
 }

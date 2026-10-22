@@ -100,6 +100,13 @@ export function presenceMode(descriptor: WidgetDescriptor): boolean {
   return (policy(descriptor).presence as { const?: boolean } | undefined)?.const === true;
 }
 
+// Whether a measurement widget reads one device's STORED HISTORY in time buckets rather than the live
+// feed (`binding.history`). The feed that reads it is its own chunk (history-feed.tsx), loaded only for
+// such a widget.
+export function historyMode(descriptor: WidgetDescriptor): boolean {
+  return (policy(descriptor).history as { const?: boolean } | undefined)?.const === true;
+}
+
 // The acknowledged filter is stored as 'true' / 'false' (or absent = any).
 function parseAcknowledged(value: string | undefined): boolean | undefined {
   if (value === 'true') return true;

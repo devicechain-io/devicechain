@@ -64,7 +64,7 @@ export function memberLabels(members: readonly MemberRef[]): Map<string, string>
 
 // One member's stored history as samples: a point per bucket that has an average, stamped at the
 // bucket's start, oldest first. A bucket with no readings has no average and no point.
-export function bucketSamples(token: string, measurement: string, buckets: readonly MeasurementBucket[]): MeasurementSample[] {
+export function bucketSamples(token: string, measurement: string, buckets: readonly MeasurementBucket[], bucketSeconds?: number): MeasurementSample[] {
   return buckets
     .filter((b) => b.name === measurement && b.avg != null)
     .map((b) => ({
@@ -75,6 +75,8 @@ export function bucketSamples(token: string, measurement: string, buckets: reado
       name: b.name,
       value: b.avg,
       classifier: null,
+      // A stored point is a bucket's average, and says how wide the bucket was (the export tells it from a reading).
+      ...(bucketSeconds !== undefined ? { bucketSeconds } : {}),
     }))
     .sort((a, b) => Date.parse(a.occurredTime as string) - Date.parse(b.occurredTime as string));
 }

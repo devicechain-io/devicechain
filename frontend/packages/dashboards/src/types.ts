@@ -185,6 +185,7 @@ export const WIDGET_TYPES = [
   'fleet-count',
   'device-status',
   'online-doughnut',
+  'history-table',
 ] as const;
 
 export type WidgetType = (typeof WIDGET_TYPES)[number];
@@ -660,6 +661,10 @@ export interface MeasurementSample {
   name: string;
   value: number | null;
   classifier: string | null;
+  // Set only on a point that is a bucket AVERAGE rather than a reading: the bucket's width in seconds.
+  // Stored history is drawn (and exported) per bucket, and a point read live is the reading itself;
+  // this is how a consumer tells them apart. Absent on a reading.
+  bucketSeconds?: number;
 }
 
 // A raised alarm as an alarm widget sees it (ADR-041). Mirrors device-management's

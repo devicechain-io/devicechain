@@ -1,0 +1,179 @@
+{
+  "schemaVersion": 2,
+  "title": "History table readability",
+  "canvas": {
+    "breakpoints": {
+      "base": 0
+    },
+    "grid": {
+      "columns": 24,
+      "minCellSize": 24,
+      "gutter": 8,
+      "padding": 0
+    },
+    "sizing": "fill"
+  },
+  "widgets": [
+    {
+      "id": "hist-plain",
+      "type": "history-table",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 0,
+          "cols": 12,
+          "rows": 5
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "Pump 3 history",
+        "columns": [
+          {
+            "measurement": "value",
+            "label": "Pressure",
+            "unit": "kPa",
+            "precision": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "hist-wide",
+      "type": "history-table",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 12,
+          "row": 0,
+          "cols": 12,
+          "rows": 5
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value",
+          "flow",
+          "temp"
+        ]
+      },
+      "options": {
+        "title": "Three measurements, long headings",
+        "pageSize": 8,
+        "columns": [
+          {
+            "measurement": "value",
+            "label": "Discharge pressure",
+            "unit": "kPa",
+            "precision": 1
+          },
+          {
+            "measurement": "flow",
+            "label": "Flow rate through the main",
+            "unit": "L/s",
+            "precision": 2
+          },
+          {
+            "measurement": "temp",
+            "label": "Bearing temperature",
+            "unit": "°C",
+            "precision": 1
+          }
+        ]
+      }
+    },
+    {
+      "id": "hist-week",
+      "type": "history-table",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 0,
+          "row": 5,
+          "cols": 12,
+          "rows": 5
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "A week, dates and times",
+        "windowSeconds": 604800,
+        "oldestFirst": true,
+        "columns": [
+          {
+            "measurement": "value",
+            "unit": "kPa"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hist-min",
+      "type": "history-table",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 12,
+          "row": 5,
+          "cols": 4,
+          "rows": 3
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "Smallest",
+        "columns": [
+          {
+            "measurement": "value",
+            "unit": "kPa"
+          }
+        ]
+      }
+    },
+    {
+      "id": "hist-chart",
+      "type": "timeseries-chart",
+      "layout": {
+        "base": {
+          "mode": "grid",
+          "col": 16,
+          "row": 5,
+          "cols": 8,
+          "rows": 5
+        }
+      },
+      "datasource": {
+        "kind": "device",
+        "deviceToken": "gate-device-01",
+        "measurements": [
+          "value"
+        ]
+      },
+      "options": {
+        "title": "The same device as a chart",
+        "unit": "kPa"
+      }
+    }
+  ]
+}
