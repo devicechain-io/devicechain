@@ -61,7 +61,7 @@ at all.
 that has nothing to do with the lock. It will not move an instance onto a release when
 the cluster has no operator, or has one identifiably from another release, and it names
 `dcctl install` as the way through. An operator installed by hand is let through with a
-note instead. See [Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
+note instead. See [Releases & upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
 Because an upgrade also applies the instance's broker and event store from the OpenTofu state
 on the machine running it, a second upgrade of the same instance from another machine, past the

@@ -7,7 +7,7 @@ title: Versiones y actualizaciones
 
 DeviceChain se distribuye como un conjunto de imágenes de contenedor precompiladas y versionadas,
 más un chart de Helm. **No** necesita compilar nada para ejecutarlo: descargue una versión publicada,
-instale el chart y actualice in situ sin tiempo de inactividad.
+instale el chart y actualice in situ con una actualización progresiva.
 
 :::warning Hay versiones a las que no se puede actualizar
 Hasta ahora, cuatro puntos de la historia pueden exigir recrear la instancia en lugar de actualizarla:
@@ -60,7 +60,7 @@ cosa. El operador es un solo controlador por clúster, compartido por todas las 
 haya en él, así que `dcctl install` lo mueve junto con el resto de los requisitos previos del
 clúster. El documento de configuración, la versión desplegada del chart y las imágenes de los
 servicios pertenecen a una instancia, así que `dcctl upgrade` mueve esos, instancia por
-instancia. Consulte [Actualizaciones sin tiempo de inactividad](#zero-downtime-upgrades) para el
+instancia. Consulte [Actualizaciones progresivas](#rolling-upgrades) para el
 procedimiento.
 
 - Las **versiones estables** son `vX.Y.Z` (por ejemplo, `v1.2.0`). La etiqueta `:latest` sigue a la
@@ -99,12 +99,13 @@ En concreto, antes de la v1.0.0 debe esperar que una versión pueda:
   `v0.19.0` rechaza un almacén de eventos con más de 4 000 000 de filas aún sin comprimir, o una
   tabla de más de 500 fragmentos, y lo indica al principio de sus notas
 
-La propiedad de "actualizar in situ sin tiempo de inactividad" descrita arriba describe la *mecánica* de una
+La propiedad de "actualizar in situ con una actualización progresiva" descrita arriba describe la *mecánica* de una
 actualización progresiva. No es una promesa de que sus llamadas a la API existentes conserven el mismo significado
 a través de un incremento de versión previo a 1.0.
 
-Una vez que se publique la v1.0.0, esta sección se reemplaza por una promesa de compatibilidad de versionado
-semántico normal: cambios disruptivos solo en una versión mayor.
+A partir de la v1.0.0, esta sección se reemplaza por una promesa de compatibilidad de versionado
+semántico: cambios disruptivos solo en una versión mayor. Consulte
+[Política de versionado y actualización](./versioning-policy.md).
 
 Debido a que las versiones son frecuentes antes de la disponibilidad general (GA), la versión **menor** marca un hito
 (una funcionalidad o subsistema significativo que se lanza) y la versión de **parche** lleva el ritmo continuo
@@ -244,11 +245,13 @@ eliminación de `infrastructure.aiInference` cuando esa área no está desplegad
 correspondiéndole a usted reproducirlas, como hasta ahora.
 :::
 
-## Actualizaciones sin tiempo de inactividad {#zero-downtime-upgrades}
+<a id="zero-downtime-upgrades"></a>
+
+## Actualizaciones progresivas {#rolling-upgrades}
 
 Actualizar consiste en **dos comandos** —uno para el clúster y luego uno por cada instancia
-que haya en él—, y el chart y los servicios están diseñados para hacer avanzar a los clientes sin
-perder tráfico. Hay cinco excepciones, todas documentadas más abajo: la transición a la
+que haya en él—, y el chart y los servicios están diseñados para avanzar pod por pod, de modo que un
+área con más de una réplica sigue sirviendo mientras se actualiza. Hay cinco excepciones, todas documentadas más abajo: la transición a la
 ingesta duradera, que sigue siendo una actualización corriente pero tiene un efecto secundario
 visible; la **`v0.9.0`, la `v0.10.0` y cualquier instancia creada por la `v0.16.0` o una
 versión anterior, a las que no se puede actualizar en absoluto**; y la **`v0.19.0` para una
@@ -261,6 +264,20 @@ versión a la que va a migrar antes de ejecutarlo:
 dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
+
+:::note Qué se ha medido
+La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
+actualizó in situ con tráfico MQTT en marcha, su broker se reinició dos veces, los dispositivos se
+reconectaron tras cada reinicio y todos los mensajes que el broker había confirmado seguían almacenados
+después. Ese ensayo es manual. La comprobación automática de actualización que condiciona cada versión
+se ejecuta sin tráfico.
+
+No se ha medido una actualización bajo carga sostenida de producción en un clúster de tamaño de producción,
+así que DeviceChain no promete una actualización sin interrupción. Prevea una breve interrupción donde se
+reemplace un pod: un área con una sola réplica y cada servidor del broker. Sin `--ha`, el único servidor del
+broker se reinicia y el broker no está disponible mientras tanto. Un dispositivo que envía mientras está
+desconectado debe reintentar.
+:::
 
 Una versión de DeviceChain es un único número que abarca las imágenes de los servicios, el
 chart, el operador y `dcctl`. Los dos comandos se lo reparten según a qué pertenece cada cosa:
@@ -547,7 +564,7 @@ Lo que hace que el despliegue sea seguro:
   migraciones y el resto espera; sin condiciones de carrera, sin DDL duplicado.
 
 :::tip Ejecute al menos dos réplicas en producción
-Para lograr un verdadero cero tiempo de inactividad, ejecute `replicas: 2` (o más) para cada área que
+Para seguir sirviendo durante un despliegue, ejecute `replicas: 2` (o más) para cada área que
 pueda servir desde más de un pod, de modo que el despliegue siempre tenga un pod activo sirviendo tráfico.
 Una sola réplica igualmente tiene una breve brecha mientras se reemplaza su único pod.
 Configúrelo globalmente con `--set replicas=2`, o por área bajo

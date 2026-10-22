@@ -38,7 +38,7 @@ DeviceChain 尚未正式发布。`dcctl install local` 和 `dcctl bootstrap loca
 - 监控 Prometheus、Grafana（`monitoring`），见[可观测性](./observability.md)；
 - ingress 控制器（`ingress-nginx`）。
 
-每集群一个 Operator，由全部实例共享。因此由集群命令安装，而非各实例分别安装；集群升级到新版本也从此处开始，参见[发布与升级](./releases-and-upgrades.md#zero-downtime-upgrades)。
+每集群一个 Operator，由全部实例共享。因此由集群命令安装，而非各实例分别安装；集群升级到新版本也从此处开始，参见[发布与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
 install 还创建基础数据库身份，用于创建各实例自己的数据库登录，并在集群记录安装结果。
 
@@ -137,7 +137,7 @@ and nothing has been changed: ... Destroy an instance, or raise the budget by re
 
 初始化按顺序构建实例。失败时会指出具体步骤。
 
-这是创建操作。数据库密码、代理的认证机构和登录、跨服务密钥、密钥存储根密钥等所有凭据都在此生成，因为它们尚不存在。针对已运行实例执行时，会在第 3 步停止，不改动基础设施或 Helm chart，并指出用于更新运行实例的 `dcctl upgrade`，详见[版本与升级](./releases-and-upgrades.md#zero-downtime-upgrades)。
+这是创建操作。数据库密码、代理的认证机构和登录、跨服务密钥、密钥存储根密钥等所有凭据都在此生成，因为它们尚不存在。针对已运行实例执行时，会在第 3 步停止，不改动基础设施或 Helm chart，并指出用于更新运行实例的 `dcctl upgrade`，详见[版本与升级](./releases-and-upgrades.md#rolling-upgrades)。
 
 中途**失败**的初始化不同，修复方法仍是重跑。第 3 步只拒绝**运行中**实例：第 8 步写入的配置文档存在，且首次初始化已完成。第 5 步声明实例时，会记录首次初始化尚未完成，只有成功结束的运行才删除此记录。因此任何步骤失败，包括 Helm 安装或等待就绪，都留下一个未完成实例；在同一台机器上重跑相同的 `dcctl bootstrap` 命令即可完成。
 

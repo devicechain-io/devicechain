@@ -63,7 +63,7 @@ publicadas ese paso no hace nada en absoluto.
 que no tiene nada que ver con el bloqueo. No moverá una instancia a una versión si el
 clúster no tiene operador, o tiene uno identificablemente de otra versión, y nombra
 `dcctl install` como el camino a seguir. Un operador instalado a mano se deja pasar con una
-nota. Consulta [Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
+nota. Consulta [Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
 Como una actualización también aplica el bróker y el almacén de eventos de la instancia desde el
 estado de OpenTofu de la máquina que la ejecuta, una segunda actualización de la misma instancia

@@ -7,7 +7,7 @@ title: Releases & Upgrades
 
 DeviceChain ships as a set of prebuilt, versioned container images plus a Helm chart.
 You do **not** need to build anything to run it — pull a released version, install the
-chart, and upgrade in place with zero downtime.
+chart, and upgrade in place with a rolling update.
 
 :::warning Some versions cannot be upgraded into
 Four points in the history can require recreating the instance rather than upgrading it:
@@ -56,7 +56,7 @@ The operator is one controller per cluster, shared by every instance on it, so
 `dcctl install` moves it along with the rest of the cluster's prerequisites. The
 configuration document, the chart release and the service images belong to one instance, so
 `dcctl upgrade` moves those, one instance at a time. See
-[Zero-downtime upgrades](#zero-downtime-upgrades) for the procedure.
+[Rolling upgrades](#rolling-upgrades) for the procedure.
 
 - **Stable releases** are `vX.Y.Z` (e.g. `v1.2.0`). The `:latest` tag tracks the most
   recent stable release.
@@ -93,12 +93,12 @@ Concretely, before v1.0.0 you should expect that a release may:
   holding more than 4,000,000 rows not yet compressed, or a table of more than 500 chunks, and
   says so at the top of its notes
 
-The "upgrade in place with zero downtime" property above describes the *mechanics* of a
+The "upgrade in place with a rolling update" property above describes the *mechanics* of a
 rolling upgrade. It is not a promise that your existing API calls keep the same meaning
 across a pre-1.0 version bump.
 
-Once v1.0.0 ships, this section is replaced by a normal semantic-versioning compatibility
-promise: breaking changes only in a major version.
+From v1.0.0 this section is replaced by a semantic-versioning compatibility promise: breaking
+changes only in a major version. See [Versioning and upgrade policy](./versioning-policy.md).
 
 Because releases are frequent before GA, the **minor** version marks a milestone (a
 significant feature or subsystem landing) and the **patch** version carries the ongoing
@@ -235,10 +235,13 @@ applies while writing the document — the `infrastructure.shutdown` block, and 
 before.
 :::
 
-## Zero-downtime upgrades {#zero-downtime-upgrades}
+<a id="zero-downtime-upgrades"></a>
+
+## Rolling upgrades {#rolling-upgrades}
 
 Upgrading is **two commands** — one for the cluster, then one for each instance on it — and
-the chart and services are built to roll customers forward without dropping traffic. Five
+the chart and services are built to roll forward one pod at a time, so an area with more than one
+replica keeps serving while it rolls. Five
 exceptions are documented below: the durable-ingest cutover, which is still an ordinary
 upgrade but has a visible side effect; **`v0.9.0`, `v0.10.0` and any instance built by
 `v0.16.0` or earlier, which cannot be upgraded into at all**; and **`v0.19.0` for an instance
@@ -250,6 +253,19 @@ Check the release notes for the version you are moving to before running it:
 dcctl install local --version <new-version>
 dcctl upgrade local devicechain --version <new-version>
 ```
+
+:::note What has been measured
+The upgrade has been rehearsed by hand on a local cluster: an instance installed with `--ha` was upgraded
+in place with MQTT traffic running, its broker rolled twice, devices reconnected after each roll, and every
+message the broker had acknowledged was still stored afterwards. That rehearsal is manual. The automated
+upgrade check that gates a release runs with no traffic.
+
+An upgrade under sustained production load, on a cluster of production size, has not been
+measured, so DeviceChain does not promise an upgrade without interruption. Plan for a short
+interruption wherever a pod is replaced: an area with a single replica, and each broker server.
+Without `--ha` the single broker server restarts and the broker is unavailable meanwhile.
+A device that sends while it is disconnected must retry.
+:::
 
 A release is one version across the service images, the chart, the operator and `dcctl`.
 The two commands split it by what each thing belongs to:
@@ -517,7 +533,7 @@ What makes the rollout safe:
   wait — no races, no duplicate DDL.
 
 :::tip Run at least two replicas in production
-For true zero-downtime, run `replicas: 2` (or more) for each area that can serve from more
+To keep serving through a rollout, run `replicas: 2` (or more) for each area that can serve from more
 than one pod, so the rollout always has a live pod serving traffic. A single replica still
 has a brief gap while its one pod is replaced. Set it globally with `--set replicas=2`, or
 per area under `functionalAreas.<area>.replicas`. The four single-pod areas above are the

@@ -56,7 +56,7 @@ Each in a namespace of its own, it installs:
 The operator is one controller per cluster, shared by every instance on it. That is why
 installing it is the cluster command's job rather than each instance's, and why moving a
 cluster to a new release starts here: see
-[Releases & upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Releases & upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
 `install` also creates the base database identity that each instance's own database login is
 created with, and records the install in the cluster.
@@ -240,7 +240,7 @@ passwords, the broker's authority and logins, the cross-service secret, the secr
 key — because none of them exists yet. Point it at an instance that is already running and it
 stops at step 3, before the infrastructure or the chart are touched. It names the command
 that does move a live instance: `dcctl upgrade`, covered in
-[Releases & Upgrades](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Releases & Upgrades](./releases-and-upgrades.md#rolling-upgrades).
 
 A run that *failed* partway through is a different case, and re-running it is still how you
 repair it. Step 3 refuses only a **live** instance: one whose configuration document (written
