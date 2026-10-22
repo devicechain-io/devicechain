@@ -328,9 +328,9 @@ exports later) go to a pluggable object store, configured under
   use the pods' own AWS identity, for example an IAM role bound through
   `serviceAccount.annotations`. `dcctl bootstrap --object-store s3` sets all of this for you.
 
-## Zero-downtime upgrades
+## Rolling upgrades
 
-`helm upgrade` rolls forward without dropping traffic. Each Deployment uses a
+`helm upgrade` rolls forward one pod at a time. Each Deployment uses a
 `RollingUpdate` strategy with `maxUnavailable: 0` / `maxSurge: 1`, so a new pod must
 pass `/readyz` before an old one is removed. On termination a pod flips `/readyz` to
 503 first, waits `shutdownDrainSeconds` (default 5) for endpoint removal to
@@ -342,7 +342,7 @@ more than half the grace period, since the teardown after the drain is what actu
 finishes in-flight work before the kubelet's SIGKILL. Database migrations run under a
 Postgres advisory lock so concurrently-rolling replicas don't race on DDL.
 
-For true zero-downtime run `replicas: 2`+ per area (`--set replicas=2` or
+To keep serving through a rollout run `replicas: 2`+ per area (`--set replicas=2` or
 `functionalAreas.<area>.replicas`); a `PodDisruptionBudget` is rendered for any area
 with more than one replica. Tune the strategy via `rollingUpdate.maxUnavailable` /
 `rollingUpdate.maxSurge`.

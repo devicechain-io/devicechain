@@ -59,7 +59,7 @@ Cada uno en un namespace propio, instala:
 El operador es un solo controlador por clúster, compartido por todas las instancias que haya
 en él. Por eso instalarlo es tarea del comando del clúster y no de cada instancia, y por eso
 mover un clúster a una versión nueva empieza aquí: consulta
-[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
 `install` también crea la identidad de base de datos base con la que se crea el login de base
 de datos propio de cada instancia, y registra la instalación en el clúster.
@@ -256,7 +256,7 @@ servicios, la clave raíz del almacén de secretos— porque ninguna de ellas ex
 Apúntalo a una instancia que ya esté en marcha y se detiene en el paso 3, antes de tocar la
 infraestructura o el chart. Nombra el comando que sí mueve una instancia viva:
 `dcctl upgrade`, descrito en
-[Versiones y actualizaciones](./releases-and-upgrades.md#zero-downtime-upgrades).
+[Versiones y actualizaciones](./releases-and-upgrades.md#rolling-upgrades).
 
 Una ejecución que *falló* a mitad de camino es un caso distinto, y volver a ejecutarla sigue
 siendo la forma de repararla. El paso 3 solo rechaza una instancia **viva**: una cuyo

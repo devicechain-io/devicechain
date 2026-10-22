@@ -103,6 +103,7 @@ const sidebars: SidebarsConfig = {
             'concepts/tenant-tiers',
             'concepts/single-sign-on',
             'concepts/system-settings',
+            'concepts/security-model',
             'concepts/object-storage',
             'concepts/mcp',
           ],
