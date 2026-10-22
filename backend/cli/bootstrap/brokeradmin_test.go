@@ -315,3 +315,34 @@ func TestAFailedHookIsOnlyRewrittenForTheBrokerAdminJob(t *testing.T) {
 		t.Errorf("indent = %q", got)
 	}
 }
+
+// A pod that never started has no log, and the Job's deadline deletes it; the cluster's warnings
+// about it (here, an image that is not in the registry) are what the failure then reports.
+func TestAHookPodThatNeverStartedIsReportedByWhatTheClusterSaid(t *testing.T) {
+	ns := InstanceNamespace("acme")
+	ev := func(name, kind, object, typ, reason, msg string) *corev1.Event {
+		return &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: ns},
+			InvolvedObject: corev1.ObjectReference{Kind: kind, Name: object, Namespace: ns},
+			Type:           typ, Reason: reason, Message: msg,
+		}
+	}
+	cs := fake.NewClientset(
+		ev("e1", "Pod", "acme-broker-admin-x1", corev1.EventTypeWarning, "Failed", `Failed to pull image "r/dc-broker-admin:t": not found`),
+		ev("e2", "Pod", "acme-broker-admin-x1", corev1.EventTypeNormal, "Pulling", "Pulling image"),
+		ev("e3", "Pod", "acme-device-state-x2", corev1.EventTypeWarning, "BackOff", "another workload"),
+		ev("e4", "Job", "acme-broker-admin", corev1.EventTypeWarning, "DeadlineExceeded", "the Job, not its pod"),
+	)
+	got := jobPodWarnings(context.Background(), cs, ns, brokerAdminJobName("acme"))
+	if !strings.Contains(got, "pod/acme-broker-admin-x1: Failed: Failed to pull image") {
+		t.Errorf("the pull failure is not reported: %q", got)
+	}
+	for _, not := range []string{"Pulling", "another workload", "the Job, not its pod"} {
+		if strings.Contains(got, not) {
+			t.Errorf("reported %q, which is not a warning about the Job's pod: %q", not, got)
+		}
+	}
+	if w := jobPodWarnings(context.Background(), fake.NewClientset(), ns, brokerAdminJobName("acme")); w != "" {
+		t.Errorf("no events read as %q", w)
+	}
+}

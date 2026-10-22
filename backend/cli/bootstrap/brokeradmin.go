@@ -63,8 +63,15 @@ func brokerAdminFailure(ctx context.Context, kubeContext, instance string, err e
 	}
 	logs := jobLogs(ctx, typed, InstanceNamespace(instance), brokerAdminJobName(instance), brokerAdminLogTail)
 	if logs == "" {
-		return fmt.Errorf("%w\n\nThe broker administrator's pod log could not be read (kubectl -n %s logs job/%s)",
-			err, InstanceNamespace(instance), brokerAdminJobName(instance))
+		// No log is what a pod that never started leaves (its image could not be pulled, it was
+		// never scheduled), and a Job past its deadline has had its pod deleted besides. What
+		// the cluster said about the pod is then the diagnosis.
+		why := ""
+		if w := jobPodWarnings(ctx, typed, InstanceNamespace(instance), brokerAdminJobName(instance)); w != "" {
+			why = "\n\nWhat the cluster reported about its pod:\n\n" + indent(w)
+		}
+		return fmt.Errorf("%w\n\nThe broker administrator's pod log could not be read (kubectl -n %s logs job/%s)%s",
+			err, InstanceNamespace(instance), brokerAdminJobName(instance), why)
 	}
 	return fmt.Errorf("%w\n\nThe broker administrator (the chart's pre-install/pre-upgrade hook) failed, so nothing "+
 		"was rolled. Its log, last lines:\n\n%s\n\nFix what it names and run the upgrade again, or run "+
@@ -96,6 +103,36 @@ func jobLogs(ctx context.Context, typed kubernetes.Interface, namespace, job str
 		return ""
 	}
 	return string(raw)
+}
+
+// brokerAdminWarningTail bounds how many of the cluster's warnings about the Job's pods are added.
+const brokerAdminWarningTail = 5
+
+// jobPodWarnings returns the last Warning events the cluster recorded about the pods of a Job
+// (ErrImagePull, FailedScheduling, ...), one per line, or "" when there are none to read. The
+// events outlive the pods, which is why they are read rather than the pods' status.
+func jobPodWarnings(ctx context.Context, typed kubernetes.Interface, namespace, job string) string {
+	events, err := typed.CoreV1().Events(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return ""
+	}
+	var lines []string
+	seen := map[string]bool{}
+	for _, e := range events.Items {
+		if e.Type != corev1.EventTypeWarning || e.InvolvedObject.Kind != "Pod" ||
+			!strings.HasPrefix(e.InvolvedObject.Name, job+"-") {
+			continue
+		}
+		line := fmt.Sprintf("pod/%s: %s: %s", e.InvolvedObject.Name, e.Reason, e.Message)
+		if !seen[line] {
+			seen[line] = true
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) > brokerAdminWarningTail {
+		lines = lines[len(lines)-brokerAdminWarningTail:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // ReconcileBrokerOptions names the instance whose broker is reconciled.
