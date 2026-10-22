@@ -51,7 +51,7 @@ func TestAFreshBootstrapMintsLoginsAndTheBareSharedSetCannotEnableThem(t *testin
 		t.Error("a fresh bootstrap hands the broker no login hashes")
 	}
 
-	bare, err := natsauth.GenerateCredentials()
+	bare, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestTheBrokerIsHandedEveryLoginHashAndNoPlaintext(t *testing.T) {
 }
 
 func TestTheBrokerRecordCarriesTheLoginsAndToleratesTheirAbsence(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +477,8 @@ func TestTheBrokerRecordCarriesTheLoginsAndToleratesTheirAbsence(t *testing.T) {
 
 // Hashes the broker already holds are reused, so a re-run does not re-salt them and roll the broker.
 func TestTheDeployedLoginHashesAreReadAndReused(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	t.Parallel()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}

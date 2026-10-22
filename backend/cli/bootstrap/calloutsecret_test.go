@@ -26,7 +26,7 @@ import (
 func calloutState(t *testing.T) (*State, natsauth.Credentials) {
 	t.Helper()
 	// The shared set only. The tests that exercise the per-area logins ask for them (loginState).
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestReadingTheCalloutSeedsFailsClosed(t *testing.T) {
 // wrote the seed into the document work: the document's copy is the fallback, the Secret wins.
 func TestTheDeployedViewOverlaysTheCalloutSecret(t *testing.T) {
 	ctx := context.Background()
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestTheDeployedViewOverlaysTheCalloutSecret(t *testing.T) {
 // The xkey is INTRODUCED: minted when the starting state has none, reused when it has one, and
 // an unusable one is an error rather than an invitation to mint over it.
 func TestAnUpgradeIntroducesTheXKeyOnceAndNeverReplacesIt(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,7 +331,7 @@ func TestAnUpgradeIntroducesTheXKeyOnceAndNeverReplacesIt(t *testing.T) {
 }
 
 func TestTheBrokerRecordCarriesTheXKeyAndToleratesItsAbsence(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}

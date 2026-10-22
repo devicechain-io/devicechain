@@ -84,7 +84,18 @@ func useRealBrokerMinting(t *testing.T) {
 	t.Cleanup(func() { generateCredentials, credentialsFromDeployed, withIdentity, withLogins = g, f, i, l })
 }
 
-func installMemoizedBrokerCredentials() {
+// useRealCredentialGeneration restores only the shared-set mint, for a test whose assertion is that
+// two fresh mints DIFFER but which says nothing about the per-area logins or the identity login. A
+// mint of those is fifteen more production-cost hashes a run, and leaving them memoized keeps
+// that test from paying for what it does not assert.
+func useRealCredentialGeneration(t *testing.T) {
+	t.Helper()
+	g := generateCredentials
+	generateCredentials = realBrokerMinting.generate
+	t.Cleanup(func() { generateCredentials = g })
+}
+
+func installMemoizedBrokerCredentials() (prewarm func()) {
 	var fromDeployed memo[natsauth.Credentials]
 	realFromDeployed := credentialsFromDeployed
 	credentialsFromDeployed = func(seed, password, sysPassword string, hashes natsauth.DeployedHashes) (natsauth.Credentials, error) {
@@ -135,5 +146,83 @@ func installMemoizedBrokerCredentials() {
 		}
 		c.Logins = maps.Clone(got)
 		return c, nil
+	}
+
+	// The wrappers are captured HERE, not read back from the package variables later: a test that
+	// calls useRealBrokerMinting swaps those variables, and a prewarm reading them from another
+	// goroutine would race with the swap.
+	memoGenerate, memoFromDeployed, memoIdentity, memoLogins := generateCredentials, credentialsFromDeployed, withIdentity, withLogins
+	return func() {
+		// The shared set and the two planted ones are independent mints (two hashes each), and the
+		// derivations every deployed-instance test goes through hang off them. Warming them on
+		// separate goroutines while the first tests run turns the package's single-core start-up
+		// (those tests wait on exactly these values) into parallel work, on a machine whose other
+		// cores are idle then. It computes the same values under the same keys the tests ask for,
+		// so it can only make a first call cheaper, never change its answer.
+		var wg sync.WaitGroup
+		run := func(f func()) { wg.Add(1); go func() { defer wg.Done(); f() }() }
+		run(func() {
+			c, err := memoGenerate()
+			if err == nil {
+				_, _ = memoLogins(c, nil, nil) // the fresh-install path: fifteen hashes
+			}
+		})
+		run(func() { _, _ = memoIdentity(natsauth.Credentials{}, "", "") })
+		for _, planted := range []func() (natsauth.Credentials, error){existingCredentials, otherExistingCredentials} {
+			run(func() {
+				c, err := planted()
+				if err != nil {
+					return
+				}
+				_, _ = memoFromDeployed(c.IssuerSeed, c.ServicePassword, c.SysPassword, natsauth.DeployedHashes{})
+			})
+		}
+		wg.Wait()
+	}
+}
+
+// 🔴 CREDENTIALS THAT STAND IN FOR "ALREADY THERE" MUST DIFFER FROM WHAT A FRESH MINT YIELDS.
+//
+// The memoized generateCredentials hands every caller the same set. A test that seeds a deployed
+// instance or a bootstrap record with credentials and then asserts a re-run REUSED them would, if
+// it seeded with that same set, pass for an implementation that ignored the deployed state and
+// minted fresh: the fresh mint IS the seeded set. So the sets a test plants as pre-existing come
+// from here, minted once per test binary like the shared one, and they are not the set a mint
+// returns. existingCredentials is the deployed (or recorded) set; otherExistingCredentials is a
+// second one, for a test that plants two sources that disagree. TestThePlantedCredentialSets...
+// holds the three apart.
+var existingCredentials, otherExistingCredentials = distinctMint("existing"), distinctMint("other-existing")
+
+func distinctMint(name string) func() (natsauth.Credentials, error) {
+	var m memo[natsauth.Credentials]
+	return func() (natsauth.Credentials, error) {
+		c, err := m.get(name, realBrokerMinting.generate)
+		return copyCredentials(c), err
+	}
+}
+
+func TestThePlantedCredentialSetsDifferFromAFreshMint(t *testing.T) {
+	fresh, err := generateCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, err := existingCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := otherExistingCredentials()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sets := []natsauth.Credentials{fresh, a, b}
+	for i := range sets {
+		for j := i + 1; j < len(sets); j++ {
+			x, y := sets[i], sets[j]
+			if x.IssuerSeed == y.IssuerSeed || x.ServicePassword == y.ServicePassword ||
+				x.SysPassword == y.SysPassword || x.XKeySeed == y.XKeySeed {
+				t.Fatalf("credential sets %d and %d share a secret, so a test planting one and "+
+					"expecting it reused cannot tell reuse from a fresh mint", i, j)
+			}
+		}
 	}
 }

@@ -119,6 +119,7 @@ func TestAnExplicitRefuseOverridesTheCarriedStrip(t *testing.T) {
 
 // ...and an explicit strip works on an instance that held nothing.
 func TestAnExplicitStripOnAReleaseThatHeldNothing(t *testing.T) {
+	t.Parallel()
 	st := profileState(false, false, "default")("dci-strip")
 	st.Evolving = true
 	st.MqttBodyCredential = "strip"

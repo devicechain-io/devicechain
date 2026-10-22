@@ -360,6 +360,7 @@ func managedLocal(st *State) {
 }
 
 func TestADcctlCreatedClusterColocatesTheStoresPods(t *testing.T) {
+	t.Parallel()
 	c := composeStoreWith(t, fsStore0(), managedLocal, nil)
 	bs, _ := c.vals["blobStorage"].(map[string]interface{})
 	p, _ := bs["persistence"].(map[string]interface{})
@@ -389,6 +390,7 @@ func fsStore0() *dcv1beta1.ObjectStoreSpec {
 }
 
 func TestOtherClustersDoNotColocate(t *testing.T) {
+	t.Parallel()
 	remote := composeStoreWith(t, fsStore0(), nil, nil)
 	if _, set := remote.vals["blobStorage"].(map[string]interface{})["persistence"].(map[string]interface{})["colocate"]; set {
 		t.Error("a cluster dcctl was pointed at was told to colocate")
@@ -489,6 +491,7 @@ func TestTwoAreasOnOneReadWriteOnceStoreAreRefused(t *testing.T) {
 // --- the chart ----------------------------------------------------------------------
 
 func TestTheChartKeepsTheStoreVolumeWhenHelmWouldDeleteIt(t *testing.T) {
+	t.Parallel()
 	c := composeStoreWith(t, fsStore0(), nil, nil)
 	pvc := c.pvc(t)
 	if pvc == nil {
@@ -514,6 +517,7 @@ func TestTheChartRefusesS3CredentialsForAFilesystemStoreAndUnknownS3Keys(t *test
 }
 
 func TestTheServiceAccountCarriesItsAnnotations(t *testing.T) {
+	t.Parallel()
 	c := composeStoreWith(t, nil, nil, func(v map[string]interface{}) {
 		v["serviceAccount"] = map[string]interface{}{
 			"create": true, "automountToken": false,
@@ -671,6 +675,7 @@ func TestEveryRefusedChangeToADeclaredStore(t *testing.T) {
 // The chart's pod-count guard counts pods across the consuming areas: user-management and
 // update-management are two pods on one ReadWriteOnce claim. Colocation is its one exception.
 func TestTwoConsumingAreasNeedAColocatedOrSharedClaim(t *testing.T) {
+	t.Parallel()
 	areas, err := ResolveEnabledAreas("default", []string{"update-management"})
 	if err != nil {
 		t.Fatal(err)

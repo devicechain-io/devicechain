@@ -289,6 +289,7 @@ func mountOf(dep appsv1.Deployment, name string) *corev1.VolumeMount {
 }
 
 func TestNoStoreComposesNoStore(t *testing.T) {
+	t.Parallel()
 	c := composeStore(t, nil)
 	if _, ok := c.vals["blobStorage"]; ok {
 		t.Errorf("an instance with no store set blobStorage: %v", c.vals["blobStorage"])
@@ -309,6 +310,7 @@ func TestNoStoreComposesNoStore(t *testing.T) {
 }
 
 func TestAFilesystemStoreComposesTheDocumentTheVolumeAndTheMount(t *testing.T) {
+	t.Parallel()
 	c := composeStore(t, fsStore())
 
 	loaded, err := loadInstanceConfigDocument([]byte(c.doc))
@@ -352,6 +354,7 @@ func TestAFilesystemStoreComposesTheDocumentTheVolumeAndTheMount(t *testing.T) {
 
 // The default local store: nothing but a size.
 func TestTheDefaultLocalStoreIsASmallClaimOnTheDefaultClass(t *testing.T) {
+	t.Parallel()
 	store, err := ResolveObjectStore(ObjectStoreFlags{}, true)
 	if err != nil {
 		t.Fatal(err)
@@ -370,6 +373,7 @@ func TestTheDefaultLocalStoreIsASmallClaimOnTheDefaultClass(t *testing.T) {
 }
 
 func TestAnS3StoreComposesTheDocumentAndProjectsTheCredentialsFromAnOwnedSecret(t *testing.T) {
+	t.Parallel()
 	c := composeStore(t, s3Store())
 
 	loaded, err := loadInstanceConfigDocument([]byte(c.doc))
@@ -410,6 +414,7 @@ func TestAnS3StoreComposesTheDocumentAndProjectsTheCredentialsFromAnOwnedSecret(
 }
 
 func TestAnS3StoreOnThePodIdentityProjectsNothing(t *testing.T) {
+	t.Parallel()
 	store := s3Store()
 	store.S3.CredentialsSecret = nil
 	c := composeStore(t, store)

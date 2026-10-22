@@ -39,6 +39,7 @@ func readyGuide() *dcv1beta1.Instance {
 // profile is asked for update-management; the chart rendered from what the run
 // composes must deploy it, alongside every area the profile already ran.
 func TestEnablingAnAreaDeploysItAlongsideTheProfile(t *testing.T) {
+	t.Parallel()
 	st, err := enableAreaState(t, readyGuide(), "update-management")
 	if err != nil {
 		t.Fatalf("settling the request: %v", err)

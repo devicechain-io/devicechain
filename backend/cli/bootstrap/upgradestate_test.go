@@ -12,7 +12,6 @@ import (
 
 	dcv1beta1 "github.com/devicechain-io/dc-k8s/api/v1beta1"
 	"github.com/devicechain-io/dc-microservice/config"
-	"github.com/devicechain-io/dc-microservice/natsauth"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -47,6 +46,7 @@ var natsAuthDerivedFields = map[string]bool{"CalloutXKeyPublic": true}
 // The system-account password is the sharpest: its ABSENCE is the off switch for the
 // broker-presence tap, so losing it does not break, it silently turns a feature off.
 func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
+	t.Parallel()
 	deployed := &config.InstanceConfiguration{}
 	deployed.Infrastructure.Nats.Tls.Enabled = true
 	deployed.Infrastructure.Nats.Tls.Ca = "sentinel-broker-ca"
@@ -64,7 +64,7 @@ func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
 	}
 	// The seeds must be real ones (the hydration derives keys from them), so they are minted and
 	// stood in for the sentinels.
-	minted, err := natsauth.GenerateCredentials()
+	minted, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestEveryCredentialTheServicesRunOnSurvivesTheHydration(t *testing.T) {
 // pointed at a listener that does not speak it.
 func TestAnInstanceWithoutBrokerTLSIsNotGivenSome(t *testing.T) {
 	deployed := &config.InstanceConfiguration{}
-	minted, err := natsauth.GenerateCredentials()
+	minted, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,6 +176,7 @@ func TestAnInstanceWithoutBrokerTLSIsNotGivenSome(t *testing.T) {
 // A list cannot see the entry nobody wrote. So the judge here is not a list at all —
 // it is the chart, rendered, with its schema doing the asserting.
 func TestTheValuesAnUpgradeComposesAreAcceptedByTheChart(t *testing.T) {
+	t.Parallel()
 	ch, err := loadEmbeddedChart()
 	if err != nil {
 		t.Fatalf("loading the embedded chart: %v", err)

@@ -190,7 +190,7 @@ func TestTheUpgradeHandsTheApplyTheRunningBrokerArchiveAndVolumes(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +261,7 @@ func TestTheUpgradeHandsTheApplyTheRunningBrokerArchiveAndVolumes(t *testing.T) 
 // 🔴 AN UPGRADE MINTS NOTHING. An instance running with no system-account password must
 // come out of the settle with none — not with one generated for it.
 func TestSettleMintsNoSystemPasswordForAnInstanceWithout(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,7 +295,7 @@ func TestThePlanGateRefusesValuesItCannotSee(t *testing.T) {
 }
 
 func TestSettleRefusesWhatCannotBeAppliedSafely(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}

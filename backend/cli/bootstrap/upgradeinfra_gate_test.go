@@ -48,7 +48,7 @@ func TestHydrationCarriesSkipInfrastructureOntoTheState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestUpgradePlansAndAppliesTheInfrastructureOnlyUnderItsGate(t *testing.T) {
 // broker. A roll left unfinished is let through, and said; a broker short of a server on
 // the template it already runs is still refused (TestSettleRefusesWhatCannotBeAppliedSafely).
 func TestSettleLetsAnUnfinishedBrokerRollThrough(t *testing.T) {
-	creds, err := natsauth.GenerateCredentials()
+	creds, err := existingCredentials()
 	if err != nil {
 		t.Fatal(err)
 	}
