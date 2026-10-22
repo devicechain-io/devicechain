@@ -200,15 +200,14 @@ function choiceIndex(offered: number, side: Side): number {
   return SIDE_INDEX[side] % offered;
 }
 
-// The command a command-button is driven to, or rendered from. All three command keys
-// resolve through one choice, because that is what they are: picking a command bakes its
-// key, its label and its parameter descriptors together.
 // The entry an ENUM option of `type` uses on this side. For a list of three or more it is
 // `choiceIndex` unchanged. A TWO-valued enum has no interior, so every one of them would land
 // on the same entry of its own list, and two of them on one widget (the timeseries chart's
 // groupBy and markAlarmsScope, both ending in 'device') would then be indistinguishable. Each
 // is therefore rotated by its ordinal among the widget's two-valued enums: still different
 // between the two sides (the rotation is the same for both), and different between siblings.
+// A THIRD two-valued enum would wrap back onto the first; the uniqueness check below then fails
+// loudly and this needs a wider scheme.
 function enumIndex(type: WidgetType, key: string, side: Side): number {
   const spec = specsOf(type)[key];
   expect(spec.kind, `${type}.${key} is not an enum`).toBe('enum');
@@ -224,6 +223,9 @@ function enumIndex(type: WidgetType, key: string, side: Side): number {
   return (base + salt) % 2;
 }
 
+// The command a command-button is driven to, or rendered from. All three command keys
+// resolve through one choice, because that is what they are: picking a command bakes its
+// key, its label and its parameter descriptors together.
 const commandFor = (side: Side) => COMMANDS[choiceIndex(COMMANDS.length, side)];
 
 const slotFor = (side: Side) => SLOT_NAMES[choiceIndex(SLOT_NAMES.length, side)];
