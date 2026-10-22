@@ -99,8 +99,8 @@
       "translationSha256": "a5354fe6780122a031d14ef2739db5ab7a8e48c79a58eaf615e50b851ad0ad4f"
     },
     "deployment/disaster-recovery.md": {
-      "sourceSha256": "fd9ffde42fa2a0f6b1c6a7cb0db26cfa294212276d242a95f9d5aad5b0e23952",
-      "translationSha256": "fafe0194c7c8d297feb30ce7d8d5a2b92989a013db4855842b40b9d935ad67be"
+      "sourceSha256": "c5561eb2e1300b8061c680ef30e90ffc591b83d0333480fe6085b5dd106eca3d",
+      "translationSha256": "fdaf339f27cb74541fcb8b53ef59602b6c9fffa9156970d2b12cc8f704f025cb"
     },
     "deployment/edge-services.md": {
       "sourceSha256": "84bff610846fd41244a2b2105ded4e8339a3598c35bb1d0b21c0342e23151de3",

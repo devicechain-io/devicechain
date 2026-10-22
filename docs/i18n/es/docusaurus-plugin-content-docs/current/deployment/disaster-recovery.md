@@ -513,6 +513,76 @@ desastre futuro, mientras que la actualización que tienes delante trata de la i
 funcionamiento. Y un operador que no puede actualizar rodeará la comprobación en lugar de
 arreglarla.
 
+## Sustituir la clave raíz {#replace-root-key}
+
+En esta versión la clave raíz no se puede rotar in situ. No existe ningún comando que instale una
+clave nueva y vuelva a sellar lo que protegía la anterior. Para sustituir la clave raíz, se recrea la
+instancia, y una instancia recreada empieza con un plano de control vacío.
+
+Tres tipos de datos guardados dependen de la clave:
+
+- **Todos los secretos que guarda la instancia.** Cada uno está sellado bajo la clave raíz:
+  credenciales de los conectores de salida, contraseñas SMTP y secretos de webhook de los canales de
+  notificación, claves de proveedores de IA y secretos de cliente del inicio de sesión único.
+- **La clave de firma de tokens.** `user-management` también la sella bajo la clave raíz, así que
+  sin la clave nadie puede iniciar sesión.
+- **Los resúmenes de las contraseñas MQTT de los dispositivos.** La clave con la que se calculan esos
+  resúmenes se deriva de la clave raíz. Un resumen es de un solo sentido, así que no se puede volver
+  a calcular bajo una clave nueva sin la contraseña.
+
+### Qué se pierde al recrear {#replace-root-key-losses}
+
+`dcctl destroy` elimina la base de datos de la instancia en el almacén relacional compartido, y todo
+lo que se guarda allí se va con ella: tenants, usuarios y roles, tipos y perfiles de dispositivo,
+dispositivos y sus credenciales, reglas de detección, paneles, conectores de salida, canales de
+notificación, alarmas y último estado conocido. Nada de ello se puede trasladar a través de un cambio
+de clave. Una copia de seguridad relacional no sirve: sus secretos están sellados bajo la clave
+anterior, y restaurarla trae de vuelta la clave anterior, que es lo contrario de sustituirla. Ningún
+comando exporta la configuración de una instancia en su conjunto. Los paneles se pueden exportar
+desde la consola e importar en la instancia nueva, y los dispositivos se pueden importar desde un
+archivo CSV ([Importar dispositivos](../guides/importing-devices.md)). Todo lo demás se vuelve a
+crear.
+
+El historial de eventos sí se puede trasladar. El almacén de eventos no contiene texto cifrado, así
+que sus copias de seguridad no necesitan la clave raíz. Destruye con `--keep-backups` y ejecuta
+bootstrap con `--restore-tsdb-from`, como en [Recuperar una instancia](#recover). El historial se
+guarda asociado a los tokens de tenant y de dispositivo, así que coincide con los tenants y
+dispositivos que vuelvas a crear con los mismos tokens. La telemetría de un tenant que no vuelvas a
+crear queda en el almacén de eventos sin una fila de tenant que dirija su eliminación. Sin
+`--keep-backups`, destroy elimina las copias de seguridad del almacén de eventos guardadas en el
+almacén de objetos propio del clúster.
+
+### Recrear la instancia {#replace-root-key-steps}
+
+Si crees que la clave raíz pudo quedar expuesta:
+
+1. Exporta lo que puedas: las definiciones de los paneles y un registro de la configuración que
+   volverás a crear.
+2. Aparta el artefacto de depósito anterior. Bootstrap no sobrescribe uno existente. Consérvalo: es
+   la única clave de las copias de seguridad relacionales tomadas antes del destroy.
+3. Ejecuta [`dcctl destroy <provider> <instance> --keep-backups`](./bootstrap.md#destroy) y después
+   [`dcctl bootstrap <provider> <instance>`](./bootstrap.md), añadiendo `--restore-tsdb-from` para
+   recuperar el historial de eventos. No pases `--restore-root-key`: después de un destroy, bootstrap
+   lo rechaza. La instancia nueva genera una clave raíz propia y escribe un artefacto de depósito
+   nuevo.
+4. Vuelve a crear tus tenants, usuarios, perfiles, reglas, conectores y canales, y vuelve a registrar
+   tus dispositivos, con una contraseña MQTT para cada uno que la use. Un dispositivo puede conservar
+   su contraseña anterior si proporcionas la misma, pero quien tenga la clave raíz anterior y una
+   copia de la base de datos anterior puede probar intentos contra su resumen sin conexión. Una
+   contraseña larga y aleatoria resiste eso; una corta no, así que da contraseñas nuevas a esos
+   dispositivos.
+5. Rota las credenciales que guardaba la instancia anterior, en el sistema que las emitió:
+   contraseñas SMTP y secretos de webhook, las credenciales de brokers y de nube que usan los
+   conectores de salida, claves de proveedores de IA y secretos de cliente del inicio de sesión
+   único. Quien tenga la clave raíz anterior y una copia de la base de datos anterior podría leerlas,
+   así que introduce otras nuevas en la instancia nueva. Las claves de firma de firmware no están en
+   esta lista: la instancia solo guarda su mitad pública.
+
+Quien tenga un artefacto de depósito y su frase de contraseña tiene la clave raíz de esa instancia,
+así que guárdalos por separado.
+
+La rotación in situ está prevista para después de la primera versión estable.
+
 ## Después de `dcctl destroy` {#after-destroy}
 
 `dcctl destroy` elimina la instancia —su release de Helm, su broker NATS y su almacén de eventos,
