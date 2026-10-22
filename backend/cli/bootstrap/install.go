@@ -826,10 +826,22 @@ func reportInstall(st *State, provider string) {
 				"not say the rows came back: check the data before believing it", st.Restore.RdbFrom))
 	}
 	if existing := instancesOnCluster(st); len(existing) > 0 {
-		fmt.Println(color.HiGreenString("\nThis cluster already hosts %s. Next: move it onto this operator:\n", describeInstances(existing)))
-		for _, name := range existing {
-			fmt.Printf("    dcctl upgrade %s --dry-run%s\n    dcctl upgrade %s%s\n\n",
-				name, upgradeTargetFlags(st), name, upgradeTargetFlags(st))
+		names := make([]string, len(existing))
+		for i, r := range existing {
+			names[i] = r.Instance
+		}
+		fmt.Println(color.HiGreenString("\nThis cluster already hosts %s. Next: move it onto this operator:\n", describeInstances(names)))
+		flags := upgradeTargetFlags(st)
+		for _, r := range existing {
+			p := r.Provider
+			if p == "" {
+				p = provider
+			}
+			fmt.Printf("    dcctl upgrade %s %s%s --dry-run\n    dcctl upgrade %s %s%s\n\n", p, r.Instance, flags, p, r.Instance, flags)
+		}
+		if st.BuildImages {
+			fmt.Println(color.YellowString("  The operator was built from source, and `dcctl upgrade` builds no images: " +
+				"push the services' images and replace <tag> with the tag they were pushed at."))
 		}
 		return
 	}
@@ -837,25 +849,29 @@ func reportInstall(st *State, provider string) {
 		provider, clusterTargetFlag(st.Binding)))
 }
 
-// instancesOnCluster names the instances recorded against the cluster this install
-// just prepared. A listing that cannot be read answers none, which only means the
-// generic next step is printed.
-func instancesOnCluster(st *State) []string {
+// instancesOnCluster is the records of the instances this machine bootstrapped onto
+// the cluster this install just prepared — the ones `dcctl upgrade` can move from
+// here, since it applies their infrastructure from this machine's state. A listing
+// that cannot be read answers none, which only means the generic next step is printed.
+func instancesOnCluster(st *State) []InstanceRecord {
+	if st.KubeContext == "" {
+		return nil
+	}
 	known, err := ListInstances()
 	if err != nil {
 		return nil
 	}
-	var names []string
+	var out []InstanceRecord
 	for _, k := range known {
-		if st.KubeContext == "" || !k.HasRecord || k.Destroying || k.Record.KubeContext != st.KubeContext {
+		if !k.HasRecord || k.Destroying || k.Record.KubeContext != st.KubeContext {
 			continue
 		}
 		if uid := k.Record.ClusterUID; uid != "" && st.ClusterUID != "" && uid != st.ClusterUID {
 			continue // same context name, a different (rebuilt) cluster
 		}
-		names = append(names, k.Instance)
+		out = append(out, k.Record)
 	}
-	return names
+	return out
 }
 
 func describeInstances(names []string) string {
@@ -866,14 +882,28 @@ func describeInstances(names []string) string {
 }
 
 // upgradeTargetFlags is what `dcctl upgrade` needs to be told to land where this
-// install did: an adopted context, and a registry other than the published one.
+// install did.
+//
+// 🔴 THE REGISTRY AND VERSION ARE ALWAYS NAMED. An upgrade takes each one it is not
+// given from the instance's declaration, so a flagless command would keep the
+// instance on the release it already runs — moving nothing while reporting success —
+// and naming only a non-default registry would leave an instance built from a local
+// registry pulling the new version from there. One release is one image source
+// across the operator and the services, so the command names this install's.
+// The context is named when it was adopted rather than created.
 func upgradeTargetFlags(st *State) string {
 	var f string
-	if !st.Binding.Managed {
+	if !st.Binding.Managed && st.Binding.KubeContext != "" {
 		f += " --kube-context " + st.Binding.KubeContext
 	}
-	if st.ImageRegistry != "" && st.ImageRegistry != DefaultImageRegistry {
+	if st.ImageRegistry != "" {
 		f += " --registry " + st.ImageRegistry
+	}
+	switch {
+	case st.BuildImages:
+		f += " --version <tag>"
+	case st.ImageVersion != "":
+		f += " --version " + st.ImageVersion
 	}
 	return f
 }
