@@ -15,6 +15,7 @@ import (
 	apply "github.com/devicechain-io/dc-k8s/apply"
 	"github.com/fatih/color"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -725,6 +726,7 @@ func deploymentRolledOut(d *appsv1.Deployment) bool {
 
 func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []deploymentRef, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	pulls := newPullWatch(imagePullGrace)
 	for {
 		pending := ""
 		for _, t := range targets {
@@ -735,6 +737,9 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 			}
 			if deploymentRolledOut(d) {
 				continue
+			}
+			if err := pulls.check(ctx, typed, d, time.Now()); err != nil {
+				return err
 			}
 			desired := int32(1)
 			if d.Spec.Replicas != nil {
@@ -755,6 +760,9 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 		// this function reports as the limit is not the limit it enforced.
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
+			if cause := pulls.lastFailure(); cause != "" {
+				pending += "; " + cause
+			}
 			return fmt.Errorf("the rollout did not finish within %s: %s", timeout, pending)
 		}
 		wait := rolloutPollInterval
@@ -767,6 +775,152 @@ func waitForRollout(ctx context.Context, typed kubernetes.Interface, targets []d
 		case <-time.After(wait):
 		}
 	}
+}
+
+// imagePullGrace is how long a pod of the Deployment's CURRENT revision may keep
+// failing to pull its image, with no sign the image is missing, before the wait gives
+// up on it. A var so tests can shorten it.
+var imagePullGrace = 90 * time.Second
+
+// permanentPullMarkers are the fragments a kubelet/runtime pull error carries when
+// the image will not appear by retrying: the tag or repository does not exist, or the
+// registry refuses this cluster. Anything else (a timeout, a reset connection, a
+// registry rate limit) is retried by the kubelet and may yet succeed.
+var permanentPullMarkers = []string{
+	"not found", "manifest unknown", "name unknown", "repository does not exist",
+	"unauthorized", "denied", "forbidden", "invalid reference format",
+}
+
+// pullWatch follows image-pull failures across the polls of one rollout wait, so
+// the wait can stop early on an image that will never arrive — a mistyped tag or
+// registry, the usual cause — and name it, instead of spending the whole timeout
+// and ending in a message that names no cause.
+//
+// 🔴 IT MUST NOT ABORT A ROLLOUT THAT WOULD HAVE SUCCEEDED, which is why it is not a
+// one-shot look at the waiting reason:
+//   - ErrImagePull / ImagePullBackOff are ALSO what a transient failure looks like —
+//     a registry blip, a rate limit, a large image timing out on a slow link before
+//     the kubelet's next attempt succeeds. Those are only given up on after they have
+//     persisted for the grace period; only InvalidImageName, or a pull error that says
+//     the image is missing or refused, stops the wait at once.
+//   - Only pods of the Deployment's CURRENT ReplicaSet count. A re-run that corrects
+//     a bad --version starts a new revision while the previous attempt's pods are
+//     still in ImagePullBackOff; reading those would fail the corrected run for the
+//     mistake it is fixing.
+type pullWatch struct {
+	grace     time.Duration
+	firstSeen map[string]time.Time // pod UID/container -> first poll seen failing
+	last      string               // the most recent failure seen, for the timeout message
+}
+
+func newPullWatch(grace time.Duration) *pullWatch {
+	return &pullWatch{grace: grace, firstSeen: map[string]time.Time{}}
+}
+
+// lastFailure is the most recent pull failure seen, or "" when there was none.
+func (w *pullWatch) lastFailure() string { return w.last }
+
+// check answers non-nil when a pod of the Deployment's current revision cannot pull
+// its image and will not: permanently, or for longer than the grace period. Anything
+// it cannot read or attribute answers nil — the wait's own polling and timeout cover
+// a cluster that cannot be read.
+func (w *pullWatch) check(ctx context.Context, typed kubernetes.Interface, d *appsv1.Deployment, now time.Time) error {
+	pods, ok := currentRevisionPods(ctx, typed, d)
+	if !ok {
+		return nil
+	}
+	failing := map[string]bool{}
+	for _, p := range pods {
+		statuses := append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...)
+		for _, cs := range statuses {
+			wt := cs.State.Waiting
+			if wt == nil {
+				continue
+			}
+			switch wt.Reason {
+			case "ImagePullBackOff", "ErrImagePull", "InvalidImageName":
+			default:
+				continue
+			}
+			key := string(p.UID) + "/" + p.Name + "/" + cs.Name
+			failing[key] = true
+			if _, seen := w.firstSeen[key]; !seen {
+				w.firstSeen[key] = now
+			}
+			w.last = fmt.Sprintf("%s/%s pod %s cannot pull %q (%s: %s)",
+				d.Namespace, d.Name, p.Name, cs.Image, wt.Reason, wt.Message)
+			permanent := wt.Reason == "InvalidImageName" || isPermanentPullError(wt.Message)
+			if permanent || now.Sub(w.firstSeen[key]) >= w.grace {
+				return fmt.Errorf("%s/%s cannot start: the image %q cannot be pulled (%s: %s) - "+
+					"check that the tag exists in the registry and that --registry and --version are right",
+					d.Namespace, d.Name, cs.Image, wt.Reason, wt.Message)
+			}
+		}
+	}
+	// A container that is no longer failing — pulling again, or started — has
+	// recovered; its clock starts over if it fails again.
+	for key := range w.firstSeen {
+		if !failing[key] {
+			delete(w.firstSeen, key)
+		}
+	}
+	return nil
+}
+
+func isPermanentPullError(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, marker := range permanentPullMarkers {
+		if strings.Contains(m, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// revisionAnnotation is the Deployment controller's revision stamp, carried by the
+// Deployment and by each of its ReplicaSets.
+const revisionAnnotation = "deployment.kubernetes.io/revision"
+
+// currentRevisionPods lists the pods of the ReplicaSet the Deployment is rolling
+// onto. ok is false when that ReplicaSet cannot be identified yet — the controller
+// has not observed the new template, or not created its ReplicaSet — in which case
+// there is nothing current to judge.
+func currentRevisionPods(ctx context.Context, typed kubernetes.Interface, d *appsv1.Deployment) ([]corev1.Pod, bool) {
+	if d.Spec.Selector == nil || d.Status.ObservedGeneration < d.Generation {
+		return nil, false
+	}
+	rev := d.Annotations[revisionAnnotation]
+	if rev == "" {
+		return nil, false
+	}
+	selector := metav1.FormatLabelSelector(d.Spec.Selector)
+	rsets, err := typed.AppsV1().ReplicaSets(d.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, false
+	}
+	hash := ""
+	for _, rs := range rsets.Items {
+		owner := metav1.GetControllerOf(&rs)
+		if owner == nil || owner.UID != d.UID || rs.Annotations[revisionAnnotation] != rev {
+			continue
+		}
+		hash = rs.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
+		break
+	}
+	if hash == "" {
+		return nil, false
+	}
+	pods, err := typed.CoreV1().Pods(d.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, false
+	}
+	var out []corev1.Pod
+	for _, p := range pods.Items {
+		if p.Labels[appsv1.DefaultDeploymentUniqueLabelKey] == hash {
+			out = append(out, p)
+		}
+	}
+	return out, true
 }
 
 // beginUpgradeClaim takes the cluster lock for an operator upgrade, warning rather
