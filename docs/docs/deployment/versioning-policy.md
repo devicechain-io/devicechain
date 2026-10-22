@@ -68,7 +68,9 @@ These can change in a minor release. When they do, the release notes and that re
   earlier one, and every migration can be re-run after a failure. Before v1.0.0 a few releases
   could not be upgraded into at all; that ends with v1.0.0.
 - **Upgrades are checked against real data.** Each release's upgrade is exercised by seeding an instance on an
-  earlier release, upgrading it, and reading every row back. The release workflow runs this check, and a release whose upgrade fails it is not published.
+  earlier release, upgrading it, and reading every row back. The release workflow runs this check from the
+  previous stable release. If it fails, the release is stopped: no GitHub release, `dcctl` binaries or SDK packages
+  are published for it. Its container images and chart may already be in the registry, but they are not a release.
 - **There is no downgrade.** A new release may migrate the database in ways an earlier release cannot read.
   If an upgrade goes wrong, roll forward to a fixed release, or restore from backup using the
   [disaster recovery](./disaster-recovery.md) procedure. Do not use `helm rollback` to go back.
@@ -94,10 +96,16 @@ is ready, in the release notes' first lines, with the steps to move to the repla
 
 ## Support window {#support-window}
 
-Security fixes and bug fixes are released for the **latest minor release** and the **minor release before it**. A
-fix is released as a patch of each of them. Releases older than that receive no fix, so keep within one
-minor release of the latest. Upgrading to the next minor is the supported path, so staying current is
-never more than one step at a time.
+| Release | What it receives |
+| --- | --- |
+| The **latest minor release** | Bug fixes, and security fixes of every severity |
+| The **minor release before it** | Security fixes rated High or Critical, for 90 days after the next minor release ships |
+| Anything older | Nothing. Upgrade to a supported release |
+
+Fixes ship as patch releases of each supported minor. Keep within one minor release of the latest; upgrading to
+the next minor is the supported path, so staying current is never more than one step at a time. The same window
+is stated in the [security policy](https://github.com/devicechain-io/devicechain/blob/main/SECURITY.md), with how
+to report a vulnerability and how quickly a fix is targeted.
 
 ## How breaking changes are announced {#announcing-breaking-changes}
 

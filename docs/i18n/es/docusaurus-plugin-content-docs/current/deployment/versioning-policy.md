@@ -67,8 +67,9 @@ Estas pueden cambiar en una versión menor. Cuando lo hacen, las notas de versi�
   toda migración puede volver a ejecutarse tras un fallo. Antes de la v1.0.0, a algunas versiones no se podía actualizar en
   absoluto; eso termina con la v1.0.0.
 - **Las actualizaciones se comprueban con datos reales.** La actualización de cada versión se ejerce sembrando una instancia en una versión
-  anterior, actualizándola y leyendo de vuelta todas las filas. El flujo de publicación ejecuta esta comprobación, y una versión cuya
-  actualización la falla no se publica.
+  anterior, actualizándola y leyendo de vuelta todas las filas. El flujo de publicación ejecuta esta comprobación desde la versión
+  estable anterior. Si falla, la versión se detiene: no se publican para ella la versión de GitHub, los binarios de `dcctl` ni los
+  paquetes de los SDK. Sus imágenes de contenedor y su chart pueden estar ya en el registro, pero no son una versión.
 - **No hay descenso de versión.** Una versión nueva puede migrar la base de datos de formas que una versión anterior no puede leer.
   Si una actualización sale mal, avance a una versión corregida o restaure desde una copia de seguridad con el procedimiento de
   [recuperación ante desastres](./disaster-recovery.md). No use `helm rollback` para volver atrás.
@@ -94,10 +95,16 @@ está lista, en las primeras líneas de las notas de versión, con los pasos par
 
 ## Ventana de soporte {#support-window}
 
-Las correcciones de seguridad y de errores se publican para la **última versión menor** y para la **versión menor anterior**. Cada
-corrección se publica como un parche de cada una de ellas. Las versiones más antiguas no reciben correcciones, así que
-manténgase a una versión menor de la última. Actualizar a la siguiente versión menor es la ruta admitida, de modo que
-mantenerse al día nunca supone más de un paso cada vez.
+| Versión | Qué recibe |
+| --- | --- |
+| La **última versión menor** | Correcciones de errores y correcciones de seguridad de cualquier gravedad |
+| La **versión menor anterior** | Correcciones de seguridad de gravedad alta o crítica, durante 90 días después de publicarse la siguiente versión menor |
+| Cualquier versión más antigua | Nada. Actualice a una versión admitida |
+
+Las correcciones se publican como versiones de parche de cada versión menor admitida. Manténgase a una versión menor de la
+última; actualizar a la siguiente versión menor es la ruta admitida, de modo que mantenerse al día nunca supone más de un paso
+cada vez. La misma ventana figura en la [política de seguridad](https://github.com/devicechain-io/devicechain/blob/main/SECURITY.md),
+junto con cómo informar de una vulnerabilidad y en qué plazo se busca publicar una corrección.
 
 ## Cómo se anuncian los cambios disruptivos {#announcing-breaking-changes}
 

@@ -36,24 +36,32 @@ See [Multi-Tenancy](./multi-tenancy.md).
 
 ## Devices {#devices}
 
-- **Transport.** The MQTT and NATS listeners use TLS.
+- **Transport.** The broker's MQTT and NATS listeners use TLS by default. It can be turned off only for local
+  debugging. HTTP ingest is protected by the TLS of the instance's ingress.
 - **Identity is asserted by the broker.** The broker asks the platform to approve each connection, and the platform
   binds the connection to that one device's subjects. The device identity the platform trusts for an event is the
   subject the broker delivered it on, not a claim in the payload. A device cannot publish into another device's or
-  another tenant's subjects, or read their commands. The MQTT client id must also begin with the device's own
-  `{instanceId}:{tenant}:{deviceToken}`, so one device cannot take over another's session.
-- **Credentials.** The default device-auth mode is `required`: an event must present a valid credential, and an
-  authenticated device cannot send events as a different device. Disabling or deleting a credential stops new
-  connections at once. See [Device credentials](../guides/device-credentials.md), including how quickly a
-  revocation reaches events already in flight.
-- **Credentials at rest.** The password of an `MQTT_BASIC` credential is stored only as a keyed one-way digest, shown once
-  when you set it, and never returned. An `ACCESS_TOKEN` credential is different today: the token is the
+  another tenant's subjects, or read their commands. The MQTT client id must also be the device's own
+  `{instanceId}:{tenant}:{deviceToken}`, optionally followed by `:` and a suffix of the device's choosing, so one
+  device cannot take over another's session.
+- **Credentials.** The default device-auth mode is `required`: an event is accepted only from an authenticated device.
+  On the platform's MQTT broker the device authenticates when it connects. Over HTTP, or through a broker of your
+  own, the credential travels in the event body. Once a credential has authenticated a device, an event naming a
+  different device is refused. Disabling, rotating or deleting a credential refuses new connections at once and
+  ends the device's open sessions. See [Device credentials](../guides/device-credentials.md), including how quickly
+  a revocation reaches events already in flight.
+- **Credentials at rest.** The password of an `MQTT_BASIC` credential is stored only as a keyed one-way digest and
+  is never returned. An `ACCESS_TOKEN` credential is different today: the token is the
   credential's identifier and is stored as a value the platform can read back. A leak of the database or of a
   backup would expose the tokens of every token-authenticated device. Treat such backups accordingly, and
-  prefer `MQTT_BASIC` where you can.
-- **Credentials in transit.** The password or token that arrives with an event is sealed before the event is put
-  on the platform's internal stream, and the copy of an undecodable message that is kept for diagnosis has its
-  credentials removed.
+  prefer `MQTT_BASIC` where you can. Storing access tokens only as a digest is planned before 1.0.0.
+- **Credentials in an event body.** On the platform's MQTT broker the connection has already authenticated the
+  device, so an event that also carries a credential in its body is refused. A transitional setting,
+  `capture.bodyCredential: strip`, accepts such an event with the credential removed so that a fleet keeps
+  reporting while its firmware is updated; it is planned for removal before 1.0.0. Over HTTP and through a broker
+  of your own, where the body is how the credential travels, the password or token is sealed before the event is
+  put on the platform's internal stream. On every transport, the copy of an undecodable message that is kept for
+  diagnosis has its credentials removed.
 
 ## People and programs {#api-access}
 
@@ -93,11 +101,16 @@ addresses. The chart's `networkPolicy` is a second layer, off by default. See
 
 ## Audit {#audit}
 
-The platform records a journal entry for every create, update and delete it makes to a tenant's registry, with the
-acting identity, and for sign-in events such as logins, failed logins and single sign-on outcomes. If a registry
-entry cannot be written, the change fails. Entries are never edited, and a tenant sees only its own. Changes to
-connectors, dashboards, rules and updates are not in this journal, and the journal is not pruned
-automatically. See [Audit](../user-guide/audit.md).
+Every service records a journal entry, with the acting identity, for each create, update and delete it makes to
+a tenant's data, and the sign-in service also records sign-in events such as logins, failed logins and single
+sign-on outcomes. A tenant's Audit screen shows the registry journal, and only that tenant's entries. Sign-in
+events are read through the operator's administration API, and the journals of other areas, such as connectors,
+dashboards and updates, are recorded but are not shown on the Audit screen.
+
+If a registry entry cannot be written, the call reports a failure even though the change itself was saved, so a
+change is never silently left unrecorded. A failed write of a sign-in entry is logged and does not block the
+sign-in. Entries are never edited, except that deleting a tenant empties the names in its entries. The journal
+is not pruned automatically. See [Audit](../user-guide/audit.md).
 
 ## What is not enforced yet {#accepted-gaps}
 
@@ -108,13 +121,14 @@ These are known and accepted for the current release. Plan around them.
    mistake, but it can also administer the broker's streams, and a stream can be configured to write into
    those subjects. A compromised service could therefore forge device events, command responses and device
    reports for any tenant. Giving each service its own login, limited to the subjects and streams it needs, is
-   being built, and this entry will change when it ships. Until then, treat the services that accept device
+   being built and is planned before 1.0.0. This entry will change when it ships. Until then, treat the services that accept device
    traffic as part of the trusted core of the platform.
 2. **The database login is shared by all services in an instance.** Every service reaches the instance's relational
    database with one login, so a compromised service could read and write another area's tables. Tenant isolation
    in the database rests on the application's tenant scope, not on database permissions. Separate roles per
-   service are planned for a release after 1.0.
-3. **Access tokens are stored readable**, as described under [Devices](#devices).
+   service are planned for a 1.0.x release.
+3. **Access tokens are stored readable**, as described under [Devices](#devices). Storing them only as a digest
+   is planned before 1.0.0.
 4. **MQTT acknowledgements across a broker leader change.** By default the broker can acknowledge a QoS 1 message and
    then lose it if the capture stream changes leader. With `infrastructure.nats.mqttFailClosed` on, an
    acknowledgement means the platform holds the message. The setting is off by default, and

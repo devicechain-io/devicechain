@@ -36,24 +36,31 @@ Consulte [Multitenencia](./multi-tenancy.md).
 
 ## Dispositivos {#devices}
 
-- **Transporte.** Los listeners MQTT y NATS usan TLS.
+- **Transporte.** Los listeners MQTT y NATS del broker usan TLS por defecto. Solo puede desactivarse para depurar en
+  local. La ingesta HTTP queda protegida por el TLS del ingress de la instancia.
 - **El broker afirma la identidad.** El broker pide a la plataforma que apruebe cada conexión, y la plataforma
   vincula la conexión a los asuntos de ese único dispositivo. La identidad de dispositivo en la que confía la plataforma para un evento es el
   asunto por el que el broker lo entregó, no una afirmación de la carga útil. Un dispositivo no puede publicar en los asuntos de otro dispositivo ni
-  de otro inquilino, ni leer sus comandos. El id de cliente MQTT debe además empezar por el
-  `{instanceId}:{tenant}:{deviceToken}` del propio dispositivo, de modo que un dispositivo no pueda apropiarse de la sesión de otro.
-- **Credenciales.** El modo de autenticación de dispositivos por defecto es `required`: un evento debe presentar una credencial válida, y un
-  dispositivo autenticado no puede enviar eventos como otro dispositivo. Desactivar o eliminar una credencial detiene de inmediato las nuevas
-  conexiones. Consulte [Credenciales de dispositivo](../guides/device-credentials.md), incluida la rapidez con que una
+  de otro inquilino, ni leer sus comandos. El id de cliente MQTT debe además ser el
+  `{instanceId}:{tenant}:{deviceToken}` del propio dispositivo, seguido opcionalmente de `:` y un sufijo que elija el dispositivo,
+  de modo que un dispositivo no pueda apropiarse de la sesión de otro.
+- **Credenciales.** El modo de autenticación de dispositivos por defecto es `required`: solo se acepta un evento de un dispositivo autenticado.
+  En el broker MQTT de la plataforma, el dispositivo se autentica al conectarse. Por HTTP, o a través de un broker propio, la credencial
+  viaja en el cuerpo del evento. Una vez que una credencial ha autenticado un dispositivo, se rechaza un evento que nombre a otro
+  dispositivo. Desactivar, rotar o eliminar una credencial rechaza de inmediato las nuevas conexiones y cierra las sesiones abiertas
+  del dispositivo. Consulte [Credenciales de dispositivo](../guides/device-credentials.md), incluida la rapidez con que una
   revocación alcanza a los eventos en curso.
-- **Credenciales en reposo.** La contraseña de una credencial `MQTT_BASIC` se guarda solo como un resumen unidireccional con clave, se muestra una vez
-  al establecerla y nunca se devuelve. Una credencial `ACCESS_TOKEN` es distinta hoy: el token es el identificador de la
+- **Credenciales en reposo.** La contraseña de una credencial `MQTT_BASIC` se guarda solo como un resumen unidireccional con clave
+  y nunca se devuelve. Una credencial `ACCESS_TOKEN` es distinta hoy: el token es el identificador de la
   credencial y se guarda como un valor que la plataforma puede leer. Una fuga de la base de datos o de una copia de
   seguridad expondría los tokens de todos los dispositivos autenticados por token. Trate esas copias en consecuencia y
-  prefiera `MQTT_BASIC` cuando pueda.
-- **Credenciales en tránsito.** La contraseña o el token que llega con un evento se sella antes de colocar el evento en el flujo
-  interno de la plataforma, y la copia de un mensaje no decodificable que se conserva para diagnóstico tiene sus
-  credenciales eliminadas.
+  prefiera `MQTT_BASIC` cuando pueda. Está previsto guardar los tokens de acceso solo como resumen antes de la 1.0.0.
+- **Credenciales en el cuerpo de un evento.** En el broker MQTT de la plataforma la conexión ya ha autenticado al dispositivo, así que
+  se rechaza un evento que además lleve una credencial en su cuerpo. Un ajuste transitorio, `capture.bodyCredential: strip`, acepta ese
+  evento sin la credencial para que una flota siga informando mientras se actualiza su firmware; está previsto retirarlo antes de la
+  1.0.0. Por HTTP y a través de un broker propio, donde el cuerpo es la vía de la credencial, la contraseña o el token se sella antes de
+  colocar el evento en el flujo interno de la plataforma. En todos los transportes, la copia de un mensaje no decodificable que se
+  conserva para diagnóstico tiene sus credenciales eliminadas.
 
 ## Personas y programas {#api-access}
 
@@ -93,10 +100,15 @@ concretas. El `networkPolicy` del chart es una segunda capa, desactivada por def
 
 ## Auditoría {#audit}
 
-La plataforma registra una entrada en el diario por cada creación, actualización y eliminación que hace en el registro de un inquilino, con la
-identidad que actúa, y por eventos de inicio de sesión como accesos, accesos fallidos y resultados del inicio de sesión único. Si una entrada del
-registro no puede escribirse, el cambio falla. Las entradas nunca se editan, y un inquilino solo ve las suyas. Los cambios en
-conectores, paneles, reglas y actualizaciones no están en este diario, y el diario no se depura
+Cada servicio registra una entrada en el diario, con la identidad que actúa, por cada creación, actualización y eliminación que hace
+en los datos de un inquilino, y el servicio de inicio de sesión registra además eventos como accesos, accesos fallidos y resultados del
+inicio de sesión único. La pantalla de Auditoría de un inquilino muestra el diario del registro, y solo las entradas de ese inquilino.
+Los eventos de inicio de sesión se leen a través de la API de administración del operador, y los diarios de otras áreas, como
+conectores, paneles y actualizaciones, se registran pero no se muestran en la pantalla de Auditoría.
+
+Si una entrada del registro no puede escribirse, la llamada informa de un fallo aunque el cambio ya se haya guardado, de modo que un
+cambio nunca queda sin registrar en silencio. Un fallo al escribir una entrada de inicio de sesión se anota en el log y no bloquea el
+acceso. Las entradas nunca se editan, salvo que eliminar un inquilino vacía los nombres de sus entradas. El diario no se depura
 automáticamente. Consulte [Auditoría](../user-guide/audit.md).
 
 ## Lo que aún no se hace cumplir {#accepted-gaps}
@@ -108,13 +120,14 @@ Estas carencias son conocidas y se aceptan en la versión actual. Planifique en 
    error, pero también puede administrar los flujos del broker, y un flujo puede configurarse para escribir en
    esos asuntos. Un servicio comprometido podría, por tanto, falsificar eventos de dispositivo, respuestas a comandos y reportes de dispositivo
    de cualquier inquilino. Se está construyendo un inicio de sesión propio para cada servicio, limitado a los asuntos y flujos que necesita,
-   y esta entrada cambiará cuando se publique. Hasta entonces, trate los servicios que aceptan tráfico de
+   y está previsto antes de la 1.0.0. Esta entrada cambiará cuando se publique. Hasta entonces, trate los servicios que aceptan tráfico de
    dispositivos como parte del núcleo de confianza de la plataforma.
 2. **El inicio de sesión de la base de datos es compartido por todos los servicios de una instancia.** Todos los servicios acceden a la base de datos
    relacional de la instancia con un único inicio de sesión, así que un servicio comprometido podría leer y escribir las tablas de otra área. El aislamiento de inquilinos
    en la base de datos descansa en el ámbito de inquilino de la aplicación, no en permisos de la base de datos. Los roles separados por
-   servicio están previstos para una versión posterior a la 1.0.
-3. **Los tokens de acceso se guardan legibles**, como se describe en [Dispositivos](#devices).
+   servicio están previstos para una versión 1.0.x.
+3. **Los tokens de acceso se guardan legibles**, como se describe en [Dispositivos](#devices). Está previsto guardarlos solo
+   como resumen antes de la 1.0.0.
 4. **Confirmaciones MQTT durante un cambio de líder del broker.** Por defecto, el broker puede confirmar un mensaje QoS 1 y
    perderlo después si el flujo de captura cambia de líder. Con `infrastructure.nats.mqttFailClosed` activado, una
    confirmación significa que la plataforma conserva el mensaje. El ajuste está desactivado por defecto, y

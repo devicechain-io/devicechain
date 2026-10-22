@@ -266,10 +266,11 @@ dcctl upgrade local devicechain --version <new-version>
 ```
 
 :::note Qué se ha medido
-La actualización se ensaya en un clúster local antes de cada versión. En ese ensayo se actualiza in situ
-una instancia instalada con `--ha`, se reinicia su broker dos veces, los dispositivos se reconectan tras
-cada reinicio y, con tráfico MQTT en marcha, todos los mensajes que el broker había confirmado seguían
-almacenados después.
+La actualización se ha ensayado a mano en un clúster local: una instancia instalada con `--ha` se
+actualizó in situ con tráfico MQTT en marcha, su broker se reinició dos veces, los dispositivos se
+reconectaron tras cada reinicio y todos los mensajes que el broker había confirmado seguían almacenados
+después. Ese ensayo es manual. La comprobación automática de actualización que condiciona cada versión
+se ejecuta sin tráfico.
 
 No se ha medido una actualización bajo carga sostenida de producción en un clúster de tamaño de producción,
 así que DeviceChain no promete una actualización sin interrupción. Prevea una breve interrupción donde se

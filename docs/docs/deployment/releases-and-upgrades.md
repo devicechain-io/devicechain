@@ -255,9 +255,10 @@ dcctl upgrade local devicechain --version <new-version>
 ```
 
 :::note What has been measured
-The upgrade is rehearsed on a local cluster before a release. In that drill an instance installed
-with `--ha` is upgraded in place, its broker is rolled twice, devices reconnect after each roll, and
-with MQTT traffic running every message the broker had acknowledged was still stored afterwards.
+The upgrade has been rehearsed by hand on a local cluster: an instance installed with `--ha` was upgraded
+in place with MQTT traffic running, its broker rolled twice, devices reconnected after each roll, and every
+message the broker had acknowledged was still stored afterwards. That rehearsal is manual. The automated
+upgrade check that gates a release runs with no traffic.
 
 An upgrade under sustained production load, on a cluster of production size, has not been
 measured, so DeviceChain does not promise an upgrade without interruption. Plan for a short
