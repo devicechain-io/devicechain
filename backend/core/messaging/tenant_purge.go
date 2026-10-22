@@ -139,14 +139,15 @@ func PurgeTenant(ctx context.Context, nc *nats.Conn, instanceId, tenant string) 
 			continue
 		}
 		stream := StreamName(instanceId, suffix)
-		filter := TenantSubjectFilter(instanceId, tenant, suffix)
-		n, err := purgeSubject(ctx, nc, stream, filter)
-		if err != nil {
-			return res, err
-		}
-		if n > 0 {
-			res.PerStream[stream] += n
-			res.Messages += n
+		for _, filter := range TenantSubjectFilters(instanceId, tenant, suffix) {
+			n, err := purgeSubject(ctx, nc, stream, filter)
+			if err != nil {
+				return res, err
+			}
+			if n > 0 {
+				res.PerStream[stream] += n
+				res.Messages += n
+			}
 		}
 	}
 

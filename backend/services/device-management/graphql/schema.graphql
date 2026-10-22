@@ -2028,6 +2028,20 @@ type Device implements Model & TokenReference & NamedEntity & MetadataEntity & E
     enabled: Boolean!
     """When the device was disabled, as an RFC 3339 timestamp; null while it is enabled."""
     disabledAt: String
+    """
+    The gateway this device is behind, or null when it is behind none. Only that gateway's
+    credential may publish this device's telemetry on the gateway's own topics; the device's
+    own credential still works as before.
+    """
+    gateway: Device
+    """
+    The devices behind this device, one page at a time. Empty unless the device is a
+    gateway. Requires device:read.
+    """
+    children(
+        """Which page to return."""
+        pagination: PaginationInput!
+    ): DeviceSearchResults!
 }
 
 """Fields for a new device."""
@@ -2049,6 +2063,12 @@ input DeviceCreateRequest {
     metadata: String
     """False to create the device already disabled. Omitted or null creates it enabled."""
     enabled: Boolean
+    """
+    Token of the gateway device to create this device behind. The same rules as
+    assignDeviceGateway apply, and a refusal fails the create. Omitted or null creates the
+    device behind no gateway.
+    """
+    gatewayToken: String
 }
 
 # There is no `token` member — the mutation's own `token` argument names the row. It used
@@ -4318,6 +4338,31 @@ type Mutation {
         """True to decide every row without writing anything."""
         dryRun: Boolean!
     ): DeviceImportResult!
+    """
+    Puts a device behind a gateway device, so that gateway's credential may publish the
+    device's telemetry on the gateway's own topics, and returns the device. Assigning a
+    device to the gateway it already has changes nothing; a device with another gateway is
+    moved. Refused with INVALID_VALUE when the two are the same device, when the gateway is
+    itself behind a gateway, or when the device is itself the gateway of other devices
+    (gateways are one level deep). Fails if either token names no device. This grants the
+    gateway the same standing over the device as issuing the device a credential, so it
+    requires device:write and is refused for a member limited to part of the tenant.
+    """
+    assignDeviceGateway(
+        """Token of the device to put behind the gateway."""
+        deviceToken: String!
+        """Token of the gateway device."""
+        gatewayToken: String!
+    ): Device!
+    """
+    Takes a device out from behind its gateway and returns it: the gateway's next publish for
+    the device is refused and recorded in failed events. Clearing a device that has no gateway
+    changes nothing. Fails if no device has the token. Requires device:write.
+    """
+    clearDeviceGateway(
+        """Token of the device."""
+        deviceToken: String!
+    ): Device!
     """
     Partially updates a device and returns it. Fails if no device has the token. Requires
     device:write.

@@ -275,6 +275,7 @@ CREATE INDEX idx_alarms_scope_anchors ON "device-management".alarms USING gin (s
 CREATE INDEX idx_audit_tenant_time ON "device-management".audit_events USING btree (tenant_id, occurred_time DESC);
 CREATE INDEX idx_devices_device_type ON "device-management".devices USING btree (tenant_id, device_type_id) WHERE (deleted_at IS NULL);
 CREATE INDEX idx_devices_disabled ON "device-management".devices USING btree (tenant_id, id) WHERE ((disabled_at IS NOT NULL) AND (deleted_at IS NULL));
+CREATE INDEX idx_devices_gateway ON "device-management".devices USING btree (tenant_id, gateway_id) WHERE ((gateway_id IS NOT NULL) AND (deleted_at IS NULL));
 CREATE INDEX idx_dr_scope_ref_group ON "device-management".detection_rule_scope_refs USING btree (group_token, group_version);
 CREATE INDEX idx_egfr_group ON "device-management".entity_group_facet_refs USING btree (group_id, selector_version);
 CREATE INDEX idx_egfr_lookup ON "device-management".entity_group_facet_refs USING btree (facet_key, member_type);
@@ -832,7 +833,8 @@ CREATE TABLE "device-management".devices (
  device_type_id bigint,
  external_id character varying(256),
  expected_since timestamp with time zone,
- disabled_at timestamp with time zone
+ disabled_at timestamp with time zone,
+ gateway_id bigint
 );
 CREATE TABLE "device-management".entity_attributes (
  id bigint NOT NULL,

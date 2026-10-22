@@ -102,3 +102,87 @@ func TestSubjectToMqttTopic(t *testing.T) {
 		}
 	}
 }
+
+// The gateway shape is declared once and every derivation agrees with it: the subject builder,
+// the capture wildcard, the parser, the MQTT topic form, and the capture stream's subject list.
+func TestGatewayShapeDerivations(t *testing.T) {
+	subject := GatewayEventsSubject("inst", "acme", "gw-1", "sensor-001")
+	if got, want := subject, "inst.acme.gateways.gw-1.devices.sensor-001.events"; got != want {
+		t.Fatalf("gateway events subject = %q, want %q", got, want)
+	}
+	if got, want := GatewayEventsWildcard("inst"), "inst.*.gateways.*.devices.*.events"; got != want {
+		t.Errorf("gateway events wildcard = %q, want %q", got, want)
+	}
+	if got, want := SubjectToMqttTopic(subject), "inst/acme/gateways/gw-1/devices/sensor-001/events"; got != want {
+		t.Errorf("gateway MQTT topic = %q, want %q", got, want)
+	}
+	if got, want := GatewayNoticesSubject("inst", "acme", "gw-1"), "inst.acme.gateways.gw-1.notices"; got != want {
+		t.Errorf("notices subject = %q, want %q", got, want)
+	}
+
+	// The capture stream stores exactly the two shapes.
+	got := StreamSubjects("inst", streams.DeviceEventsCapture)
+	want := []string{"inst.*.devices.*.events", "inst.*.gateways.*.devices.*.events"}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("capture stream subjects = %v, want %v", got, want)
+	}
+
+	// Parsing recovers who a subject speaks for, and only for the two shapes.
+	cases := []struct {
+		subject, gateway, device string
+		ok                       bool
+	}{
+		{"inst.acme.devices.d1.events", "", "d1", true},
+		{subject, "gw-1", "sensor-001", true},
+		// Not telemetry: a gateway's other leaves, its notices, and malformed subjects.
+		{GatewayDeviceSubject("inst", "acme", "gw-1", "c1", "responses"), "", "", false},
+		{GatewayNoticesSubject("inst", "acme", "gw-1"), "", "", false},
+		{"inst.acme.devices.d1.reports", "", "", false},
+		{"inst.acme.gateways..devices.c1.events", "", "", false},
+		{"inst.acme.gateways.gw-1.devices..events", "", "", false},
+		{"inst.acme.devices.d1.events.extra", "", "", false},
+		{"inst.acme.gateways.gw-1.things.c1.events", "", "", false},
+	}
+	for _, c := range cases {
+		g, d, ok := ParseDeviceEventsSubject(c.subject)
+		if g != c.gateway || d != c.device || ok != c.ok {
+			t.Errorf("ParseDeviceEventsSubject(%q) = (%q, %q, %v), want (%q, %q, %v)",
+				c.subject, g, d, ok, c.gateway, c.device, c.ok)
+		}
+	}
+}
+
+// A tenant purge reaches the tenant's gateway subjects in the capture stream, and only the
+// tenant's. A purge of the device shape alone would leave a deleted tenant's gateway traffic on
+// the broker for a successor at a reused token.
+func TestTenantPurgeFiltersCoverTheGatewayShape(t *testing.T) {
+	filters := TenantSubjectFilters("inst", "acme", streams.DeviceEventsCapture)
+	if len(filters) != 2 || filters[0] != "inst.acme.devices.*.events" || filters[1] != "inst.acme.gateways.*.devices.*.events" {
+		t.Fatalf("capture purge filters = %v", filters)
+	}
+	if got := TenantSubjectFilters("inst", "acme", streams.InboundEvents); len(got) != 1 {
+		t.Errorf("an ordinary stream purges by one filter, got %v", got)
+	}
+}
+
+// The store reader hands out a gateway's telemetry as well as a device's own, and nothing else.
+func TestFailClosedEventsDurableForwardsBothShapes(t *testing.T) {
+	var d MqttFailClosedDurable
+	for _, x := range MqttFailClosedDurables("inst") {
+		if x.Kind == MqttFailClosedEvents {
+			d = x
+		}
+	}
+	r := &natsReader{forwards: d.Forwards, alsoForwards: d.AlsoForwards}
+	for subject, want := range map[string]bool{
+		MqttMsgsSubject(DeviceEventsSubject("inst", "t1", "d1")):                          true,
+		MqttMsgsSubject(GatewayEventsSubject("inst", "t1", "g1", "c1")):                   true,
+		MqttMsgsSubject(GatewayEventsSubject("other", "t1", "g1", "c1")):                  false,
+		MqttMsgsSubject(GatewayDeviceSubject("inst", "t1", "g1", "c1", SegmentResponses)): false,
+		MqttMsgsSubject(GatewayNoticesSubject("inst", "t1", "g1")):                        false,
+	} {
+		if got := r.forwardsSubject(subject); got != want {
+			t.Errorf("forwardsSubject(%q) = %v, want %v", subject, got, want)
+		}
+	}
+}

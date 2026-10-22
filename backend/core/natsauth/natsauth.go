@@ -38,8 +38,9 @@ const AppAccount = "APP"
 const ServiceUser = "dc_service"
 
 // ServicePublishDeny is the publish DENY the broker holds the shared service login to: the
-// device-events namespace, "{instance}.{tenant}.devices.{device}.events" and the gateway's
-// "$MQTT.msgs." form of it. Only a device writes there, through the grant DevicePermissions
+// device-events namespace, "{instance}.{tenant}.devices.{device}.events", the gateway namespace's
+// "{instance}.{tenant}.gateways.{gateway}.devices.{child}.events", and the MQTT gateway's
+// "$MQTT.msgs." form of each. Only a device writes there, through the grant DevicePermissions
 // mints, so a subject in this namespace is what makes an event broker-asserted. Without the
 // deny, one `nats pub` or MQTT publish as the service login forges an event for any device.
 //
@@ -66,7 +67,8 @@ const ServiceUser = "dc_service"
 // AreaPermissions), which the infrastructure module renders verbatim.
 func ServicePublishDeny() []string {
 	events := messaging.DeviceEventsWildcard("*")
-	return []string{events, messaging.MqttMsgsSubject(events)}
+	gatewayEvents := messaging.GatewayEventsWildcard("*")
+	return []string{events, messaging.MqttMsgsSubject(events), gatewayEvents, messaging.MqttMsgsSubject(gatewayEvents)}
 }
 
 // SystemAccount is the NATS system account — where the broker publishes its own
@@ -473,9 +475,26 @@ func DevicePermissions(instanceId, tenant, deviceToken string) (jwt.Permissions,
 	reports := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceReports, deviceToken)
 	desired := messaging.DeviceScopedSubject(instanceId, tenant, messaging.SubjectDeviceDesired, deviceToken)
 
+	// 🔑 THE GATEWAY NAMESPACE, GRANTED TO EVERY DEVICE AND CONFINED TO ITS OWN TOKEN. A device
+	// that fronts other devices publishes for each of them under
+	// "{i}.{t}.gateways.{this device}.devices.*.{leaf}" and hears the platform on its own
+	// "…notices" and each child's "…commands"/"…desired". The wildcard stands in only for the
+	// CHILD token, never for the gateway token, so the grant is constant-size however many
+	// children a gateway has and a device can never publish into another gateway's namespace
+	// (the broker refuses it). WHO may be spoken for is not decided here at all: it is the
+	// child's gateway_id, checked by the resolver, so assigning the first child needs no
+	// reconnect, and a device that is nobody's gateway holds a grant that authorizes nothing.
+	// The downlink and response/report leaves are granted from v1 although only events are
+	// captured today, so routing them later changes no grant.
 	var p jwt.Permissions
-	p.Pub.Allow.Add(events, responses, reports)
-	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject)
+	p.Pub.Allow.Add(events, responses, reports,
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentEvents),
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentResponses),
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentReports))
+	p.Sub.Allow.Add(commands, desired, MqttDeliverySubject,
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentCommands),
+		messaging.GatewayLeafWildcard(instanceId, tenant, deviceToken, messaging.SegmentDesired),
+		messaging.GatewayNoticesSubject(instanceId, tenant, deviceToken))
 	return p, nil
 }
 

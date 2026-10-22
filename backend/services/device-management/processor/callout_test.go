@@ -224,6 +224,11 @@ func TestAuthorizeGrant(t *testing.T) {
 		"inst-1.acme-corp.devices.sensor-001.events",
 		"inst-1.acme-corp.command-responses.sensor-001",
 		"inst-1.acme-corp.device-reports.sensor-001",
+		// ...and the same three leaves under its OWN gateway namespace, a wildcard over the
+		// child token only (TestAuthorizeGrantNamespaceIsItsOwn pins that it names this device).
+		"inst-1.acme-corp.gateways.sensor-001.devices.*.events",
+		"inst-1.acme-corp.gateways.sensor-001.devices.*.responses",
+		"inst-1.acme-corp.gateways.sensor-001.devices.*.reports",
 	}
 	if got := []string(uc.Permissions.Pub.Allow); !slices.Equal(got, want) {
 		t.Errorf("pub allow = %v, want %v", got, want)
@@ -620,5 +625,45 @@ func TestAuthorizeClampsTheSessionToTheCredentialsExpiry(t *testing.T) {
 				t.Errorf("JWT expires at %d, want %d (now+%s)", got, want, tc.want)
 			}
 		})
+	}
+}
+
+// The gateway namespace a device is granted is ITS OWN. The grant is minted from the token of
+// the device the credential authenticated, so a wildcard appears only where the CHILD token
+// goes: nothing in the signed grant names another gateway, however the request is shaped.
+func TestAuthorizeGrantNamespaceIsItsOwn(t *testing.T) {
+	r, _ := newTestResponder(t, func(_ context.Context, _ *model.PresentedCredential) (*model.Device, error) {
+		d := &model.Device{}
+		d.Token = "sensor-001"
+		return d, nil
+	})
+	userJWT, errMsg := r.authorize(testRequest(t, "acme-corp:dev1", "s3cret"))
+	if errMsg != "" {
+		t.Fatalf("expected grant, got denial %q", errMsg)
+	}
+	uc, err := jwt.DecodeUserClaims(userJWT)
+	if err != nil {
+		t.Fatalf("decode user claims: %v", err)
+	}
+	var seen int
+	for _, list := range [][]string{uc.Permissions.Pub.Allow, uc.Permissions.Sub.Allow} {
+		for _, granted := range list {
+			parts := strings.Split(granted, ".")
+			if len(parts) < 4 || parts[2] != "gateways" {
+				continue
+			}
+			seen++
+			if parts[1] != "acme-corp" || parts[3] != "sensor-001" {
+				t.Errorf("grant %q reaches a gateway namespace that is not this device's own", granted)
+			}
+			for _, tok := range parts[:4] {
+				if strings.ContainsAny(tok, "*>") {
+					t.Errorf("grant %q wildcards the instance, tenant or gateway token", granted)
+				}
+			}
+		}
+	}
+	if seen == 0 {
+		t.Fatal("the device was granted no gateway namespace at all; the check above proved nothing")
 	}
 }

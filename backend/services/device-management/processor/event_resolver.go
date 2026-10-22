@@ -82,6 +82,10 @@ type EventResolver struct {
 	// for the pool (initializeEventResolvers sets it), label-free; nil in tests that do not
 	// look at it.
 	deviceDisabled prometheus.Counter
+	// gateway is what a refused gateway publish does besides being dead-lettered: count it, log
+	// it and tell the gateway. SHARED across the pool (initializeEventResolvers replaces the
+	// private one NewEventResolver gives); see gateway_refusal.go.
+	gateway *gatewayRefusals
 	// calcObs reports calculated-metric outcomes (ADR-082). Its metrics are the pool's
 	// (initializeEventResolvers sets them; nil in tests, which counts nothing); the rest is
 	// pointed at each event as it is resolved, which is safe because a resolver resolves one
@@ -171,6 +175,7 @@ func NewEventResolver(workerId int, api model.DeviceManagementApi, authMode stri
 		metrics:      metrics,
 		locationMemo: locationMemo,
 		slow:         newSlowResolveReporter(),
+		gateway:      newGatewayRefusals(),
 	}
 }
 
@@ -1242,7 +1247,15 @@ func (rez *EventResolver) ResolveEvent(ctx context.Context, unrez *esmodel.Unres
 		}
 		return nil, uint(resolvedevent.FailureReason_Invalid), err
 	}
-	device, reason, err := rez.resolveDevice(ctx, unrez)
+	// A gateway's publish for a child resolves to the CHILD, after the platform has checked the
+	// child is the gateway's (gateway_refusal.go). That check replaces the credential policy for
+	// this event rather than following it: the identity is the broker's (the gateway) plus the
+	// assignment (the child), and a gateway event carries no credential to authenticate.
+	resolve := rez.resolveDevice
+	if unrez.Gateway != "" {
+		resolve = rez.resolveGatewayChild
+	}
+	device, reason, err := resolve(ctx, unrez)
 	if err != nil {
 		return nil, reason, err
 	}
@@ -1392,6 +1405,15 @@ func (rez *EventResolver) Process(ctx context.Context) {
 					log.Debug().Str("correlation", correlation).Err(err).Msg("Discarding an event from a disabled device.")
 					_ = unresolved.Ack()
 					done(core.ResultDropped)
+				} else if errors.Is(err, ErrNotGatewayChild) {
+					// A gateway named a device that is not its own. Terminal on the FIRST
+					// delivery (redelivery cannot change an assignment's answer, and a device
+					// token a gateway names is never auto-registered), but never discarded: it
+					// is recorded with its payload, counted, logged and announced to the
+					// gateway, because the broker already told the gateway it was stored.
+					rez.gateway.refused(tenant, event, err)
+					rez.Failed(unresolved, tenant, reason, *event, err)
+					done(core.ResultFailed)
 				} else if disposition == messaging.Exhausted || errors.Is(err, eventtime.ErrTooOld) {
 					rez.Failed(unresolved, tenant, reason, *event, err)
 					done(core.ResultFailed)

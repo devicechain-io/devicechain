@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nats-io/jwt/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/devicechain-io/dc-microservice/config"
@@ -144,12 +145,76 @@ func TestOnlyDeclaredWritersCanPublishIntoAStream(t *testing.T) {
 // Nobody publishes where a device does: a subject in the device-events namespace is what makes an
 // event the broker's statement of which device it came from.
 func TestNoAreaCanPublishIntoTheDeviceEventsNamespace(t *testing.T) {
-	events := messaging.DeviceEventsSubject(permInstance, "acme", "dev1")
-	for area, p := range allAreaPermissions(t) {
-		require.False(t, p.publishes(events), area)
-		require.False(t, p.publishes(messaging.MqttMsgsSubject(events)), area)
+	// Both shapes the capture stream stores: a device's own telemetry and a gateway's for a child.
+	for _, events := range []string{
+		messaging.DeviceEventsSubject(permInstance, "acme", "dev1"),
+		messaging.GatewayEventsSubject(permInstance, "acme", "gw1", "dev1"),
+	} {
+		for area, p := range allAreaPermissions(t) {
+			require.False(t, p.publishes(events), "%s on %s", area, events)
+			require.False(t, p.publishes(messaging.MqttMsgsSubject(events)), "%s on %s", area, events)
+		}
+		require.False(t, ServicePermissions().publishes(events), events)
 	}
-	require.False(t, ServicePermissions().publishes(events))
+}
+
+// 🔑 EVERY SUBJECT THE CAPTURE STREAM STORES IS DENIED TO EVERY SERVICE LOGIN. The capture
+// stream's subject list is the declaration; the deny is derived from the same shapes. If a new
+// subject is added to the capture stream (DeviceEventsSubjects) and not to the deny, a service
+// could forge into it, and this fails. The negative control is the loop's own premise: the list
+// has the gateway shape in it, so a deny that only knew the device shape is caught.
+func TestEveryCaptureSubjectIsDeniedToEveryServiceLogin(t *testing.T) {
+	subjects := messaging.DeviceEventsSubjects("*")
+	require.Len(t, subjects, 2, "the capture stream stores a device's own subject and a gateway's")
+	deny := ServicePublishDeny()
+	for _, subject := range subjects {
+		for _, form := range []string{subject, messaging.MqttMsgsSubject(subject)} {
+			require.Contains(t, deny, form, "the service deny must cover capture subject %s", form)
+		}
+	}
+}
+
+// The gateway grant is the device's, confined to ITS OWN token, and constant-size.
+func TestDeviceGrantCoversOnlyItsOwnGatewayNamespace(t *testing.T) {
+	grant := func(device string) jwt.Permissions {
+		p, err := DevicePermissions(permInstance, "acme", device)
+		require.NoError(t, err)
+		return p
+	}
+	allows := func(list jwt.StringList, subject string) bool {
+		for _, g := range list {
+			if natsSubjectMatches(g, subject) {
+				return true
+			}
+		}
+		return false
+	}
+	p := grant("gw1")
+	for _, child := range []string{"c1", "c-2", "anything-at-all"} {
+		for _, leaf := range []string{"events", "responses", "reports"} {
+			require.True(t, allows(p.Pub.Allow, messaging.GatewayDeviceSubject(permInstance, "acme", "gw1", child, leaf)), "%s/%s", child, leaf)
+		}
+		for _, leaf := range []string{"commands", "desired"} {
+			require.True(t, allows(p.Sub.Allow, messaging.GatewayDeviceSubject(permInstance, "acme", "gw1", child, leaf)), "%s/%s", child, leaf)
+		}
+	}
+	require.True(t, allows(p.Sub.Allow, messaging.GatewayNoticesSubject(permInstance, "acme", "gw1")))
+
+	// Another gateway's namespace, another tenant's, another instance's: none reachable.
+	for _, subject := range []string{
+		messaging.GatewayEventsSubject(permInstance, "acme", "gw2", "c1"),
+		messaging.GatewayEventsSubject(permInstance, "other", "gw1", "c1"),
+		messaging.GatewayEventsSubject("inst2", "acme", "gw1", "c1"),
+	} {
+		require.False(t, allows(p.Pub.Allow, subject), subject)
+	}
+	require.False(t, allows(p.Sub.Allow, messaging.GatewayNoticesSubject(permInstance, "acme", "gw2")))
+	// A device cannot publish its own notices, which are the platform's word to it.
+	require.False(t, allows(p.Pub.Allow, messaging.GatewayNoticesSubject(permInstance, "acme", "gw1")))
+
+	// Constant size: the grant has no children in it.
+	require.Equal(t, len(grant("gw1").Pub.Allow), len(grant("a-device-that-is-nobodys-gateway").Pub.Allow))
+	require.Equal(t, len(grant("gw1").Sub.Allow), len(grant("another-one").Sub.Allow))
 }
 
 // 🔑 R4: a KV put is a publish into the bucket's subjects. Only a bucket's declared writers hold
@@ -381,5 +446,5 @@ func TestPermissionsSerialiseAsTheBrokerReadsThem(t *testing.T) {
 	require.JSONEq(t, `{"publish":{"allow":["a.>"],"deny":["b"]},"subscribe":{"allow":["c"]},"allow_responses":true}`, string(raw))
 	raw, err = json.Marshal(ServicePermissions())
 	require.NoError(t, err)
-	require.JSONEq(t, `{"publish":{"deny":["*.*.devices.*.events","$MQTT.msgs.*.*.devices.*.events"]}}`, string(raw))
+	require.JSONEq(t, `{"publish":{"deny":["*.*.devices.*.events","$MQTT.msgs.*.*.devices.*.events","*.*.gateways.*.devices.*.events","$MQTT.msgs.*.*.gateways.*.devices.*.events"]}}`, string(raw))
 }

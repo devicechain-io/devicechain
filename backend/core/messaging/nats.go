@@ -1683,6 +1683,8 @@ type natsReader struct {
 	// delivered outside it is acked and dropped (storeHandOut). It differs from subject (the
 	// durable's filter) only on the unfiltered events durable.
 	forwards string
+	// alsoForwards are further patterns a store reader hands out (MqttFailClosedDurable.AlsoForwards).
+	alsoForwards []string
 }
 
 // ReaderOption tunes a reader's durable consumer at creation time. Options only
@@ -2052,12 +2054,20 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 		nmgr:    nmgr,
 		suffix:  suffix,
 		stream:  stream,
-		subject: StreamSubject(nmgr.Microservice.InstanceId, suffix),
 		durable: DurableName(nmgr.Microservice.InstanceId, nmgr.Microservice.FunctionalArea, suffix),
 		gate:    nmgr.Microservice.Readiness,
 		// A hop that forwards into a stream applying backpressure parks while that stream
 		// refuses, rather than fetching messages it could only fail to publish.
 		downstream: streams.ForwardsInto(suffix, nmgr.Microservice.FunctionalArea),
+	}
+	// The device-events capture stream stores two subjects (a device's own telemetry and a
+	// gateway's for its children), which no single pattern expresses: its reader filters on
+	// the exact list, the way the max-delivery recorder does.
+	if streams.ShapeOf(suffix) == streams.ShapeDeviceEvents {
+		r.filters = DeviceEventsSubjects(nmgr.Microservice.InstanceId)
+		slices.Sort(r.filters)
+	} else {
+		r.subject = StreamSubject(nmgr.Microservice.InstanceId, suffix)
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -2111,7 +2121,7 @@ func (nmgr *NatsManager) NewReader(suffix string, opts ...ReaderOption) (Message
 	if nmgr.metrics != nil {
 		nmgr.metrics.initDurable(r.stream, r.durable, r.capacity != nil)
 	}
-	log.Info().Str("durable", r.durable).Str("subject", r.subject).Msg("Added new NATS reader")
+	log.Info().Str("durable", r.durable).Str("subject", r.subject).Strs("filters", r.filters).Msg("Added new NATS reader")
 	return r, nil
 }
 

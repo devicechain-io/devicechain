@@ -413,3 +413,166 @@ func TestJsonDecoderCannotSetBrokerAsserted(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, event.BrokerAsserted)
 }
+
+// ---------------------------------------------------------------------------------------------
+// THE GATEWAY NAMESPACE
+// ---------------------------------------------------------------------------------------------
+
+const gatewayCaptureSubject = "inst-1.acme.gateways.gw-1.devices.sensor-001.events"
+
+// A message on a gateway's own subject asserts the GATEWAY (the broker authenticated it) and
+// names the CHILD the subject carries. The event leaves the decode worker marked with both, and
+// the device is the subject's even when the body says nothing about it.
+func TestAGatewaySubjectAssertsTheGatewayAndNamesTheChild(t *testing.T) {
+	h := newCaptureHarness(t)
+	ack := &recordingAck{}
+	// The body names no device at all: the subject is the child's authority.
+	body := `{"eventType":"Measurement","payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`
+	h.source.handle(capturedMsgAt(gatewayCaptureSubject, body, 1, time.Now(), ack))
+	require.True(t, ack.settled(t))
+
+	events := h.publishedEvents()
+	require.Len(t, events, 1)
+	require.Equal(t, "gw-1", events[0].Gateway)
+	require.Equal(t, "sensor-001", events[0].Device)
+	require.True(t, events[0].BrokerAsserted)
+
+	// The control: a device's OWN subject sets no gateway.
+	h2 := newCaptureHarness(t)
+	ack2 := &recordingAck{}
+	h2.source.handle(capturedMsgAt(captureSubject, measurementWith(""), 1, time.Now(), ack2))
+	require.True(t, ack2.settled(t))
+	own := h2.publishedEvents()
+	require.Len(t, own, 1)
+	require.Empty(t, own[0].Gateway)
+	require.True(t, own[0].BrokerAsserted)
+}
+
+// A body naming a DIFFERENT device than the subject's child is refused as the same impersonation
+// it is on a device's own subject: the gateway is trusted for the child its subject names, not
+// for whichever device its body claims.
+func TestAGatewayBodyNamingAnotherDeviceThanItsSubjectIsRefused(t *testing.T) {
+	h := newCaptureHarness(t)
+	ack := &recordingAck{}
+	body := `{"device":"someone-else","eventType":"Measurement","payload":{"entries":[{"measurements":{"temp":"1"}}]}}`
+	h.source.handle(capturedMsgAt(gatewayCaptureSubject, body, 1, time.Now(), ack))
+	require.True(t, ack.settled(t))
+	published, failed, _, _ := h.counts()
+	require.Zero(t, published, "a gateway's body named another device and was published")
+	require.Equal(t, 1, failed)
+}
+
+// A body credential on a gateway subject is refused exactly as on a device's own: identity is the
+// subject plus the assignment, a secret in the body is a secret the broker already stored.
+func TestAGatewayBodyCredentialIsRefusedLikeADevicesOwn(t *testing.T) {
+	for name, cred := range credentialBodies {
+		t.Run(name, func(t *testing.T) {
+			h := newCaptureHarness(t)
+			ack := &recordingAck{}
+			h.source.handle(capturedMsgAt(gatewayCaptureSubject, measurementWith(cred), 1, time.Now(), ack))
+			require.True(t, ack.settled(t))
+			published, failed, _, _ := h.counts()
+			require.Zero(t, published)
+			require.Equal(t, 1, failed)
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			require.ErrorIs(t, h.failedReasons[0], model.ErrCredentialInMqttBody)
+		})
+	}
+}
+
+// Only the events leaf of a gateway's namespace is telemetry: the other leaves and the notices
+// subject assert nothing (and the capture stream does not store them, so they never arrive).
+func TestOnlyTheEventsLeafOfAGatewayNamespaceAsserts(t *testing.T) {
+	for _, subject := range []string{
+		messaging.GatewayDeviceSubject("inst-1", "acme", "gw-1", "sensor-001", messaging.SegmentResponses),
+		messaging.GatewayDeviceSubject("inst-1", "acme", "gw-1", "sensor-001", messaging.SegmentReports),
+		messaging.GatewayDeviceSubject("inst-1", "acme", "gw-1", "sensor-001", messaging.SegmentCommands),
+		messaging.GatewayNoticesSubject("inst-1", "acme", "gw-1"),
+		"inst-1.acme.gateways.gw-1.devices.events",
+		"inst-1.acme.gateways.gw-1.things.sensor-001.events",
+	} {
+		a := assertedByCaptureBroker(messaging.Message{Subject: subject})
+		require.Equal(t, brokerAssertion{}, a, "%s asserted something", subject)
+	}
+	require.True(t, assertedByCaptureBroker(messaging.Message{Subject: gatewayCaptureSubject}).asserted)
+}
+
+// 5. THE EXTERNAL-BROKER SOURCE NEVER ASSERTS A GATEWAY. It reads topics from the customer's
+// own broker, which authenticated no one against this platform: a gateway-shaped topic there
+// is just a topic. Nothing is marked, the topic names no device, and under required mode (no
+// credential, no assertion) the resolver refuses it.
+func TestAnExternalMqttSourceNeverAssertsAGatewayShapedTopic(t *testing.T) {
+	es, _ := newTestMqttSource(t, func(string, string, time.Time, bool, Origin) bool { return true })
+	es.onMessage(nil, &fakeMqttMessage{
+		topic:   "inst-1/acme/gateways/gw-1/devices/sensor-001/events",
+		payload: []byte(measurementWith("")),
+	})
+	select {
+	case raw := <-es.messages:
+		require.Equal(t, brokerAssertion{}, raw.assertion, "the external source asserted a gateway")
+		require.Empty(t, raw.device, "the external source took a device from a gateway-shaped topic")
+		// And the decode worker would mark nothing: no assertion, no gateway on the event.
+		event := &model.UnresolvedEvent{Device: "sensor-001"}
+		raw.assertion.mark(event)
+		require.False(t, event.BrokerAsserted)
+		require.Empty(t, event.Gateway)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the external source enqueued nothing")
+	}
+}
+
+// No decoder can set the gateway: an injected member is ignored, as with brokerAsserted.
+func TestJsonDecoderCannotSetGateway(t *testing.T) {
+	body := `{"device":"sensor-001","eventType":"Measurement","gateway":"gw-1","Gateway":"gw-1",` +
+		`"payload":{"entries":[{"measurements":{"temp":"21.5"}}]}}`
+	event, _, err := NewJsonDecoder(map[string]string{}).Decode([]byte(body), time.Time{})
+	require.NoError(t, err)
+	require.Empty(t, event.Gateway)
+}
+
+// THE WORKSPACE GUARD FOR THE GATEWAY MARK. Like BrokerAsserted, UnresolvedEvent.Gateway is an
+// exported field every ingest service could write, and a gateway the resolver believes is a
+// gateway the broker authenticated: only the mark and the proto round trip may name it as a
+// write. (The pattern is scoped to files that mention UnresolvedEvent, because "Gateway" is
+// also the name of unrelated things elsewhere in the workspace.)
+func TestNothingOutsideTheMarkWritesTheGatewayOfAnEvent(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	allowed := map[string]bool{
+		filepath.Join("services", "event-sources", "processor", "broker_assertion.go"): true,
+		filepath.Join("services", "event-sources", "proto", "marshal.go"):              true,
+	}
+	write := regexp.MustCompile(`(\bGateway\s*:[^:=]|\.Gateway\s*=[^=])`)
+	scanned, sawMark := 0, false
+	require.NoError(t, filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "node_modules" || strings.HasPrefix(d.Name(), ".") && path != root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || strings.HasSuffix(name, ".pb.go") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		require.NoError(t, err)
+		src, err := os.ReadFile(path)
+		require.NoError(t, err)
+		scanned++
+		if !strings.Contains(string(src), "UnresolvedEvent") || !write.Match(src) {
+			return nil
+		}
+		if allowed[rel] {
+			sawMark = sawMark || strings.HasSuffix(rel, "broker_assertion.go")
+			return nil
+		}
+		t.Errorf("%s writes an UnresolvedEvent's Gateway: only the capture source's mark may", rel)
+		return nil
+	}))
+	require.Greater(t, scanned, 500)
+	require.True(t, sawMark, "the mark itself must be found, or the pattern matches nothing")
+}

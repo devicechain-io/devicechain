@@ -29,15 +29,31 @@ import (
 //   - the field is unexported and has no setter, and TestOnlyTheCaptureSourceAssertsTheBroker
 //     fails the build of the package if any file but the capture source names the
 //     constructor.
+//
+// 🔑 A GATEWAY SUBJECT ASSERTS THE GATEWAY, NOT THE DEVICE. On "{i}.{t}.gateways.{g}.devices.{c}.events"
+// the broker authenticated g and confined it to its own namespace, and c is only the child g NAMES.
+// So the assertion carries both, and the event leaves marked with the gateway (UnresolvedEvent.Gateway)
+// for the resolver to check against the child's recorded gateway. The child is whatever the subject
+// says, never a body field: mark sets Device from the subject, so a body that omits it still
+// resolves and a body that contradicts it was already refused (checkDeviceMatchesTransport).
 type brokerAssertion struct {
 	asserted bool
+	// gateway and child are set together, only for a message on a gateway's namespace.
+	gateway, child string
 }
 
 // assertedByCaptureBroker is the ONLY constructor of a true brokerAssertion. It asserts only
 // when the subject is the device-events shape the broker grants a device, so a message on
 // any other subject asserts nothing.
 func assertedByCaptureBroker(msg messaging.Message) brokerAssertion {
-	return brokerAssertion{asserted: deviceFromSubject(msg.Subject) != ""}
+	gateway, device, ok := messaging.ParseDeviceEventsSubject(msg.Subject)
+	if !ok {
+		return brokerAssertion{}
+	}
+	if gateway != "" {
+		return brokerAssertion{asserted: true, gateway: gateway, child: device}
+	}
+	return brokerAssertion{asserted: true}
 }
 
 // mark stamps an event that has already passed every check on its way out of the decode
@@ -45,6 +61,10 @@ func assertedByCaptureBroker(msg messaging.Message) brokerAssertion {
 // field for it (see TestJsonDecoderCannotSetBrokerAsserted).
 func (a brokerAssertion) mark(event *model.UnresolvedEvent) {
 	event.BrokerAsserted = a.asserted
+	if a.gateway != "" {
+		event.Gateway = a.gateway
+		event.Device = a.child
+	}
 }
 
 // credentialInBody reports whether a decoded event carries any of the three credential

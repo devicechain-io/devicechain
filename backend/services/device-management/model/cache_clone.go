@@ -67,6 +67,7 @@ func cloneCachedDevice(in *Device) *Device {
 func cloneDeviceValue(in Device) Device {
 	out := in
 	out.Metadata = cloneJSONPtr(in.Metadata)
+	out.GatewayId = clonePtr(in.GatewayId)
 	if in.DeviceType != nil {
 		dt := cloneDeviceTypeValue(*in.DeviceType)
 		out.DeviceType = &dt

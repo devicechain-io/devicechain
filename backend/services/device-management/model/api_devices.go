@@ -316,6 +316,11 @@ func (api *Api) CreateDevice(ctx context.Context, request *DeviceCreateRequest) 
 		DeviceType: matches[0],
 		DisabledAt: disabledAtOnCreate(request.Enabled, time.Now()),
 	}
+	gatewayId, err := api.gatewayForNewDevice(ctx, request.Token, request.GatewayToken)
+	if err != nil {
+		return nil, err
+	}
+	created.GatewayId = gatewayId
 	result := api.RDB.DB(ctx).Create(created)
 	if result.Error != nil {
 		return nil, result.Error
