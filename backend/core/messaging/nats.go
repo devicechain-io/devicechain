@@ -3190,6 +3190,9 @@ func (nmgr *NatsManager) ExecuteInitialize(ctx context.Context) error {
 		nats.Name(nmgr.Microservice.FunctionalArea),
 		nats.MaxReconnects(-1),
 		nats.RetryOnFailedConnect(true),
+		// The area's own reply-inbox prefix: the broker lets this login subscribe to
+		// "_INBOX_<area>.>" and no other inbox (see InboxPrefix).
+		nats.CustomInboxPrefix(InboxPrefix(nmgr.Microservice.FunctionalArea)),
 	}
 	// Before the handlers: these bound how long a connection that died without being
 	// closed stays in use, which is what makes the disconnect handler fire for one at all.

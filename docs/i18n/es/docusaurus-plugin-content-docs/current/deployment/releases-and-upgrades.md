@@ -476,12 +476,22 @@ Lo que ve una instancia en marcha:
   y cualquier fuga de su configuración exponía, la credencial de todos. `dcctl upgrade` crea una
   credencial por cada área que usa el bróker, y otra para la administración del bróker, y guarda cada
   una en un Secret llamado `dci-<instancia>-nats-<área>` que se monta solo en el pod de esa área.
-  `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Las credenciales
-  nuevas tienen los mismos permisos que la compartida, así que lo que un área puede hacer no cambia. La
-  compartida sigue en su sitio por ahora, de modo que los servicios que aún no se han reiniciado siguen
-  conectándose durante la actualización. Hasta que una versión posterior la retire, la credencial
-  compartida sigue en la configuración que lee cada pod, así que esto aún no impide que un pod la
-  presente. El bróker se
+  `mcp` y `ai-inference` nunca abren una conexión con el bróker y no montan ninguna. Cada credencial
+  queda limitada a lo que usa su área, y a nada más: los streams en los que escribe, los consumidores
+  con los que lee (con nombre exacto, así que un área no puede reescribir, tomar mensajes de ni
+  confirmar los de otra), los buckets clave-valor que abre y sus propios subjects de respuesta. Un
+  servicio comprometido ya no puede, por tanto, publicar en los streams de otra área, escribir en la
+  caché de otra ni leer las respuestas de otra. Los permisos se generan a partir de las mismas
+  declaraciones contra las que se comprueban los servicios, así que no pueden quedar por detrás de lo
+  que un servicio hace. Dos cosas que la restricción aún no cubre: cada área sigue creando y
+  actualizando sus propios streams, y event-sources conserva permisos de actualización sobre los
+  almacenes MQTT del bróker (user-management puede purgar los datos de un tenant eliminado en todos los
+  streams). La credencial compartida sigue en su sitio junto a las nuevas, con los permisos que
+  siempre tuvo, de modo que los servicios que aún no se han reiniciado siguen conectándose durante la
+  actualización. Hasta que una versión posterior la retire, la credencial compartida sigue en la
+  configuración que lee cada pod, así que un pod aún puede presentarla y la restricción todavía no lo
+  impide. Una instalación que ejecuta el chart sin dcctl y aporta su propio bróker puede imprimir los
+  mismos permisos con `dcctl broker permissions`. El bróker se
   reinicia una vez, servidor a servidor con `--ha`, para añadir los usuarios. Un área se niega a
   arrancar si la instancia dice que las credenciales existen y falta la suya, en lugar de recurrir a la
   compartida. Las credenciales existentes nunca se reemplazan: una actualización crea solo las que faltan.

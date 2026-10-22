@@ -260,10 +260,16 @@ variable "nats_identity_password_bcrypt" {
 }
 
 variable "nats_login_password_bcrypts" {
-  description = "BCRYPT HASHES ($2a$...) of the per-area broker logins and the broker administrator's, keyed by username (`dc-<area>-g<generation>`). Each area holds only its own plaintext, in a Secret only its Deployment mounts. They are given the shared service login's permissions, so behaviour is unchanged; the shared login stays beside them. Minted by the bring-up. Empty renders none. Sensitive."
+  description = "BCRYPT HASHES ($2a$...) of the per-area broker logins and the broker administrator's, keyed by username (`dc-<area>-g<generation>`). Each area holds only its own plaintext, in a Secret only its Deployment mounts. Each is held to the permissions nats_service_users carries for it; the shared login stays beside them. Minted by the bring-up. Empty renders none. Sensitive."
   type        = map(string)
   default     = {}
   sensitive   = true
+}
+
+variable "nats_service_users" {
+  description = "The generated permissions of every static broker login, as one JSON document (`{\"APP\": {<username>: <permissions>}, \"SYS\": {...}}`), rendered into the broker's users verbatim. dcctl produces it from the stream and bucket declarations the services are held to; `dcctl broker permissions` prints it. Required whenever nats_enable_auth is true: a login with no block would be unrestricted, so the broker module refuses to render one."
+  type        = string
+  default     = ""
 }
 
 variable "nats_sys_password_bcrypt" {

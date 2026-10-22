@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/devicechain-io/dc-event-management/model"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -29,7 +29,11 @@ import (
 // real Postgres and opens nothing on the broker, so it is left out; the NATS half is the
 // service's own createNatsComponents and afterMicroserviceStarted.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalog-boot-%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
+	// is also the area's permission test: the real wiring runs against it and the broker's log of
+	// refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	savedMs, savedCfg, savedApi := Microservice, Configuration, Api
 	savedMetrics, savedBackfillMetrics := PersistMetrics, BackfillMetrics
@@ -45,13 +49,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalog-boot-%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "event-management",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("event-management")
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 	buildMetrics()
@@ -89,4 +93,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	live, err := NatsManager.SubscribeLive(ctx, "acme", streams.ResolvedEvents)
 	require.NoError(t, err, "live subscription on resolved-events (subscriptions_events.go:49)")
 	require.NotNil(t, live)
+	broker.RequireNoViolations(t)
 }

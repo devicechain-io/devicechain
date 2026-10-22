@@ -16,9 +16,9 @@ import (
 
 	"github.com/devicechain-io/dc-event-processing/config"
 	"github.com/devicechain-io/dc-event-processing/model"
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/rdb/sqlitetest"
 	"github.com/devicechain-io/dc-microservice/service"
@@ -38,7 +38,11 @@ import (
 // and writer, the raise-alarm, connector-dispatch and dead-letters writers, and the
 // DETECT partition lease. The lazy paths are opened directly below, in the production mode.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
+	// is also the area's permission test: the real wiring runs against it and the broker's log of
+	// refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats, prevRdb, prevSvc := Microservice, Configuration, NatsManager, RdbManager, Svc
 	prevDetect, prevReact, prevPurge, prevReader := ResolvedEventsProcessor, ReactDispatcher, TenantPurgeResponder, ResolvedEventsReader
@@ -56,13 +60,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalogboot%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "event-processing",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("event-processing")
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	Configuration = &config.EventProcessingConfiguration{}
 	Configuration.ApplyDefaults()
@@ -117,9 +121,9 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, err, "replay reader on %s", streams.ResolvedEvents)
 	require.NoError(t, replay.Close())
 	// the live gap fill, processor/live_gap.go:189. A range read refuses a range past the
-	// stream's last sequence, so put one message on the stream first (raw JetStream publish:
-	// event-processing is rightly not a declared writer of resolved-events).
-	js, err := NatsManager.Conn().JetStream()
+	// stream's last sequence, so put one message on the stream first, as its writer
+	// (device-management): event-processing is rightly not a declared writer of resolved-events.
+	js, err := broker.Connect(t, "device-management").JetStream()
 	require.NoError(t, err)
 	_, err = js.Publish(messaging.ConcreteSubjectFor(Microservice.InstanceId, "acme", streams.ResolvedEvents, "dev1"), []byte(`{}`))
 	require.NoError(t, err)
@@ -134,4 +138,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	live, err := NatsManager.SubscribeLive(ctx, "acme", streams.DerivedEvents)
 	require.NoError(t, err, "live subscription on %s", streams.DerivedEvents)
 	_ = live
+	broker.RequireNoViolations(t)
 }

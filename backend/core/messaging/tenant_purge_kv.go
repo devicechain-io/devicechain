@@ -113,31 +113,31 @@ func PurgeTenantKv(ctx context.Context, js nats.JetStreamContext, instanceId, te
 	return res, nil
 }
 
-// purgeBucket scans one bucket and deletes the keys that decode to this tenant's.
+// purgeBucket scans one bucket and removes the keys that decode to this tenant's.
+//
+// 🔴 IT NEVER OPENS THE BUCKET AS A KEY-VALUE STORE, AND THAT IS DELIBERATE. A KV Keys() call is an
+// ordered consumer on the bucket's stream and a KV Purge is a write into its subjects, and both
+// would hand the tenant-purge login rights this erasure does not need and must not have: a
+// consumer on device-by-token is a read of every tenant's device mapping, and a write there is
+// the forgery of one. The keys are listed from the stream's subject index (the same listing the
+// MQTT sweeps use) and each owned key's subject is purged from the stream, which is also a
+// stronger erasure: a KV purge leaves a marker whose subject still names the key, and this
+// removes the marker with the history.
 func purgeBucket(ctx context.Context, js nats.JetStreamContext, bucket, tenant string) (int64, error) {
-	store, err := js.KeyValue(bucket)
+	stream := KvStreamName(bucket)
+	prefix := kvSubjectPrefix + bucket + "."
+	info, err := js.StreamInfo(stream, &nats.StreamInfoRequest{SubjectsFilter: prefix + ">"}, nats.Context(ctx))
 	if err != nil {
 		// A bucket that was never created holds nothing. device-management creates these
 		// at startup, so an instance without that area has none of them.
-		if errors.Is(err, nats.ErrBucketNotFound) {
+		if errors.Is(err, nats.ErrStreamNotFound) {
 			return 0, nil
 		}
-		return 0, fmt.Errorf("opening kv bucket %s: %w", bucket, err)
-	}
-
-	keys, err := store.Keys()
-	if err != nil {
-		// 🔴 AN EMPTY BUCKET IS AN ERROR IN THIS API, NOT AN EMPTY SLICE. nats.go returns
-		// ErrNoKeysFound rather than nil, so a caller that treats every error as a failure
-		// makes an already-clean bucket permanently fail its own purge.
-		if errors.Is(err, nats.ErrNoKeysFound) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("listing kv bucket %s: %w", bucket, err)
+		return 0, fmt.Errorf("listing the keys of kv bucket %s: %w", bucket, err)
 	}
 
 	var deleted int64
-	for _, encoded := range keys {
+	for subject := range info.State.Subjects {
 		// A full-bucket scan is the one unbounded thing this store does — device-by-token
 		// is documented as the largest KV consumer at fleet scale — and it runs on the
 		// coordinator's single goroutine, which stops by cancelling a context. Without this
@@ -145,6 +145,7 @@ func purgeBucket(ctx context.Context, js nats.JetStreamContext, bucket, tenant s
 		if err := ctx.Err(); err != nil {
 			return deleted, fmt.Errorf("scanning kv bucket %s was interrupted: %w", bucket, err)
 		}
+		encoded := strings.TrimPrefix(subject, prefix)
 		owned, err := keyBelongsTo(encoded, tenant)
 		if err != nil {
 			// A key this package did not write. Deleting it would be acting on something
@@ -156,14 +157,35 @@ func purgeBucket(ctx context.Context, js nats.JetStreamContext, bucket, tenant s
 		if !owned {
 			continue
 		}
-		// Purge rather than Delete: Delete leaves a tombstone carrying the key, and the
-		// key's plaintext contains the tenant token. Purge removes the history too.
-		if err := store.Purge(encoded); err != nil {
+		if err := js.PurgeStream(stream, &nats.StreamPurgeRequest{Subject: subject}, nats.Context(ctx)); err != nil {
 			return deleted, fmt.Errorf("purging %s from kv bucket %s: %w", encoded, bucket, err)
 		}
 		deleted++
 	}
 	return deleted, nil
+}
+
+// kvSubjectPrefix is what JetStream puts in front of a bucket's name to form the subjects its
+// keys are stored under ("$KV.<bucket>.<key>"). nats.go keeps its copy unexported.
+const kvSubjectPrefix = "$KV."
+
+// TenantScopedBucketStreams are the streams backing every cache bucket a tenant purge scans, for
+// an instance, so the grant of the area that runs the purge names exactly those and no other.
+func TenantScopedBucketStreams(instanceId string) []string {
+	out := make([]string, 0, len(tenantScopedBuckets))
+	for _, b := range tenantScopedBuckets {
+		out = append(out, KvStreamName(CacheBucketName(instanceId, b.area, b.logical)))
+	}
+	return out
+}
+
+// tenantCacheArea is the area whose in-process caches a tenant purge tells to let go.
+const tenantCacheArea = "device-management"
+
+// TenantCacheEvictionSubjects is the wildcard over the eviction subjects a tenant purge publishes
+// on, for an instance (BroadcastTenantCacheEviction), so the purging area's grant names it.
+func TenantCacheEvictionSubjects(instanceId string) string {
+	return CacheEvictSubjects(instanceId, tenantCacheArea)
 }
 
 // keyBelongsTo reports whether an encoded KV key is this tenant's.
@@ -275,14 +297,14 @@ func BroadcastTenantCacheEviction(nc *nats.Conn, instanceId, tenant string) erro
 	}
 	names := []string{DeviceCredentialCacheName}
 	for _, b := range tenantScopedBuckets {
-		if b.area == "device-management" && b.logical != retiredBucketMetricDefsByType &&
+		if b.area == tenantCacheArea && b.logical != retiredBucketMetricDefsByType &&
 			b.logical != retiredBucketProfileScopeByType {
 			names = append(names, b.logical)
 		}
 	}
 	var first error
 	for _, name := range names {
-		b := newEvictionBroadcast(nc, CacheEvictSubject(instanceId, "device-management", name), name, nil)
+		b := newEvictionBroadcast(nc, CacheEvictSubject(instanceId, tenantCacheArea, name), name, nil)
 		if err := b.PublishTenant(tenant); err != nil && first == nil {
 			first = err
 		}

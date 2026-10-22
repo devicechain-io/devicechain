@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/governance"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/service"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
@@ -30,7 +30,11 @@ import (
 // newDeadLetterIndexWriter, ConnectorDispatch reader via newDispatchReader), plus the
 // max-delivery recorder core/service installs.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startEmbeddedNats(t)
+	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, so this
+	// is also the area's permission test: the real wiring runs against it and the broker's log of
+	// refusals is asserted empty at the end.
+	broker := permtest.Start(t, instance)
 
 	savedMs, savedCfg, savedSvc, savedNats := Microservice, Configuration, Svc, NatsManager
 	savedMetrics, savedUnres, savedDead := DispatchMetrics, EgressUnresolved, DeadLetters
@@ -42,13 +46,13 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalogboot%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "outbound-connectors",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("outbound-connectors")
 	Microservice.MicroserviceConfigurationRaw = []byte(`{}`)
 	require.NoError(t, parseConfiguration())
 
@@ -79,4 +83,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NoError(t, afterMicroserviceStarted(ctx),
 		"starting under the catalog: connector-dispatch reader, connector-dispatch-dead and dead-letters writers, max-delivery recorder")
 	require.NotNil(t, Consumer, "createNatsComponents built no dispatch consumer")
+	broker.RequireNoViolations(t)
 }

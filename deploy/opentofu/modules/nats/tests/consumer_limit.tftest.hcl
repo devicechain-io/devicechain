@@ -47,6 +47,7 @@ run "with_broker_auth" {
     enable_auth             = true
     callout_issuer_public   = "AAUTHCALLOUTISSUERPUBLICKEYPLACEHOLDER"
     service_password_bcrypt = "$2a$11$placeholderplaceholderplaceholderplaceholderplace"
+    service_users           = "{\"APP\":{\"dc_service\":{\"publish\":{\"deny\":[\"*.*.devices.*.events\"]}}}}"
   }
 
   assert {

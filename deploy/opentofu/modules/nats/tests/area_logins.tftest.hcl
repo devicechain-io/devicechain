@@ -3,9 +3,9 @@
 
 # Every area that uses the broker has a login of its own, and so does the broker administrator.
 #
-# Each lands in the APP account with the SAME permissions as the shared service login, so nothing an
-# area can do changes; what changes is that the credential an area presents is one only that area
-# holds. The shared login stays beside them (it is retired in a later step).
+# Each lands in the APP account with the permissions block var.service_users carries for it (the
+# generated, per-area one), and is exempt from the device callout. The shared login stays beside them
+# (it is retired in a later step).
 #
 # Runs against mocked providers, so no cluster is needed. Run it with
 # hack/check-tofu-module-tests.sh, which tests a COPY of the module.
@@ -21,9 +21,19 @@ variables {
 
   callout_issuer_public   = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
   service_password_bcrypt = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234"
+
+  # A distinct block per login, so a render that applied one login's block to another is visible.
+  service_users = <<-EOT
+    {"APP": {
+      "dc_service": {"publish": {"deny": ["*.*.devices.*.events"]}},
+      "dc-device-management-g1": {"publish": {"allow": ["dm.>"]}, "subscribe": {"allow": ["_INBOX_device-management.>"]}, "allow_responses": true},
+      "dc-user-management-g1": {"publish": {"allow": ["um.>"]}, "subscribe": {"allow": ["_INBOX_user-management.>"]}, "allow_responses": true},
+      "dc-broker-admin-g1": {"publish": {"deny": ["*.*.devices.*.events"]}}
+    }}
+  EOT
 }
 
-run "each_login_is_in_app_with_the_service_logins_permissions" {
+run "each_login_is_in_app_with_its_own_permissions" {
   command = plan
 
   variables {
@@ -44,9 +54,14 @@ run "each_login_is_in_app_with_the_service_logins_permissions" {
   assert {
     condition = alltrue([
       for u in yamldecode(helm_release.nats.values[0]).config.merge.accounts.APP.users :
-      u.permissions == yamldecode(helm_release.nats.values[0]).config.merge.accounts.APP.users[0].permissions
+      jsonencode(u.permissions) == jsonencode(jsondecode(var.service_users).APP[u.user])
     ])
-    error_message = "every login must carry exactly the shared login's permissions: narrowing them is a later change, and a login with MORE would widen the grant"
+    error_message = "every login must carry exactly the block generated for it, and no other login's"
+  }
+
+  assert {
+    condition     = [for u in yamldecode(helm_release.nats.values[0]).config.merge.accounts.APP.users : u.permissions if u.user == "dc-user-management-g1"][0].publish.allow == ["um.>"]
+    error_message = "a login must not be given another login's grant"
   }
 
   assert {
@@ -79,6 +94,18 @@ run "no_logins_until_minted" {
     condition     = yamldecode(helm_release.nats.values[0]).config.merge.authorization.auth_callout.auth_users == ["dc_service", "dc_sys"]
     error_message = "the exempt logins must be unchanged when there are no per-area logins"
   }
+}
+
+# A login with no entry in service_users would render with no permissions block, which nats-server
+# reads as unrestricted. It is refused instead.
+run "a_login_with_no_generated_block_is_refused" {
+  command = plan
+
+  variables {
+    login_password_bcrypts = { "dc-event-management-g1" = "$2a$10$eventmanagementeventmanaUABCDEFGHIJKLMNOPQRSTUVWXYZ0" }
+  }
+
+  expect_failures = [helm_release.nats]
 }
 
 run "logins_without_broker_auth_are_refused" {

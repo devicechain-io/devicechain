@@ -250,8 +250,9 @@ func sayAreaLoginsIntroduced(st *State) {
 	}
 	fmt.Println(color.WhiteString(
 		"\nEvery area that uses the message broker now has a login of its own, in a Secret only that area mounts,\n" +
-			"and so does the broker administrator (mounted nowhere yet). Their permissions are the shared login's, so\n" +
-			"what an area may do is unchanged. The shared login is still in place; a later release retires it."))
+			"and so does the broker administrator (mounted nowhere yet). Each area's login is held to what that\n" +
+			"area uses: its own streams, consumers, buckets and reply subjects. The shared login is still in place,\n" +
+			"with the permissions it always had; a later release retires it."))
 }
 
 // loginPlaintexts is every principal's password in creds, keyed by principal, as the broker record

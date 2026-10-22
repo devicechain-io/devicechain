@@ -11,12 +11,13 @@ import (
 	"testing"
 	"time"
 
-	mscfg "github.com/devicechain-io/dc-microservice/config"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/deadletter"
 	"github.com/devicechain-io/dc-microservice/kv"
 	"github.com/devicechain-io/dc-microservice/messaging"
+	"github.com/devicechain-io/dc-microservice/natsauth"
+	"github.com/devicechain-io/dc-microservice/natsauth/permtest"
 	"github.com/devicechain-io/dc-microservice/rdb"
 	"github.com/devicechain-io/dc-microservice/streams"
 	dctest "github.com/devicechain-io/dc-microservice/test"
@@ -58,7 +59,12 @@ func startCatalogBootNats(t *testing.T) (string, uint32) {
 // reaches the broker through the RAW connection (NatsManager.Conn), which the catalog does not
 // see, so it opens no stream or bucket through the manager.
 func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
-	host, port := startCatalogBootNats(t)
+	instance := fmt.Sprintf("catalogboot%d", time.Now().UnixNano())
+	// The broker holds the area's login to exactly the permissions natsauth generates for it, and
+	// has the identity account the sign-in buckets live in, so this is also the area's permission
+	// test: the real wiring runs against it and the broker's log of refusals is asserted empty at
+	// the end.
+	broker := permtest.Start(t, instance)
 
 	prevMs, prevCfg, prevNats := Microservice, Configuration, NatsManager
 	prevStore, prevMetrics, prevConsumer := DeadLetterStore, DeadLetterMetrics, DeadLetterConsumer
@@ -68,13 +74,14 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	})
 
 	Microservice = &core.Microservice{
-		InstanceId:     fmt.Sprintf("catalogboot%d", time.Now().UnixNano()),
+		InstanceId:     instance,
 		FunctionalArea: "user-management",
 		Deployed:       true,
 		Readiness:      core.NewReadinessGate(),
 	}
 	Microservice.UseMetricsRegistry(prometheus.NewRegistry())
-	Microservice.InstanceConfiguration.Infrastructure.Nats = mscfg.NatsConfiguration{Hostname: host, Port: port}
+	Microservice.InstanceConfiguration.Infrastructure.Nats = broker.NatsConfiguration("user-management")
+	Microservice.InstanceConfiguration.Infrastructure.Nats.Auth.IdentityAccount = true
 	Microservice.MicroserviceConfigurationRaw = []byte(`{"auth":{"issuerUrl":"https://devicechain.example.com/user-management"}}`)
 	require.NoError(t, parseConfiguration())
 	require.True(t, Configuration.OAuthEnabled(), "the optional oauth/sso buckets would not be opened")
@@ -107,6 +114,7 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 			c.Close()
 		}
 	})
+	NatsManager.UseIdentityLogin(permtest.Password(natsauth.IdentityUser))
 	ctx := context.Background()
 	require.NoError(t, NatsManager.Initialize(ctx), "initializing under the catalog")
 
@@ -137,4 +145,5 @@ func TestStartsUnderItsDeclaredCatalog(t *testing.T) {
 	require.NotNil(t, DeadLetterConsumer, "the oncreate callback built no dead-letter consumer")
 	Microservice.Readiness.MarkReadyWithoutAuthSurface()
 	require.NoError(t, DeadLetterConsumer.Start(ctx), "starting the dead-letter consumer")
+	broker.RequireNoViolations(t)
 }
