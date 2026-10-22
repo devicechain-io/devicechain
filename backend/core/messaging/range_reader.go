@@ -204,6 +204,17 @@ func (s *rangeSource) refresh(ctx context.Context) error {
 	return nil
 }
 
+// allKnownAbsent reports whether the leader state last read accounts for every sequence in
+// [lo, hi].
+func (s *rangeSource) allKnownAbsent(lo, hi uint64) bool {
+	for seq := lo; seq <= hi; seq++ {
+		if !s.knownAbsent(seq) {
+			return false
+		}
+	}
+	return true
+}
+
 // knownAbsent reports whether the leader state last read accounts for seq not being held: below
 // the first retained sequence, or in the deleted set.
 func (s *rangeSource) knownAbsent(seq uint64) bool {

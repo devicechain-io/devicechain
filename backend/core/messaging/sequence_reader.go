@@ -68,6 +68,19 @@ var serverHeaders = []string{
 	"Nats-Stream", "Nats-Subject", "Nats-Sequence", "Nats-Time-Stamp", "Nats-Num-Pending", "Nats-Last-Sequence",
 }
 
+// serverHeader is the value the stream gave a header it adds to a direct-get reply. The reply
+// carries the stored message's own headers FIRST and the stream's appended after them, so a
+// message whose writer set a header of the same name (Nats-Subject, Nats-Sequence) has two values
+// and Header.Get would return the writer's. The subject a tenant is read from and the sequence the
+// order and completeness checks rest on are the stream's word, never the publisher's: the LAST
+// value is the one the stream wrote.
+func serverHeader(h nats.Header, key string) string {
+	if v := h.Values(key); len(v) > 0 {
+		return v[len(v)-1]
+	}
+	return ""
+}
+
 // directBatchRequest is the JSON body of a batched direct get.
 type directBatchRequest struct {
 	Seq       uint64     `json:"seq,omitempty"`
@@ -118,9 +131,15 @@ func directGetBatch(ctx context.Context, nc *nats.Conn, stream string, req direc
 			}
 			return out, nats.ErrTimeout
 		}
-		switch status := m.Header.Get("Status"); status {
-		case "":
+		// A message always carries the sequence the stream appends; an end marker or an error never
+		// does. A stored message's own header named Status does not make it a status.
+		if len(m.Header.Values("Nats-Sequence")) > 0 {
 			out.msgs = append(out.msgs, m)
+			continue
+		}
+		switch status := serverHeader(m.Header, "Status"); status {
+		case "":
+			return out, fmt.Errorf("stream %s answered a direct get with a reply that is neither a message nor a status", stream)
 		case "204":
 			return out, nil
 		case "404":
@@ -242,9 +261,9 @@ func (r *sequenceReader) fill(ctx context.Context) error {
 // queue accounts for the messages of a batch and queues the ones in range, in order.
 func (r *sequenceReader) queue(ctx context.Context, msgs []*nats.Msg) error {
 	for _, m := range msgs {
-		seq, err := strconv.ParseUint(m.Header.Get("Nats-Sequence"), 10, 64)
+		seq, err := strconv.ParseUint(serverHeader(m.Header, "Nats-Sequence"), 10, 64)
 		if err != nil {
-			return fmt.Errorf("read of stream %s: a reply carries no sequence (%q)", r.src.stream, m.Header.Get("Nats-Sequence"))
+			return fmt.Errorf("read of stream %s: a reply carries no sequence (%q)", r.src.stream, serverHeader(m.Header, "Nats-Sequence"))
 		}
 		if r.next != 0 && seq < r.next {
 			continue // a replica answered with what was already read
@@ -278,9 +297,18 @@ func (r *sequenceReader) queue(ctx context.Context, msgs []*nats.Msg) error {
 
 // accountForGap establishes, from the stream's leader, that every sequence in [lo, hi] is gone.
 // A sequence the leader still holds that the answer skipped is an error, never an absence.
+//
+// The leader is asked again only when what it said last cannot account for the gap, as the narrow
+// path's leaderConfirmsAbsent does. A sequence once below the first retained one, or once deleted,
+// never comes back, so a cached absence stays true; and the state request lists EVERY deleted
+// sequence in the stream, which the leader builds by walking its store. A range with a purged
+// tenant's messages interleaved has a hole in nearly every batch, and a state request per batch
+// would make a long replay cost the leader a walk of its store per 256 messages.
 func (r *sequenceReader) accountForGap(ctx context.Context, lo, hi uint64) error {
-	if err := r.src.refresh(ctx); err != nil {
-		return err
+	if !r.src.allKnownAbsent(lo, hi) {
+		if err := r.src.refresh(ctx); err != nil {
+			return err
+		}
 	}
 	for s := lo; s <= hi; s++ {
 		if !r.src.knownAbsent(s) {
@@ -363,13 +391,13 @@ func (r *sequenceReader) Close() error { return nil }
 // directToMessage turns a direct-get reply into the consumed-message shape the readers return:
 // the message's own headers without the ones the broker added, its stream sequence and append time.
 func directToMessage(m *nats.Msg) (Message, error) {
-	seq, err := strconv.ParseUint(m.Header.Get("Nats-Sequence"), 10, 64)
+	seq, err := strconv.ParseUint(serverHeader(m.Header, "Nats-Sequence"), 10, 64)
 	if err != nil {
-		return Message{}, fmt.Errorf("a reply carries no sequence (%q)", m.Header.Get("Nats-Sequence"))
+		return Message{}, fmt.Errorf("a reply carries no sequence (%q)", serverHeader(m.Header, "Nats-Sequence"))
 	}
-	appended, err := time.Parse(time.RFC3339Nano, m.Header.Get("Nats-Time-Stamp"))
+	appended, err := time.Parse(time.RFC3339Nano, serverHeader(m.Header, "Nats-Time-Stamp"))
 	if err != nil {
-		return Message{}, fmt.Errorf("sequence %d carries no append time (%q)", seq, m.Header.Get("Nats-Time-Stamp"))
+		return Message{}, fmt.Errorf("sequence %d carries no append time (%q)", seq, serverHeader(m.Header, "Nats-Time-Stamp"))
 	}
 	var headers map[string]string
 	for k := range m.Header {
@@ -381,7 +409,7 @@ func directToMessage(m *nats.Msg) (Message, error) {
 		}
 		headers[k] = m.Header.Get(k)
 	}
-	msg := NewConsumedMessage(m.Header.Get("Nats-Subject"), m.Data, 1, headers, nil)
+	msg := NewConsumedMessage(serverHeader(m.Header, "Nats-Subject"), m.Data, 1, headers, nil)
 	msg.StreamSeq = seq
 	// As the consumer metadata builds it (time.Unix), so a time compares equal in every way.
 	msg.AppendTime = time.Unix(0, appended.UnixNano())

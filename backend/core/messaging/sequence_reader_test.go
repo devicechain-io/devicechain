@@ -222,3 +222,60 @@ func TestTheReplayReturnsWhatTheEphemeralConsumerReturned(t *testing.T) {
 	require.Equal(t, want, got, "the read by sequence differs from the ephemeral consumer's")
 	require.Len(t, got, 597, "the corpus is what the test says it is (101..700 less three deleted)")
 }
+
+// 🔴 A STORED MESSAGE'S OWN HEADERS ARE NOT THE STREAM'S WORD. A direct get returns the message's
+// own headers first and appends the stream's (subject, sequence, append time) after them, so a
+// message whose writer set a header of the same name carries two values. The reader takes the
+// stream's: the subject a tenant is read from, and the sequence the order and completeness checks
+// rest on, can never come from what was published. And a message that carries a header named
+// Status is a message, not the end of a batch.
+func TestTheReplayTakesSubjectAndSequenceFromTheStreamNotTheMessage(t *testing.T) {
+	rig := newRangeRig(t, 0)
+	acme := ConcreteSubjectFor("test", "acme", rangeSuffix, "dev")
+	globex := ConcreteSubjectFor("test", "globex", rangeSuffix, "dev")
+	for i := 1; i <= 300; i++ {
+		h := nats.Header{}
+		h.Set("Nats-Subject", globex)
+		h.Set("Nats-Sequence", "999999")
+		h.Set("Nats-Time-Stamp", "2001-01-01T00:00:00Z")
+		if i%3 == 0 {
+			h.Set("Status", "204")
+		}
+		_, err := rig.mgr.js.PublishMsg(&nats.Msg{Subject: acme, Header: h, Data: []byte(fmt.Sprint(i))})
+		require.NoError(t, err)
+	}
+	rd, _ := openReplayAt(t, rig, 1)
+	var seqs []uint64
+	for {
+		m, err := rd.Read(context.Background())
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		require.Equal(t, acme, m.Subject, "the subject is the one the message was stored under")
+		require.True(t, m.AppendTime.After(time.Now().Add(-time.Hour)), "the append time is the stream's")
+		seqs = append(seqs, m.StreamSeq)
+	}
+	require.Equal(t, seqRange(1, 300), seqs)
+}
+
+// The leader's state is asked for when the holes cannot be accounted for from what it said last,
+// not once per hole: a purged tenant's messages interleaved with the rest leave a hole every few
+// sequences, and each state request lists every deleted sequence in the stream.
+func TestTheReplayAsksTheLeaderOnceForHolesItAlreadyKnows(t *testing.T) {
+	rig := newRangeRig(t, 1500)
+	for s := uint64(5); s < 1500; s += 5 { // 299 holes, the last message kept
+		require.NoError(t, rig.mgr.js.DeleteMsg(rig.stream, s))
+	}
+	rd, _ := openReplayAt(t, rig, 1)
+	sr := rd.(*sequenceReader)
+	asked := 0
+	sr.src.info = func(ctx context.Context) (*nats.StreamInfo, error) {
+		asked++
+		return rig.mgr.js.StreamInfo(rig.stream, &nats.StreamInfoRequest{DeletedDetails: true}, nats.Context(ctx))
+	}
+	got := drainRange(t, rd)
+	require.Len(t, got, 1201)
+	require.Equal(t, RangeStats{Present: 1201, Absent: 299}, rangeStats(t, rd))
+	require.Equal(t, 1, asked, "one state request accounts for every hole that was there before the read")
+}
