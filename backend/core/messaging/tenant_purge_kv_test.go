@@ -85,6 +85,35 @@ func TestKvPurgeCoversBothKeyLayouts(t *testing.T) {
 	assert.Equal(t, []string{purgeBystander}, bucketKeys(t, bareStore))
 }
 
+// A key the cache already DELETED still names the tenant: a KV delete leaves a marker on the key's
+// subject, and a key listing skips it, so a purge that worked from the listing left it in the
+// stream for good. The purge works from the stream's subject index, which still holds the marker,
+// and removes it with the rest of the key's history, so the erasure covers a deleted tenant's
+// evicted entries and not only its live ones.
+func TestKvPurgeRemovesTheMarkerOfAnAlreadyDeletedKey(t *testing.T) {
+	_, js := purgeRig(t)
+	bucket := CacheBucketName(purgeInstance, "device-management", kv.BucketDeviceByToken)
+	store := seedBucket(t, js, bucket, purgeVictim+"|dev-1", purgeBystander+"|dev-1")
+	require.NoError(t, store.Delete(kvKey(purgeVictim+"|dev-1")))
+	victimSubject := "$KV." + bucket + "." + kvKey(purgeVictim+"|dev-1")
+
+	subjects := func() map[string]uint64 {
+		t.Helper()
+		info, err := js.StreamInfo(KvStreamName(bucket), &nats.StreamInfoRequest{SubjectsFilter: "$KV." + bucket + ".>"})
+		require.NoError(t, err)
+		return info.State.Subjects
+	}
+	require.Contains(t, subjects(), victimSubject, "the delete must leave its marker or this proves nothing")
+
+	res, err := PurgeTenantKv(context.Background(), js, purgeInstance, purgeVictim)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), res.Keys)
+
+	left := subjects()
+	assert.NotContains(t, left, victimSubject, "the deleted key's marker still names the tenant")
+	assert.Len(t, left, 1, "only the bystander's key remains")
+}
+
 // TestATenantWhoseTokenIsAPrefixOfAnothersIsUnaffected is the cross-tenant control.
 //
 // 🔴 "acme" AND "acme-2" SHARE A STRING PREFIX. A membership test written as

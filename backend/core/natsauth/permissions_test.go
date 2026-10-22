@@ -217,6 +217,43 @@ func TestAnAreaCannotTouchAnotherAreasDurable(t *testing.T) {
 	}
 }
 
+// 🔴 STREAM CREATE AND UPDATE NAME THE STREAM, NOT ITS CONFIGURATION. Whoever may update a stream
+// may give it sources, a subject transform or RePublish, and each of those writes into a stream
+// past every publish permission. That is the residue the stream-administration step removes; until
+// then the grant must at least stop at the streams and buckets the catalog says the area
+// administers, plus the MQTT gateway's stores for event-sources (the named exception). An area
+// that gained an update on a stream it only has to read would be a forgery path nothing else here
+// sees, because the publish properties above all hold.
+func TestStreamAdministrationIsGrantedOnlyWhereDeclared(t *testing.T) {
+	for area, p := range allAreaPermissions(t) {
+		mayAdminister := map[string]bool{}
+		for _, st := range streams.All {
+			if streams.Administers(st.Suffix, area) {
+				mayAdminister[messaging.StreamName(permInstance, st.Suffix)] = true
+			}
+		}
+		for _, b := range kv.All {
+			for _, bucket := range messaging.KvBucketNames(permInstance, b, area) {
+				mayAdminister[messaging.KvStreamName(bucket)] = true
+			}
+		}
+		if area == mqttGatewayArea {
+			for _, s := range messaging.MqttStoreNames() {
+				mayAdminister[s] = true
+			}
+		}
+		for _, a := range p.Publish.Allow {
+			for _, verb := range []string{"$JS.API.STREAM.CREATE.", "$JS.API.STREAM.UPDATE."} {
+				target, ok := strings.CutPrefix(a, verb)
+				if !ok {
+					continue
+				}
+				require.True(t, mayAdminister[target], "%s may %s%s, a stream it does not administer", area, verb, target)
+			}
+		}
+	}
+}
+
 // Stream deletion, restore and message deletion are not granted wholesale: they appear only where
 // a declaration calls for them.
 func TestDestructiveVerbsAreGrantedOnlyWhereDeclared(t *testing.T) {
