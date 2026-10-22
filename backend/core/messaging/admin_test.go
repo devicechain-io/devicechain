@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/require"
 
+	"github.com/devicechain-io/dc-microservice/auth"
 	"github.com/devicechain-io/dc-microservice/core"
 	"github.com/devicechain-io/dc-microservice/credential"
 	"github.com/devicechain-io/dc-microservice/kv"
@@ -240,10 +241,39 @@ func TestTheCatalogLifetimesMatchTheirUsers(t *testing.T) {
 	}
 	require.Equal(t, DefaultLeaseTTL, lookup(kv.BucketLeases), "the lease bucket's lifetime is the fencing window")
 	require.Equal(t, credential.AttemptTTL, lookup(kv.BucketDeviceCredentialAttempts))
+	require.Equal(t, credential.AttemptTTL, lookup(kv.BucketCredentialAttempts))
+	require.Equal(t, auth.DefaultRefreshTTL, lookup(kv.BucketRefreshTokens))
+	// Every bucket, the identity account's included: without that account the administrator
+	// creates the sign-in buckets in the shared one (user-management's own lifetimes are pinned
+	// against these in user-management, which this package cannot import).
 	for _, b := range kv.All {
-		if b.Account == kv.App {
-			require.Positive(t, b.TTL, "App bucket %s has no lifetime for the administrator to create it with", b.Name)
+		require.Positive(t, b.TTL, "bucket %s has no lifetime for the administrator to create it with", b.Name)
+	}
+}
+
+// On a broker without the identity account (a chart-only install brings its own broker, and the
+// chart's default document says it has none), the sign-in buckets live in the shared account and
+// user-management only verifies them, so the administrator is their creator and has to give them
+// their lifetimes. A sign-in bucket created with none keeps every OAuth code redeemable and every
+// failed sign-in charged forever, until the bucket fills; a full attempt bucket fails OPEN.
+func TestWithoutTheIdentityAccountTheSignInBucketsAreCreatedWithTheirLifetimes(t *testing.T) {
+	srv := startEmbeddedServer(t)
+	admin := adminOn(t, srv)
+	require.False(t, admin.identityRequired(), "this test is about a broker without the identity account")
+	_, err := admin.ReconcileBroker(context.Background(), []string{"user-management"})
+	require.NoError(t, err)
+
+	for _, b := range kv.All {
+		if b.Account != kv.Identity {
+			continue
 		}
+		name := identityBucketName("test", b.Name)
+		store, err := admin.js.KeyValue(name)
+		require.NoError(t, err, "the administrator did not create sign-in bucket %s", name)
+		status, err := store.Status()
+		require.NoError(t, err)
+		require.Positive(t, status.TTL(), "sign-in bucket %s was created with no lifetime", name)
+		require.Equal(t, b.TTL, status.TTL(), "sign-in bucket %s", name)
 	}
 }
 

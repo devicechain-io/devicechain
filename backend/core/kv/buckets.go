@@ -93,12 +93,20 @@ type Bucket struct {
 	Tier Tier
 	// Account is the NATS account the bucket lives in. See Account.
 	Account Account
-	// TTL is the bucket's entry lifetime, which the broker administrator creates it with
-	// (an App-account bucket; the Identity account's are created by the one login that owns
-	// them, with the lifetimes identity declares). A KV bucket has ONE lifetime, so for a
-	// bucket several areas open it is the value they all have to agree on: the lease bucket's
-	// is the fencing window. It is declared here, once, because the creator is no longer the
-	// service that opens the bucket and so can no longer be told the value at the call site.
+	// TTL is the bucket's entry lifetime, which the broker administrator creates it with. A KV
+	// bucket has ONE lifetime, so for a bucket several areas open it is the value they all have
+	// to agree on: the lease bucket's is the fencing window. It is declared here, once, because
+	// the creator is no longer the service that opens the bucket and so can no longer be told
+	// the value at the call site.
+	//
+	// 🔴 EVERY BUCKET DECLARES ONE, the Identity account's included. Where the identity account
+	// exists, the one login that owns it creates those buckets with the lifetimes user-management
+	// asks for (the refresh-token one is configurable). Where it does not (a broker built before
+	// it, or a chart-only install, whose default document has none), they live in the shared
+	// account, user-management only verifies them, and the administrator creates them with THIS
+	// value. A sign-in bucket created with no lifetime keeps every authorization code redeemable
+	// and every failed sign-in charged until the bucket fills, and a full attempt bucket fails
+	// open.
 	TTL time.Duration
 	// Writers are the areas that put, update, delete or purge keys in the bucket, and
 	// Readers the areas that get, list or watch them. They are separate lists because a
@@ -126,6 +134,10 @@ var All = []Bucket{
 		Name:    BucketRefreshTokens,
 		Tier:    State,
 		Account: Identity,
+		// auth.DefaultRefreshTTL. user-management's configured refresh lifetime applies where it
+		// creates the bucket itself (the identity account); in the shared account an entry lives
+		// at most this long after its last rotation, and the token's own expiry still bounds it.
+		TTL:     7 * 24 * time.Hour,
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 		Why: "One entry per live refresh token (jti -> email), plus two small entries " +
@@ -137,6 +149,7 @@ var All = []Bucket{
 		Name:    BucketOAuthCodes,
 		Tier:    State,
 		Account: Identity,
+		TTL:     60 * time.Second, // identity.AuthCodeTTL: the bucket's lifetime is what bounds redeemability
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 		Why: "One entry per in-flight OAuth 2.1 authorization code (ADR-047), held " +
@@ -147,6 +160,7 @@ var All = []Bucket{
 		Name:    BucketSsoState,
 		Tier:    State,
 		Account: Identity,
+		TTL:     10 * time.Minute, // identity.SsoStateTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 		Why: "One entry per in-flight single sign-on attempt (state, nonce, the upstream " +
@@ -161,6 +175,7 @@ var All = []Bucket{
 		Name:    BucketSsoCodes,
 		Tier:    State,
 		Account: Identity,
+		TTL:     60 * time.Second, // identity.SsoCodeTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 		Why: "One entry per completed single sign-on awaiting its completeSso call, " +
@@ -172,6 +187,7 @@ var All = []Bucket{
 		Name:    BucketCredentialAttempts,
 		Tier:    State,
 		Account: Identity,
+		TTL:     10 * time.Minute, // credential.AttemptTTL
 		Writers: []string{"user-management"},
 		Readers: []string{"user-management"},
 		Why: "One entry per principal of a throttled kind (in user-management, a " +
