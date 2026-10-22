@@ -312,7 +312,8 @@ Los ajustes dependen del widget. Los más comunes:
 - **Marcar alarmas** y **Marcar comandos** (gráfico de series temporales): ambas desactivadas por
   defecto. **Marcar alarmas** dibuja las alarmas del dispositivo del gráfico sobre las lecturas: una
   banda tenue desde que se activó la alarma hasta que se despejó (hasta el borde derecho mientras
-  sigue activa) con una línea en la activación, del color de su severidad. Una alarma sin severidad
+  sigue activa), con una franja fina en el borde superior de la banda y una línea en la
+  activación, del color de su severidad. Una alarma sin severidad
   propia y la línea donde se despejó se dibujan en el color neutro, porque en un panel el color
   significa severidad y nada más. **Marcar comandos** dibuja una línea punteada neutra donde se
   envió cada comando al dispositivo, con el nombre del comando y, cuando se conoce, su resultado
@@ -323,7 +324,13 @@ Los ajustes dependen del widget. Los más comunes:
   antigüedad. Se dibujan como máximo 30 eventos, los más recientes; el gráfico indica exactamente
   cuántos más caen en el intervalo («N más sin mostrar»). Una alarma que se despejó y volvió a
   activarse se dibuja solo desde su última activación, porque la plataforma guarda un registro por
-  alarma. En una grabación reproducida, los
+  alarma. **Alarmas a marcar** (gráfico de series temporales) elige qué alarmas se dibujan. *Solo las
+  mediciones de este gráfico* es lo predeterminado en un gráfico nuevo: dibuja las alarmas sobre una
+  medición que el gráfico representa, de modo que una alarma de presión de neumáticos no tiñe un
+  gráfico de temperatura del motor. Una alarma sobre otra medición, o que la plataforma no puede
+  vincular a una medición, no se dibuja; aparece bajo el gráfico como **Otras alarmas de este
+  dispositivo**. *Todas las alarmas del dispositivo* las dibuja todas, como los gráficos guardados
+  antes de existir esta opción. En una grabación reproducida, los
   marcadores salen de la grabación si contiene alarmas o comandos, y el gráfico indica que no están
   en la grabación para el canal que no los tiene.
 - **Estadística** (tarjeta de estadística): qué cifra del intervalo mostrar: promedio (por defecto),

@@ -296,6 +296,18 @@ const MARK_ALARMS = {
   helpId: 'widgetHintMarkAlarms',
 } as const satisfies RuntimeOptionSpec;
 
+// Which alarms the chart draws. Unset means 'device' (every alarm on the chart's device), which is
+// what a chart saved before this option existed does; a chart added from the palette starts at
+// 'series' (descriptor defaults below), so it draws only the alarms about what it charts.
+const MARK_ALARMS_SCOPE = {
+  kind: 'enum',
+  values: ['series', 'device'],
+  labelId: 'widgetLabelMarkAlarmsScope',
+  helpId: 'widgetHintMarkAlarmsScope',
+  valueLabelIds: { series: 'widgetMarkAlarmsScopeSeries', device: 'widgetMarkAlarmsScopeDevice' },
+  placeholderId: 'widgetPlaceholderWholeDevice',
+} as const satisfies RuntimeOptionSpec;
+
 const MARK_COMMANDS = {
   kind: 'boolean',
   labelId: 'widgetLabelMarkCommands',
@@ -386,12 +398,13 @@ export const builtinWidgetDescriptors = {
       staleAfterSeconds: STALE_AFTER_SECONDS,
       windowSeconds: WINDOW_SECONDS,
       markAlarms: MARK_ALARMS,
+      markAlarmsScope: MARK_ALARMS_SCOPE,
       markCommands: MARK_COMMANDS,
       min: CHART_AXIS_MIN,
       max: CHART_AXIS_MAX,
     },
     constraints: [{ kind: 'greater-than', key: 'max', than: 'min' }],
-    defaults: { title: 'Timeseries chart' },
+    defaults: { title: 'Timeseries chart', markAlarmsScope: 'series' },
     interactions: {},
     freshness: true,
     layout: { defaultSpan: { cols: 6, rows: 4 }, minSpan: { cols: 4, rows: 3 } },

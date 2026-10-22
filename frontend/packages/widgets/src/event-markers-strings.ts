@@ -12,6 +12,12 @@ export type EventKind = 'alarm' | 'command';
 export interface EventMarkerStrings {
   // The disclosure's summary, with the number of events listed.
   events: (count: number) => string;
+  // The disclosure summary of the alarms a series-scoped chart does not draw.
+  otherAlarms: (count: number) => string;
+  // Said of an alarm in that list when it names no measurement.
+  noMeasurement: string;
+  // Said of an alarm in that list that is about another measurement.
+  aboutMeasurement: (name: string) => string;
   alarm: string;
   command: string;
   severity: Record<string, string>;
@@ -31,6 +37,9 @@ export interface EventMarkerStrings {
 export const EVENT_MARKER_STRINGS: Record<'en' | 'es', EventMarkerStrings> = {
   en: {
     events: (n) => `Events in this range (${n})`,
+    otherAlarms: (n) => `Other alarms on this device (${n})`,
+    noMeasurement: 'no measurement known',
+    aboutMeasurement: (m) => `about ${m}`,
     alarm: 'Alarm',
     command: 'Command',
     severity: { CRITICAL: 'Critical', MAJOR: 'Major', MINOR: 'Minor', WARNING: 'Warning', INDETERMINATE: 'Indeterminate' },
@@ -55,6 +64,9 @@ export const EVENT_MARKER_STRINGS: Record<'en' | 'es', EventMarkerStrings> = {
   },
   es: {
     events: (n) => `Eventos en este intervalo (${n})`,
+    otherAlarms: (n) => `Otras alarmas de este dispositivo (${n})`,
+    noMeasurement: 'medición desconocida',
+    aboutMeasurement: (m) => `sobre ${m}`,
     alarm: 'Alarma',
     command: 'Comando',
     severity: { CRITICAL: 'Crítica', MAJOR: 'Mayor', MINOR: 'Menor', WARNING: 'Advertencia', INDETERMINATE: 'Indeterminada' },
