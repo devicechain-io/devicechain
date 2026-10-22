@@ -380,6 +380,12 @@ func buildSitepulseDashboard(devices []DeviceInstance) (string, error) {
 		onMachine(SitepulseEngineTempKey), "Engine temp history")
 	delete(trend.Options, "windowSeconds") // the board's range, as the stat cards
 	trend.Options["markAlarms"] = true
+	// Only the alarms about the engine temperature: the selected machine's tyre-pressure or
+	// low-fuel alarm is about something else, and tinting this chart for it reads as "the engine
+	// is in alarm". Those are listed under the chart. Set here, not left to the default, so the
+	// board does not depend on what a new chart starts with. The recording carries each alarm's
+	// metric, which is what the scope matches on.
+	trend.Options["markAlarmsScope"] = "series"
 	trend.Options["markCommands"] = true
 	trend.Options["unit"] = "°C"
 	trend.Options["min"] = sitepulseEngineTrendMin

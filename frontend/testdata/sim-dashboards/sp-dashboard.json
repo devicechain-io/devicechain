@@ -509,6 +509,7 @@
       },
       "options": {
         "markAlarms": true,
+        "markAlarmsScope": "series",
         "markCommands": true,
         "max": 130,
         "min": 60,
