@@ -200,7 +200,7 @@ func introduceLogins(st *State) error {
 	if st.Values["natsCalloutIssuerSeed"] == "" {
 		return nil // a broker with no authentication has no logins to separate
 	}
-	creds, err := natsauth.Credentials{}.WithLogins(loginsInValues(st), nil)
+	creds, err := withLogins(natsauth.Credentials{}, loginsInValues(st), nil)
 	if err != nil {
 		return err
 	}
