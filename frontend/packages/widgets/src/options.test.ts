@@ -108,6 +108,9 @@ const SHARED_SOURCES = [
   // which channels (alarms, commands) to draw.
   'binding-policy.ts',
   'event-markers-feed.tsx',
+  // The compare feed (the time-series chart set to one line per device) reads which measurement is
+  // compared and how many lines are drawn.
+  'compare-feed.tsx',
 ];
 
 // Which types each shared read actually applies to. A shared file cannot say this itself —
@@ -121,7 +124,7 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // primaryMeasurementName(), called by the two single-value widgets.
   // (and the level widgets, through the shared useLevelReading hook).
   // The fleet feed reads it for the bar chart's one bar per device.
-  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart', 'fleet-count'],
+  measurement: ['latest-card', 'gauge', 'linear-gauge', 'level-gauge', 'battery', 'status-light', 'signal-bars', 'compass', 'progress-ring', 'stat-card', 'bar-chart', 'fleet-count', 'timeseries-chart'],
   // The entity-selector authors it; the alarm-table's originator drill reuses it; slots.ts
   // reads it generically to keep a referenced slot alive, and editor-clipboard.ts to carry it
   // across a paste.
@@ -131,6 +134,14 @@ const SHARED_KEY_TYPES: Record<string, readonly WidgetType[]> = {
   // binding-policy.ts and event-markers-feed.tsx read which markers the timeseries chart draws.
   markAlarms: ['timeseries-chart'],
   markCommands: ['timeseries-chart'],
+  // compare-feed.tsx: the most lines the one-line-per-device chart draws.
+  maxSeries: ['timeseries-chart'],
+  // compare-feed.tsx draws the same line chart with the same axis and number options.
+  unit: ['timeseries-chart'],
+  precision: ['timeseries-chart'],
+  thresholds: ['timeseries-chart'],
+  min: ['timeseries-chart'],
+  max: ['timeseries-chart'],
 };
 
 // The option keys a widget's BINDING POLICY references (window, page size, alarm filters).
@@ -246,7 +257,7 @@ describe('binding-policy option references', () => {
   // references, the declared-equals-read check would fail only for the keys it used to supply
   // — pin that it still finds them, per channel.
   it('finds the references each channel declares', () => {
-    expect(policyKeys('timeseries-chart')).toEqual(['windowSeconds']);
+    expect(policyKeys('timeseries-chart')).toEqual(['windowSeconds', 'groupBy']);
     expect(policyKeys('alarm-table').sort()).toEqual(['acknowledged', 'groupBy', 'maxRows', 'severity', 'state']);
     expect(policyKeys('alarm-count').sort()).toEqual(['acknowledged', 'severity', 'state']); // page size is a constant
     expect(policyKeys('alarm-severity').sort()).toEqual(['acknowledged', 'deviceType', 'state']); // it breaks severity down, so none filters it

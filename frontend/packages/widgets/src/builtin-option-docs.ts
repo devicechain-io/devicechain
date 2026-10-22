@@ -75,6 +75,7 @@ export const OPTION_DOCS: Readonly<Record<string, string>> = {
   sortBy: 'The measurement the table is ordered by. Blank orders by device name.',
   sortDescending: 'Largest first.',
   pageSize: 'Devices per page. Default 20.',
+  maxSeries: 'Most lines drawn when the chart shows one line per device. Default 5, at most 12. Each line costs one stored-history read, and the chart colours repeat after five; a group larger than this shows the first devices of the group and says how many it left out.',
   show: 'What to count: devices in an abnormal band of the measurement (default), or all devices.',
 };
 
@@ -127,6 +128,10 @@ export const OPTION_DOC_OVERRIDES: Readonly<Record<string, Readonly<Record<strin
   'timeseries-chart': {
     min: 'Low end of the value axis. Unset, the axis starts where the chart picks. A reading or threshold below it still shows: the axis widens to take it in.',
     max: 'High end of the value axis, above min. Unset, the chart picks. A reading or threshold above it still shows: the axis widens to take it in.',
+    groupBy: 'One line per measurement of one device (the default), or one line per device of a group for the measurement set below. Per device, stored history is drawn as the average of each time bucket (the chart says so), and thresholds are reference lines over it.',
+    measurement: 'The measurement compared across the group. Defaults to the first the datasource selects. Used only with one line per device.',
+    markAlarms: 'Mark this device’s alarms on the chart, from raise to clear. Not drawn with one line per device.',
+    markCommands: 'Mark the commands sent to this device on the chart. Not drawn with one line per device.',
   },
   'bar-chart': {
     groupBy: 'One bar per measurement (the default), or per device of the group for the measurement set below.',
