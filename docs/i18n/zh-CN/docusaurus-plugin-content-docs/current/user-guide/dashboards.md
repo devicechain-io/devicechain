@@ -78,6 +78,7 @@ import GuideShot from '@site/src/components/GuideShot';
 顶部：
 
 - **15m**、**1h**、**6h**、**24h** 和 **7d** 设置图表绘制的时间范围，**Pause**（暂停）冻结仪表板。它们与 /dash 查看器中的用法相同，参见[时间范围与暂停](/user-guide/viewing-dashboards-in-dash#time-range-and-pause)。
+  **Custom range**（自定义范围）则改为显示固定的起止窗口，参见[自定义范围](/user-guide/viewing-dashboards-in-dash#custom-range)。
 - **Live**（实时）表示仪表板的实时连接正常；设备只是暂时没有上报数据并不会改变它。连接中断时它显示 **Reconnecting**（正在重新连接），中断 20 秒后显示 **Offline**（离线），如果浏览器本身断网则立即显示 **Offline**。连接恢复后，组件会自行继续更新。
 - **Preview**（预览）用生成的数据替换实时数据（参见[用合成数据预览](#previewing-with-synthetic-data)）。
 - **Export**（导出）复制或下载仪表板（参见[导出](#exporting)）。

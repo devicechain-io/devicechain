@@ -42,7 +42,11 @@ import { useHeld } from './use-held';
 import { accessStrings } from './access-strings';
 import { defaultWidgetRegistry } from './default-registry';
 import {
+  css,
+  fontVar,
   optString,
+  spaceVar,
+  viewerLocale,
   useAlarmStream,
   useCommandStream,
   useDatasourceAvailability,
@@ -103,6 +107,7 @@ type BodyProps = ConnectedWidgetProps & { registry: WidgetRegistry };
 type AnyWidgetComponent = ComponentType<any>;
 
 function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, initialSamplesAsOf, onReconnect }: BodyProps) {
+  const range = useWidgetTimeRange();
   const unresolved = widget.type === UNKNOWN_WIDGET_TYPE;
   const descriptor = unresolved ? undefined : registry.descriptor(widget.type);
   const implementation = unresolved ? undefined : registry.implementation(widget.type);
@@ -136,7 +141,7 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, i
     );
   }
 
-  return (
+  const body = (
     <HostScope descriptor={descriptor} actions={actions}>
       {(hostActions) => (
         <ChannelBody
@@ -151,6 +156,52 @@ function ConnectedWidgetBody({ widget, hub, registry, actions, initialSamples, i
         />
       )}
     </HostScope>
+  );
+  return range?.absolute !== undefined && showsCurrentStateOnly(descriptor) ? <CurrentStateBadge>{body}</CurrentStateBadge> : body;
+}
+
+// The widgets that read CURRENT state, with no history to read for a past window: alarms (the
+// active set now), positions (the last fix), and presence (online now). Under a fixed window the
+// rest of the board shows that window, so each of these says, on itself, that it does not --
+// a table of today's active alarms under "Fixed window: yesterday 02:00-04:00" would otherwise
+// read as the alarms that were active then.
+function showsCurrentStateOnly(descriptor: WidgetDescriptor): boolean {
+  return descriptor.channel === 'alarm' || descriptor.channel === 'location' || presenceMode(descriptor);
+}
+
+const CURRENT_STATE_STRINGS = {
+  en: { label: 'Now', title: 'Shows the current state: the fixed time window does not apply to this widget.' },
+  es: { label: 'Ahora', title: 'Muestra el estado actual: la ventana de tiempo fija no se aplica a este widget.' },
+};
+
+function CurrentStateBadge({ children }: { children: ReactNode }) {
+  const words = viewerLocale()?.toLowerCase().startsWith('es') ? CURRENT_STATE_STRINGS.es : CURRENT_STATE_STRINGS.en;
+  return (
+    <div data-current-state="" style={{ position: 'relative', width: '100%', height: '100%', minWidth: 0, minHeight: 0 }}>
+      {children}
+      <span
+        data-current-state-badge=""
+        role="note"
+        title={words.title}
+        aria-label={words.title}
+        style={{
+          position: 'absolute',
+          // Bottom LEFT: a map keeps its attribution bottom right, and a chart its span badge top right.
+          bottom: spaceVar(1),
+          left: spaceVar(2),
+          padding: `0 ${spaceVar(1)}`,
+          fontSize: fontVar('xs'),
+          fontWeight: 600,
+          whiteSpace: 'nowrap',
+          color: css('background'),
+          background: css('foreground'),
+          borderRadius: 4,
+          zIndex: 1,
+        }}
+      >
+        {words.label}
+      </span>
+    </div>
   );
 }
 

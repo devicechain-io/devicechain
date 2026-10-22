@@ -120,6 +120,8 @@ Along the top:
 - **15m**, **1h**, **6h**, **24h** and **7d** set the time range the charts draw, and **Pause**
   freezes the dashboard. They work as they do in the /dash viewer; see
   [Time range and pause](/user-guide/viewing-dashboards-in-dash#time-range-and-pause).
+  **Custom range** shows a fixed from-to window instead; see
+  [Custom range](/user-guide/viewing-dashboards-in-dash#custom-range).
 - **Live** shows that the dashboard's live connection is up; a device that is merely quiet does not
   change it. If the connection drops it reads **Reconnecting**, then **Offline** once it has been
   down for 20 seconds, or straight away if the browser itself goes offline. The widgets pick up again

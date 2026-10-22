@@ -224,6 +224,8 @@ layout: {
 
 `useWidgetTimeRange()` 返回时间范围：`spanSeconds`、`paused`，以及暂停时的 `pausedAt`。组件在看板之外渲染时它为 `undefined`，因此请处理这种情况，而不要假定为一小时。`withinSpan(samples, spanSeconds, end)` 会丢弃早于跨度的样本。看板暂停时，宿主会把除 `control` 以外的所有数据通道保持在屏幕上的快照，因此你的组件无需自行实现暂停逻辑。
 
+看板也可以显示固定的起止窗口。此时组件读到的时间范围看起来像一个被冻结的滚动范围：`paused` 为 `true`，`pausedAt` 是窗口的结束时间，`spanSeconds` 是窗口长度，因此只理解滚动范围的组件会准确绘制该窗口（实时数据流已经关闭），无需任何修改。想要表明“固定窗口”的组件可以读取可选字段 `absolute`（`fromMs` 与 `toMs`，纪元毫秒），它仅在此情形下存在。
+
 不指定精度时，`formatValue(value)` 最多显示 3 位小数；小于 1 的数值保留 4 位有效数字。传入精度可固定小数位数。
 
 ## 交互与信任模型 {#interactions-and-the-trust-model}

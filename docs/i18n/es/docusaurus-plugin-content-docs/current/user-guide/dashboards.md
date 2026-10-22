@@ -119,6 +119,8 @@ En la parte superior:
 - **15m**, **1h**, **6h**, **24h** y **7d** fijan el intervalo de tiempo que dibujan los gráficos, y
   **Pausar** congela el panel. Funcionan igual que en el visor /dash; consulta
   [Intervalo de tiempo y pausa](./viewing-dashboards-in-dash.md#time-range-and-pause).
+  **Intervalo personalizado** muestra en su lugar un intervalo fijo de fecha a fecha; consulta
+  [Intervalo personalizado](./viewing-dashboards-in-dash.md#custom-range).
 - **En vivo** indica que la conexión en vivo del panel está activa; un dispositivo que simplemente
   no envía datos no lo cambia. Si se corta la conexión muestra **Reconectando**, y **Sin conexión**
   cuando lleva 20 segundos caída, o de inmediato si el propio navegador se queda sin conexión. Los

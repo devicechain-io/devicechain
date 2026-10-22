@@ -56,7 +56,7 @@ describe('useBoardTimeRange', () => {
 });
 
 describe('<TimeRangeBar>', () => {
-  const controls = () => ({ setSpan: vi.fn(), pause: vi.fn(), resume: vi.fn() });
+  const controls = () => ({ setSpan: vi.fn(), pause: vi.fn(), resume: vi.fn(), setAbsolute: vi.fn() });
 
   it('marks the active preset and sets a span on click', () => {
     const c = controls();

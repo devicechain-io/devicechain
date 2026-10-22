@@ -493,6 +493,60 @@ describe('the time range', () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 
+  it('?from=&to= opens a fixed window: the live tail is off, the zone is shown, a preset returns to live', async () => {
+    landOn('?dashboard=wall&range=6h&from=2026-10-14T02:00:00Z&to=2026-10-14T04:00:00Z');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toMatchObject({
+      spanSeconds: 7200,
+      paused: true,
+      pausedAt: Date.UTC(2026, 9, 14, 4, 0, 0),
+      absolute: { fromMs: Date.UTC(2026, 9, 14, 2, 0, 0), toMs: Date.UTC(2026, 9, 14, 4, 0, 0) },
+    });
+    const pill = document.querySelector('[data-time-range-absolute]') as HTMLElement;
+    expect(pill.textContent).toContain(t('view:absFixed'));
+    expect(pill.getAttribute('title')).toContain('(UTC)');
+    expect(document.querySelector('[data-time-range-paused]')).toBeNull();
+    expect(document.querySelector('[data-time-range-notice]')).toBeNull();
+
+    fireEvent.click(rangeButton('24h'));
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 86400, paused: false });
+    expect(document.querySelector('[data-time-range-absolute]')).toBeNull();
+  });
+
+  it('an unusable ?from=&to= is ignored with a visible note, and the board opens live', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&from=2026-10-14T04:00:00Z&to=2026-10-14T02:00:00Z');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 3600, paused: false });
+    const note = document.querySelector('[data-time-range-notice]') as HTMLElement;
+    expect(note.textContent).toContain(t('view:absProblemOrder'));
+    expect(note.textContent).toContain('from=2026-10-14T04:00:00Z');
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a zoneless ?from=&to= is refused (whose 02:00?) rather than read in the viewer zone', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    landOn('?dashboard=wall&from=2026-10-14T02:00:00&to=2026-10-14T04:00:00');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(h.rendered?.timeRange).toEqual({ spanSeconds: 3600, paused: false });
+    expect(document.querySelector('[data-time-range-notice]')?.textContent).toContain(t('view:absUnzoned'));
+  });
+
+  it('kiosk says a fixed window is showing', async () => {
+    landOn('?dashboard=wall&kiosk=1&from=2026-10-14T02:00:00Z&to=2026-10-14T04:00:00Z');
+    serve();
+    render(<App />);
+    await signIn();
+    expect(document.querySelector('[data-time-range-bar]')).toBeNull();
+    expect(document.querySelector('[data-time-range-absolute]')).not.toBeNull();
+  });
+
   it('picking a preset changes the span; pause freezes at the clock, resume lets go', async () => {
     landOn('?dashboard=wall');
     serve();
