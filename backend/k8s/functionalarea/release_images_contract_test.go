@@ -199,6 +199,15 @@ func TestReleaseImageSetMatchesDeployAndVerifier(t *testing.T) {
 		if mod == "backend/k8s" {
 			continue
 		}
+		if mod == "backend/admin/dc-broker-admin" {
+			// Not an image anyone runs by hand: the chart's pre-install/pre-upgrade hook Job
+			// pulls it, so what is expected is the name the chart's helper builds.
+			if !strings.Contains(helpers, `"%s/dc-broker-admin:%s" .Values.image.registry`) {
+				t.Error("the chart's broker administrator image is no longer {registry}/dc-broker-admin:{tag} -- update the release, the verifier and the chart together")
+			}
+			expected = append(expected, "dc-broker-admin")
+			continue
+		}
 		names := map[string]bool{}
 		for _, m := range runbookImage.FindAllStringSubmatch(readRepoFile(t, mod+"/RUNBOOK.md"), -1) {
 			names[m[1]] = true

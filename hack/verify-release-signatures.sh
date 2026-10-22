@@ -73,7 +73,7 @@ RELEASE_IMAGES=(
   event-management event-processing event-sources lwm2m-ingest mcp
   notification-management outbound-connectors sparkplug-ingest update-management
   user-management
-  operator dc-edge-agent frontend
+  operator dc-edge-agent dc-broker-admin frontend
 )
 RELEASE_CHART="charts/devicechain"
 DEFAULT_FOREIGN="ghcr.io/devicechain-io/operator@sha256:c3106468ae919b9f129fcf86b659808db10f9fdc49af3300d0cae71db35374dc"

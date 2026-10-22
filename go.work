@@ -39,6 +39,7 @@ go 1.27.0
 toolchain go1.27.3
 
 use (
+	./backend/admin/dc-broker-admin
 	./backend/cli
 	./backend/core
 	./backend/edge/dc-edge-agent
