@@ -39,8 +39,8 @@ import {
   type WidgetDescriptor,
 } from '@devicechain/dashboards';
 import type { WidgetEditorServices } from '@devicechain/widget-sdk';
-import { Plus, X } from 'lucide-react';
-import { useState } from 'react';
+import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
@@ -51,6 +51,7 @@ import { Combobox, type ComboboxOption } from '@/components/ui/combobox';
 import { FormField } from '@/components/ui/form-field';
 import { Input } from '@/components/ui/input';
 
+import { EntityPicker, type EntityKind } from './EntityPicker';
 import { editorControlOf, hostControl, type ControlEditorProps } from './controlEditors';
 import { enumChoiceLabel, enumPlaceholder, fieldHelp, fieldLabel, useMessageLookup } from './optionWording';
 
@@ -176,6 +177,19 @@ function SchemaField({
       // would then be announced twice and shown above a control that already says it.
       return <BooleanField option={option} label={label} hint={hint} ctx={ctx} />;
     case 'string':
+      if (spec.control === DEVICE_TYPE_CONTROL) {
+        return (
+          <FormField label={label} description={hint}>
+            <EntityPicker
+              kind={DEVICE_TYPE_KIND}
+              ariaLabel={label}
+              value={optString(ctx.widget, option)}
+              // The picker's clear button hands back '' and setOption drops the key.
+              onChange={(token) => ctx.setOption(option, token)}
+            />
+          </FormField>
+        );
+      }
       return (
         <FormField label={label} description={hint}>
           <Input
@@ -215,6 +229,16 @@ function SchemaField({
 // ---- A list option: one row per entry, one control per declared item field -------
 
 type Row = Record<string, unknown>;
+
+// A row's controls are h-10 and its buttons size-6, and the row aligns to the top (a cell may grow
+// below its control), so the buttons drop by half the difference to sit level with the controls.
+const ROW_BUTTON = 'mt-2';
+
+// The `control` that picks a device type from the catalogue instead of asking for its token to be
+// typed. Open vocabulary: a descriptor that names it on a string option or a string list field
+// gets the picker, and the stored value is still the bare token.
+const DEVICE_TYPE_CONTROL = 'device-type';
+const DEVICE_TYPE_KIND: EntityKind = 'deviceType';
 
 // The stored rows, read defensively: a hand-edited bag may hold anything, and a row that is not
 // an object is shown as an empty row rather than crashing the panel.
@@ -256,6 +280,25 @@ function ListField({
 
   // An empty list drops the key (applyOptionPatch), so removing the last row unsets the option.
   const write = (next: Row[]) => ctx.setOptions({ [option]: next });
+  // Rows are keyed by position, so after a move the focused button would stay where it was and act
+  // on the row that slid INTO that place. Focus follows the moved row instead: the same arrow on
+  // its new position, or the other one when it has reached an end and that arrow is disabled.
+  const listRef = useRef<HTMLDivElement>(null);
+  const [moved, setMoved] = useState<{ to: number; dir: 'up' | 'down' } | null>(null);
+  useEffect(() => {
+    if (!moved) return;
+    const at = (d: 'up' | 'down') =>
+      listRef.current?.querySelector<HTMLButtonElement>(`[data-testid="list-${d}-${option}-${moved.to}"]`);
+    const same = at(moved.dir);
+    (same && !same.disabled ? same : at(moved.dir === 'up' ? 'down' : 'up'))?.focus();
+    setMoved(null);
+  }, [moved, option]);
+  const move = (from: number, to: number) => {
+    const next = [...rows];
+    [next[from], next[to]] = [next[to], next[from]];
+    write(next);
+    setMoved({ to, dir: to < from ? 'up' : 'down' });
+  };
   const setCell = (index: number, field: string, value: unknown) =>
     write(
       rows.map((row, i) => {
@@ -269,7 +312,7 @@ function ListField({
 
   return (
     <FormField label={label} description={hint}>
-      <div className="flex flex-col gap-2">
+      <div ref={listRef} className="flex flex-col gap-2">
         {rows.length > 0 && (
           // Visible column headings: a row of bare controls (a number, a select, a text box)
           // says nothing about which is which to a sighted author. Each cell also carries its
@@ -284,7 +327,9 @@ function ListField({
                 {fieldLabel(field, fieldSpec, lookup)}
               </div>
             ))}
-            {/* the remove button's column (IconButton size sm) */}
+            {/* the move/remove buttons' columns (IconButton size sm) */}
+            {spec.ordered && <div className="size-6 shrink-0" />}
+            {spec.ordered && <div className="size-6 shrink-0" />}
             <div className="size-6 shrink-0" />
           </div>
         )}
@@ -311,7 +356,30 @@ function ListField({
                 />
               </div>
             ))}
+            {spec.ordered && (
+              <>
+                <IconButton
+                  data-testid={`list-up-${option}-${index}`}
+                  className={ROW_BUTTON}
+                  label={t('widgetListMoveUp', { n: index + 1 })}
+                  disabled={index === 0}
+                  onClick={() => move(index, index - 1)}
+                >
+                  <ArrowUp className="size-4" />
+                </IconButton>
+                <IconButton
+                  data-testid={`list-down-${option}-${index}`}
+                  className={ROW_BUTTON}
+                  label={t('widgetListMoveDown', { n: index + 1 })}
+                  disabled={index === rows.length - 1}
+                  onClick={() => move(index, index + 1)}
+                >
+                  <ArrowDown className="size-4" />
+                </IconButton>
+              </>
+            )}
             <IconButton
+              className={ROW_BUTTON}
               label={t('widgetListRemove', { n: index + 1 })}
               onClick={() => write(rows.filter((_, i) => i !== index))}
             >
@@ -380,6 +448,9 @@ function ListCell({
         <Checkbox checked={value === true} aria-label={ariaLabel} onCheckedChange={(c) => onChange(c === true)} />
       );
     case 'string':
+      if (fieldSpec.control === DEVICE_TYPE_CONTROL) {
+        return <EntityPicker kind={DEVICE_TYPE_KIND} ariaLabel={ariaLabel} value={typeof value === 'string' ? value : ''} onChange={(v) => onChange(v || undefined)} />;
+      }
       return (
         <Input
           aria-label={ariaLabel}

@@ -60,8 +60,9 @@ interface OptionSpecBase {
 // and expect honoured. Not a validation whitelist: a control outside this list is valid and
 // simply falls back. `command-vocabulary` picks a device command and bakes its key, label and
 // parameters together; `slot-target` picks one of the dashboard's slots; `basemap` marks the
-// raster tile source/credit pair.
-export const HOST_OPTION_CONTROLS = ['command-vocabulary', 'slot-target', 'basemap'] as const;
+// raster tile source/credit pair; `device-type` picks a device type from the tenant's catalogue and
+// stores its token (on a string option, or a string field of a list item).
+export const HOST_OPTION_CONTROLS = ['command-vocabulary', 'slot-target', 'basemap', 'device-type'] as const;
 export type HostOptionControl = (typeof HOST_OPTION_CONTROLS)[number];
 
 export interface StringOptionSpec extends OptionSpecBase {
@@ -106,6 +107,9 @@ export interface ListOptionSpec extends OptionSpecBase {
   kind: 'list';
   item: Readonly<Record<string, ListItemFieldSpec>>;
   maxItems?: number;
+  // The ORDER of the entries means something (tab order, say), so an editor offers move up /
+  // move down on each. Absent or false, a list is a set the editor need not let the author reorder.
+  ordered?: boolean;
 }
 
 export type OptionSpec = StringOptionSpec | NumberOptionSpec | BooleanOptionSpec | EnumOptionSpec | ListOptionSpec;

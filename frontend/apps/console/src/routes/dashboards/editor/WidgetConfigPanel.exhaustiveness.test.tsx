@@ -57,10 +57,10 @@ import {
 
 import { WidgetConfigPanel } from './WidgetConfigPanel';
 
-// The entity pickers are list queries over device-management and are not this file's
+// The datasource pickers are list queries over device-management and are not this file's
 // subject: nothing they choose lands in the options bag (a datasource is reported through
-// its own callback and stored as a slot). Stubbed so a render needs no GraphQL.
-vi.mock('./EntityPicker', () => ({ EntityPicker: () => null }));
+// its own callback and stored as a slot), so their lists are empty. The DEVICE-TYPE picker is
+// the exception, because it authors an option: the real picker runs over the catalogue below.
 
 // The command vocabulary IS an input to an option this panel authors, so it is supplied
 // rather than skipped: picking a command bakes its key, its label and its parameter
@@ -91,7 +91,13 @@ const { COMMANDS } = vi.hoisted(() => ({
   ],
 }));
 
-vi.mock('@/lib/api/device-management', () => ({
+vi.mock('@/lib/api/device-management', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/device-management')>()),
+  listDevices: async () => ({ results: [], pagination: { totalRecords: 0 } }),
+  listDeviceTypes: async () => {
+    const rows = deviceTypeCatalogue().map((token) => ({ token, name: `Name of ${token}` }));
+    return { results: rows, pagination: { totalRecords: rows.length } };
+  },
   getDeviceCommandVocabulary: async () => ({ constrained: true, commands: COMMANDS }),
   listCommandDefinitionsForDevice: async () => [],
   getDeviceMetricVocabulary: async () => [],
@@ -100,6 +106,43 @@ vi.mock('@/lib/api/device-management', () => ({
 afterEach(cleanup);
 
 const FIELD_PREFIX = 'widget-option-field-';
+
+const DEVICE_TYPE_CONTROL = 'device-type';
+const picksDeviceType = (type: WidgetType, key: string): boolean => specsOf(type)[key]?.control === DEVICE_TYPE_CONTROL;
+
+// Every token a device-type picker of any built-in widget is driven with or rendered from, on
+// both sides, plus decoys: a picker that stored the first (or last) entry it was offered would
+// otherwise be indistinguishable from one that stored the entry the author chose.
+function deviceTypeCatalogue(): string[] {
+  const tokens = new Set<string>(['decoy-first', 'decoy-last']);
+  for (const type of WIDGET_TYPES) {
+    for (const key of schemaOrder(type)) {
+      const spec = specsOf(type)[key];
+      if (spec.kind === 'string' && spec.control === DEVICE_TYPE_CONTROL) tokens.add(String(optionValue(type, key, 'written')));
+      if (spec.kind === 'list') {
+        for (const [field, item] of Object.entries(spec.item)) {
+          if (item.control !== DEVICE_TYPE_CONTROL) continue;
+          for (const side of ['written', 'shown'] as const) tokens.add(String(listRow(type, key, side)[field]));
+        }
+      }
+    }
+  }
+  return [...tokens].sort();
+}
+
+// Choose `token` in the picker whose trigger is `trigger`, the way an author does.
+async function pickDeviceType(container: HTMLElement, trigger: HTMLElement, token: string): Promise<void> {
+  fireEvent.click(trigger);
+  const option = await waitFor(() => {
+    const el = document.querySelector<HTMLElement>(`[data-shot-value="${token}"]`);
+    expect(el, `the device-type picker in ${fieldId(container)} never offered ${token}`).toBeTruthy();
+    return el!;
+  });
+  fireEvent.click(option);
+}
+
+const showsDeviceType = (el: HTMLElement, token: string) =>
+  waitFor(() => expect(el.textContent, `shows another device type than ${token}`).toContain(`Name of ${token}`));
 
 // Four slots, for exactly the reason there are four commands — and this control is where
 // a smaller fixture was actually caught being insufficient. With two slots the driver's
@@ -315,7 +358,7 @@ const fieldId = (el: HTMLElement) => el.dataset.testid!.slice(FIELD_PREFIX.lengt
 // The control shapes this driver knows how to work. Tracked across the whole run and
 // asserted at the end: a selector that stops matching would otherwise silently reduce this
 // suite to "the fields that still respond", which passes for the wrong reason.
-type ControlShape = 'number' | 'checkbox' | 'choice' | 'text';
+type ControlShape = 'number' | 'checkbox' | 'choice' | 'text' | 'picker';
 const shapesDriven = new Set<ControlShape>();
 
 // Waits for the field's control, which for the command picker appears only after its
@@ -405,6 +448,14 @@ async function drive(
     // through its first text cell instead.
     const drivable = Object.values(item).some((spec) => spec.kind === 'number') ? 'number' : 'string';
     for (const [field, spec] of Object.entries(item)) {
+      if (spec.kind === drivable && spec.control === DEVICE_TYPE_CONTROL) {
+        const trigger = container.querySelector<HTMLElement>(`[data-testid="list-cell-${id}-0-${field}"] button`);
+        expect(trigger, `list ${id}: no device-type picker for ${field}`).toBeTruthy();
+        await pickDeviceType(container, trigger!, String(written[field]));
+        shapesDriven.add('picker');
+        entered[field] = written[field];
+        return { [id]: [entered] };
+      }
       if (spec.kind === drivable) {
         const input = container.querySelector<HTMLInputElement>(`[data-testid="list-cell-${id}-0-${field}"] input`);
         expect(input, `list ${id}: no ${drivable} cell for ${field}`).toBeTruthy();
@@ -439,6 +490,12 @@ async function drive(
   // Any remaining button is a Combobox trigger (its clear affordance is an svg with
   // role="button", not a <button>, so it cannot be picked up here).
   const trigger = container.querySelector<HTMLElement>('button');
+  if (trigger && picksDeviceType(type, id)) {
+    const token = optionValue(type, id, 'written') as string;
+    await pickDeviceType(container, trigger, token);
+    shapesDriven.add('picker');
+    return { [id]: token };
+  }
   if (trigger) {
     const choices = await openChoices(container, trigger);
     const { index, entered } = choiceFor(type, id, choices.length);
@@ -563,6 +620,8 @@ async function assertDisplaysItsOwnValue(type: WidgetType, container: HTMLElemen
         expect(cell!.querySelector<HTMLInputElement>('input')!.value, `${where}.${field} shows another number`).toBe(
           String(row[field]),
         );
+      } else if (spec.kind === 'string' && spec.control === DEVICE_TYPE_CONTROL) {
+        await showsDeviceType(cell!, String(row[field]));
       } else if (spec.kind === 'string') {
         expect(cell!.querySelector<HTMLInputElement>('input')!.value, `${where}.${field} shows another text`).toBe(
           String(row[field]),
@@ -596,6 +655,10 @@ async function assertDisplaysItsOwnValue(type: WidgetType, container: HTMLElemen
   }
 
   const trigger = container.querySelector<HTMLElement>('button');
+  if (trigger && picksDeviceType(type, id)) {
+    await showsDeviceType(container, String(optionValue(type, id, 'shown')));
+    return;
+  }
   if (trigger) {
     // The Combobox renders its clear affordance (an svg with role="button") only when an
     // option is actually SELECTED, so its presence is a placeholder-independent read of
@@ -752,15 +815,16 @@ describe('the gate itself', () => {
   // shrinkage shows up as a MISSING key, which reads like a product defect and would be
   // "fixed" in the panel. Pinning that all four control shapes are still reachable makes a
   // rotted selector fail as itself.
-  it('still knows how to work all four control shapes', async () => {
-    // gauge covers number+text, table covers the checkbox, alarm-table the dropdown.
-    for (const type of ['gauge', 'table', 'alarm-table'] as const) {
+  it('still knows how to work all five control shapes', async () => {
+    // gauge covers number+text, table covers the checkbox, alarm-table the dropdown and the
+    // device-type picker, alarm-severity the picker as a plain option.
+    for (const type of ['gauge', 'table', 'alarm-table', 'alarm-severity'] as const) {
       const { container } = renderPanel(type, vi.fn());
       const ids = fieldContainers(container).map(fieldId);
       cleanup();
       for (const id of ids) await optionsWrittenBy(type, id);
     }
-    expect([...shapesDriven].sort()).toEqual(['checkbox', 'choice', 'number', 'text']);
+    expect([...shapesDriven].sort()).toEqual(['checkbox', 'choice', 'number', 'picker', 'text']);
   }, SWEEP_TIMEOUT_MS);
 
   // 🔴 THE SECOND INSTRUMENT CHECK, AND THE ONE THIS FILE'S REWRITE TURNS ON. Every value

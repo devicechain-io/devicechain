@@ -140,7 +140,7 @@ partir de él.
 
 Una opción `list` almacena un arreglo de objetos pequeños, como los umbrales de un widget. Declara un
 objeto `item` cuyos campos son especificaciones `string`, `number`, `boolean` o `enum` (un campo puede
-ser `required`, y una lista no se puede anidar) y un `maxItems` opcional. Se rechaza una entrada
+ser `required`, y una lista no se puede anidar) un `maxItems` opcional y `ordered: true` cuando el orden de las entradas significa algo (el formulario de ajustes ofrece entonces subir y bajar cada fila). Se rechaza una entrada
 almacenada con un campo que `item` no declara, y el formulario de ajustes muestra una fila por entrada
 con un control por campo. La opción integrada `thresholds`, que llevan la mayoría de los widgets de
 telemetría integrados, es una de ellas: cada entrada nombra una severidad (`normal`, `warning`,
@@ -209,6 +209,7 @@ La consola implementa los controles enumerados en `HOST_OPTION_CONTROLS`, export
 | --- | --- |
 | `command-vocabulary` | Elige uno de los comandos del dispositivo enlazado y escribe juntos su clave, su etiqueta y sus parámetros. |
 | `slot-target` | Elige uno de los slots del panel. |
+| `device-type` | Elige un tipo de dispositivo del catálogo del inquilino y guarda su token. En una opción de texto o en un campo de texto de un elemento de lista. |
 | `basemap` | Marca la fuente de teselas ráster del mapa y su atribución. |
 
 Un control que la consola no implementa, incluido cualquier control con espacio de nombres, recibe

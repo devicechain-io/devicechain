@@ -93,5 +93,14 @@ describe('a descriptor that declares a list', () => {
     expect(issues({ l: { kind: 'list', doc: 'd', maxItems: 0, item: { a: { kind: 'string', doc: 'd' } } } }).join('\n')).toMatch(
       /maxItems/,
     );
+    expect(issues({ l: { kind: 'list', doc: 'd', ordered: 'yes', item: { a: { kind: 'string', doc: 'd' } } } }).join('\n')).toMatch(
+      /options\.l\.ordered/,
+    );
+  });
+
+  it('accepts ordered as true or false', () => {
+    for (const ordered of [true, false]) {
+      expect(issues({ l: { kind: 'list', doc: 'd', ordered, item: { a: { kind: 'string', doc: 'd' } } } })).toEqual([]);
+    }
   });
 });
