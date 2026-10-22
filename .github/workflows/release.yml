@@ -63,7 +63,8 @@ on:
 #   sign              — cosign + attest; the signing identity  -> packages: write,
 #                       comes from the OIDC token                id-token: write,
 #                                                               attestations: write
-#   verify-signatures — reads the registry + attestation store -> contents: read
+#   verify-signatures — reads the registry + attestation store -> contents: read,
+#                                                               attestations: read
 #   publish-manifest  — gh release VIEW; the website push
 #                       uses its own PAT, not GITHUB_TOKEN   -> contents: read
 permissions:
